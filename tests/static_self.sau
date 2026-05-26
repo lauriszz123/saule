@@ -1,0 +1,22 @@
+-- Inside a `static fn`, `self` refers to the class itself, so
+-- `self.field` and `self.method()` reach the class's static members.
+
+class Counter
+    static count: integer = 0
+    static label: string = "counter"
+
+    static fn bump()
+        self.count = self.count + 1
+    end
+
+    static fn describe() -> string
+        return self.label .. "=" .. tostring(self.count)
+    end
+end
+
+Counter.bump()
+Counter.bump()
+Counter.bump()
+assert(Counter.count == 3)
+assert(Counter.describe() == "counter=3")
+println("static self: ok")

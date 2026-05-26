@@ -2,6 +2,6 @@ class Main
   static fn main()
     local square: fn(integer) -> integer = x => x * 2
 
-    print("10 * 2 =", square(10))
+    println("10 * 2 =", square(10))
   end
 end

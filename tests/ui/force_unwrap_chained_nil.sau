@@ -1,0 +1,11 @@
+-- `?.` yields nil when the receiver is nil; `!` on that must error.
+class Box
+  label: string = "hi"
+end
+
+class Main
+  static fn main()
+    local b: Box? = nil
+    print(b?.label!)
+  end
+end

@@ -11,6 +11,6 @@ end
 class Main
   static fn main()
     local obj: Object = Object()
-    print("Hello, " .. obj.toString())
+    println("Hello, " .. obj.toString())
   end
 end

@@ -1,0 +1,11 @@
+-- Reading a member on a nullable receiver without `?.` / `!` must error.
+class Box
+  label: string = "hi"
+end
+
+class Main
+  static fn main()
+    local b: Box? = Box()
+    println(b.label)
+  end
+end

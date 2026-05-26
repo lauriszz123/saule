@@ -1,0 +1,7 @@
+-- Mixing `integer` and `float` should be a *compile-time* error.
+-- Currently caught at runtime via RuntimeError::NumericMix.
+
+local a: integer = 1
+local b: float = 2.0
+local c = a + b
+println(c)

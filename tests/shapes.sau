@@ -10,8 +10,8 @@ class Shape
   end
 
   fn describe() -> nil
-    print(self.name)
-    print(self.area())
+    println(self.name)
+    println(self.area())
   end
 end
 

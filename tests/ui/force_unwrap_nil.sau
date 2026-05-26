@@ -1,0 +1,7 @@
+-- Unwrapping a nil local must produce a runtime error.
+class Main
+  static fn main()
+    local name: string? = nil
+    print(name!)
+  end
+end

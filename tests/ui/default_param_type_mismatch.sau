@@ -1,0 +1,8 @@
+-- Default parameter value must be compatible with the declared type.
+-- `fn f(x: integer = "hi")` should be a compile error.
+
+fn greet(times: integer = "hi") -> string
+  return tostring(times)
+end
+
+println(greet())

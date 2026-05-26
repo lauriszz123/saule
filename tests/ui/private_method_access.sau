@@ -1,0 +1,15 @@
+-- `local fn` is private to the class. External callers should be
+-- rejected at compile time.
+
+class Vault
+  fn open()
+    self.secret()
+  end
+
+  local fn secret()
+    println("psst")
+  end
+end
+
+local v = Vault()
+v.secret() -- should be a compile error: `secret` is private

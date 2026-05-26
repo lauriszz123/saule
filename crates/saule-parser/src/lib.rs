@@ -504,10 +504,6 @@ impl Parser {
                 self.advance();
                 Ok(Spanned::new(Expr::Self_, tok.span))
             }
-            Token::Super => {
-                self.advance();
-                Ok(Spanned::new(Expr::Super, tok.span))
-            }
             Token::Identifier(name) => {
                 self.advance();
                 if self.eat(&Token::FatArrow) {
@@ -532,7 +528,6 @@ impl Parser {
                     Ok(Spanned::new(Expr::Ident(name), tok.span))
                 }
             }
-            Token::New => self.parse_new(),
             Token::LBrace => self.parse_table_literal(),
             Token::Fn => self.parse_fn_lambda(),
             Token::LParen => {
@@ -551,30 +546,6 @@ impl Parser {
                 span: tok.span,
             }),
         }
-    }
-
-    fn parse_new(&mut self) -> Result<Spanned<Expr>, ParseError> {
-        let new_tok = self.advance(); // consume `new`
-        let (class, _) = self.expect_ident("class name after `new`")?;
-        // Optional generic arguments on construction, e.g. `new List<Player>(...)`.
-        if self.check(&Token::Lt) {
-            self.skip_generic_args()?;
-        }
-        let (raw_args, close_span) = self.parse_call_args()?;
-        let mut args = Vec::with_capacity(raw_args.len());
-        for arg in raw_args {
-            match arg {
-                CallArg::Positional(expr) => args.push(expr),
-                CallArg::Named { value, .. } => {
-                    return Err(ParseError::Expected {
-                        expected: "positional argument in constructor call",
-                        span: value.span,
-                    });
-                }
-            }
-        }
-        let span = new_tok.span.start..close_span.end;
-        Ok(Spanned::new(Expr::New { class, args }, span))
     }
 
     fn parse_table_literal(&mut self) -> Result<Spanned<Expr>, ParseError> {
@@ -1181,6 +1152,7 @@ impl Parser {
                 let end_tok = self.expect(&Token::End, "`end` to close method")?;
                 ClassMember::Method(Method {
                     is_static,
+                    is_private: has_local,
                     name,
                     params,
                     return_ty,
@@ -1200,6 +1172,7 @@ impl Parser {
                 };
                 ClassMember::Field {
                     is_static,
+                    is_private: false,
                     name,
                     ty,
                     default,
@@ -1217,6 +1190,7 @@ impl Parser {
                 };
                 ClassMember::Field {
                     is_static,
+                    is_private: true,
                     name,
                     ty,
                     default,
@@ -1327,6 +1301,7 @@ impl Parser {
             let end_tok = self.expect(&Token::End, "`end` to close enum method")?;
             methods.push(Method {
                 is_static: false,
+                is_private: false,
                 name: mname,
                 params,
                 return_ty,
@@ -1481,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_class_with_constructor_and_method() {
+    fn parses_class_with_init_and_method() {
         let src = r#"
             class Player extends Entity implements Damageable
                 local health: integer

@@ -11,9 +11,9 @@ class Main
   static fn main()
     local test: fn() -> integer = makeCounter(start: 10)
 
-    print(test())
-    print(test())
-    print(test())
-    print(test())
+    println(test())
+    println(test())
+    println(test())
+    println(test())
   end
 end

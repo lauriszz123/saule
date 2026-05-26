@@ -1,17 +1,20 @@
 class Main
  static fn main()
     for i: integer = 1, 10 do
-        print("First: ", i)
+        print(" 1: ", i)
     end
+    println()
 
-    -- with step
+     -- with step
     for i: integer = 0, 100, 5 do
-        print("Second: ", i)
+        print(" 2: ", i)
     end
+    println()
 
     -- counting down
     for i: integer = 10, 1, -1 do
-        print("Third: ", i)
+        print(" 3: ", i)
     end
+    println()
  end
 end

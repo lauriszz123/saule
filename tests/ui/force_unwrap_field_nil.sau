@@ -1,0 +1,14 @@
+-- Unwrapping a nullable field that is currently nil must error.
+class Box
+  label: string?
+
+  fn init()
+  end
+end
+
+class Main
+  static fn main()
+    local b: Box = Box()
+    print(b.label!)
+  end
+end

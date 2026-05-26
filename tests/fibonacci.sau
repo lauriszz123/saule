@@ -11,6 +11,6 @@ end
 
 class Main
   static fn main()
-    print(fibonacci(10))
+    println(fibonacci(10))
   end
 end

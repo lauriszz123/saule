@@ -1,0 +1,7 @@
+class Main
+  static fn main()
+    for i: integer = 1, 3 do
+      local s: string = nil
+    end
+  end
+end

@@ -56,9 +56,7 @@ pub fn binary(
             r.to_display_string()
         )))),
 
-        Coalesce => Ok(if matches!(l, Value::Nil) { r } else { l }),
-
-        And | Or => unreachable!("and/or are short-circuited in expr::eval"),
+        Coalesce | And | Or => unreachable!("and/or/?? are short-circuited in expr::eval"),
     }
 }
 

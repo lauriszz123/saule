@@ -14,6 +14,6 @@ class Main
   static fn main()
     local min: integer, max: integer = minMax({3, 1, 7, 2, 9})
 
-    print("{3, 1, 7, 2, 9} min, max is:", min, max)
+    println("{3, 1, 7, 2, 9} min, max is:", min, max)
   end
 end

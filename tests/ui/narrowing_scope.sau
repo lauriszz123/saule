@@ -1,0 +1,12 @@
+-- Narrowing only applies inside the guarded branch. Using `x` outside the
+-- `if x != nil then ... end` must still see it as nullable.
+class Main
+  static fn main()
+    local maybe: string? = "x"
+    if maybe != nil then
+      println("inside")
+    end
+    local name: string = maybe
+    println(name)
+  end
+end

@@ -1,0 +1,6 @@
+class Main
+  local test: string = nil
+
+  static fn main()
+  end
+end

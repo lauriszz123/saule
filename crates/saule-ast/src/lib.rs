@@ -48,7 +48,6 @@ pub enum Expr {
     // Names
     Ident(String),
     Self_,
-    Super,
 
     // Operators
     Unary {
@@ -91,12 +90,6 @@ pub enum Expr {
     /// `x!`
     ForceUnwrap(Box<Spanned<Expr>>),
 
-    // Construction
-    /// `new ClassName(args...)`
-    New {
-        class: String,
-        args: Vec<Spanned<Expr>>,
-    },
     /// `{a, b, c}` — array-style table literal
     Table(Vec<Spanned<Expr>>),
 
@@ -292,6 +285,7 @@ pub enum ImportNames {
 pub enum ClassMember {
     Field {
         is_static: bool,
+        is_private: bool,
         name: String,
         ty: Type,
         default: Option<Spanned<Expr>>,
@@ -302,6 +296,7 @@ pub enum ClassMember {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Method {
     pub is_static: bool,
+    pub is_private: bool,
     pub name: String,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,

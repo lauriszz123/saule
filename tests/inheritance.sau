@@ -6,7 +6,7 @@ class Entity
   end
 
   fn identify()
-    print("I am a: ", self.entType)
+    println("I am a: ", self.entType)
   end
 
   fn destroy()
@@ -23,7 +23,7 @@ class Person extends Entity
 
   fn introduce()
     self.identify()
-    print("... and my name is: " .. self.name)
+    println("... and my name is: " .. self.name)
   end
 
   fn destroy()

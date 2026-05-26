@@ -1,0 +1,13 @@
+-- Calling a method on a nullable receiver without `?.` / `!` must error.
+class Greeter
+  fn hi()
+    println("hi")
+  end
+end
+
+class Main
+  static fn main()
+    local g: Greeter? = Greeter()
+    g.hi()
+  end
+end

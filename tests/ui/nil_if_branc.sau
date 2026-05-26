@@ -1,0 +1,7 @@
+class Main
+  static fn main()
+    if true then
+      local a: string, b: string = nil, "this is bad"
+    end
+  end
+end

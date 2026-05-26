@@ -1,0 +1,132 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Saule",
+  "scopeName": "source.saule",
+  "fileTypes": ["sau"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.saule",
+          "begin": "--\\[\\[",
+          "end": "\\]\\]"
+        },
+        {
+          "name": "comment.line.double-dash.saule",
+          "match": "--.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.saule",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.saule", "match": "\\\\." }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.float.saule", "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b" },
+        { "name": "constant.numeric.integer.saule", "match": "\\b\\d+\\b" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.saule",
+          "match": "\\b(if|else|then|end|for|while|repeat|until|do|in|break|continue|return|throw|try|catch)\\b"
+        },
+        {
+          "name": "keyword.declaration.saule",
+          "match": "\\b(class|interface|enum|fn|local|static|export|import|from|as|extends|implements)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.saule",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "variable.language.saule",
+          "match": "\\b(self|super)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.saule", "match": "\\b(true|false|nil)\\b" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.saule",
+          "match": "\\b(integer|float|string|boolean|any)\\b"
+        },
+        {
+          "comment": "PascalCase identifiers treated as type/class names",
+          "name": "entity.name.type.saule",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "comment": "fn name(",
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.saule" },
+            "2": { "name": "entity.name.function.saule" }
+          }
+        },
+        {
+          "comment": "call: ident(",
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.saule" }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.saule",
+          "match": "(==|!=|<=|>=|=>|<|>)"
+        },
+        {
+          "name": "keyword.operator.nullable.saule",
+          "match": "(\\?\\?|\\?\\.|[!?])"
+        },
+        {
+          "name": "keyword.operator.saule",
+          "match": "(\\.\\.\\.|\\.\\.|->|[+\\-*/%=#])"
+        },
+        {
+          "name": "punctuation.section.brackets.saule",
+          "match": "[\\(\\)\\[\\]\\{\\}]"
+        },
+        {
+          "name": "punctuation.separator.saule",
+          "match": "[,;:.]"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        { "name": "variable.other.saule", "match": "\\b[a-z_][A-Za-z0-9_]*\\b" }
+      ]
+    }
+  }
+}

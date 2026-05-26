@@ -1,6 +1,6 @@
 class Test
   static fn default(introduce: string, name: string = "Unnamed")
-    print(introduce, name)
+    println(introduce, name)
   end
 end
 

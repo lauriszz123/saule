@@ -1,13 +1,13 @@
 class Test
   fn init(named: string?, sec: string?)
-    print(named)
-    print(sec)
+    println(named)
+    println(sec)
   end
 end
 
 class Main
   local static fn test(first: string?, second: string)
-    print(first, second)
+    println(first, second)
   end
 
   static fn main()

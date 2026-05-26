@@ -63,6 +63,13 @@ pub enum RuntimeError {
         span: std::ops::Range<usize>,
     },
 
+    #[error("force-unwrapped a `nil` value")]
+    #[diagnostic(help("use `??` to provide a fallback, or check with `if x != nil` before unwrapping"))]
+    ForceUnwrapNil {
+        #[label("this expression was `nil` when `!` was applied")]
+        span: std::ops::Range<usize>,
+    },
+
     #[error("`{thing}` is not yet implemented")]
     Unsupported {
         thing: &'static str,

@@ -7,7 +7,7 @@ use std::rc::Rc;
 use saule_ast::{BinOp, CallArg, Expr, LambdaBody, Spanned, Type};
 
 use crate::env::Environment;
-use crate::error::{RuntimeError, unsupported};
+use crate::error::RuntimeError;
 use crate::value::{ClassObject, FunctionBody, FunctionObject, InstanceObject, Value};
 
 use super::{Flow, ops};
@@ -52,6 +52,11 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 let l = eval(lhs, env)?;
                 if l.is_truthy() { Ok(l) } else { eval(rhs, env) }
             }
+            // `??` short-circuits: only evaluate RHS when LHS is nil.
+            BinOp::Coalesce => {
+                let l = eval(lhs, env)?;
+                if matches!(l, Value::Nil) { eval(rhs, env) } else { Ok(l) }
+            }
             _ => {
                 let l = eval(lhs, env)?;
                 let r = eval(rhs, env)?;
@@ -83,7 +88,14 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             let receiver = eval(obj, env)?;
             read_member(&receiver, name, span)
         }
-        Expr::SafeMember { .. } => Err(unsupported("safe member access", span)),
+        Expr::SafeMember { obj, name } => {
+            let receiver = eval(obj, env)?;
+            if matches!(receiver, Value::Nil) {
+                Ok(Value::Nil)
+            } else {
+                read_member(&receiver, name, span)
+            }
+        }
         Expr::Index { obj, index } => {
             let receiver = eval(obj, env)?;
             let index_value = eval(index, env)?;
@@ -94,32 +106,13 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             let evaled = eval_call_args(args, env)?;
             invoke_method(&receiver, method, evaled, span)
         }
-        Expr::ForceUnwrap(_) => Err(unsupported("force unwrap", span)),
-        Expr::New { class, args } => {
-            let class_val = env
-                .borrow()
-                .get(class)
-                .ok_or_else(|| RuntimeError::Undefined {
-                    name: class.clone(),
-                    span: span.clone(),
-                })?;
-            let class = match class_val {
-                Value::Class(c) => c,
-                other => {
-                    return Err(RuntimeError::TypeError {
-                        message: format!(
-                            "`new` requires a class name, but got a `{}` — did you mean to call a function instead?",
-                            other.type_name()
-                        ),
-                        span,
-                    });
-                }
-            };
-            let mut vs = Vec::with_capacity(args.len());
-            for a in args {
-                vs.push(EvaluatedArg::Positional(eval(a, env)?));
+        Expr::ForceUnwrap(inner) => {
+            let v = eval(inner, env)?;
+            if matches!(v, Value::Nil) {
+                Err(RuntimeError::ForceUnwrapNil { span })
+            } else {
+                Ok(v)
             }
-            construct(class, &vs, span)
         }
         Expr::Table(items) => {
             let mut values = Vec::with_capacity(items.len());
@@ -149,7 +142,6 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 name: "self".to_string(),
                 span,
             }),
-        Expr::Super => Err(unsupported("`super`", span)),
     }
 }
 
@@ -223,8 +215,7 @@ fn call_value_multi(
                 .map_err(|message| RuntimeError::TypeError { message, span })
         }
         Value::Function(f) => call_function_multi(&f, args, span),
-        // `ClassName(args)` is sugar for `new ClassName(args)`. The explicit
-        // `new` form still works through `Expr::New`.
+        // `ClassName(args)` constructs an instance.
         Value::Class(c) => construct(c, args, span).map(|v| vec![v]),
         other => Err(RuntimeError::TypeError {
             message: format!(

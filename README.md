@@ -284,7 +284,7 @@ print(counter())    -- 3
 
 ### Declaring a Class
 
-Each class lives in its own `.saule` file. Fields are declared at the top, followed by an `init` method (the constructor) and the rest of the methods. Methods **do not declare `self`** — it is bound implicitly inside every method body.
+Each class lives in its own `.saule` file. Fields are declared at the top, followed by an `fn init` method (the constructor) and the rest of the methods.
 
 ```saule
 export class Player
@@ -322,7 +322,7 @@ export class Player
 end
 ```
 
-`init` is the canonical constructor name.
+`fn init` is the **only** constructor — there is no `constructor` keyword.
 
 ### Instantiation
 
@@ -386,7 +386,7 @@ Static fields are shared across all instances. Modifying them affects the class 
 Player.maxHealth = 200
 ```
 
-A class with **no** constructor (no `init` and no `constructor`) promotes every `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
+A class with **no** `fn init` promotes every `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
 
 ```saule
 class Main
@@ -400,7 +400,7 @@ end
 
 ### Inheritance
 
-Use `extends` to inherit from another class. Call the parent constructor with `self.super(...)` from inside `init`:
+Use `extends` to inherit from another class. Call the parent's `init` with `self.super(...)` from inside `init`:
 
 ```saule
 export class Entity
@@ -689,7 +689,7 @@ end
 
 ```saule
 try
-    local p: Player = new Player("Arthur", 100)
+    local p: Player = Player("Arthur", 100)
     p:damage(-10)
 catch e: string
     print("Caught: " .. e)
@@ -946,7 +946,7 @@ p.damage(dmg)
 | `fn` | Declare a function or method |
 | `extends` | Inherit from a class |
 | `implements` | Fulfill one or more interfaces |
-| `super` | Call the parent constructor |
+| `super` | Call the parent's `init` |
 | `self` | Reference the current instance |
 | `static` | Declare a class-level member |
 | `local` | Declare a private member or variable |

@@ -9,6 +9,6 @@ class Main
   static fn main()
     local d: Direction = Direction.North
 
-    print(d.name, d.value)
+    println(d.name, d.value)
   end
 end

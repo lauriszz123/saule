@@ -1,0 +1,10 @@
+-- Unwrapping a nullable function return that is nil must error.
+fn maybe() -> string?
+  return nil
+end
+
+class Main
+  static fn main()
+    print(maybe()!)
+  end
+end
