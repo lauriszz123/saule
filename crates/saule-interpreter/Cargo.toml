@@ -6,6 +6,8 @@ description.workspace = true
 
 [dependencies]
 saule-ast = { path = "../saule-ast" }
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }
 miette = "7.6.0"
 thiserror = "2.0.18"
 

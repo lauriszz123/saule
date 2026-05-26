@@ -76,6 +76,13 @@ pub enum RuntimeError {
         #[label("this feature will be supported in a future version")]
         span: std::ops::Range<usize>,
     },
+
+    #[error("import error: {message}")]
+    ImportError {
+        message: String,
+        #[label("could not resolve this import")]
+        span: std::ops::Range<usize>,
+    },
 }
 
 /// Convenience constructor — most non-`Local`/`Expr` statements still funnel

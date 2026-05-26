@@ -5,7 +5,7 @@ use std::{
 };
 
 use miette::{NamedSource, Report};
-use saule_interpreter::{Environment, Value};
+use saule_interpreter::{Environment, Value, module::ModuleLoader};
 
 const USAGE: &str = "\
 Usage:
@@ -176,13 +176,24 @@ fn run_file(path: PathBuf, require_main: bool) {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
 
-    if let Err(report) = run_source(&name, source, require_main) {
+    let module_dir = path
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| path.parent().map(Path::to_path_buf));
+
+    if let Err(report) = run_source(&name, source, require_main, module_dir) {
         eprintln!("{report:?}");
         process::exit(1);
     }
 }
 
-fn run_source(name: &str, source: String, require_main: bool) -> Result<(), Report> {
+fn run_source(
+    name: &str,
+    source: String,
+    require_main: bool,
+    module_dir: Option<PathBuf>,
+) -> Result<(), Report> {
     let make_src = || NamedSource::new(name.to_string(), source.clone());
 
     let tokens = saule_lexer::Lexer::new(&source)
@@ -201,7 +212,11 @@ fn run_source(name: &str, source: String, require_main: bool) -> Result<(), Repo
     }
 
     // Execute the file's top-level statements so declarations register.
-    let env = Environment::with_prelude();
+    // The environment carries the file's directory plus a shared module
+    // loader so `import "..."` can resolve relative paths and dedupe
+    // already-loaded modules.
+    let loader = ModuleLoader::new();
+    let env = Environment::with_prelude_and_context(module_dir, Some(loader));
     saule_interpreter::run_in(&module, &env)
         .map_err(|e| Report::new(e).with_source_code(make_src()))?;
 

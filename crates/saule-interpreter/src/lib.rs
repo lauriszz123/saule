@@ -29,6 +29,7 @@ pub mod eval;
 pub mod stdlib;
 pub mod typeck;
 pub mod value;
+pub mod module;
 
 pub use env::Environment;
 pub use error::RuntimeError;
