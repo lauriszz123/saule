@@ -18,7 +18,7 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 
 fn builtin_print(args: &[Value]) -> Result<Value, String> {
     let parts: Vec<String> = args.iter().map(|v| v.to_display_string()).collect();
-    println!("{}", parts.join("\t"));
+    print!("{}", parts.join("\t"));
     Ok(Value::Nil)
 }
 
