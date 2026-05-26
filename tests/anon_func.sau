@@ -1,0 +1,19 @@
+local fn makeCounter(start: integer, step: integer = 1) -> fn() -> integer
+  local count: integer = start
+
+  return fn => ()
+    count = count + step
+    return count - 1
+  end
+end
+
+class Main
+  static fn main()
+    local test: fn() -> integer = makeCounter(start: 10)
+
+    print(test())
+    print(test())
+    print(test())
+    print(test())
+  end
+end

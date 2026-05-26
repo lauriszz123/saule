@@ -8,7 +8,7 @@ use saule_ast::{ClassMember, Decl, EnumVariant, Expr, Method, Param, Spanned, St
 
 use crate::env::Environment;
 use crate::error::{RuntimeError, unsupported};
-use crate::value::{self, ClassObject, FieldDef, FunctionBody, FunctionObject, Value};
+use crate::value::{self, ClassObject, FieldDef, FunctionBody, FunctionObject, InterfaceObject, Value};
 
 use super::{Flow, expr};
 
@@ -192,8 +192,8 @@ fn exec_decl(
             Ok(Flow::nil())
         }
         Decl::Class { .. } => exec_class_decl(decl, env),
-        Decl::Interface { .. } => Err(unsupported("interface declaration", span)),
-        Decl::Enum { name, variants, methods, .. } => exec_enum_decl(name, variants, methods, env, span),
+         Decl::Interface { .. } => exec_interface_decl(decl, env),
+         Decl::Enum { name, variants, methods, .. } => exec_enum_decl(name, variants, methods, env, span),
         Decl::Import { .. } => Err(unsupported("import", span)),
     }
 }
@@ -209,6 +209,7 @@ fn exec_class_decl(
     let Decl::Class {
         name,
         extends,
+        implements,
         members,
         ..
     } = &decl.value
@@ -300,6 +301,55 @@ fn exec_class_decl(
         }
     }
 
+    // Validate that all implemented interfaces' required methods are present.
+    // Collect ALL missing methods across ALL interfaces so we report them together.
+    let mut missing_methods: Vec<(String, String)> = Vec::new(); // (interface_name, method_name)
+
+    for interface_name in implements {
+        match env.borrow().get(interface_name) {
+            Some(Value::Interface(iface)) => {
+                for required_method in &iface.methods {
+                    if !methods.contains_key(required_method.0) {
+                        missing_methods.push((interface_name.clone(), required_method.0.clone()));
+                    }
+                }
+            }
+            Some(_) => {
+                return Err(RuntimeError::TypeError {
+                    message: format!(
+                        "cannot implement `{}`: expected an interface but got something else",
+                        interface_name
+                    ),
+                    span,
+                });
+            }
+            None => {
+                return Err(RuntimeError::Undefined {
+                    name: interface_name.clone(),
+                    span,
+                });
+            }
+        }
+    }
+
+    // Report all missing methods at once
+    if !missing_methods.is_empty() {
+        let missing_list = missing_methods
+            .iter()
+            .map(|(iface, method)| format!("`{}` from interface `{}`", method, iface))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(RuntimeError::TypeError {
+            message: format!(
+                "class `{}` is missing method{}: {}",
+                name,
+                if missing_methods.len() == 1 { "" } else { "s" },
+                missing_list
+            ),
+            span,
+        });
+    }
+
     let class = Rc::new(ClassObject {
         name: name.clone(),
         parent,
@@ -312,9 +362,44 @@ fn exec_class_decl(
 
     env.borrow_mut().define(name.clone(), Value::Class(class));
     Ok(Flow::nil())
-}
+ }
 
-fn make_function(
+ /// Execute an interface declaration and install it in the environment.
+ fn exec_interface_decl(
+     decl: &Spanned<Decl>,
+     env: &Rc<RefCell<Environment>>,
+ ) -> Result<Flow, RuntimeError> {
+     let Decl::Interface {
+         name,
+         extends,
+         methods,
+         ..
+     } = &decl.value
+     else {
+         unreachable!("exec_interface_decl called with non-interface decl");
+     };
+
+     // Build a map of method signatures from the interface.
+     // For now, we just store the method name and parameter count for basic validation.
+     let mut method_sigs = HashMap::new();
+     for method in methods {
+         let param_count = method.params.len();
+         let has_return_type = method.return_ty.is_some();
+         method_sigs.insert(method.name.clone(), (param_count, has_return_type));
+     }
+
+     let interface_obj = Rc::new(InterfaceObject {
+         name: name.clone(),
+         extends: extends.clone(),
+         methods: method_sigs,
+     });
+
+     env.borrow_mut()
+         .define(name.clone(), Value::Interface(interface_obj));
+     Ok(Flow::nil())
+ }
+
+ fn make_function(
     name: Option<String>,
     params: Vec<Param>,
     body: Vec<Spanned<Stmt>>,

@@ -346,7 +346,7 @@ mod tests {
     fn numeric_for_default_step() {
         let src = r#"
             local sum: integer = 0
-            for i: integer = 1 to 5 do
+            for i: integer = 1, 5 do
               sum = sum + i
             end
 
@@ -359,7 +359,7 @@ mod tests {
     fn numeric_for_negative_step() {
         let src = r#"
             local sum: integer = 0
-            for i: integer = 10 to 1 step -1 do
+            for i: integer = 10, 1, -1 do
               sum = sum + i
             end
             sum
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn numeric_for_zero_step_errors() {
         let src = r#"
-            for i: integer = 1 to 5 step 0 do
+            for i: integer = 1, 5, 0 do
               break
             end
         "#;
@@ -1386,7 +1386,7 @@ mod tests {
         fn numeric_for_with_step_5() {
             let src = r#"
                 local sum: integer = 0
-                for i: integer = 0 to 20 step 5 do
+                for i: integer = 0, 20, 5 do
                     sum = sum + i
                 end
                 sum
@@ -1399,7 +1399,7 @@ mod tests {
             // README example mixing both.
             let src = r#"
                 local seen: string = ""
-                for i: integer = 1 to 10 do
+                for i: integer = 1, 10 do
                     if i == 5 then continue end
                     if i == 8 then break end
                     seen = seen .. i

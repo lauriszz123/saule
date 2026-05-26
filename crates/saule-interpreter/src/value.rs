@@ -42,6 +42,8 @@ pub enum Value {
     EnumVariant(Rc<EnumVariantObject>),
     /// An enum declaration — carries its variants and methods.
     Enum(Rc<EnumObject>),
+    /// An interface declaration — carries method signatures.
+    Interface(Rc<InterfaceObject>),
 }
 
 #[derive(Debug)]
@@ -183,6 +185,7 @@ impl Value {
             Value::Instance(_) => "instance",
             Value::EnumVariant(_) => "enum",
             Value::Enum(_) => "enum",
+            Value::Interface(_) => "interface",
         }
     }
 
@@ -219,6 +222,7 @@ impl Value {
                 format!("{}.{}", ev.enum_name, ev.variant_name)
             }
             Value::Enum(e) => format!("<enum {}>", e.name),
+            Value::Interface(iface) => format!("<interface {}>", iface.name),
             Value::Native(nf) => format!("<native fn {}>", nf.name),
             Value::Function(f) => match &f.name {
                 Some(n) => format!("<fn {n}>"),
@@ -247,7 +251,22 @@ impl PartialEq for Value {
             (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(a, b),
             (Value::EnumVariant(a), Value::EnumVariant(b)) => Rc::ptr_eq(a, b),
             (Value::Enum(a), Value::Enum(b)) => Rc::ptr_eq(a, b),
+            (Value::Interface(a), Value::Interface(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
+}
+
+/// Runtime representation of an `interface` declaration.
+///
+/// Carries the interface's method signatures. Used for compile-time and
+/// runtime verification that implementing classes have the required methods.
+#[derive(Debug)]
+pub struct InterfaceObject {
+    pub name: String,
+    /// Parent interfaces (for interface extension).
+    pub extends: Vec<String>,
+    /// Method signatures required by this interface.
+    /// Key is method name, value is (param_count, has_return_type).
+    pub methods: HashMap<String, (usize, bool)>,
 }

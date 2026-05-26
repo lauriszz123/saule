@@ -10,7 +10,7 @@
 //!     → `*`/`/`/`%` → unary (`-`, `not`, `#`) → postfix (`.`, `?.`, `[]`,
 //!     `(...)`, `:method(...)`, `!`) → primary.
 //!   * Statements use keyword-led forms (`if … then … end`, `while … do … end`,
-//!     `for v = a to b [step s] do … end`, `for v in iter do … end`,
+//!     `for v = a, b [, s] do … end`, `for v in iter do … end`,
 //!     `repeat … until cond`, `try … catch e: T … end`).
 //!   * Declarations: `fn`, `class`, `interface`, `enum`, `import`, `export`.
 //!
@@ -596,23 +596,42 @@ impl Parser {
 
     // ── Lambdas ─────────────────────────────────────────────────────────────
 
-    /// `fn(params): T ... end` as an expression.
-    fn parse_fn_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
-        let fn_tok = self.advance(); // consume `fn`
-        let params = self.parse_param_list()?;
-        let return_ty = self.parse_return_type_opt()?;
-        let body = self.parse_block_until(&[Token::End])?;
-        let end = self.expect(&Token::End, "`end` to close `fn` lambda")?;
-        let span = fn_tok.span.start..end.span.end;
-        Ok(Spanned::new(
-            Expr::Lambda {
-                params,
-                return_ty,
-                body: LambdaBody::Block(body),
-            },
-            span,
-        ))
-    }
+     /// `fn(params): T ... end` or `fn => (params) ... end` as an expression.
+     fn parse_fn_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
+         let fn_tok = self.advance(); // consume `fn`
+
+         // Check for `fn => (params)` syntax
+         if self.eat(&Token::FatArrow) {
+             let params = self.parse_param_list()?;
+             let return_ty = self.parse_return_type_opt()?;
+             let body = self.parse_block_until(&[Token::End])?;
+             let end = self.expect(&Token::End, "`end` to close `fn =>` lambda")?;
+             let span = fn_tok.span.start..end.span.end;
+             Ok(Spanned::new(
+                 Expr::Lambda {
+                     params,
+                     return_ty,
+                     body: LambdaBody::Block(body),
+                 },
+                 span,
+             ))
+         } else {
+             // Standard `fn(params)` syntax
+             let params = self.parse_param_list()?;
+             let return_ty = self.parse_return_type_opt()?;
+             let body = self.parse_block_until(&[Token::End])?;
+             let end = self.expect(&Token::End, "`end` to close `fn` lambda")?;
+             let span = fn_tok.span.start..end.span.end;
+             Ok(Spanned::new(
+                 Expr::Lambda {
+                     params,
+                     return_ty,
+                     body: LambdaBody::Block(body),
+                 },
+                 span,
+             ))
+         }
+     }
 
     /// Heuristic: peeks past a balanced `(...)` and checks for `=>` to decide
     /// whether `(` starts an arrow lambda or a parenthesised expression.
@@ -887,27 +906,15 @@ impl Parser {
             None
         };
 
-        // Numeric: `for i = from to to_expr [step s] do ... end`
-        // or Lua-style: `for i = from, to [, step] do ... end`
+        // Lua-style numeric for loop: `for i = from, to [, step] do ... end`
         if self.eat(&Token::Assign) {
             let from = self.parse_expression()?;
-            let (to, step) = if self.eat(&Token::Comma) {
-                let to = self.parse_expression()?;
-                let step = if self.eat(&Token::Comma) {
-                    Some(self.parse_expression()?)
-                } else {
-                    None
-                };
-                (to, step)
+            self.expect(&Token::Comma, "`,` after start value in numeric `for`")?;
+            let to = self.parse_expression()?;
+            let step = if self.eat(&Token::Comma) {
+                Some(self.parse_expression()?)
             } else {
-                self.expect(&Token::To, "`to` or `,` in numeric `for`")?;
-                let to = self.parse_expression()?;
-                let step = if self.eat(&Token::Step) {
-                    Some(self.parse_expression()?)
-                } else {
-                    None
-                };
-                (to, step)
+                None
             };
             self.expect(&Token::Do, "`do` in numeric `for`")?;
             let body = self.parse_block_until(&[Token::End])?;
