@@ -34,7 +34,7 @@ impl Environment {
     /// Global scope pre-populated with the standard built-ins.
     pub fn with_prelude() -> Rc<RefCell<Self>> {
         let env = Self::new();
-        crate::builtins::install(&env);
+        crate::stdlib::install_std(&env);
         env
     }
 

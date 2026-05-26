@@ -830,6 +830,7 @@ end
 export fn clamp(value: integer, min: integer, max: integer) -> integer
     if value < min then return min end
     if value > max then return max end
+
     return value
 end
 ```

@@ -6,7 +6,7 @@
 //! |--------------|---------------------------------------------|
 //! | [`value`]    | Runtime [`Value`] enum and `NativeFn`       |
 //! | [`env`]      | Lexical scopes ([`Environment`])            |
-//! | [`builtins`] | Standard library installed into the prelude |
+//! | [`stdlib`]   | Standard library installed into the prelude |
 //! | [`error`]    | [`RuntimeError`] (miette-aware diagnostics) |
 //! | [`eval`]     | Statement & expression evaluation           |
 //!
@@ -23,10 +23,10 @@ use std::rc::Rc;
 
 use saule_ast::Module;
 
-pub mod builtins;
 pub mod env;
 pub mod error;
 pub mod eval;
+pub mod stdlib;
 pub mod typeck;
 pub mod value;
 
