@@ -13,6 +13,8 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     define(env, "print", builtin_print);
     define(env, "tostring", builtin_tostring);
     define(env, "type", builtin_type);
+    define(env, "int", builtin_int);
+    define(env, "float", builtin_float);
 }
 
 fn define(
@@ -46,4 +48,33 @@ fn builtin_type(args: &[Value]) -> Result<Value, String> {
         _ => v.type_name().to_string(),
     };
     Ok(Value::Str(Rc::new(name)))
+}
+
+fn one_arg<'a>(name: &str, args: &'a [Value]) -> Result<&'a Value, String> {
+    if args.len() != 1 {
+        return Err(format!("{name} expects exactly 1 argument"));
+    }
+    Ok(&args[0])
+}
+
+fn builtin_int(args: &[Value]) -> Result<Value, String> {
+    match one_arg("int", args)? {
+        Value::Int(n) => Ok(Value::Int(*n)),
+        Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+        other => Err(format!(
+            "int expects integer or float, got `{}`",
+            other.type_name()
+        )),
+    }
+}
+
+fn builtin_float(args: &[Value]) -> Result<Value, String> {
+    match one_arg("float", args)? {
+        Value::Float(f) => Ok(Value::Float(*f)),
+        Value::Int(n) => Ok(Value::Float(*n as f64)),
+        other => Err(format!(
+            "float expects integer or float, got `{}`",
+            other.type_name()
+        )),
+    }
 }

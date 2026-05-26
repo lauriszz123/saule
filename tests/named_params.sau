@@ -1,0 +1,9 @@
+class Main
+  local static fn test(first: string?, second: string)
+    print(first, second)
+  end
+
+  static fn main()
+    test(second: "Hello, world!")
+  end
+end

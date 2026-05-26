@@ -27,10 +27,7 @@ pub enum Type {
     /// `table<T>`
     Table(Box<Type>),
     /// `fn(A, B): R`
-    Function {
-        params: Vec<Type>,
-        ret: Box<Type>,
-    },
+    Function { params: Vec<Type>, ret: Box<Type> },
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -81,13 +78,13 @@ pub enum Expr {
     /// `f(a, b, c)`
     Call {
         callee: Box<Spanned<Expr>>,
-        args: Vec<Spanned<Expr>>,
+        args: Vec<CallArg>,
     },
     /// `obj:method(a, b)`
     MethodCall {
         obj: Box<Spanned<Expr>>,
         method: String,
-        args: Vec<Spanned<Expr>>,
+        args: Vec<CallArg>,
     },
     /// `x!`
     ForceUnwrap(Box<Spanned<Expr>>),
@@ -107,6 +104,12 @@ pub enum Expr {
         return_ty: Option<Type>,
         body: LambdaBody,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallArg {
+    Positional(Spanned<Expr>),
+    Named { name: String, value: Spanned<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -290,10 +293,6 @@ pub enum ClassMember {
         name: String,
         ty: Type,
         default: Option<Spanned<Expr>>,
-    },
-    Constructor {
-        params: Vec<Param>,
-        body: Vec<Spanned<Stmt>>,
     },
     Method(Method),
 }

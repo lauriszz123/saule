@@ -50,8 +50,8 @@ fn run_source(name: &str, source: String) -> Result<(), Report> {
         .tokenize()
         .map_err(|e| Report::new(e).with_source_code(make_src()))?;
 
-    let module = saule_parser::parse(tokens)
-        .map_err(|e| Report::new(e).with_source_code(make_src()))?;
+    let module =
+        saule_parser::parse(tokens).map_err(|e| Report::new(e).with_source_code(make_src()))?;
 
     // Static checks run *before* evaluation so we fail fast on declarative
     // errors (missing field initializers etc.) without ever executing user

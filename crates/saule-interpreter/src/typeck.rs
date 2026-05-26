@@ -81,26 +81,22 @@ fn check_class(
     members: &[Spanned<ClassMember>],
     errors: &mut Vec<TypeCheckError>,
 ) {
-    // Locate the constructor body: explicit `constructor`, otherwise the
-    // non-static `init` method. Mirrors the runtime promotion rule in
-    // `exec_class_decl`.
+    // Locate the constructor body: the non-static `fn init` method.
     let mut ctor_body: Option<&Vec<Spanned<Stmt>>> = None;
-    let mut init_body: Option<&Vec<Spanned<Stmt>>> = None;
     for m in members {
         match &m.value {
-            ClassMember::Constructor { body, .. } => ctor_body = Some(body),
             ClassMember::Method(Method {
                 name,
                 is_static: false,
                 body,
                 ..
             }) if name == "init" => {
-                init_body = Some(body);
+                ctor_body = Some(body);
             }
             _ => {}
         }
     }
-    let body = match ctor_body.or(init_body) {
+    let body = match ctor_body {
         Some(b) => b,
         // No constructor → fields are either static (initialized at decl
         // time) or untouched; nothing to verify here.

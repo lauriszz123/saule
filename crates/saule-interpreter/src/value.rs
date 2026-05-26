@@ -123,7 +123,9 @@ impl ClassObject {
         if let Some(m) = self.static_methods.get(name) {
             return Some(m.clone());
         }
-        self.parent.as_ref().and_then(|p| p.lookup_static_method(name))
+        self.parent
+            .as_ref()
+            .and_then(|p| p.lookup_static_method(name))
     }
 
     /// Walk the inheritance chain for a static field.
@@ -131,7 +133,9 @@ impl ClassObject {
         if let Some(v) = self.static_fields.borrow().get(name) {
             return Some(v.clone());
         }
-        self.parent.as_ref().and_then(|p| p.lookup_static_field(name))
+        self.parent
+            .as_ref()
+            .and_then(|p| p.lookup_static_field(name))
     }
 }
 

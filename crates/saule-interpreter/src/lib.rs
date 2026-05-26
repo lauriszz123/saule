@@ -42,7 +42,12 @@ pub fn call_function_value(
     f: &std::rc::Rc<value::FunctionObject>,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    eval::expr::call_function(f, args, 0..0)
+    let evaled: Vec<eval::expr::EvaluatedArg> = args
+        .iter()
+        .cloned()
+        .map(eval::expr::EvaluatedArg::Positional)
+        .collect();
+    eval::expr::call_function(f, &evaled, 0..0)
 }
 
 /// Invoke a static method on a class, with `self` bound to the class — the
@@ -52,13 +57,18 @@ pub fn call_class_static_method(
     method: &str,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let f = class.lookup_static_method(method).ok_or_else(|| {
-        RuntimeError::TypeError {
+    let f = class
+        .lookup_static_method(method)
+        .ok_or_else(|| RuntimeError::TypeError {
             message: format!("no static method `{method}` on class `{}`", class.name),
             span: 0..0,
-        }
-    })?;
-    eval::expr::call_static_method_public(&f, class, args, 0..0)
+        })?;
+    let evaled: Vec<eval::expr::EvaluatedArg> = args
+        .iter()
+        .cloned()
+        .map(eval::expr::EvaluatedArg::Positional)
+        .collect();
+    eval::expr::call_static_method_public(&f, class, &evaled, 0..0)
 }
 
 /// Run a parsed [`Module`] in a fresh environment seeded with built-ins.
@@ -188,8 +198,14 @@ mod tests {
 
     #[test]
     fn type_builtin() {
-        assert_eq!(eval("type(42)").unwrap(), Value::Str(Rc::new("integer".into())));
-        assert_eq!(eval(r#"type("hi")"#).unwrap(), Value::Str(Rc::new("string".into())));
+        assert_eq!(
+            eval("type(42)").unwrap(),
+            Value::Str(Rc::new("integer".into()))
+        );
+        assert_eq!(
+            eval(r#"type("hi")"#).unwrap(),
+            Value::Str(Rc::new("string".into()))
+        );
     }
 
     // ── Phase 2: assignment ──────────────────────────────────────────────────
@@ -272,7 +288,7 @@ mod tests {
               i = i + 1
               sum = sum + i
             end
-            sum
+            return sum
         "#;
         assert_eq!(eval(src).unwrap(), Value::Int(55));
     }
@@ -287,7 +303,7 @@ mod tests {
                 break
               end
             end
-            i
+            return i
         "#;
         assert_eq!(eval(src).unwrap(), Value::Int(5));
     }
@@ -305,7 +321,7 @@ mod tests {
               end
               sum = sum + i
             end
-            sum
+            return sum
         "#;
         assert_eq!(eval(src).unwrap(), Value::Int(25));
     }
@@ -319,7 +335,7 @@ mod tests {
             repeat
               i = i + 1
             until i >= 3
-            i
+            return i
         "#;
         assert_eq!(eval(src).unwrap(), Value::Int(3));
     }
@@ -333,7 +349,8 @@ mod tests {
             for i: integer = 1 to 5 do
               sum = sum + i
             end
-            sum
+
+            return sum
         "#;
         assert_eq!(eval(src).unwrap(), Value::Int(15));
     }
@@ -819,6 +836,7 @@ mod tests {
                 fn setup(width: integer, height: integer, title: string): string
                     return title .. " " .. width .. "x" .. height
                 end
+
                 setup(width: 1920, height: 1080, title: "Game")
             "#;
             assert_str(src, "Game 1920x1080");
@@ -928,7 +946,7 @@ mod tests {
                 class Point
                     x: integer
                     y: integer
-                    constructor(x: integer, y: integer)
+                    fn init(x: integer, y: integer)
                         self.x = x
                         self.y = y
                     end
@@ -943,7 +961,7 @@ mod tests {
             let src = r#"
                 class Greeter
                     name: string
-                    constructor(name: string)
+                    fn init(name: string)
                         self.name = name
                     end
                     fn greet(self): string
@@ -960,7 +978,7 @@ mod tests {
             let src = r#"
                 class Counter
                     n: integer
-                    constructor()
+                    fn init()
                         self.n = 0
                     end
                     fn tick(self): nil
@@ -1012,7 +1030,9 @@ mod tests {
             let src = r#"
                 class Box
                     v: integer
-                    constructor(v: integer) self.v = v end
+                    fn init(v: integer)
+                        self.v = v
+                    end
                 end
                 local a: Box = new Box(1)
                 local b: Box = new Box(1)
@@ -1056,11 +1076,15 @@ mod tests {
             let src = r#"
                 class Entity
                     name: string
-                    constructor(name: string) self.name = name end
+                    fn init(name: string)
+                        self.name = name
+                    end
                     fn getName(self): string return self.name end
                 end
                 class Player extends Entity
-                    constructor(name: string) super(name) end
+                    fn init(name: string)
+                        self.super(name)
+                    end
                 end
                 local p: Player = new Player("arthur")
                 p:getName()
@@ -1072,12 +1096,14 @@ mod tests {
             let src = r#"
                 class A
                     a: integer
-                    constructor(a: integer) self.a = a end
+                    fn init(a: integer)
+                        self.a = a
+                    end
                 end
                 class B extends A
                     b: integer
-                    constructor(a: integer, b: integer)
-                        super(a)
+                    fn init(a: integer, b: integer)
+                        self.super(a)
                         self.b = b
                     end
                 end
@@ -1116,7 +1142,9 @@ mod tests {
                 end
                 class Person implements Greetable
                     name: string
-                    constructor(n: string) self.name = n end
+                    fn init(n: string)
+                        self.name = n
+                    end
                     fn greet(self): string return "hello " .. self.name end
                 end
                 local g: Greetable = new Person("rust")
@@ -1193,7 +1221,9 @@ mod tests {
             let src = r#"
                 class P
                     name: string
-                    constructor(n: string) self.name = n end
+                    fn init(n: string)
+                        self.name = n
+                    end
                 end
                 local p: P? = nil
                 p?.name
@@ -1205,7 +1235,9 @@ mod tests {
             let src = r#"
                 class P
                     name: string
-                    constructor(n: string) self.name = n end
+                    fn init(n: string)
+                        self.name = n
+                    end
                 end
                 local p: P? = new P("ada")
                 p?.name
@@ -1245,7 +1277,9 @@ mod tests {
             let src = r#"
                 class P
                     name: string
-                    constructor(n: string) self.name = n end
+                    fn init(n: string)
+                        self.name = n
+                    end
                     fn getName(self): string return self.name end
                 end
                 local p: P? = nil
@@ -1404,4 +1438,3 @@ mod tests {
         }
     }
 }
-

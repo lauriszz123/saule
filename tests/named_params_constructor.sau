@@ -1,0 +1,19 @@
+class Test
+  fn init(named: string?, sec: string?)
+    print(named)
+    print(sec)
+  end
+end
+
+class Main
+  local static fn test(first: string?, second: string)
+    print(first, second)
+  end
+
+  static fn main()
+    test(second: "Hello, world!")
+    local testify: Test = Test(named: "Parameter")
+    Test(sec: "Just a test")
+    Test("And again", sec: "but reversed")
+  end
+end

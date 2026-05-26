@@ -13,7 +13,10 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
             Value::Int(n) => Ok(Value::Int(-n)),
             Value::Float(f) => Ok(Value::Float(-f)),
             other => Err(RuntimeError::TypeError {
-                message: format!("cannot negate `{}`", other.type_name()),
+                message: format!(
+                    "cannot negate a `{}` — negation only works on numbers (integer or float)",
+                    other.type_name()
+                ),
                 span,
             }),
         },
@@ -21,7 +24,10 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
         UnaryOp::Len => match v {
             Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
             other => Err(RuntimeError::TypeError {
-                message: format!("cannot take length of `{}`", other.type_name()),
+                message: format!(
+                    "cannot take length of a `{}` — only strings have a length (use `#` on strings)",
+                    other.type_name()
+                ),
                 span,
             }),
         },
@@ -71,7 +77,7 @@ fn arithmetic(
         }
         (a, b) => Err(RuntimeError::TypeError {
             message: format!(
-                "arithmetic requires numbers, got `{}` and `{}`",
+                "arithmetic requires numbers but got `{}` and `{}` — use int() or float() to convert",
                 a.type_name(),
                 b.type_name()
             ),
@@ -127,19 +133,23 @@ fn comparison(
 
     let ord: Ordering = match (&l, &r) {
         (Value::Int(a), Value::Int(b)) => a.cmp(b),
-        (Value::Float(a), Value::Float(b)) => a
-            .partial_cmp(b)
-            .ok_or_else(|| RuntimeError::TypeError {
-                message: "NaN in comparison".into(),
+        (Value::Float(a), Value::Float(b)) => {
+            a.partial_cmp(b).ok_or_else(|| RuntimeError::TypeError {
+                message: "cannot compare NaN (not-a-number) — comparison is undefined for NaN values".into(),
                 span: span.clone(),
-            })?,
+            })?
+        }
         (Value::Str(a), Value::Str(b)) => a.cmp(b),
         (Value::Int(_), Value::Float(_)) | (Value::Float(_), Value::Int(_)) => {
             return Err(RuntimeError::NumericMix { span });
         }
         (a, b) => {
             return Err(RuntimeError::TypeError {
-                message: format!("cannot compare `{}` with `{}`", a.type_name(), b.type_name()),
+                message: format!(
+                    "cannot compare `{}` with `{}` — comparison only works on compatible types (numbers or strings)",
+                    a.type_name(),
+                    b.type_name()
+                ),
                 span,
             });
         }

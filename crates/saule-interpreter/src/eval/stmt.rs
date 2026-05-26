@@ -213,8 +213,8 @@ fn exec_class_decl(
             Some(other) => {
                 return Err(RuntimeError::TypeError {
                     message: format!(
-                        "cannot extend `{pname}`: expected a class, got `{}`",
-                        other.type_name()
+                        "cannot extend `{}`: expected a class but got `{}` — check class definition",
+                        pname, other.type_name()
                     ),
                     span,
                 });
@@ -236,18 +236,14 @@ fn exec_class_decl(
     let mut static_methods: HashMap<String, Rc<FunctionObject>> = HashMap::new();
     let mut constructor: Option<Rc<FunctionObject>> = None;
 
-    // Scan once so we know whether the class has any way to be constructed.
+    // Scan once so we know whether the class has a constructor (`fn init`).
     // When it doesn't, `local field = expr` declarations are promoted to
     // statics so callers can read them via `ClassName.field` (and through
     // the class-as-`self` convention used inside `static fn`s).
-    let has_explicit_constructor = members
-        .iter()
-        .any(|m| matches!(&m.value, ClassMember::Constructor { .. }));
     let has_init_method = members.iter().any(|m| match &m.value {
         ClassMember::Method(meth) => meth.name == "init" && !meth.is_static,
         _ => false,
     });
-    let has_constructor = has_explicit_constructor || has_init_method;
 
     for member in members {
         match &member.value {
@@ -259,8 +255,7 @@ fn exec_class_decl(
             } => {
                 // Promote `local field = expr` to a static when there's no
                 // constructor — otherwise we'd never be able to read it.
-                let treat_as_static =
-                    *is_static || (!has_constructor && default.is_some());
+                let treat_as_static = *is_static || (!has_init_method && default.is_some());
                 if treat_as_static {
                     // Static defaults are evaluated once, at class
                     // declaration time, in the enclosing scope.
@@ -276,14 +271,6 @@ fn exec_class_decl(
                     });
                 }
             }
-            ClassMember::Constructor { params, body } => {
-                constructor = Some(Rc::new(make_function(
-                    Some(format!("{name}.constructor")),
-                    params.clone(),
-                    body.clone(),
-                    env,
-                )));
-            }
             ClassMember::Method(m) => {
                 let func = Rc::new(make_function(
                     Some(format!("{name}.{}", m.name)),
@@ -293,10 +280,8 @@ fn exec_class_decl(
                 ));
                 if m.is_static {
                     static_methods.insert(m.name.clone(), func);
-                } else if m.name == "init" && !has_explicit_constructor {
-                    // `init` is Saule's preferred constructor spelling. Only
-                    // promote when there's no explicit `constructor` to
-                    // avoid silently shadowing it.
+                } else if m.name == "init" {
+                    // `init` is the only constructor spelling — always promote.
                     constructor = Some(func);
                 } else {
                     methods.insert(m.name.clone(), func);
@@ -315,8 +300,7 @@ fn exec_class_decl(
         constructor,
     });
 
-    env.borrow_mut()
-        .define(name.clone(), Value::Class(class));
+    env.borrow_mut().define(name.clone(), Value::Class(class));
     Ok(Flow::nil())
 }
 
@@ -401,7 +385,7 @@ fn assign_member(
         }
         other => Err(RuntimeError::TypeError {
             message: format!(
-                "cannot assign field `{name}` on value of type `{}`",
+                "cannot assign field `{name}` on value of type `{}` — only instances and classes can have fields assigned",
                 other.type_name()
             ),
             span,
@@ -460,7 +444,7 @@ fn exec_for_numeric(
         }
         (f, t, s) => Err(RuntimeError::TypeError {
             message: format!(
-                "numeric `for` requires matching `integer` or `float` bounds (got `{}`, `{}`, `{}`)",
+                "numeric `for` loop requires all bounds (from, to, step) to be the same numeric type — got `{}`, `{}`, `{}` (use matching integer or float bounds)",
                 f.type_name(),
                 t.type_name(),
                 s.type_name()

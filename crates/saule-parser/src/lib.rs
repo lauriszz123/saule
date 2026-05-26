@@ -22,8 +22,8 @@ mod parseerror;
 pub use parseerror::ParseError;
 
 use saule_ast::{
-    BinOp, ClassMember, Decl, EnumVariant, Expr, ImportNames, LambdaBody, Method, MethodSig,
-    Module, Param, Spanned, Stmt, Type, UnaryOp,
+    BinOp, CallArg, ClassMember, Decl, EnumVariant, Expr, ImportNames, LambdaBody, Method,
+    MethodSig, Module, Param, Spanned, Stmt, Type, UnaryOp,
 };
 use saule_lexer::Token;
 use std::ops::Range;
@@ -174,7 +174,12 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::RParen, "`)` in function type")?;
-                self.expect(&Token::Colon, "`:` before return type")?;
+                if !(self.eat(&Token::Arrow) || self.eat(&Token::Colon)) {
+                    return Err(ParseError::Expected {
+                        expected: "`->` or `:` before return type",
+                        span: self.peek().span.clone(),
+                    });
+                }
                 let ret = self.parse_type()?;
                 Ok(Type::Function {
                     params,
@@ -425,17 +430,29 @@ impl Parser {
     }
 
     /// Parses `(arg1, arg2, ...)`; the opening `(` must be the next token.
-    fn parse_call_args(&mut self) -> Result<(Vec<Spanned<Expr>>, Range<usize>), ParseError> {
+    fn parse_call_args(&mut self) -> Result<(Vec<CallArg>, Range<usize>), ParseError> {
         self.expect(&Token::LParen, "`(`")?;
         let mut args = Vec::new();
         if !self.check(&Token::RParen) {
-            args.push(self.parse_expression()?);
+            args.push(self.parse_call_arg()?);
             while self.eat(&Token::Comma) {
-                args.push(self.parse_expression()?);
+                args.push(self.parse_call_arg()?);
             }
         }
         let close = self.expect(&Token::RParen, "`)` to close arguments")?;
         Ok((args, close.span))
+    }
+
+    fn parse_call_arg(&mut self) -> Result<CallArg, ParseError> {
+        if let Token::Identifier(name) = self.peek().value.clone()
+            && matches!(self.peek_at(1).value, Token::Colon)
+        {
+            self.advance();
+            self.advance();
+            let value = self.parse_expression()?;
+            return Ok(CallArg::Named { name, value });
+        }
+        Ok(CallArg::Positional(self.parse_expression()?))
     }
 
     // ── Primary expressions ─────────────────────────────────────────────────
@@ -477,7 +494,27 @@ impl Parser {
             }
             Token::Identifier(name) => {
                 self.advance();
-                Ok(Spanned::new(Expr::Ident(name), tok.span))
+                if self.eat(&Token::FatArrow) {
+                    let body_expr = self.parse_expression()?;
+                    let span = tok.span.start..body_expr.span.end;
+                    let param = Param {
+                        name,
+                        ty: Type::Named("any".to_string()),
+                        default: None,
+                        variadic: false,
+                        span: tok.span.clone(),
+                    };
+                    Ok(Spanned::new(
+                        Expr::Lambda {
+                            params: vec![param],
+                            return_ty: None,
+                            body: LambdaBody::Expr(Box::new(body_expr)),
+                        },
+                        span,
+                    ))
+                } else {
+                    Ok(Spanned::new(Expr::Ident(name), tok.span))
+                }
             }
             Token::New => self.parse_new(),
             Token::LBrace => self.parse_table_literal(),
@@ -507,7 +544,19 @@ impl Parser {
         if self.check(&Token::Lt) {
             self.skip_generic_args()?;
         }
-        let (args, close_span) = self.parse_call_args()?;
+        let (raw_args, close_span) = self.parse_call_args()?;
+        let mut args = Vec::with_capacity(raw_args.len());
+        for arg in raw_args {
+            match arg {
+                CallArg::Positional(expr) => args.push(expr),
+                CallArg::Named { value, .. } => {
+                    return Err(ParseError::Expected {
+                        expected: "positional argument in constructor call",
+                        span: value.span,
+                    });
+                }
+            }
+        }
         let span = new_tok.span.start..close_span.end;
         Ok(Spanned::new(Expr::New { class, args }, span))
     }
@@ -1080,16 +1129,22 @@ impl Parser {
 
     fn parse_class_member(&mut self) -> Result<Spanned<ClassMember>, ParseError> {
         let start = self.peek().span.start;
-        let is_static = self.eat(&Token::Static);
+        // Accept both `static local ...` and `local static ...`.
+        let mut is_static = false;
+        let mut has_local = false;
+        loop {
+            if !is_static && self.eat(&Token::Static) {
+                is_static = true;
+                continue;
+            }
+            if !has_local && self.eat(&Token::Local) {
+                has_local = true;
+                continue;
+            }
+            break;
+        }
 
         let member = match self.peek().value {
-            Token::Constructor => {
-                self.advance();
-                let params = self.parse_param_list()?;
-                let body = self.parse_block_until(&[Token::End])?;
-                self.expect(&Token::End, "`end` to close constructor")?;
-                ClassMember::Constructor { params, body }
-            }
             Token::Fn => {
                 let m_start = self.peek().span.start;
                 self.advance();
@@ -1110,9 +1165,25 @@ impl Parser {
                     span: m_start..end_tok.span.end,
                 })
             }
-            Token::Local => {
-                // Field: `local name: T [= default]`
-                self.advance();
+            Token::Identifier(_) if !has_local => {
+                // Public field: `name: T [= default]` (also works after `static`).
+                let (name, _) = self.expect_ident("field name")?;
+                self.expect(&Token::Colon, "`:` and type on field")?;
+                let ty = self.parse_type()?;
+                let default = if self.eat(&Token::Assign) {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                ClassMember::Field {
+                    is_static,
+                    name,
+                    ty,
+                    default,
+                }
+            }
+            Token::Identifier(_) if has_local => {
+                // Private field: `local name: T [= default]`.
                 let (name, _) = self.expect_ident("field name")?;
                 self.expect(&Token::Colon, "`:` and type on field")?;
                 let ty = self.parse_type()?;
@@ -1130,7 +1201,7 @@ impl Parser {
             }
             _ => {
                 return Err(ParseError::Expected {
-                    expected: "a class member (`local`, `constructor`, `fn`, or `static`)",
+                    expected: "a class member (`[local] name: type`, `fn`, or `static`)",
                     span: self.peek().span.clone(),
                 });
             }
