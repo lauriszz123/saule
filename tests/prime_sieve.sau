@@ -1,0 +1,26 @@
+import math
+import console
+
+class Main
+  static local N: integer = 100
+
+  static fn main()
+    local isComposite: table<boolean> = {}
+
+    for i: integer = 2, Math.floor(Math.sqrt(N)) do
+      if not isComposite[i] then
+        for j: integer = i * i, N, i do
+          isComposite[j] = true
+        end
+      end
+    end
+
+    for i = 2, N do
+      if not isComposite[i] then
+        Console.write(i, " ")
+      end
+    end
+
+    print()
+  end
+end

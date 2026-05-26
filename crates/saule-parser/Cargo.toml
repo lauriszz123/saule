@@ -1,0 +1,10 @@
+[package]
+name = "saule-parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+saule-ast = { path = "../saule-ast" }
+saule-lexer = { path = "../saule-lexer" }
+miette = "7.6.0"
+thiserror = "2.0.18"

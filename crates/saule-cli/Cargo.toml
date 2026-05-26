@@ -1,0 +1,14 @@
+[package]
+name = "saule-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "saule"
+path = "src/main.rs"
+
+[dependencies]
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }
+saule-interpreter = { path = "../saule-interpreter" }
+miette = { version = "7.6.0", features = ["fancy"] }

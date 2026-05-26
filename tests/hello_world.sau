@@ -1,0 +1,7 @@
+-- Hello world example
+
+class Main
+  static fn main()
+    print("Hello, world!")
+  end
+end

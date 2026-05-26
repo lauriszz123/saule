@@ -1,0 +1,66 @@
+class Shape
+  local name: string
+
+  fn init(name: string)
+    self.name = name
+  end
+
+  fn area() -> float
+    return 0.0
+  end
+
+  fn describe() -> nil
+    print(self.name)
+    print(self.area())
+  end
+end
+
+class Circle extends Shape
+  local radius: float
+
+  fn init(radius: float)
+    self.super("Circle")
+
+    self.radius = radius
+  end
+
+  fn area() -> float
+    return 3.14159 * self.radius * self.radius
+  end
+end
+
+class Rectangle extends Shape
+  local width: float
+  local height: float
+
+  fn init(width: float, height: float)
+    self.super("Rectangle")
+
+    self.width = width
+    self.height = height
+  end
+
+  fn area() -> float
+    return self.width * self.height
+  end
+end
+
+class Square extends Rectangle
+  fn init(side: float)
+    self.super(side, side)
+
+    self.name = "Square"
+  end
+end
+
+class Main
+  static fn main()
+    local c: Circle    = Circle(2.0)
+    local r: Rectangle = Rectangle(3.0, 4.0)
+    local s: Square    = Square(5.0)
+
+    c.describe()
+    r.describe()
+    s.describe()
+  end
+end

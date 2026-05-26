@@ -1,0 +1,39 @@
+class Entity
+  local entType: string
+
+  fn init(t: string)
+    self.entType = t
+  end
+
+  fn identify()
+    print("I am a: ", self.entType)
+  end
+
+  fn destroy()
+  end
+end
+
+class Person extends Entity
+  local name: string
+
+  fn init(name: string)
+    self.super("Human")
+    self.name = name
+  end
+
+  fn introduce()
+    self.identify()
+    print("... and my name is: " .. self.name)
+  end
+
+  fn destroy()
+  end
+end
+
+class Main
+  static local lauris: Person = Person("Laurynas")
+
+  static fn main()
+    lauris.introduce()
+  end
+end

@@ -1,0 +1,9 @@
+[package]
+name = "saule-lexer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+saule-ast = { path = "../saule-ast" }
+miette = "7.6.0"
+thiserror = "2.0.18"
