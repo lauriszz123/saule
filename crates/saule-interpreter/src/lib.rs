@@ -95,7 +95,7 @@ pub fn run_in(module: &Module, env: &Rc<RefCell<Environment>>) -> Result<Value, 
             which: "continue",
             span: 0..0,
         }),
-        Flow::Return(v) => Ok(v),
+        Flow::Return(values) => Ok(values.into_iter().next().unwrap_or(Value::Nil)),
     }
 }
 
@@ -793,6 +793,23 @@ mod tests {
                 a + b
             "#;
             assert_int(src, 16);
+        }
+        #[test]
+        fn multi_return_through_named_function_call() {
+            let src = r#"
+                fn minMax(items: table<integer>) -> (integer, integer)
+                    local lo: integer = items[1]
+                    local hi: integer = items[1]
+                    for v: integer in items do
+                        if v < lo then lo = v end
+                        if v > hi then hi = v end
+                    end
+                    return lo, hi
+                end
+                local lo: integer, hi: integer = minMax({3,1,7,2,9})
+                lo * 100 + hi
+            "#;
+            assert_int(src, 109);
         }
         #[test]
         fn multi_return_min_max() {

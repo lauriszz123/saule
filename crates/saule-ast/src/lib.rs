@@ -26,6 +26,8 @@ pub enum Type {
     Nullable(Box<Type>),
     /// `table<T>`
     Table(Box<Type>),
+    /// `(A, B, C)` — currently used primarily for multi-return signatures.
+    Tuple(Vec<Type>),
     /// `fn(A, B): R`
     Function { params: Vec<Type>, ret: Box<Type> },
 }

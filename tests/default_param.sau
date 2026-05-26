@@ -1,0 +1,12 @@
+class Test
+  static fn default(introduce: string, name: string = "Unnamed")
+    print(introduce, name)
+  end
+end
+
+class Main
+  static fn main()
+    Test.default("My name is:")
+    Test.default("And my name is:", "Laurynas")
+  end
+end

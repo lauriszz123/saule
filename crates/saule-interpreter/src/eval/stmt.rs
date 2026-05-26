@@ -4,11 +4,11 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use saule_ast::{ClassMember, Decl, Expr, Param, Spanned, Stmt};
+use saule_ast::{ClassMember, Decl, EnumVariant, Expr, Method, Param, Spanned, Stmt};
 
 use crate::env::Environment;
 use crate::error::{RuntimeError, unsupported};
-use crate::value::{ClassObject, FieldDef, FunctionBody, FunctionObject, Value};
+use crate::value::{self, ClassObject, FieldDef, FunctionBody, FunctionObject, Value};
 
 use super::{Flow, expr};
 
@@ -52,11 +52,9 @@ pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow
 
         Stmt::LocalMulti { names, values } => {
             // Evaluate every RHS first so `local a, b = b, a` works at the
-            // outer scope.
-            let mut evaluated = Vec::with_capacity(values.len());
-            for v in values {
-                evaluated.push(expr::eval(v, env)?);
-            }
+            // outer scope. The final expression may expand into multiple
+            // return values (Lua-style destructuring semantics).
+            let evaluated = eval_expr_list(values, env)?;
             for (i, (name, _)) in names.iter().enumerate() {
                 let v = evaluated.get(i).cloned().unwrap_or(Value::Nil);
                 env.borrow_mut().define(name.clone(), v);
@@ -68,11 +66,9 @@ pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow
 
         Stmt::AssignMulti { targets, values } => {
             // Evaluate all RHS expressions first to support parallel
-            // semantics (e.g. `a, b = b, a + b`).
-            let mut evaluated = Vec::with_capacity(values.len());
-            for v in values {
-                evaluated.push(expr::eval(v, env)?);
-            }
+            // semantics (e.g. `a, b = b, a + b`). The final expression may
+            // expand into multiple return values.
+            let evaluated = eval_expr_list(values, env)?;
             for (i, target) in targets.iter().enumerate() {
                 let v = evaluated.get(i).cloned().unwrap_or(Value::Nil);
                 assign_target(target, v, env)?;
@@ -139,16 +135,15 @@ pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow
             body,
         } => exec_for_numeric(var, from, to, step.as_ref(), body, env, span),
 
-        Stmt::ForIn { .. } => Err(unsupported("for-in", span)),
+        Stmt::ForIn { vars, iter, body } => exec_for_in(vars, iter, body, env, span),
 
         Stmt::Return(exprs) => {
-            // Saule supports multi-return at the syntax level but only the
-            // first value is propagated until tuple support lands.
-            let v = match exprs.as_slice() {
-                [] => Value::Nil,
-                [first, ..] => expr::eval(first, env)?,
+            let values = if exprs.is_empty() {
+                vec![Value::Nil]
+            } else {
+                eval_expr_list(exprs, env)?
             };
-            Ok(Flow::Return(v))
+            Ok(Flow::Return(values))
         }
 
         Stmt::Break => Ok(Flow::Break),
@@ -158,6 +153,21 @@ pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow
         Stmt::Try { .. } => Err(unsupported("try/catch", span)),
         Stmt::Decl(decl) => exec_decl(decl, env),
     }
+}
+
+fn eval_expr_list(
+    exprs: &[Spanned<Expr>],
+    env: &Rc<RefCell<Environment>>,
+) -> Result<Vec<Value>, RuntimeError> {
+    let mut out = Vec::new();
+    for (i, expr_node) in exprs.iter().enumerate() {
+        if i + 1 == exprs.len() {
+            out.extend(expr::eval_values(expr_node, env)?);
+        } else {
+            out.push(expr::eval(expr_node, env)?);
+        }
+    }
+    Ok(out)
 }
 
 // ─── Declarations ────────────────────────────────────────────────────────────
@@ -183,7 +193,7 @@ fn exec_decl(
         }
         Decl::Class { .. } => exec_class_decl(decl, env),
         Decl::Interface { .. } => Err(unsupported("interface declaration", span)),
-        Decl::Enum { .. } => Err(unsupported("enum declaration", span)),
+        Decl::Enum { name, variants, methods, .. } => exec_enum_decl(name, variants, methods, env, span),
         Decl::Import { .. } => Err(unsupported("import", span)),
     }
 }
@@ -319,6 +329,68 @@ fn make_function(
     }
 }
 
+fn exec_enum_decl(
+    enum_name: &str,
+    variants: &[Spanned<EnumVariant>],
+    methods: &[Method],
+    env: &Rc<RefCell<Environment>>,
+    _span: std::ops::Range<usize>,
+) -> Result<Flow, RuntimeError> {
+    let mut variant_dict = HashMap::new();
+    let mut enum_methods = HashMap::new();
+
+    for method in methods {
+        let func = Rc::new(make_function(
+            Some(format!("{enum_name}.{}", method.name)),
+            method.params.clone(),
+            method.body.clone(),
+            env,
+        ));
+        enum_methods.insert(method.name.clone(), func);
+    }
+
+    // Create all variants (without enum references initially)
+    for variant in variants {
+        match &variant.value {
+            EnumVariant::Bare(name) => {
+                let variant_obj = Rc::new(value::EnumVariantObject {
+                    enum_name: enum_name.to_string(),
+                    variant_name: name.clone(),
+                    value: None,
+                    enum_obj: RefCell::new(None),
+                });
+                variant_dict.insert(name.clone(), variant_obj);
+            }
+            EnumVariant::Valued(name, expr) => {
+                let val = expr::eval(expr, env)?;
+                let variant_obj = Rc::new(value::EnumVariantObject {
+                    enum_name: enum_name.to_string(),
+                    variant_name: name.clone(),
+                    value: Some(val),
+                    enum_obj: RefCell::new(None),
+                });
+                variant_dict.insert(name.clone(), variant_obj);
+            }
+        }
+    }
+
+    // Create the final enum object with all variants
+    let final_enum = Rc::new(value::EnumObject {
+        name: enum_name.to_string(),
+        variants: variant_dict.clone(),
+        methods: enum_methods,
+    });
+
+    // Now update each variant to reference the enum
+    for variant in variant_dict.values() {
+        *variant.enum_obj.borrow_mut() = Some(final_enum.clone());
+    }
+
+    env.borrow_mut()
+        .define(enum_name.to_string(), Value::Enum(final_enum));
+    Ok(Flow::nil())
+}
+
 // ─── Assignment ──────────────────────────────────────────────────────────────
 
 fn exec_assign(
@@ -351,7 +423,11 @@ fn assign_target(
             let receiver = expr::eval(obj, env)?;
             assign_member(&receiver, name, v, target.span.clone())
         }
-        // Index assignment waits for the tables phase.
+        Expr::Index { obj, index } => {
+            let receiver = expr::eval(obj, env)?;
+            let index_value = expr::eval(index, env)?;
+            assign_index(&receiver, index_value, v, target.span.clone())
+        }
         _ => Err(RuntimeError::InvalidAssignTarget {
             span: target.span.clone(),
         }),
@@ -405,6 +481,41 @@ fn set_static_in_chain(class: &Rc<crate::value::ClassObject>, name: &str, value:
         return set_static_in_chain(parent, name, value);
     }
     false
+}
+
+fn assign_index(
+    receiver: &Value,
+    index: Value,
+    value: Value,
+    span: std::ops::Range<usize>,
+) -> Result<Flow, RuntimeError> {
+    match receiver {
+        Value::Table(items) => {
+            let Some(slot) = expr::table_index_to_slot(&index).map_err(|message| RuntimeError::TypeError {
+                message,
+                span: span.clone(),
+            })? else {
+                return Err(RuntimeError::TypeError {
+                    message: "table assignment index must be a positive integer".to_string(),
+                    span,
+                });
+            };
+
+            let mut items = items.borrow_mut();
+            if slot >= items.len() {
+                items.resize(slot + 1, Value::Nil);
+            }
+            items[slot] = value;
+            Ok(Flow::nil())
+        }
+        other => Err(RuntimeError::TypeError {
+            message: format!(
+                "cannot assign through `[index]` on a `{}` — only tables support indexed assignment",
+                other.type_name()
+            ),
+            span,
+        }),
+    }
 }
 
 // ─── Numeric for ─────────────────────────────────────────────────────────────
@@ -502,3 +613,56 @@ fn run_numeric_loop_float(
     }
     Ok(Flow::nil())
 }
+
+fn exec_for_in(
+    vars: &[(String, Option<saule_ast::Type>)],
+    iter: &Spanned<Expr>,
+    body: &[Spanned<Stmt>],
+    env: &Rc<RefCell<Environment>>,
+    span: std::ops::Range<usize>,
+) -> Result<Flow, RuntimeError> {
+    let iter_value = expr::eval(iter, env)?;
+    match iter_value {
+        Value::Table(items) => {
+            let snapshot = items.borrow().clone();
+            for (i, value) in snapshot.into_iter().enumerate() {
+                let scope = Environment::with_parent(env.clone());
+                match vars {
+                    [(name, _)] => {
+                        scope.borrow_mut().define(name.clone(), value);
+                    }
+                    [(index_name, _), (value_name, _)] => {
+                        scope
+                            .borrow_mut()
+                            .define(index_name.clone(), Value::Int((i + 1) as i64));
+                        scope.borrow_mut().define(value_name.clone(), value);
+                    }
+                    _ => {
+                        return Err(RuntimeError::TypeError {
+                            message: format!(
+                                "for-in loops support one value variable or an index/value pair, got {} variables",
+                                vars.len()
+                            ),
+                            span,
+                        });
+                    }
+                }
+
+                match exec_block(body, &scope)? {
+                    Flow::Normal(_) | Flow::Continue => {}
+                    Flow::Break => return Ok(Flow::nil()),
+                    ret @ Flow::Return(_) => return Ok(ret),
+                }
+            }
+            Ok(Flow::nil())
+        }
+        other => Err(RuntimeError::TypeError {
+            message: format!(
+                "cannot iterate over a `{}` with `for ... in` — use a table value",
+                other.type_name()
+            ),
+            span,
+        }),
+    }
+}
+

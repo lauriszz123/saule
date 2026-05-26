@@ -84,7 +84,11 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             read_member(&receiver, name, span)
         }
         Expr::SafeMember { .. } => Err(unsupported("safe member access", span)),
-        Expr::Index { .. } => Err(unsupported("indexing", span)),
+        Expr::Index { obj, index } => {
+            let receiver = eval(obj, env)?;
+            let index_value = eval(index, env)?;
+            read_index(&receiver, index_value, span)
+        }
         Expr::MethodCall { obj, method, args } => {
             let receiver = eval(obj, env)?;
             let evaled = eval_call_args(args, env)?;
@@ -117,7 +121,13 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             }
             construct(class, &vs, span)
         }
-        Expr::Table(_) => Err(unsupported("table literal", span)),
+        Expr::Table(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                values.push(eval(item, env)?);
+            }
+            Ok(Value::Table(Rc::new(RefCell::new(values))))
+        }
 
         Expr::Lambda { params, body, .. } => {
             let body = match body {
@@ -143,6 +153,39 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
     }
 }
 
+fn first_or_nil(values: Vec<Value>) -> Value {
+    values.into_iter().next().unwrap_or(Value::Nil)
+}
+
+pub(crate) fn eval_values(
+    expr: &Spanned<Expr>,
+    env: &Rc<RefCell<Environment>>,
+) -> Result<Vec<Value>, RuntimeError> {
+    let span = expr.span.clone();
+    match &expr.value {
+        Expr::Call { callee, args } => {
+            if let Expr::Member { obj, name } = &callee.value {
+                if name == "super" {
+                    return Ok(vec![super_call(obj, args, env, span)?]);
+                }
+                let receiver = eval(obj, env)?;
+                let vs = eval_call_args(args, env)?;
+                return dispatch_member_call_multi(&receiver, name, vs, span);
+            }
+
+            let cv = eval(callee, env)?;
+            let vs = eval_call_args(args, env)?;
+            call_value_multi(cv, &vs, span)
+        }
+        Expr::MethodCall { obj, method, args } => {
+            let receiver = eval(obj, env)?;
+            let evaled = eval_call_args(args, env)?;
+            invoke_method_multi(&receiver, method, evaled, span)
+        }
+        _ => Ok(vec![eval(expr, env)?]),
+    }
+}
+
 /// Invoke a callable [`Value`]. Handles both native and user-defined
 /// functions.
 fn call_value(
@@ -150,6 +193,14 @@ fn call_value(
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
+    Ok(first_or_nil(call_value_multi(callee, args, span)?))
+}
+
+fn call_value_multi(
+    callee: Value,
+    args: &[EvaluatedArg],
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
     match callee {
         Value::Native(nf) => {
             let mut positional = Vec::with_capacity(args.len());
@@ -167,12 +218,14 @@ fn call_value(
                     }
                 }
             }
-            (nf.func)(&positional).map_err(|message| RuntimeError::TypeError { message, span })
+            (nf.func)(&positional)
+                .map(|v| vec![v])
+                .map_err(|message| RuntimeError::TypeError { message, span })
         }
-        Value::Function(f) => call_function(&f, args, span),
+        Value::Function(f) => call_function_multi(&f, args, span),
         // `ClassName(args)` is sugar for `new ClassName(args)`. The explicit
         // `new` form still works through `Expr::New`.
-        Value::Class(c) => construct(c, args, span),
+        Value::Class(c) => construct(c, args, span).map(|v| vec![v]),
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "value of type `{}` is not callable — only functions, classes, and methods can be called",
@@ -192,13 +245,32 @@ fn bind_params(
     args: &[EvaluatedArg],
     span: &std::ops::Range<usize>,
 ) -> Result<(), RuntimeError> {
-    for param in params {
-        if param.variadic {
-            return Err(unsupported("variadic parameters", param.span.clone()));
-        }
+    let variadic_indices: Vec<usize> = params
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| p.variadic.then_some(i))
+        .collect();
+    if variadic_indices.len() > 1 {
+        return Err(RuntimeError::TypeError {
+            message: "a function can declare at most one variadic parameter".to_string(),
+            span: params[variadic_indices[1]].span.clone(),
+        });
+    }
+    let variadic_idx = variadic_indices.first().copied();
+    if let Some(idx) = variadic_idx
+        && idx + 1 != params.len()
+    {
+        return Err(RuntimeError::TypeError {
+            message: format!(
+                "variadic parameter `{}` must be the last parameter in the list",
+                params[idx].name
+            ),
+            span: params[idx].span.clone(),
+        });
     }
 
     let mut assigned: Vec<Option<Value>> = vec![None; params.len()];
+    let mut variadic_values: Vec<Value> = Vec::new();
     let mut next_positional = 0usize;
     let mut seen_named = false;
     let mut named_arg_count = 0usize;
@@ -214,6 +286,13 @@ fn bind_params(
                         ),
                         span: span.clone(),
                     });
+                }
+                if let Some(var_idx) = variadic_idx
+                    && next_positional >= var_idx
+                {
+                    variadic_values.push(value.clone());
+                    next_positional += 1;
+                    continue;
                 }
                 if next_positional >= params.len() {
                     return Err(RuntimeError::TypeError {
@@ -243,6 +322,14 @@ fn bind_params(
                         span: span.clone(),
                     });
                 };
+                if params[idx].variadic {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "variadic parameter `{name}` cannot be passed by name — provide any extra arguments positionally"
+                        ),
+                        span: span.clone(),
+                    });
+                }
                 if assigned[idx].is_some() {
                     return Err(RuntimeError::TypeError {
                         message: format!(
@@ -261,6 +348,7 @@ fn bind_params(
         .enumerate()
         .filter_map(|(i, p)| {
             if assigned[i].is_none()
+                && !p.variadic
                 && p.default.is_none()
                 && !is_nullable_type(&p.ty)
             {
@@ -272,6 +360,13 @@ fn bind_params(
         .collect();
 
     for (i, param) in params.iter().enumerate() {
+        if param.variadic {
+            scope.borrow_mut().define(
+                param.name.clone(),
+                Value::Table(Rc::new(RefCell::new(variadic_values.clone()))),
+            );
+            continue;
+        }
         let value = if let Some(v) = assigned[i].clone() {
             v
         } else if let Some(default) = &param.default {
@@ -301,6 +396,42 @@ fn is_nullable_type(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_)) || matches!(ty, Type::Named(n) if n == "nil")
 }
 
+pub(crate) fn table_index_to_slot(index: &Value) -> Result<Option<usize>, String> {
+    match index {
+        Value::Int(i) if *i <= 0 => Ok(None),
+        Value::Int(i) => Ok(Some((*i as usize) - 1)),
+        other => Err(format!(
+            "table indices must be integers, got `{}`",
+            other.type_name()
+        )),
+    }
+}
+
+fn read_index(
+    receiver: &Value,
+    index: Value,
+    span: std::ops::Range<usize>,
+) -> Result<Value, RuntimeError> {
+    match receiver {
+        Value::Table(items) => {
+            let Some(slot) = table_index_to_slot(&index).map_err(|message| RuntimeError::TypeError {
+                message,
+                span: span.clone(),
+            })? else {
+                return Ok(Value::Nil);
+            };
+            Ok(items.borrow().get(slot).cloned().unwrap_or(Value::Nil))
+        }
+        other => Err(RuntimeError::TypeError {
+            message: format!(
+                "cannot index a `{}` — only tables support `[index]` access",
+                other.type_name()
+            ),
+            span,
+        }),
+    }
+}
+
 fn eval_call_args(
     args: &[CallArg],
     env: &Rc<RefCell<Environment>>,
@@ -323,13 +454,21 @@ fn run_function_body(
     scope: &Rc<RefCell<Environment>>,
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
+    Ok(first_or_nil(run_function_body_multi(f, scope, span)?))
+}
+
+fn run_function_body_multi(
+    f: &FunctionObject,
+    scope: &Rc<RefCell<Environment>>,
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
     let outcome = match &f.body {
         FunctionBody::Block(stmts) => super::stmt::exec_block(stmts, scope)?,
-        FunctionBody::Expr(e) => Flow::Return(eval(e, scope)?),
+        FunctionBody::Expr(e) => Flow::Return(vec![eval(e, scope)?]),
     };
     match outcome {
-        Flow::Return(v) => Ok(v),
-        Flow::Normal(_) => Ok(Value::Nil),
+        Flow::Return(values) => Ok(values),
+        Flow::Normal(_) => Ok(vec![Value::Nil]),
         Flow::Break => Err(RuntimeError::LoopControlOutsideLoop {
             which: "break",
             span,
@@ -359,20 +498,25 @@ pub(crate) fn call_function(
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
-    let scope = Environment::with_parent(f.closure.clone());
-    bind_params(&scope, &f.params, args, &span)?;
-    run_function_body(f, &scope, span)
+    Ok(first_or_nil(call_function_multi(f, args, span)?))
 }
 
-/// Invoke an instance method with `self` bound to `receiver`. The method's
-/// signature may optionally start with an explicit `self` parameter, which
-/// we strip so it's not re-bound from `args`.
-fn call_instance_method(
+fn call_function_multi(
+    f: &FunctionObject,
+    args: &[EvaluatedArg],
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
+    let scope = Environment::with_parent(f.closure.clone());
+    bind_params(&scope, &f.params, args, &span)?;
+    run_function_body_multi(f, &scope, span)
+}
+
+fn call_instance_method_multi(
     f: &FunctionObject,
     receiver: Value,
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
-) -> Result<Value, RuntimeError> {
+) -> Result<Vec<Value>, RuntimeError> {
     let scope = Environment::with_parent(f.closure.clone());
     // Inject the class's static fields/methods so the method body can refer
     // to them by their bare names — see `inject_class_statics` for why.
@@ -381,7 +525,7 @@ fn call_instance_method(
     }
     scope.borrow_mut().define("self".to_string(), receiver);
     bind_params(&scope, user_params(f), args, &span)?;
-    run_function_body(f, &scope, span)
+    run_function_body_multi(f, &scope, span)
 }
 
 /// Invoke a static method with `self` bound to the class itself, which is
@@ -393,13 +537,22 @@ fn call_static_method(
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
+    Ok(first_or_nil(call_static_method_multi(f, class, args, span)?))
+}
+
+fn call_static_method_multi(
+    f: &FunctionObject,
+    class: &Rc<ClassObject>,
+    args: &[EvaluatedArg],
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
     let scope = Environment::with_parent(f.closure.clone());
     inject_class_statics(&scope, class);
     scope
         .borrow_mut()
         .define("self".to_string(), Value::Class(class.clone()));
     bind_params(&scope, user_params(f), args, &span)?;
-    run_function_body(f, &scope, span)
+    run_function_body_multi(f, &scope, span)
 }
 
 /// Make the class's static fields and methods directly visible inside a
@@ -451,18 +604,27 @@ fn dispatch_member_call(
     args: Vec<EvaluatedArg>,
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
+    Ok(first_or_nil(dispatch_member_call_multi(receiver, name, args, span)?))
+}
+
+fn dispatch_member_call_multi(
+    receiver: &Value,
+    name: &str,
+    args: Vec<EvaluatedArg>,
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
     match receiver {
         Value::Instance(inst) => {
             let class = inst.borrow().class.clone();
             if let Some(m) = class.lookup_method(name) {
-                return call_instance_method(&m, receiver.clone(), &args, span);
+                return call_instance_method_multi(&m, receiver.clone(), &args, span);
             }
             if let Some(m) = class.lookup_static_method(name) {
-                return call_static_method(&m, &class, &args, span);
+                return call_static_method_multi(&m, &class, &args, span);
             }
             // Fall back: maybe the instance has a callable field.
             if let Some(v) = inst.borrow().fields.get(name).cloned() {
-                return call_value(v, &args, span);
+                return call_value_multi(v, &args, span);
             }
             Err(RuntimeError::TypeError {
                 message: format!(
@@ -474,10 +636,10 @@ fn dispatch_member_call(
         }
         Value::Class(class) => {
             if let Some(m) = class.lookup_static_method(name) {
-                return call_static_method(&m, class, &args, span);
+                return call_static_method_multi(&m, class, &args, span);
             }
             if let Some(v) = class.lookup_static_field(name) {
-                return call_value(v, &args, span);
+                return call_value_multi(v, &args, span);
             }
             Err(RuntimeError::TypeError {
                 message: format!(
@@ -487,10 +649,21 @@ fn dispatch_member_call(
                 span,
             })
         }
+        Value::EnumVariant(_variant) => {
+            // Look up the method in the enum's method list, then call with
+            // self bound to the variant.
+            let v = read_member(receiver, name, span.clone())?;
+            match v {
+                Value::Function(m) => {
+                    call_instance_method_multi(&m, receiver.clone(), &args, span)
+                }
+                _ => call_value_multi(v, &args, span),
+            }
+        }
         _ => {
             // Generic: read the field, then call it.
             let v = read_member(receiver, name, span.clone())?;
-            call_value(v, &args, span)
+            call_value_multi(v, &args, span)
         }
     }
 }
@@ -632,9 +805,48 @@ fn read_member(
                 span,
             })
         }
+        Value::Enum(enum_obj) => {
+            if let Some(variant) = enum_obj.variants.get(name) {
+                return Ok(Value::EnumVariant(variant.clone()));
+            }
+            Err(RuntimeError::TypeError {
+                message: format!(
+                    "no variant `{name}` on enum `{}` — check enum definition",
+                    enum_obj.name
+                ),
+                span,
+            })
+        }
+        Value::EnumVariant(variant) => {
+            match name {
+                "value" => {
+                    Ok(variant
+                        .value
+                        .clone()
+                        .unwrap_or(Value::Str(Rc::new(variant.variant_name.clone()))))
+                }
+                "name" => {
+                    Ok(Value::Str(Rc::new(variant.variant_name.clone())))
+                }
+                _ => {
+                    if let Some(enum_obj) = variant.enum_obj.borrow().as_ref() {
+                        if let Some(m) = enum_obj.methods.get(name) {
+                            return Ok(Value::Function(m.clone()));
+                        }
+                    }
+                    Err(RuntimeError::TypeError {
+                        message: format!(
+                            "no property or method `{name}` on enum variant `{}.{}`",
+                            variant.enum_name, variant.variant_name
+                        ),
+                        span,
+                    })
+                }
+            }
+        }
         other => Err(RuntimeError::TypeError {
             message: format!(
-                "cannot read field `{name}` on value of type `{}` — only instances and classes have members",
+                "cannot read field `{name}` on value of type `{}` — only instances, classes, and enums have members",
                 other.type_name()
             ),
             span,
@@ -654,6 +866,15 @@ fn invoke_method(
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
     dispatch_member_call(receiver, name, args, span)
+}
+
+fn invoke_method_multi(
+    receiver: &Value,
+    name: &str,
+    args: Vec<EvaluatedArg>,
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
+    dispatch_member_call_multi(receiver, name, args, span)
 }
 
 /// `new Class(args)` — create an instance, populate field defaults, then

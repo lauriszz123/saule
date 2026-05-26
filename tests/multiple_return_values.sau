@@ -1,0 +1,19 @@
+fn minMax(items: table<integer>) -> (integer, integer)
+    local min: integer = items[1]
+    local max: integer = items[1]
+
+    for val: integer in items do
+        if val < min then min = val end
+        if val > max then max = val end
+    end
+
+    return min, max
+end
+
+class Main
+  static fn main()
+    local min: integer, max: integer = minMax({3, 1, 7, 2, 9})
+
+    print("{3, 1, 7, 2, 9} min, max is:", min, max)
+  end
+end

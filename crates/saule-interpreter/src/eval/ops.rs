@@ -23,9 +23,10 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
         UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
         UnaryOp::Len => match v {
             Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+            Value::Table(items) => Ok(Value::Int(items.borrow().len() as i64)),
             other => Err(RuntimeError::TypeError {
                 message: format!(
-                    "cannot take length of a `{}` — only strings have a length (use `#` on strings)",
+                    "cannot take length of a `{}` — only strings and tables have a length",
                     other.type_name()
                 ),
                 span,
@@ -169,6 +170,13 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Int(x), Value::Int(y)) => x == y,
         (Value::Float(x), Value::Float(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::Table(x), Value::Table(y)) => std::rc::Rc::ptr_eq(x, y),
+        (Value::Native(x), Value::Native(y)) => std::rc::Rc::ptr_eq(x, y),
+        (Value::Function(x), Value::Function(y)) => std::rc::Rc::ptr_eq(x, y),
+        (Value::Class(x), Value::Class(y)) => std::rc::Rc::ptr_eq(x, y),
+        (Value::Instance(x), Value::Instance(y)) => std::rc::Rc::ptr_eq(x, y),
+        (Value::EnumVariant(x), Value::EnumVariant(y)) => std::rc::Rc::ptr_eq(x, y),
+        (Value::Enum(x), Value::Enum(y)) => std::rc::Rc::ptr_eq(x, y),
         // Cross-type comparisons are always false (Lua semantics).
         _ => false,
     }

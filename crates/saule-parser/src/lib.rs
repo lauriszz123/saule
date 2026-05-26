@@ -148,6 +148,22 @@ impl Parser {
     fn parse_base_type(&mut self) -> Result<Type, ParseError> {
         let tok = self.peek().clone();
         match tok.value {
+            Token::LParen => {
+                self.advance();
+                let mut items = Vec::new();
+                if !self.check(&Token::RParen) {
+                    items.push(self.parse_type()?);
+                    while self.eat(&Token::Comma) {
+                        items.push(self.parse_type()?);
+                    }
+                }
+                self.expect(&Token::RParen, "`)` to close tuple type")?;
+                if items.len() == 1 {
+                    Ok(items.into_iter().next().expect("one tuple item"))
+                } else {
+                    Ok(Type::Tuple(items))
+                }
+            }
             Token::Identifier(name) => {
                 self.advance();
                 // Drop any generic argument list `<T, U>` — generics aren't
@@ -1527,6 +1543,21 @@ mod tests {
                 _ => panic!("expected lambda"),
             },
             _ => panic!("expected local"),
+        }
+    }
+
+    #[test]
+    fn parses_tuple_return_type() {
+        let m = parse_src("fn pair() -> (integer, integer) return 1, 2 end");
+        match &m.stmts[0].value {
+            Stmt::Decl(d) => match &d.value {
+                Decl::Function {
+                    return_ty: Some(Type::Tuple(items)),
+                    ..
+                } => assert_eq!(items.len(), 2),
+                other => panic!("expected function with tuple return, got {other:?}"),
+            },
+            _ => panic!("expected decl"),
         }
     }
 

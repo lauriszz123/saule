@@ -288,9 +288,10 @@ Each class lives in its own `.saule` file. Fields are declared at the top, follo
 
 ```saule
 export class Player
-    name: string
+    local name: string
     local health: integer
     local speed: float
+
     static maxHealth: integer = 100
 
     fn init(name: string, health: integer, speed: float)
@@ -321,25 +322,20 @@ export class Player
 end
 ```
 
-`init` is the canonical constructor name. The older `constructor(...) ... end` form is still accepted but `init` is preferred.
+`init` is the canonical constructor name.
 
 ### Instantiation
 
-Call the class as if it were a function — no `new` keyword:
-
+Call the class as if it were a function:
 ```saule
 local p: Player = Player("Arthur", 100, 5)
+
 p.greet()
 ```
 
-Both `obj.method(args)` and `obj:method(args)` work and behave identically: each one looks up `method` on `obj` and auto-binds `self`.
-
 ### Implicit `self`
 
-Inside a method body, `self` is always in scope:
-
-- In an **instance method** (and `init`), `self` is the instance.
-- In a **static method**, `self` is the class itself.
+Inside a method body, `self` is always in scope if it is a non `static` and in an **instance method** (and `init`), so `self` is the instance.
 
 In addition, every class member — static fields, static methods, instance methods — is reachable by its **bare name** from inside any method of the same class. Local variables and parameters can shadow them, which is what you want.
 
@@ -347,13 +343,19 @@ In addition, every class member — static fields, static methods, instance meth
 class Counter
     local count: integer = 0
 
+    static local cap: integer = 10
+
     fn tick()
-        count = count + 1   -- same as self.count = self.count + 1
-        report()            -- same as self.report()
+        if self.count >= cap then
+            return
+        end
+
+        self.count = count + 1
+        self.report()
     end
 
     fn report()
-        print("count is " .. count)
+        print("Count is " .. count)
     end
 end
 ```
@@ -419,6 +421,7 @@ export class Player extends Entity
 
     fn init(name: string, health: integer, speed: float)
         self.super(name)
+
         self.health = health
         self.speed = speed
     end
@@ -463,6 +466,7 @@ export class Player extends Entity implements Greetable, Damageable
 
     fn init(name: string, health: integer)
         self.super(name)
+
         self.health = health
     end
 
@@ -603,7 +607,7 @@ enum Status
 end
 
 local s: Status = Status.Alive
-print(s:describe())    -- "Status is: alive"
+print(s.describe())    -- "Status is: alive"
 ```
 
 ### Enums as Types
@@ -658,6 +662,7 @@ local players: table<Player?> = getPlayers()
 
 for player: Player? in players do
     local name: string = player?.getName() ?? "Unknown"
+
     print(name)
 end
 ```
@@ -671,10 +676,11 @@ Saule has two layers of error handling: `try/catch` for unexpected crashes, and 
 ### Throwing Errors
 
 ```saule
-fn damage(self, amount: integer) -> nil
+fn damage(amount: integer)
     if amount < 0 then
         throw "Damage cannot be negative"
     end
+
     self.health = self.health - amount
 end
 ```
@@ -702,10 +708,10 @@ fn findPlayer(id: integer) -> Result<Player>
     return Result.ok(self.items[id])
 end
 
-local result: Result<Player> = repo:findPlayer(5)
+local result: Result<Player> = repo.findPlayer(5)
 
 if result.ok then
-    print(result.value:getName())
+    print(result.value.getName())
 else
     print("Error: " .. result.error)
 end
@@ -714,7 +720,7 @@ end
 ### Combining Result with Null Safety
 
 ```saule
-local result: Result<Player> = repo:findPlayer(5)
+local result: Result<Player> = repo.findPlayer(5)
 local name: string = result.value?.getName() ?? "Unknown"
 ```
 
@@ -727,17 +733,17 @@ Use `Result<T>` for expected failures like missing data or invalid input. Use `t
 ### Numeric For
 
 ```saule
-for i: integer = 1 to 10 do
+for i: integer = 1, 10 do
     print(i)
 end
 
 -- with step
-for i: integer = 0 to 100 step 5 do
+for i: integer = 0, 100, 5 do
     print(i)
 end
 
 -- counting down
-for i: integer = 10 to 1 step -1 do
+for i: integer = 10, 1, -1 do
     print(i)
 end
 ```
@@ -782,7 +788,7 @@ until input != nil
 ### Break and Continue
 
 ```saule
-for i: integer = 1 to 10 do
+for i: integer = 1, 10 do
     if i == 5 then continue end
     if i == 8 then break end
     print(i)    -- prints 1, 2, 3, 4, 6, 7
@@ -918,11 +924,11 @@ import Player from "entities/Player"
 import Math from "utils/Math"
 import Direction from "enums/Direction"
 
-local p: Player = new Player("Arthur", 100, 1.5)
+local p: Player = Player("Arthur", 100, 1.5)
 p:greet()
 
 local dmg: integer = Math.clamp(50, 0, 100)
-p:damage(dmg)
+p.damage(dmg)
 ```
 
 ---
@@ -937,7 +943,6 @@ p:damage(dmg)
 | `interface` | Declare an interface |
 | `enum` | Declare an enum |
 | `fn` | Declare a function or method |
-| `constructor` | Declare a class constructor |
 | `extends` | Inherit from a class |
 | `implements` | Fulfill one or more interfaces |
 | `super` | Call the parent constructor |
@@ -946,7 +951,6 @@ p:damage(dmg)
 | `local` | Declare a private member or variable |
 | `export` | Make a file member publicly importable |
 | `import` | Import from another file |
-| `new` | Instantiate a class |
 | `return` | Return a value from a function |
 | `throw` | Raise an error |
 | `try` | Begin an error-handled block |

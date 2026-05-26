@@ -23,7 +23,7 @@ pub enum Flow {
     Normal(Value),
     Break,
     Continue,
-    Return(Value),
+    Return(Vec<Value>),
 }
 
 impl Flow {
@@ -35,7 +35,8 @@ impl Flow {
     /// Returns the inner value if this is a `Normal` outcome, else `Nil`.
     pub fn into_value(self) -> Value {
         match self {
-            Flow::Normal(v) | Flow::Return(v) => v,
+            Flow::Normal(v) => v,
+            Flow::Return(values) => values.into_iter().next().unwrap_or(Value::Nil),
             _ => Value::Nil,
         }
     }

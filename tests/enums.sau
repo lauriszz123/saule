@@ -1,0 +1,14 @@
+enum Direction
+    North,
+    South,
+    East,
+    West      -- Here the `,` is optional
+end
+
+class Main
+  static fn main()
+    local d: Direction = Direction.North
+
+    print(d.name, d.value)
+  end
+end

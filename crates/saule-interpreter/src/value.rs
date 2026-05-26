@@ -22,6 +22,9 @@ pub enum Value {
     Float(f64),
     /// Interned via `Rc` so cloning a value is cheap.
     Str(Rc<String>),
+    /// Array-style table storage. Shared by reference so aliasing behaves like
+    /// Lua tables and indexed mutation is visible through every alias.
+    Table(Rc<RefCell<Vec<Value>>>),
     /// Built-in function written in Rust (e.g. `print`).
     Native(Rc<NativeFn>),
     /// User-defined function or lambda. The `Rc` makes cloning cheap and
@@ -33,6 +36,31 @@ pub enum Value {
     /// An instance produced by `new ClassName(args)`. Fields are mutable
     /// behind a `RefCell`; identity is the `Rc` pointer.
     Instance(Rc<RefCell<InstanceObject>>),
+    /// An enum variant: carries the enum name, variant name, and optional
+    /// value. Compared by identity so each access to `Status.Alive` returns
+    /// the same `Rc` pointer.
+    EnumVariant(Rc<EnumVariantObject>),
+    /// An enum declaration — carries its variants and methods.
+    Enum(Rc<EnumObject>),
+}
+
+#[derive(Debug)]
+pub struct EnumVariantObject {
+    pub enum_name: String,
+    pub variant_name: String,
+    pub value: Option<Value>,
+    /// Reference to the enum so we can access methods. Stored in RefCell to
+    /// allow updating after enum creation (breaking the circular reference issue).
+    pub enum_obj: std::cell::RefCell<Option<Rc<EnumObject>>>,
+}
+
+#[derive(Debug)]
+pub struct EnumObject {
+    pub name: String,
+    /// Enum variants, keyed by name. Each variant is cached so identity is stable.
+    pub variants: HashMap<String, Rc<EnumVariantObject>>,
+    /// Methods defined on the enum, keyed by name.
+    pub methods: HashMap<String, Rc<FunctionObject>>,
 }
 
 /// Rust-implemented function exposed to Saule.
@@ -149,9 +177,12 @@ impl Value {
             Value::Int(_) => "integer",
             Value::Float(_) => "float",
             Value::Str(_) => "string",
+            Value::Table(_) => "table",
             Value::Native(_) | Value::Function(_) => "function",
             Value::Class(_) => "class",
             Value::Instance(_) => "instance",
+            Value::EnumVariant(_) => "enum",
+            Value::Enum(_) => "enum",
         }
     }
 
@@ -176,6 +207,18 @@ impl Value {
                 }
             }
             Value::Str(s) => (**s).clone(),
+            Value::Table(items) => {
+                let parts: Vec<String> = items
+                    .borrow()
+                    .iter()
+                    .map(Value::to_display_string)
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            }
+            Value::EnumVariant(ev) => {
+                format!("{}.{}", ev.enum_name, ev.variant_name)
+            }
+            Value::Enum(e) => format!("<enum {}>", e.name),
             Value::Native(nf) => format!("<native fn {}>", nf.name),
             Value::Function(f) => match &f.name {
                 Some(n) => format!("<fn {n}>"),
@@ -197,10 +240,13 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Table(a), Value::Table(b)) => Rc::ptr_eq(a, b),
             (Value::Native(a), Value::Native(b)) => Rc::ptr_eq(a, b),
             (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(a, b),
             (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(a, b),
             (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(a, b),
+            (Value::EnumVariant(a), Value::EnumVariant(b)) => Rc::ptr_eq(a, b),
+            (Value::Enum(a), Value::Enum(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
