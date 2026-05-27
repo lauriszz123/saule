@@ -1,0 +1,3 @@
+-- Os.sleep expects a number, not a string.
+Os.sleep("a while")
+

@@ -27,12 +27,14 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named};
-    let any = || t_named("any");
-    // `pairs(t)` / `ipairs(t)` each return a step closure — modelled as `any`
-    // for now since the value types are erased once you go through them.
-    register("pairs",  vec![any()], vec![any()]);
-    register("ipairs", vec![any()], vec![any()]);
+    use crate::stdlib::sigs::{register, t_any};
+    use saule_ast::Type;
+    // `pairs(t)` / `ipairs(t)` each take any table and return a step closure.
+    // `table<any>` matches any user-declared table thanks to
+    // `types_compatible`'s table-element wildcard.
+    let table_any = || Type::Table { key: None, value: Box::new(t_any()) };
+    register("pairs",  vec![table_any()], vec![t_any()]);
+    register("ipairs", vec![table_any()], vec![t_any()]);
 }
 
 fn define_interface(env: &Rc<RefCell<Environment>>, name: &str) {

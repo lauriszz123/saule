@@ -66,38 +66,41 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named, t_nullable};
+    use crate::stdlib::sigs::{register, t_named, t_nullable, t_number};
     let any = || t_named("any");
+    let n   = t_number;
     let i   = || t_named("integer");
     let f   = || t_named("float");
     let b   = || t_named("boolean");
     let s   = || t_named("string");
 
-    // Nullable returns — Math.tointeger / Math.type fail to nil for inputs
-    // that can't be coerced.
+    // `tointeger` / `type` accept anything by design (they return nil for
+    // values that can't be coerced / aren't numeric).
     register("Math.tointeger",   vec![any()],               vec![t_nullable(i())]);
     register("Math.type",        vec![any()],               vec![t_nullable(s())]);
 
-    // Definitely-integer returns.
-    register("Math.floor",       vec![any()],               vec![i()]);
-    register("Math.ceil",        vec![any()],               vec![i()]);
-    register("Math.round",       vec![any()],               vec![i()]);
+    // Definitely-integer returns; require a number in.
+    register("Math.floor",       vec![n()],                 vec![i()]);
+    register("Math.ceil",        vec![n()],                 vec![i()]);
+    register("Math.round",       vec![n()],                 vec![i()]);
     register("Math.maxinteger",  vec![],                    vec![i()]);
     register("Math.mininteger",  vec![],                    vec![i()]);
-    register("Math.sign",        vec![any()],               vec![i()]);
+    register("Math.sign",        vec![n()],                 vec![i()]);
 
-    // Definitely-float returns.
-    register("Math.sqrt",        vec![any()],               vec![f()]);
-    register("Math.sin",         vec![any()],               vec![f()]);
-    register("Math.cos",         vec![any()],               vec![f()]);
-    register("Math.tan",         vec![any()],               vec![f()]);
-    register("Math.asin",        vec![any()],               vec![f()]);
-    register("Math.acos",        vec![any()],               vec![f()]);
-    register("Math.atan",        vec![any()],               vec![f()]);
-    register("Math.exp",         vec![any()],               vec![f()]);
-    register("Math.log",         vec![any()],               vec![f()]);
-    register("Math.deg",         vec![any()],               vec![f()]);
-    register("Math.rad",         vec![any()],               vec![f()]);
+    // Definitely-float returns; require a number in.
+    register("Math.sqrt",        vec![n()],                 vec![f()]);
+    register("Math.sin",         vec![n()],                 vec![f()]);
+    register("Math.cos",         vec![n()],                 vec![f()]);
+    register("Math.tan",         vec![n()],                 vec![f()]);
+    register("Math.asin",        vec![n()],                 vec![f()]);
+    register("Math.acos",        vec![n()],                 vec![f()]);
+    // `atan(y)` and `atan(y, x)` are both valid (the 2-arg form is atan2).
+    register("Math.atan",        vec![n(), t_nullable(n())], vec![f()]);
+    register("Math.exp",         vec![n()],                 vec![f()]);
+    // `log(x)` natural log; `log(x, base)` arbitrary base.
+    register("Math.log",         vec![n(), t_nullable(n())], vec![f()]);
+    register("Math.deg",         vec![n()],                 vec![f()]);
+    register("Math.rad",         vec![n()],                 vec![f()]);
     register("Math.huge",        vec![],                    vec![f()]);
     register("Math.pi",          vec![],                    vec![f()]);
     register("Math.e",           vec![],                    vec![f()]);

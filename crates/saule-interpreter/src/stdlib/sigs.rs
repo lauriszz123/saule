@@ -21,8 +21,13 @@ use saule_ast::Type;
 /// A native function's static signature.
 #[derive(Clone, Debug)]
 pub struct NativeSig {
-    /// Declared parameter types (currently unused by the checker; reserved).
+    /// Declared positional parameter types.
     pub params: Vec<Type>,
+    /// Type of additional trailing arguments. `Some(T)` makes the call
+    /// variadic — every extra positional arg must be a `T`. `None` means
+    /// exactly `params.len()` positional args are allowed (callers may also
+    /// pass fewer if the missing slots are nullable / `any`).
+    pub variadic: Option<Type>,
     /// Declared return types. `len() == 1` for single-return functions;
     /// `len() > 1` for multi-return (surfaced as `Type::Tuple` to callers).
     pub returns: Vec<Type>,
@@ -38,7 +43,18 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
-            NativeSig { params, returns },
+            NativeSig { params, variadic: None, returns },
+        );
+    });
+}
+
+/// Register a variadic native: any extra trailing positional args must match
+/// `variadic`. Use for `printf(fmt, ...)`, `String.char(...integer)`, etc.
+pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Type>) {
+    SIGS.with(|s| {
+        s.borrow_mut().insert(
+            name.to_string(),
+            NativeSig { params, variadic: Some(variadic), returns },
         );
     });
 }
@@ -64,6 +80,7 @@ fn ensure_registered() {
         crate::stdlib::iter::register_sigs();
         crate::stdlib::table::register_sigs();
         crate::stdlib::io::register_sigs();
+        crate::stdlib::os::register_sigs();
     });
 }
 
@@ -71,6 +88,16 @@ fn ensure_registered() {
 
 pub fn t_named(s: &str) -> Type {
     Type::Named(s.to_string())
+}
+
+pub fn t_any() -> Type {
+    Type::Named("any".to_string())
+}
+
+/// Sentinel meaning "either `integer` or `float`". Recognised by
+/// `typeck::types_compatible`. Use for math/numeric natives.
+pub fn t_number() -> Type {
+    Type::Named("number".to_string())
 }
 
 pub fn t_nullable(inner: Type) -> Type {

@@ -22,18 +22,21 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 /// `sigs::lookup` on first use so signatures are available even before
 /// `install_std` runs (typecheck runs prior to environment construction).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named};
-    let any = t_named("any");
-    register("print",    vec![],                        vec![t_named("nil")]);
-    register("println",  vec![],                        vec![t_named("nil")]);
-    register("printf",   vec![],                        vec![t_named("nil")]);
+    use crate::stdlib::sigs::{register, register_v, t_any, t_named};
+    let any = t_any();
+    // `print/println` accept anything, any number of times.
+    register_v("print",   vec![], any.clone(), vec![t_named("nil")]);
+    register_v("println", vec![], any.clone(), vec![t_named("nil")]);
+    // `printf(fmt, ...)` — `fmt` must be a string; extras are anything
+    // (their type is decided by the spec).
+    register_v("printf",  vec![t_named("string")], any.clone(), vec![t_named("nil")]);
     register("tostring", vec![any.clone()],             vec![t_named("string")]);
     register("type",     vec![any.clone()],             vec![t_named("string")]);
     register("int",      vec![any.clone()],             vec![t_named("integer")]);
     register("float",    vec![any.clone()],             vec![t_named("float")]);
     // `assert(v, msg?) -> any` — its real type narrows the input on the call
     // site, which the checker doesn't yet model; `any` is safe and accurate.
-    register("assert",   vec![any.clone()],             vec![any]);
+    register("assert",   vec![any.clone(), t_named("any")], vec![any]);
     register("error",    vec![t_named("string")],       vec![t_named("nil")]);
 }
 

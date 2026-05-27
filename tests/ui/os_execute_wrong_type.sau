@@ -1,0 +1,4 @@
+-- Os.execute requires a string command.
+local code: integer = Os.execute(42)
+println(code)
+

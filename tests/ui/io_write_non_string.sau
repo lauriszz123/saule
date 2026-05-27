@@ -1,0 +1,3 @@
+-- Io.write expects strings only; passing an integer is rejected.
+Io.write("hello ", 42)
+

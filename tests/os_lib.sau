@@ -1,0 +1,83 @@
+-- Os.* smoke test. Avoids assertions that depend on the runtime environment
+-- (cwd, env, pid, platform vary between machines) — we just exercise the
+-- API surface and check the easy invariants.
+
+-- ── time ──────────────────────────────────────────────
+local now: integer = Os.time()
+println("time > 0: " .. tostring(now > 0))
+
+local started: float = Os.clock()
+println("clock >= 0.0: " .. tostring(started >= 0.0))
+
+local later: integer = now + 60
+println("difftime: " .. tostring(Os.difftime(later, now)))   -- 60
+
+-- date(format, time) — pin the epoch so we can assert exact output.
+println("date epoch 0: " .. Os.date("%Y-%m-%d %H:%M:%S", 0))  -- 1970-01-01 00:00:00
+println("date %c     : " .. Os.date("%c", 0))                 -- 1970-01-01 00:00:00
+println("date %x %X  : " .. Os.date("%x %X", 0))              -- 1970-01-01 00:00:00
+println("date weekday: " .. Os.date("%w", 0))                 -- 4 (Thursday)
+
+-- sleep — call with 0 so the test is fast; still exercises the codepath.
+Os.sleep(0.0)
+println("slept")
+
+-- ── environment ───────────────────────────────────────
+Os.setenv("SAULE_TEST_VAR", "hello-saule")
+local got: string? = Os.getenv("SAULE_TEST_VAR")
+println("getenv set : " .. (got ?? "missing"))
+local missing: string? = Os.getenv("THIS_DOES_NOT_EXIST_AAA")
+println("getenv miss: " .. tostring(missing == nil))
+
+local cwd: string = Os.cwd()
+-- We don't know the absolute path, but every cwd on a POSIX/Win system
+-- starts with `/` or a drive letter — assert non-empty + path-shaped.
+println("cwd absolute: " .. tostring(String.starts(cwd, "/") or String.find(cwd, ":\\") != nil))
+
+-- ── filesystem ────────────────────────────────────────
+local tmp: string = Os.tmpname()
+println("tmpname under tmp dir: " .. tostring(String.starts(tmp, "/") and String.find(tmp, "saule_") != nil))
+println("tmpname ends .tmp    : " .. tostring(String.ends(tmp, ".tmp")))
+
+-- Create a unique temp dir, list it, then clean up.
+local dir: string = tmp .. "_dir"
+println("mkdir          : " .. tostring(Os.mkdir(dir)))
+println("exists after   : " .. tostring(Os.exists(dir)))
+
+-- Write a file inside via Io.
+local f: File = Io.open(dir .. "/one.txt", IoMode.Write)!
+f.write("one")
+f.close()
+
+local files: table<string> = Os.list(dir)
+println("listed count   : " .. tostring(#files))   -- 1
+
+println("rename         : " .. tostring(Os.rename(dir .. "/one.txt", dir .. "/two.txt")))
+println("exists renamed : " .. tostring(Os.exists(dir .. "/two.txt")))
+
+println("remove file    : " .. tostring(Os.remove(dir .. "/two.txt")))
+println("remove dir     : " .. tostring(Os.remove(dir)))
+println("exists after rm: " .. tostring(Os.exists(dir)))
+
+-- ── process ───────────────────────────────────────────
+println("pid > 0      : " .. tostring(Os.pid() > 0))
+
+local plat: OsPlatform = Os.platform()
+println("platform value: " .. plat.value)   -- linux/macos/windows/other
+
+local exitCode: integer = Os.execute("true")
+println("execute true : " .. tostring(exitCode))   -- 0 on unix
+
+local argv: table<string> = Os.args()
+println("argv count >= 0: " .. tostring(#argv >= 0))
+
+-- ── constants ─────────────────────────────────────────
+-- `sep` is the single platform path separator; `lineSep` is the line ending.
+println("sep is / or \\: " .. tostring(Os.sep == "/" or Os.sep == "\\"))
+println("lineSep ok   : " .. tostring(Os.lineSep == "\n" or Os.lineSep == "\r\n"))
+
+println("done")
+
+
+
+

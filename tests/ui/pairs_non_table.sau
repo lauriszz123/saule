@@ -1,0 +1,5 @@
+-- pairs() expects a table; passing an integer must fail at typecheck.
+for k, v in pairs(42) do
+    println(k, v)
+end
+

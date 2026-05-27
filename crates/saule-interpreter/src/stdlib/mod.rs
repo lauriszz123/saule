@@ -14,6 +14,7 @@ pub mod core;
 pub mod io;
 pub mod iter;
 pub mod math;
+pub mod os;
 pub mod sigs;
 pub mod string;
 pub mod table;
@@ -26,6 +27,7 @@ pub fn install_std(env: &Rc<RefCell<Environment>>) {
     string::install(env);
     table::install(env);
     io::install(env);
+    os::install(env);
 }
 
 pub(crate) fn define_native(

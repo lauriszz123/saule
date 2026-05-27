@@ -98,7 +98,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named, t_nullable};
+    use crate::stdlib::sigs::{register, register_v, t_named, t_nullable};
     let s = || t_named("string");
     let i = || t_named("integer");
     let nil = || t_named("nil");
@@ -108,15 +108,17 @@ pub fn register_sigs() {
 
     register("Io.open",  vec![s(), t_named("IoMode")], vec![file_opt()]);
     register("Io.lines", vec![t_nullable(s())],        vec![t_named("any")]);
-    register("Io.read",  vec![s()],                    vec![str_opt()]);
-    register("Io.write", vec![s()],                    vec![nil()]);
+    // `Io.read(...formats: string) -> string?` — zero-or-more strings.
+    register_v("Io.read",  vec![], s(), vec![str_opt()]);
+    // `Io.write(...parts: string) -> nil` — zero-or-more strings.
+    register_v("Io.write", vec![], s(), vec![nil()]);
 
     // File method signatures — only consulted by typeck when it learns to
     // route `file.method(...)`. Pre-registering keeps the contract visible.
-    register("File.read",  vec![s()],            vec![str_opt()]);
-    register("File.write", vec![s()],            vec![nil()]);
+    register_v("File.read",  vec![], s(), vec![str_opt()]);
+    register_v("File.write", vec![], s(), vec![nil()]);
     register("File.lines", vec![],               vec![t_named("any")]);
-    register("File.seek",  vec![t_named("IoSeek"), i()], vec![i()]);
+    register("File.seek",  vec![t_nullable(t_named("IoSeek")), t_nullable(i())], vec![i()]);
     register("File.flush", vec![],               vec![nil()]);
     register("File.close", vec![],               vec![nil()]);
     // Suppress unused warnings for the helpers we didn't reach for.

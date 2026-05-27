@@ -34,8 +34,21 @@ fn main() {
             }
         },
         "run" => match args.get(1) {
-            Some(path) => run_file(PathBuf::from(path), false),
-            None => run_project(&PathBuf::from(".")),
+            Some(path) => {
+                // Everything after the file path is script argv, exposed via
+                // `Os.args()`.
+                saule_interpreter::stdlib::os::set_script_args(
+                    args.iter().skip(2).cloned().collect(),
+                );
+                run_file(PathBuf::from(path), false);
+            }
+            None => {
+                // Project mode: script-args is everything after `run`.
+                saule_interpreter::stdlib::os::set_script_args(
+                    args.iter().skip(1).cloned().collect(),
+                );
+                run_project(&PathBuf::from("."));
+            }
         },
         other => {
             eprintln!("Error: Unknown Command `{other}`\n\n{USAGE}");

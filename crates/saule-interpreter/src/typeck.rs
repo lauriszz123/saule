@@ -870,15 +870,32 @@ fn check_native_args(
             callee: callee.to_string(),
             expected: required,
             found: positional.len(),
-            span: to_source_span(call_span),
+            span: to_source_span(call_span.clone()),
         });
         return;
     }
 
+    // Reject extras when the native is not variadic. Don't bail though —
+    // continue checking the known positions for type mismatches.
+    if sig.variadic.is_none() && positional.len() > sig.params.len() {
+        errors.push(TypeCheckError::NativeArity {
+            callee: callee.to_string(),
+            expected: sig.params.len(),
+            found: positional.len(),
+            span: to_source_span(call_span),
+        });
+    }
+
     for (i, arg) in args.iter().enumerate() {
+        // Pick the expected type for slot `i`:
+        //   - within declared params: use `params[i]`
+        //   - past the end: use the variadic element type (or stop if absent)
         let expected = match sig.params.get(i) {
             Some(t) => t,
-            None => break,
+            None => match &sig.variadic {
+                Some(t) => t,
+                None => break,
+            },
         };
         let value_expr = match arg {
             CallArg::Positional(e) => e,
@@ -1053,10 +1070,51 @@ fn check_element_compat(
 /// `value_ty` is `Nullable` of a compatible inner, etc.
 fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
     match (expected, value_ty) {
-        (Type::Named(a), Type::Named(b)) => a == b || a == "any" || b == "any" || b == "nil",
+        // Same-name primitives, plus `any` on either side, plus `nil` on the
+        // value side (nil is universally assignable; nullable-rejection is
+        // handled separately by `NullableToNonNullable`).
+        (Type::Named(a), Type::Named(b)) => {
+            if a == b || a == "any" || b == "any" || b == "nil" {
+                return true;
+            }
+            // `number` is the sentinel used in native sigs to mean
+            // "integer or float" — accept either.
+            if a == "number" && (b == "integer" || b == "float" || b == "number") {
+                return true;
+            }
+            false
+        }
+        // `table<any>` (or `table<any, any>`) matches any table — used by
+        // native sigs like `pairs(t)` / `Table.insert(t, ...)` to mean
+        // "any table".
+        (
+            Type::Table { key: ek, value: ev },
+            Type::Table { key: vk, value: vv },
+        ) => {
+            let key_ok = match (ek, vk) {
+                (None, None) => true,
+                (Some(a), Some(b)) => types_compatible(a, b),
+                // Cross-shape (`table<T>` vs `table<K, V>`) only when one
+                // side is the `any` wildcard.
+                _ => is_any(ev),
+            };
+            key_ok && (is_any(ev) || types_compatible(ev, vv))
+        }
+        // Expected table, but value is the bare type-name `table`, `any` or
+        // `nil` — accept (caller has erased the element type, or it's nil).
+        (Type::Table { .. }, Type::Named(n)) if n == "table" || n == "any" || n == "nil" => true,
+        // Expected `any` / `table` / `nil` named slot, value is a table —
+        // accept (we widen to the named slot).
+        (Type::Named(n), Type::Table { .. }) if n == "table" || n == "any" => true,
         (Type::Nullable(a), b) => types_compatible(a, b),
         (a, Type::Nullable(b)) => types_compatible(a, b),
-        _ => true,
+        // Function / Tuple shapes — only equal-shape is strictly compatible,
+        // but the checker doesn't track those precisely yet. Accept rather
+        // than emit false positives.
+        (Type::Function { .. }, Type::Function { .. }) => true,
+        (Type::Tuple(_), Type::Tuple(_)) => true,
+        // Different kinds (e.g. table vs integer) — reject.
+        _ => false,
     }
 }
 

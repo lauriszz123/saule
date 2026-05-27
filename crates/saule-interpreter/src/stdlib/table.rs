@@ -51,16 +51,22 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named, t_nullable};
-    let any = || t_named("any");
+    use crate::stdlib::sigs::{register, t_any, t_named, t_nullable};
+    use saule_ast::Type;
+    let any = || t_any();
     let i   = || t_named("integer");
     let s   = || t_named("string");
     let nil = || t_named("nil");
+    // First arg of every Table.* function must be a table.
+    let table_any = || Type::Table { key: None, value: Box::new(t_any()) };
 
-    register("Table.insert", vec![any(), any(), t_nullable(any())], vec![nil()]);
-    register("Table.remove", vec![any(), t_nullable(i())],          vec![t_nullable(any())]);
-    register("Table.sort",   vec![any(), any()],                    vec![nil()]);
-    register("Table.concat", vec![any(), t_nullable(s()), t_nullable(i()), t_nullable(i())], vec![s()]);
+    // `Table.insert(list, value)` and `Table.insert(list, index, value)` —
+    // index/value slots stay `any` because the overload is arity-based.
+    register("Table.insert", vec![table_any(), any(), t_nullable(any())], vec![nil()]);
+    register("Table.remove", vec![table_any(), t_nullable(i())],          vec![t_nullable(any())]);
+    // Comparator slot left as `any` until lambda inference is fully wired.
+    register("Table.sort",   vec![table_any(), any()],                    vec![nil()]);
+    register("Table.concat", vec![table_any(), t_nullable(s()), t_nullable(i()), t_nullable(i())], vec![s()]);
 }
 
 fn native_multi(
