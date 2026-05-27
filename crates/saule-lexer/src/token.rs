@@ -1,0 +1,88 @@
+//! The [`Token`] enum produced by the lexer.
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    // Keywords
+    Class,
+    Interface,
+    Enum,
+    Fn,
+    Extends,
+    Implements,
+    Super,
+    Self_,
+    Static,
+    Local,
+    Export,
+    Import,
+    Return,
+    Throw,
+    Try,
+    Catch,
+    For,
+    While,
+    Repeat,
+    Until,
+    Break,
+    Continue,
+    If,
+    Else,
+    Elseif,
+    End,
+    Then,
+    Do,
+    In,
+    As,
+    From,
+    Match,
+    Case,
+    When,
+    And,
+    Or,
+    Not,
+    Nil,
+    True,
+    False,
+
+    // Identifiers and literals
+    Identifier(String),
+    Int(i64),
+    Float(f64),
+    String(String),
+
+    // Operators / punctuation
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    EqEq,
+    NotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    Dot,
+    DotDot,   // `..` string concatenation
+    Ellipsis, // `...` variadic
+    Comma,
+    Colon,
+    Semi,
+    Assign,
+    Question,
+    QuestionDot,
+    QuestionQuestion,
+    Bang,
+    Hash,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Arrow,    // `->`
+    FatArrow, // `=>`
+
+    // End of input
+    Eof,
+}
