@@ -187,6 +187,7 @@ fn exec_decl(
                 params: params.clone(),
                 body: FunctionBody::Block(body.clone()),
                 closure: env.clone(),
+                owner_class: std::cell::RefCell::new(None),
             };
             env.borrow_mut()
                 .define(name.clone(), Value::Function(std::rc::Rc::new(func)));
@@ -361,6 +362,19 @@ fn exec_class_decl(
         constructor,
     });
 
+    // Back-link every method to its owning class so calls to a method via a
+    // bare `Value::Function` (e.g. inside another static method that resolved
+    // a sibling via `inject_class_statics`) still see the class's statics.
+    for f in class.methods.values() {
+        f.set_owner_class(&class);
+    }
+    for f in class.static_methods.values() {
+        f.set_owner_class(&class);
+    }
+    if let Some(c) = class.constructor.as_ref() {
+        c.set_owner_class(&class);
+    }
+
     env.borrow_mut().define(name.clone(), Value::Class(class));
     Ok(Flow::nil())
  }
@@ -412,6 +426,7 @@ fn exec_class_decl(
         params,
         body: FunctionBody::Block(body),
         closure: closure.clone(),
+        owner_class: std::cell::RefCell::new(None),
     }
 }
 

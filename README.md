@@ -541,40 +541,61 @@ end
 
 ### Custom Iterable
 
-Any class implementing `Iterable<T>` works inside a `for-in` loop automatically:
+Any class implementing `Iterable<T>` works inside a `for-in` loop automatically. The contract is a single method `iter()` that returns a **step closure**: each call returns the next element, or `nil` to signal the end. The loop stops on the first `nil`.
 
 ```saule
 interface Iterable<T>
-    fn hasNext() -> boolean
-    fn next() -> T
+    fn iter() -> fn() -> T?
 end
 
 export class PlayerQueue implements Iterable<Player>
     local items: table<Player>
-    local cursor: integer
 
     fn init()
         self.items = {}
-        self.cursor = 1
     end
 
-    fn hasNext() -> boolean
-        return self.cursor <= #self.items
+    fn push(p: Player)
+        self.items[#self.items + 1] = p
     end
 
-    fn next() -> Player
-        local p: Player = self.items[self.cursor]
-        self.cursor = self.cursor + 1
-        return p
+    fn iter() -> fn() -> Player?
+        local cursor: integer = 1
+
+        return fn => ()
+            if cursor > #self.items then
+                return nil
+            end
+
+            local p: Player = self.items[cursor]
+            cursor = cursor + 1
+            return p
+        end
     end
 end
 
 local queue: PlayerQueue = PlayerQueue()
+queue.push(Player("Arthur", 100))
+queue.push(Player("Merlin", 80))
 
 for player: Player in queue do
     player.greet()
 end
 ```
+
+For iteration that yields **pairs** (key + value, index + value, etc.), implement `Iterable2<K, V>` whose `iter()` returns a closure with two return values:
+
+```saule
+interface Iterable2<K, V>
+    fn iter() -> fn() -> (K?, V?)
+end
+
+for key: string, value: Player in playerMap do
+    print(key .. " = " .. value.getName())
+end
+```
+
+The loop also accepts raw step closures and `pairs(...)` / `ipairs(...)` from the standard library — `Iterable` is just the contract that makes user-defined classes look the same.
 
 ---
 
@@ -671,7 +692,7 @@ end
 
 ## Error Handling
 
-Saule has two layers of error handling: `try/catch` for unexpected crashes, and `Result<T>` for expected, recoverable failures.
+Saule uses `try / catch` for unexpected runtime errors. For expected, recoverable failures — missing data, invalid input, parse errors — prefer **nullable return types** (`-> T?`) and let null safety carry the failure through the type system. A user-defined `Result<T>` class is trivial to write on top of classes and generics if you want richer error payloads.
 
 ### Throwing Errors
 
@@ -690,41 +711,28 @@ end
 ```saule
 try
     local p: Player = Player("Arthur", 100)
-    p:damage(-10)
+    p.damage(-10)
 catch e: string
     print("Caught: " .. e)
 end
 ```
 
-### Result\<T\>
+The `catch` clause names the thrown value and its expected type. Inside the catch block, code runs as if the `try` block had returned normally.
 
-For functions that can fail gracefully without throwing. Returns either a value or an error message:
+### Nullable returns for expected failures
 
 ```saule
-fn findPlayer(id: integer) -> Result<Player>
+fn findPlayer(id: integer) -> Player?
     if id < 0 then
-        return Result.err("Invalid ID")
+        return nil
     end
-    return Result.ok(self.items[id])
+    return self.items[id]
 end
 
-local result: Result<Player> = repo.findPlayer(5)
-
-if result.ok then
-    print(result.value.getName())
-else
-    print("Error: " .. result.error)
-end
+local name: string = repo.findPlayer(5)?.getName() ?? "Unknown"
 ```
 
-### Combining Result with Null Safety
-
-```saule
-local result: Result<Player> = repo.findPlayer(5)
-local name: string = result.value?.getName() ?? "Unknown"
-```
-
-Use `Result<T>` for expected failures like missing data or invalid input. Use `try/catch` for truly unexpected runtime errors.
+Reserve `try / catch` for truly unexpected runtime errors — bad data from an external source, file I/O failures, contract violations. For everyday "this lookup might miss", `T?` plus `?.` / `??` keeps the failure mode visible in the type signature.
 
 ---
 
@@ -926,7 +934,7 @@ import Math from "utils/Math"
 import Direction from "enums/Direction"
 
 local p: Player = Player("Arthur", 100, 1.5)
-p:greet()
+p.greet()
 
 local dmg: integer = Math.clamp(50, 0, 100)
 p.damage(dmg)

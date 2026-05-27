@@ -212,14 +212,101 @@ struct ClassInfo {
 }
 
 type ClassRegistry = HashMap<String, ClassInfo>;
+type InterfaceRegistry = HashMap<String, Vec<String>>;
 
 thread_local! {
     static CLASSES: std::cell::RefCell<ClassRegistry> = std::cell::RefCell::new(HashMap::new());
+    static INTERFACES: std::cell::RefCell<InterfaceRegistry> = std::cell::RefCell::new(HashMap::new());
     static CURRENT_CLASS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
 fn with_classes<R>(f: impl FnOnce(&ClassRegistry) -> R) -> R {
     CLASSES.with(|c| f(&c.borrow()))
+}
+
+fn with_interfaces<R>(f: impl FnOnce(&InterfaceRegistry) -> R) -> R {
+    INTERFACES.with(|c| f(&c.borrow()))
+}
+
+/// Is `iface` a known interface name?
+fn is_interface(name: &str) -> bool {
+    with_interfaces(|r| r.contains_key(name))
+}
+
+/// Does `iface` extend `target` (transitively, including itself)?
+fn interface_extends(iface: &str, target: &str) -> bool {
+    if iface == target {
+        return true;
+    }
+    with_interfaces(|r| {
+        let mut stack: Vec<String> = vec![iface.to_string()];
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Some(cur) = stack.pop() {
+            if !seen.insert(cur.clone()) {
+                continue;
+            }
+            if cur == target {
+                return true;
+            }
+            if let Some(parents) = r.get(&cur) {
+                for p in parents {
+                    stack.push(p.clone());
+                }
+            }
+        }
+        false
+    })
+}
+
+/// Does class `class` (or any ancestor) implement interface `target`
+/// (directly or via interface composition)?
+fn class_implements(class: &str, target: &str) -> bool {
+    with_classes(|reg| {
+        let mut cur = Some(class.to_string());
+        while let Some(name) = cur {
+            let Some(info) = reg.get(&name) else {
+                return false;
+            };
+            for i in &info.implements {
+                if interface_extends(i, target) {
+                    return true;
+                }
+            }
+            cur = info.parent.clone();
+        }
+        false
+    })
+}
+
+/// `got` is a subtype of `expected` when:
+/// - they're equal, OR
+/// - `expected` is an interface and `got` is a class implementing it
+///   (directly or via a parent), OR
+/// - both are interfaces and `got` extends `expected`, OR
+/// - `got` is a class that extends `expected` (class inheritance).
+fn is_subtype_named(got: &str, expected: &str) -> bool {
+    if got == expected {
+        return true;
+    }
+    // Class → interface
+    if is_interface(expected) && class_implements(got, expected) {
+        return true;
+    }
+    // Interface → interface
+    if is_interface(got) && is_interface(expected) && interface_extends(got, expected) {
+        return true;
+    }
+    // Class → ancestor class
+    with_classes(|reg| {
+        let mut cur = reg.get(got).and_then(|i| i.parent.clone());
+        while let Some(name) = cur {
+            if name == expected {
+                return true;
+            }
+            cur = reg.get(&name).and_then(|i| i.parent.clone());
+        }
+        false
+    })
 }
 
 fn current_class() -> Option<String> {
@@ -252,64 +339,61 @@ fn lookup_member(class: &str, member: &str) -> Option<(String, bool)> {
 /// Does the class (or any ancestor) declare it implements `Iterable` or
 /// `Iterable2`? Used by the `for ... in` static check.
 fn class_implements_iterable(class: &str) -> bool {
-    with_classes(|reg| {
-        let mut cur = Some(class.to_string());
-        while let Some(name) = cur {
-            let Some(info) = reg.get(&name) else {
-                return false;
-            };
-            if info
-                .implements
-                .iter()
-                .any(|i| i == "Iterable" || i == "Iterable2")
-            {
-                return true;
-            }
-            cur = info.parent.clone();
-        }
-        false
-    })
+    class_implements(class, "Iterable") || class_implements(class, "Iterable2")
 }
 
-fn build_registry(module: &Module) -> ClassRegistry {    let mut reg = ClassRegistry::new();
+fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry) {
+    let mut reg = ClassRegistry::new();
+    let mut ifaces = InterfaceRegistry::new();
     for stmt in &module.stmts {
-        if let Stmt::Decl(d) = &stmt.value
-            && let Decl::Class {
-                name,
-                extends,
-                implements,
-                members,
-                ..
-            } = &d.value
-        {
-            let mut info = ClassInfo {
-                parent: extends.clone(),
-                implements: implements.clone(),
-                members: HashMap::new(),
-            };
-            for m in members {
-                match &m.value {
-                    ClassMember::Field {
-                        name, is_private, ..
-                    } => {
-                        info.members.insert(name.clone(), *is_private);
+        if let Stmt::Decl(d) = &stmt.value {
+            match &d.value {
+                Decl::Class {
+                    name,
+                    extends,
+                    implements,
+                    members,
+                    ..
+                } => {
+                    let mut info = ClassInfo {
+                        parent: extends.clone(),
+                        implements: implements.clone(),
+                        members: HashMap::new(),
+                    };
+                    for m in members {
+                        match &m.value {
+                            ClassMember::Field {
+                                name, is_private, ..
+                            } => {
+                                info.members.insert(name.clone(), *is_private);
+                            }
+                            ClassMember::Method(meth) => {
+                                info.members.insert(meth.name.clone(), meth.is_private);
+                            }
+                        }
                     }
-                    ClassMember::Method(meth) => {
-                        info.members.insert(meth.name.clone(), meth.is_private);
-                    }
+                    reg.insert(name.clone(), info);
                 }
+                Decl::Interface { name, extends, .. } => {
+                    ifaces.insert(name.clone(), extends.clone());
+                }
+                _ => {}
             }
-            reg.insert(name.clone(), info);
         }
     }
-    reg
+    // Pre-register the builtin iterable interfaces so class-implements checks
+    // see them even without explicit declarations in user code.
+    ifaces.entry("Iterable".into()).or_default();
+    ifaces.entry("Iterable2".into()).or_default();
+    (reg, ifaces)
 }
 
 /// Run the static checks on a parsed module. Returns *all* errors found so
 /// the user sees everything in one pass.
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
-    let reg = build_registry(module);
+    let (reg, ifaces) = build_registry(module);
     CLASSES.with(|c| *c.borrow_mut() = reg);
+    INTERFACES.with(|c| *c.borrow_mut() = ifaces);
     let _restore = set_current_class(None);
     let mut errors = Vec::new();
     let mut scope = Scope::default();
@@ -317,6 +401,7 @@ pub fn check(module: &Module) -> Vec<TypeCheckError> {
         check_stmt(&stmt.value, &mut scope, &mut errors);
     }
     CLASSES.with(|c| c.borrow_mut().clear());
+    INTERFACES.with(|c| c.borrow_mut().clear());
     errors
 }
 
@@ -952,10 +1037,19 @@ fn report_if_private(
     if matches!(obj.value, Expr::Self_) {
         return;
     }
-    let Some(ty) = infer(obj, scope) else { return };
-    let class_name = match strip_nullable(ty) {
-        Type::Named(n) => n,
-        _ => return,
+    // Resolve the class name we're reading the member off:
+    //   * `obj.member` where `obj` is an *instance* → infer the receiver type.
+    //   * `Class.member` where the receiver is the class itself
+    //     (e.g. `Bank.secret`) → use the ident directly.
+    let class_name = match &obj.value {
+        Expr::Ident(n) if with_classes(|reg| reg.contains_key(n)) => n.clone(),
+        _ => match infer(obj, scope) {
+            Some(ty) => match strip_nullable(ty) {
+                Type::Named(n) => n,
+                _ => return,
+            },
+            None => return,
+        },
     };
     let Some((owning, is_private)) = lookup_member(&class_name, member) else {
         return;
@@ -1080,6 +1174,12 @@ fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
             // `number` is the sentinel used in native sigs to mean
             // "integer or float" — accept either.
             if a == "number" && (b == "integer" || b == "float" || b == "number") {
+                return true;
+            }
+            // Class/interface subtyping: a value of type `b` is assignable to
+            // a slot of type `a` if `b` is a subtype of `a` (class implements
+            // interface, class extends class, interface extends interface).
+            if is_subtype_named(b, a) {
                 return true;
             }
             false

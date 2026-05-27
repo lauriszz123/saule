@@ -139,6 +139,30 @@ pub struct FunctionObject {
     /// The environment that was in scope when the function was created.
     /// Captured by reference so inner functions see live bindings.
     pub closure: Rc<RefCell<Environment>>,
+    /// `Some(class)` when this function is a method (static or instance) of
+    /// a class. Set after class construction via [`set_owner_class`]. The
+    /// call sites consult this to re-inject the owning class's statics into
+    /// the call scope, so a static method can reach sibling statics by their
+    /// bare names even when invoked as a plain `Value::Function`.
+    pub owner_class: RefCell<Option<std::rc::Weak<ClassObject>>>,
+}
+
+impl FunctionObject {
+    /// Attach this function to its owning class. No-op when called more than
+    /// once; the first owner wins.
+    pub fn set_owner_class(&self, class: &Rc<ClassObject>) {
+        let mut slot = self.owner_class.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(Rc::downgrade(class));
+        }
+    }
+
+    /// Resolve the owning class, if any. Returns `None` once the class has
+    /// been dropped (which shouldn't happen in practice because the class
+    /// outlives its methods).
+    pub fn resolved_owner(&self) -> Option<Rc<ClassObject>> {
+        self.owner_class.borrow().as_ref().and_then(|w| w.upgrade())
+    }
 }
 
 /// Function bodies come in two shapes:

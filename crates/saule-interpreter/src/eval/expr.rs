@@ -134,6 +134,7 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 params: params.clone(),
                 body,
                 closure: env.clone(),
+                owner_class: std::cell::RefCell::new(None),
             })))
         }
 
@@ -530,6 +531,12 @@ fn call_function_multi(
     span: std::ops::Range<usize>,
 ) -> Result<Vec<Value>, RuntimeError> {
     let scope = Environment::with_parent(f.closure.clone());
+    // If this function is a class method invoked directly (rather than via
+    // the dedicated method-dispatch path), seed the scope with the class's
+    // statics so the body can reach sibling statics by bare name.
+    if let Some(class) = f.resolved_owner() {
+        inject_class_statics(&scope, &class);
+    }
     bind_params(&scope, &f.params, args, &span)?;
     run_function_body_multi(f, &scope, span)
 }
