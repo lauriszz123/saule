@@ -1007,11 +1007,17 @@ fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             }
         },
         // `Foo(args)` where `Foo` is a known class → produces a `Foo`.
+        // Otherwise, look up the qualified callee name in the native signature
+        // table (e.g. `String.byte`, `Math.tointeger`, `assert`).
         Expr::Call { callee, .. } => {
             if let Expr::Ident(n) = &callee.value
                 && with_classes(|reg| reg.contains_key(n))
             {
                 Some(Type::Named(n.clone()))
+            } else if let Some(qname) = native_callee_name(callee)
+                && let Some(sig) = crate::stdlib::sigs::lookup(&qname)
+            {
+                first_or_tuple(sig.returns)
             } else {
                 None
             }
@@ -1024,6 +1030,32 @@ fn strip_nullable(ty: Type) -> Type {
     match ty {
         Type::Nullable(t) => *t,
         other => other,
+    }
+}
+
+/// Build a qualified callee name suitable for `stdlib::sigs::lookup`:
+/// `assert` or `String.byte`.
+fn native_callee_name(callee: &Spanned<Expr>) -> Option<String> {
+    match &callee.value {
+        Expr::Ident(n) => Some(n.clone()),
+        Expr::Member { obj, name } => {
+            if let Expr::Ident(class) = &obj.value {
+                Some(format!("{class}.{name}"))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Collapse a returns-list into a single inferred type: single returns stay
+/// as-is, multi-returns become a `Type::Tuple`.
+fn first_or_tuple(returns: Vec<Type>) -> Option<Type> {
+    match returns.len() {
+        0 => None,
+        1 => returns.into_iter().next(),
+        _ => Some(Type::Tuple(returns)),
     }
 }
 

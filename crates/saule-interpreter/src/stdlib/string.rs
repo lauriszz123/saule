@@ -36,6 +36,27 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         .define("String".to_string(), Value::Class(Rc::new(class)));
 }
 
+/// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
+pub fn register_sigs() {
+    use crate::stdlib::sigs::{register, t_named, t_nullable};
+    let s   = || t_named("string");
+    let i   = || t_named("integer");
+    let b   = || t_named("boolean");
+    let any = || t_named("any");
+    register("String.byte",   vec![s(), t_nullable(i())],         vec![t_nullable(i())]);
+    register("String.char",   vec![],                              vec![s()]);
+    register("String.format", vec![s()],                           vec![s()]);
+    register("String.len",    vec![s()],                           vec![i()]);
+    register("String.sub",    vec![s(), i(), t_nullable(i())],     vec![s()]);
+    register("String.rep",    vec![s(), i()],                      vec![s()]);
+    register("String.starts", vec![s(), s()],                      vec![b()]);
+    register("String.ends",   vec![s(), s()],                      vec![b()]);
+    register("String.find",   vec![s(), s(), t_nullable(i())],     vec![t_nullable(i()), t_nullable(i())]);
+    register("String.lower",  vec![s()],                           vec![s()]);
+    register("String.upper",  vec![s()],                           vec![s()]);
+    register("String.iter",   vec![s()],                           vec![any()]);  // returns a step closure
+}
+
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {
     Value::Native(Rc::new(crate::value::NativeFn { name, func }))
 }

@@ -13,6 +13,7 @@ use crate::value::{NativeFn, Value};
 pub mod core;
 pub mod iter;
 pub mod math;
+pub mod sigs;
 pub mod string;
 
 /// Install the full standard library into `env`.

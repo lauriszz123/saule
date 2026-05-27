@@ -62,7 +62,52 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     };
     env.borrow_mut()
         .define("Math".to_string(), Value::Class(Rc::new(class)));
+}
 
+/// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
+pub fn register_sigs() {
+    use crate::stdlib::sigs::{register, t_named, t_nullable};
+    let any = || t_named("any");
+    let i   = || t_named("integer");
+    let f   = || t_named("float");
+    let b   = || t_named("boolean");
+    let s   = || t_named("string");
+
+    // Nullable returns — Math.tointeger / Math.type fail to nil for inputs
+    // that can't be coerced.
+    register("Math.tointeger",   vec![any()],               vec![t_nullable(i())]);
+    register("Math.type",        vec![any()],               vec![t_nullable(s())]);
+
+    // Definitely-integer returns.
+    register("Math.floor",       vec![any()],               vec![i()]);
+    register("Math.ceil",        vec![any()],               vec![i()]);
+    register("Math.round",       vec![any()],               vec![i()]);
+    register("Math.maxinteger",  vec![],                    vec![i()]);
+    register("Math.mininteger",  vec![],                    vec![i()]);
+    register("Math.sign",        vec![any()],               vec![i()]);
+
+    // Definitely-float returns.
+    register("Math.sqrt",        vec![any()],               vec![f()]);
+    register("Math.sin",         vec![any()],               vec![f()]);
+    register("Math.cos",         vec![any()],               vec![f()]);
+    register("Math.tan",         vec![any()],               vec![f()]);
+    register("Math.asin",        vec![any()],               vec![f()]);
+    register("Math.acos",        vec![any()],               vec![f()]);
+    register("Math.atan",        vec![any()],               vec![f()]);
+    register("Math.exp",         vec![any()],               vec![f()]);
+    register("Math.log",         vec![any()],               vec![f()]);
+    register("Math.deg",         vec![any()],               vec![f()]);
+    register("Math.rad",         vec![any()],               vec![f()]);
+    register("Math.huge",        vec![],                    vec![f()]);
+    register("Math.pi",          vec![],                    vec![f()]);
+    register("Math.e",           vec![],                    vec![f()]);
+
+    // Boolean.
+    register("Math.ult",         vec![i(), i()],            vec![b()]);
+
+    // `abs`, `min`, `max`, `pow`, `clamp`, `fmod`, `modf`, `random` can be
+    // either integer or float depending on input — left unregistered so the
+    // checker stays conservative (`None`) rather than narrowing wrongly.
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {

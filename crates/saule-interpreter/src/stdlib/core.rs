@@ -15,6 +15,26 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     define_native(env, "int", builtin_int);
     define_native(env, "float", builtin_float);
     define_native(env, "assert", builtin_assert);
+    define_native(env, "error", builtin_error);
+}
+
+/// Register native signatures for the typechecker. Called lazily by
+/// `sigs::lookup` on first use so signatures are available even before
+/// `install_std` runs (typecheck runs prior to environment construction).
+pub fn register_sigs() {
+    use crate::stdlib::sigs::{register, t_named};
+    let any = t_named("any");
+    register("print",    vec![],                        vec![t_named("nil")]);
+    register("println",  vec![],                        vec![t_named("nil")]);
+    register("printf",   vec![],                        vec![t_named("nil")]);
+    register("tostring", vec![any.clone()],             vec![t_named("string")]);
+    register("type",     vec![any.clone()],             vec![t_named("string")]);
+    register("int",      vec![any.clone()],             vec![t_named("integer")]);
+    register("float",    vec![any.clone()],             vec![t_named("float")]);
+    // `assert(v, msg?) -> any` — its real type narrows the input on the call
+    // site, which the checker doesn't yet model; `any` is safe and accurate.
+    register("assert",   vec![any.clone()],             vec![any]);
+    register("error",    vec![t_named("string")],       vec![t_named("nil")]);
 }
 
 fn builtin_print(args: &[Value]) -> Result<Value, String> {
