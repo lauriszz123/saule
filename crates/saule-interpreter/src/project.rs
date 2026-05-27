@@ -22,6 +22,24 @@ pub struct ProjectInfo {
     /// Extra source roots searched after the importing file's sibling
     /// directory. Always absolute.
     pub src_dirs: Vec<PathBuf>,
+    /// External library projects this project depends on. Each entry is
+    /// resolved from a `dependencies:` path in `saule.config` by reading the
+    /// target project's own config.
+    pub dependencies: Vec<Dependency>,
+}
+
+/// One resolved dependency: a named, external Saule project whose `src_dirs`
+/// are made available to `import "<dep_name>/..."` lookups.
+#[derive(Debug, Clone)]
+pub struct Dependency {
+    /// Name used to prefix imports (`import X from "<name>/..."`). Comes
+    /// from the dep's own `saule.config` `name:`, falling back to its
+    /// directory name.
+    pub name: String,
+    /// Absolute path to the dep's project root.
+    pub root: PathBuf,
+    /// Absolute `src_dirs` of the dep.
+    pub src_dirs: Vec<PathBuf>,
 }
 
 thread_local! {

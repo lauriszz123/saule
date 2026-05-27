@@ -58,8 +58,9 @@ pub enum Expr {
     /// `x!`
     ForceUnwrap(Box<Spanned<Expr>>),
 
-    /// `{a, b, c}` — array-style table literal
-    Table(Vec<Spanned<Expr>>),
+    /// `{a, b, c}` or `{name: "alice", "x y": 1, 42}` — array, map, and
+    /// mixed table literals all share this single shape.
+    Table(Vec<TableEntry>),
 
     // Lambdas
     Lambda {
@@ -128,6 +129,21 @@ pub enum Pattern {
 pub enum CallArg {
     Positional(Spanned<Expr>),
     Named { name: String, value: Spanned<Expr> },
+}
+
+/// One entry inside a `{ ... }` table literal.
+///
+/// * `Positional` — appended to the array part with successive 1-based keys.
+/// * `Field` — written into the map part. Both `name: expr` and `"text": expr`
+///   parse the key into a `Spanned<Expr::Str>`; arbitrary computed keys are
+///   not currently exposed in the surface but the shape leaves room for them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableEntry {
+    Positional(Spanned<Expr>),
+    Field {
+        key: Spanned<Expr>,
+        value: Spanned<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

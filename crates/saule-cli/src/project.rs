@@ -43,11 +43,24 @@ pub(crate) fn run_project(dir: &Path) {
 
     let src_dirs: Vec<PathBuf> = config.src_dirs.iter().map(|s| root.join(s)).collect();
 
+    // Resolve each `dependencies:` entry by reading the target project's
+    // own `saule.config`. Failures here are fatal because user code that
+    // imports a missing dep should not silently fall through to a generic
+    // "module not found" error.
+    let dependencies = match resolve_dependencies(&root, &config.dependencies) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+    };
+
     saule_interpreter::project::set(saule_interpreter::project::ProjectInfo {
         name: config.name.clone().unwrap_or_default(),
         version: config.version.clone().unwrap_or_default(),
         root: root.clone(),
         src_dirs,
+        dependencies,
     });
 
     let entry_rel = config
@@ -76,6 +89,9 @@ struct RawConfig {
     entry: Option<String>,
     src_dirs: Vec<String>,
     min_saule_version: Option<String>,
+    /// Raw `dependencies:` entries — paths (absolute, `~`-expanded, or
+    /// relative to the project root) to other Saule projects.
+    dependencies: Vec<String>,
 }
 
 fn read_config(path: &Path) -> std::io::Result<RawConfig> {
@@ -97,6 +113,7 @@ fn read_config(path: &Path) -> std::io::Result<RawConfig> {
             "entry" => out.entry = Some(unquote(value)),
             "src_dirs" => out.src_dirs = parse_list(value),
             "min_saule_version" => out.min_saule_version = Some(unquote(value)),
+            "dependencies" => out.dependencies = parse_list(value),
             _ => {}
         }
     }
@@ -105,6 +122,71 @@ fn read_config(path: &Path) -> std::io::Result<RawConfig> {
 
 fn unquote(s: &str) -> String {
     s.trim().trim_matches('"').to_string()
+}
+
+/// Expand a leading `~` to the user's home directory; pass anything else
+/// through unchanged.
+fn expand_tilde(p: &str) -> PathBuf {
+    if let Some(rest) = p.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(p)
+}
+
+/// For each `dependencies:` path, locate the dep's `saule.config`, read its
+/// `name` + `src_dirs`, and produce a resolved [`saule_interpreter::project::Dependency`].
+fn resolve_dependencies(
+    project_root: &Path,
+    deps: &[String],
+) -> Result<Vec<saule_interpreter::project::Dependency>, String> {
+    let mut out = Vec::with_capacity(deps.len());
+    for raw in deps {
+        let expanded = expand_tilde(raw);
+        // Relative paths are resolved against the project root, not the cwd,
+        // so `saule run` works the same from any directory.
+        let dep_root = if expanded.is_absolute() {
+            expanded
+        } else {
+            project_root.join(expanded)
+        };
+        let dep_root = dep_root
+            .canonicalize()
+            .map_err(|e| format!("dependency `{raw}`: {e}"))?;
+
+        let dep_config_path = dep_root.join("saule.config");
+        if !dep_config_path.is_file() {
+            return Err(format!(
+                "dependency `{raw}` at `{}` has no `saule.config`",
+                dep_root.display()
+            ));
+        }
+        let dep_config = read_config(&dep_config_path)
+            .map_err(|e| format!("reading {}: {e}", dep_config_path.display()))?;
+
+        // Name defaults to the dep's directory name so a config that omits
+        // `name:` still produces a usable import prefix.
+        let name = dep_config.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
+            dep_root
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+
+        let src_dirs: Vec<PathBuf> = if dep_config.src_dirs.is_empty() {
+            vec![dep_root.join("src")]
+        } else {
+            dep_config.src_dirs.iter().map(|s| dep_root.join(s)).collect()
+        };
+
+        out.push(saule_interpreter::project::Dependency {
+            name,
+            root: dep_root,
+            src_dirs,
+        });
+    }
+    Ok(out)
 }
 
 /// Parse `["a", "b", "c"]` into `["a", "b", "c"]`. Tolerates missing

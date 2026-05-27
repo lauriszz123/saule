@@ -1,0 +1,8 @@
+import Json from "json/json" 
+
+class Main
+    static fn main()
+        Json.decode("{\"message\": \"Hello, world!\"}")
+        println("Hello, world!")
+    end
+end

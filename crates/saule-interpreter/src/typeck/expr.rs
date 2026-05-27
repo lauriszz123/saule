@@ -2,7 +2,7 @@
 //! access, native-call argument checking, lightweight type inference, and
 //! the `?? != nil` style flow narrowing.
 
-use saule_ast::{BinOp, CallArg, Expr, LambdaBody, Spanned, Type};
+use saule_ast::{BinOp, CallArg, Expr, LambdaBody, Spanned, TableEntry, Type};
 
 use super::TypeCheckError;
 use super::matches::check_match;
@@ -71,8 +71,14 @@ pub(super) fn check_expr(
         }
         Expr::ForceUnwrap(inner) => check_expr(inner, scope, errors),
         Expr::Table(items) => {
-            for e in items {
-                check_expr(e, scope, errors);
+            for entry in items {
+                match entry {
+                    TableEntry::Positional(e) => check_expr(e, scope, errors),
+                    TableEntry::Field { key, value } => {
+                        check_expr(key, scope, errors);
+                        check_expr(value, scope, errors);
+                    }
+                }
             }
         }
         Expr::Lambda { params, body, .. } => {
@@ -267,13 +273,18 @@ pub(super) fn check_assignment_compat(
         return;
     }
 
-    // Table-aware checks for array-style literals assigned to a typed table.
+    // Table-aware checks for table literals assigned to a typed table.
+    // Splits the literal into its positional and field halves so each can
+    // be validated against the declared table shape independently.
     if let (Type::Table { key, value: elem_ty }, Expr::Table(items)) = (decl_ty, &value.value) {
+        let has_positional = items.iter().any(|e| matches!(e, TableEntry::Positional(_)));
+        let has_field = items.iter().any(|e| matches!(e, TableEntry::Field { .. }));
+
         // `{a, b, c}` literal cannot fill a map-typed table whose key is not
         // integer-compatible.
         if let Some(k) = key
             && !is_integer_like(k)
-            && !items.is_empty()
+            && has_positional
         {
             errors.push(TypeCheckError::TableArrayLiteralForMap {
                 key: type_to_string(k),
@@ -282,9 +293,29 @@ pub(super) fn check_assignment_compat(
             });
             return;
         }
-        // Each element must match the declared value type.
+        // Field entries (`name: ...`) require the table to declare a key
+        // type compatible with `string`. Array-typed `table<T>` rejects them.
+        if has_field {
+            let key_ok = match key {
+                None => false,
+                Some(k) => is_string_like(k),
+            };
+            if !key_ok {
+                errors.push(TypeCheckError::TableArrayLiteralForMap {
+                    key: key.as_deref().map(type_to_string).unwrap_or_else(|| "integer".to_string()),
+                    value: type_to_string(elem_ty),
+                    span: to_source_span(value.span.clone()),
+                });
+                return;
+            }
+        }
+        // Each value must match the declared value type.
         for item in items {
-            check_element_compat(elem_ty, item, scope, errors);
+            match item {
+                TableEntry::Positional(e) | TableEntry::Field { value: e, .. } => {
+                    check_element_compat(elem_ty, e, scope, errors);
+                }
+            }
         }
         return;
     }
@@ -322,6 +353,12 @@ pub(super) fn check_table_key_compat(
 /// can satisfy.
 fn is_integer_like(ty: &Type) -> bool {
     matches!(ty, Type::Named(n) if n == "integer" || n == "any")
+}
+
+/// True for `string` and `any` — the key types that a field-style literal
+/// (`name: expr` / `"text": expr`) can satisfy.
+fn is_string_like(ty: &Type) -> bool {
+    matches!(ty, Type::Named(n) if n == "string" || n == "any")
 }
 
 /// Element-of-table compatibility — accepts literals/`Ident`s whose inferred

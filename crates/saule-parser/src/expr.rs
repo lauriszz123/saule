@@ -5,8 +5,8 @@
 use std::ops::Range;
 
 use saule_ast::{
-    BinOp, CallArg, Expr, LambdaBody, MatchArm, MatchBody, Param, Pattern, Spanned, Stmt, Type,
-    UnaryOp,
+    BinOp, CallArg, Expr, LambdaBody, MatchArm, MatchBody, Param, Pattern, Spanned, Stmt,
+    TableEntry, Type, UnaryOp,
 };
 use saule_lexer::Token;
 
@@ -359,19 +359,55 @@ impl Parser {
 
     pub(crate) fn parse_table_literal(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let open = self.advance(); // consume `{`
-        let mut items = Vec::new();
+        let mut items: Vec<TableEntry> = Vec::new();
         if !self.check(&Token::RBrace) {
-            items.push(self.parse_expression()?);
+            items.push(self.parse_table_entry()?);
             while self.eat(&Token::Comma) {
                 if self.check(&Token::RBrace) {
                     break; // allow trailing comma
                 }
-                items.push(self.parse_expression()?);
+                items.push(self.parse_table_entry()?);
             }
         }
         let close = self.expect(&Token::RBrace, "`}` to close table literal")?;
         let span = open.span.start..close.span.end;
         Ok(Spanned::new(Expr::Table(items), span))
+    }
+
+    /// One `{ ... }` entry. Recognises three shapes:
+    ///
+    /// * `ident: expr`  — sugar for `"ident": expr`
+    /// * `"str": expr`  — explicit string key
+    /// * `expr`         — positional (appended to the array part)
+    ///
+    /// Only the literal-key forms are treated as field entries, so a
+    /// bare-identifier expression like `foo` (looking up a binding) still
+    /// works as a positional entry — the lookahead requires the `:` to
+    /// follow immediately.
+    fn parse_table_entry(&mut self) -> Result<TableEntry, ParseError> {
+        // `ident :` field
+        if let Token::Identifier(name) = self.peek().value.clone()
+            && matches!(self.peek_at(1).value, Token::Colon)
+        {
+            let name_tok = self.advance();
+            self.advance(); // `:`
+            let key_span = name_tok.span.clone();
+            let key = Spanned::new(Expr::Str(name), key_span);
+            let value = self.parse_expression()?;
+            return Ok(TableEntry::Field { key, value });
+        }
+        // `"str" :` field
+        if let Token::String(s) = self.peek().value.clone()
+            && matches!(self.peek_at(1).value, Token::Colon)
+        {
+            let str_tok = self.advance();
+            self.advance(); // `:`
+            let key = Spanned::new(Expr::Str(s), str_tok.span);
+            let value = self.parse_expression()?;
+            return Ok(TableEntry::Field { key, value });
+        }
+        // positional
+        Ok(TableEntry::Positional(self.parse_expression()?))
     }
 
     // ── `match` expression ──────────────────────────────────────────────────

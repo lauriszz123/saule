@@ -22,7 +22,7 @@ pub(crate) use members::table_index_to_slot;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_ast::{BinOp, Expr, LambdaBody, Spanned, Type};
+use saule_ast::{BinOp, Expr, LambdaBody, Spanned, TableEntry, Type};
 
 use crate::env::Environment;
 use crate::error::RuntimeError;
@@ -133,13 +133,28 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             }
         }
         Expr::Table(items) => {
-            let mut values = Vec::with_capacity(items.len());
+            // Build the array part from positional entries in order, then
+            // apply field entries via `set` so the existing array/map split
+            // logic (positive contiguous ints land in the array part) is
+            // reused uniformly.
+            let mut table = crate::value::TableObject::new();
             for item in items {
-                values.push(eval(item, env)?);
+                match item {
+                    TableEntry::Positional(e) => {
+                        let v = eval(e, env)?;
+                        table.array.push(v);
+                    }
+                    TableEntry::Field { key, value } => {
+                        let k = eval(key, env)?;
+                        let v = eval(value, env)?;
+                        table.set(&k, v).map_err(|msg| RuntimeError::TypeError {
+                            message: msg,
+                            span: key.span.clone(),
+                        })?;
+                    }
+                }
             }
-            Ok(Value::Table(Rc::new(RefCell::new(
-                crate::value::TableObject::from_array(values),
-            ))))
+            Ok(Value::Table(Rc::new(RefCell::new(table))))
         }
 
         Expr::Lambda { params, body, .. } => {

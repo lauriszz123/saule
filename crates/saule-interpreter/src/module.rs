@@ -86,6 +86,32 @@ pub fn resolve_import_path(dir: &Path, raw: &str) -> Option<PathBuf> {
                 return Some(hit);
             }
         }
+
+        // Dependency lookup: if the first path segment names a dep, strip
+        // it and resolve the remainder under that dep's `src_dirs`.
+        if let Some((head, rest)) = normalised.split_once('/') {
+            for dep in &info.dependencies {
+                if dep.name == head {
+                    for src_dir in &dep.src_dirs {
+                        if let Some(hit) = try_resolve_base(&src_dir.join(rest)) {
+                            return Some(hit);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Bare `import X from "json"` — match the dep itself; look for
+            // an `init.sau` (or single-file project) under its src_dirs.
+            for dep in &info.dependencies {
+                if dep.name == normalised {
+                    for src_dir in &dep.src_dirs {
+                        if let Some(hit) = try_resolve_base(src_dir) {
+                            return Some(hit);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     None

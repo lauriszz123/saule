@@ -14,6 +14,9 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     define_native(env, "type", builtin_type);
     define_native(env, "int", builtin_int);
     define_native(env, "float", builtin_float);
+    define_native(env, "tonumber", builtin_tonumber);
+    define_native(env, "tointeger", builtin_tointeger);
+    define_native(env, "tofloat", builtin_tofloat);
     define_native(env, "assert", builtin_assert);
     define_native(env, "error", builtin_error);
 }
@@ -22,7 +25,7 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 /// `sigs::lookup` on first use so signatures are available even before
 /// `install_std` runs (typecheck runs prior to environment construction).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, register_v, t_any, t_named};
+    use crate::stdlib::sigs::{register, register_v, t_any, t_named, t_nullable};
     let any = t_any();
     // `print/println` accept anything, any number of times.
     register_v("print",   vec![], any.clone(), vec![t_named("nil")]);
@@ -34,6 +37,13 @@ pub fn register_sigs() {
     register("type",     vec![any.clone()],             vec![t_named("string")]);
     register("int",      vec![any.clone()],             vec![t_named("integer")]);
     register("float",    vec![any.clone()],             vec![t_named("float")]);
+    // `tonumber(s)` returns `integer | float | nil` — modelled as nullable
+    // `any` so callers can `force-unwrap` or `match` on the result.
+    register("tonumber",  vec![any.clone()],            vec![t_nullable(t_named("any"))]);
+    // Strict variants: succeed only when the value is/parses as the named
+    // kind, otherwise return `nil`.
+    register("tointeger", vec![any.clone()],            vec![t_nullable(t_named("integer"))]);
+    register("tofloat",   vec![any.clone()],            vec![t_nullable(t_named("float"))]);
     // `assert(v, msg?) -> any` — its real type narrows the input on the call
     // site, which the checker doesn't yet model; `any` is safe and accurate.
     register("assert",   vec![any.clone(), t_named("any")], vec![any]);
@@ -95,6 +105,71 @@ fn builtin_float(args: &[Value]) -> Result<Value, String> {
             "float expects integer or float, got `{}`",
             other.type_name()
         )),
+    }
+}
+
+/// `tonumber(v)` — accept a number unchanged, or parse a string into
+/// integer-or-float. Returns `nil` on anything else or on parse failure so
+/// callers can branch with `if n != nil then`.
+fn builtin_tonumber(args: &[Value]) -> Result<Value, String> {
+    expect_arity("tonumber", args, 1)?;
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Int(*n)),
+        Value::Float(f) => Ok(Value::Float(*f)),
+        Value::Str(s) => {
+            let trimmed = s.trim();
+            // Integer wins when it parses; otherwise fall back to float.
+            // This keeps `tonumber("42")` strictly an integer instead of a
+            // float, matching `int`/`float`'s behaviour on numeric values.
+            if let Ok(i) = trimmed.parse::<i64>() {
+                Ok(Value::Int(i))
+            } else if let Ok(f) = trimmed.parse::<f64>() {
+                Ok(Value::Float(f))
+            } else {
+                Ok(Value::Nil)
+            }
+        }
+        _ => Ok(Value::Nil),
+    }
+}
+
+/// `tointeger(v)` — strict integer parse / coerce.
+///
+/// * `integer`        → unchanged
+/// * `float`          → only when it has no fractional part (e.g. `3.0`)
+/// * `string`         → only when it parses as an `i64`
+/// * anything else    → `nil`
+fn builtin_tointeger(args: &[Value]) -> Result<Value, String> {
+    expect_arity("tointeger", args, 1)?;
+    match &args[0] {
+        Value::Int(n) => Ok(Value::Int(*n)),
+        Value::Float(f) if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 => {
+            Ok(Value::Int(*f as i64))
+        }
+        Value::Str(s) => match s.trim().parse::<i64>() {
+            Ok(i) => Ok(Value::Int(i)),
+            Err(_) => Ok(Value::Nil),
+        },
+        _ => Ok(Value::Nil),
+    }
+}
+
+/// `tofloat(v)` — strict float parse / coerce.
+///
+/// * `float`          → unchanged
+/// * `integer`        → widened to `float`
+/// * `string`         → only when it parses as `f64`
+/// * anything else    → `nil`
+fn builtin_tofloat(args: &[Value]) -> Result<Value, String> {
+    expect_arity("tofloat", args, 1)?;
+    match &args[0] {
+        Value::Float(f) => Ok(Value::Float(*f)),
+        Value::Int(n) => Ok(Value::Float(*n as f64)),
+        Value::Str(s) => match s.trim().parse::<f64>() {
+            Ok(f) => Ok(Value::Float(f)),
+            Err(_) => Ok(Value::Nil),
+        },
+        _ => Ok(Value::Nil),
     }
 }
 
