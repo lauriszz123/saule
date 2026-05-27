@@ -26,6 +26,7 @@ use saule_ast::Module;
 pub mod env;
 pub mod error;
 pub mod eval;
+pub mod project;
 pub mod stdlib;
 pub mod typeck;
 pub mod value;

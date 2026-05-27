@@ -1,0 +1,75 @@
+export class Interpreter
+    local source: string
+
+    fn init(source: string)
+        self.source = source
+    end
+
+    local fn precompute(): (table<string>, table<integer>)
+        local code: table<string> = {}
+        local jumps: table<integer> = {}
+        local stack: table<integer> = {}
+        local n: integer = 0
+
+        for ch, _ in String.iter(self.source) do
+            local keep: boolean = match ch
+                case "+" then true
+                case "-" then true
+                case "<" then true
+                case ">" then true
+                case "." then true
+                case "," then true
+                case "[" then true
+                case "]" then true
+                case _   then false
+            end
+
+            if keep then
+                n = n + 1
+                code[n] = ch
+
+                if ch == "[" then
+                    Table.insert(stack, n)
+                elseif ch == "]" then
+                    local open: integer = Table.remove(stack)!
+                    jumps[open] = n
+                    jumps[n] = open
+                end
+            end
+        end
+
+        return code, jumps
+    end
+
+    fn run()
+        local code, jumps = self.precompute()
+        local tape: table<integer> = {}
+        local out: string = ""
+
+        local ip: integer = 1
+        local dp: integer = 0
+
+        while code[ip] != nil do
+            local cell: integer = tape[dp] ?? 0
+
+            match code[ip]!
+                case ">" then dp = dp + 1
+                case "<" then dp = dp - 1
+                case "+" then tape[dp] = (cell + 1) % 256
+                case "-" then tape[dp] = (cell - 1 + 256) % 256
+                case "." then out = out .. String.char(cell)
+                case "," then tape[dp] = 0
+                case "[" then
+                    if cell == 0 then ip = jumps[ip]! end
+                case "]" then
+                    if cell != 0 then ip = jumps[ip]! end
+
+                case _ then nil
+            end
+
+            ip = ip + 1
+        end
+
+        println(out)
+    end
+end

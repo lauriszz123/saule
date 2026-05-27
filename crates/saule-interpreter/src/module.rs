@@ -73,14 +73,31 @@ fn set_active_module_source(
 /// `"entities/Player"` and `"entities.Player"` both work.
 pub fn resolve_import_path(dir: &Path, raw: &str) -> Option<PathBuf> {
     let normalised = raw.replace('.', "/");
-    let base = dir.join(&normalised);
 
+    if let Some(hit) = try_resolve_base(&dir.join(&normalised)) {
+        return Some(hit);
+    }
+
+    // Project-wide `src_dirs:` fallback. These are absolute, so we look the
+    // import up under each in turn before giving up.
+    if let Some(info) = crate::project::get() {
+        for src_dir in &info.src_dirs {
+            if let Some(hit) = try_resolve_base(&src_dir.join(&normalised)) {
+                return Some(hit);
+            }
+        }
+    }
+
+    None
+}
+
+fn try_resolve_base(base: &Path) -> Option<PathBuf> {
     let candidates = [
         base.with_extension("sau"),
         base.with_extension("saule"),
         base.join("init.sau"),
         base.join("init.saule"),
-        base.clone(),
+        base.to_path_buf(),
     ];
 
     for candidate in candidates {
@@ -138,7 +155,7 @@ fn load_module_inner(
         span: import_span.clone(),
     })?;
 
-    let file_label = abs_path.display().to_string();
+    let file_label = crate::project::pretty_path(abs_path);
     let wrap = |inner: &dyn miette::Diagnostic| RuntimeError::ImportFailed {
         module_label: file_label.clone(),
         import_span: import_span.clone(),
