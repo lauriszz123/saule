@@ -3,6 +3,15 @@
   <component name="CopilotDiffPersistence">
     <option name="pendingDiffs">
       <map>
+        <entry key="$PROJECT_DIR$/run_tests.sh">
+          <value>
+            <PendingDiffInfo>
+              <option name="filePath" value="$PROJECT_DIR$/run_tests.sh" />
+              <option name="originalContent" value="#!/usr/bin/env bash&#10;echo '== positive tests =='&#10;for f in tests/*.sau; do&#10;  out=$(./target/debug/saule &quot;$f&quot; 2&gt;&amp;1)&#10;  rc=$?&#10;  if [ $rc -eq 0 ]; then&#10;    printf 'OK   %s\n' &quot;$f&quot;&#10;  else&#10;    printf 'FAIL %s\n' &quot;$f&quot;&#10;    echo &quot;$out&quot; | head -5 | sed 's/^/     /'&#10;  fi&#10;done&#10;echo&#10;echo '== ui tests (expected to error) =='&#10;for f in tests/ui/*.sau; do&#10;  out=$(./target/debug/saule &quot;$f&quot; 2&gt;&amp;1)&#10;  rc=$?&#10;  if [ $rc -ne 0 ]; then&#10;    printf 'OK   %s\n' &quot;$f&quot;&#10;  else&#10;    printf 'FAIL %s (did not error)\n' &quot;$f&quot;&#10;  fi&#10;done&#10;" />
+              <option name="updatedContent" value="#!/usr/bin/env bash&#10;SAULE_BIN=./target/debug/saule&#10;&#10;echo '== positive tests =='&#10;for f in tests/*.sau; do&#10;  out=$($SAULE_BIN run &quot;$f&quot; 2&gt;&amp;1)&#10;  rc=$?&#10;  if [ $rc -eq 0 ]; then&#10;    printf 'OK   %s\n' &quot;$f&quot;&#10;  else&#10;    printf 'FAIL %s\n' &quot;$f&quot;&#10;    echo &quot;$out&quot; | head -5 | sed 's/^/     /'&#10;  fi&#10;done&#10;echo&#10;echo '== ui tests (expected to error) =='&#10;for f in tests/ui/*.sau; do&#10;  out=$($SAULE_BIN run &quot;$f&quot; 2&gt;&amp;1)&#10;  rc=$?&#10;  if [ $rc -ne 0 ]; then&#10;    printf 'OK   %s\n' &quot;$f&quot;&#10;  else&#10;    printf 'FAIL %s (did not error)\n' &quot;$f&quot;&#10;  fi&#10;done&#10;" />
+            </PendingDiffInfo>
+          </value>
+        </entry>
         <entry key="/expr (snapshot).rs">
           <value>
             <PendingDiffInfo>
