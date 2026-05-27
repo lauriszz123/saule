@@ -1,0 +1,17 @@
+-- String concatenation `..` and length operator `#`
+
+class Main
+  static fn main()
+    local greeting: string = "Hello, " .. "world!"
+    println(greeting)               -- Hello, world!
+    println(#greeting)              -- 13
+
+    local items: table<string> = {"a", "b", "c", "d"}
+    println(#items)                 -- 4
+
+    local who: string = "Arthur"
+    local n: integer = 3
+    println("Player " .. who .. " has " .. n .. " lives")
+  end
+end
+

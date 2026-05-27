@@ -186,11 +186,11 @@ dependencies = [
 
 [[package]]
 name = "saule-ast"
-version = "2026.0.1"
+version = "2026.1.0"
 
 [[package]]
 name = "saule-cli"
-version = "2026.0.1"
+version = "2026.1.0"
 dependencies = [
  "miette",
  "saule-interpreter",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "saule-interpreter"
-version = "2026.0.1"
+version = "2026.1.0"
 dependencies = [
  "miette",
  "saule-ast",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "saule-lexer"
-version = "2026.0.1"
+version = "2026.1.0"
 dependencies = [
  "miette",
  "saule-ast",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "saule-parser"
-version = "2026.0.1"
+version = "2026.1.0"
 dependencies = [
  "miette",
  "saule-ast",

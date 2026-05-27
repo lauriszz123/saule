@@ -1,0 +1,13 @@
+-- ERROR: catch declares the wrong type for the thrown value.
+-- A string is thrown, but the catch binds it as integer.
+
+class Main
+  static fn main()
+    try
+      throw "oops"
+    catch e: integer
+      println(e)
+    end
+  end
+end
+

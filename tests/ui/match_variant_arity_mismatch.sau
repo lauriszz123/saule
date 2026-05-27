@@ -1,0 +1,18 @@
+-- Variant payload arity mismatch: `Click` carries two fields, the pattern
+-- only binds one. The typechecker should reject this.
+enum Event
+    Click(x: integer, y: integer),
+    Quit
+end
+
+class Main
+    static fn main()
+        local e: Event = Event.Click(1, 2)
+        local label: string = match e
+            case Event.Click(x) then "click " .. x
+            case Event.Quit then "bye"
+        end
+        println(label)
+    end
+end
+

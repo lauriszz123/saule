@@ -1,0 +1,10 @@
+-- ERROR: a non-nullable `string` cannot be assigned `nil`.
+-- Use `string?` to opt into nullable.
+
+class Main
+  static fn main()
+    local name: string = nil
+    println(name)
+  end
+end
+

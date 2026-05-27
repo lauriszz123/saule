@@ -1,0 +1,22 @@
+-- ERROR: a class can only extend one parent.
+
+class A
+  fn init() end
+end
+
+class B
+  fn init() end
+end
+
+class C extends A, B
+  fn init()
+    self.super()
+  end
+end
+
+class Main
+  static fn main()
+    local c: C = C()
+  end
+end
+

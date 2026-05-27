@@ -1,0 +1,12 @@
+-- ERROR: cannot mix integer and float in arithmetic without an explicit cast.
+
+class Main
+  static fn main()
+    local health: integer = 100
+    local dmg: float = 10.5
+
+    local result = health - dmg    -- ERROR: cannot mix integer and float
+    println(result)
+  end
+end
+

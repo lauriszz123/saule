@@ -1,0 +1,21 @@
+-- `match` is the canonical way to consume a nullable. The bound name
+-- on the non-nil arm has the underlying (non-nullable) type.
+fn lookup(id: integer) -> string?
+    if id == 1 then return "Arthur" end
+    return nil
+end
+
+fn greet(id: integer) -> string
+    return match lookup(id)
+        case nil then "unknown"
+        case name then "hi " .. name
+    end
+end
+
+class Main
+    static fn main()
+        println(greet(1))
+        println(greet(42))
+    end
+end
+

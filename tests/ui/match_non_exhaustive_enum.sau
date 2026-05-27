@@ -1,0 +1,19 @@
+-- Non-exhaustive match: `Color.Blue` is not covered and there's no wildcard.
+-- The typechecker should reject this with a missing-variant diagnostic.
+enum Color
+    Red,
+    Green,
+    Blue
+end
+
+class Main
+    static fn main()
+        local c: Color = Color.Red
+        local name: string = match c
+            case Color.Red then "red"
+            case Color.Green then "green"
+        end
+        println(name)
+    end
+end
+

@@ -24,7 +24,7 @@ fn main() {
             println!("{USAGE}");
         }
         "-v" | "--version" => {
-            println!("saule {}", env!("CARGO_PKG_VERSION"));
+            println!("Saule programming language version: {}", env!("CARGO_PKG_VERSION"));
         }
         "init" => match args.get(1) {
             Some(name) => cmd_init(name),

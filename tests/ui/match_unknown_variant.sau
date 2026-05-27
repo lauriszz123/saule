@@ -1,0 +1,21 @@
+-- Variant name does not exist on the enum — the typechecker should reject it.
+enum Direction
+    North,
+    South,
+    East,
+    West
+end
+
+class Main
+    static fn main()
+        local d: Direction = Direction.North
+        local label: string = match d
+            case Direction.North then "n"
+            case Direction.South then "s"
+            case Direction.East then "e"
+            case Direction.Up then "?"     -- not a real variant
+        end
+        println(label)
+    end
+end
+

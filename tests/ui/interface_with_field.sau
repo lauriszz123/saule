@@ -1,0 +1,14 @@
+-- ERROR: interfaces define method signatures only, no fields.
+
+interface Greetable
+  name: string
+
+  fn greet() -> nil
+end
+
+class Main
+  static fn main()
+    println("unreachable")
+  end
+end
+

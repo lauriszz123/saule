@@ -3,6 +3,6 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "2026.0.1"
+version = "2026.1.0"
 edition = "2024"
-description = "Saule — a statically typed, class-oriented scripting language with a Lua-flavoured runtime."
+description = "Saule — a statically typed, class-oriented scripting language."

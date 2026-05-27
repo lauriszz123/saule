@@ -1,0 +1,11 @@
+-- ERROR: `until` condition uses a nullable value as a boolean.
+
+class Main
+  static fn main()
+    local input: string? = nil
+    repeat
+      input = nil
+    until input    -- ERROR: condition must be boolean, got string?
+  end
+end
+

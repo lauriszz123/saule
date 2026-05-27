@@ -1,0 +1,8 @@
+-- ERROR: `continue` is only legal inside a loop.
+
+class Main
+  static fn main()
+    continue
+  end
+end
+

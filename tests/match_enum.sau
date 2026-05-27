@@ -1,0 +1,23 @@
+-- Basic `match` over a simple enum. Every variant covered → exhaustive.
+enum Status
+    Ok,
+    Warn,
+    Error
+end
+
+fn describe(s: Status) -> string
+    return match s
+        case Status.Ok then "fine"
+        case Status.Warn then "watch out"
+        case Status.Error then "oops"
+    end
+end
+
+class Main
+    static fn main()
+        println(describe(Status.Ok))
+        println(describe(Status.Warn))
+        println(describe(Status.Error))
+    end
+end
+

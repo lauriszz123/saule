@@ -1,0 +1,14 @@
+-- Pattern's literal type does not match the scrutinee's type:
+-- matching a string against an integer literal pattern is a type error.
+class Main
+    static fn main()
+        local cmd: string = "quit"
+        local result: string = match cmd
+            case 0 then "zero"
+            case "quit" then "bye"
+            case _ then "other"
+        end
+        println(result)
+    end
+end
+

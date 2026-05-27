@@ -1,0 +1,14 @@
+-- Non-exhaustive nullable match: handles `nil` but never the non-nil value.
+fn lookup(id: integer) -> string?
+    return nil
+end
+
+class Main
+    static fn main()
+        local label: string = match lookup(1)
+            case nil then "none"
+        end
+        println(label)
+    end
+end
+
