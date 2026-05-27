@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use saule_ast::{ClassMember, Decl, EnumVariant, Expr, ImportNames, Method, Param, Spanned, Stmt};
+use saule_ast::{ClassMember, Decl, EnumVariant, Expr, ImportNames, Method, Param, Spanned, Stmt, Type};
 
 use crate::env::Environment;
-use crate::error::{RuntimeError, unsupported};
+use crate::error::RuntimeError;
 use crate::module;
 use crate::value::{self, ClassObject, FieldDef, FunctionBody, FunctionObject, InterfaceObject, Value};
 
@@ -150,9 +150,119 @@ pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow
         Stmt::Break => Ok(Flow::Break),
         Stmt::Continue => Ok(Flow::Continue),
 
-        Stmt::Throw(_) => Err(unsupported("throw", span)),
-        Stmt::Try { .. } => Err(unsupported("try/catch", span)),
+        Stmt::Throw(e) => {
+            let v = expr::eval(e, env)?;
+            let display = v.to_display_string();
+            thrown_slot::set(v);
+            Err(RuntimeError::Thrown { value: display, span })
+        }
+        Stmt::Try {
+            body,
+            catch_var,
+            catch_ty,
+            catch_body,
+        } => exec_try(body, catch_var, catch_ty, catch_body, env),
         Stmt::Decl(decl) => exec_decl(decl, env),
+    }
+}
+
+/// Park the in-flight thrown `Value` so `RuntimeError::Thrown` can stay
+/// `Send + Sync` (miette's requirement) while the actual value — which
+/// contains non-`Send` `Rc`s — rides alongside in a thread-local slot.
+mod thrown_slot {
+    use crate::value::Value;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SLOT: RefCell<Option<Value>> = const { RefCell::new(None) };
+    }
+
+    pub fn set(v: Value) {
+        SLOT.with(|s| *s.borrow_mut() = Some(v));
+    }
+
+    pub fn take() -> Option<Value> {
+        SLOT.with(|s| s.borrow_mut().take())
+    }
+}
+
+/// Run a `try ... catch e: T ... end` block. The catch arm fires only when:
+///   1. the body errored with a `RuntimeError::Thrown`, **and**
+///   2. the thrown value's runtime type matches `catch_ty`.
+///
+/// Any other error — or a thrown value whose type doesn't match — is
+/// re-propagated so an outer `try` (or the top-level driver) can see it.
+fn exec_try(
+    body: &[Spanned<Stmt>],
+    catch_var: &str,
+    catch_ty: &Type,
+    catch_body: &[Spanned<Stmt>],
+    env: &Rc<RefCell<Environment>>,
+) -> Result<Flow, RuntimeError> {
+    let body_scope = Environment::with_parent(env.clone());
+    match exec_block(body, &body_scope) {
+        Ok(flow) => Ok(flow),
+        Err(RuntimeError::Thrown { value, span }) => {
+            let thrown = thrown_slot::take().unwrap_or(Value::Nil);
+            if runtime_matches_type(&thrown, catch_ty) {
+                let catch_scope = Environment::with_parent(env.clone());
+                catch_scope.borrow_mut().define(catch_var.to_string(), thrown);
+                exec_block(catch_body, &catch_scope)
+            } else {
+                // Re-park and re-throw for an outer handler.
+                thrown_slot::set(thrown);
+                Err(RuntimeError::Thrown { value, span })
+            }
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Best-effort runtime check that `value` satisfies the declared `catch_ty`.
+/// Nullable, table-of, and function types are accepted structurally; classes
+/// match by walking the parent chain; interfaces match by name lookup.
+fn runtime_matches_type(value: &Value, ty: &Type) -> bool {
+    match ty {
+        Type::Nullable(inner) => {
+            matches!(value, Value::Nil) || runtime_matches_type(value, inner)
+        }
+        Type::Tuple(_) => true, // multi-return shapes aren't introspectable here
+        Type::Function { .. } => matches!(
+            value,
+            Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)
+        ),
+        Type::Table { .. } => matches!(value, Value::Table(_)),
+        Type::Named(name) => match name.as_str() {
+            "any" => true,
+            "nil" => matches!(value, Value::Nil),
+            "boolean" => matches!(value, Value::Bool(_)),
+            "integer" => matches!(value, Value::Int(_)),
+            "float" => matches!(value, Value::Float(_)),
+            "number" => matches!(value, Value::Int(_) | Value::Float(_)),
+            "string" => matches!(value, Value::Str(_)),
+            "table" => matches!(value, Value::Table(_)),
+            "function" => matches!(
+                value,
+                Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)
+            ),
+            other => match value {
+                Value::Instance(inst) => {
+                    let inst_ref = inst.borrow();
+                    let mut cur = Some(inst_ref.class.clone());
+                    while let Some(c) = cur {
+                        if c.name == other {
+                            return true;
+                        }
+                        cur = c.parent.clone();
+                    }
+                    false
+                }
+                Value::Class(c) => c.name == other,
+                Value::EnumVariant(v) => v.enum_name == other,
+                Value::Enum(e) => e.name == other,
+                _ => false,
+            },
+        },
     }
 }
 
@@ -188,6 +298,7 @@ fn exec_decl(
                 body: FunctionBody::Block(body.clone()),
                 closure: env.clone(),
                 owner_class: std::cell::RefCell::new(None),
+                source: crate::module::active_module_source(),
             };
             env.borrow_mut()
                 .define(name.clone(), Value::Function(std::rc::Rc::new(func)));
@@ -427,6 +538,7 @@ fn exec_class_decl(
         body: FunctionBody::Block(body),
         closure: closure.clone(),
         owner_class: std::cell::RefCell::new(None),
+        source: crate::module::active_module_source(),
     }
 }
 
@@ -438,6 +550,7 @@ fn exec_enum_decl(
     _span: std::ops::Range<usize>,
 ) -> Result<Flow, RuntimeError> {
     let mut variant_dict = HashMap::new();
+    let mut tuple_variants: HashMap<String, usize> = HashMap::new();
     let mut enum_methods = HashMap::new();
 
     for method in methods {
@@ -472,6 +585,9 @@ fn exec_enum_decl(
                 });
                 variant_dict.insert(name.clone(), variant_obj);
             }
+            EnumVariant::Tuple { name, fields } => {
+                tuple_variants.insert(name.clone(), fields.len());
+            }
         }
     }
 
@@ -479,6 +595,7 @@ fn exec_enum_decl(
     let final_enum = Rc::new(value::EnumObject {
         name: enum_name.to_string(),
         variants: variant_dict.clone(),
+        tuple_variants,
         methods: enum_methods,
     });
 

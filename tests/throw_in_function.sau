@@ -1,0 +1,20 @@
+-- A throw inside a function should propagate to the caller's `try`.
+fn validate(n: integer)
+    if n < 0 then
+        throw "negative not allowed"
+    end
+end
+
+class Main
+    static fn main()
+        try
+            validate(10)
+            println("ok 10")
+            validate(-1)
+            println("never reached")
+        catch e: string
+            println("caught: " .. e)
+        end
+    end
+end
+

@@ -2,6 +2,8 @@
 
 Saule is a statically typed, class-oriented language inspired by Lua's simplicity and runtime model, designed to be minimal to write but powerful to use. It compiles to clean, readable code and is structured around files, classes, interfaces, and scripts.
 
+> 📚 Looking for the **standard library** (`print`, `String`, `Math`, `Table`, `Io`, `Os`, …)? See **[DOCS.md](./DOCS.md)**.
+
 ---
 
 ## Table of Contents
@@ -19,6 +21,7 @@ Saule is a statically typed, class-oriented language inspired by Lua's simplicit
 - [Loops](#loops)
 - [Imports and File Structure](#imports-and-file-structure)
 - [Project Configuration](#project-configuration)
+- [Standard Library →](./DOCS.md)
 
 ---
 
@@ -1119,7 +1122,7 @@ p.damage(dmg)
 | `until` | End condition for repeat loop |
 | `break` | Exit a loop |
 | `continue` | Skip to the next iteration |
-| `if / else / end` | Conditional logic |
+| `if / elseif / else / end` | Conditional logic |
 | `match` | Begin a pattern-matching expression |
 | `case` | Introduce a pattern arm inside `match` |
 | `when` | Attach a guard condition to a `case` |

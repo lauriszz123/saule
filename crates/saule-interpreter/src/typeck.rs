@@ -19,13 +19,13 @@
 //! it returns `None` and conservatively skips the check rather than producing
 //! a false positive.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use miette::Diagnostic;
 use saule_ast::{
-    BinOp, CallArg, ClassMember, Decl, Expr, LambdaBody, Method, Module, Param, Spanned, Stmt,
-    Type,
+    BinOp, CallArg, ClassMember, Decl, EnumVariant, Expr, LambdaBody, MatchArm, MatchBody, Method,
+    Module, Param, Pattern, Spanned, Stmt, Type,
 };
 use thiserror::Error;
 
@@ -171,6 +171,64 @@ pub enum TypeCheckError {
         #[label("wrong number of arguments")]
         span: miette::SourceSpan,
     },
+
+    #[error("`{construct}` condition must be a `boolean`, got `{found}`")]
+    #[diagnostic(help(
+        "compare with `==`, `!=`, `<`, `>` etc., or use `?? false` / `!= nil` to coerce a nullable to a `boolean`"
+    ))]
+    NonBooleanCondition {
+        construct: &'static str,
+        found: String,
+        #[label("not a boolean")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("non-exhaustive `match`: {reason}")]
+    #[diagnostic(help(
+        "add a wildcard arm `case _ then ...` or cover the remaining cases explicitly"
+    ))]
+    MatchNonExhaustive {
+        reason: String,
+        #[label("not all cases covered")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`match` arms produce incompatible types: `{expected}` vs `{found}`")]
+    #[diagnostic(help("every arm of a `match` expression must evaluate to the same type"))]
+    MatchArmTypeMismatch {
+        expected: String,
+        found: String,
+        #[label("arms disagree on result type")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("pattern of type `{found}` cannot match scrutinee of type `{expected}`")]
+    #[diagnostic(help("change the pattern to match the scrutinee's type"))]
+    MatchPatternTypeMismatch {
+        expected: String,
+        found: String,
+        #[label("incompatible pattern")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("enum `{enum_name}` has no variant `{variant}`")]
+    #[diagnostic(help("check the spelling of the variant or add it to the enum"))]
+    MatchUnknownVariant {
+        enum_name: String,
+        variant: String,
+        #[label("unknown variant")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("variant `{variant}` expects {expected} field(s), got {found}")]
+    #[diagnostic(help("supply a sub-pattern for every payload field of the variant"))]
+    MatchVariantArityMismatch {
+        variant: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of sub-patterns")]
+        span: miette::SourceSpan,
+    },
 }
 
 fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
@@ -214,10 +272,25 @@ struct ClassInfo {
 type ClassRegistry = HashMap<String, ClassInfo>;
 type InterfaceRegistry = HashMap<String, Vec<String>>;
 
+/// Enum info: variant name -> payload arity (0 for `Bare` / `Valued`,
+/// N for `Tuple { fields: [...; N] }`).
+#[derive(Default, Clone)]
+struct EnumInfo {
+    variants: HashMap<String, usize>,
+}
+type EnumRegistry = HashMap<String, EnumInfo>;
+
 thread_local! {
     static CLASSES: std::cell::RefCell<ClassRegistry> = std::cell::RefCell::new(HashMap::new());
     static INTERFACES: std::cell::RefCell<InterfaceRegistry> = std::cell::RefCell::new(HashMap::new());
+    static ENUMS: std::cell::RefCell<EnumRegistry> = std::cell::RefCell::new(HashMap::new());
     static CURRENT_CLASS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+
+    /// Generic type-parameter names in scope for the function/method body
+    /// currently being checked. Treated as `any`-equivalent so that
+    /// `table<T>`, `T?`, and bare `T` accept any concrete instantiation.
+    static GENERICS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
 fn with_classes<R>(f: impl FnOnce(&ClassRegistry) -> R) -> R {
@@ -226,6 +299,10 @@ fn with_classes<R>(f: impl FnOnce(&ClassRegistry) -> R) -> R {
 
 fn with_interfaces<R>(f: impl FnOnce(&InterfaceRegistry) -> R) -> R {
     INTERFACES.with(|c| f(&c.borrow()))
+}
+
+fn with_enums<R>(f: impl FnOnce(&EnumRegistry) -> R) -> R {
+    ENUMS.with(|c| f(&c.borrow()))
 }
 
 /// Is `iface` a known interface name?
@@ -317,6 +394,36 @@ fn set_current_class(name: Option<String>) -> Option<String> {
     CURRENT_CLASS.with(|c| std::mem::replace(&mut *c.borrow_mut(), name))
 }
 
+/// Add `params` to the in-scope generic set. Returns the names actually
+/// inserted so the matching [`pop_generics`] can remove just those (and
+/// preserve any outer generics that share a name).
+fn push_generics(params: &[String]) -> Vec<String> {
+    let mut added = Vec::new();
+    GENERICS.with(|g| {
+        let mut set = g.borrow_mut();
+        for p in params {
+            if set.insert(p.clone()) {
+                added.push(p.clone());
+            }
+        }
+    });
+    added
+}
+
+fn pop_generics(added: Vec<String>) {
+    GENERICS.with(|g| {
+        let mut set = g.borrow_mut();
+        for p in added {
+            set.remove(&p);
+        }
+    });
+}
+
+/// True if `name` names a type parameter in scope for the current body.
+fn is_type_param(name: &str) -> bool {
+    GENERICS.with(|g| g.borrow().contains(name))
+}
+
 /// Look up `member` on `class` (walking the parent chain). Returns
 /// `Some((owning_class, is_private))` if found.
 fn lookup_member(class: &str, member: &str) -> Option<(String, bool)> {
@@ -342,9 +449,10 @@ fn class_implements_iterable(class: &str) -> bool {
     class_implements(class, "Iterable") || class_implements(class, "Iterable2")
 }
 
-fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry) {
+fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, EnumRegistry) {
     let mut reg = ClassRegistry::new();
     let mut ifaces = InterfaceRegistry::new();
+    let mut enums = EnumRegistry::new();
     for stmt in &module.stmts {
         if let Stmt::Decl(d) = &stmt.value {
             match &d.value {
@@ -377,6 +485,18 @@ fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry) {
                 Decl::Interface { name, extends, .. } => {
                     ifaces.insert(name.clone(), extends.clone());
                 }
+                Decl::Enum { name, variants, .. } => {
+                    let mut info = EnumInfo::default();
+                    for v in variants {
+                        let (vname, arity) = match &v.value {
+                            EnumVariant::Bare(n) => (n.clone(), 0),
+                            EnumVariant::Valued(n, _) => (n.clone(), 0),
+                            EnumVariant::Tuple { name, fields } => (name.clone(), fields.len()),
+                        };
+                        info.variants.insert(vname, arity);
+                    }
+                    enums.insert(name.clone(), info);
+                }
                 _ => {}
             }
         }
@@ -385,23 +505,25 @@ fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry) {
     // see them even without explicit declarations in user code.
     ifaces.entry("Iterable".into()).or_default();
     ifaces.entry("Iterable2".into()).or_default();
-    (reg, ifaces)
+    (reg, ifaces, enums)
 }
 
 /// Run the static checks on a parsed module. Returns *all* errors found so
 /// the user sees everything in one pass.
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
-    let (reg, ifaces) = build_registry(module);
+    let (reg, ifaces, enums) = build_registry(module);
     CLASSES.with(|c| *c.borrow_mut() = reg);
     INTERFACES.with(|c| *c.borrow_mut() = ifaces);
+    ENUMS.with(|c| *c.borrow_mut() = enums);
     let _restore = set_current_class(None);
     let mut errors = Vec::new();
     let mut scope = Scope::default();
     for stmt in &module.stmts {
-        check_stmt(&stmt.value, &mut scope, &mut errors);
+        check_stmt(stmt, &mut scope, &mut errors);
     }
     CLASSES.with(|c| c.borrow_mut().clear());
     INTERFACES.with(|c| c.borrow_mut().clear());
+    ENUMS.with(|c| c.borrow_mut().clear());
     errors
 }
 
@@ -411,8 +533,8 @@ pub fn check(module: &Module) -> Vec<TypeCheckError> {
 // override types for the duration of a sub-block.
 // ──────────────────────────────────────────────────────────────────────────────
 
-fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) {
-    match stmt {
+fn check_stmt(stmt: &Spanned<Stmt>, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) {
+    match &stmt.value {
         Stmt::Decl(decl) => check_decl(&decl.value, errors),
 
         Stmt::Local { name, ty, value } => {
@@ -426,6 +548,15 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
                     scope.bind(name.clone(), t);
                 }
             } else if let Some(ty) = ty {
+                // `local x: T` with no initializer is implicitly `nil`.
+                // Reject when `T` isn't nullable so the user has to either
+                // mark the type `T?` or supply a value up front.
+                if !is_nullable(ty) {
+                    errors.push(TypeCheckError::NilToNonNullable {
+                        ty: type_to_string(ty),
+                        span: to_source_span(stmt.span.clone()),
+                    });
+                }
                 scope.bind(name.clone(), ty.clone());
             }
         }
@@ -494,20 +625,22 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
             else_block,
         } => {
             check_expr(cond, scope, errors);
+            check_boolean_cond("if", cond, scope, errors);
 
             // Branch the scope so narrowing in the then-block doesn't leak.
             let mut then_scope = scope.clone();
             narrow_truthy(cond, &mut then_scope);
             for s in then_block {
-                check_stmt(&s.value, &mut then_scope, errors);
+                check_stmt(s, &mut then_scope, errors);
             }
 
             for (econd, ebody) in elseifs {
                 check_expr(econd, scope, errors);
+                check_boolean_cond("elseif", econd, scope, errors);
                 let mut ei_scope = scope.clone();
                 narrow_truthy(econd, &mut ei_scope);
                 for s in ebody {
-                    check_stmt(&s.value, &mut ei_scope, errors);
+                    check_stmt(s, &mut ei_scope, errors);
                 }
             }
 
@@ -515,17 +648,23 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
                 let mut else_scope = scope.clone();
                 narrow_falsy(cond, &mut else_scope);
                 for s in block {
-                    check_stmt(&s.value, &mut else_scope, errors);
+                    check_stmt(s, &mut else_scope, errors);
                 }
             }
         }
 
         Stmt::While { cond, body } | Stmt::Repeat { body, cond } => {
             check_expr(cond, scope, errors);
+            check_boolean_cond(
+                if matches!(stmt.value, Stmt::While { .. }) { "while" } else { "until" },
+                cond,
+                scope,
+                errors,
+            );
             let mut body_scope = scope.clone();
             narrow_truthy(cond, &mut body_scope);
             for s in body {
-                check_stmt(&s.value, &mut body_scope, errors);
+                check_stmt(s, &mut body_scope, errors);
             }
         }
 
@@ -546,7 +685,7 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
             let ty = var_ty.clone().unwrap_or(Type::Named("integer".into()));
             body_scope.bind(var.clone(), ty);
             for s in body {
-                check_stmt(&s.value, &mut body_scope, errors);
+                check_stmt(s, &mut body_scope, errors);
             }
         }
 
@@ -570,7 +709,7 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
                 }
             }
             for s in body {
-                check_stmt(&s.value, &mut body_scope, errors);
+                check_stmt(s, &mut body_scope, errors);
             }
         }
 
@@ -590,12 +729,12 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
         } => {
             let mut body_scope = scope.clone();
             for s in body {
-                check_stmt(&s.value, &mut body_scope, errors);
+                check_stmt(s, &mut body_scope, errors);
             }
             let mut catch_scope = scope.clone();
             catch_scope.bind(catch_var.clone(), catch_ty.clone());
             for s in catch_body {
-                check_stmt(&s.value, &mut catch_scope, errors);
+                check_stmt(s, &mut catch_scope, errors);
             }
         }
 
@@ -615,20 +754,23 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             ..
         } => check_class(class_name, members, errors),
         Decl::Function {
+            type_params,
             params,
             return_ty,
             body,
             ..
         } => {
+            let prev_generics = push_generics(type_params);
             let mut scope = Scope::default();
             check_default_params(params, &scope, errors);
             seed_params(&mut scope, params);
             for s in body {
-                check_stmt(&s.value, &mut scope, errors);
+                check_stmt(s, &mut scope, errors);
             }
             if let Some(rt) = return_ty {
                 check_returns(body, rt, &scope, errors);
             }
+            pop_generics(prev_generics);
         }
         _ => {}
     }
@@ -747,6 +889,9 @@ fn is_assignment_compatible(decl_ty: &Type, value: &Spanned<Expr>, scope: &Scope
         (Type::Named(a), Type::Named(b)) => {
             if a == b || a == "any" || b == "any" {
                 true
+            } else if is_type_param(a) || is_type_param(b) {
+                // Generic type parameters in scope match anything.
+                true
             } else {
                 // Allow numeric literals in either direction only when same name.
                 false
@@ -825,6 +970,7 @@ fn check_class(
     let prev = set_current_class(Some(class_name.to_string()));
     for m in members {
         if let ClassMember::Method(meth) = &m.value {
+            let prev_generics = push_generics(&meth.type_params);
             let mut scope = Scope::default();
             // `self` resolves to the class itself in `static fn` and to an
             // instance otherwise. Seed it as the class name so member-existence
@@ -833,11 +979,12 @@ fn check_class(
             check_default_params(&meth.params, &scope, errors);
             seed_params(&mut scope, &meth.params);
             for s in &meth.body {
-                check_stmt(&s.value, &mut scope, errors);
+                check_stmt(s, &mut scope, errors);
             }
             if let Some(rt) = &meth.return_ty {
                 check_returns(&meth.body, rt, &scope, errors);
             }
+            pop_generics(prev_generics);
         }
     }
     set_current_class(prev);
@@ -908,9 +1055,268 @@ fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<TypeCheckErr
                 LambdaBody::Expr(e) => check_expr(e, &lscope, errors),
                 LambdaBody::Block(stmts) => {
                     for s in stmts {
-                        check_stmt(&s.value, &mut lscope, errors);
+                        check_stmt(s, &mut lscope, errors);
                     }
                 }
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            check_match(expr, scrutinee, arms, scope, errors);
+        }
+        _ => {}
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// `match` expression checks: pattern/scrutinee compat, exhaustiveness,
+// arm-body type unification. Pattern-bound variables are added to a per-arm
+// scope so guards and bodies can reference them.
+// ──────────────────────────────────────────────────────────────────────────────
+
+fn check_match(
+    match_expr: &Spanned<Expr>,
+    scrutinee: &Spanned<Expr>,
+    arms: &[MatchArm],
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    check_expr(scrutinee, scope, errors);
+    let scrut_ty = infer(scrutinee, scope);
+
+    // Determine which enum (if any) drives exhaustiveness — prefer the
+    // scrutinee's static type; fall back to the enum referenced by any
+    // `Variant` pattern in the arms.
+    let scrut_enum_name = match &scrut_ty {
+        Some(ty) => match strip_nullable(ty.clone()) {
+            Type::Named(n) if with_enums(|e| e.contains_key(&n)) => Some(n),
+            _ => None,
+        },
+        None => None,
+    };
+    let pattern_enum_name = arms.iter().find_map(|a| match &a.pattern.value {
+        Pattern::Variant { enum_name, .. } if with_enums(|e| e.contains_key(enum_name)) => {
+            Some(enum_name.clone())
+        }
+        _ => None,
+    });
+    let active_enum = scrut_enum_name.clone().or(pattern_enum_name);
+
+    let mut covered_variants: HashSet<String> = HashSet::new();
+    let mut has_fallback = false;
+    let mut covered_true = false;
+    let mut covered_false = false;
+    let mut arm_types: Vec<Option<Type>> = Vec::new();
+    let arm_bind_ty = scrut_ty.as_ref().map(|t| strip_nullable(t.clone()));
+
+    for arm in arms {
+        check_pattern(&arm.pattern, &scrut_ty, errors);
+
+        let mut arm_scope = scope.clone();
+        bind_pattern(&arm.pattern.value, arm_bind_ty.as_ref(), &mut arm_scope);
+
+        if let Some(g) = &arm.guard {
+            check_expr(g, &arm_scope, errors);
+            check_boolean_cond("when", g, &arm_scope, errors);
+        }
+
+        let body_ty = match &arm.body {
+            MatchBody::Expr(e) => {
+                check_expr(e, &arm_scope, errors);
+                infer(e, &arm_scope)
+            }
+            MatchBody::Block(stmts) => {
+                let mut bs = arm_scope.clone();
+                for s in stmts {
+                    check_stmt(s, &mut bs, errors);
+                }
+                None
+            }
+        };
+        arm_types.push(body_ty);
+
+        // Only unguarded arms contribute to exhaustiveness.
+        if arm.guard.is_none() {
+            match &arm.pattern.value {
+                Pattern::Wildcard | Pattern::Bind(_) => has_fallback = true,
+                Pattern::Tuple(fields)
+                    if fields
+                        .iter()
+                        .all(|p| matches!(p.value, Pattern::Wildcard | Pattern::Bind(_))) =>
+                {
+                    has_fallback = true;
+                }
+                Pattern::Variant { enum_name, variant, .. } => {
+                    if let Some(en) = &active_enum
+                        && en == enum_name
+                    {
+                        covered_variants.insert(variant.clone());
+                    }
+                }
+                Pattern::Bool(true) => covered_true = true,
+                Pattern::Bool(false) => covered_false = true,
+                _ => {}
+            }
+        }
+    }
+
+    // Exhaustiveness.
+    let (exhaustive, missing_variants): (bool, Vec<String>) = if has_fallback {
+        (true, vec![])
+    } else if let Some(en) = &active_enum {
+        with_enums(|e| {
+            if let Some(info) = e.get(en) {
+                let missing: Vec<String> = info
+                    .variants
+                    .keys()
+                    .filter(|v| !covered_variants.contains(*v))
+                    .cloned()
+                    .collect();
+                (missing.is_empty(), missing)
+            } else {
+                (false, vec![])
+            }
+        })
+    } else if matches!(&scrut_ty, Some(Type::Named(n)) if n == "boolean") {
+        (covered_true && covered_false, vec![])
+    } else {
+        (false, vec![])
+    };
+
+    if !exhaustive {
+        let reason = if let Some(en) = &active_enum {
+            if missing_variants.is_empty() {
+                format!("enum `{en}` is not fully covered")
+            } else {
+                format!(
+                    "missing variant(s) of `{en}`: {}",
+                    missing_variants.join(", ")
+                )
+            }
+        } else if matches!(&scrut_ty, Some(Type::Named(n)) if n == "boolean") {
+            "boolean match must cover both `true` and `false`".to_string()
+        } else {
+            "no unguarded wildcard / binding arm".to_string()
+        };
+        errors.push(TypeCheckError::MatchNonExhaustive {
+            reason,
+            span: to_source_span(match_expr.span.clone()),
+        });
+    }
+
+    // Arm body type unification — flag the first pair that don't agree.
+    let mut first_ty: Option<Type> = None;
+    for ty_opt in &arm_types {
+        if let Some(t) = ty_opt {
+            if let Some(first) = &first_ty {
+                if !types_compatible(first, t) && !types_compatible(t, first) {
+                    errors.push(TypeCheckError::MatchArmTypeMismatch {
+                        expected: type_to_string(first),
+                        found: type_to_string(t),
+                        span: to_source_span(match_expr.span.clone()),
+                    });
+                    break;
+                }
+            } else {
+                first_ty = Some(t.clone());
+            }
+        }
+    }
+}
+
+fn check_pattern(
+    pat: &Spanned<Pattern>,
+    scrut_ty: &Option<Type>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    match &pat.value {
+        Pattern::Wildcard | Pattern::Bind(_) | Pattern::Nil => {}
+        Pattern::Int(_) => check_pattern_literal_compat(scrut_ty, "integer", &pat.span, errors),
+        Pattern::Float(_) => check_pattern_literal_compat(scrut_ty, "float", &pat.span, errors),
+        Pattern::Bool(_) => check_pattern_literal_compat(scrut_ty, "boolean", &pat.span, errors),
+        Pattern::Str(_) => check_pattern_literal_compat(scrut_ty, "string", &pat.span, errors),
+        Pattern::Variant {
+            enum_name,
+            variant,
+            fields,
+        } => {
+            let mut known_enum = false;
+            with_enums(|e| {
+                if let Some(info) = e.get(enum_name) {
+                    known_enum = true;
+                    if let Some(&arity) = info.variants.get(variant) {
+                        if fields.len() != arity {
+                            errors.push(TypeCheckError::MatchVariantArityMismatch {
+                                variant: format!("{enum_name}.{variant}"),
+                                expected: arity,
+                                found: fields.len(),
+                                span: to_source_span(pat.span.clone()),
+                            });
+                        }
+                    } else {
+                        errors.push(TypeCheckError::MatchUnknownVariant {
+                            enum_name: enum_name.clone(),
+                            variant: variant.clone(),
+                            span: to_source_span(pat.span.clone()),
+                        });
+                    }
+                }
+            });
+            let _ = known_enum;
+            for f in fields {
+                check_pattern(f, &None, errors);
+            }
+        }
+        Pattern::Tuple(fields) => {
+            for f in fields {
+                check_pattern(f, &None, errors);
+            }
+        }
+    }
+}
+
+fn check_pattern_literal_compat(
+    scrut_ty: &Option<Type>,
+    pat_ty_name: &str,
+    span: &Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let Some(ty) = scrut_ty else {
+        return;
+    };
+    let stripped = strip_nullable(ty.clone());
+    if let Type::Named(n) = &stripped {
+        if n == "any" || n == pat_ty_name || is_type_param(n) {
+            return;
+        }
+        // `number` accepts integer/float literals.
+        if n == "number" && (pat_ty_name == "integer" || pat_ty_name == "float") {
+            return;
+        }
+        errors.push(TypeCheckError::MatchPatternTypeMismatch {
+            expected: n.clone(),
+            found: pat_ty_name.to_string(),
+            span: to_source_span(span.clone()),
+        });
+    }
+}
+
+/// Bind the variables introduced by a pattern into `scope`. Best-effort
+/// typing: scrutinee-typed for top-level binds, `any` for sub-patterns whose
+/// type we can't easily derive.
+fn bind_pattern(pat: &Pattern, scrut_ty: Option<&Type>, scope: &mut Scope) {
+    match pat {
+        Pattern::Bind(name) => {
+            let ty = scrut_ty.cloned().unwrap_or(Type::Named("any".into()));
+            scope.bind(name.clone(), ty);
+        }
+        Pattern::Variant { fields, .. } => {
+            for f in fields {
+                bind_pattern(&f.value, None, scope);
+            }
+        }
+        Pattern::Tuple(fields) => {
+            for f in fields {
+                bind_pattern(&f.value, None, scope);
             }
         }
         _ => {}
@@ -1026,22 +1432,25 @@ fn report_if_nullable_receiver(
 }
 
 /// Reject access to `local` (private) members from outside the owning class.
-/// `self.foo` is always permitted; access via any other expression is checked.
+/// `self.foo` is allowed only when the *owning* class of `foo` is the class
+/// currently being checked — a private field inherited from a parent is
+/// **not** visible to the child.
 fn report_if_private(
     obj: &Spanned<Expr>,
     member: &str,
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
 ) {
-    // Accesses through `self` are always allowed (inside their own class).
-    if matches!(obj.value, Expr::Self_) {
-        return;
-    }
     // Resolve the class name we're reading the member off:
+    //   * `self.member` → the current class (lookup walks the parent chain).
     //   * `obj.member` where `obj` is an *instance* → infer the receiver type.
     //   * `Class.member` where the receiver is the class itself
     //     (e.g. `Bank.secret`) → use the ident directly.
     let class_name = match &obj.value {
+        Expr::Self_ => match current_class() {
+            Some(n) => n,
+            None => return,
+        },
         Expr::Ident(n) if with_classes(|reg| reg.contains_key(n)) => n.clone(),
         _ => match infer(obj, scope) {
             Some(ty) => match strip_nullable(ty) {
@@ -1171,6 +1580,11 @@ fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
             if a == b || a == "any" || b == "any" || b == "nil" {
                 return true;
             }
+            // Generic type parameters in scope match anything — they're
+            // effectively `any` from the body's point of view.
+            if is_type_param(a) || is_type_param(b) {
+                return true;
+            }
             // `number` is the sentinel used in native sigs to mean
             // "integer or float" — accept either.
             if a == "number" && (b == "integer" || b == "float" || b == "number") {
@@ -1215,6 +1629,28 @@ fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         (Type::Tuple(_), Type::Tuple(_)) => true,
         // Different kinds (e.g. table vs integer) — reject.
         _ => false,
+    }
+}
+
+/// Reject `if`/`while`/`until` conditions that the type system can prove are
+/// not `boolean`. Conservative: when `infer` can't determine a type, we skip
+/// silently so calls and dynamic expressions keep working.
+fn check_boolean_cond(
+    construct: &'static str,
+    cond: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let Some(ty) = infer(cond, scope) else {
+        return;
+    };
+    let is_bool = matches!(&ty, Type::Named(n) if n == "boolean" || n == "any");
+    if !is_bool {
+        errors.push(TypeCheckError::NonBooleanCondition {
+            construct,
+            found: type_to_string(&ty),
+            span: to_source_span(cond.span.clone()),
+        });
     }
 }
 
@@ -1279,6 +1715,13 @@ fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 None
             }
         }
+        // A `match` expression has the type of its (unified) arm bodies. We
+        // only need an approximation, so return the first arm-body type we
+        // can infer.
+        Expr::Match { arms, .. } => arms.iter().find_map(|a| match &a.body {
+            MatchBody::Expr(e) => infer(e, scope),
+            MatchBody::Block(_) => None,
+        }),
         _ => None,
     }
 }

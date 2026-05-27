@@ -103,6 +103,61 @@ pub enum Expr {
         return_ty: Option<Type>,
         body: LambdaBody,
     },
+
+    /// `match scrutinee case <pat> [when <guard>] then <expr-or-block> ... end`
+    ///
+    /// `match` is an expression: every arm evaluates to a value of the same
+    /// type, and that's the value of the whole `match`. Used as a statement,
+    /// the value is simply discarded. See the README for the full surface.
+    Match {
+        scrutinee: Box<Spanned<Expr>>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+/// One `case <pattern> [when <guard>] then <body>` clause inside a `match`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Spanned<Pattern>,
+    /// Optional `when <expr>` guard — evaluated only after the pattern matches.
+    pub guard: Option<Spanned<Expr>>,
+    /// Arm body. Either a single expression (typical `case x then 1`) or a
+    /// block of statements whose final value becomes the arm's value.
+    pub body: MatchBody,
+    pub span: std::ops::Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchBody {
+    Expr(Spanned<Expr>),
+    Block(Vec<Spanned<Stmt>>),
+}
+
+/// Patterns supported in `match` arms.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// `_` — matches anything, binds nothing.
+    Wildcard,
+    /// Lowercase identifier — matches anything, binds the value under that
+    /// name in the arm's scope.
+    Bind(String),
+    /// `nil` — matches only the nil value.
+    Nil,
+    /// Literal pattern: `1`, `"x"`, `true`, `false`.
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    /// Enum variant: `Status.Ok` or `Event.Click(x, y)`.
+    Variant {
+        enum_name: String,
+        variant: String,
+        /// Optional payload sub-patterns (empty when matching a bare variant).
+        fields: Vec<Spanned<Pattern>>,
+    },
+    /// Tuple destructuring: `(q, r)` — bound positionally from a multi-return
+    /// scrutinee.
+    Tuple(Vec<Spanned<Pattern>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,6 +303,11 @@ pub enum Decl {
     Function {
         exported: bool,
         name: String,
+        /// Generic type parameters declared with `<T, U>` after the name.
+
+        /// Erased at runtime; the typechecker treats these names as
+        /// universally compatible inside the body.
+        type_params: Vec<String>,
         params: Vec<Param>,
         return_ty: Option<Type>,
         body: Vec<Spanned<Stmt>>,
@@ -302,6 +362,8 @@ pub struct Method {
     pub is_static: bool,
     pub is_private: bool,
     pub name: String,
+    /// Generic type parameters declared with `<T, U>` after the method name.
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
     pub body: Vec<Spanned<Stmt>>,
@@ -320,8 +382,18 @@ pub struct MethodSig {
 pub enum EnumVariant {
     /// `North`
     Bare(String),
-    /// `Alive = "alive"`
+    /// `Alive = "alive"` — single payload value set at decl time, exposed
+    /// via `.value`. Treated as a singleton: every reference to the variant
+    /// returns the same value.
     Valued(String, Spanned<Expr>),
+    /// `Click(x: integer, y: integer)` — tuple-style payload variant. The
+    /// fields' types are recorded for the typechecker; at runtime each call
+    /// `Click(10, 20)` constructs a fresh variant instance whose payload is
+    /// an array-style table of the positional arguments.
+    Tuple {
+        name: String,
+        fields: Vec<Param>,
+    },
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

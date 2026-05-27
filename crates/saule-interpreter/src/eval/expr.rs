@@ -4,11 +4,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use saule_ast::{BinOp, CallArg, Expr, LambdaBody, Spanned, Type};
+use saule_ast::{BinOp, CallArg, Expr, LambdaBody, MatchArm, MatchBody, Pattern, Spanned, Type};
 
 use crate::env::Environment;
 use crate::error::RuntimeError;
-use crate::value::{ClassObject, FunctionBody, FunctionObject, InstanceObject, Value};
+use crate::value::{
+    ClassObject, EnumObject, EnumVariantObject, FunctionBody, FunctionObject, InstanceObject,
+    NativeClosure, TableObject, Value,
+};
 
 use super::{Flow, ops};
 
@@ -135,6 +138,7 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 body,
                 closure: env.clone(),
                 owner_class: std::cell::RefCell::new(None),
+                source: crate::module::active_module_source(),
             })))
         }
 
@@ -145,11 +149,186 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 name: "self".to_string(),
                 span,
             }),
+
+        Expr::Match { scrutinee, arms } => eval_match(scrutinee, arms, env, span),
+    }
+}
+
+/// Evaluate a `match` expression. The scrutinee is evaluated *once*, as a
+/// multi-value list so tuple patterns can destructure multi-return calls.
+/// Arms are tried top-down; the first whose pattern matches **and** whose
+/// guard (if any) holds wins, and its body is evaluated in a fresh scope
+/// that contains the pattern's bindings.
+fn eval_match(
+    scrutinee: &Spanned<Expr>,
+    arms: &[MatchArm],
+    env: &Rc<RefCell<Environment>>,
+    span: std::ops::Range<usize>,
+) -> Result<Value, RuntimeError> {
+    let values = eval_values(scrutinee, env)?;
+    let first = values.first().cloned().unwrap_or(Value::Nil);
+    for arm in arms {
+        let mut bindings: Vec<(String, Value)> = Vec::new();
+        if !match_pattern(&arm.pattern.value, &first, &values, &mut bindings) {
+            continue;
+        }
+        // Bindings go into a fresh scope so they don't leak past the arm.
+        let arm_scope = Environment::with_parent(env.clone());
+        for (name, value) in &bindings {
+            arm_scope.borrow_mut().define(name.clone(), value.clone());
+        }
+        if let Some(guard) = &arm.guard {
+            let g = eval(guard, &arm_scope)?;
+            if !g.is_truthy() {
+                continue;
+            }
+        }
+        return match &arm.body {
+            MatchBody::Expr(e) => eval(e, &arm_scope),
+            MatchBody::Block(stmts) => {
+                let flow = crate::eval::stmt::exec_block(stmts, &arm_scope)?;
+                Ok(match flow {
+                    Flow::Normal(v) => v,
+                    Flow::Return(_) => {
+                        return Err(RuntimeError::TypeError {
+                            message:
+                                "`return` from inside a `match` arm is not supported — use the arm's expression value instead"
+                                    .to_string(),
+                            span,
+                        });
+                    }
+                    Flow::Break | Flow::Continue => Value::Nil,
+                })
+            }
+        };
+    }
+    // No arm matched. The typechecker should reject non-exhaustive matches,
+    // so reaching here at runtime means the static checks were bypassed.
+    Err(RuntimeError::TypeError {
+        message: "non-exhaustive `match`: no arm matched the value".to_string(),
+        span,
+    })
+}
+
+/// Try to match `pattern` against either the first scrutinee value (`first`)
+/// or, for tuple patterns, the full multi-return list (`values`). Returns
+/// `true` and appends bindings on success.
+fn match_pattern(
+    pattern: &Pattern,
+    first: &Value,
+    values: &[Value],
+    out: &mut Vec<(String, Value)>,
+) -> bool {
+    match pattern {
+        Pattern::Wildcard => true,
+        Pattern::Bind(name) => {
+            // A bare identifier that happens to share its name with a real
+            // value (or a known enum variant alias) would have been parsed
+            // as a `Variant` pattern instead. Here we always bind.
+            out.push((name.clone(), first.clone()));
+            true
+        }
+        Pattern::Nil => matches!(first, Value::Nil),
+        Pattern::Int(n) => matches!(first, Value::Int(v) if v == n),
+        Pattern::Float(f) => matches!(first, Value::Float(v) if v == f),
+        Pattern::Bool(b) => matches!(first, Value::Bool(v) if v == b),
+        Pattern::Str(s) => matches!(first, Value::Str(v) if v.as_str() == s.as_str()),
+        Pattern::Variant {
+            enum_name,
+            variant,
+            fields,
+        } => {
+            let Value::EnumVariant(v) = first else {
+                return false;
+            };
+            if v.enum_name != *enum_name || v.variant_name != *variant {
+                return false;
+            }
+            if fields.is_empty() {
+                return true;
+            }
+            // Variant carries a payload — match each field positionally.
+            // The current `EnumVariantObject` holds a single `value` (None
+            // for bare variants, Some for valued ones). Multi-field variant
+            // payloads aren't yet supported by the runtime; treat a single
+            // field pattern against a single value as a 1-tuple destructure.
+            let payload: Vec<Value> = match &v.value {
+                Some(Value::Table(t)) => t.borrow().array.clone(),
+                Some(other) => vec![other.clone()],
+                None => Vec::new(),
+            };
+            if payload.len() != fields.len() {
+                return false;
+            }
+            for (sub, val) in fields.iter().zip(payload.iter()) {
+                if !match_pattern(&sub.value, val, std::slice::from_ref(val), out) {
+                    out.clear();
+                    return false;
+                }
+            }
+            true
+        }
+        Pattern::Tuple(elems) => {
+            // Tuple patterns destructure the *multi-return* value list.
+            if values.len() < elems.len() {
+                return false;
+            }
+            for (sub, val) in elems.iter().zip(values.iter()) {
+                if !match_pattern(&sub.value, val, std::slice::from_ref(val), out) {
+                    out.clear();
+                    return false;
+                }
+            }
+            true
+        }
     }
 }
 
 fn first_or_nil(values: Vec<Value>) -> Value {
     values.into_iter().next().unwrap_or(Value::Nil)
+}
+
+/// Build a callable that constructs a fresh `EnumVariant` carrying its
+/// arguments as an array-style table payload. The arity is checked at call
+/// time; pattern matching on `Enum.Variant(p1, p2, ...)` destructures the
+/// payload positionally.
+fn make_tuple_variant_ctor(
+    enum_obj: Rc<EnumObject>,
+    variant_name: String,
+    arity: usize,
+) -> Value {
+    let label = format!("{}.{} (variant ctor)", enum_obj.name, variant_name);
+    // Leak the descriptive name into a `&'static str` because `NativeClosure`
+    // wants `&'static str` for its `name`. One leak per declared tuple
+    // variant is fine — declarations happen once at startup.
+    let static_name: &'static str = Box::leak(label.into_boxed_str());
+    let enum_name = enum_obj.name.clone();
+    Value::NativeClosure(Rc::new(NativeClosure {
+        name: static_name,
+        func: Box::new(move |args: &[Value]| -> Result<Vec<Value>, String> {
+            if args.len() != arity {
+                return Err(format!(
+                    "{}.{} expects {arity} argument(s), got {}",
+                    enum_name,
+                    variant_name,
+                    args.len()
+                ));
+            }
+            // Stash the positional args in an array-style table so the
+            // pattern matcher (`match_pattern`) can pull them out via
+            // `Value::Table` extraction.
+            let payload = Value::Table(Rc::new(RefCell::new(TableObject::from_array(
+                args.to_vec(),
+            ))));
+            let variant = Rc::new(EnumVariantObject {
+                enum_name: enum_name.clone(),
+                variant_name: variant_name.clone(),
+                value: Some(payload),
+                enum_obj: RefCell::new(Some(enum_obj.clone())),
+            });
+            Ok(vec![Value::EnumVariant(variant)])
+        }),
+    }))
 }
 
 pub(crate) fn eval_values(
@@ -482,6 +661,51 @@ fn run_function_body(
 }
 
 fn run_function_body_multi(
+    f: &FunctionObject,
+    scope: &Rc<RefCell<Environment>>,
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
+    let raw = run_function_body_multi_inner(f, scope, span);
+    // If the function was defined in an imported module and the error
+    // hasn't already been wrapped by a deeper call, attach this module's
+    // source so miette renders the snippet from the right file.
+    match (raw, f.source.as_ref()) {
+        (Err(e), Some(src)) => Err(attach_module_source(e, src)),
+        (other, _) => other,
+    }
+}
+
+/// Wrap a `RuntimeError` with the module's source so the offending span
+/// resolves against the right file. Skip wrapping when it's already
+/// wrapped (transitive call into another imported module).
+fn attach_module_source(
+    err: RuntimeError,
+    src: &Rc<miette::NamedSource<String>>,
+) -> RuntimeError {
+    match err {
+        RuntimeError::ImportFailed { .. } | RuntimeError::InModule { .. } => err,
+        other => {
+            let inner = crate::error::ImportedDiagnostic::from_inner(
+                &other,
+                src.name().to_string(),
+                source_text(src),
+            );
+            RuntimeError::InModule {
+                module_label: src.name().to_string(),
+                inner: Box::new(inner),
+            }
+        }
+    }
+}
+
+/// `miette::NamedSource` doesn't expose its inner text directly; this is a
+/// small helper that reuses `SourceCode::read_span` over the full range to
+/// recover the original source for cloning into a fresh `NamedSource`.
+fn source_text(src: &miette::NamedSource<String>) -> String {
+    src.inner().clone()
+}
+
+fn run_function_body_multi_inner(
     f: &FunctionObject,
     scope: &Rc<RefCell<Environment>>,
     span: std::ops::Range<usize>,
@@ -859,6 +1083,13 @@ fn read_member(
         Value::Enum(enum_obj) => {
             if let Some(variant) = enum_obj.variants.get(name) {
                 return Ok(Value::EnumVariant(variant.clone()));
+            }
+            if let Some(&arity) = enum_obj.tuple_variants.get(name) {
+                return Ok(make_tuple_variant_ctor(
+                    enum_obj.clone(),
+                    name.to_string(),
+                    arity,
+                ));
             }
             Err(RuntimeError::TypeError {
                 message: format!(

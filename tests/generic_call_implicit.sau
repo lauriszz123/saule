@@ -1,0 +1,18 @@
+-- Generic call site without explicit `<T>` — type args are erased and the
+-- runtime treats the function call exactly the same way.
+fn first<T>(items: table<T>) -> T?
+    if #items == 0 then return nil end
+    return items[1]
+end
+
+class Main
+    static fn main()
+        local nums: table<integer> = {10, 20, 30}
+        local n: integer? = first(nums)            -- no explicit `<integer>`
+        local m: integer? = first<integer>(nums)   -- explicit form
+
+        if n != nil then println("n: " .. n) end
+        if m != nil then println("m: " .. m) end
+    end
+end
+

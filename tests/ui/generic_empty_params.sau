@@ -1,0 +1,10 @@
+-- ERROR: empty generic parameter list — `fn name<>()` is a syntax error.
+fn nothing<>()
+end
+
+class Main
+    static fn main()
+        nothing()
+    end
+end
+

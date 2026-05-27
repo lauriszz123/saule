@@ -9,11 +9,16 @@ use saule_interpreter::{Environment, Value, module::ModuleLoader};
 
 const USAGE: &str = "\
 Usage:
-  saule run <file.sau>       run a single Saule source file
-  saule run                  run the project in the current directory
-  saule init <name>          scaffold a new Saule project in ./<name>
-  saule --help | -h          show this help
-  saule --version | -V       print the version";
+  saule run <file.sau> [args...]   run a single Saule source file
+  saule run [args...]              run the project in the current directory
+  saule run -- [args...]           force project mode, forward args to Os.args()
+  saule init <name>                scaffold a new Saule project in ./<name>
+  saule --help | -h                show this help
+  saule --version | -V             print the version
+
+Anything after the file path (or after `--` in project mode) is exposed to
+the script via `Os.args()`. In a project directory (one with a saule.config),
+args that don't look like a file path are forwarded automatically.";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,23 +38,47 @@ fn main() {
                 process::exit(2);
             }
         },
-        "run" => match args.get(1) {
-            Some(path) => {
-                // Everything after the file path is script argv, exposed via
-                // `Os.args()`.
-                saule_interpreter::stdlib::os::set_script_args(
-                    args.iter().skip(2).cloned().collect(),
-                );
+        "run" => {
+            // Split `run` args at the first `--`: anything before is for the
+            // CLI (file path or nothing), anything after is forwarded
+            // verbatim as script argv.
+            let run_args: Vec<String> = args.iter().skip(1).cloned().collect();
+            let (cli_part, script_after_sep) = match run_args.iter().position(|a| a == "--") {
+                Some(i) => (run_args[..i].to_vec(), Some(run_args[i + 1..].to_vec())),
+                None => (run_args, None),
+            };
+
+            // Decide between project mode and single-file mode:
+            //   * `saule run`                       → project
+            //   * `saule run -- a b c`              → project, argv = a b c
+            //   * `saule run file.sau …`            → single file
+            //   * `saule run thing …` where `thing` isn't an existing path
+            //     AND cwd has `saule.config`       → project, argv = thing …
+            //   * otherwise                         → single file
+            let has_config = PathBuf::from("saule.config").is_file();
+            let first_looks_like_path = cli_part.first().is_some_and(|s| {
+                PathBuf::from(s).is_file() || s.ends_with(".sau") || s.ends_with(".saule")
+            });
+
+            if cli_part.is_empty() || (has_config && !first_looks_like_path) {
+                // Project mode. Script argv = explicit `-- …` part if given,
+                // otherwise everything we accumulated before the (absent) `--`.
+                let argv = script_after_sep.unwrap_or(cli_part);
+                saule_interpreter::stdlib::os::set_script_args(argv);
+                run_project(&PathBuf::from("."));
+            } else {
+                // Single-file mode. First non-`--` arg is the file path,
+                // everything else (whether before or after `--`) is script argv.
+                let mut iter = cli_part.into_iter();
+                let path = iter.next().expect("cli_part non-empty checked above");
+                let mut argv: Vec<String> = iter.collect();
+                if let Some(extra) = script_after_sep {
+                    argv.extend(extra);
+                }
+                saule_interpreter::stdlib::os::set_script_args(argv);
                 run_file(PathBuf::from(path), false);
             }
-            None => {
-                // Project mode: script-args is everything after `run`.
-                saule_interpreter::stdlib::os::set_script_args(
-                    args.iter().skip(1).cloned().collect(),
-                );
-                run_project(&PathBuf::from("."));
-            }
-        },
+        }
         other => {
             eprintln!("Error: Unknown Command `{other}`\n\n{USAGE}");
             process::exit(2);

@@ -17,7 +17,7 @@ use std::rc::Rc;
 use saule_ast::{Decl, Module, Spanned, Stmt};
 
 use crate::env::Environment;
-use crate::error::RuntimeError;
+use crate::error::{ImportedDiagnostic, RuntimeError};
 use crate::value::Value;
 
 /// The publicly importable surface of a loaded module.
@@ -38,6 +38,27 @@ impl ModuleLoader {
     pub fn new() -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Self::default()))
     }
+}
+
+thread_local! {
+    /// Source attached to functions/methods built while this slot is set.
+    /// `load_module_inner` populates it for the duration of the imported
+    /// module's top-level execution so every `FunctionObject` born there
+    /// can later wrap its own runtime errors with the right source snippet.
+    static ACTIVE_MODULE_SOURCE: RefCell<Option<Rc<miette::NamedSource<String>>>> =
+        const { RefCell::new(None) };
+}
+
+/// Returns the module source currently being loaded, if any. Consulted by
+/// `FunctionObject` constructors in `eval/stmt.rs` and `eval/expr.rs`.
+pub fn active_module_source() -> Option<Rc<miette::NamedSource<String>>> {
+    ACTIVE_MODULE_SOURCE.with(|s| s.borrow().clone())
+}
+
+fn set_active_module_source(
+    new: Option<Rc<miette::NamedSource<String>>>,
+) -> Option<Rc<miette::NamedSource<String>>> {
+    ACTIVE_MODULE_SOURCE.with(|s| std::mem::replace(&mut *s.borrow_mut(), new))
 }
 
 /// Resolve a `"path"` literal as it appears in an `import ... from "path"`
@@ -117,24 +138,26 @@ fn load_module_inner(
         span: import_span.clone(),
     })?;
 
+    let file_label = abs_path.display().to_string();
+    let wrap = |inner: &dyn miette::Diagnostic| RuntimeError::ImportFailed {
+        module_label: file_label.clone(),
+        import_span: import_span.clone(),
+        inner: Box::new(ImportedDiagnostic::from_inner(
+            inner,
+            file_label.clone(),
+            source.clone(),
+        )),
+    };
+
     let tokens = saule_lexer::Lexer::new(&source)
         .tokenize()
-        .map_err(|e| RuntimeError::ImportError {
-            message: format!("lex error in `{}`: {e}", abs_path.display()),
-            span: import_span.clone(),
-        })?;
+        .map_err(|e| wrap(&e))?;
 
-    let module = saule_parser::parse(tokens).map_err(|e| RuntimeError::ImportError {
-        message: format!("parse error in `{}`: {e}", abs_path.display()),
-        span: import_span.clone(),
-    })?;
+    let module = saule_parser::parse(tokens).map_err(|e| wrap(&e))?;
 
     let errors = crate::typeck::check(&module);
     if let Some(first) = errors.into_iter().next() {
-        return Err(RuntimeError::ImportError {
-            message: format!("type error in `{}`: {first}", abs_path.display()),
-            span: import_span,
-        });
+        return Err(wrap(&first));
     }
 
     let dir = abs_path
@@ -143,7 +166,24 @@ fn load_module_inner(
         .unwrap_or_else(|| PathBuf::from("."));
     let env = Environment::with_prelude_and_context(Some(dir), Some(loader.clone()));
 
-    crate::run_in(&module, &env)?;
+    // Park the module's `NamedSource` for the duration of its top-level
+    // execution so every `FunctionObject` constructed by `class`/`fn`
+    // declarations carries it. Restore the previous slot on the way out so
+    // nested imports don't trample each other.
+    let module_src = Rc::new(miette::NamedSource::new(file_label.clone(), source.clone()));
+    let prev_src = set_active_module_source(Some(module_src));
+
+    // Runtime errors from the imported module's top-level: wrap them too,
+    // *unless* they're already an ImportFailed (transitive import — keep
+    // the original to preserve the deepest source attachment).
+    let run_result = crate::run_in(&module, &env);
+
+    set_active_module_source(prev_src);
+
+    run_result.map_err(|e| match e {
+        RuntimeError::ImportFailed { .. } | RuntimeError::InModule { .. } => e,
+        other => wrap(&other),
+    })?;
 
     Ok(collect_exports(&module, &env))
 }

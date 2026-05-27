@@ -46,7 +46,7 @@
       "patterns": [
         {
           "name": "keyword.control.saule",
-          "match": "\\b(if|else|then|end|for|while|repeat|until|do|in|break|continue|return|throw|try|catch)\\b"
+          "match": "\\b(if|else|elseif|then|end|for|while|repeat|until|do|in|break|continue|return|throw|try|catch|match|case|when)\\b"
         },
         {
           "name": "keyword.declaration.saule",
@@ -71,7 +71,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.saule",
-          "match": "\\b(integer|float|string|boolean|any)\\b"
+          "match": "\\b(integer|float|string|boolean|any|nil|function|table|userdata|thread|number)\\b"
         },
         {
           "comment": "PascalCase identifiers treated as type/class names",

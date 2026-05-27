@@ -1,0 +1,14 @@
+-- Generic identity function.
+fn identity<T>(value: T) -> T
+    return value
+end
+
+class Main
+    static fn main()
+        local n: integer = identity<integer>(42)
+        local s: string = identity<string>("hello")
+        println(n)
+        println(s)
+    end
+end
+

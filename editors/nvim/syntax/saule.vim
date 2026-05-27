@@ -13,13 +13,17 @@ syntax case match
 syntax match  sauleVariable    "\<[a-z_][A-Za-z0-9_]*\>"
 
 " ── Operators / punctuation ─────────────────────────────────────────────
-syntax match  sauleOperator   "\.\.\.\|\.\.\|[+*/%=#]"
+" Order matters: longer / more specific patterns are defined *after* the
+" shorter ones so they win the tie-break at the same start column.
+syntax match  sauleOperator   "\.\.\.\|\.\.\|[+\-*/%=#]"
 syntax match  sauleNullable   "??\|?\.\|[!?]"
 syntax match  sauleBracket    "[(){}\[\]]"
 syntax match  sauleDelimiter  "[,;:.]"
-" sauleCompare defined last so multi-char compares win over single-char
-" sauleOperator/sauleNullable at the same start position.
-syntax match  sauleCompare    "==\|!=\|<=\|>=\|=>\|->\|[<>]"
+" Comparison operators (`==`, `!=`, `<=`, `>=`, `<`, `>`).
+syntax match  sauleCompare    "==\|!=\|<=\|>=\|[<>]"
+" Arrows are their own thing so they can be coloured distinctly from
+" comparisons (return-type `->` and lambda `=>`).
+syntax match  sauleArrow      "->\|=>"
 
 " ── Numbers ─────────────────────────────────────────────────────────────
 syntax match  sauleFloat       "\<\d\+\.\d\+\([eE][+-]\=\d\+\)\=\>"
@@ -31,17 +35,25 @@ syntax match  sauleEscape      "\\." contained
 
 " ── Types ───────────────────────────────────────────────────────────────
 syntax keyword sauleType        integer float string boolean any
+                              \ function table userdata thread number
 syntax match   sauleTypeName    "\<[A-Z][A-Za-z0-9_]*\>"
 
 " ── Functions ───────────────────────────────────────────────────────────
+" `fn name` (handles `fn name<T, U>` too — the `<...>` simply isn't captured).
 syntax match   sauleFunction    "\<fn\>\s\+\zs[A-Za-z_][A-Za-z0-9_]*"
+" Direct call: ident( ... and generic call: ident<T>(
 syntax match   sauleFuncCall    "\<[a-z_][A-Za-z0-9_]*\>\ze\s*("
+syntax match   sauleFuncCall    "\<[a-z_][A-Za-z0-9_]*\>\ze\s*<[A-Za-z_][^<>]*>\s*("
 
 " ── Keywords (defined late so they override the variable catch-all) ─────
-syntax keyword sauleConditional if else then end
-syntax keyword sauleRepeat      for while repeat until do in
+syntax keyword sauleConditional if else elseif then end
+" Pure loop intros stay `Repeat`; structural `do`/`in` get their own group
+" so they don't pick up the loud loop colour many themes use for `Repeat`.
+syntax keyword sauleRepeat      for while repeat until
+syntax keyword sauleStructural  do in
 syntax keyword sauleReturn      return
 syntax keyword sauleStatement   break continue throw try catch
+syntax keyword sauleMatch       match case when
 syntax keyword sauleDeclaration class interface enum fn
                               \ local static export import from as
                               \ extends implements
@@ -62,11 +74,13 @@ highlight default link sauleEscape       SpecialChar
 highlight default link sauleFloat        Float
 highlight default link sauleNumber       Number
 highlight default link sauleConditional  Conditional
-highlight default link sauleRepeat       Repeat
+highlight default link sauleRepeat       Keyword
+highlight default link sauleStructural   Keyword
 highlight default link sauleReturn       @keyword.return
 highlight default link sauleStatement    Statement
+highlight default link sauleMatch        Conditional
 highlight default link sauleDeclaration  Keyword
-highlight default link sauleOperatorKW   sauleCompare
+highlight default link sauleOperatorKW   Operator
 highlight default link sauleBoolean      Boolean
 highlight default link sauleNil          Constant
 if has('nvim')
@@ -78,12 +92,18 @@ highlight default link sauleType         Type
 highlight default link sauleTypeName     Type
 highlight default link sauleFunction     Function
 highlight default link sauleFuncCall     Function
-highlight default link sauleVariable     @variable
-highlight default link sauleOperator     Operator
-highlight default link sauleNullable     Special
-highlight default link sauleBracket      @punctuation.bracket
-highlight default link sauleDelimiter    @punctuation.delimiter
+highlight default link sauleBracket      Delimiter
+highlight default link sauleDelimiter    Delimiter
 
-highlight sauleCompare ctermfg=Red guifg=#f7768e
+" ── Explicit fallback palette ───────────────────────────────────────────
+" Direct `highlight` (not `highlight default link`) so these paint visibly
+" even when the user's colourscheme doesn't give the linked group a strong
+" colour. Variables, operators, nullables, comparisons, and arrows each get
+" their own hue so they read at a glance. Tweak to taste.
+highlight sauleVariable   ctermfg=15  guifg=#c0caf5
+highlight sauleOperator   ctermfg=14  guifg=#89ddff
+highlight sauleNullable   ctermfg=13  guifg=#bb9af7
+highlight sauleCompare    ctermfg=9   guifg=#f7768e
+highlight sauleArrow      ctermfg=13  guifg=#bb9af7
 
 let b:current_syntax = "saule"

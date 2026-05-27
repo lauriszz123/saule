@@ -143,6 +143,7 @@ fn install_enum(env: &Rc<RefCell<Environment>>, name: &str, variants: &[(&str, &
     let final_enum = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
+        tuple_variants: HashMap::new(),
         methods: HashMap::new(),
     });
     for v in variant_dict.values() {

@@ -22,8 +22,8 @@ mod parseerror;
 pub use parseerror::ParseError;
 
 use saule_ast::{
-    BinOp, CallArg, ClassMember, Decl, EnumVariant, Expr, ImportNames, LambdaBody, Method,
-    MethodSig, Module, Param, Spanned, Stmt, Type, UnaryOp,
+    BinOp, CallArg, ClassMember, Decl, EnumVariant, Expr, ImportNames, LambdaBody, MatchArm,
+    MatchBody, Method, MethodSig, Module, Param, Pattern, Spanned, Stmt, Type, UnaryOp,
 };
 use saule_lexer::Token;
 use std::ops::Range;
@@ -236,6 +236,56 @@ impl Parser {
         Ok(())
     }
 
+    /// Consumes a `<T, U, ...>` *parameter* list on a function or method
+    /// declaration and returns the type-parameter names. Unlike
+    /// [`skip_generic_args`], every entry must be a bare identifier.
+    fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
+        self.expect(&Token::Lt, "`<`")?;
+        let mut params = Vec::new();
+        let (first, _) = self.expect_ident("generic parameter name")?;
+        params.push(first);
+        while self.eat(&Token::Comma) {
+            let (n, _) = self.expect_ident("generic parameter name")?;
+            params.push(n);
+        }
+        self.expect(&Token::Gt, "`>` to close generic parameters")?;
+        Ok(params)
+    }
+
+    /// Try to consume a generic-call instantiation `<T, U, ...>` immediately
+    /// followed by `(`. Returns `true` if the consumption succeeded; restores
+    /// the cursor and returns `false` otherwise (so the `<` can be parsed as
+    /// a less-than operator instead). Used at call sites like
+    /// `filter<integer>(nums, ...)`.
+    fn try_eat_generic_call_args(&mut self) -> bool {
+        let saved = self.pos;
+        if !self.check(&Token::Lt) {
+            return false;
+        }
+        // Try to consume a `<` ... `>` window where every entry parses as a
+        // type. If the window doesn't end in `>(`, restore.
+        self.advance(); // `<`
+        if self.parse_type().is_err() {
+            self.pos = saved;
+            return false;
+        }
+        while self.eat(&Token::Comma) {
+            if self.parse_type().is_err() {
+                self.pos = saved;
+                return false;
+            }
+        }
+        if !self.eat(&Token::Gt) {
+            self.pos = saved;
+            return false;
+        }
+        if !self.check(&Token::LParen) {
+            self.pos = saved;
+            return false;
+        }
+        true
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Expressions  (lowest precedence first)
     // ─────────────────────────────────────────────────────────────────────────
@@ -377,7 +427,8 @@ impl Parser {
     fn postfix_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let mut expr = self.primary_expr()?;
         loop {
-            match self.peek().value {
+            let tok = self.peek().value.clone();
+            match tok {
                 Token::Dot => {
                     self.advance();
                     // `super` is a keyword everywhere else, but after `.` we
@@ -424,6 +475,20 @@ impl Parser {
                     );
                 }
                 Token::LParen => {
+                    let (args, close_span) = self.parse_call_args()?;
+                    let span = expr.span.start..close_span.end;
+                    expr = Spanned::new(
+                        Expr::Call {
+                            callee: Box::new(expr),
+                            args,
+                        },
+                        span,
+                    );
+                }
+                Token::Lt if self.try_eat_generic_call_args() => {
+                    // `name<T, U>(args)` — generic instantiation. Type args
+                    // are erased at parse time; the typechecker is generic-
+                    // parameter aware so it doesn't penalize the call.
                     let (args, close_span) = self.parse_call_args()?;
                     let span = expr.span.start..close_span.end;
                     expr = Spanned::new(
@@ -545,6 +610,7 @@ impl Parser {
             }
             Token::LBrace => self.parse_table_literal(),
             Token::Fn => self.parse_fn_lambda(),
+            Token::Match => self.parse_match_expr(),
             Token::LParen => {
                 if self.looks_like_arrow_lambda() {
                     self.parse_arrow_lambda()
@@ -578,6 +644,184 @@ impl Parser {
         let close = self.expect(&Token::RBrace, "`}` to close table literal")?;
         let span = open.span.start..close.span.end;
         Ok(Spanned::new(Expr::Table(items), span))
+    }
+
+    // ── `match` expression ──────────────────────────────────────────────────
+    //
+    // Surface (per README):
+    //
+    //   match <scrutinee>
+    //       case <pattern> [when <guard>] then <body>
+    //       ...
+    //   end
+    //
+    // Body is parsed as a single expression — multi-statement arms aren't
+    // supported in the v1 surface and would clash with the `case`/`end`
+    // boundaries. The whole match is itself an expression.
+
+    fn parse_match_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let kw = self.advance(); // `match`
+        let scrutinee = self.parse_expression()?;
+        let mut arms = Vec::new();
+        while self.check(&Token::Case) {
+            arms.push(self.parse_match_arm()?);
+        }
+        let end = self.expect(&Token::End, "`end` to close `match`")?;
+        let span = kw.span.start..end.span.end;
+        Ok(Spanned::new(
+            Expr::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+            },
+            span,
+        ))
+    }
+
+    fn parse_match_arm(&mut self) -> Result<MatchArm, ParseError> {
+        let case_tok = self.advance(); // `case`
+        let pattern = self.parse_pattern()?;
+        let guard = if self.eat(&Token::When) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        self.expect(&Token::Then, "`then` to start arm body")?;
+
+        // The body runs until the next `case` or the closing `end`.
+        // Single-expression arms like `case x then 42` parse as one
+        // `Stmt::Expr(42)` and collapse to `MatchBody::Expr` so the
+        // expression's value is the arm's value. Multi-statement arms
+        // (`case x then dp = dp + 1` followed by more statements, or
+        // a `do ... end` block) stay as `MatchBody::Block`.
+        let stmts = self.parse_block_until(&[Token::Case, Token::End])?;
+
+        let (body, end_pos) = match (stmts.len(), stmts.first()) {
+            (1, Some(Spanned { value: Stmt::Expr(e), span })) => {
+                let end = span.end;
+                (MatchBody::Expr(e.clone()), end)
+            }
+            (0, _) => {
+                return Err(ParseError::Expected {
+                    expected: "an expression or statement after `then`",
+                    span: self.peek().span.clone(),
+                });
+            }
+            _ => {
+                let end = stmts.last().map(|s| s.span.end).unwrap_or(case_tok.span.end);
+                (MatchBody::Block(stmts), end)
+            }
+        };
+
+        Ok(MatchArm {
+            pattern,
+            guard,
+            body,
+            span: case_tok.span.start..end_pos,
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<Spanned<Pattern>, ParseError> {
+        let tok = self.peek().clone();
+        match tok.value {
+            Token::Nil => {
+                self.advance();
+                Ok(Spanned::new(Pattern::Nil, tok.span))
+            }
+            Token::True => {
+                self.advance();
+                Ok(Spanned::new(Pattern::Bool(true), tok.span))
+            }
+            Token::False => {
+                self.advance();
+                Ok(Spanned::new(Pattern::Bool(false), tok.span))
+            }
+            Token::Int(n) => {
+                self.advance();
+                Ok(Spanned::new(Pattern::Int(n), tok.span))
+            }
+            Token::Float(f) => {
+                self.advance();
+                Ok(Spanned::new(Pattern::Float(f), tok.span))
+            }
+            Token::String(s) => {
+                self.advance();
+                Ok(Spanned::new(Pattern::Str(s), tok.span))
+            }
+            // `-1` / `-1.5` — negated numeric literal (handy for `case -1 then ...`).
+            Token::Minus => {
+                self.advance();
+                let next = self.peek().clone();
+                match next.value {
+                    Token::Int(n) => {
+                        self.advance();
+                        let span = tok.span.start..next.span.end;
+                        Ok(Spanned::new(Pattern::Int(-n), span))
+                    }
+                    Token::Float(f) => {
+                        self.advance();
+                        let span = tok.span.start..next.span.end;
+                        Ok(Spanned::new(Pattern::Float(-f), span))
+                    }
+                    _ => Err(ParseError::Expected {
+                        expected: "a numeric literal after `-`",
+                        span: next.span,
+                    }),
+                }
+            }
+            // Tuple pattern: `(p1, p2, ...)`
+            Token::LParen => {
+                self.advance();
+                let mut elems = Vec::new();
+                if !self.check(&Token::RParen) {
+                    elems.push(self.parse_pattern()?);
+                    while self.eat(&Token::Comma) {
+                        elems.push(self.parse_pattern()?);
+                    }
+                }
+                let close = self.expect(&Token::RParen, "`)` to close tuple pattern")?;
+                let span = tok.span.start..close.span.end;
+                Ok(Spanned::new(Pattern::Tuple(elems), span))
+            }
+            // Identifier: wildcard `_`, binding `name`, or enum-variant
+            // `Enum.Variant[(fields)]` form.
+            Token::Identifier(name) => {
+                self.advance();
+                if name == "_" {
+                    return Ok(Spanned::new(Pattern::Wildcard, tok.span));
+                }
+                // `Name.Variant[(p1, p2, ...)]` — qualified variant pattern.
+                if self.eat(&Token::Dot) {
+                    let (variant, vspan) = self.expect_ident("variant name after `.`")?;
+                    let mut fields = Vec::new();
+                    let mut end = vspan.end;
+                    if self.eat(&Token::LParen) {
+                        if !self.check(&Token::RParen) {
+                            fields.push(self.parse_pattern()?);
+                            while self.eat(&Token::Comma) {
+                                fields.push(self.parse_pattern()?);
+                            }
+                        }
+                        let close = self
+                            .expect(&Token::RParen, "`)` to close variant pattern payload")?;
+                        end = close.span.end;
+                    }
+                    let span = tok.span.start..end;
+                    return Ok(Spanned::new(
+                        Pattern::Variant {
+                            enum_name: name,
+                            variant,
+                            fields,
+                        },
+                        span,
+                    ));
+                }
+                Ok(Spanned::new(Pattern::Bind(name), tok.span))
+            }
+            _ => Err(ParseError::Expected {
+                expected: "a pattern (literal, identifier, `_`, `(...)`, or `Enum.Variant`)",
+                span: tok.span,
+            }),
+        }
     }
 
     // ── Lambdas ─────────────────────────────────────────────────────────────
@@ -827,24 +1071,23 @@ impl Parser {
         let kw = self.advance(); // `if`
         let cond = self.parse_expression()?;
         self.expect(&Token::Then, "`then` after `if` condition")?;
-        let then_block = self.parse_block_until(&[Token::Else, Token::End])?;
+        let then_block = self.parse_block_until(&[Token::Else, Token::Elseif, Token::End])?;
 
         let mut elseifs = Vec::new();
         let mut else_block: Option<Vec<Spanned<Stmt>>> = None;
 
-        while self.check(&Token::Else) {
-            self.advance();
-            // `else if ...` chains as an `elseif` arm.
-            if self.check(&Token::If) {
-                self.advance();
+        loop {
+            if self.eat(&Token::Elseif) {
                 let ec = self.parse_expression()?;
-                self.expect(&Token::Then, "`then` after `else if` condition")?;
-                let eb = self.parse_block_until(&[Token::Else, Token::End])?;
+                self.expect(&Token::Then, "`then` after `elseif` condition")?;
+                let eb = self.parse_block_until(&[Token::Else, Token::Elseif, Token::End])?;
                 elseifs.push((ec, eb));
-            } else {
-                else_block = Some(self.parse_block_until(&[Token::End])?);
-                break;
+                continue;
             }
+            if self.eat(&Token::Else) {
+                else_block = Some(self.parse_block_until(&[Token::End])?);
+            }
+            break;
         }
 
         let end = self.expect(&Token::End, "`end` to close `if`")?;
@@ -1065,10 +1308,12 @@ impl Parser {
     fn parse_fn_decl(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `fn`
         let (name, _) = self.expect_ident("function name")?;
-        // Optional generic parameter list — accepted and discarded.
-        if self.check(&Token::Lt) {
-            self.skip_generic_args()?;
-        }
+        // Optional generic parameter list.
+        let type_params = if self.check(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
         let params = self.parse_param_list()?;
         let return_ty = self.parse_return_type_opt()?;
         let body = self.parse_block_until(&[Token::End])?;
@@ -1077,6 +1322,7 @@ impl Parser {
             Decl::Function {
                 exported,
                 name,
+                type_params,
                 params,
                 return_ty,
                 body,
@@ -1158,9 +1404,11 @@ impl Parser {
                 let m_start = self.peek().span.start;
                 self.advance();
                 let (name, _) = self.expect_ident("method name")?;
-                if self.check(&Token::Lt) {
-                    self.skip_generic_args()?;
-                }
+                let type_params = if self.check(&Token::Lt) {
+                    self.parse_generic_params()?
+                } else {
+                    Vec::new()
+                };
                 let params = self.parse_param_list()?;
                 let return_ty = self.parse_return_type_opt()?;
                 let body = self.parse_block_until(&[Token::End])?;
@@ -1169,6 +1417,7 @@ impl Parser {
                     is_static,
                     is_private: has_local,
                     name,
+                    type_params,
                     params,
                     return_ty,
                     body,
@@ -1295,6 +1544,13 @@ impl Parser {
                     let variant = if self.eat(&Token::Assign) {
                         let value = self.parse_expression()?;
                         EnumVariant::Valued(vname, value)
+                    } else if self.check(&Token::LParen) {
+                        // `Click(x: integer, y: integer)` — tuple-style payload.
+                        let fields = self.parse_param_list()?;
+                        EnumVariant::Tuple {
+                            name: vname,
+                            fields,
+                        }
                     } else {
                         EnumVariant::Bare(vname)
                     };
@@ -1318,6 +1574,7 @@ impl Parser {
                 is_static: false,
                 is_private: false,
                 name: mname,
+                type_params: Vec::new(),
                 params,
                 return_ty,
                 body,

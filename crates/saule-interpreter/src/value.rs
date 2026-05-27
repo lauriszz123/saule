@@ -97,6 +97,10 @@ pub struct EnumObject {
     pub name: String,
     /// Enum variants, keyed by name. Each variant is cached so identity is stable.
     pub variants: HashMap<String, Rc<EnumVariantObject>>,
+    /// Tuple-style variants and their arity. These don't have a singleton
+    /// instance; each call produces a fresh `EnumVariantObject` whose
+    /// `value` is an array-style table of the positional arguments.
+    pub tuple_variants: HashMap<String, usize>,
     /// Methods defined on the enum, keyed by name.
     pub methods: HashMap<String, Rc<FunctionObject>>,
 }
@@ -145,6 +149,12 @@ pub struct FunctionObject {
     /// the call scope, so a static method can reach sibling statics by their
     /// bare names even when invoked as a plain `Value::Function`.
     pub owner_class: RefCell<Option<std::rc::Weak<ClassObject>>>,
+    /// `Some` when this function was defined inside an imported module —
+    /// carries that module's `NamedSource` so a runtime error fired while
+    /// executing the body can be rendered with the correct source snippet.
+    /// `None` for functions defined in the entry file (the CLI attaches
+    /// the entry file's source to top-level errors already).
+    pub source: Option<Rc<miette::NamedSource<String>>>,
 }
 
 impl FunctionObject {

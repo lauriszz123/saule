@@ -1,0 +1,12 @@
+-- Throw can carry arbitrary values, including integers — the catch
+-- binds the raw value back into `e`.
+class Main
+    static fn main()
+        try
+            throw 42
+        catch e: integer
+            println("caught int " .. e)
+        end
+    end
+end
+

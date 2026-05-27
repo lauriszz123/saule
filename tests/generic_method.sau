@@ -1,0 +1,21 @@
+-- Generic method on a class — `T` is declared on the method, not the class.
+class Box
+    label: string
+
+    fn init(label: string)
+        self.label = label
+    end
+
+    fn wrap<T>(value: T) -> string
+        return self.label .. ": " .. value
+    end
+end
+
+class Main
+    static fn main()
+        local b: Box = Box("box")
+        println(b.wrap<integer>(7))
+        println(b.wrap<string>("hi"))
+    end
+end
+

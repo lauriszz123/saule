@@ -1,5 +1,5 @@
 class Shape
-  local name: string
+  name: string
 
   fn init(name: string)
     self.name = name
