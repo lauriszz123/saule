@@ -683,6 +683,27 @@ fn dispatch_member_call_multi(
                 _ => call_value_multi(v, &args, span),
             }
         }
+        Value::File(handle) => {
+            // File methods are implemented in `stdlib::io` via a static
+            // method table — keep `Value::File` opaque to the rest of the
+            // evaluator.
+            let mut positional = Vec::with_capacity(args.len());
+            for a in args {
+                match a {
+                    EvaluatedArg::Positional(v) => positional.push(v),
+                    EvaluatedArg::Named { .. } => {
+                        return Err(RuntimeError::TypeError {
+                            message: format!(
+                                "named arguments are not supported on file methods (`{name}`) — use positional arguments instead"
+                            ),
+                            span,
+                        });
+                    }
+                }
+            }
+            crate::stdlib::io::dispatch_file_method(handle, name, &positional)
+                .map_err(|message| RuntimeError::TypeError { message, span })
+        }
         _ => {
             // Generic: read the field, then call it.
             let v = read_member(receiver, name, span.clone())?;

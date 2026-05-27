@@ -11,6 +11,7 @@ use crate::env::Environment;
 use crate::value::{NativeFn, Value};
 
 pub mod core;
+pub mod io;
 pub mod iter;
 pub mod math;
 pub mod sigs;
@@ -24,6 +25,7 @@ pub fn install_std(env: &Rc<RefCell<Environment>>) {
     math::install(env);
     string::install(env);
     table::install(env);
+    io::install(env);
 }
 
 pub(crate) fn define_native(

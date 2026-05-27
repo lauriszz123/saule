@@ -1,0 +1,8 @@
+-- Unknown method on a file value must error at runtime.
+class Main
+  static fn main()
+    local f: File = Io.open("/tmp/saule_io_unknown.txt", IoMode.Write)!
+    f.flop()
+  end
+end
+

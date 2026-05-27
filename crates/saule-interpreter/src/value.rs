@@ -49,6 +49,37 @@ pub enum Value {
     Enum(Rc<EnumObject>),
     /// An interface declaration — carries method signatures.
     Interface(Rc<InterfaceObject>),
+    /// An open (or closed) file handle returned by `Io.open` and the
+    /// `Io.stdin`/`stdout`/`stderr` statics. Methods are dispatched via a
+    /// static table inside `stdlib::io`.
+    File(Rc<RefCell<FileHandle>>),
+}
+
+/// Backing storage for a `Value::File`. Variants split read- and write-side
+/// state so we can buffer line reads via `BufReader` while leaving writes
+/// unbuffered (the caller can call `:flush` explicitly when needed).
+pub enum FileHandle {
+    Stdin(std::io::BufReader<std::io::Stdin>),
+    Stdout,
+    Stderr,
+    Open {
+        path: String,
+        reader: Option<std::io::BufReader<std::fs::File>>,
+        writer: Option<std::fs::File>,
+    },
+    Closed,
+}
+
+impl fmt::Debug for FileHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileHandle::Stdin(_) => write!(f, "<file stdin>"),
+            FileHandle::Stdout => write!(f, "<file stdout>"),
+            FileHandle::Stderr => write!(f, "<file stderr>"),
+            FileHandle::Open { path, .. } => write!(f, "<file {path}>"),
+            FileHandle::Closed => write!(f, "<closed file>"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -204,6 +235,7 @@ impl Value {
             Value::EnumVariant(_) => "enum",
             Value::Enum(_) => "enum",
             Value::Interface(_) => "interface",
+            Value::File(_) => "file",
         }
     }
 
@@ -251,6 +283,7 @@ impl Value {
             },
             Value::Class(c) => format!("<class {}>", c.name),
             Value::Instance(i) => format!("<instance of {}>", i.borrow().class.name),
+            Value::File(h) => format!("{:?}", h.borrow()),
         }
     }
 }
@@ -274,6 +307,7 @@ impl PartialEq for Value {
             (Value::EnumVariant(a), Value::EnumVariant(b)) => Rc::ptr_eq(a, b),
             (Value::Enum(a), Value::Enum(b)) => Rc::ptr_eq(a, b),
             (Value::Interface(a), Value::Interface(b)) => Rc::ptr_eq(a, b),
+            (Value::File(a), Value::File(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }

@@ -148,6 +148,29 @@ pub enum TypeCheckError {
         #[label("class is not iterable")]
         span: miette::SourceSpan,
     },
+
+    #[error("argument {arg} of `{callee}` expects `{expected}`, got `{found}`")]
+    #[diagnostic(help(
+        "pass a value of type `{expected}` here — check the signature of `{callee}`"
+    ))]
+    NativeArgTypeMismatch {
+        callee: String,
+        arg: usize,
+        expected: String,
+        found: String,
+        #[label("wrong argument type")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{callee}` expects {expected} argument(s), got {found}")]
+    #[diagnostic(help("check the signature of `{callee}`"))]
+    NativeArity {
+        callee: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of arguments")]
+        span: miette::SourceSpan,
+    },
 }
 
 fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
@@ -768,6 +791,14 @@ fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<TypeCheckErr
             for a in args {
                 check_arg(a, scope, errors);
             }
+            // If the callee resolves to a known native signature, check the
+            // argument types positionally. Named arguments are skipped (those
+            // aren't supported on natives anyway, and they error at runtime).
+            if let Some(qname) = native_callee_name(callee)
+                && let Some(sig) = crate::stdlib::sigs::lookup(&qname)
+            {
+                check_native_args(&qname, &sig, args, scope, errors, expr.span.clone());
+            }
         }
         Expr::SafeMember { obj, .. } => check_expr(obj, scope, errors),
         Expr::Index { obj, index } => {
@@ -805,6 +836,74 @@ fn check_arg(arg: &CallArg, scope: &Scope, errors: &mut Vec<TypeCheckError>) {
     match arg {
         CallArg::Positional(e) | CallArg::Named { value: e, .. } => check_expr(e, scope, errors),
     }
+}
+
+/// Check positional arguments of a native call against the registered
+/// signature. Skips named arguments (natives don't support them; the runtime
+/// will surface that as an error).
+///
+/// Heuristics intentionally lenient:
+///   * `any` and `T?` parameters accept anything (incl. nil) — they're the
+///     "I'll figure it out" slots.
+///   * Variadic / over-supplied calls aren't penalised when the declared
+///     param list runs out — many natives accept `...rest` (variadic) which
+///     isn't expressed in the sig yet.
+///   * If `infer` can't produce a type for the argument, we skip silently.
+fn check_native_args(
+    callee: &str,
+    sig: &crate::stdlib::sigs::NativeSig,
+    args: &[CallArg],
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+    call_span: std::ops::Range<usize>,
+) {
+    // Count required positional params (every param up to the first
+    // nullable / `any` is required — nullable+`any` slots are optional).
+    let required: usize = sig
+        .params
+        .iter()
+        .take_while(|p| !is_nullable(p) && !is_any(p))
+        .count();
+    let positional: Vec<&CallArg> = args.iter().filter(|a| matches!(a, CallArg::Positional(_))).collect();
+    if positional.len() < required {
+        errors.push(TypeCheckError::NativeArity {
+            callee: callee.to_string(),
+            expected: required,
+            found: positional.len(),
+            span: to_source_span(call_span),
+        });
+        return;
+    }
+
+    for (i, arg) in args.iter().enumerate() {
+        let expected = match sig.params.get(i) {
+            Some(t) => t,
+            None => break,
+        };
+        let value_expr = match arg {
+            CallArg::Positional(e) => e,
+            CallArg::Named { .. } => continue,
+        };
+        if is_any(expected) {
+            continue;
+        }
+        let Some(found_ty) = infer(value_expr, scope) else {
+            continue;
+        };
+        if !types_compatible(expected, &found_ty) {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: callee.to_string(),
+                arg: i + 1,
+                expected: type_to_string(expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+        }
+    }
+}
+
+fn is_any(t: &Type) -> bool {
+    matches!(t, Type::Named(n) if n == "any")
 }
 
 fn report_if_nullable_receiver(
