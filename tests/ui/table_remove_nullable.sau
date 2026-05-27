@@ -1,0 +1,10 @@
+-- Table.remove returns a nullable value; assigning to a non-nullable binding
+-- must be rejected by the typechecker via the registered signature.
+class Main
+  static fn main()
+    local xs: table<integer> = {1, 2, 3}
+    local v: integer = Table.remove(xs)
+    println(v)
+  end
+end
+

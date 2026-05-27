@@ -1,0 +1,8 @@
+-- Table.sort with a non-function comparator must error.
+class Main
+  static fn main()
+    local xs: table<integer> = {3, 1, 2}
+    Table.sort(xs, 42)
+  end
+end
+

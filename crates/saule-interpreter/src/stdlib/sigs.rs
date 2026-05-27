@@ -62,6 +62,7 @@ fn ensure_registered() {
         crate::stdlib::math::register_sigs();
         crate::stdlib::string::register_sigs();
         crate::stdlib::iter::register_sigs();
+        crate::stdlib::table::register_sigs();
     });
 }
 

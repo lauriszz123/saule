@@ -1,0 +1,8 @@
+-- Table.insert with wrong arity should error at runtime.
+class Main
+  static fn main()
+    local xs: table<integer> = {1, 2, 3}
+    Table.insert(xs)
+  end
+end
+

@@ -1,0 +1,274 @@
+//! `Table` static class — array-part helpers.
+//!
+//! All functions operate on the array side of a `table` value. They mirror
+//! Lua's `table.*` library, adapted to Saule semantics:
+//!
+//! * `Table.insert(list, [pos], value)` — append, or insert-at-position.
+//! * `Table.remove(list, [pos])`        — remove last, or remove-at-position; returns the removed value (nullable).
+//! * `Table.sort(list, comp)`           — in-place sort using the user comparator.
+//! * `Table.concat(list, [sep], [i], [j])` — join array elements with a separator.
+//!
+//! Overloading is done by arg count (Lua-style) rather than by named
+//! parameters, because native callables don't yet route named args. The
+//! ergonomic equivalents are preserved:
+//!
+//!   `Table.insert(list, x)`        -- append
+//!   `Table.insert(list, 1, x)`     -- prepend
+//!   `Table.remove(list)`           -- pop last
+//!   `Table.remove(list, 1)`        -- shift first
+//!   `Table.concat(list)`           -- join with ""
+//!   `Table.concat(list, ", ")`     -- join with separator
+//!   `Table.concat(list, ", ", 2)`  -- from index 2 to end
+//!   `Table.concat(list, ", ", 2, 4)` -- range
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use crate::env::Environment;
+use crate::stdlib::expect_min_arity;
+use crate::value::{ClassObject, NativeClosure, TableObject, Value};
+
+pub fn install(env: &Rc<RefCell<Environment>>) {
+    let mut static_fields = HashMap::new();
+    static_fields.insert("insert".to_string(), native_multi("Table.insert", tbl_insert));
+    static_fields.insert("remove".to_string(), native_multi("Table.remove", tbl_remove));
+    static_fields.insert("sort".to_string(),   native_multi("Table.sort",   tbl_sort));
+    static_fields.insert("concat".to_string(), native_multi("Table.concat", tbl_concat));
+
+    let class = ClassObject {
+        name: "Table".to_string(),
+        parent: None,
+        field_defs: Vec::new(),
+        methods: HashMap::new(),
+        static_fields: RefCell::new(static_fields),
+        static_methods: HashMap::new(),
+        constructor: None,
+    };
+    env.borrow_mut()
+        .define("Table".to_string(), Value::Class(Rc::new(class)));
+}
+
+/// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
+pub fn register_sigs() {
+    use crate::stdlib::sigs::{register, t_named, t_nullable};
+    let any = || t_named("any");
+    let i   = || t_named("integer");
+    let s   = || t_named("string");
+    let nil = || t_named("nil");
+
+    register("Table.insert", vec![any(), any(), t_nullable(any())], vec![nil()]);
+    register("Table.remove", vec![any(), t_nullable(i())],          vec![t_nullable(any())]);
+    register("Table.sort",   vec![any(), any()],                    vec![nil()]);
+    register("Table.concat", vec![any(), t_nullable(s()), t_nullable(i()), t_nullable(i())], vec![s()]);
+}
+
+fn native_multi(
+    name: &'static str,
+    func: fn(&[Value]) -> Result<Vec<Value>, String>,
+) -> Value {
+    Value::NativeClosure(Rc::new(NativeClosure {
+        name,
+        func: Box::new(move |args| func(args)),
+    }))
+}
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+fn expect_table(name: &str, args: &[Value], idx: usize) -> Result<Rc<RefCell<TableObject>>, String> {
+    match args.get(idx) {
+        Some(Value::Table(t)) => Ok(t.clone()),
+        Some(other) => Err(format!(
+            "{name} expects a table at argument {}, got `{}`",
+            idx + 1,
+            other.type_name()
+        )),
+        None => Err(format!("{name} missing argument {}", idx + 1)),
+    }
+}
+
+fn expect_int_arg(name: &str, args: &[Value], idx: usize) -> Result<i64, String> {
+    match args.get(idx) {
+        Some(Value::Int(n)) => Ok(*n),
+        Some(other) => Err(format!(
+            "{name} expects an integer at argument {}, got `{}`",
+            idx + 1,
+            other.type_name()
+        )),
+        None => Err(format!("{name} missing argument {}", idx + 1)),
+    }
+}
+
+fn expect_string_arg(name: &str, args: &[Value], idx: usize) -> Result<String, String> {
+    match args.get(idx) {
+        Some(Value::Str(s)) => Ok((**s).clone()),
+        Some(other) => Err(format!(
+            "{name} expects a string at argument {}, got `{}`",
+            idx + 1,
+            other.type_name()
+        )),
+        None => Err(format!("{name} missing argument {}", idx + 1)),
+    }
+}
+
+// ─── Table.insert ────────────────────────────────────────────────────────────
+//
+// Two arities:
+//   Table.insert(list, value)         -- append
+//   Table.insert(list, pos, value)    -- shift right and insert at pos (1-based)
+
+fn tbl_insert(args: &[Value]) -> Result<Vec<Value>, String> {
+    expect_min_arity("Table.insert", args, 2)?;
+    let table = expect_table("Table.insert", args, 0)?;
+
+    match args.len() {
+        2 => {
+            let value = args[1].clone();
+            table.borrow_mut().array.push(value);
+            Ok(vec![Value::Nil])
+        }
+        3 => {
+            let pos = expect_int_arg("Table.insert", args, 1)?;
+            let value = args[2].clone();
+            let mut t = table.borrow_mut();
+            let len = t.array.len() as i64;
+            if pos < 1 || pos > len + 1 {
+                return Err(format!(
+                    "Table.insert: position {pos} out of range for length {len}"
+                ));
+            }
+            t.array.insert((pos - 1) as usize, value);
+            Ok(vec![Value::Nil])
+        }
+        n => Err(format!(
+            "Table.insert expects 2 or 3 arguments, got {n}"
+        )),
+    }
+}
+
+// ─── Table.remove ────────────────────────────────────────────────────────────
+//
+//   Table.remove(list)        -- remove + return the last element (or nil if empty)
+//   Table.remove(list, pos)   -- remove + return the element at pos (or nil if oor)
+
+fn tbl_remove(args: &[Value]) -> Result<Vec<Value>, String> {
+    expect_min_arity("Table.remove", args, 1)?;
+    let table = expect_table("Table.remove", args, 0)?;
+    let mut t = table.borrow_mut();
+    let len = t.array.len();
+
+    let pos: i64 = if args.len() >= 2 {
+        expect_int_arg("Table.remove", args, 1)?
+    } else if len == 0 {
+        return Ok(vec![Value::Nil]);
+    } else {
+        len as i64
+    };
+
+    if len == 0 || pos < 1 || (pos as usize) > len {
+        return Ok(vec![Value::Nil]);
+    }
+    let removed = t.array.remove((pos - 1) as usize);
+    Ok(vec![removed])
+}
+
+// ─── Table.sort ──────────────────────────────────────────────────────────────
+//
+//   Table.sort(list, comp)
+//   - `comp(a, b)` should return true if `a` must come before `b`.
+//   - Comparator is required; for default ordering wrap it explicitly.
+
+fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
+    expect_min_arity("Table.sort", args, 2)?;
+    let table = expect_table("Table.sort", args, 0)?;
+    let comp = args[1].clone();
+
+    // Copy out, sort, write back — keeps the comparator from re-entering the
+    // borrowed table while the sort is in flight.
+    let mut elements: Vec<Value> = table.borrow().array.clone();
+
+    // Sort with a fallible comparator using a single bubbling error slot.
+    let mut sort_err: Option<String> = None;
+    elements.sort_by(|a, b| {
+        if sort_err.is_some() {
+            return std::cmp::Ordering::Equal;
+        }
+        match invoke_comp(&comp, a, b) {
+            Ok(true)  => std::cmp::Ordering::Less,
+            Ok(false) => match invoke_comp(&comp, b, a) {
+                Ok(true)  => std::cmp::Ordering::Greater,
+                Ok(false) => std::cmp::Ordering::Equal,
+                Err(e)    => { sort_err = Some(e); std::cmp::Ordering::Equal }
+            },
+            Err(e) => { sort_err = Some(e); std::cmp::Ordering::Equal }
+        }
+    });
+    if let Some(e) = sort_err {
+        return Err(e);
+    }
+
+    table.borrow_mut().array = elements;
+    Ok(vec![Value::Nil])
+}
+
+fn invoke_comp(comp: &Value, a: &Value, b: &Value) -> Result<bool, String> {
+    use crate::eval::expr::{EvaluatedArg, call_value_multi};
+    if !matches!(comp, Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)) {
+        return Err(format!(
+            "Table.sort: comparator must be a function, got `{}`",
+            comp.type_name()
+        ));
+    }
+    let args = vec![
+        EvaluatedArg::Positional(a.clone()),
+        EvaluatedArg::Positional(b.clone()),
+    ];
+    let result = call_value_multi(comp.clone(), &args, 0..0)
+        .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
+    Ok(result.into_iter().next().unwrap_or(Value::Nil).is_truthy())
+}
+
+// ─── Table.concat ────────────────────────────────────────────────────────────
+//
+//   Table.concat(list)                       -- join with ""
+//   Table.concat(list, sep)                  -- join with sep
+//   Table.concat(list, sep, i)               -- from index i to end
+//   Table.concat(list, sep, i, j)            -- range [i, j]
+
+fn tbl_concat(args: &[Value]) -> Result<Vec<Value>, String> {
+    expect_min_arity("Table.concat", args, 1)?;
+    let table = expect_table("Table.concat", args, 0)?;
+    let sep = if args.len() >= 2 && !matches!(args[1], Value::Nil) {
+        expect_string_arg("Table.concat", args, 1)?
+    } else {
+        String::new()
+    };
+    let t = table.borrow();
+    let len = t.array.len() as i64;
+    let i = if args.len() >= 3 && !matches!(args[2], Value::Nil) {
+        expect_int_arg("Table.concat", args, 2)?
+    } else { 1 };
+    let j = if args.len() >= 4 && !matches!(args[3], Value::Nil) {
+        expect_int_arg("Table.concat", args, 3)?
+    } else { len };
+
+    if i > j {
+        return Ok(vec![Value::Str(Rc::new(String::new()))]);
+    }
+    if i < 1 || j > len {
+        return Err(format!(
+            "Table.concat: range [{i}, {j}] out of bounds for length {len}"
+        ));
+    }
+
+    let mut out = String::new();
+    for k in i..=j {
+        if k > i {
+            out.push_str(&sep);
+        }
+        out.push_str(&t.array[(k - 1) as usize].to_display_string());
+    }
+    Ok(vec![Value::Str(Rc::new(out))])
+}
+
+

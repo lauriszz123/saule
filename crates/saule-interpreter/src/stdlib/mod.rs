@@ -15,6 +15,7 @@ pub mod iter;
 pub mod math;
 pub mod sigs;
 pub mod string;
+pub mod table;
 
 /// Install the full standard library into `env`.
 pub fn install_std(env: &Rc<RefCell<Environment>>) {
@@ -22,6 +23,7 @@ pub fn install_std(env: &Rc<RefCell<Environment>>) {
     iter::install(env);
     math::install(env);
     string::install(env);
+    table::install(env);
 }
 
 pub(crate) fn define_native(
