@@ -69,7 +69,11 @@ highlight default link sauleDeclaration  Keyword
 highlight default link sauleOperatorKW   sauleCompare
 highlight default link sauleBoolean      Boolean
 highlight default link sauleNil          Constant
-highlight default link sauleSelf         Identifier
+if has('nvim')
+  highlight default link sauleSelf       @variable.builtin
+else
+  highlight default link sauleSelf       Special
+endif
 highlight default link sauleType         Type
 highlight default link sauleTypeName     Type
 highlight default link sauleFunction     Function

@@ -1,0 +1,8 @@
+-- A table<integer> array literal must contain only integers.
+class Main
+  static fn main()
+    local xs: table<integer> = {1, "two", 3}
+    println(xs[2])
+  end
+end
+

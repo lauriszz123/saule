@@ -166,6 +166,21 @@ impl Parser {
             }
             Token::Identifier(name) => {
                 self.advance();
+                // `table<T>` (array) and `table<K, V>` (hashmap) are first-class
+                // forms in the type system. Other identifiers may carry generic
+                // arguments which we still accept-and-discard for forward-compat.
+                if name == "table" && self.check(&Token::Lt) {
+                    self.expect(&Token::Lt, "`<`")?;
+                    let first = self.parse_type()?;
+                    let (key, value) = if self.eat(&Token::Comma) {
+                        let v = self.parse_type()?;
+                        (Some(Box::new(first)), Box::new(v))
+                    } else {
+                        (None, Box::new(first))
+                    };
+                    self.expect(&Token::Gt, "`>` to close `table<...>`")?;
+                    return Ok(Type::Table { key, value });
+                }
                 // Drop any generic argument list `<T, U>` — generics aren't
                 // implemented yet but appear in the README; we accept and
                 // ignore them so real programs parse.

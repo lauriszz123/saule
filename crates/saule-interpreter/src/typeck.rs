@@ -105,6 +105,49 @@ pub enum TypeCheckError {
         #[label("private")]
         span: miette::SourceSpan,
     },
+
+    #[error("table value of type `{found}` is incompatible with declared element type `{expected}`")]
+    #[diagnostic(help(
+        "every value stored in this table must be a `{expected}`"
+    ))]
+    TableElementTypeMismatch {
+        expected: String,
+        found: String,
+        #[label("wrong value type")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("table key of type `{found}` is incompatible with declared key type `{expected}`")]
+    #[diagnostic(help(
+        "this table is declared with key type `{expected}` — pass an index of that type"
+    ))]
+    TableKeyTypeMismatch {
+        expected: String,
+        found: String,
+        #[label("wrong key type")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("cannot initialise `table<{key}, {value}>` with an array-style literal")]
+    #[diagnostic(help(
+        "array-style `{{ ... }}` literals can only fill `table<T>` (integer-keyed); start from `{{}}` and assign by key instead"
+    ))]
+    TableArrayLiteralForMap {
+        key: String,
+        value: String,
+        #[label("array literal not allowed for a map-typed table")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("cannot iterate over a `{class}` — it does not implement `Iterable` or `Iterable2`")]
+    #[diagnostic(help(
+        "add `implements Iterable<T>` (or `Iterable2<K, V>`) to `{class}` and define `fn iter() -> fn(): T?` returning a step closure"
+    ))]
+    NotIterable {
+        class: String,
+        #[label("class is not iterable")]
+        span: miette::SourceSpan,
+    },
 }
 
 fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
@@ -139,6 +182,8 @@ impl Scope {
 #[derive(Default, Clone)]
 struct ClassInfo {
     parent: Option<String>,
+    /// Interfaces declared on the class (`class C implements A, B`).
+    implements: Vec<String>,
     /// member name -> is_private
     members: HashMap<String, bool>,
 }
@@ -181,19 +226,42 @@ fn lookup_member(class: &str, member: &str) -> Option<(String, bool)> {
     })
 }
 
-fn build_registry(module: &Module) -> ClassRegistry {
-    let mut reg = ClassRegistry::new();
+/// Does the class (or any ancestor) declare it implements `Iterable` or
+/// `Iterable2`? Used by the `for ... in` static check.
+fn class_implements_iterable(class: &str) -> bool {
+    with_classes(|reg| {
+        let mut cur = Some(class.to_string());
+        while let Some(name) = cur {
+            let Some(info) = reg.get(&name) else {
+                return false;
+            };
+            if info
+                .implements
+                .iter()
+                .any(|i| i == "Iterable" || i == "Iterable2")
+            {
+                return true;
+            }
+            cur = info.parent.clone();
+        }
+        false
+    })
+}
+
+fn build_registry(module: &Module) -> ClassRegistry {    let mut reg = ClassRegistry::new();
     for stmt in &module.stmts {
         if let Stmt::Decl(d) = &stmt.value
             && let Decl::Class {
                 name,
                 extends,
+                implements,
                 members,
                 ..
             } = &d.value
         {
             let mut info = ClassInfo {
                 parent: extends.clone(),
+                implements: implements.clone(),
                 members: HashMap::new(),
             };
             for m in members {
@@ -280,6 +348,17 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
             {
                 check_assignment_compat(&ty, value, scope, errors);
             }
+            // `t[k] = v` — enforce the table's static key/value types.
+            if let Expr::Index { obj, index } = &target.value
+                && let Some(Type::Table { key, value: elem_ty }) = infer(obj, scope)
+            {
+                let key_ty = key
+                    .as_deref()
+                    .cloned()
+                    .unwrap_or_else(|| Type::Named("integer".into()));
+                check_table_key_compat(&key_ty, index, scope, errors);
+                check_element_compat(&elem_ty, value, scope, errors);
+            }
         }
 
         Stmt::AssignMulti { targets, values } => {
@@ -365,6 +444,17 @@ fn check_stmt(stmt: &Stmt, scope: &mut Scope, errors: &mut Vec<TypeCheckError>) 
 
         Stmt::ForIn { vars, iter, body } => {
             check_expr(iter, scope, errors);
+            // If the iter expression is a known class instance, it must
+            // implement `Iterable` or `Iterable2` (walking the parent chain).
+            if let Some(Type::Named(class_name)) = infer(iter, scope)
+                && with_classes(|reg| reg.contains_key(&class_name))
+                && !class_implements_iterable(&class_name)
+            {
+                errors.push(TypeCheckError::NotIterable {
+                    class: class_name,
+                    span: to_source_span(iter.span.clone()),
+                });
+            }
             let mut body_scope = scope.clone();
             for (name, ty_opt) in vars {
                 if let Some(ty) = ty_opt {
@@ -783,6 +873,29 @@ fn check_assignment_compat(
         });
         return;
     }
+
+    // Table-aware checks for array-style literals assigned to a typed table.
+    if let (Type::Table { key, value: elem_ty }, Expr::Table(items)) = (decl_ty, &value.value) {
+        // `{a, b, c}` literal cannot fill a map-typed table whose key is not
+        // integer-compatible.
+        if let Some(k) = key
+            && !is_integer_like(k)
+            && !items.is_empty()
+        {
+            errors.push(TypeCheckError::TableArrayLiteralForMap {
+                key: type_to_string(k),
+                value: type_to_string(elem_ty),
+                span: to_source_span(value.span.clone()),
+            });
+            return;
+        }
+        // Each element must match the declared value type.
+        for item in items {
+            check_element_compat(elem_ty, item, scope, errors);
+        }
+        return;
+    }
+
     if let Some(value_ty) = infer(value, scope)
         && is_nullable(&value_ty)
     {
@@ -791,6 +904,60 @@ fn check_assignment_compat(
             to: type_to_string(decl_ty),
             span: to_source_span(value.span.clone()),
         });
+    }
+}
+
+/// Index key must match the table's declared key type.
+fn check_table_key_compat(
+    expected: &Type,
+    index: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    if let Some(idx_ty) = infer(index, scope)
+        && !types_compatible(expected, &idx_ty)
+    {
+        errors.push(TypeCheckError::TableKeyTypeMismatch {
+            expected: type_to_string(expected),
+            found: type_to_string(&idx_ty),
+            span: to_source_span(index.span.clone()),
+        });
+    }
+}
+
+/// True for `integer` and `any` — the key types that an array-style literal
+/// can satisfy.
+fn is_integer_like(ty: &Type) -> bool {
+    matches!(ty, Type::Named(n) if n == "integer" || n == "any")
+}
+
+/// Element-of-table compatibility — accepts literals/`Ident`s whose inferred
+/// type matches, and stays quiet otherwise (conservative).
+fn check_element_compat(
+    expected: &Type,
+    value: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    if let Some(value_ty) = infer(value, scope)
+        && !types_compatible(expected, &value_ty)
+    {
+        errors.push(TypeCheckError::TableElementTypeMismatch {
+            expected: type_to_string(expected),
+            found: type_to_string(&value_ty),
+            span: to_source_span(value.span.clone()),
+        });
+    }
+}
+
+/// Conservative type compatibility — names match (or either is `any`), or
+/// `value_ty` is `Nullable` of a compatible inner, etc.
+fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
+    match (expected, value_ty) {
+        (Type::Named(a), Type::Named(b)) => a == b || a == "any" || b == "any" || b == "nil",
+        (Type::Nullable(a), b) => types_compatible(a, b),
+        (a, Type::Nullable(b)) => types_compatible(a, b),
+        _ => true,
     }
 }
 
@@ -930,6 +1097,11 @@ fn type_to_string(ty: &Type) -> String {
     match ty {
         Type::Named(n) => n.clone(),
         Type::Nullable(inner) => format!("{}?", type_to_string(inner)),
+        Type::Table { key: None, value } => format!("table<{}>", type_to_string(value)),
+        Type::Table {
+            key: Some(k),
+            value,
+        } => format!("table<{}, {}>", type_to_string(k), type_to_string(value)),
         other => format!("{:?}", other),
     }
 }

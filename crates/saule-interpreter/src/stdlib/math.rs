@@ -269,10 +269,12 @@ fn math_modf(args: &[Value]) -> Result<Value, String> {
     let x = number_at(args, 0, "modf")?.as_f64();
     let int_part = x.trunc();
     let frac_part = x - int_part;
-    Ok(Value::Table(Rc::new(RefCell::new(vec![
-        Value::Float(int_part),
-        Value::Float(frac_part),
-    ]))))
+    Ok(Value::Table(Rc::new(RefCell::new(
+        crate::value::TableObject::from_array(vec![
+            Value::Float(int_part),
+            Value::Float(frac_part),
+        ]),
+    ))))
 }
 
 fn math_round(args: &[Value]) -> Result<Value, String> {

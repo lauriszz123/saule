@@ -23,7 +23,7 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
         UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
         UnaryOp::Len => match v {
             Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
-            Value::Table(items) => Ok(Value::Int(items.borrow().len() as i64)),
+            Value::Table(items) => Ok(Value::Int(items.borrow().array_len() as i64)),
             other => Err(RuntimeError::TypeError {
                 message: format!(
                     "cannot take length of a `{}` — only strings and tables have a length",

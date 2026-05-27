@@ -11,12 +11,16 @@ use crate::env::Environment;
 use crate::value::{NativeFn, Value};
 
 pub mod core;
+pub mod iter;
 pub mod math;
+pub mod string;
 
 /// Install the full standard library into `env`.
 pub fn install_std(env: &Rc<RefCell<Environment>>) {
     core::install(env);
+    iter::install(env);
     math::install(env);
+    string::install(env);
 }
 
 pub(crate) fn define_native(

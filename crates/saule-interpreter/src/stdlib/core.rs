@@ -9,6 +9,7 @@ use crate::value::Value;
 pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     define_native(env, "print", builtin_print);
     define_native(env, "println", builtin_println);
+    define_native(env, "printf", builtin_printf);
     define_native(env, "tostring", builtin_tostring);
     define_native(env, "type", builtin_type);
     define_native(env, "int", builtin_int);
@@ -25,6 +26,14 @@ fn builtin_print(args: &[Value]) -> Result<Value, String> {
 fn builtin_println(args: &[Value]) -> Result<Value, String> {
     let parts: Vec<String> = args.iter().map(|v| v.to_display_string()).collect();
     println!("{}", parts.join("\t"));
+    Ok(Value::Nil)
+}
+
+/// `printf(fmt, ...)` — same format spec as `String.format`, written to
+/// stdout without a trailing newline.
+fn builtin_printf(args: &[Value]) -> Result<Value, String> {
+    let s = crate::stdlib::string::format_args_impl(args)?;
+    print!("{s}");
     Ok(Value::Nil)
 }
 
@@ -80,3 +89,12 @@ fn builtin_assert(args: &[Value]) -> Result<Value, String> {
         .unwrap_or_else(|| Value::Str(Rc::new("assertion failed".to_string())));
     Err(format!("assertion failed: {}", message.to_display_string()))
 }
+
+fn builtin_error(args: &[Value]) -> Result<Value, String> {
+    let msg = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| Value::Str(Rc::new("error".to_string())));
+    Err(msg.to_display_string())
+}
+

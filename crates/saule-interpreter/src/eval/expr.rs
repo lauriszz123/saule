@@ -119,7 +119,9 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             for item in items {
                 values.push(eval(item, env)?);
             }
-            Ok(Value::Table(Rc::new(RefCell::new(values))))
+            Ok(Value::Table(Rc::new(RefCell::new(
+                crate::value::TableObject::from_array(values),
+            ))))
         }
 
         Expr::Lambda { params, body, .. } => {
@@ -188,7 +190,7 @@ fn call_value(
     Ok(first_or_nil(call_value_multi(callee, args, span)?))
 }
 
-fn call_value_multi(
+pub(crate) fn call_value_multi(
     callee: Value,
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
@@ -215,6 +217,25 @@ fn call_value_multi(
                 .map_err(|message| RuntimeError::TypeError { message, span })
         }
         Value::Function(f) => call_function_multi(&f, args, span),
+        Value::NativeClosure(nc) => {
+            let mut positional = Vec::with_capacity(args.len());
+            for arg in args {
+                match arg {
+                    EvaluatedArg::Positional(v) => positional.push(v.clone()),
+                    EvaluatedArg::Named { name: _, .. } => {
+                        return Err(RuntimeError::TypeError {
+                            message: format!(
+                                "named arguments are not supported for built-in function `{}` — use positional arguments instead",
+                                nc.name
+                            ),
+                            span,
+                        });
+                    }
+                }
+            }
+            (nc.func)(&positional)
+                .map_err(|message| RuntimeError::TypeError { message, span })
+        }
         // `ClassName(args)` constructs an instance.
         Value::Class(c) => construct(c, args, span).map(|v| vec![v]),
         other => Err(RuntimeError::TypeError {
@@ -354,7 +375,9 @@ fn bind_params(
         if param.variadic {
             scope.borrow_mut().define(
                 param.name.clone(),
-                Value::Table(Rc::new(RefCell::new(variadic_values.clone()))),
+                Value::Table(Rc::new(RefCell::new(crate::value::TableObject::from_array(
+                    variadic_values.clone(),
+                )))),
             );
             continue;
         }
@@ -365,7 +388,22 @@ fn bind_params(
         } else if is_nullable_type(&param.ty) {
             Value::Nil
         } else {
-            return Err(RuntimeError::TypeError {
+            let help = if missing_required.len() == 1 {
+                Some(format!(
+                    "add argument `{}` to this call (positionally or by name)",
+                    missing_required[0]
+                ))
+            } else {
+                Some(format!(
+                    "add required arguments to this call: {}",
+                    missing_required
+                        .iter()
+                        .map(|n| format!("`{n}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            };
+            return Err(RuntimeError::ArgumentError {
                 message: if missing_required.len() == 1 {
                     format!("missing required argument for parameter `{}`", param.name)
                 } else {
@@ -375,6 +413,7 @@ fn bind_params(
                         missing_required.join(", ")
                     )
                 },
+                help,
                 span: span.clone(),
             });
         };
@@ -387,6 +426,7 @@ fn is_nullable_type(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_)) || matches!(ty, Type::Named(n) if n == "nil")
 }
 
+#[allow(dead_code)]
 pub(crate) fn table_index_to_slot(index: &Value) -> Result<Option<usize>, String> {
     match index {
         Value::Int(i) if *i <= 0 => Ok(None),
@@ -404,15 +444,7 @@ fn read_index(
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
     match receiver {
-        Value::Table(items) => {
-            let Some(slot) = table_index_to_slot(&index).map_err(|message| RuntimeError::TypeError {
-                message,
-                span: span.clone(),
-            })? else {
-                return Ok(Value::Nil);
-            };
-            Ok(items.borrow().get(slot).cloned().unwrap_or(Value::Nil))
-        }
+        Value::Table(items) => Ok(items.borrow().get(&index)),
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "cannot index a `{}` — only tables support `[index]` access",
@@ -859,7 +891,7 @@ fn invoke_method(
     dispatch_member_call(receiver, name, args, span)
 }
 
-fn invoke_method_multi(
+pub(crate) fn invoke_method_multi(
     receiver: &Value,
     name: &str,
     args: Vec<EvaluatedArg>,

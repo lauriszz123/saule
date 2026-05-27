@@ -1,0 +1,15 @@
+-- `for ... in instance` requires the instance's class to implement
+-- `Iterable<T>` (or `Iterable2<K, V>`). `Thing` implements neither.
+class Thing
+  fn init() end
+end
+
+class Main
+  static fn main()
+    local t: Thing = Thing()
+    for v in t do
+      println(v)
+    end
+  end
+end
+

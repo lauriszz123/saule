@@ -1,0 +1,9 @@
+-- Assigning with the wrong key type to a table<string, integer> is an error.
+class Main
+  static fn main()
+    local m: table<string, integer> = {}
+    m[1] = 42
+    println(m[1])
+  end
+end
+

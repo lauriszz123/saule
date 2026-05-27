@@ -634,21 +634,13 @@ fn assign_index(
 ) -> Result<Flow, RuntimeError> {
     match receiver {
         Value::Table(items) => {
-            let Some(slot) = expr::table_index_to_slot(&index).map_err(|message| RuntimeError::TypeError {
-                message,
-                span: span.clone(),
-            })? else {
-                return Err(RuntimeError::TypeError {
-                    message: "table assignment index must be a positive integer".to_string(),
-                    span,
-                });
-            };
-
-            let mut items = items.borrow_mut();
-            if slot >= items.len() {
-                items.resize(slot + 1, Value::Nil);
-            }
-            items[slot] = value;
+            items
+                .borrow_mut()
+                .set(&index, value)
+                .map_err(|message| RuntimeError::TypeError {
+                    message,
+                    span: span.clone(),
+                })?;
             Ok(Flow::nil())
         }
         other => Err(RuntimeError::TypeError {
@@ -767,30 +759,126 @@ fn exec_for_in(
     let iter_value = expr::eval(iter, env)?;
     match iter_value {
         Value::Table(items) => {
-            let snapshot = items.borrow().clone();
-            for (i, value) in snapshot.into_iter().enumerate() {
+            // Snapshot to allow the table to mutate during iteration without
+            // breaking the loop. Yield array entries first, then map entries.
+            let (array, map_entries) = {
+                let t = items.borrow();
+                let array = t.array.clone();
+                let mut map_entries: Vec<(crate::value::TableKey, Value)> =
+                    t.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                // Deterministic order: int keys ascending, then strings, then bools.
+                map_entries.sort_by(|a, b| match (&a.0, &b.0) {
+                    (crate::value::TableKey::Int(x), crate::value::TableKey::Int(y)) => x.cmp(y),
+                    (crate::value::TableKey::Int(_), _) => std::cmp::Ordering::Less,
+                    (_, crate::value::TableKey::Int(_)) => std::cmp::Ordering::Greater,
+                    (crate::value::TableKey::Str(x), crate::value::TableKey::Str(y)) => x.cmp(y),
+                    (crate::value::TableKey::Str(_), _) => std::cmp::Ordering::Less,
+                    (_, crate::value::TableKey::Str(_)) => std::cmp::Ordering::Greater,
+                    (crate::value::TableKey::Bool(x), crate::value::TableKey::Bool(y)) => x.cmp(y),
+                });
+                (array, map_entries)
+            };
+
+            // Helper to bind one (key, value) pair and run the body.
+            let run_iter = |key: Value, value: Value| -> Result<Flow, RuntimeError> {
                 let scope = Environment::with_parent(env.clone());
                 match vars {
                     [(name, _)] => {
                         scope.borrow_mut().define(name.clone(), value);
                     }
-                    [(index_name, _), (value_name, _)] => {
-                        scope
-                            .borrow_mut()
-                            .define(index_name.clone(), Value::Int((i + 1) as i64));
+                    [(key_name, _), (value_name, _)] => {
+                        scope.borrow_mut().define(key_name.clone(), key);
                         scope.borrow_mut().define(value_name.clone(), value);
                     }
                     _ => {
                         return Err(RuntimeError::TypeError {
                             message: format!(
-                                "for-in loops support one value variable or an index/value pair, got {} variables",
+                                "for-in loops support one value variable or a key/value pair, got {} variables",
                                 vars.len()
+                            ),
+                            span: span.clone(),
+                        });
+                    }
+                }
+                exec_block(body, &scope)
+            };
+
+            for (i, value) in array.into_iter().enumerate() {
+                match run_iter(Value::Int((i + 1) as i64), value)? {
+                    Flow::Normal(_) | Flow::Continue => {}
+                    Flow::Break => return Ok(Flow::nil()),
+                    ret @ Flow::Return(_) => return Ok(ret),
+                }
+            }
+            for (k, v) in map_entries {
+                match run_iter(k.to_value(), v)? {
+                    Flow::Normal(_) | Flow::Continue => {}
+                    Flow::Break => return Ok(Flow::nil()),
+                    ret @ Flow::Return(_) => return Ok(ret),
+                }
+            }
+            Ok(Flow::nil())
+        }
+        other => {
+            // For functions and instances we drive a closure-based iterator.
+            // Instances must expose an `iter()` method that returns the closure.
+            let driver: Value = match &other {
+                Value::Function(_) | Value::Native(_) | Value::NativeClosure(_) => other.clone(),
+                Value::Instance(_) => {
+                    let result = expr::invoke_method_multi(
+                        &other,
+                        "iter",
+                        Vec::new(),
+                        span.clone(),
+                    )?;
+                    let Some(driver) = result.into_iter().next() else {
+                        return Err(RuntimeError::TypeError {
+                            message: format!(
+                                "`{}.iter()` returned no value — it must return a function",
+                                other.type_name()
+                            ),
+                            span,
+                        });
+                    };
+                    if !matches!(driver, Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)) {
+                        return Err(RuntimeError::TypeError {
+                            message: format!(
+                                "`iter()` must return a function, got `{}`",
+                                driver.type_name()
                             ),
                             span,
                         });
                     }
+                    driver
                 }
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "cannot iterate over a `{}` with `for ... in` — use a table, a function, or a class that implements `Iterable`",
+                            other.type_name()
+                        ),
+                        span,
+                    });
+                }
+            };
 
+            // Drive the closure: call repeatedly with no arguments. Stop when
+            // the first returned value is `nil` (Lua's nil-terminator). Each
+            // step's returns are bound positionally across the loop variables
+            // (extras → nil, surplus values dropped).
+            loop {
+                let values = expr::call_value_multi(driver.clone(), &[], span.clone())?;
+                if values.first().is_none_or(|v| matches!(v, Value::Nil)) {
+                    break;
+                }
+                let scope = Environment::with_parent(env.clone());
+                {
+                    let mut scope_mut = scope.borrow_mut();
+                    for (i, (name, _)) in vars.iter().enumerate() {
+                        let v = values.get(i).cloned().unwrap_or(Value::Nil);
+                        scope_mut.define(name.clone(), v);
+                    }
+                }
                 match exec_block(body, &scope)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::nil()),
@@ -799,13 +887,6 @@ fn exec_for_in(
             }
             Ok(Flow::nil())
         }
-        other => Err(RuntimeError::TypeError {
-            message: format!(
-                "cannot iterate over a `{}` with `for ... in` — use a table value",
-                other.type_name()
-            ),
-            span,
-        }),
     }
 }
 

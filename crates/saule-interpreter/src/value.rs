@@ -22,11 +22,16 @@ pub enum Value {
     Float(f64),
     /// Interned via `Rc` so cloning a value is cheap.
     Str(Rc<String>),
-    /// Array-style table storage. Shared by reference so aliasing behaves like
-    /// Lua tables and indexed mutation is visible through every alias.
-    Table(Rc<RefCell<Vec<Value>>>),
+    /// Hybrid table storage: a dense array part plus a hashmap part. `table<T>`
+    /// uses only the array; `table<K, V>` uses the map (and may also use the
+    /// array when keys happen to be positive integers). Shared by reference so
+    /// aliasing behaves like Lua tables.
+    Table(Rc<RefCell<TableObject>>),
     /// Built-in function written in Rust (e.g. `print`).
     Native(Rc<NativeFn>),
+    /// Built-in function with captured Rust state (e.g. iterators). Same call
+    /// shape as `Native` but stateful and may return multiple values.
+    NativeClosure(Rc<NativeClosure>),
     /// User-defined function or lambda. The `Rc` makes cloning cheap and
     /// gives recursive closures something stable to point at.
     Function(Rc<FunctionObject>),
@@ -77,6 +82,19 @@ pub struct NativeFn {
 impl fmt::Debug for NativeFn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "<native fn {}>", self.name)
+    }
+}
+
+/// Stateful Rust-implemented function. The closure may capture arbitrary
+/// Rust state (e.g. an iterator's cursor) and may return multiple values.
+pub struct NativeClosure {
+    pub name: &'static str,
+    pub func: Box<dyn Fn(&[Value]) -> Result<Vec<Value>, String>>,
+}
+
+impl fmt::Debug for NativeClosure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<native closure {}>", self.name)
     }
 }
 
@@ -180,7 +198,7 @@ impl Value {
             Value::Float(_) => "float",
             Value::Str(_) => "string",
             Value::Table(_) => "table",
-            Value::Native(_) | Value::Function(_) => "function",
+            Value::Native(_) | Value::NativeClosure(_) | Value::Function(_) => "function",
             Value::Class(_) => "class",
             Value::Instance(_) => "instance",
             Value::EnumVariant(_) => "enum",
@@ -211,11 +229,13 @@ impl Value {
             }
             Value::Str(s) => (**s).clone(),
             Value::Table(items) => {
-                let parts: Vec<String> = items
-                    .borrow()
+                let t = items.borrow();
+                let array_parts = t.array.iter().map(Value::to_display_string);
+                let map_parts = t
+                    .map
                     .iter()
-                    .map(Value::to_display_string)
-                    .collect();
+                    .map(|(k, v)| format!("{}={}", k.display(), v.to_display_string()));
+                let parts: Vec<String> = array_parts.chain(map_parts).collect();
                 format!("{{{}}}", parts.join(", "))
             }
             Value::EnumVariant(ev) => {
@@ -224,6 +244,7 @@ impl Value {
             Value::Enum(e) => format!("<enum {}>", e.name),
             Value::Interface(iface) => format!("<interface {}>", iface.name),
             Value::Native(nf) => format!("<native fn {}>", nf.name),
+            Value::NativeClosure(nc) => format!("<native fn {}>", nc.name),
             Value::Function(f) => match &f.name {
                 Some(n) => format!("<fn {n}>"),
                 None => "<lambda>".into(),
@@ -246,6 +267,7 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Table(a), Value::Table(b)) => Rc::ptr_eq(a, b),
             (Value::Native(a), Value::Native(b)) => Rc::ptr_eq(a, b),
+            (Value::NativeClosure(a), Value::NativeClosure(b)) => Rc::ptr_eq(a, b),
             (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(a, b),
             (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(a, b),
             (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(a, b),
@@ -270,3 +292,122 @@ pub struct InterfaceObject {
     /// Key is method name, value is (param_count, has_return_type).
     pub methods: HashMap<String, (usize, bool)>,
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tables — hybrid array + map storage.
+//
+// The static type system decides how a table is *typed* (`table<T>` array or
+// `table<K, V>` map). At runtime there is a single representation so a table
+// passed across these boundaries (e.g. through `any`) never has to be
+// converted. Positive integer keys collapse into the dense `array` part so the
+// common array iteration path stays a `Vec` walk.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A hashable key for the map part of a table.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TableKey {
+    Int(i64),
+    Str(String),
+    Bool(bool),
+}
+
+impl TableKey {
+    pub fn from_value(v: &Value) -> Option<TableKey> {
+        match v {
+            Value::Int(i) => Some(TableKey::Int(*i)),
+            Value::Str(s) => Some(TableKey::Str((**s).clone())),
+            Value::Bool(b) => Some(TableKey::Bool(*b)),
+            _ => None,
+        }
+    }
+
+    pub fn to_value(&self) -> Value {
+        match self {
+            TableKey::Int(i) => Value::Int(*i),
+            TableKey::Str(s) => Value::Str(Rc::new(s.clone())),
+            TableKey::Bool(b) => Value::Bool(*b),
+        }
+    }
+
+    pub fn display(&self) -> String {
+        match self {
+            TableKey::Int(i) => i.to_string(),
+            TableKey::Str(s) => format!("\"{s}\""),
+            TableKey::Bool(b) => b.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct TableObject {
+    /// 1-based logical indices stored 0-based here.
+    pub array: Vec<Value>,
+    /// All non-array entries (non-integer keys or sparse integer keys).
+    pub map: HashMap<TableKey, Value>,
+}
+
+impl TableObject {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_array(items: Vec<Value>) -> Self {
+        Self {
+            array: items,
+            map: HashMap::new(),
+        }
+    }
+
+    /// Array length (Lua-style `#t`). Does not include map entries.
+    pub fn array_len(&self) -> usize {
+        self.array.len()
+    }
+
+    /// Read by arbitrary value index. Returns `Nil` for missing keys.
+    pub fn get(&self, key: &Value) -> Value {
+        if let Value::Int(i) = key {
+            if *i >= 1 && (*i as usize) <= self.array.len() {
+                return self.array[(*i as usize) - 1].clone();
+            }
+        }
+        match TableKey::from_value(key) {
+            Some(k) => self.map.get(&k).cloned().unwrap_or(Value::Nil),
+            None => Value::Nil,
+        }
+    }
+
+    /// Write by arbitrary value index. Positive integers ≤ len+1 grow the
+    /// array part; everything else lands in the map.
+    pub fn set(&mut self, key: &Value, value: Value) -> Result<(), String> {
+        if let Value::Int(i) = key
+            && *i >= 1
+        {
+            let slot = (*i as usize) - 1;
+            if slot < self.array.len() {
+                self.array[slot] = value;
+                return Ok(());
+            }
+            if slot == self.array.len() {
+                self.array.push(value);
+                // Pull any contiguous map entries into the array.
+                let mut next = self.array.len() as i64 + 1;
+                while let Some(v) = self.map.remove(&TableKey::Int(next)) {
+                    self.array.push(v);
+                    next += 1;
+                }
+                return Ok(());
+            }
+        }
+        let Some(k) = TableKey::from_value(key) else {
+            return Err(format!(
+                "table keys must be integer, string, or boolean, got `{}`",
+                key.type_name()
+            ));
+        };
+        self.map.insert(k, value);
+        Ok(())
+    }
+}
+
+
+

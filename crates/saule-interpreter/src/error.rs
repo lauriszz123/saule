@@ -32,6 +32,15 @@ pub enum RuntimeError {
         span: std::ops::Range<usize>,
     },
 
+    #[error("argument error: {message}")]
+    ArgumentError {
+        message: String,
+        #[help]
+        help: Option<String>,
+        #[label("invalid or missing call argument")]
+        span: std::ops::Range<usize>,
+    },
+
     #[error("cannot mix `integer` and `float` in arithmetic — type mismatch")]
     NumericMix {
         #[label("convert using int() or float() to make types compatible")]

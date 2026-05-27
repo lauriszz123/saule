@@ -1,0 +1,40 @@
+-- String standard library functions.
+class Main
+  static fn main()
+    -- byte: numerical code of the character
+    println(String.byte("A"))            -- 65
+
+    -- char: build a string from numerical codes
+    println(String.char(72, 105))        -- Hi
+
+    -- format: formatted string
+    println(String.format("%s is %d years old", "Alice", 30))
+
+    -- len: length of a string
+    println(String.len("hello"))         -- 5
+
+    -- sub: substring
+    println(String.sub("hello", 2, 4))   -- ell
+
+    -- rep: concatenate n copies
+    println(String.rep("ab", 3))         -- ababab
+
+    -- starts / ends
+    println(String.starts("hello", "he")) -- true
+    println(String.ends("hello", "lo"))   -- true
+
+    -- find: indices of first match, or nil
+    local s: integer, e: integer = String.find("hello world", "world")
+    println(s, " ", e)                   -- 7 11
+
+    -- lower / upper
+    println(String.lower("XYZ"))         -- xyz
+    println(String.upper("abc"))         -- ABC
+
+    -- iter: traverse all characters, returning each character and its index
+    for c, i in String.iter("hey") do
+      print(c, i, " ")
+    end
+    println()
+  end
+end
