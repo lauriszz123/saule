@@ -1,0 +1,273 @@
+//! Control-flow validity check.
+//!
+//! Walks every statement tracking whether we're currently inside a loop
+//! and/or inside a function body, and reports `break` / `continue` /
+//! `return` statements that appear outside those contexts.
+//!
+//! Lambdas and nested function declarations open new function frames;
+//! `for` / `while` / `repeat` open new loop frames. Try/catch is *not* a
+//! loop, so a `break` inside `try` is only valid if the `try` itself sits
+//! inside a loop.
+
+use saule_ast::{ClassMember, Decl, Expr, LambdaBody, MatchBody, Spanned, Stmt};
+
+use crate::error::SemanticError;
+use crate::to_source_span;
+
+#[derive(Clone, Copy)]
+struct Ctx {
+    in_loop: bool,
+    in_function: bool,
+}
+
+impl Ctx {
+    const fn top() -> Self {
+        // The file's top level is a script body; it sits inside no loop
+        // and inside no function. `Main.main` opens a function frame when
+        // we recurse into it.
+        Self { in_loop: false, in_function: false }
+    }
+
+    const fn enter_loop(self) -> Self {
+        Self { in_loop: true, in_function: self.in_function }
+    }
+
+    const fn enter_function(self) -> Self {
+        // A new function body resets the loop context: a `break` inside a
+        // lambda that happens to live inside a `while` does NOT escape the
+        // outer loop.
+        Self { in_loop: false, in_function: true }
+    }
+}
+
+pub(crate) fn check_module(
+    module: &saule_ast::Module,
+    errors: &mut Vec<SemanticError>,
+) {
+    let ctx = Ctx::top();
+    for s in &module.stmts {
+        check_stmt(s, ctx, errors);
+    }
+}
+
+fn check_block(block: &[Spanned<Stmt>], ctx: Ctx, errors: &mut Vec<SemanticError>) {
+    for s in block {
+        check_stmt(s, ctx, errors);
+    }
+}
+
+fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
+    match &stmt.value {
+        Stmt::Break => {
+            if !ctx.in_loop {
+                errors.push(SemanticError::LoopControlOutsideLoop {
+                    which: "break",
+                    span: to_source_span(stmt.span.clone()),
+                });
+            }
+        }
+        Stmt::Continue => {
+            if !ctx.in_loop {
+                errors.push(SemanticError::LoopControlOutsideLoop {
+                    which: "continue",
+                    span: to_source_span(stmt.span.clone()),
+                });
+            }
+        }
+        Stmt::Return(values) => {
+            if !ctx.in_function {
+                errors.push(SemanticError::ReturnOutsideFunction {
+                    span: to_source_span(stmt.span.clone()),
+                });
+            }
+            for v in values {
+                check_expr(v, ctx, errors);
+            }
+        }
+
+        Stmt::Local { value, .. } => {
+            if let Some(v) = value {
+                check_expr(v, ctx, errors);
+            }
+        }
+        Stmt::LocalMulti { values, .. } => {
+            for v in values {
+                check_expr(v, ctx, errors);
+            }
+        }
+        Stmt::Assign { target, value } => {
+            check_expr(target, ctx, errors);
+            check_expr(value, ctx, errors);
+        }
+        Stmt::AssignMulti { targets, values } => {
+            for t in targets {
+                check_expr(t, ctx, errors);
+            }
+            for v in values {
+                check_expr(v, ctx, errors);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => check_expr(e, ctx, errors),
+
+        Stmt::If { cond, then_block, elseifs, else_block } => {
+            check_expr(cond, ctx, errors);
+            check_block(then_block, ctx, errors);
+            for (c, b) in elseifs {
+                check_expr(c, ctx, errors);
+                check_block(b, ctx, errors);
+            }
+            if let Some(b) = else_block {
+                check_block(b, ctx, errors);
+            }
+        }
+        Stmt::While { cond, body } => {
+            check_expr(cond, ctx, errors);
+            check_block(body, ctx.enter_loop(), errors);
+        }
+        Stmt::Repeat { body, cond } => {
+            check_block(body, ctx.enter_loop(), errors);
+            check_expr(cond, ctx, errors);
+        }
+        Stmt::ForNumeric { from, to, step, body, .. } => {
+            check_expr(from, ctx, errors);
+            check_expr(to, ctx, errors);
+            if let Some(s) = step {
+                check_expr(s, ctx, errors);
+            }
+            check_block(body, ctx.enter_loop(), errors);
+        }
+        Stmt::ForIn { iter, body, .. } => {
+            check_expr(iter, ctx, errors);
+            check_block(body, ctx.enter_loop(), errors);
+        }
+        Stmt::Try { body, catch_body, .. } => {
+            check_block(body, ctx, errors);
+            check_block(catch_body, ctx, errors);
+        }
+
+        Stmt::Decl(decl) => check_decl(&decl.value, ctx, errors),
+    }
+}
+
+fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
+    match decl {
+        Decl::Function { body, params, .. } => {
+            for p in params {
+                if let Some(d) = &p.default {
+                    check_expr(d, ctx, errors);
+                }
+            }
+            check_block(body, Ctx::top().enter_function(), errors);
+        }
+        Decl::Class { members, .. } => {
+            for m in members {
+                match &m.value {
+                    ClassMember::Method(meth) => {
+                        for p in &meth.params {
+                            if let Some(d) = &p.default {
+                                check_expr(d, ctx, errors);
+                            }
+                        }
+                        check_block(&meth.body, Ctx::top().enter_function(), errors);
+                    }
+                    ClassMember::Field { default: Some(d), .. } => {
+                        check_expr(d, ctx, errors);
+                    }
+                    ClassMember::Field { .. } => {}
+                }
+            }
+        }
+        Decl::Enum { methods, .. } => {
+            for meth in methods {
+                for p in &meth.params {
+                    if let Some(d) = &p.default {
+                        check_expr(d, ctx, errors);
+                    }
+                }
+                check_block(&meth.body, Ctx::top().enter_function(), errors);
+            }
+        }
+        // Interface / Import declarations have no executable body.
+        Decl::Interface { .. } | Decl::Import { .. } => {}
+    }
+}
+
+fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
+    match &expr.value {
+        Expr::Unary { rhs, .. } => check_expr(rhs, ctx, errors),
+        Expr::Binary { lhs, rhs, .. } => {
+            check_expr(lhs, ctx, errors);
+            check_expr(rhs, ctx, errors);
+        }
+        Expr::Member { obj, .. } | Expr::SafeMember { obj, .. } => check_expr(obj, ctx, errors),
+        Expr::Index { obj, index } => {
+            check_expr(obj, ctx, errors);
+            check_expr(index, ctx, errors);
+        }
+        Expr::Call { callee, args } => {
+            check_expr(callee, ctx, errors);
+            for a in args {
+                check_call_arg(a, ctx, errors);
+            }
+        }
+        Expr::MethodCall { obj, args, .. } => {
+            check_expr(obj, ctx, errors);
+            for a in args {
+                check_call_arg(a, ctx, errors);
+            }
+        }
+        Expr::ForceUnwrap(inner) => check_expr(inner, ctx, errors),
+        Expr::Table(entries) => {
+            for e in entries {
+                match e {
+                    saule_ast::TableEntry::Positional(v) => check_expr(v, ctx, errors),
+                    saule_ast::TableEntry::Field { key, value } => {
+                        check_expr(key, ctx, errors);
+                        check_expr(value, ctx, errors);
+                    }
+                }
+            }
+        }
+        Expr::Lambda { body, params, .. } => {
+            for p in params {
+                if let Some(d) = &p.default {
+                    check_expr(d, ctx, errors);
+                }
+            }
+            let inner = Ctx::top().enter_function();
+            match body {
+                LambdaBody::Expr(e) => check_expr(e, inner, errors),
+                LambdaBody::Block(b) => check_block(b, inner, errors),
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            check_expr(scrutinee, ctx, errors);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    check_expr(g, ctx, errors);
+                }
+                match &arm.body {
+                    MatchBody::Expr(e) => check_expr(e, ctx, errors),
+                    MatchBody::Block(b) => check_block(b, ctx, errors),
+                }
+            }
+        }
+        // Leaves: no nested expressions.
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Nil
+        | Expr::Ident(_)
+        | Expr::Self_ => {}
+    }
+}
+
+fn check_call_arg(arg: &saule_ast::CallArg, ctx: Ctx, errors: &mut Vec<SemanticError>) {
+    match arg {
+        saule_ast::CallArg::Positional(e) | saule_ast::CallArg::Named { value: e, .. } => {
+            check_expr(e, ctx, errors)
+        }
+    }
+}
+

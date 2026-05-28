@@ -43,6 +43,10 @@ fn run_source(
     require_main: bool,
     module_dir: Option<PathBuf>,
 ) -> Result<(), Report> {
+    // Wire the stdlib's native signatures into `saule-typeck` before the
+    // static check runs. Idempotent.
+    saule_interpreter::init();
+
     let make_src = || NamedSource::new(name.to_string(), source.clone());
 
     let tokens = saule_lexer::Lexer::new(&source)
@@ -52,9 +56,21 @@ fn run_source(
     let module =
         saule_parser::parse(tokens).map_err(|e| Report::new(e).with_source_code(make_src()))?;
 
-    // Static checks run *before* evaluation so we fail fast on declarative
-    // errors (missing field initializers etc.) without ever executing user
-    // code. Today the checker is intentionally narrow; see `typeck`.
+    // Static analysis runs *before* evaluation so we fail fast on declarative
+    // errors without ever executing user code. The pipeline is:
+    //
+    //   1. semantic — registry build, definite-assignment, control-flow
+    //                 validity (`break` / `continue` / `return` placement).
+    //   2. typeck   — null safety, return types, native arg/arity, match
+    //                 exhaustiveness, etc.
+    //
+    // Semantic runs first because the type pass assumes a structurally
+    // valid module and reads the class/interface/enum registry it installs.
+    let sem_errors = saule_interpreter::semantic::analyze(&module);
+    if let Some(first) = sem_errors.into_iter().next() {
+        return Err(Report::new(first).with_source_code(make_src()));
+    }
+
     let errors = saule_interpreter::typeck::check(&module);
     if let Some(first) = errors.into_iter().next() {
         return Err(Report::new(first).with_source_code(make_src()));

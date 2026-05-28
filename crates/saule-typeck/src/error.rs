@@ -7,16 +7,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum TypeCheckError {
-    #[error("field `{field}` of class `{class}` is never initialized")]
-    #[diagnostic(help(
-        "assign `self.{field} = ...` in `init`, give the field a default value, or mark it nullable with `?`"
-    ))]
-    FieldNotInitialized {
-        class: String,
-        field: String,
-        #[label("declared here")]
-        span: miette::SourceSpan,
-    },
 
     #[error("cannot assign `nil` to non-nullable type `{ty}`")]
     #[diagnostic(help(

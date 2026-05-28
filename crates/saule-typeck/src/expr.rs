@@ -54,7 +54,7 @@ pub(super) fn check_expr(
             // argument types positionally. Named arguments are skipped (those
             // aren't supported on natives anyway, and they error at runtime).
             if let Some(qname) = native_callee_name(callee)
-                && let Some(sig) = crate::stdlib::sigs::lookup(&qname)
+                && let Some(sig) = crate::sigs::lookup(&qname)
             {
                 check_native_args(&qname, &sig, args, scope, errors, expr.span.clone());
             }
@@ -119,7 +119,7 @@ pub(super) fn check_arg(arg: &CallArg, scope: &Scope, errors: &mut Vec<TypeCheck
 ///   * If `infer` can't produce a type for the argument, we skip silently.
 pub(super) fn check_native_args(
     callee: &str,
-    sig: &crate::stdlib::sigs::NativeSig,
+    sig: &crate::sigs::NativeSig,
     args: &[CallArg],
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
@@ -522,7 +522,7 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             {
                 Some(Type::Named(n.clone()))
             } else if let Some(qname) = native_callee_name(callee)
-                && let Some(sig) = crate::stdlib::sigs::lookup(&qname)
+                && let Some(sig) = crate::sigs::lookup(&qname)
             {
                 first_or_tuple(sig.returns)
             } else {

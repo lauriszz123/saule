@@ -32,6 +32,20 @@ pub fn install_std(env: &Rc<RefCell<Environment>>) {
     project::install(env);
 }
 
+/// Register every stdlib module's native signatures with `saule-typeck`.
+/// Used as the lazy initializer hook (see [`crate::init`]) so the
+/// typechecker sees `String.byte`, `Math.sqrt`, etc. without needing the
+/// runtime environment to have been built first.
+pub fn register_all_sigs() {
+    core::register_sigs();
+    math::register_sigs();
+    string::register_sigs();
+    iter::register_sigs();
+    table::register_sigs();
+    io::register_sigs();
+    os::register_sigs();
+}
+
 pub(crate) fn define_native(
     env: &Rc<RefCell<Environment>>,
     name: &'static str,

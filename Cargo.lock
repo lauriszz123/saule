@@ -206,6 +206,8 @@ dependencies = [
  "saule-ast",
  "saule-lexer",
  "saule-parser",
+ "saule-semantic",
+ "saule-typeck",
  "thiserror",
 ]
 
@@ -225,6 +227,25 @@ dependencies = [
  "miette",
  "saule-ast",
  "saule-lexer",
+ "thiserror",
+]
+
+[[package]]
+name = "saule-semantic"
+version = "2026.1.0"
+dependencies = [
+ "miette",
+ "saule-ast",
+ "thiserror",
+]
+
+[[package]]
+name = "saule-typeck"
+version = "2026.1.0"
+dependencies = [
+ "miette",
+ "saule-ast",
+ "saule-semantic",
  "thiserror",
 ]
 

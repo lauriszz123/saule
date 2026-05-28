@@ -28,6 +28,7 @@
 //! | [`stmt`]    | Statement & declaration walker, class field-init checks, return-type checks |
 //! | [`expr`]    | Expression walker, type inference, native-call args, flow narrowing |
 //! | [`matches`] | `match` exhaustiveness, pattern/scrutinee compat, arm-type unification |
+//! | [`sigs`]    | Native-function signature registry (consumed by `expr`, populated by embedders) |
 
 use std::ops::Range;
 
@@ -38,6 +39,7 @@ mod expr;
 mod matches;
 mod state;
 mod stmt;
+pub mod sigs;
 
 pub use error::TypeCheckError;
 
@@ -47,11 +49,14 @@ pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
     (r.start, r.end.saturating_sub(r.start)).into()
 }
 
-/// Run the static checks on a parsed module. Returns *all* errors found so
-/// the user sees everything in one pass.
+/// Run the static type checks on a parsed module. Returns *all* errors
+/// found so the user sees everything in one pass.
+///
+/// **Precondition**: `saule_semantic::analyze` (or an equivalent) must have
+/// installed the class / interface / enum registries already — typeck reads
+/// them through `saule-semantic`'s thread-local accessors. The standard
+/// pipeline (`saule_interpreter::pipeline` or the CLI) guarantees this.
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
-    let (reg, ifaces, enums) = state::build_registry(module);
-    state::install_registries(reg, ifaces, enums);
     let _restore = state::set_current_class(None);
 
     let mut errors = Vec::new();
@@ -59,7 +64,5 @@ pub fn check(module: &Module) -> Vec<TypeCheckError> {
     for s in &module.stmts {
         stmt::check_stmt(s, &mut scope, &mut errors);
     }
-
-    state::clear_registries();
     errors
 }

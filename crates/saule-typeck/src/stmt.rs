@@ -3,7 +3,7 @@
 //! so narrowing in `if`/`else` can override types for the duration of a
 //! sub-block.
 
-use saule_ast::{ClassMember, Decl, Expr, Method, Param, Spanned, Stmt, Type};
+use saule_ast::{ClassMember, Decl, Expr, Param, Spanned, Stmt, Type};
 
 use super::TypeCheckError;
 use super::expr::{
@@ -397,24 +397,9 @@ fn check_class(
     members: &[Spanned<ClassMember>],
     errors: &mut Vec<TypeCheckError>,
 ) {
-    // Locate the constructor body: the non-static `fn init` method.
-    let mut ctor_body: Option<&Vec<Spanned<Stmt>>> = None;
-    for m in members {
-        match &m.value {
-            ClassMember::Method(Method {
-                name,
-                is_static: false,
-                body,
-                ..
-            }) if name == "init" => {
-                ctor_body = Some(body);
-            }
-            _ => {}
-        }
-    }
-
     // Validate field defaults: `local x: string = nil` is an error regardless
-    // of whether a constructor exists or the field is static.
+    // of whether a constructor exists or the field is static. (Definite
+    // assignment of constructor-set fields lives in `saule-semantic`.)
     for m in members {
         if let ClassMember::Field {
             ty,
@@ -427,33 +412,6 @@ fn check_class(
         }
     }
 
-    if let Some(body) = ctor_body {
-        let mut assigned: Vec<String> = Vec::new();
-        for s in body {
-            collect_self_assignments(&s.value, &mut assigned);
-        }
-        for m in members {
-            if let ClassMember::Field {
-                is_static: false,
-                name,
-                ty,
-                default,
-                ..
-            } = &m.value
-            {
-                if default.is_some() || is_nullable(ty) {
-                    continue;
-                }
-                if !assigned.iter().any(|a| a == name) {
-                    errors.push(TypeCheckError::FieldNotInitialized {
-                        class: class_name.to_string(),
-                        field: name.clone(),
-                        span: to_source_span(m.span.clone()),
-                    });
-                }
-            }
-        }
-    }
 
     // Walk every method body with a scope seeded from its parameters,
     // and within `CURRENT_CLASS` set so private-member checks know we're
@@ -481,67 +439,3 @@ fn check_class(
     set_current_class(prev);
 }
 
-/// Walk a statement collecting every `self.NAME` that appears on the LHS of
-/// an `=`. Recurses through control-flow statements so an assignment inside
-/// an `if` still counts.
-fn collect_self_assignments(stmt: &Stmt, out: &mut Vec<String>) {
-    match stmt {
-        Stmt::Assign { target, .. } => {
-            if let Expr::Member { obj, name } = &target.value
-                && matches!(obj.value, Expr::Self_)
-                && !out.iter().any(|n| n == name)
-            {
-                out.push(name.clone());
-            }
-        }
-        Stmt::AssignMulti { targets, .. } => {
-            for target in targets {
-                if let Expr::Member { obj, name } = &target.value
-                    && matches!(obj.value, Expr::Self_)
-                    && !out.iter().any(|n| n == name)
-                {
-                    out.push(name.clone());
-                }
-            }
-        }
-        Stmt::If {
-            then_block,
-            elseifs,
-            else_block,
-            ..
-        } => {
-            for s in then_block {
-                collect_self_assignments(&s.value, out);
-            }
-            for (_, block) in elseifs {
-                for s in block {
-                    collect_self_assignments(&s.value, out);
-                }
-            }
-            if let Some(block) = else_block {
-                for s in block {
-                    collect_self_assignments(&s.value, out);
-                }
-            }
-        }
-        Stmt::While { body, .. }
-        | Stmt::Repeat { body, .. }
-        | Stmt::ForNumeric { body, .. }
-        | Stmt::ForIn { body, .. } => {
-            for s in body {
-                collect_self_assignments(&s.value, out);
-            }
-        }
-        Stmt::Try {
-            body, catch_body, ..
-        } => {
-            for s in body {
-                collect_self_assignments(&s.value, out);
-            }
-            for s in catch_body {
-                collect_self_assignments(&s.value, out);
-            }
-        }
-        _ => {}
-    }
-}

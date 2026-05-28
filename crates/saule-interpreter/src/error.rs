@@ -1,4 +1,21 @@
 //! Runtime errors surfaced by the interpreter.
+//!
+//! Kept disjoint from the compile-time error families:
+//!
+//! * `saule_lexer::LexerError` — lexing
+//! * `saule_parser::ParseError` — parsing
+//! * `saule_semantic::SemanticError` — structural / control-flow / definite
+//!   assignment (catches what would otherwise fire as `Undefined`,
+//!   `AssignUndeclared`, `LoopControlOutsideLoop`, or `ReturnOutsideFunction`
+//!   at runtime)
+//! * `saule_typeck::TypeCheckError` — types, nullability, match exhaustiveness
+//! * `RuntimeError` (this file) — only genuinely-dynamic failures: division
+//!   by zero, force-unwrap of `nil`, uncaught `throw`, file-I/O, etc.
+//!
+//! A few "structural" variants (`Undefined`, `LoopControlOutsideLoop`, …)
+//! are kept here as defensive guards for callers that invoke [`crate::run`]
+//! directly without running the semantic pass first; the standard pipeline
+//! (CLI, module loader) ensures they never fire in practice.
 
 use miette::Diagnostic;
 use thiserror::Error;

@@ -1,5 +1,5 @@
 //! Tests moved out of src/lib.rs.
-use saule_interpreter::{run, RuntimeError, Value};
+use saule_interpreter::{RuntimeError, Value, run};
 use saule_lexer::Lexer;
 use saule_parser::parse;
 use std::rc::Rc;
@@ -144,9 +144,9 @@ fn if_elseif_else_chain() {
         local kind: string = ""
         if n < 0 then
           kind = "neg"
-        else if n == 0 then
+        elseif n == 0 then
           kind = "zero"
-        else if n < 10 then
+        elseif n < 10 then
           kind = "small"
         else
           kind = "big"
@@ -864,7 +864,7 @@ mod classes {
                     self.y = y
                 end
             end
-            local p: Point = new Point(3, 4)
+            local p: Point =Point(3, 4)
             p.x + p.y
         "#;
         assert_int(src, 7);
@@ -881,7 +881,7 @@ mod classes {
                     return "hi " .. self.name
                 end
             end
-            local g: Greeter = new Greeter("ada")
+            local g: Greeter = Greeter("ada")
             g:greet()
         "#;
         assert_str(src, "hi ada");
@@ -898,7 +898,7 @@ mod classes {
                     self.n = self.n + 1
                 end
             end
-            local c: Counter = new Counter()
+            local c: Counter = Counter()
             c:tick() c:tick() c:tick()
             c.n
         "#;
@@ -947,8 +947,8 @@ mod classes {
                     self.v = v
                 end
             end
-            local a: Box = new Box(1)
-            local b: Box = new Box(1)
+            local a: Box = Box(1)
+            local b: Box = Box(1)
             a == b
         "#;
         assert_bool(src, false);
@@ -973,7 +973,7 @@ mod classes {
         // yield the class name (or at least something non-empty).
         let src = r#"
             class Foo end
-            type(new Foo())
+            type(Foo())
         "#;
         // We only assert it's a string of "Foo" or similar; the exact
         // format will be locked once classes are implemented.
@@ -999,7 +999,7 @@ mod inheritance {
                     self.super(name)
                 end
             end
-            local p: Player = new Player("arthur")
+            local p: Player = Player("arthur")
             p:getName()
         "#;
         assert_str(src, "arthur");
@@ -1020,7 +1020,7 @@ mod inheritance {
                     self.b = b
                 end
             end
-            local x: B = new B(10, 20)
+            local x: B = B(10, 20)
             x.a + x.b
         "#;
         assert_int(src, 30);
@@ -1034,7 +1034,7 @@ mod inheritance {
             class B extends A
                 fn label(self): string return "B" end
             end
-            (new B()):label()
+            (B()).label()
         "#;
         assert_str(src, "B");
     }
@@ -1060,7 +1060,7 @@ mod interfaces {
                 end
                 fn greet(self): string return "hello " .. self.name end
             end
-            local g: Greetable = new Person("rust")
+            local g: Greetable = Person("rust")
             g:greet()
         "#;
         assert_str(src, "hello rust");
