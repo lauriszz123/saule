@@ -59,15 +59,17 @@ fn main() {
             //   * `saule run`                       → project
             //   * `saule run -- a b c`              → project, argv = a b c
             //   * `saule run file.sau …`            → single file
-            //   * `saule run thing …` where `thing` isn't an existing path
-            //     AND cwd has `saule.config`       → project, argv = thing …
+            //   * `saule run thing …` where `thing` isn't a `.sau`/`.saule`
+            //     file AND cwd has `saule.config`   → project, argv = thing …
+            //     (covers things like `saule run input.bf`, where the file
+            //     should be forwarded to the script, not parsed as Saule.)
             //   * otherwise                         → single file
             let has_config = PathBuf::from("saule.config").is_file();
-            let first_looks_like_path = cli_part.first().is_some_and(|s| {
-                PathBuf::from(s).is_file() || s.ends_with(".sau") || s.ends_with(".saule")
-            });
+            let first_is_saule_file = cli_part
+                .first()
+                .is_some_and(|s| s.ends_with(".sau") || s.ends_with(".saule"));
 
-            if cli_part.is_empty() || (has_config && !first_looks_like_path) {
+            if cli_part.is_empty() || (has_config && !first_is_saule_file) {
                 // Project mode. Script argv = explicit `-- …` part if given,
                 // otherwise everything we accumulated before the (absent) `--`.
                 let argv = script_after_sep.unwrap_or(cli_part);
