@@ -8,22 +8,23 @@ class Main
     local b: Box? = Box()
 
     if b != nil then
-      local label: string = b.label   -- OK: narrowed to non-nullable inside the guard
+      local label: string = b.label  -- OK: narrowed to non-nullable inside the guard
       println(label)
     end
 
     local maybe: string? = "world"
     if maybe != nil then
-      local s: string = maybe         -- OK: narrowed
+      local s: string = maybe  -- OK: narrowed
       println(s)
     end
 
     -- `if x == nil then ... else ...` narrows in the else branch.
+
     local opt: string? = "fallback works too"
     if opt == nil then
       println("nope")
     else
-      local s: string = opt           -- OK: narrowed in else
+      local s: string = opt  -- OK: narrowed in else
       println(s)
     end
   end

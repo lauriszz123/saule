@@ -37,6 +37,22 @@ impl<T> Spanned<T> {
     pub fn new(value: T, span: Range<usize>) -> Self {
         Self { value, span }
     }
+
+    /// Convert this node's byte range into a `miette::SourceSpan` for
+    /// diagnostic emission. Convenience wrapper around [`to_source_span`].
+    pub fn source_span(&self) -> miette::SourceSpan {
+        to_source_span(self.span.clone())
+    }
+}
+
+/// Convert a byte-range span into a `miette::SourceSpan`. The single
+/// canonical conversion used by every compiler stage (lexer, parser,
+/// typeck, interpreter) when handing spans to miette.
+///
+/// `Range::end` is exclusive, while `SourceSpan` carries `(offset, len)`;
+/// `saturating_sub` keeps an inverted/empty range from underflowing.
+pub fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
+    (r.start, r.end.saturating_sub(r.start)).into()
 }
 
 /// A whole source file: a sequence of statements (which may be declarations).

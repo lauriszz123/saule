@@ -1,13 +1,17 @@
 fn minMax(items: table<integer>) -> (integer, integer)
-    local min: integer = items[1]
-    local max: integer = items[1]
+  local min: integer = items[1]
+  local max: integer = items[1]
 
-    for val: integer in items do
-        if val < min then min = val end
-        if val > max then max = val end
+  for val: integer in items do
+    if val < min then
+      min = val
     end
+    if val > max then
+      max = val
+    end
+  end
 
-    return min, max
+  return min, max
 end
 
 class Main

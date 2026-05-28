@@ -1,20 +1,22 @@
 -- `when` guards run after the pattern matches. A trailing binding arm
 -- with no guard keeps the match exhaustive.
 fn classify(n: integer) -> string
-    return match n
-        case x when x < 0 then "negative"
-        case 0 then "zero"
-        case x when x < 10 then "small " .. x
-        case x then "big " .. x
-    end
+  return match n
+    case x when x < 0 then "negative"
+
+    case 0 then "zero"
+
+    case x when x < 10 then "small " .. x
+
+    case x then "big " .. x
+  end
 end
 
 class Main
-    static fn main()
-        println(classify(-5))
-        println(classify(0))
-        println(classify(3))
-        println(classify(999))
-    end
+  static fn main()
+    println(classify(-5))
+    println(classify(0))
+    println(classify(3))
+    println(classify(999))
+  end
 end
-

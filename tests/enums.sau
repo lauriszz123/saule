@@ -1,8 +1,8 @@
 enum Direction
-    North,
-    South,
-    East,
-    West      -- Here the `,` is optional
+  North,
+  South,
+  East,
+  West  -- Here the `,` is optional
 end
 
 class Main

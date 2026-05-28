@@ -5,13 +5,13 @@ end
 class Main
   static fn main()
     local name: string? = nil
-    println(name ?? "Unknown")                -- "Unknown"
+    println(name ?? "Unknown")  -- "Unknown"
 
     local first: string? = nil
     local second: string? = nil
-    println(first ?? second ?? "fallback")    -- "fallback"
+    println(first ?? (second ?? "fallback"))  -- "fallback"
 
     local b: Box? = nil
-    println(b?.label ?? "no Box")             -- "no box"
+    println(b?.label ?? "no Box")  -- "no box"
   end
 end

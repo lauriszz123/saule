@@ -1,10 +1,15 @@
 -- A bare closure used as the iterator. Each call returns the next value or
 -- `nil` to stop. No interface needed; the loop drives the closure directly.
-fn counter(stop: integer) -> fn(): integer?
+fn counter(stop: integer) -> fn() -> integer?
   local i: integer = 0
+
   return fn => ()
     i = i + 1
-    if i > stop then return nil end
+
+    if i > stop then
+      return nil
+    end
+
     return i
   end
 end
@@ -16,6 +21,3 @@ class Main
     end
   end
 end
-
-
-

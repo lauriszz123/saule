@@ -8,57 +8,57 @@
 -- (The `<T>` type list is currently erased at parse time, so generics
 -- act mostly as documentation. The interface contract itself, the
 -- `implements` check, and the interface-typed parameter are all enforced.)
-
 interface Greetable
-    fn greet()
+  fn greet()
 end
 
-interface Repository<T>
-    fn save(item: T)
-    fn findById(id: integer) -> T?
-    fn count() -> integer
+interface Repository
+  fn save(item: T)
+  fn findById(id: integer) -> T?
+  fn count() -> integer
 end
 
 class Player implements Greetable
-    name: string
+  name: string
 
-    fn init(name: string)
-        self.name = name
-    end
+  fn init(name: string)
+    self.name = name
+  end
 
-    fn greet()
-        println("hi, " .. self.name)
-    end
+  fn greet()
+    println("hi, " .. self.name)
+  end
 end
 
-class PlayerRepository implements Repository<Player>
-    local items: table<Player>
+class PlayerRepository implements Repository
+  local items: table<Player>
 
-    fn init()
-        self.items = {}
-    end
+  fn init()
+    self.items = {}
+  end
 
-    fn save(item: Player)
-        self.items[#self.items + 1] = item
-    end
+  fn save(item: Player)
+    self.items[#self.items + 1] = item
+  end
 
-    fn findById(id: integer) -> Player?
-        if id < 1 or id > #self.items then
-            return nil
-        end
-        return self.items[id]
+  fn findById(id: integer) -> Player?
+    if id < 1 or id > #self.items then
+      return nil
     end
+    return self.items[id]
+  end
 
-    fn count() -> integer
-        return #self.items
-    end
+  fn count() -> integer
+    return #self.items
+  end
 end
 
 -- An interface-typed parameter accepts any implementer.
+
 fn greetAll(items: table<Greetable>)
-    for g: Greetable in items do
-        g.greet()
-    end
+  for g: Greetable in items do
+    g.greet()
+  end
 end
 
 local repo: PlayerRepository = PlayerRepository()
@@ -74,8 +74,7 @@ assert(arthur!.name == "Arthur")
 
 assert(repo.findById(99) == nil)
 
-local pretty: table<Greetable> = { Player("Galahad"), Player("Percival") }
+local pretty: table<Greetable> = {Player("Galahad"), Player("Percival")}
 greetAll(pretty)
 
 println("generic interface + interface-as-param: ok")
-

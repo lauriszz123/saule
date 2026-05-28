@@ -1,5 +1,4 @@
 -- Higher-order: a function returning a function (closure over `factor`)
-
 fn multiplier(factor: integer) -> fn(integer) -> integer
   return x => x * factor
 end
@@ -9,9 +8,8 @@ class Main
     local triple: fn(integer) -> integer = multiplier(3)
     local tenX: fn(integer) -> integer = multiplier(10)
 
-    println(triple(5))    -- 15
-    println(tenX(5))      -- 50
-    println(triple(7))    -- 21
+    println(triple(5))  -- 15
+    println(tenX(5))  -- 50
+    println(triple(7))  -- 21
   end
 end
-

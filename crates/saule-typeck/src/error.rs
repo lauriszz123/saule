@@ -166,6 +166,39 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`??` fallback of type `{found}` is incompatible with left-hand side base type `{expected}`")]
+    #[diagnostic(help(
+        "the fallback expression must produce a `{expected}` so the whole `??` expression has a consistent type"
+    ))]
+    CoalesceFallbackTypeMismatch {
+        expected: String,
+        found: String,
+        #[label("incompatible fallback")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("comparison between unrelated types `{left}` and `{right}` is always {result}")]
+    #[diagnostic(help(
+        "these types can never be equal — did you mean to compare against `nil` instead?"
+    ))]
+    DisjointEquality {
+        left: String,
+        right: String,
+        result: &'static str,
+        #[label("types can never match")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("operator `{op}` cannot be applied to type `{found}` (expected {expected})")]
+    #[diagnostic(help("change the operand so it has a compatible type"))]
+    BinaryOperandTypeMismatch {
+        op: &'static str,
+        expected: &'static str,
+        found: String,
+        #[label("incompatible operand")]
+        span: miette::SourceSpan,
+    },
+
     #[error("pattern of type `{found}` cannot match scrutinee of type `{expected}`")]
     #[diagnostic(help("change the pattern to match the scrutinee's type"))]
     MatchPatternTypeMismatch {

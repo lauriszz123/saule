@@ -1,32 +1,34 @@
 -- A class with no `fn init` is a "module": every `local field = expr`
 -- declaration is promoted to a static, evaluated once at class-declaration
 -- time. `Main.main()` then uses those statics like a small global scope.
-
 class Person
-    name: string
+  name: string
 
-    fn init(name: string)
-        self.name = name
-    end
+  fn init(name: string)
+    self.name = name
+  end
 
-    fn introduce()
-        println("hi, " .. self.name)
-    end
+  fn introduce()
+    println("hi, " .. self.name)
+  end
 end
 
 class Main
-    -- No `fn init` → these are auto-promoted to statics.
-    static local lauris: Person = Person("Laurynas")
-    static local greeting: string = "module classes work"
 
-    static fn main()
-        -- Bare names resolve to the statics.
-        lauris.introduce()
-        println(greeting)
+  -- No `fn init` → these are auto-promoted to statics.
+  static local lauris: Person = Person("Laurynas")
+  static local greeting: string = "module classes work"
 
-        -- And `ClassName.field` reaches them from anywhere.
-        assert(Main.greeting == "module classes work")
-    end
+  static fn main()
+
+    -- Bare names resolve to the statics.
+    lauris.introduce()
+    println(greeting)
+
+    -- And `ClassName.field` reaches them from anywhere.
+
+    assert(Main.greeting == "module classes work")
+  end
 end
 
 Main.main()

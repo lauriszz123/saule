@@ -1,5 +1,4 @@
 -- try / catch / throw
-
 class Player
   local health: integer
 
@@ -27,7 +26,7 @@ class Main
     end
 
     -- catch block runs as if try returned normally
+
     println("after try/catch")
   end
 end
-

@@ -7,6 +7,11 @@ use crate::{Expr, Param, Spanned, Stmt, Type};
 pub enum Decl {
     Function {
         exported: bool,
+        /// `true` when declared with the `local` qualifier inside a block
+        /// (`local fn name(...) ... end`). Only meaningful for the
+        /// pretty-printer; semantically `local fn` is identical to a
+        /// non-exported `fn`.
+        is_local: bool,
         name: String,
         /// Generic type parameters declared with `<T, U>` after the name.
         ///

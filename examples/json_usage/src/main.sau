@@ -1,80 +1,86 @@
 import Json from "json/json"
 
 class Main
-    static fn main()
-        -- Read the small test file.
-        println("test.json:")
-        Main.dumpAny(Json.decode(Main.loadFile("test.json") ?? ""), "  ")
+  static fn main()
 
-        -- Read the kitchen-sink file (covers every JSON variant).
-        println()
-        println("kitchen_sink.json:")
+    -- Read the small test file.
+    println("test.json:")
+    Main.dumpAny(Json.decode(Main.loadFile("test.json") ?? ""), "  ")
 
-        -- We know that it exists so we can force unwrap.
-        local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!)
+    -- Read the kitchen-sink file (covers every JSON variant).
 
-        if raw == nil then
-            println("Failed to parse!")
-            return
-        end
+    println()
+    println("kitchen_sink.json:")
 
-        local data: table = raw!
-        Main.dumpTable(data, "  ")
+    -- We know that it exists so we can force unwrap.
 
-        -- Mutate: remove a key, add a key, change a value.
-        Table.remove(data, "draft")
-        data["lastRun"] = "2026-05-28T00:00:00Z"
-        data.version = data.version + 1
+    local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!)
 
-        -- Write the modified copy to a separate file so the original
-        -- kitchen_sink.json stays untouched between runs.
-        Main.saveJson("kitchen_sink_modified.json", data)
+    if raw == nil then
+      println("Failed to parse!")
+      return
     end
 
-    static fn loadFile(path: string) -> string?
-        if Os.exists(path) then
-            local file: File = Io.open(path, IoMode.Read)!
-            local source: string = file.read("a")
-            file.close()
+    local data: table = raw!
+    Main.dumpTable(data, "  ")
 
-            return source
-        end
+    -- Mutate: remove a key, add a key, change a value.
+
+    Table.remove(data, "draft")
+    data["lastRun"] = "2026-05-28T00:00:00Z"
+    data.version = data.version + 1
+
+    -- Write the modified copy to a separate file so the original
+    -- kitchen_sink.json stays untouched between runs.
+
+    Main.saveJson("kitchen_sink_modified.json", data)
+  end
+
+  static fn loadFile(path: string) -> string?
+    if Os.exists(path) then
+      local file: File = Io.open(path, IoMode.Read)!
+      local source: string = file.read("a")
+      file.close()
+
+      return source
+    end
+  end
+
+  static fn saveJson(path: string, object: table)
+    local file: File = Io.open(path, IoMode.Write)!
+    file.write(Json.encode(object))
+    file.close()
+  end
+
+  static fn dumpAny(v: any?, indent: string)
+    if v == nil then
+      println(indent .. "nil")
+      return
     end
 
-    static fn saveJson(path: string, object: table)
-        local file: File = Io.open(path, IoMode.Write)!
-        file.write(Json.encode(object))
-        file.close()
+    match type(v)
+      case "table" then Main.dumpTable(v!, indent)
+
+      case t then println(indent .. "(" .. t .. ") " .. tostring(v))
     end
+  end
 
-    static fn dumpAny(v: any?, indent: string)
-        if v == nil then
-            println(indent .. "nil")
-            return
-        end
+  static fn dumpTable(t: table, indent: string)
+    local next: string = indent .. "  "
 
+    for k, v in t do
+      local label: string = indent .. tostring(k)
+      if v == nil then
+        println(label .. ": nil")
+      else
         match type(v)
-            case "table" then Main.dumpTable(v!, indent)
-            case t       then println(indent .. "(" .. t .. ") " .. tostring(v))
-        end
-    end
+          case "table" then
+            println(label .. ":")
+            Main.dumpTable(v, next)
 
-    static fn dumpTable(t: table, indent: string)
-        local next: string = indent .. "  "
-
-        for k, v in t do
-            local label: string = indent .. tostring(k)
-            if v == nil then
-                println(label .. ": nil")
-            else
-                match type(v)
-                    case "table" then
-                        println(label .. ":")
-                        Main.dumpTable(v, next)
-                    case t then
-                        println(label .. " (" .. t .. "): " .. tostring(v))
-                end
-            end
+          case t then println(label .. " (" .. t .. "): " .. tostring(v))
         end
+      end
     end
+  end
 end

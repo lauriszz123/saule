@@ -1,5 +1,7 @@
 local fn fibonacci(n: integer) -> integer
-  if n < 0 then return 0 end
+  if n < 0 then
+    return 0
+  end
   local a: integer, b: integer = 0, 1
 
   for i: integer = 2, n do

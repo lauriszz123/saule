@@ -1,18 +1,18 @@
 -- Throwing a class instance and catching it by class name.
 class AppError
-    msg: string
-    fn init(msg: string)
-        self.msg = msg
-    end
+  msg: string
+
+  fn init(msg: string)
+    self.msg = msg
+  end
 end
 
 class Main
-    static fn main()
-        try
-            throw AppError("disk full")
-        catch e: AppError
-            println("caught: " .. e.msg)
-        end
+  static fn main()
+    try
+      throw AppError("disk full")
+    catch e: AppError
+      println("caught: " .. e.msg)
     end
+  end
 end
-

@@ -14,7 +14,7 @@ impl Parser {
     pub(crate) fn parse_export(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         self.advance(); // consume `export`
         let decl = match self.peek().value {
-            Token::Fn => self.parse_fn_decl(true)?,
+            Token::Fn => self.parse_fn_decl(true, false)?,
             Token::Class => self.parse_class_decl(true)?,
             Token::Interface => self.parse_interface_decl(true)?,
             Token::Enum => self.parse_enum_decl(true)?,
@@ -28,7 +28,11 @@ impl Parser {
         Ok(stmt_decl(decl))
     }
 
-    pub(crate) fn parse_fn_decl(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
+    pub(crate) fn parse_fn_decl(
+        &mut self,
+        exported: bool,
+        is_local: bool,
+    ) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `fn`
         let (name, _) = self.expect_ident("function name")?;
         // Optional generic parameter list.
@@ -44,6 +48,7 @@ impl Parser {
         Ok(Spanned::new(
             Decl::Function {
                 exported,
+                is_local,
                 name,
                 type_params,
                 params,

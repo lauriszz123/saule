@@ -1,6 +1,6 @@
 -- A class that implements the built-in `Iterable<T>` interface. Its `iter()`
 -- returns a closure that yields the next value (or nil) each call.
-class Range implements Iterable<integer>
+class Range implements Iterable
   local lo: integer
   local hi: integer
 
@@ -9,12 +9,17 @@ class Range implements Iterable<integer>
     self.hi = hi
   end
 
-  fn iter() -> fn(): integer?
-    local i: integer    = self.lo - 1
+  fn iter() -> fn() -> integer?
+    local i: integer = self.lo - 1
     local stop: integer = self.hi
+
     return fn => ()
       i = i + 1
-      if i > stop then return nil end
+
+      if i > stop then
+        return nil
+      end
+
       return i
     end
   end
@@ -27,6 +32,3 @@ class Main
     end
   end
 end
-
-
-

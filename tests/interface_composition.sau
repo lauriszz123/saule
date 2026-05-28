@@ -1,36 +1,37 @@
 -- An interface can extend another. The child interface implicitly demands
 -- every method of the parent, plus its own. A class that implements the
 -- child must satisfy both contracts.
-
 interface Damageable
-    fn damage(amount: integer)
-    fn isAlive() -> boolean
+  fn damage(amount: integer)
+  fn isAlive() -> boolean
 end
 
 interface Combatant extends Damageable
-    fn attack(target: Combatant)
+  fn attack(target: Combatant)
 end
 
 class Knight implements Combatant
-    local health: integer
+  local health: integer
 
-    fn init(health: integer)
-        self.health = health
-    end
+  fn init(health: integer)
+    self.health = health
+  end
 
-    -- From `Damageable` —
-    fn damage(amount: integer)
-        self.health = self.health - amount
-    end
+  -- From `Damageable` —
 
-    fn isAlive() -> boolean
-        return self.health > 0
-    end
+  fn damage(amount: integer)
+    self.health = self.health - amount
+  end
 
-    -- From `Combatant` —
-    fn attack(target: Combatant)
-        target.damage(10)
-    end
+  fn isAlive() -> boolean
+    return self.health > 0
+  end
+
+  -- From `Combatant` —
+
+  fn attack(target: Combatant)
+    target.damage(10)
+  end
 end
 
 local arthur: Knight = Knight(100)

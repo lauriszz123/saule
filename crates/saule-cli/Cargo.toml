@@ -9,8 +9,10 @@ name = "saule"
 path = "src/main.rs"
 
 [dependencies]
+saule-ast = { path = "../saule-ast" }
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
 saule-interpreter = { path = "../saule-interpreter" }
+saule-fmt = { path = "../saule-fmt" }
 miette = { version = "7.6.0", features = ["fancy"] }

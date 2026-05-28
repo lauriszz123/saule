@@ -21,5 +21,3 @@ class Main
     println(Math.sqrt(9), Math.tointeger(5.0), Math.type(5), Math.type(5.5), Math.ult(1, 2))
   end
 end
-
-

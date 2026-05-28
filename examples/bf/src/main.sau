@@ -1,50 +1,53 @@
 import Interpreter from "interpreter"
 
 class Main
-    static fn usage()
-        println("Usage:")
-        println("bf <file> -- Runs the BF program.")
-        println("bf -d     -- Runs a hello world embeeded in this program.")
-        println("bf -h     -- Shows this screen.")
-        println("bf -v     -- Prints the version.")
-    end
+  static fn usage()
+    println("Usage:")
+    println("bf <file> -- Runs the BF program.")
+    println("bf -d     -- Runs a hello world embeeded in this program.")
+    println("bf -h     -- Shows this screen.")
+    println("bf -v     -- Prints the version.")
+  end
 
-    static fn version()
-        printf("%s %s\n", Project.name, Project.version)
-    end
+  static fn version()
+    printf("%s %s\n", Project.name, Project.version)
+  end
 
-    static fn main()
-        local args = Os.args()
+  static fn main()
+    local args = Os.args()
 
-        if #args == 0 then
-            usage()
-        else
-            match args[1]
-                case "-h" then usage()
-                case "-v" then version()
-                case "-d" then runEmbeeded()
-                case _ then runFile(args[1])
-            end
-        end
-    end
+    if #args == 0 then
+      usage()
+    else
+      match args[1]
+        case "-h" then usage()
 
-    static local fn runFile(path: string)
-        if Os.exists(path) then
-            local file: File = Io.open(path, IoMode.Read)!
-            runFromSource(file.read("a"))
-            file.close()
-        else
-            printf("File '%s' does not exist.\n", path)
-        end
-    end
+        case "-v" then version()
 
-    static local fn runEmbeeded()
-        local bf_helloworld: string = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
-        runFromSource(bf_helloworld)
-    end
+        case "-d" then runEmbeeded()
 
-    static local fn runFromSource(src: string)
-        local interpreter: Interpreter = Interpreter(src)
-        interpreter.run()
+        case _ then runFile(args[1])
+      end
     end
+  end
+
+  static local fn runFile(path: string)
+    if Os.exists(path) then
+      local file: File = Io.open(path, IoMode.Read)!
+      runFromSource(file.read("a"))
+      file.close()
+    else
+      printf("File '%s' does not exist.\n", path)
+    end
+  end
+
+  static local fn runEmbeeded()
+    local bf_helloworld: string = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
+    runFromSource(bf_helloworld)
+  end
+
+  static local fn runFromSource(src: string)
+    local interpreter: Interpreter = Interpreter(src)
+    interpreter.run()
+  end
 end

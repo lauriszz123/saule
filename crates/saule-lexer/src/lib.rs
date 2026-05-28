@@ -18,7 +18,22 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    pub fn tokenize(mut self) -> Result<Vec<Spanned<Token>>, LexerError> {
+    /// Tokenize and discard comments. The default entry point: matches
+    /// the lexer's historical behaviour and keeps the parser unaware of
+    /// trivia.
+    pub fn tokenize(self) -> Result<Vec<Spanned<Token>>, LexerError> {
+        let all = self.tokenize_with_trivia()?;
+        Ok(all
+            .into_iter()
+            .filter(|t| !matches!(t.value, Token::LineComment(_) | Token::BlockComment(_)))
+            .collect())
+    }
+
+    /// Tokenize and preserve `--` line / `--[[ … ]]` block comments as
+    /// `Token::LineComment` / `Token::BlockComment` with their full span
+    /// (including delimiters). Used by the formatter to round-trip
+    /// comments; the parser still goes through [`Self::tokenize`].
+    pub fn tokenize_with_trivia(mut self) -> Result<Vec<Spanned<Token>>, LexerError> {
         let mut out = Vec::new();
 
         while let Some(&(start, c)) = self.chars.peek() {
@@ -46,13 +61,16 @@ impl<'src> Lexer<'src> {
                     if is_block {
                         self.chars.next(); // consume '['
                         self.chars.next(); // consume '['
+                        let body_start = start + 4; // after `--[[`
+                        let body_end;
                         loop {
                             match self.chars.next() {
-                                Some((_, ']')) => {
-                                    if matches!(self.chars.peek(), Some(&(_, ']'))) {
-                                        self.chars.next();
-                                        break;
-                                    }
+                                Some((i, ']'))
+                                    if matches!(self.chars.peek(), Some(&(_, ']'))) =>
+                                {
+                                    self.chars.next();
+                                    body_end = i; // first `]` of the `]]` pair
+                                    break;
                                 }
                                 Some(_) => {}
                                 None => {
@@ -62,14 +80,28 @@ impl<'src> Lexer<'src> {
                                 }
                             }
                         }
+                        let text = self.source[body_start..body_end].to_string();
+                        let span_end = body_end + 2; // include the `]]`
+                        out.push(Spanned {
+                            value: Token::BlockComment(text),
+                            span: start..span_end,
+                        });
                     } else {
                         // Line comment: until end of line (or EOF).
-                        while let Some(&(_, ch)) = self.chars.peek() {
+                        let body_start = start + 2; // after `--`
+                        let mut end = body_start;
+                        while let Some(&(i, ch)) = self.chars.peek() {
                             if ch == '\n' {
                                 break;
                             }
                             self.chars.next();
+                            end = i + ch.len_utf8();
                         }
+                        let text = self.source[body_start..end].to_string();
+                        out.push(Spanned {
+                            value: Token::LineComment(text),
+                            span: start..end,
+                        });
                     }
                     continue;
                 }

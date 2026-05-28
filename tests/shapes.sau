@@ -55,9 +55,9 @@ end
 
 class Main
   static fn main()
-    local c: Circle    = Circle(2.0)
+    local c: Circle = Circle(2.0)
     local r: Rectangle = Rectangle(3.0, 4.0)
-    local s: Square    = Square(5.0)
+    local s: Square = Square(5.0)
 
     c.describe()
     r.describe()

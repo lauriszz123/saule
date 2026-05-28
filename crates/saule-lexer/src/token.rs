@@ -83,6 +83,15 @@ pub enum Token {
     Arrow,    // `->`
     FatArrow, // `=>`
 
+    // Trivia
+    //
+    // Comments are produced by [`crate::Lexer::tokenize_with_trivia`] only;
+    // the default [`crate::Lexer::tokenize`] filters them out so the parser
+    // and downstream pipeline never see them. `text` is the verbatim
+    // payload between the comment delimiters (no `--` / `--[[`/`]]`).
+    LineComment(String),
+    BlockComment(String),
+
     // End of input
     Eof,
 }

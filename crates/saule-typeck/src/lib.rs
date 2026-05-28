@@ -30,9 +30,8 @@
 //! | [`matches`] | `match` exhaustiveness, pattern/scrutinee compat, arm-type unification |
 //! | [`sigs`]    | Native-function signature registry (consumed by `expr`, populated by embedders) |
 
-use std::ops::Range;
-
 use saule_ast::Module;
+pub(crate) use saule_ast::to_source_span;
 
 mod error;
 mod expr;
@@ -43,12 +42,6 @@ mod stmt;
 pub mod sigs;
 
 pub use error::TypeCheckError;
-
-/// Convert a byte-range span into a `miette::SourceSpan`. Shared by every
-/// submodule when emitting diagnostics.
-pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
-    (r.start, r.end.saturating_sub(r.start)).into()
-}
 
 /// Run the static type checks on a parsed module. Returns *all* errors
 /// found so the user sees everything in one pass.

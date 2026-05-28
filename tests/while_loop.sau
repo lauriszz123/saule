@@ -1,5 +1,4 @@
 -- while loop
-
 class Main
   static fn main()
     local hp: integer = 100
@@ -8,7 +7,6 @@ class Main
       hp = hp - 10
     end
 
-    println("hp =", hp)    -- 0
+    println("hp =", hp)  -- 0
   end
 end
-

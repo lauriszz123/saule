@@ -71,9 +71,10 @@ pub(super) fn check_expr(
             check_expr(index, scope, errors);
         }
         Expr::Unary { rhs, .. } => check_expr(rhs, scope, errors),
-        Expr::Binary { lhs, rhs, .. } => {
+        Expr::Binary { op, lhs, rhs } => {
             check_expr(lhs, scope, errors);
             check_expr(rhs, scope, errors);
+            check_binary_op(*op, lhs, rhs, scope, errors);
         }
         Expr::ForceUnwrap(inner) => check_expr(inner, scope, errors),
         Expr::Table(items) => {
@@ -407,12 +408,265 @@ fn report_if_user_function_arity(
 // Assignment compatibility — only flags the cases we can prove are wrong.
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Reject `lhs ?? rhs` when the fallback's type is incompatible with the
+/// stripped base type of the left-hand side. Stays conservative: if either
+/// side's type can't be inferred, or either side is `any`, the check is
+/// skipped (matches how the rest of the typechecker handles `any`).
+pub(super) fn check_coalesce_fallback(
+    lhs: &Spanned<Expr>,
+    rhs: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let (Some(lt), Some(rt)) = (infer(lhs, scope), infer(rhs, scope)) else {
+        return;
+    };
+    let base = strip_nullable(lt);
+    // `nil` fallback collapses to `T?` and is always fine.
+    if matches!(&rt, Type::Named(n) if n == "nil") {
+        return;
+    }
+    // Literal-`nil` lhs (or any expression typed exactly as `nil`) is a
+    // degenerate `??` — the fallback is always taken, so any type is
+    // valid. Don't second-guess it.
+    if matches!(&base, Type::Named(n) if n == "nil") {
+        return;
+    }
+    // Don't flag when either side is `any` — that's the explicit escape
+    // hatch; flagging would just spam diagnostics in dynamic code.
+    if is_any(&base) || is_any(&strip_nullable(rt.clone())) {
+        return;
+    }
+    if !types_compatible(&base, &strip_nullable(rt.clone())) {
+        errors.push(TypeCheckError::CoalesceFallbackTypeMismatch {
+            expected: type_to_string(&base),
+            found: type_to_string(&rt),
+            span: to_source_span(rhs.span.clone()),
+        });
+    }
+}
+
+/// True for numeric scalars: `integer`, `float`, the `number` sentinel, and
+/// `any` (which acts as a wildcard).
+fn is_numeric_like(ty: &Type) -> bool {
+    matches!(ty, Type::Named(n) if n == "integer" || n == "float" || n == "number" || n == "any")
+}
+
+/// True for operands of `..` (string concatenation). Saule follows Lua and
+/// coerces numbers to strings, so all numeric types are accepted too.
+fn is_concat_like(ty: &Type) -> bool {
+    is_string_like(ty) || is_numeric_like(ty)
+}
+
+/// Friendly printable name of a binary operator, used in diagnostics.
+fn binop_name(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Mod => "%",
+        BinOp::Eq => "==",
+        BinOp::NotEq => "!=",
+        BinOp::Lt => "<",
+        BinOp::LtEq => "<=",
+        BinOp::Gt => ">",
+        BinOp::GtEq => ">=",
+        BinOp::And => "and",
+        BinOp::Or => "or",
+        BinOp::Concat => "..",
+        BinOp::Coalesce => "??",
+    }
+}
+
+/// Per-operator type validation. Each branch checks just enough to flag
+/// obvious mistakes (string + integer, table < 5, "x" and y, etc.) while
+/// staying conservative for `any`, `nil`, and uninferable expressions.
+pub(super) fn check_binary_op(
+    op: BinOp,
+    lhs: &Spanned<Expr>,
+    rhs: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    match op {
+        BinOp::Coalesce => check_coalesce_fallback(lhs, rhs, scope, errors),
+        BinOp::Eq | BinOp::NotEq => check_equality_compat(op, lhs, rhs, scope, errors),
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+            let name = binop_name(op);
+            check_operand_kind(name, "`integer` or `float`", is_numeric_like, lhs, scope, errors);
+            check_operand_kind(name, "`integer` or `float`", is_numeric_like, rhs, scope, errors);
+        }
+        BinOp::And | BinOp::Or => {
+            // Saule follows Lua semantics for `and`/`or`: they short-circuit
+            // on truthiness and accept any value (`nil or "x"` → `"x"`),
+            // so the operands aren't type-restricted.
+        }
+        BinOp::Concat => {
+            check_operand_kind("..", "`string` or numeric", is_concat_like, lhs, scope, errors);
+            check_operand_kind("..", "`string` or numeric", is_concat_like, rhs, scope, errors);
+        }
+        BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+            check_ordering_operands(op, lhs, rhs, scope, errors);
+        }
+    }
+}
+
+/// Check that a single operand satisfies a predicate; emit if not. Stays
+/// silent when inference fails, the operand is `any`, or the operand is
+/// `nil` (nullable misuse is reported elsewhere).
+fn check_operand_kind(
+    op: &'static str,
+    expected: &'static str,
+    pred: impl Fn(&Type) -> bool,
+    arg: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let Some(t) = infer(arg, scope) else {
+        return;
+    };
+    let base = strip_nullable(t.clone());
+    if is_any(&base) {
+        return;
+    }
+    if matches!(&base, Type::Named(n) if n == "nil") {
+        return;
+    }
+    if !pred(&base) {
+        errors.push(TypeCheckError::BinaryOperandTypeMismatch {
+            op,
+            expected,
+            found: type_to_string(&t),
+            span: to_source_span(arg.span.clone()),
+        });
+    }
+}
+
+/// `<`, `<=`, `>`, `>=` require both sides to be in the same family —
+/// numeric/numeric or string/string. Anything else is flagged on the side
+/// that breaks the family.
+fn check_ordering_operands(
+    op: BinOp,
+    lhs: &Spanned<Expr>,
+    rhs: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let name = binop_name(op);
+    // First, each side individually must be orderable (numeric or string).
+    check_operand_kind(name, "`integer`, `float`, or `string`", is_orderable, lhs, scope, errors);
+    check_operand_kind(name, "`integer`, `float`, or `string`", is_orderable, rhs, scope, errors);
+    // Then, both sides must agree on the family.
+    let (Some(lt), Some(rt)) = (infer(lhs, scope), infer(rhs, scope)) else {
+        return;
+    };
+    let lb = strip_nullable(lt.clone());
+    let rb = strip_nullable(rt.clone());
+    if is_any(&lb) || is_any(&rb) {
+        return;
+    }
+    if matches!(&lb, Type::Named(n) if n == "nil")
+        || matches!(&rb, Type::Named(n) if n == "nil")
+    {
+        return;
+    }
+    let l_num = is_numeric_like(&lb);
+    let r_num = is_numeric_like(&rb);
+    let l_str = is_string_like(&lb);
+    let r_str = is_string_like(&rb);
+    let same_family = (l_num && r_num) || (l_str && r_str);
+    if !same_family && (l_num || l_str) && (r_num || r_str) {
+        // Both individually orderable but in different families — flag rhs
+        // with the lhs family as the expected one.
+        let expected = if l_num {
+            "`integer` or `float`"
+        } else {
+            "`string`"
+        };
+        errors.push(TypeCheckError::BinaryOperandTypeMismatch {
+            op: name,
+            expected,
+            found: type_to_string(&rt),
+            span: to_source_span(rhs.span.clone()),
+        });
+    }
+}
+
+fn is_orderable(ty: &Type) -> bool {
+    is_numeric_like(ty) || is_string_like(ty)
+}
+
+/// Reject equality comparisons whose two sides have provably-disjoint
+/// types (e.g. comparing a `table?` value to a string literal). Skips when
+/// either side involves `any` or `nil`, since `T? == nil` is the idiomatic
+/// nullability check.
+pub(super) fn check_equality_compat(
+    op: BinOp,
+    lhs: &Spanned<Expr>,
+    rhs: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let (Some(lt), Some(rt)) = (infer(lhs, scope), infer(rhs, scope)) else {
+        return;
+    };
+    let lb = strip_nullable(lt.clone());
+    let rb = strip_nullable(rt.clone());
+    // `nil` on either side is legitimate — `x == nil` is how you check
+    // nullability.
+    if matches!(&lb, Type::Named(n) if n == "nil")
+        || matches!(&rb, Type::Named(n) if n == "nil")
+    {
+        return;
+    }
+    if is_any(&lb) || is_any(&rb) {
+        return;
+    }
+    // Compatible in either direction → OK.
+    if types_compatible(&lb, &rb) || types_compatible(&rb, &lb) {
+        return;
+    }
+    let result = if matches!(op, BinOp::Eq) { "false" } else { "true" };
+    // Span covers both sides.
+    let span_start = lhs.span.start.min(rhs.span.start);
+    let span_end = lhs.span.end.max(rhs.span.end);
+    errors.push(TypeCheckError::DisjointEquality {
+        left: type_to_string(&lt),
+        right: type_to_string(&rt),
+        result,
+        span: to_source_span(span_start..span_end),
+    });
+}
+
 pub(super) fn check_assignment_compat(
     decl_ty: &Type,
     value: &Spanned<Expr>,
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
 ) {
+    // When the value is `lhs ?? rhs`, the declared type tells us what the
+    // whole expression is supposed to produce — use its stripped base as
+    // the expected type for the fallback. This catches mismatches even
+    // when `lhs` has lost type info (e.g. returns `any?`).
+    if let Expr::Binary { op: BinOp::Coalesce, rhs, .. } = &value.value {
+        let expected_base = strip_nullable(decl_ty.clone());
+        if !matches!(&expected_base, Type::Named(n) if n == "nil" || n == "any")
+            && let Some(rt) = infer(rhs, scope)
+        {
+            let rt_base = strip_nullable(rt.clone());
+            let rt_is_nil = matches!(&rt_base, Type::Named(n) if n == "nil");
+            let rt_is_any = is_any(&rt_base);
+            if !rt_is_nil && !rt_is_any && !types_compatible(&expected_base, &rt_base) {
+                errors.push(TypeCheckError::CoalesceFallbackTypeMismatch {
+                    expected: type_to_string(&expected_base),
+                    found: type_to_string(&rt),
+                    span: to_source_span(rhs.span.clone()),
+                });
+            }
+        }
+    }
+
     if is_nullable(decl_ty) {
         return;
     }

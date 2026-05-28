@@ -8,4 +8,3 @@ class Main
     printf("hex=%x dec=%d\n", 255, 255)
   end
 end
-

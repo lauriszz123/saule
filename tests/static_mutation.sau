@@ -1,5 +1,4 @@
 -- Static field mutation persists across all instances
-
 class Player
   static maxHealth: integer = 100
 
@@ -16,13 +15,12 @@ end
 
 class Main
   static fn main()
-    println(Player.maxHealth)         -- 100
-    println(Player.getMaxHealth())    -- 100
+    println(Player.maxHealth)  -- 100
+    println(Player.getMaxHealth())  -- 100
 
     Player.maxHealth = 200
 
-    println(Player.maxHealth)         -- 200
-    println(Player.getMaxHealth())    -- 200
+    println(Player.maxHealth)  -- 200
+    println(Player.getMaxHealth())  -- 200
   end
 end
-

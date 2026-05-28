@@ -3,6 +3,6 @@ class Main
     local name: string? = "Arthur"
     local got: string = name!
 
-    println(got)               -- "Arthur"
+    println(got)  -- "Arthur"
   end
 end

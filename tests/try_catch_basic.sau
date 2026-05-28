@@ -1,12 +1,11 @@
 -- Basic throw/catch happy path: throw a string, catch it as string.
 class Main
-    static fn main()
-        try
-            throw "boom"
-        catch e: string
-            println("caught: " .. e)
-        end
-        println("after")
+  static fn main()
+    try
+      throw "boom"
+    catch e: string
+      println("caught: " .. e)
     end
+    println("after")
+  end
 end
-

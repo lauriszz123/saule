@@ -575,41 +575,24 @@ impl Parser {
 
     // ── Lambdas ─────────────────────────────────────────────────────────────
 
-     /// `fn(params): T ... end` or `fn => (params) ... end` as an expression.
+     /// `fn => (params): T ... end` as an expression.
      fn parse_fn_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
          let fn_tok = self.advance(); // consume `fn`
 
-         // Check for `fn => (params)` syntax
-         if self.eat(&Token::FatArrow) {
-             let params = self.parse_param_list()?;
-             let return_ty = self.parse_return_type_opt()?;
-             let body = self.parse_block_until(&[Token::End])?;
-             let end = self.expect(&Token::End, "`end` to close `fn =>` lambda")?;
-             let span = fn_tok.span.start..end.span.end;
-             Ok(Spanned::new(
-                 Expr::Lambda {
-                     params,
-                     return_ty,
-                     body: LambdaBody::Block(body),
-                 },
-                 span,
-             ))
-         } else {
-             // Standard `fn(params)` syntax
-             let params = self.parse_param_list()?;
-             let return_ty = self.parse_return_type_opt()?;
-             let body = self.parse_block_until(&[Token::End])?;
-             let end = self.expect(&Token::End, "`end` to close `fn` lambda")?;
-             let span = fn_tok.span.start..end.span.end;
-             Ok(Spanned::new(
-                 Expr::Lambda {
-                     params,
-                     return_ty,
-                     body: LambdaBody::Block(body),
-                 },
-                 span,
-             ))
-         }
+         self.expect(&Token::FatArrow, "`=>` after `fn` in lambda expression")?;
+         let params = self.parse_param_list()?;
+         let return_ty = self.parse_return_type_opt()?;
+         let body = self.parse_block_until(&[Token::End])?;
+         let end = self.expect(&Token::End, "`end` to close `fn =>` lambda")?;
+         let span = fn_tok.span.start..end.span.end;
+         Ok(Spanned::new(
+             Expr::Lambda {
+                 params,
+                 return_ty,
+                 body: LambdaBody::Block(body),
+             },
+             span,
+         ))
      }
 
     /// Heuristic: peeks past a balanced `(...)` and checks for `=>` to decide

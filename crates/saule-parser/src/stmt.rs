@@ -34,7 +34,7 @@ impl Parser {
                 let t = self.advance();
                 Ok(Spanned::new(Stmt::Continue, t.span))
             }
-            Token::Fn => self.parse_fn_decl(false).map(stmt_decl),
+            Token::Fn => self.parse_fn_decl(false, false).map(stmt_decl),
             Token::Class => self.parse_class_decl(false).map(stmt_decl),
             Token::Interface => self.parse_interface_decl(false).map(stmt_decl),
             Token::Enum => self.parse_enum_decl(false).map(stmt_decl),
@@ -48,7 +48,7 @@ impl Parser {
         // `local fn name(...)` is a non-exported function declaration.
         if matches!(self.peek_at(1).value, Token::Fn) {
             self.advance(); // consume `local`
-            let decl = self.parse_fn_decl(false)?;
+            let decl = self.parse_fn_decl(false, true)?;
             return Ok(stmt_decl(decl));
         }
 

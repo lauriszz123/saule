@@ -1,0 +1,27 @@
+[package]
+name = "saule-lsp"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "saule-lsp"
+path = "src/main.rs"
+
+[dependencies]
+saule-ast = { path = "../saule-ast" }
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }
+saule-semantic = { path = "../saule-semantic" }
+saule-typeck = { path = "../saule-typeck" }
+saule-interpreter = { path = "../saule-interpreter" }
+saule-fmt = { path = "../saule-fmt" }
+miette = "7.6.0"
+tower-lsp = "0.20"
+tokio = { version = "1", features = [
+	"rt-multi-thread",
+	"io-std",
+	"macros",
+	"sync",
+] }
+dashmap = "6"

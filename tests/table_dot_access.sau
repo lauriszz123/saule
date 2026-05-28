@@ -1,45 +1,49 @@
 -- Lua-style dot access on tables: `t.foo` is sugar for `t["foo"]`.
 -- Dot and bracket forms are interchangeable for string keys.
 class Main
-    static fn main()
-        local user: table<string, any> = {}
+  static fn main()
+    local user: table<string, any> = {}
 
-        -- write via dot, read via bracket
-        user.name = "alice"
-        user.age  = 30
-        println(user["name"])             -- alice
-        println(user["age"])              -- 30
+    -- write via dot, read via bracket
 
-        -- write via bracket, read via dot
-        user["city"] = "paris"
-        println(user.city)                -- paris
+    user.name = "alice"
+    user.age = 30
+    println(user["name"])  -- alice
+    println(user["age"])  -- 30
 
-        -- mixed reads on a map literal
-        local cfg: table<string, any> = { host: "localhost", port: 8080 }
-        println(cfg.host, " ", cfg["port"])   -- localhost  8080
+    -- write via bracket, read via dot
 
-        -- missing keys read as nil (no error)
-        println(user.nonexistent)         -- nil
+    user["city"] = "paris"
+    println(user.city)  -- paris
 
-        -- nested dot chains
-        local doc: table<string, any> = {
-            owner: { name: "bob", contact: { email: "b@x" } },
-        }
-        local owner: any  = doc.owner
-        local contact: any = owner.contact
-        println(owner.name)               -- bob
-        println(contact.email)            -- b@x
+    -- mixed reads on a map literal
 
-        -- overwrite via dot
-        user.age = 31
-        println(user.age)                 -- 31
+    local cfg: table<string, any> = {host: "localhost", port: 8080}
+    println(cfg.host, " ", cfg["port"])  -- localhost  8080
 
-        -- iteration still sees dot-assigned keys
-        local seen: table<string, boolean> = {}
-        for k, v in user do
-            seen[k] = true
-        end
-        println(seen["name"], " ", seen["age"], " ", seen["city"])  -- true true true
+    -- missing keys read as nil (no error)
+
+    println(user.nonexistent)  -- nil
+
+    -- nested dot chains
+
+    local doc: table<string, any> = {owner: {name: "bob", contact: {email: "b@x"}}}
+    local owner: any = doc.owner
+    local contact: any = owner.contact
+    println(owner.name)  -- bob
+    println(contact.email)  -- b@x
+
+    -- overwrite via dot
+
+    user.age = 31
+    println(user.age)  -- 31
+
+    -- iteration still sees dot-assigned keys
+
+    local seen: table<string, boolean> = {}
+    for k, v in user do
+      seen[k] = true
     end
+    println(seen["name"], " ", seen["age"], " ", seen["city"])  -- true true true
+  end
 end
-

@@ -7,6 +7,7 @@
 
 use std::{path::PathBuf, process};
 
+mod fmt;
 mod init;
 mod project;
 mod run;
@@ -16,6 +17,8 @@ Usage:
   saule run <file.sau> [args...]   run a single Saule source file
   saule run [args...]              run the project in the current directory
   saule run -- [args...]           force project mode, forward args to Os.args()
+  saule fmt <file.sau> ...         print formatted source to stdout
+  saule fmt -w <file.sau> ...      overwrite files in place
   saule init <name>                scaffold a new Saule project in ./<name>
   saule --help | -h                show this help
   saule --version | -V             print the version
@@ -45,6 +48,7 @@ fn main() {
                 process::exit(2);
             }
         },
+        "fmt" => fmt::cmd_fmt(&args[1..]),
         "run" => {
             // Split `run` args at the first `--`: anything before is for the
             // CLI (file path or nothing), anything after is forwarded

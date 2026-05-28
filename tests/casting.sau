@@ -1,23 +1,22 @@
 -- Explicit casting between integer and float.
 -- Saule never converts silently; int() truncates toward zero, float() is safe.
-
 class Main
   static fn main()
     local health: integer = 100
     local dmg: float = 10.5
 
-    local result: integer = health - int(dmg)         -- dmg truncated to 10
-    local precise: float = float(health) - dmg        -- health promoted to 100.0
+    local result: integer = health - int(dmg)  -- dmg truncated to 10
+    local precise: float = float(health) - dmg  -- health promoted to 100.0
 
-    println(result)       -- 90
-    println(precise)      -- 89.5
+    println(result)  -- 90
+    println(precise)  -- 89.5
 
     -- int() truncates, does not round
+
     local x: float = 7.9
-    println(int(x))       -- 7
+    println(int(x))  -- 7
 
     local y: float = -7.9
-    println(int(y))       -- -7  (toward zero)
+    println(int(y))  -- -7  (toward zero)
   end
 end
-

@@ -3,25 +3,27 @@ class Main
   static fn main()
     local xs: table<integer> = {10, 20, 30}
 
-    println("len=", #xs)        -- expect 3
-    println("first=", xs[1])    -- expect 10
-    println("last=",  xs[3])    -- expect 30
+    println("len=", #xs)  -- expect 3
+    println("first=", xs[1])  -- expect 10
+    println("last=", xs[3])  -- expect 30
 
     -- append via assignment past end
+
     xs[4] = 40
     println("appended=", #xs, " last=", xs[4])
 
     -- single-variable iteration yields values in order
+
     for v in xs do
       print(v, " ")
     end
     println()
 
     -- index/value iteration
+
     for i, v in xs do
       print(i, "->", v, " ")
     end
     println()
   end
 end
-
