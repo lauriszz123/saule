@@ -162,26 +162,6 @@ local last: integer = Table.remove(xs)!         -- 5
 
 ---
 
-## `pairs` / `ipairs`
-
-Free iterator helpers usable with `for ... in`. Both return a step closure;
-the loop reads it until it returns `nil`.
-
-| Signature | Description |
-| --- | --- |
-| `pairs(t: table<any>) -> fn(): (any?, any?)` | Iterate every `(key, value)` pair in unspecified order. |
-| `ipairs(t: table<any>) -> fn(): (integer?, any?)` | Iterate integer keys `1, 2, 3, …` until the first gap. |
-
-```saule
-local scores: table<string, integer> = {}
-scores["alice"] = 10
-scores["bob"]   = 7
-for name, n in pairs(scores) do
-    println(name, n)
-end
-```
-
----
 
 ## `Io` / `File`
 

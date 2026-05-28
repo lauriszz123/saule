@@ -564,8 +564,7 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
             false
         }
         // `table<any>` (or `table<any, any>`) matches any table — used by
-        // native sigs like `pairs(t)` / `Table.insert(t, ...)` to mean
-        // "any table".
+        // native sigs like `Table.insert(t, ...)` to mean "any table".
         (
             Type::Table { key: ek, value: ev },
             Type::Table { key: vk, value: vv },

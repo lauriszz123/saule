@@ -93,6 +93,10 @@ fn check_fn(
 fn requires_return(ty: &Type) -> bool {
     match ty {
         Type::Nullable(_) => false,
+        // An explicit `nil` return type is satisfied by the implicit
+        // fall-through (which yields `nil` at runtime), so no explicit
+        // `return` is needed.
+        Type::Named(n) if n == "nil" => false,
         // A tuple return is only safe to fall through if every component
         // is nullable — otherwise the `nil` fallback violates at least one
         // slot's type.

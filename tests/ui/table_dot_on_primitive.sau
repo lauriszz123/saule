@@ -1,0 +1,9 @@
+-- Dot-assigning a field on a primitive is invalid — only class instances,
+-- class statics, and tables support `obj.field = ...`.
+class Main
+    static fn main()
+        local n: integer = 5
+        n.foo = 1
+    end
+end
+

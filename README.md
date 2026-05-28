@@ -738,7 +738,7 @@ for key: string, value: Player in playerMap do
 end
 ```
 
-The loop also accepts raw step closures and `pairs(...)` / `ipairs(...)` from the standard library — `Iterable` is just the contract that makes user-defined classes look the same.
+The loop also accepts raw step closures and plain `table` values directly — `Iterable` is just the contract that makes user-defined classes look the same.
 
 ---
 

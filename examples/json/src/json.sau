@@ -333,7 +333,7 @@ export class Json
     local len: integer = #t
     if len == 0 then return false end
     local count: integer = 0
-    for k, v in pairs(t) do
+    for k, v in t do
       if type(k) != "integer" then return false end
       count = count + 1
     end
@@ -358,7 +358,7 @@ export class Json
     local parts: table<string> = {}
     Table.insert(parts, "{")
     local first: boolean = true
-    for k, v in pairs(t) do
+    for k, v in t do
       if not first then Table.insert(parts, ",") end
       first = false
       Table.insert(parts, Json.encodeString(tostring(k)))

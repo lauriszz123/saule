@@ -57,7 +57,7 @@ pub fn all_prelude_names() -> Vec<&'static str> {
         "print", "println", "printf", "tostring", "type", "int", "float",
         "tonumber", "tointeger", "tofloat", "assert", "error",
         // iter
-        "Iterable", "Iterable2", "pairs", "ipairs",
+        "Iterable", "Iterable2",
         // class-style stdlib globals
         "Math", "String", "Table", "Io", "File", "Os", "Project",
         // stdlib enums
