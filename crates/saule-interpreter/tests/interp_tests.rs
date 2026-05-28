@@ -361,7 +361,7 @@ fn missing_argument_errors() {
     "#;
     assert!(matches!(
         eval(src).unwrap_err(),
-        RuntimeError::TypeError { .. }
+        RuntimeError::ArgumentError { .. }
     ));
 }
 
@@ -1152,7 +1152,7 @@ mod null_safety {
                     self.name = n
                 end
             end
-            local p: P? = new P("ada")
+            local p: P? = P("ada")
             p?.name
         "#;
         assert_str(src, "ada");
@@ -1193,10 +1193,10 @@ mod null_safety {
                 fn init(n: string)
                     self.name = n
                 end
-                fn getName(self): string return self.name end
+                fn getName(self) -> string return self.name end
             end
             local p: P? = nil
-            local n: string = p?:getName() ?? "Unknown"
+            local n: string = p?.getName() ?? "Unknown"
             n
         "#;
         assert_str(src, "Unknown");

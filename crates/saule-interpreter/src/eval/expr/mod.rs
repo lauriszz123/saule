@@ -97,6 +97,22 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 return calls::dispatch_member_call(&receiver, name, vs, span);
             }
 
+            // `obj?.method(args)` — short-circuit the *entire* call when the
+            // receiver is nil. Without this special case the inner
+            // `SafeMember` would evaluate to nil and we'd fall through to
+            // `call_value_pub(nil, ...)`, producing a spurious "value of
+            // type `nil` is not callable" error. The expected behaviour is
+            // for the whole `p?.foo()` to produce nil, so `p?.foo() ?? x`
+            // falls back to `x`.
+            if let Expr::SafeMember { obj, name } = &callee.value {
+                let receiver = eval(obj, env)?;
+                if matches!(receiver, Value::Nil) {
+                    return Ok(Value::Nil);
+                }
+                let vs = calls::eval_call_args_pub(args, env)?;
+                return calls::dispatch_member_call(&receiver, name, vs, span);
+            }
+
             let cv = eval(callee, env)?;
             let vs = calls::eval_call_args_pub(args, env)?;
             calls::call_value_pub(cv, &vs, span)
