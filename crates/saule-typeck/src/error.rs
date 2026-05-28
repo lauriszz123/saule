@@ -205,6 +205,17 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("cannot assign field `{member}` on value of type `{receiver}`")]
+    #[diagnostic(help(
+        "only class instances and class statics support `obj.{member} = ...`; for tables use `t[\"{member}\"] = ...`"
+    ))]
+    InvalidFieldAssign {
+        receiver: String,
+        member: String,
+        #[label("not a class or instance")]
+        span: miette::SourceSpan,
+    },
+
     #[error("enum `{enum_name}` has no variant `{variant}`")]
     #[diagnostic(help("check the spelling of the variant or add it to the enum"))]
     UnknownEnumVariant {

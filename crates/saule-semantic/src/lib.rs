@@ -31,6 +31,7 @@ mod field_init;
 pub mod prelude;
 pub mod registry;
 mod resolve;
+mod return_check;
 
 pub use error::SemanticError;
 pub use registry::{
@@ -98,6 +99,11 @@ pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError
 
     // Control-flow validity over every executable region.
     control_flow::check_module(module, &mut errors);
+
+    // Every function/method with a non-nullable return type must actually
+    // return on every reachable path (catches the "fell off the end →
+    // implicit nil" bug at compile time).
+    return_check::check_module(module, &mut errors);
 
     // Name resolution + a bundle of structural checks
     // (self/super placement, variadic param shape, arg ordering, for-in

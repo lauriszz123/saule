@@ -34,9 +34,9 @@ end
 class Main
   static fn main()
     local players: PlayerList = PlayerList()
-    players:add("alice", 10)
-    players:add("bob",    7)
-    players:add("carol",  3)
+    players.add("alice", 10)
+    players.add("bob",    7)
+    players.add("carol",  3)
 
     for name, lvl in players do
       println(name, " -> ", lvl)

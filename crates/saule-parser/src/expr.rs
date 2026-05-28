@@ -227,21 +227,6 @@ impl Parser {
                         span,
                     );
                 }
-                Token::Colon => {
-                    // `obj:method(args)` — method call.
-                    self.advance();
-                    let (method, _) = self.expect_ident("method name after `:`")?;
-                    let (args, close_span) = self.parse_call_args()?;
-                    let span = expr.span.start..close_span.end;
-                    expr = Spanned::new(
-                        Expr::MethodCall {
-                            obj: Box::new(expr),
-                            method,
-                            args,
-                        },
-                        span,
-                    );
-                }
                 Token::Bang => {
                     let bang = self.advance();
                     let span = expr.span.start..bang.span.end;

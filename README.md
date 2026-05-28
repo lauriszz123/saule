@@ -10,6 +10,7 @@ Saule is a statically typed, class-oriented language inspired by Lua's simplicit
 
 - [Types](#types)
 - [Variables](#variables)
+- [Tables](#tables)
 - [Functions](#functions)
 - [Lambdas and Closures](#lambdas-and-closures)
 - [Classes](#classes)
@@ -88,15 +89,153 @@ print(int(x))    -- 7, not 8, truncation not rounding
 
 ## Variables
 
+Saule follows Lua's scoping model: `local` makes a binding **lexically scoped** (visible only inside the block / function / file where it was declared), and an assignment **without** `local` creates an **implicit global** (visible from anywhere after that point). The type annotation is optional in either form — when omitted, the type is inferred from the initializer.
+
+### Local (Recommended)
+
+`local` is the workhorse — same lifetime as the surrounding block, no leak into the rest of the program:
+
 ```saule
 local name: string = "Arthur"
 local health: integer = 100
 local speed: float = 1.5
 local alive: boolean = true
-local nothing: nil = nil
 ```
 
-Variables are declared with `local` followed by a name, type annotation, and value.
+### Global
+
+Drop `local` to publish the binding as a top-level name. Use sparingly — globals defeat scope-based reasoning and are the usual source of "where did this value come from?" bugs:
+
+```saule
+appName: string = "MyGame"        -- global
+version = 1                       -- global, type inferred
+
+fn showHeader()
+    print(appName .. " v" .. version)   -- visible here without import
+end
+```
+
+A global is created on its **first** assignment. Subsequent `name = expr` (still no `local`) updates that global. Inside a function, an assignment to an undeclared name follows the same rule — it creates / updates the global.
+
+### Inferred Type
+
+When the right-hand side is unambiguous, drop the `: T`:
+
+```saule
+local name = "Arthur"        -- inferred string
+local health = 100           -- inferred integer
+local speed = 1.5            -- inferred float
+local alive = true           -- inferred boolean
+```
+
+The explicit form is preferred for public APIs (function bodies, module-level constants, anything someone else will read); inferred bindings are fine for short-lived intermediates.
+
+### Multiple Bindings
+
+Declare and assign several names in one statement. Types can be mixed (each name carries its own optional annotation):
+
+```saule
+local x: integer, y: integer = 10, 20
+local name, age = "Arthur", 36          -- both inferred
+local q, r = divmod(17, 5)              -- unpack multi-return
+```
+
+### Nullable Without Initializer
+
+A `local` declaration with no initializer is implicitly `nil`, so the type must be nullable:
+
+```saule
+local pending: string? = nil    -- ok
+local pending: string?          -- ok, same thing
+local pending: string           -- ERROR: `string` is never nil
+```
+
+### Reassignment
+
+`local` introduces the binding once; subsequent writes use plain `name = expr` (no `local`):
+
+```saule
+local hp: integer = 100
+hp = hp - 25                    -- reassign the local
+local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
+```
+
+> Class **fields** are a separate thing — they live on instances or the class itself, not in the surrounding scope. They use `name: T = expr` for public and `local name: T = expr` for private. See [Classes → Access Modifiers](#access-modifiers).
+
+---
+
+## Tables
+
+Tables are Saule's only data structure — same model as Lua. A single table holds both an **array part** (contiguous 1-based integer keys) and a **map part** (everything else: strings, booleans, non-positive integers). The two parts share one value space and one length.
+
+### Literals
+
+```saule
+-- Array part (positional entries — auto-indexed from 1).
+local nums: table<integer> = {10, 20, 30}
+print(nums[1])     -- 10
+print(#nums)       -- 3
+
+-- Map part (named entries).
+local p: table = { name: "Arthur", health: 100, alive: true }
+
+-- Mixed: positional first, then named.
+local mix: table = { "a", "b", color: "red", 99 }
+```
+
+Keys in `{ key: value }` literals can be bare identifiers or quoted strings — both produce a string-keyed map entry.
+
+### Indexed Access
+
+`t[k]` accepts any value as a key:
+
+```saule
+local scores: table = {}
+scores["arthur"] = 50
+scores["merlin"] = 80
+scores[1] = "first place"
+```
+
+### Lua-style Dotted Access
+
+`t.foo` is equivalent to `t["foo"]` — both read and write, in any combination:
+
+```saule
+local cfg: table = {}
+cfg.title = "My Game"        -- same as cfg["title"] = "My Game"
+cfg["width"] = 1920          -- same as cfg.width = 1920
+
+print(cfg.title)             -- "My Game"
+print(cfg["width"])          -- 1920
+print(cfg.missing)           -- nil (no error — missing keys yield nil)
+```
+
+This is plain map sugar, so it only applies to **tables**. Class instances and statics keep their strict `obj.field` semantics: writing a previously-undeclared field on an instance is still a compile error.
+
+### Length
+
+`#t` returns the array length — the count of contiguous integer keys starting at `1`. Map entries don't contribute to `#`:
+
+```saule
+local t: table = {10, 20, 30, name: "tags"}
+print(#t)    -- 3
+```
+
+### Removing Keys
+
+Assigning `nil` does **not** delete a map entry (so JSON-style `{"x": null}` round-trips faithfully). Use `Table.remove(t, key)` to actually drop a key:
+
+```saule
+local user: table = { name: "Arthur", draft: true }
+Table.remove(user, "draft")
+print(user.draft)    -- nil
+```
+
+For the array part, `Table.remove(t, i)` shifts subsequent elements down (standard Lua behaviour).
+
+### Iterating
+
+`for v in t` walks the array part. `for k, v in t` walks both parts via `pairs`-style iteration. See [Loops](#loops) and the [Standard Library](./DOCS.md#table) for the full set of helpers (`Table.insert`, `Table.sort`, `Table.concat`, …).
 
 ---
 
@@ -288,7 +427,7 @@ print(counter())    -- 3
 
 ### Declaring a Class
 
-Each class lives in its own `.saule` file. Fields are declared at the top, followed by an `fn init` method (the constructor) and the rest of the methods.
+Each class lives in its own `.sau` file. Fields are declared at the top, followed by an `fn init` method (the constructor) and the rest of the methods.
 
 ```saule
 export class Player
@@ -921,6 +1060,11 @@ end
 for i: integer, name: string in names do
     print(i .. ": " .. name)
 end
+
+-- types are optional — inferred from the iterated value
+for name in names do
+    print(name)
+end
 ```
 
 ### While
@@ -1002,7 +1146,7 @@ A file without `export` is private to its folder.
 Not everything needs a class. Export standalone functions from a utility file:
 
 ```saule
--- utils/Math.saule
+-- utils/Math.sau
 
 export fn clamp(value: integer, min: integer, max: integer) -> integer
     if value < min then return min end
@@ -1037,7 +1181,7 @@ Saule forbids circular imports at compile time:
 
 ```
 ERROR: Circular import detected
-  Player.saule → Inventory.saule → Player.saule
+  Player.sau → Inventory.sau → Player.sau
 
   Hint: Extract shared types into a separate file
 ```
@@ -1051,7 +1195,7 @@ Every Saule project has a `saule.config` file at the root:
 ```
 name: "myproject"
 version: "1.0.0"
-entry: "main.saule"
+entry: "main.sau"
 author: "Arthur"
 ```
 
@@ -1060,25 +1204,25 @@ author: "Arthur"
 ```
 myproject/
 ├── saule.config
-├── main.saule
+├── main.sau
 ├── entities/
-│   ├── Entity.saule
-│   ├── Player.saule
-│   └── Enemy.saule
+│   ├── Entity.sau
+│   ├── Player.sau
+│   └── Enemy.sau
 ├── data/
-│   ├── Repository.saule
-│   └── PlayerRepository.saule
+│   ├── Repository.sau
+│   └── PlayerRepository.sau
 ├── utils/
-│   ├── Math.saule
-│   └── Logger.saule
+│   ├── Math.sau
+│   └── Logger.sau
 └── enums/
-    ├── Direction.saule
-    └── Status.saule
+    ├── Direction.sau
+    └── Status.sau
 ```
 
 ### Entry Point
 
-`main.saule` is a script that runs top to bottom, like a Lua script. No class needed:
+`main.sau` is a script that runs top to bottom, like a Lua script. No class needed:
 
 ```saule
 import Player from "entities/Player"

@@ -115,4 +115,14 @@ impl TableObject {
         self.map.insert(k, value);
         Ok(())
     }
+
+    /// Remove a hash-map entry by key. Returns the previous value (or
+    /// `nil` if absent). Array slots are left untouched — use this only
+    /// for the map portion.
+    pub fn remove(&mut self, key: &Value) -> Value {
+        let Some(k) = TableKey::from_value(key) else {
+            return Value::Nil;
+        };
+        self.map.remove(&k).unwrap_or(Value::Nil)
+    }
 }

@@ -63,7 +63,7 @@ pub fn register_sigs() {
     // `Table.insert(list, value)` and `Table.insert(list, index, value)` —
     // index/value slots stay `any` because the overload is arity-based.
     register("Table.insert", vec![table_any(), any(), t_nullable(any())], vec![nil()]);
-    register("Table.remove", vec![table_any(), t_nullable(i())],          vec![t_nullable(any())]);
+    register("Table.remove", vec![table_any(), t_nullable(any())],        vec![t_nullable(any())]);
     // Comparator slot left as `any` until lambda inference is fully wired.
     register("Table.sort",   vec![table_any(), any()],                    vec![nil()]);
     register("Table.concat", vec![table_any(), t_nullable(s()), t_nullable(i()), t_nullable(i())], vec![s()]);
@@ -160,6 +160,16 @@ fn tbl_insert(args: &[Value]) -> Result<Vec<Value>, String> {
 fn tbl_remove(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_min_arity("Table.remove", args, 1)?;
     let table = expect_table("Table.remove", args, 0)?;
+
+    // Two flavours, dispatched by the type of the second argument:
+    //   Table.remove(t)             -> pop last from the array
+    //   Table.remove(t, n: integer) -> remove array slot n
+    //   Table.remove(t, k: string | boolean) -> delete a map entry
+    if args.len() >= 2 && !matches!(&args[1], Value::Int(_) | Value::Nil) {
+        let mut t = table.borrow_mut();
+        return Ok(vec![t.remove(&args[1])]);
+    }
+
     let mut t = table.borrow_mut();
     let len = t.array.len();
 

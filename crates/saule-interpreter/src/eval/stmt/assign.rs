@@ -84,6 +84,15 @@ fn assign_member(
                 Ok(Flow::nil())
             }
         }
+        // Lua-style table write: `t.foo = v` is sugar for `t["foo"] = v`.
+        Value::Table(items) => {
+            let key = Value::Str(Rc::new(name.to_string()));
+            items
+                .borrow_mut()
+                .set(&key, value)
+                .map_err(|message| RuntimeError::TypeError { message, span })?;
+            Ok(Flow::nil())
+        }
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "cannot assign field `{name}` on value of type `{}` — only instances and classes can have fields assigned",

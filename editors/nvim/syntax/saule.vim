@@ -102,6 +102,7 @@ highlight default link sauleDelimiter    Delimiter
 " their own hue so they read at a glance. Tweak to taste.
 highlight sauleVariable   ctermfg=15  guifg=#c0caf5
 highlight sauleOperator   ctermfg=14  guifg=#89ddff
+highlight sauleOperatorKW ctermfg=13  guifg=#bb9af7
 highlight sauleNullable   ctermfg=13  guifg=#bb9af7
 highlight sauleCompare    ctermfg=9   guifg=#f7768e
 highlight sauleArrow      ctermfg=13  guifg=#bb9af7

@@ -117,10 +117,10 @@ pub(super) fn read_member(
                 .unwrap_or(Value::Str(Rc::new(variant.variant_name.clone())))),
             "name" => Ok(Value::Str(Rc::new(variant.variant_name.clone()))),
             _ => {
-                if let Some(enum_obj) = variant.enum_obj.borrow().as_ref() {
-                    if let Some(m) = enum_obj.methods.get(name) {
-                        return Ok(Value::Function(m.clone()));
-                    }
+                if let Some(enum_obj) = variant.enum_obj.borrow().as_ref()
+                    && let Some(m) = enum_obj.methods.get(name)
+                {
+                    return Ok(Value::Function(m.clone()));
                 }
                 Err(RuntimeError::TypeError {
                     message: format!(
@@ -131,9 +131,13 @@ pub(super) fn read_member(
                 })
             }
         },
+        // Lua-style table access: `t.foo` is sugar for `t["foo"]`. Misses
+        // produce `nil` (Lua semantics) rather than a runtime error, so
+        // `t.maybe` is a safe probe.
+        Value::Table(items) => Ok(items.borrow().get(&Value::Str(Rc::new(name.to_string())))),
         other => Err(RuntimeError::TypeError {
             message: format!(
-                "cannot read field `{name}` on value of type `{}` — only instances, classes, and enums have members",
+                "cannot read field `{name}` on value of type `{}` — only instances, classes, enums, and tables have members",
                 other.type_name()
             ),
             span,

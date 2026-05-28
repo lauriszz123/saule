@@ -86,6 +86,17 @@ pub enum SemanticError {
         span: miette::SourceSpan,
     },
 
+    #[error("function `{name}` declares return type `{ty}` but not every path returns a value")]
+    #[diagnostic(help(
+        "add a `return` on every path, end the function with `return ...`, or make the return type nullable with `?` (so missing returns yield `nil`)"
+    ))]
+    MissingReturn {
+        name: String,
+        ty: String,
+        #[label("missing `return` on some path")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`for ... in` supports one variable or a key/value pair, got {found}")]
     #[diagnostic(help("use `for v in iter` for tables and iterators, or `for k, v in iter` for pairs"))]
     ForInArity {

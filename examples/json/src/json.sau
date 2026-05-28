@@ -1,8 +1,371 @@
-export class Json
-    static fn encode(data: table<string, any>) -> string
-    end
+-- json.sau — JSON parser and encoder.
+--
+-- Public API:
+--   Json.encode(value: any?) -> string
+--   Json.decode(source: string) -> any?      -- nil on parse error
+--
+-- Mapping:
+--   object -> table<string, any>
+--   array  -> table<any>   (1-based)
+--   number -> integer if it has no '.' / 'e' / 'E', else float
+--   null   -> nil
 
-    static fn decode(source: string) -> table<string, any>?
-        println(source)
+class JsonParser
+  local text: string
+  local pos: integer
+  local size: integer
+
+  fn init(text: string)
+    self.text = text
+    self.pos = 1
+    self.size = String.len(text)
+  end
+
+  local fn atEnd() -> boolean
+    return self.pos > self.size
+  end
+
+  -- Peek returns -1 at EOF so callers can `match` on it without juggling nil.
+  local fn peekByte() -> integer
+    return String.byte(self.text, self.pos) ?? -1
+  end
+
+  local fn skipWs()
+    while not self.atEnd() do
+      local stop: boolean = match self.peekByte()
+        case 32 then false
+        case 9  then false
+        case 10 then false
+        case 13 then false
+        case _  then true
+      end
+      if stop then break end
+      self.pos = self.pos + 1
     end
+  end
+
+  local fn expect(b: integer)
+    if self.peekByte() != b then
+      throw "expected byte " .. tostring(b) .. " at position " .. tostring(self.pos)
+    end
+    self.pos = self.pos + 1
+  end
+
+  local fn expectKeyword(kw: string)
+    local n: integer = String.len(kw)
+    if self.pos + n - 1 > self.size then
+      throw "unexpected end of input"
+    end
+    if String.sub(self.text, self.pos, self.pos + n - 1) != kw then
+      throw "expected `" .. kw .. "` at position " .. tostring(self.pos)
+    end
+    self.pos = self.pos + n
+  end
+
+  -- Throw helper for use inside match expressions (which can't throw).
+  local fn fail(msg: string) -> any?
+    throw msg
+    return nil
+  end
+
+  -- Single public entry point.
+  fn parseDocument() -> any?
+    local v: any? = self.parseValue()
+    self.skipWs()
+    if not self.atEnd() then
+      throw "trailing garbage at position " .. tostring(self.pos)
+    end
+    return v
+  end
+
+  local fn parseValue() -> any?
+    self.skipWs()
+    return match self.peekByte()
+      case -1  then self.fail("unexpected end of input")
+      case 123 then self.parseObject()         -- {
+      case 91  then self.parseArray()          -- [
+      case 34  then self.parseString()         -- "
+      case 116 then self.parseTrue()           -- t
+      case 102 then self.parseFalse()          -- f
+      case 110 then self.parseNull()           -- n
+      case 45  then self.parseNumber()         -- -
+      case c when c >= 48 and c <= 57 then self.parseNumber()
+      case c then self.fail("unexpected byte " .. tostring(c) .. " at position " .. tostring(self.pos))
+    end
+  end
+
+  local fn parseObject() -> table<string, any>
+    self.expect(123)
+    local obj: table<string, any> = {}
+    self.skipWs()
+    if self.peekByte() == 125 then
+      self.pos = self.pos + 1
+      return obj
+    end
+    while true do
+      self.skipWs()
+      local key: string = self.parseString()
+      self.skipWs()
+      self.expect(58)
+      obj[key] = self.parseValue()
+      self.skipWs()
+      match self.peekByte()
+        case 44 then self.pos = self.pos + 1                       -- ,
+        case 125 then nil                                          -- } handled below
+        case _ then throw "expected `,` or `}` in object at position " .. tostring(self.pos)
+      end
+      if self.peekByte() == 125 then
+        self.pos = self.pos + 1
+        return obj
+      end
+    end
+    return obj
+  end
+
+  local fn parseArray() -> table<any>
+    self.expect(91)
+    local arr: table<any> = {}
+    self.skipWs()
+    if self.peekByte() == 93 then
+      self.pos = self.pos + 1
+      return arr
+    end
+    while true do
+      Table.insert(arr, self.parseValue())
+      self.skipWs()
+      match self.peekByte()
+        case 44 then self.pos = self.pos + 1
+        case 93 then nil
+        case _ then throw "expected `,` or `]` in array at position " .. tostring(self.pos)
+      end
+      if self.peekByte() == 93 then
+        self.pos = self.pos + 1
+        return arr
+      end
+    end
+    return arr
+  end
+
+  local fn parseString() -> string
+    self.expect(34)
+    local parts: table<string> = {}
+    while not self.atEnd() do
+      local b: integer = self.peekByte()
+      if b == 34 then
+        self.pos = self.pos + 1
+        return Table.concat(parts, "")
+      end
+      if b == 92 then
+        self.pos = self.pos + 1
+        if self.atEnd() then throw "unterminated escape" end
+        local e: integer = self.peekByte()
+        self.pos = self.pos + 1
+        if e == 117 then
+          Table.insert(parts, self.readUnicodeEscape())
+        else
+          Table.insert(parts, self.decodeEscape(e))
+        end
+      else
+        -- Saule strings are byte-oriented, so multibyte UTF-8 passes through.
+        Table.insert(parts, String.sub(self.text, self.pos, self.pos))
+        self.pos = self.pos + 1
+      end
+    end
+    throw "unterminated string"
+    return ""
+  end
+
+  local fn decodeEscape(e: integer) -> string
+    return match e
+      case 34  then "\""
+      case 92  then "\\"
+      case 47  then "/"
+      case 98  then String.char(8)
+      case 102 then String.char(12)
+      case 110 then "\n"
+      case 114 then "\r"
+      case 116 then "\t"
+      case _   then self.fail("unknown escape `\\" .. String.char(e) .. "`") ?? ""
+    end
+  end
+
+  local fn readUnicodeEscape() -> string
+    if self.pos + 3 > self.size then
+      throw "truncated \\u escape"
+    end
+    local hex: string = String.sub(self.text, self.pos, self.pos + 3)
+    self.pos = self.pos + 4
+    local cp: integer = self.hexToInt(hex) ?? -1
+    if cp < 0 then
+      throw "invalid \\u escape `" .. hex .. "`"
+    end
+    return String.char(cp)
+  end
+
+  local fn hexToInt(s: string) -> integer?
+    local total: integer = 0
+    local len: integer = String.len(s)
+    local i: integer = 1
+    while i <= len do
+      local b: integer = String.byte(s, i)!
+      local d: integer? = match b
+        case x when x >= 48 and x <= 57  then x - 48
+        case x when x >= 65 and x <= 70  then x - 55
+        case x when x >= 97 and x <= 102 then x - 87
+        case _ then nil
+      end
+      if d == nil then return nil end
+      total = total * 16 + d!
+      i = i + 1
+    end
+    return total
+  end
+
+  local fn parseNumber() -> any
+    local start: integer = self.pos
+    local sawDot: boolean = false
+    local sawExp: boolean = false
+    if self.peekByte() == 45 then self.pos = self.pos + 1 end
+    while not self.atEnd() do
+      local b: integer = self.peekByte()
+      if b >= 48 and b <= 57 then
+        self.pos = self.pos + 1
+      elseif b == 46 and not sawDot and not sawExp then
+        sawDot = true
+        self.pos = self.pos + 1
+      elseif (b == 101 or b == 69) and not sawExp then
+        sawExp = true
+        self.pos = self.pos + 1
+        local sign: integer = self.peekByte()
+        if sign == 43 or sign == 45 then self.pos = self.pos + 1 end
+      else
+        break
+      end
+    end
+    local lexeme: string = String.sub(self.text, start, self.pos - 1)
+    if sawDot or sawExp then
+      return tofloat(lexeme) ?? self.fail("invalid number `" .. lexeme .. "`")!
+    end
+    return tointeger(lexeme) ?? self.fail("invalid integer `" .. lexeme .. "`")!
+  end
+
+  local fn parseTrue() -> boolean
+    self.expectKeyword("true")
+    return true
+  end
+
+  local fn parseFalse() -> boolean
+    self.expectKeyword("false")
+    return false
+  end
+
+  local fn parseNull() -> any?
+    self.expectKeyword("null")
+    return nil
+  end
+end
+
+
+export class Json
+  -- Parse a JSON document. Returns nil on parse error (or for JSON `null`).
+  static fn decode(source: string) -> any?
+    try
+      return JsonParser(source).parseDocument()
+    catch e: string
+      return nil
+    end
+  end
+
+  -- Serialise a Saule value to compact JSON.
+  static fn encode(value: any?) -> string
+    if value == nil then return "null" end
+    return match type(value)
+      case "boolean" then Json.encodeBool(value!)
+      case "integer" then tostring(value)
+      case "float"   then tostring(value)
+      case "string"  then Json.encodeString(value)
+      case "table"   then Json.encodeTable(value)
+      case _         then Json.encodeString(tostring(value))
+    end
+  end
+
+  static local fn encodeBool(b: boolean) -> string
+    return match b
+      case true  then "true"
+      case false then "false"
+    end
+  end
+
+  static local fn encodeTable(t: any) -> string
+    if Json.looksLikeArray(t) then return Json.encodeArray(t) end
+    return Json.encodeObject(t)
+  end
+
+  static local fn encodeString(s: string) -> string
+    local parts: table<string> = {}
+    Table.insert(parts, "\"")
+    local n: integer = String.len(s)
+    local i: integer = 1
+    while i <= n do
+      Table.insert(parts, Json.escapeByte(String.byte(s, i)!, s, i))
+      i = i + 1
+    end
+    Table.insert(parts, "\"")
+    return Table.concat(parts, "")
+  end
+
+  static local fn escapeByte(b: integer, s: string, i: integer) -> string
+    return match b
+      case 34  then "\\\""
+      case 92  then "\\\\"
+      case 8   then "\\b"
+      case 12  then "\\f"
+      case 10  then "\\n"
+      case 13  then "\\r"
+      case 9   then "\\t"
+      case x when x < 32 then String.format("\\u%04x", x)
+      case _   then String.sub(s, i, i)
+    end
+  end
+
+  -- A non-empty table with keys exactly 1..#t renders as a JSON array.
+  static local fn looksLikeArray(t: any) -> boolean
+    local len: integer = #t
+    if len == 0 then return false end
+    local count: integer = 0
+    for k, v in pairs(t) do
+      if type(k) != "integer" then return false end
+      count = count + 1
+    end
+    return count == len
+  end
+
+  static local fn encodeArray(t: any) -> string
+    local parts: table<string> = {}
+    Table.insert(parts, "[")
+    local len: integer = #t
+    local i: integer = 1
+    while i <= len do
+      if i > 1 then Table.insert(parts, ",") end
+      Table.insert(parts, Json.encode(t[i]))
+      i = i + 1
+    end
+    Table.insert(parts, "]")
+    return Table.concat(parts, "")
+  end
+
+  static local fn encodeObject(t: any) -> string
+    local parts: table<string> = {}
+    Table.insert(parts, "{")
+    local first: boolean = true
+    for k, v in pairs(t) do
+      if not first then Table.insert(parts, ",") end
+      first = false
+      Table.insert(parts, Json.encodeString(tostring(k)))
+      Table.insert(parts, ":")
+      Table.insert(parts, Json.encode(v))
+    end
+    Table.insert(parts, "}")
+    return Table.concat(parts, "")
+  end
 end

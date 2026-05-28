@@ -299,7 +299,13 @@ fn attach_module_source(
     src: &Rc<miette::NamedSource<String>>,
 ) -> RuntimeError {
     match err {
+        // Already-wrapped errors keep their original module context.
         RuntimeError::ImportFailed { .. } | RuntimeError::InModule { .. } => err,
+        // `Thrown` must stay un-wrapped so an outer `try ... catch` in the
+        // caller's module can still intercept it. The diagnostic will lose
+        // its module source if it escapes to the top level, but correctness
+        // (catch actually fires) wins over presentation.
+        RuntimeError::Thrown { .. } => err,
         other => {
             let inner = crate::error::ImportedDiagnostic::from_inner(
                 &other,

@@ -8,7 +8,8 @@ use saule_ast::{ClassMember, Decl, Expr, Param, Spanned, Stmt, Type};
 use super::TypeCheckError;
 use super::expr::{
     check_assignment_compat, check_boolean_cond, check_element_compat, check_expr,
-    check_table_key_compat, infer, is_nullable, narrow_falsy, narrow_truthy, type_to_string,
+    check_table_key_compat, infer, is_nullable, narrow_falsy, narrow_truthy, strip_nullable,
+    type_to_string,
 };
 use super::state::{
     Scope, class_implements_iterable, is_interface, is_type_param, pop_generics, push_generics,
@@ -84,6 +85,13 @@ pub(super) fn check_stmt(
                     .unwrap_or_else(|| Type::Named("integer".into()));
                 check_table_key_compat(&key_ty, index, scope, errors);
                 check_element_compat(&elem_ty, value, scope, errors);
+            }
+            // `obj.field = v` — only class instances and class statics support
+            // dotted-field assignment. Catches `tbl.foo = ...` on plain
+            // tables, where `tbl["foo"] = ...` is the intended form, before
+            // it blows up at runtime.
+            if let Expr::Member { obj, name } = &target.value {
+                check_member_assign_receiver(obj, name, target.span.clone(), scope, errors);
             }
         }
 
@@ -475,3 +483,48 @@ fn check_class(
     set_current_class(prev);
 }
 
+/// Verify that `obj.name = ...` is being written to a receiver that
+/// actually supports field assignment. Class instances and class statics
+/// do; plain tables, primitives, and functions don't.
+fn check_member_assign_receiver(
+    obj: &Spanned<Expr>,
+    name: &str,
+    span: std::ops::Range<usize>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    // `self.foo = ...` and `super.foo = ...` are always fine inside a method;
+    // the resolver / runtime own that path.
+    if matches!(obj.value, Expr::Self_) {
+        return;
+    }
+    // `Class.foo = ...` (static-field assignment) — receiver is a known class.
+    if let Expr::Ident(n) = &obj.value
+        && with_classes(|reg| reg.contains_key(n))
+    {
+        return;
+    }
+    // Otherwise infer the receiver's type. We can only complain when we
+    // actually know it; an unknown type silently passes so dynamic `any`
+    // code still works.
+    let Some(ty) = infer(obj, scope) else { return };
+    let stripped = strip_nullable(ty.clone());
+    // Lua-style tables let `t.foo = v` mean `t["foo"] = v`, so anything
+    // shaped like a table is allowed through. Reject only the truly
+    // field-less primitives / functions.
+    let bad = match &stripped {
+        Type::Named(n) => matches!(
+            n.as_str(),
+            "integer" | "float" | "number" | "boolean" | "string" | "function"
+        ),
+        Type::Tuple(_) | Type::Function { .. } => true,
+        _ => false,
+    };
+    if bad {
+        errors.push(TypeCheckError::InvalidFieldAssign {
+            receiver: type_to_string(&stripped),
+            member: name.to_string(),
+            span: super::to_source_span(span),
+        });
+    }
+}
