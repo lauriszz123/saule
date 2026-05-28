@@ -5,6 +5,7 @@
 
 mod line_index;
 mod server;
+mod workspace;
 
 use server::Backend;
 use tower_lsp::{LspService, Server};
