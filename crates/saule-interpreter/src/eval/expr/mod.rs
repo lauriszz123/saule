@@ -49,13 +49,21 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
         Expr::Str(s) => Ok(Value::Str(Rc::new(s.clone()))),
         Expr::Nil => Ok(Value::Nil),
 
-        Expr::Ident(name) => env
-            .borrow()
-            .get(name)
-            .ok_or_else(|| RuntimeError::Undefined {
-                name: name.clone(),
-                span,
-            }),
+        Expr::Ident(name) => env.borrow().get(name).ok_or_else(|| {
+            // saule-semantic's name resolver should have caught any
+            // truly-undefined identifier before we reach evaluation. The
+            // only way this branch fires in practice is via the bare
+            // low-level `run()` entry point on a module that wasn't
+            // checked first — surface that as a TypeError rather than a
+            // dead variant.
+            RuntimeError::TypeError {
+                message: format!(
+                    "internal: identifier `{name}` reached evaluation undefined — \
+                     `saule_semantic::analyze` was not run on this module"
+                ),
+                span: span.clone(),
+            }
+        }),
 
         Expr::Unary { op, rhs } => {
             let v = eval(rhs, env)?;
@@ -188,13 +196,12 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             })))
         }
 
-        Expr::Self_ => env
-            .borrow()
-            .get("self")
-            .ok_or_else(|| RuntimeError::Undefined {
-                name: "self".to_string(),
-                span,
-            }),
+        Expr::Self_ => env.borrow().get("self").ok_or_else(|| RuntimeError::TypeError {
+            message: "internal: `self` reached evaluation outside a method — \
+                      `saule_semantic::analyze` was not run on this module"
+                .to_string(),
+            span,
+        }),
 
         Expr::Match { scrutinee, arms } => match_::eval_match(scrutinee, arms, env, span),
     }

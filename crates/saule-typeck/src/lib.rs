@@ -36,6 +36,7 @@ use saule_ast::Module;
 
 mod error;
 mod expr;
+mod funcs;
 mod matches;
 mod state;
 mod stmt;
@@ -58,11 +59,14 @@ pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
 /// pipeline (`saule_interpreter::pipeline` or the CLI) guarantees this.
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
     let _restore = state::set_current_class(None);
+    funcs::install(module);
 
     let mut errors = Vec::new();
     let mut scope = state::Scope::default();
     for s in &module.stmts {
         stmt::check_stmt(s, &mut scope, &mut errors);
     }
+
+    funcs::clear();
     errors
 }

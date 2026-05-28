@@ -8,11 +8,22 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use saule_ast::{ClassMember, Decl, EnumVariant, Module, Stmt};
+use saule_ast::{ClassMember, Decl, EnumVariant, Module, Param, Stmt, Type};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Registry types
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Full signature of a class method as collected from the AST. Stored so
+/// `saule-typeck` can infer the return type of `obj.method(args)` and
+/// validate arg counts/types without a separate scan.
+#[derive(Clone, Debug)]
+pub struct MethodSig {
+    pub is_static: bool,
+    pub is_private: bool,
+    pub params: Vec<Param>,
+    pub return_ty: Option<Type>,
+}
 
 /// Class info collected so member-access checks can consult member
 /// visibility, parent classes, etc.
@@ -21,8 +32,13 @@ pub struct ClassInfo {
     pub parent: Option<String>,
     /// Interfaces declared on the class (`class C implements A, B`).
     pub implements: Vec<String>,
-    /// member name -> is_private
+    /// member name -> is_private. Kept distinct from [`methods`] so the
+    /// existing visibility check can stay O(1) when the member is a field.
     pub members: HashMap<String, bool>,
+    /// Method-name -> full signature. Populated for every `fn` declared
+    /// on the class so the typechecker can answer "what does
+    /// `Foo.bar(...)` return?".
+    pub methods: HashMap<String, MethodSig>,
 }
 
 pub type ClassRegistry = HashMap<String, ClassInfo>;
@@ -155,6 +171,22 @@ pub fn lookup_member(class: &str, member: &str) -> Option<(String, bool)> {
     })
 }
 
+/// Look up a method's full signature on `class` (walking the parent
+/// chain). Returns `None` for fields or unknown names.
+pub fn lookup_method(class: &str, method: &str) -> Option<MethodSig> {
+    with_classes(|reg| {
+        let mut cur = Some(class.to_string());
+        while let Some(name) = cur {
+            let info = reg.get(&name)?;
+            if let Some(sig) = info.methods.get(method) {
+                return Some(sig.clone());
+            }
+            cur = info.parent.clone();
+        }
+        None
+    })
+}
+
 /// Does the class (or any ancestor) declare it implements `Iterable` or
 /// `Iterable2`? Used by the `for ... in` static check.
 pub fn class_implements_iterable(class: &str) -> bool {
@@ -185,6 +217,7 @@ pub fn build_registry(
                         parent: extends.clone(),
                         implements: implements.clone(),
                         members: HashMap::new(),
+                        methods: HashMap::new(),
                     };
                     for m in members {
                         match &m.value {
@@ -195,6 +228,15 @@ pub fn build_registry(
                             }
                             ClassMember::Method(meth) => {
                                 info.members.insert(meth.name.clone(), meth.is_private);
+                                info.methods.insert(
+                                    meth.name.clone(),
+                                    MethodSig {
+                                        is_static: meth.is_static,
+                                        is_private: meth.is_private,
+                                        params: meth.params.clone(),
+                                        return_ty: meth.return_ty.clone(),
+                                    },
+                                );
                             }
                         }
                     }

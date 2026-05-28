@@ -5,10 +5,11 @@
 use saule_ast::{BinOp, CallArg, Expr, LambdaBody, Spanned, TableEntry, Type};
 
 use super::TypeCheckError;
+use super::funcs;
 use super::matches::check_match;
 use super::state::{
     Scope, class_implements, current_class, is_interface, is_subtype_named, is_type_param,
-    lookup_member, with_classes,
+    lookup_member, with_classes, with_enums,
 };
 use super::stmt::{check_stmt, seed_params};
 use super::to_source_span;
@@ -28,11 +29,13 @@ pub(super) fn check_expr(
             check_expr(obj, scope, errors);
             report_if_nullable_receiver(obj, name, scope, errors);
             report_if_private(obj, name, scope, errors);
+            report_if_unknown_member(obj, name, scope, errors);
         }
         Expr::MethodCall { obj, method, args } => {
             check_expr(obj, scope, errors);
             report_if_nullable_receiver(obj, method, scope, errors);
             report_if_private(obj, method, scope, errors);
+            report_if_unknown_member(obj, method, scope, errors);
             for a in args {
                 check_arg(a, scope, errors);
             }
@@ -44,8 +47,11 @@ pub(super) fn check_expr(
                 check_expr(obj, scope, errors);
                 report_if_nullable_receiver(obj, name, scope, errors);
                 report_if_private(obj, name, scope, errors);
+                report_if_unknown_member(obj, name, scope, errors);
+                report_if_enum_variant_arity(obj, name, args, errors, expr.span.clone());
             } else {
                 check_expr(callee, scope, errors);
+                report_if_user_function_arity(callee, args, errors, expr.span.clone());
             }
             for a in args {
                 check_arg(a, scope, errors);
@@ -248,6 +254,151 @@ fn report_if_private(
             class: owning,
             member: member.to_string(),
             span: to_source_span(obj.span.end..obj.span.end + member.len() + 1),
+        });
+    }
+}
+
+/// Emit [`TypeCheckError::UnknownMember`] / [`UnknownEnumVariant`] when the
+/// receiver's static type is a known class or enum but the member name
+/// isn't present. Unknown receivers, generic params, primitives, and types
+/// `infer` couldn't resolve are conservatively ignored so we don't generate
+/// false positives.
+fn report_if_unknown_member(
+    obj: &Spanned<Expr>,
+    member: &str,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    // `self.super(...)` is a magic parent-ctor delegation form, not a
+    // real member access. Same for the bare-receiver counterpart.
+    if member == "super" {
+        return;
+    }
+
+    // Resolve the receiver to either:
+    //   * an enum *class* (lookup the variant) — only via a bare Ident
+    //     receiver, since `Color.Red` is the access path; OR
+    //   * a regular class (lookup the member, walking inheritance).
+    //
+    // Receivers whose inferred type is an enum-valued local (e.g.
+    // `local s: Status = Status.Alive` then `s.describe()`) intentionally
+    // fall through: we don't yet track enum method names statically, so
+    // emitting here would generate false positives.
+    let (receiver_name, is_enum_class) = match &obj.value {
+        Expr::Self_ => match current_class() {
+            Some(n) => (n, false),
+            None => return,
+        },
+        Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => (n.clone(), false),
+        Expr::Ident(n) if with_enums(|r| r.contains_key(n)) => (n.clone(), true),
+        _ => match infer(obj, scope) {
+            Some(ty) => match strip_nullable(ty) {
+                Type::Named(n) => {
+                    if with_classes(|r| r.contains_key(&n)) {
+                        (n, false)
+                    } else {
+                        // Enum-typed locals, primitives, generics, etc.
+                        return;
+                    }
+                }
+                _ => return,
+            },
+            None => return,
+        },
+    };
+
+    if is_enum_class {
+        let known = with_enums(|r| {
+            r.get(&receiver_name).is_some_and(|info| info.variants.contains_key(member))
+        });
+        if !known {
+            errors.push(TypeCheckError::UnknownEnumVariant {
+                enum_name: receiver_name,
+                variant: member.to_string(),
+                span: to_source_span(obj.span.end..obj.span.end + member.len() + 1),
+            });
+        }
+    } else if lookup_member(&receiver_name, member).is_none() {
+        errors.push(TypeCheckError::UnknownMember {
+            receiver: receiver_name,
+            member: member.to_string(),
+            span: to_source_span(obj.span.end..obj.span.end + member.len() + 1),
+        });
+    }
+}
+
+/// Emit [`TypeCheckError::EnumVariantArity`] for `Enum.Variant(args)` calls
+/// when the variant is a known tuple-style variant with a fixed arity.
+fn report_if_enum_variant_arity(
+    obj: &Spanned<Expr>,
+    variant: &str,
+    args: &[CallArg],
+    errors: &mut Vec<TypeCheckError>,
+    span: std::ops::Range<usize>,
+) {
+    let Expr::Ident(enum_name) = &obj.value else { return };
+    let Some(arity) = with_enums(|r| {
+        r.get(enum_name).and_then(|info| info.variants.get(variant).copied())
+    }) else {
+        return;
+    };
+    // Arity 0 means a bare/valued variant — those aren't constructed with
+    // call syntax, but we'd still error elsewhere. Skip to avoid noise.
+    if arity == 0 {
+        return;
+    }
+    if args.len() != arity {
+        errors.push(TypeCheckError::EnumVariantArity {
+            enum_name: enum_name.clone(),
+            variant: variant.to_string(),
+            expected: arity,
+            found: args.len(),
+            span: to_source_span(span),
+        });
+    }
+}
+
+/// Emit [`TypeCheckError::FunctionArity`] for direct calls to top-level
+/// user-defined functions when the supplied positional-argument count
+/// can't match the declared signature.
+fn report_if_user_function_arity(
+    callee: &Spanned<Expr>,
+    args: &[CallArg],
+    errors: &mut Vec<TypeCheckError>,
+    span: std::ops::Range<usize>,
+) {
+    let Expr::Ident(name) = &callee.value else { return };
+    let Some(info) = funcs::lookup(name) else { return };
+
+    // Skip when any argument is named — those may legitimately fill in
+    // defaults out of order. The runtime still validates names.
+    if args.iter().any(|a| matches!(a, CallArg::Named { .. })) {
+        return;
+    }
+
+    let positional = args.len();
+    if info.variadic {
+        // With a variadic last param, `total - 1 - defaults` is the
+        // minimum required positional count.
+        let min_required = info.total.saturating_sub(1).saturating_sub(info.defaults);
+        if positional < min_required {
+            errors.push(TypeCheckError::FunctionArity {
+                callee: name.clone(),
+                expected: min_required,
+                found: positional,
+                span: to_source_span(span),
+            });
+        }
+        return;
+    }
+
+    let min_required = info.total.saturating_sub(info.defaults);
+    if positional < min_required || positional > info.total {
+        errors.push(TypeCheckError::FunctionArity {
+            callee: name.clone(),
+            expected: info.total,
+            found: positional,
+            span: to_source_span(span),
         });
     }
 }
@@ -514,20 +665,48 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             }
         },
         // `Foo(args)` where `Foo` is a known class → produces a `Foo`.
-        // Otherwise, look up the qualified callee name in the native signature
-        // table (e.g. `String.byte`, `Math.tointeger`, `assert`).
+        // Otherwise, look up the qualified callee name in:
+        //   1. the local class registry as a user-defined method
+        //      (`Foo.bar(...)` → return type of `Foo.bar`); or
+        //   2. the native signature table (`String.byte`, `Math.tointeger`,
+        //      `assert`).
         Expr::Call { callee, .. } => {
             if let Expr::Ident(n) = &callee.value
                 && with_classes(|reg| reg.contains_key(n))
             {
-                Some(Type::Named(n.clone()))
-            } else if let Some(qname) = native_callee_name(callee)
+                return Some(Type::Named(n.clone()));
+            }
+            // `Class.method(args)` — receiver is the class itself.
+            if let Expr::Member { obj, name } = &callee.value
+                && let Expr::Ident(class_name) = &obj.value
+                && let Some(sig) = saule_semantic::lookup_method(class_name, name)
+            {
+                return sig.return_ty;
+            }
+            // `instance.method(args)` — receiver inferred to a class.
+            if let Expr::Member { obj, name } = &callee.value
+                && let Some(ty) = infer(obj, scope)
+                && let Type::Named(class_name) = strip_nullable(ty)
+                && let Some(sig) = saule_semantic::lookup_method(&class_name, name)
+            {
+                return sig.return_ty;
+            }
+            if let Some(qname) = native_callee_name(callee)
                 && let Some(sig) = crate::sigs::lookup(&qname)
             {
-                first_or_tuple(sig.returns)
-            } else {
-                None
+                return first_or_tuple(sig.returns);
             }
+            None
+        }
+        // `obj:method(args)` — same lookup as the `obj.method(args)` case.
+        Expr::MethodCall { obj, method, .. } => {
+            if let Some(ty) = infer(obj, scope)
+                && let Type::Named(class_name) = strip_nullable(ty)
+                && let Some(sig) = saule_semantic::lookup_method(&class_name, method)
+            {
+                return sig.return_ty;
+            }
+            None
         }
         // A `match` expression has the type of its (unified) arm bodies. We
         // only need an approximation, so return the first arm-body type we

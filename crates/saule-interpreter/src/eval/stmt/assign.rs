@@ -31,8 +31,15 @@ pub(super) fn assign_target(
             if env.borrow_mut().assign(name, v) {
                 Ok(Flow::nil())
             } else {
-                Err(RuntimeError::AssignUndeclared {
-                    name: name.clone(),
+                // Caught earlier by `saule_semantic::analyze` as
+                // `AssignToUndeclared`. Only reachable via the low-level
+                // `run()` entry point on a module that wasn't checked first.
+                Err(RuntimeError::TypeError {
+                    message: format!(
+                        "internal: assignment to undeclared `{name}` reached \
+                         evaluation — `saule_semantic::analyze` was not run on \
+                         this module"
+                    ),
                     span: target.span.clone(),
                 })
             }

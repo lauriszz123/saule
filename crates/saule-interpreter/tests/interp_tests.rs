@@ -1,13 +1,14 @@
 //! Tests moved out of src/lib.rs.
-use saule_interpreter::{RuntimeError, Value, run};
+use saule_interpreter::{PipelineError, RuntimeError, Value, check_and_run};
 use saule_lexer::Lexer;
 use saule_parser::parse;
+use saule_semantic::SemanticError;
 use std::rc::Rc;
 
-fn eval(src: &str) -> Result<Value, RuntimeError> {
+fn eval(src: &str) -> Result<Value, PipelineError> {
     let toks = Lexer::new(src).tokenize().expect("lex");
     let module = parse(toks).expect("parse");
-    run(&module)
+    check_and_run(&module)
 }
 
 // ── Phase 1 regression coverage ──────────────────────────────────────────
@@ -29,7 +30,7 @@ fn float_arithmetic() {
 fn mixing_int_and_float_errors() {
     assert!(matches!(
         eval("1 + 2.0").unwrap_err(),
-        RuntimeError::NumericMix { .. }
+        PipelineError::Runtime(RuntimeError::NumericMix { .. })
     ));
 }
 
@@ -80,7 +81,7 @@ fn print_native_call() {
 fn undefined_variable_errors() {
     assert!(matches!(
         eval("nope").unwrap_err(),
-        RuntimeError::Undefined { .. }
+        PipelineError::Semantic(SemanticError::UndefinedName { .. })
     ));
 }
 
@@ -88,7 +89,7 @@ fn undefined_variable_errors() {
 fn division_by_zero() {
     assert!(matches!(
         eval("1 / 0").unwrap_err(),
-        RuntimeError::DivisionByZero { .. }
+        PipelineError::Runtime(RuntimeError::DivisionByZero { .. })
     ));
 }
 
@@ -117,7 +118,7 @@ fn assign_to_undeclared_errors() {
     let src = "x = 1";
     assert!(matches!(
         eval(src).unwrap_err(),
-        RuntimeError::AssignUndeclared { .. }
+        PipelineError::Semantic(SemanticError::AssignToUndeclared { .. })
     ));
 }
 
@@ -169,7 +170,7 @@ fn if_body_introduces_scope() {
     "#;
     assert!(matches!(
         eval(src).unwrap_err(),
-        RuntimeError::Undefined { .. }
+        PipelineError::Semantic(SemanticError::UndefinedName { .. })
     ));
 }
 
@@ -272,7 +273,7 @@ fn numeric_for_zero_step_errors() {
     "#;
     assert!(matches!(
         eval(src).unwrap_err(),
-        RuntimeError::ZeroStep { .. }
+        PipelineError::Runtime(RuntimeError::ZeroStep { .. })
     ));
 }
 
@@ -282,7 +283,7 @@ fn numeric_for_zero_step_errors() {
 fn break_outside_loop_errors() {
     assert!(matches!(
         eval("break").unwrap_err(),
-        RuntimeError::LoopControlOutsideLoop { which: "break", .. }
+        PipelineError::Semantic(SemanticError::LoopControlOutsideLoop { which: "break", .. })
     ));
 }
 
@@ -359,9 +360,11 @@ fn missing_argument_errors() {
         end
         add(1)
     "#;
+    // Caught at the typeck phase now: `saule_typeck` validates direct
+    // calls to top-level functions against their declared arity.
     assert!(matches!(
         eval(src).unwrap_err(),
-        RuntimeError::ArgumentError { .. }
+        PipelineError::Typeck(saule_typeck::TypeCheckError::FunctionArity { .. })
     ));
 }
 
@@ -402,7 +405,7 @@ fn calling_non_callable_errors() {
     "#;
     assert!(matches!(
         eval(src).unwrap_err(),
-        RuntimeError::TypeError { .. }
+        PipelineError::Runtime(RuntimeError::TypeError { .. })
     ));
 }
 
@@ -425,7 +428,7 @@ fn try_eval(src: &str) -> Result<Value, String> {
         .tokenize()
         .map_err(|e| format!("lex error: {e:?}"))?;
     let module = parse(toks).map_err(|e| format!("parse error: {e:?}"))?;
-    run(&module).map_err(|e| format!("runtime error: {e:?}"))
+    check_and_run(&module).map_err(|e| format!("{e:?}"))
 }
 
 fn assert_int(src: &str, expected: i64) {

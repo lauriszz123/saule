@@ -56,17 +56,26 @@ fn run_source(
     let module =
         saule_parser::parse(tokens).map_err(|e| Report::new(e).with_source_code(make_src()))?;
 
+    // Pre-collect class/interface/enum metadata from each direct import
+    // so the typechecker can see imported method signatures (e.g. the
+    // return type of `Json.decode(...)` from an imported `json` module).
+    let seed = match &module_dir {
+        Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
+        None => saule_semantic::ModuleSeed::default(),
+    };
+
     // Static analysis runs *before* evaluation so we fail fast on declarative
     // errors without ever executing user code. The pipeline is:
     //
     //   1. semantic — registry build, definite-assignment, control-flow
-    //                 validity (`break` / `continue` / `return` placement).
+    //                 validity (`break` / `continue` placement), name
+    //                 resolution, etc.
     //   2. typeck   — null safety, return types, native arg/arity, match
     //                 exhaustiveness, etc.
     //
     // Semantic runs first because the type pass assumes a structurally
     // valid module and reads the class/interface/enum registry it installs.
-    let sem_errors = saule_interpreter::semantic::analyze(&module);
+    let sem_errors = saule_interpreter::semantic::analyze_with_seed(&module, seed);
     if let Some(first) = sem_errors.into_iter().next() {
         return Err(Report::new(first).with_source_code(make_src()));
     }

@@ -22,6 +22,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use saule_ast::Type;
 
@@ -40,10 +41,12 @@ pub struct NativeSig {
     pub returns: Vec<Type>,
 }
 
+/// Process-global initializer slot. Set once by the embedder.
+static INITIALIZER: OnceLock<fn()> = OnceLock::new();
+
 thread_local! {
     static SIGS: RefCell<HashMap<String, NativeSig>> = RefCell::new(HashMap::new());
     static INIT_DONE: Cell<bool> = const { Cell::new(false) };
-    static INITIALIZER: Cell<Option<fn()>> = const { Cell::new(None) };
 }
 
 /// Register `name -> sig`. Overwrites silently — the embedder's initializer
@@ -72,11 +75,9 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
 /// [`lookup`]. Typically called once at startup by the interpreter so its
 /// stdlib signatures appear in the registry before any type-check pass.
 ///
-/// Calling this after the initializer has already fired has no effect on the
-/// current registration but will run the *new* initializer on the next
-/// fresh thread.
+/// Subsequent calls are silently ignored (`OnceLock` semantics).
 pub fn set_initializer(f: fn()) {
-    INITIALIZER.with(|s| s.set(Some(f)));
+    let _ = INITIALIZER.set(f);
 }
 
 /// Look up by qualified (`"String.byte"`) or bare (`"assert"`) name.
@@ -94,7 +95,7 @@ fn ensure_registered() {
         return;
     }
     INIT_DONE.with(|d| d.set(true));
-    if let Some(f) = INITIALIZER.with(Cell::get) {
+    if let Some(f) = INITIALIZER.get() {
         f();
     }
 }

@@ -1,13 +1,17 @@
 //! Control-flow validity check.
 //!
-//! Walks every statement tracking whether we're currently inside a loop
-//! and/or inside a function body, and reports `break` / `continue` /
-//! `return` statements that appear outside those contexts.
+//! Walks every statement tracking whether we're currently inside a loop,
+//! and reports `break` / `continue` statements that appear outside loop
+//! bodies.
 //!
-//! Lambdas and nested function declarations open new function frames;
-//! `for` / `while` / `repeat` open new loop frames. Try/catch is *not* a
-//! loop, so a `break` inside `try` is only valid if the `try` itself sits
-//! inside a loop.
+//! Lambdas and nested function declarations *reset* the loop context: a
+//! `break` inside a lambda that happens to live syntactically inside a
+//! `while` does NOT escape the outer loop, so the inner frame is treated
+//! as if it were at module scope.
+//!
+//! `return` placement is *not* restricted — at module top level it's the
+//! script's exit value (Lua-style); inside a function body it returns
+//! from that function. Either is fine.
 
 use saule_ast::{ClassMember, Decl, Expr, LambdaBody, MatchBody, Spanned, Stmt};
 
@@ -17,26 +21,20 @@ use crate::to_source_span;
 #[derive(Clone, Copy)]
 struct Ctx {
     in_loop: bool,
-    in_function: bool,
 }
 
 impl Ctx {
     const fn top() -> Self {
-        // The file's top level is a script body; it sits inside no loop
-        // and inside no function. `Main.main` opens a function frame when
-        // we recurse into it.
-        Self { in_loop: false, in_function: false }
+        Self { in_loop: false }
     }
 
     const fn enter_loop(self) -> Self {
-        Self { in_loop: true, in_function: self.in_function }
+        Self { in_loop: true }
     }
 
-    const fn enter_function(self) -> Self {
-        // A new function body resets the loop context: a `break` inside a
-        // lambda that happens to live inside a `while` does NOT escape the
-        // outer loop.
-        Self { in_loop: false, in_function: true }
+    /// Crossing a function boundary resets the loop context.
+    const fn enter_function() -> Self {
+        Self { in_loop: false }
     }
 }
 
@@ -75,11 +73,11 @@ fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
             }
         }
         Stmt::Return(values) => {
-            if !ctx.in_function {
-                errors.push(SemanticError::ReturnOutsideFunction {
-                    span: to_source_span(stmt.span.clone()),
-                });
-            }
+            // Saule/Lua semantics: `return` is valid at every level —
+            // inside a function body it returns the function's value, at
+            // module top level it ends script load and yields the module's
+            // value (used by the REPL and by test harnesses). We therefore
+            // only walk the operands; placement isn't restricted.
             for v in values {
                 check_expr(v, ctx, errors);
             }
@@ -157,7 +155,7 @@ fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                     check_expr(d, ctx, errors);
                 }
             }
-            check_block(body, Ctx::top().enter_function(), errors);
+            check_block(body, Ctx::enter_function(), errors);
         }
         Decl::Class { members, .. } => {
             for m in members {
@@ -168,7 +166,7 @@ fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                                 check_expr(d, ctx, errors);
                             }
                         }
-                        check_block(&meth.body, Ctx::top().enter_function(), errors);
+                        check_block(&meth.body, Ctx::enter_function(), errors);
                     }
                     ClassMember::Field { default: Some(d), .. } => {
                         check_expr(d, ctx, errors);
@@ -184,7 +182,7 @@ fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                         check_expr(d, ctx, errors);
                     }
                 }
-                check_block(&meth.body, Ctx::top().enter_function(), errors);
+                check_block(&meth.body, Ctx::enter_function(), errors);
             }
         }
         // Interface / Import declarations have no executable body.
@@ -234,7 +232,7 @@ fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                     check_expr(d, ctx, errors);
                 }
             }
-            let inner = Ctx::top().enter_function();
+            let inner = Ctx::enter_function();
             match body {
                 LambdaBody::Expr(e) => check_expr(e, inner, errors),
                 LambdaBody::Block(b) => check_block(b, inner, errors),

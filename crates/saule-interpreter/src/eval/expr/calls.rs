@@ -330,12 +330,20 @@ fn run_function_body_multi_inner(
     match outcome {
         Flow::Return(values) => Ok(values),
         Flow::Normal(_) => Ok(vec![Value::Nil]),
-        Flow::Break => Err(RuntimeError::LoopControlOutsideLoop {
-            which: "break",
+        // `break` / `continue` escaping a function body is rejected by
+        // `saule_semantic`'s control-flow walker before we ever evaluate.
+        // Reaching this arm means the caller skipped semantic — surface as
+        // a generic type error rather than carry a dedicated variant.
+        Flow::Break => Err(RuntimeError::TypeError {
+            message: "internal: `break` escaped a function body — \
+                      `saule_semantic::analyze` was not run on this module"
+                .to_string(),
             span,
         }),
-        Flow::Continue => Err(RuntimeError::LoopControlOutsideLoop {
-            which: "continue",
+        Flow::Continue => Err(RuntimeError::TypeError {
+            message: "internal: `continue` escaped a function body — \
+                      `saule_semantic::analyze` was not run on this module"
+                .to_string(),
             span,
         }),
     }

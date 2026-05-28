@@ -5,37 +5,22 @@
 //! * `saule_lexer::LexerError` — lexing
 //! * `saule_parser::ParseError` — parsing
 //! * `saule_semantic::SemanticError` — structural / control-flow / definite
-//!   assignment (catches what would otherwise fire as `Undefined`,
-//!   `AssignUndeclared`, `LoopControlOutsideLoop`, or `ReturnOutsideFunction`
-//!   at runtime)
-//! * `saule_typeck::TypeCheckError` — types, nullability, match exhaustiveness
+//!   assignment / name resolution
+//! * `saule_typeck::TypeCheckError` — types, nullability, match exhaustiveness,
+//!   unknown members, function arity, …
 //! * `RuntimeError` (this file) — only genuinely-dynamic failures: division
 //!   by zero, force-unwrap of `nil`, uncaught `throw`, file-I/O, etc.
 //!
-//! A few "structural" variants (`Undefined`, `LoopControlOutsideLoop`, …)
-//! are kept here as defensive guards for callers that invoke [`crate::run`]
-//! directly without running the semantic pass first; the standard pipeline
-//! (CLI, module loader) ensures they never fire in practice.
+//! The variants below are the residual set after semantic + typeck have run.
+//! Anything caught by an earlier pass has been removed; if you find yourself
+//! about to add a new variant here, consider whether semantic or typeck is
+//! the more appropriate owner first.
 
 use miette::Diagnostic;
 use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum RuntimeError {
-    #[error("undefined variable `{name}` — it is not in scope")]
-    Undefined {
-        name: String,
-        #[label("not defined; declare it with `local` or check the spelling")]
-        span: std::ops::Range<usize>,
-    },
-
-    #[error("cannot assign to undeclared variable `{name}` — use `local {name} = ...` to declare it first")]
-    AssignUndeclared {
-        name: String,
-        #[label("declare with `local` before assigning")]
-        span: std::ops::Range<usize>,
-    },
-
     #[error("invalid assignment target")]
     InvalidAssignTarget {
         #[label("only identifiers and member/index access can be assigned to")]
@@ -73,19 +58,6 @@ pub enum RuntimeError {
     #[error("numeric `for` loop requires a non-zero step value")]
     ZeroStep {
         #[label("step cannot be 0 — use a positive or negative number")]
-        span: std::ops::Range<usize>,
-    },
-
-    #[error("`{which}` is only valid inside a loop")]
-    LoopControlOutsideLoop {
-        which: &'static str,
-        #[label("move this inside a `for`, `while`, or `repeat` loop")]
-        span: std::ops::Range<usize>,
-    },
-
-    #[error("`return` is only valid inside a function")]
-    ReturnOutsideFunction {
-        #[label("move this statement inside a `fn` definition")]
         span: std::ops::Range<usize>,
     },
 

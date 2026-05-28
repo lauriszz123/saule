@@ -11,5 +11,6 @@ path = "src/main.rs"
 [dependencies]
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
+saule-semantic = { path = "../saule-semantic" }
 saule-interpreter = { path = "../saule-interpreter" }
 miette = { version = "7.6.0", features = ["fancy"] }

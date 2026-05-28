@@ -47,8 +47,12 @@ pub(super) fn exec_class_decl(
                 });
             }
             None => {
-                return Err(RuntimeError::Undefined {
-                    name: pname.clone(),
+                return Err(RuntimeError::TypeError {
+                    message: format!(
+                        "cannot extend `{}`: no class with that name is in scope at runtime \
+                         (was it imported and visible at this point?)",
+                        pname
+                    ),
                     span,
                 });
             }
@@ -132,8 +136,12 @@ pub(super) fn exec_class_decl(
                 });
             }
             None => {
-                return Err(RuntimeError::Undefined {
-                    name: interface_name.clone(),
+                return Err(RuntimeError::TypeError {
+                    message: format!(
+                        "cannot implement `{}`: no interface with that name is in scope at \
+                         runtime (was it imported and visible at this point?)",
+                        interface_name
+                    ),
                     span,
                 });
             }

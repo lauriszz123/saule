@@ -46,6 +46,25 @@ pub fn register_all_sigs() {
     os::register_sigs();
 }
 
+/// Every identifier the stdlib injects into the prelude. Consumed by
+/// `saule-semantic`'s name resolver so references like `print`, `Math`,
+/// `Iterable`, etc. aren't flagged as undefined.
+///
+/// Keep in sync with the bodies of the `install` functions in this module.
+pub fn all_prelude_names() -> Vec<&'static str> {
+    vec![
+        // core natives
+        "print", "println", "printf", "tostring", "type", "int", "float",
+        "tonumber", "tointeger", "tofloat", "assert", "error",
+        // iter
+        "Iterable", "Iterable2", "pairs", "ipairs",
+        // class-style stdlib globals
+        "Math", "String", "Table", "Io", "File", "Os", "Project",
+        // stdlib enums
+        "IoMode", "IoSeek", "OsPlatform",
+    ]
+}
+
 pub(crate) fn define_native(
     env: &Rc<RefCell<Environment>>,
     name: &'static str,

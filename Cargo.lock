@@ -196,6 +196,7 @@ dependencies = [
  "saule-interpreter",
  "saule-lexer",
  "saule-parser",
+ "saule-semantic",
 ]
 
 [[package]]

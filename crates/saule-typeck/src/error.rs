@@ -193,4 +193,69 @@ pub enum TypeCheckError {
         #[label("wrong number of sub-patterns")]
         span: miette::SourceSpan,
     },
+
+    #[error("no member `{member}` on `{receiver}`")]
+    #[diagnostic(help(
+        "check the spelling, or add `{member}` as a field / method to `{receiver}`"
+    ))]
+    UnknownMember {
+        receiver: String,
+        member: String,
+        #[label("unknown member")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("enum `{enum_name}` has no variant `{variant}`")]
+    #[diagnostic(help("check the spelling of the variant or add it to the enum"))]
+    UnknownEnumVariant {
+        enum_name: String,
+        variant: String,
+        #[label("unknown variant")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("class `{name}` cannot extend `{parent}` — no class with that name is in scope")]
+    #[diagnostic(help("define `class {parent}` first, or import it from another module"))]
+    UnknownParentClass {
+        name: String,
+        parent: String,
+        #[label("unknown parent class")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("class `{name}` cannot implement `{iface}` — no interface with that name is in scope")]
+    #[diagnostic(help(
+        "define `interface {iface}` first, import it, or remove it from the `implements` list"
+    ))]
+    UnknownInterface {
+        name: String,
+        iface: String,
+        #[label("unknown interface")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{callee}` expects {expected} argument(s), got {found}")]
+    #[diagnostic(help(
+        "check the signature of `{callee}` — pass exactly the right number of arguments (or rely on declared defaults)"
+    ))]
+    FunctionArity {
+        callee: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of arguments")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("enum variant `{enum_name}.{variant}` expects {expected} field(s), got {found}")]
+    #[diagnostic(help(
+        "construct the variant with exactly the declared positional fields"
+    ))]
+    EnumVariantArity {
+        enum_name: String,
+        variant: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of fields")]
+        span: miette::SourceSpan,
+    },
 }

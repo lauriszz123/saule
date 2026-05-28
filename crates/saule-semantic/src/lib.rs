@@ -28,14 +28,16 @@ use saule_ast::{Decl, Module, Stmt};
 mod control_flow;
 mod error;
 mod field_init;
+pub mod prelude;
 pub mod registry;
+mod resolve;
 
 pub use error::SemanticError;
 pub use registry::{
-    ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, InterfaceRegistry, build_registry,
-    class_implements, class_implements_iterable, clear_registries, install_registries,
-    interface_extends, is_interface, is_subtype_named, lookup_member, with_classes, with_enums,
-    with_interfaces,
+    ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, InterfaceRegistry, MethodSig,
+    build_registry, class_implements, class_implements_iterable, clear_registries,
+    install_registries, interface_extends, is_interface, is_subtype_named, lookup_member,
+    lookup_method, with_classes, with_enums, with_interfaces,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
@@ -44,14 +46,43 @@ pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
     (r.start, r.end.saturating_sub(r.start)).into()
 }
 
-/// Run every semantic check on a parsed module.
+/// Pre-built class / interface / enum metadata to splice into the
+/// registry before analysing the current module. Used by embedders that
+/// can resolve `import` statements (the interpreter's module loader)
+/// to make imported classes' method signatures visible to the
+/// typechecker.
 ///
-/// As a side effect this installs the class/interface/enum registries into
-/// thread-local slots so a subsequent `saule_typeck::check` call sees the
-/// same metadata without re-walking the AST. Callers that don't intend to
-/// typecheck can call [`clear_registries`] afterwards.
+/// Locally-declared symbols always win on a name collision: if a module
+/// declares `class Json` *and* imports a `Json` from elsewhere, the
+/// imported entry is ignored.
+#[derive(Default, Debug)]
+pub struct ModuleSeed {
+    pub classes: ClassRegistry,
+    pub interfaces: InterfaceRegistry,
+    pub enums: EnumRegistry,
+}
+
+/// Run every semantic check on a parsed module. See [`analyze_with_seed`]
+/// to also include metadata from imported modules.
 pub fn analyze(module: &Module) -> Vec<SemanticError> {
-    let (reg, ifaces, enums) = build_registry(module);
+    analyze_with_seed(module, ModuleSeed::default())
+}
+
+/// Like [`analyze`] but seeds the class / interface / enum registry with
+/// metadata pre-collected from this module's imports. The seed augments
+/// (but does not override) the metadata extracted from the current
+/// module's own declarations.
+pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError> {
+    let (mut reg, mut ifaces, mut enums) = build_registry(module);
+    for (name, info) in seed.classes {
+        reg.entry(name).or_insert(info);
+    }
+    for (name, ext) in seed.interfaces {
+        ifaces.entry(name).or_insert(ext);
+    }
+    for (name, info) in seed.enums {
+        enums.entry(name).or_insert(info);
+    }
     install_registries(reg, ifaces, enums);
 
     let mut errors = Vec::new();
@@ -67,6 +98,11 @@ pub fn analyze(module: &Module) -> Vec<SemanticError> {
 
     // Control-flow validity over every executable region.
     control_flow::check_module(module, &mut errors);
+
+    // Name resolution + a bundle of structural checks
+    // (self/super placement, variadic param shape, arg ordering, for-in
+    // arity). Walks the AST once, sharing scope state across the checks.
+    resolve::check(module, &mut errors);
 
     errors
 }

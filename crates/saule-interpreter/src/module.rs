@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use saule_ast::{Decl, Module, Spanned, Stmt};
+use saule_ast::{Decl, ImportNames, Module, Spanned, Stmt};
 
 use crate::env::Environment;
 use crate::error::{ImportedDiagnostic, RuntimeError};
@@ -198,10 +198,23 @@ fn load_module_inner(
 
     let module = saule_parser::parse(tokens).map_err(|e| wrap(&e))?;
 
+    let dir = abs_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    // Pre-collect class/interface/enum metadata from every directly-
+    // imported file so the typechecker sees imported methods' signatures.
+    // The seed is best-effort: if an import can't be resolved or parsed,
+    // we skip it silently — semantic/typeck will surface the user-facing
+    // issue separately, and missing seed entries just mean we can't
+    // statically check those particular calls.
+    let seed = collect_import_seed(&module, &dir);
+
     // Pipeline: semantic (registry build + field-init + control-flow) runs
     // first; if it produces *any* error we don't even attempt typecheck —
     // the type pass assumes a structurally valid module.
-    let sem_errors = saule_semantic::analyze(&module);
+    let sem_errors = saule_semantic::analyze_with_seed(&module, seed);
     if let Some(first) = sem_errors.into_iter().next() {
         return Err(wrap(&first));
     }
@@ -211,10 +224,6 @@ fn load_module_inner(
         return Err(wrap(&first));
     }
 
-    let dir = abs_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
     let env = Environment::with_prelude_and_context(Some(dir), Some(loader.clone()));
 
     // Park the module's `NamedSource` for the duration of its top-level
@@ -285,3 +294,72 @@ fn exported_name(decl: &Decl) -> Option<&str> {
 // (kept here in case future loader paths need explicit span info).
 #[allow(dead_code)]
 fn _spanned_marker(_: &Spanned<Stmt>) {}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Cross-module typecheck seed
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Walk every `import ... from "path"` statement in `module`, resolve the
+/// target file, parse it, and harvest its exported class / interface /
+/// enum metadata into a [`saule_semantic::ModuleSeed`]. Returned to the
+/// caller so they can hand it to [`saule_semantic::analyze_with_seed`] —
+/// the result lets the typechecker know the return types of imported
+/// methods like `Json.decode(...)`.
+///
+/// Best-effort: any import that fails to resolve, read, or parse is
+/// silently skipped — semantic/typeck will surface the user-facing error
+/// (or, in the import-fails case, the runtime loader will).
+pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::ModuleSeed {
+    let mut seed = saule_semantic::ModuleSeed::default();
+
+    for stmt in &module.stmts {
+        let Stmt::Decl(d) = &stmt.value else { continue };
+        let Decl::Import { names, path } = &d.value else { continue };
+
+        let Some(abs) = resolve_import_path(dir, path) else { continue };
+        let Ok(source) = std::fs::read_to_string(&abs) else { continue };
+        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else { continue };
+        let Ok(imported) = saule_parser::parse(tokens) else { continue };
+
+        let (reg, ifaces, enums) = saule_semantic::build_registry(&imported);
+
+        // For each top-level decl in the imported module, decide which
+        // (local) alias to register it under. Wildcard imports adopt the
+        // original name; named imports rename per `as`-clause.
+        let aliases = collect_import_aliases(&imported, names);
+
+        for (orig, alias) in aliases {
+            if let Some(info) = reg.get(&orig).cloned() {
+                seed.classes.entry(alias.clone()).or_insert(info);
+            }
+            if let Some(ext) = ifaces.get(&orig).cloned() {
+                seed.interfaces.entry(alias.clone()).or_insert(ext);
+            }
+            if let Some(info) = enums.get(&orig).cloned() {
+                seed.enums.entry(alias).or_insert(info);
+            }
+        }
+    }
+
+    seed
+}
+
+/// Resolve which `(original_name, local_alias)` pairs come into the
+/// importing module's scope from one `import` statement.
+fn collect_import_aliases(imported: &Module, names: &ImportNames) -> Vec<(String, String)> {
+    match names {
+        ImportNames::All => imported
+            .stmts
+            .iter()
+            .filter_map(|s| match &s.value {
+                Stmt::Decl(d) => exported_name(&d.value).map(|n| (n.to_string(), n.to_string())),
+                _ => None,
+            })
+            .collect(),
+        ImportNames::List(items) => items
+            .iter()
+            .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
+            .collect(),
+    }
+}
+

@@ -11,8 +11,8 @@ use super::expr::{
     check_table_key_compat, infer, is_nullable, narrow_falsy, narrow_truthy, type_to_string,
 };
 use super::state::{
-    Scope, class_implements_iterable, is_type_param, pop_generics, push_generics, set_current_class,
-    with_classes,
+    Scope, class_implements_iterable, is_interface, is_type_param, pop_generics, push_generics,
+    set_current_class, with_classes,
 };
 use super::to_source_span;
 
@@ -241,9 +241,45 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
     match decl {
         Decl::Class {
             name: class_name,
+            extends,
+            implements,
             members,
             ..
-        } => check_class(class_name, members, errors),
+        } => {
+            // Validate the class hierarchy: every name in `extends` /
+            // `implements` must refer to a real class / interface that
+            // semantic has already collected into the registry.
+            if let Some(parent) = extends
+                && !with_classes(|r| r.contains_key(parent))
+            {
+                // Point the diagnostic at the first member span — class
+                // span isn't readily available here; tweaking the AST to
+                // carry it is left for a follow-up.
+                let span = members
+                    .first()
+                    .map(|m| m.span.clone())
+                    .unwrap_or(0..0);
+                errors.push(TypeCheckError::UnknownParentClass {
+                    name: class_name.clone(),
+                    parent: parent.clone(),
+                    span: to_source_span(span),
+                });
+            }
+            for iface in implements {
+                if !is_interface(iface) {
+                    let span = members
+                        .first()
+                        .map(|m| m.span.clone())
+                        .unwrap_or(0..0);
+                    errors.push(TypeCheckError::UnknownInterface {
+                        name: class_name.clone(),
+                        iface: iface.clone(),
+                        span: to_source_span(span),
+                    });
+                }
+            }
+            check_class(class_name, members, errors)
+        }
         Decl::Function {
             type_params,
             params,

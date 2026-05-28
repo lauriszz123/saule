@@ -56,6 +56,25 @@ pub use error::RuntimeError;
 pub use eval::Flow;
 pub use value::{NativeFn, Value};
 
+/// Unified diagnostic for the full source-to-value pipeline. Each variant
+/// is `#[diagnostic(transparent)]` so miette renders it indistinguishably
+/// from the inner family's own diagnostics — callers (CLI, tests) only need
+/// to handle one error type.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+pub enum PipelineError {
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Semantic(#[from] saule_semantic::SemanticError),
+
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Typeck(#[from] saule_typeck::TypeCheckError),
+
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Runtime(#[from] RuntimeError),
+}
+
 /// One-shot, idempotent initialization the embedder should call before any
 /// `typeck::check` / `run` pass. Today this just wires the stdlib's native
 /// signatures into the typechecker's registry; future startup work (logging,
@@ -71,6 +90,7 @@ pub fn init() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         saule_typeck::sigs::set_initializer(stdlib::register_all_sigs);
+        saule_semantic::prelude::set_provider(stdlib::all_prelude_names);
     });
 }
 
@@ -114,6 +134,9 @@ pub fn call_class_static_method(
 
 /// Run a parsed [`Module`] in a fresh environment seeded with built-ins.
 ///
+/// **Low-level entry point** — see [`check_and_run`] for the full pipeline
+/// that runs `saule_semantic::analyze` and `saule_typeck::check` first.
+///
 /// Returns the value of the last evaluated expression-statement (useful for
 /// the REPL and for tests).
 pub fn run(module: &Module) -> Result<Value, RuntimeError> {
@@ -122,22 +145,64 @@ pub fn run(module: &Module) -> Result<Value, RuntimeError> {
     run_in(module, &env)
 }
 
+/// Run the full source-to-value pipeline on a parsed module:
+/// `semantic::analyze` → `typeck::check` → [`run`]. Returns the first
+/// diagnostic from whichever phase failed.
+///
+/// This is the entry point most embedders should use; the CLI's
+/// `run_source` does the same thing but also carries `NamedSource` so
+/// miette can render snippets.
+pub fn check_and_run(module: &Module) -> Result<Value, PipelineError> {
+    check_and_run_in(module, None)
+}
+
+/// Like [`check_and_run`] but lets the caller specify the directory the
+/// module lives in so cross-module imports can be resolved when building
+/// the typecheck seed. Pass `None` for in-memory snippets (tests, REPL).
+pub fn check_and_run_in(
+    module: &Module,
+    dir: Option<&std::path::Path>,
+) -> Result<Value, PipelineError> {
+    init();
+    let seed = match dir {
+        Some(d) => module::collect_import_seed(module, d),
+        None => saule_semantic::ModuleSeed::default(),
+    };
+    if let Some(first) = semantic::analyze_with_seed(module, seed).into_iter().next() {
+        return Err(PipelineError::Semantic(first));
+    }
+    if let Some(first) = typeck::check(module).into_iter().next() {
+        return Err(PipelineError::Typeck(first));
+    }
+    Ok(run(module)?)
+}
+
 /// Run a [`Module`] inside a caller-supplied environment.
+///
+/// **Low-level entry point** — assumes the caller has already invoked
+/// `saule_semantic::analyze` and `saule_typeck::check` on the module. For
+/// the safe, full-pipeline alternative see [`check_and_run`].
 pub fn run_in(module: &Module, env: &Rc<RefCell<Environment>>) -> Result<Value, RuntimeError> {
     init();
     match eval::stmt::exec_block(&module.stmts, env)? {
         Flow::Normal(v) => Ok(v),
-        // At the top level these are illegal — `Stmt::Return` is rejected
-        // inside `exec`; `break`/`continue` reach here only if they appear
-        // outside any loop.
-        Flow::Break => Err(RuntimeError::LoopControlOutsideLoop {
-            which: "break",
-            span: 0..0,
-        }),
-        Flow::Continue => Err(RuntimeError::LoopControlOutsideLoop {
-            which: "continue",
-            span: 0..0,
-        }),
         Flow::Return(values) => Ok(values.into_iter().next().unwrap_or(Value::Nil)),
+        // `break` / `continue` / loose `return` at module top level are
+        // rejected by `saule_semantic`'s control-flow walker before we ever
+        // get here. The standard pipeline (CLI, module loader, and
+        // [`check_and_run`]) guarantees that; only a bare `run_in` on an
+        // unchecked module could reach these arms.
+        Flow::Break => Err(RuntimeError::TypeError {
+            message: "internal: `break` at module top level reached evaluation — \
+                      `saule_semantic::analyze` was not run on this module"
+                .to_string(),
+            span: 0..0,
+        }),
+        Flow::Continue => Err(RuntimeError::TypeError {
+            message: "internal: `continue` at module top level reached evaluation — \
+                      `saule_semantic::analyze` was not run on this module"
+                .to_string(),
+            span: 0..0,
+        }),
     }
 }

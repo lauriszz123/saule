@@ -16,3 +16,5 @@ thiserror = "2.0.18"
 [dev-dependencies]
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
+saule-semantic = { path = "../saule-semantic" }
+saule-typeck = { path = "../saule-typeck" }

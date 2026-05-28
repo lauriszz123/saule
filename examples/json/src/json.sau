@@ -1,0 +1,8 @@
+export class Json
+    static fn encode(data: table<string, any>) -> string
+    end
+
+    static fn decode(source: string) -> table<string, any>?
+        println(source)
+    end
+end

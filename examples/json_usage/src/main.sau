@@ -2,7 +2,21 @@ import Json from "json/json"
 
 class Main
     static fn main()
-        Json.decode("{\"message\": \"Hello, world!\"}")
-        println("Hello, world!")
+        local jsonObj = Json.decode(loadFile("test.json")!)
+        if jsonObj == nil then
+            println("Is nil")
+        else
+            println(type(jsonObj))
+        end
+    end
+
+    static fn loadFile(path: string) -> string?
+        if Os.exists(path) then
+            local file: File = Io.open(path, IoMode.Read)!
+            local source: string = file.read("a")
+            file.close()
+
+            return source
+        end
     end
 end
