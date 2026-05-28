@@ -2,7 +2,7 @@
 
 This is the reference for everything Saule ships out of the box — the prelude
 (`print`, `assert`, …) plus the seven static-class modules (`String`, `Math`,
-`Table`, `pairs`/`ipairs`, `Io` / `File`, `Os`).
+`Table`, `Io` / `File`, `Os`).
 
 For language syntax see [README.md](./README.md). For the runtime side of
 errors / pattern matching / generics see the corresponding README sections.
@@ -18,7 +18,6 @@ errors / pattern matching / generics see the corresponding README sections.
 - [`String`](#string)
 - [`Math`](#math)
 - [`Table`](#table)
-- [`pairs` / `ipairs`](#pairs--ipairs)
 - [`Io` / `File`](#io--file)
 - [`Os`](#os)
 

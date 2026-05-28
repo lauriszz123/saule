@@ -2,7 +2,7 @@
 
 Saule is a statically typed, class-oriented language inspired by Lua's simplicity and runtime model, designed to be minimal to write but powerful to use. It compiles to clean, readable code and is structured around files, classes, interfaces, and scripts.
 
-> 📚 Looking for the **standard library** (`print`, `String`, `Math`, `Table`, `Io`, `Os`, …)? See **[DOCS.md](./DOCS.md)**.
+> 📚 Looking for the **standard library**? See **[DOCS.md](./DOCS.md)**.
 
 ---
 
@@ -235,7 +235,7 @@ For the array part, `Table.remove(t, i)` shifts subsequent elements down (standa
 
 ### Iterating
 
-`for v in t` walks the array part. `for k, v in t` walks both parts via `pairs`-style iteration. See [Loops](#loops) and the [Standard Library](./DOCS.md#table) for the full set of helpers (`Table.insert`, `Table.sort`, `Table.concat`, …).
+`for v in t` walks the array part. `for k, v in t` walks both the array and map parts (key/value iteration). See [Loops](#loops) and the [Standard Library](./DOCS.md#table) for the full set of helpers (`Table.insert`, `Table.sort`, `Table.concat`, …).
 
 ---
 
