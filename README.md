@@ -994,7 +994,15 @@ local name: string = nil        -- ERROR, string is never nil
 Use `?.` to access a member that may be nil. Returns nil instead of crashing:
 
 ```saule
-local len: integer? = name?.length
+local player: Player? = repo.findById(id)
+local name: string? = player?.name      -- nil if `player` was nil
+```
+
+For lengths of strings and tables, use `#`:
+
+```saule
+local greeting: string? = nil
+local len: integer = #(greeting ?? "")     -- 0 when nil
 ```
 
 ### Null Coalescing
@@ -1151,22 +1159,23 @@ end
 
 ### Importing
 
+Every import names a single `.sau` file. The path is relative to the project root (or, in single-file mode, the entry file's directory).
+
 ```saule
 -- single import
 import Player from "entities/Player"
-
--- multiple from same folder
-import Player, Enemy from "entities"
-
--- import everything from a folder
-import * from "entities"
 
 -- import with alias
 import PlayerRepository as PlayerRepo from "data/PlayerRepository"
 
 -- import a utility module
 import Math from "utils/Math"
+
+-- pull every exported name out of one file
+import * from "entities/Player"
 ```
+
+Folder-level imports (`import * from "entities"` or `import Player, Enemy from "entities"`) are **not** supported — each `import` statement targets one file. Re-export from an `index.sau` file by hand if you want a single facade.
 
 ### Exporting
 
@@ -1185,7 +1194,7 @@ export fn clamp(value: integer, min: integer, max: integer) -> integer
 end
 ```
 
-A file without `export` is private to its folder.
+A file without `export` is private to itself — even sibling files in the same folder can't see its declarations. The only way to share code across files is to `export` it and `import` it explicitly.
 
 ### Utility Modules
 
@@ -1217,7 +1226,7 @@ local smooth: float = Math.lerp(0.0, 1.0, 0.5)    -- 0.5
 | Situation | Accessible from |
 |---|---|
 | `export class Foo` | anywhere that imports it |
-| `class Foo` without export | only within the same folder |
+| `class Foo` without export | only inside the same file |
 | `local` field or method | only within the class |
 | `static` field or method | via `ClassName.x` anywhere |
 
@@ -1242,8 +1251,23 @@ Every Saule project has a `saule.config` file at the root:
 name: "myproject"
 version: "1.0.0"
 entry: "main.sau"
-author: "Arthur"
+src_dirs: ["src"]
+dependencies: ["../shared-lib", "~/code/json"]
+min_saule_version: "2026.1.0"
 ```
+
+Recognised keys:
+
+| Key | Purpose |
+|---|---|
+| `name` | Project name; also the import prefix exposed to dependents |
+| `version` | Free-form version string (semver recommended) |
+| `entry` | Path to the entry `.sau` file, relative to the project root |
+| `src_dirs` | List of directories to search when resolving imports |
+| `dependencies` | List of paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory |
+| `min_saule_version` | Refuses to run if the toolchain reports a lower version |
+
+Unknown keys are ignored.
 
 ### Recommended Project Structure
 
@@ -1268,18 +1292,37 @@ myproject/
 
 ### Entry Point
 
-`main.sau` is a script that runs top to bottom, like a Lua script. No class needed:
+There are two ways to run Saule code, with different rules about what the entry file must contain:
+
+**Project mode** — `saule run` invoked inside a directory containing `saule.config`. The file pointed to by `entry:` must declare:
+
+```saule
+class Main
+    static fn main()
+        -- your code here
+    end
+end
+```
+
+Top-level statements in the entry file still execute first (handy for one-off setup or imports), and then `Main.main()` is called. Without a `Main` class the runner exits with `error: '<entry>' must declare 'class Main' with a 'static fn main()' entry point`.
+
+**Single-file mode** — `saule run path/to/file.sau` with no surrounding `saule.config`. The file is executed top-to-bottom like a Lua script; no `class Main` is required. If the script happens to define one with a `static fn main()`, it is invoked as a convenience after the top-level body finishes.
+
+A typical project-mode entry file:
 
 ```saule
 import Player from "entities/Player"
 import Math from "utils/Math"
-import Direction from "enums/Direction"
 
-local p: Player = Player("Arthur", 100, 1.5)
-p.greet()
+class Main
+    static fn main()
+        local p: Player = Player("Arthur", 100, 1.5)
+        p.greet()
 
-local dmg: integer = Math.clamp(50, 0, 100)
-p.damage(dmg)
+        local dmg: integer = Math.clamp(50, 0, 100)
+        p.damage(dmg)
+    end
+end
 ```
 
 ---
