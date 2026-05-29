@@ -140,6 +140,12 @@ pub fn register_sigs() {
     register("Os.pid", vec![], vec![i()]);
     register("Os.platform", vec![], vec![t_named("OsPlatform")]);
     register("Os.args", vec![], vec![table_str()]);
+
+    // String-valued constants — record their names so the unknown-member
+    // check doesn't flag them as typos.
+    use crate::stdlib::sigs::register_member;
+    register_member("Os.sep");
+    register_member("Os.lineSep");
 }
 
 // ─── enum ──────────────────────────────────────────────────────────────────

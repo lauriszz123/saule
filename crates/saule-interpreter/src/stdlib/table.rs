@@ -1,19 +1,20 @@
 //! `Table` static class — array-part helpers.
 //!
-//! All functions operate on the array side of a `table` value. They mirror
-//! Lua's `table.*` library, adapted to Saule semantics:
+//! All functions operate on the array side of a `table` value. The shapes
+//! follow Saule's strict-typing aesthetic — the optional `pos` parameter
+//! always comes *last* (unlike Lua's `table.insert(list, pos, value)`).
 //!
-//! * `Table.insert(list, [pos], value)` — append, or insert-at-position.
-//! * `Table.remove(list, [pos])`        — remove last, or remove-at-position; returns the removed value (nullable).
+//! * `Table.insert(list, value, pos?)` — append, or insert-at-position.
+//! * `Table.remove(list, pos?)`        — remove last, or remove-at-position; returns the removed value (nullable).
 //! * `Table.sort(list, comp)`           — in-place sort using the user comparator.
-//! * `Table.concat(list, [sep], [i], [j])` — join array elements with a separator.
+//! * `Table.concat(list, sep?, i?, j?)` — join array elements with a separator.
 //!
 //! Overloading is done by arg count (Lua-style) rather than by named
 //! parameters, because native callables don't yet route named args. The
 //! ergonomic equivalents are preserved:
 //!
 //!   `Table.insert(list, x)`        -- append
-//!   `Table.insert(list, 1, x)`     -- prepend
+//!   `Table.insert(list, x, 1)`     -- prepend
 //!   `Table.remove(list)`           -- pop last
 //!   `Table.remove(list, 1)`        -- shift first
 //!   `Table.concat(list)`           -- join with ""
@@ -72,16 +73,16 @@ pub fn register_sigs() {
         value: Box::new(t_any()),
     };
 
-    // `Table.insert(list, value)` and `Table.insert(list, index, value)` —
-    // index/value slots stay `any` because the overload is arity-based.
+    // `Table.insert(list, value, pos?)` — strict: pos must be integer.
     register(
         "Table.insert",
-        vec![table_any(), any(), t_nullable(any())],
+        vec![table_any(), any(), t_nullable(i())],
         vec![nil()],
     );
+    // `Table.remove(list, pos?)` — pos is a 1-based array index.
     register(
         "Table.remove",
-        vec![table_any(), t_nullable(any())],
+        vec![table_any(), t_nullable(i())],
         vec![t_nullable(any())],
     );
     // Comparator slot left as `any` until lambda inference is fully wired.
@@ -149,9 +150,9 @@ fn expect_string_arg(name: &str, args: &[Value], idx: usize) -> Result<String, S
 
 // ─── Table.insert ────────────────────────────────────────────────────────────
 //
-// Two arities:
+// Two arities (Saule convention: optional `pos` comes *last*):
 //   Table.insert(list, value)         -- append
-//   Table.insert(list, pos, value)    -- shift right and insert at pos (1-based)
+//   Table.insert(list, value, pos)    -- shift right and insert at pos (1-based)
 
 fn tbl_insert(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_min_arity("Table.insert", args, 2)?;
@@ -164,8 +165,8 @@ fn tbl_insert(args: &[Value]) -> Result<Vec<Value>, String> {
             Ok(vec![Value::Nil])
         }
         3 => {
-            let pos = expect_int_arg("Table.insert", args, 1)?;
-            let value = args[2].clone();
+            let value = args[1].clone();
+            let pos = expect_int_arg("Table.insert", args, 2)?;
             let mut t = table.borrow_mut();
             let len = t.array.len() as i64;
             if pos < 1 || pos > len + 1 {

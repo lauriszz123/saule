@@ -2,7 +2,7 @@
 class Main
   static fn main()
     local xs: table<integer> = {1, 2, 3}
-    Table.insert(xs, 99, 7)
+    Table.insert(xs, 7, 99)
   end
 end
 

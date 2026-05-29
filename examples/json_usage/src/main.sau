@@ -24,9 +24,9 @@ class Main
     local data: table = raw!
     Main.dumpTable(data, "  ")
 
-    -- Mutate: remove a key, add a key, change a value.
+    -- Mutate: clear a key, add a key, change a value.
 
-    Table.remove(data, "draft")
+    data["draft"] = nil
     data["lastRun"] = "2026-05-28T00:00:00Z"
     data.version = data.version + 1
 

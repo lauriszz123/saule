@@ -131,6 +131,12 @@ pub fn register_sigs() {
     register("File.close", vec![], vec![nil()]);
     // Suppress unused warnings for the helpers we didn't reach for.
     let _ = file;
+
+    // `File`-valued constants on the `Io` static class.
+    use crate::stdlib::sigs::register_member;
+    register_member("Io.stdin");
+    register_member("Io.stdout");
+    register_member("Io.stderr");
 }
 
 // ─── enum helper ───────────────────────────────────────────────────────────

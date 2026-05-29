@@ -46,12 +46,23 @@ static INITIALIZER: OnceLock<fn()> = OnceLock::new();
 
 thread_local! {
     static SIGS: RefCell<HashMap<String, NativeSig>> = RefCell::new(HashMap::new());
+    /// `module -> { member names }` — knows every public member of every
+    /// stdlib "static class" (`Table`, `String`, `Math`, `Os`, `Io`, …)
+    /// regardless of whether a signature is registered. The typechecker
+    /// consults this to decide whether `Foo.bar` deserves an "unknown
+    /// member" diagnostic (avoiding false positives for value-only fields
+    /// like `Math.pi` or `Os.sep`).
+    static MEMBERS: RefCell<HashMap<String, std::collections::HashSet<String>>> =
+        RefCell::new(HashMap::new());
     static INIT_DONE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Register `name -> sig`. Overwrites silently — the embedder's initializer
-/// is run at most once per thread.
+/// is run at most once per thread. Qualified names (`"Module.member"`) are
+/// auto-recorded in the members registry too so `Module.member` is treated
+/// as a known field even when the sig is consulted via different code paths.
 pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
+    record_member(name);
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
@@ -67,6 +78,7 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
 /// Register a variadic native: any extra trailing positional args must match
 /// `variadic`. Use for `printf(fmt, ...)`, `String.char(...integer)`, etc.
 pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Type>) {
+    record_member(name);
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
@@ -76,6 +88,27 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
                 returns,
             },
         );
+    });
+}
+
+/// Record `Module.member` as a known stdlib member without attaching a
+/// callable signature. Used for value-only fields (`Math.pi`, `Os.sep`,
+/// `Io.stdout`) and for natives whose signature is intentionally left
+/// unmodelled (e.g. `Math.abs`, `Math.min`, where the return type depends
+/// on input flavour). Bare names (no `.`) are ignored.
+pub fn register_member(qname: &str) {
+    record_member(qname);
+}
+
+fn record_member(qname: &str) {
+    let Some((module, member)) = qname.split_once('.') else {
+        return;
+    };
+    MEMBERS.with(|m| {
+        m.borrow_mut()
+            .entry(module.to_string())
+            .or_default()
+            .insert(member.to_string());
     });
 }
 
@@ -96,6 +129,36 @@ pub fn set_initializer(f: fn()) {
 pub fn lookup(name: &str) -> Option<NativeSig> {
     ensure_registered();
     SIGS.with(|s| s.borrow().get(name).cloned())
+}
+
+/// Returns `true` when `name` is a known stdlib *module* (i.e. at least
+/// one member has been recorded for it). Used by the typechecker to
+/// decide whether `Foo.bar` deserves an "unknown member" diagnostic.
+pub fn is_module(name: &str) -> bool {
+    ensure_registered();
+    MEMBERS.with(|m| m.borrow().contains_key(name))
+}
+
+/// Is `member` a known public member of stdlib `module`?
+pub fn has_member(module: &str, member: &str) -> bool {
+    ensure_registered();
+    MEMBERS.with(|m| {
+        m.borrow()
+            .get(module)
+            .is_some_and(|set| set.contains(member))
+    })
+}
+
+/// Collect every recorded member of `module`. Used to power
+/// "did-you-mean" hints on unknown-member diagnostics.
+pub fn module_members(module: &str) -> Vec<String> {
+    ensure_registered();
+    MEMBERS.with(|m| {
+        m.borrow()
+            .get(module)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
+    })
 }
 
 fn ensure_registered() {

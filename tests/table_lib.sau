@@ -11,9 +11,9 @@ class Main
 
     -- insert: at position
 
-    Table.insert(xs, 1, 0)  -- prepend
+    Table.insert(xs, 0, 1)  -- prepend
     println(xs[1], xs[6])  -- 0 5
-    Table.insert(xs, 4, 99)  -- middle
+    Table.insert(xs, 99, 4)  -- middle
     println(xs[4])  -- 99
 
     -- remove: pop last

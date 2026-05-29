@@ -134,12 +134,15 @@ pub(super) fn check_native_args(
     errors: &mut Vec<TypeCheckError>,
     call_span: std::ops::Range<usize>,
 ) {
-    // Count required positional params (every param up to the first
-    // nullable / `any` is required — nullable+`any` slots are optional).
+    // Count required positional params. A parameter is *optional* only
+    // when its declared type is nullable (`T?`); `any` slots are still
+    // required — they just accept any value. Natives that genuinely
+    // want an optional `any` should register `Nullable(any)` for that
+    // slot (e.g. `Os.exit`).
     let required: usize = sig
         .params
         .iter()
-        .take_while(|p| !is_nullable(p) && !is_any(p))
+        .take_while(|p| !is_nullable(p))
         .count();
     let positional: Vec<&CallArg> = args
         .iter()
@@ -275,6 +278,24 @@ fn report_if_unknown_member(
     // `self.super(...)` is a magic parent-ctor delegation form, not a
     // real member access. Same for the bare-receiver counterpart.
     if member == "super" {
+        return;
+    }
+
+    // Stdlib module access: `Table.insert`, `String.byte`, etc. The
+    // module isn't a class or enum, so the class/enum dispatch below
+    // would skip it silently. Catch typos like `Table.insertttt` here
+    // by consulting the members registry (which knows both callable
+    // sigs *and* value-only fields like `Math.pi`).
+    if let Expr::Ident(n) = &obj.value
+        && crate::sigs::is_module(n)
+    {
+        if !crate::sigs::has_member(n, member) {
+            errors.push(TypeCheckError::UnknownMember {
+                receiver: n.clone(),
+                member: member.to_string(),
+                span: to_source_span(obj.span.end..obj.span.end + member.len() + 1),
+            });
+        }
         return;
     }
 

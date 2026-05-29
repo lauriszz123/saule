@@ -1,10 +1,30 @@
-class Storage
-  fn init()
+export class Storage
+  local path: string
+  local storage: table<string>
+
+  fn init(path: string)
+    self.path = path
+    self.storage = {}
   end
 
   fn load()
   end
 
   fn save()
+  end
+
+  fn add(item: string)
+  end
+
+  fn remove(id: integer)
+  end
+
+  fn done(id: integer)
+  end
+
+  fn findById(id: integer)
+  end
+
+  fn updateEntry(id: integer, value: string)
   end
 end

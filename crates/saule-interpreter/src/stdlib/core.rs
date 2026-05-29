@@ -63,7 +63,12 @@ pub fn register_sigs() {
     );
     // `assert(v, msg?) -> any` — its real type narrows the input on the call
     // site, which the checker doesn't yet model; `any` is safe and accurate.
-    register("assert", vec![any.clone(), t_named("any")], vec![any]);
+    // The optional message must be a string.
+    register(
+        "assert",
+        vec![any.clone(), t_nullable(t_named("string"))],
+        vec![any],
+    );
     register("error", vec![t_named("string")], vec![t_named("nil")]);
 }
 

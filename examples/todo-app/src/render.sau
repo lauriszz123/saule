@@ -1,2 +1,2 @@
-class Renderer
+export class Renderer
 end

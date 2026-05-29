@@ -1,3 +1,5 @@
+import Storage from "storage"
+
 class Main
   static fn help()
     println("TODO App Usage:")

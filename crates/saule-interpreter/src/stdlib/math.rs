@@ -108,9 +108,25 @@ pub fn register_sigs() {
     // Boolean.
     register("Math.ult", vec![i(), i()], vec![b()]);
 
-    // `abs`, `min`, `max`, `pow`, `clamp`, `fmod`, `modf`, `random` can be
-    // either integer or float depending on input — left unregistered so the
-    // checker stays conservative (`None`) rather than narrowing wrongly.
+    // `abs`, `min`, `max`, `pow`, `clamp`, `fmod`, `modf`, `random`,
+    // `randomseed` can be either integer or float depending on input —
+    // left unregistered so the checker stays conservative (`None`) rather
+    // than narrowing wrongly. We still record their names so the
+    // unknown-member check doesn't flag them as typos.
+    use crate::stdlib::sigs::register_member;
+    for name in [
+        "Math.abs",
+        "Math.min",
+        "Math.max",
+        "Math.pow",
+        "Math.clamp",
+        "Math.fmod",
+        "Math.modf",
+        "Math.random",
+        "Math.randomseed",
+    ] {
+        register_member(name);
+    }
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {
