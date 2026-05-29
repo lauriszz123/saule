@@ -1,7 +1,7 @@
 local fn makeCounter(start: integer, step: integer = 1) -> fn() -> integer
   local count: integer = start
 
-  return fn => ()
+  return fn()
     count = count + step
     return count - 1
   end

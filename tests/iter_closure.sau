@@ -3,7 +3,7 @@
 fn counter(stop: integer) -> fn() -> integer?
   local i: integer = 0
 
-  return fn => ()
+  return fn()
     i = i + 1
 
     if i > stop then

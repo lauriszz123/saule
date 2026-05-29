@@ -900,7 +900,7 @@ impl<'a> Printer<'a> {
                     self.expr(e, 0);
                 }
                 LambdaBody::Block(stmts) => {
-                    self.write("fn => (");
+                    self.write("fn(");
                     self.params(params);
                     self.write(")");
                     if let Some(rt) = return_ty {

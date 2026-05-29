@@ -24,7 +24,7 @@ class PlayerList implements Iterable2
     local ns: table<integer, string> = self.names
     local ls: table<integer, integer> = self.levels
 
-    return fn => ()
+    return fn()
       i = i + 1
 
       if i > total then

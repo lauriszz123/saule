@@ -575,15 +575,14 @@ impl Parser {
 
     // ── Lambdas ─────────────────────────────────────────────────────────────
 
-     /// `fn => (params): T ... end` as an expression.
+     /// `fn(params) -> T ... end` as an expression (Lua-style anonymous fn).
      fn parse_fn_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
          let fn_tok = self.advance(); // consume `fn`
 
-         self.expect(&Token::FatArrow, "`=>` after `fn` in lambda expression")?;
          let params = self.parse_param_list()?;
          let return_ty = self.parse_return_type_opt()?;
          let body = self.parse_block_until(&[Token::End])?;
-         let end = self.expect(&Token::End, "`end` to close `fn =>` lambda")?;
+         let end = self.expect(&Token::End, "`end` to close `fn(...)` lambda")?;
          let span = fn_tok.span.start..end.span.end;
          Ok(Spanned::new(
              Expr::Lambda {

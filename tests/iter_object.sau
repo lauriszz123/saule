@@ -13,7 +13,7 @@ class Range implements Iterable
     local i: integer = self.lo - 1
     local stop: integer = self.hi
 
-    return fn => ()
+    return fn()
       i = i + 1
 
       if i > stop then
