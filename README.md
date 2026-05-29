@@ -371,7 +371,7 @@ local half: fn(float) -> float       = x => x / 2.0
 Multi-line anonymous function:
 
 ```saule
-local double: fn(integer) -> integer = fn => (x)
+local double: fn(integer) -> integer = fn(x)
     return x * 2
 end
 ```
@@ -409,7 +409,7 @@ Lambdas capture their surrounding scope:
 fn makeCounter(start: integer = 0) -> fn() -> integer
     local count: integer = start
 
-    return fn => ()
+    return fn()
         count = count + 1
         return count
     end
@@ -705,7 +705,7 @@ export class PlayerQueue implements Iterable<Player>
     fn iter() -> fn() -> Player?
         local cursor: integer = 1
 
-        return fn => ()
+        return fn()
             if cursor > #self.items then
                 return nil
             end
