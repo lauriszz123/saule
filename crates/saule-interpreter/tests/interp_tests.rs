@@ -30,7 +30,7 @@ fn float_arithmetic() {
 fn mixing_int_and_float_errors() {
     assert!(matches!(
         eval("1 + 2.0").unwrap_err(),
-        PipelineError::Runtime(RuntimeError::NumericMix { .. })
+        PipelineError::Typeck(saule_typeck::TypeCheckError::NumericMix { .. })
     ));
 }
 
@@ -835,7 +835,7 @@ mod piping {
         let src = r#"
             fn double(x: integer) -> integer return x * 2 end
             fn inc(x: integer) -> integer return x + 1 end
-            local r: integer = 10 then double() then inc()
+            local r: integer = when(10):double():inc()
             r
         "#;
         assert_int(src, 21);
@@ -844,7 +844,7 @@ mod piping {
     fn pipe_with_extra_args() {
         let src = r#"
             fn add(a: integer, b: integer) -> integer return a + b end
-            local r: integer = 1 then add(41)
+            local r: integer = when(1):add(41)
             r
         "#;
         assert_int(src, 42);

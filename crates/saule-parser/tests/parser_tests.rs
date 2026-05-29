@@ -27,7 +27,7 @@ fn parses_if_else_chain() {
     let src = r#"
         if a then
             x = 1
-        else if b then
+        elseif b then
             x = 2
         else
             x = 3
@@ -55,7 +55,7 @@ fn parses_numeric_for() {
 
 #[test]
 fn parses_for_in() {
-    let m = parse_src("for v: Player in queue do v:greet() end");
+    let m = parse_src("for v: Player in queue do v.greet() end");
     assert!(matches!(m.stmts[0].value, Stmt::ForIn { .. }));
 }
 
@@ -99,7 +99,7 @@ fn parses_class_with_init_and_method() {
 fn parses_interface_and_enum() {
     let src = r#"
         interface Greetable
-            fn greet(self): nil
+            fn greet(self)
         end
 
         enum Direction

@@ -17,6 +17,45 @@ use super::state::{
 };
 use super::to_source_span;
 
+/// Reject `nil` used as a binding type. `nil` is a value (the inhabitant
+/// of the unit type), and nullability is expressed with `T?` — so any
+/// occurrence of `nil` inside a binding/parameter/field type is a
+/// foot-gun the typechecker should call out. Return types are *not*
+/// validated here: `fn foo() -> nil` is the conventional "returns
+/// nothing" signature.
+pub(super) fn reject_nil_in_binding_type(
+    ty: &Type,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    fn walk(ty: &Type) -> bool {
+        match ty {
+            Type::Named(n) => n == "nil",
+            Type::Nullable(inner) => walk(inner),
+            Type::Table { key, value } => {
+                key.as_deref().map(walk).unwrap_or(false) || walk(value)
+            }
+            Type::Tuple(items) => items.iter().any(walk),
+            Type::Function { params, ret } => {
+                params.iter().any(walk) || walk(ret)
+            }
+        }
+    }
+    if walk(ty) {
+        errors.push(TypeCheckError::NilTypeAnnotation {
+            span: to_source_span(span),
+        });
+    }
+}
+
+/// Run [`reject_nil_in_binding_type`] over every parameter's declared type.
+fn reject_nil_in_params(params: &[Param], errors: &mut Vec<TypeCheckError>) {
+    for p in params {
+        reject_nil_in_binding_type(&p.ty, p.span.clone(), errors);
+    }
+}
+
+
 pub(super) fn check_stmt(
     stmt: &Spanned<Stmt>,
     scope: &mut Scope,
@@ -26,6 +65,9 @@ pub(super) fn check_stmt(
         Stmt::Decl(decl) => check_decl(&decl.value, errors),
 
         Stmt::Local { name, ty, value } => {
+            if let Some(t) = ty {
+                reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+            }
             if let (Some(ty), Some(v)) = (ty, value) {
                 check_expr(v, scope, errors);
                 check_assignment_compat(ty, v, scope, errors);
@@ -50,6 +92,11 @@ pub(super) fn check_stmt(
         }
 
         Stmt::LocalMulti { names, values } => {
+            for (_, ty_opt) in names {
+                if let Some(t) = ty_opt {
+                    reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+                }
+            }
             for v in values {
                 check_expr(v, scope, errors);
             }
@@ -175,6 +222,9 @@ pub(super) fn check_stmt(
             step,
             body,
         } => {
+            if let Some(t) = var_ty {
+                reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+            }
             check_expr(from, scope, errors);
             check_expr(to, scope, errors);
             if let Some(s) = step {
@@ -189,6 +239,11 @@ pub(super) fn check_stmt(
         }
 
         Stmt::ForIn { vars, iter, body } => {
+            for (_, ty_opt) in vars {
+                if let Some(t) = ty_opt {
+                    reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+                }
+            }
             check_expr(iter, scope, errors);
             // If the iter expression is a known class instance, it must
             // implement `Iterable` or `Iterable2` (walking the parent chain).
@@ -226,6 +281,7 @@ pub(super) fn check_stmt(
             catch_ty,
             catch_body,
         } => {
+            reject_nil_in_binding_type(catch_ty, stmt.span.clone(), errors);
             let mut body_scope = scope.clone();
             for s in body {
                 check_stmt(s, &mut body_scope, errors);
@@ -295,6 +351,7 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             body,
             ..
         } => {
+            reject_nil_in_params(params, errors);
             let prev_generics = push_generics(type_params);
             let mut scope = Scope::default();
             check_default_params(params, &scope, errors);
@@ -306,6 +363,18 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                 check_returns(body, rt, &scope, errors);
             }
             pop_generics(prev_generics);
+        }
+        Decl::Interface { methods, .. } => {
+            for sig in methods {
+                reject_nil_in_params(&sig.params, errors);
+            }
+        }
+        Decl::Enum { variants, .. } => {
+            for v in variants {
+                if let saule_ast::EnumVariant::Tuple { fields, .. } = &v.value {
+                    reject_nil_in_params(fields, errors);
+                }
+            }
         }
         _ => {}
     }
@@ -447,12 +516,15 @@ fn check_class(
     for m in members {
         if let ClassMember::Field {
             ty,
-            default: Some(default_expr),
+            default,
             ..
         } = &m.value
         {
-            let scope = Scope::default();
-            check_assignment_compat(ty, default_expr, &scope, errors);
+            reject_nil_in_binding_type(ty, m.span.clone(), errors);
+            if let Some(default_expr) = default {
+                let scope = Scope::default();
+                check_assignment_compat(ty, default_expr, &scope, errors);
+            }
         }
     }
 
@@ -463,6 +535,7 @@ fn check_class(
     let prev = set_current_class(Some(class_name.to_string()));
     for m in members {
         if let ClassMember::Method(meth) = &m.value {
+            reject_nil_in_params(&meth.params, errors);
             let prev_generics = push_generics(&meth.type_params);
             let mut scope = Scope::default();
             // `self` resolves to the class itself in `static fn` and to an

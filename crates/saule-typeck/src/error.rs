@@ -302,4 +302,56 @@ pub enum TypeCheckError {
         #[label("wrong number of fields")]
         span: miette::SourceSpan,
     },
+
+    #[error("cannot mix `integer` and `float` in arithmetic — type mismatch")]
+    #[diagnostic(help(
+        "Saule never auto-promotes numeric types; wrap one operand in `int(...)` or `float(...)` to make the kinds match"
+    ))]
+    NumericMix {
+        #[label("incompatible numeric kinds")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`nil` is not a valid type annotation — it is only a value")]
+    #[diagnostic(help(
+        "to allow `nil`, mark the surrounding type as nullable (e.g. `string?`); `nil` may only appear as a value or as the unit return type (`-> nil`)"
+    ))]
+    NilTypeAnnotation {
+        #[label("`nil` cannot be used as a binding type")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("pipeline stage `{stage}` expects `{expected}` as first argument, got `{found}`")]
+    #[diagnostic(help(
+        "the value flowing through `when(...):{stage}(...)` must match the function's first parameter — adjust the upstream stage or call `{stage}` directly"
+    ))]
+    PipeStageTypeMismatch {
+        stage: String,
+        expected: String,
+        found: String,
+        #[label("piped value has the wrong type for this stage")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("pipeline stage `{stage}` takes {expected} argument(s) (one of them is the piped value), got {found}")]
+    #[diagnostic(help(
+        "the upstream value counts as the first argument; pass the rest in the parentheses, e.g. `:fn(a, b)`"
+    ))]
+    PipeStageArity {
+        stage: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of arguments in this pipeline stage")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("pipeline stage `{stage}` is not a known function — `when` chains only call free functions")]
+    #[diagnostic(help(
+        "declare `fn {stage}(first: T, …) -> U` at the top level (or import it), then re-run; class methods and locally-bound lambdas are not currently pipeable"
+    ))]
+    UnknownPipeStage {
+        stage: String,
+        #[label("no top-level function with this name")]
+        span: miette::SourceSpan,
+    },
 }

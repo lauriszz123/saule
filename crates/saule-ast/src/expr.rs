@@ -78,7 +78,33 @@ pub enum Expr {
         scrutinee: Box<Spanned<Expr>>,
         arms: Vec<MatchArm>,
     },
+
+    /// `when(source):stage1(args):stage2(args)…` — colon-based piping
+    /// ("Saule style"). Each stage is a free-function call where the
+    /// previous stage's value is implicitly threaded in as the first
+    /// argument. Lowering happens late (the typechecker and interpreter
+    /// know how to walk a `Pipe`) so the formatter can round-trip the
+    /// surface syntax faithfully.
+    Pipe {
+        source: Box<Spanned<Expr>>,
+        stages: Vec<PipeStage>,
+    },
 }
+
+/// One `:name(args)` step inside an [`Expr::Pipe`] chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PipeStage {
+    /// Free-function name invoked at this step. Resolved as a regular
+    /// identifier (locals / globals / top-level `fn`).
+    pub name: String,
+    /// Extra positional/named arguments. The piped value is *prepended*
+    /// to this list at call time, so the function's first parameter is
+    /// always the upstream value.
+    pub args: Vec<CallArg>,
+    /// Span covering `:name(args)` for diagnostics.
+    pub span: std::ops::Range<usize>,
+}
+
 
 /// One `case <pattern> [when <guard>] then <body>` clause inside a `match`.
 #[derive(Debug, Clone, PartialEq)]

@@ -63,6 +63,36 @@ local dmg: float = 10.5
 local result = health - dmg    -- ERROR: cannot mix integer and float
 ```
 
+Saule never auto-promotes — the checker catches this at compile time, so a hidden `int / int` truncating into a `float` slot is impossible.
+
+### Integer Division
+
+`/` on two integers is **integer division** (Lua / C semantics) — the result is the truncated quotient, never a float:
+
+```saule
+local q: integer = 7 / 2     -- 3 (truncated, not 3.5)
+local r: integer = 7 % 2     -- 1
+```
+
+If you want the real-number quotient, convert one operand first:
+
+```saule
+local q: float = float(7) / 2.0    -- 3.5
+```
+
+Because mixing kinds is a compile error, `7 / 2.0` won't silently produce `3.5` — the checker rejects it and forces an explicit `float(7)` (or `int(2.0)`) so the intent is visible at the call site.
+
+### `nil` Is a Value, Not a Binding Type
+
+`nil` exists only as the **value** that inhabits a nullable slot. Writing `: nil` as a binding type is rejected so the meaning of the type system stays "every variable has a real type, and `?` says whether it can be empty":
+
+```saule
+local nothing: nil = nil       -- ERROR: `nil` is not a valid binding type
+local pending: string? = nil   -- ok — `string?` means "string or nil"
+```
+
+`nil` is still legal as a **value** (`return nil`, `x = nil`, `match v case nil then …`) and as the conventional `-> nil` return type meaning "this function returns nothing".
+
 ### Casting
 
 Use `int()` and `float()` to explicitly convert between the two:
@@ -329,27 +359,43 @@ local nums: table<integer> = {1, 2, 3, 4, 5, 6}
 local evens: table<integer> = filter<integer>(nums, x => x % 2 == 0)
 ```
 
-### Piping with `then`
+### Piping with `when(...):`
 
-The `then` keyword passes the result of the left side as the first argument of the right side, enabling clean data transformation chains that read top to bottom:
-
-```saule
-local result: table<integer> = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-    then filter<integer>(x => x % 2 == 0)
-    then map(x => x * x)
-    then map(x => x + 1)
-```
-
-Each `then` takes the result of the previous step and passes it as the first argument of the next function. It reads like a sentence — take this, then do that, then do this:
+The `when(...)` keyword starts a **colon-based pipeline** ("Saule style"). It wraps a value, and every subsequent `:func(args)` calls `func` with the upstream value threaded in as the **first argument**:
 
 ```saule
-local name: string = getRawInput()
-    then trim()
-    then toUpperCase()
-    then format("Player: %s")
-
-print(name)    -- "Player: ARTHUR"
+local result: string = when("Hello, "):pipe()
+-- equivalent to:  pipe("Hello, ")
 ```
+
+Each stage feeds its result into the next, so a chain reads top-to-bottom even though every step is an ordinary free-function call:
+
+```saule
+local size: integer = when({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+    :filter<integer>(x => x % 2 == 0)
+    :map(x => x * x)
+    :length_of()
+```
+
+That's exactly the same as `length_of(map(filter<integer>({...}, x => x % 2 == 0), x => x * x))` — just easier to read.
+
+#### Static type checking along the chain
+
+The type of the upstream value must match the **first parameter** of the next stage, otherwise the typechecker rejects the chain at compile time:
+
+```saule
+fn to_str(n: integer) -> string ... end
+fn square(n: integer) -> integer ... end
+
+local err = when(5):to_str():square()
+-- COMPILE ERROR: pipeline stage `square` expects `integer` as first
+--                argument, got `string`
+```
+
+Rules:
+- The chain needs **at least one** `:stage()` after `when(...)` — a bare `when(x)` is a parse error so the keyword's purpose stays unambiguous.
+- Stage targets are resolved as **free functions** in scope (locals, globals, top-level `fn`). Class methods and lambdas aren't pipeable today.
+- The piped value always becomes argument `#1`; declared defaults and the variadic tail still apply to the remaining parameters as usual.
 
 ---
 
@@ -493,7 +539,7 @@ class Counter
             return
         end
 
-        self.count = count + 1
+        self.count = self.count + 1
         self.report()
     end
 
@@ -1269,8 +1315,8 @@ p.damage(dmg)
 | `if / elseif / else / end` | Conditional logic |
 | `match` | Begin a pattern-matching expression |
 | `case` | Introduce a pattern arm inside `match` |
-| `when` | Attach a guard condition to a `case` |
-| `then` | Pipe result into next function |
+| `when` | Attach a guard condition to a `case`, or start a `when(...)` pipeline |
+| `then` | Begin a `match` arm body / `if` branch |
 | `nil` | Absence of value |
 | `true / false` | Boolean literals |
 
@@ -1286,6 +1332,7 @@ p.damage(dmg)
 | `==`, `!=` | Equality checks |
 | `>`, `<`, `>=`, `<=` | Comparisons |
 | `and`, `or`, `not` | Boolean logic |
-| `+`, `-`, `*`, `/`, `%` | Arithmetic |
+| `+`, `-`, `*`, `/`, `%` | Arithmetic (`/` on two `integer`s truncates) |
+| `:` | Pipeline stage call inside `when(...)` |
 | `int()` | Cast float to integer, truncates toward zero |
 | `float()` | Cast integer to float, always safe |

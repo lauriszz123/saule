@@ -5,8 +5,8 @@
 use std::ops::Range;
 
 use saule_ast::{
-    BinOp, CallArg, Expr, LambdaBody, MatchArm, MatchBody, Param, Pattern, Spanned, Stmt,
-    TableEntry, Type, UnaryOp,
+    BinOp, CallArg, Expr, LambdaBody, MatchArm, MatchBody, Param, Pattern, PipeStage, Spanned,
+    Stmt, TableEntry, Type, UnaryOp,
 };
 use saule_lexer::Token;
 
@@ -324,6 +324,7 @@ impl Parser {
             Token::LBrace => self.parse_table_literal(),
             Token::Fn => self.parse_fn_lambda(),
             Token::Match => self.parse_match_expr(),
+            Token::When => self.parse_when_pipe(),
             Token::LParen => {
                 if self.looks_like_arrow_lambda() {
                     self.parse_arrow_lambda()
@@ -424,6 +425,64 @@ impl Parser {
             },
             span,
         ))
+    }
+
+    // ── `when(...)` pipeline ────────────────────────────────────────────────
+    //
+    // Surface (per README → "Pipelines"):
+    //
+    //     when(source):stage1(args):stage2(args)…
+    //
+    // `when(x)` wraps a value; every subsequent `:name(args)` invokes
+    // `name(prev, args)` and feeds the result into the next stage. The
+    // chain *requires at least one* `:stage()` — a bare `when(x)` with
+    // nothing piped is a parse error so users don't accidentally call
+    // `when` like a regular function (the `when` keyword is otherwise
+    // reserved as a match-arm guard).
+
+    pub(crate) fn parse_when_pipe(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let kw = self.advance(); // `when`
+        self.expect(&Token::LParen, "`(` after `when` to wrap the source value")?;
+        let source = self.parse_expression()?;
+        let close = self.expect(&Token::RParen, "`)` to close `when(...)`")?;
+
+        let mut stages: Vec<PipeStage> = Vec::new();
+        while self.check(&Token::Colon) {
+            stages.push(self.parse_pipe_stage()?);
+        }
+        if stages.is_empty() {
+            return Err(ParseError::Expected {
+                expected: "`:name(args)` after `when(...)` — a pipeline needs at least one stage",
+                span: self.peek().span.clone(),
+            });
+        }
+
+        let span_end = stages
+            .last()
+            .map(|s| s.span.end)
+            .unwrap_or(close.span.end);
+        let span = kw.span.start..span_end;
+        Ok(Spanned::new(
+            Expr::Pipe {
+                source: Box::new(source),
+                stages,
+            },
+            span,
+        ))
+    }
+
+    /// Parses one `:name(args)` stage of a `when` pipeline. The leading
+    /// colon must be the current token; callers (only [`parse_when_pipe`])
+    /// peek for it.
+    fn parse_pipe_stage(&mut self) -> Result<PipeStage, ParseError> {
+        let colon = self.expect(&Token::Colon, "`:` to begin a pipeline stage")?;
+        let (name, _) = self.expect_ident("function name after `:` in pipeline")?;
+        let (args, close_span) = self.parse_call_args()?;
+        Ok(PipeStage {
+            name,
+            args,
+            span: colon.span.start..close_span.end,
+        })
     }
 
     pub(crate) fn parse_match_arm(&mut self) -> Result<MatchArm, ParseError> {

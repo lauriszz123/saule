@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use saule_ast::{Decl, Module, Stmt};
+use saule_ast::{Decl, Module, Param, Stmt, Type};
 
 #[derive(Clone, Debug)]
 pub(super) struct FunctionInfo {
@@ -23,6 +23,13 @@ pub(super) struct FunctionInfo {
     /// Whether the last parameter is variadic — when true, calls with
     /// `found >= total - 1 - defaults` are all valid.
     pub(super) variadic: bool,
+    /// Full parameter list, kept so the typechecker can validate
+    /// `when(x):name(args)` stage calls (where the receiver type is
+    /// matched against `params[0].ty`) and other per-arg type rules.
+    pub(super) params: Vec<Param>,
+    /// Declared return type, if any. `None` is treated as "unknown" and
+    /// causes the typechecker to skip downstream inference.
+    pub(super) return_ty: Option<Type>,
 }
 
 thread_local! {
@@ -34,12 +41,21 @@ pub(super) fn install(module: &Module) {
     let mut map: HashMap<String, FunctionInfo> = HashMap::new();
     for stmt in &module.stmts {
         if let Stmt::Decl(d) = &stmt.value
-            && let Decl::Function { name, params, .. } = &d.value
+            && let Decl::Function { name, params, return_ty, .. } = &d.value
         {
             let total = params.len();
             let defaults = params.iter().filter(|p| p.default.is_some()).count();
             let variadic = params.last().is_some_and(|p| p.variadic);
-            map.insert(name.clone(), FunctionInfo { total, defaults, variadic });
+            map.insert(
+                name.clone(),
+                FunctionInfo {
+                    total,
+                    defaults,
+                    variadic,
+                    params: params.clone(),
+                    return_ty: return_ty.clone(),
+                },
+            );
         }
     }
     FUNCTIONS.with(|f| *f.borrow_mut() = map);

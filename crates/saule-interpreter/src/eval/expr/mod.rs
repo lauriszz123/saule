@@ -204,6 +204,37 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
         }),
 
         Expr::Match { scrutinee, arms } => match_::eval_match(scrutinee, arms, env, span),
+
+        // `when(source):stage1(args):stage2(args)…` — colon-based pipeline.
+        // Each stage threads the upstream value in as the first argument
+        // of an otherwise-normal function call. Implemented as a tight
+        // loop over `stages` so we never allocate intermediate AST nodes.
+        Expr::Pipe { source, stages } => {
+            let mut current = eval(source, env)?;
+            for stage in stages {
+                // Resolve the stage function as a regular identifier — same
+                // lookup rules as a bare `name()` call, so locals, globals,
+                // and top-level `fn` definitions all work.
+                let callee = env.borrow().get(&stage.name).ok_or_else(|| {
+                    RuntimeError::TypeError {
+                        message: format!(
+                            "pipeline stage `{}` is not defined — `when(...):{}` needs a free function in scope",
+                            stage.name, stage.name
+                        ),
+                        span: stage.span.clone(),
+                    }
+                })?;
+                // Evaluate the explicit args, then prepend the piped value
+                // as positional arg #0.
+                let mut evaled: Vec<EvaluatedArg> = Vec::with_capacity(stage.args.len() + 1);
+                evaled.push(EvaluatedArg::Positional(current));
+                for a in calls::eval_call_args_pub(&stage.args, env)? {
+                    evaled.push(a);
+                }
+                current = calls::call_value_pub(callee, &evaled, stage.span.clone())?;
+            }
+            Ok(current)
+        }
     }
 }
 

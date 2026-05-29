@@ -250,6 +250,14 @@ fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                 }
             }
         }
+        Expr::Pipe { source, stages } => {
+            check_expr(source, ctx, errors);
+            for stage in stages {
+                for a in &stage.args {
+                    check_call_arg(a, ctx, errors);
+                }
+            }
+        }
         // Leaves: no nested expressions.
         Expr::Int(_)
         | Expr::Float(_)

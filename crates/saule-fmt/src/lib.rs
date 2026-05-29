@@ -27,7 +27,8 @@ use std::{collections::VecDeque, fmt::Write, ops::Range};
 
 use saule_ast::{
     BinOp, CallArg, ClassMember, Decl, EnumVariant, Expr, ImportNames, LambdaBody, MatchArm,
-    MatchBody, Method, MethodSig, Module, Param, Pattern, Spanned, Stmt, TableEntry, Type, UnaryOp,
+    MatchBody, Method, MethodSig, Module, Param, Pattern, PipeStage, Spanned, Stmt, TableEntry,
+    Type, UnaryOp,
 };
 
 /// A single source comment extracted from the lexer's trivia stream.
@@ -88,6 +89,12 @@ struct Printer<'a> {
 }
 
 const INDENT: &str = "  ";
+
+/// Soft target for one rendered line. The `Expr::Pipe` layout uses this to
+/// decide whether a `when(...):a():b()` chain fits inline or should be
+/// broken across multiple lines. Anything past this threshold flips to
+/// the column-aligned multi-line shape.
+const MAX_LINE_WIDTH: usize = 100;
 
 impl<'a> Printer<'a> {
     fn new(source: &'a str, comments: &'a [Comment]) -> Self {
@@ -934,7 +941,125 @@ impl<'a> Printer<'a> {
                 self.indent -= 1;
                 self.write("end");
             }
+
+            // `when(source):stage1(args):stage2(args)…` — colon pipeline.
+            //
+            // Layout:
+            //   * Inline by default when the whole chain fits within
+            //     [`MAX_LINE_WIDTH`] from the current column. Reads as
+            //     `when(x):a():b()`.
+            //   * Multi-line when (a) the inline form is too wide, or
+            //     (b) the source already broke before *any* `:` — the
+            //     user's intent wins, so explicit multi-line stays
+            //     multi-line even on tiny chains.
+            //   * Multi-line indent: every `:` is aligned to the column
+            //     where the `w` of `when` lives, so the method names
+            //     line up just past the keyword:
+            //
+            //         local r: integer = when({1, 2, 3})
+            //                            :a()
+            //                            :b()
+            Expr::Pipe { source, stages } => {
+                let when_col = self.current_column();
+                let force_ml = self.pipe_has_source_break(source, stages);
+                let inline = self.render_pipe_inline(source, stages);
+                let too_wide = when_col + inline.len() > MAX_LINE_WIDTH;
+                if !force_ml && !too_wide {
+                    self.write(&inline);
+                } else {
+                    self.write("when(");
+                    self.expr(source, 0);
+                    self.write(")");
+                    for stage in stages {
+                        self.newline();
+                        // Skip the indent prefix the next `write` would
+                        // emit and lay down `when_col` spaces directly so
+                        // `:` lands exactly under the original `w`.
+                        self.needs_indent = false;
+                        for _ in 0..when_col {
+                            self.out.push(' ');
+                        }
+                        self.write(":");
+                        self.write(&stage.name);
+                        self.write("(");
+                        self.call_args(&stage.args);
+                        self.write(")");
+                    }
+                }
+            }
         }
+    }
+
+    // ── `when(...)` pipeline layout helpers ────────────────────────────────
+
+    /// Column (0-based) of the *next* character to be emitted.
+    ///
+    /// Used by [`Expr::Pipe`] to remember where the `w` of `when` lands
+    /// so subsequent `:stage()` lines can align under it. Accounts for a
+    /// pending indent that hasn't been flushed yet.
+    fn current_column(&self) -> usize {
+        if self.needs_indent {
+            return self.indent * INDENT.len();
+        }
+        match self.out.rfind('\n') {
+            Some(p) => self.out.len() - p - 1,
+            None => self.out.len(),
+        }
+    }
+
+    /// `true` when the user broke any `:stage()` onto its own line in the
+    /// original source. We honour that — once it's multi-line in the
+    /// source it stays multi-line in the output, even if the chain is
+    /// short enough to fit inline.
+    fn pipe_has_source_break(&self, source: &Spanned<Expr>, stages: &[PipeStage]) -> bool {
+        if self.source.is_empty() {
+            return false;
+        }
+        // Gap between `when(source)` and the first `:`.
+        if let Some(first) = stages.first()
+            && self.source_range_has_newline(source.span.end..first.span.start)
+        {
+            return true;
+        }
+        // Gaps between successive stages.
+        stages
+            .windows(2)
+            .any(|pair| self.source_range_has_newline(pair[0].span.end..pair[1].span.start))
+    }
+
+    fn source_range_has_newline(&self, range: Range<usize>) -> bool {
+        self.source
+            .get(range)
+            .map(|s| s.contains('\n'))
+            .unwrap_or(false)
+    }
+
+    /// Render `when(source):stage1(args):stage2(args)…` into a string
+    /// without touching `self.out`. The result is the inline form; the
+    /// caller compares its length against the available room to decide
+    /// whether to commit it or fall back to the multi-line layout.
+    fn render_pipe_inline(&self, source: &Spanned<Expr>, stages: &[PipeStage]) -> String {
+        let mut sub = Printer {
+            out: String::new(),
+            indent: self.indent,
+            needs_indent: false,
+            // Comments inside the chain are ignored for the size estimate;
+            // they only ever fire in the real `self` printer.
+            source: self.source,
+            comments: VecDeque::new(),
+            last_pos: self.last_pos,
+        };
+        sub.write("when(");
+        sub.expr(source, 0);
+        sub.write(")");
+        for stage in stages {
+            sub.write(":");
+            sub.write(&stage.name);
+            sub.write("(");
+            sub.call_args(&stage.args);
+            sub.write(")");
+        }
+        sub.out
     }
 
     fn call_args(&mut self, args: &[CallArg]) {

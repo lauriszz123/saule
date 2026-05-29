@@ -2,7 +2,7 @@
 //! access, native-call argument checking, lightweight type inference, and
 //! the `?? != nil` style flow narrowing.
 
-use saule_ast::{BinOp, CallArg, Expr, LambdaBody, Spanned, TableEntry, Type};
+use saule_ast::{BinOp, CallArg, Expr, LambdaBody, PipeStage, Spanned, TableEntry, Type};
 
 use super::TypeCheckError;
 use super::funcs;
@@ -89,6 +89,9 @@ pub(super) fn check_expr(
             }
         }
         Expr::Lambda { params, body, .. } => {
+            for p in params {
+                super::stmt::reject_nil_in_binding_type(&p.ty, p.span.clone(), errors);
+            }
             let mut lscope = scope.clone();
             seed_params(&mut lscope, params);
             match body {
@@ -102,6 +105,9 @@ pub(super) fn check_expr(
         }
         Expr::Match { scrutinee, arms } => {
             check_match(expr, scrutinee, arms, scope, errors);
+        }
+        Expr::Pipe { source, stages } => {
+            check_pipe(source, stages, scope, errors);
         }
         _ => {}
     }
@@ -496,6 +502,7 @@ pub(super) fn check_binary_op(
             let name = binop_name(op);
             check_operand_kind(name, "`integer` or `float`", is_numeric_like, lhs, scope, errors);
             check_operand_kind(name, "`integer` or `float`", is_numeric_like, rhs, scope, errors);
+            check_numeric_kinds_match(lhs, rhs, scope, errors);
         }
         BinOp::And | BinOp::Or => {
             // Saule follows Lua semantics for `and`/`or`: they short-circuit
@@ -595,6 +602,149 @@ fn check_ordering_operands(
 
 fn is_orderable(ty: &Type) -> bool {
     is_numeric_like(ty) || is_string_like(ty)
+}
+
+/// Saule is strict on numeric kinds — `integer` and `float` never mix
+/// implicitly. When both operands have a known *concrete* numeric kind
+/// (i.e. not the `number` sentinel, not `any`, not generic), flag the
+/// pair when they disagree. The error mirrors `RuntimeError::NumericMix`
+/// so the user sees the same diagnostic at compile time.
+fn check_numeric_kinds_match(
+    lhs: &Spanned<Expr>,
+    rhs: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let (Some(lt), Some(rt)) = (infer(lhs, scope), infer(rhs, scope)) else {
+        return;
+    };
+    let lb = strip_nullable(lt);
+    let rb = strip_nullable(rt);
+    let kind = |t: &Type| -> Option<&'static str> {
+        if let Type::Named(n) = t {
+            match n.as_str() {
+                "integer" => Some("integer"),
+                "float" => Some("float"),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    };
+    let (Some(lk), Some(rk)) = (kind(&lb), kind(&rb)) else {
+        return;
+    };
+    if lk != rk {
+        // Span covers both sides so the underline brackets the whole
+        // expression — matches the runtime diagnostic.
+        let span_start = lhs.span.start.min(rhs.span.start);
+        let span_end = lhs.span.end.max(rhs.span.end);
+        errors.push(TypeCheckError::NumericMix {
+            span: to_source_span(span_start..span_end),
+        });
+    }
+}
+
+/// Validate every stage of a `when(source):stage1():stage2()…` pipeline.
+///
+/// For each stage we:
+///   * recursively check the stage's argument expressions;
+///   * look up `stage.name` in the top-level function registry — if it
+///     isn't a known free function, emit [`TypeCheckError::UnknownPipeStage`]
+///     and stop threading types through (subsequent stages get `None`);
+///   * verify the *piped* arg-0 matches `params[0].ty` — this is the
+///     spec's "Expected 'number' as first argument to 'square', got
+///     'string'" diagnostic;
+///   * verify the explicit arg count agrees with the declared arity
+///     (remembering that the piped value covers one of the parameters);
+///   * advance the "current type" to the function's declared return
+///     type for the next stage.
+fn check_pipe(
+    source: &Spanned<Expr>,
+    stages: &[PipeStage],
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    check_expr(source, scope, errors);
+    for stage in stages {
+        for a in &stage.args {
+            check_arg(a, scope, errors);
+        }
+    }
+
+    // Walk the chain left-to-right, threading the "current value type"
+    // through each stage. `None` means "we lost the trail" — we keep
+    // walking so syntactic errors in later stages still surface, but
+    // skip arg-0 type compatibility checks.
+    let mut current: Option<Type> = infer(source, scope);
+    for stage in stages {
+        let Some(info) = super::funcs::lookup(&stage.name) else {
+            errors.push(TypeCheckError::UnknownPipeStage {
+                stage: stage.name.clone(),
+                span: to_source_span(stage.span.clone()),
+            });
+            current = None;
+            continue;
+        };
+
+        // Arity check: piped value counts as one argument. The declared
+        // function must therefore have at least one parameter, and the
+        // explicit args must fit into `params[1..]` (respecting defaults
+        // and variadics).
+        if info.total == 0 && !info.variadic {
+            errors.push(TypeCheckError::PipeStageArity {
+                stage: stage.name.clone(),
+                expected: 1,
+                found: stage.args.len() + 1,
+                span: to_source_span(stage.span.clone()),
+            });
+            current = info.return_ty.clone();
+            continue;
+        }
+        let explicit = stage.args.len();
+        let total = info.total;
+        let defaults = info.defaults;
+        let min_explicit = total.saturating_sub(1 + defaults);
+        let max_explicit = total - 1;
+        let arity_ok = if info.variadic {
+            // Last param is `...rest`; only enforce the lower bound.
+            explicit + 1 >= total.saturating_sub(1)
+        } else {
+            explicit >= min_explicit && explicit <= max_explicit
+        };
+        if !arity_ok {
+            errors.push(TypeCheckError::PipeStageArity {
+                stage: stage.name.clone(),
+                expected: total,
+                found: explicit + 1,
+                span: to_source_span(stage.span.clone()),
+            });
+        }
+
+        // First-arg type check — the headline pipeline diagnostic.
+        if let (Some(actual), Some(expected_param)) =
+            (current.as_ref(), info.params.first())
+        {
+            let actual_base = strip_nullable(actual.clone());
+            let expected_base = strip_nullable(expected_param.ty.clone());
+            let skip = is_any(&actual_base)
+                || is_any(&expected_base)
+                || matches!(&actual_base, Type::Named(n) if n == "nil");
+            if !skip && !types_compatible(&expected_param.ty, actual) {
+                errors.push(TypeCheckError::PipeStageTypeMismatch {
+                    stage: stage.name.clone(),
+                    expected: type_to_string(&expected_param.ty),
+                    found: type_to_string(actual),
+                    span: to_source_span(stage.span.clone()),
+                });
+            }
+        }
+
+        // Thread the return type into the next stage (so the chain
+        // type-checks transitively). `None` propagates as "unknown" and
+        // simply disables the next first-arg comparison.
+        current = info.return_ty.clone();
+    }
 }
 
 /// Reject equality comparisons whose two sides have provably-disjoint
@@ -968,6 +1118,12 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             saule_ast::MatchBody::Expr(e) => infer(e, scope),
             saule_ast::MatchBody::Block(_) => None,
         }),
+        // `when(x):a():b():c()` has the return type of the last stage's
+        // declared function, regardless of any earlier inference failures.
+        Expr::Pipe { stages, .. } => stages
+            .last()
+            .and_then(|s| super::funcs::lookup(&s.name))
+            .and_then(|info| info.return_ty.clone()),
         _ => None,
     }
 }

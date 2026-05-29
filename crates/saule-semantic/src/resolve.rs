@@ -507,6 +507,27 @@ impl Resolver {
                     self.pop_scope();
                 }
             }
+            // `when(source):stage1(args):stage2(args)…` — resolve the
+            // source like a normal expression, then treat every stage
+            // function name as an identifier lookup at its own span so
+            // typos surface as `UndefinedName`. Stage args are checked
+            // for ordering (positionals before named) just like a regular
+            // call.
+            Expr::Pipe { source, stages } => {
+                self.expr(source);
+                for stage in stages {
+                    self.check_arg_ordering(&stage.args);
+                    if !self.resolved(&stage.name) {
+                        self.errors.push(SemanticError::UndefinedName {
+                            name: stage.name.clone(),
+                            span: to_source_span(stage.span.clone()),
+                        });
+                    }
+                    for a in &stage.args {
+                        self.call_arg(a);
+                    }
+                }
+            }
             // Pure literals — nothing to resolve.
             Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Str(_) | Expr::Nil => {}
         }

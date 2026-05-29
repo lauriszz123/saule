@@ -1,0 +1,18 @@
+-- The pipeline's first-argument types must line up.
+--
+-- `to_str` takes an integer and returns a string. Trying to chain
+-- `:square()` after it is a compile error because `square` expects an
+-- integer, not a string.
+
+fn to_str(n: integer) -> string
+    return "" .. n
+end
+
+fn square(n: integer) -> integer
+    return n * n
+end
+
+local err = when(5):to_str():square()
+-- COMPILE ERROR: pipeline stage `square` expects `integer`, got `string`
+print(err)
+
