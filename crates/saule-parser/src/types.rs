@@ -13,10 +13,9 @@ impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Optional return type after a `)` in a function/method/lambda signature.
-    /// Accepts either `-> T` (BNF/spec) or `: T` (legacy form still used in
-    /// many tests and older READMEs).
+    /// Only `-> T` is accepted; the legacy `: T` form has been removed.
     pub(crate) fn parse_return_type_opt(&mut self) -> Result<Option<Type>, ParseError> {
-        if self.eat(&Token::Arrow) || self.eat(&Token::Colon) {
+        if self.eat(&Token::Arrow) {
             Ok(Some(self.parse_type()?))
         } else {
             Ok(None)
@@ -93,9 +92,9 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::RParen, "`)` in function type")?;
-                if !(self.eat(&Token::Arrow) || self.eat(&Token::Colon)) {
+                if !self.eat(&Token::Arrow) {
                     return Err(ParseError::Expected {
-                        expected: "`->` or `:` before return type",
+                        expected: "`->` before return type",
                         span: self.peek().span.clone(),
                     });
                 }

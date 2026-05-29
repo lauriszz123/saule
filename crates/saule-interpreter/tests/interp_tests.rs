@@ -292,7 +292,7 @@ fn break_outside_loop_errors() {
 #[test]
 fn calls_named_function() {
     let src = r#"
-        fn add(a: integer, b: integer): integer
+        fn add(a: integer, b: integer) -> integer
           return a + b
         end
         add(2, 3)
@@ -303,7 +303,7 @@ fn calls_named_function() {
 #[test]
 fn function_with_no_explicit_return_is_nil() {
     let src = r#"
-        fn nothing(): nil
+        fn nothing() -> nil
         end
         nothing()
     "#;
@@ -313,7 +313,7 @@ fn function_with_no_explicit_return_is_nil() {
 #[test]
 fn recursion_factorial() {
     let src = r#"
-        fn fact(n: integer): integer
+        fn fact(n: integer) -> integer
           if n <= 1 then
             return 1
           end
@@ -328,7 +328,7 @@ fn recursion_factorial() {
 fn closures_capture_lexical_scope() {
     // `make_adder` returns a lambda that adds its captured `n`.
     let src = r#"
-        fn make_adder(n: integer): fn(integer): integer
+        fn make_adder(n: integer) -> fn(integer) -> integer
           return (x: integer) => x + n
         end
         local add10 = make_adder(10)
@@ -341,7 +341,7 @@ fn closures_capture_lexical_scope() {
 #[test]
 fn default_parameter_value() {
     let src = r#"
-        fn greet(name: string = "world"): string
+        fn greet(name: string = "world") -> string
           return "hello, " .. name
         end
         greet()
@@ -355,7 +355,7 @@ fn default_parameter_value() {
 #[test]
 fn missing_argument_errors() {
     let src = r#"
-        fn add(a: integer, b: integer): integer
+        fn add(a: integer, b: integer) -> integer
           return a + b
         end
         add(1)
@@ -380,7 +380,7 @@ fn lambda_assigned_and_called() {
 #[test]
 fn higher_order_function() {
     let src = r#"
-        fn apply(f: fn(integer): integer, x: integer): integer
+        fn apply(f: fn(integer) -> integer, x: integer) -> integer
           return f(x)
         end
         apply((n: integer) => n + 1, 41)
@@ -391,7 +391,7 @@ fn higher_order_function() {
 #[test]
 fn function_type_name_is_function() {
     let src = r#"
-        fn id(x: integer): integer return x end
+        fn id(x: integer) -> integer return x end
         type(id)
     "#;
     assert_eq!(eval(src).unwrap(), Value::Str(Rc::new("function".into())));
@@ -589,7 +589,7 @@ mod tables {
     #[test]
     fn tables_passed_to_fn_are_shared() {
         let src = r#"
-            fn modify(t: table<integer>): nil
+            fn modify(t: table<integer>)
                 t[1] = 42
             end
             local t = {1, 2, 3}
@@ -685,7 +685,7 @@ mod multi_return {
     #[test]
     fn multi_return_destructured() {
         let src = r#"
-            fn pair(): (integer, integer)
+            fn pair() -> (integer, integer)
                 return 7, 9
             end
             local a: integer, b: integer = pair()
@@ -714,7 +714,7 @@ mod multi_return {
     fn multi_return_min_max() {
         // README example.
         let src = r#"
-            fn minMax(items: table<integer>): (integer, integer)
+            fn minMax(items: table<integer>) -> (integer, integer)
                 local lo: integer = items[1]
                 local hi: integer = items[1]
                 for v: integer in items do
@@ -731,7 +731,7 @@ mod multi_return {
     #[test]
     fn single_binding_of_multi_return_takes_first() {
         let src = r#"
-            fn pair(): (integer, integer)
+            fn pair() -> (integer, integer)
                 return 11, 22
             end
             local x: integer = pair()
@@ -749,7 +749,7 @@ mod named_params {
     #[test]
     fn call_with_named_arguments() {
         let src = r#"
-            fn setup(width: integer, height: integer, title: string): string
+            fn setup(width: integer, height: integer, title: string) -> string
                 return title .. " " .. width .. "x" .. height
             end
 
@@ -760,7 +760,7 @@ mod named_params {
     #[test]
     fn named_args_in_any_order() {
         let src = r#"
-            fn make(a: integer, b: integer, c: integer): integer
+            fn make(a: integer, b: integer, c: integer) -> integer
                 return a * 100 + b * 10 + c
             end
             make(c: 3, a: 1, b: 2)
@@ -770,7 +770,7 @@ mod named_params {
     #[test]
     fn named_with_default() {
         let src = r#"
-            fn fmt(x: integer, suffix: string = "px"): string
+            fn fmt(x: integer, suffix: string = "px") -> string
                 return x .. suffix
             end
             fmt(x: 16)
@@ -788,7 +788,7 @@ mod variadic {
     fn variadic_sums_integers() {
         // README example.
         let src = r#"
-            fn sum(...values: integer): integer
+            fn sum(...values: integer) -> integer
                 local total: integer = 0
                 for v: integer in values do
                     total = total + v
@@ -802,7 +802,7 @@ mod variadic {
     #[test]
     fn variadic_with_zero_extras() {
         let src = r#"
-            fn sum(...values: integer): integer
+            fn sum(...values: integer) -> integer
                 local total: integer = 0
                 for v: integer in values do total = total + v end
                 return total
@@ -814,7 +814,7 @@ mod variadic {
     #[test]
     fn variadic_after_fixed_param() {
         let src = r#"
-            fn label(prefix: string, ...vs: integer): string
+            fn label(prefix: string, ...vs: integer) -> string
                 local s: string = prefix
                 for v: integer in vs do s = s .. " " .. v end
                 return s
@@ -833,8 +833,8 @@ mod piping {
     #[test]
     fn pipe_threads_value_into_first_arg() {
         let src = r#"
-            fn double(x: integer): integer return x * 2 end
-            fn inc(x: integer): integer return x + 1 end
+            fn double(x: integer) -> integer return x * 2 end
+            fn inc(x: integer) -> integer return x + 1 end
             local r: integer = 10 then double() then inc()
             r
         "#;
@@ -843,7 +843,7 @@ mod piping {
     #[test]
     fn pipe_with_extra_args() {
         let src = r#"
-            fn add(a: integer, b: integer): integer return a + b end
+            fn add(a: integer, b: integer) -> integer return a + b end
             local r: integer = 1 then add(41)
             r
         "#;
@@ -877,15 +877,17 @@ mod classes {
         let src = r#"
             class Greeter
                 name: string
+
                 fn init(name: string)
                     self.name = name
                 end
-                fn greet(self): string
+
+                fn greet(self) -> string
                     return "hi " .. self.name
                 end
             end
             local g: Greeter = Greeter("ada")
-            g:greet()
+            g.greet()
         "#;
         assert_str(src, "hi ada");
     }
@@ -897,12 +899,12 @@ mod classes {
                 fn init()
                     self.n = 0
                 end
-                fn tick(self): nil
+                fn tick(self)
                     self.n = self.n + 1
                 end
             end
             local c: Counter = Counter()
-            c:tick() c:tick() c:tick()
+            c.tick() c.tick() c.tick()
             c.n
         "#;
         assert_int(src, 3);
@@ -922,7 +924,7 @@ mod classes {
         let src = r#"
             class Player
                 static maxHealth: integer = 100
-                static fn getMax(): integer
+                static fn getMax() -> integer
                     return Player.maxHealth
                 end
             end
@@ -995,7 +997,7 @@ mod inheritance {
                 fn init(name: string)
                     self.name = name
                 end
-                fn getName(self): string return self.name end
+                fn getName(self) -> string return self.name end
             end
             class Player extends Entity
                 fn init(name: string)
@@ -1003,7 +1005,7 @@ mod inheritance {
                 end
             end
             local p: Player = Player("arthur")
-            p:getName()
+            p.getName()
         "#;
         assert_str(src, "arthur");
     }
@@ -1018,11 +1020,13 @@ mod inheritance {
             end
             class B extends A
                 b: integer
+
                 fn init(a: integer, b: integer)
                     self.super(a)
                     self.b = b
                 end
             end
+
             local x: B = B(10, 20)
             x.a + x.b
         "#;
@@ -1032,10 +1036,10 @@ mod inheritance {
     fn child_overrides_parent_method() {
         let src = r#"
             class A
-                fn label(self): string return "A" end
+                fn label(self) -> string return "A" end
             end
             class B extends A
-                fn label(self): string return "B" end
+                fn label(self) -> string return "B" end
             end
             (B()).label()
         "#;
@@ -1054,17 +1058,17 @@ mod interfaces {
         // through an interface-typed local must still dispatch correctly.
         let src = r#"
             interface Greetable
-                fn greet(self): string
+                fn greet(self) -> string
             end
             class Person implements Greetable
                 name: string
                 fn init(n: string)
                     self.name = n
                 end
-                fn greet(self): string return "hello " .. self.name end
+                fn greet(self) -> string return "hello " .. self.name end
             end
             local g: Greetable = Person("rust")
-            g:greet()
+            g.greet()
         "#;
         assert_str(src, "hello rust");
     }
@@ -1117,11 +1121,11 @@ mod enums {
             enum Status
                 Alive = "alive"
                 Dead = "dead"
-                fn describe(self): string
+                fn describe(self) -> string
                     return "Status is: " .. self.value
                 end
             end
-            (Status.Alive):describe()
+            (Status.Alive).describe()
         "#;
         assert_str(src, "Status is: alive");
     }
@@ -1261,7 +1265,7 @@ mod error_handling {
     #[test]
     fn throw_from_inside_function_caught_outside() {
         let src = r#"
-            fn bad(): nil
+            fn bad()
                 throw "no good"
             end
             local msg: string = ""
