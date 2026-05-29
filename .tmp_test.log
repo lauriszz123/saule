@@ -1,0 +1,362 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running unittests src/lib.rs (target/debug/deps/saule_ast-5be950e022a219ba)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/saule-b01e8c8a720be954)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/saule_interpreter-735c26785d4bcb44)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/interp_tests.rs (target/debug/deps/interp_tests-5f872b32c99d99df)
+
+running 110 tests
+test assignment_updates_local ... ok
+test assign_to_undeclared_errors ... ok
+test break_exits_loop_early ... ok
+test break_outside_loop_errors ... ok
+test calling_non_callable_errors ... ok
+test calls_named_function ... ok
+test casts::cast_enables_mixed_arithmetic ... ok
+test casts::cast_back_to_integer ... ok
+test casts::float_of_string_errors ... ok
+test casts::float_promotes_integer ... ok
+test casts::int_of_string_errors ... ok
+test casts::int_of_whole_float ... ok
+test casts::int_truncates_negative_toward_zero ... ok
+test casts::int_truncates_positive_toward_zero ... ok
+test casts::int_with_no_args_errors ... ok
+test classes::construct_and_read_field ... FAILED
+test classes::field_default_value ... ok
+test classes::instance_identity_is_per_object ... FAILED
+test classes::method_can_mutate_self ... FAILED
+test classes::method_call_with_self ... FAILED
+test classes::static_field_is_shared_and_mutable ... ok
+test classes::static_field_access ... ok
+test classes::type_of_instance_is_instance ... FAILED
+test classes::static_method_call ... ok
+test closures_capture_lexical_scope ... ok
+test continue_skips_rest_of_iteration ... ok
+test comparison_and_logic ... ok
+test default_parameter_value ... ok
+test division_by_zero ... ok
+test enums::enum_method_dispatch ... ok
+test enums::enum_variants_are_distinct ... ok
+test enums::enum_variant_equality ... ok
+test enums::valued_enum_exposes_value ... ok
+test error_handling::nested_try_catch ... ok
+test error_handling::throw_from_inside_function_caught_outside ... ok
+test error_handling::try_body_completes_without_throw ... ok
+test error_handling::uncaught_throw_bubbles_as_error ... ok
+test error_handling::try_catches_thrown_string ... ok
+test float_arithmetic ... ok
+test for_in::break_inside_for_in ... ok
+test for_in::continue_inside_for_in ... ok
+test for_in::empty_table_runs_body_zero_times ... ok
+test for_in::one_var_iterates_values ... ok
+test for_in::two_vars_iterate_index_and_value ... ok
+test function_type_name_is_function ... ok
+test function_with_no_explicit_return_is_nil ... ok
+test if_body_introduces_scope ... ok
+test higher_order_function ... ok
+test if_elseif_else_chain ... FAILED
+test if_then_branch ... ok
+test inheritance::child_overrides_parent_method ... FAILED
+test inheritance::child_inherits_parent_method ... FAILED
+test inheritance::super_calls_parent_constructor ... FAILED
+test integer_arithmetic ... ok
+test interfaces::class_implements_interface_at_runtime ... FAILED
+test lambda_assigned_and_called ... ok
+test local_then_lookup ... ok
+test loops::numeric_for_with_step_5 ... ok
+test loops::for_combined_break_and_continue ... ok
+test mixing_int_and_float_errors ... ok
+test missing_argument_errors ... FAILED
+test multi_return::multi_return_destructured ... ok
+test multi_return::multi_return_min_max ... ok
+test multi_return::single_binding_of_multi_return_takes_first ... ok
+test multi_return::multi_return_through_named_function_call ... ok
+test named_params::call_with_named_arguments ... ok
+test named_params::named_args_in_any_order ... ok
+test named_params::named_with_default ... ok
+test null_safety::combined_safe_call_and_coalesce ... FAILED
+test null_coalescing ... ok
+test null_safety::force_unwrap_on_nil_errors ... ok
+test null_safety::force_unwrap_on_value_returns_value ... ok
+test null_safety::null_coalesce_with_nil ... ok
+test null_safety::null_coalesce_with_value ... ok
+test null_safety::safe_member_on_nil_returns_nil ... ok
+test null_safety::safe_member_on_value_returns_field ... FAILED
+test numeric_for_default_step ... ok
+test numeric_for_negative_step ... ok
+test numeric_for_zero_step_errors ... ok
+test operators::boolean_logic_full ... ok
+test operators::arithmetic_full ... ok
+test operators::null_safety_ops_list ... ok
+test operators::string_ops ... ok
+test piping::pipe_threads_value_into_first_arg ... FAILED
+test operators::comparison_full ... ok
+test piping::pipe_with_extra_args ... FAILED
+test print_native_call ... ok
+test recursion_factorial ... ok
+test repeat_until_runs_at_least_once ... ok
+test string_concat_and_length ... ok
+test tables::append_idiom_grows_table ... ok
+test tables::empty_table_literal_has_zero_length ... ok
+test tables::array_literal_with_elements ... ok
+test tables::index_assign_on_non_table_errors ... ok
+test tables::index_assignment_updates_element ... ok
+test tables::indexing_non_table_errors ... ok
+test tables::length_of_populated_table ... ok
+test tables::negative_index_returns_nil ... ok
+test tables::nested_table_access ... ok
+test tables::out_of_bounds_index_returns_nil ... ok
+test tables::tables_have_reference_identity ... ok
+test tables::type_of_table_is_table ... ok
+test tables::tables_passed_to_fn_are_shared ... ok
+test tables::zero_index_returns_nil ... ok
+test type_builtin ... ok
+test undefined_variable_errors ... ok
+test variadic::variadic_after_fixed_param ... ok
+test variadic::variadic_sums_integers ... ok
+test variadic::variadic_with_zero_extras ... ok
+test while_counts_to_ten ... ok
+
+failures:
+
+---- classes::construct_and_read_field stdout ----
+
+thread 'classes::construct_and_read_field' (5459) panicked at crates/saule-interpreter/tests/interp_tests.rs:435:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 254..257 }) — src: 
+            class Point
+                x: integer
+                y: integer
+                fn init(x: integer, y: integer)
+                    self.x = x
+                    self.y = y
+                end
+            end
+            local p: Point = new Point(3, 4)
+            p.x + p.y
+        
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- classes::instance_identity_is_per_object stdout ----
+
+thread 'classes::instance_identity_is_per_object' (5461) panicked at crates/saule-interpreter/tests/interp_tests.rs:456:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 180..183 }) — src: 
+            class Box
+                v: integer
+                fn init(v: integer)
+                    self.v = v
+                end
+            end
+            local a: Box = new Box(1)
+            local b: Box = new Box(1)
+            a == b
+        
+
+---- classes::method_can_mutate_self stdout ----
+
+thread 'classes::method_can_mutate_self' (5463) panicked at crates/saule-interpreter/tests/interp_tests.rs:435:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 273..276 }) — src: 
+            class Counter
+                n: integer
+                fn init()
+                    self.n = 0
+                end
+                fn tick(self): nil
+                    self.n = self.n + 1
+                end
+            end
+            local c: Counter = new Counter()
+            c:tick() c:tick() c:tick()
+            c.n
+        
+
+---- classes::method_call_with_self stdout ----
+
+thread 'classes::method_call_with_self' (5462) panicked at crates/saule-interpreter/tests/interp_tests.rs:449:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 303..306 }) — src: 
+            class Greeter
+                name: string
+                fn init(name: string)
+                    self.name = name
+                end
+                fn greet(self): string
+                    return "hi " .. self.name
+                end
+            end
+            local g: Greeter = new Greeter("ada")
+            g:greet()
+        
+
+---- classes::type_of_instance_is_instance stdout ----
+
+thread 'classes::type_of_instance_is_instance' (5467) panicked at crates/saule-interpreter/tests/interp_tests.rs:449:19:
+evaluation failed (parse error: Expected { expected: "`)` to close arguments", span: 48..51 }) — src: 
+            class Foo end
+            type(new Foo())
+        
+
+---- if_elseif_else_chain stdout ----
+
+thread 'if_elseif_else_chain' (5492) panicked at crates/saule-interpreter/tests/interp_tests.rs:9:30:
+parse: Expected { expected: "`end` to close `if`", span: 277..277 }
+
+---- inheritance::child_overrides_parent_method stdout ----
+
+thread 'inheritance::child_overrides_parent_method' (5495) panicked at crates/saule-interpreter/tests/interp_tests.rs:449:19:
+evaluation failed (parse error: Expected { expected: "`)`", span: 208..209 }) — src: 
+            class A
+                fn label(self): string return "A" end
+            end
+            class B extends A
+                fn label(self): string return "B" end
+            end
+            (new B()):label()
+        
+
+---- inheritance::child_inherits_parent_method stdout ----
+
+thread 'inheritance::child_inherits_parent_method' (5494) panicked at crates/saule-interpreter/tests/interp_tests.rs:449:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 409..412 }) — src: 
+            class Entity
+                name: string
+                fn init(name: string)
+                    self.name = name
+                end
+                fn getName(self): string return self.name end
+            end
+            class Player extends Entity
+                fn init(name: string)
+                    self.super(name)
+                end
+            end
+            local p: Player = new Player("arthur")
+            p:getName()
+        
+
+---- inheritance::super_calls_parent_constructor stdout ----
+
+thread 'inheritance::super_calls_parent_constructor' (5496) panicked at crates/saule-interpreter/tests/interp_tests.rs:435:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 382..385 }) — src: 
+            class A
+                a: integer
+                fn init(a: integer)
+                    self.a = a
+                end
+            end
+            class B extends A
+                b: integer
+                fn init(a: integer, b: integer)
+                    self.super(a)
+                    self.b = b
+                end
+            end
+            local x: B = new B(10, 20)
+            x.a + x.b
+        
+
+---- interfaces::class_implements_interface_at_runtime stdout ----
+
+thread 'interfaces::class_implements_interface_at_runtime' (5498) panicked at crates/saule-interpreter/tests/interp_tests.rs:449:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 373..376 }) — src: 
+            interface Greetable
+                fn greet(self): string
+            end
+            class Person implements Greetable
+                name: string
+                fn init(n: string)
+                    self.name = n
+                end
+                fn greet(self): string return "hello " .. self.name end
+            end
+            local g: Greetable = new Person("rust")
+            g:greet()
+        
+
+---- missing_argument_errors stdout ----
+
+thread 'missing_argument_errors' (5503) panicked at crates/saule-interpreter/tests/interp_tests.rs:362:5:
+assertion failed: matches!(eval(src).unwrap_err(), RuntimeError::TypeError { .. })
+
+---- null_safety::combined_safe_call_and_coalesce stdout ----
+
+thread 'null_safety::combined_safe_call_and_coalesce' (5513) panicked at crates/saule-interpreter/tests/interp_tests.rs:449:19:
+evaluation failed (parse error: Expected { expected: "an expression", span: 278..279 }) — src: 
+            class P
+                name: string
+                fn init(n: string)
+                    self.name = n
+                end
+                fn getName(self): string return self.name end
+            end
+            local p: P? = nil
+            local n: string = p?:getName() ?? "Unknown"
+            n
+        
+
+---- null_safety::safe_member_on_value_returns_field stdout ----
+
+thread 'null_safety::safe_member_on_value_returns_field' (5519) panicked at crates/saule-interpreter/tests/interp_tests.rs:449:19:
+evaluation failed (runtime error: Undefined { name: "new", span: 181..184 }) — src: 
+            class P
+                name: string
+                fn init(n: string)
+                    self.name = n
+                end
+            end
+            local p: P? = new P("ada")
+            p?.name
+        
+
+---- piping::pipe_threads_value_into_first_arg stdout ----
+
+thread 'piping::pipe_threads_value_into_first_arg' (5528) panicked at crates/saule-interpreter/tests/interp_tests.rs:435:19:
+evaluation failed (parse error: Expected { expected: "an expression", span: 152..156 }) — src: 
+            fn double(x: integer): integer return x * 2 end
+            fn inc(x: integer): integer return x + 1 end
+            local r: integer = 10 then double() then inc()
+            r
+        
+
+---- piping::pipe_with_extra_args stdout ----
+
+thread 'piping::pipe_with_extra_args' (5529) panicked at crates/saule-interpreter/tests/interp_tests.rs:435:19:
+evaluation failed (parse error: Expected { expected: "an expression", span: 103..107 }) — src: 
+            fn add(a: integer, b: integer): integer return a + b end
+            local r: integer = 1 then add(41)
+            r
+        
+
+
+failures:
+    classes::construct_and_read_field
+    classes::instance_identity_is_per_object
+    classes::method_call_with_self
+    classes::method_can_mutate_self
+    classes::type_of_instance_is_instance
+    if_elseif_else_chain
+    inheritance::child_inherits_parent_method
+    inheritance::child_overrides_parent_method
+    inheritance::super_calls_parent_constructor
+    interfaces::class_implements_interface_at_runtime
+    missing_argument_errors
+    null_safety::combined_safe_call_and_coalesce
+    null_safety::safe_member_on_value_returns_field
+    piping::pipe_threads_value_into_first_arg
+    piping::pipe_with_extra_args
+
+test result: FAILED. 95 passed; 15 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p saule-interpreter --test interp_tests`
