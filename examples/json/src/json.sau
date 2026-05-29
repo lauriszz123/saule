@@ -128,6 +128,13 @@ class JsonParser
     end
 
     while true do
+      -- Skip any whitespace before the next key. Needed on every iteration
+      -- (not just the first) so pretty-printed JSON like
+      --   { "a": 1,\n  "b": 2 }
+      -- doesn't trip parseString — `parseString` expects a `"` and would
+      -- otherwise see the `\n` / spaces left after the previous `,`.
+      self.skipWs()
+
       local key: string = self.parseString()
       self.skipWs()
       self.skipWs()

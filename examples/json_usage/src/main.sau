@@ -5,7 +5,7 @@ class Main
 
     -- Read the small test file.
     println("test.json:")
-    Main.dumpAny(Json.decode(Main.loadFile("test.json") ?? ""), "  ")
+    Main.dumpAny(Json.decode(Main.loadFile("test.json")), "  ")
 
     -- Read the kitchen-sink file (covers every JSON variant).
 
@@ -14,7 +14,7 @@ class Main
 
     -- We know that it exists so we can force unwrap.
 
-    local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!)
+    local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json"))
 
     if raw == nil then
       println("Failed to parse!")
