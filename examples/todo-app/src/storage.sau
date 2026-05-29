@@ -1,0 +1,10 @@
+class Storage
+  fn init()
+  end
+
+  fn load()
+  end
+
+  fn save()
+  end
+end

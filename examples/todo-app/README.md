@@ -1,0 +1,7 @@
+# todo-app
+
+A Saule project. Run with:
+
+```sh
+saule run
+```

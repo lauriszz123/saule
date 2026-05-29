@@ -1,0 +1,13 @@
+class Main
+  static fn help()
+    println("TODO App Usage:")
+    println("\t todo list")
+    println("\t todo add [task]")
+    println("\t todo remove [number-of-task]")
+    println("\t todo done [number-of-task]")
+  end
+
+  static fn main()
+    Main.help()
+  end
+end
