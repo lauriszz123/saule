@@ -37,10 +37,10 @@ use saule_ast::Module;
 pub mod env;
 pub mod error;
 pub mod eval;
+pub mod module;
 pub mod project;
 pub mod stdlib;
 pub mod value;
-pub mod module;
 
 /// Re-export of the standalone `saule-typeck` crate so existing call sites
 /// (`saule_interpreter::typeck::check`) keep working after the extraction.

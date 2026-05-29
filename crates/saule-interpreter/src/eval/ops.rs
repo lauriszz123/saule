@@ -134,7 +134,9 @@ fn comparison(
         (Value::Int(a), Value::Int(b)) => a.cmp(b),
         (Value::Float(a), Value::Float(b)) => {
             a.partial_cmp(b).ok_or_else(|| RuntimeError::TypeError {
-                message: "cannot compare NaN (not-a-number) — comparison is undefined for NaN values".into(),
+                message:
+                    "cannot compare NaN (not-a-number) — comparison is undefined for NaN values"
+                        .into(),
                 span: span.clone(),
             })?
         }

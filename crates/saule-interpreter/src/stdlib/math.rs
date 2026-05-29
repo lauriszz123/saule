@@ -68,45 +68,45 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 pub fn register_sigs() {
     use crate::stdlib::sigs::{register, t_named, t_nullable, t_number};
     let any = || t_named("any");
-    let n   = t_number;
-    let i   = || t_named("integer");
-    let f   = || t_named("float");
-    let b   = || t_named("boolean");
-    let s   = || t_named("string");
+    let n = t_number;
+    let i = || t_named("integer");
+    let f = || t_named("float");
+    let b = || t_named("boolean");
+    let s = || t_named("string");
 
     // `tointeger` / `type` accept anything by design (they return nil for
     // values that can't be coerced / aren't numeric).
-    register("Math.tointeger",   vec![any()],               vec![t_nullable(i())]);
-    register("Math.type",        vec![any()],               vec![t_nullable(s())]);
+    register("Math.tointeger", vec![any()], vec![t_nullable(i())]);
+    register("Math.type", vec![any()], vec![t_nullable(s())]);
 
     // Definitely-integer returns; require a number in.
-    register("Math.floor",       vec![n()],                 vec![i()]);
-    register("Math.ceil",        vec![n()],                 vec![i()]);
-    register("Math.round",       vec![n()],                 vec![i()]);
-    register("Math.maxinteger",  vec![],                    vec![i()]);
-    register("Math.mininteger",  vec![],                    vec![i()]);
-    register("Math.sign",        vec![n()],                 vec![i()]);
+    register("Math.floor", vec![n()], vec![i()]);
+    register("Math.ceil", vec![n()], vec![i()]);
+    register("Math.round", vec![n()], vec![i()]);
+    register("Math.maxinteger", vec![], vec![i()]);
+    register("Math.mininteger", vec![], vec![i()]);
+    register("Math.sign", vec![n()], vec![i()]);
 
     // Definitely-float returns; require a number in.
-    register("Math.sqrt",        vec![n()],                 vec![f()]);
-    register("Math.sin",         vec![n()],                 vec![f()]);
-    register("Math.cos",         vec![n()],                 vec![f()]);
-    register("Math.tan",         vec![n()],                 vec![f()]);
-    register("Math.asin",        vec![n()],                 vec![f()]);
-    register("Math.acos",        vec![n()],                 vec![f()]);
+    register("Math.sqrt", vec![n()], vec![f()]);
+    register("Math.sin", vec![n()], vec![f()]);
+    register("Math.cos", vec![n()], vec![f()]);
+    register("Math.tan", vec![n()], vec![f()]);
+    register("Math.asin", vec![n()], vec![f()]);
+    register("Math.acos", vec![n()], vec![f()]);
     // `atan(y)` and `atan(y, x)` are both valid (the 2-arg form is atan2).
-    register("Math.atan",        vec![n(), t_nullable(n())], vec![f()]);
-    register("Math.exp",         vec![n()],                 vec![f()]);
+    register("Math.atan", vec![n(), t_nullable(n())], vec![f()]);
+    register("Math.exp", vec![n()], vec![f()]);
     // `log(x)` natural log; `log(x, base)` arbitrary base.
-    register("Math.log",         vec![n(), t_nullable(n())], vec![f()]);
-    register("Math.deg",         vec![n()],                 vec![f()]);
-    register("Math.rad",         vec![n()],                 vec![f()]);
-    register("Math.huge",        vec![],                    vec![f()]);
-    register("Math.pi",          vec![],                    vec![f()]);
-    register("Math.e",           vec![],                    vec![f()]);
+    register("Math.log", vec![n(), t_nullable(n())], vec![f()]);
+    register("Math.deg", vec![n()], vec![f()]);
+    register("Math.rad", vec![n()], vec![f()]);
+    register("Math.huge", vec![], vec![f()]);
+    register("Math.pi", vec![], vec![f()]);
+    register("Math.e", vec![], vec![f()]);
 
     // Boolean.
-    register("Math.ult",         vec![i(), i()],            vec![b()]);
+    register("Math.ult", vec![i(), i()], vec![b()]);
 
     // `abs`, `min`, `max`, `pow`, `clamp`, `fmod`, `modf`, `random` can be
     // either integer or float depending on input — left unregistered so the
@@ -372,7 +372,10 @@ fn math_random(args: &[Value]) -> Result<Value, String> {
             let v = (next_u64() as u128) % span;
             Ok(Value::Int(lo + v as i64))
         }
-        _ => Err(format!("random expects 0, 1, or 2 arguments, got {}", args.len())),
+        _ => Err(format!(
+            "random expects 0, 1, or 2 arguments, got {}",
+            args.len()
+        )),
     }
 }
 
@@ -391,8 +394,7 @@ fn math_tointeger(args: &[Value]) -> Result<Value, String> {
     let out = match &args[0] {
         Value::Int(i) => Some(*i),
         Value::Float(f) => {
-            if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64
-            {
+            if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
                 Some(*f as i64)
             } else {
                 None
@@ -462,5 +464,3 @@ fn to_i64(n: Number, label: &str) -> Result<i64, String> {
         }
     }
 }
-
-

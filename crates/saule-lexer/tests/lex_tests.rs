@@ -1,7 +1,6 @@
 //! Tests moved out of src/lib.rs.
 use saule_lexer::{Lexer, LexerError, Token};
 
-
 fn lex(src: &str) -> Vec<Token> {
     Lexer::new(src)
         .tokenize()

@@ -209,7 +209,12 @@ impl Resolver {
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
 
-            Stmt::If { cond, then_block, elseifs, else_block } => {
+            Stmt::If {
+                cond,
+                then_block,
+                elseifs,
+                else_block,
+            } => {
                 self.expr(cond);
                 self.push_scope();
                 self.block(then_block);
@@ -240,7 +245,14 @@ impl Resolver {
                 self.expr(cond);
                 self.pop_scope();
             }
-            Stmt::ForNumeric { var, from, to, step, body, .. } => {
+            Stmt::ForNumeric {
+                var,
+                from,
+                to,
+                step,
+                body,
+                ..
+            } => {
                 self.expr(from);
                 self.expr(to);
                 if let Some(s) = step {
@@ -271,7 +283,12 @@ impl Resolver {
                     self.expr(v);
                 }
             }
-            Stmt::Try { body, catch_var, catch_body, .. } => {
+            Stmt::Try {
+                body,
+                catch_var,
+                catch_body,
+                ..
+            } => {
                 self.push_scope();
                 self.block(body);
                 self.pop_scope();
@@ -310,7 +327,11 @@ impl Resolver {
                 let static_names: Vec<String> = members
                     .iter()
                     .filter_map(|m| match &m.value {
-                        ClassMember::Field { is_static: true, name, .. } => Some(name.clone()),
+                        ClassMember::Field {
+                            is_static: true,
+                            name,
+                            ..
+                        } => Some(name.clone()),
                         ClassMember::Method(meth) if meth.is_static => Some(meth.name.clone()),
                         _ => None,
                     })
@@ -321,7 +342,9 @@ impl Resolver {
                         ClassMember::Method(meth) => {
                             self.method(name, meth, &static_names);
                         }
-                        ClassMember::Field { default: Some(d), .. } => self.expr(d),
+                        ClassMember::Field {
+                            default: Some(d), ..
+                        } => self.expr(d),
                         ClassMember::Field { .. } => {}
                     }
                 }
@@ -344,7 +367,8 @@ impl Resolver {
     fn method(&mut self, class_name: &str, meth: &Method, static_names: &[String]) {
         self.check_variadic_shape(&meth.params);
         let prev_method = std::mem::replace(&mut self.in_method, true);
-        let prev_init = std::mem::replace(&mut self.in_init, meth.name == "init" && !meth.is_static);
+        let prev_init =
+            std::mem::replace(&mut self.in_init, meth.name == "init" && !meth.is_static);
 
         // Default-value expressions evaluate in the *outer* scope, so walk
         // them before pushing the body frame.
@@ -390,8 +414,12 @@ impl Resolver {
     }
 
     fn check_variadic_shape(&mut self, params: &[Param]) {
-        let variadic_positions: Vec<usize> =
-            params.iter().enumerate().filter(|(_, p)| p.variadic).map(|(i, _)| i).collect();
+        let variadic_positions: Vec<usize> = params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.variadic)
+            .map(|(i, _)| i)
+            .collect();
 
         if variadic_positions.len() > 1 {
             // Report every extra variadic individually.
@@ -614,4 +642,3 @@ impl Resolver {
         }
     }
 }
-

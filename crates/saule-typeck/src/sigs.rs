@@ -55,7 +55,11 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
-            NativeSig { params, variadic: None, returns },
+            NativeSig {
+                params,
+                variadic: None,
+                returns,
+            },
         );
     });
 }
@@ -66,7 +70,11 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
-            NativeSig { params, variadic: Some(variadic), returns },
+            NativeSig {
+                params,
+                variadic: Some(variadic),
+                returns,
+            },
         );
     });
 }
@@ -121,16 +129,22 @@ pub fn t_nullable(inner: Type) -> Type {
 }
 
 pub fn t_table(value: Type) -> Type {
-    Type::Table { key: None, value: Box::new(value) }
+    Type::Table {
+        key: None,
+        value: Box::new(value),
+    }
 }
 
 pub fn t_table_map(key: Type, value: Type) -> Type {
-    Type::Table { key: Some(Box::new(key)), value: Box::new(value) }
+    Type::Table {
+        key: Some(Box::new(key)),
+        value: Box::new(value),
+    }
 }
 
 pub fn t_function(params: Vec<Type>, ret: Type) -> Type {
-    Type::Function { params, ret: Box::new(ret) }
+    Type::Function {
+        params,
+        ret: Box::new(ret),
+    }
 }
-
-
-

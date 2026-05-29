@@ -90,9 +90,7 @@ pub(super) fn check_match(
                     has_fallback = true;
                 }
                 Pattern::Variant {
-                    enum_name,
-                    variant,
-                    ..
+                    enum_name, variant, ..
                 } => {
                     if let Some(en) = &active_enum
                         && en == enum_name

@@ -54,14 +54,33 @@ pub fn register_all_sigs() {
 pub fn all_prelude_names() -> Vec<&'static str> {
     vec![
         // core natives
-        "print", "println", "printf", "tostring", "type", "int", "float",
-        "tonumber", "tointeger", "tofloat", "assert", "error",
+        "print",
+        "println",
+        "printf",
+        "tostring",
+        "type",
+        "int",
+        "float",
+        "tonumber",
+        "tointeger",
+        "tofloat",
+        "assert",
+        "error",
         // iter
-        "Iterable", "Iterable2",
+        "Iterable",
+        "Iterable2",
         // class-style stdlib globals
-        "Math", "String", "Table", "Io", "File", "Os", "Project",
+        "Math",
+        "String",
+        "Table",
+        "Io",
+        "File",
+        "Os",
+        "Project",
         // stdlib enums
-        "IoMode", "IoSeek", "OsPlatform",
+        "IoMode",
+        "IoSeek",
+        "OsPlatform",
     ]
 }
 
@@ -97,5 +116,3 @@ pub(crate) fn expect_min_arity(name: &str, args: &[Value], min: usize) -> Result
     }
     Ok(())
 }
-
-

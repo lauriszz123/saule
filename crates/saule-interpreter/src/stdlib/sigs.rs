@@ -7,4 +7,3 @@ pub use saule_typeck::sigs::{
     NativeSig, lookup, register, register_v, set_initializer, t_any, t_function, t_named,
     t_nullable, t_number, t_table, t_table_map,
 };
-

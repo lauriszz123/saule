@@ -35,10 +35,19 @@ pub(crate) fn check_module(module: &saule_ast::Module, errors: &mut Vec<Semantic
 
 fn check_decl(decl: &Decl, errors: &mut Vec<SemanticError>) {
     match decl {
-        Decl::Function { name, return_ty, body, .. } => {
+        Decl::Function {
+            name,
+            return_ty,
+            body,
+            ..
+        } => {
             check_fn(name, return_ty.as_ref(), body, errors);
         }
-        Decl::Class { name: class, members, .. } => {
+        Decl::Class {
+            name: class,
+            members,
+            ..
+        } => {
             for m in members {
                 if let ClassMember::Method(meth) = &m.value {
                     let qual = format!("{class}.{}", meth.name);
@@ -46,7 +55,9 @@ fn check_decl(decl: &Decl, errors: &mut Vec<SemanticError>) {
                 }
             }
         }
-        Decl::Enum { name: en, methods, .. } => {
+        Decl::Enum {
+            name: en, methods, ..
+        } => {
             for meth in methods {
                 let qual = format!("{en}.{}", meth.name);
                 check_method(&qual, meth, errors);
@@ -76,10 +87,7 @@ fn check_fn(
     // Best-effort span: point at the last statement of the body (where the
     // missing `return` would naturally go), falling back to a zero span at
     // position 0 if the body is empty.
-    let span = body
-        .last()
-        .map(|s| s.span.clone())
-        .unwrap_or(0..0);
+    let span = body.last().map(|s| s.span.clone()).unwrap_or(0..0);
     errors.push(SemanticError::MissingReturn {
         name: name.to_string(),
         ty: render_type(ty),
@@ -110,7 +118,10 @@ fn render_type(ty: &Type) -> String {
         Type::Named(n) => n.clone(),
         Type::Nullable(inner) => format!("{}?", render_type(inner)),
         Type::Table { key: None, value } => format!("table<{}>", render_type(value)),
-        Type::Table { key: Some(k), value } => {
+        Type::Table {
+            key: Some(k),
+            value,
+        } => {
             format!("table<{}, {}>", render_type(k), render_type(value))
         }
         Type::Tuple(parts) => {
@@ -133,13 +144,22 @@ fn block_returns(block: &[Spanned<Stmt>]) -> bool {
 fn stmt_returns(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Return(_) | Stmt::Throw(_) => true,
-        Stmt::If { then_block, elseifs, else_block, .. } => {
-            let Some(else_b) = else_block else { return false };
+        Stmt::If {
+            then_block,
+            elseifs,
+            else_block,
+            ..
+        } => {
+            let Some(else_b) = else_block else {
+                return false;
+            };
             block_returns(then_block)
                 && elseifs.iter().all(|(_, b)| block_returns(b))
                 && block_returns(else_b)
         }
-        Stmt::Try { body, catch_body, .. } => {
+        Stmt::Try {
+            body, catch_body, ..
+        } => {
             // Both the protected region and the handler must return for
             // the `try` itself to count.
             block_returns(body) && block_returns(catch_body)
@@ -178,13 +198,6 @@ fn arm_returns(arm: &MatchArm) -> bool {
 
 fn has_irrefutable_arm(arms: &[MatchArm]) -> bool {
     arms.iter().any(|a| {
-        a.guard.is_none()
-            && matches!(
-                a.pattern.value,
-                Pattern::Wildcard | Pattern::Bind(_)
-            )
+        a.guard.is_none() && matches!(a.pattern.value, Pattern::Wildcard | Pattern::Bind(_))
     })
 }
-
-
-

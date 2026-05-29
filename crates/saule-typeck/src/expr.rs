@@ -19,11 +19,7 @@ use super::to_source_span;
 // `obj.method(...)` where `obj` has a statically-known nullable type.
 // ──────────────────────────────────────────────────────────────────────────────
 
-pub(super) fn check_expr(
-    expr: &Spanned<Expr>,
-    scope: &Scope,
-    errors: &mut Vec<TypeCheckError>,
-) {
+pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<TypeCheckError>) {
     match &expr.value {
         Expr::Member { obj, name } => {
             check_expr(obj, scope, errors);
@@ -316,7 +312,8 @@ fn report_if_unknown_member(
 
     if is_enum_class {
         let known = with_enums(|r| {
-            r.get(&receiver_name).is_some_and(|info| info.variants.contains_key(member))
+            r.get(&receiver_name)
+                .is_some_and(|info| info.variants.contains_key(member))
         });
         if !known {
             errors.push(TypeCheckError::UnknownEnumVariant {
@@ -343,9 +340,12 @@ fn report_if_enum_variant_arity(
     errors: &mut Vec<TypeCheckError>,
     span: std::ops::Range<usize>,
 ) {
-    let Expr::Ident(enum_name) = &obj.value else { return };
+    let Expr::Ident(enum_name) = &obj.value else {
+        return;
+    };
     let Some(arity) = with_enums(|r| {
-        r.get(enum_name).and_then(|info| info.variants.get(variant).copied())
+        r.get(enum_name)
+            .and_then(|info| info.variants.get(variant).copied())
     }) else {
         return;
     };
@@ -374,8 +374,12 @@ fn report_if_user_function_arity(
     errors: &mut Vec<TypeCheckError>,
     span: std::ops::Range<usize>,
 ) {
-    let Expr::Ident(name) = &callee.value else { return };
-    let Some(info) = funcs::lookup(name) else { return };
+    let Expr::Ident(name) = &callee.value else {
+        return;
+    };
+    let Some(info) = funcs::lookup(name) else {
+        return;
+    };
 
     // Skip when any argument is named — those may legitimately fill in
     // defaults out of order. The runtime still validates names.
@@ -500,8 +504,22 @@ pub(super) fn check_binary_op(
         BinOp::Eq | BinOp::NotEq => check_equality_compat(op, lhs, rhs, scope, errors),
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             let name = binop_name(op);
-            check_operand_kind(name, "`integer` or `float`", is_numeric_like, lhs, scope, errors);
-            check_operand_kind(name, "`integer` or `float`", is_numeric_like, rhs, scope, errors);
+            check_operand_kind(
+                name,
+                "`integer` or `float`",
+                is_numeric_like,
+                lhs,
+                scope,
+                errors,
+            );
+            check_operand_kind(
+                name,
+                "`integer` or `float`",
+                is_numeric_like,
+                rhs,
+                scope,
+                errors,
+            );
             check_numeric_kinds_match(lhs, rhs, scope, errors);
         }
         BinOp::And | BinOp::Or => {
@@ -510,8 +528,22 @@ pub(super) fn check_binary_op(
             // so the operands aren't type-restricted.
         }
         BinOp::Concat => {
-            check_operand_kind("..", "`string` or numeric", is_concat_like, lhs, scope, errors);
-            check_operand_kind("..", "`string` or numeric", is_concat_like, rhs, scope, errors);
+            check_operand_kind(
+                "..",
+                "`string` or numeric",
+                is_concat_like,
+                lhs,
+                scope,
+                errors,
+            );
+            check_operand_kind(
+                "..",
+                "`string` or numeric",
+                is_concat_like,
+                rhs,
+                scope,
+                errors,
+            );
         }
         BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
             check_ordering_operands(op, lhs, rhs, scope, errors);
@@ -562,8 +594,22 @@ fn check_ordering_operands(
 ) {
     let name = binop_name(op);
     // First, each side individually must be orderable (numeric or string).
-    check_operand_kind(name, "`integer`, `float`, or `string`", is_orderable, lhs, scope, errors);
-    check_operand_kind(name, "`integer`, `float`, or `string`", is_orderable, rhs, scope, errors);
+    check_operand_kind(
+        name,
+        "`integer`, `float`, or `string`",
+        is_orderable,
+        lhs,
+        scope,
+        errors,
+    );
+    check_operand_kind(
+        name,
+        "`integer`, `float`, or `string`",
+        is_orderable,
+        rhs,
+        scope,
+        errors,
+    );
     // Then, both sides must agree on the family.
     let (Some(lt), Some(rt)) = (infer(lhs, scope), infer(rhs, scope)) else {
         return;
@@ -573,9 +619,7 @@ fn check_ordering_operands(
     if is_any(&lb) || is_any(&rb) {
         return;
     }
-    if matches!(&lb, Type::Named(n) if n == "nil")
-        || matches!(&rb, Type::Named(n) if n == "nil")
-    {
+    if matches!(&lb, Type::Named(n) if n == "nil") || matches!(&rb, Type::Named(n) if n == "nil") {
         return;
     }
     let l_num = is_numeric_like(&lb);
@@ -722,9 +766,7 @@ fn check_pipe(
         }
 
         // First-arg type check — the headline pipeline diagnostic.
-        if let (Some(actual), Some(expected_param)) =
-            (current.as_ref(), info.params.first())
-        {
+        if let (Some(actual), Some(expected_param)) = (current.as_ref(), info.params.first()) {
             let actual_base = strip_nullable(actual.clone());
             let expected_base = strip_nullable(expected_param.ty.clone());
             let skip = is_any(&actual_base)
@@ -765,9 +807,7 @@ pub(super) fn check_equality_compat(
     let rb = strip_nullable(rt.clone());
     // `nil` on either side is legitimate — `x == nil` is how you check
     // nullability.
-    if matches!(&lb, Type::Named(n) if n == "nil")
-        || matches!(&rb, Type::Named(n) if n == "nil")
-    {
+    if matches!(&lb, Type::Named(n) if n == "nil") || matches!(&rb, Type::Named(n) if n == "nil") {
         return;
     }
     if is_any(&lb) || is_any(&rb) {
@@ -777,7 +817,11 @@ pub(super) fn check_equality_compat(
     if types_compatible(&lb, &rb) || types_compatible(&rb, &lb) {
         return;
     }
-    let result = if matches!(op, BinOp::Eq) { "false" } else { "true" };
+    let result = if matches!(op, BinOp::Eq) {
+        "false"
+    } else {
+        "true"
+    };
     // Span covers both sides.
     let span_start = lhs.span.start.min(rhs.span.start);
     let span_end = lhs.span.end.max(rhs.span.end);
@@ -799,7 +843,12 @@ pub(super) fn check_assignment_compat(
     // whole expression is supposed to produce — use its stripped base as
     // the expected type for the fallback. This catches mismatches even
     // when `lhs` has lost type info (e.g. returns `any?`).
-    if let Expr::Binary { op: BinOp::Coalesce, rhs, .. } = &value.value {
+    if let Expr::Binary {
+        op: BinOp::Coalesce,
+        rhs,
+        ..
+    } = &value.value
+    {
         let expected_base = strip_nullable(decl_ty.clone());
         if !matches!(&expected_base, Type::Named(n) if n == "nil" || n == "any")
             && let Some(rt) = infer(rhs, scope)
@@ -831,7 +880,14 @@ pub(super) fn check_assignment_compat(
     // Table-aware checks for table literals assigned to a typed table.
     // Splits the literal into its positional and field halves so each can
     // be validated against the declared table shape independently.
-    if let (Type::Table { key, value: elem_ty }, Expr::Table(items)) = (decl_ty, &value.value) {
+    if let (
+        Type::Table {
+            key,
+            value: elem_ty,
+        },
+        Expr::Table(items),
+    ) = (decl_ty, &value.value)
+    {
         let has_positional = items.iter().any(|e| matches!(e, TableEntry::Positional(_)));
         let has_field = items.iter().any(|e| matches!(e, TableEntry::Field { .. }));
 
@@ -857,7 +913,10 @@ pub(super) fn check_assignment_compat(
             };
             if !key_ok {
                 errors.push(TypeCheckError::TableArrayLiteralForMap {
-                    key: key.as_deref().map(type_to_string).unwrap_or_else(|| "integer".to_string()),
+                    key: key
+                        .as_deref()
+                        .map(type_to_string)
+                        .unwrap_or_else(|| "integer".to_string()),
                     value: type_to_string(elem_ty),
                     span: to_source_span(value.span.clone()),
                 });
@@ -969,10 +1028,7 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         }
         // `table<any>` (or `table<any, any>`) matches any table — used by
         // native sigs like `Table.insert(t, ...)` to mean "any table".
-        (
-            Type::Table { key: ek, value: ev },
-            Type::Table { key: vk, value: vv },
-        ) => {
+        (Type::Table { key: ek, value: ev }, Type::Table { key: vk, value: vv }) => {
             let key_ok = match (ek, vk) {
                 (None, None) => true,
                 (Some(a), Some(b)) => types_compatible(a, b),

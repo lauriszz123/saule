@@ -167,17 +167,25 @@ fn resolve_dependencies(
 
         // Name defaults to the dep's directory name so a config that omits
         // `name:` still produces a usable import prefix.
-        let name = dep_config.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-            dep_root
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        });
+        let name = dep_config
+            .name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                dep_root
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
 
         let src_dirs: Vec<PathBuf> = if dep_config.src_dirs.is_empty() {
             vec![dep_root.join("src")]
         } else {
-            dep_config.src_dirs.iter().map(|s| dep_root.join(s)).collect()
+            dep_config
+                .src_dirs
+                .iter()
+                .map(|s| dep_root.join(s))
+                .collect()
         };
 
         out.push(saule_interpreter::project::Dependency {

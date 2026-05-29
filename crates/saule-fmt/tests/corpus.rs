@@ -179,5 +179,8 @@ end
     }
     // And idempotent.
     let twice = format_with_comments(&out).expect("re-format");
-    assert_eq!(out, twice, "lossless re-format diverged:\n{out}\n---\n{twice}");
+    assert_eq!(
+        out, twice,
+        "lossless re-format diverged:\n{out}\n---\n{twice}"
+    );
 }

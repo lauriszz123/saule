@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use saule_ast::{Expr, Spanned};
 
-use super::function::FunctionObject;
 use super::Value;
+use super::function::FunctionObject;
 
 /// Runtime representation of a `class` declaration.
 ///

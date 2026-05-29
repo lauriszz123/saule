@@ -37,9 +37,9 @@ mod error;
 mod expr;
 mod funcs;
 mod matches;
+pub mod sigs;
 mod state;
 mod stmt;
-pub mod sigs;
 
 pub use error::TypeCheckError;
 

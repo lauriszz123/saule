@@ -27,9 +27,9 @@ use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentFormattingParams,
     DocumentRangeFormattingParams, InitializeParams, InitializeResult, InitializedParams,
-    MessageType, OneOf, Position, SaveOptions, ServerCapabilities, ServerInfo, TextEdit,
+    MessageType, OneOf, Position, SaveOptions, ServerCapabilities, ServerInfo,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, Url,
+    TextDocumentSyncSaveOptions, TextEdit, Url,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -246,7 +246,9 @@ impl Backend {
         });
         for stmt in &module.stmts {
             let Stmt::Decl(d) = &stmt.value else { continue };
-            let Decl::Import { path, .. } = &d.value else { continue };
+            let Decl::Import { path, .. } = &d.value else {
+                continue;
+            };
             let Some(target) = saule_interpreter::module::resolve_import_path(dir, path) else {
                 continue;
             };
@@ -418,10 +420,7 @@ impl LanguageServer for Backend {
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
     }
 
-    async fn formatting(
-        &self,
-        params: DocumentFormattingParams,
-    ) -> Result<Option<Vec<TextEdit>>> {
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         Ok(self.format_document(&params.text_document.uri).await)
     }
 
@@ -492,7 +491,9 @@ fn primary_range<D: miette::Diagnostic>(err: &D) -> Option<Range<usize>> {
 /// when lex / parse fails — we never want to hand the editor a partial
 /// or comment-stripped buffer if the file currently doesn't compile.
 fn format_source(source: &str) -> Option<String> {
-    let raw = saule_lexer::Lexer::new(source).tokenize_with_trivia().ok()?;
+    let raw = saule_lexer::Lexer::new(source)
+        .tokenize_with_trivia()
+        .ok()?;
 
     // Split comments off from the parser token stream — saule-fmt
     // expects the AST and a separate, ordered comment slice.
@@ -518,7 +519,9 @@ fn format_source(source: &str) -> Option<String> {
     }
 
     let module = saule_parser::parse(tokens).ok()?;
-    Some(saule_fmt::format_module_with_comments(&module, source, &comments))
+    Some(saule_fmt::format_module_with_comments(
+        &module, source, &comments,
+    ))
 }
 
 /// Canonicalise a path, falling back to the input on failure. Used as

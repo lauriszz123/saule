@@ -10,8 +10,8 @@ use saule_ast::{
 };
 use saule_lexer::Token;
 
-use crate::{Parser, mk_binary};
 use crate::error::ParseError;
+use crate::{Parser, mk_binary};
 
 impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
@@ -457,10 +457,7 @@ impl Parser {
             });
         }
 
-        let span_end = stages
-            .last()
-            .map(|s| s.span.end)
-            .unwrap_or(close.span.end);
+        let span_end = stages.last().map(|s| s.span.end).unwrap_or(close.span.end);
         let span = kw.span.start..span_end;
         Ok(Spanned::new(
             Expr::Pipe {
@@ -504,7 +501,13 @@ impl Parser {
         let stmts = self.parse_block_until(&[Token::Case, Token::End])?;
 
         let (body, end_pos) = match (stmts.len(), stmts.first()) {
-            (1, Some(Spanned { value: Stmt::Expr(e), span })) => {
+            (
+                1,
+                Some(Spanned {
+                    value: Stmt::Expr(e),
+                    span,
+                }),
+            ) => {
                 let end = span.end;
                 (MatchBody::Expr(e.clone()), end)
             }
@@ -515,7 +518,10 @@ impl Parser {
                 });
             }
             _ => {
-                let end = stmts.last().map(|s| s.span.end).unwrap_or(case_tok.span.end);
+                let end = stmts
+                    .last()
+                    .map(|s| s.span.end)
+                    .unwrap_or(case_tok.span.end);
                 (MatchBody::Block(stmts), end)
             }
         };
@@ -609,8 +615,8 @@ impl Parser {
                                 fields.push(self.parse_pattern()?);
                             }
                         }
-                        let close = self
-                            .expect(&Token::RParen, "`)` to close variant pattern payload")?;
+                        let close =
+                            self.expect(&Token::RParen, "`)` to close variant pattern payload")?;
                         end = close.span.end;
                     }
                     let span = tok.span.start..end;
@@ -634,24 +640,24 @@ impl Parser {
 
     // ── Lambdas ─────────────────────────────────────────────────────────────
 
-     /// `fn(params) -> T ... end` as an expression (Lua-style anonymous fn).
-     fn parse_fn_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
-         let fn_tok = self.advance(); // consume `fn`
+    /// `fn(params) -> T ... end` as an expression (Lua-style anonymous fn).
+    fn parse_fn_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let fn_tok = self.advance(); // consume `fn`
 
-         let params = self.parse_param_list()?;
-         let return_ty = self.parse_return_type_opt()?;
-         let body = self.parse_block_until(&[Token::End])?;
-         let end = self.expect(&Token::End, "`end` to close `fn(...)` lambda")?;
-         let span = fn_tok.span.start..end.span.end;
-         Ok(Spanned::new(
-             Expr::Lambda {
-                 params,
-                 return_ty,
-                 body: LambdaBody::Block(body),
-             },
-             span,
-         ))
-     }
+        let params = self.parse_param_list()?;
+        let return_ty = self.parse_return_type_opt()?;
+        let body = self.parse_block_until(&[Token::End])?;
+        let end = self.expect(&Token::End, "`end` to close `fn(...)` lambda")?;
+        let span = fn_tok.span.start..end.span.end;
+        Ok(Spanned::new(
+            Expr::Lambda {
+                params,
+                return_ty,
+                body: LambdaBody::Block(body),
+            },
+            span,
+        ))
+    }
 
     /// Heuristic: peeks past a balanced `(...)` and checks for `=>` to decide
     /// whether `(` starts an arrow lambda or a parenthesised expression.
@@ -760,5 +766,4 @@ impl Parser {
             span: start..end,
         })
     }
-
 }

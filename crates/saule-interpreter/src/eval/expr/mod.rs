@@ -15,7 +15,9 @@ mod construct;
 mod match_;
 mod members;
 
-pub(crate) use calls::{call_function, call_static_method_public, call_value_multi, eval_values, invoke_method_multi};
+pub(crate) use calls::{
+    call_function, call_static_method_public, call_value_multi, eval_values, invoke_method_multi,
+};
 #[allow(unused_imports)]
 pub(crate) use members::table_index_to_slot;
 
@@ -83,7 +85,11 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             // `??` short-circuits: only evaluate RHS when LHS is nil.
             BinOp::Coalesce => {
                 let l = eval(lhs, env)?;
-                if matches!(l, Value::Nil) { eval(rhs, env) } else { Ok(l) }
+                if matches!(l, Value::Nil) {
+                    eval(rhs, env)
+                } else {
+                    Ok(l)
+                }
             }
             _ => {
                 let l = eval(lhs, env)?;
@@ -196,12 +202,15 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             })))
         }
 
-        Expr::Self_ => env.borrow().get("self").ok_or_else(|| RuntimeError::TypeError {
-            message: "internal: `self` reached evaluation outside a method — \
+        Expr::Self_ => env
+            .borrow()
+            .get("self")
+            .ok_or_else(|| RuntimeError::TypeError {
+                message: "internal: `self` reached evaluation outside a method — \
                       `saule_semantic::analyze` was not run on this module"
-                .to_string(),
-            span,
-        }),
+                    .to_string(),
+                span,
+            }),
 
         Expr::Match { scrutinee, arms } => match_::eval_match(scrutinee, arms, env, span),
 

@@ -7,7 +7,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum TypeCheckError {
-
     #[error("cannot assign `nil` to non-nullable type `{ty}`")]
     #[diagnostic(help(
         "mark the type nullable with `?` (e.g. `{ty}?`) or initialize it with a non-nil value"
@@ -41,9 +40,7 @@ pub enum TypeCheckError {
     },
 
     #[error("default value for parameter `{param}` is incompatible with declared type `{ty}`")]
-    #[diagnostic(help(
-        "the default expression must produce a value of type `{ty}`"
-    ))]
+    #[diagnostic(help("the default expression must produce a value of type `{ty}`"))]
     DefaultParamTypeMismatch {
         param: String,
         ty: String,
@@ -60,9 +57,7 @@ pub enum TypeCheckError {
     },
 
     #[error("cannot access private member `{member}` of class `{class}` from outside the class")]
-    #[diagnostic(help(
-        "`local` fields and methods are only accessible from within `{class}`"
-    ))]
+    #[diagnostic(help("`local` fields and methods are only accessible from within `{class}`"))]
     PrivateMemberAccess {
         class: String,
         member: String,
@@ -70,10 +65,10 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
-    #[error("table value of type `{found}` is incompatible with declared element type `{expected}`")]
-    #[diagnostic(help(
-        "every value stored in this table must be a `{expected}`"
-    ))]
+    #[error(
+        "table value of type `{found}` is incompatible with declared element type `{expected}`"
+    )]
+    #[diagnostic(help("every value stored in this table must be a `{expected}`"))]
     TableElementTypeMismatch {
         expected: String,
         found: String,
@@ -166,7 +161,9 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
-    #[error("`??` fallback of type `{found}` is incompatible with left-hand side base type `{expected}`")]
+    #[error(
+        "`??` fallback of type `{found}` is incompatible with left-hand side base type `{expected}`"
+    )]
     #[diagnostic(help(
         "the fallback expression must produce a `{expected}` so the whole `??` expression has a consistent type"
     ))]
@@ -291,9 +288,7 @@ pub enum TypeCheckError {
     },
 
     #[error("enum variant `{enum_name}.{variant}` expects {expected} field(s), got {found}")]
-    #[diagnostic(help(
-        "construct the variant with exactly the declared positional fields"
-    ))]
+    #[diagnostic(help("construct the variant with exactly the declared positional fields"))]
     EnumVariantArity {
         enum_name: String,
         variant: String,
@@ -333,7 +328,9 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
-    #[error("pipeline stage `{stage}` takes {expected} argument(s) (one of them is the piped value), got {found}")]
+    #[error(
+        "pipeline stage `{stage}` takes {expected} argument(s) (one of them is the piped value), got {found}"
+    )]
     #[diagnostic(help(
         "the upstream value counts as the first argument; pass the rest in the parentheses, e.g. `:fn(a, b)`"
     ))]
@@ -345,7 +342,9 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
-    #[error("pipeline stage `{stage}` is not a known function — `when` chains only call free functions")]
+    #[error(
+        "pipeline stage `{stage}` is not a known function — `when` chains only call free functions"
+    )]
     #[diagnostic(help(
         "declare `fn {stage}(first: T, …) -> U` at the top level (or import it), then re-run; class methods and locally-bound lambdas are not currently pipeable"
     ))]

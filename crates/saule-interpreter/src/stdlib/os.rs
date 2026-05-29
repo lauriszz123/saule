@@ -36,36 +36,54 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     let mut static_fields = HashMap::new();
 
     // time
-    static_fields.insert("time".to_string(),     native_multi("Os.time",     os_time));
-    static_fields.insert("clock".to_string(),    native_multi("Os.clock",    os_clock));
-    static_fields.insert("difftime".to_string(), native_multi("Os.difftime", os_difftime));
-    static_fields.insert("date".to_string(),     native_multi("Os.date",     os_date));
-    static_fields.insert("sleep".to_string(),    native_multi("Os.sleep",    os_sleep));
+    static_fields.insert("time".to_string(), native_multi("Os.time", os_time));
+    static_fields.insert("clock".to_string(), native_multi("Os.clock", os_clock));
+    static_fields.insert(
+        "difftime".to_string(),
+        native_multi("Os.difftime", os_difftime),
+    );
+    static_fields.insert("date".to_string(), native_multi("Os.date", os_date));
+    static_fields.insert("sleep".to_string(), native_multi("Os.sleep", os_sleep));
 
     // environment
-    static_fields.insert("getenv".to_string(),   native_multi("Os.getenv",   os_getenv));
-    static_fields.insert("setenv".to_string(),   native_multi("Os.setenv",   os_setenv));
-    static_fields.insert("cwd".to_string(),      native_multi("Os.cwd",      os_cwd));
-    static_fields.insert("chdir".to_string(),    native_multi("Os.chdir",    os_chdir));
+    static_fields.insert("getenv".to_string(), native_multi("Os.getenv", os_getenv));
+    static_fields.insert("setenv".to_string(), native_multi("Os.setenv", os_setenv));
+    static_fields.insert("cwd".to_string(), native_multi("Os.cwd", os_cwd));
+    static_fields.insert("chdir".to_string(), native_multi("Os.chdir", os_chdir));
 
     // filesystem
-    static_fields.insert("remove".to_string(),   native_multi("Os.remove",   os_remove));
-    static_fields.insert("rename".to_string(),   native_multi("Os.rename",   os_rename));
-    static_fields.insert("list".to_string(),     native_multi("Os.list",     os_list));
-    static_fields.insert("exists".to_string(),   native_multi("Os.exists",   os_exists));
-    static_fields.insert("mkdir".to_string(),    native_multi("Os.mkdir",    os_mkdir));
-    static_fields.insert("tmpname".to_string(),  native_multi("Os.tmpname",  os_tmpname));
+    static_fields.insert("remove".to_string(), native_multi("Os.remove", os_remove));
+    static_fields.insert("rename".to_string(), native_multi("Os.rename", os_rename));
+    static_fields.insert("list".to_string(), native_multi("Os.list", os_list));
+    static_fields.insert("exists".to_string(), native_multi("Os.exists", os_exists));
+    static_fields.insert("mkdir".to_string(), native_multi("Os.mkdir", os_mkdir));
+    static_fields.insert(
+        "tmpname".to_string(),
+        native_multi("Os.tmpname", os_tmpname),
+    );
 
     // process
-    static_fields.insert("exit".to_string(),     native_multi("Os.exit",     os_exit));
-    static_fields.insert("execute".to_string(),  native_multi("Os.execute",  os_execute));
-    static_fields.insert("pid".to_string(),      native_multi("Os.pid",      os_pid));
-    static_fields.insert("platform".to_string(), native_multi("Os.platform", os_platform));
-    static_fields.insert("args".to_string(),     native_multi("Os.args",     os_args));
+    static_fields.insert("exit".to_string(), native_multi("Os.exit", os_exit));
+    static_fields.insert(
+        "execute".to_string(),
+        native_multi("Os.execute", os_execute),
+    );
+    static_fields.insert("pid".to_string(), native_multi("Os.pid", os_pid));
+    static_fields.insert(
+        "platform".to_string(),
+        native_multi("Os.platform", os_platform),
+    );
+    static_fields.insert("args".to_string(), native_multi("Os.args", os_args));
 
     // constants
-    static_fields.insert("sep".to_string(),     Value::Str(Rc::new(path_sep().to_string())));
-    static_fields.insert("lineSep".to_string(), Value::Str(Rc::new(line_sep().to_string())));
+    static_fields.insert(
+        "sep".to_string(),
+        Value::Str(Rc::new(path_sep().to_string())),
+    );
+    static_fields.insert(
+        "lineSep".to_string(),
+        Value::Str(Rc::new(line_sep().to_string())),
+    );
 
     let class = ClassObject {
         name: "Os".to_string(),
@@ -90,45 +108,48 @@ pub fn register_sigs() {
     let b = || t_named("boolean");
     let nil = || t_named("nil");
     let str_opt = || t_nullable(s());
-    let table_str = || Type::Table { key: None, value: Box::new(s()) };
+    let table_str = || Type::Table {
+        key: None,
+        value: Box::new(s()),
+    };
 
     // time
-    register("Os.time",     vec![],                       vec![i()]);
-    register("Os.clock",    vec![],                       vec![f()]);
-    register("Os.difftime", vec![i(), i()],               vec![i()]);
-    register("Os.date",     vec![t_nullable(s()), t_nullable(i())], vec![s()]);
-    register("Os.sleep",    vec![t_number()],             vec![nil()]);
+    register("Os.time", vec![], vec![i()]);
+    register("Os.clock", vec![], vec![f()]);
+    register("Os.difftime", vec![i(), i()], vec![i()]);
+    register("Os.date", vec![t_nullable(s()), t_nullable(i())], vec![s()]);
+    register("Os.sleep", vec![t_number()], vec![nil()]);
 
     // environment
-    register("Os.getenv",   vec![s()],                    vec![str_opt()]);
-    register("Os.setenv",   vec![s(), s()],               vec![nil()]);
-    register("Os.cwd",      vec![],                       vec![s()]);
-    register("Os.chdir",    vec![s()],                    vec![b()]);
+    register("Os.getenv", vec![s()], vec![str_opt()]);
+    register("Os.setenv", vec![s(), s()], vec![nil()]);
+    register("Os.cwd", vec![], vec![s()]);
+    register("Os.chdir", vec![s()], vec![b()]);
 
     // filesystem
-    register("Os.remove",   vec![s()],                    vec![b()]);
-    register("Os.rename",   vec![s(), s()],               vec![b()]);
-    register("Os.list",     vec![s()],                    vec![table_str()]);
-    register("Os.exists",   vec![s()],                    vec![b()]);
-    register("Os.mkdir",    vec![s(), t_nullable(b())],   vec![b()]);
-    register("Os.tmpname",  vec![],                       vec![s()]);
+    register("Os.remove", vec![s()], vec![b()]);
+    register("Os.rename", vec![s(), s()], vec![b()]);
+    register("Os.list", vec![s()], vec![table_str()]);
+    register("Os.exists", vec![s()], vec![b()]);
+    register("Os.mkdir", vec![s(), t_nullable(b())], vec![b()]);
+    register("Os.tmpname", vec![], vec![s()]);
 
     // process
-    register("Os.exit",     vec![t_nullable(i())],        vec![nil()]);
-    register("Os.execute",  vec![s()],                    vec![i()]);
-    register("Os.pid",      vec![],                       vec![i()]);
-    register("Os.platform", vec![],                       vec![t_named("OsPlatform")]);
-    register("Os.args",     vec![],                       vec![table_str()]);
+    register("Os.exit", vec![t_nullable(i())], vec![nil()]);
+    register("Os.execute", vec![s()], vec![i()]);
+    register("Os.pid", vec![], vec![i()]);
+    register("Os.platform", vec![], vec![t_named("OsPlatform")]);
+    register("Os.args", vec![], vec![table_str()]);
 }
 
 // ─── enum ──────────────────────────────────────────────────────────────────
 
 fn install_platform_enum(env: &Rc<RefCell<Environment>>) {
     let variants = &[
-        ("Linux",   "linux"),
-        ("Macos",   "macos"),
+        ("Linux", "linux"),
+        ("Macos", "macos"),
         ("Windows", "windows"),
-        ("Other",   "other"),
+        ("Other", "other"),
     ];
     let name = "OsPlatform";
     let mut variant_dict = HashMap::new();
@@ -170,10 +191,7 @@ pub fn set_script_args(args: Vec<String>) {
 
 // ─── native helpers ────────────────────────────────────────────────────────
 
-fn native_multi(
-    name: &'static str,
-    func: fn(&[Value]) -> Result<Vec<Value>, String>,
-) -> Value {
+fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, String>) -> Value {
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
         func: Box::new(move |args| func(args)),
@@ -216,21 +234,40 @@ fn nil_vec() -> Vec<Value> {
     vec![Value::Nil]
 }
 
-#[cfg(target_os = "linux")]   fn platform_str() -> &'static str { "linux" }
-#[cfg(target_os = "macos")]   fn platform_str() -> &'static str { "macos" }
-#[cfg(target_os = "windows")] fn platform_str() -> &'static str { "windows" }
+#[cfg(target_os = "linux")]
+fn platform_str() -> &'static str {
+    "linux"
+}
+#[cfg(target_os = "macos")]
+fn platform_str() -> &'static str {
+    "macos"
+}
+#[cfg(target_os = "windows")]
+fn platform_str() -> &'static str {
+    "windows"
+}
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn platform_str() -> &'static str { "other" }
+fn platform_str() -> &'static str {
+    "other"
+}
 
 #[cfg(target_family = "windows")]
-fn path_sep() -> &'static str { "\\" }
+fn path_sep() -> &'static str {
+    "\\"
+}
 #[cfg(not(target_family = "windows"))]
-fn path_sep() -> &'static str { "/" }
+fn path_sep() -> &'static str {
+    "/"
+}
 
 #[cfg(target_family = "windows")]
-fn line_sep() -> &'static str { "\r\n" }
+fn line_sep() -> &'static str {
+    "\r\n"
+}
 #[cfg(not(target_family = "windows"))]
-fn line_sep() -> &'static str { "\n" }
+fn line_sep() -> &'static str {
+    "\n"
+}
 
 // ─── time ──────────────────────────────────────────────────────────────────
 
@@ -314,7 +351,9 @@ fn os_setenv(args: &[Value]) -> Result<Vec<Value>, String> {
     // SAFETY: set_var is process-global and not thread-safe on some
     // platforms. Saule is single-threaded today, so this is sound; revisit
     // when adding `thread`.
-    unsafe { std::env::set_var(name, value); }
+    unsafe {
+        std::env::set_var(name, value);
+    }
     Ok(nil_vec())
 }
 
@@ -450,9 +489,8 @@ fn os_platform(_args: &[Value]) -> Result<Vec<Value>, String> {
 }
 
 fn os_args(_args: &[Value]) -> Result<Vec<Value>, String> {
-    let argv: Vec<Value> = SCRIPT_ARGS.with(|cell| {
-        cell.borrow().iter().map(|s| str_value(s.clone())).collect()
-    });
+    let argv: Vec<Value> =
+        SCRIPT_ARGS.with(|cell| cell.borrow().iter().map(|s| str_value(s.clone())).collect());
     Ok(vec![Value::Table(Rc::new(RefCell::new(
         TableObject::from_array(argv),
     )))])
@@ -481,9 +519,7 @@ fn format_epoch(format: &str, epoch: i64) -> String {
             Some('y') => out.push_str(&format!("{:02}", y % 100)),
             Some('j') => out.push_str(&format!("{yday:03}")),
             Some('w') => out.push_str(&wday.to_string()),
-            Some('c') => out.push_str(&format!(
-                "{y:04}-{mo:02}-{d:02} {hh:02}:{mm:02}:{ss:02}"
-            )),
+            Some('c') => out.push_str(&format!("{y:04}-{mo:02}-{d:02} {hh:02}:{mm:02}:{ss:02}")),
             Some('x') => out.push_str(&format!("{y:04}-{mo:02}-{d:02}")),
             Some('X') => out.push_str(&format!("{hh:02}:{mm:02}:{ss:02}")),
             Some('%') => out.push('%'),
@@ -504,7 +540,7 @@ fn format_epoch(format: &str, epoch: i64) -> String {
 /// Algorithm: Howard Hinnant, "civil_from_days".
 fn civil_from_epoch(epoch: i64) -> (i64, u32, u32, u32, u32, u32, u32, u32) {
     let days = epoch.div_euclid(86_400);
-    let rem  = epoch.rem_euclid(86_400) as u32;
+    let rem = epoch.rem_euclid(86_400) as u32;
     let hh = rem / 3600;
     let mm = (rem % 3600) / 60;
     let ss = rem % 60;
@@ -519,7 +555,11 @@ fn civil_from_epoch(epoch: i64) -> (i64, u32, u32, u32, u32, u32, u32, u32) {
     let mp = (5 * doy + 2) / 153;
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m_shifted = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if m_shifted <= 2 { y_shifted + 1 } else { y_shifted };
+    let year = if m_shifted <= 2 {
+        y_shifted + 1
+    } else {
+        y_shifted
+    };
 
     // Day-of-year via leap-year flag.
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
@@ -535,4 +575,3 @@ fn civil_from_epoch(epoch: i64) -> (i64, u32, u32, u32, u32, u32, u32, u32) {
 
     (year, m_shifted as u32, d, hh, mm, ss, wday, yday)
 }
-

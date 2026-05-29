@@ -85,8 +85,7 @@ pub(super) fn read_member(
             Err(RuntimeError::TypeError {
                 message: format!(
                     "no static member `{name}` on class `{}` — try `{}:` method notation or check if this is an instance method",
-                    class.name,
-                    class.name
+                    class.name, class.name
                 ),
                 span,
             })

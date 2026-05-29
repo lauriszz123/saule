@@ -220,10 +220,7 @@ fn eval_expr_list(
     Ok(out)
 }
 
-fn exec_decl(
-    decl: &Spanned<Decl>,
-    env: &Rc<RefCell<Environment>>,
-) -> Result<Flow, RuntimeError> {
+fn exec_decl(decl: &Spanned<Decl>, env: &Rc<RefCell<Environment>>) -> Result<Flow, RuntimeError> {
     let span = decl.span.clone();
     match &decl.value {
         Decl::Function {

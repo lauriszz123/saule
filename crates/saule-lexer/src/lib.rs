@@ -2,8 +2,8 @@ mod error;
 mod token;
 
 pub use error::LexerError;
-pub use token::Token;
 use saule_ast::Spanned;
+pub use token::Token;
 
 pub struct Lexer<'src> {
     source: &'src str,
@@ -65,9 +65,7 @@ impl<'src> Lexer<'src> {
                         let body_end;
                         loop {
                             match self.chars.next() {
-                                Some((i, ']'))
-                                    if matches!(self.chars.peek(), Some(&(_, ']'))) =>
-                                {
+                                Some((i, ']')) if matches!(self.chars.peek(), Some(&(_, ']'))) => {
                                     self.chars.next();
                                     body_end = i; // first `]` of the `]]` pair
                                     break;

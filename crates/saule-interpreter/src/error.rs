@@ -62,7 +62,9 @@ pub enum RuntimeError {
     },
 
     #[error("force-unwrapped a `nil` value")]
-    #[diagnostic(help("use `??` to provide a fallback, or check with `if x != nil` before unwrapping"))]
+    #[diagnostic(help(
+        "use `??` to provide a fallback, or check with `if x != nil` before unwrapping"
+    ))]
     ForceUnwrapNil {
         #[label("this expression was `nil` when `!` was applied")]
         span: std::ops::Range<usize>,
@@ -163,8 +165,7 @@ impl ImportedDiagnostic {
             .labels()
             .and_then(|mut it| it.next())
             .map(|l| {
-                let s: miette::SourceSpan =
-                    (l.offset(), l.len()).into();
+                let s: miette::SourceSpan = (l.offset(), l.len()).into();
                 (s, l.label().unwrap_or("here").to_string())
             })
             .unwrap_or_else(|| ((0usize, 0usize).into(), "here".to_string()));
@@ -188,4 +189,3 @@ impl ImportedDiagnostic {
         }
     }
 }
-

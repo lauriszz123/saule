@@ -41,7 +41,12 @@ pub(super) fn install(module: &Module) {
     let mut map: HashMap<String, FunctionInfo> = HashMap::new();
     for stmt in &module.stmts {
         if let Stmt::Decl(d) = &stmt.value
-            && let Decl::Function { name, params, return_ty, .. } = &d.value
+            && let Decl::Function {
+                name,
+                params,
+                return_ty,
+                ..
+            } = &d.value
         {
             let total = params.len();
             let defaults = params.iter().filter(|p| p.default.is_some()).count();
@@ -68,4 +73,3 @@ pub(super) fn clear() {
 pub(super) fn lookup(name: &str) -> Option<FunctionInfo> {
     FUNCTIONS.with(|f| f.borrow().get(name).cloned())
 }
-

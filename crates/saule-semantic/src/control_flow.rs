@@ -38,10 +38,7 @@ impl Ctx {
     }
 }
 
-pub(crate) fn check_module(
-    module: &saule_ast::Module,
-    errors: &mut Vec<SemanticError>,
-) {
+pub(crate) fn check_module(module: &saule_ast::Module, errors: &mut Vec<SemanticError>) {
     let ctx = Ctx::top();
     for s in &module.stmts {
         check_stmt(s, ctx, errors);
@@ -107,7 +104,12 @@ fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
         }
         Stmt::Expr(e) | Stmt::Throw(e) => check_expr(e, ctx, errors),
 
-        Stmt::If { cond, then_block, elseifs, else_block } => {
+        Stmt::If {
+            cond,
+            then_block,
+            elseifs,
+            else_block,
+        } => {
             check_expr(cond, ctx, errors);
             check_block(then_block, ctx, errors);
             for (c, b) in elseifs {
@@ -126,7 +128,13 @@ fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
             check_block(body, ctx.enter_loop(), errors);
             check_expr(cond, ctx, errors);
         }
-        Stmt::ForNumeric { from, to, step, body, .. } => {
+        Stmt::ForNumeric {
+            from,
+            to,
+            step,
+            body,
+            ..
+        } => {
             check_expr(from, ctx, errors);
             check_expr(to, ctx, errors);
             if let Some(s) = step {
@@ -138,7 +146,9 @@ fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
             check_expr(iter, ctx, errors);
             check_block(body, ctx.enter_loop(), errors);
         }
-        Stmt::Try { body, catch_body, .. } => {
+        Stmt::Try {
+            body, catch_body, ..
+        } => {
             check_block(body, ctx, errors);
             check_block(catch_body, ctx, errors);
         }
@@ -168,7 +178,9 @@ fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                         }
                         check_block(&meth.body, Ctx::enter_function(), errors);
                     }
-                    ClassMember::Field { default: Some(d), .. } => {
+                    ClassMember::Field {
+                        default: Some(d), ..
+                    } => {
                         check_expr(d, ctx, errors);
                     }
                     ClassMember::Field { .. } => {}
@@ -276,4 +288,3 @@ fn check_call_arg(arg: &saule_ast::CallArg, ctx: Ctx, errors: &mut Vec<SemanticE
         }
     }
 }
-

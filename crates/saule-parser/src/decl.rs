@@ -3,8 +3,8 @@
 use saule_ast::{ClassMember, Decl, EnumVariant, ImportNames, Method, MethodSig, Spanned, Stmt};
 use saule_lexer::Token;
 
-use crate::{Parser, stmt_decl};
 use crate::error::ParseError;
+use crate::{Parser, stmt_decl};
 
 impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
@@ -199,7 +199,10 @@ impl Parser {
         Ok(Spanned::new(member, start..end))
     }
 
-    pub(crate) fn parse_interface_decl(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
+    pub(crate) fn parse_interface_decl(
+        &mut self,
+        exported: bool,
+    ) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `interface`
         let (name, _) = self.expect_ident("interface name")?;
         if self.check(&Token::Lt) {

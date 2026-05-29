@@ -67,4 +67,3 @@ pub fn pretty_path(abs_path: &Path) -> String {
     }
     abs_path.display().to_string()
 }
-

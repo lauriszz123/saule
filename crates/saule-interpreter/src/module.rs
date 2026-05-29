@@ -150,10 +150,7 @@ pub fn load_module(
 
     if loader.borrow().loading.contains(abs_path) {
         return Err(RuntimeError::ImportError {
-            message: format!(
-                "circular import detected at `{}`",
-                abs_path.display()
-            ),
+            message: format!("circular import detected at `{}`", abs_path.display()),
             span: import_span,
         });
     }
@@ -314,12 +311,22 @@ pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::Modul
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
-        let Decl::Import { names, path } = &d.value else { continue };
+        let Decl::Import { names, path } = &d.value else {
+            continue;
+        };
 
-        let Some(abs) = resolve_import_path(dir, path) else { continue };
-        let Ok(source) = std::fs::read_to_string(&abs) else { continue };
-        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else { continue };
-        let Ok(imported) = saule_parser::parse(tokens) else { continue };
+        let Some(abs) = resolve_import_path(dir, path) else {
+            continue;
+        };
+        let Ok(source) = std::fs::read_to_string(&abs) else {
+            continue;
+        };
+        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
+            continue;
+        };
+        let Ok(imported) = saule_parser::parse(tokens) else {
+            continue;
+        };
 
         let (reg, ifaces, enums) = saule_semantic::build_registry(&imported);
 
@@ -362,4 +369,3 @@ fn collect_import_aliases(imported: &Module, names: &ImportNames) -> Vec<(String
             .collect(),
     }
 }
-

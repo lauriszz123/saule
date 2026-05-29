@@ -105,7 +105,6 @@ pub struct PipeStage {
     pub span: std::ops::Range<usize>,
 }
 
-
 /// One `case <pattern> [when <guard>] then <body>` clause inside a `match`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {

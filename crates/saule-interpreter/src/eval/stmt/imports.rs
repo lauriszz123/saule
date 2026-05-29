@@ -22,14 +22,23 @@ pub(super) fn exec_import(
     env: &Rc<RefCell<Environment>>,
     span: std::ops::Range<usize>,
 ) -> Result<Flow, RuntimeError> {
-    let loader = env.borrow().loader().ok_or_else(|| RuntimeError::ImportError {
-        message: "no module loader available — running this file with `saule run` should attach one".to_string(),
-        span: span.clone(),
-    })?;
-    let dir = env.borrow().module_dir().ok_or_else(|| RuntimeError::ImportError {
-        message: "cannot resolve relative import: current file has no known directory".to_string(),
-        span: span.clone(),
-    })?;
+    let loader = env
+        .borrow()
+        .loader()
+        .ok_or_else(|| RuntimeError::ImportError {
+            message:
+                "no module loader available — running this file with `saule run` should attach one"
+                    .to_string(),
+            span: span.clone(),
+        })?;
+    let dir = env
+        .borrow()
+        .module_dir()
+        .ok_or_else(|| RuntimeError::ImportError {
+            message: "cannot resolve relative import: current file has no known directory"
+                .to_string(),
+            span: span.clone(),
+        })?;
 
     let abs = module::resolve_import_path(&dir, path).ok_or_else(|| RuntimeError::ImportError {
         message: format!(
@@ -48,15 +57,15 @@ pub(super) fn exec_import(
         }
         ImportNames::List(list) => {
             for (n, alias) in list {
-                let v = exports.values.get(n).cloned().ok_or_else(|| {
-                    RuntimeError::ImportError {
-                        message: format!(
-                            "`{n}` is not exported from `{}`",
-                            abs.display()
-                        ),
-                        span: span.clone(),
-                    }
-                })?;
+                let v =
+                    exports
+                        .values
+                        .get(n)
+                        .cloned()
+                        .ok_or_else(|| RuntimeError::ImportError {
+                            message: format!("`{n}` is not exported from `{}`", abs.display()),
+                            span: span.clone(),
+                        })?;
                 let bind = alias.clone().unwrap_or_else(|| n.clone());
                 env.borrow_mut().define(bind, v);
             }

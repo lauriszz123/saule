@@ -26,7 +26,6 @@ pub enum SemanticError {
         span: miette::SourceSpan,
     },
 
-
     #[error("undefined name `{name}` — it is not declared in this scope")]
     #[diagnostic(help("declare it with `local {name} = ...`, import it, or check the spelling"))]
     UndefinedName {
@@ -44,35 +43,45 @@ pub enum SemanticError {
     },
 
     #[error("`self` is only valid inside a method body")]
-    #[diagnostic(help("`self` refers to the receiving instance of a method and isn't available at module scope"))]
+    #[diagnostic(help(
+        "`self` refers to the receiving instance of a method and isn't available at module scope"
+    ))]
     SelfOutsideClass {
         #[label("not inside a method")]
         span: miette::SourceSpan,
     },
 
     #[error("`super` is only valid inside an instance method of a class with a parent")]
-    #[diagnostic(help("`super.member` and `self.super(...)` are only meaningful inside a subclass's methods"))]
+    #[diagnostic(help(
+        "`super.member` and `self.super(...)` are only meaningful inside a subclass's methods"
+    ))]
     SuperOutsideClass {
         #[label("not inside a method")]
         span: miette::SourceSpan,
     },
 
     #[error("`self.super(...)` is only valid inside the `init` constructor of a subclass")]
-    #[diagnostic(help("call the parent constructor from `fn init(...)` — not from a regular method"))]
+    #[diagnostic(help(
+        "call the parent constructor from `fn init(...)` — not from a regular method"
+    ))]
     SuperCallOutsideInit {
         #[label("not inside `init`")]
         span: miette::SourceSpan,
     },
 
     #[error("a function can declare at most one variadic parameter")]
-    #[diagnostic(help("remove the extra `...` parameter; variadic packs everything that follows the fixed params"))]
+    #[diagnostic(help(
+        "remove the extra `...` parameter; variadic packs everything that follows the fixed params"
+    ))]
     MultipleVariadicParams {
         #[label("second variadic")]
         span: miette::SourceSpan,
     },
 
     #[error("variadic parameter `{name}` must be the last parameter in the list")]
-    #[diagnostic(help("move `...{name}` to the end of the parameter list — nothing may come after it"))]
+    #[diagnostic(help(
+        "move `...{name}` to the end of the parameter list — nothing may come after it"
+    ))]
     VariadicNotLast {
         name: String,
         #[label("variadic must come last")]
@@ -98,11 +107,12 @@ pub enum SemanticError {
     },
 
     #[error("`for ... in` supports one variable or a key/value pair, got {found}")]
-    #[diagnostic(help("use `for v in iter` for tables and iterators, or `for k, v in iter` for pairs"))]
+    #[diagnostic(help(
+        "use `for v in iter` for tables and iterators, or `for k, v in iter` for pairs"
+    ))]
     ForInArity {
         found: usize,
         #[label("wrong number of variables")]
         span: miette::SourceSpan,
     },
 }
-

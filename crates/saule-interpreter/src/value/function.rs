@@ -9,8 +9,8 @@ use saule_ast::{Expr, Param, Spanned, Stmt};
 
 use crate::env::Environment;
 
-use super::class::ClassObject;
 use super::Value;
+use super::class::ClassObject;
 
 /// Rust-implemented function exposed to Saule.
 ///

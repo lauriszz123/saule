@@ -81,5 +81,3 @@ pub(super) fn pop_generics(added: Vec<String>) {
 pub(super) fn is_type_param(name: &str) -> bool {
     GENERICS.with(|g| g.borrow().contains(name))
 }
-
-

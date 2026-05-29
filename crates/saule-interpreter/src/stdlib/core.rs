@@ -28,26 +28,43 @@ pub fn register_sigs() {
     use crate::stdlib::sigs::{register, register_v, t_any, t_named, t_nullable};
     let any = t_any();
     // `print/println` accept anything, any number of times.
-    register_v("print",   vec![], any.clone(), vec![t_named("nil")]);
+    register_v("print", vec![], any.clone(), vec![t_named("nil")]);
     register_v("println", vec![], any.clone(), vec![t_named("nil")]);
     // `printf(fmt, ...)` — `fmt` must be a string; extras are anything
     // (their type is decided by the spec).
-    register_v("printf",  vec![t_named("string")], any.clone(), vec![t_named("nil")]);
-    register("tostring", vec![any.clone()],             vec![t_named("string")]);
-    register("type",     vec![any.clone()],             vec![t_named("string")]);
-    register("int",      vec![any.clone()],             vec![t_named("integer")]);
-    register("float",    vec![any.clone()],             vec![t_named("float")]);
+    register_v(
+        "printf",
+        vec![t_named("string")],
+        any.clone(),
+        vec![t_named("nil")],
+    );
+    register("tostring", vec![any.clone()], vec![t_named("string")]);
+    register("type", vec![any.clone()], vec![t_named("string")]);
+    register("int", vec![any.clone()], vec![t_named("integer")]);
+    register("float", vec![any.clone()], vec![t_named("float")]);
     // `tonumber(s)` returns `integer | float | nil` — modelled as nullable
     // `any` so callers can `force-unwrap` or `match` on the result.
-    register("tonumber",  vec![any.clone()],            vec![t_nullable(t_named("any"))]);
+    register(
+        "tonumber",
+        vec![any.clone()],
+        vec![t_nullable(t_named("any"))],
+    );
     // Strict variants: succeed only when the value is/parses as the named
     // kind, otherwise return `nil`.
-    register("tointeger", vec![any.clone()],            vec![t_nullable(t_named("integer"))]);
-    register("tofloat",   vec![any.clone()],            vec![t_nullable(t_named("float"))]);
+    register(
+        "tointeger",
+        vec![any.clone()],
+        vec![t_nullable(t_named("integer"))],
+    );
+    register(
+        "tofloat",
+        vec![any.clone()],
+        vec![t_nullable(t_named("float"))],
+    );
     // `assert(v, msg?) -> any` — its real type narrows the input on the call
     // site, which the checker doesn't yet model; `any` is safe and accurate.
-    register("assert",   vec![any.clone(), t_named("any")], vec![any]);
-    register("error",    vec![t_named("string")],       vec![t_named("nil")]);
+    register("assert", vec![any.clone(), t_named("any")], vec![any]);
+    register("error", vec![t_named("string")], vec![t_named("nil")]);
 }
 
 fn builtin_print(args: &[Value]) -> Result<Value, String> {
@@ -143,7 +160,12 @@ fn builtin_tointeger(args: &[Value]) -> Result<Value, String> {
     expect_arity("tointeger", args, 1)?;
     match &args[0] {
         Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(f) if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 => {
+        Value::Float(f)
+            if f.is_finite()
+                && f.fract() == 0.0
+                && *f >= i64::MIN as f64
+                && *f <= i64::MAX as f64 =>
+        {
             Ok(Value::Int(*f as i64))
         }
         Value::Str(s) => match s.trim().parse::<i64>() {
@@ -195,4 +217,3 @@ fn builtin_error(args: &[Value]) -> Result<Value, String> {
         .unwrap_or_else(|| Value::Str(Rc::new("error".to_string())));
     Err(msg.to_display_string())
 }
-

@@ -114,9 +114,13 @@ fn resolve_deps(project_root: &Path, deps: &[String]) -> Vec<Dependency> {
         } else {
             project_root.join(expanded)
         };
-        let Ok(dep_root) = dep_root.canonicalize() else { continue };
+        let Ok(dep_root) = dep_root.canonicalize() else {
+            continue;
+        };
 
-        let Ok(cfg) = fs::read_to_string(dep_root.join("saule.config")) else { continue };
+        let Ok(cfg) = fs::read_to_string(dep_root.join("saule.config")) else {
+            continue;
+        };
         let (dep_name_opt, _, dep_src_raw, _) = parse_kv(&cfg);
 
         let name = dep_name_opt.filter(|s| !s.is_empty()).unwrap_or_else(|| {

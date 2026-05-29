@@ -126,4 +126,3 @@ fn collect_self_assignments(stmt: &Stmt, out: &mut Vec<String>) {
         _ => {}
     }
 }
-

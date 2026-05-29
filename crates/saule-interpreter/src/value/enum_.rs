@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::function::FunctionObject;
 use super::Value;
+use super::function::FunctionObject;
 
 #[derive(Debug)]
 pub struct EnumVariantObject {

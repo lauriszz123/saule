@@ -208,9 +208,9 @@ pub(super) fn bind_params(
         if param.variadic {
             scope.borrow_mut().define(
                 param.name.clone(),
-                Value::Table(Rc::new(RefCell::new(crate::value::TableObject::from_array(
-                    variadic_values.clone(),
-                )))),
+                Value::Table(Rc::new(RefCell::new(
+                    crate::value::TableObject::from_array(variadic_values.clone()),
+                ))),
             );
             continue;
         }
@@ -294,10 +294,7 @@ pub(super) fn run_function_body_multi(
 
 /// Wrap a `RuntimeError` with the module's source so the offending span
 /// resolves against the right file.
-fn attach_module_source(
-    err: RuntimeError,
-    src: &Rc<miette::NamedSource<String>>,
-) -> RuntimeError {
+fn attach_module_source(err: RuntimeError, src: &Rc<miette::NamedSource<String>>) -> RuntimeError {
     match err {
         // Already-wrapped errors keep their original module context.
         RuntimeError::ImportFailed { .. } | RuntimeError::InModule { .. } => err,
@@ -411,7 +408,9 @@ fn call_static_method(
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
-    Ok(first_or_nil(call_static_method_multi(f, class, args, span)?))
+    Ok(first_or_nil(call_static_method_multi(
+        f, class, args, span,
+    )?))
 }
 
 pub(super) fn call_static_method_multi(
@@ -518,9 +517,7 @@ pub(super) fn dispatch_member_call_multi(
         Value::EnumVariant(_variant) => {
             let v = read_member(receiver, name, span.clone())?;
             match v {
-                Value::Function(m) => {
-                    call_instance_method_multi(&m, receiver.clone(), &args, span)
-                }
+                Value::Function(m) => call_instance_method_multi(&m, receiver.clone(), &args, span),
                 _ => call_value_multi(v, &args, span),
             }
         }
@@ -581,10 +578,11 @@ pub(super) fn super_call(
             ),
             span: span.clone(),
         })?;
-    let ctor = super::construct::constructor_chain(&parent).ok_or_else(|| RuntimeError::TypeError {
-        message: format!("parent class `{}` has no constructor", parent.name),
-        span: span.clone(),
-    })?;
+    let ctor =
+        super::construct::constructor_chain(&parent).ok_or_else(|| RuntimeError::TypeError {
+            message: format!("parent class `{}` has no constructor", parent.name),
+            span: span.clone(),
+        })?;
 
     let vs = eval_super_args(args, env, &span)?;
 

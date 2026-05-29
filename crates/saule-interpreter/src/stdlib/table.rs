@@ -31,10 +31,19 @@ use crate::value::{ClassObject, NativeClosure, TableObject, Value};
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
     let mut static_fields = HashMap::new();
-    static_fields.insert("insert".to_string(), native_multi("Table.insert", tbl_insert));
-    static_fields.insert("remove".to_string(), native_multi("Table.remove", tbl_remove));
-    static_fields.insert("sort".to_string(),   native_multi("Table.sort",   tbl_sort));
-    static_fields.insert("concat".to_string(), native_multi("Table.concat", tbl_concat));
+    static_fields.insert(
+        "insert".to_string(),
+        native_multi("Table.insert", tbl_insert),
+    );
+    static_fields.insert(
+        "remove".to_string(),
+        native_multi("Table.remove", tbl_remove),
+    );
+    static_fields.insert("sort".to_string(), native_multi("Table.sort", tbl_sort));
+    static_fields.insert(
+        "concat".to_string(),
+        native_multi("Table.concat", tbl_concat),
+    );
 
     let class = ClassObject {
         name: "Table".to_string(),
@@ -54,25 +63,42 @@ pub fn register_sigs() {
     use crate::stdlib::sigs::{register, t_any, t_named, t_nullable};
     use saule_ast::Type;
     let any = || t_any();
-    let i   = || t_named("integer");
-    let s   = || t_named("string");
+    let i = || t_named("integer");
+    let s = || t_named("string");
     let nil = || t_named("nil");
     // First arg of every Table.* function must be a table.
-    let table_any = || Type::Table { key: None, value: Box::new(t_any()) };
+    let table_any = || Type::Table {
+        key: None,
+        value: Box::new(t_any()),
+    };
 
     // `Table.insert(list, value)` and `Table.insert(list, index, value)` —
     // index/value slots stay `any` because the overload is arity-based.
-    register("Table.insert", vec![table_any(), any(), t_nullable(any())], vec![nil()]);
-    register("Table.remove", vec![table_any(), t_nullable(any())],        vec![t_nullable(any())]);
+    register(
+        "Table.insert",
+        vec![table_any(), any(), t_nullable(any())],
+        vec![nil()],
+    );
+    register(
+        "Table.remove",
+        vec![table_any(), t_nullable(any())],
+        vec![t_nullable(any())],
+    );
     // Comparator slot left as `any` until lambda inference is fully wired.
-    register("Table.sort",   vec![table_any(), any()],                    vec![nil()]);
-    register("Table.concat", vec![table_any(), t_nullable(s()), t_nullable(i()), t_nullable(i())], vec![s()]);
+    register("Table.sort", vec![table_any(), any()], vec![nil()]);
+    register(
+        "Table.concat",
+        vec![
+            table_any(),
+            t_nullable(s()),
+            t_nullable(i()),
+            t_nullable(i()),
+        ],
+        vec![s()],
+    );
 }
 
-fn native_multi(
-    name: &'static str,
-    func: fn(&[Value]) -> Result<Vec<Value>, String>,
-) -> Value {
+fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, String>) -> Value {
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
         func: Box::new(move |args| func(args)),
@@ -81,7 +107,11 @@ fn native_multi(
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-fn expect_table(name: &str, args: &[Value], idx: usize) -> Result<Rc<RefCell<TableObject>>, String> {
+fn expect_table(
+    name: &str,
+    args: &[Value],
+    idx: usize,
+) -> Result<Rc<RefCell<TableObject>>, String> {
     match args.get(idx) {
         Some(Value::Table(t)) => Ok(t.clone()),
         Some(other) => Err(format!(
@@ -146,9 +176,7 @@ fn tbl_insert(args: &[Value]) -> Result<Vec<Value>, String> {
             t.array.insert((pos - 1) as usize, value);
             Ok(vec![Value::Nil])
         }
-        n => Err(format!(
-            "Table.insert expects 2 or 3 arguments, got {n}"
-        )),
+        n => Err(format!("Table.insert expects 2 or 3 arguments, got {n}")),
     }
 }
 
@@ -210,13 +238,19 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
             return std::cmp::Ordering::Equal;
         }
         match invoke_comp(&comp, a, b) {
-            Ok(true)  => std::cmp::Ordering::Less,
+            Ok(true) => std::cmp::Ordering::Less,
             Ok(false) => match invoke_comp(&comp, b, a) {
-                Ok(true)  => std::cmp::Ordering::Greater,
+                Ok(true) => std::cmp::Ordering::Greater,
                 Ok(false) => std::cmp::Ordering::Equal,
-                Err(e)    => { sort_err = Some(e); std::cmp::Ordering::Equal }
+                Err(e) => {
+                    sort_err = Some(e);
+                    std::cmp::Ordering::Equal
+                }
             },
-            Err(e) => { sort_err = Some(e); std::cmp::Ordering::Equal }
+            Err(e) => {
+                sort_err = Some(e);
+                std::cmp::Ordering::Equal
+            }
         }
     });
     if let Some(e) = sort_err {
@@ -229,7 +263,10 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
 
 fn invoke_comp(comp: &Value, a: &Value, b: &Value) -> Result<bool, String> {
     use crate::eval::expr::{EvaluatedArg, call_value_multi};
-    if !matches!(comp, Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)) {
+    if !matches!(
+        comp,
+        Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)
+    ) {
         return Err(format!(
             "Table.sort: comparator must be a function, got `{}`",
             comp.type_name()
@@ -263,10 +300,14 @@ fn tbl_concat(args: &[Value]) -> Result<Vec<Value>, String> {
     let len = t.array.len() as i64;
     let i = if args.len() >= 3 && !matches!(args[2], Value::Nil) {
         expect_int_arg("Table.concat", args, 2)?
-    } else { 1 };
+    } else {
+        1
+    };
     let j = if args.len() >= 4 && !matches!(args[3], Value::Nil) {
         expect_int_arg("Table.concat", args, 3)?
-    } else { len };
+    } else {
+        len
+    };
 
     if i > j {
         return Ok(vec![Value::Str(Rc::new(String::new()))]);
@@ -286,5 +327,3 @@ fn tbl_concat(args: &[Value]) -> Result<Vec<Value>, String> {
     }
     Ok(vec![Value::Str(Rc::new(out))])
 }
-
-

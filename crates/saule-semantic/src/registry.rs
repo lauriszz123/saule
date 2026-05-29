@@ -197,9 +197,7 @@ pub fn class_implements_iterable(class: &str) -> bool {
 // Registry build / install / clear
 // ──────────────────────────────────────────────────────────────────────────────
 
-pub fn build_registry(
-    module: &Module,
-) -> (ClassRegistry, InterfaceRegistry, EnumRegistry) {
+pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, EnumRegistry) {
     let mut reg = ClassRegistry::new();
     let mut ifaces = InterfaceRegistry::new();
     let mut enums = EnumRegistry::new();
@@ -268,11 +266,7 @@ pub fn build_registry(
     (reg, ifaces, enums)
 }
 
-pub fn install_registries(
-    reg: ClassRegistry,
-    ifaces: InterfaceRegistry,
-    enums: EnumRegistry,
-) {
+pub fn install_registries(reg: ClassRegistry, ifaces: InterfaceRegistry, enums: EnumRegistry) {
     CLASSES.with(|c| *c.borrow_mut() = reg);
     INTERFACES.with(|c| *c.borrow_mut() = ifaces);
     ENUMS.with(|c| *c.borrow_mut() = enums);
@@ -283,4 +277,3 @@ pub fn clear_registries() {
     INTERFACES.with(|c| c.borrow_mut().clear());
     ENUMS.with(|c| c.borrow_mut().clear());
 }
-

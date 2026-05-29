@@ -30,22 +30,26 @@ use crate::value::{
 // ─── installation ──────────────────────────────────────────────────────────
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
-    install_enum(env, "IoMode", &[
-        ("Read",         "r"),
-        ("Write",        "w"),
-        ("Append",       "a"),
-        ("ReadWrite",    "r+"),
-        ("WriteRead",    "w+"),
-        ("AppendRead",   "a+"),
-        ("ReadBinary",   "rb"),
-        ("WriteBinary",  "wb"),
-        ("AppendBinary", "ab"),
-    ]);
-    install_enum(env, "IoSeek", &[
-        ("Set", "set"),
-        ("Cur", "cur"),
-        ("End", "end"),
-    ]);
+    install_enum(
+        env,
+        "IoMode",
+        &[
+            ("Read", "r"),
+            ("Write", "w"),
+            ("Append", "a"),
+            ("ReadWrite", "r+"),
+            ("WriteRead", "w+"),
+            ("AppendRead", "a+"),
+            ("ReadBinary", "rb"),
+            ("WriteBinary", "wb"),
+            ("AppendBinary", "ab"),
+        ],
+    );
+    install_enum(
+        env,
+        "IoSeek",
+        &[("Set", "set"), ("Cur", "cur"), ("End", "end")],
+    );
 
     // Phantom `File` class — only needed so the typechecker recognises
     // `File` as a type name in `local f: File = ...`. Method dispatch happens
@@ -78,9 +82,9 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         "stderr".to_string(),
         Value::File(Rc::new(RefCell::new(FileHandle::Stderr))),
     );
-    static_fields.insert("open".to_string(),  native_multi("Io.open",  io_open));
+    static_fields.insert("open".to_string(), native_multi("Io.open", io_open));
     static_fields.insert("lines".to_string(), native_multi("Io.lines", io_lines));
-    static_fields.insert("read".to_string(),  native_multi("Io.read",  io_read));
+    static_fields.insert("read".to_string(), native_multi("Io.read", io_read));
     static_fields.insert("write".to_string(), native_multi("Io.write", io_write));
 
     let io_class = ClassObject {
@@ -106,21 +110,25 @@ pub fn register_sigs() {
     let file = || t_named("File");
     let str_opt = || t_nullable(s());
 
-    register("Io.open",  vec![s(), t_named("IoMode")], vec![file_opt()]);
-    register("Io.lines", vec![t_nullable(s())],        vec![t_named("any")]);
+    register("Io.open", vec![s(), t_named("IoMode")], vec![file_opt()]);
+    register("Io.lines", vec![t_nullable(s())], vec![t_named("any")]);
     // `Io.read(...formats: string) -> string?` — zero-or-more strings.
-    register_v("Io.read",  vec![], s(), vec![str_opt()]);
+    register_v("Io.read", vec![], s(), vec![str_opt()]);
     // `Io.write(...parts: string) -> nil` — zero-or-more strings.
     register_v("Io.write", vec![], s(), vec![nil()]);
 
     // File method signatures — only consulted by typeck when it learns to
     // route `file.method(...)`. Pre-registering keeps the contract visible.
-    register_v("File.read",  vec![], s(), vec![str_opt()]);
+    register_v("File.read", vec![], s(), vec![str_opt()]);
     register_v("File.write", vec![], s(), vec![nil()]);
-    register("File.lines", vec![],               vec![t_named("any")]);
-    register("File.seek",  vec![t_nullable(t_named("IoSeek")), t_nullable(i())], vec![i()]);
-    register("File.flush", vec![],               vec![nil()]);
-    register("File.close", vec![],               vec![nil()]);
+    register("File.lines", vec![], vec![t_named("any")]);
+    register(
+        "File.seek",
+        vec![t_nullable(t_named("IoSeek")), t_nullable(i())],
+        vec![i()],
+    );
+    register("File.flush", vec![], vec![nil()]);
+    register("File.close", vec![], vec![nil()]);
     // Suppress unused warnings for the helpers we didn't reach for.
     let _ = file;
 }
@@ -155,10 +163,7 @@ fn install_enum(env: &Rc<RefCell<Environment>>, name: &str, variants: &[(&str, &
 
 // ─── native helpers ────────────────────────────────────────────────────────
 
-fn native_multi(
-    name: &'static str,
-    func: fn(&[Value]) -> Result<Vec<Value>, String>,
-) -> Value {
+fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, String>) -> Value {
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
         func: Box::new(move |args| func(args)),
@@ -210,12 +215,30 @@ fn io_open(args: &[Value]) -> Result<Vec<Value>, String> {
 
     let mut opts = OpenOptions::new();
     let (readable, writable) = match mode.as_str() {
-        "r"  | "rb"            => { opts.read(true);                                      (true,  false) }
-        "w"  | "wb"            => { opts.write(true).create(true).truncate(true);         (false, true ) }
-        "a"  | "ab"            => { opts.append(true).create(true);                       (false, true ) }
-        "r+" | "rb+" | "r+b"   => { opts.read(true).write(true);                          (true,  true ) }
-        "w+" | "wb+" | "w+b"   => { opts.read(true).write(true).create(true).truncate(true); (true, true ) }
-        "a+" | "ab+" | "a+b"   => { opts.read(true).append(true).create(true);            (true,  true ) }
+        "r" | "rb" => {
+            opts.read(true);
+            (true, false)
+        }
+        "w" | "wb" => {
+            opts.write(true).create(true).truncate(true);
+            (false, true)
+        }
+        "a" | "ab" => {
+            opts.append(true).create(true);
+            (false, true)
+        }
+        "r+" | "rb+" | "r+b" => {
+            opts.read(true).write(true);
+            (true, true)
+        }
+        "w+" | "wb+" | "w+b" => {
+            opts.read(true).write(true).create(true).truncate(true);
+            (true, true)
+        }
+        "a+" | "ab+" | "a+b" => {
+            opts.read(true).append(true).create(true);
+            (true, true)
+        }
         other => return Err(format!("Io.open: unknown mode `{other}`")),
     };
 
@@ -376,10 +399,7 @@ fn read_line_src(src: &mut ReadSource<'_>, buf: &mut String) -> Result<usize, St
     let r = match src {
         ReadSource::Stdin => {
             let stdin = std::io::stdin();
-            return stdin
-                .lock()
-                .read_line(buf)
-                .map_err(|e| e.to_string());
+            return stdin.lock().read_line(buf).map_err(|e| e.to_string());
         }
         ReadSource::BufFile(r) => r.read_line(buf),
         ReadSource::BufStdin(r) => r.read_line(buf),
@@ -390,7 +410,10 @@ fn read_line_src(src: &mut ReadSource<'_>, buf: &mut String) -> Result<usize, St
 fn read_all_src(src: &mut ReadSource<'_>, buf: &mut String) -> Result<(), String> {
     match src {
         ReadSource::Stdin => {
-            std::io::stdin().lock().read_to_string(buf).map_err(|e| e.to_string())?;
+            std::io::stdin()
+                .lock()
+                .read_to_string(buf)
+                .map_err(|e| e.to_string())?;
         }
         ReadSource::BufFile(r) => {
             r.read_to_string(buf).map_err(|e| e.to_string())?;
@@ -411,13 +434,13 @@ pub fn dispatch_file_method(
     args: &[Value],
 ) -> Result<Vec<Value>, String> {
     match method {
-        "read"  => file_read(handle, args),
+        "read" => file_read(handle, args),
         "write" => file_write(handle, args),
         "lines" => file_lines(handle, args),
-        "seek"  => file_seek(handle, args),
+        "seek" => file_seek(handle, args),
         "flush" => file_flush(handle, args),
         "close" => file_close(handle, args),
-        other   => Err(format!(
+        other => Err(format!(
             "no method `{other}` on file — valid: read / write / lines / seek / flush / close"
         )),
     }
@@ -441,7 +464,9 @@ fn file_read(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Val
     let mut h = handle.borrow_mut();
     let h = require_open(&mut h)?;
     match h {
-        FileHandle::Open { reader: Some(r), .. } => {
+        FileHandle::Open {
+            reader: Some(r), ..
+        } => {
             let mut src = ReadSource::BufFile(r);
             read_format(&format, &mut src)
         }
@@ -461,7 +486,9 @@ fn file_write(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Va
     let mut h = handle.borrow_mut();
     let h = require_open(&mut h)?;
     match h {
-        FileHandle::Open { writer: Some(w), .. } => {
+        FileHandle::Open {
+            writer: Some(w), ..
+        } => {
             for v in args {
                 w.write_all(v.to_display_string().as_bytes())
                     .map_err(|e| e.to_string())?;
@@ -484,9 +511,7 @@ fn file_write(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Va
             let _ = err.flush();
             Ok(vec![Value::Nil])
         }
-        FileHandle::Open { writer: None, .. } => {
-            Err("file is not opened for writing".to_string())
-        }
+        FileHandle::Open { writer: None, .. } => Err("file is not opened for writing".to_string()),
         FileHandle::Stdin(_) => Err("cannot write to stdin".to_string()),
         FileHandle::Closed => unreachable!(),
     }
@@ -500,7 +525,9 @@ fn file_lines(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
         func: Box::new(move |_| {
             let mut handle = h.borrow_mut();
             match &mut *handle {
-                FileHandle::Open { reader: Some(r), .. } => {
+                FileHandle::Open {
+                    reader: Some(r), ..
+                } => {
                     let mut buf = String::new();
                     match r.read_line(&mut buf) {
                         Ok(0) => Ok(vec![Value::Nil]),
@@ -538,12 +565,16 @@ fn file_seek(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Val
     let offset = if args.len() >= 2 {
         match &args[1] {
             Value::Int(n) => *n,
-            other => return Err(format!(
-                "File.seek expects an integer offset, got `{}`",
-                other.type_name()
-            )),
+            other => {
+                return Err(format!(
+                    "File.seek expects an integer offset, got `{}`",
+                    other.type_name()
+                ));
+            }
         }
-    } else { 0 };
+    } else {
+        0
+    };
 
     let from = match whence.as_str() {
         "set" => SeekFrom::Start(offset.max(0) as u64),
@@ -575,12 +606,20 @@ fn file_flush(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
     let mut h = handle.borrow_mut();
     let h = require_open(&mut h)?;
     match h {
-        FileHandle::Open { writer: Some(w), .. } => {
+        FileHandle::Open {
+            writer: Some(w), ..
+        } => {
             w.flush().map_err(|e| e.to_string())?;
             Ok(vec![Value::Nil])
         }
-        FileHandle::Stdout => { let _ = std::io::stdout().flush(); Ok(vec![Value::Nil]) }
-        FileHandle::Stderr => { let _ = std::io::stderr().flush(); Ok(vec![Value::Nil]) }
+        FileHandle::Stdout => {
+            let _ = std::io::stdout().flush();
+            Ok(vec![Value::Nil])
+        }
+        FileHandle::Stderr => {
+            let _ = std::io::stderr().flush();
+            Ok(vec![Value::Nil])
+        }
         _ => Ok(vec![Value::Nil]),
     }
 }
@@ -588,11 +627,12 @@ fn file_flush(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
 fn file_close(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<Value>, String> {
     let mut h = handle.borrow_mut();
     // Standard streams are no-ops on close to match Lua.
-    if matches!(*h, FileHandle::Stdout | FileHandle::Stderr | FileHandle::Stdin(_)) {
+    if matches!(
+        *h,
+        FileHandle::Stdout | FileHandle::Stderr | FileHandle::Stdin(_)
+    ) {
         return Ok(vec![Value::Nil]);
     }
     *h = FileHandle::Closed;
     Ok(vec![Value::Nil])
 }
-
-

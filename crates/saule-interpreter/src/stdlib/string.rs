@@ -10,18 +10,18 @@ use crate::value::{ClassObject, NativeClosure, Value};
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
     let mut static_fields = HashMap::new();
-    static_fields.insert("byte".to_string(),   native("String.byte",   str_byte));
-    static_fields.insert("char".to_string(),   native("String.char",   str_char));
+    static_fields.insert("byte".to_string(), native("String.byte", str_byte));
+    static_fields.insert("char".to_string(), native("String.char", str_char));
     static_fields.insert("format".to_string(), native("String.format", str_format));
-    static_fields.insert("len".to_string(),    native("String.len",    str_len));
-    static_fields.insert("sub".to_string(),    native("String.sub",    str_sub));
-    static_fields.insert("rep".to_string(),    native("String.rep",    str_rep));
+    static_fields.insert("len".to_string(), native("String.len", str_len));
+    static_fields.insert("sub".to_string(), native("String.sub", str_sub));
+    static_fields.insert("rep".to_string(), native("String.rep", str_rep));
     static_fields.insert("starts".to_string(), native("String.starts", str_starts));
-    static_fields.insert("ends".to_string(),   native("String.ends",   str_ends));
-    static_fields.insert("find".to_string(),   native_multi("String.find", str_find));
-    static_fields.insert("lower".to_string(),  native("String.lower",  str_lower));
-    static_fields.insert("upper".to_string(),  native("String.upper",  str_upper));
-    static_fields.insert("iter".to_string(),   native("String.iter",   str_iter));
+    static_fields.insert("ends".to_string(), native("String.ends", str_ends));
+    static_fields.insert("find".to_string(), native_multi("String.find", str_find));
+    static_fields.insert("lower".to_string(), native("String.lower", str_lower));
+    static_fields.insert("upper".to_string(), native("String.upper", str_upper));
+    static_fields.insert("iter".to_string(), native("String.iter", str_iter));
 
     let class = ClassObject {
         name: "String".to_string(),
@@ -39,25 +39,33 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
     use crate::stdlib::sigs::{register, register_v, t_any, t_named, t_nullable};
-    let s   = || t_named("string");
-    let i   = || t_named("integer");
-    let b   = || t_named("boolean");
+    let s = || t_named("string");
+    let i = || t_named("integer");
+    let b = || t_named("boolean");
     let any = || t_named("any");
-    register("String.byte",   vec![s(), t_nullable(i())],         vec![t_nullable(i())]);
+    register(
+        "String.byte",
+        vec![s(), t_nullable(i())],
+        vec![t_nullable(i())],
+    );
     // `char(...integer) -> string` — every arg must be an integer codepoint.
-    register_v("String.char", vec![],                      i(),    vec![s()]);
+    register_v("String.char", vec![], i(), vec![s()]);
     // `format(fmt, ...)` — fmt is a string; rest can be anything (the spec
     // decides per-placeholder).
-    register_v("String.format", vec![s()],                 any(),  vec![s()]);
-    register("String.len",    vec![s()],                           vec![i()]);
-    register("String.sub",    vec![s(), i(), t_nullable(i())],     vec![s()]);
-    register("String.rep",    vec![s(), i()],                      vec![s()]);
-    register("String.starts", vec![s(), s()],                      vec![b()]);
-    register("String.ends",   vec![s(), s()],                      vec![b()]);
-    register("String.find",   vec![s(), s(), t_nullable(i())],     vec![t_nullable(i()), t_nullable(i())]);
-    register("String.lower",  vec![s()],                           vec![s()]);
-    register("String.upper",  vec![s()],                           vec![s()]);
-    register("String.iter",   vec![s()],                           vec![t_any()]);  // returns a step closure
+    register_v("String.format", vec![s()], any(), vec![s()]);
+    register("String.len", vec![s()], vec![i()]);
+    register("String.sub", vec![s(), i(), t_nullable(i())], vec![s()]);
+    register("String.rep", vec![s(), i()], vec![s()]);
+    register("String.starts", vec![s(), s()], vec![b()]);
+    register("String.ends", vec![s(), s()], vec![b()]);
+    register(
+        "String.find",
+        vec![s(), s(), t_nullable(i())],
+        vec![t_nullable(i()), t_nullable(i())],
+    );
+    register("String.lower", vec![s()], vec![s()]);
+    register("String.upper", vec![s()], vec![s()]);
+    register("String.iter", vec![s()], vec![t_any()]); // returns a step closure
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {
@@ -66,10 +74,7 @@ fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Va
 
 /// Wrap a multi-return native function as a `NativeClosure` so the call
 /// site can destructure `local a, b = f(...)`.
-fn native_multi(
-    name: &'static str,
-    func: fn(&[Value]) -> Result<Vec<Value>, String>,
-) -> Value {
+fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, String>) -> Value {
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
         func: Box::new(move |args| func(args)),
@@ -354,9 +359,7 @@ pub(crate) fn format_args_impl(args: &[Value]) -> Result<String, String> {
         }
 
         let arg = args.get(arg_idx).ok_or_else(|| {
-            format!(
-                "String.format: not enough arguments for format string (missing arg {arg_idx})"
-            )
+            format!("String.format: not enough arguments for format string (missing arg {arg_idx})")
         })?;
         arg_idx += 1;
 
@@ -472,7 +475,3 @@ fn as_float(v: &Value, spec: char) -> Result<f64, String> {
         )),
     }
 }
-
-
-
-

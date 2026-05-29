@@ -32,13 +32,9 @@ pub(super) fn reject_nil_in_binding_type(
         match ty {
             Type::Named(n) => n == "nil",
             Type::Nullable(inner) => walk(inner),
-            Type::Table { key, value } => {
-                key.as_deref().map(walk).unwrap_or(false) || walk(value)
-            }
+            Type::Table { key, value } => key.as_deref().map(walk).unwrap_or(false) || walk(value),
             Type::Tuple(items) => items.iter().any(walk),
-            Type::Function { params, ret } => {
-                params.iter().any(walk) || walk(ret)
-            }
+            Type::Function { params, ret } => params.iter().any(walk) || walk(ret),
         }
     }
     if walk(ty) {
@@ -54,7 +50,6 @@ fn reject_nil_in_params(params: &[Param], errors: &mut Vec<TypeCheckError>) {
         reject_nil_in_binding_type(&p.ty, p.span.clone(), errors);
     }
 }
-
 
 pub(super) fn check_stmt(
     stmt: &Spanned<Stmt>,
@@ -124,7 +119,10 @@ pub(super) fn check_stmt(
             }
             // `t[k] = v` — enforce the table's static key/value types.
             if let Expr::Index { obj, index } = &target.value
-                && let Some(Type::Table { key, value: elem_ty }) = infer(obj, scope)
+                && let Some(Type::Table {
+                    key,
+                    value: elem_ty,
+                }) = infer(obj, scope)
             {
                 let key_ty = key
                     .as_deref()
@@ -319,10 +317,7 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                 // Point the diagnostic at the first member span — class
                 // span isn't readily available here; tweaking the AST to
                 // carry it is left for a follow-up.
-                let span = members
-                    .first()
-                    .map(|m| m.span.clone())
-                    .unwrap_or(0..0);
+                let span = members.first().map(|m| m.span.clone()).unwrap_or(0..0);
                 errors.push(TypeCheckError::UnknownParentClass {
                     name: class_name.clone(),
                     parent: parent.clone(),
@@ -331,10 +326,7 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             }
             for iface in implements {
                 if !is_interface(iface) {
-                    let span = members
-                        .first()
-                        .map(|m| m.span.clone())
-                        .unwrap_or(0..0);
+                    let span = members.first().map(|m| m.span.clone()).unwrap_or(0..0);
                     errors.push(TypeCheckError::UnknownInterface {
                         name: class_name.clone(),
                         iface: iface.clone(),
@@ -414,12 +406,7 @@ fn check_returns(
     }
 }
 
-fn walk_returns(
-    stmt: &Stmt,
-    return_ty: &Type,
-    scope: &Scope,
-    errors: &mut Vec<TypeCheckError>,
-) {
+fn walk_returns(stmt: &Stmt, return_ty: &Type, scope: &Scope, errors: &mut Vec<TypeCheckError>) {
     match stmt {
         Stmt::Return(values) => {
             if let Some(v) = values.first()
@@ -514,12 +501,7 @@ fn check_class(
     // of whether a constructor exists or the field is static. (Definite
     // assignment of constructor-set fields lives in `saule-semantic`.)
     for m in members {
-        if let ClassMember::Field {
-            ty,
-            default,
-            ..
-        } = &m.value
-        {
+        if let ClassMember::Field { ty, default, .. } = &m.value {
             reject_nil_in_binding_type(ty, m.span.clone(), errors);
             if let Some(default_expr) = default {
                 let scope = Scope::default();
@@ -527,7 +509,6 @@ fn check_class(
             }
         }
     }
-
 
     // Walk every method body with a scope seeded from its parameters,
     // and within `CURRENT_CLASS` set so private-member checks know we're

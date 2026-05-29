@@ -4,8 +4,8 @@
 use saule_ast::{Spanned, Stmt};
 use saule_lexer::Token;
 
-use crate::{Parser, stmt_decl};
 use crate::error::ParseError;
+use crate::{Parser, stmt_decl};
 
 impl Parser {
     // ─────────────────────────────────────────────────────────────────────────

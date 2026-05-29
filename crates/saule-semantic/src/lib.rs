@@ -35,10 +35,10 @@ mod return_check;
 
 pub use error::SemanticError;
 pub use registry::{
-    ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, InterfaceRegistry, MethodSig,
-    build_registry, class_implements, class_implements_iterable, clear_registries,
-    install_registries, interface_extends, is_interface, is_subtype_named, lookup_member,
-    lookup_method, with_classes, with_enums, with_interfaces,
+    ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, InterfaceRegistry, MethodSig, build_registry,
+    class_implements, class_implements_iterable, clear_registries, install_registries,
+    interface_extends, is_interface, is_subtype_named, lookup_member, lookup_method, with_classes,
+    with_enums, with_interfaces,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
@@ -112,5 +112,3 @@ pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError
 
     errors
 }
-
-

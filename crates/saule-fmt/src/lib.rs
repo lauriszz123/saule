@@ -100,9 +100,7 @@ impl<'a> Printer<'a> {
     fn new(source: &'a str, comments: &'a [Comment]) -> Self {
         let mut queue: VecDeque<&'a Comment> = comments.iter().collect();
         // Tolerate unsorted inputs.
-        queue
-            .make_contiguous()
-            .sort_by_key(|c| c.span.start);
+        queue.make_contiguous().sort_by_key(|c| c.span.start);
         Self {
             out: String::new(),
             indent: 0,
@@ -1286,9 +1284,7 @@ fn is_bare_arrow_param(params: &[Param], return_ty: &Option<Type>) -> bool {
         return false;
     }
     let p = &params[0];
-    !p.variadic
-        && p.default.is_none()
-        && matches!(&p.ty, Type::Named(n) if n == "any")
+    !p.variadic && p.default.is_none() && matches!(&p.ty, Type::Named(n) if n == "any")
 }
 
 fn is_ident(s: &str) -> bool {

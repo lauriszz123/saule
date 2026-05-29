@@ -52,9 +52,7 @@ pub(super) fn exec_try(
 /// match by walking the parent chain; interfaces match by name lookup.
 fn runtime_matches_type(value: &Value, ty: &Type) -> bool {
     match ty {
-        Type::Nullable(inner) => {
-            matches!(value, Value::Nil) || runtime_matches_type(value, inner)
-        }
+        Type::Nullable(inner) => matches!(value, Value::Nil) || runtime_matches_type(value, inner),
         Type::Tuple(_) => true, // multi-return shapes aren't introspectable here
         Type::Function { .. } => matches!(
             value,

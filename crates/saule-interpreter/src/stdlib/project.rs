@@ -26,8 +26,11 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         .collect();
 
     let mut static_fields = HashMap::new();
-    static_fields.insert("name".to_string(),    Value::Str(Rc::new(info.name.clone())));
-    static_fields.insert("version".to_string(), Value::Str(Rc::new(info.version.clone())));
+    static_fields.insert("name".to_string(), Value::Str(Rc::new(info.name.clone())));
+    static_fields.insert(
+        "version".to_string(),
+        Value::Str(Rc::new(info.version.clone())),
+    );
     static_fields.insert(
         "root".to_string(),
         Value::Str(Rc::new(info.root.display().to_string())),
@@ -56,4 +59,3 @@ pub fn register_sigs() {
     // method signatures to register today. Kept for parity with other
     // stdlib modules so future `Project.foo()` methods slot in cleanly.
 }
-
