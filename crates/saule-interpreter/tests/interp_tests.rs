@@ -867,7 +867,7 @@ mod classes {
                     self.y = y
                 end
             end
-            local p: Point =Point(3, 4)
+            local p: Point = Point(3, 4)
             p.x + p.y
         "#;
         assert_int(src, 7);
