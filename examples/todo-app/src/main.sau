@@ -45,16 +45,16 @@ class Main
         end
 
         storage.add(args[2], dueDate: due)
-        storage.save()
+        Renderer.print(storage.getAll())
 
       case "done" then
         local index: integer? = tointeger(args[2])
         if index == nil then
           println("error: invalid task number")
-        else
-          storage.update(index, isDone: true)
-          storage.save()
+          return
         end
+
+        storage.update(index, isDone: true)
 
       case "due" then
         local index: integer? = tointeger(args[2])
@@ -86,11 +86,14 @@ class Main
 
         if not storage.remove(index) then
           printf("Task id %d does not exist\n", index)
-        else
-          storage.save()
+          return
         end
+
+        Renderer.print(storage.getAll())
 
       case _ then Main.help()
     end
+
+    storage.save()
   end
 end

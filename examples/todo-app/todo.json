@@ -1,1 +1,1 @@
-[{"done":false,"todo":"some test"},{"done":false,"todo":"cool"}]
+[{"done":false,"dueDate":1780272000,"todo":"A task with due"},{"done":false,"dueDate":null,"todo":"A task without one"},{"done":false,"dueDate":null,"todo":"Maybe smoke"},{"done":false,"dueDate":null,"todo":"Maybe shit"}]

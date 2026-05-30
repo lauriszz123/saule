@@ -6,11 +6,15 @@ export class Renderer
     end
 
     for i, task in tasks do
-      printf("%s %d. %s\n", match task.isDone()
+      printf("%s %d.%s %s\n", match task.isDone()
         case true then "[x]"
 
         case false then "[-]"
-      end, i, task.getTodo())
+      end, i, match task.getDueDate()
+        case nil then ""
+
+        case dueDate then String.format(" (due %s)", Os.date("%Y-%m-%d", dueDate))
+      end, task.getTodo())
     end
   end
 end
