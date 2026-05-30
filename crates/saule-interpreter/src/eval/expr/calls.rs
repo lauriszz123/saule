@@ -664,6 +664,20 @@ pub(crate) fn eval_values(
                 return dispatch_member_call_multi(&receiver, name, vs, span);
             }
 
+            // `obj?.method(args)` — same short-circuit as in `eval`'s
+            // `Expr::Call` arm. Without this, `read_member` returns the
+            // bare unbound method and `call_value_multi` invokes it
+            // without binding `self`, producing a confusing internal
+            // "`self` reached evaluation outside a method" error.
+            if let Expr::SafeMember { obj, name } = &callee.value {
+                let receiver = eval(obj, env)?;
+                if matches!(receiver, Value::Nil) {
+                    return Ok(vec![Value::Nil]);
+                }
+                let vs = eval_call_args(args, env)?;
+                return dispatch_member_call_multi(&receiver, name, vs, span);
+            }
+
             let cv = eval(callee, env)?;
             let vs = eval_call_args(args, env)?;
             call_value_multi(cv, &vs, span)

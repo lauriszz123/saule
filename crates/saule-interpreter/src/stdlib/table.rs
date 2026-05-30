@@ -61,7 +61,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_any, t_named, t_nullable};
+    use crate::stdlib::sigs::{register, register_g, t_any, t_named, t_nullable};
     use saule_ast::Type;
     let any = || t_any();
     let i = || t_named("integer");
@@ -72,31 +72,62 @@ pub fn register_sigs() {
         key: None,
         value: Box::new(t_any()),
     };
+    // `table<V>` — the element-typed table used by the generic `Table.*`
+    // sigs below. `V` is unified against the actual receiver's element type
+    // so e.g. `Table.insert(self.storage, "")` rejects `string` when
+    // `self.storage: table<Entry>`.
+    let table_v = || Type::Table {
+        key: None,
+        value: Box::new(t_named("V")),
+    };
 
-    // `Table.insert(list, value, pos?)` — strict: pos must be integer.
-    register(
+    // `Table.insert<V>(list: table<V>, value: V, pos: integer?)` — appends,
+    // or inserts at `pos`. Generic so the element type is enforced.
+    register_g(
         "Table.insert",
-        vec![table_any(), any(), t_nullable(i())],
+        vec!["V"],
+        vec![table_v(), t_named("V"), t_nullable(i())],
         vec![nil()],
     );
-    // `Table.remove(list, pos?)` — pos is a 1-based array index.
-    register(
+    // `Table.remove<V>(list: table<V>, pos: integer?) -> V?` — removes and
+    // returns the element, or `nil` when the slot is empty / out of range.
+    register_g(
         "Table.remove",
-        vec![table_any(), t_nullable(i())],
-        vec![t_nullable(any())],
+        vec!["V"],
+        vec![table_v(), t_nullable(i())],
+        vec![t_nullable(t_named("V"))],
     );
-    // Comparator slot left as `any` until lambda inference is fully wired.
-    register("Table.sort", vec![table_any(), any()], vec![nil()]);
+    // `Table.sort<V>(list: table<V>, cmp: fn(V, V) -> boolean) -> nil` —
+    // generic so the comparator's parameter types are tied to the table's
+    // element type. (Lambda parameter inference is still a separate work
+    // item; the binding at least propagates `V` from the receiver.)
+    use crate::stdlib::sigs::t_function;
+    register_g(
+        "Table.sort",
+        vec!["V"],
+        vec![
+            table_v(),
+            t_function(vec![t_named("V"), t_named("V")], t_named("boolean")),
+        ],
+        vec![nil()],
+    );
+    // `Table.concat(list: table<string>, sep?, from?, to?) -> string` —
+    // element type is fixed: only string tables can be joined directly.
+    // (Numeric tables must be mapped through `tostring` first.)
     register(
         "Table.concat",
         vec![
-            table_any(),
+            Type::Table {
+                key: None,
+                value: Box::new(s()),
+            },
             t_nullable(s()),
             t_nullable(i()),
             t_nullable(i()),
         ],
         vec![s()],
     );
+    let _ = (any, table_any);
 }
 
 fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, String>) -> Value {

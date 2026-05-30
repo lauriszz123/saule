@@ -102,34 +102,49 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, register_v, t_named, t_nullable};
+    use crate::stdlib::sigs::{register, register_v, t_function, t_named, t_nullable};
     let s = || t_named("string");
-    let i = || t_named("integer");
     let nil = || t_named("nil");
     let file_opt = || t_nullable(t_named("File"));
     let file = || t_named("File");
     let str_opt = || t_nullable(s());
+    // `fn(): string?` — the shape returned by `Io.lines` / `File.lines`,
+    // suitable for `for line in Io.lines(...) do ... end`.
+    let line_iter = || t_function(vec![], t_nullable(s()));
 
     register("Io.open", vec![s(), t_named("IoMode")], vec![file_opt()]);
-    register("Io.lines", vec![t_nullable(s())], vec![t_named("any")]);
+    register("Io.lines", vec![t_nullable(s())], vec![line_iter()]);
     // `Io.read(...formats: string) -> string?` — zero-or-more strings.
     register_v("Io.read", vec![], s(), vec![str_opt()]);
     // `Io.write(...parts: string) -> nil` — zero-or-more strings.
     register_v("Io.write", vec![], s(), vec![nil()]);
 
-    // File method signatures — only consulted by typeck when it learns to
-    // route `file.method(...)`. Pre-registering keeps the contract visible.
-    register_v("File.read", vec![], s(), vec![str_opt()]);
+    // `File` is a *value* class — its methods (`read`, `write`, `lines`,
+    // `seek`, `flush`, `close`) are dispatched off a `Value::File`
+    // instance, not off the class itself. Register `File` as a module
+    // so static-call typos like `File.write(self.path, data)` surface
+    // as `UnknownMember` at typeck time, then register a sig for each
+    // instance method so the typechecker validates argument types and
+    // propagates return types for `file.method(...)` calls.
+    use crate::stdlib::sigs::register_module;
+    register_module("File");
+    let int_opt = || t_nullable(t_named("integer"));
+    // `file.read(format?: string) -> string?`
+    register("File.read", vec![t_nullable(s())], vec![str_opt()]);
+    // `file.write(...parts: string) -> nil`
     register_v("File.write", vec![], s(), vec![nil()]);
-    register("File.lines", vec![], vec![t_named("any")]);
+    // `file.lines() -> fn(): string?`
+    register("File.lines", vec![], vec![line_iter()]);
+    // `file.seek(whence?: IoSeek, offset?: integer) -> integer?`
     register(
         "File.seek",
-        vec![t_nullable(t_named("IoSeek")), t_nullable(i())],
-        vec![i()],
+        vec![t_nullable(t_named("IoSeek")), int_opt()],
+        vec![int_opt()],
     );
+    // `file.flush() -> nil`
     register("File.flush", vec![], vec![nil()]);
+    // `file.close() -> nil`
     register("File.close", vec![], vec![nil()]);
-    // Suppress unused warnings for the helpers we didn't reach for.
     let _ = file;
 
     // `File`-valued constants on the `Io` static class.

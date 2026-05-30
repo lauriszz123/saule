@@ -34,10 +34,6 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
         "randomseed".to_string(),
         native("Math.randomseed", math_randomseed),
     );
-    static_fields.insert(
-        "tointeger".to_string(),
-        native("Math.tointeger", math_tointeger),
-    );
     static_fields.insert("type".to_string(), native("Math.type", math_type));
     static_fields.insert("ult".to_string(), native("Math.ult", math_ult));
     static_fields.insert("round".to_string(), native("Math.round", math_round));
@@ -74,9 +70,8 @@ pub fn register_sigs() {
     let b = || t_named("boolean");
     let s = || t_named("string");
 
-    // `tointeger` / `type` accept anything by design (they return nil for
-    // values that can't be coerced / aren't numeric).
-    register("Math.tointeger", vec![any()], vec![t_nullable(i())]);
+    // `type` accepts anything by design (it returns nil for non-numeric
+    // values). Numeric coercion (`tointeger` / `tofloat`) lives in core.
     register("Math.type", vec![any()], vec![t_nullable(s())]);
 
     // Definitely-integer returns; require a number in.
@@ -403,22 +398,6 @@ fn math_randomseed(args: &[Value]) -> Result<Value, String> {
     };
     RNG_STATE.with(|cell| *cell.borrow_mut() = if seed == 0 { 1 } else { seed });
     Ok(Value::Nil)
-}
-
-fn math_tointeger(args: &[Value]) -> Result<Value, String> {
-    expect_arity("tointeger", args, 1)?;
-    let out = match &args[0] {
-        Value::Int(i) => Some(*i),
-        Value::Float(f) => {
-            if f.is_finite() && f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
-                Some(*f as i64)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-    Ok(out.map(Value::Int).unwrap_or(Value::Nil))
 }
 
 fn math_type(args: &[Value]) -> Result<Value, String> {

@@ -28,6 +28,15 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("cannot assign value of type `{found}` to variable of type `{expected}`")]
+    #[diagnostic(help("the value's type isn't compatible with the declared type"))]
+    AssignmentTypeMismatch {
+        expected: String,
+        found: String,
+        #[label("incompatible type")]
+        span: miette::SourceSpan,
+    },
+
     #[error("cannot access `{member}` on nullable type `{ty}`")]
     #[diagnostic(help(
         "use `?.` for safe access, `!` to force-unwrap, or guard with `if x != nil then ... end`"
@@ -48,11 +57,12 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
-    #[error("return value is incompatible with declared return type `{ty}`")]
+    #[error("return value of type `{found}` is incompatible with declared return type `{ty}`")]
     #[diagnostic(help("this function must return a `{ty}`"))]
     WrongReturnType {
         ty: String,
-        #[label("returned here")]
+        found: String,
+        #[label("returned `{found}` here")]
         span: miette::SourceSpan,
     },
 
@@ -108,6 +118,18 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`for` binding `{name}` declared as `{declared}`, but the iterator yields `{actual}`")]
+    #[diagnostic(help(
+        "change the binding's type to `{actual}` (or drop the annotation to let it infer)"
+    ))]
+    ForBindingTypeMismatch {
+        name: String,
+        declared: String,
+        actual: String,
+        #[label("incompatible binding type")]
+        span: miette::SourceSpan,
+    },
+
     #[error("argument {arg} of `{callee}` expects `{expected}`, got `{found}`")]
     #[diagnostic(help(
         "pass a value of type `{expected}` here — check the signature of `{callee}`"
@@ -128,6 +150,17 @@ pub enum TypeCheckError {
         expected: usize,
         found: usize,
         #[label("wrong number of arguments")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{callee}` has no parameter named `{name}`")]
+    #[diagnostic(help(
+        "remove the named argument or use one of the parameter names declared on `{callee}`"
+    ))]
+    UnknownNamedArg {
+        callee: String,
+        name: String,
+        #[label("unknown parameter name")]
         span: miette::SourceSpan,
     },
 
@@ -221,6 +254,15 @@ pub enum TypeCheckError {
         expected: usize,
         found: usize,
         #[label("wrong number of sub-patterns")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`match` scrutinee is a function value, not a result")]
+    #[diagnostic(help(
+        "you probably forgot to call it — write `expr()` instead of `expr` to match on the return value"
+    ))]
+    MatchOnFunction {
+        #[label("this is a function reference, not its result")]
         span: miette::SourceSpan,
     },
 

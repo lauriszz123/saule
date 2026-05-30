@@ -43,6 +43,10 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         native_multi("Os.difftime", os_difftime),
     );
     static_fields.insert("date".to_string(), native_multi("Os.date", os_date));
+    static_fields.insert(
+        "parsedate".to_string(),
+        native_multi("Os.parsedate", os_parsedate),
+    );
     static_fields.insert("sleep".to_string(), native_multi("Os.sleep", os_sleep));
 
     // environment
@@ -118,6 +122,13 @@ pub fn register_sigs() {
     register("Os.clock", vec![], vec![f()]);
     register("Os.difftime", vec![i(), i()], vec![i()]);
     register("Os.date", vec![t_nullable(s()), t_nullable(i())], vec![s()]);
+    // Parse a date string into a unix epoch. Returns nil when the input
+    // doesn't match the format, so the result type is `integer?`.
+    register(
+        "Os.parsedate",
+        vec![s(), t_nullable(s())],
+        vec![t_nullable(i())],
+    );
     register("Os.sleep", vec![t_number()], vec![nil()]);
 
     // environment
@@ -139,6 +150,10 @@ pub fn register_sigs() {
     register("Os.execute", vec![s()], vec![i()]);
     register("Os.pid", vec![], vec![i()]);
     register("Os.platform", vec![], vec![t_named("OsPlatform")]);
+    // `Os.args() -> table<string>` — process argv. Not generic: the
+    // runtime always produces a string-valued table, so a generic `T`
+    // would just be a hole that defeats element-type checking at the
+    // call site (e.g. `local a: table<Foo> = Os.args()` would pass).
     register("Os.args", vec![], vec![table_str()]);
 
     // String-valued constants — record their names so the unknown-member
@@ -580,4 +595,127 @@ fn civil_from_epoch(epoch: i64) -> (i64, u32, u32, u32, u32, u32, u32, u32) {
     let wday = (((days + 4) % 7 + 7) % 7) as u32;
 
     (year, m_shifted as u32, d, hh, mm, ss, wday, yday)
+}
+
+/// Inverse of `civil_from_epoch`: convert a UTC civil date/time to a unix
+/// epoch in seconds. Algorithm: Howard Hinnant, "days_from_civil".
+fn epoch_from_civil(y: i64, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = (y - era * 400) as u64; // [0, 399]
+    let m_u = m as u64;
+    let d_u = d as u64;
+    let doy = (153 * if m_u > 2 { m_u - 3 } else { m_u + 9 } + 2) / 5 + d_u - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    let days = era * 146_097 + doe as i64 - 719_468;
+    days * 86_400 + (hh as i64) * 3600 + (mm as i64) * 60 + ss as i64
+}
+
+/// `Os.parsedate(input, format?) -> integer?`
+///
+/// Parses `input` against `format` (default `%Y-%m-%d`) and returns the
+/// matching unix epoch in seconds (UTC). Supported specifiers mirror
+/// `Os.date`: `%Y %m %d %H %M %S %y %%`. Literal characters in the
+/// format must match exactly. Returns `nil` on any mismatch — callers
+/// are expected to handle the failure case.
+fn os_parsedate(args: &[Value]) -> Result<Vec<Value>, String> {
+    let input = expect_string("Os.parsedate", args, 0)?;
+    let format = match args.get(1) {
+        Some(Value::Str(s)) => (**s).clone(),
+        Some(Value::Nil) | None => "%Y-%m-%d".to_string(),
+        Some(other) => {
+            return Err(format!(
+                "Os.parsedate: format must be a string, got `{}`",
+                other.type_name()
+            ));
+        }
+    };
+
+    let in_bytes = input.as_bytes();
+    let fmt_bytes = format.as_bytes();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut year: i64 = 1970;
+    let mut month: u32 = 1;
+    let mut day: u32 = 1;
+    let mut hour: u32 = 0;
+    let mut minute: u32 = 0;
+    let mut second: u32 = 0;
+
+    fn take_digits(s: &[u8], i: &mut usize, n: usize) -> Option<u64> {
+        if *i + n > s.len() {
+            return None;
+        }
+        let slice = &s[*i..*i + n];
+        if !slice.iter().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let mut v: u64 = 0;
+        for &c in slice {
+            v = v * 10 + (c - b'0') as u64;
+        }
+        *i += n;
+        Some(v)
+    }
+
+    while j < fmt_bytes.len() {
+        if fmt_bytes[j] != b'%' {
+            if i >= in_bytes.len() || in_bytes[i] != fmt_bytes[j] {
+                return Ok(vec![Value::Nil]);
+            }
+            i += 1;
+            j += 1;
+            continue;
+        }
+        j += 1;
+        if j >= fmt_bytes.len() {
+            return Ok(vec![Value::Nil]);
+        }
+        let spec = fmt_bytes[j];
+        j += 1;
+        match spec {
+            b'Y' => match take_digits(in_bytes, &mut i, 4) {
+                Some(v) => year = v as i64,
+                None => return Ok(vec![Value::Nil]),
+            },
+            b'y' => match take_digits(in_bytes, &mut i, 2) {
+                Some(v) => year = 2000 + v as i64,
+                None => return Ok(vec![Value::Nil]),
+            },
+            b'm' => match take_digits(in_bytes, &mut i, 2) {
+                Some(v) if (1..=12).contains(&v) => month = v as u32,
+                _ => return Ok(vec![Value::Nil]),
+            },
+            b'd' => match take_digits(in_bytes, &mut i, 2) {
+                Some(v) if (1..=31).contains(&v) => day = v as u32,
+                _ => return Ok(vec![Value::Nil]),
+            },
+            b'H' => match take_digits(in_bytes, &mut i, 2) {
+                Some(v) if v < 24 => hour = v as u32,
+                _ => return Ok(vec![Value::Nil]),
+            },
+            b'M' => match take_digits(in_bytes, &mut i, 2) {
+                Some(v) if v < 60 => minute = v as u32,
+                _ => return Ok(vec![Value::Nil]),
+            },
+            b'S' => match take_digits(in_bytes, &mut i, 2) {
+                Some(v) if v < 60 => second = v as u32,
+                _ => return Ok(vec![Value::Nil]),
+            },
+            b'%' => {
+                if i >= in_bytes.len() || in_bytes[i] != b'%' {
+                    return Ok(vec![Value::Nil]);
+                }
+                i += 1;
+            }
+            _ => return Ok(vec![Value::Nil]),
+        }
+    }
+
+    if i != in_bytes.len() {
+        return Ok(vec![Value::Nil]);
+    }
+
+    let epoch = epoch_from_civil(year, month, day, hour, minute, second);
+    Ok(vec![Value::Int(epoch)])
 }

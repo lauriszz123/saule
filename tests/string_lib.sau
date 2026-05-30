@@ -32,7 +32,7 @@ class Main
 
     -- find: indices of first match, or nil
 
-    local s: integer, e: integer = String.find("hello world", "world")
+    local s: integer?, e: integer? = String.find("hello world", "world")
     println(s, " ", e)  -- 7 11
 
     -- lower / upper

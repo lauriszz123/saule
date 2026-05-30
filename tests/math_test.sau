@@ -18,6 +18,6 @@ class Main
     local b: integer = Math.random(1, 100)
     println(a, b, a == b)
 
-    println(Math.sqrt(9), Math.tointeger(5.0), Math.type(5), Math.type(5.5), Math.ult(1, 2))
+    println(Math.sqrt(9), tointeger(5.0), Math.type(5), Math.type(5.5), Math.ult(1, 2))
   end
 end

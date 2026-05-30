@@ -5,16 +5,22 @@ class Main
 
     -- Read the small test file.
     println("test.json:")
-    Main.dumpAny(Json.decode(Main.loadFile("test.json")), "  ")
+    match Main.loadFile("test.json")
 
-    -- Read the kitchen-sink file (covers every JSON variant).
+      -- Force unwrap since we know it exists.
+      case nil then println("Failed to parse test.json")
+
+      case v then Main.dumpAny(Json.decode(v), "  ")
+    end
+
+    -- Read the kitchen-sink file.
 
     println()
     println("kitchen_sink.json:")
 
     -- We know that it exists so we can force unwrap.
 
-    local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json"))
+    local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!)
 
     if raw == nil then
       println("Failed to parse!")
@@ -39,10 +45,10 @@ class Main
   static fn loadFile(path: string) -> string?
     if Os.exists(path) then
       local file: File = Io.open(path, IoMode.Read)!
-      local source: string = file.read("a")
+      local source: string? = file.read("a")
       file.close()
 
-      return source
+      return source!
     end
   end
 

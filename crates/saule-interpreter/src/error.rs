@@ -124,6 +124,17 @@ pub enum RuntimeError {
         #[label("uncaught `throw`")]
         span: std::ops::Range<usize>,
     },
+
+    /// Sentinel: a `return` / `break` / `continue` statement executed
+    /// inside an expression context (e.g. a `match` arm). The actual
+    /// `Flow` is parked in `crate::eval::stmt::pending_flow` and the
+    /// surrounding statement executor restores it. Never reaches the
+    /// user; if it does, that's an interpreter bug.
+    #[error("internal: control-flow escape (this should be intercepted)")]
+    PendingFlow {
+        #[label("control-flow escape")]
+        span: std::ops::Range<usize>,
+    },
 }
 
 /// Convenience constructor — most non-`Local`/`Expr` statements still funnel

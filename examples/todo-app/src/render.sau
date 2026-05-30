@@ -1,2 +1,16 @@
 export class Renderer
+  static fn print(tasks: table<Entry>)
+    if #tasks == 0 then
+      println("No tasks found.")
+      return
+    end
+
+    for i, task in tasks do
+      printf("%s %d. %s\n", match task.isDone()
+        case true then "[x]"
+
+        case false then "[-]"
+      end, i, task.getTodo())
+    end
+  end
 end

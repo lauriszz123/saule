@@ -21,6 +21,10 @@ use saule_ast::{ClassMember, Decl, EnumVariant, Module, Param, Stmt, Type};
 pub struct MethodSig {
     pub is_static: bool,
     pub is_private: bool,
+    /// Generic type parameters declared with `<T, U>` after the method
+    /// name. Erased at runtime; the typechecker treats these as universal
+    /// inside the body and uses them to enforce caller-side unification.
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
 }
@@ -35,6 +39,10 @@ pub struct ClassInfo {
     /// member name -> is_private. Kept distinct from [`methods`] so the
     /// existing visibility check can stay O(1) when the member is a field.
     pub members: HashMap<String, bool>,
+    /// Field-name -> declared type. Populated for `local`/static fields so
+    /// the typechecker can infer `self.foo` / `instance.foo` and enforce
+    /// assignment compatibility for indexed writes through fields.
+    pub field_types: HashMap<String, Type>,
     /// Method-name -> full signature. Populated for every `fn` declared
     /// on the class so the typechecker can answer "what does
     /// `Foo.bar(...)` return?".
@@ -187,6 +195,22 @@ pub fn lookup_method(class: &str, method: &str) -> Option<MethodSig> {
     })
 }
 
+/// Look up the declared type of field `name` on `class` (walking the parent
+/// chain). Returns `None` for methods or unknown names.
+pub fn lookup_field_type(class: &str, name: &str) -> Option<Type> {
+    with_classes(|reg| {
+        let mut cur = Some(class.to_string());
+        while let Some(cname) = cur {
+            let info = reg.get(&cname)?;
+            if let Some(ty) = info.field_types.get(name) {
+                return Some(ty.clone());
+            }
+            cur = info.parent.clone();
+        }
+        None
+    })
+}
+
 /// Does the class (or any ancestor) declare it implements `Iterable` or
 /// `Iterable2`? Used by the `for ... in` static check.
 pub fn class_implements_iterable(class: &str) -> bool {
@@ -215,14 +239,19 @@ pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, Enu
                         parent: extends.clone(),
                         implements: implements.clone(),
                         members: HashMap::new(),
+                        field_types: HashMap::new(),
                         methods: HashMap::new(),
                     };
                     for m in members {
                         match &m.value {
                             ClassMember::Field {
-                                name, is_private, ..
+                                name,
+                                is_private,
+                                ty,
+                                ..
                             } => {
                                 info.members.insert(name.clone(), *is_private);
+                                info.field_types.insert(name.clone(), ty.clone());
                             }
                             ClassMember::Method(meth) => {
                                 info.members.insert(meth.name.clone(), meth.is_private);
@@ -231,6 +260,7 @@ pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, Enu
                                     MethodSig {
                                         is_static: meth.is_static,
                                         is_private: meth.is_private,
+                                        type_params: meth.type_params.clone(),
                                         params: meth.params.clone(),
                                         return_ty: meth.return_ty.clone(),
                                     },

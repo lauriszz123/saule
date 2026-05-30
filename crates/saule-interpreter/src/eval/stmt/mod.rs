@@ -50,6 +50,28 @@ pub(super) mod thrown_slot {
     }
 }
 
+/// Park a `Flow` that escaped from inside an expression-context evaluator
+/// (e.g. a `return` inside a `match` arm). Same trick as `thrown_slot`:
+/// the marker error rides through `Result` while the non-`Send` `Flow`
+/// stays in a thread-local. The surrounding `exec` boundary takes it
+/// back and resumes normal control-flow propagation.
+pub(super) mod pending_flow {
+    use super::Flow;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SLOT: RefCell<Option<Flow>> = const { RefCell::new(None) };
+    }
+
+    pub fn set(f: Flow) {
+        SLOT.with(|s| *s.borrow_mut() = Some(f));
+    }
+
+    pub fn take() -> Option<Flow> {
+        SLOT.with(|s| s.borrow_mut().take())
+    }
+}
+
 /// Execute a sequence of statements in `env`. Stops at the first non-`Normal`
 /// outcome and propagates it.
 pub fn exec_block(
@@ -77,6 +99,20 @@ fn exec_scoped_block(
 
 /// Execute a single statement.
 pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow, RuntimeError> {
+    match exec_inner(stmt, env) {
+        // A `return`/`break`/`continue` that escaped through an expression
+        // context (e.g. a `match` arm body) parks itself in `pending_flow`
+        // and signals via `PendingFlow`. Convert it back into a real
+        // `Flow` here so the surrounding block keeps propagating it.
+        Err(RuntimeError::PendingFlow { .. }) => Ok(pending_flow::take().unwrap_or(Flow::nil())),
+        other => other,
+    }
+}
+
+fn exec_inner(
+    stmt: &Spanned<Stmt>,
+    env: &Rc<RefCell<Environment>>,
+) -> Result<Flow, RuntimeError> {
     let span = stmt.span.clone();
     match &stmt.value {
         Stmt::Local { name, value, .. } => {

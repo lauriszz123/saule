@@ -65,7 +65,19 @@ pub fn register_sigs() {
     );
     register("String.lower", vec![s()], vec![s()]);
     register("String.upper", vec![s()], vec![s()]);
-    register("String.iter", vec![s()], vec![t_any()]); // returns a step closure
+    // `String.iter(s) -> fn(): (string?, integer?)` — step closure for
+    // `for c, i in String.iter(s)`.
+    use crate::stdlib::sigs::t_function;
+    use saule_ast::Type;
+    register(
+        "String.iter",
+        vec![s()],
+        vec![t_function(
+            vec![],
+            Type::Tuple(vec![t_nullable(s()), t_nullable(i())]),
+        )],
+    );
+    let _ = t_any;
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {

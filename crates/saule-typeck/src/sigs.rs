@@ -29,6 +29,13 @@ use saule_ast::Type;
 /// A native function's static signature.
 #[derive(Clone, Debug)]
 pub struct NativeSig {
+    /// Type parameters introduced by this signature (e.g. `["V"]` for
+    /// `Table.insert<V>(table<V>, V, integer?)`). Names listed here are
+    /// treated as type variables when checking — they're unified against
+    /// the *actual* argument types, and the resulting substitution is
+    /// applied when checking later positional slots and when inferring
+    /// the return type.
+    pub type_params: Vec<String>,
     /// Declared positional parameter types.
     pub params: Vec<Type>,
     /// Type of additional trailing arguments. `Some(T)` makes the call
@@ -54,6 +61,14 @@ thread_local! {
     /// like `Math.pi` or `Os.sep`).
     static MEMBERS: RefCell<HashMap<String, std::collections::HashSet<String>>> =
         RefCell::new(HashMap::new());
+    /// Names registered via [`register_module`] — stdlib *value types*
+    /// (e.g. `File`) whose entries in [`MEMBERS`] describe *instance*
+    /// methods, not statically-reachable members. Tracked separately so
+    /// the unknown-member check can reject bare `File.write(...)`-style
+    /// static access while still accepting `file.write(...)` on an
+    /// instance of type `File`.
+    static VALUE_TYPES: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(std::collections::HashSet::new());
     static INIT_DONE: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -67,6 +82,32 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
         s.borrow_mut().insert(
             name.to_string(),
             NativeSig {
+                type_params: Vec::new(),
+                params,
+                variadic: None,
+                returns,
+            },
+        );
+    });
+}
+
+/// Register a generic native: `type_params` names are treated as type
+/// variables, unified against actual arg types and substituted into both
+/// later parameter slots and the return list. Use for
+/// `Table.insert<V>(table<V>, V, integer?)`, `Table.remove<V>(table<V>, integer?) -> V?`,
+/// etc.
+pub fn register_g(
+    name: &str,
+    type_params: Vec<&str>,
+    params: Vec<Type>,
+    returns: Vec<Type>,
+) {
+    record_member(name);
+    SIGS.with(|s| {
+        s.borrow_mut().insert(
+            name.to_string(),
+            NativeSig {
+                type_params: type_params.into_iter().map(String::from).collect(),
                 params,
                 variadic: None,
                 returns,
@@ -83,6 +124,7 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
         s.borrow_mut().insert(
             name.to_string(),
             NativeSig {
+                type_params: Vec::new(),
                 params,
                 variadic: Some(variadic),
                 returns,
@@ -98,6 +140,21 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
 /// on input flavour). Bare names (no `.`) are ignored.
 pub fn register_member(qname: &str) {
     record_member(qname);
+}
+
+/// Mark `name` as a known stdlib *type* / module that has **no** static
+/// members. Used for value classes like `File` whose methods are only
+/// reachable through an instance (`f:write(...)`) — recording the bare
+/// module makes [`is_module`] return `true` so static-call typos like
+/// `File.write(...)` get flagged by the unknown-member check instead of
+/// silently passing typeck and exploding at runtime.
+pub fn register_module(name: &str) {
+    MEMBERS.with(|m| {
+        m.borrow_mut().entry(name.to_string()).or_default();
+    });
+    VALUE_TYPES.with(|v| {
+        v.borrow_mut().insert(name.to_string());
+    });
 }
 
 fn record_member(qname: &str) {
@@ -147,6 +204,15 @@ pub fn has_member(module: &str, member: &str) -> bool {
             .get(module)
             .is_some_and(|set| set.contains(member))
     })
+}
+
+/// Was `name` registered via [`register_module`]? Such names refer to
+/// stdlib *value types* (instance method holders) rather than true
+/// modules — bare `Name.member` static access on them is never valid
+/// regardless of the contents of [`MEMBERS`].
+pub fn is_value_type(name: &str) -> bool {
+    ensure_registered();
+    VALUE_TYPES.with(|v| v.borrow().contains(name))
 }
 
 /// Collect every recorded member of `module`. Used to power

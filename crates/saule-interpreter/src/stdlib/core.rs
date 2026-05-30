@@ -25,7 +25,7 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 /// `sigs::lookup` on first use so signatures are available even before
 /// `install_std` runs (typecheck runs prior to environment construction).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, register_v, t_any, t_named, t_nullable};
+    use crate::stdlib::sigs::{register, register_g, register_v, t_any, t_named, t_nullable};
     let any = t_any();
     // `print/println` accept anything, any number of times.
     register_v("print", vec![], any.clone(), vec![t_named("nil")]);
@@ -61,14 +61,17 @@ pub fn register_sigs() {
         vec![any.clone()],
         vec![t_nullable(t_named("float"))],
     );
-    // `assert(v, msg?) -> any` — its real type narrows the input on the call
-    // site, which the checker doesn't yet model; `any` is safe and accurate.
-    // The optional message must be a string.
-    register(
+    // `assert<T>(v: T?, msg: string?) -> T` — strips the nullability of
+    // the input on success. The generic param binds to whatever non-null
+    // base type `v` has, so `local x: Foo = assert(maybeFoo)` is checked
+    // against `Foo` rather than the historical `any` widening.
+    register_g(
         "assert",
-        vec![any.clone(), t_nullable(t_named("string"))],
-        vec![any],
+        vec!["T"],
+        vec![t_nullable(t_named("T")), t_nullable(t_named("string"))],
+        vec![t_named("T")],
     );
+    let _ = any;
     register("error", vec![t_named("string")], vec![t_named("nil")]);
 }
 

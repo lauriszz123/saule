@@ -35,6 +35,20 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             for a in args {
                 check_arg(a, scope, errors);
             }
+            // Validate positional argument types against the user method sig.
+            if let Some(ty) = infer(obj, scope)
+                && let Type::Named(class_name) = strip_nullable(ty)
+                && let Some(sig) = saule_semantic::lookup_method(&class_name, method)
+            {
+                check_user_method_args(
+                    &format!("{class_name}.{method}"),
+                    &sig,
+                    args,
+                    scope,
+                    errors,
+                    expr.span.clone(),
+                );
+            }
         }
         Expr::Call { callee, args } => {
             // `obj.method(args)` is parsed as Call(Member { obj, name }, args)
@@ -47,18 +61,60 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                 report_if_enum_variant_arity(obj, name, args, errors, expr.span.clone());
             } else {
                 check_expr(callee, scope, errors);
-                report_if_user_function_arity(callee, args, errors, expr.span.clone());
+                report_if_user_function_arity(callee, args, scope, errors, expr.span.clone());
             }
             for a in args {
                 check_arg(a, scope, errors);
             }
+            // Constructor call: `ClassName(args)` dispatches to `init`.
+            // Validate args against the class's `init` signature so that
+            // bogus extras (`Entry(item, dueDate)` against `fn init(todo)`)
+            // and unknown named params get caught at typeck time.
+            if let Expr::Ident(class_name) = &callee.value
+                && with_classes(|r| r.contains_key(class_name))
+                && let Some(sig) = saule_semantic::lookup_method(class_name, "init")
+            {
+                check_user_method_args(
+                    &format!("{class_name}.init"),
+                    &sig,
+                    args,
+                    scope,
+                    errors,
+                    expr.span.clone(),
+                );
+            }
             // If the callee resolves to a known native signature, check the
             // argument types positionally. Named arguments are skipped (those
             // aren't supported on natives anyway, and they error at runtime).
-            if let Some(qname) = native_callee_name(callee)
+            if let Some(qname) = native_callee_name(callee, scope)
                 && let Some(sig) = crate::sigs::lookup(&qname)
             {
                 check_native_args(&qname, &sig, args, scope, errors, expr.span.clone());
+            }
+            // User-defined class methods: `Class.method(args)` (static) or
+            // `instance.method(args)` (instance). The native-sig path above
+            // never matches these because they aren't registered as natives.
+            if let Expr::Member { obj, name } = &callee.value {
+                let class_name = match &obj.value {
+                    Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => Some(n.clone()),
+                    Expr::Self_ => current_class(),
+                    _ => infer(obj, scope).and_then(|t| match strip_nullable(t) {
+                        Type::Named(n) if with_classes(|r| r.contains_key(&n)) => Some(n),
+                        _ => None,
+                    }),
+                };
+                if let Some(class_name) = class_name
+                    && let Some(sig) = saule_semantic::lookup_method(&class_name, name)
+                {
+                    check_user_method_args(
+                        &format!("{class_name}.{name}"),
+                        &sig,
+                        args,
+                        scope,
+                        errors,
+                        expr.span.clone(),
+                    );
+                }
             }
         }
         Expr::SafeMember { obj, .. } => check_expr(obj, scope, errors),
@@ -169,11 +225,18 @@ pub(super) fn check_native_args(
         });
     }
 
+    // Build a substitution from this signature's type params (e.g. `V`) to
+    // concrete types learned from the actual arguments. Walking left-to-right
+    // means earlier args (the table, typically) seed the variable, and later
+    // args (the element to insert) get checked against the bound type.
+    let mut subst: std::collections::HashMap<String, Type> =
+        std::collections::HashMap::new();
+
     for (i, arg) in args.iter().enumerate() {
         // Pick the expected type for slot `i`:
         //   - within declared params: use `params[i]`
         //   - past the end: use the variadic element type (or stop if absent)
-        let expected = match sig.params.get(i) {
+        let expected_raw = match sig.params.get(i) {
             Some(t) => t,
             None => match &sig.variadic {
                 Some(t) => t,
@@ -184,21 +247,289 @@ pub(super) fn check_native_args(
             CallArg::Positional(e) => e,
             CallArg::Named { .. } => continue,
         };
-        if is_any(expected) {
+        // Substitute any already-bound type params before checking.
+        let expected = substitute(expected_raw, &subst, &sig.type_params);
+        let Some(found_ty) = infer(value_expr, scope) else {
+            // Even without an inferred type, try to refine the substitution
+            // from sibling args downstream — but we have nothing to do here.
+            continue;
+        };
+        // Refine the substitution from this arg/expected pair before the
+        // compatibility check, so a generic slot that's still free becomes
+        // bound rather than rejected.
+        unify(&expected, &found_ty, &sig.type_params, &mut subst);
+        let expected = substitute(&expected, &subst, &sig.type_params);
+        if is_any(&expected) {
+            continue;
+        }
+        // See `check_user_method_args` for why we reject nullability here
+        // even though `types_compatible` would accept it. Skip when the
+        // expected type is still a free type parameter — `V` is allowed
+        // to bind to `any?` so the nullable arg is legitimate.
+        if !is_unbound_type_param(&expected, &sig.type_params)
+            && !is_nullable(&expected)
+            && is_nullable(&found_ty)
+        {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: callee.to_string(),
+                arg: i + 1,
+                expected: type_to_string(&expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+            continue;
+        }
+        if !types_compatible(&expected, &found_ty) {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: callee.to_string(),
+                arg: i + 1,
+                expected: type_to_string(&expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+        }
+    }
+}
+
+/// Check positional arguments of a user-defined class method against its
+/// declared parameter types. Mirrors [`check_native_args`] but reads
+/// `Param` from the semantic registry (no native generic substitution —
+/// user-side generics aren't tracked here yet).
+///
+/// Lenient in the same ways: `any` slots accept anything, nullable slots
+/// accept anything, named args are skipped, and we bail silently when
+/// `infer` can't produce a type.
+fn check_user_method_args(
+    callee_display: &str,
+    sig: &saule_semantic::MethodSig,
+    args: &[CallArg],
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+    call_span: std::ops::Range<usize>,
+) {
+    // Required: leading non-variadic, non-defaulted, non-nullable params.
+    let required: usize = sig
+        .params
+        .iter()
+        .take_while(|p| !p.variadic && p.default.is_none() && !is_nullable(&p.ty))
+        .count();
+    let positional: Vec<&CallArg> = args
+        .iter()
+        .filter(|a| matches!(a, CallArg::Positional(_)))
+        .collect();
+    let has_variadic = sig.params.last().is_some_and(|p| p.variadic);
+    if positional.len() < required {
+        errors.push(TypeCheckError::NativeArity {
+            callee: callee_display.to_string(),
+            expected: required,
+            found: positional.len(),
+            span: to_source_span(call_span.clone()),
+        });
+        return;
+    }
+    if !has_variadic && positional.len() > sig.params.len() {
+        errors.push(TypeCheckError::NativeArity {
+            callee: callee_display.to_string(),
+            expected: sig.params.len(),
+            found: positional.len(),
+            span: to_source_span(call_span),
+        });
+    }
+
+    // Reject named args whose name doesn't match any declared parameter.
+    // Without this the call silently drops the arg at runtime, which is
+    // a footgun (`obj.add(x, dueDate: y)` against `fn add(x)` looked OK).
+    for arg in args {
+        if let CallArg::Named { name, value } = arg
+            && !sig.params.iter().any(|p| &p.name == name)
+        {
+            errors.push(TypeCheckError::UnknownNamedArg {
+                callee: callee_display.to_string(),
+                name: name.clone(),
+                span: to_source_span(value.span.clone()),
+            });
+        }
+    }
+
+    // Bind the method's generic type parameters (e.g. `<T, U>`) from the
+    // actual arguments left-to-right, then check each slot against the
+    // substituted expected type. Non-generic methods skip the unify step
+    // and behave like before.
+    let type_params = &sig.type_params;
+    let mut subst: std::collections::HashMap<String, Type> =
+        std::collections::HashMap::new();
+
+    for (i, arg) in args.iter().enumerate() {
+        let Some(p) = sig.params.get(i).or_else(|| {
+            if has_variadic {
+                sig.params.last()
+            } else {
+                None
+            }
+        }) else {
+            break;
+        };
+        if p.variadic {
+            continue;
+        }
+        let value_expr = match arg {
+            CallArg::Positional(e) => e,
+            CallArg::Named { .. } => continue,
+        };
+        let expected = if type_params.is_empty() {
+            p.ty.clone()
+        } else {
+            substitute(&p.ty, &subst, type_params)
+        };
+        if is_any(&expected) {
             continue;
         }
         let Some(found_ty) = infer(value_expr, scope) else {
             continue;
         };
-        if !types_compatible(expected, &found_ty) {
+        if !type_params.is_empty() {
+            unify(&expected, &found_ty, type_params, &mut subst);
+        }
+        let expected = if type_params.is_empty() {
+            expected
+        } else {
+            substitute(&expected, &subst, type_params)
+        };
+        if is_any(&expected) {
+            continue;
+        }
+        // Pass-a-nullable-into-a-non-nullable-slot is rejected even when
+        // the stripped bases match. `types_compatible` deliberately
+        // strips `Nullable` on both sides (it's the structural compat
+        // predicate), so the nullability check has to live here. Skip
+        // when the expected slot is still a free generic parameter —
+        // it can legitimately bind to a nullable type.
+        if !is_unbound_type_param(&expected, type_params)
+            && !is_nullable(&expected)
+            && is_nullable(&found_ty)
+        {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
-                callee: callee.to_string(),
+                callee: callee_display.to_string(),
                 arg: i + 1,
-                expected: type_to_string(expected),
+                expected: type_to_string(&expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+            continue;
+        }
+        if !types_compatible(&expected, &found_ty) {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: callee_display.to_string(),
+                arg: i + 1,
+                expected: type_to_string(&expected),
                 found: type_to_string(&found_ty),
                 span: to_source_span(value_expr.span.clone()),
             });
         }
+    }
+}
+
+/// True when `ty` is a `Named(n)` where `n` is one of the (still-unbound)
+/// type parameters from the surrounding signature. Such a slot can bind
+/// to any concrete type — including nullable ones — so the targeted
+/// nullable-into-non-nullable rejection should not fire for it.
+fn is_unbound_type_param(ty: &Type, params: &[String]) -> bool {
+    matches!(ty, Type::Named(n) if params.iter().any(|p| p == n))
+}
+
+/// Substitute bound type variables in `ty` with their concrete types from
+/// `subst`. Unbound variables (and non-parameter names) are returned as-is.
+pub(super) fn substitute(
+    ty: &Type,
+    subst: &std::collections::HashMap<String, Type>,
+    params: &[String],
+) -> Type {
+    match ty {
+        Type::Named(n) if params.iter().any(|p| p == n) => {
+            subst.get(n).cloned().unwrap_or_else(|| ty.clone())
+        }
+        Type::Named(_) => ty.clone(),
+        Type::Nullable(inner) => Type::Nullable(Box::new(substitute(inner, subst, params))),
+        Type::Table { key, value } => Type::Table {
+            key: key.as_ref().map(|k| Box::new(substitute(k, subst, params))),
+            value: Box::new(substitute(value, subst, params)),
+        },
+        Type::Tuple(items) => Type::Tuple(items.iter().map(|t| substitute(t, subst, params)).collect()),
+        Type::Function { params: ps, ret } => Type::Function {
+            params: ps.iter().map(|t| substitute(t, subst, params)).collect(),
+            ret: Box::new(substitute(ret, subst, params)),
+        },
+    }
+}
+
+/// One-way unification: bind type-param names in `expected` to corresponding
+/// concrete shapes from `found`. Conservative — if shapes don't line up,
+/// silently skip (the regular compatibility check will surface the mismatch).
+pub(super) fn unify(
+    expected: &Type,
+    found: &Type,
+    params: &[String],
+    subst: &mut std::collections::HashMap<String, Type>,
+) {
+    // A free type-param on the expected side binds to whatever the actual
+    // argument's type is. Strip a leading `Nullable` from `found` so
+    // `table<V>` against `table<Entry>?` still binds `V := Entry`.
+    if let Type::Named(n) = expected
+        && params.iter().any(|p| p == n)
+        && !subst.contains_key(n)
+    {
+        let bound = match found {
+            Type::Nullable(inner) => (**inner).clone(),
+            other => other.clone(),
+        };
+        // Don't bind `V := any` — that would erase the constraint for the
+        // remaining args. Leave it unbound so later args can refine it.
+        if !is_any(&bound) {
+            subst.insert(n.clone(), bound);
+        }
+        return;
+    }
+    match (expected, found) {
+        (Type::Nullable(e_inner), Type::Nullable(f_inner)) => {
+            unify(e_inner, f_inner, params, subst);
+        }
+        (Type::Nullable(e_inner), other) => unify(e_inner, other, params, subst),
+        (
+            Type::Table {
+                value: e_val,
+                key: e_key,
+            },
+            Type::Table {
+                value: f_val,
+                key: f_key,
+            },
+        ) => {
+            unify(e_val, f_val, params, subst);
+            if let (Some(ek), Some(fk)) = (e_key, f_key) {
+                unify(ek, fk, params, subst);
+            }
+        }
+        (Type::Tuple(es), Type::Tuple(fs)) if es.len() == fs.len() => {
+            for (e, f) in es.iter().zip(fs.iter()) {
+                unify(e, f, params, subst);
+            }
+        }
+        (
+            Type::Function {
+                params: ep,
+                ret: er,
+            },
+            Type::Function {
+                params: fp,
+                ret: fr,
+            },
+        ) if ep.len() == fp.len() => {
+            for (e, f) in ep.iter().zip(fp.iter()) {
+                unify(e, f, params, subst);
+            }
+            unify(er, fr, params, subst);
+        }
+        _ => {}
     }
 }
 
@@ -289,7 +620,11 @@ fn report_if_unknown_member(
     if let Expr::Ident(n) = &obj.value
         && crate::sigs::is_module(n)
     {
-        if !crate::sigs::has_member(n, member) {
+        // Bare `Name.member` access. For real modules (`Table`, `Io`, …)
+        // accept any member listed in the registry. For *value types*
+        // (`File`) the registry holds instance methods, so bare static
+        // access is always invalid — emit the diagnostic regardless.
+        if crate::sigs::is_value_type(n) || !crate::sigs::has_member(n, member) {
             errors.push(TypeCheckError::UnknownMember {
                 receiver: n.clone(),
                 member: member.to_string(),
@@ -320,6 +655,20 @@ fn report_if_unknown_member(
                 Type::Named(n) => {
                     if with_classes(|r| r.contains_key(&n)) {
                         (n, false)
+                    } else if crate::sigs::is_module(&n) {
+                        // Native instance type (e.g. `File`) whose method
+                        // set is recorded in the members registry. Catch
+                        // typos like `file.readAll` here.
+                        if !crate::sigs::has_member(&n, member) {
+                            errors.push(TypeCheckError::UnknownMember {
+                                receiver: n,
+                                member: member.to_string(),
+                                span: to_source_span(
+                                    obj.span.end..obj.span.end + member.len() + 1,
+                                ),
+                            });
+                        }
+                        return;
                     } else {
                         // Enum-typed locals, primitives, generics, etc.
                         return;
@@ -392,6 +741,7 @@ fn report_if_enum_variant_arity(
 fn report_if_user_function_arity(
     callee: &Spanned<Expr>,
     args: &[CallArg],
+    scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
     span: std::ops::Range<usize>,
 ) {
@@ -409,6 +759,7 @@ fn report_if_user_function_arity(
     }
 
     let positional = args.len();
+    let arity_ok;
     if info.variadic {
         // With a variadic last param, `total - 1 - defaults` is the
         // minimum required positional count.
@@ -420,18 +771,81 @@ fn report_if_user_function_arity(
                 found: positional,
                 span: to_source_span(span),
             });
+            return;
         }
+        arity_ok = true;
+    } else {
+        let min_required = info.total.saturating_sub(info.defaults);
+        if positional < min_required || positional > info.total {
+            errors.push(TypeCheckError::FunctionArity {
+                callee: name.clone(),
+                expected: info.total,
+                found: positional,
+                span: to_source_span(span),
+            });
+            return;
+        }
+        arity_ok = true;
+    }
+
+    if !arity_ok {
         return;
     }
 
-    let min_required = info.total.saturating_sub(info.defaults);
-    if positional < min_required || positional > info.total {
-        errors.push(TypeCheckError::FunctionArity {
-            callee: name.clone(),
-            expected: info.total,
-            found: positional,
-            span: to_source_span(span),
-        });
+    // Argument-type validation. Mirrors `check_user_method_args` /
+    // `check_native_args`: walks left-to-right, unifying generic type
+    // parameters as we go, then checks each slot for compatibility.
+    let type_params = &info.type_params;
+    let mut subst: std::collections::HashMap<String, Type> =
+        std::collections::HashMap::new();
+
+    for (i, arg) in args.iter().enumerate() {
+        let Some(p) = info.params.get(i).or_else(|| {
+            if info.variadic {
+                info.params.last()
+            } else {
+                None
+            }
+        }) else {
+            break;
+        };
+        if p.variadic {
+            continue;
+        }
+        let CallArg::Positional(value_expr) = arg else {
+            continue;
+        };
+        let expected = if type_params.is_empty() {
+            p.ty.clone()
+        } else {
+            substitute(&p.ty, &subst, type_params)
+        };
+        if is_any(&expected) {
+            continue;
+        }
+        let Some(found_ty) = infer(value_expr, scope) else {
+            continue;
+        };
+        if !type_params.is_empty() {
+            unify(&expected, &found_ty, type_params, &mut subst);
+        }
+        let expected = if type_params.is_empty() {
+            expected
+        } else {
+            substitute(&expected, &subst, type_params)
+        };
+        if is_any(&expected) {
+            continue;
+        }
+        if !types_compatible(&expected, &found_ty) {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: name.clone(),
+                arg: i + 1,
+                expected: type_to_string(&expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+        }
     }
 }
 
@@ -888,6 +1302,20 @@ pub(super) fn check_assignment_compat(
     }
 
     if is_nullable(decl_ty) {
+        // Even for nullable slots we still want to reject obviously
+        // incompatible value types — e.g. `local x: string? = some_entry`
+        // where `some_entry: Entry?`. `nil` and `any` stay permissive.
+        if let Some(value_ty) = infer(value, scope)
+            && !matches!(&value_ty, Type::Named(n) if n == "nil")
+            && !is_any(&value_ty)
+            && !types_compatible(decl_ty, &value_ty)
+        {
+            errors.push(TypeCheckError::AssignmentTypeMismatch {
+                expected: type_to_string(decl_ty),
+                found: type_to_string(&value_ty),
+                span: to_source_span(value.span.clone()),
+            });
+        }
         return;
     }
     if matches!(value.value, Expr::Nil) {
@@ -955,14 +1383,30 @@ pub(super) fn check_assignment_compat(
         return;
     }
 
-    if let Some(value_ty) = infer(value, scope)
-        && is_nullable(&value_ty)
-    {
-        errors.push(TypeCheckError::NullableToNonNullable {
-            from: type_to_string(&value_ty),
-            to: type_to_string(decl_ty),
-            span: to_source_span(value.span.clone()),
-        });
+    if let Some(value_ty) = infer(value, scope) {
+        if is_nullable(&value_ty) {
+            errors.push(TypeCheckError::NullableToNonNullable {
+                from: type_to_string(&value_ty),
+                to: type_to_string(decl_ty),
+                span: to_source_span(value.span.clone()),
+            });
+            return;
+        }
+        // General incompatibility (e.g. `table<Storage>` vs `table<string>`
+        // from `Os.args()`). `any` / `nil` stay permissive — they're the
+        // "I don't know" sentinels. Skip when the declared slot is `any`
+        // or a free type parameter for the same reason.
+        if !matches!(&value_ty, Type::Named(n) if n == "nil")
+            && !is_any(&value_ty)
+            && !is_any(decl_ty)
+            && !types_compatible(decl_ty, &value_ty)
+        {
+            errors.push(TypeCheckError::AssignmentTypeMismatch {
+                expected: type_to_string(decl_ty),
+                found: type_to_string(&value_ty),
+                span: to_source_span(value.span.clone()),
+            });
+        }
     }
 }
 
@@ -1115,7 +1559,40 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         Expr::Bool(_) => Some(Type::Named("boolean".into())),
         Expr::Str(_) => Some(Type::Named("string".into())),
         Expr::Ident(n) => scope.lookup(n).cloned(),
+        Expr::Self_ => current_class().map(Type::Named),
+        // `obj.field` — when `obj` resolves to a known class, return the
+        // declared type of that field (walks parents). Methods aren't fields,
+        // so this only fires for stored slots declared with `local x: T`.
+        Expr::Member { obj, name } => {
+            let ty = infer(obj, scope)?;
+            let Type::Named(class_name) = strip_nullable(ty) else {
+                return None;
+            };
+            if let Some(t) = saule_semantic::lookup_field_type(&class_name, name) {
+                return Some(t);
+            }
+            // Not a field — fall back to method-as-value: a bare `obj.method`
+            // reference (no parens) yields a function value. We surface this
+            // so downstream checks (e.g. `match` against a method ref) can
+            // detect a missing call.
+            let sig = saule_semantic::lookup_method(&class_name, name)?;
+            Some(Type::Function {
+                params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                ret: Box::new(sig.return_ty.clone().unwrap_or(Type::Named("any".into()))),
+            })
+        }
         Expr::SafeMember { .. } => Some(Type::Nullable(Box::new(Type::Named("any".into())))),
+        // `t[k]` — return the declared element type as-is. If the table
+        // was declared `table<V?>` the result is nullable and member
+        // access on it will trip the nullable-receiver check; if it was
+        // declared `table<V>` we trust the declaration and yield `V`.
+        Expr::Index { obj, index: _ } => {
+            let ty = infer(obj, scope)?;
+            match strip_nullable(ty) {
+                Type::Table { value, .. } => Some(*value),
+                _ => None,
+            }
+        }
         Expr::ForceUnwrap(inner) => match infer(inner, scope)? {
             Type::Nullable(t) => Some(*t),
             other => Some(other),
@@ -1150,7 +1627,7 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         //      (`Foo.bar(...)` → return type of `Foo.bar`); or
         //   2. the native signature table (`String.byte`, `Math.tointeger`,
         //      `assert`).
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, args } => {
             if let Expr::Ident(n) = &callee.value
                 && with_classes(|reg| reg.contains_key(n))
             {
@@ -1171,10 +1648,38 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             {
                 return sig.return_ty;
             }
-            if let Some(qname) = native_callee_name(callee)
+            if let Some(qname) = native_callee_name(callee, scope)
                 && let Some(sig) = crate::sigs::lookup(&qname)
             {
-                return first_or_tuple(sig.returns);
+                // Generic native: bind type params from the actual args, then
+                // substitute the return list. Falls back to the raw returns
+                // for non-generic sigs.
+                let returns = if sig.type_params.is_empty() {
+                    sig.returns
+                } else {
+                    let mut subst: std::collections::HashMap<String, Type> =
+                        std::collections::HashMap::new();
+                    let positional: Vec<&Spanned<Expr>> = args
+                        .iter()
+                        .filter_map(|a| match a {
+                            CallArg::Positional(e) => Some(e),
+                            CallArg::Named { .. } => None,
+                        })
+                        .collect();
+                    for (i, expected) in sig.params.iter().enumerate() {
+                        let Some(arg_expr) = positional.get(i) else {
+                            break;
+                        };
+                        if let Some(found_ty) = infer(arg_expr, scope) {
+                            unify(expected, &found_ty, &sig.type_params, &mut subst);
+                        }
+                    }
+                    sig.returns
+                        .iter()
+                        .map(|t| substitute(t, &subst, &sig.type_params))
+                        .collect()
+                };
+                return first_or_tuple(returns);
             }
             None
         }
@@ -1188,13 +1693,49 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             }
             None
         }
-        // A `match` expression has the type of its (unified) arm bodies. We
-        // only need an approximation, so return the first arm-body type we
-        // can infer.
-        Expr::Match { arms, .. } => arms.iter().find_map(|a| match &a.body {
-            saule_ast::MatchBody::Expr(e) => infer(e, scope),
-            saule_ast::MatchBody::Block(_) => None,
-        }),
+        // A `match` expression has the type of its unified arm bodies.
+        // We collect every arm's inferred type and:
+        //   * if any arm yields nil / Nullable → the result is `Nullable(base)`;
+        //   * if arm bases agree → that base (wrapped if nullable seen);
+        //   * if arm bases disagree → `any`;
+        //   * if no arm could be inferred → `None` (give up conservatively).
+        // Block-bodied arms aren't inferable today; they're skipped, but
+        // their presence still widens the result to `any` rather than
+        // silently dropping a possibly-different branch.
+        Expr::Match { arms, .. } => {
+            let mut any_nullable = false;
+            let mut bases: Vec<Type> = Vec::new();
+            let mut had_block = false;
+            for a in arms {
+                match &a.body {
+                    saule_ast::MatchBody::Expr(e) => {
+                        let Some(t) = infer(e, scope) else { continue };
+                        if matches!(&t, Type::Named(n) if n == "nil") || is_nullable(&t) {
+                            any_nullable = true;
+                        }
+                        bases.push(strip_nullable(t));
+                    }
+                    saule_ast::MatchBody::Block(_) => {
+                        had_block = true;
+                    }
+                }
+            }
+            if bases.is_empty() {
+                return None;
+            }
+            let first = bases[0].clone();
+            let same = bases.iter().all(|t| matches_base(t, &first));
+            let base = if same && !had_block {
+                first
+            } else {
+                Type::Named("any".into())
+            };
+            Some(if any_nullable {
+                Type::Nullable(Box::new(base))
+            } else {
+                base
+            })
+        }
         // `when(x):a():b():c()` has the return type of the last stage's
         // declared function, regardless of any earlier inference failures.
         Expr::Pipe { stages, .. } => stages
@@ -1212,17 +1753,79 @@ pub(super) fn strip_nullable(ty: Type) -> Type {
     }
 }
 
+/// Structural equality on stripped bases — used by `Match` inference to
+/// decide whether all arms produce the same shape (in which case we keep
+/// that type) or whether to widen to `any`.
+fn matches_base(a: &Type, b: &Type) -> bool {
+    match (a, b) {
+        (Type::Named(x), Type::Named(y)) => x == y,
+        (Type::Nullable(x), Type::Nullable(y)) => matches_base(x, y),
+        (Type::Tuple(xs), Type::Tuple(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(a, b)| matches_base(a, b))
+        }
+        (
+            Type::Table {
+                key: kx,
+                value: vx,
+            },
+            Type::Table {
+                key: ky,
+                value: vy,
+            },
+        ) => {
+            let key_ok = match (kx, ky) {
+                (None, None) => true,
+                (Some(a), Some(b)) => matches_base(a, b),
+                _ => false,
+            };
+            key_ok && matches_base(vx, vy)
+        }
+        (
+            Type::Function {
+                params: px,
+                ret: rx,
+            },
+            Type::Function {
+                params: py,
+                ret: ry,
+            },
+        ) => {
+            px.len() == py.len()
+                && px.iter().zip(py).all(|(a, b)| matches_base(a, b))
+                && matches_base(rx, ry)
+        }
+        _ => false,
+    }
+}
+
 /// Build a qualified callee name suitable for `stdlib::sigs::lookup`:
-/// `assert` or `String.byte`.
-fn native_callee_name(callee: &Spanned<Expr>) -> Option<String> {
+/// `assert`, `String.byte`, or — for instance calls on stdlib value types
+/// — `File.read` (resolved by looking at the receiver's inferred type).
+fn native_callee_name(callee: &Spanned<Expr>, scope: &Scope) -> Option<String> {
     match &callee.value {
         Expr::Ident(n) => Some(n.clone()),
         Expr::Member { obj, name } => {
-            if let Expr::Ident(class) = &obj.value {
-                Some(format!("{class}.{name}"))
-            } else {
-                None
+            // Prefer the receiver Ident as a module name only when it
+            // actually denotes a known module / value-type. Otherwise
+            // (e.g. `file.read` where `file` is a local of type `File`)
+            // fall through to the inferred-type path below so we build
+            // `File.read`, not `file.read`.
+            if let Expr::Ident(class) = &obj.value
+                && (crate::sigs::is_module(class) || crate::sigs::lookup(class).is_some())
+            {
+                return Some(format!("{class}.{name}"));
             }
+            // `instance.method(...)` where `instance` has a stdlib
+            // value-type (e.g. `File`). Build the qname so the existing
+            // sig-based arg / return checks apply to instance methods
+            // the same way they do for static `Class.method` calls.
+            let ty = infer(obj, scope)?;
+            if let Type::Named(n) = strip_nullable(ty)
+                && crate::sigs::is_value_type(&n)
+            {
+                return Some(format!("{n}.{name}"));
+            }
+            None
         }
         _ => None,
     }
@@ -1313,7 +1916,14 @@ pub(super) fn type_to_string(ty: &Type) -> String {
             key: Some(k),
             value,
         } => format!("table<{}, {}>", type_to_string(k), type_to_string(value)),
-        other => format!("{:?}", other),
+        Type::Tuple(elems) => {
+            let parts: Vec<String> = elems.iter().map(type_to_string).collect();
+            format!("({})", parts.join(", "))
+        }
+        Type::Function { params, ret } => {
+            let parts: Vec<String> = params.iter().map(type_to_string).collect();
+            format!("fn({}): {}", parts.join(", "), type_to_string(ret))
+        }
     }
 }
 

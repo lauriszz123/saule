@@ -27,6 +27,10 @@ pub(super) struct FunctionInfo {
     /// `when(x):name(args)` stage calls (where the receiver type is
     /// matched against `params[0].ty`) and other per-arg type rules.
     pub(super) params: Vec<Param>,
+    /// Generic type parameters declared with `<T, U>` after the function
+    /// name. Used by the caller-side argument checker to unify across
+    /// `T`-typed slots.
+    pub(super) type_params: Vec<String>,
     /// Declared return type, if any. `None` is treated as "unknown" and
     /// causes the typechecker to skip downstream inference.
     pub(super) return_ty: Option<Type>,
@@ -45,6 +49,7 @@ pub(super) fn install(module: &Module) {
                 name,
                 params,
                 return_ty,
+                type_params,
                 ..
             } = &d.value
         {
@@ -58,6 +63,7 @@ pub(super) fn install(module: &Module) {
                     defaults,
                     variadic,
                     params: params.clone(),
+                    type_params: type_params.clone(),
                     return_ty: return_ty.clone(),
                 },
             );

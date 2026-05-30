@@ -882,7 +882,7 @@ mod classes {
                     self.name = name
                 end
 
-                fn greet(self) -> string
+                fn greet() -> string
                     return "hi " .. self.name
                 end
             end
@@ -899,7 +899,7 @@ mod classes {
                 fn init()
                     self.n = 0
                 end
-                fn tick(self)
+                fn tick()
                     self.n = self.n + 1
                 end
             end
@@ -997,7 +997,7 @@ mod inheritance {
                 fn init(name: string)
                     self.name = name
                 end
-                fn getName(self) -> string return self.name end
+                fn getName() -> string return self.name end
             end
             class Player extends Entity
                 fn init(name: string)
@@ -1036,10 +1036,10 @@ mod inheritance {
     fn child_overrides_parent_method() {
         let src = r#"
             class A
-                fn label(self) -> string return "A" end
+                fn label() -> string return "A" end
             end
             class B extends A
-                fn label(self) -> string return "B" end
+                fn label() -> string return "B" end
             end
             (B()).label()
         "#;

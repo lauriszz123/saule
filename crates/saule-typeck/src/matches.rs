@@ -27,6 +27,20 @@ pub(super) fn check_match(
     check_expr(scrutinee, scope, errors);
     let scrut_ty = infer(scrutinee, scope);
 
+    // A function-typed scrutinee is almost always a missing call —
+    // `match obj.method case true ...` instead of `obj.method()`. Surface
+    // a targeted diagnostic and skip exhaustiveness (which would also
+    // complain, but less usefully).
+    let scrut_is_function = matches!(
+        scrut_ty.as_ref().map(|t| strip_nullable(t.clone())),
+        Some(Type::Function { .. })
+    );
+    if scrut_is_function {
+        errors.push(TypeCheckError::MatchOnFunction {
+            span: to_source_span(scrutinee.span.clone()),
+        });
+    }
+
     // Determine which enum (if any) drives exhaustiveness — prefer the
     // scrutinee's static type; fall back to the enum referenced by any
     // `Variant` pattern in the arms.
@@ -122,13 +136,18 @@ pub(super) fn check_match(
                 (false, vec![])
             }
         })
-    } else if matches!(&scrut_ty, Some(Type::Named(n)) if n == "boolean") {
+    } else if matches!(&scrut_ty, Some(Type::Named(n)) if n == "boolean")
+        || (scrut_ty.is_none() && all_arms_bool_literals(arms))
+    {
+        // Either we know the scrutinee is `boolean`, or we couldn't
+        // infer it but every arm is a bool literal — in which case the
+        // user's intent is unambiguous and `true + false` exhausts it.
         (covered_true && covered_false, vec![])
     } else {
         (false, vec![])
     };
 
-    if !exhaustive {
+    if !exhaustive && !scrut_is_function {
         let reason = if let Some(en) = &active_enum {
             if missing_variants.is_empty() {
                 format!("enum `{en}` is not fully covered")
@@ -138,7 +157,9 @@ pub(super) fn check_match(
                     missing_variants.join(", ")
                 )
             }
-        } else if matches!(&scrut_ty, Some(Type::Named(n)) if n == "boolean") {
+        } else if matches!(&scrut_ty, Some(Type::Named(n)) if n == "boolean")
+            || (scrut_ty.is_none() && all_arms_bool_literals(arms))
+        {
             "boolean match must cover both `true` and `false`".to_string()
         } else {
             "no unguarded wildcard / binding arm".to_string()
@@ -167,6 +188,18 @@ pub(super) fn check_match(
             }
         }
     }
+}
+
+/// True when every arm pattern is an unguarded `case true` / `case false`
+/// literal. Used by exhaustiveness to recognise an obviously-boolean
+/// scrutinee even when type inference couldn't prove it — e.g.
+/// `match maybeBool() case true ... case false ... end` where the
+/// callee's return type isn't statically known.
+fn all_arms_bool_literals(arms: &[MatchArm]) -> bool {
+    !arms.is_empty()
+        && arms
+            .iter()
+            .all(|a| a.guard.is_none() && matches!(&a.pattern.value, Pattern::Bool(_)))
 }
 
 fn check_pattern(

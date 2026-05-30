@@ -855,29 +855,28 @@ impl<'a> Printer<'a> {
                 if entries.is_empty() {
                     self.write("{}");
                 } else {
-                    self.write("{");
-                    for (i, ent) in entries.iter().enumerate() {
-                        if i > 0 {
-                            self.write(", ");
+                    // Mirrors the `when(...)` layout policy: inline by default,
+                    // multi-line when the inline form overflows
+                    // [`MAX_LINE_WIDTH`] OR the user already broke an entry
+                    // onto its own line in the source.
+                    let start_col = self.current_column();
+                    let inline = self.render_table_inline(entries);
+                    let force_ml = self.table_has_source_break(entries);
+                    let too_wide = start_col + inline.len() > MAX_LINE_WIDTH;
+                    if !force_ml && !too_wide {
+                        self.write(&inline);
+                    } else {
+                        self.write("{");
+                        self.indent += 1;
+                        for ent in entries {
+                            self.newline();
+                            self.write_table_entry(ent);
+                            self.write(",");
                         }
-                        match ent {
-                            TableEntry::Positional(e) => self.expr(e, 0),
-                            TableEntry::Field { key, value } => {
-                                if let Expr::Str(s) = &key.value {
-                                    if is_ident(s) {
-                                        self.write(s);
-                                    } else {
-                                        self.write(&quote_str(s));
-                                    }
-                                } else {
-                                    self.expr(key, 0);
-                                }
-                                self.write(": ");
-                                self.expr(value, 0);
-                            }
-                        }
+                        self.indent -= 1;
+                        self.newline();
+                        self.write("}");
                     }
-                    self.write("}");
                 }
             }
 
@@ -1058,6 +1057,64 @@ impl<'a> Printer<'a> {
             sub.write(")");
         }
         sub.out
+    }
+
+    // ── Table-literal layout helpers ───────────────────────────────────────
+
+    /// Render `{ entry, entry, ... }` into a single-line string using a
+    /// sub-printer. Used to decide whether the inline form fits within
+    /// [`MAX_LINE_WIDTH`] before committing to a layout.
+    fn render_table_inline(&self, entries: &[TableEntry]) -> String {
+        let mut sub = Printer {
+            out: String::new(),
+            indent: self.indent,
+            needs_indent: false,
+            source: self.source,
+            comments: VecDeque::new(),
+            last_pos: self.last_pos,
+        };
+        sub.write("{");
+        for (i, ent) in entries.iter().enumerate() {
+            if i > 0 {
+                sub.write(", ");
+            }
+            sub.write_table_entry(ent);
+        }
+        sub.write("}");
+        sub.out
+    }
+
+    /// True when the user broke any pair of consecutive entries onto
+    /// separate lines in the source. We honour that — once it's
+    /// multi-line in the source it stays multi-line on output, even
+    /// when the inline form would fit.
+    fn table_has_source_break(&self, entries: &[TableEntry]) -> bool {
+        if self.source.is_empty() || entries.len() < 2 {
+            return false;
+        }
+        entries
+            .windows(2)
+            .any(|pair| self.source_range_has_newline(entry_end(&pair[0])..entry_start(&pair[1])))
+    }
+
+    /// Emit a single table entry — shared by inline and multi-line layouts.
+    fn write_table_entry(&mut self, ent: &TableEntry) {
+        match ent {
+            TableEntry::Positional(e) => self.expr(e, 0),
+            TableEntry::Field { key, value } => {
+                if let Expr::Str(s) = &key.value {
+                    if is_ident(s) {
+                        self.write(s);
+                    } else {
+                        self.write(&quote_str(s));
+                    }
+                } else {
+                    self.expr(key, 0);
+                }
+                self.write(": ");
+                self.expr(value, 0);
+            }
+        }
     }
 
     fn call_args(&mut self, args: &[CallArg]) {
@@ -1294,6 +1351,24 @@ fn is_ident(s: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Byte offset where a table entry starts in the source — used by the
+/// formatter to detect a user-introduced line break between two entries
+/// so the multi-line layout sticks.
+fn entry_start(entry: &TableEntry) -> usize {
+    match entry {
+        TableEntry::Positional(e) => e.span.start,
+        TableEntry::Field { key, .. } => key.span.start,
+    }
+}
+
+/// Byte offset where a table entry ends in the source.
+fn entry_end(entry: &TableEntry) -> usize {
+    match entry {
+        TableEntry::Positional(e) => e.span.end,
+        TableEntry::Field { value, .. } => value.span.end,
+    }
 }
 
 /// Whether two adjacent top-level statements should be separated by a

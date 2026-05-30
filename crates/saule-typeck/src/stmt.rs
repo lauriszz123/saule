@@ -8,11 +8,11 @@ use saule_ast::{ClassMember, Decl, Expr, Param, Spanned, Stmt, Type};
 use super::TypeCheckError;
 use super::expr::{
     check_assignment_compat, check_boolean_cond, check_element_compat, check_expr,
-    check_table_key_compat, infer, is_nullable, narrow_falsy, narrow_truthy, strip_nullable,
-    type_to_string,
+    check_table_key_compat, infer, is_any, is_nullable, narrow_falsy, narrow_truthy,
+    strip_nullable, type_to_string, types_compatible,
 };
 use super::state::{
-    Scope, class_implements_iterable, is_interface, is_type_param, pop_generics, push_generics,
+    Scope, class_implements_iterable, is_interface, pop_generics, push_generics,
     set_current_class, with_classes,
 };
 use super::to_source_span;
@@ -51,6 +51,46 @@ fn reject_nil_in_params(params: &[Param], errors: &mut Vec<TypeCheckError>) {
     }
 }
 
+/// Type-vs-type assignment compatibility check, used when the value side
+/// is a tuple component (e.g. `local a, b = f()` where `f()` returns
+/// `(A, B)`) and we don't have a per-element expression to feed through
+/// [`check_assignment_compat`].
+fn check_type_assignment_compat(
+    decl_ty: &Type,
+    found_ty: &Type,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let is_nil_val = matches!(found_ty, Type::Named(n) if n == "nil");
+    if is_nil_val {
+        if !is_nullable(decl_ty) {
+            errors.push(TypeCheckError::NilToNonNullable {
+                ty: type_to_string(decl_ty),
+                span: to_source_span(span),
+            });
+        }
+        return;
+    }
+    if is_any(found_ty) || is_any(decl_ty) {
+        return;
+    }
+    if is_nullable(found_ty) && !is_nullable(decl_ty) {
+        errors.push(TypeCheckError::NullableToNonNullable {
+            from: type_to_string(found_ty),
+            to: type_to_string(decl_ty),
+            span: to_source_span(span),
+        });
+        return;
+    }
+    if !types_compatible(decl_ty, found_ty) {
+        errors.push(TypeCheckError::AssignmentTypeMismatch {
+            expected: type_to_string(decl_ty),
+            found: type_to_string(found_ty),
+            span: to_source_span(span),
+        });
+    }
+}
+
 pub(super) fn check_stmt(
     stmt: &Spanned<Stmt>,
     scope: &mut Scope,
@@ -66,7 +106,14 @@ pub(super) fn check_stmt(
             if let (Some(ty), Some(v)) = (ty, value) {
                 check_expr(v, scope, errors);
                 check_assignment_compat(ty, v, scope, errors);
-                scope.bind(name.clone(), ty.clone());
+                // Refine a bare structural annotation (`table`, `function`)
+                // to the value's concrete shape — e.g.
+                // `local args: table = Os.args()` widens to `table<string>`
+                // so `args[i] = 10` then errors. Without this, the bare
+                // name passes assignment-compat (everything is a `table`)
+                // but loses the element type for downstream checks.
+                let bound = refine_bare_binding(ty, v, scope);
+                scope.bind(name.clone(), bound);
             } else if let Some(v) = value {
                 check_expr(v, scope, errors);
                 if let Some(t) = infer(v, scope) {
@@ -95,12 +142,47 @@ pub(super) fn check_stmt(
             for v in values {
                 check_expr(v, scope, errors);
             }
+
+            // Single-RHS tuple destructuring: `local a, b = f()` where `f()`
+            // returns `(A, B)`. Distribute the tuple components across the
+            // bindings instead of comparing the whole tuple to each one.
+            let tuple_spread: Option<(Vec<Type>, std::ops::Range<usize>)> =
+                if values.len() == 1 && names.len() > 1 {
+                    let v = &values[0];
+                    match infer(v, scope) {
+                        Some(Type::Tuple(ts)) => Some((ts, v.span.clone())),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+            if let Some((ts, vspan)) = tuple_spread {
+                for (i, (name, ty_opt)) in names.iter().enumerate() {
+                    let found = ts.get(i).cloned();
+                    if let (Some(ty), Some(found_ty)) = (ty_opt, found.as_ref()) {
+                        check_type_assignment_compat(ty, found_ty, vspan.clone(), errors);
+                    }
+                    let bound = match (ty_opt, found) {
+                        (Some(ty), _) => ty.clone(),
+                        (None, Some(t)) => t,
+                        (None, None) => Type::Named("nil".into()),
+                    };
+                    scope.bind(name.clone(), bound);
+                }
+                return;
+            }
+
             for (i, (name, ty_opt)) in names.iter().enumerate() {
                 if let (Some(ty), Some(v)) = (ty_opt, values.get(i)) {
                     check_assignment_compat(ty, v, scope, errors);
                 }
                 if let Some(ty) = ty_opt {
-                    scope.bind(name.clone(), ty.clone());
+                    let bound = match values.get(i) {
+                        Some(v) => refine_bare_binding(ty, v, scope),
+                        None => ty.clone(),
+                    };
+                    scope.bind(name.clone(), bound);
                 } else if let Some(v) = values.get(i)
                     && let Some(t) = infer(v, scope)
                 {
@@ -147,6 +229,24 @@ pub(super) fn check_stmt(
             for v in values {
                 check_expr(v, scope, errors);
             }
+
+            // Single-RHS tuple destructuring on the assignment form.
+            if values.len() == 1
+                && targets.len() > 1
+                && let Some(Type::Tuple(ts)) = infer(&values[0], scope)
+            {
+                let vspan = values[0].span.clone();
+                for (i, target) in targets.iter().enumerate() {
+                    if let Expr::Ident(n) = &target.value
+                        && let (Some(ty), Some(found_ty)) =
+                            (scope.lookup(n).cloned(), ts.get(i))
+                    {
+                        check_type_assignment_compat(&ty, found_ty, vspan.clone(), errors);
+                    }
+                }
+                return;
+            }
+
             for (i, target) in targets.iter().enumerate() {
                 if let Expr::Ident(n) = &target.value
                     && let (Some(ty), Some(v)) = (scope.lookup(n).cloned(), values.get(i))
@@ -189,6 +289,27 @@ pub(super) fn check_stmt(
                 narrow_falsy(cond, &mut else_scope);
                 for s in block {
                     check_stmt(s, &mut else_scope, errors);
+                }
+            }
+
+            // Early-exit narrowing: when a branch always diverges (every
+            // path ends in return/throw/break/continue), the opposite
+            // assumption holds in code that follows the `if`. This makes
+            // the common guard idiom work:
+            //
+            //   if x == nil then return end
+            //   -- x is non-nil from here on
+            //
+            // Only handles the cases without elseifs to keep the analysis
+            // small and obviously correct.
+            if elseifs.is_empty() {
+                let then_diverges = block_diverges(then_block);
+                match else_block {
+                    None if then_diverges => narrow_falsy(cond, scope),
+                    Some(block) if block_diverges(block) && !then_diverges => {
+                        narrow_truthy(cond, scope);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -254,10 +375,63 @@ pub(super) fn check_stmt(
                     span: to_source_span(iter.span.clone()),
                 });
             }
+            // When the iter is a `table<V>` / `table<K, V>` we know exactly
+            // what each binding receives. Reject mismatched annotations so
+            // e.g. `for k: string, v: string in table<Entry>` flags both
+            // bindings rather than letting them silently lie.
+            if let Some(Type::Table { key, value }) = infer(iter, scope) {
+                let yielded: Vec<Type> = match vars.len() {
+                    1 => vec![(*value).clone()],
+                    2 => {
+                        let k_ty = key
+                            .as_deref()
+                            .cloned()
+                            .unwrap_or_else(|| Type::Named("integer".into()));
+                        vec![k_ty, (*value).clone()]
+                    }
+                    _ => Vec::new(),
+                };
+                for ((name, ty_opt), actual) in vars.iter().zip(yielded.iter()) {
+                    if let Some(declared) = ty_opt
+                        && !crate::expr::types_compatible(declared, actual)
+                    {
+                        errors.push(TypeCheckError::ForBindingTypeMismatch {
+                            name: name.clone(),
+                            declared: crate::expr::type_to_string(declared),
+                            actual: crate::expr::type_to_string(actual),
+                            span: to_source_span(iter.span.clone()),
+                        });
+                    }
+                }
+            }
             let mut body_scope = scope.clone();
-            for (name, ty_opt) in vars {
+            // Bind each loop var: prefer the user's annotation; otherwise
+            // fall back to the element/key type inferred from `iter` so
+            // unannotated `for i, task in table<Entry>` still gets
+            // `task: Entry`. Without this, downstream method calls and
+            // exhaustiveness checks (e.g. `match task.isDone()` over a
+            // `boolean`) lose their receiver type and bail.
+            let yielded_from_iter: Vec<Type> =
+                if let Some(Type::Table { key, value }) = infer(iter, scope) {
+                    match vars.len() {
+                        1 => vec![(*value).clone()],
+                        2 => {
+                            let k_ty = key
+                                .as_deref()
+                                .cloned()
+                                .unwrap_or_else(|| Type::Named("integer".into()));
+                            vec![k_ty, (*value).clone()]
+                        }
+                        _ => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+            for (i, (name, ty_opt)) in vars.iter().enumerate() {
                 if let Some(ty) = ty_opt {
                     body_scope.bind(name.clone(), ty.clone());
+                } else if let Some(inferred) = yielded_from_iter.get(i) {
+                    body_scope.bind(name.clone(), inferred.clone());
                 }
             }
             for s in body {
@@ -409,11 +583,37 @@ fn check_returns(
 fn walk_returns(stmt: &Stmt, return_ty: &Type, scope: &Scope, errors: &mut Vec<TypeCheckError>) {
     match stmt {
         Stmt::Return(values) => {
+            // Multi-return: `-> (A, B, C)` paired against `return a, b, c`.
+            // When there's exactly one return value but the function returns
+            // a tuple, the value may be a call that yields the tuple — leave
+            // that case to the per-value path (it'll see Tuple vs Tuple and
+            // accept).
+            if let Type::Tuple(elems) = return_ty
+                && values.len() == elems.len()
+            {
+                for (elem_ty, v) in elems.iter().zip(values.iter()) {
+                    if !is_assignment_compatible(elem_ty, v, scope) {
+                        let found = infer(v, scope)
+                            .map(|t| type_to_string(&t))
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        errors.push(TypeCheckError::WrongReturnType {
+                            ty: type_to_string(elem_ty),
+                            found,
+                            span: to_source_span(v.span.clone()),
+                        });
+                    }
+                }
+                return;
+            }
             if let Some(v) = values.first()
                 && !is_assignment_compatible(return_ty, v, scope)
             {
+                let found = infer(v, scope)
+                    .map(|t| type_to_string(&t))
+                    .unwrap_or_else(|| "<unknown>".to_string());
                 errors.push(TypeCheckError::WrongReturnType {
                     ty: type_to_string(return_ty),
+                    found,
                     span: to_source_span(v.span.clone()),
                 });
             }
@@ -460,36 +660,65 @@ fn walk_returns(stmt: &Stmt, return_ty: &Type, scope: &Scope, errors: &mut Vec<T
     }
 }
 
+/// Refine a bare structural annotation against the value's inferred shape.
+///
+/// `local x: table = expr` and `local x: function = expr` only carry the
+/// kind tag — no element type, no parameter / return types. If `expr`
+/// infers to a concrete `Type::Table { .. }` / `Type::Function { .. }`
+/// of the matching kind, use that richer type for the binding so later
+/// reads and writes get the full generic check. Otherwise fall back to
+/// the declared bare type.
+///
+/// Nullable wrappers are unwrapped on the declaration side and re-wrapped
+/// around the refined type — `local x: table? = maybe()` widens to
+/// `table<...>?` when `maybe()` returns one.
+fn refine_bare_binding(decl_ty: &Type, value: &Spanned<Expr>, scope: &Scope) -> Type {
+    let (inner_decl, was_nullable) = match decl_ty {
+        Type::Nullable(inner) => (inner.as_ref(), true),
+        other => (other, false),
+    };
+    let Type::Named(name) = inner_decl else {
+        return decl_ty.clone();
+    };
+    let Some(value_ty) = infer(value, scope) else {
+        return decl_ty.clone();
+    };
+    // Look through a nullable on the value side too — the declared
+    // nullability is what wraps the binding, not the value's.
+    let value_inner = match &value_ty {
+        Type::Nullable(inner) => inner.as_ref().clone(),
+        other => other.clone(),
+    };
+    let matches_kind = matches!(
+        (name.as_str(), &value_inner),
+        ("table", Type::Table { .. }) | ("function", Type::Function { .. })
+    );
+    if !matches_kind {
+        return decl_ty.clone();
+    }
+    if was_nullable {
+        Type::Nullable(Box::new(value_inner))
+    } else {
+        value_inner
+    }
+}
+
 /// True when we can *prove* the value is incompatible-free with the target
 /// type. Returns true when we can't decide (conservative: don't false-positive).
 fn is_assignment_compatible(decl_ty: &Type, value: &Spanned<Expr>, scope: &Scope) -> bool {
-    if is_nullable(decl_ty) {
-        // Nullable target accepts anything we can express.
-        return true;
-    }
+    // `nil` literal is fine only when the target accepts nil.
     if matches!(value.value, Expr::Nil) {
-        return false;
+        return is_nullable(decl_ty);
     }
     let Some(value_ty) = infer(value, scope) else {
+        // Unknown value type — stay conservative.
         return true;
     };
-    if is_nullable(&value_ty) {
+    // Nullable value into non-nullable slot is always wrong.
+    if is_nullable(&value_ty) && !is_nullable(decl_ty) {
         return false;
     }
-    match (decl_ty, &value_ty) {
-        (Type::Named(a), Type::Named(b)) => {
-            if a == b || a == "any" || b == "any" {
-                true
-            } else if is_type_param(a) || is_type_param(b) {
-                // Generic type parameters in scope match anything.
-                true
-            } else {
-                // Allow numeric literals in either direction only when same name.
-                false
-            }
-        }
-        _ => true,
-    }
+    crate::expr::types_compatible(decl_ty, &value_ty)
 }
 
 fn check_class(
@@ -580,5 +809,33 @@ fn check_member_assign_receiver(
             member: name.to_string(),
             span: super::to_source_span(span),
         });
+    }
+}
+
+/// Returns true if every execution path through `block` exits the
+/// surrounding scope — i.e. ends in `return`, `throw`, `break`, or
+/// `continue`. Used to drive early-exit narrowing for guard idioms
+/// like `if x == nil then return end`.
+///
+/// Conservative: only inspects the *last* statement of the block, plus
+/// a shallow recursion into nested `If` arms. Anything else (loops,
+/// try/catch, etc.) is treated as non-diverging.
+fn block_diverges(block: &[Spanned<Stmt>]) -> bool {
+    let Some(last) = block.last() else {
+        return false;
+    };
+    match &last.value {
+        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue => true,
+        Stmt::If {
+            then_block,
+            elseifs,
+            else_block,
+            ..
+        } => {
+            else_block.as_ref().is_some_and(|b| block_diverges(b))
+                && block_diverges(then_block)
+                && elseifs.iter().all(|(_, body)| block_diverges(body))
+        }
+        _ => false,
     }
 }

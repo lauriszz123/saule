@@ -44,18 +44,18 @@ pub(super) fn eval_match(
             MatchBody::Expr(e) => eval(e, &arm_scope),
             MatchBody::Block(stmts) => {
                 let flow = crate::eval::stmt::exec_block(stmts, &arm_scope)?;
-                Ok(match flow {
-                    Flow::Normal(v) => v,
-                    Flow::Return(_) => {
-                        return Err(RuntimeError::TypeError {
-                            message:
-                                "`return` from inside a `match` arm is not supported — use the arm's expression value instead"
-                                    .to_string(),
-                            span,
-                        });
+                match flow {
+                    Flow::Normal(v) => Ok(v),
+                    // `return` / `break` / `continue` from inside an arm
+                    // body escapes the match. We park the flow in a
+                    // thread-local and signal via `PendingFlow`; the
+                    // statement executor at the next boundary picks it
+                    // back up and resumes propagation.
+                    other => {
+                        crate::eval::stmt::pending_flow::set(other);
+                        Err(RuntimeError::PendingFlow { span })
                     }
-                    Flow::Break | Flow::Continue => Value::Nil,
-                })
+                }
             }
         };
     }
