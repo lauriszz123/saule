@@ -6,17 +6,15 @@ class Main
   static fn help()
     println("TODO App Usage:")
     println("\ttodo list")
-    println("\ttodo add [task]")
+    println("\ttodo add [task] [optional-due-date YYYY-MM-DD]")
     println("\ttodo remove [number-of-task]")
     println("\ttodo done [number-of-task]")
+    println("\ttodo due [number-of-task] [due-date YYYY-MM-DD]")
   end
 
   static fn main()
     local storage: Storage = Storage("todo.json")
     local args: table = Os.args()
-
-    -- Create todo.json on first run; refuse to touch it if it exists
-    -- but fails to parse so we don't silently wipe the user's data.
 
     if not Os.exists("todo.json") then
       storage.save()
