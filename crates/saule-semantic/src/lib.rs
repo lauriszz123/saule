@@ -28,6 +28,7 @@ use saule_ast::{Decl, Module, Stmt};
 mod control_flow;
 mod error;
 mod field_init;
+pub mod builtins;
 pub mod prelude;
 pub mod registry;
 mod resolve;
@@ -83,6 +84,18 @@ pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError
         ifaces.entry(name).or_insert(ext);
     }
     for (name, info) in seed.enums {
+        enums.entry(name).or_insert(info);
+    }
+    // Embedder-provided builtins (e.g. stdlib value types). User
+    // declarations and seed entries take precedence.
+    let built = builtins::snapshot();
+    for (name, info) in built.classes {
+        reg.entry(name).or_insert(info);
+    }
+    for (name, ext) in built.interfaces {
+        ifaces.entry(name).or_insert(ext);
+    }
+    for (name, info) in built.enums {
         enums.entry(name).or_insert(info);
     }
     install_registries(reg, ifaces, enums);

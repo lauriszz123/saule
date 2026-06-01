@@ -14,7 +14,24 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::value::{ClassObject, FieldDef, TableObject, Value};
+
+/// `import Project from "project"`. Auto-prelude'd so the existing bare
+/// `Project.name` references keep working.
+pub static PROJECT_PACKAGE: NativePackage = NativePackage {
+    name: "project",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &["Project"],
+    register_sigs,
+    builtins: empty_builtins,
+    auto_prelude: true,
+};
+
+fn empty_builtins() -> saule_semantic::builtins::Builtins {
+    saule_semantic::builtins::Builtins::default()
+}
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
     let info = crate::project::get().unwrap_or_default();

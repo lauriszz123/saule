@@ -7,8 +7,25 @@ use std::rc::Rc;
 use std::thread_local;
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::{ClassObject, Value};
+
+/// `import Math from "math"`. Auto-prelude'd so bare `Math.sqrt(…)`
+/// also works.
+pub static MATH_PACKAGE: NativePackage = NativePackage {
+    name: "math",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &["Math"],
+    register_sigs,
+    builtins: empty_builtins,
+    auto_prelude: true,
+};
+
+fn empty_builtins() -> saule_semantic::builtins::Builtins {
+    saule_semantic::builtins::Builtins::default()
+}
 
 pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     let mut static_fields = HashMap::new();

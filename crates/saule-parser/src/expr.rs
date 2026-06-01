@@ -413,8 +413,23 @@ impl Parser {
         let kw = self.advance(); // `match`
         let scrutinee = self.parse_expression()?;
         let mut arms = Vec::new();
-        while self.check(&Token::Case) {
-            arms.push(self.parse_match_arm()?);
+        loop {
+            if self.check(&Token::Case) {
+                arms.push(self.parse_match_arm()?);
+                continue;
+            }
+            if self.check(&Token::End) {
+                break;
+            }
+            // Anything else here is almost certainly a forgotten `case`
+            // — e.g. `_ then return` or `"foo" then ...` written without
+            // the leading keyword. A bare "expected `end`" message in
+            // that situation is confusing; point at the arm-start
+            // explicitly.
+            return Err(ParseError::Expected {
+                expected: "`case` to start a match arm, or `end` to close `match`",
+                span: self.peek().span.clone(),
+            });
         }
         let end = self.expect(&Token::End, "`end` to close `match`")?;
         let span = kw.span.start..end.span.end;

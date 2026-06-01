@@ -3,8 +3,39 @@
 use std::rc::Rc;
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::stdlib::{define_native, expect_arity};
 use crate::value::Value;
+
+/// `import { print, println, … } from "core"`. Also auto-installed so
+/// these names are visible without an explicit import (the common
+/// case — `print` is a language built-in, not a library).
+pub static CORE_PACKAGE: NativePackage = NativePackage {
+    name: "core",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &[
+        "print",
+        "println",
+        "printf",
+        "tostring",
+        "type",
+        "int",
+        "float",
+        "tonumber",
+        "tointeger",
+        "tofloat",
+        "assert",
+        "error",
+    ],
+    register_sigs,
+    builtins: empty_builtins,
+    auto_prelude: true,
+};
+
+fn empty_builtins() -> saule_semantic::builtins::Builtins {
+    saule_semantic::builtins::Builtins::default()
+}
 
 pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     define_native(env, "print", builtin_print);

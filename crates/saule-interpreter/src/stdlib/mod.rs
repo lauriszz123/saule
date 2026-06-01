@@ -1,8 +1,22 @@
-//! Standard library installation and module wiring.
+//! Standard library wiring.
 //!
-//! The stdlib is installed into the prelude as plain global functions/values.
-//! Namespacing (e.g. `math.abs`) can be layered on later once runtime module
-//! objects are added.
+//! The stdlib is shipped as a set of [`crate::native_packages::NativePackage`]s.
+//! Each module here exposes a `pub static *_PACKAGE: NativePackage` that
+//! describes its bindings, type signatures, and auto-prelude policy.
+//! Registering them with `native_packages::register` is the only thing
+//! [`register_builtin_packages`] does.
+//!
+//! Embedders get four orthogonal hooks the rest of the interpreter
+//! drives off of:
+//!
+//! * [`crate::native_packages::install_auto_prelude`] — fired by
+//!   [`crate::env::Environment::with_prelude`] via [`install_std`].
+//! * [`saule_typeck::sigs::set_initializer`] — [`register_all_sigs`]
+//!   walks every registered package's `register_sigs`.
+//! * [`saule_semantic::builtins::set_provider`] —
+//!   [`builtin_registries`] returns the aggregated builtins.
+//! * [`saule_semantic::prelude::set_provider`] — [`all_prelude_names`]
+//!   returns the aggregated auto-prelude names.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,68 +34,55 @@ pub mod sigs;
 pub mod string;
 pub mod table;
 
-/// Install the full standard library into `env`.
+/// Install every `auto_prelude` package's bindings into `env`. Called
+/// by [`crate::env::Environment::with_prelude`] right after the env is
+/// allocated. Third-party packages registered via
+/// [`crate::native_packages::register`] also flow through here.
 pub fn install_std(env: &Rc<RefCell<Environment>>) {
-    core::install(env);
-    iter::install(env);
-    math::install(env);
-    string::install(env);
-    table::install(env);
-    io::install(env);
-    os::install(env);
-    project::install(env);
+    crate::native_packages::install_auto_prelude(env);
 }
 
-/// Register every stdlib module's native signatures with `saule-typeck`.
-/// Used as the lazy initializer hook (see [`crate::init`]) so the
-/// typechecker sees `String.byte`, `Math.sqrt`, etc. without needing the
-/// runtime environment to have been built first.
+/// Register every built-in native package. Called from [`crate::init`]
+/// after the typeck/semantic providers are installed. Each package's
+/// `register_sigs` and `builtins` thunks fire on registration so the
+/// typechecker sees them right away; the `exports` list is folded into
+/// the prelude-name aggregator if `auto_prelude` is on.
+pub fn register_builtin_packages() {
+    use crate::native_packages::register;
+    register(&core::CORE_PACKAGE);
+    register(&iter::ITER_PACKAGE);
+    register(&math::MATH_PACKAGE);
+    register(&string::STRING_PACKAGE);
+    register(&table::TABLE_PACKAGE);
+    register(&io::IO_PACKAGE);
+    register(&os::OS_PACKAGE);
+    register(&project::PROJECT_PACKAGE);
+}
+
+/// Walk every registered package and let it register its native
+/// signatures with `saule-typeck`. Wired into the lazy initializer in
+/// [`crate::init`] so typecheck-only passes see them without needing
+/// the runtime environment to have been built first.
 pub fn register_all_sigs() {
-    core::register_sigs();
-    math::register_sigs();
-    string::register_sigs();
-    iter::register_sigs();
-    table::register_sigs();
-    io::register_sigs();
-    os::register_sigs();
+    for pkg in crate::native_packages::all() {
+        (pkg.register_sigs)();
+    }
 }
 
-/// Every identifier the stdlib injects into the prelude. Consumed by
-/// `saule-semantic`'s name resolver so references like `print`, `Math`,
-/// `Iterable`, etc. aren't flagged as undefined.
-///
-/// Keep in sync with the bodies of the `install` functions in this module.
+/// Synthetic `ClassInfo` / `EnumInfo` entries for stdlib value types
+/// (e.g. `FsInfo`, `FsKind`) contributed by registered packages.
+/// Installed via [`saule_semantic::builtins::set_provider`] in
+/// [`crate::init`].
+pub fn builtin_registries() -> saule_semantic::builtins::Builtins {
+    crate::native_packages::aggregated_builtins()
+}
+
+/// Every identifier registered `auto_prelude` packages inject into the
+/// global prelude. Consumed by `saule-semantic`'s name resolver so
+/// references like `print`, `Math`, `Iterable`, … aren't flagged as
+/// undefined.
 pub fn all_prelude_names() -> Vec<&'static str> {
-    vec![
-        // core natives
-        "print",
-        "println",
-        "printf",
-        "tostring",
-        "type",
-        "int",
-        "float",
-        "tonumber",
-        "tointeger",
-        "tofloat",
-        "assert",
-        "error",
-        // iter
-        "Iterable",
-        "Iterable2",
-        // class-style stdlib globals
-        "Math",
-        "String",
-        "Table",
-        "Io",
-        "File",
-        "Os",
-        "Project",
-        // stdlib enums
-        "IoMode",
-        "IoSeek",
-        "OsPlatform",
-    ]
+    crate::native_packages::aggregated_prelude()
 }
 
 pub(crate) fn define_native(

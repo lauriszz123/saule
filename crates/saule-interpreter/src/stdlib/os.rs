@@ -24,14 +24,45 @@ use std::rc::Rc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::value::{
-    ClassObject, EnumObject, EnumVariantObject, FieldDef, NativeClosure, TableObject, Value,
+    ClassObject, EnumObject, EnumVariantObject, FieldDef, InstanceObject, NativeClosure,
+    TableObject, Value,
 };
+
+/// `import Os, OsPlatform, FsKind, FsInfo from "os"`. Auto-prelude'd so
+/// the existing bare-name call sites keep working.
+pub static OS_PACKAGE: NativePackage = NativePackage {
+    name: "os",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &["Os", "OsPlatform", "FsKind", "FsInfo"],
+    register_sigs,
+    builtins: os_builtins,
+    auto_prelude: true,
+};
+
+fn os_builtins() -> saule_semantic::builtins::Builtins {
+    let (classes, interfaces, enums) = builtin_registries();
+    saule_semantic::builtins::Builtins {
+        classes,
+        interfaces,
+        enums,
+    }
+}
+
+thread_local! {
+    /// Phantom class object reused as the type tag for every `FsInfo`
+    /// instance produced by `Os.fsInfo`. Populated by `install`.
+    static FSINFO_CLASS: RefCell<Option<Rc<ClassObject>>> = const { RefCell::new(None) };
+}
 
 // ─── installation ──────────────────────────────────────────────────────────
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
     install_platform_enum(env);
+    install_fskind_enum(env);
+    install_fsinfo_class(env);
 
     let mut static_fields = HashMap::new();
 
@@ -60,6 +91,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     static_fields.insert("rename".to_string(), native_multi("Os.rename", os_rename));
     static_fields.insert("list".to_string(), native_multi("Os.list", os_list));
     static_fields.insert("exists".to_string(), native_multi("Os.exists", os_exists));
+    static_fields.insert("fsInfo".to_string(), native_multi("Os.fsInfo", os_fs_info));
     static_fields.insert("mkdir".to_string(), native_multi("Os.mkdir", os_mkdir));
     static_fields.insert(
         "tmpname".to_string(),
@@ -142,6 +174,11 @@ pub fn register_sigs() {
     register("Os.rename", vec![s(), s()], vec![b()]);
     register("Os.list", vec![s()], vec![table_str()]);
     register("Os.exists", vec![s()], vec![b()]);
+    register(
+        "Os.fsInfo",
+        vec![t_nullable(s())],
+        vec![t_nullable(t_named("FsInfo"))],
+    );
     register("Os.mkdir", vec![s(), t_nullable(b())], vec![b()]);
     register("Os.tmpname", vec![], vec![s()]);
 
@@ -718,4 +755,186 @@ fn os_parsedate(args: &[Value]) -> Result<Vec<Value>, String> {
 
     let epoch = epoch_from_civil(year, month, day, hour, minute, second);
     Ok(vec![Value::Int(epoch)])
+}
+
+// ─── FsInfo / FsKind ───────────────────────────────────────────────────────
+
+fn install_fskind_enum(env: &Rc<RefCell<Environment>>) {
+    let variants = &[
+        ("File", "file"),
+        ("Dir", "dir"),
+        ("Symlink", "symlink"),
+        ("Other", "other"),
+    ];
+    let name = "FsKind";
+    let mut variant_dict = HashMap::new();
+    for (vname, vvalue) in variants {
+        variant_dict.insert(
+            (*vname).to_string(),
+            Rc::new(EnumVariantObject {
+                enum_name: name.to_string(),
+                variant_name: (*vname).to_string(),
+                value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
+                enum_obj: RefCell::new(None),
+            }),
+        );
+    }
+    let final_enum = Rc::new(EnumObject {
+        name: name.to_string(),
+        variants: variant_dict.clone(),
+        tuple_variants: HashMap::new(),
+        methods: HashMap::new(),
+    });
+    for v in variant_dict.values() {
+        *v.enum_obj.borrow_mut() = Some(final_enum.clone());
+    }
+    env.borrow_mut()
+        .define(name.to_string(), Value::Enum(final_enum));
+}
+
+/// Phantom `FsInfo` class — only used so `Value::Instance(...)` prints
+/// "<instance of FsInfo>" and so the semantic registry's class name
+/// lookup resolves. Has no user-callable methods of its own; field
+/// access goes straight to the underlying `InstanceObject.fields` map.
+fn install_fsinfo_class(env: &Rc<RefCell<Environment>>) {
+    let class = Rc::new(ClassObject {
+        name: "FsInfo".to_string(),
+        parent: None,
+        field_defs: Vec::<FieldDef>::new(),
+        methods: HashMap::new(),
+        static_fields: RefCell::new(HashMap::new()),
+        static_methods: HashMap::new(),
+        constructor: None,
+    });
+    FSINFO_CLASS.with(|slot| *slot.borrow_mut() = Some(class.clone()));
+    env.borrow_mut()
+        .define("FsInfo".to_string(), Value::Class(class));
+}
+
+fn fskind_variant(kind: &str) -> Value {
+    // Reach into the global registry through the prelude `FsKind` name —
+    // we re-look up rather than caching so unit tests that rebuild the
+    // environment can't dangle a stale Rc.
+    // Falls back to a freshly-constructed variant if the enum isn't
+    // installed (which would only happen if the stdlib wasn't loaded).
+    Value::EnumVariant(Rc::new(EnumVariantObject {
+        enum_name: "FsKind".to_string(),
+        variant_name: kind.to_string(),
+        value: Some(Value::Str(Rc::new(kind.to_ascii_lowercase()))),
+        enum_obj: RefCell::new(None),
+    }))
+}
+
+/// `Os.fsInfo(path?) -> FsInfo?`
+///
+/// `path = nil` (or omitted) reports on the current working directory.
+/// When a path is given but doesn't exist, returns `nil` so callers can
+/// distinguish "missing" from "present but failed to stat" — any other
+/// metadata error also collapses to `nil`.
+fn os_fs_info(args: &[Value]) -> Result<Vec<Value>, String> {
+    let path: String = match args.first() {
+        Some(Value::Str(s)) => (**s).clone(),
+        Some(Value::Nil) | None => match std::env::current_dir() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(_) => return Ok(nil_vec()),
+        },
+        Some(other) => {
+            return Err(format!(
+                "Os.fsInfo: path must be a string or nil, got `{}`",
+                other.type_name()
+            ));
+        }
+    };
+
+    // `symlink_metadata` so we can report `Symlink` instead of silently
+    // following the link.
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(m) => m,
+        Err(_) => return Ok(nil_vec()),
+    };
+
+    let kind_str = if meta.file_type().is_symlink() {
+        "Symlink"
+    } else if meta.is_dir() {
+        "Dir"
+    } else if meta.is_file() {
+        "File"
+    } else {
+        "Other"
+    };
+
+    let modified_at = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| Value::Int(d.as_secs() as i64))
+        .unwrap_or(Value::Nil);
+
+    let mut fields = HashMap::new();
+    fields.insert("path".to_string(), Value::Str(Rc::new(path)));
+    fields.insert("kind".to_string(), fskind_variant(kind_str));
+    fields.insert("size".to_string(), Value::Int(meta.len() as i64));
+    fields.insert("modifiedAt".to_string(), modified_at);
+    fields.insert(
+        "readOnly".to_string(),
+        Value::Bool(meta.permissions().readonly()),
+    );
+
+    let class = FSINFO_CLASS
+        .with(|slot| slot.borrow().clone())
+        .ok_or_else(|| "Os.fsInfo: FsInfo class not installed".to_string())?;
+
+    Ok(vec![Value::Instance(Rc::new(RefCell::new(
+        InstanceObject { class, fields },
+    )))])
+}
+
+// ─── builtin registries (consumed by saule-semantic) ───────────────────────
+
+/// Return synthetic [`ClassInfo`] / [`EnumInfo`] entries for `Os`-owned
+/// builtin types whose declarations don't exist in user source.
+pub fn builtin_registries() -> (
+    saule_semantic::ClassRegistry,
+    saule_semantic::InterfaceRegistry,
+    saule_semantic::EnumRegistry,
+) {
+    use saule_ast::Type;
+    use saule_semantic::{ClassInfo, EnumInfo};
+
+    let mut classes = saule_semantic::ClassRegistry::new();
+    let ifaces = saule_semantic::InterfaceRegistry::new();
+    let mut enums = saule_semantic::EnumRegistry::new();
+
+    // FsKind ────────────────────────────────────────────────────────────
+    let mut fskind = EnumInfo::default();
+    for v in ["File", "Dir", "Symlink", "Other"] {
+        fskind.variants.insert(v.to_string(), 0);
+    }
+    enums.insert("FsKind".to_string(), fskind);
+
+    // FsInfo ────────────────────────────────────────────────────────────
+    let mut info = ClassInfo {
+        parent: None,
+        implements: Vec::new(),
+        members: HashMap::new(),
+        field_types: HashMap::new(),
+        methods: HashMap::new(),
+    };
+    let fields: [(&str, Type); 5] = [
+        ("path", Type::Named("string".to_string())),
+        ("kind", Type::Named("FsKind".to_string())),
+        ("size", Type::Named("integer".to_string())),
+        (
+            "modifiedAt",
+            Type::Nullable(Box::new(Type::Named("integer".to_string()))),
+        ),
+        ("readOnly", Type::Named("boolean".to_string())),
+    ];
+    for (name, ty) in fields {
+        info.members.insert(name.to_string(), false);
+        info.field_types.insert(name.to_string(), ty);
+    }
+    classes.insert("FsInfo".to_string(), info);
+
+    (classes, ifaces, enums)
 }

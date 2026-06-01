@@ -38,6 +38,7 @@ pub mod env;
 pub mod error;
 pub mod eval;
 pub mod module;
+pub mod native_packages;
 pub mod project;
 pub mod stdlib;
 pub mod value;
@@ -91,6 +92,11 @@ pub fn init() {
     ONCE.call_once(|| {
         saule_typeck::sigs::set_initializer(stdlib::register_all_sigs);
         saule_semantic::prelude::set_provider(stdlib::all_prelude_names);
+        saule_semantic::builtins::set_provider(stdlib::builtin_registries);
+        // Built-in native packages — anything we ship with the
+        // interpreter that lives behind an `import "..."`. Third-party
+        // packages call `native_packages::register` themselves.
+        stdlib::register_builtin_packages();
     });
 }
 

@@ -23,9 +23,29 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::rc::Rc;
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::value::{
     ClassObject, EnumObject, EnumVariantObject, FieldDef, FileHandle, NativeClosure, Value,
 };
+
+// ─── native-package descriptor ─────────────────────────────────────────────
+
+/// `import { Io, File, IoMode, IoSeek } from "io"`. Also auto-installed
+/// into the prelude so existing code that uses these bare names keeps
+/// working without an explicit import.
+pub static IO_PACKAGE: NativePackage = NativePackage {
+    name: "io",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &["Io", "File", "IoMode", "IoSeek"],
+    register_sigs,
+    builtins: empty_builtins,
+    auto_prelude: true,
+};
+
+fn empty_builtins() -> saule_semantic::builtins::Builtins {
+    saule_semantic::builtins::Builtins::default()
+}
 
 // ─── installation ──────────────────────────────────────────────────────────
 
@@ -52,8 +72,8 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     );
 
     // Phantom `File` class — only needed so the typechecker recognises
-    // `File` as a type name in `local f: File = ...`. Method dispatch happens
-    // in `dispatch_file_method`, not through this class.
+    // `File` as a type name in `local f: File = ...`. Method dispatch
+    // happens in `dispatch_file_method`, not through this class.
     let file_class = ClassObject {
         name: "File".to_string(),
         parent: None,

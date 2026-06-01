@@ -5,8 +5,25 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::{ClassObject, NativeClosure, Value};
+
+/// `import String from "string"`. Auto-prelude'd so bare
+/// `String.format(…)` also works.
+pub static STRING_PACKAGE: NativePackage = NativePackage {
+    name: "string",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &["String"],
+    register_sigs,
+    builtins: empty_builtins,
+    auto_prelude: true,
+};
+
+fn empty_builtins() -> saule_semantic::builtins::Builtins {
+    saule_semantic::builtins::Builtins::default()
+}
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
     let mut static_fields = HashMap::new();

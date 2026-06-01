@@ -27,8 +27,25 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::stdlib::expect_min_arity;
 use crate::value::{ClassObject, NativeClosure, TableObject, Value};
+
+/// `import Table from "table"`. Auto-prelude'd so bare `Table.insert(…)`
+/// also works.
+pub static TABLE_PACKAGE: NativePackage = NativePackage {
+    name: "table",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &["Table"],
+    register_sigs,
+    builtins: empty_builtins,
+    auto_prelude: true,
+};
+
+fn empty_builtins() -> saule_semantic::builtins::Builtins {
+    saule_semantic::builtins::Builtins::default()
+}
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
     let mut static_fields = HashMap::new();

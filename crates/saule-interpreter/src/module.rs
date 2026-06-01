@@ -72,6 +72,13 @@ fn set_active_module_source(
 /// Both `/` and `.` are accepted as path separators inside the literal so
 /// `"entities/Player"` and `"entities.Player"` both work.
 pub fn resolve_import_path(dir: &Path, raw: &str) -> Option<PathBuf> {
+    // Native package wins over any filesystem lookup so a registered
+    // `"io"` package can never be shadowed by a stray `io.sau` next to
+    // the importing file.
+    if crate::native_packages::lookup(raw).is_some() {
+        return Some(crate::native_packages::sentinel_path(raw));
+    }
+
     let normalised = raw.replace('.', "/");
 
     if let Some(hit) = try_resolve_base(&dir.join(&normalised)) {
@@ -146,6 +153,22 @@ pub fn load_module(
 ) -> Result<ModuleExports, RuntimeError> {
     if let Some(hit) = loader.borrow().cache.get(abs_path) {
         return Ok(hit.clone());
+    }
+
+    // Native package shortcut — the sentinel path encodes the package
+    // name; build the exports by running the package's `install`
+    // against a scratch env and harvesting its declared exports.
+    if let Some(name) = crate::native_packages::name_from_sentinel(abs_path) {
+        let pkg = crate::native_packages::lookup(name).ok_or_else(|| RuntimeError::ImportError {
+            message: format!("native package `{name}` is no longer registered"),
+            span: import_span,
+        })?;
+        let exports = crate::native_packages::build_exports(pkg);
+        loader
+            .borrow_mut()
+            .cache
+            .insert(abs_path.to_path_buf(), exports.clone());
+        return Ok(exports);
     }
 
     if loader.borrow().loading.contains(abs_path) {
@@ -315,6 +338,26 @@ pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::Modul
             continue;
         };
 
+        // Native package seed — fold the package's synthetic
+        // class/interface/enum metadata directly into the seed; no need
+        // to parse anything from disk.
+        if let Some(pkg) = crate::native_packages::lookup(path) {
+            let built = (pkg.builtins)();
+            let aliases = collect_native_aliases(pkg, names);
+            for (orig, alias) in aliases {
+                if let Some(info) = built.classes.get(&orig).cloned() {
+                    seed.classes.entry(alias.clone()).or_insert(info);
+                }
+                if let Some(ext) = built.interfaces.get(&orig).cloned() {
+                    seed.interfaces.entry(alias.clone()).or_insert(ext);
+                }
+                if let Some(info) = built.enums.get(&orig).cloned() {
+                    seed.enums.entry(alias).or_insert(info);
+                }
+            }
+            continue;
+        }
+
         let Some(abs) = resolve_import_path(dir, path) else {
             continue;
         };
@@ -362,6 +405,26 @@ fn collect_import_aliases(imported: &Module, names: &ImportNames) -> Vec<(String
                 Stmt::Decl(d) => exported_name(&d.value).map(|n| (n.to_string(), n.to_string())),
                 _ => None,
             })
+            .collect(),
+        ImportNames::List(items) => items
+            .iter()
+            .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
+            .collect(),
+    }
+}
+
+/// Native-package counterpart of [`collect_import_aliases`]: wildcards
+/// pull in every name the package declares via
+/// [`crate::native_packages::NativePackage::exports`].
+fn collect_native_aliases(
+    pkg: &crate::native_packages::NativePackage,
+    names: &ImportNames,
+) -> Vec<(String, String)> {
+    match names {
+        ImportNames::All => pkg
+            .exports
+            .iter()
+            .map(|n| ((*n).to_string(), (*n).to_string()))
             .collect(),
         ImportNames::List(items) => items
             .iter()

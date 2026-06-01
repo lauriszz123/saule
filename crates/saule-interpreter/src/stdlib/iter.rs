@@ -12,7 +12,25 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
+use crate::native_packages::NativePackage;
 use crate::value::{InterfaceObject, Value};
+
+/// `import Iterable, Iterable2 from "iter"`. Auto-prelude'd so the
+/// `for … in … do` desugar can rely on these names always being in
+/// scope.
+pub static ITER_PACKAGE: NativePackage = NativePackage {
+    name: "iter",
+    version: env!("CARGO_PKG_VERSION"),
+    install,
+    exports: &["Iterable", "Iterable2"],
+    register_sigs,
+    builtins: empty_builtins,
+    auto_prelude: true,
+};
+
+fn empty_builtins() -> saule_semantic::builtins::Builtins {
+    saule_semantic::builtins::Builtins::default()
+}
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
     define_interface(env, "Iterable");
