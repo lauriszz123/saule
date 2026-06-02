@@ -1,5 +1,4 @@
 import Storage from "storage"
-
 import Renderer from "render"
 
 class Main
@@ -82,9 +81,10 @@ class Main
           return
         end
 
-        if not storage.remove(index) then
-          printf("Task id %d does not exist\n", index)
-          return
+        match storage.remove(index)
+          case nil then printf("Task id %d does not exist\n", index)
+
+          case task then printf("Removed task: %s\n", task)
         end
 
         Renderer.print(storage.getAll())

@@ -2,11 +2,10 @@ import Json from "json/json"
 
 class Main
   static fn main()
-
     -- Read the small test file.
     println("test.json:")
-    match Main.loadFile("test.json")
 
+    match Main.loadFile("test.json")
       -- Force unwrap since we know it exists.
       case nil then println("Failed to parse test.json")
 
@@ -14,12 +13,10 @@ class Main
     end
 
     -- Read the kitchen-sink file.
-
     println()
     println("kitchen_sink.json:")
 
     -- We know that it exists so we can force unwrap.
-
     local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!)
 
     if raw == nil then
@@ -31,14 +28,12 @@ class Main
     Main.dumpTable(data, "  ")
 
     -- Mutate: clear a key, add a key, change a value.
-
     data["draft"] = nil
     data["lastRun"] = "2026-05-28T00:00:00Z"
     data.version = data.version + 1
 
     -- Write the modified copy to a separate file so the original
     -- kitchen_sink.json stays untouched between runs.
-
     Main.saveJson("kitchen_sink_modified.json", data)
   end
 

@@ -25,7 +25,7 @@ use std::path::Path;
 
 use saule_ast::{
     ClassMember, Decl, EnumVariant, Expr, ImportNames, Method, MethodSig as AstMethodSig, Module,
-    Param, Spanned, Stmt, Type,
+    Param, Pattern, Spanned, Stmt, Type,
 };
 use saule_semantic::{
     ClassInfo, MethodSig, lookup_field_type, lookup_method, with_classes, with_enums,
@@ -83,6 +83,7 @@ pub fn hover_at_with(
         best: None,
         imports,
         locals: Vec::new(),
+        enum_variant_fields: collect_enum_variant_fields(module),
     };
     cx.visit_module(module);
     cx.best.map(|h| (h.md, h.span))
@@ -311,6 +312,7 @@ enum LocalKind {
     Local,
     LoopVar,
     Catch,
+    Binding,
 }
 
 struct Cx<'a> {
@@ -319,6 +321,11 @@ struct Cx<'a> {
     best: Option<Hit>,
     imports: &'a ImportContext,
     locals: Vec<LocalVar>,
+    /// Tuple-variant payload field types, keyed by `(enum, variant)`.
+    /// Populated once at the start of [`hover_at_with`] so pattern
+    /// bindings inside `match` arms can be typed without re-walking
+    /// every enum decl per arm.
+    enum_variant_fields: HashMap<(String, String), Vec<Param>>,
 }
 
 impl<'a> Cx<'a> {
@@ -386,6 +393,19 @@ impl<'a> Cx<'a> {
                     // don't have ASTs for those, so return None and
                     // accept `any`.
                     if let Some(sig) = saule_typeck::sigs::lookup(name) {
+                        return sig.returns.first().cloned();
+                    }
+                }
+                // `recv.method(args)` — dot-call on an instance or
+                // module. Resolve the receiver's class and chase the
+                // method's return type the same way `MethodCall` does.
+                if let Expr::Member { obj, name } = &callee.value {
+                    let class = self.receiver_class(&obj.value)?;
+                    if let Some(sig) = lookup_method(&class, name) {
+                        return sig.return_ty;
+                    }
+                    let qname = format!("{class}.{name}");
+                    if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
                         return sig.returns.first().cloned();
                     }
                 }
@@ -766,7 +786,14 @@ impl<'a> Cx<'a> {
             }
             Expr::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
+                let scrut_ty = self.infer_init_type(&scrutinee.value);
                 for arm in arms {
+                    let mark = self.locals.len();
+                    // Bind first so the recursive `visit_pattern`
+                    // walk can render `Bind` names through the
+                    // local-scope path with their inferred type.
+                    self.bind_pattern(&arm.pattern.value, scrut_ty.as_ref());
+                    self.visit_pattern(&arm.pattern);
                     if let Some(g) = &arm.guard {
                         self.visit_expr(g);
                     }
@@ -774,6 +801,7 @@ impl<'a> Cx<'a> {
                         saule_ast::MatchBody::Expr(e) => self.visit_expr(e),
                         saule_ast::MatchBody::Block(b) => self.visit_block(b),
                     }
+                    self.locals.truncate(mark);
                 }
             }
             Expr::Pipe { source, stages } => {
@@ -801,6 +829,128 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// Walk a `match` pattern, recording hover info for the parts that
+    /// have something useful to say:
+    ///
+    /// * `Variant { enum_name, variant, fields }` — render the variant
+    ///   shape (`(variant) Enum.Variant(field: T, ...)`) and recurse
+    ///   into the sub-patterns.
+    /// * `Tuple(parts)` — recurse only.
+    /// * `Bind(name)` — no hover here; the binding is rendered through
+    ///   the local-scope path once it's been pushed by `bind_pattern`.
+    /// * Literal patterns — no hover (matches today's behaviour for
+    ///   literal expressions).
+    fn visit_pattern(&mut self, p: &Spanned<Pattern>) {
+        if !contains(&p.span, self.offset) {
+            return;
+        }
+        match &p.value {
+            Pattern::Variant {
+                enum_name,
+                variant,
+                fields,
+            } => {
+                self.record(
+                    p.span.clone(),
+                    render_variant_pattern(
+                        enum_name,
+                        variant,
+                        fields,
+                        &self.enum_variant_fields,
+                    ),
+                );
+                for f in fields {
+                    self.visit_pattern(f);
+                }
+            }
+            Pattern::Tuple(parts) => {
+                for f in parts {
+                    self.visit_pattern(f);
+                }
+            }
+            Pattern::Bind(name) => {
+                // Look up the just-pushed binding so the hover shows
+                // its inferred type (`(binding) task: Task?`, etc.).
+                if let Some(local) = self.lookup_local(name) {
+                    self.record(
+                        p.span.clone(),
+                        format!(
+                            "```saule\n(binding) {name}: {ty}\n```",
+                            ty = render_type(&local.ty)
+                        ),
+                    );
+                } else {
+                    self.record(
+                        p.span.clone(),
+                        format!("```saule\n(binding) {name}\n```"),
+                    );
+                }
+            }
+            Pattern::Wildcard => {
+                self.record(p.span.clone(), "```saule\n(wildcard) _\n```".to_string());
+            }
+            Pattern::Nil => {
+                self.record(p.span.clone(), "```saule\n(pattern) nil\n```".to_string());
+            }
+            Pattern::Int(_) | Pattern::Float(_) | Pattern::Bool(_) | Pattern::Str(_) => {}
+        }
+    }
+
+    /// Push every name introduced by `pat` onto the local scope, using
+    /// `scrut_ty` to type top-level `Bind` and tuple bindings. Variant
+    /// payload bindings are typed from the enum's recorded field
+    /// types. Anything we can't type defaults to `any`.
+    fn bind_pattern(&mut self, pat: &Pattern, scrut_ty: Option<&Type>) {
+        match pat {
+            Pattern::Bind(name) => {
+                // Strip the nullable wrapper: `case nil` is the only
+                // arm that handles nil, so any other arm — including
+                // a bare `case binding` — implies the value is
+                // non-nil. Mirrors `saule-typeck`'s arm-binding rule
+                // so hover types match diagnostics.
+                let ty = scrut_ty
+                    .map(|t| strip_nullable_type(t.clone()))
+                    .unwrap_or_else(|| Type::Named("any".into()));
+                self.locals.push(LocalVar {
+                    name: name.clone(),
+                    ty,
+                    kind: LocalKind::Binding,
+                });
+            }
+            Pattern::Variant {
+                enum_name,
+                variant,
+                fields,
+            } => {
+                let field_tys: Vec<Type> = self
+                    .enum_variant_fields
+                    .get(&(enum_name.clone(), variant.clone()))
+                    .map(|ps| ps.iter().map(|p| p.ty.clone()).collect())
+                    .unwrap_or_default();
+                for (i, sub) in fields.iter().enumerate() {
+                    let sub_ty = field_tys.get(i);
+                    self.bind_pattern(&sub.value, sub_ty);
+                }
+            }
+            Pattern::Tuple(parts) => {
+                let elems: Option<&[Type]> = match scrut_ty {
+                    Some(Type::Tuple(parts)) => Some(parts.as_slice()),
+                    _ => None,
+                };
+                for (i, sub) in parts.iter().enumerate() {
+                    let sub_ty = elems.and_then(|e| e.get(i));
+                    self.bind_pattern(&sub.value, sub_ty);
+                }
+            }
+            Pattern::Wildcard
+            | Pattern::Nil
+            | Pattern::Int(_)
+            | Pattern::Float(_)
+            | Pattern::Bool(_)
+            | Pattern::Str(_) => {}
+        }
+    }
+
     /// Render a Markdown blurb for `expr` if we can resolve it from the
     /// registries / surrounding context. Returns `None` for literals
     /// and unknown names — callers should leave hover empty in that
@@ -822,6 +972,7 @@ impl<'a> Cx<'a> {
                         LocalKind::Local => "(local)",
                         LocalKind::LoopVar => "(loop var)",
                         LocalKind::Catch => "(error)",
+                        LocalKind::Binding => "(binding)",
                     };
                     return Some(format!(
                         "```saule\n{label} {name}: {ty}\n```",
@@ -984,6 +1135,18 @@ fn named_type(ty: &Type) -> Option<String> {
         Type::Named(n) => Some(n.clone()),
         Type::Nullable(inner) => named_type(inner),
         _ => None,
+    }
+}
+
+/// Peel a single `Nullable` wrapper. Used for `match` arm bindings:
+/// the bound name is only reachable when the scrutinee wasn't nil, so
+/// hover should surface `T` rather than `T?`. Mirrors
+/// `saule_typeck::types::strip_nullable`, kept local so this crate
+/// doesn't depend on that helper just for one call.
+fn strip_nullable_type(ty: Type) -> Type {
+    match ty {
+        Type::Nullable(inner) => *inner,
+        other => other,
     }
 }
 
@@ -1330,8 +1493,7 @@ fn render_enum_head(name: &str, variants: &[Spanned<EnumVariant>]) -> String {
     s
 }
 
-fn render_enum_from_registry(name: &str, variants: &[(String, usize)]) -> String {
-    let mut s = format!("```saule\nenum {name} {{\n");
+fn render_enum_from_registry(name: &str, variants: &[(String, usize)]) -> String {    let mut s = format!("```saule\nenum {name} {{\n");
     for (vn, arity) in variants {
         s.push_str("  ");
         s.push_str(vn);
@@ -1369,6 +1531,59 @@ fn render_type(ty: &Type) -> String {
             format!("fn({}) -> {}", p.join(", "), render_type(ret))
         }
     }
+}
+
+/// Pre-pass: walk every `enum` declaration in `module` and record the
+/// payload-field shape of each tuple variant. Used by `bind_pattern` to
+/// type the names introduced by `case Enum.Variant(a, b, ...)` patterns
+/// without having to re-find the decl per arm.
+fn collect_enum_variant_fields(module: &Module) -> HashMap<(String, String), Vec<Param>> {
+    let mut out: HashMap<(String, String), Vec<Param>> = HashMap::new();
+    for s in &module.stmts {
+        if let Stmt::Decl(d) = &s.value
+            && let Decl::Enum { name, variants, .. } = &d.value
+        {
+            for v in variants {
+                if let EnumVariant::Tuple { name: vn, fields } = &v.value {
+                    out.insert((name.clone(), vn.clone()), fields.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Render hover info for a `Variant` pattern, e.g.
+/// `(variant) Event.Click(x: integer, y: integer)`. Falls back to a
+/// bare `Enum.Variant` when the enum isn't in our pre-collected map
+/// (likely a bare or valued variant that carries no payload).
+fn render_variant_pattern(
+    enum_name: &str,
+    variant: &str,
+    fields: &[Spanned<Pattern>],
+    enum_fields: &HashMap<(String, String), Vec<Param>>,
+) -> String {
+    let mut s = format!("```saule\n(variant) {enum_name}.{variant}");
+    if let Some(params) = enum_fields.get(&(enum_name.to_string(), variant.to_string())) {
+        s.push('(');
+        s.push_str(
+            &params
+                .iter()
+                .map(render_param_inline)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        s.push(')');
+    } else if !fields.is_empty() {
+        // Unknown enum but pattern carries sub-patterns — surface
+        // arity at least.
+        s.push('(');
+        s.push_str(&"_, ".repeat(fields.len()));
+        s.truncate(s.len() - 2);
+        s.push(')');
+    }
+    s.push_str("\n```");
+    s
 }
 
 #[cfg(test)]
@@ -1711,6 +1926,88 @@ end
         let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
         assert!(md.contains("(local)"), "got: {md}");
         assert!(md.contains("s: Storage"), "got: {md}");
+    }
+
+    /// User-reported case: hover inside a `match` arm should resolve
+    /// pattern-bound names (here `task` from `case task then ...`) to
+    /// the scrutinee's inferred type, including when the scrutinee is
+    /// a method call returning a nullable.
+    #[test]
+    fn hovers_match_bind_pattern_from_method_call() {
+        let src = "\
+class Task
+  name: string = \"\"
+end
+
+class Storage
+  fn remove(index: integer) -> Task?
+    return nil
+  end
+end
+
+fn run() -> nothing
+  local storage = Storage()
+  match storage.remove(1)
+    case nil then print(\"missing\")
+    case task then print(task.name)
+  end
+end
+";
+        // Cursor on `task` in the pattern position.
+        let pos = src.find("case task").unwrap() + "case ".len() + 1;
+        let tokens = saule_lexer::Lexer::new(src).tokenize().unwrap();
+        let module = saule_parser::parse(tokens).unwrap();
+        let _ = saule_semantic::analyze(&module);
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("(binding)"), "got: {md}");
+        assert!(md.contains("task: Task"), "got: {md}");
+
+        // Cursor on `task` in the body — should resolve as the same
+        // local binding.
+        let pos = src.find("task.name").unwrap() + 1;
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("(binding)"), "got: {md}");
+        assert!(md.contains("task: Task"), "got: {md}");
+
+        // Cursor on `.name` — should resolve through the binding's
+        // type back to the field on `Task`.
+        let pos = src.find("task.name").unwrap() + "task.".len() + 1;
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("Task.name"), "got: {md}");
+        assert!(md.contains("string"), "got: {md}");
+    }
+
+    /// Enum variant patterns and their payload bindings should both
+    /// hover correctly inside a `match` arm.
+    #[test]
+    fn hovers_match_variant_pattern_and_payload() {
+        let src = "\
+enum Event
+  Click(x: integer, y: integer),
+  Quit
+end
+
+fn describe(e: Event) -> string
+  return match e
+    case Event.Click(x, y) then \"click\"
+    case Event.Quit then \"bye\"
+  end
+end
+";
+        // Cursor on the variant head `Click`.
+        let pos = src.find("Event.Click(").unwrap() + "Event.".len() + 1;
+        let tokens = saule_lexer::Lexer::new(src).tokenize().unwrap();
+        let module = saule_parser::parse(tokens).unwrap();
+        let _ = saule_semantic::analyze(&module);
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("Event.Click"), "got: {md}");
+        assert!(md.contains("x: integer"), "got: {md}");
+
+        // Cursor on the payload binding `x`.
+        let pos = src.find("Click(x, y)").unwrap() + "Click(".len();
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("(binding)"), "got: {md}");
+        assert!(md.contains("x: integer"), "got: {md}");
     }
 }
 

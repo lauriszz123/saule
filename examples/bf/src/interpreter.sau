@@ -23,7 +23,6 @@ end
 -- byte-count form, so we pull a full line and dispense its bytes one
 -- `,` at a time; on EOF every subsequent `,` yields 0 (the most common
 -- BF convention).
-
 class InputBuffer
   local pending: string
   local pos: integer
@@ -63,7 +62,6 @@ export class Interpreter
 
   -- Decode source into a flat op vector with bracket targets resolved.
   -- Throws on unmatched brackets, citing the source column.
-
   local fn precompute() -> table<Op>
     local code: table<Op> = {}
     local stack: table<integer> = {}
@@ -115,7 +113,6 @@ export class Interpreter
   end
 
   -- Coalesce consecutive Inc / Move ops by summing their deltas.
-
   local fn pushDelta(code: table<Op>, n: integer, op: Op) -> integer
     if n > 0 then
       local fused: Op? = self.fuse(code[n]!, op)
@@ -130,7 +127,6 @@ export class Interpreter
 
   -- Returns the merged op when `prev` and `next` are the same `Inc` /
   -- `Move` family; `nil` when they can't be coalesced.
-
   local fn fuse(prev: Op, next: Op) -> Op?
     return match prev
       case Op.Inc(a) then match next
@@ -185,7 +181,6 @@ export class Interpreter
 
   -- Saule's `%` follows Rust semantics (sign of dividend), so a naive
   -- `(cell + by) % 256` would map `-1` to `-1`. Force into `0..255`.
-
   local fn wrap(value: integer) -> integer
     return (value % 256 + 256) % 256
   end

@@ -112,11 +112,12 @@ impl<'a> Printer<'a> {
     }
 
     fn finish(mut self) -> String {
-        // Guarantee exactly one trailing newline.
+        // Guarantee exactly one trailing newline, even for an empty
+        // module — every formatted file ends with `\n`.
         while self.out.ends_with("\n\n") {
             self.out.pop();
         }
-        if !self.out.is_empty() && !self.out.ends_with('\n') {
+        if !self.out.ends_with('\n') {
             self.out.push('\n');
         }
         self.out
@@ -185,7 +186,7 @@ impl<'a> Printer<'a> {
             }
             self.write_comment(c);
             self.newline();
-            self.last_pos = c.span.end;
+            self.last_pos = self.last_pos.max(c.span.end);
         }
     }
 
@@ -208,7 +209,7 @@ impl<'a> Printer<'a> {
         let c = self.comments.pop_front().unwrap();
         self.out.push_str("  ");
         self.write_comment(c);
-        self.last_pos = c.span.end;
+        self.last_pos = self.last_pos.max(c.span.end);
         true
     }
 
@@ -246,23 +247,28 @@ impl<'a> Printer<'a> {
             .filter(|&&b| b == b'\n')
             .count()
     }
-
     // ---- top-level ---------------------------------------------------------
 
     fn module(&mut self, m: &Module) {
         for (i, s) in m.stmts.iter().enumerate() {
             self.drain_before(s.span.start);
             if i > 0 {
-                let prev_end = m.stmts[i - 1].span.end;
-                // Preserve user-written blank lines between top-level
-                // statements (≥ 2 newlines in the source gap).
-                if self.newlines_in_source(prev_end, s.span.start) >= 2 {
+                let prev_stmt_end = m.stmts[i - 1].span.end;
+                let comment_drained = self.last_pos > prev_stmt_end;
+                if comment_drained {
+                    // A comment was just emitted in the gap. Treat it as
+                    // attached to the upcoming stmt: no blank line between
+                    // the comment and the stmt, regardless of source.
+                } else if self.newlines_in_source(prev_stmt_end, s.span.start)
+                    >= 2
+                {
                     self.blank_line();
                 } else if needs_top_separator(&m.stmts[i - 1].value, &s.value) {
                     self.blank_line();
                 }
             }
             self.stmt(s);
+            self.last_pos = self.last_pos.max(s.span.end);
             self.try_trailing(s.span.end);
             self.newline();
         }
@@ -278,16 +284,33 @@ impl<'a> Printer<'a> {
     /// `span.end`, which sits just past the `end` keyword).
     fn block(&mut self, body: &[Spanned<Stmt>], block_end: usize) {
         self.indent += 1;
+        // Anchor `last_pos` at the start of the line containing the
+        // first body element. Without this, a comment placed at the
+        // top of the block (e.g. immediately under `then` / `do` /
+        // `fn(...)`) would see `last_pos` from somewhere above the
+        // block header and incorrectly trigger a leading blank line
+        // inside `drain_before`.
+        if let Some(first) = body.first() {
+            self.last_pos = self
+                .last_pos
+                .max(line_start_in_source(self.source, first.span.start));
+        }
         for (i, s) in body.iter().enumerate() {
             self.drain_before(s.span.start);
-            // Preserve user-written blank lines inside blocks.
             if i > 0 {
-                let prev_end = body[i - 1].span.end;
-                if self.newlines_in_source(prev_end, s.span.start) >= 2 {
+                let prev_stmt_end = body[i - 1].span.end;
+                let comment_drained = self.last_pos > prev_stmt_end;
+                if comment_drained {
+                    // Comment attaches to the next stmt; no blank between
+                    // the comment and the stmt.
+                } else if self.newlines_in_source(prev_stmt_end, s.span.start)
+                    >= 2
+                {
                     self.blank_line();
                 }
             }
             self.stmt(s);
+            self.last_pos = self.last_pos.max(s.span.end);
             self.try_trailing(s.span.end);
             self.newline();
         }
@@ -628,22 +651,30 @@ impl<'a> Printer<'a> {
 
     fn class_body(&mut self, members: &[Spanned<ClassMember>], class_end: usize) {
         self.indent += 1;
+        if let Some(first) = members.first() {
+            self.last_pos = self
+                .last_pos
+                .max(line_start_in_source(self.source, first.span.start));
+        }
         let mut prev_was_method = false;
         for (i, m) in members.iter().enumerate() {
             self.drain_before(m.span.start);
             let is_method = matches!(m.value, ClassMember::Method(_));
             if i > 0 {
-                let prev_end = members[i - 1].span.end;
-                // Preserve user-written blank lines between class
-                // members. The structural rule (blank between methods
-                // and around method boundaries) still applies on top.
-                if self.newlines_in_source(prev_end, m.span.start) >= 2 {
+                let prev_member_end = members[i - 1].span.end;
+                let comment_drained = self.last_pos > prev_member_end;
+                if comment_drained {
+                    // Comment attaches to the next member.
+                } else if self.newlines_in_source(prev_member_end, m.span.start)
+                    >= 2
+                {
                     self.blank_line();
                 } else if is_method || prev_was_method {
                     self.blank_line();
                 }
             }
             self.class_member(&m.value);
+            self.last_pos = self.last_pos.max(m.span.end);
             self.try_trailing(m.span.end);
             self.newline();
             prev_was_method = is_method;
@@ -922,15 +953,25 @@ impl<'a> Printer<'a> {
                 self.expr(scrutinee, 0);
                 self.newline();
                 self.indent += 1;
+                if let Some(first) = arms.first() {
+                    self.last_pos = self
+                        .last_pos
+                        .max(line_start_in_source(self.source, first.span.start));
+                }
                 for (i, a) in arms.iter().enumerate() {
-                    // Blank line between arms — keeps multi-statement
-                    // arms visually distinct. The first arm stays right
-                    // under `match` with no extra leading blank.
-                    if i > 0 {
-                        self.newline();
-                    }
                     self.drain_before(a.span.start);
+                    // Blank line between arms when the source had one
+                    // (≥ 2 newlines between the previous arm's end and
+                    // this arm's start, after accounting for any
+                    // comments drained in the gap).
+                    if i > 0 {
+                        let prev_end = self.last_pos.max(arms[i - 1].span.end);
+                        if self.newlines_in_source(prev_end, a.span.start) >= 2 {
+                            self.blank_line();
+                        }
+                    }
                     self.match_arm(a);
+                    self.last_pos = self.last_pos.max(a.span.end);
                     self.try_trailing(a.span.end);
                     self.newline();
                 }
@@ -1373,11 +1414,29 @@ fn entry_end(entry: &TableEntry) -> usize {
 
 /// Whether two adjacent top-level statements should be separated by a
 /// blank line. Declarations get breathing room; tight runs of locals or
-/// expression statements stay compact.
+/// expression statements stay compact. Consecutive `import` statements
+/// are an exception — they read as a single block and stay packed.
 fn needs_top_separator(prev: &Stmt, next: &Stmt) -> bool {
+    let p_is_import = matches!(prev, Stmt::Decl(d) if matches!(d.value, Decl::Import { .. }));
+    let n_is_import = matches!(next, Stmt::Decl(d) if matches!(d.value, Decl::Import { .. }));
+    if p_is_import && n_is_import {
+        return false;
+    }
     let p_is_decl = matches!(prev, Stmt::Decl(_));
     let n_is_decl = matches!(next, Stmt::Decl(_));
     p_is_decl || n_is_decl
+}
+
+/// Byte offset of the first character on the line that contains `pos`.
+/// Walks backwards in `source` to find the previous `\n`; returns
+/// `pos` itself when out of range. Used at block entry to anchor
+/// `last_pos` so a comment placed right under a header doesn't get
+/// charged for the newlines above the header.
+fn line_start_in_source(source: &str, pos: usize) -> usize {
+    if pos > source.len() {
+        return source.len();
+    }
+    source[..pos].rfind('\n').map(|n| n + 1).unwrap_or(0)
 }
 
 /// The byte offset where the next chunk of an `if … elseif … else … end`
