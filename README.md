@@ -1,6 +1,6 @@
 # Saule Programming Language
 
-Saule is a statically typed, class-oriented language inspired by Lua's simplicity and runtime model, designed to be minimal to write but powerful to use. It compiles to clean, readable code and is structured around files, classes, interfaces, and scripts.
+Saule is a statically typed, class-oriented language inspired by Lua's simplicity and runtime model, designed to be minimal to write but powerful to use. It is structured around files, classes, interfaces, and scripts.
 
 > 📚 Looking for the **standard library**? See **[DOCS.md](./DOCS.md)**.
 
