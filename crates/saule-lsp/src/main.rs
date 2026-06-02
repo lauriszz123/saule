@@ -5,6 +5,7 @@
 
 mod hover;
 mod line_index;
+mod refs;
 mod server;
 mod workspace;
 
