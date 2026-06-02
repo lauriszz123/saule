@@ -3,6 +3,7 @@
 //! Communicates over stdin/stdout (the conventional LSP transport).
 //! Editors launch this binary as a child process and speak LSP to it.
 
+mod hover;
 mod line_index;
 mod server;
 mod workspace;

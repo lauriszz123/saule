@@ -61,4 +61,31 @@ impl LineIndex {
             end: self.position(source, end),
         }
     }
+
+    /// Inverse of [`Self::position`]: convert an LSP `Position`
+    /// (line + UTF-16 character) into a UTF-8 byte offset. Out-of-range
+    /// positions clamp to end-of-line / end-of-source so a stale cursor
+    /// never panics. Used by hover to map the request's `Position` onto
+    /// our span-indexed AST.
+    pub fn offset(&self, source: &str, pos: Position) -> usize {
+        let line = (pos.line as usize).min(self.line_starts.len().saturating_sub(1));
+        let line_start = self.line_starts[line];
+        let line_end = if line + 1 < self.line_starts.len() {
+            // `line_starts[line + 1]` points just past the '\n'; back up
+            // one byte so the slice we walk doesn't include the newline
+            // itself (newlines are never valid hover targets).
+            self.line_starts[line + 1].saturating_sub(1)
+        } else {
+            self.len
+        };
+        let line_slice = &source[line_start..line_end];
+        let mut utf16_idx: u32 = 0;
+        for (byte_idx, ch) in line_slice.char_indices() {
+            if utf16_idx >= pos.character {
+                return line_start + byte_idx;
+            }
+            utf16_idx += ch.len_utf16() as u32;
+        }
+        line_start + line_slice.len()
+    }
 }
