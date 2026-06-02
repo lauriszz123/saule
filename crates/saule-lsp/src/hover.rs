@@ -82,6 +82,7 @@ pub fn hover_at_with(
         enclosing_class: None,
         best: None,
         imports,
+        locals: Vec::new(),
     };
     cx.visit_module(module);
     cx.best.map(|h| (h.md, h.span))
@@ -291,11 +292,33 @@ struct Hit {
     md: String,
 }
 
+/// One in-scope local binding (parameter, `local x =`, loop variable,
+/// `try ... catch (e: T)` binding). Tracked as a flat stack — entering
+/// a function/method/lambda saves the current stack and starts fresh,
+/// exiting restores it. Block-level scoping inside a function is
+/// approximated with a length-marker save/truncate idiom: precise
+/// enough for hover, with no Vec<Vec<…>> overhead.
+#[derive(Clone)]
+struct LocalVar {
+    name: String,
+    ty: Type,
+    kind: LocalKind,
+}
+
+#[derive(Clone, Copy)]
+enum LocalKind {
+    Param,
+    Local,
+    LoopVar,
+    Catch,
+}
+
 struct Cx<'a> {
     offset: usize,
     enclosing_class: Option<String>,
     best: Option<Hit>,
     imports: &'a ImportContext,
+    locals: Vec<LocalVar>,
 }
 
 impl<'a> Cx<'a> {
@@ -315,6 +338,87 @@ impl<'a> Cx<'a> {
         self.best = Some(Hit { span, md });
     }
 
+    /// Walk into a function/method/lambda body with a fresh local
+    /// scope. Saves and restores the outer scope so a hover request
+    /// inside a closure doesn't see locals from the enclosing function
+    /// (which would be confusing) and vice versa.
+    fn enter_function(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
+        let saved = std::mem::take(&mut self.locals);
+        for p in params {
+            self.locals.push(LocalVar {
+                name: p.name.clone(),
+                ty: p.ty.clone(),
+                kind: LocalKind::Param,
+            });
+        }
+        body(self);
+        self.locals = saved;
+    }
+
+    /// Look up `name` in the current local scope (innermost first).
+    /// Returns `None` for free identifiers — the caller falls through
+    /// to the registry / native-sig path.
+    fn lookup_local(&self, name: &str) -> Option<&LocalVar> {
+        self.locals.iter().rev().find(|l| l.name == name)
+    }
+
+    /// Best-effort type inference for a `local x = <init>` site when
+    /// the user didn't write an annotation. Handles the cases that
+    /// account for the bulk of real-world `local`s in Saule code:
+    ///
+    /// * `Class(args)` — constructor call returns `Class`.
+    /// * `obj:method(args)` — uses the registered method's return type.
+    /// * `obj.field` — uses the field's declared type.
+    /// * Existing local — propagates its known type.
+    /// * `self` inside a method — the enclosing class.
+    /// * Literal expressions — their primitive type.
+    ///
+    /// Anything else returns `None`; the caller falls back to `any`.
+    fn infer_init_type(&self, init: &Expr) -> Option<Type> {
+        match init {
+            Expr::Call { callee, .. } => {
+                if let Expr::Ident(name) = &callee.value {
+                    if with_classes(|r| r.contains_key(name)) {
+                        return Some(Type::Named(name.clone()));
+                    }
+                    // Non-constructor free call: consult native-sig
+                    // returns or imported function signatures. We
+                    // don't have ASTs for those, so return None and
+                    // accept `any`.
+                    if let Some(sig) = saule_typeck::sigs::lookup(name) {
+                        return sig.returns.first().cloned();
+                    }
+                }
+                None
+            }
+            Expr::MethodCall { obj, method, .. } => {
+                let class = self.receiver_class(&obj.value)?;
+                if let Some(sig) = lookup_method(&class, method) {
+                    return sig.return_ty;
+                }
+                let qname = format!("{class}.{method}");
+                if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
+                    return sig.returns.first().cloned();
+                }
+                None
+            }
+            Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
+                let class = self.receiver_class(&obj.value)?;
+                lookup_field_type(&class, name)
+            }
+            Expr::Ident(name) => self.lookup_local(name).map(|l| l.ty.clone()),
+            Expr::Self_ => self
+                .enclosing_class
+                .as_ref()
+                .map(|c| Type::Named(c.clone())),
+            Expr::Str(_) => Some(Type::Named("string".into())),
+            Expr::Int(_) => Some(Type::Named("integer".into())),
+            Expr::Float(_) => Some(Type::Named("float".into())),
+            Expr::Bool(_) => Some(Type::Named("boolean".into())),
+            _ => None,
+        }
+    }
+
     fn visit_module(&mut self, m: &Module) {
         for s in &m.stmts {
             self.visit_stmt(s);
@@ -330,14 +434,38 @@ impl<'a> Cx<'a> {
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
             Stmt::Decl(d) => self.visit_decl(d),
-            Stmt::Local { value, .. } => {
+            Stmt::Local { name, ty, value } => {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
+                let resolved = ty
+                    .clone()
+                    .or_else(|| value.as_ref().and_then(|v| self.infer_init_type(&v.value)))
+                    .unwrap_or_else(|| Type::Named("any".into()));
+                self.locals.push(LocalVar {
+                    name: name.clone(),
+                    ty: resolved,
+                    kind: LocalKind::Local,
+                });
             }
-            Stmt::LocalMulti { values, .. } => {
+            Stmt::LocalMulti { names, values } => {
                 for v in values {
                     self.visit_expr(v);
+                }
+                for (i, (name, ty)) in names.iter().enumerate() {
+                    let resolved = ty
+                        .clone()
+                        .or_else(|| {
+                            values
+                                .get(i)
+                                .and_then(|v| self.infer_init_type(&v.value))
+                        })
+                        .unwrap_or_else(|| Type::Named("any".into()));
+                    self.locals.push(LocalVar {
+                        name: name.clone(),
+                        ty: resolved,
+                        kind: LocalKind::Local,
+                    });
                 }
             }
             Stmt::Assign { target, value } => {
@@ -360,40 +488,67 @@ impl<'a> Cx<'a> {
                 else_block,
             } => {
                 self.visit_expr(cond);
+                let mark = self.locals.len();
                 self.visit_block(then_block);
+                self.locals.truncate(mark);
                 for (c, b) in elseifs {
                     self.visit_expr(c);
+                    let mark = self.locals.len();
                     self.visit_block(b);
+                    self.locals.truncate(mark);
                 }
                 if let Some(eb) = else_block {
+                    let mark = self.locals.len();
                     self.visit_block(eb);
+                    self.locals.truncate(mark);
                 }
             }
             Stmt::While { cond, body } => {
                 self.visit_expr(cond);
+                let mark = self.locals.len();
                 self.visit_block(body);
+                self.locals.truncate(mark);
             }
             Stmt::Repeat { body, cond } => {
+                let mark = self.locals.len();
                 self.visit_block(body);
                 self.visit_expr(cond);
+                self.locals.truncate(mark);
             }
             Stmt::ForNumeric {
+                var,
+                var_ty,
                 from,
                 to,
                 step,
                 body,
-                ..
             } => {
                 self.visit_expr(from);
                 self.visit_expr(to);
                 if let Some(st) = step {
                     self.visit_expr(st);
                 }
+                let mark = self.locals.len();
+                self.locals.push(LocalVar {
+                    name: var.clone(),
+                    ty: var_ty.clone().unwrap_or_else(|| Type::Named("integer".into())),
+                    kind: LocalKind::LoopVar,
+                });
                 self.visit_block(body);
+                self.locals.truncate(mark);
             }
-            Stmt::ForIn { iter, body, .. } => {
+            Stmt::ForIn { vars, iter, body } => {
                 self.visit_expr(iter);
+                let mark = self.locals.len();
+                for (name, ty) in vars {
+                    self.locals.push(LocalVar {
+                        name: name.clone(),
+                        ty: ty.clone().unwrap_or_else(|| Type::Named("any".into())),
+                        kind: LocalKind::LoopVar,
+                    });
+                }
                 self.visit_block(body);
+                self.locals.truncate(mark);
             }
             Stmt::Return(es) => {
                 for e in es {
@@ -402,10 +557,22 @@ impl<'a> Cx<'a> {
             }
             Stmt::Throw(e) => self.visit_expr(e),
             Stmt::Try {
-                body, catch_body, ..
+                body,
+                catch_var,
+                catch_ty,
+                catch_body,
             } => {
+                let mark = self.locals.len();
                 self.visit_block(body);
+                self.locals.truncate(mark);
+                let mark = self.locals.len();
+                self.locals.push(LocalVar {
+                    name: catch_var.clone(),
+                    ty: catch_ty.clone(),
+                    kind: LocalKind::Catch,
+                });
                 self.visit_block(catch_body);
+                self.locals.truncate(mark);
             }
             Stmt::Break | Stmt::Continue => {}
         }
@@ -437,7 +604,8 @@ impl<'a> Cx<'a> {
                         self.visit_expr(def);
                     }
                 }
-                self.visit_block(body);
+                let params = params.clone();
+                self.enter_function(&params, |this| this.visit_block(body));
             }
             Decl::Class {
                 name,
@@ -535,7 +703,8 @@ impl<'a> Cx<'a> {
                 self.visit_expr(def);
             }
         }
-        self.visit_block(&m.body);
+        let params = m.params.clone();
+        self.enter_function(&params, |this| this.visit_block(&m.body));
     }
 
     fn visit_expr(&mut self, e: &Spanned<Expr>) {
@@ -589,10 +758,11 @@ impl<'a> Cx<'a> {
                         self.visit_expr(def);
                     }
                 }
-                match body {
-                    saule_ast::LambdaBody::Expr(b) => self.visit_expr(b),
-                    saule_ast::LambdaBody::Block(b) => self.visit_block(b),
-                }
+                let params = params.clone();
+                self.enter_function(&params, |this| match body {
+                    saule_ast::LambdaBody::Expr(b) => this.visit_expr(b),
+                    saule_ast::LambdaBody::Block(b) => this.visit_block(b),
+                });
             }
             Expr::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
@@ -641,7 +811,25 @@ impl<'a> Cx<'a> {
                 .enclosing_class
                 .as_ref()
                 .map(|c| format!("```saule\n(self): {c}\n```")),
-            Expr::Ident(name) => self.resolve_ident(name),
+            Expr::Ident(name) => {
+                // Locals shadow globals — same precedence rule the
+                // resolver enforces. Render with a kind-specific
+                // label so users can tell at a glance whether the
+                // cursor is on a parameter, loop var, etc.
+                if let Some(local) = self.lookup_local(name) {
+                    let label = match local.kind {
+                        LocalKind::Param => "(parameter)",
+                        LocalKind::Local => "(local)",
+                        LocalKind::LoopVar => "(loop var)",
+                        LocalKind::Catch => "(error)",
+                    };
+                    return Some(format!(
+                        "```saule\n{label} {name}: {ty}\n```",
+                        ty = render_type(&local.ty)
+                    ));
+                }
+                self.resolve_ident(name)
+            }
             Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
                 let class = self.receiver_class(&obj.value)?;
                 resolve_member(&class, name, false)
@@ -703,6 +891,11 @@ impl<'a> Cx<'a> {
         match obj {
             Expr::Self_ => self.enclosing_class.clone(),
             Expr::Ident(name) => {
+                // Locals first — `newEntry.setDone(...)` resolves
+                // through the local's declared/inferred type.
+                if let Some(local) = self.lookup_local(name) {
+                    return named_type(&local.ty);
+                }
                 if with_classes(|r| r.contains_key(name))
                     || with_enums(|r| r.contains_key(name))
                     || saule_typeck::sigs::is_module(name)
@@ -717,6 +910,22 @@ impl<'a> Cx<'a> {
                 let inner_class = self.receiver_class(&inner.value)?;
                 let ty = lookup_field_type(&inner_class, name)?;
                 named_type(&ty)
+            }
+            Expr::Call { callee, .. } => {
+                // `Class(args).foo` — constructor call returns the class.
+                if let Expr::Ident(name) = &callee.value
+                    && with_classes(|r| r.contains_key(name))
+                {
+                    return Some(name.clone());
+                }
+                None
+            }
+            Expr::MethodCall { obj: inner, method, .. } => {
+                // `obj:method(args).foo` — chase the method's
+                // registered return type.
+                let inner_class = self.receiver_class(&inner.value)?;
+                let sig = lookup_method(&inner_class, method)?;
+                named_type(sig.return_ty.as_ref()?)
             }
             _ => None,
         }
@@ -1441,6 +1650,67 @@ end
         assert!(md.contains("-> string"), "got: {md}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The user's reported case: an unannotated `local newEntry =
+    /// Entry(...)` followed by method calls on `newEntry`. Hover on
+    /// the local should surface its inferred type, and method-call
+    /// hover should resolve through it.
+    #[test]
+    fn hovers_local_inferred_from_constructor() {
+        let src = "\
+class Entry
+  todo: string = \"\"
+  done: boolean = false
+  fn setDone(value: boolean) -> nothing
+    self.done = value
+  end
+end
+
+fn use_it() -> nothing
+  local newEntry = Entry()
+  newEntry.setDone(true)
+end
+";
+        // Hover on the local-binding use site (the second `newEntry`).
+        let pos = src.find("newEntry.setDone").unwrap() + 1;
+        let tokens = saule_lexer::Lexer::new(src).tokenize().unwrap();
+        let module = saule_parser::parse(tokens).unwrap();
+        let _ = saule_semantic::analyze(&module);
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("(local)"), "got: {md}");
+        assert!(md.contains("newEntry: Entry"), "got: {md}");
+
+        // Hover on the `setDone` member should resolve via the
+        // local's inferred type back to the method signature.
+        let pos = src.find("newEntry.setDone").unwrap() + "newEntry.".len() + 1;
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("Entry.setDone"), "got: {md}");
+        assert!(md.contains("value: boolean"), "got: {md}");
+    }
+
+    /// Annotated `local s: Storage = ...` should give the same hover
+    /// info as the inferred case via the type ascription.
+    #[test]
+    fn hovers_local_with_annotation() {
+        let src = "\
+class Storage
+  fn save() -> nothing
+  end
+end
+
+fn run() -> nothing
+  local s: Storage = Storage()
+  s.save()
+end
+";
+        let pos = src.find("s.save()").unwrap();
+        let tokens = saule_lexer::Lexer::new(src).tokenize().unwrap();
+        let module = saule_parser::parse(tokens).unwrap();
+        let _ = saule_semantic::analyze(&module);
+        let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
+        assert!(md.contains("(local)"), "got: {md}");
+        assert!(md.contains("s: Storage"), "got: {md}");
     }
 }
 
