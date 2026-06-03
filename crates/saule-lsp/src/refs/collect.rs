@@ -148,7 +148,7 @@ impl<'a> CollectCx<'a> {
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
             Stmt::Decl(d) => self.visit_decl(d),
-            Stmt::Local { name, ty, value } => {
+            Stmt::Local { name, ty, value, .. } => {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }

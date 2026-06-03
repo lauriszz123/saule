@@ -42,9 +42,11 @@ class JsonParser
 
         case _ then true
       end
+
       if stop then
         break
       end
+
       self.pos = self.pos + 1
     end
   end

@@ -12,7 +12,7 @@ class Main
   end
 
   static fn main()
-    local storage: Storage = Storage("todo.json")
+    local storage = Storage("todo.json")
     local args: table = Os.args()
 
     if not Os.exists("todo.json") then
@@ -23,7 +23,7 @@ class Main
     end
 
     if #args == 0 then
-      Main.help()
+      help()
       return
     end
 

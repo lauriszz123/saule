@@ -24,7 +24,7 @@ class Main
       return
     end
 
-    local data: table = raw!
+    local data: table = raw
     Main.dumpTable(data, "  ")
 
     -- Mutate: clear a key, add a key, change a value.
@@ -43,7 +43,7 @@ class Main
       local source: string? = file.read("a")
       file.close()
 
-      return source!
+      return source
     end
   end
 

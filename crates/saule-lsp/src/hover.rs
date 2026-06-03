@@ -70,19 +70,34 @@ pub struct ImportContext {
 /// always builds one). Kept `pub` for that ergonomic.
 #[allow(dead_code)]
 pub fn hover_at(module: &Module, offset: usize) -> Option<(String, Range<usize>)> {
-    hover_at_with(module, offset, &ImportContext::default())
+    hover_at_with_source(module, "", offset, &ImportContext::default())
 }
 
 /// Like [`hover_at`] but also consults `imports` when resolving bare
 /// identifiers and import-statement spans. Backend::hover builds a
 /// fresh context per request from the cached source's `import`
 /// declarations.
+#[allow(dead_code)]
 pub fn hover_at_with(
     module: &Module,
     offset: usize,
     imports: &ImportContext,
 ) -> Option<(String, Range<usize>)> {
-    walker::run(module, offset, imports)
+    hover_at_with_source(module, "", offset, imports)
+}
+
+/// Full entry point: like [`hover_at_with`] but also consumes the raw
+/// `source` text so the walker can scan within parent spans for
+/// identifiers that aren't directly span-tracked in the AST (parameter
+/// types, class field types, `extends` / `implements` heads, named
+/// call argument keys, per-name import resolution, ...).
+pub fn hover_at_with_source(
+    module: &Module,
+    source: &str,
+    offset: usize,
+    imports: &ImportContext,
+) -> Option<(String, Range<usize>)> {
+    walker::run(module, source, offset, imports)
 }
 
 /// Build an [`ImportContext`] for `module` by walking every `import`

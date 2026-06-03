@@ -19,8 +19,12 @@
 
 mod diagnostics;
 mod format;
+mod highlight;
 mod hover;
+mod inlay;
 mod nav;
+mod sighelp;
+mod symbols;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -30,11 +34,14 @@ use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, DocumentFormattingParams, DocumentRangeFormattingParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, Location, MessageType, OneOf,
-    ReferenceParams, SaveOptions, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
+    DidSaveTextDocumentParams, DocumentFormattingParams, DocumentHighlight,
+    DocumentHighlightParams, DocumentRangeFormattingParams, DocumentSymbolParams,
+    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
+    InlayHintParams, Location, MessageType, OneOf, ReferenceParams, SaveOptions,
+    ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, TextEdit, Url,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -133,6 +140,20 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(tower_lsp::lsp_types::OneOf::Left(true)),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    // `(`, `,`, and `:` (named-arg key separator) all
+                    // re-trigger the popup.
+                    trigger_characters: Some(vec![
+                        "(".to_string(),
+                        ",".to_string(),
+                        ":".to_string(),
+                    ]),
+                    retrigger_characters: Some(vec![",".to_string()]),
+                    work_done_progress_options: Default::default(),
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -233,6 +254,40 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         Ok(Some(locs))
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let p = params.text_document_position_params;
+        let hls = self.highlights_at(&p.text_document.uri, p.position).await;
+        if hls.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(hls))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        Ok(self
+            .document_symbols(&params.text_document.uri)
+            .await
+            .map(DocumentSymbolResponse::Nested))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        Ok(Some(self.inlay_hints(&params.text_document.uri).await))
+    }
+
+    async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> Result<Option<SignatureHelp>> {
+        let p = params.text_document_position_params;
+        Ok(self.signature_help_at(&p.text_document.uri, p.position).await)
     }
 
     async fn shutdown(&self) -> Result<()> {

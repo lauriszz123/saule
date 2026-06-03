@@ -1,5 +1,7 @@
 //! Statement nodes — everything that can appear in a block body.
 
+use std::ops::Range;
+
 use crate::{Decl, Expr, Spanned, Type};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -7,7 +9,16 @@ pub enum Stmt {
     /// `local x: T = expr`
     Local {
         name: String,
+        /// Byte range of the declaring identifier (`x` above) in the
+        /// source. Used by tooling (hover, go-to-definition) to point
+        /// at the binding name itself rather than the whole statement.
+        name_span: Range<usize>,
         ty: Option<Type>,
+        /// Byte range of the type ascription (`T` above), if one was
+        /// written. Covers from the start of the type to the end of
+        /// any trailing `?` suffix. `None` when the binding has no
+        /// annotation.
+        ty_span: Option<Range<usize>>,
         value: Option<Spanned<Expr>>,
     },
     /// `local a: T, b: U = e1, e2` — parallel binding. Extra names are nil,

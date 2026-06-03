@@ -99,7 +99,7 @@ pub(super) fn check_stmt(
     match &stmt.value {
         Stmt::Decl(decl) => check_decl(&decl.value, errors),
 
-        Stmt::Local { name, ty, value } => {
+        Stmt::Local { name, ty, value, .. } => {
             if let Some(t) = ty {
                 reject_nil_in_binding_type(t, stmt.span.clone(), errors);
             }
