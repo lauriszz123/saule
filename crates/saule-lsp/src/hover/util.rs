@@ -13,6 +13,78 @@ pub(super) fn contains(r: &Range<usize>, o: usize) -> bool {
     r.start <= o && o <= r.end
 }
 
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Locate the first occurrence of `name` as a word (bounded by
+/// non-identifier bytes) inside `source[range]`. Returns the absolute
+/// byte range of the match.
+pub(super) fn locate_word_in(
+    source: &str,
+    range: &Range<usize>,
+    name: &str,
+) -> Option<Range<usize>> {
+    let end = range.end.min(source.len());
+    let start = range.start.min(end);
+    let slice = source.get(start..end)?;
+    let bytes = slice.as_bytes();
+    let pat = name.as_bytes();
+    if pat.is_empty() || pat.len() > bytes.len() {
+        return None;
+    }
+    let mut i = 0;
+    while i + pat.len() <= bytes.len() {
+        if &bytes[i..i + pat.len()] == pat {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            let after_ok =
+                i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
+            if before_ok && after_ok {
+                return Some((start + i)..(start + i + pat.len()));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Like [`locate_word_in`] but returns every occurrence — used when
+/// the same name may appear more than once inside a span (e.g. a
+/// comma-separated `implements A, B, C` list).
+#[allow(dead_code)]
+pub(super) fn locate_words_in(
+    source: &str,
+    range: &Range<usize>,
+    name: &str,
+) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let end = range.end.min(source.len());
+    let start = range.start.min(end);
+    let Some(slice) = source.get(start..end) else {
+        return out;
+    };
+    let bytes = slice.as_bytes();
+    let pat = name.as_bytes();
+    if pat.is_empty() || pat.len() > bytes.len() {
+        return out;
+    }
+    let mut i = 0;
+    while i + pat.len() <= bytes.len() {
+        if &bytes[i..i + pat.len()] == pat {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            let after_ok =
+                i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
+            if before_ok && after_ok {
+                out.push((start + i)..(start + i + pat.len()));
+                i += pat.len();
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Identifier / member resolution
 // ──────────────────────────────────────────────────────────────────────────────
@@ -62,6 +134,48 @@ pub(super) fn named_type(ty: &Type) -> Option<String> {
         Type::Nullable(inner) => named_type(inner),
         _ => None,
     }
+}
+
+/// Walk a [`Type`] and append every named-type identifier reachable
+/// from it (head names of `Named`, components of `Tuple`,
+/// `Nullable`'s inner, `table<K, V>`'s key/value, function param /
+/// return types) into `out`. Used by the hover walker to find every
+/// type ident worth recording a hover hit for inside a written
+/// ascription, without having to thread per-fragment spans through
+/// the AST.
+pub(super) fn collect_named_heads(ty: &Type, out: &mut Vec<String>) {
+    match ty {
+        Type::Named(n) => out.push(n.clone()),
+        Type::Nullable(inner) => collect_named_heads(inner, out),
+        Type::Table { key, value } => {
+            if let Some(k) = key {
+                collect_named_heads(k, out);
+            }
+            collect_named_heads(value, out);
+        }
+        Type::Tuple(items) => {
+            for it in items {
+                collect_named_heads(it, out);
+            }
+        }
+        Type::Function { params, ret } => {
+            for p in params {
+                collect_named_heads(p, out);
+            }
+            collect_named_heads(ret, out);
+        }
+    }
+}
+
+/// Names that the language treats as primitives — hovering them
+/// shouldn't fire (no useful blurb, and would shadow the surrounding
+/// node). Kept centralised so the type-ascription walker, identifier
+/// resolver, and renderer all agree.
+pub(super) fn is_primitive(name: &str) -> bool {
+    matches!(
+        name,
+        "integer" | "float" | "string" | "boolean" | "nil" | "any" | "table" | "nothing"
+    )
 }
 
 /// Peel a single `Nullable` wrapper. Used for `match` arm bindings:

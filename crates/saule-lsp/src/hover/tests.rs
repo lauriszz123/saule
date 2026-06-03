@@ -27,6 +27,32 @@ fn hover(src: &str, needle: &str) -> Option<String> {
     hover_at(&module, pos).map(|(md, _)| md)
 }
 
+/// Like [`hover`] but threads the original source through so the
+/// walker's source-scanning paths (parameter type ascriptions, class
+/// field type heads, `extends` / `implements` heads, named-arg keys,
+/// per-import-name resolution, `return` keyword) actually fire.
+#[allow(dead_code)]
+fn hover_src(src: &str, needle: &str) -> Option<String> {
+    init_stdlib();
+    let pos = src.find(needle).expect("needle not found") + 1;
+    let tokens = saule_lexer::Lexer::new(src).tokenize().ok()?;
+    let module = saule_parser::parse(tokens).ok()?;
+    let _ = saule_semantic::analyze(&module);
+    hover_at_with_source(&module, src, pos, &ImportContext::default()).map(|(md, _)| md)
+}
+
+/// As [`hover_src`] but with an explicit `offset` past the needle's
+/// start, for cases where the token of interest isn't at the left
+/// edge of `needle`.
+fn hover_src_at(src: &str, needle: &str, offset: usize) -> Option<String> {
+    init_stdlib();
+    let pos = src.find(needle).expect("needle not found") + offset;
+    let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
+    let module = saule_parser::parse(tokens).expect("parse");
+    let _ = saule_semantic::analyze(&module);
+    hover_at_with_source(&module, src, pos, &ImportContext::default()).map(|(md, _)| md)
+}
+
 /// As [`hover`] but the cursor is placed `offset` chars past the
 /// start of `needle`, useful when the relevant token isn't the one
 /// at `needle`'s left edge.
@@ -423,4 +449,154 @@ end
     let md = hover_at(&module, pos).map(|(m, _)| m).unwrap();
     assert!(md.contains("(binding)"), "got: {md}");
     assert!(md.contains("x: integer"), "got: {md}");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Source-threaded hovers: parameter / field / extends / implements / named-arg
+// keys / per-import-name / return keyword
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn hovers_param_type_ascription() {
+    let src = "\
+class Storage
+end
+
+fn use_it(s: Storage) -> nil
+  return nil
+end
+";
+    let md = hover_src_at(src, "Storage)", 1).expect("hover");
+    assert!(md.contains("class Storage"), "got: {md}");
+}
+
+#[test]
+fn hovers_return_type_ascription() {
+    let src = "\
+class Storage
+end
+
+fn make() -> Storage
+  return Storage()
+end
+";
+    let md = hover_src_at(src, "-> Storage", 4).expect("hover");
+    assert!(md.contains("class Storage"), "got: {md}");
+}
+
+#[test]
+fn hovers_field_type_ascription() {
+    let src = "\
+class Item
+end
+
+class List
+  head: Item = Item()
+end
+";
+    let md = hover_src_at(src, "head: Item", "head: ".len()).expect("hover");
+    assert!(md.contains("class Item"), "got: {md}");
+}
+
+#[test]
+fn hovers_extends_head() {
+    let src = "\
+class Animal
+end
+
+class Dog extends Animal
+end
+";
+    let md = hover_src_at(src, "extends Animal", "extends ".len()).expect("hover");
+    assert!(md.contains("class Animal"), "got: {md}");
+}
+
+#[test]
+fn hovers_implements_head() {
+    let src = "\
+interface Greeter
+  fn hello() -> string
+end
+
+class Cat implements Greeter
+  fn hello() -> string
+    return \"meow\"
+  end
+end
+";
+    let md = hover_src_at(src, "implements Greeter", "implements ".len()).expect("hover");
+    assert!(md.contains("interface Greeter"), "got: {md}");
+}
+
+#[test]
+fn hovers_return_keyword() {
+    let src = "\
+fn forty_two() -> integer
+  return 42
+end
+";
+    let md = hover_src_at(src, "return 42", 1).expect("hover");
+    assert!(md.contains("(return)"), "got: {md}");
+    assert!(md.contains("integer"), "got: {md}");
+}
+
+#[test]
+fn hovers_named_call_arg_key() {
+    // The parser only supports named-argument syntax on free / static
+    // calls (sibling static dispatch inside a class), not `:method`
+    // calls. Mirror the shape used by tests/named_params.sau.
+    let src = "\
+class Main
+  static local fn put(item: string, count: integer = 1)
+  end
+
+  static fn main()
+    put(\"x\", count: 3)
+  end
+end
+";
+    let md = hover_src_at(src, "count: 3", 1).expect("hover");
+    assert!(md.contains("(named arg)"), "got: {md}");
+    assert!(md.contains("count"), "got: {md}");
+    assert!(md.contains("integer"), "got: {md}");
+}
+
+#[test]
+fn hovers_local_type_ascription() {
+    let src = "\
+class Storage
+end
+
+local s: Storage = Storage()
+";
+    let md = hover_src_at(src, "s: Storage = Storage()", "s: ".len()).expect("hover");
+    assert!(md.contains("class Storage"), "got: {md}");
+}
+
+#[test]
+fn hovers_chained_method_inference() {
+    // The parser doesn't support `a.b().c()` directly, but the
+    // semantic equivalent — chaining through a local — exercises the
+    // same `receiver_class` path that resolves the inferred class of
+    // a method call's return type.
+    let src = "\
+class A
+  fn b() -> A
+    return self
+  end
+  fn c() -> A
+    return self
+  end
+end
+
+class Main
+  static fn main()
+    local a = A()
+    local mid = a.b()
+    local r = mid.c()
+  end
+end
+";
+    let md = hover_src_at(src, "mid.c()", "mid.".len() + 1).expect("hover");
+    assert!(md.contains("-> A"), "got: {md}");
 }

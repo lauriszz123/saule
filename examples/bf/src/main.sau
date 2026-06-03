@@ -33,7 +33,7 @@ class Main
 
   static local fn runFile(path: string)
     if Os.exists(path) then
-      local file: File = Io.open(path, IoMode.Read)!
+      local file = Io.open(path, IoMode.Read)!
       runFromSource(file.read("a"))
       file.close()
     else

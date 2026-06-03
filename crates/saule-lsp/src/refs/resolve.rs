@@ -161,7 +161,7 @@ impl<'a> ResolveCx<'a> {
         }
         match &s.value {
             Stmt::Decl(d) => self.visit_decl(d),
-            Stmt::Local { name, ty, value } => {
+            Stmt::Local { name, ty, value, .. } => {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
@@ -355,7 +355,7 @@ impl<'a> ResolveCx<'a> {
 
     fn push_locals_from_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
-            Stmt::Local { name, ty, value } => {
+            Stmt::Local { name, ty, value, .. } => {
                 self.push_local_binding(name, ty.clone(), value.as_ref().map(|v| &v.value), &s.span);
             }
             Stmt::LocalMulti { names, values } => {

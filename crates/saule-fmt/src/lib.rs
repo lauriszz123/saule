@@ -321,7 +321,7 @@ impl<'a> Printer<'a> {
 
     fn stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
-            Stmt::Local { name, ty, value } => {
+            Stmt::Local { name, ty, value, .. } => {
                 self.write("local ");
                 self.write(name);
                 if let Some(t) = ty {

@@ -54,10 +54,13 @@ impl Parser {
 
         let kw = self.advance(); // `local`
         let (first_name, first_span) = self.expect_ident("variable name after `local`")?;
-        let first_ty = if self.eat(&Token::Colon) {
-            Some(self.parse_type()?)
+        let (first_ty, first_ty_span) = if self.eat(&Token::Colon) {
+            let start = self.peek().span.start;
+            let t = self.parse_type()?;
+            let end = self.last_consumed_end();
+            (Some(t), Some(start..end))
         } else {
-            None
+            (None, None)
         };
 
         // `local a: T, b: U = e1, e2`
@@ -97,7 +100,9 @@ impl Parser {
         Ok(Spanned::new(
             Stmt::Local {
                 name: first_name,
+                name_span: first_span.clone(),
                 ty: first_ty,
+                ty_span: first_ty_span,
                 value,
             },
             kw.span.start..end,
