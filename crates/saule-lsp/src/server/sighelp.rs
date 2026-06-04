@@ -20,6 +20,7 @@ use saule_ast::{
     Stmt, TableEntry, Type,
 };
 use saule_semantic::{lookup_method, with_classes};
+use std::collections::HashMap;
 use tower_lsp::lsp_types::{
     ParameterInformation, ParameterLabel, Position, SignatureHelp, SignatureInformation, Url,
 };
@@ -74,6 +75,7 @@ impl Backend {
                 offset,
                 locals: Vec::new(),
                 enclosing_class: None,
+                user_fns: collect_user_fns(module),
                 best: None,
             };
             cx.visit_module(module);
@@ -103,11 +105,36 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                     return build_help(&name, Some(sig), &hit.args, offset);
                 }
             }
+            // User-defined top-level function (collected by the AST
+            // walker into `hit.user_fn`).
+            if let Some((params, ret)) = hit.user_fn {
+                return build_help_user_fn(&name, &params, &ret, &hit.args, offset);
+            }
+            // Bare native (`println`, `assert`, ...).
+            if let Some(native) = saule_typeck::sigs::lookup(&name) {
+                return build_help_native(&name, &name, &native, &hit.args, offset);
+            }
             None
         }
         CalleeRef::Method { class, name } => {
-            let sig = lookup_method(&class, &name);
-            build_help(&name, sig, &hit.args, offset)
+            if let Some(sig) = lookup_method(&class, &name) {
+                return build_help(&name, Some(sig), &hit.args, offset);
+            }
+            // Stdlib value-type instance method (e.g. `file.write` where
+            // `file: File`). Native sigs are registered as `File.write`.
+            let qname = format!("{class}.{name}");
+            if let Some(native) = saule_typeck::sigs::lookup(&qname) {
+                return build_help_native(&name, &qname, &native, &hit.args, offset);
+            }
+            None
+        }
+        CalleeRef::Native(qname) => {
+            let native = saule_typeck::sigs::lookup(&qname)?;
+            let display = qname
+                .rsplit_once('.')
+                .map(|(_, n)| n)
+                .unwrap_or(&qname);
+            build_help_native(display, &qname, &native, &hit.args, offset)
         }
     }
 }
@@ -211,8 +238,15 @@ fn textual_fallback(source: &str, offset: usize) -> Option<SignatureHelp> {
 
     if let Some(recv) = receiver {
         if with_classes(|r| r.contains_key(recv)) {
-            let sig = lookup_method(recv, name)?;
-            return build_help_simple(name, sig, active);
+            if let Some(sig) = lookup_method(recv, name) {
+                return build_help_simple(name, sig, active);
+            }
+        }
+        // Stdlib module call (`Os.exists`, `String.find`, ...) or
+        // value-type instance method (`File.write`).
+        let qname = format!("{recv}.{name}");
+        if let Some(native) = saule_typeck::sigs::lookup(&qname) {
+            return build_help_native_simple(name, &qname, &native, active);
         }
         return None;
     }
@@ -228,6 +262,15 @@ fn textual_fallback(source: &str, offset: usize) -> Option<SignatureHelp> {
         if let Some(sig) = lookup_method(&class, name) {
             return build_help_simple(name, sig, active);
         }
+    }
+    // User-defined free function. Re-parse the source defensively so
+    // we can pick up `fn name(...)` even when the parse failed during
+    // mid-keystroke (the failing call site may be a different stmt).
+    if let Some((params, ret)) = lookup_user_fn_textual(source, name) {
+        return build_help_user_fn_simple(name, &params, &ret, active);
+    }
+    if let Some(native) = saule_typeck::sigs::lookup(name) {
+        return build_help_native_simple(name, name, &native, active);
     }
     None
 }
@@ -248,6 +291,119 @@ fn build_help_simple(
     }
     help.active_parameter = Some(active as u32);
     Some(help)
+}
+
+/// Render a `NativeSig` as a `SignatureHelp`. Native sigs have no
+/// param names, so we synthesize `arg0`, `arg1`, ... — cheap, but
+/// good enough for stdlib calls where the type is the load-bearing
+/// piece of information anyway.
+fn build_help_native(
+    display: &str,
+    qname: &str,
+    sig: &saule_typeck::sigs::NativeSig,
+    args: &[CallArgInfo],
+    offset: usize,
+) -> Option<SignatureHelp> {
+    let names = super::native_names::param_names(qname, sig);
+    let mut label = String::new();
+    label.push_str(display);
+    label.push('(');
+    let mut param_ranges: Vec<(u32, u32)> = Vec::new();
+    let positional_n = sig.params.len();
+    for (i, ty) in sig.params.iter().enumerate() {
+        if i > 0 {
+            label.push_str(", ");
+        }
+        let start = label.len() as u32;
+        let pname = names.get(i).map(|s| s.as_str()).unwrap_or("value");
+        label.push_str(pname);
+        label.push_str(": ");
+        label.push_str(&render_type(ty));
+        let end = label.len() as u32;
+        param_ranges.push((start, end));
+    }
+    if let Some(var_ty) = &sig.variadic {
+        if positional_n > 0 {
+            label.push_str(", ");
+        }
+        let start = label.len() as u32;
+        let vname = names.get(positional_n).map(|s| s.as_str()).unwrap_or("rest");
+        label.push_str("...");
+        label.push_str(vname);
+        label.push_str(": ");
+        label.push_str(&render_type(var_ty));
+        let end = label.len() as u32;
+        param_ranges.push((start, end));
+    }
+    label.push(')');
+    if !sig.returns.is_empty() {
+        label.push_str(" -> ");
+        let parts: Vec<String> = sig.returns.iter().map(render_type).collect();
+        label.push_str(&parts.join(", "));
+    }
+
+    let arity_with_var = param_ranges.len();
+    let active = active_parameter(args, offset, arity_with_var);
+
+    let parameters = param_ranges
+        .into_iter()
+        .map(|(s, e)| ParameterInformation {
+            label: ParameterLabel::LabelOffsets([s, e]),
+            documentation: None,
+        })
+        .collect::<Vec<_>>();
+
+    Some(SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label,
+            documentation: None,
+            parameters: Some(parameters),
+            active_parameter: Some(active as u32),
+        }],
+        active_signature: Some(0),
+        active_parameter: Some(active as u32),
+    })
+}
+
+/// Textual-fallback variant of [`build_help_native`] — same output
+/// shape but uses a comma-derived `active` index instead of arg-span
+/// containment.
+fn build_help_native_simple(
+    display: &str,
+    qname: &str,
+    sig: &saule_typeck::sigs::NativeSig,
+    active: usize,
+) -> Option<SignatureHelp> {
+    let total = sig.params.len() + usize::from(sig.variadic.is_some());
+    let active = if total == 0 { 0 } else { active.min(total - 1) };
+    let dummy_args: Vec<CallArgInfo> = Vec::new();
+    let mut help = build_help_native(display, qname, sig, &dummy_args, 0)?;
+    if let Some(s) = help.signatures.first_mut() {
+        s.active_parameter = Some(active as u32);
+    }
+    help.active_parameter = Some(active as u32);
+    Some(help)
+}
+
+/// Build help for a user-defined free top-level function. We pull
+/// `Param` records (with names!) directly from the AST, so the
+/// rendering matches what `build_help` produces for class methods.
+fn build_help_user_fn(
+    name: &str,
+    params: &[Param],
+    return_ty: &Option<Type>,
+    args: &[CallArgInfo],
+    offset: usize,
+) -> Option<SignatureHelp> {
+    use saule_semantic::MethodSig;
+    let sig = MethodSig {
+        is_static: false,
+        is_private: false,
+        type_params: Vec::new(),
+        params: params.to_vec(),
+        return_ty: return_ty.clone(),
+    };
+    build_help(name, Some(sig), args, offset)
 }
 
 /// Best-effort scan for the enclosing `class Name` whose body brackets
@@ -394,6 +550,9 @@ fn render_type(ty: &Type) -> String {
 enum CalleeRef {
     Free(String),
     Method { class: String, name: String },
+    /// Stdlib qualified name like `"Os.exists"` or bare native like
+    /// `"println"` — resolved through `saule_typeck::sigs::lookup`.
+    Native(String),
 }
 
 #[derive(Clone)]
@@ -410,6 +569,10 @@ struct CallHit {
     callee: CalleeRef,
     args: Vec<CallArgInfo>,
     enclosing_class: Option<String>,
+    /// Resolved params for a user-defined free function — populated
+    /// by the walker when it sees `Expr::Call` whose callee identifier
+    /// matches a top-level `Decl::Function`.
+    user_fn: Option<(Vec<Param>, Option<Type>)>,
     /// Source span of the entire arg list region — used to disambiguate
     /// nested calls (the smallest enclosing call wins).
     args_span: std::ops::Range<usize>,
@@ -419,6 +582,10 @@ struct Cx {
     offset: usize,
     locals: Vec<Local>,
     enclosing_class: Option<String>,
+    /// Top-level user functions discovered in the module. Populated
+    /// during a single pre-pass before `visit_module` so call sites
+    /// resolve regardless of declaration order.
+    user_fns: HashMap<String, (Vec<Param>, Option<Type>)>,
     best: Option<CallHit>,
 }
 
@@ -613,10 +780,15 @@ impl Cx {
                     visit_arg(self, a);
                 }
                 if let Some(callee_ref) = self.callee_ref(&callee.value) {
+                    let user_fn = match &callee_ref {
+                        CalleeRef::Free(n) => self.user_fns.get(n).cloned(),
+                        _ => None,
+                    };
                     self.record(CallHit {
                         callee: callee_ref,
                         args: build_arg_infos(args),
                         enclosing_class: self.enclosing_class.clone(),
+                        user_fn,
                         args_span: args_span(&callee.span, args, e.span.end),
                     });
                 }
@@ -634,6 +806,7 @@ impl Cx {
                         },
                         args: build_arg_infos(args),
                         enclosing_class: self.enclosing_class.clone(),
+                        user_fn: None,
                         args_span: args_span(&obj.span, args, e.span.end),
                     });
                 }
@@ -700,6 +873,15 @@ impl Cx {
         match callee {
             Expr::Ident(name) => Some(CalleeRef::Free(name.clone())),
             Expr::Member { obj, name } => {
+                // Stdlib static call (`Os.exists`, `String.find`, ...) —
+                // these aren't user classes so receiver_class can't see
+                // them. Probe the typeck sig registry directly.
+                if let Expr::Ident(mod_name) = &obj.value {
+                    let qname = format!("{mod_name}.{name}");
+                    if saule_typeck::sigs::lookup(&qname).is_some() {
+                        return Some(CalleeRef::Native(qname));
+                    }
+                }
                 let class = self.receiver_class(&obj.value)?;
                 Some(CalleeRef::Method {
                     class,
@@ -782,6 +964,77 @@ fn contains(span: &std::ops::Range<usize>, offset: usize) -> bool {
     offset >= span.start && offset <= span.end
 }
 
+/// Pre-pass: collect every top-level `fn name(...)` declaration so the
+/// signature-help walker can resolve free-call expressions whose target
+/// is a user-defined function (not a class init, not a stdlib native).
+fn collect_user_fns(module: &Module) -> HashMap<String, (Vec<Param>, Option<Type>)> {
+    let mut out = HashMap::new();
+    for s in &module.stmts {
+        if let Stmt::Decl(d) = &s.value {
+            if let Decl::Function {
+                name,
+                params,
+                return_ty,
+                ..
+            } = &d.value
+            {
+                out.insert(name.clone(), (params.clone(), return_ty.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Textual-fallback variant of [`collect_user_fns`]: re-lexes and
+/// re-parses the source defensively to recover top-level `fn name`
+/// declarations even when the document as a whole fails to parse
+/// (the failing tokens may be elsewhere in the file).
+fn lookup_user_fn_textual(source: &str, name: &str) -> Option<(Vec<Param>, Option<Type>)> {
+    // First try parsing the source as-is.
+    if let Ok(tokens) = saule_lexer::Lexer::new(source).tokenize() {
+        if let Ok(module) = saule_parser::parse(tokens) {
+            if let Some(found) = collect_user_fns(&module).remove(name) {
+                return Some(found);
+            }
+        }
+    }
+    // Mid-keystroke: the buffer has an unclosed `(` somewhere. Try
+    // synthesising a closed buffer by appending `) end` enough times
+    // to balance any open call/block. This is crude but cheap and
+    // recovers the `fn name(...) ... end` declarations the user
+    // already finished typing.
+    for suffix in [") end", ") end\nend", ") end\nend\nend"] {
+        let patched = format!("{source}{suffix}");
+        if let Ok(tokens) = saule_lexer::Lexer::new(&patched).tokenize() {
+            if let Ok(module) = saule_parser::parse(tokens) {
+                if let Some(found) = collect_user_fns(&module).remove(name) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Textual-fallback variant of [`build_help_user_fn`]: reuses the
+/// AST path's renderer but feeds it a comma-derived `active` index
+/// instead of arg-span containment.
+fn build_help_user_fn_simple(
+    name: &str,
+    params: &[Param],
+    return_ty: &Option<Type>,
+    active: usize,
+) -> Option<SignatureHelp> {
+    let total = params.len().max(1);
+    let active = active.min(total - 1);
+    let mut help = build_help_user_fn(name, params, return_ty, &[], 0)?;
+    if let Some(s) = help.signatures.first_mut() {
+        s.active_parameter = Some(active as u32);
+    }
+    help.active_parameter = Some(active as u32);
+    Some(help)
+}
+
 #[cfg(test)]
 mod tests {
     //! Signature help tests. Bypasses `Backend` by replicating the
@@ -789,8 +1042,15 @@ mod tests {
     //! to `build_help`) against an in-memory source string.
 
     use super::*;
+    use std::sync::Once;
+
+    fn init_stdlib() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(saule_interpreter::init);
+    }
 
     fn help(src: &str, cursor_at: &str, offset_into: usize) -> Option<SignatureHelp> {
+        init_stdlib();
         let offset = src.find(cursor_at).expect("needle") + offset_into;
         let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
         let module = saule_parser::parse(tokens).expect("parse");
@@ -799,27 +1059,12 @@ mod tests {
             offset,
             locals: Vec::new(),
             enclosing_class: None,
+            user_fns: collect_user_fns(&module),
             best: None,
         };
         cx.visit_module(&module);
         let hit = cx.best?;
-        match hit.callee {
-            CalleeRef::Free(name) => {
-                if with_classes(|r| r.contains_key(&name)) {
-                    return build_help(&name, lookup_method(&name, "init"), &hit.args, offset);
-                }
-                if let Some(class) = &hit.enclosing_class {
-                    if let Some(sig) = lookup_method(class, &name) {
-                        return build_help(&name, Some(sig), &hit.args, offset);
-                    }
-                }
-                None
-            }
-            CalleeRef::Method { class, name } => {
-                let sig = lookup_method(&class, &name);
-                build_help(&name, sig, &hit.args, offset)
-            }
-        }
+        resolve_hit(hit, offset)
     }
 
     #[test]
@@ -864,6 +1109,7 @@ mod tests {
     /// work — analyse a *prelude* containing the class def so the
     /// in-progress snippet doesn't have to be syntactically valid.
     fn fallback_help(prelude: &str, snippet: &str, cursor_at_end: usize) -> Option<SignatureHelp> {
+        init_stdlib();
         let tokens = saule_lexer::Lexer::new(prelude).tokenize().expect("lex");
         let module = saule_parser::parse(tokens).expect("parse");
         let _ = saule_semantic::analyze(&module);
@@ -911,6 +1157,97 @@ mod tests {
         let h = fallback_help(prelude, snippet, 0).expect("fallback help");
         // Only one param exists — clamp instead of going out of range.
         assert_eq!(h.active_parameter, Some(0));
+    }
+
+    // ── stdlib (native) signature help ────────────────────────────
+
+    #[test]
+    fn signature_for_stdlib_module_member() {
+        let src = "fn main()\n  local n = Math.floor(3.14)\nend\n";
+        let h = help(src, "floor(3", 6).expect("help");
+        let sig = &h.signatures[0];
+        assert!(sig.label.starts_with("floor("), "label={}", sig.label);
+        assert_eq!(h.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn fallback_signature_for_stdlib_member_mid_typing() {
+        // No closing paren → parser would fail; textual fallback
+        // should still resolve `Math.floor(`.
+        let prelude = "";
+        let snippet = "  local n = Math.floor(";
+        let h = fallback_help(prelude, snippet, 0).expect("fallback help");
+        let sig = &h.signatures[0];
+        assert!(sig.label.starts_with("floor("), "label={}", sig.label);
+        assert_eq!(h.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn fallback_signature_for_stdlib_two_arg_after_comma() {
+        // `Math.atan` is registered with 2 params (`(n, n?)`).
+        let prelude = "";
+        let snippet = "  local r = Math.atan(1, ";
+        let h = fallback_help(prelude, snippet, 0).expect("fallback help");
+        assert!(h.signatures[0].label.starts_with("atan("));
+        assert_eq!(h.active_parameter, Some(1));
+    }
+
+    // ── user-defined free top-level functions ─────────────────────
+
+    #[test]
+    fn signature_for_free_top_level_user_fn() {
+        let src = "fn add(x: integer, y: integer) -> integer\n  return x + y\nend\n\nfn main()\n  local r = add(1, 2)\nend\n";
+        let h = help(src, "add(1", 4).expect("help");
+        let label = &h.signatures[0].label;
+        assert!(label.starts_with("add("), "label={label}");
+        assert!(label.contains("x: integer"), "label={label}");
+        assert!(label.contains("y: integer"), "label={label}");
+        assert!(label.contains("-> integer"), "label={label}");
+        assert_eq!(h.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn signature_for_free_user_fn_advances_active_param() {
+        let src = "fn add(x: integer, y: integer) -> integer\n  return x + y\nend\n\nfn main()\n  local r = add(1, 2)\nend\n";
+        // Position cursor between `1, ` and `2)` — second arg.
+        let h = help(src, "1, 2", 3).expect("help");
+        assert_eq!(h.active_parameter, Some(1));
+    }
+
+    #[test]
+    fn fallback_signature_for_free_user_fn() {
+        // Mid-keystroke: closing paren missing on the call site, but
+        // the `fn add` declaration parses fine on its own.
+        let prelude = "fn add(x: integer, y: integer) -> integer\n  return x + y\nend";
+        let snippet = "\nfn main()\n  local r = add(";
+        let h = fallback_help(prelude, snippet, 0).expect("fallback help");
+        let label = &h.signatures[0].label;
+        assert!(label.starts_with("add("), "label={label}");
+        assert!(label.contains("x: integer"), "label={label}");
+        assert_eq!(h.active_parameter, Some(0));
+    }
+
+    // ── better native param names ─────────────────────────────────
+
+    #[test]
+    fn signature_for_stdlib_uses_real_param_names() {
+        // `Math.floor(n: number) -> integer` — names should come from
+        // the static stdlib table, not synthesised `arg0`.
+        let src = "fn main()\n  local n = Math.floor(3.14)\nend\n";
+        let h = help(src, "floor(3", 6).expect("help");
+        let label = &h.signatures[0].label;
+        assert!(label.contains("n: "), "expected `n:` in {label}");
+        assert!(!label.contains("arg0"), "should not contain arg0: {label}");
+    }
+
+    #[test]
+    fn signature_for_stdlib_string_find_uses_real_param_names() {
+        let src = "fn main()\n  local i, j = String.find(\"hello\", \"l\")\nend\n";
+        let h = help(src, "find(\"", 5).expect("help");
+        let label = &h.signatures[0].label;
+        assert!(label.contains("s: "), "expected `s:` in {label}");
+        assert!(label.contains("pattern: "), "expected `pattern:` in {label}");
+        assert!(label.contains("init"), "expected `init` in {label}");
     }
 }
 
