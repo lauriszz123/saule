@@ -23,6 +23,7 @@ use saule_ast::{
     Stmt, TableEntry, Type,
 };
 use saule_semantic::{lookup_method, with_classes};
+use std::collections::HashMap;
 use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Url};
 
 use crate::line_index::LineIndex;
@@ -69,6 +70,7 @@ impl Backend {
             out: Vec::new(),
             locals: Vec::new(),
             enclosing_class: None,
+            user_fns: collect_user_fns(&module),
         };
         cx.visit_module(&module);
         cx.out
@@ -106,6 +108,10 @@ struct Cx<'a> {
     out: Vec<RawHint>,
     locals: Vec<Local>,
     enclosing_class: Option<String>,
+    /// Top-level user functions discovered in the module, populated by
+    /// `collect_user_fns` before traversal so call sites resolve
+    /// regardless of declaration order.
+    user_fns: HashMap<String, Vec<Param>>,
 }
 
 impl<'a> Cx<'a> {
@@ -297,18 +303,15 @@ impl<'a> Cx<'a> {
             Expr::Call { callee, args } => {
                 self.visit_expr(callee);
                 let params = self.callee_params(&callee.value);
-                self.emit_param_hints(args, params.as_deref());
+                self.emit_param_hints(args, params.as_ref());
                 for a in args {
                     self.visit_call_arg(a);
                 }
             }
             Expr::MethodCall { obj, method, args } => {
                 self.visit_expr(obj);
-                let params = self
-                    .receiver_class(&obj.value)
-                    .and_then(|c| lookup_method(&c, method))
-                    .map(|sig| sig.params);
-                self.emit_param_hints(args, params.as_deref());
+                let params = self.method_callee_params(&obj.value, method);
+                self.emit_param_hints(args, params.as_ref());
                 for a in args {
                     self.visit_call_arg(a);
                 }
@@ -391,37 +394,46 @@ impl<'a> Cx<'a> {
     /// matching parameter we could resolve. Suppressed when the arg
     /// is itself the bare parameter name (`add(a, b)` would be noisy)
     /// or already named at the source level.
-    fn emit_param_hints(&mut self, args: &[CallArg], params: Option<&[Param]>) {
+    fn emit_param_hints(&mut self, args: &[CallArg], params: Option<&CalleeParams>) {
         let Some(params) = params else { return };
-        // Strip a leading `self` / receiver slot from the signature
-        // when the call is a method call — saule's class registry
-        // keeps `self` implicit, but a few entry points include it.
-        // We index by position into `args`, so just walk in lockstep.
+        // Project the two shapes down to a `(name, is_variadic)` slice
+        // so the rest of the loop can treat them uniformly. Native
+        // sigs don't carry per-slot variadic info — at most one
+        // trailing variadic slot — so we mark only that last one.
+        let slots: Vec<(String, bool)> = match params {
+            CalleeParams::Named(ps) => ps
+                .iter()
+                .map(|p| (p.name.clone(), p.variadic))
+                .collect(),
+            CalleeParams::Native { names, has_variadic } => names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.clone(), *has_variadic && i + 1 == names.len()))
+                .collect(),
+        };
         let mut pi = 0;
         for arg in args {
             match arg {
                 CallArg::Named { .. } => {
-                    // The user already wrote the name; advance past
-                    // the matching declared param (best-effort).
                     pi += 1;
                 }
                 CallArg::Positional(value) => {
-                    let Some(param) = params.get(pi) else { break };
+                    let Some((name, is_var)) = slots.get(pi) else { break };
                     pi += 1;
-                    if param.variadic {
-                        // Variadic slots accept any number of args;
-                        // a single label in front of every remaining
-                        // arg would be misleading.
+                    if *is_var {
                         break;
                     }
                     if let Expr::Ident(n) = &value.value {
-                        if n == &param.name {
+                        if n == name {
                             continue;
                         }
                     }
+                    if name.is_empty() {
+                        continue;
+                    }
                     self.out.push(RawHint {
                         byte: value.span.start,
-                        label: format!("{}:", param.name),
+                        label: format!("{name}:"),
                         kind: InlayHintKind::PARAMETER,
                         padding_left: None,
                         padding_right: Some(true),
@@ -506,26 +518,115 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn callee_params(&self, callee: &Expr) -> Option<Vec<Param>> {
+    fn callee_params(&self, callee: &Expr) -> Option<CalleeParams> {
         match callee {
             Expr::Ident(name) => {
                 if with_classes(|r| r.contains_key(name)) {
-                    return lookup_method(name, "init").map(|sig| sig.params);
+                    return lookup_method(name, "init")
+                        .map(|sig| CalleeParams::Named(sig.params));
                 }
                 if let Some(class) = &self.enclosing_class {
                     if let Some(sig) = lookup_method(class, name) {
-                        return Some(sig.params);
+                        return Some(CalleeParams::Named(sig.params));
                     }
+                }
+                if let Some(params) = self.user_fns.get(name) {
+                    return Some(CalleeParams::Named(params.clone()));
+                }
+                // Bare native (`assert`, `tonumber`, ...): synthesise
+                // names from the registered native sig so the user
+                // gets `assert(cond: true, message: ...)`.
+                if let Some(native) = saule_typeck::sigs::lookup(name) {
+                    return Some(CalleeParams::Native {
+                        names: super::native_names::param_names(name, &native),
+                        has_variadic: native.variadic.is_some(),
+                    });
                 }
                 None
             }
             Expr::Member { obj, name } => {
-                let class = self.receiver_class(&obj.value)?;
-                lookup_method(&class, name).map(|sig| sig.params)
+                if let Some(class) = self.receiver_class(&obj.value) {
+                    if let Some(sig) = lookup_method(&class, name) {
+                        return Some(CalleeParams::Named(sig.params));
+                    }
+                    let qname = format!("{class}.{name}");
+                    if let Some(native) = saule_typeck::sigs::lookup(&qname) {
+                        return Some(CalleeParams::Native {
+                            names: super::native_names::param_names(&qname, &native),
+                            has_variadic: native.variadic.is_some(),
+                        });
+                    }
+                }
+                // Stdlib module call: `Math.floor(2)` — receiver is a
+                // bare identifier registered as a module.
+                if let Expr::Ident(recv) = &obj.value {
+                    let qname = format!("{recv}.{name}");
+                    if let Some(native) = saule_typeck::sigs::lookup(&qname) {
+                        return Some(CalleeParams::Native {
+                            names: super::native_names::param_names(&qname, &native),
+                            has_variadic: native.variadic.is_some(),
+                        });
+                    }
+                }
+                None
             }
             _ => None,
         }
     }
+
+    /// Resolve the parameter list for `obj.method(...)`. Mirrors the
+    /// Member-arm in [`Self::callee_params`] but specialised for
+    /// `Expr::MethodCall` whose AST keeps `method` as a bare string.
+    fn method_callee_params(&self, obj: &Expr, method: &str) -> Option<CalleeParams> {
+        if let Some(class) = self.receiver_class(obj) {
+            if let Some(sig) = lookup_method(&class, method) {
+                return Some(CalleeParams::Named(sig.params));
+            }
+            let qname = format!("{class}.{method}");
+            if let Some(native) = saule_typeck::sigs::lookup(&qname) {
+                return Some(CalleeParams::Native {
+                    names: super::native_names::param_names(&qname, &native),
+                    has_variadic: native.variadic.is_some(),
+                });
+            }
+        }
+        if let Expr::Ident(recv) = obj {
+            let qname = format!("{recv}.{method}");
+            if let Some(native) = saule_typeck::sigs::lookup(&qname) {
+                return Some(CalleeParams::Native {
+                    names: super::native_names::param_names(&qname, &native),
+                    has_variadic: native.variadic.is_some(),
+                });
+            }
+        }
+        None
+    }
+}
+
+/// Either a list of AST `Param`s (which may have explicit names and
+/// types) or a list of synthesised names from a native sig together
+/// with a flag marking whether the trailing slot is variadic. The
+/// two shapes are kept apart so the caller can decide whether to
+/// consult `param.name` and `param.variadic` (only meaningful for
+/// named params).
+enum CalleeParams {
+    Named(Vec<Param>),
+    Native { names: Vec<String>, has_variadic: bool },
+}
+
+/// Pre-pass: collect every top-level `fn name(...)` declaration so the
+/// param-hint walker can resolve free-call expressions whose target
+/// is a user-defined function (not a class init, not a stdlib native).
+fn collect_user_fns(module: &Module) -> HashMap<String, Vec<Param>> {
+    let mut out = HashMap::new();
+    for s in &module.stmts {
+        if let Stmt::Decl(d) = &s.value {
+            if let Decl::Function { name, params, .. } = &d.value {
+                out.insert(name.clone(), params.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Render a `Type` as a short label suitable for an inlay hint. Returns
@@ -557,6 +658,7 @@ mod tests {
             out: Vec::new(),
             locals: Vec::new(),
             enclosing_class: None,
+            user_fns: collect_user_fns(&module),
         };
         cx.visit_module(&module);
         cx.out
@@ -637,6 +739,61 @@ mod tests {
             .collect();
         assert!(labels.contains(&&"x:".to_string()), "got {hints:?}");
         assert!(labels.contains(&&"y:".to_string()), "got {hints:?}");
+    }
+
+    fn init_stdlib() {
+        use std::sync::Once;
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            saule_interpreter::init();
+        });
+    }
+
+    #[test]
+    fn parameter_hint_for_free_top_level_fn() {
+        let src = "fn add(x: integer, y: integer) -> integer\n  return x + y\nend\n\nfn main()\n  local r = add(1, 2)\nend\n";
+        let hints = raw_hints(src);
+        let labels: Vec<&String> = hints
+            .iter()
+            .filter(|(k, _, _)| *k == InlayHintKind::PARAMETER)
+            .map(|(_, _, l)| l)
+            .collect();
+        assert!(labels.contains(&&"x:".to_string()), "got {hints:?}");
+        assert!(labels.contains(&&"y:".to_string()), "got {hints:?}");
+    }
+
+    #[test]
+    fn parameter_hint_for_stdlib_module_call() {
+        init_stdlib();
+        // `String.find(s, pattern, init?)` — first two positionals get
+        // `s:` and `pattern:` from the static names table.
+        let src = "fn main()\n  local i = String.find(\"hello\", \"l\")\nend\n";
+        let hints = raw_hints(src);
+        let labels: Vec<&String> = hints
+            .iter()
+            .filter(|(k, _, _)| *k == InlayHintKind::PARAMETER)
+            .map(|(_, _, l)| l)
+            .collect();
+        assert!(labels.contains(&&"s:".to_string()), "got {hints:?}");
+        assert!(labels.contains(&&"pattern:".to_string()), "got {hints:?}");
+    }
+
+    #[test]
+    fn parameter_hint_suppressed_for_println() {
+        init_stdlib();
+        // `println` is registered as a purely-variadic native
+        // (`println(...any)`). The walker treats variadic slots as
+        // unlabel-able, so a `println("hello")` should produce no
+        // parameter inlay hint — labelling the first arg `value:`
+        // when there are no fixed positional slots would be noise.
+        let src = "fn main()\n  println(\"hello\")\nend\n";
+        let hints = raw_hints(src);
+        let labels: Vec<&String> = hints
+            .iter()
+            .filter(|(k, _, _)| *k == InlayHintKind::PARAMETER)
+            .map(|(_, _, l)| l)
+            .collect();
+        assert!(labels.is_empty(), "expected no param hints, got {hints:?}");
     }
 }
 

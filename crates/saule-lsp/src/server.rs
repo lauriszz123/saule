@@ -23,6 +23,7 @@ mod highlight;
 mod hover;
 mod inlay;
 mod nav;
+mod native_names;
 mod sighelp;
 mod symbols;
 
