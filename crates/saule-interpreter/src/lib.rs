@@ -38,6 +38,7 @@ pub mod env;
 pub mod error;
 pub mod eval;
 pub mod module;
+pub mod dynamic_packages;
 pub mod native_packages;
 pub mod project;
 pub mod stdlib;
@@ -97,6 +98,11 @@ pub fn init() {
         // interpreter that lives behind an `import "..."`. Third-party
         // packages call `native_packages::register` themselves.
         stdlib::register_builtin_packages();
+        // Discover externally-installed native packages described by
+        // manifests under `~/.saule/native_manifests/`. This only parses
+        // manifests and records their type signatures — the shared
+        // libraries themselves are loaded lazily on first import.
+        dynamic_packages::discover();
     });
 }
 

@@ -1,0 +1,9 @@
+[package]
+name = "saule-native-abi"
+version.workspace = true
+edition.workspace = true
+description = "Stable C-ABI boundary types shared between the Saule interpreter and dynamically-loaded native packages."
+
+[lib]
+name = "saule_native_abi"
+path = "src/lib.rs"

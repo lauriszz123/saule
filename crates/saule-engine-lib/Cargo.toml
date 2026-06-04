@@ -1,0 +1,16 @@
+[package]
+name = "saule-engine-lib"
+version.workspace = true
+edition.workspace = true
+description = "Love2D-like graphics engine, compiled as a dynamically-loadable Saule native package."
+
+[lib]
+name = "saule_engine_lib"
+# `cdylib` produces the `.so` / `.dll` / `.dylib` the Saule interpreter loads
+# at runtime. `rlib` lets the crate's own tests link against it normally.
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+saule-native-abi = { path = "../saule-native-abi" }
+minifb = "0.28"

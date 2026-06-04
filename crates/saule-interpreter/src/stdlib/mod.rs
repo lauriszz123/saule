@@ -67,6 +67,10 @@ pub fn register_all_sigs() {
     for pkg in crate::native_packages::all() {
         (pkg.register_sigs)();
     }
+    // Dynamically-discovered native packages register their signatures from
+    // the parsed manifests so `Pkg.method(...)` type-checks before the
+    // shared library is ever loaded.
+    crate::dynamic_packages::register_sigs();
 }
 
 /// Synthetic `ClassInfo` / `EnumInfo` entries for stdlib value types
