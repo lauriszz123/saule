@@ -1,0 +1,24 @@
+-- Demo of the dynamically-loaded `engine` native package.
+--
+-- Prerequisites (see README.md in this folder):
+--   1. Build the package:  cargo build -p saule-engine-lib --release
+--   2. Copy the binary to  ~/.saule/native_packages/
+--   3. Copy engine.toml to  ~/.saule/native_manifests/
+--
+-- Then run:  saule examples/native-package/demo.sau
+
+import Graphics, Window, Timer from "engine"
+
+class Main
+    static fn main()
+        Window.create(800, 600)
+
+        local started: float = Timer.getTime()
+
+        Graphics.circle("fill", 400.0, 300.0, 64.0)
+        Graphics.rectangle("line", 10.0, 10.0, 120.0, 40.0)
+
+        local elapsed: float = Timer.getTime() - started
+        printf("drew a frame in %.4f seconds\n", elapsed)
+    end
+end

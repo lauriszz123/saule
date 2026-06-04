@@ -79,6 +79,14 @@ pub fn resolve_import_path(dir: &Path, raw: &str) -> Option<PathBuf> {
         return Some(crate::native_packages::sentinel_path(raw));
     }
 
+    // Dynamically-discovered native packages (manifest-described shared
+    // libraries under `~/.saule/`) resolve next, before any filesystem
+    // lookup, so an installed `"engine"` package can't be shadowed by a
+    // stray `engine.sau`.
+    if crate::dynamic_packages::is_dynamic_package(raw) {
+        return Some(crate::dynamic_packages::sentinel_path(raw));
+    }
+
     let normalised = raw.replace('.', "/");
 
     if let Some(hit) = try_resolve_base(&dir.join(&normalised)) {
@@ -164,6 +172,17 @@ pub fn load_module(
             span: import_span,
         })?;
         let exports = crate::native_packages::build_exports(pkg);
+        loader
+            .borrow_mut()
+            .cache
+            .insert(abs_path.to_path_buf(), exports.clone());
+        return Ok(exports);
+    }
+
+    // Dynamic (manifest-described) native package shortcut — loads the
+    // shared library on first import and wraps its exported symbols.
+    if let Some(name) = crate::dynamic_packages::name_from_sentinel(abs_path) {
+        let exports = crate::dynamic_packages::build_exports(name, import_span)?;
         loader
             .borrow_mut()
             .cache
@@ -354,6 +373,18 @@ pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::Modul
                 if let Some(info) = built.enums.get(&orig).cloned() {
                     seed.enums.entry(alias).or_insert(info);
                 }
+            }
+            continue;
+        }
+
+        // Dynamic (manifest-described) native package seed — synthesize a
+        // semantic `ClassInfo` per exported class so member access like
+        // `Window.create(...)` resolves. Without this the loop below would
+        // try to read the synthetic sentinel path as a file and silently
+        // skip the package, leaving its classes undefined.
+        if crate::dynamic_packages::is_dynamic_package(path) {
+            for (alias, info) in crate::dynamic_packages::seed_classes(path, names) {
+                seed.classes.entry(alias).or_insert(info);
             }
             continue;
         }

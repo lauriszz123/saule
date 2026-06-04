@@ -1,0 +1,84 @@
+# `engine` — example native package manifest.
+#
+# Install location: ~/.saule/native_manifests/engine.toml
+# The compiled binary goes in:  ~/.saule/native_packages/
+#
+# The interpreter discovers this manifest at startup, registers the type
+# signatures below (so `Graphics.circle(...)` type-checks with full LSP
+# support), and lazily loads the shared library the first time you
+# `import` the package.
+
+[package]
+name = "engine"
+version = "0.1.0"
+# Comma-separated candidate filenames. The interpreter prefers the one
+# matching the host OS (.dll on Windows, .so on Linux, .dylib on macOS) and
+# falls back to whichever exists.
+binary = "saule_engine_lib.so, saule_engine_lib.dll, saule_engine_lib.dylib"
+
+[exports.Graphics]
+type = "class"
+doc = "2D graphics rendering."
+
+[[exports.Graphics.methods]]
+name = "setColor"
+sig = "fn(r: float, g: float, b: float) -> nil"
+native_symbol = "saule_engine_graphics_set_color"
+
+[[exports.Graphics.methods]]
+name = "circle"
+sig = "fn(mode: string, x: float, y: float, radius: float) -> nil"
+native_symbol = "saule_engine_graphics_circle"
+
+[[exports.Graphics.methods]]
+name = "rectangle"
+sig = "fn(mode: string, x: float, y: float, w: float, h: float) -> nil"
+native_symbol = "saule_engine_graphics_rectangle"
+
+[[exports.Graphics.methods]]
+name = "clear"
+sig = "fn(r: float, g: float, b: float) -> nil"
+native_symbol = "saule_engine_graphics_clear"
+
+[[exports.Graphics.methods]]
+name = "present"
+sig = "fn() -> nil"
+native_symbol = "saule_engine_graphics_present"
+
+[exports.Window]
+type = "class"
+doc = "Window management."
+
+[[exports.Window.methods]]
+name = "create"
+sig = "fn(width: integer, height: integer, title: string?) -> nil"
+native_symbol = "saule_engine_window_create"
+
+[[exports.Window.methods]]
+name = "isOpen"
+sig = "fn() -> boolean"
+native_symbol = "saule_engine_window_is_open"
+
+[[exports.Window.methods]]
+name = "pollEvents"
+sig = "fn() -> nil"
+native_symbol = "saule_engine_window_poll_events"
+
+[[exports.Window.methods]]
+name = "close"
+sig = "fn() -> nil"
+native_symbol = "saule_engine_window_close"
+
+[exports.Timer]
+type = "class"
+doc = "Timing helpers."
+
+[[exports.Timer.methods]]
+name = "getTime"
+sig = "fn() -> float"
+native_symbol = "saule_engine_timer_get_time"
+
+[[exports.Timer.methods]]
+name = "getDelta"
+sig = "fn() -> float"
+native_symbol = "saule_engine_timer_get_delta"
