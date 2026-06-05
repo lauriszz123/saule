@@ -38,8 +38,10 @@
 //! ## Type mapping
 //!
 //! See [`convert`] for the supported Rust ⇄ Saule type mappings. A function
-//! may return `T`, `()`, or `Result<T, E>` (where `E: Display`); an `Err`
-//! becomes a Saule runtime error at the call site.
+//! may return `T`, `()`, `Result<T, E>` (where `E: Display`; an `Err` becomes
+//! a Saule runtime error at the call site), or a tuple `(A, B, …)` for a
+//! multi-value return that the caller can destructure
+//! (`local a, b = Class.method()`).
 
 pub mod convert;
 pub mod host;

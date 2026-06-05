@@ -8,7 +8,7 @@ class Main
     local nums = Util.range(6)  -- table<integer>
 
     -- find returns integer? — coalesce to a plain integer.
-    local firstBig: integer? = Util.find(nums, x => x > 4)
+    local firstBig = Util.find(nums, x => x > 4)
     println("find       = ", firstBig)
 
     -- reduce returns the accumulator's type (integer here).

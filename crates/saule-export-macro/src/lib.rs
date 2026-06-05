@@ -20,7 +20,16 @@
 //! ## Type mapping
 //! `i64 → integer`, `f64 → float`, `bool → boolean`, `String → string`,
 //! `SValue → any`, `Option<T> → T?`, `() → nil`. The return type may be `T`,
-//! `()`, or `Result<T, E>` (an `Err` surfaces as a Saule runtime error).
+//! `()`, `Result<T, E>` (an `Err` surfaces as a Saule runtime error), or a
+//! tuple `(A, B, …)` for a multi-value return.
+//!
+//! ## Multi-return
+//! A tuple return type renders as a Saule multi-return signature, e.g.
+//! `fn divmod(a: i64, b: i64) -> (i64, i64)` becomes
+//! `fn(a: integer, b: integer) -> (integer, integer)`. The values are packed
+//! into a host table across the single-valued ABI and spread back into
+//! separate bindings at the call site (`local q, r = Util.divmod(17, 5)`).
+//! Tuples are accepted only in return position; parameters stay scalar.
 //!
 //! ## Generics
 //! The marker types `T`/`U`/`V`/`W` from `saule_sdk` are type variables:
@@ -107,7 +116,7 @@ fn expand(attr: TokenStream, item: TokenStream) -> Result<proc_macro2::TokenStre
     // ── Return type: unwrap Result, map value type, note if fallible ──────
     let (ret_value_ty, is_result) = unwrap_return(&func.sig.output);
     let ret_saule = match &ret_value_ty {
-        Some(ty) => saule_type(ty, &mut tvars)?.0,
+        Some(ty) => saule_return_type(ty, &mut tvars)?,
         None => "nil".to_string(),
     };
 
@@ -260,6 +269,26 @@ fn parse_attr(attr: TokenStream) -> Result<(String, String), syn::Error> {
             "`saule_export` requires `class = \"...\"` and `name = \"...\"`",
         )),
     }
+}
+
+/// Map a return type to its Saule signature string. Unlike [`saule_type`],
+/// this accepts a non-unit tuple `(A, B, …)` and renders it as a Saule
+/// multi-return type `(a, b, …)` — the manifest parser turns that into a
+/// `Type::Tuple` and the interpreter spreads the value across several
+/// bindings. Element types still flow through [`saule_type`], so generic
+/// markers and `Option<_>` work inside a tuple return.
+fn saule_return_type(ty: &Type, tvars: &mut Vec<String>) -> Result<String, syn::Error> {
+    if let Type::Tuple(t) = ty {
+        if t.elems.is_empty() {
+            return Ok("nil".to_string());
+        }
+        let mut parts = Vec::with_capacity(t.elems.len());
+        for elem in &t.elems {
+            parts.push(saule_type(elem, tvars)?.0);
+        }
+        return Ok(format!("({})", parts.join(", ")));
+    }
+    Ok(saule_type(ty, tvars)?.0)
 }
 
 /// Map a Rust type to its Saule type string. Returns `(saule_type, is_optional)`

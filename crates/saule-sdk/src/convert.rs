@@ -148,3 +148,39 @@ impl IntoSaule for &str {
         return_string(self)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tuple returns — multi-value returns marshalled as a host array-table.
+//
+// The single-valued C ABI can't carry several values at once, so a tuple
+// return is packed into a freshly allocated host `table` (its array part).
+// The interpreter, knowing the method's declared return arity from its
+// signature, spreads that table back into multiple Saule values at the call
+// site (`local a, b = native_call()`).
+//
+// Each element is converted and pushed *before* the next is converted, so the
+// thread-local string buffer used by `return_string` is copied into the table
+// by `table_push` before a later string element can overwrite it.
+// ---------------------------------------------------------------------------
+macro_rules! impl_into_saule_tuple {
+    ($($name:ident),+) => {
+        impl<$($name: IntoSaule),+> IntoSaule for ($($name,)+) {
+            fn into_saule(self) -> CValue {
+                #[allow(non_snake_case)]
+                let ($($name,)+) = self;
+                let handle = crate::host::table_new();
+                $(
+                    let cv = $name.into_saule();
+                    let _ = crate::host::table_push(handle, &cv);
+                )+
+                CValue::table_handle(handle)
+            }
+        }
+    };
+}
+
+impl_into_saule_tuple!(A, B);
+impl_into_saule_tuple!(A, B, C);
+impl_into_saule_tuple!(A, B, C, D);
+impl_into_saule_tuple!(A, B, C, D, E);
+impl_into_saule_tuple!(A, B, C, D, E, F);

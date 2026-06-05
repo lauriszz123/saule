@@ -22,16 +22,19 @@ fn util_sum(t: STable<SInteger>) -> Result<SInteger, String> {
     Ok(SInteger::new(total))
 }
 
-/// `Util.keys(t)` — return a new array-table of the table's keys.
+/// `Util.keys(t)` — return a new array-table of the table's keys. Saule
+/// tables are keyed by integer indices, so the result is `table<integer>`
+/// regardless of the element type: `keys(table<T>) -> table<integer>`.
 #[saule_export(class = "Util", name = "keys")]
-fn util_keys(t: STable) -> Result<STable, String> {
+fn util_keys(t: STable<T>) -> Result<STable<SInteger>, String> {
     t.keys()
 }
 
 /// `Util.map(t, f)` — apply `f` to every array element, collecting the
-/// results into a fresh table.
+/// results into a fresh table. Threads the element type through:
+/// `map(table<T>, function) -> table<T>`.
 #[saule_export(class = "Util", name = "map")]
-fn util_map(t: STable, f: SFunction) -> Result<STable, String> {
+fn util_map(t: STable<T>, f: SFunction) -> Result<STable<T>, String> {
     let out = STable::new();
     for v in t.to_vec()? {
         let mapped = f.call(&[v])?;
@@ -48,6 +51,18 @@ fn util_range(n: SInteger) -> Result<STable<SInteger>, String> {
         t.push(i)?;
     }
     Ok(t)
+}
+
+/// `Util.divmod(a, b)` — integer division and remainder as two values:
+/// `local q, r = Util.divmod(a, b)`. Demonstrates a scalar multi-return,
+/// which the SDK packs into a host table and the interpreter spreads back
+/// into separate bindings.
+#[saule_export(class = "Util", name = "divmod")]
+fn util_divmod(a: i64, b: i64) -> Result<(i64, i64), String> {
+    if b == 0 {
+        return Err("Util.divmod: division by zero".to_string());
+    }
+    Ok((a / b, a % b))
 }
 
 /// `Util.filter(t, f)` — keep array elements for which `f(element)` is truthy.

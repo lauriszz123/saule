@@ -626,3 +626,65 @@ end
     let md = hover_src_at(src, "mid.c()", "mid.".len() + 1).expect("hover");
     assert!(md.contains("-> A"), "got: {md}");
 }
+
+/// A multi-return (tuple) static method spreads across a `local q, r =
+/// Class.method()` binding: each name should hover as the matching tuple
+/// component, not the whole tuple.
+#[test]
+fn hovers_multi_return_local_spread() {
+    let src = "\
+class Util
+  static fn divmod(a: integer, b: integer) -> (integer, integer)
+    return a, b
+  end
+end
+
+class Main
+  static fn main()
+    local q, r = Util.divmod(17, 5)
+    println(q)
+    println(r)
+  end
+end
+";
+    // `q` resolves to the first tuple component.
+    let md = hover_at_offset(src, "println(q)", "println(".len()).expect("hover q");
+    assert!(md.contains("(local)"), "got: {md}");
+    assert!(md.contains("q: integer"), "got: {md}");
+
+    // `r` likewise resolves to the second component.
+    let md = hover_at_offset(src, "println(r)", "println(".len()).expect("hover r");
+    assert!(md.contains("(local)"), "got: {md}");
+    assert!(md.contains("r: integer"), "got: {md}");
+
+    // Hovering the binding site itself (`local q, r = …`) also works.
+    let md = hover_at_offset(src, "local q, r =", "local ".len()).expect("hover binding q");
+    assert!(md.contains("(local)"), "got: {md}");
+    assert!(md.contains("q: integer"), "got: {md}");
+    let md = hover_at_offset(src, "local q, r =", "local q, ".len()).expect("hover binding r");
+    assert!(md.contains("(local)"), "got: {md}");
+    assert!(md.contains("r: integer"), "got: {md}");
+}
+
+/// In single-value context a multi-return collapses to its first
+/// component: `local justQ = Util.divmod(...)` is `integer`, not a tuple.
+#[test]
+fn hovers_multi_return_single_binding_collapses() {
+    let src = "\
+class Util
+  static fn divmod(a: integer, b: integer) -> (integer, integer)
+    return a, b
+  end
+end
+
+class Main
+  static fn main()
+    local justQ = Util.divmod(20, 6)
+    println(justQ)
+  end
+end
+";
+    let md = hover_at_offset(src, "println(justQ)", "println(".len()).expect("hover justQ");
+    assert!(md.contains("(local)"), "got: {md}");
+    assert!(md.contains("justQ: integer"), "got: {md}");
+}
