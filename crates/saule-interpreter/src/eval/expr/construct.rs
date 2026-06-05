@@ -52,6 +52,7 @@ pub(super) fn make_tuple_variant_ctor(
             });
             Ok(vec![Value::EnumVariant(variant)])
         }),
+        param_names: Vec::new(),
     }))
 }
 

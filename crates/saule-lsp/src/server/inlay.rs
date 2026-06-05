@@ -458,21 +458,66 @@ impl<'a> Cx<'a> {
                 .rev()
                 .find(|l| l.name == *name)
                 .map(|l| l.ty.clone()),
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, args } => {
                 if let Expr::Ident(name) = &callee.value {
                     if with_classes(|r| r.contains_key(name)) {
                         return Some(Type::Named(name.clone()));
                     }
+                    if let Some(sig) = saule_typeck::sigs::lookup(name) {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                            .into_iter()
+                            .next();
+                    }
+                }
+                // `recv.method(args)` — dot-call on a module or instance.
+                if let Expr::Member { obj, name } = &callee.value {
+                    let class = self.receiver_class(&obj.value)?;
+                    if let Some(sig) = lookup_method(&class, name) {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
+                    }
+                    let qname = format!("{class}.{name}");
+                    if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                            .into_iter()
+                            .next();
+                    }
                 }
                 None
             }
-            Expr::MethodCall { obj, method, .. } => {
+            Expr::MethodCall { obj, method, args } => {
                 let class = self.receiver_class(&obj.value)?;
-                lookup_method(&class, method)?.return_ty
+                if let Some(sig) = lookup_method(&class, method) {
+                    let arg_types = self.positional_arg_types(args);
+                    return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
+                }
+                let qname = format!("{class}.{method}");
+                if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
+                    let arg_types = self.positional_arg_types(args);
+                    return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                        .into_iter()
+                        .next();
+                }
+                None
             }
             Expr::Self_ => self.enclosing_class.clone().map(Type::Named),
             _ => None,
         }
+    }
+
+    /// Infer the types of a call's positional arguments (in order;
+    /// `None` where inference can't produce a type). Named arguments are
+    /// skipped — mirrors how the typechecker binds generics from
+    /// positional args only.
+    fn positional_arg_types(&self, args: &[CallArg]) -> Vec<Option<Type>> {
+        args.iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(self.infer_type(&e.value)),
+                CallArg::Named { .. } => None,
+            })
+            .collect()
     }
 
     /// Best-effort: figure out which class a member-access receiver

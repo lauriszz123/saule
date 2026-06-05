@@ -1,5 +1,10 @@
 # `engine` — example native package manifest.
 #
+# This is the canonical manifest for the engine package. The crate's
+# `build.rs` copies it next to the compiled library in the Cargo artifact
+# directory (`target/<profile>/engine.toml`) on every build, so install
+# scripts can pick it up from there instead of a hand-maintained path.
+#
 # Install location: ~/.saule/native_manifests/engine.toml
 # The compiled binary goes in:  ~/.saule/native_packages/
 #

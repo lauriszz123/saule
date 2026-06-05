@@ -12,5 +12,18 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-saule-native-abi = { path = "../saule-native-abi" }
-minifb = "0.28"
+# The SDK does the ABI heavy lifting: `#[saule_export]` generates the C shim
+# and infers the Saule signature, `saule_package!` declares the manifest, and
+# `manifest::render` emits `<name>.toml`. Authors write only safe Rust.
+saule-sdk = { path = "../saule-sdk" }
+# X11-only on Linux: WSLg's Wayland compositor (Weston) lacks server-side
+# window decorations, so minifb's Wayland backend fails to map a visible
+# window ("Failed to create server-side surface decoration: Missing").
+# Unsetting WAYLAND_DISPLAY does NOT help because wayland-client defaults to
+# the `wayland-0` socket, so the only reliable fix is to drop the Wayland
+# feature at build time and always use XWayland (a working X server).
+# Note: minifb's `dlopen` feature implies `wayland-client/dlopen`, so it must
+# be omitted too. The `x11` feature uses `x11-dl`, which already loads libX11
+# at runtime via dlopen — so no X11 dev headers are needed to build. On
+# Windows/macOS these features are inert (Win32/Cocoa is used).
+minifb = { version = "0.28", default-features = false, features = ["x11"] }

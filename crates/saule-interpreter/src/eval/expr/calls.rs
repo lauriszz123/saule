@@ -53,21 +53,7 @@ pub(crate) fn call_value_multi(
         }
         Value::Function(f) => call_function_multi(&f, args, span),
         Value::NativeClosure(nc) => {
-            let mut positional = Vec::with_capacity(args.len());
-            for arg in args {
-                match arg {
-                    EvaluatedArg::Positional(v) => positional.push(v.clone()),
-                    EvaluatedArg::Named { name: _, .. } => {
-                        return Err(RuntimeError::TypeError {
-                            message: format!(
-                                "named arguments are not supported for built-in function `{}` — use positional arguments instead",
-                                nc.name
-                            ),
-                            span,
-                        });
-                    }
-                }
-            }
+            let positional = native_positional_args(&nc.name, &nc.param_names, args, &span)?;
             (nc.func)(&positional).map_err(|message| RuntimeError::TypeError { message, span })
         }
         Value::Class(c) => construct(c, args, span).map(|v| vec![v]),
@@ -79,6 +65,110 @@ pub(crate) fn call_value_multi(
             span,
         }),
     }
+}
+
+/// Flatten a native closure's arguments into positional values.
+///
+/// When `param_names` is empty the closure only accepts positional
+/// arguments, so any named argument is an error (preserving the historical
+/// behaviour for stdlib closures). When `param_names` is non-empty (dynamic
+/// native packages, which declare their parameter names in the manifest)
+/// named arguments are reordered into their declared slots; gaps left by
+/// omitted optional parameters are filled with `nil`.
+fn native_positional_args(
+    name: &str,
+    param_names: &[String],
+    args: &[EvaluatedArg],
+    span: &std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
+    let has_named = args
+        .iter()
+        .any(|a| matches!(a, EvaluatedArg::Named { .. }));
+
+    if !has_named {
+        return Ok(args
+            .iter()
+            .map(|a| match a {
+                EvaluatedArg::Positional(v) => v.clone(),
+                // No named args present, so this branch is unreachable, but
+                // map exhaustively rather than panic.
+                EvaluatedArg::Named { value, .. } => value.clone(),
+            })
+            .collect());
+    }
+
+    if param_names.is_empty() {
+        return Err(RuntimeError::TypeError {
+            message: format!(
+                "named arguments are not supported for built-in function `{name}` — use positional arguments instead"
+            ),
+            span: span.clone(),
+        });
+    }
+
+    // Reorder into declared slots. Positional args fill left-to-right; named
+    // args drop into the slot matching their name. Positional-after-named is
+    // rejected, matching user-function call rules.
+    let mut slots: Vec<Option<Value>> = vec![None; param_names.len()];
+    let mut next_positional = 0usize;
+    let mut seen_named = false;
+
+    for arg in args {
+        match arg {
+            EvaluatedArg::Positional(value) => {
+                if seen_named {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "positional argument cannot follow named arguments in call to `{name}` — all positional arguments must come first"
+                        ),
+                        span: span.clone(),
+                    });
+                }
+                if next_positional >= slots.len() {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "too many arguments to `{name}`: expected at most {} but got more",
+                            param_names.len()
+                        ),
+                        span: span.clone(),
+                    });
+                }
+                slots[next_positional] = Some(value.clone());
+                next_positional += 1;
+            }
+            EvaluatedArg::Named { name: arg_name, value } => {
+                seen_named = true;
+                let Some(idx) = param_names.iter().position(|p| p == arg_name) else {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "unknown named argument `{arg_name}` for `{name}` — valid parameters: {}",
+                            param_names.join(", ")
+                        ),
+                        span: span.clone(),
+                    });
+                };
+                if slots[idx].is_some() {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "argument `{arg_name}` specified more than once in call to `{name}`"
+                        ),
+                        span: span.clone(),
+                    });
+                }
+                slots[idx] = Some(value.clone());
+            }
+        }
+    }
+
+    // Trim trailing unfilled (optional) slots; fill interior gaps with nil so
+    // a later named arg still lands in the right position.
+    let last_filled = slots.iter().rposition(|s| s.is_some());
+    let len = last_filled.map_or(0, |i| i + 1);
+    Ok(slots
+        .into_iter()
+        .take(len)
+        .map(|s| s.unwrap_or(Value::Nil))
+        .collect())
 }
 
 /// Bind `params` into `scope` from `args`, evaluating defaults lazily. Used

@@ -1,18 +1,19 @@
 //! Timer module — a real monotonic clock plus per-frame delta tracking.
+//!
+//! The exported functions are plain, safe Rust functions annotated with
+//! `#[saule_export]`; the SDK generates the C-ABI shim and the manifest entry.
 
 use std::sync::Mutex;
 use std::time::Instant;
 
-use saule_native_abi::{return_error, CValue, NativeSymbolFn};
-
-use crate::args::Args;
+use saule_sdk::saule_export;
 
 struct Clock {
     /// When the clock was last reset (window creation). `Timer.getTime` is
     /// measured from here.
     start: Instant,
-    /// Instant of the previous `Timer.getDelta` / `Timer.step` call, used to
-    /// compute the frame delta.
+    /// Instant of the previous `Timer.getDelta` call, used to compute the
+    /// frame delta.
     last_frame: Instant,
 }
 
@@ -40,58 +41,20 @@ fn with_clock<R>(f: impl FnOnce(&mut Clock) -> R) -> R {
     f(clock)
 }
 
-/// Write the dispatch result into `out`.
-fn dispatch(out: &mut CValue, body: impl FnOnce() -> Result<CValue, String>) -> i32 {
-    let (value, code) = match body() {
-        Ok(v) => (v, 0),
-        Err(msg) => (return_error(&msg), 1),
-    };
-    *out = value;
-    code
+/// `Timer.getTime()` — seconds since the clock was last reset.
+#[saule_export(class = "Timer", name = "getTime")]
+fn timer_get_time() -> f64 {
+    with_clock(|c| c.start.elapsed().as_secs_f64())
 }
 
-/// `Timer.getTime() -> float` — seconds since the clock was last reset.
-///
-/// # Safety
-/// ABI entry point — see [`saule_native_abi`] for the pointer contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn saule_engine_timer_get_time(
-    args: *const CValue,
-    argc: usize,
-    out: *mut CValue,
-) -> i32 {
-    let a = unsafe { Args::new(args, argc) };
-    let out = unsafe { &mut *out };
-    dispatch(out, || {
-        a.expect_arity("Timer.getTime", 0)?;
-        let secs = with_clock(|c| c.start.elapsed().as_secs_f64());
-        Ok(CValue::float(secs))
+/// `Timer.getDelta()` — seconds since the previous frame, and marks "now" as
+/// the start of the current frame. Call once per loop iteration.
+#[saule_export(class = "Timer", name = "getDelta")]
+fn timer_get_delta() -> f64 {
+    with_clock(|c| {
+        let now = Instant::now();
+        let dt = now.duration_since(c.last_frame).as_secs_f64();
+        c.last_frame = now;
+        dt
     })
 }
-
-/// `Timer.getDelta() -> float` — seconds since the previous frame, and marks
-/// "now" as the start of the current frame. Call once per loop iteration.
-///
-/// # Safety
-/// ABI entry point — see [`saule_native_abi`] for the pointer contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn saule_engine_timer_get_delta(
-    args: *const CValue,
-    argc: usize,
-    out: *mut CValue,
-) -> i32 {
-    let a = unsafe { Args::new(args, argc) };
-    let out = unsafe { &mut *out };
-    dispatch(out, || {
-        a.expect_arity("Timer.getDelta", 0)?;
-        let dt = with_clock(|c| {
-            let now = Instant::now();
-            let dt = now.duration_since(c.last_frame).as_secs_f64();
-            c.last_frame = now;
-            dt
-        });
-        Ok(CValue::float(dt))
-    })
-}
-
-const _: [NativeSymbolFn; 2] = [saule_engine_timer_get_time, saule_engine_timer_get_delta];

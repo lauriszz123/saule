@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use saule_ast::{
-    ClassMember, Decl, Expr, Method, Module, Param, Pattern, Spanned, Stmt, Type,
+    CallArg, ClassMember, Decl, Expr, Method, Module, Param, Pattern, Spanned, Stmt, Type,
 };
 use saule_semantic::{lookup_field_type, lookup_method, with_classes, with_enums, with_interfaces};
 
@@ -203,6 +203,19 @@ impl<'a> Cx<'a> {
         self.locals.iter().rev().find(|l| l.name == name)
     }
 
+    /// Infer the types of a call's positional arguments (in order;
+    /// `None` where inference can't produce a type). Named arguments are
+    /// skipped — mirrors how the typechecker binds generics from
+    /// positional args only.
+    fn positional_arg_types(&self, args: &[CallArg]) -> Vec<Option<Type>> {
+        args.iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(self.infer_init_type(&e.value)),
+                CallArg::Named { .. } => None,
+            })
+            .collect()
+    }
+
     /// Best-effort type inference for a `local x = <init>` site when
     /// the user didn't write an annotation. Handles the cases that
     /// account for the bulk of real-world `local`s in Saule code:
@@ -217,7 +230,7 @@ impl<'a> Cx<'a> {
     /// Anything else returns `None`; the caller falls back to `any`.
     fn infer_init_type(&self, init: &Expr) -> Option<Type> {
         match init {
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, args } => {
                 if let Expr::Ident(name) = &callee.value {
                     if with_classes(|r| r.contains_key(name)) {
                         return Some(Type::Named(name.clone()));
@@ -227,14 +240,18 @@ impl<'a> Cx<'a> {
                     // don't have ASTs for those, so return None and
                     // accept `any`.
                     if let Some(sig) = saule_typeck::sigs::lookup(name) {
-                        return sig.returns.first().cloned();
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                            .into_iter()
+                            .next();
                     }
                     // Sibling free function inside a class body —
                     // reach through the enclosing-class registry the
                     // same way `resolve_ident` does for hover.
                     if let Some(class) = &self.enclosing_class {
                         if let Some(sig) = lookup_method(class, name) {
-                            return sig.return_ty;
+                            let arg_types = self.positional_arg_types(args);
+                            return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
                         }
                     }
                 }
@@ -244,23 +261,31 @@ impl<'a> Cx<'a> {
                 if let Expr::Member { obj, name } = &callee.value {
                     let class = self.receiver_class(&obj.value)?;
                     if let Some(sig) = lookup_method(&class, name) {
-                        return sig.return_ty;
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
                     }
                     let qname = format!("{class}.{name}");
                     if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
-                        return sig.returns.first().cloned();
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                            .into_iter()
+                            .next();
                     }
                 }
                 None
             }
-            Expr::MethodCall { obj, method, .. } => {
+            Expr::MethodCall { obj, method, args } => {
                 let class = self.receiver_class(&obj.value)?;
                 if let Some(sig) = lookup_method(&class, method) {
-                    return sig.return_ty;
+                    let arg_types = self.positional_arg_types(args);
+                    return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
                 }
                 let qname = format!("{class}.{method}");
                 if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
-                    return sig.returns.first().cloned();
+                    let arg_types = self.positional_arg_types(args);
+                    return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                        .into_iter()
+                        .next();
                 }
                 None
             }

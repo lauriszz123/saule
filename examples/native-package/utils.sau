@@ -1,0 +1,35 @@
+import Util from "engine"
+
+-- Exercise the new collection helpers, all running across the native .so
+-- boundary via the STable / SFunction / SValue bridge.
+class Main
+  static fn main()
+    local nums = Util.range(6)                  -- {1,2,3,4,5,6}
+
+    local evens = Util.filter(nums, x => x % 2 == 0)
+    println("filter  = ", evens[1], ", ", evens[2], ", ", evens[3])
+
+    local total = Util.reduce(nums, (acc: integer, x: integer) => acc + x, 0)
+    println("reduce  = ", total)
+
+    local firstBig = Util.find(nums, x => x > 4)
+    println("find    = ", firstBig)
+
+    println("count   = ", Util.count(nums, x => x > 3))
+
+    local rev = Util.reverse(nums)
+    println("reverse = ", rev[1], "..", rev[6])
+
+    local joined = Util.concat(Util.range(2), Util.range(3))
+    println("concat  = #", #joined)
+
+    local mid = Util.slice(nums, 2, 3)          -- {2,3,4}
+    println("slice   = ", mid[1], ", ", mid[2], ", ", mid[3])
+
+    println("contains 4 = ", Util.contains(nums, 4))
+    println("indexOf 5  = ", Util.indexOf(nums, 5))
+    println("indexOf 99 = ", Util.indexOf(nums, 99))
+
+    Util.forEach(Util.range(3), x => println("  forEach -> ", x))
+  end
+end

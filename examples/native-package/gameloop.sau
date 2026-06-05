@@ -9,7 +9,7 @@ import Graphics, Window, Timer from "engine"
 
 class Main
   static fn main()
-    Window.create(800, 600, "Saule — game loop")
+    Window.create(800, 600, title: "Saule Game Loop Example")
 
     -- Simple moving-circle state.
     local x: float = 100.0
@@ -30,6 +30,7 @@ class Main
         x = 700.0
         speed = -speed
       end
+
       if x < 100.0 then
         x = 100.0
         speed = -speed

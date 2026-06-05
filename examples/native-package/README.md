@@ -26,6 +26,12 @@ The contract is entirely declarative: the manifest says which symbols exist and
 what their Saule signatures are. There is **no** `get_package()` entry point to
 implement — just plain `extern "C"` functions.
 
+The manifest itself is **generated from the code**: each exported function
+carries a `#[saule_export(class = ..., name = ..., sig = ...)]` attribute, and a
+small `gen-manifest` binary (built alongside the library) walks those
+declarations to emit `engine.toml`. There is no hand-maintained manifest to
+keep in sync.
+
 ## Build & install
 
 > **Toolchain.** The build works on both Windows and Linux/WSL:
@@ -39,7 +45,7 @@ implement — just plain `extern "C"` functions.
 >   `rustup override set stable-x86_64-pc-windows-msvc`.
 
 ```sh
-# 1. Build the example engine as a shared library
+# 1. Build the example engine as a shared library (also builds gen-manifest)
 cargo build -p saule-engine-lib --release
 
 # 2. Create the package directories
@@ -53,9 +59,15 @@ copy target\release\saule_engine_lib.dll   $env:USERPROFILE\.saule\native_packag
 #    Linux:   target/release/libsaule_engine_lib.so   → ~/.saule/native_packages/saule_engine_lib.so
 #    macOS:   target/release/libsaule_engine_lib.dylib → ~/.saule/native_packages/saule_engine_lib.dylib
 
-# 4. Install the manifest
-copy examples\native-package\engine.toml   $env:USERPROFILE\.saule\native_manifests\
+# 4. Generate and install the manifest (it is emitted from the code, not
+#    checked in). Pass an output path, or run it with none to write
+#    engine.toml next to the binary.
+.\target\release\gen-manifest.exe $env:USERPROFILE\.saule\native_manifests\engine.toml
 ```
+
+> On Linux/WSL, `scripts/install_wsl.sh` does steps 3–4 for you: it runs
+> `gen-manifest` and copies both the `lib`-stripped `.so` and the manifest into
+> `~/.saule/`.
 
 > The manifest's `binary = "..."` field lists the candidate filenames. On Linux
 > and macOS, Cargo prefixes the output with `lib`, so either rename the file to
@@ -113,9 +125,12 @@ windowed build would drop that and close on the OS quit event.
 
 1. Add an `extern "C"` symbol in `crates/saule-engine-lib/src/` following the
    `(args, argc, out) -> i32` ABI (use the `Args` helper to read arguments).
-2. Add a matching `[[exports.<Class>.methods]]` entry to `engine.toml` with the
-   Saule `sig` and the `native_symbol` name.
-3. Rebuild the package and copy the binary across. No interpreter changes.
+2. Annotate it with `#[saule_export(class = "<Class>", name = "<method>", sig =
+   "fn(...) -> ...")]`. The manifest entry is generated from this — no TOML to
+   edit. (For a brand-new class, also add an `ExportedClass` registration in
+   `crates/saule-engine-lib/src/lib.rs`.)
+3. Rebuild and reinstall (`scripts/install_wsl.sh`, or rerun `gen-manifest`).
+   No interpreter changes.
 
 ## Note on the toolchain (Windows)
 
