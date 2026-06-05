@@ -197,6 +197,32 @@ end
     assert!(md.contains("sqrt"), "got: {md}");
 }
 
+#[test]
+fn does_not_hover_non_prelude_native_module_without_import() {
+    init_stdlib();
+    saule_typeck::sigs::register(
+        "Timer.getTime",
+        vec![],
+        vec![saule_ast::Type::Named("float".into())],
+    );
+
+    let src = "\
+fn run() -> float
+  return Timer.getTime()
+end
+";
+    let tokens = saule_lexer::Lexer::new(src).tokenize().unwrap();
+    let module = saule_parser::parse(tokens).unwrap();
+    let _ = saule_semantic::analyze(&module);
+
+    let pos = src.find("Timer.getTime").unwrap() + 1;
+    let md = hover_at_with_source(&module, src, pos, &ImportContext::default()).map(|(m, _)| m);
+    assert!(
+        !md.as_deref().is_some_and(|m| m.contains("Timer")),
+        "got: {md:?}"
+    );
+}
+
 /// End-to-end: write two `.sau` files into a tempdir, import the
 /// first from the second, and confirm hover on the imported class
 /// name surfaces its full definition (the user's reported case).

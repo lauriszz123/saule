@@ -351,8 +351,9 @@ impl<'a> Cx<'a> {
                 // Storage` (no call) and indirectly for method-chain
                 // inference upstream.
                 if with_classes(|r| r.contains_key(name))
-                    || saule_typeck::sigs::is_module(name)
-                    || saule_typeck::sigs::is_value_type(name)
+                    || ((saule_typeck::sigs::is_module(name)
+                        || saule_typeck::sigs::is_value_type(name))
+                        && saule_semantic::prelude::contains(name))
                 {
                     return Some(Type::Named(name.clone()));
                 }
@@ -1160,10 +1161,10 @@ impl<'a> Cx<'a> {
                 render_native_sig_full(&sig)
             ));
         }
-        if saule_typeck::sigs::is_value_type(name) {
+        if saule_typeck::sigs::is_value_type(name) && saule_semantic::prelude::contains(name) {
             return Some(render_stdlib_module(name, "type"));
         }
-        if saule_typeck::sigs::is_module(name) {
+        if saule_typeck::sigs::is_module(name) && saule_semantic::prelude::contains(name) {
             return Some(render_stdlib_module(name, "module"));
         }
         // Bare identifier inside a class body — try resolving as a
@@ -1198,8 +1199,9 @@ impl<'a> Cx<'a> {
                 }
                 if with_classes(|r| r.contains_key(name))
                     || with_enums(|r| r.contains_key(name))
-                    || saule_typeck::sigs::is_module(name)
-                    || saule_typeck::sigs::is_value_type(name)
+                    || ((saule_typeck::sigs::is_module(name)
+                        || saule_typeck::sigs::is_value_type(name))
+                        && saule_semantic::prelude::contains(name))
                 {
                     Some(name.clone())
                 } else {
@@ -1242,4 +1244,3 @@ impl<'a> Cx<'a> {
         }
     }
 }
-
