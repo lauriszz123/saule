@@ -12,8 +12,8 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
-TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/saule-target-wsl}"
-SO_SRC="$TARGET_DIR/release/libsaule_engine_lib.so"
+TARGET_DIR="./target"
+SO_SRC="$TARGET_DIR/release/libsaule_engine_lib.dylib"
 SAULE_HOME="${SAULE_HOME:-$HOME/.saule}"
 
 if [ ! -f "$SO_SRC" ]; then
@@ -22,9 +22,9 @@ if [ ! -f "$SO_SRC" ]; then
 fi
 
 mkdir -p "$SAULE_HOME/native_packages" "$SAULE_HOME/native_manifests"
-cp "$SO_SRC" "$SAULE_HOME/native_packages/saule_engine_lib.so"
+cp "$SO_SRC" "$SAULE_HOME/native_packages/saule_engine_lib.dylib"
 cp examples/native-package/engine.toml "$SAULE_HOME/native_manifests/engine.toml"
 
 echo "installed:"
-echo "  $SAULE_HOME/native_packages/saule_engine_lib.so"
+echo "  $SAULE_HOME/native_packages/saule_engine_lib.dylib"
 echo "  $SAULE_HOME/native_manifests/engine.toml"
