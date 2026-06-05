@@ -49,6 +49,8 @@ struct MethodSpec {
     symbol: String,
     /// Parameter types parsed from the manifest `sig`.
     params: Vec<Type>,
+    /// Parameter names parsed from the manifest `sig`.
+    param_names: Vec<String>,
     /// Return types parsed from the manifest `sig`.
     returns: Vec<Type>,
 }
@@ -245,7 +247,11 @@ fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
             .iter()
             .enumerate()
             .map(|(i, ty)| saule_ast::Param {
-                name: format!("arg{i}"),
+                name: m
+                    .param_names
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("arg{i}")),
                 ty: ty.clone(),
                 default: None,
                 variadic: false,
@@ -494,11 +500,12 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| format!("`{class_name}.{mname}` is missing `native_symbol`"))?
                         .to_string();
-                    let (params, returns) = parse_sig(sig)
+                    let (param_names, params, returns) = parse_sig(sig)
                         .map_err(|e| format!("`{class_name}.{mname}` has an invalid sig: {e}"))?;
                     methods.push(MethodSpec {
                         name: mname,
                         symbol,
+                        param_names,
                         params,
                         returns,
                     });
@@ -520,11 +527,11 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
     })
 }
 
-/// Parse a `fn(a: T, b: U) -> R` signature string into `(params, returns)`
-/// using the typeck type builders. Parameter *names* are ignored; only the
-/// types matter. A `nil` (or absent) return becomes `[nil]`; a parenthesised
+/// Parse a `fn(a: T, b: U) -> R` signature string into
+/// `(param_names, params, returns)` using the typeck type builders.
+/// A `nil` (or absent) return becomes `[nil]`; a parenthesised
 /// `(A, B)` return becomes a multi-return.
-fn parse_sig(sig: &str) -> Result<(Vec<Type>, Vec<Type>), String> {
+fn parse_sig(sig: &str) -> Result<(Vec<String>, Vec<Type>, Vec<Type>), String> {
     let s = sig.trim();
     let s = s.strip_prefix("fn").unwrap_or(s).trim_start();
 
@@ -549,24 +556,35 @@ fn parse_sig(sig: &str) -> Result<(Vec<Type>, Vec<Type>), String> {
     let close = close.ok_or("unbalanced parentheses in parameter list")?;
 
     let params_str = &s[open + 1..close];
-    let params = split_top_level(params_str)
-        .iter()
-        .map(|p| parse_type(param_type(p)))
-        .collect();
+    let mut param_names = Vec::new();
+    let mut params = Vec::new();
+    for (i, p) in split_top_level(params_str).iter().enumerate() {
+        let (name, ty) = parse_param(p, i);
+        param_names.push(name);
+        params.push(parse_type(ty));
+    }
 
     let rest = s[close + 1..].trim();
     let ret_str = rest.strip_prefix("->").map(str::trim).unwrap_or("");
     let returns = parse_return(ret_str);
 
-    Ok((params, returns))
+    Ok((param_names, params, returns))
 }
 
-/// Extract the type portion of a `name: type` parameter (or the whole token
-/// if there's no name).
-fn param_type(p: &str) -> &str {
+/// Extract `(name, type)` from a signature parameter token.
+/// Unnamed parameters are given a synthetic `arg{idx}` name.
+fn parse_param(p: &str, idx: usize) -> (String, &str) {
     match p.split_once(':') {
-        Some((_, ty)) => ty.trim(),
-        None => p.trim(),
+        Some((name, ty)) => {
+            let name = name.trim();
+            let name = if name.is_empty() {
+                format!("arg{idx}")
+            } else {
+                name.to_string()
+            };
+            (name, ty.trim())
+        }
+        None => (format!("arg{idx}"), p.trim()),
     }
 }
 
@@ -656,6 +674,7 @@ mod tests {
         assert_eq!(g.methods.len(), 1);
         assert_eq!(g.methods[0].name, "circle");
         assert_eq!(g.methods[0].symbol, "saule_engine_graphics_circle");
+        assert_eq!(g.methods[0].param_names, ["mode", "x", "y", "radius"]);
         assert_eq!(g.methods[0].params.len(), 4);
         assert_eq!(g.methods[0].returns.len(), 1);
     }
@@ -668,7 +687,35 @@ mod tests {
 
     #[test]
     fn parses_tuple_return() {
-        let (_p, r) = parse_sig("fn() -> (integer, integer)").unwrap();
+        let (_n, _p, r) = parse_sig("fn() -> (integer, integer)").unwrap();
         assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn parses_param_names_with_fallback_for_unnamed() {
+        let (names, params, _r) = parse_sig("fn(integer, y: float) -> nil").unwrap();
+        assert_eq!(names, ["arg0", "y"]);
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn class_info_uses_manifest_param_names() {
+        let text = r#"
+            [package]
+            name = "engine"
+            version = "0.1.0"
+            binary = "engine.so"
+
+            [exports.Graphics]
+              [[exports.Graphics.methods]]
+              name = "circle"
+              sig = "fn(mode: string, x: float, y: float, radius: float) -> nil"
+              native_symbol = "saule_engine_graphics_circle"
+        "#;
+        let m = parse_manifest(text).expect("manifest should parse");
+        let info = class_info(&m.exports[0]);
+        let sig = info.methods.get("circle").expect("circle method");
+        let names: Vec<&str> = sig.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["mode", "x", "y", "radius"]);
     }
 }
