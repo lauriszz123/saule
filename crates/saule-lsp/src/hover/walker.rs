@@ -24,6 +24,20 @@ use super::util::{
     resolve_member, strip_nullable_type,
 };
 
+/// Collapse an inferred type to the single value it yields in a
+/// single-value context: a multi-return tuple becomes its first
+/// component, anything else passes through, and `None` becomes `any`.
+fn first_value_type(ty: Option<Type>) -> Type {
+    match ty {
+        Some(Type::Tuple(parts)) => parts
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Type::Named("any".into())),
+        Some(t) => t,
+        None => Type::Named("any".into()),
+    }
+}
+
 /// Drive the hover walker against `module` for `offset` and return the
 /// best (smallest-span) blurb we found, if any.
 pub(super) fn run(
@@ -216,6 +230,29 @@ impl<'a> Cx<'a> {
             .collect()
     }
 
+    /// Expand a value-expression list into the flat list of value types it
+    /// produces, using Lua-style multi-assign semantics (mirrors the
+    /// interpreter's `eval_expr_list`): every expression contributes exactly
+    /// one value *except the last*, whose tuple components (a multi-return)
+    /// spread into several. Non-final expressions are in single-value context,
+    /// so a tuple there collapses to its first component.
+    fn spread_value_types(&self, values: &[Spanned<Expr>]) -> Vec<Type> {
+        let mut out = Vec::new();
+        let n = values.len();
+        for (i, v) in values.iter().enumerate() {
+            let ty = self.infer_init_type(&v.value);
+            if i + 1 == n {
+                match ty {
+                    Some(Type::Tuple(parts)) => out.extend(parts),
+                    other => out.push(first_value_type(other)),
+                }
+            } else {
+                out.push(first_value_type(ty));
+            }
+        }
+        out
+    }
+
     /// Best-effort type inference for a `local x = <init>` site when
     /// the user didn't write an annotation. Handles the cases that
     /// account for the bulk of real-world `local`s in Saule code:
@@ -342,7 +379,7 @@ impl<'a> Cx<'a> {
                         .unwrap_or_else(|| Type::Named("any".into())),
                 ),
             }),
-            Expr::Table(_) => Some(Type::Named("table".into())),
+            Expr::Table(entries) => Some(self.infer_table_literal(entries)),
             Expr::Match { arms, .. } => {
                 // First arm's body type is a decent approximation;
                 // typeck enforces that all arms agree.
@@ -396,6 +433,68 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// Infer a `table<V>` (array literal) or `table<K, V>` (map literal)
+    /// from a table-constructor's entries, so generic natives like
+    /// `Util.map(table<T>, …)` can bind their element type. Falls back to a
+    /// bare `table` when the entries are empty or their types disagree.
+    fn infer_table_literal(&self, entries: &[saule_ast::TableEntry]) -> Type {
+        use saule_ast::TableEntry;
+        let mut value_ty: Option<Type> = None;
+        let mut key_ty: Option<Type> = None;
+        let mut has_field = false;
+        let mut consistent = true;
+        for entry in entries {
+            let (k, v) = match entry {
+                TableEntry::Positional(v) => (None, self.infer_init_type(&v.value)),
+                TableEntry::Field { key, value } => {
+                    has_field = true;
+                    (self.infer_init_type(&key.value), self.infer_init_type(&value.value))
+                }
+            };
+            if let Some(vt) = v {
+                match &value_ty {
+                    Some(existing) if existing != &vt => consistent = false,
+                    _ => value_ty = Some(vt),
+                }
+            }
+            if let Some(kt) = k {
+                match &key_ty {
+                    Some(existing) if existing != &kt => consistent = false,
+                    _ => key_ty = Some(kt),
+                }
+            }
+        }
+        match value_ty {
+            Some(v) if consistent => Type::Table {
+                key: if has_field { key_ty.map(Box::new) } else { None },
+                value: Box::new(v),
+            },
+            _ => Type::Named("table".into()),
+        }
+    }
+
+    /// Refine a bare structural annotation (`table` / `function`) against the
+    /// initializer's inferred shape: `local nums: table = {1, 2}` becomes
+    /// `table<integer>`. A `nil`-side or mismatched-kind value leaves the
+    /// declared type untouched. Mirrors typeck's `refine_bare_binding`.
+    fn refine_bare_annotation(&self, decl: Type, value: Option<Type>) -> Type {
+        let Type::Named(name) = &decl else {
+            return decl;
+        };
+        let Some(value_ty) = value else {
+            return decl;
+        };
+        let inner = match &value_ty {
+            Type::Nullable(i) => (**i).clone(),
+            other => other.clone(),
+        };
+        let matches_kind = matches!(
+            (name.as_str(), &inner),
+            ("table", Type::Table { .. }) | ("function", Type::Function { .. })
+        );
+        if matches_kind { inner } else { decl }
+    }
+
     fn visit_module(&mut self, m: &Module) {
         for s in &m.stmts {
             self.visit_stmt(s);
@@ -415,10 +514,21 @@ impl<'a> Cx<'a> {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
-                let resolved = ty
-                    .clone()
-                    .or_else(|| value.as_ref().and_then(|v| self.infer_init_type(&v.value)))
-                    .unwrap_or_else(|| Type::Named("any".into()));
+                let resolved = match ty.clone() {
+                    // A bare structural annotation (`table` / `function`)
+                    // is refined against the initializer's inferred shape
+                    // so generic natives can bind the element type
+                    // (`local nums: table = {1, 2}` -> `table<integer>`).
+                    Some(t) => self.refine_bare_annotation(
+                        t,
+                        value.as_ref().and_then(|v| self.infer_init_type(&v.value)),
+                    ),
+                    // A single binding takes one value; a multi-return
+                    // (tuple) collapses to its first component here.
+                    None => first_value_type(
+                        value.as_ref().and_then(|v| self.infer_init_type(&v.value)),
+                    ),
+                };
                 // Surface a hover blurb when the cursor is on the
                 // declaring identifier itself (`local due: int? = …`
                 // -> hover on `due`). Without this the walker would
@@ -452,15 +562,22 @@ impl<'a> Cx<'a> {
                 for v in values {
                     self.visit_expr(v);
                 }
-                for (i, (name, ty)) in names.iter().enumerate() {
+                let spread = self.spread_value_types(values);
+                for (i, (name, name_span, ty)) in names.iter().enumerate() {
                     let resolved = ty
                         .clone()
-                        .or_else(|| {
-                            values
-                                .get(i)
-                                .and_then(|v| self.infer_init_type(&v.value))
-                        })
+                        .or_else(|| spread.get(i).cloned())
                         .unwrap_or_else(|| Type::Named("any".into()));
+                    // Surface a hover blurb when the cursor is on the
+                    // declaring identifier itself (`local q, r = …`
+                    // -> hover on `q`), mirroring `Stmt::Local`.
+                    self.record(
+                        name_span.clone(),
+                        format!(
+                            "```saule\n(local) {name}: {ty}\n```",
+                            ty = render_type(&resolved)
+                        ),
+                    );
                     self.locals.push(LocalVar {
                         name: name.clone(),
                         ty: resolved,

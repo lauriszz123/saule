@@ -38,3 +38,11 @@ fn window_poll_events() -> Result<(), String> {
 fn window_close() {
     state::close();
 }
+
+/// `Window.getSize()` — the window's framebuffer dimensions as two values,
+/// `width, height`. Use it as `local w, h = Window.getSize()`.
+#[saule_export(class = "Window", name = "getSize")]
+fn window_get_size() -> Result<(i64, i64), String> {
+    let (w, h) = state::with(|e| e.size())?;
+    Ok((w as i64, h as i64))
+}

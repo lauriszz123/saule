@@ -62,6 +62,7 @@ pub fn anchor() {
     black_box(window::saule_export_Window_isOpen as *const ());
     black_box(window::saule_export_Window_pollEvents as *const ());
     black_box(window::saule_export_Window_close as *const ());
+    black_box(window::saule_export_Window_getSize as *const ());
     black_box(graphics::saule_export_Graphics_setColor as *const ());
     black_box(graphics::saule_export_Graphics_circle as *const ());
     black_box(graphics::saule_export_Graphics_rectangle as *const ());
@@ -73,6 +74,7 @@ pub fn anchor() {
     black_box(util::saule_export_Util_keys as *const ());
     black_box(util::saule_export_Util_map as *const ());
     black_box(util::saule_export_Util_range as *const ());
+    black_box(util::saule_export_Util_divmod as *const ());
     black_box(util::saule_export_Util_filter as *const ());
     black_box(util::saule_export_Util_reduce as *const ());
     black_box(util::saule_export_Util_find as *const ());

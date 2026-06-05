@@ -107,7 +107,7 @@ fn collect_module_scope(module: &Module) -> HashSet<String> {
                 scope.insert(name.clone());
             }
             Stmt::LocalMulti { names, .. } => {
-                for (n, _) in names {
+                for (n, _, _) in names {
                     scope.insert(n.clone());
                 }
             }
@@ -169,7 +169,7 @@ impl Resolver {
                 for v in values {
                     self.expr(v);
                 }
-                for (n, _) in names {
+                for (n, _, _) in names {
                     self.declare(n);
                 }
             }

@@ -98,6 +98,11 @@ impl Engine {
         self.window.is_open() && !self.window.is_key_down(Key::Escape)
     }
 
+    /// The window's framebuffer dimensions as `(width, height)`.
+    pub fn size(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
     /// Pump the OS event queue without presenting a frame. Keeps
     /// `is_open` / input fresh at the top of the loop.
     pub fn poll_events(&mut self) {

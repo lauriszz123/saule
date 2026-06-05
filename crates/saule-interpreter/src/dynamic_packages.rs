@@ -272,7 +272,10 @@ fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
             .collect();
         let return_ty = match m.returns.as_slice() {
             [single] => Some(single.clone()),
-            _ => None,
+            [] => None,
+            // Multiple declared returns surface as a tuple so the type
+            // checker can destructure `local a, b = Class.method()`.
+            multi => Some(saule_ast::Type::Tuple(multi.to_vec())),
         };
         info.methods.insert(
             m.name.clone(),
@@ -358,7 +361,13 @@ fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, Stri
     let mut static_fields = HashMap::new();
     for method in &spec.methods {
         let qname = format!("{}.{}", spec.name, method.name);
-        let value = make_native(qname, lib.clone(), &method.symbol, method.param_names.clone())?;
+        let value = make_native(
+            qname,
+            lib.clone(),
+            &method.symbol,
+            method.param_names.clone(),
+            method.returns.len(),
+        )?;
         static_fields.insert(method.name.clone(), value);
     }
     Ok(ClassObject {
@@ -378,11 +387,15 @@ fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, Stri
 ///
 /// `param_names` lets callers pass arguments by name (`Window.create(800,
 /// 600, title: "x")`); the call site reorders them into positional slots.
+/// `ret_arity` is the number of declared return values: when it exceeds one
+/// the native packs them into a host array-`table`, which this closure
+/// spreads back into a multi-value result.
 fn make_native(
     qname: String,
     lib: Arc<Library>,
     symbol: &str,
     param_names: Vec<String>,
+    ret_arity: usize,
 ) -> Result<Value, String> {
     // SAFETY: the symbol must have the ABI's frozen signature; a mismatch is
     // the package author's bug. We copy the function pointer out and keep the
@@ -402,7 +415,12 @@ fn make_native(
         // Keep the library alive for the duration of the call (and for as
         // long as this closure lives).
         let _keep = &lib;
-        call_native(raw, args).map(|v| vec![v])
+        let result = call_native(raw, args)?;
+        Ok(if ret_arity > 1 {
+            spread_multi_return(result, ret_arity)
+        } else {
+            vec![result]
+        })
     });
 
     Ok(Value::NativeClosure(Rc::new(NativeClosure {
@@ -410,6 +428,28 @@ fn make_native(
         func,
         param_names,
     })))
+}
+
+/// Spread a multi-return native's result into `arity` values. The native
+/// encodes its returns as a host array-`table` (the single-valued ABI can't
+/// carry several values directly); the first `arity` array slots become the
+/// result tuple. A non-table result (a misbehaving package) degrades to that
+/// value followed by `nil`s.
+fn spread_multi_return(value: Value, arity: usize) -> Vec<Value> {
+    match value {
+        Value::Table(t) => {
+            let t = t.borrow();
+            (1..=arity as i64)
+                .map(|i| t.get(&Value::Int(i)))
+                .collect()
+        }
+        other => {
+            let mut out = Vec::with_capacity(arity);
+            out.push(other);
+            out.resize(arity, Value::Nil);
+            out
+        }
+    }
 }
 
 /// Marshal `args` into [`CValue`]s, invoke `raw`, and translate the result
@@ -692,6 +732,7 @@ fn split_top_level(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::value::TableObject;
 
     #[test]
     fn parses_a_manifest() {
@@ -734,6 +775,35 @@ mod tests {
     fn parses_tuple_return() {
         let (_g, _n, _p, r) = parse_sig("fn() -> (integer, integer)").unwrap();
         assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn spreads_table_into_multiple_returns() {
+        let table = Value::Table(Rc::new(RefCell::new(TableObject::from_array(vec![
+            Value::Int(3),
+            Value::Int(2),
+        ]))));
+        let out = spread_multi_return(table, 2);
+        assert!(matches!(out.as_slice(), [Value::Int(3), Value::Int(2)]));
+    }
+
+    #[test]
+    fn spreads_pads_missing_slots_with_nil() {
+        // A short table (or a misbehaving native) still yields `arity` values.
+        let table = Value::Table(Rc::new(RefCell::new(TableObject::from_array(vec![
+            Value::Int(1),
+        ]))));
+        let out = spread_multi_return(table, 3);
+        assert!(matches!(
+            out.as_slice(),
+            [Value::Int(1), Value::Nil, Value::Nil]
+        ));
+    }
+
+    #[test]
+    fn spreads_non_table_result_as_first_value() {
+        let out = spread_multi_return(Value::Int(7), 2);
+        assert!(matches!(out.as_slice(), [Value::Int(7), Value::Nil]));
     }
 
     #[test]

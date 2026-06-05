@@ -22,9 +22,11 @@ pub enum Stmt {
         value: Option<Spanned<Expr>>,
     },
     /// `local a: T, b: U = e1, e2` — parallel binding. Extra names are nil,
-    /// extra values are dropped.
+    /// extra values are dropped. Each entry is `(name, name_span, ty)`
+    /// where `name_span` is the byte range of the declaring identifier,
+    /// used by tooling (hover, go-to-definition, inlay hints).
     LocalMulti {
-        names: Vec<(String, Option<Type>)>,
+        names: Vec<(String, Range<usize>, Option<Type>)>,
         values: Vec<Spanned<Expr>>,
     },
     /// `lhs = rhs` (lhs is restricted to an assignable expression)

@@ -177,13 +177,11 @@ impl<'a> ResolveCx<'a> {
                 for v in values {
                     self.visit_expr(v);
                 }
-                for (i, (name, ty)) in names.iter().enumerate() {
-                    if let Some(span) = locate_word_in(self.source, &s.span, name) {
-                        self.record(span.clone(), Symbol::Local {
-                            name: name.clone(),
-                            def_span: span,
-                        });
-                    }
+                for (i, (name, name_span, ty)) in names.iter().enumerate() {
+                    self.record(name_span.clone(), Symbol::Local {
+                        name: name.clone(),
+                        def_span: name_span.clone(),
+                    });
                     let init = values.get(i).map(|v| &v.value);
                     self.push_local_binding(name, ty.clone(), init, &s.span);
                 }
@@ -359,7 +357,7 @@ impl<'a> ResolveCx<'a> {
                 self.push_local_binding(name, ty.clone(), value.as_ref().map(|v| &v.value), &s.span);
             }
             Stmt::LocalMulti { names, values } => {
-                for (i, (name, ty)) in names.iter().enumerate() {
+                for (i, (name, _, ty)) in names.iter().enumerate() {
                     let init = values.get(i).map(|v| &v.value);
                     self.push_local_binding(name, ty.clone(), init, &s.span);
                 }

@@ -65,15 +65,15 @@ impl Parser {
 
         // `local a: T, b: U = e1, e2`
         if self.check(&Token::Comma) {
-            let mut names = vec![(first_name, first_ty)];
+            let mut names = vec![(first_name, first_span.clone(), first_ty)];
             while self.eat(&Token::Comma) {
-                let (n, _) = self.expect_ident("variable name in `local` list")?;
+                let (n, n_span) = self.expect_ident("variable name in `local` list")?;
                 let t = if self.eat(&Token::Colon) {
                     Some(self.parse_type()?)
                 } else {
                     None
                 };
-                names.push((n, t));
+                names.push((n, n_span, t));
             }
             let mut values = Vec::new();
             let mut end = self.last_consumed_end();

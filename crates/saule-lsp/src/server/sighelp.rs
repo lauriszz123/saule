@@ -630,7 +630,7 @@ impl Cx {
                 for v in values {
                     self.visit_expr(v);
                 }
-                for (n, t) in names {
+                for (n, _, t) in names {
                     self.locals.push(Local {
                         name: n.clone(),
                         ty: t.clone().unwrap_or(Type::Named("any".into())),

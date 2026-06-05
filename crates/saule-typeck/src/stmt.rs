@@ -134,7 +134,7 @@ pub(super) fn check_stmt(
         }
 
         Stmt::LocalMulti { names, values } => {
-            for (_, ty_opt) in names {
+            for (_, _, ty_opt) in names {
                 if let Some(t) = ty_opt {
                     reject_nil_in_binding_type(t, stmt.span.clone(), errors);
                 }
@@ -158,7 +158,7 @@ pub(super) fn check_stmt(
                 };
 
             if let Some((ts, vspan)) = tuple_spread {
-                for (i, (name, ty_opt)) in names.iter().enumerate() {
+                for (i, (name, _, ty_opt)) in names.iter().enumerate() {
                     let found = ts.get(i).cloned();
                     if let (Some(ty), Some(found_ty)) = (ty_opt, found.as_ref()) {
                         check_type_assignment_compat(ty, found_ty, vspan.clone(), errors);
@@ -173,7 +173,7 @@ pub(super) fn check_stmt(
                 return;
             }
 
-            for (i, (name, ty_opt)) in names.iter().enumerate() {
+            for (i, (name, _, ty_opt)) in names.iter().enumerate() {
                 if let (Some(ty), Some(v)) = (ty_opt, values.get(i)) {
                     check_assignment_compat(ty, v, scope, errors);
                 }

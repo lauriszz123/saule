@@ -175,8 +175,8 @@ impl<'a> CollectCx<'a> {
                 for v in values {
                     self.visit_expr(v);
                 }
-                for (i, (name, ty)) in names.iter().enumerate() {
-                    let def_span = locate_word_in(self.source, &s.span, name);
+                for (i, (name, name_span, ty)) in names.iter().enumerate() {
+                    let def_span = Some(name_span.clone());
                     if let Some(span) = &def_span {
                         if let Symbol::Local { name: tname, def_span: tspan } = self.symbol
                             && tname == name

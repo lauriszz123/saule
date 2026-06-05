@@ -436,8 +436,10 @@ impl<T> STable<T> {
         host::table_remove(self.handle, &key.to_cvalue())
     }
 
-    /// A new array-table holding this table's keys.
-    pub fn keys(&self) -> Result<STable, String> {
+    /// A new array-table holding this table's keys. The element marker of
+    /// the result is left free for the caller to choose (Saule tables are
+    /// integer-keyed, so a typical annotation is `STable<SInteger>`).
+    pub fn keys<U>(&self) -> Result<STable<U>, String> {
         Ok(STable {
             handle: host::table_keys(self.handle)?,
             _marker: PhantomData,

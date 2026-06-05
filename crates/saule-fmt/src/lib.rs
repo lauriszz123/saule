@@ -335,7 +335,7 @@ impl<'a> Printer<'a> {
             }
             Stmt::LocalMulti { names, values } => {
                 self.write("local ");
-                for (i, (n, t)) in names.iter().enumerate() {
+                for (i, (n, _, t)) in names.iter().enumerate() {
                     if i > 0 {
                         self.write(", ");
                     }

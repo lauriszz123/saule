@@ -129,7 +129,7 @@ fn exec_inner(
             // outer scope. The final expression may expand into multiple
             // return values (Lua-style destructuring semantics).
             let evaluated = eval_expr_list(values, env)?;
-            for (i, (name, _)) in names.iter().enumerate() {
+            for (i, (name, _, _)) in names.iter().enumerate() {
                 let v = evaluated.get(i).cloned().unwrap_or(Value::Nil);
                 env.borrow_mut().define(name.clone(), v);
             }
