@@ -40,6 +40,7 @@ pub mod eval;
 pub mod module;
 pub mod dynamic_packages;
 pub mod native_packages;
+mod native_host;
 pub mod project;
 pub mod stdlib;
 pub mod value;

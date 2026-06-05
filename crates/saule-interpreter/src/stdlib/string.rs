@@ -107,6 +107,7 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
         func: Box::new(move |args| func(args)),
+        param_names: Vec::new(),
     }))
 }
 
@@ -319,6 +320,7 @@ fn str_iter(args: &[Value]) -> Result<Value, String> {
                 Value::Int(idx as i64),
             ])
         }),
+        param_names: Vec::new(),
     })))
 }
 

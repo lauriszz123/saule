@@ -293,8 +293,10 @@ pub(super) fn check_native_args(
 
 /// Check positional arguments of a user-defined class method against its
 /// declared parameter types. Mirrors [`check_native_args`] but reads
-/// `Param` from the semantic registry (no native generic substitution —
-/// user-side generics aren't tracked here yet).
+/// `Param` from the semantic registry. Generic methods (non-empty
+/// `sig.type_params`, e.g. a native package's `find<T>`) have their type
+/// parameters bound from the actual arguments and substituted before the
+/// compatibility check.
 ///
 /// Lenient in the same ways: `any` slots accept anything, nullable slots
 /// accept anything, named args are skipped, and we bail silently when
@@ -535,6 +537,31 @@ pub(super) fn unify(
 
 pub(super) fn is_any(t: &Type) -> bool {
     matches!(t, Type::Named(n) if n == "any")
+}
+
+/// Resolve a semantic method's return type, substituting any generic type
+/// parameters bound from the call's actual positional arguments. Non-generic
+/// methods return their declared `return_ty` unchanged.
+fn semantic_method_return(
+    sig: &saule_semantic::MethodSig,
+    args: &[CallArg],
+    scope: &Scope,
+) -> Option<Type> {
+    let ret = sig.return_ty.clone()?;
+    if sig.type_params.is_empty() {
+        return Some(ret);
+    }
+    let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
+    let positional = args.iter().filter_map(|a| match a {
+        CallArg::Positional(e) => Some(e),
+        CallArg::Named { .. } => None,
+    });
+    for (p, arg_expr) in sig.params.iter().zip(positional) {
+        if let Some(found_ty) = infer(arg_expr, scope) {
+            unify(&p.ty, &found_ty, &sig.type_params, &mut subst);
+        }
+    }
+    Some(substitute(&ret, &subst, &sig.type_params))
 }
 
 fn report_if_nullable_receiver(
@@ -1509,6 +1536,13 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         // Expected `any` / `table` / `nil` named slot, value is a table —
         // accept (we widen to the named slot).
         (Type::Named(n), Type::Table { .. }) if n == "table" || n == "any" => true,
+        // Bare `function` (or `any` / `nil`) named slot vs an actual function
+        // value — mirrors the `table` arms. Native sigs erase the precise
+        // shape (e.g. an `SFunction` parameter renders as `function`).
+        (Type::Function { .. }, Type::Named(n)) if n == "function" || n == "any" || n == "nil" => {
+            true
+        }
+        (Type::Named(n), Type::Function { .. }) if n == "function" || n == "any" => true,
         (Type::Nullable(a), b) => types_compatible(a, b),
         (a, Type::Nullable(b)) => types_compatible(a, b),
         // Function / Tuple shapes — only equal-shape is strictly compatible,
@@ -1597,6 +1631,10 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             Type::Nullable(t) => Some(*t),
             other => Some(other),
         },
+        // A table literal infers to a typed `table<…>` so a bare `table`
+        // annotation can be refined (`local xs: table = {"a"}` → `table<string>`)
+        // and a literal passed straight to a native is checked element-wise.
+        Expr::Table(items) => Some(infer_table_literal(items, scope)),
         Expr::Binary { op, lhs, rhs } => match op {
             BinOp::Coalesce => {
                 // `lhs ?? rhs`: result is non-nullable iff `rhs` is non-nullable.
@@ -1638,7 +1676,7 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 && let Expr::Ident(class_name) = &obj.value
                 && let Some(sig) = saule_semantic::lookup_method(class_name, name)
             {
-                return sig.return_ty;
+                return semantic_method_return(&sig, args, scope);
             }
             // `instance.method(args)` — receiver inferred to a class.
             if let Expr::Member { obj, name } = &callee.value
@@ -1646,7 +1684,7 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 && let Type::Named(class_name) = strip_nullable(ty)
                 && let Some(sig) = saule_semantic::lookup_method(&class_name, name)
             {
-                return sig.return_ty;
+                return semantic_method_return(&sig, args, scope);
             }
             if let Some(qname) = native_callee_name(callee, scope)
                 && let Some(sig) = crate::sigs::lookup(&qname)
@@ -1750,6 +1788,71 @@ pub(super) fn strip_nullable(ty: Type) -> Type {
     match ty {
         Type::Nullable(t) => *t,
         other => other,
+    }
+}
+
+/// Infer the static type of a table literal.
+///
+/// * All-positional (`{a, b, c}`) → `table<T>` when every element shares the
+///   same inferred base type, otherwise `table<any>`.
+/// * All-field (`{x: a, y: b}`) → `table<string, V>` with `V` unified the same
+///   way.
+/// * Empty (`{}`) or mixed positional+field → `table<any>` (element type
+///   can't be pinned down without false positives).
+///
+/// Any element whose type can't be inferred widens the result to `any`, so the
+/// outcome is always at least as permissive as the old `None` behaviour.
+fn infer_table_literal(items: &[TableEntry], scope: &Scope) -> Type {
+    let mut has_positional = false;
+    let mut has_field = false;
+    let mut elem: Option<Type> = None;
+    let mut unknown = false;
+
+    for item in items {
+        let value_expr = match item {
+            TableEntry::Positional(e) => {
+                has_positional = true;
+                e
+            }
+            TableEntry::Field { value, .. } => {
+                has_field = true;
+                value
+            }
+        };
+        match infer(value_expr, scope) {
+            Some(t) => {
+                let base = strip_nullable(t);
+                elem = match elem {
+                    None => Some(base),
+                    Some(prev) if matches_base(&prev, &base) => Some(prev),
+                    Some(_) => Some(Type::Named("any".into())),
+                };
+            }
+            None => unknown = true,
+        }
+    }
+
+    let value_ty = match elem {
+        Some(t) if !unknown => t,
+        _ => Type::Named("any".into()),
+    };
+
+    if has_field && !has_positional {
+        Type::Table {
+            key: Some(Box::new(Type::Named("string".into()))),
+            value: Box::new(value_ty),
+        }
+    } else if has_positional && !has_field {
+        Type::Table {
+            key: None,
+            value: Box::new(value_ty),
+        }
+    } else {
+        // Empty or mixed — known to be a table, element type left open.
+        Type::Table {
+            key: None,
+            value: Box::new(Type::Named("any".into())),
+        }
     }
 }
 

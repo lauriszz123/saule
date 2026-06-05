@@ -208,6 +208,7 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
         func: Box::new(move |args| func(args)),
+        param_names: Vec::new(),
     }))
 }
 
@@ -342,6 +343,7 @@ fn lines_step_file(reader: Rc<RefCell<BufReader<std::fs::File>>>) -> Value {
                 Err(e) => Err(format!("Io.lines: read error: {e}")),
             }
         }),
+        param_names: Vec::new(),
     }))
 }
 
@@ -360,6 +362,7 @@ fn lines_step_stdin(reader: Rc<RefCell<BufReader<std::io::Stdin>>>) -> Value {
                 Err(e) => Err(format!("Io.lines: read error: {e}")),
             }
         }),
+        param_names: Vec::new(),
     }))
 }
 
@@ -594,6 +597,7 @@ fn file_lines(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
                 _ => Err("File.lines: file is not readable".to_string()),
             }
         }),
+        param_names: Vec::new(),
     }))])
 }
 

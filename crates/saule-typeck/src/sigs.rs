@@ -188,6 +188,51 @@ pub fn lookup(name: &str) -> Option<NativeSig> {
     SIGS.with(|s| s.borrow().get(name).cloned())
 }
 
+/// Bind a generic native sig's type parameters from the inferred types of
+/// its positional arguments (in declaration order; `None` where inference
+/// failed) and return the substituted return list. Non-generic sigs clone
+/// `sig.returns` unchanged.
+///
+/// Lets tools like the LSP surface the concrete inferred type
+/// (`Util.filter(table<integer>) -> table<integer>`) instead of the raw
+/// type parameter (`table<T>`).
+pub fn instantiate_returns(sig: &NativeSig, arg_types: &[Option<Type>]) -> Vec<Type> {
+    if sig.type_params.is_empty() {
+        return sig.returns.clone();
+    }
+    let mut subst = HashMap::new();
+    for (expected, found) in sig.params.iter().zip(arg_types.iter()) {
+        if let Some(found_ty) = found {
+            crate::expr::unify(expected, found_ty, &sig.type_params, &mut subst);
+        }
+    }
+    sig.returns
+        .iter()
+        .map(|t| crate::expr::substitute(t, &subst, &sig.type_params))
+        .collect()
+}
+
+/// Same as [`instantiate_returns`] but for a *semantic* method signature
+/// (e.g. a dynamic native package's class method seeded into
+/// `saule_semantic`). Returns the substituted return type, or `None` when
+/// the method has no declared return.
+pub fn instantiate_method_return(
+    sig: &saule_semantic::MethodSig,
+    arg_types: &[Option<Type>],
+) -> Option<Type> {
+    let ret = sig.return_ty.clone()?;
+    if sig.type_params.is_empty() {
+        return Some(ret);
+    }
+    let mut subst = HashMap::new();
+    for (p, found) in sig.params.iter().zip(arg_types.iter()) {
+        if let Some(found_ty) = found {
+            crate::expr::unify(&p.ty, found_ty, &sig.type_params, &mut subst);
+        }
+    }
+    Some(crate::expr::substitute(&ret, &subst, &sig.type_params))
+}
+
 /// Returns `true` when `name` is a known stdlib *module* (i.e. at least
 /// one member has been recorded for it). Used by the typechecker to
 /// decide whether `Foo.bar` deserves an "unknown member" diagnostic.
@@ -277,3 +322,87 @@ pub fn t_function(params: Vec<Type>, ret: Type) -> Type {
         ret: Box::new(ret),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use saule_ast::Param;
+
+    fn param(name: &str, ty: Type) -> Param {
+        Param {
+            name: name.into(),
+            ty,
+            default: None,
+            variadic: false,
+            span: 0..0,
+        }
+    }
+
+    #[test]
+    fn instantiate_returns_binds_table_element() {
+        // fn<T>(t: table<T>, f: function) -> table<T>
+        let sig = NativeSig {
+            type_params: vec!["T".into()],
+            params: vec![t_table(t_named("T")), t_named("function")],
+            variadic: None,
+            returns: vec![t_table(t_named("T"))],
+        };
+        let args = [Some(t_table(t_named("integer"))), Some(t_named("function"))];
+        assert_eq!(
+            instantiate_returns(&sig, &args),
+            vec![t_table(t_named("integer"))]
+        );
+    }
+
+    #[test]
+    fn instantiate_returns_binds_accumulator_param() {
+        // fn<T, U>(t: table<T>, f: function, init: U) -> U
+        let sig = NativeSig {
+            type_params: vec!["T".into(), "U".into()],
+            params: vec![t_table(t_named("T")), t_named("function"), t_named("U")],
+            variadic: None,
+            returns: vec![t_named("U")],
+        };
+        let args = [
+            Some(t_table(t_named("integer"))),
+            Some(t_named("function")),
+            Some(t_named("integer")),
+        ];
+        assert_eq!(instantiate_returns(&sig, &args), vec![t_named("integer")]);
+    }
+
+    #[test]
+    fn instantiate_returns_non_generic_clones_unchanged() {
+        let sig = NativeSig {
+            type_params: vec![],
+            params: vec![t_named("integer")],
+            variadic: None,
+            returns: vec![t_named("boolean")],
+        };
+        assert_eq!(
+            instantiate_returns(&sig, &[Some(t_named("integer"))]),
+            vec![t_named("boolean")]
+        );
+    }
+
+    #[test]
+    fn instantiate_method_return_substitutes_nullable() {
+        // find<T>(t: table<T>, f: function) -> T?
+        let sig = saule_semantic::MethodSig {
+            is_static: true,
+            is_private: false,
+            type_params: vec!["T".into()],
+            params: vec![
+                param("t", t_table(t_named("T"))),
+                param("f", t_named("function")),
+            ],
+            return_ty: Some(t_nullable(t_named("T"))),
+        };
+        let args = [Some(t_table(t_named("integer"))), Some(t_named("function"))];
+        assert_eq!(
+            instantiate_method_return(&sig, &args),
+            Some(t_nullable(t_named("integer")))
+        );
+    }
+}
+

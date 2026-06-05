@@ -34,7 +34,7 @@ use std::sync::{Arc, Once, RwLock};
 
 use libloading::Library;
 use saule_ast::Type;
-use saule_native_abi::{tag, CValue, NativeSymbolFn};
+use saule_native_abi::{CValue, NativeSymbolFn};
 
 use crate::error::RuntimeError;
 use crate::module::ModuleExports;
@@ -47,6 +47,8 @@ struct MethodSpec {
     name: String,
     /// Symbol exported by the shared library (`saule_engine_graphics_circle`).
     symbol: String,
+    /// Generic type-parameter names from the sig's `fn<...>` prefix.
+    type_params: Vec<String>,
     /// Parameter types parsed from the manifest `sig`.
     params: Vec<Type>,
     /// Parameter names parsed from the manifest `sig`.
@@ -148,7 +150,17 @@ pub fn register_sigs() {
         for class in &manifest.exports {
             for method in &class.methods {
                 let qname = format!("{}.{}", class.name, method.name);
-                saule_typeck::sigs::register(&qname, method.params.clone(), method.returns.clone());
+                if method.type_params.is_empty() {
+                    saule_typeck::sigs::register(&qname, method.params.clone(), method.returns.clone());
+                } else {
+                    let tps: Vec<&str> = method.type_params.iter().map(String::as_str).collect();
+                    saule_typeck::sigs::register_g(
+                        &qname,
+                        tps,
+                        method.params.clone(),
+                        method.returns.clone(),
+                    );
+                }
             }
         }
     }
@@ -267,7 +279,7 @@ fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
             saule_semantic::MethodSig {
                 is_static: true,
                 is_private: false,
-                type_params: Vec::new(),
+                type_params: m.type_params.clone(),
                 params,
                 return_ty,
             },
@@ -300,6 +312,13 @@ fn load_library(manifest: &Manifest) -> Result<Arc<Library>, String> {
     let lib = unsafe { Library::new(&path) }
         .map_err(|e| format!("failed to load `{}`: {e}", path.display()))?;
     let lib = Arc::new(lib);
+
+    // Hand the package its host-callback table so it can manipulate
+    // host-owned `table` / function values by handle. No-op for packages
+    // that only deal in scalars (the symbol is optional).
+    // SAFETY: the library was just loaded for a native package; the symbol,
+    // if present, has the frozen `SetHostFn` signature.
+    unsafe { crate::native_host::install_host(&lib) };
 
     LIBS.write()
         .expect("dynamic lib cache poisoned")
@@ -339,7 +358,7 @@ fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, Stri
     let mut static_fields = HashMap::new();
     for method in &spec.methods {
         let qname = format!("{}.{}", spec.name, method.name);
-        let value = make_native(qname, lib.clone(), &method.symbol)?;
+        let value = make_native(qname, lib.clone(), &method.symbol, method.param_names.clone())?;
         static_fields.insert(method.name.clone(), value);
     }
     Ok(ClassObject {
@@ -356,7 +375,15 @@ fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, Stri
 /// Resolve `symbol` in `lib` and wrap it in a [`Value::NativeClosure`] that
 /// marshals Saule values across the ABI on every call. The closure captures
 /// an `Arc<Library>` so the resolved function pointer stays valid.
-fn make_native(qname: String, lib: Arc<Library>, symbol: &str) -> Result<Value, String> {
+///
+/// `param_names` lets callers pass arguments by name (`Window.create(800,
+/// 600, title: "x")`); the call site reorders them into positional slots.
+fn make_native(
+    qname: String,
+    lib: Arc<Library>,
+    symbol: &str,
+    param_names: Vec<String>,
+) -> Result<Value, String> {
     // SAFETY: the symbol must have the ABI's frozen signature; a mismatch is
     // the package author's bug. We copy the function pointer out and keep the
     // library alive via the captured `Arc` below.
@@ -378,64 +405,53 @@ fn make_native(qname: String, lib: Arc<Library>, symbol: &str) -> Result<Value, 
         call_native(raw, args).map(|v| vec![v])
     });
 
-    Ok(Value::NativeClosure(Rc::new(NativeClosure { name, func })))
+    Ok(Value::NativeClosure(Rc::new(NativeClosure {
+        name,
+        func,
+        param_names,
+    })))
 }
 
 /// Marshal `args` into [`CValue`]s, invoke `raw`, and translate the result
 /// back into a [`Value`].
+///
+/// The call is bracketed by [`crate::native_host::enter`] / `exit` so any
+/// `table` / function arguments (and values the package creates via the host
+/// callbacks) live in the handle registry for the duration of the call.
 fn call_native(raw: NativeSymbolFn, args: &[Value]) -> Result<Value, String> {
-    let mut cargs = Vec::with_capacity(args.len());
-    for (i, v) in args.iter().enumerate() {
-        cargs.push(value_to_cvalue(v).ok_or_else(|| {
-            format!(
-                "cannot pass argument #{} ({}) across the native boundary",
-                i + 1,
-                v.type_name()
-            )
-        })?);
-    }
+    use crate::native_host;
 
-    let mut out = CValue::nil();
-    // SAFETY: `cargs` is a valid, contiguous, initialised slice; `out` is a
-    // valid writable slot. The string payloads in `cargs` borrow from `args`,
-    // which outlives the call.
-    let code = unsafe { raw(cargs.as_ptr(), cargs.len(), &mut out) };
+    native_host::enter();
+    let result = (|| {
+        let mut cargs = Vec::with_capacity(args.len());
+        for (i, v) in args.iter().enumerate() {
+            cargs.push(native_host::value_to_cvalue(v).ok_or_else(|| {
+                format!(
+                    "cannot pass argument #{} ({}) across the native boundary",
+                    i + 1,
+                    v.type_name()
+                )
+            })?);
+        }
 
-    if code != 0 {
-        // SAFETY: on failure the callee writes an ERR/STR value into `out`.
-        let msg = unsafe { out.as_str() }
-            .unwrap_or("native package call failed")
-            .to_string();
-        return Err(msg);
-    }
-    Ok(cvalue_to_value(&out))
-}
+        let mut out = CValue::nil();
+        // SAFETY: `cargs` is a valid, contiguous, initialised slice; `out` is a
+        // valid writable slot. String payloads in `cargs` borrow from `args`,
+        // which outlives the call.
+        let code = unsafe { raw(cargs.as_ptr(), cargs.len(), &mut out) };
 
-/// Borrowed conversion `Value -> CValue`. Returns `None` for values that have
-/// no ABI representation (tables, instances, functions, …). String payloads
-/// borrow from `v`, so the result is only valid while `v` is alive.
-fn value_to_cvalue(v: &Value) -> Option<CValue> {
-    Some(match v {
-        Value::Nil => CValue::nil(),
-        Value::Bool(b) => CValue::boolean(*b),
-        Value::Int(i) => CValue::integer(*i),
-        Value::Float(f) => CValue::float(*f),
-        Value::Str(s) => CValue::string_borrowed(s.as_bytes()),
-        _ => return None,
-    })
-}
-
-/// Owned conversion `CValue -> Value`. Copies string payloads immediately so
-/// the result outlives the callee's thread-local return buffer.
-fn cvalue_to_value(c: &CValue) -> Value {
-    match c.tag {
-        tag::BOOL => Value::Bool(c.boolean != 0),
-        tag::INT => Value::Int(c.integer),
-        tag::FLOAT => Value::Float(c.float),
-        // SAFETY: STR tag implies a valid `(ptr, len)` pair from the callee.
-        tag::STR => Value::Str(Rc::new(unsafe { c.as_str() }.unwrap_or("").to_string())),
-        _ => Value::Nil,
-    }
+        if code != 0 {
+            // SAFETY: on failure the callee writes an ERR/STR value into `out`.
+            let msg = unsafe { out.as_str() }
+                .unwrap_or("native package call failed")
+                .to_string();
+            return Err(msg);
+        }
+        // Resolve any returned handle *before* the scope is torn down.
+        Ok(native_host::cvalue_to_value(&out))
+    })();
+    native_host::exit();
+    result
 }
 
 // ─── Manifest parsing ───────────────────────────────────────────────────────
@@ -500,11 +516,12 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| format!("`{class_name}.{mname}` is missing `native_symbol`"))?
                         .to_string();
-                    let (param_names, params, returns) = parse_sig(sig)
+                    let (type_params, param_names, params, returns) = parse_sig(sig)
                         .map_err(|e| format!("`{class_name}.{mname}` has an invalid sig: {e}"))?;
                     methods.push(MethodSpec {
                         name: mname,
                         symbol,
+                        type_params,
                         param_names,
                         params,
                         returns,
@@ -527,13 +544,26 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
     })
 }
 
-/// Parse a `fn(a: T, b: U) -> R` signature string into
-/// `(param_names, params, returns)` using the typeck type builders.
+/// Parse a `fn<T>(a: T, b: U) -> R` signature string into
+/// `(type_params, param_names, params, returns)` using the typeck type
+/// builders. The optional `<...>` prefix lists generic type-parameter names.
 /// A `nil` (or absent) return becomes `[nil]`; a parenthesised
 /// `(A, B)` return becomes a multi-return.
-fn parse_sig(sig: &str) -> Result<(Vec<String>, Vec<Type>, Vec<Type>), String> {
+fn parse_sig(sig: &str) -> Result<(Vec<String>, Vec<String>, Vec<Type>, Vec<Type>), String> {
     let s = sig.trim();
     let s = s.strip_prefix("fn").unwrap_or(s).trim_start();
+
+    // Optional `<T, U>` generic prefix: collect the type-parameter names.
+    let mut type_params = Vec::new();
+    let s = if let Some(rest) = s.strip_prefix('<') {
+        let gt = rest.find('>').ok_or("unbalanced `<...>` in type parameters")?;
+        for p in split_top_level(&rest[..gt]) {
+            type_params.push(p);
+        }
+        rest[gt + 1..].trim_start()
+    } else {
+        s
+    };
 
     let open = s.find('(').ok_or("expected '(' after `fn`")?;
     // Find the parameter list's matching ')', tracking nesting so a
@@ -568,7 +598,7 @@ fn parse_sig(sig: &str) -> Result<(Vec<String>, Vec<Type>, Vec<Type>), String> {
     let ret_str = rest.strip_prefix("->").map(str::trim).unwrap_or("");
     let returns = parse_return(ret_str);
 
-    Ok((param_names, params, returns))
+    Ok((type_params, param_names, params, returns))
 }
 
 /// Extract `(name, type)` from a signature parameter token.
@@ -602,13 +632,28 @@ fn parse_return(ret: &str) -> Vec<Type> {
     vec![parse_type(ret)]
 }
 
-/// Parse a single type token: a trailing `?` makes it nullable.
+/// Parse a single type token: a trailing `?` makes it nullable; a
+/// `table<...>` token becomes a typed array (`table<T>`) or map
+/// (`table<K, V>`).
 fn parse_type(tok: &str) -> Type {
     let t = tok.trim();
-    match t.strip_suffix('?') {
-        Some(base) => saule_typeck::sigs::t_nullable(saule_typeck::sigs::t_named(base.trim())),
-        None => saule_typeck::sigs::t_named(t),
+    if let Some(base) = t.strip_suffix('?') {
+        return saule_typeck::sigs::t_nullable(parse_type(base));
     }
+    // `table<T>` / `table<K, V>` — anything else falls through to a named type.
+    if let Some(inner) = t
+        .strip_prefix("table<")
+        .and_then(|r| r.strip_suffix('>'))
+    {
+        let parts = split_top_level(inner);
+        return match parts.as_slice() {
+            [v] => saule_typeck::sigs::t_table(parse_type(v)),
+            [k, v] => saule_typeck::sigs::t_table_map(parse_type(k), parse_type(v)),
+            // Malformed (`table<>` or 3+ args) — degrade to an untyped table.
+            _ => saule_typeck::sigs::t_table(saule_typeck::sigs::t_any()),
+        };
+    }
+    saule_typeck::sigs::t_named(t)
 }
 
 /// Split on commas that are not nested inside `<...>` or `(...)`. Empty
@@ -687,13 +732,23 @@ mod tests {
 
     #[test]
     fn parses_tuple_return() {
-        let (_n, _p, r) = parse_sig("fn() -> (integer, integer)").unwrap();
+        let (_g, _n, _p, r) = parse_sig("fn() -> (integer, integer)").unwrap();
         assert_eq!(r.len(), 2);
     }
 
     #[test]
+    fn parses_generic_prefix() {
+        let (generics, names, params, returns) =
+            parse_sig("fn<T>(t: table<T>, value: T) -> T?").unwrap();
+        assert_eq!(generics, ["T"]);
+        assert_eq!(names, ["t", "value"]);
+        assert_eq!(params.len(), 2);
+        assert_eq!(returns.len(), 1);
+    }
+
+    #[test]
     fn parses_param_names_with_fallback_for_unnamed() {
-        let (names, params, _r) = parse_sig("fn(integer, y: float) -> nil").unwrap();
+        let (_g, names, params, _r) = parse_sig("fn(integer, y: float) -> nil").unwrap();
         assert_eq!(names, ["arg0", "y"]);
         assert_eq!(params.len(), 2);
     }

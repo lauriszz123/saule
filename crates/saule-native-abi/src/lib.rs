@@ -54,6 +54,104 @@ pub mod tag {
     /// Only ever written into the `out` slot alongside a non-zero return
     /// code — carries a UTF-8 error message in the string fields.
     pub const ERR: u8 = 5;
+    /// A Saule `table` that stays owned by the host. The package receives
+    /// an opaque [`Handle`] (in [`CValue::integer`]) and operates on the
+    /// table through the [`HostApi`] callbacks rather than touching its
+    /// memory. See the "Reference values" section below.
+    pub const TABLE: u8 = 6;
+    /// A Saule callable (function / closure / native) owned by the host.
+    /// The package holds a [`Handle`] and invokes it via
+    /// [`HostApi::func_call`].
+    pub const FUNC: u8 = 7;
+}
+
+/// An opaque reference to a host-owned value (a `table` or a callable).
+///
+/// Reference values never cross the ABI by memory — only their `Rc`-counted
+/// identity lives on the interpreter side. A handle is a token the host can
+/// resolve back to the real [`crate`]-external `Value`. **Handles are valid
+/// only for the duration of the native call that produced them** (including
+/// any nested host callbacks); the host reclaims them when the outermost
+/// call returns. `0` is the never-valid sentinel.
+pub type Handle = u64;
+
+/// The symbol an interpreter looks up (optionally) right after loading a
+/// package's shared library, to hand the package its [`HostApi`]. A package
+/// that uses reference values (`STable` / `SFunction`) must export it; one
+/// that only deals in scalars may omit it. `saule-sdk` emits it for you.
+pub const SET_HOST_SYMBOL: &str = "saule_set_host";
+
+/// Signature of [`SET_HOST_SYMBOL`]. The pointer is valid for the entire
+/// lifetime of the loaded library; the package should stash it.
+pub type SetHostFn = unsafe extern "C" fn(*const HostApi);
+
+/// The callback table the host hands a package so it can manipulate
+/// host-owned reference values ([`tag::TABLE`], [`tag::FUNC`]) by [`Handle`].
+///
+/// Every callback takes `ctx` first — the host's opaque context pointer
+/// ([`HostApi::ctx`]) — so the host can locate its handle registry. All
+/// `CValue` arguments follow the same ownership rules as a normal call:
+/// string payloads are borrowed for the duration of the callback, and any
+/// table/func `CValue` carries a [`Handle`] valid in the current call scope.
+#[repr(C)]
+pub struct HostApi {
+    /// Opaque host context, passed back into every callback below.
+    pub ctx: *mut core::ffi::c_void,
+
+    /// Allocate a fresh empty `table` on the host and return its handle
+    /// (`0` on failure).
+    pub table_new: unsafe extern "C" fn(ctx: *mut core::ffi::c_void) -> Handle,
+
+    /// Number of array-part elements in the table, or `-1` for a bad handle.
+    pub table_len: unsafe extern "C" fn(ctx: *mut core::ffi::c_void, table: Handle) -> i64,
+
+    /// Read `table[key]` into `out`. Returns `0` on success (writes `nil`
+    /// for a missing key), non-zero on error (bad handle / unusable key),
+    /// writing an [`tag::ERR`] message into `out`.
+    pub table_get: unsafe extern "C" fn(
+        ctx: *mut core::ffi::c_void,
+        table: Handle,
+        key: *const CValue,
+        out: *mut CValue,
+    ) -> i32,
+
+    /// Assign `table[key] = val`. Returns `0` on success, non-zero on error.
+    pub table_set: unsafe extern "C" fn(
+        ctx: *mut core::ffi::c_void,
+        table: Handle,
+        key: *const CValue,
+        val: *const CValue,
+    ) -> i32,
+
+    /// Append `val` to the table's array part. Returns `0` on success.
+    pub table_push: unsafe extern "C" fn(
+        ctx: *mut core::ffi::c_void,
+        table: Handle,
+        val: *const CValue,
+    ) -> i32,
+
+    /// Remove `key` from the table. Returns `0` on success.
+    pub table_remove: unsafe extern "C" fn(
+        ctx: *mut core::ffi::c_void,
+        table: Handle,
+        key: *const CValue,
+    ) -> i32,
+
+    /// Return a *new* array-table handle holding this table's keys, so a
+    /// package can iterate without an open iterator protocol. `0` on error.
+    pub table_keys: unsafe extern "C" fn(ctx: *mut core::ffi::c_void, table: Handle) -> Handle,
+
+    /// Invoke a host callable with `argc` positional `CValue` arguments,
+    /// writing its (first) return value into `out`. Returns `0` on success;
+    /// non-zero means the callee threw, with an [`tag::ERR`] message in
+    /// `out`.
+    pub func_call: unsafe extern "C" fn(
+        ctx: *mut core::ffi::c_void,
+        func: Handle,
+        args: *const CValue,
+        argc: usize,
+        out: *mut CValue,
+    ) -> i32,
 }
 
 /// FFI-safe tagged value. A flat struct (not a real union) so both sides
@@ -130,6 +228,33 @@ impl CValue {
             str_ptr: bytes.as_ptr(),
             str_len: bytes.len(),
             ..Self::nil()
+        }
+    }
+
+    /// A host-owned `table` referenced by [`Handle`].
+    pub fn table_handle(h: Handle) -> Self {
+        Self {
+            tag: tag::TABLE,
+            integer: h as i64,
+            ..Self::nil()
+        }
+    }
+
+    /// A host-owned callable referenced by [`Handle`].
+    pub fn func_handle(h: Handle) -> Self {
+        Self {
+            tag: tag::FUNC,
+            integer: h as i64,
+            ..Self::nil()
+        }
+    }
+
+    /// The [`Handle`] carried by a [`tag::TABLE`] or [`tag::FUNC`] value, or
+    /// `None` for any other tag.
+    pub fn as_handle(&self) -> Option<Handle> {
+        match self.tag {
+            tag::TABLE | tag::FUNC => Some(self.integer as Handle),
+            _ => None,
         }
     }
 

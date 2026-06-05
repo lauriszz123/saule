@@ -32,6 +32,11 @@ impl fmt::Debug for NativeFn {
 pub struct NativeClosure {
     pub name: &'static str,
     pub func: Box<dyn Fn(&[Value]) -> Result<Vec<Value>, String>>,
+    /// Declared parameter names, in order. When non-empty, the call site
+    /// accepts named arguments and reorders them into positional slots
+    /// before invoking `func`. Empty for closures that only take positional
+    /// arguments (the default for stdlib closures).
+    pub param_names: Vec<String>,
 }
 
 impl fmt::Debug for NativeClosure {
