@@ -9,7 +9,7 @@
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-use minifb::{Key, Scale, Window, WindowOptions};
+use minifb::{Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
 
 /// Target frame time for the 60 FPS cap.
 const FRAME_DUR: Duration = Duration::from_nanos(1_000_000_000 / 60);
@@ -23,6 +23,7 @@ pub struct Engine {
     height: usize,
     /// Current draw colour for shapes, packed `0RGB`.
     color: u32,
+    line_width: f32,
     /// Instant the next presented frame should be released at — the single
     /// 60 FPS pacing point (see [`Engine::present`]).
     next_frame: Instant,
@@ -70,6 +71,7 @@ pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
             width,
             height,
             color: 0x00FF_FFFF, // default draw colour: white
+            line_width: 1.0,
             next_frame: Instant::now() + FRAME_DUR,
         });
     });
@@ -98,6 +100,30 @@ impl Engine {
         self.window.is_open() && !self.window.is_key_down(Key::Escape)
     }
 
+    /// Cursor position in window pixels, clamped to the window bounds.
+    pub fn mouse_pos(&self) -> (f64, f64) {
+        self.window
+            .get_mouse_pos(MouseMode::Clamp)
+            .map(|(x, y)| (x as f64, y as f64))
+            .unwrap_or((0.0, 0.0))
+    }
+
+    /// Whether `button` is currently held. `1` = left, `2` = right,
+    /// `3` = middle. Returns `false` for unrecognised button indices.
+    pub fn mouse_is_down(&self, button: i64) -> bool {
+        let btn = match button {
+            1 => MouseButton::Left,
+            2 => MouseButton::Right,
+            3 => MouseButton::Middle,
+            _ => return false,
+        };
+        self.window.get_mouse_down(btn)
+    }
+
+    pub fn is_key_down(&self, key: Key) -> bool {
+        self.window.is_key_down(key)
+    }
+
     /// The window's framebuffer dimensions as `(width, height)`.
     pub fn size(&self) -> (usize, usize) {
         (self.width, self.height)
@@ -112,6 +138,11 @@ impl Engine {
     /// Set the current draw colour for subsequent shapes.
     pub fn set_color(&mut self, r: f64, g: f64, b: f64) {
         self.color = pack_color(r, g, b);
+    }
+
+    /// Set the current draw colour for subsequent shapes.
+    pub fn set_line_width(&mut self, w: f64) {
+        self.line_width = w.max(0.0) as f32;
     }
 
     /// Fill the whole framebuffer with `(r, g, b)`.
@@ -156,6 +187,54 @@ impl Engine {
     fn put(&mut self, x: i32, y: i32) {
         if x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height {
             self.buffer[y as usize * self.width + x as usize] = self.color;
+        }
+    }
+
+    pub fn line(&mut self, x1: f64, y1: f64, x2: f64, y2: f64) {
+        let lw = self.line_width as f64;
+        if lw <= 1.0 {
+            self.bresenham(
+                x1.round() as i32,
+                y1.round() as i32,
+                x2.round() as i32,
+                y2.round() as i32,
+            );
+        } else {
+            let dx = x2 - x1;
+            let dy = y2 - y1;
+            let len = (dx * dx + dy * dy).sqrt().max(1.0);
+            // Two stamps per pixel of length avoids visible gaps.
+            let steps = (len * 2.0).round() as i32;
+            for i in 0..=steps {
+                let t = i as f64 / steps as f64;
+                let cx = x1 + t * dx;
+                let cy = y1 + t * dy;
+                self.circle("fill", cx, cy, lw * 0.5);
+            }
+        }
+    }
+
+    /// Bresenham integer line rasterizer — always produces a 1-pixel stroke.
+    fn bresenham(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32) {
+        let dx = (x1 - x0).abs();
+        let dy = (y1 - y0).abs();
+        let sx = if x0 < x1 { 1i32 } else { -1 };
+        let sy = if y0 < y1 { 1i32 } else { -1 };
+        let mut err = dx - dy;
+        loop {
+            self.put(x0, y0);
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 > -dy {
+                err -= dy;
+                x0 += sx;
+            }
+            if e2 < dx {
+                err += dx;
+                y0 += sy;
+            }
         }
     }
 

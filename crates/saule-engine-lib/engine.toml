@@ -41,6 +41,16 @@ sig = "fn(mode: string, x: float, y: float, w: float, h: float) -> nil"
 native_symbol = "saule_engine_graphics_rectangle"
 
 [[exports.Graphics.methods]]
+name = "line"
+sig = "fn(x1: float, y1: float, x2: float, y2: float) -> nil"
+native_symbol = "saule_engine_graphics_line"
+
+[[exports.Graphics.methods]]
+name = "setLineWidth"
+sig = "fn(width: float) -> nil"
+native_symbol = "saule_engine_graphics_set_line_width"
+
+[[exports.Graphics.methods]]
 name = "clear"
 sig = "fn(r: float, g: float, b: float) -> nil"
 native_symbol = "saule_engine_graphics_clear"
@@ -74,6 +84,11 @@ name = "close"
 sig = "fn() -> nil"
 native_symbol = "saule_engine_window_close"
 
+[[exports.Window.methods]]
+name = "getSize"
+sig = "fn() -> (integer, integer)"
+native_symbol = "saule_engine_window_get_size"
+
 [exports.Timer]
 type = "class"
 doc = "Timing helpers."
@@ -87,3 +102,26 @@ native_symbol = "saule_engine_timer_get_time"
 name = "getDelta"
 sig = "fn() -> float"
 native_symbol = "saule_engine_timer_get_delta"
+
+[exports.Mouse]
+type = "class"
+doc  = "Mouse position and button state."
+ 
+[[exports.Mouse.methods]]
+name          = "getPos"
+sig           = "fn() -> (float, float)"
+native_symbol = "saule_engine_mouse_get_pos"
+ 
+[[exports.Mouse.methods]]
+name          = "isDown"
+sig           = "fn(button: integer) -> boolean"
+native_symbol = "saule_engine_mouse_is_down"
+
+[exports.Keyboard]
+type = "class"
+doc  = "Keyboard polling by key name."
+ 
+[[exports.Keyboard.methods]]
+name          = "isDown"
+sig           = "fn(key: string) -> boolean"
+native_symbol = "saule_engine_keyboard_is_down"

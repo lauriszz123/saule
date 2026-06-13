@@ -14,9 +14,8 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
-TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/saule-target-wsl}"
+TARGET_DIR="target"
 SO_SRC="$TARGET_DIR/release/libsaule_engine_lib.so"
-GEN_BIN="$TARGET_DIR/release/gen-manifest"
 MANIFEST_SRC="$TARGET_DIR/release/engine.toml"
 SAULE_HOME="${SAULE_HOME:-$HOME/.saule}"
 
@@ -24,14 +23,6 @@ if [ ! -f "$SO_SRC" ]; then
     echo "error: $SO_SRC not found — build saule-engine-lib (release) first" >&2
     exit 1
 fi
-
-if [ ! -x "$GEN_BIN" ]; then
-    echo "error: $GEN_BIN not found — build saule-engine-lib (release) first" >&2
-    exit 1
-fi
-
-# Regenerate the manifest from the #[saule_export] declarations.
-"$GEN_BIN" "$MANIFEST_SRC"
 
 mkdir -p "$SAULE_HOME/native_packages" "$SAULE_HOME/native_manifests"
 cp "$SO_SRC" "$SAULE_HOME/native_packages/saule_engine_lib.so"
