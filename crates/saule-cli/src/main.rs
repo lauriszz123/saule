@@ -35,12 +35,14 @@ fn main() {
         "" | "-h" | "--help" => {
             println!("{USAGE}");
         }
+
         "-v" | "--version" => {
             println!(
                 "Saule programming language version: {}",
                 env!("CARGO_PKG_VERSION")
             );
         }
+
         "init" => match args.get(1) {
             Some(name) => init::cmd_init(name),
             None => {
@@ -48,7 +50,9 @@ fn main() {
                 process::exit(2);
             }
         },
+
         "fmt" => fmt::cmd_fmt(&args[1..]),
+
         "run" => {
             // Split `run` args at the first `--`: anything before is for the
             // CLI (file path or nothing), anything after is forwarded
@@ -72,6 +76,10 @@ fn main() {
             let first_is_saule_file = cli_part
                 .first()
                 .is_some_and(|s| s.ends_with(".sau") || s.ends_with(".saule"));
+            let is_folder = cli_part
+                .first()
+                .map(|s| PathBuf::from(s).is_dir())
+                .unwrap_or(false);
 
             if cli_part.is_empty() || (has_config && !first_is_saule_file) {
                 // Project mode. Script argv = explicit `-- …` part if given,
@@ -79,6 +87,17 @@ fn main() {
                 let argv = script_after_sep.unwrap_or(cli_part);
                 saule_interpreter::stdlib::os::set_script_args(argv);
                 project::run_project(&PathBuf::from("."));
+            } else if is_folder {
+                // If the first arg is a folder, run that as a project in that folder.
+                // Script argv = explicit `<path_to_project> ...args`
+                let mut iter = cli_part.into_iter();
+                let path = iter.next().expect("cli_part non-empty checked above");
+                let mut argv: Vec<String> = iter.collect();
+                if let Some(extra) = script_after_sep {
+                    argv.extend(extra);
+                }
+                saule_interpreter::stdlib::os::set_script_args(argv);
+                project::run_project(&PathBuf::from(path));
             } else {
                 // Single-file mode. First non-`--` arg is the file path,
                 // everything else (whether before or after `--`) is script argv.
@@ -92,6 +111,7 @@ fn main() {
                 run::run_file(PathBuf::from(path), false);
             }
         }
+
         other => {
             eprintln!("Error: Unknown Command `{other}`\n\n{USAGE}");
             process::exit(2);

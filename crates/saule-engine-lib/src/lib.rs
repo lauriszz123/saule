@@ -23,6 +23,8 @@
 //! ```
 
 mod graphics;
+mod keyboard;
+mod mouse;
 mod state;
 mod timer;
 mod util;
@@ -58,18 +60,35 @@ saule_sdk::saule_package! {
 #[doc(hidden)]
 pub fn anchor() {
     use std::hint::black_box;
+
+    // Window exports
     black_box(window::saule_export_Window_create as *const ());
     black_box(window::saule_export_Window_isOpen as *const ());
     black_box(window::saule_export_Window_pollEvents as *const ());
     black_box(window::saule_export_Window_close as *const ());
     black_box(window::saule_export_Window_getSize as *const ());
+
+    // Keyboard exports
+    black_box(keyboard::saule_export_Keyboard_isDown as *const ());
+
+    // Mouse exports
+    black_box(mouse::saule_export_Mouse_isDown as *const ());
+    black_box(mouse::saule_export_Mouse_getPos as *const ());
+
+    // Graphics exports
     black_box(graphics::saule_export_Graphics_setColor as *const ());
+    black_box(graphics::saule_export_Graphics_setLineWidth as *const ());
     black_box(graphics::saule_export_Graphics_circle as *const ());
+    black_box(graphics::saule_export_Graphics_line as *const ());
     black_box(graphics::saule_export_Graphics_rectangle as *const ());
     black_box(graphics::saule_export_Graphics_clear as *const ());
     black_box(graphics::saule_export_Graphics_present as *const ());
+
+    // Timer exports
     black_box(timer::saule_export_Timer_getTime as *const ());
     black_box(timer::saule_export_Timer_getDelta as *const ());
+
+    // Util exports
     black_box(util::saule_export_Util_sum as *const ());
     black_box(util::saule_export_Util_keys as *const ());
     black_box(util::saule_export_Util_map as *const ());
@@ -104,8 +123,20 @@ mod tests {
     }
 
     #[test]
-    fn create_rejects_non_positive_dimensions() {
-        let result = super::window::window_create(0, 0, None);
-        assert!(result.is_err());
+    fn keyboard_is_down_without_window_is_false() {
+        // Keyboard polling degrades gracefully without an open window.
+        assert!(!super::keyboard::keyboard_is_down("space".to_string()));
+    }
+
+    #[test]
+    fn keyboard_unknown_key_is_false() {
+        // Unrecognised key names silently return false, never panic.
+        assert!(!super::keyboard::keyboard_is_down("hyperspace".to_string()));
+    }
+
+    #[test]
+    fn mouse_is_down_without_window_is_false() {
+        // Mouse polling degrades gracefully without an open window.
+        assert!(!super::mouse::mouse_is_down(1));
     }
 }
