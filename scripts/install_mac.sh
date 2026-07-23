@@ -17,13 +17,13 @@ SO_SRC="$TARGET_DIR/release/libsaule_engine_lib.dylib"
 SAULE_HOME="${SAULE_HOME:-$HOME/.saule}"
 
 if [ ! -f "$SO_SRC" ]; then
-    echo "error: $SO_SRC not found — run scripts/build_wsl.sh -p saule-engine-lib first" >&2
+    echo "error: $SO_SRC not found — run scripts/install_mac.sh -p saule-engine-lib first" >&2
     exit 1
 fi
 
 mkdir -p "$SAULE_HOME/native_packages" "$SAULE_HOME/native_manifests"
 cp "$SO_SRC" "$SAULE_HOME/native_packages/saule_engine_lib.dylib"
-cp examples/native-package/engine.toml "$SAULE_HOME/native_manifests/engine.toml"
+cp "$TARGET_DIR/release/engine.toml" "$SAULE_HOME/native_manifests/engine.toml"
 
 echo "installed:"
 echo "  $SAULE_HOME/native_packages/saule_engine_lib.dylib"
