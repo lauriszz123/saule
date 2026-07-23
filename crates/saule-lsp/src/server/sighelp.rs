@@ -515,7 +515,7 @@ fn active_parameter(args: &[CallArgInfo], offset: usize, arity: usize) -> usize 
     idx.min(arity.saturating_sub(1).max(0))
 }
 
-fn render_type(ty: &Type) -> String {
+pub(super) fn render_type(ty: &Type) -> String {
     match ty {
         Type::Named(n) => n.clone(),
         Type::Nullable(inner) => format!("{}?", render_type(inner)),

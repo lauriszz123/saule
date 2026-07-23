@@ -177,3 +177,84 @@ fn parses_import() {
         _ => panic!("expected import"),
     }
 }
+
+#[test]
+fn parses_glob_import_with_from() {
+    // The explicit glob spelling stays supported.
+    let m = parse_src(r#"import * from "engine""#);
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Import {
+                names,
+                path,
+                quoted,
+            } => {
+                assert_eq!(names, &ImportNames::All);
+                assert_eq!(path, "engine");
+                assert!(quoted);
+            }
+            _ => panic!("expected import"),
+        },
+        _ => panic!("expected import"),
+    }
+}
+
+#[test]
+fn parses_unquoted_dotted_module_path() {
+    // `from some.folder.module` — no quotes; `.` is already a path separator.
+    let m = parse_src("import * from some.folder.module");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Import {
+                names,
+                path,
+                quoted,
+            } => {
+                assert_eq!(names, &ImportNames::All);
+                assert_eq!(path, "some.folder.module");
+                assert!(!quoted);
+            }
+            _ => panic!("expected import"),
+        },
+        _ => panic!("expected import"),
+    }
+}
+
+#[test]
+fn unquoted_import_does_not_swallow_next_statement() {
+    // No statement can begin with `.`, so the bare path stops at `engine`
+    // and the following call parses as its own statement.
+    let m = parse_src("import * from engine\nGraphics.present()");
+    assert_eq!(m.stmts.len(), 2);
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Import { path, quoted, .. } => {
+                assert_eq!(path, "engine");
+                assert!(!quoted);
+            }
+            _ => panic!("expected import"),
+        },
+        _ => panic!("expected import"),
+    }
+}
+
+#[test]
+fn parses_unquoted_named_import_with_alias() {
+    let m = parse_src("import View as V, Button from some.folder.module");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Import { names, path, .. } => {
+                assert_eq!(
+                    names,
+                    &ImportNames::List(vec![
+                        ("View".to_string(), Some("V".to_string())),
+                        ("Button".to_string(), None),
+                    ])
+                );
+                assert_eq!(path, "some.folder.module");
+            }
+            _ => panic!("expected import"),
+        },
+        _ => panic!("expected import"),
+    }
+}

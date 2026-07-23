@@ -355,22 +355,44 @@ impl Parser {
         };
 
         self.expect(&Token::From, "`from` in import")?;
+
+        // The path is either a quoted literal (`from "some/folder/module"`)
+        // or a bare dotted chain (`from some.folder.module`). The latter is
+        // just sugar: `.` is already a path separator, so both spellings
+        // produce the same `path` string.
         let path_tok = self.peek().clone();
-        let path = match path_tok.value {
+        let (path, quoted, path_end) = match path_tok.value {
             Token::String(s) => {
                 self.advance();
-                s
+                (s, true, path_tok.span.end)
+            }
+            Token::Identifier(_) => {
+                let (first, first_span) = self.expect_ident("module path")?;
+                let mut parts = vec![first];
+                let mut end = first_span.end;
+                // Only extend on `.`; no statement can start with one, so
+                // this can't swallow the following line.
+                while self.eat(&Token::Dot) {
+                    let (seg, seg_span) = self.expect_ident("path segment after `.`")?;
+                    parts.push(seg);
+                    end = seg_span.end;
+                }
+                (parts.join("."), false, end)
             }
             _ => {
                 return Err(ParseError::Expected {
-                    expected: "a quoted module path",
+                    expected: "a module path, quoted or bare (e.g. \"a/b\" or a.b)",
                     span: path_tok.span,
                 });
             }
         };
         Ok(Spanned::new(
-            Decl::Import { names, path },
-            kw.span.start..path_tok.span.end,
+            Decl::Import {
+                names,
+                path,
+                quoted,
+            },
+            kw.span.start..path_end,
         ))
     }
 }

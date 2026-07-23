@@ -40,6 +40,8 @@ saule_sdk::saule_package! {
     ],
     classes {
         Graphics = "2D graphics rendering.",
+        Keyboard = "Keyboard input state.",
+        Mouse = "Mouse input state.",
         Window = "Window management.",
         Timer = "Timing helpers.",
         Util = "Table / function bridge demo helpers.",

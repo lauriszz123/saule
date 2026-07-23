@@ -1,0 +1,105 @@
+<idea-plugin>
+    <id>com.saule.lang</id>
+    <name>Saule</name>
+    <version>2026.1.0</version>
+    <vendor url="https://github.com/">Saule</vendor>
+
+    <description><![CDATA[
+        <p>Language support for the <b>Saule</b> programming language
+        (<code>.sau</code>): syntax highlighting plus a full language server —
+        diagnostics, hover, go-to-definition, find usages, document symbols,
+        inlay hints, signature help, and formatting.</p>
+        <p>Semantic features are provided by the <code>saule-lsp</code> binary
+        from the Saule toolchain, connected through LSP4IJ.</p>
+    ]]></description>
+
+    <!-- Core platform. -->
+    <depends>com.intellij.modules.platform</depends>
+    <!-- LSP client framework. Users are prompted to install it from Marketplace. -->
+    <depends>com.redhat.devtools.lsp4ij</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Balloon shown when a toolchain binary can't be found. -->
+        <notificationGroup id="Saule" displayType="BALLOON"/>
+
+        <!-- Toolchain location settings (Settings ▸ Languages & Frameworks ▸ Saule). -->
+        <applicationService serviceImplementation="com.saule.lang.SauleSettings"/>
+        <applicationConfigurable
+            parentId="language"
+            id="com.saule.lang.settings"
+            displayName="Saule"
+            instance="com.saule.lang.SauleConfigurable"/>
+
+        <!-- .sau ⇒ Saule language + file type. -->
+        <fileType
+            name="Saule File"
+            implementationClass="com.saule.lang.SauleFileType"
+            fieldName="INSTANCE"
+            language="Saule"
+            extensions="sau"/>
+
+        <!-- PSI. Required for anything keyed on the language: the commenter,
+             the brace matcher, and formatting (hence reformat-on-save).
+             Without it IntelliJ falls back to a plain-text PSI file. -->
+        <lang.parserDefinition
+            language="Saule"
+            implementationClass="com.saule.lang.SauleParserDefinition"/>
+
+        <!-- Code style settings. Also what puts Saule in the file-type list of
+             Settings > Tools > Actions on Save > Reformat code, and supplies
+             the tabSize/insertSpaces sent with each LSP formatting request. -->
+        <langCodeStyleSettingsProvider
+            implementation="com.saule.lang.SauleCodeStyleSettingsProvider"/>
+
+        <!-- Client-side syntax highlighting (the LSP has no semantic tokens). -->
+        <lang.syntaxHighlighterFactory
+            language="Saule"
+            implementationClass="com.saule.lang.highlight.SauleSyntaxHighlighterFactory"/>
+        <colorSettingsPage
+            implementation="com.saule.lang.highlight.SauleColorSettingsPage"/>
+
+        <!-- Editor conveniences. -->
+        <lang.commenter
+            language="Saule"
+            implementationClass="com.saule.lang.SauleCommenter"/>
+        <lang.braceMatcher
+            language="Saule"
+            implementationClass="com.saule.lang.SauleBraceMatcher"/>
+
+        <!-- Parameter hints (signature help). LSP4IJ registers its completion
+             contributor for language="any", but only wires parameterInfo for
+             TEXT/textmate — a custom language must opt in explicitly. -->
+        <codeInsight.parameterInfo
+            language="Saule"
+            implementationClass="com.redhat.devtools.lsp4ij.features.signatureHelp.LSPParameterInfoHandler"/>
+
+        <!-- New Project / New Module wizard: scaffold a Saule project. -->
+        <moduleType
+            id="SAULE_MODULE"
+            implementationClass="com.saule.lang.project.SauleModuleType"/>
+
+        <!-- Run configurations: run scripts (single-file) and projects. -->
+        <configurationType
+            implementation="com.saule.lang.run.SauleRunConfigurationType"/>
+        <runConfigurationProducer
+            implementation="com.saule.lang.run.SauleRunConfigurationProducer"/>
+    </extensions>
+
+    <!-- LSP4IJ: register and map the saule-lsp server. -->
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server
+            id="saule"
+            name="Saule Language Server"
+            factoryClass="com.saule.lang.lsp.SauleLanguageServerFactory">
+            <description><![CDATA[
+                Connects to the <code>saule-lsp</code> executable. It is
+                discovered automatically from the project's
+                <code>target/release</code> or <code>target/debug</code>
+                folder, then from <code>PATH</code>; override with the
+                <code>SAULE_LSP_PATH</code> environment variable or the
+                <code>-Dsaule.lsp.path=</code> system property.
+            ]]></description>
+        </server>
+        <languageMapping language="Saule" serverId="saule"/>
+    </extensions>
+</idea-plugin>
