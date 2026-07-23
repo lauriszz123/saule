@@ -263,7 +263,7 @@ fn load_module_inner(
         return Err(wrap(&first));
     }
 
-    let env = Environment::with_prelude_and_context(Some(dir), Some(loader.clone()));
+    let env = Environment::with_prelude_and_context(Some(dir.clone()), Some(loader.clone()));
 
     // Park the module's `NamedSource` for the duration of its top-level
     // execution so every `FunctionObject` constructed by `class`/`fn`
@@ -284,23 +284,96 @@ fn load_module_inner(
         other => wrap(&other),
     })?;
 
-    Ok(collect_exports(&module, &env))
+    Ok(collect_exports(
+        &module,
+        &env,
+        &dir,
+        loader,
+        is_init_module(abs_path),
+    ))
+}
+
+/// True when `path` is a folder module's entry file (`init.sau` /
+/// `init.saule`).
+///
+/// Such a file is a *barrel*: it re-exports whatever it imports, so a folder
+/// of files can be consumed as one module. See [`collect_exports`].
+pub(crate) fn is_init_module(path: &Path) -> bool {
+    path.file_stem().and_then(|s| s.to_str()) == Some("init")
 }
 
 /// Walk the module's top-level declarations and copy out everything that
 /// carries `export`. Anything not exported stays private to the module.
-fn collect_exports(module: &Module, env: &Rc<RefCell<Environment>>) -> ModuleExports {
+///
+/// When `reexport_imports` is set (the module is an `init.sau` barrel), the
+/// names brought in by its `import` statements are published too — that is
+/// what lets
+///
+/// ```text
+/// -- some/folder/module/init.sau
+/// import * from "view"
+/// ```
+///
+/// make `View` visible to `import * from "some/folder/module"`.
+fn collect_exports(
+    module: &Module,
+    env: &Rc<RefCell<Environment>>,
+    dir: &Path,
+    loader: &Rc<RefCell<ModuleLoader>>,
+    reexport_imports: bool,
+) -> ModuleExports {
     let mut exports = ModuleExports::default();
     for stmt in &module.stmts {
-        if let Stmt::Decl(decl) = &stmt.value {
-            if let Some(name) = exported_name(&decl.value) {
-                if let Some(value) = env.borrow().get(name) {
-                    exports.values.insert(name.to_string(), value);
+        let Stmt::Decl(decl) = &stmt.value else {
+            continue;
+        };
+
+        if let Some(name) = exported_name(&decl.value) {
+            if let Some(value) = env.borrow().get(name) {
+                exports.values.insert(name.to_string(), value);
+            }
+            continue;
+        }
+
+        if reexport_imports {
+            if let Decl::Import { names, path, .. } = &decl.value {
+                for local in imported_local_names(names, path, dir, loader) {
+                    if let Some(value) = env.borrow().get(&local) {
+                        exports.values.insert(local, value);
+                    }
                 }
             }
         }
     }
     exports
+}
+
+/// The local names one `import` statement binds into its module's scope.
+///
+/// For a glob the names come from the target's own exports. The module has
+/// already executed this import by the time we run, so those exports are in
+/// the loader cache — no need to re-resolve or re-run anything.
+fn imported_local_names(
+    names: &ImportNames,
+    path: &str,
+    dir: &Path,
+    loader: &Rc<RefCell<ModuleLoader>>,
+) -> Vec<String> {
+    match names {
+        ImportNames::List(items) => items
+            .iter()
+            .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone()))
+            .collect(),
+        ImportNames::All => resolve_import_path(dir, path)
+            .and_then(|abs| {
+                loader
+                    .borrow()
+                    .cache
+                    .get(&abs)
+                    .map(|e| e.values.keys().cloned().collect::<Vec<_>>())
+            })
+            .unwrap_or_default(),
+    }
 }
 
 fn exported_name(decl: &Decl) -> Option<&str> {
@@ -349,11 +422,26 @@ fn _spanned_marker(_: &Spanned<Stmt>) {}
 /// silently skipped — semantic/typeck will surface the user-facing error
 /// (or, in the import-fails case, the runtime loader will).
 pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::ModuleSeed {
+    let mut visited = HashSet::new();
+    collect_import_seed_inner(module, dir, &mut visited, 0)
+}
+
+/// How many nested `init.sau` barrels we will follow when gathering type
+/// metadata. Deep enough for any sane module tree, bounded so a pathological
+/// (or cyclic) layout can't hang the typechecker.
+const MAX_BARREL_DEPTH: usize = 8;
+
+fn collect_import_seed_inner(
+    module: &Module,
+    dir: &Path,
+    visited: &mut HashSet<PathBuf>,
+    depth: usize,
+) -> saule_semantic::ModuleSeed {
     let mut seed = saule_semantic::ModuleSeed::default();
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
-        let Decl::Import { names, path } = &d.value else {
+        let Decl::Import { names, path, .. } = &d.value else {
             continue;
         };
 
@@ -420,9 +508,59 @@ pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::Modul
                 seed.enums.entry(alias).or_insert(info);
             }
         }
+
+        // Barrel module: an `init.sau` re-exports what *it* imports, so the
+        // metadata for the names we just pulled in lives one level deeper.
+        // Recurse into its own imports (relative to the barrel's folder) and
+        // fold the result in.
+        if is_init_module(&abs) && depth < MAX_BARREL_DEPTH && visited.insert(abs.clone()) {
+            let sub_dir = abs
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let sub = collect_import_seed_inner(&imported, &sub_dir, visited, depth + 1);
+            merge_barrel_seed(&mut seed, sub, names);
+        }
     }
 
     seed
+}
+
+/// Fold a barrel module's seed into `seed`, honouring the importer's name
+/// filter: a glob takes everything, a name list takes only what it asked
+/// for (renamed by any `as` clause).
+fn merge_barrel_seed(
+    seed: &mut saule_semantic::ModuleSeed,
+    sub: saule_semantic::ModuleSeed,
+    names: &ImportNames,
+) {
+    match names {
+        ImportNames::All => {
+            for (k, v) in sub.classes {
+                seed.classes.entry(k).or_insert(v);
+            }
+            for (k, v) in sub.interfaces {
+                seed.interfaces.entry(k).or_insert(v);
+            }
+            for (k, v) in sub.enums {
+                seed.enums.entry(k).or_insert(v);
+            }
+        }
+        ImportNames::List(items) => {
+            for (orig, alias) in items {
+                let local = alias.clone().unwrap_or_else(|| orig.clone());
+                if let Some(v) = sub.classes.get(orig).cloned() {
+                    seed.classes.entry(local.clone()).or_insert(v);
+                }
+                if let Some(v) = sub.interfaces.get(orig).cloned() {
+                    seed.interfaces.entry(local.clone()).or_insert(v);
+                }
+                if let Some(v) = sub.enums.get(orig).cloned() {
+                    seed.enums.entry(local).or_insert(v);
+                }
+            }
+        }
+    }
 }
 
 /// Resolve which `(original_name, local_alias)` pairs come into the

@@ -628,7 +628,11 @@ impl<'a> Printer<'a> {
                 self.indent -= 1;
                 self.write("end");
             }
-            Decl::Import { names, path } => {
+            Decl::Import {
+                names,
+                path,
+                quoted,
+            } => {
                 self.write("import ");
                 match names {
                     ImportNames::All => self.write("*"),
@@ -644,7 +648,12 @@ impl<'a> Printer<'a> {
                         }
                     }
                 }
-                self.writef(format_args!(" from {}", quote_str(path)));
+                // Preserve how the author spelled the path.
+                if *quoted {
+                    self.writef(format_args!(" from {}", quote_str(path)));
+                } else {
+                    self.writef(format_args!(" from {path}"));
+                }
             }
         }
     }

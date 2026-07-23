@@ -1159,7 +1159,7 @@ end
 
 ### Importing
 
-Every import names a single `.sau` file. The path is relative to the project root (or, in single-file mode, the entry file's directory).
+An import names either a single `.sau` file or a folder module (a directory with an `init.sau` — see [Folder Modules](#folder-modules-initsau)). The path is relative to the importing file's directory, then the project's `src_dirs`.
 
 ```saule
 -- single import
@@ -1175,7 +1175,42 @@ import Math from "utils/Math"
 import * from "entities/Player"
 ```
 
-Folder-level imports (`import * from "entities"` or `import Player, Enemy from "entities"`) are **not** supported — each `import` statement targets one file. Re-export from an `index.sau` file by hand if you want a single facade.
+The path may be written **with or without quotes**. Unquoted, `.` separates folders — the two lines below mean exactly the same thing:
+
+```saule
+import * from "some/folder/module"
+import * from some.folder.module
+```
+
+### Folder Modules (`init.sau`)
+
+A folder becomes a single importable **module** by giving it an `init.sau`. That file is a *barrel*: whatever it imports becomes the module's public surface, so a folder of files can be consumed as one unit.
+
+```saule
+-- some/folder/module/init.sau
+-- Paths are relative to this file. This is all the barrel does: it lists
+-- the files whose exports should be visible to importers of the module.
+import * from view
+import * from button
+```
+
+Consumers then import the folder itself and get everything the barrel pulled in:
+
+```saule
+import * from some.folder.module
+
+local view: View = View("Name")
+local b: Button = Button()
+```
+
+Named and aliased imports work against a barrel too:
+
+```saule
+import View from some.folder.module
+import View as V, Button from some.folder.module
+```
+
+Re-exporting is **only** done by `init.sau` / `init.saule`. Any other file keeps its imports private — importing a regular file gives you the names it declared with `export`, never the ones it imported. That keeps a file's imports an implementation detail.
 
 ### Exporting
 

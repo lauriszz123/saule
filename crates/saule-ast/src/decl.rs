@@ -43,7 +43,13 @@ pub enum Decl {
     },
     Import {
         names: ImportNames,
+        /// The module path with `.` / `/` separators, e.g. `some.folder.module`
+        /// or `entities/Player`. Stored without surrounding quotes either way.
         path: String,
+        /// How the path was spelled: `true` for `from "some/path"`, `false`
+        /// for the unquoted `from some.folder.module`. Purely cosmetic — it
+        /// only exists so the formatter can preserve the author's style.
+        quoted: bool,
     },
 }
 

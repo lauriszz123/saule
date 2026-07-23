@@ -17,6 +17,7 @@
 //! the analyse → publish pipeline, [`format`] for formatting,
 //! [`hover`] for hover, and [`nav`] for goto-definition / references.
 
+mod completion;
 mod diagnostics;
 mod format;
 mod highlight;
@@ -144,6 +145,17 @@ impl LanguageServer for Backend {
                 document_highlight_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 inlay_hint_provider: Some(tower_lsp::lsp_types::OneOf::Left(true)),
+                completion_provider: Some(tower_lsp::lsp_types::CompletionOptions {
+                    // `.` opens member completion; the rest re-trigger after
+                    // a type annotation or a new argument.
+                    trigger_characters: Some(vec![
+                        ".".to_string(),
+                        ":".to_string(),
+                        ">".to_string(),
+                    ]),
+                    resolve_provider: Some(false),
+                    ..Default::default()
+                }),
                 signature_help_provider: Some(SignatureHelpOptions {
                     // `(`, `,`, and `:` (named-arg key separator) all
                     // re-trigger the popup.
@@ -281,6 +293,14 @@ impl LanguageServer for Backend {
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         Ok(Some(self.inlay_hints(&params.text_document.uri).await))
+    }
+
+    async fn completion(
+        &self,
+        params: tower_lsp::lsp_types::CompletionParams,
+    ) -> Result<Option<tower_lsp::lsp_types::CompletionResponse>> {
+        let p = params.text_document_position;
+        Ok(self.completion_at(&p.text_document.uri, p.position).await)
     }
 
     async fn signature_help(

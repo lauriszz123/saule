@@ -33,8 +33,8 @@ use std::path::Path;
 use saule_ast::{Decl, Module, Stmt};
 
 use imports::{
-    aliases_for_file, aliases_for_native, render_file_import_blurb, render_native_import_blurb,
-    render_unresolved_import,
+    aliases_for_dynamic, aliases_for_file, aliases_for_native, render_file_import_blurb,
+    render_native_import_blurb, render_unresolved_import,
 };
 use render::render_function_sig;
 
@@ -119,7 +119,7 @@ pub fn build_import_context(module: &Module, dir: Option<&Path>) -> ImportContex
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
-        let Decl::Import { names, path } = &d.value else {
+        let Decl::Import { names, path, .. } = &d.value else {
             continue;
         };
 
@@ -131,6 +131,19 @@ pub fn build_import_context(module: &Module, dir: Option<&Path>) -> ImportContex
         if let Some(pkg) = saule_interpreter::native_packages::lookup(path) {
             let exports: Vec<&'static str> = pkg.exports.to_vec();
             let aliases = aliases_for_native(&exports, names);
+            ctx.import_blurbs
+                .push((d.span.clone(), render_native_import_blurb(path, &aliases)));
+            continue;
+        }
+
+        // Dynamically-discovered native package (a manifest-described shared
+        // library such as `"engine"`). `resolve_import_path` answers these
+        // with a synthetic sentinel path that is *not* a real file, so they
+        // must be handled here — otherwise the `read_to_string` below fails
+        // and the import gets mislabelled "unresolved".
+        if saule_interpreter::dynamic_packages::is_dynamic_package(path) {
+            let exports = saule_interpreter::dynamic_packages::export_names(path);
+            let aliases = aliases_for_dynamic(&exports, names);
             ctx.import_blurbs
                 .push((d.span.clone(), render_native_import_blurb(path, &aliases)));
             continue;

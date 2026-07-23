@@ -282,7 +282,7 @@ fn exec_decl(decl: &Spanned<Decl>, env: &Rc<RefCell<Environment>>) -> Result<Flo
             methods,
             ..
         } => enums::exec_enum_decl(name, variants, methods, env, span),
-        Decl::Import { names, path } => imports::exec_import(names, path, env, span),
+        Decl::Import { names, path, .. } => imports::exec_import(names, path, env, span),
     }
 }
 

@@ -177,6 +177,25 @@ pub fn is_dynamic_package(name: &str) -> bool {
     lookup(name).is_some()
 }
 
+/// Every discovered dynamic package's import name. Used by tooling (the LSP's
+/// import completion) to offer installed packages as import targets.
+pub fn package_names() -> Vec<String> {
+    let guard = MANIFESTS.read().expect("dynamic manifest registry poisoned");
+    guard
+        .as_ref()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// The class names `name` exports, in manifest order. Empty if `name` isn't
+/// a discovered dynamic package. Used by tooling (the LSP's import hover)
+/// that wants the package's surface without loading its shared library.
+pub fn export_names(name: &str) -> Vec<String> {
+    lookup(name)
+        .map(|m| m.exports.iter().map(|c| c.name.clone()).collect())
+        .unwrap_or_default()
+}
+
 // ─── Module-loader integration ──────────────────────────────────────────────
 
 /// Mint the sentinel `PathBuf` used as the module-cache key for a dynamic
