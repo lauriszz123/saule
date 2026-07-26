@@ -157,14 +157,27 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 signature_help_provider: Some(SignatureHelpOptions {
-                    // `(`, `,`, and `:` (named-arg key separator) all
-                    // re-trigger the popup.
+                    // `(` opens the popup, `,` and `:` (named-arg key
+                    // separator) move between slots.
                     trigger_characters: Some(vec![
                         "(".to_string(),
                         ",".to_string(),
                         ":".to_string(),
                     ]),
-                    retrigger_characters: Some(vec![",".to_string()]),
+                    // Trigger characters only fire while the popup is
+                    // *closed*; once it's open the client re-queries only
+                    // on a retrigger character. So every trigger has to
+                    // appear here too, or a nested call never updates the
+                    // popup — typing `f(g(` left it stuck on `f`, since
+                    // the second `(` arrived with the popup already open.
+                    // `)` is here for the way back out: closing `g(...)`
+                    // puts the caret in `f`'s argument list again.
+                    retrigger_characters: Some(vec![
+                        "(".to_string(),
+                        ")".to_string(),
+                        ",".to_string(),
+                        ":".to_string(),
+                    ]),
                     work_done_progress_options: Default::default(),
                 }),
                 ..Default::default()
@@ -312,7 +325,20 @@ impl LanguageServer for Backend {
         params: SignatureHelpParams,
     ) -> Result<Option<SignatureHelp>> {
         let p = params.text_document_position_params;
-        Ok(self.signature_help_at(&p.text_document.uri, p.position).await)
+        let help = self.signature_help_at(&p.text_document.uri, p.position).await;
+        // Never hand back a longer signature list than the popup was
+        // opened with — IntelliJ indexes its existing rows by it.
+        let prev = params
+            .context
+            .as_ref()
+            .and_then(|c| c.active_signature_help.as_ref());
+        let help = match (help, prev) {
+            (Some(fresh), Some(prev)) => Some(sighelp::reconcile_with_client(fresh, prev)),
+            (help, _) => help,
+        };
+        self.trace_signature_help(&p.text_document.uri, p.position, &help)
+            .await;
+        Ok(help)
     }
 
     async fn shutdown(&self) -> Result<()> {
