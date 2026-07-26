@@ -532,7 +532,27 @@ pub fn blit_mask(surf: &mut Surface, mask: &Mask, xform: &Transform, paint: &Pai
 /// Draw one surface onto another through `xform`, modulated by the paint
 /// colour. This is how a Canvas is composited back onto the screen.
 pub fn blit_surface(dst: &mut Surface, src: &Surface, xform: &Transform, paint: &Paint) {
-    if src.w == 0 || src.h == 0 {
+    let whole = Rect::new(0.0, 0.0, src.w as f64, src.h as f64);
+    blit_surface_sub(dst, src, whole, xform, paint);
+}
+
+/// Draw the `sub` region of `src` onto `dst` through `xform`, with `sub`'s
+/// top-left mapping to the transform's origin.
+///
+/// This is the spritesheet path: `xform` positions and scales the destination
+/// while `sub` picks the frame, so one image can hold a whole animation.
+pub fn blit_surface_sub(
+    dst: &mut Surface,
+    src: &Surface,
+    sub: Rect,
+    xform: &Transform,
+    paint: &Paint,
+) {
+    // Confine the region to the source: a frame rectangle that runs off the
+    // edge of the sheet should draw the part that exists, not sample garbage.
+    let sub = sub.intersect(&Rect::surface(src.w, src.h));
+    let (sub_w, sub_h) = (sub.x1 - sub.x0, sub.y1 - sub.y0);
+    if src.w == 0 || src.h == 0 || sub_w <= 0.0 || sub_h <= 0.0 {
         return;
     }
     let clip = paint.clip.intersect(&Rect::surface(dst.w, dst.h));
@@ -540,7 +560,7 @@ pub fn blit_surface(dst: &mut Surface, src: &Surface, xform: &Transform, paint: 
         return;
     }
     let Some(inv) = xform.inverse() else { return };
-    let bounds = transformed_bounds(xform, src.w as f64, src.h as f64);
+    let bounds = transformed_bounds(xform, sub_w, sub_h);
     let (x0, y0, x1, y1) = bounds.intersect(&clip).pixel_bounds(dst.w, dst.h);
 
     for py in y0..y1 {
@@ -549,9 +569,15 @@ pub fn blit_surface(dst: &mut Surface, src: &Surface, xform: &Transform, paint: 
             let (u, v) = inv.apply(px as f64 + 0.5, py as f64 + 0.5);
             // Reject outside the source rect rather than clamping, so a
             // rotated canvas has clean edges instead of smeared borders.
-            if u < 0.0 || v < 0.0 || u >= src.w as f64 || v >= src.h as f64 {
+            if u < 0.0 || v < 0.0 || u >= sub_w || v >= sub_h {
                 continue;
             }
+            // Keep bilinear taps half a pixel inside the region: on a
+            // spritesheet, sampling the frame's edge would otherwise pull in
+            // the neighbouring frame. At 1:1 the samples already land on pixel
+            // centres, so this is a no-op for an ordinary canvas blit.
+            let u = sub.x0 + clamp_inside(u, sub_w);
+            let v = sub.y0 + clamp_inside(v, sub_h);
             let (sa, sr, sg, sb) = if paint.linear_filter {
                 src.sample_linear(u, v)
             } else {
@@ -569,6 +595,15 @@ pub fn blit_surface(dst: &mut Surface, src: &Surface, xform: &Transform, paint: 
             dst.blend(dst_row + px, tint, 1.0, paint.blend);
         }
     }
+}
+
+/// Pin a source coordinate to the half-pixel-inset interior of a `0..extent`
+/// span, so a bilinear tap can't reach past the region being sampled.
+fn clamp_inside(value: f64, extent: f64) -> f64 {
+    if extent <= 1.0 {
+        return extent / 2.0;
+    }
+    value.clamp(0.5, extent - 0.5)
 }
 
 /// Recognise a pure integer translation, the case a direct copy is valid for.
@@ -643,6 +678,74 @@ mod tests {
             antialias: true,
             linear_filter: false,
         }
+    }
+
+    /// A one-pixel-tall strip of four distinct opaque colours — a spritesheet
+    /// with four 1x1 frames.
+    fn strip() -> Surface {
+        Surface {
+            buf: vec![0xFFFF_0000, 0xFF00_FF00, 0xFF00_00FF, 0xFFFF_FFFF],
+            w: 4,
+            h: 1,
+        }
+    }
+
+    #[test]
+    fn a_frame_blit_picks_exactly_its_cell() {
+        for (frame, expected) in [
+            (0.0, 0xFFFF_0000u32),
+            (1.0, 0xFF00_FF00),
+            (2.0, 0xFF00_00FF),
+            (3.0, 0xFFFF_FFFF),
+        ] {
+            let mut dst = Surface::new(1, 1);
+            blit_surface_sub(
+                &mut dst,
+                &strip(),
+                Rect::new(frame, 0.0, 1.0, 1.0),
+                &Transform::IDENTITY,
+                &paint([1.0, 1.0, 1.0, 1.0], 1, 1),
+            );
+            assert_eq!(dst.buf[0], expected, "frame {frame}");
+        }
+    }
+
+    /// With bilinear filtering on, a magnified frame must not pull colour out of
+    /// the neighbouring cell.
+    #[test]
+    fn a_magnified_frame_does_not_bleed_into_its_neighbour() {
+        let mut dst = Surface::new(8, 8);
+        let mut p = paint([1.0, 1.0, 1.0, 1.0], 8, 8);
+        p.linear_filter = true;
+
+        blit_surface_sub(
+            &mut dst,
+            &strip(),
+            Rect::new(1.0, 0.0, 1.0, 1.0),
+            &Transform::scaling(8.0, 8.0),
+            &p,
+        );
+
+        // Every touched pixel is the green frame, with no red or blue mixed in.
+        for (i, px) in dst.buf.iter().enumerate() {
+            assert_eq!(*px, 0xFF00_FF00, "pixel {i} bled");
+        }
+    }
+
+    #[test]
+    fn a_frame_running_past_the_sheet_is_clipped_to_it() {
+        let mut dst = Surface::new(4, 1);
+        blit_surface_sub(
+            &mut dst,
+            &strip(),
+            Rect::new(3.0, 0.0, 4.0, 1.0),
+            &Transform::IDENTITY,
+            &paint([1.0, 1.0, 1.0, 1.0], 4, 1),
+        );
+
+        // Only the one real column exists, so only one pixel is written.
+        assert_eq!(dst.buf[0], 0xFFFF_FFFF);
+        assert_eq!(dst.buf[1], 0);
     }
 
     fn alpha_at(s: &Surface, x: usize, y: usize) -> f32 {

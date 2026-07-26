@@ -18,11 +18,12 @@ declarations.
 
 | Class      | Methods                                                   |
 |------------|-----------------------------------------------------------|
-| `Window`   | `create`, `isOpen`, `pollEvents`, `close`, `getSize`      |
+| `Window`   | lifecycle, live size, title, position, focus, DPI — see below |
 | `Graphics` | the UI drawing surface — see below                        |
 | `Keyboard` | key state, per-frame edges, typed text — see below        |
-| `Mouse`    | `getPos`, `isDown`                                        |
+| `Mouse`    | position, buttons, per-frame edges, wheel, cursor — see below |
 | `Timer`    | `getTime`, `getDelta`                                     |
+| `Clipboard`| `get`, `set`, `hasText`                                   |
 | `Util`     | table/function bridge demo helpers                        |
 
 Windowing uses `minifb` (X11-only on Linux, to stay compatible with WSLg).
@@ -54,8 +55,9 @@ a1, a2 [, arctype])`, `polygon(mode, points)`, `line(x1, y1, x2, y2)`,
 **Clipping** — `setScissor([x,y,w,h])`, `intersectScissor(x,y,w,h)`,
 `getScissor()`
 
-**Canvases** — `newCanvas(w, h)`, `setCanvas([handle])`, `getCanvas()`,
-`draw(canvas, x, y [, angle, sx, sy, ox, oy])`
+**Canvases & images** — `newCanvas(w, h)`, `newImage(path)`, `setCanvas([handle])`,
+`getCanvas()`, `imageSize(handle)`, `draw(handle, x, y [, angle, sx, sy, ox, oy])`,
+`drawFrame(handle, fx, fy, fw, fh, x, y [, angle, sx, sy, ox, oy])`
 
 **Transforms** — `push([mode])`, `pop()`, `origin()`, `translate`, `scale`,
 `rotate`, `shear`, `applyTransform`, `replaceTransform`, `getStackDepth()`,
@@ -77,9 +79,81 @@ a1, a2 [, arctype])`, `polygon(mode, points)`, `line(x1, y1, x2, y2)`,
   composes with `translate` the way nested scroll views need. `getScissor`
   reports screen coordinates.
 - `push()` saves the transform; `push("all")` saves the whole state.
-- **Not implemented**: shaders (no GPU), and image loading — `newImage`,
-  `newQuad`, `newImageFont`, and `newText` would all need an image decoder.
-  Canvases cover offscreen rendering and caching in the meantime.
+- `newImage(path)` decodes a PNG (via the pure-Rust `png` crate) into the same
+  registry canvases live in, so one handle serves both: `draw` composites it,
+  `imageSize` measures it, `drawFrame` picks a spritesheet cell out of it, and
+  `setCanvas` can even draw into it. `drawFrame` confines sampling to the cell,
+  so a magnified frame never pulls in its neighbours.
+- **Not implemented**: shaders (no GPU), formats other than PNG, and
+  `newImageFont` / `newText`.
+
+## The `Window` API
+
+**Lifecycle** — `create(width, height [, title, resizable])`, `isOpen()`,
+`pollEvents()`, `close()`
+
+**Geometry** — `getSize()`, `getPosition()`, `setPosition(x, y)`
+
+**Chrome** — `setTitle(title)`, `setTopmost(topmost)`, `isFocused()`
+
+**Density** — `getScale()`
+
+Windows are resizable by default. The framebuffer is reallocated to match
+whenever the window changes size, so `getSize` reports live dimensions and
+drawing never lands in a stale buffer; the scissor is reset at the same moment,
+since a clip from the old size could sit entirely outside the new one.
+
+`getScale()` returns the display's scale factor — `1.0` at 96 DPI, `1.5` at
+150%. minifb has no DPI query, so the engine asks the OS through the native
+window handle, and declares the process **per-monitor DPI aware** before the
+first window opens. Without that declaration Windows reports 96 DPI and quietly
+magnifies the window's pixels, which produces a blurry UI with no way to detect
+it. The scale is re-read every `pollEvents`, so moving a window between monitors
+of different density is picked up.
+
+Only Windows reports a real figure today; the other platforms return `1.0`
+rather than guessing.
+
+## The `Mouse` API
+
+The same polling shape as `Keyboard`, for the same reason.
+
+**Position** — `getPos()`
+
+**Buttons** — `isDown(button)`, `wasPressed(button)`, `wasReleased(button)`.
+`1` = left, `2` = right, `3` = middle.
+
+**Wheel** — `getWheel() -> (x, y)`, the movement since the last
+`Window.pollEvents()`, in **notches**: one click of the wheel is `1.0`, positive
+away from the user. Most mice report only `y`, and both are `0` on a frame with
+no scrolling. This stands in for Love2D's `love.wheelmoved`.
+
+**Cursor** — `setCursor(style)`, `setVisible(visible)`. Styles are `"arrow"`,
+`"ibeam"`, `"crosshair"`, `"hand"`, `"grab"`, `"resizeleftright"`,
+`"resizeupdown"`, `"resizeall"`; an unknown name is an error rather than a
+silent no-op.
+
+Everything except `getPos` is latched at `pollEvents`, so all of it describes
+one consistent instant.
+
+Input is sampled after *both* of minifb's message pumps — `update` in
+`pollEvents` and the one inside `update_with_buffer` in `present` — and the
+extra edges are carried into the next frame. Each pump begins by resetting
+minifb's own scroll delta and key tracking, so anything that arrived during the
+present half of a frame used to be wiped before Saule could read it: roughly
+half of all wheel notches and any keystroke short enough to start and finish in
+that window. The keyboard does the same thing for the same reason.
+
+## The `Clipboard` API
+
+`get()`, `set(text)`, `hasText()` — plain text only. `get()` returns `""` when
+the clipboard is empty or holds something that isn't text, so a paste handler
+needs no error handling.
+
+Backed by `arboard` with default features off, which keeps it pure Rust: x11rb
+on Linux, `windows-sys` on Windows. The connection is kept alive for the life of
+the process because on X11 the clipboard is *owned* by a live connection —
+dropping it would take the copied text with it.
 
 ## The `Keyboard` API
 

@@ -1,0 +1,7 @@
+-- ERROR: `g` is not a hex digit.
+
+class Main
+  static fn main()
+    println(0xGG)
+  end
+end

@@ -127,6 +127,25 @@ Input is read inside that loop, between `pollEvents` and `present`. See
 stand in for Love2D's `keypressed` / `keyreleased` callbacks), and typed text
 (`getTextInput`, standing in for `love.textinput`).
 
+`Mouse` follows the same shape: position (`getPos`), held buttons (`isDown`),
+per-frame edges (`wasPressed`, `wasReleased`), wheel movement since the last
+`pollEvents` (`getWheel`), and the cursor image (`setCursor`, `setVisible`).
+Everything but `getPos` comes from one `pollEvents` snapshot, so the queries
+always describe the same instant.
+
+Images are PNG files loaded with `Graphics.newImage(path)`. They share the
+handle registry with canvases, so one handle works everywhere:
+
+| Function | Purpose |
+| --- | --- |
+| `Graphics.newImage(path: string) -> integer` | Decode a PNG; returns a handle. |
+| `Graphics.imageSize(handle) -> (integer, integer)` | Pixel dimensions of an image or canvas. |
+| `Graphics.draw(handle, x, y [, angle, sx, sy, ox, oy])` | Composite the whole thing. |
+| `Graphics.drawFrame(handle, fx, fy, fw, fh, x, y [, angle, sx, sy, ox, oy])` | One spritesheet cell; sampling stays inside the cell, so frames never bleed. |
+
+See [images.sau](images.sau) for all of it together — a spritesheet animation,
+wheel-driven zoom, mouse edges, and a canvas used as a pre-rendered backdrop.
+
 ## Adding your own functions
 
 1. Add an `extern "C"` symbol in `crates/saule-engine-lib/src/` following the

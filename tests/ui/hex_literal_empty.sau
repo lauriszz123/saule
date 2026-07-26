@@ -1,0 +1,7 @@
+-- ERROR: `0x` with no digits after it is not a number.
+
+class Main
+  static fn main()
+    println(0x)
+  end
+end

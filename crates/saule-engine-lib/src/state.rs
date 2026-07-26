@@ -10,12 +10,69 @@
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
-use minifb::{Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
+use minifb::{CursorStyle, Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
 
 use crate::font::{self, Align, FontRes};
 use crate::geom::{self, ArcType, LineJoin, Point, Transform};
 use crate::keyboard::{self, KeyState, TextCollector};
 use crate::raster::{self, BlendMode, Paint, Rect, Surface};
+
+/// Ask the OS for this window's scale factor, with 1.0 meaning "96 DPI".
+///
+/// minifb has no DPI query, so this goes through the native window handle.
+/// Only Windows is wired up; the others report 1.0 rather than guessing, which
+/// at least makes the limitation visible instead of subtly wrong.
+#[cfg(windows)]
+fn query_scale(window: &Window) -> f64 {
+    let handle = window.get_window_handle();
+
+    if handle.is_null() {
+        return 1.0;
+    }
+
+    // Safety: the handle is minifb's live HWND, and `GetDpiForWindow` only
+    // reads from it.
+    let dpi = unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForWindow(handle as _) };
+
+    if dpi == 0 {
+        return 1.0;
+    }
+
+    f64::from(dpi) / 96.0
+}
+
+#[cfg(not(windows))]
+fn query_scale(_window: &Window) -> f64 {
+    1.0
+}
+
+/// Opt the process into per-monitor DPI awareness before any window exists.
+///
+/// Without this Windows lies: `GetDpiForWindow` reports 96 and the OS scales
+/// the window's pixels up for us, which on a scaled display means a blurry UI
+/// we cannot see the real resolution of. Declaring awareness hands us physical
+/// pixels and an honest DPI, which is what the toolkit wants — it does its own
+/// scaling.
+#[cfg(windows)]
+fn declare_dpi_aware() {
+    use std::sync::Once;
+
+    static ONCE: Once = Once::new();
+
+    ONCE.call_once(|| {
+        // Safety: no arguments to get wrong, and a failure (already set by a
+        // manifest, or an older Windows) is reported by the return value we
+        // deliberately ignore.
+        unsafe {
+            windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+                windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+            );
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn declare_dpi_aware() {}
 
 /// Target frame time for the 60 FPS cap.
 const FRAME_DUR: Duration = Duration::from_nanos(1_000_000_000 / 60);
@@ -61,6 +118,116 @@ enum Saved {
     All(Box<GState>),
 }
 
+/// Per-frame mouse edges and wheel movement, latched by
+/// [`Engine::poll_events`] the same way [`KeyState`] latches key edges.
+///
+/// minifb reports the wheel as a delta that is only valid for the `update`
+/// that produced it, so it has to be captured at the frame boundary or it is
+/// lost. Buttons are sampled the same way to give `wasPressed` / `wasReleased`
+/// the same "since the last `pollEvents`" meaning the keyboard has.
+#[derive(Default)]
+pub struct MouseState {
+    /// Left, right, middle — indices 0, 1, 2 (button numbers 1, 2, 3).
+    down: [bool; 3],
+    pressed: [bool; 3],
+    released: [bool; 3],
+    wheel: (f64, f64),
+    /// Edges and wheel movement seen during a `present`. Same reason as
+    /// [`crate::keyboard::KeyState`]: minifb pumps the OS queue twice a frame
+    /// and each pump clears its own scroll delta, so half of them would be
+    /// thrown away before Saule ever saw them.
+    carried_pressed: [bool; 3],
+    carried_released: [bool; 3],
+    carried_wheel: (f64, f64),
+}
+
+/// One wheel notch in minifb's units: it reports `WHEEL_DELTA` (120) scaled by
+/// 0.1, so a single click arrives as 12.0. Normalising to 1.0 per notch is what
+/// makes "pixels per notch" mean anything on the Saule side.
+const WHEEL_NOTCH: f64 = 12.0;
+
+impl MouseState {
+    fn sync(&mut self, window: &Window) {
+        const BUTTONS: [MouseButton; 3] =
+            [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
+
+        for (i, button) in BUTTONS.iter().enumerate() {
+            let now = window.get_mouse_down(*button);
+            self.pressed[i] = (now && !self.down[i]) || self.carried_pressed[i];
+            self.released[i] = (!now && self.down[i]) || self.carried_released[i];
+            self.down[i] = now;
+        }
+
+        let (wx, wy) = Self::read_wheel(window);
+        self.wheel = (wx + self.carried_wheel.0, wy + self.carried_wheel.1);
+
+        self.carried_pressed = [false; 3];
+        self.carried_released = [false; 3];
+        self.carried_wheel = (0.0, 0.0);
+    }
+
+    /// Sample the mouse after presenting, keeping the edges and wheel movement
+    /// for the next [`MouseState::sync`].
+    fn observe(&mut self, window: &Window) {
+        const BUTTONS: [MouseButton; 3] =
+            [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
+
+        for (i, button) in BUTTONS.iter().enumerate() {
+            let now = window.get_mouse_down(*button);
+
+            if now && !self.down[i] {
+                self.carried_pressed[i] = true;
+            }
+
+            if !now && self.down[i] {
+                self.carried_released[i] = true;
+            }
+
+            self.down[i] = now;
+        }
+
+        let (wx, wy) = Self::read_wheel(window);
+        self.carried_wheel = (self.carried_wheel.0 + wx, self.carried_wheel.1 + wy);
+    }
+
+    /// The wheel delta in notches: 1.0 per click, positive away from the user.
+    fn read_wheel(window: &Window) -> (f64, f64) {
+        window
+            .get_scroll_wheel()
+            .map_or((0.0, 0.0), |(x, y)| {
+                (f64::from(x) / WHEEL_NOTCH, f64::from(y) / WHEEL_NOTCH)
+            })
+    }
+
+    /// `1` = left, `2` = right, `3` = middle; anything else is not a button.
+    fn slot(button: i64) -> Option<usize> {
+        match button {
+            1 => Some(0),
+            2 => Some(1),
+            3 => Some(2),
+            _ => None,
+        }
+    }
+
+    pub fn is_down(&self, button: i64) -> bool {
+        Self::slot(button).is_some_and(|i| self.down[i])
+    }
+
+    pub fn was_pressed(&self, button: i64) -> bool {
+        Self::slot(button).is_some_and(|i| self.pressed[i])
+    }
+
+    pub fn was_released(&self, button: i64) -> bool {
+        Self::slot(button).is_some_and(|i| self.released[i])
+    }
+
+    /// Wheel movement since the last `pollEvents`, as `(x, y)`. Positive `y` is
+    /// a scroll up / away from the user.
+    pub fn wheel(&self) -> (f64, f64) {
+        self.wheel
+    }
+}
+
 /// Live engine state, created by `Window.create`.
 pub struct Engine {
     window: Window,
@@ -80,9 +247,14 @@ pub struct Engine {
     linear_filter: bool,
     /// Per-frame keyboard edges, latched by [`Engine::poll_events`].
     keys: KeyState,
+    /// Per-frame mouse edges and wheel, latched by [`Engine::poll_events`].
+    mouse: MouseState,
     /// Instant the next presented frame should be released at — the single
     /// 60 FPS pacing point (see [`Engine::present`]).
     next_frame: Instant,
+    /// OS scale factor, refreshed each frame so dragging a window between
+    /// monitors of different DPI is picked up.
+    scale: f64,
 }
 
 thread_local! {
@@ -90,7 +262,9 @@ thread_local! {
 }
 
 /// Create the window and framebuffer. Replaces any existing window.
-pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
+pub fn create(width: i64, height: i64, title: &str, resizable: bool) -> Result<(), String> {
+    declare_dpi_aware();
+
     if width <= 0 || height <= 0 {
         return Err("Window.create: width and height must be positive".into());
     }
@@ -102,8 +276,11 @@ pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
         width,
         height,
         WindowOptions {
-            resize: false,
+            resize: resizable,
             scale: Scale::X1,
+            // Keep the framebuffer 1:1 with the window: the engine reallocates
+            // it on resize rather than letting minifb stretch a stale buffer.
+            scale_mode: minifb::ScaleMode::Stretch,
             ..WindowOptions::default()
         },
     )
@@ -114,10 +291,13 @@ pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
     // `update_with_buffer` would each block and halve the frame rate.
     window.set_target_fps(0);
 
-    // Typed text arrives through this callback while `update` pumps the queue;
-    // `Keyboard.getTextInput` drains what it collects.
+    // Typed text and key edges arrive through this callback while `update`
+    // pumps the queue; `Keyboard.getTextInput` and `KeyState::sync` drain what
+    // it collects.
     window.set_input_callback(Box::new(TextCollector));
-    keyboard::reset_text();
+    keyboard::reset_input();
+
+    let scale = query_scale(&window);
 
     ENGINE.with(|cell| {
         *cell.borrow_mut() = Some(Engine {
@@ -131,7 +311,9 @@ pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
             stack: Vec::new(),
             linear_filter: true,
             keys: KeyState::default(),
+            mouse: MouseState::default(),
             next_frame: Instant::now() + FRAME_DUR,
+            scale,
         });
     });
     Ok(())
@@ -171,16 +353,40 @@ impl Engine {
             .unwrap_or((0.0, 0.0))
     }
 
-    /// Whether `button` is currently held. `1` = left, `2` = right,
-    /// `3` = middle. Returns `false` for unrecognised button indices.
-    pub fn mouse_is_down(&self, button: i64) -> bool {
-        let btn = match button {
-            1 => MouseButton::Left,
-            2 => MouseButton::Right,
-            3 => MouseButton::Middle,
-            _ => return false,
+    /// This frame's mouse state: held buttons, edges, and wheel movement.
+    ///
+    /// Everything comes from the same `pollEvents` snapshot, so `isDown`,
+    /// `wasPressed` and `wasReleased` always describe one consistent instant.
+    pub fn mouse(&self) -> &MouseState {
+        &self.mouse
+    }
+
+    /// Swap the cursor image. Unknown names are rejected rather than silently
+    /// ignored, so a typo surfaces at the call site.
+    pub fn set_cursor(&mut self, style: &str) -> Result<(), String> {
+        let cursor = match style {
+            "arrow" => CursorStyle::Arrow,
+            "ibeam" | "text" => CursorStyle::Ibeam,
+            "crosshair" => CursorStyle::Crosshair,
+            "hand" | "openhand" => CursorStyle::OpenHand,
+            "grab" | "closedhand" => CursorStyle::ClosedHand,
+            "resizeleftright" | "ew" => CursorStyle::ResizeLeftRight,
+            "resizeupdown" | "ns" => CursorStyle::ResizeUpDown,
+            "resizeall" | "move" => CursorStyle::ResizeAll,
+            other => {
+                return Err(format!(
+                    "Mouse.setCursor: unknown cursor {other:?} — expected one of \
+                     arrow, ibeam, crosshair, hand, grab, resizeleftright, \
+                     resizeupdown, resizeall"
+                ));
+            }
         };
-        self.window.get_mouse_down(btn)
+        self.window.set_cursor_style(cursor);
+        Ok(())
+    }
+
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        self.window.set_cursor_visibility(visible);
     }
 
     pub fn is_key_down(&self, key: Key) -> bool {
@@ -211,10 +417,9 @@ impl Engine {
         (self.screen.w, self.screen.h)
     }
 
-    /// The DPI scale factor. minifb has no portable way to report this, so the
-    /// engine always works in physical pixels and reports a scale of 1.
+    /// The DPI scale factor, refreshed every `pollEvents`.
     pub fn dpi_scale(&self) -> f64 {
-        1.0
+        self.scale
     }
 
     /// Pump the OS event queue without presenting a frame. Keeps
@@ -223,6 +428,51 @@ impl Engine {
     pub fn poll_events(&mut self) {
         self.window.update();
         self.keys.sync(&self.window);
+        self.mouse.sync(&self.window);
+        self.sync_surface();
+    }
+
+    /// Match the framebuffer to the window, and refresh the scale factor.
+    ///
+    /// A resized window needs a new buffer before anything is drawn into it —
+    /// `update_with_buffer` rejects a mismatch, and drawing into the old one
+    /// would clip to the previous size. The scale is re-read here too, so
+    /// dragging a window onto a monitor with different DPI is picked up.
+    fn sync_surface(&mut self) {
+        let (w, h) = self.window.get_size();
+
+        if w > 0 && h > 0 && (w != self.screen.w || h != self.screen.h) {
+            self.screen = Surface::opaque(w, h);
+            // A scissor from the old size could be entirely outside the new
+            // one, which would silently blank the frame.
+            self.st.scissor = None;
+        }
+
+        self.scale = query_scale(&self.window);
+    }
+
+    pub fn set_title(&mut self, title: &str) {
+        self.window.set_title(title);
+    }
+
+    pub fn position(&self) -> (i64, i64) {
+        let (x, y) = self.window.get_position();
+
+        (x as i64, y as i64)
+    }
+
+    pub fn set_position(&mut self, x: i64, y: i64) {
+        self.window.set_position(x as isize, y as isize);
+    }
+
+    pub fn set_topmost(&mut self, topmost: bool) {
+        self.window.topmost(topmost);
+    }
+
+    /// Whether the window has keyboard focus. A background app should usually
+    /// stop animating.
+    pub fn is_focused(&mut self) -> bool {
+        self.window.is_active()
     }
 
     /// Present the framebuffer to the window, then sleep until the next 60 FPS
@@ -234,6 +484,13 @@ impl Engine {
         window
             .update_with_buffer(&screen.buf, screen.w, screen.h)
             .map_err(|e| format!("Graphics.present: {e}"))?;
+
+        // Presenting pumps the OS queue a second time, and minifb clears its
+        // scroll delta at the start of every pump. Sampling here is what stops
+        // a wheel notch that arrived mid-frame from being wiped before
+        // `pollEvents` gets to read it. Keys need no equivalent: their edges
+        // are latched in the backend's callback as the messages arrive.
+        self.mouse.observe(&self.window);
 
         // Pace to 60 FPS: sleep off whatever time is left in this frame.
         let now = Instant::now();
@@ -360,6 +617,62 @@ impl Engine {
             .take()
             .expect("a canvas is only on loan during its own draw");
         raster::blit_surface(self.target_mut(), &src, &xform, &paint);
+        self.canvases[idx] = Some(src);
+        Ok(())
+    }
+
+    /// Decode a PNG into the surface registry and return its handle.
+    ///
+    /// Images and canvases share one registry, so the handle works with
+    /// `draw`, `drawFrame`, `imageSize`, and even `setCanvas` — a loaded image
+    /// is simply a canvas that started life with pixels in it.
+    pub fn new_image(&mut self, path: &str) -> Result<i64, String> {
+        let surface = crate::image::load(path)?;
+        self.canvases.push(Some(surface));
+        Ok(self.canvases.len() as i64)
+    }
+
+    /// Pixel dimensions of an image or canvas.
+    pub fn image_size(&self, handle: i64) -> Result<(i64, i64), String> {
+        let idx = self.canvas_index(handle, "Graphics.imageSize")?;
+        let surface = self.canvases[idx]
+            .as_ref()
+            .ok_or("Graphics.imageSize: the image is on loan to a draw call")?;
+        Ok((surface.w as i64, surface.h as i64))
+    }
+
+    /// Composite one cell of an image onto the current target — the
+    /// spritesheet draw. `frame` selects the source rectangle; the rest
+    /// positions it exactly like [`Engine::draw_canvas`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_frame(
+        &mut self,
+        handle: i64,
+        frame: Rect,
+        x: f64,
+        y: f64,
+        angle: f64,
+        sx: f64,
+        sy: f64,
+        ox: f64,
+        oy: f64,
+    ) -> Result<(), String> {
+        let idx = self.canvas_index(handle, "Graphics.drawFrame")?;
+        if self.target == Some(idx) {
+            return Err("Graphics.drawFrame: an image cannot be drawn onto itself".into());
+        }
+
+        let local = Transform::translation(x, y)
+            .then(&Transform::rotation(angle))
+            .then(&Transform::scaling(sx, sy))
+            .then(&Transform::translation(-ox, -oy));
+        let xform = self.st.transform.then(&local);
+        let paint = self.paint();
+
+        let src = self.canvases[idx]
+            .take()
+            .expect("an image is only on loan during its own draw");
+        raster::blit_surface_sub(self.target_mut(), &src, frame, &xform, &paint);
         self.canvases[idx] = Some(src);
         Ok(())
     }

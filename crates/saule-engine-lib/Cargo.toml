@@ -32,3 +32,18 @@ minifb = { version = "0.28", default-features = false, features = ["x11"] }
 # engine pairs it with a host-font lookup (see `src/font.rs`) so text works
 # without shipping a typeface.
 fontdue = "0.9"
+# PNG decoding for `Graphics.newImage`. Pure Rust, so image support costs no
+# system dependency, matching fontdue's role for text.
+png = "0.17"
+# System clipboard for `Clipboard.get` / `Clipboard.set`. minifb has no
+# clipboard of its own. Default features are off so this stays pure Rust:
+# x11rb on Linux and windows-sys here, with no image-data or Wayland backends
+# dragging in C libraries.
+arboard = { version = "3.6.1", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+# Per-monitor DPI awareness, and the scale factor for the window. minifb has no
+# DPI query of its own, so this asks the OS through the native window handle.
+# Windows-only by design: the other platforms report a scale of 1.0 until there
+# is an equally honest way to ask them.
+windows-sys = { version = "0.61", features = ["Win32_UI_HiDpi", "Win32_Foundation"] }
