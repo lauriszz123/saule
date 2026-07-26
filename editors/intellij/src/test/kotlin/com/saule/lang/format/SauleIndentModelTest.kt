@@ -2,6 +2,8 @@ package com.saule.lang.format
 
 import com.intellij.psi.codeStyle.CommonCodeStyleSettings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -177,6 +179,41 @@ class SauleIndentModelTest {
     }
 
     @Test
+    fun `a closer typed at the body indent still resolves one level out`() {
+        // What the editor sees mid-keystroke: Enter has indented the line to
+        // the body level and the closer has just been typed into it. The
+        // answer must not depend on the whitespace already there.
+        for (opener in listOf("fn f()", "if a then", "while a do", "for i in x do", "try", "match x")) {
+            val text = "class A\n  $opener\n    end\n"
+            assertEquals(opener, SauleIndent(1, 0), indentOfLine(text, 2))
+        }
+        assertEquals(SauleIndent(1, 0), indentOfLine("class A\n  repeat\n    until done\n", 2))
+        assertEquals(SauleIndent(1, 0), indentOfLine("class A\n  if a then\n    else\n", 2))
+        assertEquals(SauleIndent(1, 0), indentOfLine("class A\n  try\n    catch e: any\n", 2))
+    }
+
+    @Test
+    fun `a closer that turns out to be an identifier keeps the body indent`() {
+        // `end` dedents as it is typed, so `endless` has to put it back.
+        assertEquals(SauleIndent(2, 0), indentOfLine("class A\n  fn f()\n    endless()\n", 2))
+    }
+
+    @Test
+    fun `keywordTypedAt fires only on a bare closer`() {
+        assertTrue(keywordTypedAt("fn f()\n  end"))
+        assertTrue(keywordTypedAt("fn f()\n  else"))
+        assertTrue(keywordTypedAt("repeat\n  until"))
+        assertTrue(keywordTypedAt("match x\n  case"))
+        // One character past a closer: the indent has to be restored.
+        assertTrue(keywordTypedAt("fn f()\n  endl"))
+        // Half-typed, mid-expression, or not a keyword at all.
+        assertFalse(keywordTypedAt("fn f()\n  en"))
+        assertFalse(keywordTypedAt("fn f()\n  x = end"))
+        assertFalse(keywordTypedAt("fn f()\n  endles"))
+        assertFalse(keywordTypedAt("fn f()\n  "))
+    }
+
+    @Test
     fun `render uses tabs when the code style asks for them`() {
         val spaces = options(useTabs = false)
         assertEquals("    ", SauleIndent(2, 0).render(spaces))
@@ -200,6 +237,10 @@ class SauleIndentModelTest {
             USE_TAB_CHARACTER = useTabs
             SMART_TABS = smartTabs
         }
+
+    /** As the editor asks it: caret at the end of the half-typed text. */
+    private fun keywordTypedAt(text: String): Boolean =
+        SauleReindent.keywordTypedAt(text, text.length)
 
     private fun indentOfLine(text: String, line: Int): SauleIndent {
         val starts = lineStarts(text)
