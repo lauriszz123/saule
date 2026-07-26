@@ -19,6 +19,7 @@ Usage:
   saule run -- [args...]           force project mode, forward args to Os.args()
   saule fmt <file.sau> ...         print formatted source to stdout
   saule fmt -w <file.sau> ...      overwrite files in place
+  saule fmt --help                 indent options (--indent, --tabs, --spaces)
   saule init <name>                scaffold a new Saule project in ./<name>
   saule --help | -h                show this help
   saule --version | -V             print the version

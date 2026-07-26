@@ -43,7 +43,7 @@ saule_sdk::saule_package! {
     ],
     classes {
         Graphics = "2D graphics: shapes, text, canvases, clipping, and transforms.",
-        Keyboard = "Keyboard input state.",
+        Keyboard = "Keyboard input: key state, per-frame press/release edges, and typed text.",
         Mouse = "Mouse input state.",
         Window = "Window management.",
         Timer = "Timing helpers.",
@@ -75,6 +75,17 @@ pub fn anchor() {
 
     // Keyboard exports
     black_box(keyboard::saule_export_Keyboard_isDown as *const ());
+    black_box(keyboard::saule_export_Keyboard_isAnyDown as *const ());
+    black_box(keyboard::saule_export_Keyboard_wasPressed as *const ());
+    black_box(keyboard::saule_export_Keyboard_wasReleased as *const ());
+    black_box(keyboard::saule_export_Keyboard_getKeysDown as *const ());
+    black_box(keyboard::saule_export_Keyboard_getKeysPressed as *const ());
+    black_box(keyboard::saule_export_Keyboard_getKeysReleased as *const ());
+    black_box(keyboard::saule_export_Keyboard_setKeyRepeat as *const ());
+    black_box(keyboard::saule_export_Keyboard_hasKeyRepeat as *const ());
+    black_box(keyboard::saule_export_Keyboard_setTextInput as *const ());
+    black_box(keyboard::saule_export_Keyboard_hasTextInput as *const ());
+    black_box(keyboard::saule_export_Keyboard_getTextInput as *const ());
 
     // Mouse exports
     black_box(mouse::saule_export_Mouse_isDown as *const ());

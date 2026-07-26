@@ -12,7 +12,7 @@ use saule_semantic::{
 };
 
 use super::util::{
-    declared_name, inferred_type_of, locate_string_literal, locate_word_in, locate_words_in,
+    declared_name, inferred_type_of, locate_import_path, locate_word_in, locate_words_in,
     member_name_span, named_type, strip_nullable, LocalBind,
 };
 use super::{Hit, Symbol};
@@ -448,10 +448,12 @@ impl<'a> CollectCx<'a> {
                 }
                 self.enclosing_class = prev;
             }
-            Decl::Import { path, .. } => {
+            Decl::Import {
+                path, quoted, ..
+            } => {
                 if let Symbol::ImportPath(target) = self.symbol
                     && target == path
-                    && let Some(span) = locate_string_literal(self.source, &d.span, path)
+                    && let Some(span) = locate_import_path(self.source, &d.span, path, *quoted)
                 {
                     self.push(span, false);
                 }

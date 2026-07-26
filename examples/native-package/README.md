@@ -121,6 +121,12 @@ windowed build would drop that and close on the OS quit event.
 | `Graphics.clear(r, g, b) -> nil` | Begin a frame (clear to colour). |
 | `Graphics.present() -> nil` | End a frame (swap buffers). |
 
+Input is read inside that loop, between `pollEvents` and `present`. See
+[keyboard.sau](keyboard.sau) for the `Keyboard` surface — held keys
+(`isDown`, `isAnyDown`), per-frame edges (`wasPressed`, `wasReleased`, which
+stand in for Love2D's `keypressed` / `keyreleased` callbacks), and typed text
+(`getTextInput`, standing in for `love.textinput`).
+
 ## Adding your own functions
 
 1. Add an `extern "C"` symbol in `crates/saule-engine-lib/src/` following the

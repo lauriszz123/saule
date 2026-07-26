@@ -111,6 +111,55 @@ end
     );
 }
 
+/// Goto-definition on an import needs the path to resolve to an
+/// `ImportPath` symbol — for every spelling of the path, not just the
+/// quoted one.
+#[test]
+fn resolves_quoted_import_path() {
+    let src = "import * from \"entities/Player\"\n";
+    let s = resolve(src, "entities/Player");
+    assert!(matches!(&s, Symbol::ImportPath(p) if p == "entities/Player"), "got: {s:?}");
+}
+
+#[test]
+fn resolves_bare_import_path() {
+    let src = "import * from Geometry\n";
+    let s = resolve(src, "Geometry");
+    assert!(matches!(&s, Symbol::ImportPath(p) if p == "Geometry"), "got: {s:?}");
+}
+
+#[test]
+fn resolves_bare_dotted_import_path() {
+    let src = "import View as V from some.folder.module\n";
+    let s = resolve(src, "some.folder.module");
+    assert!(
+        matches!(&s, Symbol::ImportPath(p) if p == "some.folder.module"),
+        "got: {s:?}"
+    );
+}
+
+/// When the imported name and the module spell the same word, the path is
+/// the trailing one — the cursor on the name must not resolve to it.
+#[test]
+fn bare_import_path_is_the_trailing_occurrence() {
+    init_stdlib();
+    let src = "import Geometry from Geometry\n";
+    let module = parse_src(src);
+    analyze(&module);
+
+    let on_name = find_symbol_at(&module, src, src.find("Geometry").expect("name") + 2);
+    assert!(
+        !matches!(on_name.map(|r| r.symbol), Some(Symbol::ImportPath(_))),
+        "the imported name is not the module path"
+    );
+
+    let on_path = find_symbol_at(&module, src, src.rfind("Geometry").expect("path") + 2);
+    assert!(
+        matches!(on_path.map(|r| r.symbol), Some(Symbol::ImportPath(p)) if p == "Geometry"),
+        "the trailing occurrence is the module path"
+    );
+}
+
 /// No parent — `self.super(...)` has nothing to point at, and the
 /// resolver must not claim a bogus `super` field.
 #[test]

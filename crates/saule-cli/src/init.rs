@@ -13,12 +13,19 @@ pub(crate) fn cmd_init(name: &str) {
         process::exit(1);
     }
 
+    // The two `indent_*` keys are scaffolded commented-out: they show the
+    // knob (and the defaults `saule fmt` and the LSP already use) without
+    // committing a new project to anything.
     let config = format!(
         "name: \"{name}\"\n\
          version: \"0.1.0\"\n\
          entry: \"src/main.sau\"\n\
          src_dirs: [\"src\"]\n\
-         min_saule_version: \"{}\"\n",
+         min_saule_version: \"{}\"\n\
+         \n\
+         -- Formatting, shared by `saule fmt` and the editor's Reformat.\n\
+         -- indent_style: \"space\"  -- or \"tab\"\n\
+         -- indent_width: 2        -- columns, 1..=16\n",
         env!("CARGO_PKG_VERSION")
     );
 

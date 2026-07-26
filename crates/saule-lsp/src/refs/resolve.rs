@@ -12,7 +12,7 @@ use saule_semantic::{
 };
 
 use super::util::{
-    contains, inferred_type_of, locate_string_literal, locate_word_in, member_name_span,
+    contains, inferred_type_of, locate_import_path, locate_word_in, member_name_span,
     named_type, strip_nullable, LocalBind,
 };
 use super::{Resolved, Symbol};
@@ -452,10 +452,12 @@ impl<'a> ResolveCx<'a> {
                 }
                 self.enclosing_class = prev;
             }
-            Decl::Import { path, .. } => {
-                // Find the path literal inside the import statement —
-                // the path appears between the matching quotes.
-                if let Some(span) = locate_string_literal(self.source, &d.span, path) {
+            Decl::Import {
+                path, quoted, ..
+            } => {
+                // Find the path inside the import statement — quoted between
+                // the matching quotes, bare at the end of the declaration.
+                if let Some(span) = locate_import_path(self.source, &d.span, path, *quoted) {
                     self.record(span, Symbol::ImportPath(path.clone()));
                 }
             }

@@ -1,0 +1,19 @@
+-- ERROR: naming one required parameter does not excuse the other — `h` is
+-- still missing.
+
+class Box
+  w: integer
+  h: integer
+
+  fn init(w: integer, h: integer)
+    self.w = w
+    self.h = h
+  end
+end
+
+class Main
+  static fn main()
+    local b: Box = Box(w: 5)
+    println(b.w, b.h)
+  end
+end

@@ -319,9 +319,12 @@ pub(super) fn check_native_args(
 /// parameters bound from the actual arguments and substituted before the
 /// compatibility check.
 ///
+/// Named arguments are resolved to the parameter that carries the name —
+/// both for the arity check (a named arg fills a required slot) and for the
+/// per-slot type check.
+///
 /// Lenient in the same ways: `any` slots accept anything, nullable slots
-/// accept anything, named args are skipped, and we bail silently when
-/// `infer` can't produce a type.
+/// accept anything, and we bail silently when `infer` can't produce a type.
 fn check_user_method_args(
     callee_display: &str,
     sig: &saule_semantic::MethodSig,
@@ -341,11 +344,24 @@ fn check_user_method_args(
         .filter(|a| matches!(a, CallArg::Positional(_)))
         .collect();
     let has_variadic = sig.params.last().is_some_and(|p| p.variadic);
-    if positional.len() < required {
+    // A required slot counts as filled either by its position or by a named
+    // argument carrying its name — `Box(w: 5, h: 6)` fills both of
+    // `fn init(w, h = 2)` even though it passes nothing positionally.
+    let filled: usize = sig.params[..required]
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| {
+            *i < positional.len()
+                || args
+                    .iter()
+                    .any(|a| matches!(a, CallArg::Named { name, .. } if name == &p.name))
+        })
+        .count();
+    if filled < required {
         errors.push(TypeCheckError::NativeArity {
             callee: callee_display.to_string(),
             expected: required,
-            found: positional.len(),
+            found: filled,
             span: to_source_span(call_span.clone()),
         });
         return;
@@ -382,23 +398,39 @@ fn check_user_method_args(
     let mut subst: std::collections::HashMap<String, Type> =
         std::collections::HashMap::new();
 
-    for (i, arg) in args.iter().enumerate() {
-        let Some(p) = sig.params.get(i).or_else(|| {
-            if has_variadic {
-                sig.params.last()
-            } else {
-                None
+    // Positional args consume parameter slots left-to-right; a named arg
+    // targets the slot that carries its name, so both forms get their type
+    // checked (`Text(color: 3)` is as wrong as `Text(3)`).
+    let mut next_slot = 0usize;
+    for arg in args.iter() {
+        let (p, value_expr, i) = match arg {
+            CallArg::Positional(e) => {
+                let slot = next_slot;
+                next_slot += 1;
+                let Some(p) = sig.params.get(slot).or_else(|| {
+                    if has_variadic {
+                        sig.params.last()
+                    } else {
+                        None
+                    }
+                }) else {
+                    break;
+                };
+                (p, e, slot)
             }
-        }) else {
-            break;
+            CallArg::Named { name, value } => {
+                // Unknown names are already reported above; skip quietly.
+                let Some((slot, p)) =
+                    sig.params.iter().enumerate().find(|(_, p)| &p.name == name)
+                else {
+                    continue;
+                };
+                (p, value, slot)
+            }
         };
         if p.variadic {
             continue;
         }
-        let value_expr = match arg {
-            CallArg::Positional(e) => e,
-            CallArg::Named { .. } => continue,
-        };
         let expected = if type_params.is_empty() {
             p.ty.clone()
         } else {

@@ -20,7 +20,7 @@ declarations.
 |------------|-----------------------------------------------------------|
 | `Window`   | `create`, `isOpen`, `pollEvents`, `close`, `getSize`      |
 | `Graphics` | the UI drawing surface — see below                        |
-| `Keyboard` | `isDown`                                                  |
+| `Keyboard` | key state, per-frame edges, typed text — see below        |
 | `Mouse`    | `getPos`, `isDown`                                        |
 | `Timer`    | `getTime`, `getDelta`                                     |
 | `Util`     | table/function bridge demo helpers                        |
@@ -80,6 +80,44 @@ a1, a2 [, arctype])`, `polygon(mode, points)`, `line(x1, y1, x2, y2)`,
 - **Not implemented**: shaders (no GPU), and image loading — `newImage`,
   `newQuad`, `newImageFont`, and `newText` would all need an image decoder.
   Canvases cover offscreen rendering and caching in the meantime.
+
+## The `Keyboard` API
+
+A polling take on `love.keyboard`. Love2D splits keyboard input between level
+queries and callbacks (`love.keypressed`, `love.keyreleased`, `love.textinput`);
+Saule owns the loop here, so the callbacks become per-frame queries instead.
+
+**Held keys** — `isDown(key)`, `isAnyDown({key, ...})`, `getKeysDown()`
+
+**Edges** — `wasPressed(key)`, `wasReleased(key)`, `getKeysPressed()`,
+`getKeysReleased()`
+
+**Key repeat** — `setKeyRepeat(enable)`, `hasKeyRepeat()`
+
+**Text** — `getTextInput()`, `setTextInput(enable)`, `hasTextInput()`
+
+Key names are Love2D's `KeyConstant` strings — `"a"`, `"space"`, `"lshift"`,
+`"return"`, `"kp0"`, `"/"` — so code reads the same as its Love2D equivalent.
+Unrecognised names report as "not down" rather than erroring. See
+`examples/native-package/keyboard.sau` for a text field and WASD movement built
+on the whole surface.
+
+### Differences from Love2D worth knowing
+
+- `wasPressed` / `wasReleased` (and the `getKeys*` accessors) are measured
+  against the last `Window.pollEvents()` — that call is the frame boundary. A
+  key tapped and released between two polls is not reported.
+- `isAnyDown({"lshift", "rshift"})` replaces Love2D's variadic
+  `isDown(key, ...)`, since native calls take a fixed argument list.
+- `getTextInput()` drains the text typed since the previous call, the way
+  `love.textinput` would deliver it — layout- and modifier-aware, so shift+`a`
+  arrives as `"A"`. Unread text is capped at 4 KiB.
+- `setKeyRepeat(true)` makes a held key keep reporting `wasPressed` after a
+  0.25 s delay, then every 0.05 s.
+- **Not implemented**: scancodes (`isScancodeDown`, `getScancodeFromKey`,
+  `getKeyFromScancode`). The windowing backend reports keys already mapped
+  through the OS layout, so there is no honest physical-position code to hand
+  back.
 
 ## Building & installing
 
