@@ -106,8 +106,19 @@ impl<'src> Lexer<'src> {
                 // Not a comment — fall through so '-' becomes Minus or Arrow.
             }
 
+            // A `.` immediately followed by a digit opens a leading-dot float
+            // (`.5`). Checking the *next* character is what keeps `..` and
+            // `...` intact: in `1..2` the char after the first dot is another
+            // dot, so this never fires and `..` still lexes as concat.
+            let dot_starts_float = c == '.' && {
+                let mut look = self.chars.clone();
+                look.next();
+                matches!(look.peek(), Some(&(_, d)) if d.is_ascii_digit())
+            };
+
             let tok = match c {
                 '0'..='9' => self.number(start)?,
+                _ if dot_starts_float => self.number(start)?,
                 'a'..='z' | 'A'..='Z' | '_' => self.ident_or_keyword(start),
                 '"' => self.string(start)?,
                 _ => self.symbol(start)?,
@@ -185,11 +196,16 @@ impl<'src> Lexer<'src> {
         }
     }
 
+    /// Lex a numeric literal.
+    ///
+    /// Accepts `12`, `1.5`, `.5` (the integer part may be omitted), and a
+    /// trailing `f`/`F` suffix that forces a float — so `1f` is `1.0`.
     fn number(&mut self, start: usize) -> Result<Spanned<Token>, LexerError> {
         let mut end = start;
         let mut is_float = false;
 
-        // Integer part.
+        // Integer part. Consumes nothing for a leading-dot literal like `.5`,
+        // which the fractional branch below picks up.
         while let Some(&(i, c)) = self.chars.peek() {
             if c.is_ascii_digit() {
                 end = i + c.len_utf8();
@@ -219,7 +235,29 @@ impl<'src> Lexer<'src> {
             }
         }
 
-        let text = &self.source[start..end];
+        // The numeric text ends here; a suffix extends the span but must stay
+        // out of the string handed to `parse`.
+        let digits_end = end;
+
+        // Optional `f` / `F` suffix, so an integral value can be written as a
+        // float without a fractional part: `1f` is `1.0`. Only treat it as a
+        // suffix when no further identifier character follows, which keeps
+        // `1foo` lexing as `1` then `foo` rather than `1f` then `oo`.
+        if let Some(&(sfx_i, sfx)) = self.chars.peek() {
+            if sfx == 'f' || sfx == 'F' {
+                let mut look = self.chars.clone();
+                look.next(); // skip the suffix
+                let continues_ident =
+                    matches!(look.peek(), Some(&(_, c)) if c.is_alphanumeric() || c == '_');
+                if !continues_ident {
+                    self.chars.next();
+                    is_float = true;
+                    end = sfx_i + sfx.len_utf8();
+                }
+            }
+        }
+
+        let text = &self.source[start..digits_end];
         let tok = if is_float {
             Token::Float(
                 text.parse()

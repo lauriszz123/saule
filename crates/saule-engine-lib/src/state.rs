@@ -1,5 +1,6 @@
-//! Shared engine state: the OS window, its pixel framebuffer, and the
-//! software rasterizers that draw into it.
+//! Shared engine state: the OS window, its render targets, the graphics state
+//! machine (colour, line style, blend mode, scissor, transform, font), and the
+//! glue that turns each `Graphics.*` call into work for [`crate::raster`].
 //!
 //! The interpreter is single-threaded and calls every native symbol from the
 //! same thread, so the state lives in a `thread_local!`. That sidesteps the
@@ -11,19 +12,71 @@ use std::time::{Duration, Instant};
 
 use minifb::{Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
 
+use crate::font::{self, Align, FontRes};
+use crate::geom::{self, ArcType, LineJoin, Point, Transform};
+use crate::raster::{self, BlendMode, Paint, Rect, Surface};
+
 /// Target frame time for the 60 FPS cap.
 const FRAME_DUR: Duration = Duration::from_nanos(1_000_000_000 / 60);
+
+/// The retained graphics state — everything `Graphics.push("all")` saves and
+/// `Graphics.reset()` restores.
+#[derive(Clone)]
+struct GState {
+    /// Kept at `f64` so `getColor` returns exactly what `setColor` was given;
+    /// it narrows to `f32` only when a [`Paint`] is built.
+    color: [f64; 4],
+    line_width: f64,
+    line_join: LineJoin,
+    /// `false` is `setLineStyle("rough")`: hard, aliased edges.
+    smooth: bool,
+    blend: BlendMode,
+    /// Device-space clip. `None` means "the whole render target".
+    scissor: Option<Rect>,
+    transform: Transform,
+    /// Index into [`Engine::fonts`]; `0` is the lazily-loaded system default.
+    font: usize,
+}
+
+impl Default for GState {
+    fn default() -> Self {
+        GState {
+            color: [1.0, 1.0, 1.0, 1.0],
+            line_width: 1.0,
+            line_join: LineJoin::Miter,
+            smooth: true,
+            blend: BlendMode::Alpha,
+            scissor: None,
+            transform: Transform::IDENTITY,
+            font: 0,
+        }
+    }
+}
+
+/// One `Graphics.push` frame. A bare `push()` is transform-only (matching
+/// Love2D); `push("all")` snapshots the whole state.
+enum Saved {
+    TransformOnly(Transform),
+    All(Box<GState>),
+}
 
 /// Live engine state, created by `Window.create`.
 pub struct Engine {
     window: Window,
-    /// `0RGB` pixels, `width * height` long. minifb ignores the top byte.
-    buffer: Vec<u32>,
-    width: usize,
-    height: usize,
-    /// Current draw colour for shapes, packed `0RGB`.
-    color: u32,
-    line_width: f32,
+    /// The window's framebuffer. minifb reads it as `0RGB` and ignores alpha.
+    screen: Surface,
+    /// Canvas registry; a slot is `None` only while its surface is on loan to
+    /// a draw call (see [`Engine::draw_canvas`]). Handle `n` is index `n - 1`.
+    canvases: Vec<Option<Surface>>,
+    /// Bound render target: `None` is the screen, `Some(i)` a canvas index.
+    target: Option<usize>,
+    /// Font registry. Slot 0 is the system default, loaded on first use.
+    fonts: Vec<Option<FontRes>>,
+    background: [f64; 4],
+    st: GState,
+    stack: Vec<Saved>,
+    /// Bilinear rather than nearest sampling for transformed blits.
+    linear_filter: bool,
     /// Instant the next presented frame should be released at — the single
     /// 60 FPS pacing point (see [`Engine::present`]).
     next_frame: Instant,
@@ -31,12 +84,6 @@ pub struct Engine {
 
 thread_local! {
     static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
-}
-
-/// Pack three `0.0..=1.0` channels into a `0RGB` pixel.
-pub fn pack_color(r: f64, g: f64, b: f64) -> u32 {
-    let c = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
-    (c(r) << 16) | (c(g) << 8) | c(b)
 }
 
 /// Create the window and framebuffer. Replaces any existing window.
@@ -67,11 +114,14 @@ pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
     ENGINE.with(|cell| {
         *cell.borrow_mut() = Some(Engine {
             window,
-            buffer: vec![0; width * height],
-            width,
-            height,
-            color: 0x00FF_FFFF, // default draw colour: white
-            line_width: 1.0,
+            screen: Surface::opaque(width, height),
+            canvases: Vec::new(),
+            target: None,
+            fonts: vec![None],
+            background: [0.0, 0.0, 0.0, 1.0],
+            st: GState::default(),
+            stack: Vec::new(),
+            linear_filter: true,
             next_frame: Instant::now() + FRAME_DUR,
         });
     });
@@ -93,6 +143,10 @@ pub fn with<R>(f: impl FnOnce(&mut Engine) -> R) -> Result<R, String> {
         }
     })
 }
+
+// ---------------------------------------------------------------------------
+// Window, input, framing
+// ---------------------------------------------------------------------------
 
 impl Engine {
     /// `true` while the OS window is open and Escape isn't held.
@@ -126,7 +180,13 @@ impl Engine {
 
     /// The window's framebuffer dimensions as `(width, height)`.
     pub fn size(&self) -> (usize, usize) {
-        (self.width, self.height)
+        (self.screen.w, self.screen.h)
+    }
+
+    /// The DPI scale factor. minifb has no portable way to report this, so the
+    /// engine always works in physical pixels and reports a scale of 1.
+    pub fn dpi_scale(&self) -> f64 {
+        1.0
     }
 
     /// Pump the OS event queue without presenting a frame. Keeps
@@ -135,36 +195,14 @@ impl Engine {
         self.window.update();
     }
 
-    /// Set the current draw colour for subsequent shapes.
-    pub fn set_color(&mut self, r: f64, g: f64, b: f64) {
-        self.color = pack_color(r, g, b);
-    }
-
-    /// Set the current draw colour for subsequent shapes.
-    pub fn set_line_width(&mut self, w: f64) {
-        self.line_width = w.max(0.0) as f32;
-    }
-
-    /// Fill the whole framebuffer with `(r, g, b)`.
-    pub fn clear(&mut self, r: f64, g: f64, b: f64) {
-        let c = pack_color(r, g, b);
-        self.buffer.iter_mut().for_each(|p| *p = c);
-    }
-
     /// Present the framebuffer to the window, then sleep until the next 60 FPS
     /// deadline. This is the loop's single pacing point.
     pub fn present(&mut self) -> Result<(), String> {
         // Split the borrow so `update_with_buffer` can take `&mut window`
         // and `&buffer` at once.
-        let Engine {
-            window,
-            buffer,
-            width,
-            height,
-            ..
-        } = self;
+        let Engine { window, screen, .. } = self;
         window
-            .update_with_buffer(buffer, *width, *height)
+            .update_with_buffer(&screen.buf, screen.w, screen.h)
             .map_err(|e| format!("Graphics.present: {e}"))?;
 
         // Pace to 60 FPS: sleep off whatever time is left in this frame.
@@ -182,133 +220,676 @@ impl Engine {
         }
         Ok(())
     }
+}
 
-    /// Set one pixel in the current colour, ignoring out-of-bounds writes.
-    fn put(&mut self, x: i32, y: i32) {
-        if x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height {
-            self.buffer[y as usize * self.width + x as usize] = self.color;
+// ---------------------------------------------------------------------------
+// Render targets
+// ---------------------------------------------------------------------------
+
+impl Engine {
+    fn target_size(&self) -> (usize, usize) {
+        match self.target {
+            None => (self.screen.w, self.screen.h),
+            Some(i) => self.canvases[i]
+                .as_ref()
+                .map(|s| (s.w, s.h))
+                .unwrap_or((0, 0)),
         }
     }
 
-    pub fn line(&mut self, x1: f64, y1: f64, x2: f64, y2: f64) {
-        let lw = self.line_width as f64;
-        if lw <= 1.0 {
-            self.bresenham(
-                x1.round() as i32,
-                y1.round() as i32,
-                x2.round() as i32,
-                y2.round() as i32,
+    fn target_mut(&mut self) -> &mut Surface {
+        match self.target {
+            None => &mut self.screen,
+            Some(i) => self.canvases[i]
+                .as_mut()
+                .expect("the bound canvas is never on loan during a draw"),
+        }
+    }
+
+    /// The paint for the current state, with the scissor already reduced to the
+    /// target's bounds.
+    fn paint(&self) -> Paint {
+        let (w, h) = self.target_size();
+        let bounds = Rect::surface(w, h);
+        Paint {
+            color: narrow(self.st.color),
+            blend: self.st.blend,
+            clip: match self.st.scissor {
+                Some(s) => s.intersect(&bounds),
+                None => bounds,
+            },
+            antialias: self.st.smooth,
+            linear_filter: self.linear_filter,
+        }
+    }
+
+    /// Allocate a canvas and return its handle (`1`-based).
+    pub fn new_canvas(&mut self, w: i64, h: i64) -> Result<i64, String> {
+        if w <= 0 || h <= 0 {
+            return Err("Graphics.newCanvas: width and height must be positive".into());
+        }
+        // Guard against a typo turning into a multi-gigabyte allocation.
+        if w > 16384 || h > 16384 {
+            return Err("Graphics.newCanvas: dimensions may not exceed 16384".into());
+        }
+        self.canvases
+            .push(Some(Surface::new(w as usize, h as usize)));
+        Ok(self.canvases.len() as i64)
+    }
+
+    fn canvas_index(&self, handle: i64, func: &str) -> Result<usize, String> {
+        if handle < 1 || handle as usize > self.canvases.len() {
+            return Err(format!("{func}: no canvas with handle {handle}"));
+        }
+        Ok(handle as usize - 1)
+    }
+
+    /// Bind a canvas as the render target. `None` (or handle `0`) restores the
+    /// screen.
+    pub fn set_canvas(&mut self, handle: Option<i64>) -> Result<(), String> {
+        self.target = match handle {
+            None | Some(0) => None,
+            Some(h) => Some(self.canvas_index(h, "Graphics.setCanvas")?),
+        };
+        Ok(())
+    }
+
+    /// The bound canvas handle, or `0` for the screen.
+    pub fn get_canvas(&self) -> i64 {
+        self.target.map(|i| i as i64 + 1).unwrap_or(0)
+    }
+
+    /// Composite a canvas onto the current target.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_canvas(
+        &mut self,
+        handle: i64,
+        x: f64,
+        y: f64,
+        angle: f64,
+        sx: f64,
+        sy: f64,
+        ox: f64,
+        oy: f64,
+    ) -> Result<(), String> {
+        let idx = self.canvas_index(handle, "Graphics.draw")?;
+        if self.target == Some(idx) {
+            return Err("Graphics.draw: a canvas cannot be drawn onto itself".into());
+        }
+
+        let local = Transform::translation(x, y)
+            .then(&Transform::rotation(angle))
+            .then(&Transform::scaling(sx, sy))
+            .then(&Transform::translation(-ox, -oy));
+        let xform = self.st.transform.then(&local);
+        let paint = self.paint();
+
+        // Lift the source out of the registry so the source and destination
+        // borrows are provably disjoint, then put it straight back.
+        let src = self.canvases[idx]
+            .take()
+            .expect("a canvas is only on loan during its own draw");
+        raster::blit_surface(self.target_mut(), &src, &xform, &paint);
+        self.canvases[idx] = Some(src);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Graphics state
+// ---------------------------------------------------------------------------
+
+impl Engine {
+    pub fn set_color(&mut self, r: f64, g: f64, b: f64, a: f64) {
+        self.st.color = [r, g, b, a];
+    }
+
+    pub fn color(&self) -> (f64, f64, f64, f64) {
+        let c = self.st.color;
+        (c[0], c[1], c[2], c[3])
+    }
+
+    pub fn set_background_color(&mut self, r: f64, g: f64, b: f64, a: f64) {
+        self.background = [r, g, b, a];
+    }
+
+    pub fn background_color(&self) -> (f64, f64, f64, f64) {
+        let c = self.background;
+        (c[0], c[1], c[2], c[3])
+    }
+
+    pub fn set_line_width(&mut self, w: f64) {
+        self.st.line_width = w.max(0.0);
+    }
+
+    pub fn line_width(&self) -> f64 {
+        self.st.line_width
+    }
+
+    pub fn set_line_style(&mut self, style: &str) -> Result<(), String> {
+        self.st.smooth = match style {
+            "smooth" => true,
+            "rough" => false,
+            other => {
+                return Err(format!(
+                    "Graphics.setLineStyle: unknown style `{other}` \
+                     (expected \"smooth\" or \"rough\")"
+                ));
+            }
+        };
+        Ok(())
+    }
+
+    pub fn line_style(&self) -> &'static str {
+        if self.st.smooth { "smooth" } else { "rough" }
+    }
+
+    pub fn set_line_join(&mut self, join: &str) -> Result<(), String> {
+        self.st.line_join = LineJoin::parse(join).map_err(|e| format!("Graphics.setLineJoin: {e}"))?;
+        Ok(())
+    }
+
+    pub fn line_join(&self) -> &'static str {
+        self.st.line_join.name()
+    }
+
+    pub fn set_blend_mode(&mut self, mode: &str) -> Result<(), String> {
+        self.st.blend =
+            BlendMode::parse(mode).map_err(|e| format!("Graphics.setBlendMode: {e}"))?;
+        Ok(())
+    }
+
+    pub fn blend_mode(&self) -> &'static str {
+        self.st.blend.name()
+    }
+
+    pub fn set_default_filter(&mut self, mode: &str) -> Result<(), String> {
+        self.linear_filter = match mode {
+            "linear" => true,
+            "nearest" => false,
+            other => {
+                return Err(format!(
+                    "Graphics.setDefaultFilter: unknown filter `{other}` \
+                     (expected \"linear\" or \"nearest\")"
+                ));
+            }
+        };
+        Ok(())
+    }
+
+    pub fn default_filter(&self) -> &'static str {
+        if self.linear_filter { "linear" } else { "nearest" }
+    }
+
+    /// The device-space bounding box of a local rectangle under the current
+    /// transform. Scissors follow the transform, so a clipped scroll view keeps
+    /// working when its parent is translated.
+    fn device_rect(&self, x: f64, y: f64, w: f64, h: f64) -> Rect {
+        let t = &self.st.transform;
+        let corners = [
+            t.apply(x, y),
+            t.apply(x + w, y),
+            t.apply(x + w, y + h),
+            t.apply(x, y + h),
+        ];
+        let mut r = Rect {
+            x0: f64::INFINITY,
+            y0: f64::INFINITY,
+            x1: f64::NEG_INFINITY,
+            y1: f64::NEG_INFINITY,
+        };
+        for (px, py) in corners {
+            r.x0 = r.x0.min(px);
+            r.x1 = r.x1.max(px);
+            r.y0 = r.y0.min(py);
+            r.y1 = r.y1.max(py);
+        }
+        r
+    }
+
+    /// `None` disables clipping entirely.
+    pub fn set_scissor(&mut self, rect: Option<(f64, f64, f64, f64)>) {
+        let device = rect.map(|(x, y, w, h)| self.device_rect(x, y, w, h));
+        self.st.scissor = device;
+    }
+
+    /// Narrow the clip to the intersection with an existing one. This is what
+    /// makes nested clipping — a scroll view inside a scroll view — compose.
+    pub fn intersect_scissor(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        let device = self.device_rect(x, y, w, h);
+        self.st.scissor = Some(match self.st.scissor {
+            Some(existing) => existing.intersect(&device),
+            None => device,
+        });
+    }
+
+    /// The active clip in device coordinates, defaulting to the whole target.
+    pub fn scissor(&self) -> (f64, f64, f64, f64) {
+        let (w, h) = self.target_size();
+        let r = self.st.scissor.unwrap_or(Rect::surface(w, h));
+        (r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0)
+    }
+
+    /// Restore every default: colour, line settings, blend mode, filter,
+    /// scissor, transform, and font selection. Canvases and loaded fonts
+    /// survive, since they are resources rather than state.
+    pub fn reset(&mut self) {
+        self.st = GState::default();
+        self.stack.clear();
+        self.background = [0.0, 0.0, 0.0, 1.0];
+        self.linear_filter = true;
+        self.target = None;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Coordinate system
+// ---------------------------------------------------------------------------
+
+impl Engine {
+    pub fn push(&mut self, all: bool) {
+        self.stack.push(if all {
+            Saved::All(Box::new(self.st.clone()))
+        } else {
+            Saved::TransformOnly(self.st.transform)
+        });
+    }
+
+    pub fn pop(&mut self) -> Result<(), String> {
+        match self.stack.pop() {
+            Some(Saved::TransformOnly(t)) => self.st.transform = t,
+            Some(Saved::All(s)) => self.st = *s,
+            None => return Err("Graphics.pop: the transform stack is empty".into()),
+        }
+        Ok(())
+    }
+
+    pub fn stack_depth(&self) -> i64 {
+        self.stack.len() as i64
+    }
+
+    pub fn origin(&mut self) {
+        self.st.transform = Transform::IDENTITY;
+    }
+
+    pub fn translate(&mut self, dx: f64, dy: f64) {
+        self.st.transform = self.st.transform.then(&Transform::translation(dx, dy));
+    }
+
+    pub fn scale(&mut self, sx: f64, sy: f64) {
+        self.st.transform = self.st.transform.then(&Transform::scaling(sx, sy));
+    }
+
+    pub fn rotate(&mut self, angle: f64) {
+        self.st.transform = self.st.transform.then(&Transform::rotation(angle));
+    }
+
+    pub fn shear(&mut self, kx: f64, ky: f64) {
+        self.st.transform = self.st.transform.then(&Transform::shearing(kx, ky));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_transform(&mut self, a: f64, b: f64, c: f64, d: f64, tx: f64, ty: f64) {
+        let t = Transform { a, b, c, d, tx, ty };
+        self.st.transform = self.st.transform.then(&t);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn replace_transform(&mut self, a: f64, b: f64, c: f64, d: f64, tx: f64, ty: f64) {
+        self.st.transform = Transform { a, b, c, d, tx, ty };
+    }
+
+    pub fn transform_point(&self, x: f64, y: f64) -> (f64, f64) {
+        self.st.transform.apply(x, y)
+    }
+
+    pub fn inverse_transform_point(&self, x: f64, y: f64) -> Result<(f64, f64), String> {
+        self.st
+            .transform
+            .inverse()
+            .map(|inv| inv.apply(x, y))
+            .ok_or_else(|| {
+                "Graphics.inverseTransformPoint: the current transform is not invertible \
+                 (a scale factor is zero)"
+                    .to_string()
+            })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shapes
+// ---------------------------------------------------------------------------
+
+impl Engine {
+    pub fn clear(&mut self, color: Option<(f64, f64, f64, f64)>) {
+        let c = narrow(match color {
+            Some((r, g, b, a)) => [r, g, b, a],
+            None => self.background,
+        });
+        let (w, h) = self.target_size();
+        let clip = match self.st.scissor {
+            Some(s) => s.intersect(&Rect::surface(w, h)),
+            None => Rect::surface(w, h),
+        };
+        self.target_mut().clear(c, clip);
+    }
+
+    /// The shared tail of every shape call: transform the path into device
+    /// space, then either fill it or expand it into a stroke.
+    fn draw_path(&mut self, mode: &str, local: &[Point], closed: bool) -> Result<(), String> {
+        let t = self.st.transform;
+        let device: Vec<Point> = local.iter().map(|&(x, y)| t.apply(x, y)).collect();
+
+        let paths = match mode {
+            "fill" => vec![device],
+            "line" => {
+                // Line width is a local-space quantity in Love2D, so it scales
+                // with the transform just like the geometry does.
+                let w = self.st.line_width * t.mean_scale();
+                geom::stroke(&device, closed, w, self.st.line_join)
+            }
+            other => {
+                return Err(format!(
+                    "draw mode must be \"fill\" or \"line\", got `{other}`"
+                ));
+            }
+        };
+
+        let paint = self.paint();
+        raster::fill_paths(self.target_mut(), &paths, &paint);
+        Ok(())
+    }
+
+    /// Segment budget for a curve of local radius `r` under the current
+    /// transform.
+    fn segments_for(&self, r: f64) -> usize {
+        geom::curve_segments(r * self.st.transform.mean_scale())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn rectangle(
+        &mut self,
+        mode: &str,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        rx: f64,
+        ry: f64,
+    ) -> Result<(), String> {
+        let path = if rx > 0.0 || ry > 0.0 {
+            let segs = self.segments_for(rx.abs().max(ry.abs()));
+            geom::rounded_rect_path(x, y, w, h, rx, ry, segs)
+        } else {
+            geom::rect_path(x, y, w, h)
+        };
+        self.draw_path(mode, &path, true)
+    }
+
+    pub fn circle(
+        &mut self,
+        mode: &str,
+        x: f64,
+        y: f64,
+        radius: f64,
+        segments: Option<i64>,
+    ) -> Result<(), String> {
+        self.ellipse(mode, x, y, radius, radius, segments)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ellipse(
+        &mut self,
+        mode: &str,
+        x: f64,
+        y: f64,
+        rx: f64,
+        ry: f64,
+        segments: Option<i64>,
+    ) -> Result<(), String> {
+        let segs = match segments {
+            Some(n) if n >= 3 => n as usize,
+            Some(n) => return Err(format!("segment count must be at least 3, got {n}")),
+            None => self.segments_for(rx.abs().max(ry.abs())),
+        };
+        let path = geom::ellipse_path(x, y, rx, ry, segs);
+        self.draw_path(mode, &path, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn arc(
+        &mut self,
+        mode: &str,
+        x: f64,
+        y: f64,
+        radius: f64,
+        angle1: f64,
+        angle2: f64,
+        arctype: &str,
+    ) -> Result<(), String> {
+        let kind = ArcType::parse(arctype)?;
+        let segs = self.segments_for(radius);
+        let (path, closed) = geom::arc_path(x, y, radius, angle1, angle2, segs, kind);
+        self.draw_path(mode, &path, closed)
+    }
+
+    pub fn polygon(&mut self, mode: &str, points: &[Point]) -> Result<(), String> {
+        if points.len() < 3 {
+            return Err("need at least 3 points".into());
+        }
+        self.draw_path(mode, points, true)
+    }
+
+    pub fn line(&mut self, x1: f64, y1: f64, x2: f64, y2: f64) -> Result<(), String> {
+        self.draw_path("line", &[(x1, y1), (x2, y2)], false)
+    }
+
+    pub fn polyline(&mut self, points: &[Point]) -> Result<(), String> {
+        if points.len() < 2 {
+            return Err("need at least 2 points".into());
+        }
+        self.draw_path("line", points, false)
+    }
+
+    /// Draw one-pixel points. Each lands on the device pixel containing the
+    /// transformed position, so points stay crisp under any transform.
+    pub fn points(&mut self, points: &[Point]) {
+        let t = self.st.transform;
+        let paths: Vec<Vec<Point>> = points
+            .iter()
+            .map(|&(x, y)| {
+                let (dx, dy) = t.apply(x, y);
+                let (px, py) = (dx.floor(), dy.floor());
+                vec![
+                    (px, py),
+                    (px + 1.0, py),
+                    (px + 1.0, py + 1.0),
+                    (px, py + 1.0),
+                ]
+            })
+            .collect();
+        let paint = self.paint();
+        raster::fill_paths(self.target_mut(), &paths, &paint);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Text
+// ---------------------------------------------------------------------------
+
+impl Engine {
+    /// Load a typeface. `path` of `None` uses the system default face.
+    /// Returns the new font's handle.
+    pub fn new_font(&mut self, size: f64, path: Option<&str>) -> Result<i64, String> {
+        let res = match path {
+            Some(p) => FontRes::from_file(p, size)?,
+            None => font::load_default(size).ok_or_else(no_system_font)?,
+        };
+        self.fonts.push(Some(res));
+        Ok(self.fonts.len() as i64 - 1)
+    }
+
+    pub fn set_font(&mut self, handle: i64) -> Result<(), String> {
+        if handle < 0 || handle as usize >= self.fonts.len() {
+            return Err(format!("Graphics.setFont: no font with handle {handle}"));
+        }
+        self.st.font = handle as usize;
+        Ok(())
+    }
+
+    pub fn get_font(&self) -> i64 {
+        self.st.font as i64
+    }
+
+    /// Make sure the selected font slot is populated, loading the system
+    /// default on first use.
+    fn ensure_font(&mut self) -> Result<(), String> {
+        let i = self.st.font;
+        if self.fonts.get(i).is_some_and(|f| f.is_some()) {
+            return Ok(());
+        }
+        if i != 0 {
+            return Err(format!("no font with handle {i}"));
+        }
+        self.fonts[0] = Some(font::load_default(font::DEFAULT_SIZE).ok_or_else(no_system_font)?);
+        Ok(())
+    }
+
+    /// Borrow the render target and the active font at once. They live in
+    /// disjoint fields, so destructuring is what makes the two `&mut`s legal.
+    fn target_and_font(&mut self) -> (&mut Surface, &mut FontRes) {
+        let Engine {
+            screen,
+            canvases,
+            target,
+            fonts,
+            st,
+            ..
+        } = self;
+        let surf = match target {
+            None => screen,
+            Some(i) => canvases[*i]
+                .as_mut()
+                .expect("the bound canvas is never on loan during a draw"),
+        };
+        let font = fonts[st.font]
+            .as_mut()
+            .expect("ensure_font ran before this call");
+        (surf, font)
+    }
+
+    pub fn font_height(&mut self) -> Result<f64, String> {
+        self.ensure_font()?;
+        Ok(self.fonts[self.st.font].as_ref().unwrap().height())
+    }
+
+    pub fn text_width(&mut self, text: &str) -> Result<f64, String> {
+        self.ensure_font()?;
+        let i = self.st.font;
+        Ok(self.fonts[i].as_mut().unwrap().measure(text))
+    }
+
+    /// Draw a single line of text with its top-left corner at `(x, y)`.
+    pub fn print(&mut self, text: &str, x: f64, y: f64) -> Result<(), String> {
+        self.ensure_font()?;
+        let paint = self.paint();
+        let xform = self.st.transform;
+        let (surf, font) = self.target_and_font();
+
+        let mut cursor_y = y;
+        for line in text.split('\n') {
+            draw_line(surf, font, line, x, cursor_y, &xform, &paint);
+            cursor_y += font.height();
+        }
+        Ok(())
+    }
+
+    /// Draw word-wrapped, aligned text inside a `limit`-wide box anchored at
+    /// `(x, y)`.
+    pub fn printf(
+        &mut self,
+        text: &str,
+        x: f64,
+        y: f64,
+        limit: f64,
+        align: &str,
+    ) -> Result<(), String> {
+        let align = Align::parse(align)?;
+        self.ensure_font()?;
+        let paint = self.paint();
+        let xform = self.st.transform;
+        let (surf, font) = self.target_and_font();
+
+        let lines = font.wrap(text, limit);
+        let mut cursor_y = y;
+        for line in &lines {
+            let width = font.layout(line).1;
+            draw_line(
+                surf,
+                font,
+                line,
+                x + align.offset(width, limit),
+                cursor_y,
+                &xform,
+                &paint,
             );
-        } else {
-            let dx = x2 - x1;
-            let dy = y2 - y1;
-            let len = (dx * dx + dy * dy).sqrt().max(1.0);
-            // Two stamps per pixel of length avoids visible gaps.
-            let steps = (len * 2.0).round() as i32;
-            for i in 0..=steps {
-                let t = i as f64 / steps as f64;
-                let cx = x1 + t * dx;
-                let cy = y1 + t * dy;
-                self.circle("fill", cx, cy, lw * 0.5);
-            }
+            cursor_y += font.height();
         }
+        Ok(())
     }
+}
 
-    /// Bresenham integer line rasterizer — always produces a 1-pixel stroke.
-    fn bresenham(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32) {
-        let dx = (x1 - x0).abs();
-        let dy = (y1 - y0).abs();
-        let sx = if x0 < x1 { 1i32 } else { -1 };
-        let sy = if y0 < y1 { 1i32 } else { -1 };
-        let mut err = dx - dy;
-        loop {
-            self.put(x0, y0);
-            if x0 == x1 && y0 == y1 {
-                break;
-            }
-            let e2 = 2 * err;
-            if e2 > -dy {
-                err -= dy;
-                x0 += sx;
-            }
-            if e2 < dx {
-                err += dx;
-                y0 += sy;
-            }
-        }
+/// Narrow a state colour to the rasterizer's working precision.
+fn narrow(c: [f64; 4]) -> [f32; 4] {
+    [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32]
+}
+
+fn no_system_font() -> String {
+    "no font available — the engine found no system typeface to fall back on; \
+     load one explicitly with Graphics.newFont(size, path)"
+        .to_string()
+}
+
+/// Blit one laid-out line. `y` is the line's *top*, matching how Love2D's
+/// `print` anchors text.
+fn draw_line(
+    surf: &mut Surface,
+    font: &mut FontRes,
+    text: &str,
+    x: f64,
+    y: f64,
+    xform: &Transform,
+    paint: &Paint,
+) {
+    if text.is_empty() {
+        return;
     }
-
-    /// Draw a rectangle. `fill` paints the interior; any other mode draws a
-    /// 1px outline.
-    pub fn rectangle(&mut self, mode: &str, x: f64, y: f64, w: f64, h: f64) {
-        let x0 = x.round() as i32;
-        let y0 = y.round() as i32;
-        let x1 = (x + w).round() as i32;
-        let y1 = (y + h).round() as i32;
-
-        if mode == "fill" {
-            for py in y0..y1 {
-                for px in x0..x1 {
-                    self.put(px, py);
-                }
-            }
-        } else {
-            for px in x0..x1 {
-                self.put(px, y0);
-                self.put(px, y1 - 1);
-            }
-            for py in y0..y1 {
-                self.put(x0, py);
-                self.put(x1 - 1, py);
-            }
+    let baseline = y + font.ascent();
+    let (glyphs, _) = font.layout(text);
+    for (ch, pen) in glyphs {
+        let Some(glyph) = font.glyph(ch) else { continue };
+        if glyph.mask.w == 0 || glyph.mask.h == 0 {
+            continue; // whitespace carries advance but no pixels
         }
-    }
-
-    /// Draw a circle. `fill` paints the disc; any other mode draws a ~1px
-    /// ring.
-    pub fn circle(&mut self, mode: &str, cx: f64, cy: f64, radius: f64) {
-        if radius <= 0.0 {
-            return;
-        }
-        let r = radius;
-        let min_x = (cx - r).floor() as i32;
-        let max_x = (cx + r).ceil() as i32;
-        let min_y = (cy - r).floor() as i32;
-        let max_y = (cy + r).ceil() as i32;
-        let fill = mode == "fill";
-
-        for py in min_y..=max_y {
-            for px in min_x..=max_x {
-                let dx = px as f64 + 0.5 - cx;
-                let dy = py as f64 + 0.5 - cy;
-                let dist = (dx * dx + dy * dy).sqrt();
-                let inside = if fill {
-                    dist <= r
-                } else {
-                    (dist - r).abs() <= 1.0
-                };
-                if inside {
-                    self.put(px, py);
-                }
-            }
-        }
+        let placement = Transform::translation(x + pen + glyph.left, baseline + glyph.top);
+        raster::blit_mask(surf, &glyph.mask, &xform.then(&placement), paint);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::pack_color;
+    use super::*;
 
     #[test]
-    fn packs_primary_colors() {
-        assert_eq!(pack_color(1.0, 0.0, 0.0), 0x00FF_0000);
-        assert_eq!(pack_color(0.0, 1.0, 0.0), 0x0000_FF00);
-        assert_eq!(pack_color(0.0, 0.0, 1.0), 0x0000_00FF);
-        assert_eq!(pack_color(1.0, 1.0, 1.0), 0x00FF_FFFF);
-    }
-
-    #[test]
-    fn clamps_out_of_range() {
-        assert_eq!(pack_color(2.0, -1.0, 0.5), 0x00FF_0080);
+    fn default_state_matches_love_defaults() {
+        let s = GState::default();
+        assert_eq!(s.color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(s.line_width, 1.0);
+        assert_eq!(s.line_join, LineJoin::Miter);
+        assert_eq!(s.blend, BlendMode::Alpha);
+        assert!(s.smooth);
+        assert!(s.scissor.is_none());
+        assert_eq!(s.transform, Transform::IDENTITY);
+        assert_eq!(s.font, 0);
     }
 }

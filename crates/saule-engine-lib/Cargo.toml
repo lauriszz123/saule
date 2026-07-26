@@ -27,3 +27,8 @@ saule-sdk = { path = "../saule-sdk" }
 # at runtime via dlopen — so no X11 dev headers are needed to build. On
 # Windows/macOS these features are inert (Win32/Cocoa is used).
 minifb = { version = "0.28", default-features = false, features = ["x11"] }
+# TrueType parsing and glyph rasterization for `Graphics.print` / `printf`.
+# Pure Rust and `no_std`-friendly, so it adds no system dependencies; the
+# engine pairs it with a host-font lookup (see `src/font.rs`) so text works
+# without shipping a typeface.
+fontdue = "0.9"

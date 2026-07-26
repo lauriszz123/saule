@@ -91,6 +91,27 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             {
                 check_native_args(&qname, &sig, args, scope, errors, expr.span.clone());
             }
+            // `self.super(args)` delegates to the parent's constructor.
+            // The receiver-based path below can't see it: `super` is not a
+            // member of the current class, so `lookup_method` walks the
+            // whole chain and finds nothing. `super_init_target` resolves
+            // it the way the interpreter does — nearest ancestor that
+            // actually declares `init`.
+            if let Expr::Member { obj, name } = &callee.value
+                && name == "super"
+                && matches!(obj.value, Expr::Self_)
+                && let Some(class) = current_class()
+                && let Some((owner, sig)) = saule_semantic::super_init_target(&class)
+            {
+                check_user_method_args(
+                    &format!("{owner}.init"),
+                    &sig,
+                    args,
+                    scope,
+                    errors,
+                    expr.span.clone(),
+                );
+            }
             // User-defined class methods: `Class.method(args)` (static) or
             // `instance.method(args)` (instance). The native-sig path above
             // never matches these because they aren't registered as natives.

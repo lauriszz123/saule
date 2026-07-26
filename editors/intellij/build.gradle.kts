@@ -1,4 +1,5 @@
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
     id("java")
@@ -33,7 +34,17 @@ dependencies {
 
         instrumentationTools()
         pluginVerifier()
+
+        // Puts the platform (and JUnit 4) on the test classpath. The indent
+        // model tests need nothing more than that — no IDE fixture.
+        testFramework(TestFrameworkType.Platform)
     }
+
+    testImplementation("junit:junit:4.13.2")
+}
+
+tasks.test {
+    useJUnit()
 }
 
 intellijPlatform {

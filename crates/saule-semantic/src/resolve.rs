@@ -33,12 +33,19 @@
 //!
 //! ## Wildcard imports
 //!
-//! `import * from "..."` introduces names this pass cannot enumerate, so
-//! when *any* wildcard import is seen the [`UndefinedName`] /
-//! [`AssignToUndeclared`] checks become advisory: we still walk the AST
-//! for the other diagnostics, but ident lookups that would otherwise fail
-//! are silently accepted. Files without a wildcard import get the full
-//! treatment.
+//! `import * from "..."` introduces names this crate can't enumerate on
+//! its own — it has no module loader. The embedder resolves them and
+//! hands the result over as [`crate::ModuleSeed::wildcard_names`]:
+//!
+//! * `Some(names)` — every wildcard target was enumerated. The names go
+//!   into the module scope and the [`UndefinedName`] /
+//!   [`AssignToUndeclared`] checks stay fully active, so a typo still
+//!   gets reported in a file that globs a module.
+//! * `None` — at least one target couldn't be enumerated (or the
+//!   embedder doesn't resolve imports at all). Those two checks then
+//!   become advisory for any module containing a wildcard import: we
+//!   still walk the AST for the other diagnostics, but ident lookups
+//!   that would otherwise fail are silently accepted.
 
 use std::collections::HashSet;
 
@@ -64,20 +71,30 @@ struct Resolver {
     /// `super.x` is legal (when a parent exists; we don't check that here),
     /// `self.super(...)` is only legal when also `in_init`.
     in_method: bool,
-    /// True when the module contains `import * from "..."`. Suppresses
-    /// undefined-name diagnostics since we can't enumerate the imported
-    /// names statically.
-    has_wildcard_import: bool,
+    /// True when the module contains `import * from "..."` *and* the
+    /// embedder couldn't tell us what those imports bind. Suppresses
+    /// undefined-name diagnostics, since any unknown ident might have
+    /// come in through the glob.
+    has_opaque_wildcard_import: bool,
     errors: Vec<SemanticError>,
 }
 
-pub(crate) fn check(module: &Module, errors: &mut Vec<SemanticError>) {
+pub(crate) fn check(
+    module: &Module,
+    wildcard_names: Option<&HashSet<String>>,
+    errors: &mut Vec<SemanticError>,
+) {
+    let mut module_scope = collect_module_scope(module);
+    if let Some(names) = wildcard_names {
+        module_scope.extend(names.iter().cloned());
+    }
+
     let mut r = Resolver {
-        scopes: vec![collect_module_scope(module)],
+        scopes: vec![module_scope],
         in_class: None,
         in_init: false,
         in_method: false,
-        has_wildcard_import: module_has_wildcard_import(module),
+        has_opaque_wildcard_import: wildcard_names.is_none() && module_has_wildcard_import(module),
         errors: Vec::new(),
     };
 
@@ -146,7 +163,7 @@ impl Resolver {
         }
     }
     fn resolved(&self, name: &str) -> bool {
-        if self.has_wildcard_import {
+        if self.has_opaque_wildcard_import {
             return true;
         }
         if self.scopes.iter().any(|f| f.contains(name)) {

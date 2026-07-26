@@ -226,7 +226,9 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        Ok(self.format_document(&params.text_document.uri).await)
+        Ok(self
+            .format_document(&params.text_document.uri, &params.options)
+            .await)
     }
 
     /// Range formatting is implemented as full-document formatting — the
@@ -237,7 +239,9 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentRangeFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
-        Ok(self.format_document(&params.text_document.uri).await)
+        Ok(self
+            .format_document(&params.text_document.uri, &params.options)
+            .await)
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

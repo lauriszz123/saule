@@ -51,6 +51,24 @@
         <langCodeStyleSettingsProvider
             implementation="com.saule.lang.SauleCodeStyleSettingsProvider"/>
 
+        <!-- Indentation while typing. `saule-lsp` formats on demand but is not
+             in the loop per keystroke, so the indent of a new line is computed
+             here — in the code style's tabs/spaces, not the platform default of
+             "copy the previous line". -->
+        <lineIndentProvider
+            implementation="com.saule.lang.format.SauleLineIndentProvider"/>
+        <enterHandlerDelegate
+            implementation="com.saule.lang.editor.SauleEnterHandler"/>
+        <!-- Saule closes blocks with `end`, not `}`, so the platform's
+             brace-triggered dedent never fires; this does it by keyword. -->
+        <typedHandler
+            implementation="com.saule.lang.editor.SauleTypedHandler"/>
+
+        <!-- Parameter info follows the caret: the popup appears whenever the
+             caret is inside a call's parens, not only when `(` is typed. -->
+        <postStartupActivity
+            implementation="com.saule.lang.editor.SauleParameterInfoAutoPopup"/>
+
         <!-- Client-side syntax highlighting (the LSP has no semantic tokens). -->
         <lang.syntaxHighlighterFactory
             language="Saule"

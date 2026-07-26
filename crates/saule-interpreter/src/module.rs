@@ -167,10 +167,11 @@ pub fn load_module(
     // name; build the exports by running the package's `install`
     // against a scratch env and harvesting its declared exports.
     if let Some(name) = crate::native_packages::name_from_sentinel(abs_path) {
-        let pkg = crate::native_packages::lookup(name).ok_or_else(|| RuntimeError::ImportError {
-            message: format!("native package `{name}` is no longer registered"),
-            span: import_span,
-        })?;
+        let pkg =
+            crate::native_packages::lookup(name).ok_or_else(|| RuntimeError::ImportError {
+                message: format!("native package `{name}` is no longer registered"),
+                span: import_span,
+            })?;
         let exports = crate::native_packages::build_exports(pkg);
         loader
             .borrow_mut()
@@ -423,7 +424,103 @@ fn _spanned_marker(_: &Spanned<Stmt>) {}
 /// (or, in the import-fails case, the runtime loader will).
 pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::ModuleSeed {
     let mut visited = HashSet::new();
-    collect_import_seed_inner(module, dir, &mut visited, 0)
+    let mut seed = collect_import_seed_inner(module, dir, &mut visited, 0);
+    seed.wildcard_names = collect_wildcard_names(module, dir);
+    seed
+}
+
+/// Union of the local names every `import * from "..."` in `module` binds.
+///
+/// `None` when at least one wildcard target couldn't be enumerated — the
+/// name resolver reads that as "unknown names may be in scope here" and
+/// stops reporting undefined names for the whole module. Enumerating them
+/// is what lets a typo inside a file that globs a module still be caught.
+fn collect_wildcard_names(module: &Module, dir: &Path) -> Option<HashSet<String>> {
+    let mut out = HashSet::new();
+    for stmt in &module.stmts {
+        let Stmt::Decl(d) = &stmt.value else { continue };
+        let Decl::Import {
+            names: names @ ImportNames::All,
+            path,
+            ..
+        } = &d.value
+        else {
+            continue;
+        };
+        out.extend(static_import_names(dir, path, names, 0)?);
+    }
+    Some(out)
+}
+
+/// The local names one `import` statement binds, resolved statically —
+/// from a package manifest or by parsing the target file, never by
+/// executing anything.
+///
+/// `None` means the target couldn't be enumerated: an unresolvable path,
+/// an unreadable or unparseable file, or a barrel chain nested deeper
+/// than [`MAX_BARREL_DEPTH`].
+fn static_import_names(
+    dir: &Path,
+    path: &str,
+    names: &ImportNames,
+    depth: usize,
+) -> Option<Vec<String>> {
+    // A name list is its own answer — no need to look at the target.
+    if let ImportNames::List(items) = names {
+        return Some(
+            items
+                .iter()
+                .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone()))
+                .collect(),
+        );
+    }
+
+    // Glob over a native package: the descriptor / manifest already lists
+    // exactly what the import binds.
+    if let Some(pkg) = crate::native_packages::lookup(path) {
+        return Some(pkg.exports.iter().map(|n| (*n).to_string()).collect());
+    }
+    if crate::dynamic_packages::is_dynamic_package(path) {
+        return Some(crate::dynamic_packages::export_names(path));
+    }
+
+    // Glob over a file module: its `export`ed top-level declarations.
+    let abs = resolve_import_path(dir, path)?;
+    let source = std::fs::read_to_string(&abs).ok()?;
+    let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
+    let imported = saule_parser::parse(tokens).ok()?;
+
+    let mut out: Vec<String> = imported
+        .stmts
+        .iter()
+        .filter_map(|s| match &s.value {
+            Stmt::Decl(d) => exported_name(&d.value).map(str::to_string),
+            _ => None,
+        })
+        .collect();
+
+    // A barrel re-exports whatever *it* imports, so its surface is wider
+    // than its own declarations. The depth bound doubles as the cycle
+    // guard: a barrel that (transitively) globs itself bottoms out here
+    // and reports "can't enumerate" rather than recursing forever.
+    if is_init_module(&abs) {
+        if depth >= MAX_BARREL_DEPTH {
+            return None;
+        }
+        let sub_dir = abs
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        for stmt in &imported.stmts {
+            let Stmt::Decl(d) = &stmt.value else { continue };
+            let Decl::Import { names, path, .. } = &d.value else {
+                continue;
+            };
+            out.extend(static_import_names(&sub_dir, path, names, depth + 1)?);
+        }
+    }
+
+    Some(out)
 }
 
 /// How many nested `init.sau` barrels we will follow when gathering type

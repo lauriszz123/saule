@@ -25,10 +25,10 @@ use std::ops::Range;
 
 use saule_ast::{Decl, Module, Stmt};
 
+pub mod builtins;
 mod control_flow;
 mod error;
 mod field_init;
-pub mod builtins;
 pub mod prelude;
 pub mod registry;
 mod resolve;
@@ -39,8 +39,7 @@ pub use registry::{
     ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, InterfaceRegistry, MethodSig, build_registry,
     class_implements, class_implements_iterable, clear_registries, install_registries,
     interface_extends, is_interface, is_subtype_named, lookup_field_type, lookup_member,
-    lookup_method, with_classes,
-    with_enums, with_interfaces,
+    lookup_method, super_init_target, with_classes, with_enums, with_interfaces,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
@@ -63,6 +62,15 @@ pub struct ModuleSeed {
     pub classes: ClassRegistry,
     pub interfaces: InterfaceRegistry,
     pub enums: EnumRegistry,
+    /// Local names this module's `import * from "..."` statements bind,
+    /// as enumerated by the embedder.
+    ///
+    /// `None` — the default — means "not enumerated", and the resolver
+    /// falls back to suppressing undefined-name diagnostics in any module
+    /// that globs. Embedders that can resolve every wildcard target (the
+    /// interpreter's module loader, and through it the CLI and the LSP)
+    /// pass `Some`, which keeps those diagnostics live.
+    pub wildcard_names: Option<std::collections::HashSet<String>>,
 }
 
 /// Run every semantic check on a parsed module. See [`analyze_with_seed`]
@@ -76,6 +84,7 @@ pub fn analyze(module: &Module) -> Vec<SemanticError> {
 /// (but does not override) the metadata extracted from the current
 /// module's own declarations.
 pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError> {
+    let wildcard_names = seed.wildcard_names;
     let (mut reg, mut ifaces, mut enums) = build_registry(module);
     for (name, info) in seed.classes {
         reg.entry(name).or_insert(info);
@@ -122,7 +131,7 @@ pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError
     // Name resolution + a bundle of structural checks
     // (self/super placement, variadic param shape, arg ordering, for-in
     // arity). Walks the AST once, sharing scope state across the checks.
-    resolve::check(module, &mut errors);
+    resolve::check(module, wildcard_names.as_ref(), &mut errors);
 
     errors
 }

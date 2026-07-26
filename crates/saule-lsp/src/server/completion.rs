@@ -8,6 +8,7 @@
 //! * `Expr::Member { obj, name: SENTINEL }` → complete members of `obj`
 //! * `Type::Named(SENTINEL)`               → complete type names
 //! * `Expr::Ident(SENTINEL)`               → complete values in scope
+//! * `Decl::Class { extends: SENTINEL }`   → complete base classes
 //!
 //! Two things fall out of this for free. A caret inside a comment or a string
 //! swallows the sentinel into a trivia/literal token, so it never appears in
@@ -25,7 +26,8 @@ use saule_ast::{
     CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Module, Param, Spanned, Stmt, Type,
 };
 use saule_semantic::registry::{
-    lookup_field_type, lookup_method, with_classes, with_enums, with_interfaces,
+    interface_extends, lookup_field_type, lookup_method, with_classes, with_enums, with_interfaces,
+    ClassRegistry,
 };
 use saule_semantic::MethodSig;
 use saule_typeck::sigs::{self, NativeSig};
@@ -68,7 +70,7 @@ impl Backend {
             saule_interpreter::project::set(info);
         }
 
-        let module = parse(&patched)?;
+        let module = parse_tolerant(&patched)?;
 
         // Populate the class / enum / interface registries with this module's
         // declarations *and* everything it imports, so member lookups and type
@@ -84,6 +86,8 @@ impl Backend {
         let items = match &found.ctx {
             Ctx::Member(recv) => member_items(recv, &found),
             Ctx::TypeName => type_items(),
+            Ctx::BaseClass { exclude } => class_items(exclude),
+            Ctx::Interfaces { exclude } => interface_items(exclude),
             Ctx::Value { stmt_start } => value_items(&found, &module, *stmt_start),
             Ctx::ImportPath { quoted } => self.import_path_items(module_dir.as_deref(), *quoted),
             Ctx::ImportName { path } => import_name_items(path, module_dir.as_deref()),
@@ -202,6 +206,28 @@ fn parse(src: &str) -> Option<Module> {
         .and_then(|t| saule_parser::parse(t).ok())
 }
 
+/// How many blocks we're willing to close for the author.
+const MAX_REPAIR: usize = 8;
+
+/// Code is written top-down, so the `end` closing the declaration the caret
+/// sits in usually hasn't been typed yet — a plain parse of a class being
+/// written fails, and completion would have nothing to work with. Close the
+/// open blocks artificially and retry. Only reached when the source doesn't
+/// parse as-is, so this can add suggestions but never change existing ones.
+fn parse_tolerant(src: &str) -> Option<Module> {
+    if let Some(m) = parse(src) {
+        return Some(m);
+    }
+    let mut patched = src.to_string();
+    for _ in 0..MAX_REPAIR {
+        patched.push_str("\nend");
+        if let Some(m) = parse(&patched) {
+            return Some(m);
+        }
+    }
+    None
+}
+
 /// Replace the partial identifier under the caret with [`SENTINEL`],
 /// returning the patched source and the text the user had typed.
 fn splice_sentinel(source: &str, offset: usize) -> Option<(String, String)> {
@@ -240,6 +266,12 @@ enum Ctx {
     Member(Spanned<Expr>),
     /// A type annotation or return type.
     TypeName,
+    /// `class Foo extends <caret>` — a base class. `exclude` holds the names
+    /// that would close a cycle in the inheritance chain.
+    BaseClass { exclude: Vec<String> },
+    /// `class Foo implements <caret>` or `interface Foo extends <caret>` —
+    /// interfaces, minus the ones already named in the header.
+    Interfaces { exclude: Vec<String> },
     /// A value position. `stmt_start` is true when the caret begins a
     /// statement, which is the only place statement keywords make sense.
     Value { stmt_start: bool },
@@ -466,7 +498,23 @@ impl Walk {
                 self.block(body);
                 self.scope.truncate(mark);
             }
-            Decl::Class { name, members, .. } => {
+            Decl::Class {
+                name,
+                extends,
+                implements,
+                members,
+                ..
+            } => {
+                if extends.as_deref() == Some(SENTINEL) {
+                    self.record(Ctx::BaseClass {
+                        exclude: vec![name.clone()],
+                    });
+                }
+                if implements.iter().any(|i| i == SENTINEL) {
+                    self.record(Ctx::Interfaces {
+                        exclude: without_sentinel(implements),
+                    });
+                }
                 let prev = self.class.replace(name.clone());
                 for m in members {
                     match &m.value {
@@ -488,7 +536,17 @@ impl Walk {
                 }
                 self.class = prev;
             }
-            Decl::Interface { methods, .. } => {
+            Decl::Interface {
+                name,
+                extends,
+                methods,
+                ..
+            } => {
+                if extends.iter().any(|e| e == SENTINEL) {
+                    let mut exclude = without_sentinel(extends);
+                    exclude.push(name.clone());
+                    self.record(Ctx::Interfaces { exclude });
+                }
                 for m in methods {
                     self.params(&m.params);
                     self.ty(m.return_ty.as_ref());
@@ -654,6 +712,11 @@ fn bind_pattern(w: &mut Walk, p: &saule_ast::Pattern) {
         }
         _ => {}
     }
+}
+
+/// The names in a header list the author has already committed to.
+fn without_sentinel(names: &[String]) -> Vec<String> {
+    names.iter().filter(|n| *n != SENTINEL).cloned().collect()
 }
 
 fn type_mentions_sentinel(ty: &Type) -> bool {
@@ -1032,6 +1095,66 @@ fn collect_exports(
     }
 }
 
+/// Classes usable as a base class. A class can't extend itself, and can't
+/// extend one of its own descendants either — that would close a cycle in the
+/// chain — so both are left out.
+fn class_items(exclude: &[String]) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = with_classes(|r| {
+        r.iter()
+            .filter(|(name, _)| !exclude.iter().any(|e| descends_from(r, name, e)))
+            .map(|(name, info)| {
+                let detail = match &info.parent {
+                    Some(p) => format!("class extends {p}"),
+                    None => "class".to_string(),
+                };
+                item(name.clone(), CompletionItemKind::CLASS, Some(detail))
+            })
+            .collect()
+    });
+    items.sort_by(|a, b| a.label.cmp(&b.label));
+    items
+}
+
+/// Is `class` `ancestor`, or one of its descendants?
+fn descends_from(reg: &ClassRegistry, class: &str, ancestor: &str) -> bool {
+    let mut cur = Some(class.to_string());
+    let mut hops = 0;
+    while let Some(name) = cur {
+        if name == ancestor {
+            return true;
+        }
+        // A pre-existing cycle in the registry would otherwise spin forever.
+        hops += 1;
+        if hops > MAX_INHERITANCE_DEPTH {
+            return false;
+        }
+        cur = reg.get(&name).and_then(|i| i.parent.clone());
+    }
+    false
+}
+
+const MAX_INHERITANCE_DEPTH: usize = 64;
+
+/// Interfaces, minus the ones already named in the header — and, for
+/// `interface X extends`, minus anything that already extends `X`.
+fn interface_items(exclude: &[String]) -> Vec<CompletionItem> {
+    let mut items: Vec<CompletionItem> = with_interfaces(|r| {
+        r.iter()
+            .filter(|(name, _)| !exclude.iter().any(|e| interface_extends(name, e)))
+            .map(|(name, extends)| {
+                let detail = if extends.is_empty() {
+                    "interface".to_string()
+                } else {
+                    format!("interface extends {}", extends.join(", "))
+                };
+                item(name.clone(), CompletionItemKind::INTERFACE, Some(detail))
+            })
+            .collect()
+    });
+    items.sort_by(|a, b| a.label.cmp(&b.label));
+    items
+}
+
 /// Only type names — never values or keywords.
 fn type_items() -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = PRIMITIVES
@@ -1300,3 +1423,131 @@ const STATEMENT_KEYWORDS: &[&str] = &[
     "local", "if", "for", "while", "repeat", "return", "break", "continue", "try", "throw", "fn",
     "class", "interface", "enum", "export", "import", "match", "do",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Complete at the `@` marker. Mirrors the request handler minus the
+    /// cross-file seeding, which needs a real workspace.
+    fn complete(marked: &str) -> Vec<String> {
+        let offset = marked.find('@').expect("no `@` caret marker");
+        let src = marked.replace('@', "");
+        let (patched, prefix) = splice_sentinel(&src, offset).expect("splice");
+        let Some(module) = parse_tolerant(&patched) else {
+            return Vec::new();
+        };
+        let _ = saule_semantic::analyze(&module);
+        let Some(found) = Walk::run(&module) else {
+            return Vec::new();
+        };
+        let items = match &found.ctx {
+            Ctx::BaseClass { exclude } => class_items(exclude),
+            Ctx::Interfaces { exclude } => interface_items(exclude),
+            Ctx::TypeName => type_items(),
+            _ => Vec::new(),
+        };
+        filter(items, &prefix)
+            .into_iter()
+            .map(|i| i.label)
+            .collect()
+    }
+
+    const DECLS: &str = "\
+class Entity end
+class Actor extends Entity end
+interface Drawable
+    fn draw()
+end
+interface Sized
+    fn size() -> integer
+end
+enum Colour Red, Green end
+";
+
+    /// Classes and nothing else — the interfaces and the enum declared above
+    /// are not base classes.
+    #[test]
+    fn extends_offers_classes_only() {
+        let got = complete(&format!("{DECLS}class Player extends @"));
+        assert!(got.contains(&"Entity".to_string()));
+        assert!(got.contains(&"Actor".to_string()));
+        for absent in ["Drawable", "Sized", "Colour", "string"] {
+            assert!(!got.contains(&absent.to_string()), "{absent} offered");
+        }
+    }
+
+    #[test]
+    fn extends_filters_by_prefix() {
+        let got = complete(&format!("{DECLS}class Player extends En@"));
+        assert_eq!(got, vec!["Entity"]);
+    }
+
+    /// A class can extend neither itself nor one of its own descendants.
+    #[test]
+    fn extends_excludes_cycles() {
+        let got = complete(&format!("{DECLS}class Entity2 extends @\nend\n"));
+        assert!(got.contains(&"Actor".to_string()));
+
+        let got = complete(&format!("{DECLS}class Entity extends @"));
+        assert!(!got.contains(&"Entity".to_string()));
+        assert!(!got.contains(&"Actor".to_string()), "Actor extends Entity");
+    }
+
+    /// Interfaces — including the built-in ones — and nothing else. The
+    /// classes and the enum declared above must not show up.
+    #[test]
+    fn implements_offers_interfaces_only() {
+        let got = complete(&format!("{DECLS}class Player implements @"));
+        assert!(got.contains(&"Drawable".to_string()));
+        assert!(got.contains(&"Sized".to_string()));
+        assert!(got.contains(&"Iterable".to_string()), "built-in interface");
+        for absent in ["Entity", "Actor", "Colour", "string"] {
+            assert!(!got.contains(&absent.to_string()), "{absent} offered");
+        }
+    }
+
+    /// Later entries in the list drop what's already been named.
+    #[test]
+    fn implements_drops_names_already_listed() {
+        let got = complete(&format!("{DECLS}class Player implements Drawable, @"));
+        assert!(!got.contains(&"Drawable".to_string()));
+        assert!(got.contains(&"Sized".to_string()));
+    }
+
+    #[test]
+    fn interface_extends_offers_interfaces_minus_self() {
+        let got = complete(&format!("{DECLS}interface Widget extends @"));
+        assert!(got.contains(&"Drawable".to_string()));
+        assert!(got.contains(&"Sized".to_string()));
+
+        let got = complete(&format!("{DECLS}interface Drawable extends @"));
+        assert!(!got.contains(&"Drawable".to_string()));
+        assert!(got.contains(&"Sized".to_string()));
+    }
+
+    /// The header still parses once the body is there.
+    #[test]
+    fn works_with_a_complete_class_body() {
+        let got = complete(&format!(
+            "{DECLS}class Player extends @\n    name: string\n    fn go() end\nend\n"
+        ));
+        assert!(got.contains(&"Entity".to_string()));
+        assert!(got.contains(&"Actor".to_string()));
+    }
+
+    /// The header keywords themselves are never suggested.
+    #[test]
+    fn nothing_before_the_keyword() {
+        assert!(complete(&format!("{DECLS}class Player @")).is_empty());
+    }
+
+    /// Type positions are unaffected — they still see enums and primitives.
+    #[test]
+    fn type_position_still_offers_everything() {
+        let got = complete(&format!("{DECLS}class Player\n    hue: @\nend\n"));
+        assert!(got.contains(&"Colour".to_string()));
+        assert!(got.contains(&"string".to_string()));
+        assert!(got.contains(&"Drawable".to_string()));
+    }
+}

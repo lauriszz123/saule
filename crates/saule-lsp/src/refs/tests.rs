@@ -57,3 +57,71 @@ fn resolves_local_only_within_file() {
     assert_eq!(hits.iter().filter(|h| h.is_def).count(), 1);
     assert_eq!(hits.iter().filter(|h| !h.is_def).count(), 2);
 }
+
+/// `self.super(...)` names no member of the enclosing class — it
+/// delegates to the parent constructor, so goto-definition must land on
+/// the parent's `init` and find-references must count the call site.
+#[test]
+fn resolves_self_super_to_parent_init() {
+    let src = "\
+class Base
+  fn init(x: integer)
+  end
+end
+
+class Child extends Base
+  fn init()
+    self.super(1)
+  end
+end
+";
+    let s = resolve(src, "super(1)");
+    assert!(
+        matches!(&s, Symbol::Method { class, name } if class == "Base" && name == "init"),
+        "got: {s:?}"
+    );
+    let hits = defs_and_refs(src, &s);
+    assert_eq!(hits.iter().filter(|h| h.is_def).count(), 1, "{hits:?}");
+    assert_eq!(hits.iter().filter(|h| !h.is_def).count(), 1, "{hits:?}");
+}
+
+/// A parent that doesn't declare `init` is skipped: resolution follows
+/// the same chain the interpreter's `constructor_chain` walks.
+#[test]
+fn resolves_self_super_through_ancestor_without_init() {
+    let src = "\
+class Base
+  fn init(x: integer)
+  end
+end
+
+class Middle extends Base
+end
+
+class Child extends Middle
+  fn init()
+    self.super(1)
+  end
+end
+";
+    let s = resolve(src, "super(1)");
+    assert!(
+        matches!(&s, Symbol::Method { class, name } if class == "Base" && name == "init"),
+        "got: {s:?}"
+    );
+}
+
+/// No parent — `self.super(...)` has nothing to point at, and the
+/// resolver must not claim a bogus `super` field.
+#[test]
+fn self_super_without_parent_resolves_to_no_method() {
+    let src = "\
+class Orphan
+  fn init()
+    self.super()
+  end
+end
+";
+    let s = resolve(src, "super()");
+    assert!(!matches!(&s, Symbol::Method { .. }), "got: {s:?}");
+}

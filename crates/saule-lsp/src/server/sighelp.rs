@@ -4,22 +4,32 @@
 //!
 //! Implementation strategy:
 //!
-//! 1. Lex / parse the document.
+//! 1. Lex / parse the document. A buffer mid-edit usually *doesn't*
+//!    parse — the call being typed has no `)` yet — so on failure
+//!    [`repair_parse`] appends the missing closers and parses that.
+//!    Appending never shifts the offsets before the cursor, so the
+//!    same walk works on the repaired tree.
 //! 2. Walk the AST to find the smallest `Expr::Call` /
-//!    `Expr::MethodCall` whose argument span (the `(...)` parens
-//!    region) contains the cursor.
-//! 3. Resolve the callee to a parameter list via the class registry
-//!    (constructor, method, or sibling-static dispatch).
+//!    `Expr::MethodCall` / pipeline stage whose argument span (the
+//!    `(...)` parens region) contains the cursor.
+//! 3. Resolve the callee to a parameter list: free function, class
+//!    constructor, method (on a local, field, parameter, or call
+//!    result), sibling / static method, `self.super`, enum tuple
+//!    variant, function-typed local, or a stdlib native.
 //! 4. Compute `active_parameter` from how many `,`-separated
-//!    arguments precede the cursor.
+//!    arguments precede the cursor — or, for a `name: value`
+//!    argument, from the slot its key names.
 //! 5. Render `name(p1: T1, p2: T2, ...)` with the active param
 //!    highlighted via `parameters[*]` ranges into the label string.
+//!
+//! [`textual_fallback`] remains as a last resort for buffers even the
+//! repair can't parse; it resolves the callee by name from raw text.
 
 use saule_ast::{
     CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Method, Module, Param, Spanned,
     Stmt, TableEntry, Type,
 };
-use saule_semantic::{lookup_method, with_classes};
+use saule_semantic::{lookup_field_type, lookup_method, super_init_target, with_classes};
 use std::collections::HashMap;
 use tower_lsp::lsp_types::{
     ParameterInformation, ParameterLabel, Position, SignatureHelp, SignatureInformation, Url,
@@ -71,25 +81,28 @@ impl Backend {
             };
             let _ = saule_semantic::analyze_with_seed(module, seed);
 
-            let mut cx = Cx {
-                offset,
-                locals: Vec::new(),
-                enclosing_class: None,
-                user_fns: collect_user_fns(module),
-                best: None,
+            if let Some(help) = help_from_module(module, offset) {
+                return Some(help);
+            }
+        } else if let Some(module) = repair_parse(&source, offset) {
+            // Mid-keystroke (`w.moveTo(`, `add(1, `): close the call the
+            // user is typing and re-run the real walker. Everything is
+            // appended at the end, so byte offsets up to the cursor —
+            // and therefore the cursor itself — are unaffected.
+            let seed = match &module_dir {
+                Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
+                None => saule_semantic::ModuleSeed::default(),
             };
-            cx.visit_module(module);
-            if let Some(hit) = cx.best {
-                if let Some(help) = resolve_hit(hit, offset) {
-                    return Some(help);
-                }
+            let _ = saule_semantic::analyze_with_seed(&module, seed);
+
+            if let Some(help) = help_from_module(&module, offset) {
+                return Some(help);
             }
         }
 
-        // Parser failed *or* the AST walker couldn't pin down the call
-        // (typical mid-keystroke: `Foo(1, ` with no trailing `)`).
-        // Scan the raw source to locate the innermost unmatched `(`
-        // before the cursor and resolve the call by name.
+        // Last resort: the repair didn't parse either (unbalanced
+        // brackets elsewhere, a broken string, ...). Scan the raw source
+        // for the innermost unmatched `(` and resolve the call by name.
         textual_fallback(&source, offset)
     }
 }
@@ -104,6 +117,23 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                 if let Some(sig) = lookup_method(class, &name) {
                     return build_help(&name, Some(sig), &hit.args, offset);
                 }
+            }
+            // Callback held in a local / parameter: `f(...)` where
+            // `f: fn(integer) -> string`. The type carries no parameter
+            // names, so they're synthesised.
+            if let Some((params, ret)) = hit.local_fn {
+                let params: Vec<Param> = params
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, ty)| Param {
+                        name: format!("arg{i}"),
+                        ty,
+                        default: None,
+                        variadic: false,
+                        span: 0..0,
+                    })
+                    .collect();
+                return build_help_user_fn(&name, &params, &Some(ret), &hit.args, offset);
             }
             // User-defined top-level function (collected by the AST
             // walker into `hit.user_fn`).
@@ -128,6 +158,37 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             }
             None
         }
+        CalleeRef::SuperInit { owner } => build_help(
+            &format!("{owner}.init"),
+            lookup_method(&owner, "init"),
+            &hit.args,
+            offset,
+        ),
+        CalleeRef::Variant { display, fields } => {
+            build_help_user_fn(&display, &fields, &None, &hit.args, offset)
+        }
+        CalleeRef::PipeStage(name) => {
+            // Resolve the stage like a free call, then drop the first
+            // parameter — the pipeline supplies it.
+            let sig = hit
+                .enclosing_class
+                .as_ref()
+                .and_then(|c| lookup_method(c, &name))
+                .or_else(|| {
+                    hit.user_fn.clone().map(|(params, ret)| saule_semantic::MethodSig {
+                        is_static: false,
+                        is_private: false,
+                        type_params: Vec::new(),
+                        params,
+                        return_ty: ret,
+                    })
+                })?;
+            let piped = saule_semantic::MethodSig {
+                params: sig.params.iter().skip(1).cloned().collect(),
+                ..sig
+            };
+            build_help(&name, Some(piped), &hit.args, offset)
+        }
         CalleeRef::Native(qname) => {
             let native = saule_typeck::sigs::lookup(&qname)?;
             let display = qname
@@ -137,6 +198,105 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             build_help_native(display, &qname, &native, &hit.args, offset)
         }
     }
+}
+
+/// Try to make a mid-keystroke buffer parse by appending a closing
+/// suffix: `)` for `foo(`, `nil)` for `foo(1, ` (an empty slot after a
+/// comma isn't an expression), each with enough `end`s to close the
+/// blocks the call sits in. First candidate that parses wins.
+///
+/// Only ever appends, so every byte offset in the original source —
+/// including the cursor — keeps its meaning.
+fn repair_parse(source: &str, offset: usize) -> Option<Module> {
+    let offset = offset.min(source.len());
+    if !source.is_char_boundary(offset) {
+        return None;
+    }
+    // The delimiters are inserted *at the cursor*, not at the end of the
+    // buffer: the call being typed is normally in the middle of a file
+    // with well-formed code after it, and a `)` appended past that code
+    // closes nothing. Only the text before the cursor decides what is
+    // still open, and it keeps its offsets because nothing moves ahead
+    // of it.
+    let (head, tail) = source.split_at(offset);
+    let closers = unclosed_delimiters(head);
+    for filler in ["", "nil"] {
+        for ends in 0..=4 {
+            if filler.is_empty() && closers.is_empty() && ends == 0 {
+                continue; // that's the original source, already known to fail
+            }
+            let mut patched = String::with_capacity(source.len() + closers.len() + 24);
+            patched.push_str(head);
+            patched.push_str(filler);
+            patched.push_str(&closers);
+            patched.push_str(tail);
+            for _ in 0..ends {
+                patched.push_str("\nend");
+            }
+            if let Ok(tokens) = saule_lexer::Lexer::new(&patched).tokenize()
+                && let Ok(module) = saule_parser::parse(tokens)
+            {
+                return Some(module);
+            }
+        }
+    }
+    None
+}
+
+/// The closing delimiters `source` is missing, innermost first — so
+/// `foo(bar(` yields `"))"`. Skips string literals and `--` line /
+/// `--[[ ]]` block comments so brackets inside them don't count.
+/// Returns an empty string when everything is balanced.
+fn unclosed_delimiters(source: &str) -> String {
+    let b = source.as_bytes();
+    let mut stack: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => {
+                let quote = b[i];
+                i += 1;
+                while i < b.len() {
+                    if b[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if b[i] == quote {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                if b.get(i + 2) == Some(&b'[') && b.get(i + 3) == Some(&b'[') {
+                    i += 4;
+                    while i + 1 < b.len() && !(b[i] == b']' && b[i + 1] == b']') {
+                        i += 1;
+                    }
+                    i += 1;
+                } else {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+            }
+            open @ (b'(' | b'[' | b'{') => stack.push(open),
+            b')' | b']' | b'}' => {
+                stack.pop();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    stack
+        .iter()
+        .rev()
+        .map(|open| match open {
+            b'(' => ')',
+            b'[' => ']',
+            _ => '}',
+        })
+        .collect()
 }
 
 /// Scan raw source for the innermost unmatched `(` strictly before
@@ -237,6 +397,15 @@ fn textual_fallback(source: &str, offset: usize) -> Option<SignatureHelp> {
     };
 
     if let Some(recv) = receiver {
+        // Mid-keystroke `self.super(` — resolve the enclosing class from
+        // the raw source, then chase its parent constructor.
+        if recv == "self"
+            && name == "super"
+            && let Some(class) = enclosing_class_textual(source, offset)
+            && let Some((owner, sig)) = super_init_target(&class)
+        {
+            return build_help_simple(&format!("{owner}.init"), sig, active);
+        }
         if with_classes(|r| r.contains_key(recv)) {
             if let Some(sig) = lookup_method(recv, name) {
                 return build_help_simple(name, sig, active);
@@ -482,7 +651,19 @@ fn build_help(
         })
         .collect::<Vec<_>>();
 
-    let active = active_parameter(args, offset, sig.params.len());
+    // Now that the signature is known, point each `name: value`
+    // argument at the slot its key names.
+    let resolved: Vec<CallArgInfo> = args
+        .iter()
+        .map(|a| CallArgInfo {
+            named_index: a
+                .name
+                .as_ref()
+                .and_then(|n| sig.params.iter().position(|p| &p.name == n)),
+            ..a.clone()
+        })
+        .collect();
+    let active = active_parameter(&resolved, offset, sig.params.len());
 
     Some(SignatureHelp {
         signatures: vec![SignatureInformation {
@@ -550,6 +731,17 @@ pub(super) fn render_type(ty: &Type) -> String {
 enum CalleeRef {
     Free(String),
     Method { class: String, name: String },
+    /// `self.super(...)` — the `init` of `owner`, the nearest ancestor
+    /// that declares one. Kept separate from `Method` so the rendered
+    /// label can say `View.init` instead of a bare `init`.
+    SuperInit { owner: String },
+    /// `Shape.Circle(...)` — a tuple-style enum variant used as a
+    /// constructor. Its fields are `Param`s on the AST, so they're
+    /// carried here directly rather than looked up in a registry.
+    Variant { display: String, fields: Vec<Param> },
+    /// `when(x):stage(...)` — the piped value fills the first parameter,
+    /// so the rendered signature drops it.
+    PipeStage(String),
     /// Stdlib qualified name like `"Os.exists"` or bare native like
     /// `"println"` — resolved through `saule_typeck::sigs::lookup`.
     Native(String),
@@ -558,10 +750,11 @@ enum CalleeRef {
 #[derive(Clone)]
 struct CallArgInfo {
     span: std::ops::Range<usize>,
-    /// `Some(i)` when this arg was written `name: value` and we could
-    /// match `name` to a declared param at signature-build time. The
-    /// resolution happens later in [`build_help`]; the walker just
-    /// records the literal name and we look it up against the sig.
+    /// Key of a `name: value` argument. Resolved to a parameter slot in
+    /// [`build_help`], where the signature is known, so that typing
+    /// inside `Widget(y: …)` highlights `y` rather than slot 0.
+    name: Option<String>,
+    /// Slot this argument fills, once resolved against the signature.
     named_index: Option<usize>,
 }
 
@@ -573,6 +766,10 @@ struct CallHit {
     /// by the walker when it sees `Expr::Call` whose callee identifier
     /// matches a top-level `Decl::Function`.
     user_fn: Option<(Vec<Param>, Option<Type>)>,
+    /// Param / return types when the callee identifier is a local or
+    /// parameter of function type. Takes precedence over `user_fn`,
+    /// matching the resolver's locals-shadow-globals rule.
+    local_fn: Option<(Vec<Type>, Type)>,
     /// Source span of the entire arg list region — used to disambiguate
     /// nested calls (the smallest enclosing call wins).
     args_span: std::ops::Range<usize>,
@@ -586,6 +783,9 @@ struct Cx {
     /// during a single pre-pass before `visit_module` so call sites
     /// resolve regardless of declaration order.
     user_fns: HashMap<String, (Vec<Param>, Option<Type>)>,
+    /// `(enum, variant) -> fields` for tuple-style variants, which are
+    /// called like constructors. Same pre-pass rationale as `user_fns`.
+    enum_variants: HashMap<(String, String), Vec<Param>>,
     best: Option<CallHit>,
 }
 
@@ -621,19 +821,27 @@ impl Cx {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
+                let ty = ty.clone().unwrap_or_else(|| match value {
+                    Some(v) => self.infer_local_ty(&v.value),
+                    None => Type::Named("any".into()),
+                });
                 self.locals.push(Local {
                     name: name.clone(),
-                    ty: ty.clone().unwrap_or(Type::Named("any".into())),
+                    ty,
                 });
             }
             Stmt::LocalMulti { names, values } => {
                 for v in values {
                     self.visit_expr(v);
                 }
-                for (n, _, t) in names {
+                for (i, (n, _, t)) in names.iter().enumerate() {
+                    let ty = t.clone().unwrap_or_else(|| match values.get(i) {
+                        Some(v) => self.infer_local_ty(&v.value),
+                        None => Type::Named("any".into()),
+                    });
                     self.locals.push(Local {
                         name: n.clone(),
-                        ty: t.clone().unwrap_or(Type::Named("any".into())),
+                        ty,
                     });
                 }
             }
@@ -780,15 +988,16 @@ impl Cx {
                     visit_arg(self, a);
                 }
                 if let Some(callee_ref) = self.callee_ref(&callee.value) {
-                    let user_fn = match &callee_ref {
-                        CalleeRef::Free(n) => self.user_fns.get(n).cloned(),
-                        _ => None,
+                    let (user_fn, local_fn) = match &callee_ref {
+                        CalleeRef::Free(n) => (self.user_fns.get(n).cloned(), self.local_fn(n)),
+                        _ => (None, None),
                     };
                     self.record(CallHit {
                         callee: callee_ref,
                         args: build_arg_infos(args),
                         enclosing_class: self.enclosing_class.clone(),
                         user_fn,
+                        local_fn,
                         args_span: args_span(&callee.span, args, e.span.end),
                     });
                 }
@@ -807,6 +1016,7 @@ impl Cx {
                         args: build_arg_infos(args),
                         enclosing_class: self.enclosing_class.clone(),
                         user_fn: None,
+                        local_fn: None,
                         args_span: args_span(&obj.span, args, e.span.end),
                     });
                 }
@@ -817,6 +1027,17 @@ impl Cx {
                     for a in &st.args {
                         visit_arg(self, a);
                     }
+                    // `:name(` — the arg region starts after the stage
+                    // name, which sits one `:` past the stage's start.
+                    let args_start = st.span.start + 1 + st.name.len();
+                    self.record(CallHit {
+                        callee: CalleeRef::PipeStage(st.name.clone()),
+                        args: build_arg_infos(&st.args),
+                        enclosing_class: self.enclosing_class.clone(),
+                        user_fn: self.user_fns.get(&st.name).cloned(),
+                        local_fn: None,
+                        args_span: args_start.min(st.span.end)..st.span.end,
+                    });
                 }
             }
             Expr::Unary { rhs, .. } => self.visit_expr(rhs),
@@ -873,6 +1094,26 @@ impl Cx {
         match callee {
             Expr::Ident(name) => Some(CalleeRef::Free(name.clone())),
             Expr::Member { obj, name } => {
+                // Tuple-style enum variant used as a constructor:
+                // `Shape.Circle(1.0)`.
+                if let Expr::Ident(enum_name) = &obj.value
+                    && let Some(fields) =
+                        self.enum_variants.get(&(enum_name.clone(), name.clone()))
+                {
+                    return Some(CalleeRef::Variant {
+                        display: format!("{enum_name}.{name}"),
+                        fields: fields.clone(),
+                    });
+                }
+                // `self.super(...)` delegates to the parent constructor;
+                // there is no member called `super` to look up.
+                if name == "super"
+                    && matches!(obj.value, Expr::Self_)
+                    && let Some(class) = &self.enclosing_class
+                    && let Some((owner, _)) = super_init_target(class)
+                {
+                    return Some(CalleeRef::SuperInit { owner });
+                }
                 // Stdlib static call (`Os.exists`, `String.find`, ...) —
                 // these aren't user classes so receiver_class can't see
                 // them. Probe the typeck sig registry directly.
@@ -896,35 +1137,106 @@ impl Cx {
         match obj {
             Expr::Self_ => self.enclosing_class.clone(),
             Expr::Ident(name) => {
-                if let Some(local) = self.locals.iter().rev().find(|l| l.name == *name) {
-                    if let Type::Named(n) = &local.ty {
-                        return Some(n.clone());
-                    }
+                if let Some(local) = self.locals.iter().rev().find(|l| l.name == *name)
+                    && let Some(n) = class_of(&local.ty)
+                {
+                    return Some(n);
                 }
                 if with_classes(|r| r.contains_key(name)) {
                     return Some(name.clone());
                 }
                 None
             }
-            Expr::Call { callee, .. } => {
-                if let Expr::Ident(n) = &callee.value {
-                    if with_classes(|r| r.contains_key(n)) {
-                        return Some(n.clone());
-                    }
-                }
-                None
+            // `obj.field.method(` — the field's declared type carries
+            // the class the method is looked up on.
+            Expr::Member { obj: inner, name } => {
+                let inner_class = self.receiver_class(&inner.value)?;
+                class_of(&lookup_field_type(&inner_class, name)?)
             }
+            Expr::Call { callee, .. } => match &callee.value {
+                // Constructor: `Widget(...).method(`.
+                Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => Some(n.clone()),
+                // Method or static call returning a class:
+                // `Widget.make(1).moveTo(`, `self.child().moveTo(`.
+                Expr::Member { obj: inner, name } => {
+                    let inner_class = self.receiver_class(&inner.value)?;
+                    class_of(&lookup_method(&inner_class, name)?.return_ty?)
+                }
+                _ => None,
+            },
             Expr::MethodCall { obj, method, .. } => {
                 let cls = self.receiver_class(&obj.value)?;
-                let sig = lookup_method(&cls, method)?;
-                if let Type::Named(n) = sig.return_ty? {
-                    Some(n)
-                } else {
-                    None
-                }
+                class_of(&lookup_method(&cls, method)?.return_ty?)
             }
+            // `maybeWidget!.moveTo(` — force-unwrap is transparent here.
+            Expr::ForceUnwrap(inner) => self.receiver_class(&inner.value),
             _ => None,
         }
+    }
+
+    /// Param / return types of a function-typed local or parameter
+    /// named `name` — the callback case, `f(...)`.
+    fn local_fn(&self, name: &str) -> Option<(Vec<Type>, Type)> {
+        let local = self.locals.iter().rev().find(|l| l.name == *name)?;
+        match &local.ty {
+            Type::Function { params, ret } => Some((params.clone(), (**ret).clone())),
+            _ => None,
+        }
+    }
+
+    /// Static type of a `local` with no annotation, from its
+    /// initialiser. Only the shapes that actually matter for resolving
+    /// a later `recv.method(` — constructor calls, calls returning a
+    /// class, field reads, and aliases of another local.
+    fn infer_local_ty(&self, init: &Expr) -> Type {
+        let any = || Type::Named("any".into());
+        match init {
+            Expr::Self_ => self
+                .enclosing_class
+                .as_ref()
+                .map(|c| Type::Named(c.clone()))
+                .unwrap_or_else(any),
+            Expr::Ident(n) => self
+                .locals
+                .iter()
+                .rev()
+                .find(|l| l.name == *n)
+                .map(|l| l.ty.clone())
+                .unwrap_or_else(any),
+            Expr::Call { callee, .. } => match &callee.value {
+                Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => Type::Named(n.clone()),
+                Expr::Member { obj, name } => self
+                    .receiver_class(&obj.value)
+                    .and_then(|c| lookup_method(&c, name))
+                    .and_then(|sig| sig.return_ty)
+                    .unwrap_or_else(any),
+                _ => any(),
+            },
+            Expr::MethodCall { obj, method, .. } => self
+                .receiver_class(&obj.value)
+                .and_then(|c| lookup_method(&c, method))
+                .and_then(|sig| sig.return_ty)
+                .unwrap_or_else(any),
+            Expr::Member { obj, name } => self
+                .receiver_class(&obj.value)
+                .and_then(|c| lookup_field_type(&c, name))
+                .unwrap_or_else(any),
+            Expr::ForceUnwrap(inner) => match self.infer_local_ty(&inner.value) {
+                Type::Nullable(t) => *t,
+                other => other,
+            },
+            _ => any(),
+        }
+    }
+}
+
+/// Head class name of a type, peeling `T?`. `None` for primitives and
+/// structural types, which have no methods to look up.
+fn class_of(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named(n) => Some(n.clone()),
+        Type::Nullable(inner) => class_of(inner),
+        _ => None,
     }
 }
 
@@ -939,10 +1251,12 @@ fn build_arg_infos(args: &[CallArg]) -> Vec<CallArgInfo> {
         .map(|a| match a {
             CallArg::Positional(e) => CallArgInfo {
                 span: e.span.clone(),
+                name: None,
                 named_index: None,
             },
-            CallArg::Named { value, .. } => CallArgInfo {
+            CallArg::Named { name, value } => CallArgInfo {
                 span: value.span.clone(),
+                name: Some(name.clone()),
                 named_index: None,
             },
         })
@@ -983,6 +1297,43 @@ fn collect_user_fns(module: &Module) -> HashMap<String, (Vec<Param>, Option<Type
         }
     }
     out
+}
+
+/// Pre-pass: collect every tuple-style enum variant's fields so
+/// `Enum.Variant(...)` calls resolve like constructors.
+fn collect_enum_variants(module: &Module) -> HashMap<(String, String), Vec<Param>> {
+    let mut out = HashMap::new();
+    for s in &module.stmts {
+        if let Stmt::Decl(d) = &s.value
+            && let Decl::Enum { name, variants, .. } = &d.value
+        {
+            for v in variants {
+                if let saule_ast::EnumVariant::Tuple {
+                    name: vname,
+                    fields,
+                } = &v.value
+                {
+                    out.insert((name.clone(), vname.clone()), fields.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Walk `module` for the innermost call containing `offset` and render
+/// its signature. Shared by the normal path and the repair path.
+fn help_from_module(module: &Module, offset: usize) -> Option<SignatureHelp> {
+    let mut cx = Cx {
+        offset,
+        locals: Vec::new(),
+        enclosing_class: None,
+        user_fns: collect_user_fns(module),
+        enum_variants: collect_enum_variants(module),
+        best: None,
+    };
+    cx.visit_module(module);
+    resolve_hit(cx.best?, offset)
 }
 
 /// Textual-fallback variant of [`collect_user_fns`]: re-lexes and
@@ -1055,16 +1406,7 @@ mod tests {
         let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
         let module = saule_parser::parse(tokens).expect("parse");
         let _ = saule_semantic::analyze(&module);
-        let mut cx = Cx {
-            offset,
-            locals: Vec::new(),
-            enclosing_class: None,
-            user_fns: collect_user_fns(&module),
-            best: None,
-        };
-        cx.visit_module(&module);
-        let hit = cx.best?;
-        resolve_hit(hit, offset)
+        help_from_module(&module, offset)
     }
 
     #[test]
@@ -1249,5 +1591,364 @@ mod tests {
         assert!(label.contains("pattern: "), "expected `pattern:` in {label}");
         assert!(label.contains("init"), "expected `init` in {label}");
     }
-}
 
+    // ── `self.super(...)` → parent constructor ────────────────────
+
+    #[test]
+    fn signature_for_self_super_shows_parent_init() {
+        let src = "class Base
+  fn init(x: integer, y: integer)
+  end
+end
+
+class Child extends Base
+  fn init()
+    self.super(1, 2)
+  end
+end
+";
+        let h = help(src, "self.super(1", "self.super(".len()).expect("help");
+        let label = &h.signatures[0].label;
+        assert!(label.starts_with("Base.init("), "label={label}");
+        assert!(label.contains("x: integer"), "label={label}");
+        assert_eq!(h.active_parameter, Some(0));
+    }
+
+    /// Mid-keystroke `self.super(1, ` with no closing paren. The
+    /// registries still hold the last good parse (both classes), which
+    /// is what the enclosing-class text scan is resolved against.
+    #[test]
+    fn fallback_signature_for_self_super_mid_typing() {
+        let prelude = "class Base
+  fn init(x: integer, y: integer)
+  end
+end
+
+class Child extends Base
+  fn init()
+  end
+end
+";
+        let snippet = "class Child extends Base
+  fn init()
+    self.super(1, ";
+        let h = fallback_help(prelude, snippet, 0).expect("fallback help");
+        assert!(h.signatures[0].label.starts_with("Base.init("));
+        assert_eq!(h.active_parameter, Some(1));
+    }
+
+
+    // ── coverage matrix: every call form the language has ─────────
+    //
+    // One shared fixture, two passes: the finished-code path (parens
+    // closed) and the mid-keystroke path (the user has typed `(` and
+    // nothing after it yet). A form missing from here is a form where
+    // the parameter popup silently does nothing.
+
+    const FIXTURE: &str = "\
+class Color
+  fn apply(alpha: float)
+  end
+end
+
+class Widget
+  fn init(x: float, y: float)
+  end
+  fn moveTo(x: float, y: float)
+  end
+  static fn make(n: integer) -> Widget
+    return Widget(0.0, 0.0)
+  end
+end
+
+enum Shape
+  Circle(r: float)
+  Square
+end
+
+fn add(x: integer, y: integer) -> integer
+  return x + y
+end
+";
+
+    /// Byte offset just past `needle`, searched after the fixture so
+    /// call sites are found rather than the declarations above.
+    fn call_offset(src: &str, needle: &str) -> usize {
+        let start = FIXTURE.len();
+        src[start..]
+            .find(needle)
+            .map(|i| start + i + needle.len())
+            .unwrap_or_else(|| panic!("needle {needle:?} not found"))
+    }
+
+    fn label(h: Option<SignatureHelp>, case: &str) -> String {
+        let mut h = h.unwrap_or_else(|| panic!("no signature help for {case}"));
+        h.signatures.remove(0).label
+    }
+
+    /// Finished code: the call's parens are closed, so the document
+    /// parses and the AST walker resolves the callee.
+    #[test]
+    fn signature_help_covers_every_call_form() {
+        init_stdlib();
+        let cases: Vec<(&str, &str, &str, &str)> = vec![
+            ("free fn", "  local r = add(1, 2)\n", "add(1", "add("),
+            ("constructor", "  local w = Widget(1.0, 2.0)\n", "Widget(1.0", "Widget("),
+            (
+                "method on annotated local",
+                "  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(3.0, 4.0)\n",
+                "moveTo(3.0",
+                "moveTo(",
+            ),
+            (
+                "method on inferred local",
+                "  local w = Widget(1.0, 2.0)\n  w.moveTo(3.0, 4.0)\n",
+                "moveTo(3.0",
+                "moveTo(",
+            ),
+            ("static method", "  Widget.make(1)\n", "make(1", "make("),
+            (
+                "method on constructor result",
+                "  Widget(1.0, 2.0).moveTo(3.0, 4.0)\n",
+                "moveTo(3.0",
+                "moveTo(",
+            ),
+            (
+                "method on call result",
+                "  Widget.make(1).moveTo(3.0, 4.0)\n",
+                "moveTo(3.0",
+                "moveTo(",
+            ),
+            ("stdlib module fn", "  local n = Math.floor(3.14)\n", "floor(3.14", "floor("),
+            ("bare native", "  println(1)\n", "println(1", "println("),
+            (
+                "enum tuple variant",
+                "  local s = Shape.Circle(1.0)\n",
+                "Circle(1.0",
+                "Shape.Circle(",
+            ),
+            (
+                "function-typed local",
+                "  local f: fn(integer) -> integer = fn(n: integer) -> integer return n end\n  local z = f(1)\n",
+                "f(1)",
+                "f(",
+            ),
+            ("nested inner call", "  local r = add(add(1, 2), 3)\n", "add(1", "add("),
+            ("named argument", "  local w = Widget(x: 1.0, y: 2.0)\n", "Widget(x: 1.0", "Widget("),
+            ("table-literal argument", "  local t = add({1, 2}, 3)\n", "add({1", "add("),
+            // The piped value fills slot 0, so only `y` is left.
+            ("pipeline stage", "  local n = when(4):add(3)\n", "add(3", "add(y: integer)"),
+        ];
+        for (case, body, needle, expected) in cases {
+            let src = format!("{FIXTURE}\nfn probe()\n{body}end\n");
+            let got = label(help_at(&src, call_offset(&src, needle)), case);
+            assert!(got.starts_with(expected), "{case}: got {got:?}");
+        }
+    }
+
+    /// Call forms that only exist inside a class body.
+    #[test]
+    fn signature_help_covers_in_class_call_forms() {
+        init_stdlib();
+        let src = format!(
+            "{FIXTURE}
+class Probe extends Widget
+  tint: Color
+  fn init()
+    self.super(1.0, 2.0)
+  end
+  fn go(w: Widget)
+    self.go2(1)
+    w.moveTo(3.0, 4.0)
+    self.tint.apply(1.0)
+    go2(1)
+    Probe.stat(1)
+  end
+  fn go2(n: integer)
+  end
+  static fn stat(n: integer)
+  end
+end
+"
+        );
+        for (case, needle, expected) in [
+            ("self.super", "self.super(1.0", "Widget.init("),
+            ("self.method", "self.go2(1", "go2("),
+            ("method on parameter", "w.moveTo(3.0", "moveTo("),
+            ("method on field", "self.tint.apply(1.0", "apply("),
+            ("bare sibling method", "\n    go2(1", "go2("),
+            ("own static via class name", "Probe.stat(1", "stat("),
+        ] {
+            let got = label(help_at(&src, call_offset(&src, needle)), case);
+            assert!(got.starts_with(expected), "{case}: got {got:?}");
+        }
+    }
+
+    /// Mid-keystroke: the user has typed `(` (or `(arg, `) and the
+    /// buffer doesn't parse yet. This is the path that has to keep the
+    /// popup alive while the arguments are being typed.
+    #[test]
+    fn signature_help_survives_unclosed_call() {
+        init_stdlib();
+        for (case, snippet, expected, active) in [
+            ("free fn", "fn probe()\n  local r = add(", "add(", 0),
+            ("free fn second arg", "fn probe()\n  local r = add(1, ", "add(", 1),
+            ("constructor", "fn probe()\n  local w = Widget(", "Widget(", 0),
+            (
+                "method on annotated local",
+                "fn probe()\n  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(",
+                "moveTo(",
+                0,
+            ),
+            (
+                "method on inferred local",
+                "fn probe()\n  local w = Widget(1.0, 2.0)\n  w.moveTo(",
+                "moveTo(",
+                0,
+            ),
+            ("static method", "fn probe()\n  Widget.make(", "make(", 0),
+            (
+                "method on constructor result",
+                "fn probe()\n  Widget(1.0, 2.0).moveTo(",
+                "moveTo(",
+                0,
+            ),
+            ("stdlib module fn", "fn probe()\n  local n = Math.floor(", "floor(", 0),
+            ("bare native", "fn probe()\n  println(", "println(", 0),
+            ("enum tuple variant", "fn probe()\n  local s = Shape.Circle(", "Shape.Circle(", 0),
+            (
+                "self.method",
+                "class Probe extends Widget\n  fn go()\n    self.moveTo(",
+                "moveTo(",
+                0,
+            ),
+            (
+                "self.super",
+                "class Probe extends Widget\n  fn init()\n    self.super(",
+                "Widget.init(",
+                0,
+            ),
+            (
+                "method on field",
+                "class Probe extends Widget\n  tint: Color\n  fn go()\n    self.tint.apply(",
+                "apply(",
+                0,
+            ),
+            ("nested inner call", "fn probe()\n  local r = add(add(", "add(", 0),
+        ] {
+            let src = format!("{FIXTURE}\n{snippet}");
+            let offset = src.len();
+            let h = help_mid_keystroke(&src, offset)
+                .unwrap_or_else(|| panic!("no signature help for {case}"));
+            assert_eq!(h.active_parameter, Some(active), "{case}");
+            let got = &h.signatures[0].label;
+            assert!(got.starts_with(expected), "{case}: got {got:?}");
+        }
+    }
+
+    /// A `name: value` argument highlights the slot its key names,
+    /// not the positional slot it happens to sit in.
+    #[test]
+    fn named_argument_highlights_its_own_slot() {
+        init_stdlib();
+        let src = format!("{FIXTURE}
+fn probe()
+  local w = Widget(y: 2.0)
+end
+");
+        let h = help_at(&src, call_offset(&src, "Widget(y: 2")).expect("help");
+        assert_eq!(h.active_parameter, Some(1));
+    }
+
+    /// The realistic shape of the same thing: the half-typed call sits
+    /// in the *middle* of a file, with well-formed code after it. The
+    /// repair has to close the call at the cursor — appending past the
+    /// trailing `end`s closes nothing and the popup stays empty.
+    #[test]
+    fn signature_help_survives_unclosed_call_mid_file() {
+        init_stdlib();
+        for (case, head, tail, expected, active) in [
+            (
+                "method on local",
+                "fn probe()\n  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(",
+                "\nend\n",
+                "moveTo(",
+                0,
+            ),
+            (
+                "constructor second arg",
+                "fn probe()\n  local w = Widget(1.0, ",
+                "\nend\n\nfn after()\n  println(1)\nend\n",
+                "Widget(",
+                1,
+            ),
+            (
+                "self.super",
+                "class Probe extends Widget\n  fn init()\n    self.super(",
+                "\n  end\nend\n",
+                "Widget.init(",
+                0,
+            ),
+            (
+                "nested call",
+                "fn probe()\n  local r = add(add(",
+                "\nend\n",
+                "add(",
+                0,
+            ),
+            (
+                "method on field",
+                "class Probe extends Widget\n  tint: Color\n  fn go()\n    self.tint.apply(",
+                "\n  end\nend\n",
+                "apply(",
+                0,
+            ),
+        ] {
+            let src = format!("{FIXTURE}\n{head}{tail}");
+            let offset = FIXTURE.len() + 1 + head.len();
+            let h = help_mid_keystroke(&src, offset)
+                .unwrap_or_else(|| panic!("no signature help for {case}"));
+            assert_eq!(h.active_parameter, Some(active), "{case}");
+            let got = &h.signatures[0].label;
+            assert!(got.starts_with(expected), "{case}: got {got:?}");
+        }
+    }
+
+    #[test]
+    fn unclosed_delimiters_ignores_strings_and_comments() {
+        assert_eq!(unclosed_delimiters("add(1, 2)"), "");
+        assert_eq!(unclosed_delimiters("add(f("), "))");
+        assert_eq!(unclosed_delimiters("f(\"a )( b\""), ")");
+        assert_eq!(unclosed_delimiters("f( -- a ) comment\n"), ")");
+        assert_eq!(unclosed_delimiters("f( --[[ ) ]] "), ")");
+        assert_eq!(unclosed_delimiters("t = {1, [2] = f("), ")}");
+    }
+
+    /// Like `help` but takes an absolute byte offset.
+    fn help_at(src: &str, offset: usize) -> Option<SignatureHelp> {
+        init_stdlib();
+        let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
+        let module = saule_parser::parse(tokens).expect("parse");
+        let _ = saule_semantic::analyze(&module);
+        help_from_module(&module, offset)
+    }
+
+    /// Mirrors `signature_help_at`'s dispatch for a buffer that may not
+    /// parse: real AST first, repaired AST second, text scan last.
+    fn help_mid_keystroke(src: &str, offset: usize) -> Option<SignatureHelp> {
+        init_stdlib();
+        if let Ok(tokens) = saule_lexer::Lexer::new(src).tokenize()
+            && let Ok(module) = saule_parser::parse(tokens)
+        {
+            let _ = saule_semantic::analyze(&module);
+            return help_from_module(&module, offset);
+        }
+        if let Some(module) = repair_parse(src, offset) {
+            let _ = saule_semantic::analyze(&module);
+            if let Some(h) = help_from_module(&module, offset) {
+                return Some(h);
+            }
+        }
+        textual_fallback(src, offset)
+    }
+}

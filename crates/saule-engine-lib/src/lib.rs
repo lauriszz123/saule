@@ -22,9 +22,12 @@
 //! # library + generated engine.toml into ~/.saule/ manually.
 //! ```
 
+mod font;
+mod geom;
 mod graphics;
 mod keyboard;
 mod mouse;
+mod raster;
 mod state;
 mod timer;
 mod util;
@@ -39,7 +42,7 @@ saule_sdk::saule_package! {
         "saule_engine_lib.dylib",
     ],
     classes {
-        Graphics = "2D graphics rendering.",
+        Graphics = "2D graphics: shapes, text, canvases, clipping, and transforms.",
         Keyboard = "Keyboard input state.",
         Mouse = "Mouse input state.",
         Window = "Window management.",
@@ -77,14 +80,81 @@ pub fn anchor() {
     black_box(mouse::saule_export_Mouse_isDown as *const ());
     black_box(mouse::saule_export_Mouse_getPos as *const ());
 
-    // Graphics exports
-    black_box(graphics::saule_export_Graphics_setColor as *const ());
-    black_box(graphics::saule_export_Graphics_setLineWidth as *const ());
-    black_box(graphics::saule_export_Graphics_circle as *const ());
-    black_box(graphics::saule_export_Graphics_line as *const ());
-    black_box(graphics::saule_export_Graphics_rectangle as *const ());
+    // Graphics — frame lifecycle
     black_box(graphics::saule_export_Graphics_clear as *const ());
     black_box(graphics::saule_export_Graphics_present as *const ());
+
+    // Graphics — shapes
+    black_box(graphics::saule_export_Graphics_rectangle as *const ());
+    black_box(graphics::saule_export_Graphics_circle as *const ());
+    black_box(graphics::saule_export_Graphics_ellipse as *const ());
+    black_box(graphics::saule_export_Graphics_arc as *const ());
+    black_box(graphics::saule_export_Graphics_polygon as *const ());
+    black_box(graphics::saule_export_Graphics_line as *const ());
+    black_box(graphics::saule_export_Graphics_polyline as *const ());
+    black_box(graphics::saule_export_Graphics_points as *const ());
+    black_box(graphics::saule_export_Graphics_point as *const ());
+
+    // Graphics — text
+    black_box(graphics::saule_export_Graphics_print as *const ());
+    black_box(graphics::saule_export_Graphics_printf as *const ());
+    black_box(graphics::saule_export_Graphics_newFont as *const ());
+    black_box(graphics::saule_export_Graphics_setNewFont as *const ());
+    black_box(graphics::saule_export_Graphics_setFont as *const ());
+    black_box(graphics::saule_export_Graphics_getFont as *const ());
+    black_box(graphics::saule_export_Graphics_getFontHeight as *const ());
+    black_box(graphics::saule_export_Graphics_getTextWidth as *const ());
+
+    // Graphics — colour, lines, blending
+    black_box(graphics::saule_export_Graphics_setColor as *const ());
+    black_box(graphics::saule_export_Graphics_getColor as *const ());
+    black_box(graphics::saule_export_Graphics_setBackgroundColor as *const ());
+    black_box(graphics::saule_export_Graphics_getBackgroundColor as *const ());
+    black_box(graphics::saule_export_Graphics_setLineWidth as *const ());
+    black_box(graphics::saule_export_Graphics_getLineWidth as *const ());
+    black_box(graphics::saule_export_Graphics_setLineStyle as *const ());
+    black_box(graphics::saule_export_Graphics_getLineStyle as *const ());
+    black_box(graphics::saule_export_Graphics_setLineJoin as *const ());
+    black_box(graphics::saule_export_Graphics_getLineJoin as *const ());
+    black_box(graphics::saule_export_Graphics_setBlendMode as *const ());
+    black_box(graphics::saule_export_Graphics_getBlendMode as *const ());
+    black_box(graphics::saule_export_Graphics_setDefaultFilter as *const ());
+    black_box(graphics::saule_export_Graphics_getDefaultFilter as *const ());
+    black_box(graphics::saule_export_Graphics_reset as *const ());
+
+    // Graphics — clipping
+    black_box(graphics::saule_export_Graphics_setScissor as *const ());
+    black_box(graphics::saule_export_Graphics_intersectScissor as *const ());
+    black_box(graphics::saule_export_Graphics_getScissor as *const ());
+
+    // Graphics — canvases
+    black_box(graphics::saule_export_Graphics_newCanvas as *const ());
+    black_box(graphics::saule_export_Graphics_setCanvas as *const ());
+    black_box(graphics::saule_export_Graphics_getCanvas as *const ());
+    black_box(graphics::saule_export_Graphics_draw as *const ());
+
+    // Graphics — coordinate system
+    black_box(graphics::saule_export_Graphics_push as *const ());
+    black_box(graphics::saule_export_Graphics_pop as *const ());
+    black_box(graphics::saule_export_Graphics_origin as *const ());
+    black_box(graphics::saule_export_Graphics_translate as *const ());
+    black_box(graphics::saule_export_Graphics_scale as *const ());
+    black_box(graphics::saule_export_Graphics_rotate as *const ());
+    black_box(graphics::saule_export_Graphics_shear as *const ());
+    black_box(graphics::saule_export_Graphics_applyTransform as *const ());
+    black_box(graphics::saule_export_Graphics_replaceTransform as *const ());
+    black_box(graphics::saule_export_Graphics_getStackDepth as *const ());
+    black_box(graphics::saule_export_Graphics_transformPoint as *const ());
+    black_box(graphics::saule_export_Graphics_inverseTransformPoint as *const ());
+
+    // Graphics — dimensions
+    black_box(graphics::saule_export_Graphics_getWidth as *const ());
+    black_box(graphics::saule_export_Graphics_getHeight as *const ());
+    black_box(graphics::saule_export_Graphics_getDimensions as *const ());
+    black_box(graphics::saule_export_Graphics_getDPIScale as *const ());
+    black_box(graphics::saule_export_Graphics_getPixelWidth as *const ());
+    black_box(graphics::saule_export_Graphics_getPixelHeight as *const ());
+    black_box(graphics::saule_export_Graphics_getPixelDimensions as *const ());
 
     // Timer exports
     black_box(timer::saule_export_Timer_getTime as *const ());
@@ -114,7 +184,7 @@ mod tests {
     fn graphics_circle_without_window_errors() {
         // No window has been created on this test thread, so drawing must
         // fail cleanly rather than crash.
-        let result = super::graphics::graphics_circle("fill".to_string(), 100.0, 120.0, 50.0);
+        let result = super::graphics::graphics_circle("fill".to_string(), 100.0, 120.0, 50.0, None);
         assert!(result.is_err());
     }
 
