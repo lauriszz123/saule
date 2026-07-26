@@ -17,13 +17,14 @@
 //!   coordinates — `{x1, y1, x2, y2, ...}` — instead of varargs.
 //! - Scissor rectangles are transformed by the current transform, so clipping
 //!   composes with `translate` the way nested scroll views need.
-//! - Shaders and image loading are not implemented: there is no GPU here, and
-//!   the rasterizer is pure software.
+//! - Shaders are not implemented: there is no GPU here, and the rasterizer is
+//!   pure software. Images are PNG-only and decoded on the CPU.
 
 use saule_sdk::prelude::*;
 use saule_sdk::saule_export;
 
 use crate::geom::Point;
+use crate::raster::Rect;
 use crate::state;
 
 // ---------------------------------------------------------------------------
@@ -460,6 +461,61 @@ fn graphics_draw(
     state::with(|e| {
         e.draw_canvas(
             canvas,
+            x,
+            y,
+            angle.unwrap_or(0.0),
+            sx,
+            sy.unwrap_or(sx),
+            ox.unwrap_or(0.0),
+            oy.unwrap_or(0.0),
+        )
+    })??;
+    Ok(())
+}
+
+/// `Graphics.newImage(path)` — load a PNG from disk. Returns a handle usable
+/// anywhere a canvas handle is: `draw`, `drawFrame`, `imageSize`, `setCanvas`.
+///
+/// Decoding is not cached, so load an image once at startup rather than every
+/// frame.
+#[saule_export(class = "Graphics", name = "newImage")]
+fn graphics_new_image(path: String) -> Result<i64, String> {
+    state::with(|e| e.new_image(&path))?
+}
+
+/// `Graphics.imageSize(handle)` — pixel dimensions of an image or canvas, as
+/// `width, height`.
+#[saule_export(class = "Graphics", name = "imageSize")]
+fn graphics_image_size(handle: i64) -> Result<(i64, i64), String> {
+    state::with(|e| e.image_size(handle))?
+}
+
+/// `Graphics.drawFrame(image, fx, fy, fw, fh, x, y [, angle, sx, sy, ox, oy])`
+/// — composite one cell of an image, for spritesheets. `fx, fy, fw, fh` is the
+/// source rectangle in image pixels; the rest positions it exactly like
+/// `draw`. Sampling is confined to the cell, so neighbouring frames never
+/// bleed in at the edges.
+#[saule_export(class = "Graphics", name = "drawFrame")]
+#[allow(clippy::too_many_arguments)]
+fn graphics_draw_frame(
+    image: i64,
+    fx: f64,
+    fy: f64,
+    fw: f64,
+    fh: f64,
+    x: f64,
+    y: f64,
+    angle: Option<f64>,
+    sx: Option<f64>,
+    sy: Option<f64>,
+    ox: Option<f64>,
+    oy: Option<f64>,
+) -> Result<(), String> {
+    let sx = sx.unwrap_or(1.0);
+    state::with(|e| {
+        e.draw_frame(
+            image,
+            Rect::new(fx, fy, fw, fh),
             x,
             y,
             angle.unwrap_or(0.0),

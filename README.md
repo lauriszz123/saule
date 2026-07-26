@@ -65,6 +65,22 @@ local result = health - dmg    -- ERROR: cannot mix integer and float
 
 Saule never auto-promotes — the checker catches this at compile time, so a hidden `int / int` truncating into a `float` slot is impossible.
 
+### Base Prefixes
+
+Integers can be written in hex or binary, with `_` allowed anywhere as a digit
+separator:
+
+```saule
+local mask: integer = 0xFF        -- 255
+local flags: integer = 0b1010     -- 10
+local colour: integer = 0xFF_80_00
+local glyph: integer = 0xE5CD     -- a font codepoint
+```
+
+Both forms produce ordinary `integer` values — there is no separate type. A
+prefix with no digits (`0x`) or an invalid digit for the base (`0xGG`, `0b102`)
+is a lex error.
+
 ### Integer Division
 
 `/` on two integers is **integer division** (Lua / C semantics) — the result is the truncated quotient, never a float:

@@ -22,9 +22,11 @@
 //! # library + generated engine.toml into ~/.saule/ manually.
 //! ```
 
+mod clipboard;
 mod font;
 mod geom;
 mod graphics;
+mod image;
 mod keyboard;
 mod mouse;
 mod raster;
@@ -47,6 +49,7 @@ saule_sdk::saule_package! {
         Mouse = "Mouse input state.",
         Window = "Window management.",
         Timer = "Timing helpers.",
+        Clipboard = "System clipboard: copy and paste plain text.",
         Util = "Table / function bridge demo helpers.",
     }
 }

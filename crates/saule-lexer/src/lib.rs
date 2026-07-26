@@ -198,11 +198,35 @@ impl<'src> Lexer<'src> {
 
     /// Lex a numeric literal.
     ///
-    /// Accepts `12`, `1.5`, `.5` (the integer part may be omitted), and a
-    /// trailing `f`/`F` suffix that forces a float — so `1f` is `1.0`.
+    /// Accepts `12`, `1.5`, `.5` (the integer part may be omitted), a trailing
+    /// `f`/`F` suffix that forces a float — so `1f` is `1.0` — and the
+    /// base-prefixed integer forms `0xFF` and `0b1010`.
     fn number(&mut self, start: usize) -> Result<Spanned<Token>, LexerError> {
         let mut end = start;
         let mut is_float = false;
+
+        // A base prefix has to be checked before the decimal scan, or the `0`
+        // would be eaten as an ordinary integer and `x` left as an identifier.
+        // Nothing is consumed yet at this point, so the marker is the character
+        // *after* the leading zero.
+        if self.source[start..].starts_with('0') {
+            let mut look = self.chars.clone();
+            look.next();
+
+            if let Some(&(_, marker)) = look.peek() {
+                let radix = match marker {
+                    'x' | 'X' => Some(16),
+                    'b' | 'B' => Some(2),
+                    _ => None,
+                };
+
+                if let Some(radix) = radix {
+                    self.chars.next(); // the leading `0`
+
+                    return self.radix_number(start, radix);
+                }
+            }
+        }
 
         // Integer part. Consumes nothing for a leading-dot literal like `.5`,
         // which the fractional branch below picks up.
@@ -272,6 +296,50 @@ impl<'src> Lexer<'src> {
 
         Ok(Spanned {
             value: tok,
+            span: start..end,
+        })
+    }
+
+    /// Lex `0x…` / `0b…` after the leading `0`, with `radix` already chosen.
+    ///
+    /// Underscores are allowed as digit separators (`0xFF_FF`), because the
+    /// literals this form is for — colour values, bit masks, codepoints — are
+    /// exactly the ones that are hard to read in one run.
+    fn radix_number(&mut self, start: usize, radix: u32) -> Result<Spanned<Token>, LexerError> {
+        // Consume the base marker itself.
+        let (marker_i, marker) = self.chars.next().expect("peeked by the caller");
+        let mut end = marker_i + marker.len_utf8();
+        let mut digits = String::new();
+
+        while let Some(&(i, c)) = self.chars.peek() {
+            if c == '_' {
+                end = i + c.len_utf8();
+                self.chars.next();
+            } else if c.is_digit(radix) {
+                digits.push(c);
+                end = i + c.len_utf8();
+                self.chars.next();
+            } else if c.is_alphanumeric() {
+                // `0xGG` or `0b2`: consume the offending run so the error span
+                // covers the whole literal rather than stopping mid-token.
+                end = i + c.len_utf8();
+                self.chars.next();
+                digits.push(c);
+            } else {
+                break;
+            }
+        }
+
+        // `0x` with nothing after it is not a number.
+        if digits.is_empty() {
+            return Err(LexerError::BadNumber(start..end));
+        }
+
+        let value =
+            i64::from_str_radix(&digits, radix).map_err(|_| LexerError::BadNumber(start..end))?;
+
+        Ok(Spanned {
+            value: Token::Int(value),
             span: start..end,
         })
     }

@@ -6,6 +6,25 @@ name = "engine"
 version = "0.1.0"
 binary = "saule_engine_lib.so, saule_engine_lib.dll, saule_engine_lib.dylib"
 
+[exports.Clipboard]
+type = "class"
+doc = "System clipboard: copy and paste plain text."
+
+[[exports.Clipboard.methods]]
+name = "get"
+sig = "fn() -> string"
+native_symbol = "saule_export_Clipboard_get"
+
+[[exports.Clipboard.methods]]
+name = "hasText"
+sig = "fn() -> boolean"
+native_symbol = "saule_export_Clipboard_hasText"
+
+[[exports.Clipboard.methods]]
+name = "set"
+sig = "fn(text: string) -> nil"
+native_symbol = "saule_export_Clipboard_set"
+
 [exports.Graphics]
 type = "class"
 doc = "2D graphics: shapes, text, canvases, clipping, and transforms."
@@ -34,6 +53,11 @@ native_symbol = "saule_export_Graphics_clear"
 name = "draw"
 sig = "fn(canvas: integer, x: float, y: float, angle: float?, sx: float?, sy: float?, ox: float?, oy: float?) -> nil"
 native_symbol = "saule_export_Graphics_draw"
+
+[[exports.Graphics.methods]]
+name = "drawFrame"
+sig = "fn(image: integer, fx: float, fy: float, fw: float, fh: float, x: float, y: float, angle: float?, sx: float?, sy: float?, ox: float?, oy: float?) -> nil"
+native_symbol = "saule_export_Graphics_drawFrame"
 
 [[exports.Graphics.methods]]
 name = "ellipse"
@@ -141,6 +165,11 @@ sig = "fn() -> integer"
 native_symbol = "saule_export_Graphics_getWidth"
 
 [[exports.Graphics.methods]]
+name = "imageSize"
+sig = "fn(handle: integer) -> (integer, integer)"
+native_symbol = "saule_export_Graphics_imageSize"
+
+[[exports.Graphics.methods]]
 name = "intersectScissor"
 sig = "fn(x: float, y: float, w: float, h: float) -> nil"
 native_symbol = "saule_export_Graphics_intersectScissor"
@@ -164,6 +193,11 @@ native_symbol = "saule_export_Graphics_newCanvas"
 name = "newFont"
 sig = "fn(size: float, path: string?) -> integer"
 native_symbol = "saule_export_Graphics_newFont"
+
+[[exports.Graphics.methods]]
+name = "newImage"
+sig = "fn(path: string) -> integer"
+native_symbol = "saule_export_Graphics_newImage"
 
 [[exports.Graphics.methods]]
 name = "origin"
@@ -384,9 +418,34 @@ sig = "fn() -> (float, float)"
 native_symbol = "saule_export_Mouse_getPos"
 
 [[exports.Mouse.methods]]
+name = "getWheel"
+sig = "fn() -> (float, float)"
+native_symbol = "saule_export_Mouse_getWheel"
+
+[[exports.Mouse.methods]]
 name = "isDown"
 sig = "fn(button: integer) -> boolean"
 native_symbol = "saule_export_Mouse_isDown"
+
+[[exports.Mouse.methods]]
+name = "setCursor"
+sig = "fn(style: string) -> nil"
+native_symbol = "saule_export_Mouse_setCursor"
+
+[[exports.Mouse.methods]]
+name = "setVisible"
+sig = "fn(visible: boolean) -> nil"
+native_symbol = "saule_export_Mouse_setVisible"
+
+[[exports.Mouse.methods]]
+name = "wasPressed"
+sig = "fn(button: integer) -> boolean"
+native_symbol = "saule_export_Mouse_wasPressed"
+
+[[exports.Mouse.methods]]
+name = "wasReleased"
+sig = "fn(button: integer) -> boolean"
+native_symbol = "saule_export_Mouse_wasReleased"
 
 [exports.Timer]
 type = "class"
@@ -492,13 +551,28 @@ native_symbol = "saule_export_Window_close"
 
 [[exports.Window.methods]]
 name = "create"
-sig = "fn(width: integer, height: integer, title: string?) -> nil"
+sig = "fn(width: integer, height: integer, title: string?, resizable: boolean?) -> nil"
 native_symbol = "saule_export_Window_create"
+
+[[exports.Window.methods]]
+name = "getPosition"
+sig = "fn() -> (integer, integer)"
+native_symbol = "saule_export_Window_getPosition"
+
+[[exports.Window.methods]]
+name = "getScale"
+sig = "fn() -> float"
+native_symbol = "saule_export_Window_getScale"
 
 [[exports.Window.methods]]
 name = "getSize"
 sig = "fn() -> (integer, integer)"
 native_symbol = "saule_export_Window_getSize"
+
+[[exports.Window.methods]]
+name = "isFocused"
+sig = "fn() -> boolean"
+native_symbol = "saule_export_Window_isFocused"
 
 [[exports.Window.methods]]
 name = "isOpen"
@@ -509,3 +583,18 @@ native_symbol = "saule_export_Window_isOpen"
 name = "pollEvents"
 sig = "fn() -> nil"
 native_symbol = "saule_export_Window_pollEvents"
+
+[[exports.Window.methods]]
+name = "setPosition"
+sig = "fn(x: integer, y: integer) -> nil"
+native_symbol = "saule_export_Window_setPosition"
+
+[[exports.Window.methods]]
+name = "setTitle"
+sig = "fn(title: string) -> nil"
+native_symbol = "saule_export_Window_setTitle"
+
+[[exports.Window.methods]]
+name = "setTopmost"
+sig = "fn(topmost: boolean) -> nil"
+native_symbol = "saule_export_Window_setTopmost"

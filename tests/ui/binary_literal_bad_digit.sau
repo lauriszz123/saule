@@ -1,0 +1,7 @@
+-- ERROR: `2` is not a binary digit.
+
+class Main
+  static fn main()
+    println(0b1012)
+  end
+end

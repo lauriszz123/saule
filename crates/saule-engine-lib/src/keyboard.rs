@@ -298,15 +298,21 @@ const REPEAT_RATE: f32 = 0.05;
 
 /// Which keys went down or came up between the last two frames.
 ///
-/// minifb has its own `is_key_pressed` / `is_key_released`, but those edges are
-/// relative to *its* update count, and the engine pumps the OS queue twice per
-/// frame (`Window.pollEvents` and `Graphics.present`). Roughly half the edges
-/// would therefore land outside the window a program can observe. Snapshotting
-/// the level state once per `pollEvents` instead makes an edge mean exactly
-/// "since the previous frame", however often the backend updates.
+/// The edges are *not* derived by comparing level snapshots. The backend pumps
+/// the OS queue at several points in a frame — `Window.pollEvents`,
+/// `Graphics.present` — and a key tapped between two of them is already back up
+/// by the time the next snapshot is taken, so diffing levels drops the press
+/// entirely. That is invisible for letters (they arrive as text) but loses real
+/// keystrokes for backspace and the arrows, which have no other channel.
+///
+/// So the edges come from [`EDGES`], latched inside the backend's key callback
+/// as each key message is handled, and are drained here once per frame. Level
+/// state is still read straight from the window, where it cannot go stale.
 pub struct KeyState {
     down: [bool; KEY_SLOTS],
-    prev: [bool; KEY_SLOTS],
+    /// Edges drained from [`EDGES`] for this frame.
+    pressed: [bool; KEY_SLOTS],
+    released: [bool; KEY_SLOTS],
     /// Seconds each key has been held, or `-1` while it is up.
     held: [f32; KEY_SLOTS],
     /// Keys whose repeat timer fired this frame; `wasPressed` reports these
@@ -320,7 +326,8 @@ impl Default for KeyState {
     fn default() -> Self {
         KeyState {
             down: [false; KEY_SLOTS],
-            prev: [false; KEY_SLOTS],
+            pressed: [false; KEY_SLOTS],
+            released: [false; KEY_SLOTS],
             held: [-1.0; KEY_SLOTS],
             repeated: [false; KEY_SLOTS],
             // Love2D's `love.keyboard.setKeyRepeat` defaults to off.
@@ -337,7 +344,6 @@ impl KeyState {
         let dt = now.duration_since(self.last_sync).as_secs_f32();
         self.last_sync = now;
 
-        self.prev = self.down;
         self.down = [false; KEY_SLOTS];
         for key in window.get_keys() {
             let i = key as usize;
@@ -346,11 +352,18 @@ impl KeyState {
             }
         }
 
+        let (pressed, released) = drain_edges();
+        self.pressed = pressed;
+        self.released = released;
+
         for i in 0..KEY_SLOTS {
             self.repeated[i] = false;
             if !self.down[i] {
                 self.held[i] = -1.0;
-            } else if !self.prev[i] {
+            } else if self.pressed[i] || self.held[i] < 0.0 {
+                // A fresh press restarts the timer; so does finding a key
+                // already down that we never saw go down (the window regaining
+                // focus with a key held).
                 self.held[i] = 0.0;
             } else {
                 let before = self.held[i];
@@ -362,15 +375,17 @@ impl KeyState {
     }
 
     /// `true` if the key went down this frame, or its repeat timer fired.
+    ///
+    /// A key tapped and let go entirely within one frame still reports here —
+    /// that is the whole point of latching edges at the callback.
     pub fn is_pressed(&self, key: Key) -> bool {
         let i = key as usize;
-        (self.down[i] && !self.prev[i]) || self.repeated[i]
+        self.pressed[i] || self.repeated[i]
     }
 
     /// `true` if the key came up this frame.
     pub fn is_released(&self, key: Key) -> bool {
-        let i = key as usize;
-        !self.down[i] && self.prev[i]
+        self.released[key as usize]
     }
 
     /// The names of every key matching `pick`, in [`KEY_TABLE`] order.
@@ -434,7 +449,44 @@ thread_local! {
 /// grow it without bound.
 const TEXT_LIMIT: usize = 4096;
 
-/// Receives characters from the windowing backend. Installed by
+/// Key edges seen since the last [`KeyState::sync`], recorded as the backend
+/// handles each key message rather than sampled afterwards.
+///
+/// This is what makes a keystroke that begins and ends inside one frame
+/// survive: by the time anything polls `get_keys()` the key is up again, and
+/// the press would otherwise leave no trace. It lives beside [`TEXT`], and for
+/// the same reason — the callback runs inside `window.update()`, with the
+/// engine already mutably borrowed, so it cannot reach [`crate::state`].
+struct EdgeState {
+    pressed: [bool; KEY_SLOTS],
+    released: [bool; KEY_SLOTS],
+    /// The callback's own view of what is held, so the repeated `down`
+    /// messages the OS sends for a held key are not mistaken for new presses.
+    /// Key repeat is the engine's own business (see [`repeat_fired`]).
+    live: [bool; KEY_SLOTS],
+}
+
+thread_local! {
+    static EDGES: RefCell<EdgeState> = const {
+        RefCell::new(EdgeState {
+            pressed: [false; KEY_SLOTS],
+            released: [false; KEY_SLOTS],
+            live: [false; KEY_SLOTS],
+        })
+    };
+}
+
+/// Take this frame's edges, leaving the buffer empty for the next one.
+fn drain_edges() -> ([bool; KEY_SLOTS], [bool; KEY_SLOTS]) {
+    EDGES.with(|cell| {
+        let mut edges = cell.borrow_mut();
+        let pressed = std::mem::replace(&mut edges.pressed, [false; KEY_SLOTS]);
+        let released = std::mem::replace(&mut edges.released, [false; KEY_SLOTS]);
+        (pressed, released)
+    })
+}
+
+/// Receives characters and key edges from the windowing backend. Installed by
 /// [`crate::state::create`].
 pub(crate) struct TextCollector;
 
@@ -455,11 +507,37 @@ impl InputCallback for TextCollector {
             }
         });
     }
+
+    fn set_key_state(&mut self, key: Key, state: bool) {
+        let i = key as usize;
+        if i >= KEY_SLOTS {
+            return; // `Key::Unknown`, and anything a future backend adds
+        }
+        EDGES.with(|cell| {
+            let mut edges = cell.borrow_mut();
+            if edges.live[i] == state {
+                return; // OS auto-repeat, or a duplicate message
+            }
+            edges.live[i] = state;
+            if state {
+                edges.pressed[i] = true;
+            } else {
+                edges.released[i] = true;
+            }
+        });
+    }
 }
 
-/// Drop any text buffered from a previous window session.
-pub(crate) fn reset_text() {
+/// Drop the text and key edges buffered from a previous window session.
+pub(crate) fn reset_input() {
     TEXT.with(|cell| cell.borrow_mut().buf.clear());
+    EDGES.with(|cell| {
+        *cell.borrow_mut() = EdgeState {
+            pressed: [false; KEY_SLOTS],
+            released: [false; KEY_SLOTS],
+            live: [false; KEY_SLOTS],
+        };
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -632,24 +710,72 @@ mod tests {
         assert_eq!(parse_key("hyperspace"), None);
     }
 
+    /// Stand-in for a `sync` without a live window: take the callback's edges
+    /// and pair them with a level state supplied by the test.
+    fn sync_with(keys: &mut KeyState, down: &[Key]) {
+        keys.down = [false; KEY_SLOTS];
+        for key in down {
+            keys.down[*key as usize] = true;
+        }
+        let (pressed, released) = drain_edges();
+        keys.pressed = pressed;
+        keys.released = released;
+    }
+
     #[test]
     fn edges_are_relative_to_the_previous_frame() {
+        reset_input();
         let mut keys = KeyState::default();
+
         // Frame 1: the key goes down.
-        keys.prev = keys.down;
-        keys.down[Key::Space as usize] = true;
+        TextCollector.set_key_state(Key::Space, true);
+        sync_with(&mut keys, &[Key::Space]);
         assert!(keys.is_pressed(Key::Space));
         assert!(!keys.is_released(Key::Space));
 
-        // Frame 2: still held — a press is an edge, not a level.
-        keys.prev = keys.down;
+        // Frame 2: still held — a press is an edge, not a level. The OS repeats
+        // the down message for a held key; that is not a new press.
+        TextCollector.set_key_state(Key::Space, true);
+        sync_with(&mut keys, &[Key::Space]);
         assert!(!keys.is_pressed(Key::Space));
 
         // Frame 3: released.
-        keys.prev = keys.down;
-        keys.down[Key::Space as usize] = false;
+        TextCollector.set_key_state(Key::Space, false);
+        sync_with(&mut keys, &[]);
         assert!(keys.is_released(Key::Space));
         assert!(!keys.is_pressed(Key::Space));
+    }
+
+    #[test]
+    fn a_tap_inside_one_frame_still_reports_a_press() {
+        // The regression this whole mechanism exists for: press and release
+        // both land between two frames, so every level snapshot says "up".
+        // Diffing levels loses the keystroke; latching edges keeps it.
+        reset_input();
+        let mut keys = KeyState::default();
+
+        TextCollector.set_key_state(Key::Backspace, true);
+        TextCollector.set_key_state(Key::Backspace, false);
+        sync_with(&mut keys, &[]);
+
+        assert!(keys.is_pressed(Key::Backspace));
+        assert!(keys.is_released(Key::Backspace));
+
+        // And it is a one-frame event, not a sticky one.
+        sync_with(&mut keys, &[]);
+        assert!(!keys.is_pressed(Key::Backspace));
+        assert!(!keys.is_released(Key::Backspace));
+    }
+
+    #[test]
+    fn edges_do_not_leak_between_window_sessions() {
+        reset_input();
+        TextCollector.set_key_state(Key::Escape, true);
+        reset_input();
+
+        let mut keys = KeyState::default();
+        sync_with(&mut keys, &[]);
+        assert!(!keys.is_pressed(Key::Escape));
     }
 
     #[test]

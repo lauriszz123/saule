@@ -48,6 +48,46 @@ fn integers_and_floats() {
 }
 
 #[test]
+fn hex_and_binary_literals() {
+    assert_eq!(
+        lex("0xFF 0xff 0X10 0b1010 0B11"),
+        vec![
+            Token::Int(255),
+            Token::Int(255),
+            Token::Int(16),
+            Token::Int(10),
+            Token::Int(3),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn underscores_group_digits_in_a_base_literal() {
+    assert_eq!(
+        lex("0xFF_FF 0b1010_1010"),
+        vec![Token::Int(65535), Token::Int(170), Token::Eof]
+    );
+}
+
+/// `0` on its own, and a decimal that merely starts with one, must not be
+/// mistaken for a base prefix.
+#[test]
+fn a_bare_zero_is_still_a_decimal() {
+    assert_eq!(
+        lex("0 0.5 07"),
+        vec![Token::Int(0), Token::Float(0.5), Token::Int(7), Token::Eof]
+    );
+}
+
+#[test]
+fn a_base_literal_needs_digits_and_valid_ones() {
+    assert!(saule_lexer::Lexer::new("0x").tokenize().is_err());
+    assert!(saule_lexer::Lexer::new("0xGG").tokenize().is_err());
+    assert!(saule_lexer::Lexer::new("0b102").tokenize().is_err());
+}
+
+#[test]
 fn dot_after_int_is_member_access_when_not_digit() {
     assert_eq!(
         lex("1.foo"),
