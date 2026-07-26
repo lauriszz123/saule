@@ -103,7 +103,91 @@ impl Backend {
         // Last resort: the repair didn't parse either (unbalanced
         // brackets elsewhere, a broken string, ...). Scan the raw source
         // for the innermost unmatched `(` and resolve the call by name.
-        textual_fallback(&source, offset)
+        textual_fallback(&source, offset).and_then(drop_parameterless)
+    }
+}
+
+/// Drop signatures that take no arguments, and the whole response if
+/// nothing is left.
+///
+/// A parameterless call has nothing to tell you, and IntelliJ renders it
+/// as a literal `<no parameters>` row — noise sitting next to the call
+/// you're actually filling in, as with `update(dt: Timer.getDelta(`.
+///
+/// The AST path filters earlier, in [`help_from_module`], where spans
+/// are still around to reselect the enclosing level. This is the same
+/// rule for the textual fallback, which only ever has one signature.
+fn drop_parameterless(help: SignatureHelp) -> Option<SignatureHelp> {
+    let was_active = help
+        .active_signature
+        .and_then(|i| help.signatures.get(i as usize))
+        .map(|s| s.label.clone());
+
+    let signatures: Vec<SignatureInformation> = help
+        .signatures
+        .into_iter()
+        .filter(|s| s.parameters.as_ref().is_some_and(|p| !p.is_empty()))
+        .collect();
+    if signatures.is_empty() {
+        return None;
+    }
+
+    // If the caret was in the parameterless call we just removed, fall
+    // back to the outermost surviving level rather than showing nothing.
+    let active = was_active
+        .and_then(|l| signatures.iter().position(|s| s.label == l))
+        .unwrap_or(0);
+    let active_parameter = signatures[active].active_parameter;
+    Some(SignatureHelp {
+        signatures,
+        active_signature: Some(active as u32),
+        active_parameter,
+    })
+}
+
+impl Backend {
+    /// Log one line per signature-help request to the client's LSP
+    /// console: the caret's line as *the server* has it, with `[|]`
+    /// marking where the client said the caret is, and the signature we
+    /// answered with.
+    ///
+    /// Worth its noise because the three ways this feature goes wrong —
+    /// a stale document, a caret that isn't where it looks like it is,
+    /// and a genuinely wrong resolution — are indistinguishable from a
+    /// screenshot of the popup. Set `SAULE_LSP_TRACE=1` to enable.
+    pub(super) async fn trace_signature_help(
+        &self,
+        uri: &Url,
+        pos: Position,
+        help: &Option<SignatureHelp>,
+    ) {
+        if std::env::var_os("SAULE_LSP_TRACE").is_none() {
+            return;
+        }
+        let line = self
+            .docs
+            .get(uri.as_str())
+            .and_then(|e| e.source.lines().nth(pos.line as usize).map(str::to_string))
+            .unwrap_or_else(|| "<no such line>".into());
+        // Insert the marker by UTF-16 column, the unit the client counts in.
+        let units: Vec<u16> = line.encode_utf16().collect();
+        let col = (pos.character as usize).min(units.len());
+        let marked = format!(
+            "{}[|]{}",
+            String::from_utf16_lossy(&units[..col]),
+            String::from_utf16_lossy(&units[col..])
+        );
+        let got = help
+            .as_ref()
+            .and_then(|h| h.signatures.first())
+            .map(|s| s.label.as_str())
+            .unwrap_or("<none>");
+        self.client
+            .log_message(
+                tower_lsp::lsp_types::MessageType::INFO,
+                format!("sighelp {}:{} -> {got}  ::  {marked}", pos.line, pos.character),
+            )
+            .await;
     }
 }
 
@@ -483,25 +567,25 @@ fn build_help_native(
         if i > 0 {
             label.push_str(", ");
         }
-        let start = label.len() as u32;
+        let start = utf16_len(&label);
         let pname = names.get(i).map(|s| s.as_str()).unwrap_or("value");
         label.push_str(pname);
         label.push_str(": ");
         label.push_str(&render_type(ty));
-        let end = label.len() as u32;
+        let end = utf16_len(&label);
         param_ranges.push((start, end));
     }
     if let Some(var_ty) = &sig.variadic {
         if positional_n > 0 {
             label.push_str(", ");
         }
-        let start = label.len() as u32;
+        let start = utf16_len(&label);
         let vname = names.get(positional_n).map(|s| s.as_str()).unwrap_or("rest");
         label.push_str("...");
         label.push_str(vname);
         label.push_str(": ");
         label.push_str(&render_type(var_ty));
-        let end = label.len() as u32;
+        let end = utf16_len(&label);
         param_ranges.push((start, end));
     }
     label.push(')');
@@ -624,7 +708,7 @@ fn build_help(
         if i > 0 {
             label.push_str(", ");
         }
-        let start = label.len() as u32;
+        let start = utf16_len(&label);
         label.push_str(&p.name);
         label.push_str(": ");
         label.push_str(&render_type(&p.ty));
@@ -634,7 +718,7 @@ fn build_help(
         if p.default.is_some() {
             label.push_str(" = …");
         }
-        let end = label.len() as u32;
+        let end = utf16_len(&label);
         param_ranges.push((start, end));
     }
     label.push(')');
@@ -694,6 +778,18 @@ fn active_parameter(args: &[CallArgInfo], offset: usize, arity: usize) -> usize 
         }
     }
     idx.min(arity.saturating_sub(1).max(0))
+}
+
+/// Length of `s` in UTF-16 code units.
+///
+/// `ParameterInformation.label` offsets are indices into the signature
+/// label *as the client sees it*, and LSP defines string positions in
+/// UTF-16 code units — not Rust byte offsets. The label can contain
+/// non-ASCII (`" = …"` for a defaulted parameter), so handing out
+/// `label.len()` makes every offset past that point too large and the
+/// client slices out of bounds.
+fn utf16_len(s: &str) -> u32 {
+    s.encode_utf16().count() as u32
 }
 
 pub(super) fn render_type(ty: &Type) -> String {
@@ -786,7 +882,11 @@ struct Cx {
     /// `(enum, variant) -> fields` for tuple-style variants, which are
     /// called like constructors. Same pre-pass rationale as `user_fns`.
     enum_variants: HashMap<(String, String), Vec<Param>>,
-    best: Option<CallHit>,
+    /// Collection filter for [`Cx::record`]. `None` collects the calls
+    /// containing the cursor; `Some(r)` collects everything nested
+    /// inside `r`.
+    region: Option<std::ops::Range<usize>>,
+    hits: Vec<CallHit>,
 }
 
 struct Local {
@@ -795,18 +895,23 @@ struct Local {
 }
 
 impl Cx {
+    /// Two collection modes, one per pass in [`help_from_module`].
+    ///
+    /// `region: None` — only calls whose argument list contains the
+    /// cursor, i.e. the enclosing chain.
+    ///
+    /// `region: Some(r)` — every call nested anywhere inside `r`,
+    /// whether or not it contains the cursor. This is what makes the
+    /// signature list identical for every caret position inside one
+    /// call expression.
     fn record(&mut self, hit: CallHit) {
-        if !contains(&hit.args_span, self.offset) {
-            return;
+        let keep = match &self.region {
+            None => contains(&hit.args_span, self.offset),
+            Some(r) => hit.args_span.start >= r.start && hit.args_span.end <= r.end,
+        };
+        if keep {
+            self.hits.push(hit);
         }
-        let new_w = hit.args_span.end.saturating_sub(hit.args_span.start);
-        if let Some(prev) = &self.best {
-            let old_w = prev.args_span.end.saturating_sub(prev.args_span.start);
-            if new_w >= old_w {
-                return;
-            }
-        }
-        self.best = Some(hit);
     }
 
     fn visit_module(&mut self, module: &Module) {
@@ -1017,7 +1122,7 @@ impl Cx {
                         enclosing_class: self.enclosing_class.clone(),
                         user_fn: None,
                         local_fn: None,
-                        args_span: args_span(&obj.span, args, e.span.end),
+                        args_span: method_args_span(&obj.span, method, e.span.end),
                     });
                 }
             }
@@ -1274,8 +1379,37 @@ fn args_span(
     callee_or_obj.end..call_end
 }
 
+/// `(...)` region of `obj.method(...)`. The callee here is the
+/// *receiver*, so its span stops before `.method` — stepping over the
+/// dot and the name lands on the `(` and gives the same boundaries a
+/// free call gets. Falls back to the receiver's end if the arithmetic
+/// overshoots (whitespace around the `.`, and so on).
+fn method_args_span(
+    obj: &std::ops::Range<usize>,
+    method: &str,
+    call_end: usize,
+) -> std::ops::Range<usize> {
+    let lparen = obj.end + 1 + method.len();
+    if lparen < call_end {
+        lparen..call_end
+    } else {
+        obj.end..call_end
+    }
+}
+
+/// Is the cursor inside this call's argument list?
+///
+/// `span` runs from the `(` to one past the `)`, so both ends are
+/// *outside* the arg list and the test is strict on both sides:
+/// `f(|x)` and `f(x|)` are in, `f|(x)` and `f(x)|` are out.
+///
+/// The strictness is what makes nesting work. With `f(g())`, the two
+/// boundary positions `f(g|())` and `f(g()|)` sit exactly on the inner
+/// call's span ends; accepting them let the narrower inner call win
+/// there and the popup showed `g`'s parameters while the caret was
+/// plainly in `f`'s argument list.
 fn contains(span: &std::ops::Range<usize>, offset: usize) -> bool {
-    offset >= span.start && offset <= span.end
+    offset > span.start && offset < span.end
 }
 
 /// Pre-pass: collect every top-level `fn name(...)` declaration so the
@@ -1321,19 +1455,157 @@ fn collect_enum_variants(module: &Module) -> HashMap<(String, String), Vec<Param
     out
 }
 
-/// Walk `module` for the innermost call containing `offset` and render
-/// its signature. Shared by the normal path and the repair path.
+/// Render one signature per call in the expression the cursor is in,
+/// ordered by source position, with `active_signature` on the level the
+/// cursor actually sits in.
+///
+/// Returning the whole expression rather than just the innermost call is
+/// what makes the popup follow the caret in IntelliJ. LSP4IJ sets the
+/// list of signatures *once*, when the popup opens
+/// (`showParameterInfo` -> `setItemsToShow`); on a later cursor move
+/// `updateParameterInfo` re-requests but only feeds the response into
+/// `setUIComponentEnabled` / `setCurrentParameter`. So a response that
+/// swaps in a different single signature is silently ignored, while one
+/// that keeps the same list and moves `activeSignature` does update the
+/// display.
+///
+/// Hence two rules the caret can't break, however it moves — typing
+/// forward, arrowing back, or clicking straight onto some parameter:
+///
+/// 1. The list depends only on the *expression*, never on where in it
+///    the cursor is, so every position yields the same rows in the same
+///    order and only the selection differs.
+/// 2. The list never grows between responses (see
+///    [`reconcile_with_client`]), because the popup's rows are built
+///    once and indexed by position thereafter.
 fn help_from_module(module: &Module, offset: usize) -> Option<SignatureHelp> {
-    let mut cx = Cx {
-        offset,
-        locals: Vec::new(),
-        enclosing_class: None,
-        user_fns: collect_user_fns(module),
-        enum_variants: collect_enum_variants(module),
-        best: None,
+    let walk = |region: Option<std::ops::Range<usize>>| {
+        let mut cx = Cx {
+            offset,
+            locals: Vec::new(),
+            enclosing_class: None,
+            user_fns: collect_user_fns(module),
+            enum_variants: collect_enum_variants(module),
+            region,
+            hits: Vec::new(),
+        };
+        cx.visit_module(module);
+        cx.hits
     };
-    cx.visit_module(module);
-    resolve_hit(cx.best?, offset)
+
+    // Pass 1: the calls the cursor is actually inside. The widest of
+    // them is the whole call expression the caret is somewhere within.
+    let enclosing = walk(None);
+    let outermost = enclosing
+        .iter()
+        .max_by_key(|h| h.args_span.end.saturating_sub(h.args_span.start))?
+        .args_span
+        .clone();
+
+    // Pass 2: every call in that expression, cursor-containing or not.
+    // Ordered by source position so an entry keeps its index as the
+    // caret moves — the index is what the client selects by.
+    let mut hits = walk(Some(outermost));
+    hits.sort_by(|a, b| {
+        a.args_span
+            .start
+            .cmp(&b.args_span.start)
+            .then(a.args_span.end.cmp(&b.args_span.end))
+    });
+    // Runaway expression: fall back to just the enclosing chain rather
+    // than filling the popup with every call on the line.
+    if hits.len() > MAX_SIGNATURES {
+        hits = enclosing;
+        hits.sort_by(|a, b| {
+            a.args_span
+                .start
+                .cmp(&b.args_span.start)
+                .then(a.args_span.end.cmp(&b.args_span.end))
+        });
+    }
+
+    // Resolve each level, remembering its span so the innermost one
+    // containing the cursor can be selected afterwards. A level we
+    // can't resolve is skipped, not fatal: `unknownFn(Color(` still
+    // shows `Color`.
+    let mut entries: Vec<(std::ops::Range<usize>, SignatureInformation)> = Vec::new();
+    for hit in hits {
+        let span = hit.args_span.clone();
+        if let Some(help) = resolve_hit(hit, offset) {
+            for sig in help.signatures {
+                entries.push((span.clone(), sig));
+            }
+        }
+    }
+    // Drop levels that take no arguments *before* choosing the active
+    // one. IntelliJ renders those as a bare `<no parameters>` row, and
+    // dropping them first means a cursor inside `update(t.getDelta(|))`
+    // selects the enclosing `update` — which still contains the cursor —
+    // instead of falling back to an arbitrary row.
+    entries.retain(|(_, sig)| sig.parameters.as_ref().is_some_and(|p| !p.is_empty()));
+    if entries.is_empty() {
+        return None;
+    }
+
+    // Active = narrowest surviving entry whose arg list holds the
+    // cursor. Purely a function of the cursor against fixed spans, so
+    // it lands correctly whether the caret got there by typing, by
+    // arrowing back, or by a click straight onto a parameter.
+    let active = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, (span, _))| contains(span, offset))
+        .min_by_key(|(_, (span, _))| span.end.saturating_sub(span.start))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    let signatures: Vec<SignatureInformation> =
+        entries.into_iter().map(|(_, sig)| sig).collect();
+    let active_parameter = signatures[active].active_parameter;
+    Some(SignatureHelp {
+        signatures,
+        active_signature: Some(active as u32),
+        active_parameter,
+    })
+}
+
+/// Upper bound on signatures in one response. Keeps a dense expression
+/// from producing an unreadable popup.
+const MAX_SIGNATURES: usize = 8;
+
+/// Reconcile a fresh response against what the client already shows.
+///
+/// IntelliJ creates one UI row per signature when the popup opens and
+/// never rebuilds them, but LSP4IJ's `updateParameterInfo` indexes those
+/// rows by the position of every *later* response
+/// (`setUIComponentEnabled(i, …)`). A response with more signatures than
+/// the popup was opened with therefore throws ArrayIndexOutOfBounds
+/// inside the IDE.
+///
+/// So the list must never grow on a retrigger. When the fresh chain is
+/// longer, keep the client's own list and just move the selection to the
+/// matching entry.
+pub(super) fn reconcile_with_client(
+    fresh: SignatureHelp,
+    prev: &SignatureHelp,
+) -> SignatureHelp {
+    if fresh.signatures.len() <= prev.signatures.len() {
+        return fresh;
+    }
+    let active_label = fresh
+        .active_signature
+        .and_then(|i| fresh.signatures.get(i as usize))
+        .map(|s| s.label.clone());
+    let idx = active_label
+        .and_then(|l| prev.signatures.iter().position(|s| s.label == l))
+        .unwrap_or(0);
+    let mut out = prev.clone();
+    out.active_signature = Some(idx as u32);
+    out.active_parameter = fresh.active_parameter;
+    if let Some(s) = out.signatures.get_mut(idx) {
+        s.active_parameter = fresh.active_parameter;
+    }
+    out
 }
 
 /// Textual-fallback variant of [`collect_user_fns`]: re-lexes and
@@ -1681,9 +1953,17 @@ end
             .unwrap_or_else(|| panic!("needle {needle:?} not found"))
     }
 
+    /// The signature the user actually sees highlighted. The list is
+    /// ordered by source position and can carry several nesting levels,
+    /// so `active_signature` — not index 0 — is the current one.
     fn label(h: Option<SignatureHelp>, case: &str) -> String {
-        let mut h = h.unwrap_or_else(|| panic!("no signature help for {case}"));
-        h.signatures.remove(0).label
+        let h = h.unwrap_or_else(|| panic!("no signature help for {case}"));
+        let i = h.active_signature.unwrap_or(0) as usize;
+        h.signatures[i].label.clone()
+    }
+
+    fn active_label(h: &SignatureHelp) -> &str {
+        &h.signatures[h.active_signature.unwrap_or(0) as usize].label
     }
 
     /// Finished code: the call's parens are closed, so the document
@@ -1730,7 +2010,9 @@ end
             (
                 "function-typed local",
                 "  local f: fn(integer) -> integer = fn(n: integer) -> integer return n end\n  local z = f(1)\n",
-                "f(1)",
+                // Inside the args — a needle ending in `)` would put the
+                // caret past the close paren, which is outside the call.
+                "f(1",
                 "f(",
             ),
             ("nested inner call", "  local r = add(add(1, 2), 3)\n", "add(1", "add("),
@@ -1841,7 +2123,7 @@ end
             let h = help_mid_keystroke(&src, offset)
                 .unwrap_or_else(|| panic!("no signature help for {case}"));
             assert_eq!(h.active_parameter, Some(active), "{case}");
-            let got = &h.signatures[0].label;
+            let got = active_label(&h);
             assert!(got.starts_with(expected), "{case}: got {got:?}");
         }
     }
@@ -1909,8 +2191,291 @@ end
             let h = help_mid_keystroke(&src, offset)
                 .unwrap_or_else(|| panic!("no signature help for {case}"));
             assert_eq!(h.active_parameter, Some(active), "{case}");
-            let got = &h.signatures[0].label;
+            let got = active_label(&h);
             assert!(got.starts_with(expected), "{case}: got {got:?}");
+        }
+    }
+
+    /// Every parameter range must be a valid slice of the label
+    /// measured in UTF-16 code units — that's what the client indexes
+    /// with. A defaulted parameter renders `" = …"`, whose `…` is three
+    /// bytes but one code unit, so byte offsets would run past the end
+    /// of the label and the client would slice out of bounds.
+    #[test]
+    fn parameter_offsets_are_utf16_code_units() {
+        init_stdlib();
+        let src = "class Color
+  fn init(r: float = 1.0, g: float = 1.0, b: float = 1.0)
+  end
+end
+
+fn probe()
+  local c = Color(1.0)
+end
+";
+        let h = help_at(&src, src.rfind("Color(1.0").unwrap() + "Color(".len()).expect("help");
+        let sig = &h.signatures[0];
+        let units: Vec<u16> = sig.label.encode_utf16().collect();
+        assert!(sig.label.contains(" = …"), "label={}", sig.label);
+        let params = sig.parameters.as_ref().expect("parameters");
+        assert_eq!(params.len(), 3);
+        for (i, p) in params.iter().enumerate() {
+            let ParameterLabel::LabelOffsets([s, e]) = p.label else {
+                panic!("expected offset labels");
+            };
+            assert!(
+                s <= e && (e as usize) <= units.len(),
+                "param {i} range [{s}, {e}) out of bounds for label of {} units: {}",
+                units.len(),
+                sig.label
+            );
+            let slice = String::from_utf16(&units[s as usize..e as usize]).expect("utf16");
+            assert!(slice.starts_with(["r", "g", "b"][i]), "param {i} sliced to {slice:?}");
+        }
+    }
+
+    /// Nested calls: which signature is showing depends on the caret
+    /// position, and the boundaries have to be exact. `f(g())` has
+    /// four interesting spots — the caret is in `f`'s arg list
+    /// everywhere except strictly inside `g`'s parens.
+    #[test]
+    fn nested_call_switches_signature_at_the_paren_boundaries() {
+        init_stdlib();
+        let src = "class Color
+  fn init(r: float = 1.0, g: float = 1.0)
+  end
+end
+
+class View
+  fn setBackground(color: Color)
+  end
+end
+
+class PanelView extends View
+  fn init()
+    setBackground(Color())
+  end
+end
+";
+        let call = src.find("setBackground(Color())").expect("call site");
+        // setBackground(Color())
+        // ^0           ^13    ^20
+        for (case, at, expected) in [
+            ("before the argument", call + "setBackground(".len(), "setBackground("),
+            ("on the callee name", call + "setBackground(Color".len(), "setBackground("),
+            ("inside the inner parens", call + "setBackground(Color(".len(), "Color("),
+            ("after the inner call", call + "setBackground(Color()".len(), "setBackground("),
+        ] {
+            let got = label(help_at(src, at), case);
+            assert!(got.starts_with(expected), "{case}: expected {expected:?}, got {got:?}");
+        }
+        // Past the outer `)` the popup belongs to nobody.
+        assert!(
+            help_at(src, call + "setBackground(Color())".len()).is_none(),
+            "caret past the outer close paren should not report a signature"
+        );
+    }
+
+    /// A nested call reports one signature per enclosing level,
+    /// innermost first, with `active_signature` on the innermost. The
+    /// whole chain has to be in the *first* response: LSP4IJ fixes the
+    /// signature list when the popup opens and afterwards only moves
+    /// `activeSignature`, so a level missing here can never be shown.
+    #[test]
+    fn nested_call_reports_the_whole_enclosing_chain() {
+        init_stdlib();
+        let src = "class Color
+  fn init(r: float = 1.0, g: float = 1.0)
+  end
+end
+
+class View
+  fn setBackground(color: Color?)
+  end
+end
+
+class PanelView extends View
+  fn init()
+    self.setBackground(Color(10f, 10f))
+  end
+end
+";
+        let call = src.find("self.setBackground(Color").expect("call site");
+        let outer = help_at(src, call + "self.setBackground(".len()).expect("help");
+        let inner = help_at(src, call + "self.setBackground(Color(".len()).expect("help");
+
+        // The list is identical from both positions — same entries, same
+        // order. Only `active_signature` moves. This is the property the
+        // IDE depends on: it builds its rows once, from whichever
+        // response opened the popup, and thereafter only re-selects.
+        let labels = |h: &SignatureHelp| -> Vec<String> {
+            h.signatures.iter().map(|s| s.label.clone()).collect()
+        };
+        assert_eq!(labels(&outer), labels(&inner), "signature list must be stable");
+        assert_eq!(outer.signatures.len(), 2, "got {:?}", labels(&outer));
+        assert!(labels(&outer)[0].starts_with("setBackground("), "source order");
+        assert!(labels(&outer)[1].starts_with("Color("), "source order");
+
+        assert_eq!(outer.active_signature, Some(0));
+        assert!(active_label(&outer).starts_with("setBackground("));
+        assert_eq!(inner.active_signature, Some(1));
+        assert!(active_label(&inner).starts_with("Color("));
+    }
+
+    /// The response must never carry more signatures than the popup was
+    /// opened with: IntelliJ creates its rows once and LSP4IJ indexes
+    /// them by the position of every later response, so a longer list
+    /// throws ArrayIndexOutOfBounds inside the IDE.
+    #[test]
+    fn retrigger_never_grows_the_signature_list() {
+        let sig = |label: &str| SignatureInformation {
+            label: label.to_string(),
+            documentation: None,
+            parameters: Some(Vec::new()),
+            active_parameter: Some(0),
+        };
+        let prev = SignatureHelp {
+            signatures: vec![sig("setBackground(color: Color?)")],
+            active_signature: Some(0),
+            active_parameter: Some(0),
+        };
+        let fresh = SignatureHelp {
+            signatures: vec![sig("setBackground(color: Color?)"), sig("Color(r: float)")],
+            active_signature: Some(1),
+            active_parameter: Some(0),
+        };
+        let out = reconcile_with_client(fresh, &prev);
+        assert_eq!(out.signatures.len(), 1, "must not exceed the client's row count");
+
+        // Shrinking or staying level is safe, so the fresh answer wins.
+        let fresh = SignatureHelp {
+            signatures: vec![sig("Color(r: float)")],
+            active_signature: Some(0),
+            active_parameter: Some(1),
+        };
+        let out = reconcile_with_client(fresh, &prev);
+        assert_eq!(out.signatures.len(), 1);
+        assert!(out.signatures[0].label.starts_with("Color("));
+    }
+
+    /// A call that takes no arguments is never worth a popup row —
+    /// IntelliJ spells it `<no parameters>`. It's dropped from the
+    /// chain, and if that empties the chain there's no popup at all.
+    #[test]
+    fn parameterless_calls_are_not_offered() {
+        init_stdlib();
+        let src = "class Timer
+  fn getDelta() -> float
+    return 0.0
+  end
+end
+
+class Root
+  fn update(dt: float)
+  end
+end
+
+fn probe()
+  local t = Timer()
+  local root = Root()
+  root.update(t.getDelta())
+end
+";
+        let call = src.find("root.update(t.getDelta())").expect("call site");
+
+        // Caret inside the parameterless `getDelta()`: that level is
+        // dropped, leaving the enclosing `update` as the only row.
+        let h = help_at(src, call + "root.update(t.getDelta(".len()).expect("help");
+        let labels: Vec<&str> = h.signatures.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels.len(), 1, "getDelta should be filtered out: {labels:?}");
+        assert!(labels[0].starts_with("update("), "{labels:?}");
+        assert!(active_label(&h).starts_with("update("));
+
+        // Caret inside the parameterless call with nothing enclosing it:
+        // no popup at all.
+        let src = "class Timer
+  fn getDelta() -> float
+    return 0.0
+  end
+end
+
+fn probe()
+  local t = Timer()
+  local d = t.getDelta()
+end
+";
+        let at = src.find("t.getDelta()").expect("call") + "t.getDelta(".len();
+        assert!(help_at(src, at).is_none(), "parameterless call should not open a popup");
+    }
+
+    /// The caret is not required to arrive by typing. It can be arrowed
+    /// backwards, arrowed forwards again, or clicked straight onto any
+    /// argument — every position has to resolve on its own terms.
+    ///
+    /// Two invariants, checked at every offset in the expression: the
+    /// signature *list* never changes (the IDE builds its rows once), and
+    /// the *selection* always names the call the caret is really in.
+    #[test]
+    fn caret_can_land_anywhere_in_a_nested_call() {
+        init_stdlib();
+        let src = "class Color
+  static fn rgb(r: integer, g: integer, b: integer) -> Color?
+    return nil
+  end
+end
+
+class Root
+  fn setBackground(color: Color?)
+  end
+end
+
+fn probe()
+  local root = Root()
+  root.setBackground(Color.rgb(38, 38, 38))
+end
+";
+        let text = "root.setBackground(Color.rgb(38, 38, 38))";
+        let call = src.find(text).expect("call site");
+        let outer_open = "root.setBackground(".len();
+        let inner_open = "root.setBackground(Color.rgb(".len();
+        let inner_close = text.rfind("))").expect("closers");
+
+        // 1. The list is the same at every live position.
+        let mut seen: Option<Vec<String>> = None;
+        for i in outer_open..=inner_close + 1 {
+            let h = help_at(src, call + i).unwrap_or_else(|| panic!("no help at +{i}"));
+            let labels: Vec<String> = h.signatures.iter().map(|s| s.label.clone()).collect();
+            match &seen {
+                None => seen = Some(labels),
+                Some(prev) => assert_eq!(prev, &labels, "list changed at +{i}"),
+            }
+        }
+        let labels = seen.expect("swept at least one offset");
+        assert_eq!(labels.len(), 2, "{labels:?}");
+        assert!(labels[0].starts_with("setBackground("), "source order: {labels:?}");
+        assert!(labels[1].starts_with("rgb("), "source order: {labels:?}");
+
+        // 2. The selection tracks the caret, in both directions.
+        for i in outer_open..inner_open {
+            let h = help_at(src, call + i).expect("help");
+            assert!(active_label(&h).starts_with("setBackground("), "at +{i}");
+        }
+        for i in inner_open..=inner_close {
+            let h = help_at(src, call + i).expect("help");
+            assert!(active_label(&h).starts_with("rgb("), "at +{i}");
+        }
+        // Between the two closing parens we're back in the outer call.
+        let h = help_at(src, call + inner_close + 1).expect("help");
+        assert!(active_label(&h).starts_with("setBackground("));
+        // Past the whole expression there's nothing to show.
+        assert!(help_at(src, call + text.len()).is_none());
+
+        // 3. Clicking directly onto an argument selects that slot —
+        //    including jumping backwards from the third to the first.
+        for (slot, delta) in [(0u32, 0usize), (1, 4), (2, 8), (0, 0)] {
+            let h = help_at(src, call + inner_open + delta).expect("help");
+            assert!(active_label(&h).starts_with("rgb("), "slot {slot}");
+            assert_eq!(h.active_parameter, Some(slot), "clicked slot {slot}");
         }
     }
 
