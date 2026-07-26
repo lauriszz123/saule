@@ -31,6 +31,30 @@ effect. **Keep the defaults in step with the IntelliJ plugin's
 `SauleCodeStyleSettingsProvider.customizeDefaults`** — if they disagree, the
 editor silently reformats to something other than what `saule fmt` produces.
 
+## Indentation precedence
+
+A project declares its style once in `saule.config`; the `config` module
+parses it and both front-ends layer it the same way. Lowest to highest:
+
+1. `FmtOptions::default()` — 2 spaces.
+2. The editor's `tabSize` / `insertSpaces` (language server only).
+3. `saule.config`:
+   ```text
+   indent_style: "tab"   -- or "space"
+   indent_width: 4       -- columns, 1..=16
+   ```
+4. `saule fmt --indent <n>` / `--tabs` / `--spaces`.
+
+`saule.config` deliberately outranks the editor's Code Style page: the style
+belongs to the project rather than to whoever opened it, and that is what
+makes Reformat and `saule fmt -w` produce byte-identical files. A project
+that declares neither key leaves the editor in charge, exactly as before.
+
+Keys are optional and independent — `indent_style: "tab"` alone keeps the
+current width for column arithmetic (4 columns if the editor didn't supply
+one). A malformed value is reported by the CLI and then ignored, so a typo
+falls back rather than silently reindenting the project.
+
 ## Layout rules
 
 - **Blank lines** collapse to at most one, and a blank line the author left

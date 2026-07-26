@@ -52,26 +52,50 @@ from the same `saule-lsp` binary the VS Code and Neovim integrations use.
 
 ## Indentation, tabs and spaces
 
-**Editor ▸ Code Style ▸ Saule ▸ Tabs and Indents** is the single place that
-decides how `.sau` is laid out. It defaults to `saule fmt`'s canonical style —
-2 spaces — but *Use tab character* (with *Smart tabs*, *Tab size*, *Indent* and
+**Editor ▸ Code Style ▸ Saule ▸ Tabs and Indents** decides how `.sau` is laid
+out for projects that don't declare a style of their own (see *Project-wide
+indentation* below). It defaults to `saule fmt`'s canonical style — 2 spaces —
+but *Use tab character* (with *Smart tabs*, *Tab size*, *Indent* and
 *Continuation indent*) is a first-class choice, and everything follows it:
 
 * **Typing.** Enter indents the new line from the enclosing `class` / `fn` /
   `if` / `match` block, and `end`, `else`, `elseif`, `until`, `catch` and `case`
   pull back out a level as you type them. Computed by `SauleIndentModel`, which
   mirrors the printer in `crates/saule-fmt` — keep the two in step.
-* **Reformat** (`Ctrl+Alt+L`, or Actions on Save). LSP4IJ turns the same options
-  into the `insertSpaces` / `tabSize` of the `textDocument/formatting` request,
-  and `saule-lsp` feeds them straight into `FmtOptions`.
+* **Reformat** (`Ctrl+Alt+L`, or Actions on Save). `SauleFormattingFeature`
+  reads the same options off the file and sends them as the `insertSpaces` /
+  `tabSize` of the `textDocument/formatting` request, and `saule-lsp` feeds
+  them straight into `FmtOptions`.
 
-One wrinkle worth knowing: LSP has a single `tabSize`, and LSP4IJ fills it from
-**Tab size**, not **Indent**. `saule fmt` uses it as the indent width, so the two
-want to stay equal. Set *Indent* to 4 and leave *Tab size* at 2 and the editor
-will indent by 4 while Reformat pulls the file back to 2.
+Note that LSP has a single `tabSize` where the page has both **Indent** and
+**Tab size**. The request carries whichever of the two decides the width of one
+level — *Indent* for spaces, *Tab size* when *Use tab character* is on — so the
+two only have to agree if you want the editor and a tab-rendering elsewhere to
+line up. (Older builds of this plugin left that to LSP4IJ, which always sent
+*Tab size*; a page set to indent 4 / tab size 2 formatted to 2. Requires
+LSP4IJ 0.20 or newer.)
 
-The `saule fmt` CLI has no flags for this yet — it always prints the canonical
-2 spaces. If you switch the IDE to tabs, format from the IDE, not the CLI.
+### Project-wide indentation
+
+A style set in Code Style lives in *your* IDE, so a teammate's Reformat — or a
+`saule fmt -w` from a terminal — can still pull the files back to something
+else. To settle it for everyone, declare it in the project's `saule.config`:
+
+```text
+indent_style: "tab"   -- or "space"
+indent_width: 4       -- columns, 1..=16
+```
+
+`saule-lsp` applies those on top of whatever LSP4IJ sent, so the config wins
+over the Code Style page for files inside that project, and `saule fmt`
+reads the same keys. Reformat and the CLI then produce identical files.
+
+The CLI can also be pointed at a style directly, which overrides the config
+for that run:
+
+```bash
+saule fmt -w --tabs --indent 4 src/TestPanel.sau
+```
 
 ## Prerequisites
 

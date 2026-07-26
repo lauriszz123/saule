@@ -1289,6 +1289,8 @@ entry: "main.sau"
 src_dirs: ["src"]
 dependencies: ["../shared-lib", "~/code/json"]
 min_saule_version: "2026.1.0"
+indent_style: "space"
+indent_width: 2
 ```
 
 Recognised keys:
@@ -1301,8 +1303,15 @@ Recognised keys:
 | `src_dirs` | List of directories to search when resolving imports |
 | `dependencies` | List of paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory |
 | `min_saule_version` | Refuses to run if the toolchain reports a lower version |
+| `indent_style` | Formatting: `"tab"` or `"space"` (default `"space"`) |
+| `indent_width` | Formatting: columns per indent level, 1–16 (default `2`) |
 
 Unknown keys are ignored.
+
+The two `indent_*` keys are what `saule fmt` and the language server both read,
+so a project's declared style survives a Reformat in the IDE and a `saule fmt -w`
+in a terminal alike. They override the editor's own Code Style settings; the
+`saule fmt --indent <n>` / `--tabs` / `--spaces` flags override them in turn.
 
 ### Recommended Project Structure
 

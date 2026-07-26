@@ -14,6 +14,7 @@ use minifb::{Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
 
 use crate::font::{self, Align, FontRes};
 use crate::geom::{self, ArcType, LineJoin, Point, Transform};
+use crate::keyboard::{self, KeyState, TextCollector};
 use crate::raster::{self, BlendMode, Paint, Rect, Surface};
 
 /// Target frame time for the 60 FPS cap.
@@ -77,6 +78,8 @@ pub struct Engine {
     stack: Vec<Saved>,
     /// Bilinear rather than nearest sampling for transformed blits.
     linear_filter: bool,
+    /// Per-frame keyboard edges, latched by [`Engine::poll_events`].
+    keys: KeyState,
     /// Instant the next presented frame should be released at — the single
     /// 60 FPS pacing point (see [`Engine::present`]).
     next_frame: Instant,
@@ -111,6 +114,11 @@ pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
     // `update_with_buffer` would each block and halve the frame rate.
     window.set_target_fps(0);
 
+    // Typed text arrives through this callback while `update` pumps the queue;
+    // `Keyboard.getTextInput` drains what it collects.
+    window.set_input_callback(Box::new(TextCollector));
+    keyboard::reset_text();
+
     ENGINE.with(|cell| {
         *cell.borrow_mut() = Some(Engine {
             window,
@@ -122,6 +130,7 @@ pub fn create(width: i64, height: i64, title: &str) -> Result<(), String> {
             st: GState::default(),
             stack: Vec::new(),
             linear_filter: true,
+            keys: KeyState::default(),
             next_frame: Instant::now() + FRAME_DUR,
         });
     });
@@ -178,6 +187,25 @@ impl Engine {
         self.window.is_key_down(key)
     }
 
+    /// The canonical names of every key held right now, in the keyboard
+    /// module's table order. Unnameable keys are skipped.
+    pub fn keys_held(&self) -> Vec<&'static str> {
+        self.window
+            .get_keys()
+            .into_iter()
+            .filter_map(keyboard::key_name)
+            .collect()
+    }
+
+    /// This frame's keyboard edges (`wasPressed` / `wasReleased`).
+    pub fn keys(&self) -> &KeyState {
+        &self.keys
+    }
+
+    pub fn keys_mut(&mut self) -> &mut KeyState {
+        &mut self.keys
+    }
+
     /// The window's framebuffer dimensions as `(width, height)`.
     pub fn size(&self) -> (usize, usize) {
         (self.screen.w, self.screen.h)
@@ -190,9 +218,11 @@ impl Engine {
     }
 
     /// Pump the OS event queue without presenting a frame. Keeps
-    /// `is_open` / input fresh at the top of the loop.
+    /// `is_open` / input fresh at the top of the loop, and is the frame
+    /// boundary the keyboard's press/release edges are measured against.
     pub fn poll_events(&mut self) {
         self.window.update();
+        self.keys.sync(&self.window);
     }
 
     /// Present the framebuffer to the window, then sleep until the next 60 FPS

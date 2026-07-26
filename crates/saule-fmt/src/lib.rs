@@ -22,8 +22,19 @@
 //!   drained at the right indent so they don't leak past the block.
 //! * Blank lines between source comments are preserved when ≥ 2 newlines
 //!   separated them in the original source.
+//!
+//! ## Indentation
+//!
+//! [`FmtOptions`] carries the indent unit and width. A project can declare
+//! them once in its `saule.config` — see [`config`] for the keys and for the
+//! precedence between that file, an editor's LSP options, and `saule fmt`'s
+//! own flags.
 
 use std::{collections::VecDeque, fmt::Write, ops::Range};
+
+pub mod config;
+
+pub use config::ConfigIndent;
 
 use saule_ast::{
     BinOp, CallArg, ClassMember, Decl, EnumVariant, Expr, ImportNames, LambdaBody, MatchArm,

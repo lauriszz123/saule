@@ -17,6 +17,20 @@ saule --help | -h
 saule --version | -V
 ```
 
+### `fmt` indentation
+
+| Flag | Effect |
+|---|---|
+| `--indent <n>` | Columns per indent level, 1–16 (`--indent=4` also works) |
+| `--tabs` | Indent with hard tabs |
+| `--spaces` | Indent with spaces |
+
+Without flags, each file follows the nearest `saule.config` above it
+(`indent_style:` / `indent_width:`), and files in no project get the
+canonical 2 spaces. Flags override the config for that run. See
+[`saule-fmt`](../saule-fmt/README.md#indentation-precedence) for how this
+lines up with the options an editor sends the language server.
+
 | Module    | Responsibility                                         |
 |-----------|--------------------------------------------------------|
 | `run`     | File / project execution (lex → parse → typeck → `Main`) |

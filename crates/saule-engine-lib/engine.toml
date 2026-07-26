@@ -312,12 +312,67 @@ native_symbol = "saule_export_Graphics_translate"
 
 [exports.Keyboard]
 type = "class"
-doc = "Keyboard input state."
+doc = "Keyboard input: key state, per-frame press/release edges, and typed text."
+
+[[exports.Keyboard.methods]]
+name = "getKeysDown"
+sig = "fn() -> table<string>"
+native_symbol = "saule_export_Keyboard_getKeysDown"
+
+[[exports.Keyboard.methods]]
+name = "getKeysPressed"
+sig = "fn() -> table<string>"
+native_symbol = "saule_export_Keyboard_getKeysPressed"
+
+[[exports.Keyboard.methods]]
+name = "getKeysReleased"
+sig = "fn() -> table<string>"
+native_symbol = "saule_export_Keyboard_getKeysReleased"
+
+[[exports.Keyboard.methods]]
+name = "getTextInput"
+sig = "fn() -> string"
+native_symbol = "saule_export_Keyboard_getTextInput"
+
+[[exports.Keyboard.methods]]
+name = "hasKeyRepeat"
+sig = "fn() -> boolean"
+native_symbol = "saule_export_Keyboard_hasKeyRepeat"
+
+[[exports.Keyboard.methods]]
+name = "hasTextInput"
+sig = "fn() -> boolean"
+native_symbol = "saule_export_Keyboard_hasTextInput"
+
+[[exports.Keyboard.methods]]
+name = "isAnyDown"
+sig = "fn(keys: table<string>) -> boolean"
+native_symbol = "saule_export_Keyboard_isAnyDown"
 
 [[exports.Keyboard.methods]]
 name = "isDown"
 sig = "fn(key: string) -> boolean"
 native_symbol = "saule_export_Keyboard_isDown"
+
+[[exports.Keyboard.methods]]
+name = "setKeyRepeat"
+sig = "fn(enable: boolean) -> nil"
+native_symbol = "saule_export_Keyboard_setKeyRepeat"
+
+[[exports.Keyboard.methods]]
+name = "setTextInput"
+sig = "fn(enable: boolean) -> nil"
+native_symbol = "saule_export_Keyboard_setTextInput"
+
+[[exports.Keyboard.methods]]
+name = "wasPressed"
+sig = "fn(key: string) -> boolean"
+native_symbol = "saule_export_Keyboard_wasPressed"
+
+[[exports.Keyboard.methods]]
+name = "wasReleased"
+sig = "fn(key: string) -> boolean"
+native_symbol = "saule_export_Keyboard_wasReleased"
 
 [exports.Mouse]
 type = "class"

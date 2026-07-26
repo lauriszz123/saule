@@ -5,6 +5,23 @@ class Test
   end
 end
 
+-- A named argument fills the parameter it names, so a *required* parameter
+-- can be satisfied without passing anything positionally.
+class Box
+  w: integer
+  h: integer
+
+  fn init(w: integer, h: integer = 2)
+    self.w = w
+    self.h = h
+  end
+
+  fn resize(w: integer, h: integer) -> nil
+    self.w = w
+    self.h = h
+  end
+end
+
 class Main
   static local fn test(first: string?, second: string)
     println(first, second)
@@ -15,5 +32,18 @@ class Main
     local testify: Test = Test(named: "Parameter")
     Test(sec: "Just a test")
     Test("And again", sec: "but reversed")
+
+    local b: Box = Box(w: 5, h: 6)
+    println(b.w, b.h)
+
+    local defaulted: Box = Box(w: 1)
+    println(defaulted.w, defaulted.h)
+
+    -- Out of order, and mixed with a positional argument.
+    local swapped: Box = Box(h: 9, w: 8)
+    println(swapped.w, swapped.h)
+
+    b.resize(3, h: 4)
+    println(b.w, b.h)
   end
 end

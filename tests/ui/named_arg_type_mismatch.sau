@@ -1,0 +1,17 @@
+-- ERROR: a named argument is checked against the parameter it names, so
+-- passing a string where `w: integer` is declared is rejected.
+
+class Box
+  w: integer
+
+  fn init(w: integer)
+    self.w = w
+  end
+end
+
+class Main
+  static fn main()
+    local b: Box = Box(w: "wide")
+    println(b.w)
+  end
+end

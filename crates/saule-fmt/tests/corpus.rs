@@ -379,3 +379,112 @@ fn indent_width_is_configurable() {
     );
     assert!(tabs.contains("\n\tstatic fn main()"), "want tabs:\n{tabs}");
 }
+
+/// A non-default indent must survive the same round trip as the canonical
+/// one: a tab-indented project reformatted by `saule fmt --tabs` (or by a
+/// `saule.config` that declares tabs) has to stay parseable and converge.
+#[test]
+fn corpus_round_trips_under_a_configured_indent() {
+    use saule_fmt::{ConfigIndent, FmtOptions};
+
+    let styles = [
+        ("indent_style: \"tab\"\n", "\t"),
+        ("indent_width: 4\n", "    "),
+    ];
+    let mut failures: Vec<String> = Vec::new();
+
+    for (config, unit) in styles {
+        let options = ConfigIndent::parse(config).apply_to(FmtOptions::default());
+        for path in corpus_files() {
+            let Ok(src) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let once = match format_with_options(&src, options) {
+                Ok(s) => s,
+                Err(e) => {
+                    failures.push(format!(
+                        "{} [{config:?}]: format failed: {e}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            match format_with_options(&once, options) {
+                Ok(twice) if twice == once => {}
+                Ok(twice) => failures.push(format!(
+                    "{} [{config:?}]: not idempotent\n--- first ---\n{once}--- second ---\n{twice}",
+                    path.display()
+                )),
+                Err(e) => failures.push(format!(
+                    "{} [{config:?}]: re-format failed (output isn't parseable): {e}",
+                    path.display()
+                )),
+            }
+            // Nothing may leak the canonical two spaces into a file that
+            // asked for something else.
+            if let Some(bad) = once
+                .lines()
+                .find(|l| l.starts_with(' ') || l.starts_with('\t'))
+                .filter(|l| !l.starts_with(unit))
+            {
+                failures.push(format!(
+                    "{} [{config:?}]: indented line does not use the configured unit: {bad:?}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} failure(s):\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+/// Every `.sau` file the corpus test above formats.
+fn corpus_files() -> Vec<PathBuf> {
+    let dir = workspace_root().join("tests");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        panic!("could not read {}", dir.display())
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("sau"))
+        // Same exclusion as `corpus_round_trips_and_is_idempotent`.
+        .filter(|p| p.file_name().and_then(|s| s.to_str()) != Some("pipe_then.sau"))
+        .collect()
+}
+
+/// Lossless format with an explicit [`saule_fmt::FmtOptions`].
+fn format_with_options(src: &str, options: saule_fmt::FmtOptions) -> Result<String, String> {
+    let raw = saule_lexer::Lexer::new(src)
+        .tokenize_with_trivia()
+        .map_err(|e| format!("{e:?}"))?;
+    let mut comments: Vec<Comment> = Vec::new();
+    let mut tokens = Vec::with_capacity(raw.len());
+    for tok in raw {
+        match tok.value {
+            Token::LineComment(text) => comments.push(Comment {
+                span: tok.span,
+                kind: CommentKind::Line,
+                text,
+            }),
+            Token::BlockComment(text) => comments.push(Comment {
+                span: tok.span,
+                kind: CommentKind::Block,
+                text,
+            }),
+            other => tokens.push(saule_ast::Spanned {
+                value: other,
+                span: tok.span,
+            }),
+        }
+    }
+    let module = saule_parser::parse(tokens).map_err(|e| format!("{e:?}"))?;
+    Ok(saule_fmt::format_module_with_options(
+        &module, src, &comments, options,
+    ))
+}

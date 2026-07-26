@@ -20,19 +20,19 @@ import com.intellij.psi.codeStyle.LanguageCodeStyleSettingsProvider
  * 1. **Typing.** [com.saule.lang.format.SauleIndentModel] renders the indent it
  *    computes with these options, so Enter, `Adjust Indent`, and the auto-dedent
  *    of `end` all produce tabs or spaces exactly as configured.
- * 2. **Reformat.** LSP4IJ turns them into the `FormattingOptions` of a
- *    `textDocument/formatting` request (`insertSpaces` from *Use tab character*,
- *    `tabSize` from *Tab size*), and `saule-lsp` feeds those straight into
+ * 2. **Reformat.** [com.saule.lang.lsp.SauleFormattingFeature] turns them into
+ *    the `FormattingOptions` of a `textDocument/formatting` request
+ *    (`insertSpaces` from *Use tab character*, `tabSize` from *Indent*, or from
+ *    *Tab size* when tabs are on), and `saule-lsp` feeds those straight into
  *    `FmtOptions` — see `fmt_options` in `crates/saule-lsp/src/server/format.rs`.
  * 3. **Actions on Save ▸ Reformat code** builds its file-type list from the
  *    languages that have a code-style page; without this provider `.sau` never
  *    appears there.
  *
- * Note the asymmetry in (2): the LSP protocol has a single `tabSize`, and
- * LSP4IJ fills it from *Tab size*, not *Indent*. `saule fmt` uses it as the
- * indent width, so the two want to stay equal — hence the defaults below. If
- * you set *Indent* to 4 but leave *Tab size* at 2, the editor will indent by 4
- * while Reformat pulls the file back to 2.
+ * The protocol has a single `tabSize` where this page has both *Indent* and
+ * *Tab size*, so (2) picks whichever of the two actually decides the width of
+ * one level. Keeping them equal — as the defaults below do — means never having
+ * to think about it.
  *
  * Deliberately *not* a `FormattingModelBuilder`: the formatting itself is done
  * by the language server, and registering a PSI formatter here would give the
@@ -95,7 +95,8 @@ class SauleCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider() {
         // them, and tabs are a first-class choice.
         indentOptions.INDENT_SIZE = SauleIndentDefaults.INDENT
         indentOptions.CONTINUATION_INDENT_SIZE = SauleIndentDefaults.CONTINUATION_INDENT
-        // Kept equal to INDENT_SIZE on purpose; see the class docs.
+        // Kept equal to INDENT_SIZE so switching *Use tab character* on doesn't
+        // also change how wide a level is; see the class docs.
         indentOptions.TAB_SIZE = SauleIndentDefaults.INDENT
         indentOptions.USE_TAB_CHARACTER = false
         // Tabs-to-indent, spaces-to-align, for when the user does switch tabs on.

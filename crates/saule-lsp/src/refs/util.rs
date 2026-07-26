@@ -145,6 +145,45 @@ pub(super) fn inferred_type_of(
     }
 }
 
+/// Find the byte range of the module path inside an `import … from …`
+/// declaration, for either spelling of the path.
+///
+/// `from "a/b"` sits between quotes; `from a.b` is bare, and the parser ends
+/// the declaration's span at its last segment, so the bare path is the span's
+/// suffix. Only handling the quoted form is what used to make goto-definition
+/// silently do nothing on `import * from Geometry`.
+pub(super) fn locate_import_path(
+    source: &str,
+    range: &Range<usize>,
+    path: &str,
+    quoted: bool,
+) -> Option<Range<usize>> {
+    if quoted {
+        return locate_string_literal(source, range, path);
+    }
+
+    let end = range.end.min(source.len());
+    if let Some(start) = end.checked_sub(path.len())
+        && start >= range.start
+        && source.get(start..end) == Some(path)
+    {
+        return Some(start..end);
+    }
+
+    // Whitespace between segments (`from a . b`) makes the joined path differ
+    // from the source text; fall back to everything after the `from` keyword.
+    let slice = source.get(range.start..end)?;
+    let after_from = range.start + slice.rfind("from")? + "from".len();
+    let tail = source.get(after_from..end)?;
+    let start = after_from + (tail.len() - tail.trim_start().len());
+
+    if start < end {
+        Some(start..end)
+    } else {
+        None
+    }
+}
+
 /// Find the byte range of `path`'s string-literal occurrence inside an
 /// `import "…"` statement. Looks for the first quote after the start
 /// of `range`, then matches a closing quote at `start + path.len()+1`.

@@ -3,6 +3,7 @@ package com.saule.lang.lsp
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerFactory
+import com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures
 import com.redhat.devtools.lsp4ij.server.CannotStartServerException
 import com.redhat.devtools.lsp4ij.server.OSProcessStreamConnectionProvider
 import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
@@ -49,4 +50,10 @@ class SauleLanguageServerFactory : LanguageServerFactory {
             }
         }
     }
+
+    /**
+     * Formatting requests carry the Saule code style rather than LSP4IJ's
+     * editor-derived guess — see [SauleFormattingFeature].
+     */
+    override fun createClientFeatures(): LSPClientFeatures = SauleClientFeatures()
 }
