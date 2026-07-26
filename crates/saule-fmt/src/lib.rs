@@ -54,7 +54,7 @@ pub enum CommentKind {
 /// ends with exactly one trailing newline (or is empty for an empty
 /// module).
 pub fn format_module(module: &Module) -> String {
-    let mut p = Printer::new("", &[]);
+    let mut p = Printer::new("", &[], FmtOptions::default());
     p.module(module);
     p.finish()
 }
@@ -64,9 +64,69 @@ pub fn format_module(module: &Module) -> String {
 /// tell same-line trailing comments from leading ones and to preserve
 /// blank-line gaps.
 pub fn format_module_with_comments(module: &Module, source: &str, comments: &[Comment]) -> String {
-    let mut p = Printer::new(source, comments);
+    format_module_with_options(module, source, comments, FmtOptions::default())
+}
+
+/// Like [`format_module_with_comments`] but with an explicit layout
+/// configuration.
+///
+/// This is what the language server calls, mapping the editor's LSP
+/// `FormattingOptions` (`tabSize` / `insertSpaces`) onto [`FmtOptions`] — so an
+/// IDE's Code Style page actually drives the output instead of being ignored.
+pub fn format_module_with_options(
+    module: &Module,
+    source: &str,
+    comments: &[Comment],
+    options: FmtOptions,
+) -> String {
+    let mut p = Printer::new(source, comments, options);
     p.module(module);
     p.finish()
+}
+
+/// Layout configuration for the printer.
+///
+/// [`Default`] is the canonical Saule style — 2-space indent, 100-column soft
+/// target — and is what `saule fmt` uses when the caller has no opinion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FmtOptions {
+    /// Columns per indent level. Clamped to `1..=16` on use, so a client
+    /// sending `0` can't produce unindented output.
+    pub indent_width: usize,
+    /// Indent with hard tabs instead of spaces. `indent_width` still
+    /// describes how wide one level *displays*, which is what the width
+    /// calculations need.
+    pub use_tabs: bool,
+    /// Soft target for one rendered line; layouts that can break (table
+    /// literals, pipelines, argument lists) flip to multi-line past it.
+    pub max_width: usize,
+}
+
+impl Default for FmtOptions {
+    fn default() -> Self {
+        FmtOptions {
+            indent_width: 2,
+            use_tabs: false,
+            max_width: 100,
+        }
+    }
+}
+
+impl FmtOptions {
+    /// One indent level as it is written to the output.
+    fn unit(&self) -> String {
+        if self.use_tabs {
+            "\t".to_string()
+        } else {
+            " ".repeat(self.indent_width.clamp(1, 16))
+        }
+    }
+
+    /// Display width of one indent level, used for column arithmetic. A hard
+    /// tab is counted as `indent_width` columns.
+    fn display_width(&self) -> usize {
+        self.indent_width.clamp(1, 16)
+    }
 }
 
 struct Printer<'a> {
@@ -86,18 +146,26 @@ struct Printer<'a> {
     /// the last comment we drained, or 0. Used for blank-line preservation
     /// between consecutive comments.
     last_pos: usize,
+    /// End offset of the most recently drained leading comment. Unlike
+    /// `last_pos` this is never advanced past the comment, so it can measure
+    /// the gap the author left between a comment and the code below it.
+    last_comment_end: usize,
+    /// Layout configuration: indent unit and the soft line-width target.
+    opts: FmtOptions,
+    /// `opts.unit()`, precomputed — it is written on every indented line.
+    indent_unit: String,
+    /// Set on measurement sub-printers: every breakable construct must render
+    /// on one line.
+    ///
+    /// Without this a nested table or pipeline could emit newlines *into* the
+    /// candidate string being measured, so the caller would compare a
+    /// multi-line blob against the width budget and could then splice those
+    /// newlines back in as if they were an inline form.
+    force_inline: bool,
 }
 
-const INDENT: &str = "  ";
-
-/// Soft target for one rendered line. The `Expr::Pipe` layout uses this to
-/// decide whether a `when(...):a():b()` chain fits inline or should be
-/// broken across multiple lines. Anything past this threshold flips to
-/// the column-aligned multi-line shape.
-const MAX_LINE_WIDTH: usize = 100;
-
 impl<'a> Printer<'a> {
-    fn new(source: &'a str, comments: &'a [Comment]) -> Self {
+    fn new(source: &'a str, comments: &'a [Comment], opts: FmtOptions) -> Self {
         let mut queue: VecDeque<&'a Comment> = comments.iter().collect();
         // Tolerate unsorted inputs.
         queue.make_contiguous().sort_by_key(|c| c.span.start);
@@ -108,7 +176,34 @@ impl<'a> Printer<'a> {
             source,
             comments: queue,
             last_pos: 0,
+            last_comment_end: 0,
+            indent_unit: opts.unit(),
+            opts,
+            force_inline: false,
         }
+    }
+
+    /// A sub-printer sharing this printer's configuration and position, used
+    /// to render a candidate layout into a string so its width can be
+    /// measured before committing to it. Always renders on one line.
+    fn sub_printer(&self) -> Printer<'a> {
+        Printer {
+            out: String::new(),
+            indent: self.indent,
+            needs_indent: false,
+            source: self.source,
+            comments: VecDeque::new(),
+            last_pos: self.last_pos,
+            last_comment_end: self.last_comment_end,
+            opts: self.opts,
+            indent_unit: self.indent_unit.clone(),
+            force_inline: true,
+        }
+    }
+
+    /// The soft line-width target.
+    fn max_width(&self) -> usize {
+        self.opts.max_width
     }
 
     fn finish(mut self) -> String {
@@ -123,23 +218,24 @@ impl<'a> Printer<'a> {
         self.out
     }
 
-    fn write(&mut self, s: &str) {
+    /// Emit the pending indentation, if any. Kept separate so `write` and
+    /// `writef` cannot drift apart.
+    fn flush_indent(&mut self) {
         if self.needs_indent {
             for _ in 0..self.indent {
-                self.out.push_str(INDENT);
+                self.out.push_str(&self.indent_unit);
             }
             self.needs_indent = false;
         }
+    }
+
+    fn write(&mut self, s: &str) {
+        self.flush_indent();
         self.out.push_str(s);
     }
 
     fn writef(&mut self, args: std::fmt::Arguments<'_>) {
-        if self.needs_indent {
-            for _ in 0..self.indent {
-                self.out.push_str(INDENT);
-            }
-            self.needs_indent = false;
-        }
+        self.flush_indent();
         let _ = self.out.write_fmt(args);
     }
 
@@ -168,7 +264,13 @@ impl<'a> Printer<'a> {
     /// one per line at the current indent. Preserves blank-line gaps
     /// between consecutive source comments (≥ 2 newlines in the original
     /// source → blank line in the output).
-    fn drain_before(&mut self, pos: usize) {
+    ///
+    /// Returns whether anything was emitted, so callers can tell a comment
+    /// apart from an empty gap. `last_pos` can't answer that: it is a running
+    /// maximum that [`Printer::block`] deliberately advances past the comment
+    /// when anchoring to the block's first line.
+    fn drain_before(&mut self, pos: usize) -> bool {
+        let mut emitted = false;
         while let Some(c) = self.comments.front() {
             if c.span.start >= pos {
                 break;
@@ -187,7 +289,10 @@ impl<'a> Printer<'a> {
             self.write_comment(c);
             self.newline();
             self.last_pos = self.last_pos.max(c.span.end);
+            self.last_comment_end = c.span.end;
+            emitted = true;
         }
+        emitted
     }
 
     /// If the next pending comment starts on the same source line as
@@ -216,12 +321,7 @@ impl<'a> Printer<'a> {
     fn write_comment(&mut self, c: &Comment) {
         // `write_str` would apply indentation; we want indent only on the
         // first line. Manage it manually.
-        if self.needs_indent {
-            for _ in 0..self.indent {
-                self.out.push_str(INDENT);
-            }
-            self.needs_indent = false;
-        }
+        self.flush_indent();
         match c.kind {
             CommentKind::Line => {
                 self.out.push_str("--");
@@ -247,21 +347,35 @@ impl<'a> Printer<'a> {
             .filter(|&&b| b == b'\n')
             .count()
     }
+    /// True when the author left a blank line between the comment that was
+    /// just drained and the construct starting at `next_start`.
+    ///
+    /// `last_comment_end` sits at the end of that comment, which is *before*
+    /// its newline, so a bare line break counts as one newline and a
+    /// deliberate blank line counts as two.
+    fn gap_after_comment(&self, next_start: usize) -> bool {
+        !self.source.is_empty()
+            && self.newlines_in_source(self.last_comment_end, next_start) >= 2
+    }
+
     // ---- top-level ---------------------------------------------------------
 
     fn module(&mut self, m: &Module) {
         for (i, s) in m.stmts.iter().enumerate() {
-            self.drain_before(s.span.start);
-            if i > 0 {
+            let comment_drained = self.drain_before(s.span.start);
+            if comment_drained {
+                // A comment was just emitted in the gap. Whether it is a
+                // caption for the next statement or a standalone section
+                // header is the author's call, so honour the gap *they* left
+                // between the comment and the statement. This runs for `i == 0`
+                // too, which is what keeps a file-header comment from being
+                // glued onto the first declaration.
+                if self.gap_after_comment(s.span.start) {
+                    self.blank_line();
+                }
+            } else if i > 0 {
                 let prev_stmt_end = m.stmts[i - 1].span.end;
-                let comment_drained = self.last_pos > prev_stmt_end;
-                if comment_drained {
-                    // A comment was just emitted in the gap. Treat it as
-                    // attached to the upcoming stmt: no blank line between
-                    // the comment and the stmt, regardless of source.
-                } else if self.newlines_in_source(prev_stmt_end, s.span.start)
-                    >= 2
-                {
+                if self.newlines_in_source(prev_stmt_end, s.span.start) >= 2 {
                     self.blank_line();
                 } else if needs_top_separator(&m.stmts[i - 1].value, &s.value) {
                     self.blank_line();
@@ -296,16 +410,17 @@ impl<'a> Printer<'a> {
                 .max(line_start_in_source(self.source, first.span.start));
         }
         for (i, s) in body.iter().enumerate() {
-            self.drain_before(s.span.start);
-            if i > 0 {
+            let comment_drained = self.drain_before(s.span.start);
+            if comment_drained {
+                // See `module`: the gap the author left after the comment
+                // decides whether it captions the next statement or stands
+                // alone as a section header.
+                if self.gap_after_comment(s.span.start) {
+                    self.blank_line();
+                }
+            } else if i > 0 {
                 let prev_stmt_end = body[i - 1].span.end;
-                let comment_drained = self.last_pos > prev_stmt_end;
-                if comment_drained {
-                    // Comment attaches to the next stmt; no blank between
-                    // the comment and the stmt.
-                } else if self.newlines_in_source(prev_stmt_end, s.span.start)
-                    >= 2
-                {
+                if self.newlines_in_source(prev_stmt_end, s.span.start) >= 2 {
                     self.blank_line();
                 }
             }
@@ -667,16 +782,17 @@ impl<'a> Printer<'a> {
         }
         let mut prev_was_method = false;
         for (i, m) in members.iter().enumerate() {
-            self.drain_before(m.span.start);
+            let comment_drained = self.drain_before(m.span.start);
             let is_method = matches!(m.value, ClassMember::Method(_));
-            if i > 0 {
+            if comment_drained {
+                // See `module`: the author's gap decides whether the comment
+                // captions this member or stands alone above it.
+                if self.gap_after_comment(m.span.start) {
+                    self.blank_line();
+                }
+            } else if i > 0 {
                 let prev_member_end = members[i - 1].span.end;
-                let comment_drained = self.last_pos > prev_member_end;
-                if comment_drained {
-                    // Comment attaches to the next member.
-                } else if self.newlines_in_source(prev_member_end, m.span.start)
-                    >= 2
-                {
+                if self.newlines_in_source(prev_member_end, m.span.start) >= 2 {
                     self.blank_line();
                 } else if is_method || prev_was_method {
                     self.blank_line();
@@ -784,21 +900,63 @@ impl<'a> Printer<'a> {
         self.write(">");
     }
 
+    /// Emit a parameter list between an already-written `(` and the `)` the
+    /// caller writes next. Wraps like [`Printer::call_args`] when the
+    /// signature would run past the width target.
+    ///
+    /// The budget reserves one column for `)` but not for a trailing
+    /// `-> ReturnType`, so a signature with a long return type can still edge
+    /// slightly past the target — it is a soft limit, and breaking a
+    /// just-barely-long signature reads worse than the overhang.
+    ///
+    /// As in [`Printer::call_args`], the comma separates rather than
+    /// terminates: `parse_param_list_inner` demands a parameter after every
+    /// comma, so a trailing one would not parse back.
     fn params(&mut self, ps: &[Param]) {
+        if ps.is_empty() {
+            return;
+        }
+        let start_col = self.current_column();
+        let inline = self.render_params_inline(ps);
+        if self.force_inline || start_col + inline.len() + 1 <= self.max_width() {
+            self.write(&inline);
+            return;
+        }
+
+        self.indent += 1;
+        for (i, p) in ps.iter().enumerate() {
+            self.newline();
+            self.write_param(p);
+            if i + 1 < ps.len() {
+                self.write(",");
+            }
+        }
+        self.indent -= 1;
+        self.newline();
+    }
+
+    fn render_params_inline(&self, ps: &[Param]) -> String {
+        let mut sub = self.sub_printer();
         for (i, p) in ps.iter().enumerate() {
             if i > 0 {
-                self.write(", ");
+                sub.write(", ");
             }
-            if p.variadic {
-                self.write("...");
-            }
-            self.write(&p.name);
-            self.write(": ");
-            self.ty(&p.ty);
-            if let Some(d) = &p.default {
-                self.write(" = ");
-                self.expr(d, 0);
-            }
+            sub.write_param(p);
+        }
+        sub.out
+    }
+
+    /// Emit a single parameter — shared by the inline and multi-line layouts.
+    fn write_param(&mut self, p: &Param) {
+        if p.variadic {
+            self.write("...");
+        }
+        self.write(&p.name);
+        self.write(": ");
+        self.ty(&p.ty);
+        if let Some(d) = &p.default {
+            self.write(" = ");
+            self.expr(d, 0);
         }
     }
 
@@ -820,7 +978,10 @@ impl<'a> Printer<'a> {
         let outer_end = e.span.end;
         match &e.value {
             Expr::Int(n) => self.writef(format_args!("{n}")),
-            Expr::Float(f) => self.write(&format_float(*f)),
+            Expr::Float(f) => {
+                let s = self.float_lit(*f, &e.span);
+                self.write(&s);
+            }
             Expr::Bool(b) => self.write(if *b { "true" } else { "false" }),
             Expr::Str(s) => self.write(&quote_str(s)),
             Expr::Nil => self.write("nil"),
@@ -896,14 +1057,14 @@ impl<'a> Printer<'a> {
                     self.write("{}");
                 } else {
                     // Mirrors the `when(...)` layout policy: inline by default,
-                    // multi-line when the inline form overflows
-                    // [`MAX_LINE_WIDTH`] OR the user already broke an entry
-                    // onto its own line in the source.
+                    // multi-line when the inline form overflows the width
+                    // target OR the user already broke an entry onto its own
+                    // line in the source.
                     let start_col = self.current_column();
                     let inline = self.render_table_inline(entries);
                     let force_ml = self.table_has_source_break(entries);
-                    let too_wide = start_col + inline.len() > MAX_LINE_WIDTH;
-                    if !force_ml && !too_wide {
+                    let too_wide = start_col + inline.len() > self.max_width();
+                    if self.force_inline || (!force_ml && !too_wide) {
                         self.write(&inline);
                     } else {
                         self.write("{");
@@ -992,8 +1153,8 @@ impl<'a> Printer<'a> {
             // `when(source):stage1(args):stage2(args)…` — colon pipeline.
             //
             // Layout:
-            //   * Inline by default when the whole chain fits within
-            //     [`MAX_LINE_WIDTH`] from the current column. Reads as
+            //   * Inline by default when the whole chain fits within the
+            //     width target from the current column. Reads as
             //     `when(x):a():b()`.
             //   * Multi-line when (a) the inline form is too wide, or
             //     (b) the source already broke before *any* `:` — the
@@ -1010,8 +1171,8 @@ impl<'a> Printer<'a> {
                 let when_col = self.current_column();
                 let force_ml = self.pipe_has_source_break(source, stages);
                 let inline = self.render_pipe_inline(source, stages);
-                let too_wide = when_col + inline.len() > MAX_LINE_WIDTH;
-                if !force_ml && !too_wide {
+                let too_wide = when_col + inline.len() > self.max_width();
+                if self.force_inline || (!force_ml && !too_wide) {
                     self.write(&inline);
                 } else {
                     self.write("when(");
@@ -1046,7 +1207,7 @@ impl<'a> Printer<'a> {
     /// pending indent that hasn't been flushed yet.
     fn current_column(&self) -> usize {
         if self.needs_indent {
-            return self.indent * INDENT.len();
+            return self.indent * self.opts.display_width();
         }
         match self.out.rfind('\n') {
             Some(p) => self.out.len() - p - 1,
@@ -1086,16 +1247,9 @@ impl<'a> Printer<'a> {
     /// caller compares its length against the available room to decide
     /// whether to commit it or fall back to the multi-line layout.
     fn render_pipe_inline(&self, source: &Spanned<Expr>, stages: &[PipeStage]) -> String {
-        let mut sub = Printer {
-            out: String::new(),
-            indent: self.indent,
-            needs_indent: false,
-            // Comments inside the chain are ignored for the size estimate;
-            // they only ever fire in the real `self` printer.
-            source: self.source,
-            comments: VecDeque::new(),
-            last_pos: self.last_pos,
-        };
+        // Comments inside the chain are ignored for the size estimate; they
+        // only ever fire in the real `self` printer.
+        let mut sub = self.sub_printer();
         sub.write("when(");
         sub.expr(source, 0);
         sub.write(")");
@@ -1112,17 +1266,10 @@ impl<'a> Printer<'a> {
     // ── Table-literal layout helpers ───────────────────────────────────────
 
     /// Render `{ entry, entry, ... }` into a single-line string using a
-    /// sub-printer. Used to decide whether the inline form fits within
-    /// [`MAX_LINE_WIDTH`] before committing to a layout.
+    /// sub-printer. Used to decide whether the inline form fits within the
+    /// width target before committing to a layout.
     fn render_table_inline(&self, entries: &[TableEntry]) -> String {
-        let mut sub = Printer {
-            out: String::new(),
-            indent: self.indent,
-            needs_indent: false,
-            source: self.source,
-            comments: VecDeque::new(),
-            last_pos: self.last_pos,
-        };
+        let mut sub = self.sub_printer();
         sub.write("{");
         for (i, ent) in entries.iter().enumerate() {
             if i > 0 {
@@ -1167,24 +1314,66 @@ impl<'a> Printer<'a> {
         }
     }
 
+    /// Emit `arg, arg, …` between an already-written `(` and the `)` the
+    /// caller writes next.
+    ///
+    /// Inline when the whole list plus its closing paren fits inside the width
+    /// target; otherwise one argument per line at one extra indent level, so
+    /// the closing paren lands back at the caller's indent.
+    ///
+    /// Note the comma is a *separator* here, not a terminator: unlike a table
+    /// literal, `parse_call_args` requires an argument after every comma, so a
+    /// trailing one would make the formatter's own output unparseable.
     fn call_args(&mut self, args: &[CallArg]) {
+        if args.is_empty() {
+            return;
+        }
+        let start_col = self.current_column();
+        let inline = self.render_call_args_inline(args);
+        // `+ 1` reserves the closing paren.
+        if self.force_inline || start_col + inline.len() + 1 <= self.max_width() {
+            self.write(&inline);
+            return;
+        }
+
+        self.indent += 1;
+        for (i, a) in args.iter().enumerate() {
+            self.newline();
+            self.write_call_arg(a);
+            if i + 1 < args.len() {
+                self.write(",");
+            }
+        }
+        self.indent -= 1;
+        self.newline();
+    }
+
+    /// Render an argument list on one line, for width measurement.
+    fn render_call_args_inline(&self, args: &[CallArg]) -> String {
+        let mut sub = self.sub_printer();
         for (i, a) in args.iter().enumerate() {
             if i > 0 {
-                self.write(", ");
+                sub.write(", ");
             }
-            match a {
-                CallArg::Positional(e) => self.expr(e, 0),
-                CallArg::Named { name, value } => {
-                    self.writef(format_args!("{name}: "));
-                    self.expr(value, 0);
-                }
+            sub.write_call_arg(a);
+        }
+        sub.out
+    }
+
+    /// Emit a single argument — shared by the inline and multi-line layouts.
+    fn write_call_arg(&mut self, a: &CallArg) {
+        match a {
+            CallArg::Positional(e) => self.expr(e, 0),
+            CallArg::Named { name, value } => {
+                self.writef(format_args!("{name}: "));
+                self.expr(value, 0);
             }
         }
     }
 
     fn match_arm(&mut self, a: &MatchArm) {
         self.write("case ");
-        self.pattern(&a.pattern.value);
+        self.pattern(&a.pattern);
         if let Some(g) = &a.guard {
             self.write(" when ");
             self.expr(g, 0);
@@ -1222,13 +1411,30 @@ impl<'a> Printer<'a> {
         }
     }
 
-    fn pattern(&mut self, p: &Pattern) {
-        match p {
+    /// Render a float literal, preferring the exact text the author wrote.
+    ///
+    /// The AST only carries the parsed `f64`, so `0f`, `.5` and `1.50` would
+    /// otherwise all come back as the canonical `0.0` / `0.5` / `1.5`. When the
+    /// original source is available we reuse the literal's own span verbatim,
+    /// provided it still reads back as the same value; [`format_float`] covers
+    /// the source-less path (`format_module`) and any span that doesn't match.
+    fn float_lit(&self, f: f64, span: &Range<usize>) -> String {
+        match self.source.get(span.clone()) {
+            Some(raw) if float_text_matches(raw, f) => raw.to_string(),
+            _ => format_float(f),
+        }
+    }
+
+    fn pattern(&mut self, p: &Spanned<Pattern>) {
+        match &p.value {
             Pattern::Wildcard => self.write("_"),
             Pattern::Bind(n) => self.write(n),
             Pattern::Nil => self.write("nil"),
             Pattern::Int(n) => self.writef(format_args!("{n}")),
-            Pattern::Float(f) => self.write(&format_float(*f)),
+            Pattern::Float(f) => {
+                let s = self.float_lit(*f, &p.span);
+                self.write(&s);
+            }
             Pattern::Bool(b) => self.write(if *b { "true" } else { "false" }),
             Pattern::Str(s) => self.write(&quote_str(s)),
             Pattern::Variant {
@@ -1243,7 +1449,7 @@ impl<'a> Printer<'a> {
                         if i > 0 {
                             self.write(", ");
                         }
-                        self.pattern(&f.value);
+                        self.pattern(f);
                     }
                     self.write(")");
                 }
@@ -1254,7 +1460,7 @@ impl<'a> Printer<'a> {
                     if i > 0 {
                         self.write(", ");
                     }
-                    self.pattern(&sp.value);
+                    self.pattern(sp);
                 }
                 self.write(")");
             }
@@ -1349,9 +1555,31 @@ fn bin_sym(op: BinOp) -> &'static str {
     }
 }
 
+/// Whether `raw` is a Saule float literal that reads back as exactly `f`.
+///
+/// Guards the verbatim path in [`Printer::float_lit`] against spans that
+/// don't line up with the text we were handed — a synthesised AST, or a
+/// `source` that isn't what the module was parsed from. Accepts the same
+/// shapes the lexer does: digits with an optional single `.` (either side
+/// may be empty, but not both), an optional `f`/`F` suffix, and the leading
+/// `-` that negative literal *patterns* fold into their span.
+fn float_text_matches(raw: &str, f: f64) -> bool {
+    let body = raw
+        .strip_suffix('f')
+        .or_else(|| raw.strip_suffix('F'))
+        .unwrap_or(raw);
+    let digits = body.strip_prefix('-').unwrap_or(body);
+    let well_formed = digits.chars().any(|c| c.is_ascii_digit())
+        && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && digits.chars().filter(|&c| c == '.').count() <= 1;
+    well_formed && matches!(body.parse::<f64>(), Ok(v) if v == f)
+}
+
 /// Render an `f64` so it always reads back as a float (i.e. `1.0` rather
 /// than `1`) and round-trips through `parse::<f64>()` losslessly for
 /// finite values.
+///
+/// Only a fallback: [`Printer::float_lit`] prefers the author's own text.
 fn format_float(f: f64) -> String {
     if !f.is_finite() {
         // Saule has no syntax for these; keep something readable.

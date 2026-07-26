@@ -15,6 +15,7 @@ Ultimate-only native LSP API.
 | Concern | Provided by |
 |---|---|
 | Colouring, brace matching, commenting, colour-settings page | Native IntelliJ lexer (`com.saule.lang.lexer.SauleLexer`) |
+| Indentation while typing (Enter, `Adjust Indent`, auto-dedent of `end`) | `com.saule.lang.format.SauleIndentModel` |
 | Diagnostics, hover, navigation, symbols, inlay hints, signature help, formatting | `saule-lsp` binary, connected via LSP4IJ |
 | New Project / New Module scaffolding | `SauleModuleType` + `SauleModuleBuilder` (writes `saule.config`, `src/main.sau`, …) |
 | Running scripts & projects | `SauleRunConfigurationType` + producer → `saule run` |
@@ -48,6 +49,29 @@ with `SAULE_PATH` / `-Dsaule.path=`):
 The server has no semantic-token support, so highlighting is done client-side by
 a hand-written lexer that mirrors `crates/saule-lexer`. Everything semantic comes
 from the same `saule-lsp` binary the VS Code and Neovim integrations use.
+
+## Indentation, tabs and spaces
+
+**Editor ▸ Code Style ▸ Saule ▸ Tabs and Indents** is the single place that
+decides how `.sau` is laid out. It defaults to `saule fmt`'s canonical style —
+2 spaces — but *Use tab character* (with *Smart tabs*, *Tab size*, *Indent* and
+*Continuation indent*) is a first-class choice, and everything follows it:
+
+* **Typing.** Enter indents the new line from the enclosing `class` / `fn` /
+  `if` / `match` block, and `end`, `else`, `elseif`, `until`, `catch` and `case`
+  pull back out a level as you type them. Computed by `SauleIndentModel`, which
+  mirrors the printer in `crates/saule-fmt` — keep the two in step.
+* **Reformat** (`Ctrl+Alt+L`, or Actions on Save). LSP4IJ turns the same options
+  into the `insertSpaces` / `tabSize` of the `textDocument/formatting` request,
+  and `saule-lsp` feeds them straight into `FmtOptions`.
+
+One wrinkle worth knowing: LSP has a single `tabSize`, and LSP4IJ fills it from
+**Tab size**, not **Indent**. `saule fmt` uses it as the indent width, so the two
+want to stay equal. Set *Indent* to 4 and leave *Tab size* at 2 and the editor
+will indent by 4 while Reformat pulls the file back to 2.
+
+The `saule fmt` CLI has no flags for this yet — it always prints the canonical
+2 spaces. If you switch the IDE to tabs, format from the IDE, not the CLI.
 
 ## Prerequisites
 
@@ -122,16 +146,20 @@ To target an older IDE (LSP4IJ supports 2023.2+), lower **both**
 editors/intellij/
 ├─ build.gradle.kts                 IntelliJ Platform Gradle Plugin 2.x
 ├─ gradle.properties                versions & compatibility range
-└─ src/main/
-   ├─ kotlin/com/saule/lang/
-   │  ├─ SauleLanguage / SauleFileType / SauleIcons
-   │  ├─ SauleCommenter / SauleBraceMatcher
-   │  ├─ lexer/         SauleLexer + SauleTokenTypes
-   │  ├─ highlight/     SyntaxHighlighter (+factory) + ColorSettingsPage
-   │  └─ lsp/           SauleLanguageServerFactory + SauleLspLocator
-   └─ resources/
-      ├─ META-INF/plugin.xml
-      └─ icons/saule.svg
+├─ src/main/
+│  ├─ kotlin/com/saule/lang/
+│  │  ├─ SauleLanguage / SauleFileType / SauleIcons
+│  │  ├─ SauleCommenter / SauleBraceMatcher
+│  │  ├─ SauleCodeStyleSettingsProvider   Code Style ▸ Saule page
+│  │  ├─ editor/        Enter + typed-char indent handlers
+│  │  ├─ format/        SauleIndentModel + LineIndentProvider
+│  │  ├─ lexer/         SauleLexer + SauleTokenTypes
+│  │  ├─ highlight/     SyntaxHighlighter (+factory) + ColorSettingsPage
+│  │  └─ lsp/           SauleLanguageServerFactory + SauleLspLocator
+│  └─ resources/
+│     ├─ META-INF/plugin.xml
+│     └─ icons/saule.svg
+└─ src/test/kotlin/     SauleIndentModelTest (`./gradlew test`)
 ```
 
 [lsp4ij]: https://plugins.jetbrains.com/plugin/23257-lsp4ij

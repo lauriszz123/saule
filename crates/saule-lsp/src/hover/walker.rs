@@ -10,14 +10,16 @@ use std::ops::Range;
 use saule_ast::{
     CallArg, ClassMember, Decl, Expr, Method, Module, Param, Pattern, Spanned, Stmt, Type,
 };
-use saule_semantic::{lookup_field_type, lookup_method, with_classes, with_enums, with_interfaces};
+use saule_semantic::{
+    lookup_field_type, lookup_method, super_init_target, with_classes, with_enums, with_interfaces,
+};
 
 use super::ImportContext;
 use super::render::{
     collect_enum_variant_fields, render_class_full, render_class_head, render_enum_from_registry,
     render_enum_head, render_field, render_function_sig, render_interface_from_registry,
-    render_interface_head, render_method_head, render_native_sig_full, render_param,
-    render_stdlib_module, render_type, render_variant_pattern,
+    render_interface_head, render_method_head, render_method_sig, render_native_sig_full,
+    render_param, render_stdlib_module, render_type, render_variant_pattern,
 };
 use super::util::{
     collect_named_heads, contains, is_primitive, locate_word_in, named_type,
@@ -1095,6 +1097,9 @@ impl<'a> Cx<'a> {
                 None
             }
             Expr::Member { obj, name } => {
+                if let Some((_, sig)) = self.super_target(name, &obj.value) {
+                    return Some(sig.params);
+                }
                 let class = self.receiver_class(&obj.value)?;
                 if let Some(sig) = lookup_method(&class, name) {
                     return Some(sig.params);
@@ -1258,6 +1263,15 @@ impl<'a> Cx<'a> {
                 self.resolve_ident(name)
             }
             Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
+                // `self.super(...)` isn't a member access — surface the
+                // parent constructor it delegates to instead.
+                if let Some((owner, sig)) = self.super_target(name, &obj.value) {
+                    let enclosing = self.enclosing_class.clone().unwrap_or_default();
+                    return Some(format!(
+                        "{sig}\nParent constructor, delegated to by `self.super(...)` in `{enclosing}`.",
+                        sig = render_method_sig(&owner, "init", &sig)
+                    ));
+                }
                 let class = self.receiver_class(&obj.value)?;
                 resolve_member(&class, name, false)
             }
@@ -1324,6 +1338,16 @@ impl<'a> Cx<'a> {
             return Some(md.clone());
         }
         None
+    }
+
+    /// `(owner, sig)` of the constructor a `self.super(...)` written in
+    /// the current class delegates to, when `name` / `obj` are exactly
+    /// that form. `None` for every other member access.
+    fn super_target(&self, name: &str, obj: &Expr) -> Option<(String, saule_semantic::MethodSig)> {
+        if name != "super" || !matches!(obj, Expr::Self_) {
+            return None;
+        }
+        super_init_target(self.enclosing_class.as_deref()?)
     }
 
     /// Best-effort: figure out which class a member-access receiver

@@ -7,7 +7,9 @@ use saule_ast::{
     CallArg, ClassMember, Decl, EnumVariant, Expr, LambdaBody, MatchBody, Method, Module, Param,
     Pattern, Spanned, Stmt, TableEntry, Type,
 };
-use saule_semantic::{lookup_field_type, lookup_method, with_classes, with_enums};
+use saule_semantic::{
+    lookup_field_type, lookup_method, super_init_target, with_classes, with_enums,
+};
 
 use super::util::{
     declared_name, inferred_type_of, locate_string_literal, locate_word_in, locate_words_in,
@@ -563,6 +565,20 @@ impl<'a> CollectCx<'a> {
                 else {
                     return;
                 };
+                // `self.super(...)` is a reference to the parent
+                // constructor, not to a member named `super` — mirror
+                // what the cursor resolver records for it.
+                if name == "super"
+                    && matches!(obj.value, Expr::Self_)
+                    && let Symbol::Method { class: tc, name: tn } = self.symbol
+                    && tn == "init"
+                    && let Some(enclosing) = &self.enclosing_class
+                    && let Some((owner, _)) = super_init_target(enclosing)
+                    && &owner == tc
+                {
+                    self.push(span, false);
+                    return;
+                }
                 let class = self.receiver_class(&obj.value);
                 match self.symbol {
                     Symbol::Field { class: tc, name: tn } => {

@@ -195,6 +195,25 @@ pub fn lookup_method(class: &str, method: &str) -> Option<MethodSig> {
     })
 }
 
+/// Resolve what a `self.super(...)` written inside `class` delegates to:
+/// the nearest ancestor that actually declares an `init`, paired with its
+/// signature. Mirrors the interpreter's `constructor_chain`, which walks
+/// the same chain from the parent up. `None` when `class` is unknown, has
+/// no parent, or no ancestor declares a constructor.
+pub fn super_init_target(class: &str) -> Option<(String, MethodSig)> {
+    with_classes(|reg| {
+        let mut cur = reg.get(class)?.parent.clone();
+        while let Some(name) = cur {
+            let info = reg.get(&name)?;
+            if let Some(sig) = info.methods.get("init") {
+                return Some((name, sig.clone()));
+            }
+            cur = info.parent.clone();
+        }
+        None
+    })
+}
+
 /// Look up the declared type of field `name` on `class` (walking the parent
 /// chain). Returns `None` for methods or unknown names.
 pub fn lookup_field_type(class: &str, name: &str) -> Option<Type> {

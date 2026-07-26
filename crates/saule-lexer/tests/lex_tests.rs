@@ -69,6 +69,140 @@ fn double_dot_is_concat_not_float() {
 }
 
 #[test]
+fn leading_dot_is_a_float() {
+    assert_eq!(
+        lex(".5 .0 .25"),
+        vec![
+            Token::Float(0.5),
+            Token::Float(0.0),
+            Token::Float(0.25),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn leading_dot_float_after_an_operator() {
+    // The spot a leading-dot literal actually shows up in real code.
+    assert_eq!(
+        lex("x = .5"),
+        vec![
+            Token::Identifier("x".into()),
+            Token::Assign,
+            Token::Float(0.5),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn concat_with_a_leading_dot_float_still_splits() {
+    // `..` must win over `.5`: the char after the first dot is another dot.
+    assert_eq!(
+        lex("a...5"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::Ellipsis,
+            Token::Int(5),
+            Token::Eof,
+        ]
+    );
+    assert_eq!(
+        lex("a...5e"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::Ellipsis,
+            Token::Int(5),
+            Token::Identifier("e".into()),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn bare_dot_is_still_member_access() {
+    assert_eq!(
+        lex("a.b"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::Dot,
+            Token::Identifier("b".into()),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn f_suffix_makes_an_integer_literal_a_float() {
+    assert_eq!(
+        lex("1f 0f 42F"),
+        vec![
+            Token::Float(1.0),
+            Token::Float(0.0),
+            Token::Float(42.0),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn f_suffix_on_an_already_fractional_literal() {
+    assert_eq!(
+        lex("2.5f .5f"),
+        vec![Token::Float(2.5), Token::Float(0.5), Token::Eof]
+    );
+}
+
+#[test]
+fn f_is_only_a_suffix_when_no_identifier_follows() {
+    // `1foo` must stay `1` then `foo`, not `1f` then `oo`.
+    assert_eq!(
+        lex("1foo"),
+        vec![Token::Int(1), Token::Identifier("foo".into()), Token::Eof]
+    );
+    assert_eq!(
+        lex("1fs"),
+        vec![Token::Int(1), Token::Identifier("fs".into()), Token::Eof]
+    );
+    assert_eq!(
+        lex("1f_"),
+        vec![Token::Int(1), Token::Identifier("f_".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn f_suffix_terminated_by_punctuation_or_eof() {
+    assert_eq!(
+        lex("f(1f, 2f)"),
+        vec![
+            Token::Identifier("f".into()),
+            Token::LParen,
+            Token::Float(1.0),
+            Token::Comma,
+            Token::Float(2.0),
+            Token::RParen,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn suffixed_literal_span_covers_the_suffix() {
+    // The span must include `f`, or diagnostics and the formatter would
+    // underline the wrong slice of source.
+    let toks = Lexer::new("1f").tokenize().unwrap();
+    assert_eq!(toks[0].value, Token::Float(1.0));
+    assert_eq!(toks[0].span, 0..2);
+}
+
+#[test]
+fn leading_dot_float_span_starts_at_the_dot() {
+    let toks = Lexer::new(".5").tokenize().unwrap();
+    assert_eq!(toks[0].value, Token::Float(0.5));
+    assert_eq!(toks[0].span, 0..2);
+}
+
+#[test]
 fn ellipsis() {
     assert_eq!(
         lex("fn f(...x: int)"),

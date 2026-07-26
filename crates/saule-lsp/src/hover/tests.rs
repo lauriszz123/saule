@@ -688,3 +688,46 @@ end
     assert!(md.contains("(local)"), "got: {md}");
     assert!(md.contains("justQ: integer"), "got: {md}");
 }
+
+/// Hovering `self.super(...)` shows the parent constructor it
+/// delegates to, not an empty popup.
+#[test]
+fn hovers_self_super_as_parent_constructor() {
+    let src = "\
+class Base
+  fn init(x: integer)
+  end
+end
+
+class Child extends Base
+  fn init()
+    self.super(1)
+  end
+end
+";
+    let md = hover(src, "super(1)").expect("hover super");
+    assert!(md.contains("fn Base.init(x: integer)"), "got: {md}");
+    assert!(md.contains("Parent constructor"), "got: {md}");
+    assert!(md.contains("`Child`"), "got: {md}");
+}
+
+/// Arguments of a `self.super(...)` call hover as the parent ctor's
+/// parameters, same as any other call.
+#[test]
+fn hovers_self_super_named_argument() {
+    let src = "\
+class Base
+  fn init(width: float)
+  end
+end
+
+class Child extends Base
+  fn init()
+    self.super(width: 1.0)
+  end
+end
+";
+    let md = hover_src_at(src, "self.super(width: 1.0)", "self.super(w".len() - 1)
+        .expect("hover named arg");
+    assert!(md.contains("width"), "got: {md}");
+}

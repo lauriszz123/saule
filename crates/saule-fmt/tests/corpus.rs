@@ -184,3 +184,198 @@ end
         "lossless re-format diverged:\n{out}\n---\n{twice}"
     );
 }
+
+// ── Layout regressions ──────────────────────────────────────────────────────
+//
+// Each of these pins a behaviour that was wrong (or absent) and is easy to
+// regress, since the corpus test above only covers shapes that happen to
+// appear in the integration tests.
+
+/// A comment directly above a statement captions it and stays attached; a
+/// comment the author separated with a blank line is a section header and
+/// keeps its gap. The formatter used to swallow the gap unconditionally.
+#[test]
+fn blank_line_after_a_comment_follows_the_source() {
+    let src = "\
+class Main
+  static fn main()
+    -- section header
+
+    local a: integer = 1
+    -- attached caption
+    local b: integer = 2
+  end
+end
+";
+    let out = format_with_comments(src).expect("format");
+    assert!(
+        out.contains("-- section header\n\n"),
+        "section header lost its blank line:\n{out}"
+    );
+    assert!(
+        out.contains("-- attached caption\n    local b"),
+        "attached comment should not gain a blank line:\n{out}"
+    );
+}
+
+/// A file-header comment is separated from the first declaration. This is the
+/// `i == 0` path, which the blank-line logic used to skip entirely.
+#[test]
+fn file_header_comment_keeps_its_gap() {
+    let src = "-- File header.\n\nclass Main\n  static fn main()\n    println(1)\n  end\nend\n";
+    let out = format_with_comments(src).expect("format");
+    assert!(
+        out.starts_with("-- File header.\n\nclass Main"),
+        "header comment was glued to the declaration:\n{out}"
+    );
+}
+
+/// The same rule inside a class body. Members are walked by their own loop,
+/// separate from `module` and `block`, so this is a distinct code path.
+#[test]
+fn blank_line_after_a_comment_applies_to_class_members_too() {
+    let src = "\
+class Hud
+  -- Section header.
+
+  static fn a()
+    println(1)
+  end
+
+  -- Attached caption.
+  static fn b()
+    println(2)
+  end
+end
+";
+    let out = format_with_comments(src).expect("format");
+    assert!(
+        out.contains("-- Section header.\n\n"),
+        "member section header lost its blank line:\n{out}"
+    );
+    assert!(
+        out.contains("-- Attached caption.\n  static fn b()"),
+        "attached member comment should not gain a blank line:\n{out}"
+    );
+}
+
+/// Over-long argument lists break one-per-line instead of running off the
+/// right edge.
+#[test]
+fn long_call_arguments_wrap() {
+    let src = "class Main\n  static fn main()\n    println(111111111, 222222222, 333333333, 444444444, 555555555, 666666666, 777777777, 888888888, 999999999)\n  end\nend\n";
+    assert!(
+        src.lines().any(|l| l.len() > 100),
+        "test input must actually exceed the width target"
+    );
+    let out = format_str(src).expect("format");
+    assert!(out.contains("println(\n"), "call did not wrap:\n{out}");
+    for line in out.lines() {
+        assert!(line.len() <= 100, "line still over width: {line:?}");
+    }
+}
+
+/// Over-long signatures break the same way.
+#[test]
+fn long_parameter_lists_wrap() {
+    let src = "class Main\n  static fn wide(alpha: integer, bravo: integer, charlie: integer, delta: integer, echo: integer, foxtrot: integer) -> integer\n    return alpha\n  end\nend\n";
+    let out = format_str(src).expect("format");
+    assert!(out.contains("wide(\n"), "params did not wrap:\n{out}");
+    assert!(out.contains(") -> integer"), "return type misplaced:\n{out}");
+}
+
+/// Wrapped lists must not emit a trailing comma: unlike table literals, the
+/// parser demands an argument/parameter after every comma, so a trailing one
+/// makes the formatter's own output unparseable.
+#[test]
+fn wrapped_lists_reparse() {
+    let cases = [
+        "class Main\n  static fn main()\n    println(111111111, 222222222, 333333333, 444444444, 555555555, 666666666, 777777777, 888888888, 999999999)\n  end\nend\n",
+        "class Main\n  static fn wide(alpha: integer, bravo: integer, charlie: integer, delta: integer, echo: integer, foxtrot: integer) -> integer\n    return alpha\n  end\nend\n",
+    ];
+    for src in cases {
+        let once = format_str(src).expect("format");
+        let twice = format_str(&once)
+            .unwrap_or_else(|e| panic!("wrapped output did not re-parse: {e}\n{once}"));
+        assert_eq!(once, twice, "wrapped layout is not idempotent:\n{once}");
+    }
+}
+
+/// Short calls are left alone — wrapping only kicks in past the width target.
+#[test]
+fn short_calls_stay_inline() {
+    let src = "class Main\n  static fn main()\n    println(1, 2, 3)\n  end\nend\n";
+    let out = format_str(src).expect("format");
+    assert!(out.contains("println(1, 2, 3)"), "short call was wrapped:\n{out}");
+}
+
+/// Float literals keep the spelling the author chose. The AST only carries the
+/// parsed `f64`, so the formatter used to rewrite `0f`, `.5` and `1.50` to the
+/// canonical `0.0` / `0.5` / `1.5`.
+#[test]
+fn float_literals_keep_their_source_spelling() {
+    let src = "\
+class Main
+  static fn main()
+    local a = 0f
+    local b = .5
+    local c = 1.50
+    local d = -.25
+    local e = 2F
+    println(match a case 0f then 1 case -1.0 then 2 case _ then 3 end)
+  end
+end
+";
+    let out = format_with_comments(src).expect("format");
+    for needle in ["= 0f", "= .5", "= 1.50", "= -.25", "= 2F", "case 0f", "case -1.0"] {
+        assert!(
+            out.contains(needle),
+            "literal {needle:?} was rewritten:\n{out}"
+        );
+    }
+    let twice = format_with_comments(&out).expect("re-format");
+    assert_eq!(out, twice, "verbatim literals are not idempotent:\n{out}");
+}
+
+/// Without the original source there are no spans to quote, so literals fall
+/// back to the canonical rendering — and that rendering must still be a float.
+#[test]
+fn float_literals_without_source_stay_floats() {
+    let src = "class Main\n  static fn main()\n    local a = 0f\n    local b = .5\n  end\nend\n";
+    let out = format_str(src).expect("format");
+    assert!(out.contains("= 0.0"), "want canonical float:\n{out}");
+    assert!(out.contains("= 0.5"), "want canonical float:\n{out}");
+}
+
+/// The indent width is configurable, and the width-based layout decisions
+/// account for it rather than assuming two spaces.
+#[test]
+fn indent_width_is_configurable() {
+    use saule_fmt::FmtOptions;
+
+    let src = "class Main\n  static fn main()\n    println(1)\n  end\nend\n";
+    let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
+    let module = saule_parser::parse(tokens).expect("parse");
+
+    let four = saule_fmt::format_module_with_options(
+        &module,
+        src,
+        &[],
+        FmtOptions {
+            indent_width: 4,
+            ..FmtOptions::default()
+        },
+    );
+    assert!(four.contains("\n    static fn main()"), "want 4 spaces:\n{four}");
+
+    let tabs = saule_fmt::format_module_with_options(
+        &module,
+        src,
+        &[],
+        FmtOptions {
+            use_tabs: true,
+            ..FmtOptions::default()
+        },
+    );
+    assert!(tabs.contains("\n\tstatic fn main()"), "want tabs:\n{tabs}");
+}

@@ -7,7 +7,9 @@ use saule_ast::{
     CallArg, ClassMember, Decl, EnumVariant, Expr, LambdaBody, MatchBody, Method, Module, Param,
     Pattern, Spanned, Stmt, TableEntry, Type,
 };
-use saule_semantic::{lookup_field_type, lookup_method, with_classes, with_enums, with_interfaces};
+use saule_semantic::{
+    lookup_field_type, lookup_method, super_init_target, with_classes, with_enums, with_interfaces,
+};
 
 use super::util::{
     contains, inferred_type_of, locate_string_literal, locate_word_in, member_name_span,
@@ -545,6 +547,23 @@ impl<'a> ResolveCx<'a> {
                     member_name_span(self.source, obj.span.end, e.span.end, name)
                     && contains(&span, self.offset)
                 {
+                    // `self.super(...)` names no member of the enclosing
+                    // class — it delegates to the parent constructor, so
+                    // point goto-definition at that `init`.
+                    if name == "super"
+                        && matches!(obj.value, Expr::Self_)
+                        && let Some(class) = &self.enclosing_class
+                        && let Some((owner, _)) = super_init_target(class)
+                    {
+                        self.record(
+                            span,
+                            Symbol::Method {
+                                class: owner,
+                                name: "init".to_string(),
+                            },
+                        );
+                        return;
+                    }
                     if let Some(class) = self.receiver_class(&obj.value) {
                         // Enum.Variant access (no payload) — surface as
                         // a variant reference rather than a field.
