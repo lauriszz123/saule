@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.service
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.event.DocumentEvent
@@ -14,6 +15,9 @@ import com.intellij.openapi.startup.ProjectActivity
 import com.saule.lang.SauleFileType
 import com.saule.lang.format.SauleReindent
 
+/** Undo-stack name for the re-indent, when it turns out to be one of its own. */
+private const val ADJUST_INDENT = "Adjust Indent"
+
 /**
  * Dedents a block-closing keyword — `end`, `until`, `else`, `elseif`, `catch`,
  * `case` — the moment it is finished, whichever block it closes.
@@ -22,11 +26,11 @@ import com.saule.lang.format.SauleReindent
  * miss: `TypedHandlerDelegate.charTyped` is only reached when the keystroke
  * gets as far as `TypedHandler`, and while a completion popup is up the lookup
  * takes the character first, appends it to its own prefix and returns. Since
- * `saule-lsp` auto-popups completions on plain letters, the `d` of `end` very
- * often lands there instead — which is why the keyword stays a level too deep.
+ * completions auto-popup on plain letters, the `d` of `end` very often lands
+ * there instead — which is why the keyword stays a level too deep.
  *
- * Watching the document instead catches every route text can arrive by:
- * typing, lookup prefixes, and completing the keyword from the popup. The
+ * Watching the document instead catches every route the text can arrive by:
+ * typing, lookup prefixes, and accepting the keyword from the popup. The
  * re-indent has to be scheduled rather than done in place, because a document
  * may not be modified from inside its own change notification.
  */
@@ -68,35 +72,29 @@ class SauleAutoDedent : ProjectActivity {
             )
         }
 
-        private fun reindent(document: com.intellij.openapi.editor.Document, caret: Int) {
-            if (project.isDisposed) return
+        private fun reindent(document: Document, caret: Int) {
+            if (project.isDisposed || !document.isWritable) return
             // Typing has moved on, or something else rewrote the line: the
-            // keyword we saw is no longer what is under the caret.
+            // keyword we saw is no longer the one under the caret.
             if (caret > document.textLength) return
             if (!SauleReindent.keywordTypedAt(document.charsSequence, caret)) return
             val editor = editorWithCaretAt(document, caret) ?: return
 
-            // A no-op re-indent leaves the document untouched, and the platform
-            // drops a command that changed nothing — so this does not litter
-            // the undo stack when `SauleTypedHandler` already got there.
+            // A re-indent that finds the line already correct leaves the
+            // document untouched, and the platform drops a command that changed
+            // nothing — so this adds no undo step when [SauleTypedHandler] has
+            // already done the work.
             WriteCommandAction.runWriteCommandAction(project, ADJUST_INDENT, null, {
                 SauleReindent.line(project, editor, caret)
             })
         }
 
-        private fun editorWithCaretAt(
-            document: com.intellij.openapi.editor.Document,
-            offset: Int,
-        ): Editor? =
+        private fun editorWithCaretAt(document: Document, offset: Int): Editor? =
             EditorFactory.getInstance().getEditors(document, project).firstOrNull {
                 !it.isDisposed &&
                     !it.isViewer &&
                     it.caretModel.caretCount == 1 &&
                     it.caretModel.offset == offset
             }
-    }
-
-    private companion object {
-        const val ADJUST_INDENT = "Adjust Indent"
     }
 }

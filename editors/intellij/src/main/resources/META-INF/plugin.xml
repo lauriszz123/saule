@@ -63,6 +63,10 @@
              brace-triggered dedent never fires; this does it by keyword. -->
         <typedHandler
             implementation="com.saule.lang.editor.SauleTypedHandler"/>
+        <!-- ...and this catches the keystrokes the typed handler never sees,
+             which is most of them once the completion popup is open. -->
+        <postStartupActivity
+            implementation="com.saule.lang.editor.SauleAutoDedent"/>
 
         <!-- Parameter info follows the caret: the popup appears whenever the
              caret is inside a call's parens, not only when `(` is typed. -->
