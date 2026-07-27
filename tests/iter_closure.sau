@@ -1,23 +1,23 @@
 -- A bare closure used as the iterator. Each call returns the next value or
 -- `nil` to stop. No interface needed; the loop drives the closure directly.
 fn counter(stop: integer) -> fn() -> integer?
-  local i: integer = 0
+	local i: integer = 0
 
-  return fn()
-    i = i + 1
+	return fn()
+		i = i + 1
 
-    if i > stop then
-      return nil
-    end
+		if i > stop then
+			return nil
+		end
 
-    return i
-  end
+		return i
+	end
 end
 
 class Main
-  static fn main()
-    for n in counter(3) do
-      println(n)
-    end
-  end
+	static fn main()
+		for n in counter(3) do
+			println(n)
+		end
+	end
 end

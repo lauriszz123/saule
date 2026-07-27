@@ -1,15 +1,15 @@
 -- repeat / until: body runs at least once, condition checked at the end
 class Main
-  static fn main()
-    local i: integer = 0
+	static fn main()
+		local i: integer = 0
 
-    repeat
-      i = i + 1
-      print(i, " ")
-    until i >= 5
+		repeat
+			i = i + 1
+			print(i, " ")
+		until i >= 5
 
-    println()
+		println()
 
-    -- expected: 1 2 3 4 5
-  end
+		-- expected: 1 2 3 4 5
+	end
 end

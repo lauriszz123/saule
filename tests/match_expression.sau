@@ -1,42 +1,44 @@
 -- `match` is an expression — usable on the RHS of `local`, in `return`,
 -- and inside other expressions like a function argument.
 enum Tier
-  Free,
-  Pro,
-  Enterprise
+	Free,
+	Pro,
+	Enterprise
 end
 
 fn priceFor(tier: Tier) -> integer
-  return match tier
-    case Tier.Free then 0
+	return match tier
+		case Tier.Free then 0
 
-    case Tier.Pro then 9
+		case Tier.Pro then 9
 
-    case Tier.Enterprise then 99
-  end
+		case Tier.Enterprise then 99
+	end
 end
 
 class Main
-  static fn main()
-    local label: string = match Tier.Pro
-      case Tier.Free then "free"
+	static fn main()
+		local label: string = match Tier.Pro
+			case Tier.Free then "free"
 
-      case Tier.Pro then "pro"
+			case Tier.Pro then "pro"
 
-      case Tier.Enterprise then "ent"
-    end
-    println(label)
+			case Tier.Enterprise then "ent"
+		end
+		println(label)
 
-    println("price: " .. priceFor(Tier.Enterprise))
+		println("price: " .. priceFor(Tier.Enterprise))
 
-    -- Match as a function argument.
+		-- Match as a function argument.
 
-    println("you picked " .. match Tier.Free
-      case Tier.Free then "Free"
+		println(
+			"you picked " .. match Tier.Free
+				case Tier.Free then "Free"
 
-      case Tier.Pro then "Pro"
+				case Tier.Pro then "Pro"
 
-      case Tier.Enterprise then "Enterprise"
-    end)
-  end
+				case Tier.Enterprise then "Enterprise"
+			end
+		)
+	end
 end

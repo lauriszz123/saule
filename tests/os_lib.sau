@@ -42,7 +42,11 @@ println("cwd absolute: " .. tostring(String.starts(cwd, "/") or String.find(cwd,
 -- ── filesystem ────────────────────────────────────────
 
 local tmp: string = Os.tmpname()
-println("tmpname under tmp dir: " .. tostring(String.starts(tmp, "/") and String.find(tmp, "saule_") != nil))
+println(
+	"tmpname under tmp dir: " .. tostring(
+		String.starts(tmp, "/") and String.find(tmp, "saule_") != nil
+	)
+)
 println("tmpname ends .tmp    : " .. tostring(String.ends(tmp, ".tmp")))
 
 -- Create a unique temp dir, list it, then clean up.

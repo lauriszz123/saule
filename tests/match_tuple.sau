@@ -1,19 +1,19 @@
 -- Tuple patterns destructure multi-return values directly inside `match`.
 fn divmod(a: integer, b: integer) -> (integer, integer)
-  return a / b, a % b
+	return a / b, a % b
 end
 
 fn describe(a: integer, b: integer) -> string
-  return match divmod(a, b)
-    case (q, 0) then "clean: " .. q
+	return match divmod(a, b)
+		case (q, 0) then "clean: " .. q
 
-    case (q, r) then q .. " rem " .. r
-  end
+		case (q, r) then q .. " rem " .. r
+	end
 end
 
 class Main
-  static fn main()
-    println(describe(10, 2))  -- "clean: 5"
-    println(describe(10, 3))  -- "3 rem 1"
-  end
+	static fn main()
+		println(describe(10, 2))  -- "clean: 5"
+		println(describe(10, 3))  -- "3 rem 1"
+	end
 end

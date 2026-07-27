@@ -1,26 +1,26 @@
 -- Generic standalone function
 fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
-  local result: table<T> = {}
+	local result: table<T> = {}
 
-  for item: T in items do
-    if predicate(item) then
-      result[#result + 1] = item
-    end
-  end
+	for item: T in items do
+		if predicate(item) then
+			result[#result + 1] = item
+		end
+	end
 
-  return result
+	return result
 end
 
 class Main
-  static fn main()
-    local nums: table<integer> = {1, 2, 3, 4, 5, 6}
-    local evens: table<integer> = filter(nums, x => x % 2 == 0)
+	static fn main()
+		local nums: table<integer> = {1, 2, 3, 4, 5, 6}
+		local evens: table<integer> = filter(nums, x => x % 2 == 0)
 
-    for v: integer in evens do
-      print(v, " ")
-    end
-    println()
+		for v: integer in evens do
+			print(v, " ")
+		end
+		println()
 
-    -- expected: 2 4 6
-  end
+		-- expected: 2 4 6
+	end
 end

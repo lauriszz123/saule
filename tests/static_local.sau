@@ -3,22 +3,22 @@
 -- its bare name. From outside it cannot be touched — see the matching UI
 -- test `static_local_private.sau` for the negative case.
 class Bank
-  static local secret: integer = 42
+	static local secret: integer = 42
 
-  static local fn check(n: integer) -> boolean
-    return n == secret
-  end
+	static local fn check(n: integer) -> boolean
+		return n == secret
+	end
 
-  static fn unlock(code: integer) -> string
-    if check(code) then
-      return "opened"
-    end
-    return "denied"
-  end
+	static fn unlock(code: integer) -> string
+		if check(code) then
+			return "opened"
+		end
+		return "denied"
+	end
 
-  static fn peekSecret() -> integer
-    return secret
-  end
+	static fn peekSecret() -> integer
+		return secret
+	end
 end
 
 assert(Bank.unlock(42) == "opened")

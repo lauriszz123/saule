@@ -1,18 +1,18 @@
-import Window, Graphics from "engine"
+import * from "engine"
 
 class Main
-  static fn main()
-    Window.create(800, 600, "Sau Engine")
-    while Window.isOpen() do
-      Window.pollEvents()
+	static fn main()
+		Window.create(800, 600, "Sau Engine")
+		while Window.isOpen() do
+			Window.pollEvents()
 
-      Graphics.clear(0.0, 0.0, 0.0)
+			Graphics.clear(0.0, 0.0, 0.0)
 
-      local x, y = 10.0, 10.0
+			local x, y = Mouse.getPos()
 
-      Graphics.rectangle("fill", x, y, 50.0, 50.0)
+			Graphics.rectangle("fill", x, y, 50.0, 50.0)
 
-      Graphics.present()
-    end
-  end
+			Graphics.present()
+		end
+	end
 end

@@ -1,24 +1,24 @@
 -- Piping with `then`: result of LHS is passed as first arg of RHS
 fn doubleAll(items: table<integer>) -> table<integer>
-  local out: table<integer> = {}
-  for i: integer, v: integer in items do
-    out[i] = v * 2
-  end
-  return out
+	local out: table<integer> = {}
+	for i: integer, v: integer in items do
+		out[i] = v * 2
+	end
+	return out
 end
 
 fn sum(items: table<integer>) -> integer
-  local total: integer = 0
-  for v: integer in items do
-    total = total + v
-  end
-  return total
+	local total: integer = 0
+	for v: integer in items do
+		total = total + v
+	end
+	return total
 end
 
 class Main
-  static fn main()
-    local result: integer = when({1, 2, 3, 4, 5}):doubleAll():sum()
+	static fn main()
+		local result: integer = when({1, 2, 3, 4, 5}):doubleAll():sum()
 
-    println(result)  -- 30
-  end
+		println(result)  -- 30
+	end
 end

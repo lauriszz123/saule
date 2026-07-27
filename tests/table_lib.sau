@@ -1,60 +1,59 @@
 -- Table.* — insert / remove / sort / concat against the array part of a table.
 class Main
-  static fn main()
+	static fn main()
+		-- insert: append
+		local xs: table<integer> = {1, 2, 3}
+		Table.insert(xs, 4)
+		Table.insert(xs, 5)
+		println(#xs)  -- 5
+		println(xs[1], xs[2], xs[3], xs[4], xs[5])  -- 1 2 3 4 5
 
-    -- insert: append
-    local xs: table<integer> = {1, 2, 3}
-    Table.insert(xs, 4)
-    Table.insert(xs, 5)
-    println(#xs)  -- 5
-    println(xs[1], xs[2], xs[3], xs[4], xs[5])  -- 1 2 3 4 5
+		-- insert: at position
 
-    -- insert: at position
+		Table.insert(xs, 0, 1)  -- prepend
+		println(xs[1], xs[6])  -- 0 5
+		Table.insert(xs, 99, 4)  -- middle
+		println(xs[4])  -- 99
 
-    Table.insert(xs, 0, 1)  -- prepend
-    println(xs[1], xs[6])  -- 0 5
-    Table.insert(xs, 99, 4)  -- middle
-    println(xs[4])  -- 99
+		-- remove: pop last
 
-    -- remove: pop last
+		local last: integer? = Table.remove(xs)
+		println(last!)  -- 5
 
-    local last: integer? = Table.remove(xs)
-    println(last!)  -- 5
+		-- remove: at position
 
-    -- remove: at position
+		local first: integer? = Table.remove(xs, 1)
+		println(first!)  -- 0
 
-    local first: integer? = Table.remove(xs, 1)
-    println(first!)  -- 0
+		-- remove: out of range -> nil
 
-    -- remove: out of range -> nil
+		local empty: table<integer> = {}
+		local nothing: integer? = Table.remove(empty)
+		if nothing == nil then
+			println("nil-pop-ok")
+		end
 
-    local empty: table<integer> = {}
-    local nothing: integer? = Table.remove(empty)
-    if nothing == nil then
-      println("nil-pop-ok")
-    end
+		-- sort: ascending
 
-    -- sort: ascending
+		local nums: table<integer> = {3, 1, 4, 1, 5, 9, 2, 6}
+		Table.sort(nums, (a: integer, b: integer) => a < b)
+		println(nums[1], nums[2], nums[8])  -- 1 1 9
 
-    local nums: table<integer> = {3, 1, 4, 1, 5, 9, 2, 6}
-    Table.sort(nums, (a: integer, b: integer) => a < b)
-    println(nums[1], nums[2], nums[8])  -- 1 1 9
+		-- sort: descending
 
-    -- sort: descending
+		Table.sort(nums, (a: integer, b: integer) => a > b)
+		println(nums[1], nums[8])  -- 9 1
 
-    Table.sort(nums, (a: integer, b: integer) => a > b)
-    println(nums[1], nums[8])  -- 9 1
+		-- concat: default sep
 
-    -- concat: default sep
+		local words: table<string> = {"hello", "world", "saule"}
+		println(Table.concat(words))  -- helloworldsaule
+		println(Table.concat(words, " "))  -- hello world saule
+		println(Table.concat(words, "-", 2))  -- world-saule
+		println(Table.concat(words, "|", 1, 2))  -- hello|world
 
-    local words: table<string> = {"hello", "world", "saule"}
-    println(Table.concat(words))  -- helloworldsaule
-    println(Table.concat(words, " "))  -- hello world saule
-    println(Table.concat(words, "-", 2))  -- world-saule
-    println(Table.concat(words, "|", 1, 2))  -- hello|world
+		-- concat: empty range
 
-    -- concat: empty range
-
-    println("[" .. Table.concat(words, ",", 3, 2) .. "]")  -- []
-  end
+		println("[" .. Table.concat(words, ",", 3, 2) .. "]")  -- []
+	end
 end

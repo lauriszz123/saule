@@ -1,44 +1,44 @@
 -- Literal patterns, wildcards, and identifier bindings.
 fn handle(cmd: string) -> string
-  return match cmd
-    case "quit" then "bye"
+	return match cmd
+		case "quit" then "bye"
 
-    case "help" then "list of commands..."
+		case "help" then "list of commands..."
 
-    case "" then "empty"
+		case "" then "empty"
 
-    case other then "unknown: " .. other
-  end
+		case other then "unknown: " .. other
+	end
 end
 
 fn flag(b: boolean) -> string
-  return match b
-    case true then "yes"
+	return match b
+		case true then "yes"
 
-    case false then "no"
-  end
+		case false then "no"
+	end
 end
 
 fn first(n: integer) -> string
-  return match n
-    case 0 then "zero"
+	return match n
+		case 0 then "zero"
 
-    case 1 then "one"
+		case 1 then "one"
 
-    case _ then "many"
-  end
+		case _ then "many"
+	end
 end
 
 class Main
-  static fn main()
-    println(handle("quit"))
-    println(handle("help"))
-    println(handle(""))
-    println(handle("dance"))
-    println(flag(true))
-    println(flag(false))
-    println(first(0))
-    println(first(1))
-    println(first(7))
-  end
+	static fn main()
+		println(handle("quit"))
+		println(handle("help"))
+		println(handle(""))
+		println(handle("dance"))
+		println(flag(true))
+		println(flag(false))
+		println(first(0))
+		println(first(1))
+		println(first(7))
+	end
 end

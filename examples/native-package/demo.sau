@@ -2,15 +2,15 @@
 import Graphics, Window, Timer from "engine"
 
 class Main
-  static fn main()
-    Window.create(800, 600)
+	static fn main()
+		Window.create(800, 600)
 
-    local started = Timer.getTime()
+		local started = Timer.getTime()
 
-    Graphics.circle("fill", 400.0, 300.0, 64.0)
-    Graphics.rectangle("line", 10.0, 10.0, 120.0, 40.0)
+		Graphics.circle("fill", 400.0, 300.0, 64.0)
+		Graphics.rectangle("line", 10.0, 10.0, 120.0, 40.0)
 
-    local elapsed = Timer.getTime() - started
-    printf("drew a frame in %.4f seconds\n", elapsed)
-  end
+		local elapsed = Timer.getTime() - started
+		printf("drew a frame in %.4f seconds\n", elapsed)
+	end
 end

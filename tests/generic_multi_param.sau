@@ -1,14 +1,14 @@
 -- Generic function with multiple type parameters.
 fn pairUp<K, V>(key: K, value: V) -> table<any>
-  local out: table<any> = {}
-  out[1] = key
-  out[2] = value
-  return out
+	local out: table<any> = {}
+	out[1] = key
+	out[2] = value
+	return out
 end
 
 class Main
-  static fn main()
-    local p: table<any> = pairUp("age", 30)
-    println(p[1], "=", p[2])
-  end
+	static fn main()
+		local p: table<any> = pairUp("age", 30)
+		println(p[1], "=", p[2])
+	end
 end

@@ -1,22 +1,22 @@
 class Main
-  static fn main()
-    for i: integer = 1, 10 do
-      print(" 1: ", i)
-    end
-    println()
+	static fn main()
+		for i: integer = 1, 10 do
+			print(" 1: ", i)
+		end
+		println()
 
-    -- with step
+		-- with step
 
-    for i: integer = 0, 100, 5 do
-      print(" 2: ", i)
-    end
-    println()
+		for i: integer = 0, 100, 5 do
+			print(" 2: ", i)
+		end
+		println()
 
-    -- counting down
+		-- counting down
 
-    for i: integer = 10, 1, -1 do
-      print(" 3: ", i)
-    end
-    println()
-  end
+		for i: integer = 10, 1, -1 do
+			print(" 3: ", i)
+		end
+		println()
+	end
 end

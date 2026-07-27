@@ -1,8 +1,8 @@
 class Main
-  static fn main()
-    local name: string? = "Arthur"
-    local got: string = name!
+	static fn main()
+		local name: string? = "Arthur"
+		local got: string = name!
 
-    println(got)  -- "Arthur"
-  end
+		println(got)  -- "Arthur"
+	end
 end
