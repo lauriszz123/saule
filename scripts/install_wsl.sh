@@ -3,9 +3,11 @@
 #
 # Cargo names the Linux cdylib `libsaule_engine_lib.so`, but the manifest's
 # `binary` list uses the un-prefixed `saule_engine_lib.so`, so we rename on
-# copy. The manifest (`engine.toml`) is generated from the crate's
-# `#[saule_export]` declarations by the `gen-manifest` binary, which is built
-# alongside the library. Build saule-engine-lib (release) first.
+# copy. The manifest is written straight to its install location by the
+# `gen-manifest` binary, which renders it from the crate's `#[saule_export]`
+# declarations and is built alongside the library.
+#
+# Build first:  cargo build --release -p saule-engine-lib
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,17 +18,19 @@ fi
 
 TARGET_DIR="target"
 SO_SRC="$TARGET_DIR/release/libsaule_engine_lib.so"
-MANIFEST_SRC="$TARGET_DIR/release/engine.toml"
+GEN_MANIFEST="$TARGET_DIR/release/gen-manifest"
 SAULE_HOME="${SAULE_HOME:-$HOME/.saule}"
 
-if [ ! -f "$SO_SRC" ]; then
-    echo "error: $SO_SRC not found — build saule-engine-lib (release) first" >&2
-    exit 1
-fi
+for f in "$SO_SRC" "$GEN_MANIFEST"; do
+    if [ ! -f "$f" ]; then
+        echo "error: $f not found — run 'cargo build --release -p saule-engine-lib' first" >&2
+        exit 1
+    fi
+done
 
 mkdir -p "$SAULE_HOME/native_packages" "$SAULE_HOME/native_manifests"
 cp "$SO_SRC" "$SAULE_HOME/native_packages/saule_engine_lib.so"
-cp "$MANIFEST_SRC" "$SAULE_HOME/native_manifests/engine.toml"
+"$GEN_MANIFEST" "$SAULE_HOME/native_manifests/engine.toml"
 
 echo "installed:"
 echo "  $SAULE_HOME/native_packages/saule_engine_lib.so"
