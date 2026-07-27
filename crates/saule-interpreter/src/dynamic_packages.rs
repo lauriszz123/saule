@@ -10,6 +10,9 @@
 //! ~/.saule/native_packages/<pkg>.{dll,so,dylib}  ── the compiled code
 //! ```
 //!
+//! `~/.saule` is the Saule home directory; set `SAULE_HOME` to relocate it.
+//! See [`saule_home`] for the exact resolution order.
+//!
 //! 1. [`discover`] (run once from [`crate::init`]) scans the manifest
 //!    directory, parses every `*.toml`, and records the resulting
 //!    [`Manifest`]s in a process-global registry. **No binary is loaded yet.**
@@ -94,11 +97,21 @@ static DISCOVER_ONCE: Once = Once::new();
 
 // ─── Filesystem layout ──────────────────────────────────────────────────────
 
+/// The Saule home directory — the root of everything the toolchain installs
+/// per-user: native packages and their manifests, and (in future) the LSP
+/// server, docs, editor plugins and the SDK/API surface.
+///
+/// `SAULE_HOME`, when set, **is** that directory — it is used verbatim, not
+/// treated as a parent to append `.saule` to. This matches how the install
+/// scripts (`scripts/install_*.sh`, `scripts/install_windows.ps1`) interpret
+/// the variable. Unset, it defaults to `.saule` under the user's home.
 fn saule_home() -> PathBuf {
-    std::env::var_os("SAULE_HOME")
+    if let Some(explicit) = std::env::var_os("SAULE_HOME") {
+        return PathBuf::from(explicit);
+    }
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".saule")
 }
