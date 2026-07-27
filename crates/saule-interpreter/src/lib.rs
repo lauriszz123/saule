@@ -35,6 +35,7 @@ use std::rc::Rc;
 use saule_ast::Module;
 
 pub mod env;
+pub mod fxhash;
 pub mod error;
 pub mod eval;
 pub mod module;

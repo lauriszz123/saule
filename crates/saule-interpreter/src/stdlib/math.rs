@@ -1,7 +1,7 @@
 //! Math prelude functions and constants.
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use std::thread_local;
@@ -28,7 +28,7 @@ fn empty_builtins() -> saule_semantic::builtins::Builtins {
 }
 
 pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
-    let mut static_fields = HashMap::new();
+    let mut static_fields = fxmap();
     static_fields.insert("abs".to_string(), native("Math.abs", math_abs));
     static_fields.insert("acos".to_string(), native("Math.acos", math_acos));
     static_fields.insert("asin".to_string(), native("Math.asin", math_asin));
@@ -68,9 +68,9 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
         name: "Math".to_string(),
         parent: None,
         field_defs: Vec::new(),
-        methods: HashMap::new(),
+        methods: Default::default(),
         static_fields: RefCell::new(static_fields),
-        static_methods: HashMap::new(),
+        static_methods: Default::default(),
         constructor: None,
     };
     env.borrow_mut()

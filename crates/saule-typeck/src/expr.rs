@@ -170,7 +170,7 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             match body {
                 LambdaBody::Expr(e) => check_expr(e, &lscope, errors),
                 LambdaBody::Block(stmts) => {
-                    for s in stmts {
+                    for s in stmts.iter() {
                         check_stmt(s, &mut lscope, errors);
                     }
                 }

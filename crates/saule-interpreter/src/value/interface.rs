@@ -1,6 +1,6 @@
 //! `interface` declarations.
 
-use std::collections::HashMap;
+use crate::fxhash::FxHashMap as HashMap;
 
 /// Runtime representation of an `interface` declaration.
 ///

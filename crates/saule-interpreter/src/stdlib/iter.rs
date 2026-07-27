@@ -7,8 +7,8 @@
 //! For ad-hoc iteration over a `table`, the loop itself accepts the table
 //! directly (`for v in t do` / `for k, v in t do`); no helper is needed.
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
@@ -45,7 +45,7 @@ pub fn register_sigs() {
 }
 
 fn define_interface(env: &Rc<RefCell<Environment>>, name: &str) {
-    let mut methods = HashMap::new();
+    let mut methods = fxmap();
     // `iter()` — zero parameters, has a return type.
     methods.insert("iter".to_string(), (0, true));
     env.borrow_mut().define(

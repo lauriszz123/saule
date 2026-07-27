@@ -1,7 +1,7 @@
 //! String standard library — exposed as the static class `String`.
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
@@ -26,7 +26,7 @@ fn empty_builtins() -> saule_semantic::builtins::Builtins {
 }
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
-    let mut static_fields = HashMap::new();
+    let mut static_fields = fxmap();
     static_fields.insert("byte".to_string(), native("String.byte", str_byte));
     static_fields.insert("char".to_string(), native("String.char", str_char));
     static_fields.insert("format".to_string(), native("String.format", str_format));
@@ -44,9 +44,9 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "String".to_string(),
         parent: None,
         field_defs: Vec::new(),
-        methods: HashMap::new(),
+        methods: Default::default(),
         static_fields: RefCell::new(static_fields),
-        static_methods: HashMap::new(),
+        static_methods: Default::default(),
         constructor: None,
     };
     env.borrow_mut()

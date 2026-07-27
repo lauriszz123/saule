@@ -22,8 +22,8 @@
 //!   `Table.concat(list, ", ", 2)`  -- from index 2 to end
 //!   `Table.concat(list, ", ", 2, 4)` -- range
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
@@ -48,7 +48,7 @@ fn empty_builtins() -> saule_semantic::builtins::Builtins {
 }
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
-    let mut static_fields = HashMap::new();
+    let mut static_fields = fxmap();
     static_fields.insert(
         "insert".to_string(),
         native_multi("Table.insert", tbl_insert),
@@ -67,9 +67,9 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "Table".to_string(),
         parent: None,
         field_defs: Vec::new(),
-        methods: HashMap::new(),
+        methods: Default::default(),
         static_fields: RefCell::new(static_fields),
-        static_methods: HashMap::new(),
+        static_methods: Default::default(),
         constructor: None,
     };
     env.borrow_mut()
