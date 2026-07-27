@@ -265,7 +265,7 @@ fn exec_decl(decl: &Spanned<Decl>, env: &Rc<RefCell<Environment>>) -> Result<Flo
             let func = FunctionObject {
                 name: Some(name.clone()),
                 params: params.clone(),
-                body: FunctionBody::Block(body.clone()),
+                body: FunctionBody::Block(body.as_slice().into()),
                 closure: env.clone(),
                 owner_class: std::cell::RefCell::new(None),
                 source: crate::module::active_module_source(),
@@ -297,7 +297,7 @@ pub(super) fn make_function(
     FunctionObject {
         name,
         params,
-        body: FunctionBody::Block(body),
+        body: FunctionBody::Block(body.into()),
         closure: closure.clone(),
         owner_class: std::cell::RefCell::new(None),
         source: crate::module::active_module_source(),

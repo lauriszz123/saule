@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use saule_ast::{Expr, Param, Spanned, Stmt};
 
@@ -90,8 +91,13 @@ impl FunctionObject {
 /// Function bodies come in two shapes:
 ///   * a block of statements (named `fn` decls, block-body lambdas),
 ///   * a single expression (arrow-style lambdas like `(x) => x + 1`).
+///
+/// Shared by `Arc` so building a [`FunctionObject`] from a lambda's AST is
+/// a refcount bump rather than a deep copy of the body — a lambda inside a
+/// loop is re-evaluated on every iteration. See [`saule_ast::LambdaBody`],
+/// which uses the same representation so the two share one allocation.
 #[derive(Debug, Clone)]
 pub enum FunctionBody {
-    Block(Vec<Spanned<Stmt>>),
-    Expr(Box<Spanned<Expr>>),
+    Block(Arc<[Spanned<Stmt>]>),
+    Expr(Arc<Spanned<Expr>>),
 }

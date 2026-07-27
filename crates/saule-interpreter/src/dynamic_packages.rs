@@ -29,6 +29,7 @@
 //! never links the interpreter — the only shared contract is
 //! [`saule_native_abi`].
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -131,7 +132,7 @@ fn packages_dir() -> PathBuf {
 /// and skipped rather than aborting startup.
 pub fn discover() {
     DISCOVER_ONCE.call_once(|| {
-        let mut map = HashMap::new();
+        let mut map = std::collections::HashMap::new();
         let dir = manifests_dir();
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -390,7 +391,7 @@ fn pick_binary(dir: &Path, candidates: &[String]) -> Option<PathBuf> {
 // ─── Class / method construction ────────────────────────────────────────────
 
 fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, String> {
-    let mut static_fields = HashMap::new();
+    let mut static_fields = fxmap();
     for method in &spec.methods {
         let qname = format!("{}.{}", spec.name, method.name);
         let value = make_native(
@@ -406,9 +407,9 @@ fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, Stri
         name: spec.name.clone(),
         parent: None,
         field_defs: Vec::new(),
-        methods: HashMap::new(),
+        methods: Default::default(),
         static_fields: RefCell::new(static_fields),
-        static_methods: HashMap::new(),
+        static_methods: Default::default(),
         constructor: None,
     })
 }

@@ -9,8 +9,8 @@
 //! All values are *snapshots* taken at startup. There is no setter; mutating
 //! the table doesn't propagate back to the loader.
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
@@ -42,7 +42,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         .map(|p| Value::Str(Rc::new(p.display().to_string())))
         .collect();
 
-    let mut static_fields = HashMap::new();
+    let mut static_fields = fxmap();
     static_fields.insert("name".to_string(), Value::Str(Rc::new(info.name.clone())));
     static_fields.insert(
         "version".to_string(),
@@ -61,9 +61,9 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "Project".to_string(),
         parent: None,
         field_defs: Vec::<FieldDef>::new(),
-        methods: HashMap::new(),
+        methods: Default::default(),
         static_fields: RefCell::new(static_fields),
-        static_methods: HashMap::new(),
+        static_methods: Default::default(),
         constructor: None,
     };
     env.borrow_mut()

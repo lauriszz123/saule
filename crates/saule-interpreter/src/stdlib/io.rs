@@ -16,8 +16,8 @@
 //!   registered programmatically. Natives read the variant's `.value` string
 //!   to drive the underlying `OpenOptions` / `SeekFrom`.
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::rc::Rc;
@@ -78,16 +78,16 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "File".to_string(),
         parent: None,
         field_defs: Vec::<FieldDef>::new(),
-        methods: HashMap::new(),
-        static_fields: RefCell::new(HashMap::new()),
-        static_methods: HashMap::new(),
+        methods: Default::default(),
+        static_fields: RefCell::new(Default::default()),
+        static_methods: Default::default(),
         constructor: None,
     };
     env.borrow_mut()
         .define("File".to_string(), Value::Class(Rc::new(file_class)));
 
     // `Io` class — statics + native methods.
-    let mut static_fields = HashMap::new();
+    let mut static_fields = fxmap();
     static_fields.insert(
         "stdin".to_string(),
         Value::File(Rc::new(RefCell::new(FileHandle::Stdin(BufReader::new(
@@ -111,9 +111,9 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "Io".to_string(),
         parent: None,
         field_defs: Vec::new(),
-        methods: HashMap::new(),
+        methods: Default::default(),
         static_fields: RefCell::new(static_fields),
-        static_methods: HashMap::new(),
+        static_methods: Default::default(),
         constructor: None,
     };
     env.borrow_mut()
@@ -177,7 +177,7 @@ pub fn register_sigs() {
 // ─── enum helper ───────────────────────────────────────────────────────────
 
 fn install_enum(env: &Rc<RefCell<Environment>>, name: &str, variants: &[(&str, &str)]) {
-    let mut variant_dict = HashMap::new();
+    let mut variant_dict = fxmap();
     for (vname, vvalue) in variants {
         variant_dict.insert(
             (*vname).to_string(),
@@ -192,8 +192,8 @@ fn install_enum(env: &Rc<RefCell<Environment>>, name: &str, variants: &[(&str, &
     let final_enum = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
-        tuple_variants: HashMap::new(),
-        methods: HashMap::new(),
+        tuple_variants: Default::default(),
+        methods: Default::default(),
     });
     for v in variant_dict.values() {
         *v.enum_obj.borrow_mut() = Some(final_enum.clone());

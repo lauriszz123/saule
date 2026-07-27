@@ -648,7 +648,7 @@ impl<'a> CollectCx<'a> {
                 self.enter_function(&params_clone, |this| match body {
                     LambdaBody::Expr(b) => this.visit_expr(b),
                     LambdaBody::Block(b) => {
-                        for s in b {
+                        for s in b.iter() {
                             this.visit_stmt(s);
                         }
                     }

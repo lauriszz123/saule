@@ -2,6 +2,8 @@
 //! `match`, plus the function-parameter shape that lambdas and declarations
 //! share.
 
+use std::sync::Arc;
+
 use crate::{Spanned, Stmt, Type};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,10 +173,16 @@ pub enum TableEntry {
     },
 }
 
+/// The body of a lambda expression.
+///
+/// Held behind `Arc` rather than `Box`/`Vec` because evaluating a lambda
+/// expression builds a runtime function object from this body, and a lambda
+/// written inside a loop is evaluated once per iteration. Sharing means
+/// that's a refcount bump instead of a deep copy of the whole body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LambdaBody {
-    Expr(Box<Spanned<Expr>>),
-    Block(Vec<Spanned<Stmt>>),
+    Expr(Arc<Spanned<Expr>>),
+    Block(Arc<[Spanned<Stmt>]>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2,7 +2,7 @@
 //! constructors.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use crate::env::Environment;
@@ -65,7 +65,7 @@ pub(crate) fn construct(
 ) -> Result<Value, RuntimeError> {
     let inst = Rc::new(RefCell::new(InstanceObject {
         class: class.clone(),
-        fields: HashMap::new(),
+        fields: HashMap::default(),
     }));
 
     init_fields(&class, &inst, &span)?;

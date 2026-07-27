@@ -1,7 +1,7 @@
 //! `enum` declaration execution.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use saule_ast::{EnumVariant, Method, Spanned};
@@ -20,9 +20,9 @@ pub(super) fn exec_enum_decl(
     env: &Rc<RefCell<Environment>>,
     _span: std::ops::Range<usize>,
 ) -> Result<Flow, RuntimeError> {
-    let mut variant_dict = HashMap::new();
-    let mut tuple_variants: HashMap<String, usize> = HashMap::new();
-    let mut enum_methods = HashMap::new();
+    let mut variant_dict = HashMap::default();
+    let mut tuple_variants: HashMap<String, usize> = HashMap::default();
+    let mut enum_methods = HashMap::default();
 
     for method in methods {
         let func = Rc::new(make_function(

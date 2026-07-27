@@ -18,8 +18,8 @@
 //!   integer exit code (0 on success). A richer captured-output variant can
 //!   be added later as `Os.run`.
 
+use crate::fxhash::fxmap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -64,7 +64,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     install_fskind_enum(env);
     install_fsinfo_class(env);
 
-    let mut static_fields = HashMap::new();
+    let mut static_fields = fxmap();
 
     // time
     static_fields.insert("time".to_string(), native_multi("Os.time", os_time));
@@ -125,9 +125,9 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "Os".to_string(),
         parent: None,
         field_defs: Vec::<FieldDef>::new(),
-        methods: HashMap::new(),
+        methods: Default::default(),
         static_fields: RefCell::new(static_fields),
-        static_methods: HashMap::new(),
+        static_methods: Default::default(),
         constructor: None,
     };
     env.borrow_mut()
@@ -210,7 +210,7 @@ fn install_platform_enum(env: &Rc<RefCell<Environment>>) {
         ("Other", "other"),
     ];
     let name = "OsPlatform";
-    let mut variant_dict = HashMap::new();
+    let mut variant_dict = fxmap();
     for (vname, vvalue) in variants {
         variant_dict.insert(
             (*vname).to_string(),
@@ -225,8 +225,8 @@ fn install_platform_enum(env: &Rc<RefCell<Environment>>) {
     let final_enum = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
-        tuple_variants: HashMap::new(),
-        methods: HashMap::new(),
+        tuple_variants: Default::default(),
+        methods: Default::default(),
     });
     for v in variant_dict.values() {
         *v.enum_obj.borrow_mut() = Some(final_enum.clone());
@@ -768,7 +768,7 @@ fn install_fskind_enum(env: &Rc<RefCell<Environment>>) {
         ("Other", "other"),
     ];
     let name = "FsKind";
-    let mut variant_dict = HashMap::new();
+    let mut variant_dict = fxmap();
     for (vname, vvalue) in variants {
         variant_dict.insert(
             (*vname).to_string(),
@@ -783,8 +783,8 @@ fn install_fskind_enum(env: &Rc<RefCell<Environment>>) {
     let final_enum = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
-        tuple_variants: HashMap::new(),
-        methods: HashMap::new(),
+        tuple_variants: Default::default(),
+        methods: Default::default(),
     });
     for v in variant_dict.values() {
         *v.enum_obj.borrow_mut() = Some(final_enum.clone());
@@ -802,9 +802,9 @@ fn install_fsinfo_class(env: &Rc<RefCell<Environment>>) {
         name: "FsInfo".to_string(),
         parent: None,
         field_defs: Vec::<FieldDef>::new(),
-        methods: HashMap::new(),
-        static_fields: RefCell::new(HashMap::new()),
-        static_methods: HashMap::new(),
+        methods: Default::default(),
+        static_fields: RefCell::new(Default::default()),
+        static_methods: Default::default(),
         constructor: None,
     });
     FSINFO_CLASS.with(|slot| *slot.borrow_mut() = Some(class.clone()));
@@ -871,7 +871,7 @@ fn os_fs_info(args: &[Value]) -> Result<Vec<Value>, String> {
         .map(|d| Value::Int(d.as_secs() as i64))
         .unwrap_or(Value::Nil);
 
-    let mut fields = HashMap::new();
+    let mut fields = fxmap();
     fields.insert("path".to_string(), Value::Str(Rc::new(path)));
     fields.insert("kind".to_string(), fskind_variant(kind_str));
     fields.insert("size".to_string(), Value::Int(meta.len() as i64));
@@ -917,9 +917,9 @@ pub fn builtin_registries() -> (
     let mut info = ClassInfo {
         parent: None,
         implements: Vec::new(),
-        members: HashMap::new(),
-        field_types: HashMap::new(),
-        methods: HashMap::new(),
+        members: Default::default(),
+        field_types: Default::default(),
+        methods: Default::default(),
     };
     let fields: [(&str, Type); 5] = [
         ("path", Type::Named("string".to_string())),

@@ -180,18 +180,20 @@ pub(super) fn bind_params(
     args: &[EvaluatedArg],
     span: &std::ops::Range<usize>,
 ) -> Result<(), RuntimeError> {
-    let variadic_indices: Vec<usize> = params
-        .iter()
-        .enumerate()
-        .filter_map(|(i, p)| p.variadic.then_some(i))
-        .collect();
-    if variadic_indices.len() > 1 {
-        return Err(RuntimeError::TypeError {
-            message: "a function can declare at most one variadic parameter".to_string(),
-            span: params[variadic_indices[1]].span.clone(),
-        });
+    // Locate the variadic parameter (and reject a second one) without
+    // building a `Vec` — this runs on every single call.
+    let mut variadic_idx = None;
+    for (i, p) in params.iter().enumerate() {
+        if p.variadic {
+            if variadic_idx.is_some() {
+                return Err(RuntimeError::TypeError {
+                    message: "a function can declare at most one variadic parameter".to_string(),
+                    span: p.span.clone(),
+                });
+            }
+            variadic_idx = Some(i);
+        }
     }
-    let variadic_idx = variadic_indices.first().copied();
     if let Some(idx) = variadic_idx
         && idx + 1 != params.len()
     {
@@ -202,6 +204,45 @@ pub(super) fn bind_params(
             ),
             span: params[idx].span.clone(),
         });
+    }
+
+    // Fast path: plain positional call against a non-variadic signature —
+    // the shape of nearly every call in a program. Arguments map onto
+    // parameters by index, so there's nothing to reorder and none of the
+    // buffers the general path needs.
+    if variadic_idx.is_none() && !args.iter().any(|a| matches!(a, EvaluatedArg::Named { .. })) {
+        if args.len() > params.len() {
+            return Err(RuntimeError::TypeError {
+                message: format!(
+                    "too many arguments: expected {} but got at least {}",
+                    params.len(),
+                    params.len() + 1
+                ),
+                span: span.clone(),
+            });
+        }
+        for (i, param) in params.iter().enumerate() {
+            let value = match args.get(i) {
+                Some(EvaluatedArg::Positional(v)) => v.clone(),
+                // `any(Named)` above ruled this out; map it exhaustively
+                // rather than panic.
+                Some(EvaluatedArg::Named { value, .. }) => value.clone(),
+                None => match &param.default {
+                    Some(default) => eval(default, scope)?,
+                    None if is_nullable_type(&param.ty) => Value::Nil,
+                    None => {
+                        return Err(missing_argument_error(
+                            params,
+                            |j| j < args.len(),
+                            param,
+                            span,
+                        ));
+                    }
+                },
+            };
+            scope.borrow_mut().define(param.name.clone(), value);
+        }
+        return Ok(());
     }
 
     let mut assigned: Vec<Option<Value>> = vec![None; params.len()];
@@ -278,22 +319,6 @@ pub(super) fn bind_params(
         }
     }
 
-    let missing_required: Vec<String> = params
-        .iter()
-        .enumerate()
-        .filter_map(|(i, p)| {
-            if assigned[i].is_none()
-                && !p.variadic
-                && p.default.is_none()
-                && !is_nullable_type(&p.ty)
-            {
-                Some(p.name.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-
     for (i, param) in params.iter().enumerate() {
         if param.variadic {
             scope.borrow_mut().define(
@@ -311,38 +336,70 @@ pub(super) fn bind_params(
         } else if is_nullable_type(&param.ty) {
             Value::Nil
         } else {
-            let help = if missing_required.len() == 1 {
-                Some(format!(
-                    "add argument `{}` to this call (positionally or by name)",
-                    missing_required[0]
-                ))
-            } else {
-                Some(format!(
-                    "add required arguments to this call: {}",
-                    missing_required
-                        .iter()
-                        .map(|n| format!("`{n}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            };
-            return Err(RuntimeError::ArgumentError {
-                message: if missing_required.len() == 1 {
-                    format!("missing required argument for parameter `{}`", param.name)
-                } else {
-                    format!(
-                        "missing {} required argument(s): {}",
-                        missing_required.len(),
-                        missing_required.join(", ")
-                    )
-                },
-                help,
-                span: span.clone(),
-            });
+            return Err(missing_argument_error(
+                params,
+                |j| assigned[j].is_some(),
+                param,
+                span,
+            ));
         };
         scope.borrow_mut().define(param.name.clone(), value);
     }
     Ok(())
+}
+
+/// Build the "missing required argument" diagnostic.
+///
+/// Listing every unfilled parameter means walking the whole signature, so
+/// this is deliberately only reached on the failure path — the happy path
+/// never pays for it. `is_filled` reports whether parameter `i` received an
+/// argument, which the positional and reorder paths answer differently.
+fn missing_argument_error(
+    params: &[saule_ast::Param],
+    is_filled: impl Fn(usize) -> bool,
+    param: &saule_ast::Param,
+    span: &std::ops::Range<usize>,
+) -> RuntimeError {
+    let missing: Vec<&str> = params
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| {
+            !is_filled(*i) && !p.variadic && p.default.is_none() && !is_nullable_type(&p.ty)
+        })
+        .map(|(_, p)| p.name.as_str())
+        .collect();
+
+    let (message, help) = if missing.len() == 1 {
+        (
+            format!("missing required argument for parameter `{}`", param.name),
+            format!(
+                "add argument `{}` to this call (positionally or by name)",
+                missing[0]
+            ),
+        )
+    } else {
+        (
+            format!(
+                "missing {} required argument(s): {}",
+                missing.len(),
+                missing.join(", ")
+            ),
+            format!(
+                "add required arguments to this call: {}",
+                missing
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    };
+
+    RuntimeError::ArgumentError {
+        message,
+        help: Some(help),
+        span: span.clone(),
+    }
 }
 
 pub(super) fn eval_call_args(
@@ -519,25 +576,15 @@ pub(super) fn call_static_method_multi(
 }
 
 /// Make the class's static fields and methods directly visible inside a
-/// method body. Parent statics are seeded first and overridden by child
-/// statics, matching the lookup order used for member access.
+/// method body.
+///
+/// This used to copy every static from the whole inheritance chain into the
+/// fresh scope — a `String` clone and a map insert per static, on *every*
+/// method call. Now it just hands the scope a pointer to the class and lets
+/// `Environment::get` consult it on a miss, which is free at call time and
+/// costs one extra probe only on names that aren't locals.
 pub(super) fn inject_class_statics(scope: &Rc<RefCell<Environment>>, class: &Rc<ClassObject>) {
-    let mut chain: Vec<Rc<ClassObject>> = Vec::new();
-    let mut cur = Some(class.clone());
-    while let Some(c) = cur {
-        chain.push(c.clone());
-        cur = c.parent.clone();
-    }
-    for c in chain.iter().rev() {
-        for (n, v) in c.static_fields.borrow().iter() {
-            scope.borrow_mut().define(n.clone(), v.clone());
-        }
-        for (n, f) in &c.static_methods {
-            scope
-                .borrow_mut()
-                .define(n.clone(), Value::Function(f.clone()));
-        }
-    }
+    scope.borrow_mut().set_statics_owner(class.clone());
 }
 
 /// Public re-export of [`call_static_method`] for embedders.

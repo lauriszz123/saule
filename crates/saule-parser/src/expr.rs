@@ -313,7 +313,7 @@ impl Parser {
                         Expr::Lambda {
                             params: vec![param],
                             return_ty: None,
-                            body: LambdaBody::Expr(Box::new(body_expr)),
+                            body: LambdaBody::Expr(std::sync::Arc::new(body_expr)),
                         },
                         span,
                     ))
@@ -668,7 +668,7 @@ impl Parser {
             Expr::Lambda {
                 params,
                 return_ty,
-                body: LambdaBody::Block(body),
+                body: LambdaBody::Block(body.into()),
             },
             span,
         ))
@@ -713,7 +713,7 @@ impl Parser {
             Expr::Lambda {
                 params,
                 return_ty,
-                body: LambdaBody::Expr(Box::new(body_expr)),
+                body: LambdaBody::Expr(std::sync::Arc::new(body_expr)),
             },
             span,
         ))

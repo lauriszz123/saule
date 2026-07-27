@@ -133,7 +133,7 @@ pub(super) fn read_member(
         // Lua-style table access: `t.foo` is sugar for `t["foo"]`. Misses
         // produce `nil` (Lua semantics) rather than a runtime error, so
         // `t.maybe` is a safe probe.
-        Value::Table(items) => Ok(items.borrow().get(&Value::Str(Rc::new(name.to_string())))),
+        Value::Table(items) => Ok(items.borrow().get_str(name)),
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "cannot read field `{name}` on value of type `{}` — only instances, classes, enums, and tables have members",

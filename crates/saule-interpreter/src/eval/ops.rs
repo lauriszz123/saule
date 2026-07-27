@@ -50,11 +50,23 @@ pub fn binary(
 
         Lt | LtEq | Gt | GtEq => comparison(op, l, r, span),
 
-        Concat => Ok(Value::Str(Rc::new(format!(
-            "{}{}",
-            l.to_display_string(),
-            r.to_display_string()
-        )))),
+        // String-to-string is the overwhelmingly common shape, and the
+        // generic path below would clone both operands via
+        // `to_display_string` and then allocate a third buffer for the
+        // result. Build the result directly instead.
+        Concat => match (&l, &r) {
+            (Value::Str(a), Value::Str(b)) => {
+                let mut s = String::with_capacity(a.len() + b.len());
+                s.push_str(a);
+                s.push_str(b);
+                Ok(Value::Str(Rc::new(s)))
+            }
+            _ => Ok(Value::Str(Rc::new(format!(
+                "{}{}",
+                l.to_display_string(),
+                r.to_display_string()
+            )))),
+        },
 
         Coalesce | And | Or => unreachable!("and/or/?? are short-circuited in expr::eval"),
     }

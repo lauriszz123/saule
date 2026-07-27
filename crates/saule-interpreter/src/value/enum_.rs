@@ -1,6 +1,6 @@
 //! `enum` declarations and their variants.
 
-use std::collections::HashMap;
+use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use super::Value;

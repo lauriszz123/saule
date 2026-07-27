@@ -1,7 +1,7 @@
 //! `class` and `interface` declaration execution.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use saule_ast::{ClassMember, Decl, Spanned};
@@ -62,9 +62,9 @@ pub(super) fn exec_class_decl(
     };
 
     let mut field_defs: Vec<FieldDef> = Vec::new();
-    let mut methods: HashMap<String, Rc<FunctionObject>> = HashMap::new();
-    let mut static_fields: HashMap<String, Value> = HashMap::new();
-    let mut static_methods: HashMap<String, Rc<FunctionObject>> = HashMap::new();
+    let mut methods: HashMap<String, Rc<FunctionObject>> = HashMap::default();
+    let mut static_fields: HashMap<String, Value> = HashMap::default();
+    let mut static_methods: HashMap<String, Rc<FunctionObject>> = HashMap::default();
     let mut constructor: Option<Rc<FunctionObject>> = None;
 
     // Scan once so we know whether the class has a constructor (`fn init`).
@@ -206,7 +206,7 @@ pub(super) fn exec_interface_decl(
         unreachable!("exec_interface_decl called with non-interface decl");
     };
 
-    let mut method_sigs = HashMap::new();
+    let mut method_sigs = HashMap::default();
     for method in methods {
         let param_count = method.params.len();
         let has_return_type = method.return_ty.is_some();

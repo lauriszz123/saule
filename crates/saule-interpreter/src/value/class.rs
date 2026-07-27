@@ -1,7 +1,7 @@
 //! `class` declarations, field templates, and instance state.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use saule_ast::{Expr, Spanned};
@@ -74,5 +74,19 @@ impl ClassObject {
         self.parent
             .as_ref()
             .and_then(|p| p.lookup_static_field(name))
+    }
+
+    /// The class in this chain that actually declares static field `name`.
+    ///
+    /// Writes target the *declaring* class rather than the most-derived one
+    /// so `Child.counter = 1` and a bare-name `counter = 1` inside a method
+    /// both update the single shared slot every sibling reads from.
+    pub fn declaring_static_field(self: &Rc<Self>, name: &str) -> Option<Rc<ClassObject>> {
+        if self.static_fields.borrow().contains_key(name) {
+            return Some(self.clone());
+        }
+        self.parent
+            .as_ref()
+            .and_then(|p| p.declaring_static_field(name))
     }
 }
