@@ -6,19 +6,19 @@
 -- an ordinary free-function call.
 
 fn shout(msg: string) -> string
-    return msg .. "!"
+	return msg .. "!"
 end
 
 fn repeat_str(msg: string, times: integer) -> string
-    local out: string = ""
-    for i: integer = 1, times do
-        out = out .. msg
-    end
-    return out
+	local out: string = ""
+	for i: integer = 1, times do
+		out = out .. msg
+	end
+	return out
 end
 
 fn length_of(msg: string) -> integer
-    return #msg
+	return #msg
 end
 
 -- Single stage: `shout("Hello, ")` returns "Hello, !".
@@ -29,4 +29,3 @@ print(greeting)
 -- Equivalent to `length_of(repeat_str(shout("hi"), 3))`.
 local size: integer = when("hi"):shout():repeat_str(3):length_of()
 print(size)
-

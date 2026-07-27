@@ -1,16 +1,16 @@
 interface Test
-  fn toString() -> string
+	fn toString() -> string
 end
 
 class Object implements Test
-  fn toString() -> string
-    return "Object"
-  end
+	fn toString() -> string
+		return "Object"
+	end
 end
 
 class Main
-  static fn main()
-    local obj: Object = Object()
-    println("Hello, " .. obj.toString())
-  end
+	static fn main()
+		local obj: Object = Object()
+		println("Hello, " .. obj.toString())
+	end
 end

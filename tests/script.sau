@@ -1,4 +1,4 @@
 class Main
-  static fn main()
-  end
+	static fn main()
+	end
 end

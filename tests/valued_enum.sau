@@ -1,21 +1,21 @@
 -- Valued enum with a method that uses `self.value`
 enum Status
-  Alive = "alive",
-  Dead = "dead",
-  Unknown = "unknown"
+	Alive = "alive",
+	Dead = "dead",
+	Unknown = "unknown"
 
-  fn describe() -> string
-    return "Status is: " .. self.value
-  end
+	fn describe() -> string
+		return "Status is: " .. self.value
+	end
 end
 
 class Main
-  static fn main()
-    local s: Status = Status.Alive
-    println(s.describe())  -- "Status is: alive"
+	static fn main()
+		local s: Status = Status.Alive
+		println(s.describe())  -- "Status is: alive"
 
-    local d: Status = Status.Dead
-    println(d.value)  -- "dead"
-    println(d.name)  -- "Dead"
-  end
+		local d: Status = Status.Dead
+		println(d.value)  -- "dead"
+		println(d.name)  -- "Dead"
+	end
 end

@@ -2,96 +2,96 @@ import Storage from "storage"
 import Renderer from "render"
 
 class Main
-  static fn help()
-    println("TODO App Usage:")
-    println("\ttodo list")
-    println("\ttodo add [task] [optional-due-date YYYY-MM-DD]")
-    println("\ttodo remove [number-of-task]")
-    println("\ttodo done [number-of-task]")
-    println("\ttodo due [number-of-task] [due-date YYYY-MM-DD]")
-  end
+	static fn help()
+		println("TODO App Usage:")
+		println("\ttodo list")
+		println("\ttodo add [task] [optional-due-date YYYY-MM-DD]")
+		println("\ttodo remove [number-of-task]")
+		println("\ttodo done [number-of-task]")
+		println("\ttodo due [number-of-task] [due-date YYYY-MM-DD]")
+	end
 
-  static fn main()
-    local storage = Storage("todo.json")
-    local args: table = Os.args()
+	static fn main()
+		local storage = Storage("todo.json")
+		local args: table = Os.args()
 
-    if not Os.exists("todo.json") then
-      storage.save()
-    elseif not storage.load() then
-      println("error: todo.json is corrupt; refusing to overwrite")
-      return
-    end
+		if not Os.exists("todo.json") then
+			storage.save()
+		elseif not storage.load() then
+			println("error: todo.json is corrupt; refusing to overwrite")
+			return
+		end
 
-    if #args == 0 then
-      help()
-      return
-    end
+		if #args == 0 then
+			help()
+			return
+		end
 
-    match args[1]
-      case "list" then Renderer.print(storage.getAll())
+		match args[1]
+			case "list" then Renderer.print(storage.getAll())
 
-      case "add" then
-        local due: integer? = nil
+			case "add" then
+				local due: integer? = nil
 
-        if args[3] != nil then
-          due = Os.parsedate(args[3])
-          if due == nil then
-            println("invalid date: " .. args[3] .. " (expected YYYY-MM-DD)")
-            return
-          end
-        end
+				if args[3] != nil then
+					due = Os.parsedate(args[3])
+					if due == nil then
+						println("invalid date: " .. args[3] .. " (expected YYYY-MM-DD)")
+						return
+					end
+				end
 
-        storage.add(args[2], dueDate: due)
-        Renderer.print(storage.getAll())
+				storage.add(args[2], dueDate: due)
+				Renderer.print(storage.getAll())
 
-      case "done" then
-        local index: integer? = tointeger(args[2])
-        if index == nil then
-          println("error: invalid task number")
-          return
-        end
+			case "done" then
+				local index: integer? = tointeger(args[2])
+				if index == nil then
+					println("error: invalid task number")
+					return
+				end
 
-        storage.update(index, isDone: true)
+				storage.update(index, isDone: true)
 
-      case "due" then
-        local index: integer? = tointeger(args[2])
+			case "due" then
+				local index: integer? = tointeger(args[2])
 
-        if index == nil then
-          println("error: invalid task number")
-          return
-        end
+				if index == nil then
+					println("error: invalid task number")
+					return
+				end
 
-        if args[3] == nil then
-          println("error: missing due date")
-          return
-        end
+				if args[3] == nil then
+					println("error: missing due date")
+					return
+				end
 
-        local due: integer? = Os.parsedate(args[3])
-        if due == nil then
-          println("invalid date: " .. args[3] .. " (expected YYYY-MM-DD)")
-          return
-        end
+				local due: integer? = Os.parsedate(args[3])
+				if due == nil then
+					println("invalid date: " .. args[3] .. " (expected YYYY-MM-DD)")
+					return
+				end
 
-        storage.update(index, dueDate: due)
+				storage.update(index, dueDate: due)
 
-      case "remove" then
-        local index: integer? = tointeger(args[2])
-        if index == nil then
-          println("error: invalid task number")
-          return
-        end
+			case "remove" then
+				local index: integer? = tointeger(args[2])
+				if index == nil then
+					println("error: invalid task number")
+					return
+				end
 
-        match storage.remove(index)
-          case nil then printf("Task id %d does not exist\n", index)
+				match storage.remove(index)
+					case nil then printf("Task id %d does not exist\n", index)
 
-          case task then printf("Removed task: %s\n", task)
-        end
+					case task then printf("Removed task: %s\n", task)
+				end
 
-        Renderer.print(storage.getAll())
+				Renderer.print(storage.getAll())
 
-      case _ then Main.help()
-    end
+			case _ then Main.help()
+		end
 
-    storage.save()
-  end
+		storage.save()
+	end
 end

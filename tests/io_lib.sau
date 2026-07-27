@@ -1,54 +1,54 @@
 -- Io / File round-trip — write, read whole, iterate lines.
 class Main
-  static fn main()
-    local path: string = "/tmp/saule_io_test.txt"
+	static fn main()
+		local path: string = "/tmp/saule_io_test.txt"
 
-    -- Write
+		-- Write
 
-    local f: File = Io.open(path, IoMode.Write)!
-    f.write("hello\n")
-    f.write("world\n")
-    f.write("saule\n")
-    f.close()
+		local f: File = Io.open(path, IoMode.Write)!
+		f.write("hello\n")
+		f.write("world\n")
+		f.write("saule\n")
+		f.close()
 
-    -- Read whole
+		-- Read whole
 
-    local g: File = Io.open(path, IoMode.Read)!
-    local body: string = g.read("a")!
-    println("body=[" .. body .. "]")
-    g.close()
+		local g: File = Io.open(path, IoMode.Read)!
+		local body: string = g.read("a")!
+		println("body=[" .. body .. "]")
+		g.close()
 
-    -- Iterate via file:lines()
+		-- Iterate via file:lines()
 
-    local h: File = Io.open(path, IoMode.Read)!
-    for line in h.lines() do
-      println("line=" .. line)
-    end
-    h.close()
+		local h: File = Io.open(path, IoMode.Read)!
+		for line in h.lines() do
+			println("line=" .. line)
+		end
+		h.close()
 
-    -- Iterate via Io.lines(path)
+		-- Iterate via Io.lines(path)
 
-    for line in Io.lines(path) do
-      println("path-line=" .. line)
-    end
+		for line in Io.lines(path) do
+			println("path-line=" .. line)
+		end
 
-    -- Append
+		-- Append
 
-    local a: File = Io.open(path, IoMode.Append)!
-    a.write("extra\n")
-    a.close()
+		local a: File = Io.open(path, IoMode.Append)!
+		a.write("extra\n")
+		a.close()
 
-    -- Confirm append by counting lines
+		-- Confirm append by counting lines
 
-    local count: integer = 0
-    for line in Io.lines(path) do
-      count = count + 1
-    end
-    println("count=" .. tostring(count))
+		local count: integer = 0
+		for line in Io.lines(path) do
+			count = count + 1
+		end
+		println("count=" .. tostring(count))
 
-    -- Standard streams
+		-- Standard streams
 
-    Io.stdout.write("via-stdout\n")
-    Io.write("via-io-write\n")
-  end
+		Io.stdout.write("via-stdout\n")
+		Io.write("via-io-write\n")
+	end
 end

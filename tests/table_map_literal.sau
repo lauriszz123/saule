@@ -1,61 +1,65 @@
 -- Map-literal syntax: ident keys, string keys, mixed with positional.
 class Main
-  static fn main()
-    local user: table<string, any> = {name: "alice", "full name": "Alice X", age: 30}
-    println(user["name"])  -- alice
-    println(user["full name"])  -- Alice X
-    println(user["age"])  -- 30
+	static fn main()
+		local user: table<string, any> = {name: "alice", "full name": "Alice X", age: 30}
+		println(user["name"])  -- alice
+		println(user["full name"])  -- Alice X
+		println(user["age"])  -- 30
 
-    -- Nested
+		-- Nested
 
-    local doc: table<string, any> = {name: "bob", scores: {math: 90, art: 80}}
-    local scores: any = doc["scores"]
-    println(scores["math"])  -- 90
-    println(scores["art"])  -- 80
+		local doc: table<string, any> = {name: "bob", scores: {math: 90, art: 80}}
+		local scores: any = doc["scores"]
+		println(scores["math"])  -- 90
+		println(scores["art"])  -- 80
 
-    -- Deeply nested: map → map → map, with string-quoted keys and idents
-    -- intermixed at every level, plus a trailing comma.
+		-- Deeply nested: map → map → map, with string-quoted keys and idents
+		-- intermixed at every level, plus a trailing comma.
 
-    local company: table<string, any> = {name: "acme", address: {"street name": "Main", number: 42, geo: {lat: 51, lon: -1}}, ceo: {name: "carol", contact: {email: "c@acme.test", phones: {home: "111", work: "222"}}}}
-    local addr: any = company["address"]
-    local geo: any = addr["geo"]
-    println(addr["street name"])  -- Main
-    println(addr["number"])  -- 42
-    println(geo["lat"], geo["lon"])  -- 51   -1
+		local company: table<string, any> = {
+			name: "acme",
+			address: {"street name": "Main", number: 42, geo: {lat: 51, lon: -1}},
+			ceo: {name: "carol", contact: {email: "c@acme.test", phones: {home: "111", work: "222"}}},
+		}
+		local addr: any = company["address"]
+		local geo: any = addr["geo"]
+		println(addr["street name"])  -- Main
+		println(addr["number"])  -- 42
+		println(geo["lat"], geo["lon"])  -- 51   -1
 
-    local ceo: any = company["ceo"]
-    local contact: any = ceo["contact"]
-    local phones: any = contact["phones"]
-    println(ceo["name"])  -- carol
-    println(contact["email"])  -- c@acme.test
-    println(phones["home"], phones["work"])  -- 111  222
+		local ceo: any = company["ceo"]
+		local contact: any = ceo["contact"]
+		local phones: any = contact["phones"]
+		println(ceo["name"])  -- carol
+		println(contact["email"])  -- c@acme.test
+		println(phones["home"], phones["work"])  -- 111  222
 
-    -- Map of arrays + array of maps — nested across kind boundaries.
+		-- Map of arrays + array of maps — nested across kind boundaries.
 
-    local groups: table<string, any> = {evens: {2, 4, 6}, odds: {1, 3, 5}}
-    local evens: any = groups["evens"]
-    local odds: any = groups["odds"]
-    println(evens[1], evens[2], evens[3])  -- 2  4  6
-    println(odds[1], odds[2], odds[3])  -- 1  3  5
+		local groups: table<string, any> = {evens: {2, 4, 6}, odds: {1, 3, 5}}
+		local evens: any = groups["evens"]
+		local odds: any = groups["odds"]
+		println(evens[1], evens[2], evens[3])  -- 2  4  6
+		println(odds[1], odds[2], odds[3])  -- 1  3  5
 
-    local users: table<any> = {{name: "a", age: 1}, {name: "b", age: 2}}
-    local u1: any = users[1]
-    local u2: any = users[2]
-    println(u1["name"], u1["age"])  -- a  1
-    println(u2["name"], u2["age"])  -- b  2
+		local users: table<any> = {{name: "a", age: 1}, {name: "b", age: 2}}
+		local u1: any = users[1]
+		local u2: any = users[2]
+		println(u1["name"], u1["age"])  -- a  1
+		println(u2["name"], u2["age"])  -- b  2
 
-    -- Mixed: positional + field entries (typed `table<any, any>` or
-    -- left to inference). `table<string, …>` correctly rejects
-    -- positional entries because they'd land at integer keys.
+		-- Mixed: positional + field entries (typed `table<any, any>` or
+		-- left to inference). `table<string, …>` correctly rejects
+		-- positional entries because they'd land at integer keys.
 
-    local mixed: table<any, any> = {1, name: "x", 2}
-    println(mixed[1])  -- 1
-    println(mixed[2])  -- 2
-    println(mixed["name"])  -- x
+		local mixed: table<any, any> = {1, name: "x", 2}
+		println(mixed[1])  -- 1
+		println(mixed[2])  -- 2
+		println(mixed["name"])  -- x
 
-    -- Pure array still works
+		-- Pure array still works
 
-    local xs: table<integer> = {10, 20, 30}
-    println(xs[1], xs[2], xs[3])
-  end
+		local xs: table<integer> = {10, 20, 30}
+		println(xs[1], xs[2], xs[3])
+	end
 end

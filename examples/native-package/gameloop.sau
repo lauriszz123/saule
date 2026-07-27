@@ -8,46 +8,46 @@
 import Graphics, Window, Timer from "engine"
 
 class Main
-  static fn main()
-    Window.create(800, 600, title: "Saule Game Loop Example")
+	static fn main()
+		Window.create(800, 600, title: "Saule Game Loop Example")
 
-    -- Simple moving-circle state.
-    local x: float = 100.0
-    local y: float = 300.0
-    local speed: float = 200.0  -- pixels per second
-    local frames: integer = 0
+		-- Simple moving-circle state.
+		local x: float = 100.0
+		local y: float = 300.0
+		local speed: float = 200.0  -- pixels per second
+		local frames: integer = 0
 
-    while Window.isOpen() do
-      -- 1. Input / OS events.
-      Window.pollEvents()
+		while Window.isOpen() do
+			-- 1. Input / OS events.
+			Window.pollEvents()
 
-      -- 2. Get the delta time.
-      local dt: float = Timer.getDelta()
+			-- 2. Get the delta time.
+			local dt: float = Timer.getDelta()
 
-      -- 3. Update using the real frame delta.
-      x = x + speed * dt
-      if x > 700.0 then
-        x = 700.0
-        speed = -speed
-      end
+			-- 3. Update using the real frame delta.
+			x = x + speed * dt
+			if x > 700.0 then
+				x = 700.0
+				speed = -speed
+			end
 
-      if x < 100.0 then
-        x = 100.0
-        speed = -speed
-      end
+			if x < 100.0 then
+				x = 100.0
+				speed = -speed
+			end
 
-      -- 4. Draw.
-      Graphics.clear(0.1, 0.1, 0.12)
-      Graphics.setColor(1.0, 0.8, 0.2)
-      Graphics.circle("fill", x, y, 32.0)
-      Graphics.setColor(0.3, 0.7, 1.0)
-      Graphics.rectangle("line", 10.0, 10.0, 120.0, 40.0)
+			-- 4. Draw.
+			Graphics.clear(0.1, 0.1, 0.12)
+			Graphics.setColor(1.0, 0.8, 0.2)
+			Graphics.circle("fill", x, y, 32.0)
+			Graphics.setColor(0.3, 0.7, 1.0)
+			Graphics.rectangle("line", 10.0, 10.0, 120.0, 40.0)
 
-      -- 5. Present it to the screen.
-      Graphics.present()
-      frames = frames + 1
-    end
+			-- 5. Present it to the screen.
+			Graphics.present()
+			frames = frames + 1
+		end
 
-    printf("Ran %d frames over %.3fs\n", frames, Timer.getTime())
-  end
+		printf("Ran %d frames over %.3fs\n", frames, Timer.getTime())
+	end
 end

@@ -1,130 +1,126 @@
-import Json from "json/json"
+import Json from json.json
 
 class Entry
-  local todo: string
-  local done: boolean
-  local dueDate: integer?
+	local todo: string
+	local done: boolean
+	local dueDate: integer?
 
-  fn init(todo: string, dueDate: integer?)
-    self.todo = todo
-    self.done = false
-    self.dueDate = dueDate
-  end
+	fn init(todo: string, dueDate: integer?)
+		self.todo = todo
+		self.done = false
+		self.dueDate = dueDate
+	end
 
-  fn setTodo(todo: string)
-    self.todo = todo
-  end
+	fn setTodo(todo: string)
+		self.todo = todo
+	end
 
-  fn getTodo() -> string
-    return self.todo
-  end
+	fn getTodo() -> string
+		return self.todo
+	end
 
-  fn setDone(isDone: boolean)
-    self.done = isDone
-  end
+	fn setDone(isDone: boolean)
+		self.done = isDone
+	end
 
-  fn isDone() -> boolean
-    return self.done
-  end
+	fn isDone() -> boolean
+		return self.done
+	end
 
-  fn setDueDate(dueDate: integer)
-    self.dueDate = dueDate
-  end
+	fn setDueDate(dueDate: integer)
+		self.dueDate = dueDate
+	end
 
-  fn getDueDate() -> integer?
-    return self.dueDate
-  end
+	fn getDueDate() -> integer?
+		return self.dueDate
+	end
 
-  fn isDue() -> boolean?
-    if self.dueDate == nil then
-      return
-    end
+	fn isDue() -> boolean?
+		if self.dueDate == nil then
+			return
+		end
 
-    return Os.time() >= self.dueDate
-  end
+		return Os.time() >= self.dueDate
+	end
 end
 
 export class Storage
-  local path: string
-  local storage: table<Entry>
+	local path: string
+	local storage: table<Entry>
 
-  fn init(path: string)
-    self.path = path
-    self.storage = {}
-  end
+	fn init(path: string)
+		self.path = path
+		self.storage = {}
+	end
 
-  fn load() -> boolean
-    if not Os.exists(self.path) then
-      return false
-    end
+	fn load() -> boolean
+		if not Os.exists(self.path) then
+			return false
+		end
 
-    local file: File = Io.open(self.path, IoMode.Read)!
+		local file: File = Io.open(self.path, IoMode.Read)!
 
-    local data: table? = Json.decode(file.read()!)
-    file.close()
+		local data: table? = Json.decode(file.read()!)
+		file.close()
 
-    if not data then
-      return false
-    end
+		if not data then
+			return false
+		end
 
-    if type(data) != "table" then
-      return false
-    end
+		if type(data) != "table" then
+			return false
+		end
 
-    for _, entry in data do
-      if type(entry) == "table" and type(entry.todo) == "string" and type(entry.done) == "boolean" then
-        local newEntry = Entry(entry.todo)
-        newEntry.setDone(entry.done)
-        newEntry.setDueDate(entry.dueDate)
-        Table.insert(self.storage, newEntry)
-      else
-        return false
-      end
-    end
+		for _, entry in data do
+			if type(entry) == "table" and type(entry.todo) == "string" and type(entry.done) == "boolean" then
+				local newEntry = Entry(entry.todo)
+				newEntry.setDone(entry.done)
+				newEntry.setDueDate(entry.dueDate)
+				Table.insert(self.storage, newEntry)
+			else
+				return false
+			end
+		end
 
-    return true
-  end
+		return true
+	end
 
-  fn save()
-    local data: table = {}
+	fn save()
+		local data: table = {}
 
-    for _, entry in self.storage do
-      Table.insert(data, {
-        todo: entry.getTodo(),
-        done: entry.isDone(),
-        dueDate: entry.getDueDate(),
-      })
-    end
+		for _, entry in self.storage do
+			Table.insert(data, {todo: entry.getTodo(), done: entry.isDone(), dueDate: entry.getDueDate()})
+		end
 
-    local jsonData: string = Json.encode(data)
-    local file: File = Io.open(self.path, IoMode.Write)!
-    file.write(jsonData)
-    file.close()
-  end
+		local jsonData: string = Json.encode(data)
+		local file: File = Io.open(self.path, IoMode.Write)!
+		file.write(jsonData)
+		file.close()
+	end
 
-  fn add(item: string, dueDate: integer?)
-    Table.insert(self.storage, Entry(item, dueDate))
-  end
+	fn add(item: string, dueDate: integer?)
+		Table.insert(self.storage, Entry(item, dueDate))
+	end
 
-  fn remove(id: integer) -> string?
-    return Table.remove(self.storage, id)?.getTodo()
-  end
+	fn remove(id: integer) -> string?
+		return Table.remove(self.storage, id)?.getTodo()
+	end
 
-  fn update(id: integer, dueDate: integer?, isDone: boolean?)
-    if self.storage[id] == nil then
-      return
-    end
+	fn update(id: integer, dueDate: integer?, isDone: boolean?)
+		if self.storage[id] == nil then
+			return
+		end
 
-    if dueDate != nil then
-      self.storage[id].setDueDate(dueDate)
-    end
+		if dueDate != nil then
+			self.storage[id].setDueDate(dueDate)
+		end
 
-    if isDone != nil then
-      self.storage[id].setDone(isDone)
-    end
-  end
+		if isDone != nil then
+			self.storage[id].setDone(isDone)
+		end
+	end
 
-  fn getAll() -> table<Entry>
-    return self.storage
-  end
+	fn getAll() -> table<Entry>
+		return self.storage
+	end
 end

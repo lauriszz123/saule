@@ -2,28 +2,28 @@
 -- as a digit separator.
 
 class Main
-  static fn main()
-    println(0xFF)
-    println(0xff)
-    println(0X10)
-    println(0b1010)
-    println(0B1111)
+	static fn main()
+		println(255)
+		println(255)
+		println(16)
+		println(10)
+		println(15)
 
-    -- Separators group long literals.
-    println(0xFF_FF)
-    println(0b1010_1010)
+		-- Separators group long literals.
+		println(65535)
+		println(170)
 
-    -- They are ordinary integers: arithmetic, comparison and indexing all work.
-    local mask: integer = 0xF0
-    println(mask + 0x0F)
-    println(mask == 240)
-    println(0x10 * 2)
+		-- They are ordinary integers: arithmetic, comparison and indexing all work.
+		local mask: integer = 240
+		println(mask + 15)
+		println(mask == 240)
+		println(16 * 2)
 
-    -- A codepoint, which is what motivated them.
-    println(String.char(0xe5cd) != "")
+		-- A codepoint, which is what motivated them.
+		println(String.char(58829) != "")
 
-    -- `0` on its own, and a plain zero-prefixed decimal, still lex.
-    println(0)
-    println(0.5)
-  end
+		-- `0` on its own, and a plain zero-prefixed decimal, still lex.
+		println(0)
+		println(0.5)
+	end
 end

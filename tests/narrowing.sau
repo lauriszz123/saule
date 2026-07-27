@@ -1,31 +1,31 @@
 -- Flow narrowing: inside `if x != nil then`, `x` is treated as non-nullable.
 class Box
-  label: string = "hello"
+	label: string = "hello"
 end
 
 class Main
-  static fn main()
-    local b: Box? = Box()
+	static fn main()
+		local b: Box? = Box()
 
-    if b != nil then
-      local label: string = b.label  -- OK: narrowed to non-nullable inside the guard
-      println(label)
-    end
+		if b != nil then
+			local label: string = b.label  -- OK: narrowed to non-nullable inside the guard
+			println(label)
+		end
 
-    local maybe: string? = "world"
-    if maybe != nil then
-      local s: string = maybe  -- OK: narrowed
-      println(s)
-    end
+		local maybe: string? = "world"
+		if maybe != nil then
+			local s: string = maybe  -- OK: narrowed
+			println(s)
+		end
 
-    -- `if x == nil then ... else ...` narrows in the else branch.
+		-- `if x == nil then ... else ...` narrows in the else branch.
 
-    local opt: string? = "fallback works too"
-    if opt == nil then
-      println("nope")
-    else
-      local s: string = opt  -- OK: narrowed in else
-      println(s)
-    end
-  end
+		local opt: string? = "fallback works too"
+		if opt == nil then
+			println("nope")
+		else
+			local s: string = opt  -- OK: narrowed in else
+			println(s)
+		end
+	end
 end

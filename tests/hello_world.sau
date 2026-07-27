@@ -1,6 +1,6 @@
 -- Hello world example
 class Main
-  static fn main()
-    println("Hello, world!")
-  end
+	static fn main()
+		println("Hello, world!")
+	end
 end

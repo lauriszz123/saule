@@ -3,13 +3,13 @@
 import Util from "engine"
 
 class Main
-  static fn main()
-    local q, r = Util.divmod(16, 5)
-    println("q = ", q)  -- 3
-    println("r = ", r)  -- 2
+	static fn main()
+		local q, r = Util.divmod(16, 5)
+		println("q = ", q)  -- 3
+		println("r = ", r)  -- 2
 
-    -- In single-value context only the first value is taken.
-    local justQ = Util.divmod(20, 6)
-    println("justQ = ", justQ)  -- 3
-  end
+		-- In single-value context only the first value is taken.
+		local justQ = Util.divmod(20, 6)
+		println("justQ = ", justQ)  -- 3
+	end
 end

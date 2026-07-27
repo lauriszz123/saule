@@ -1,17 +1,17 @@
 -- `?? non-nullable` collapses nullability; `!` force-unwraps. Both should
 -- typecheck against a non-nullable binding without complaint.
 class Box
-  label: string = "something"
+	label: string = "something"
 end
 
 class Main
-  static fn main()
-    local b: Box? = Box()
+	static fn main()
+		local b: Box? = Box()
 
-    local s1: string = b?.label ?? "fallback"  -- OK: rhs non-nullable
-    local s2: string = b!.label  -- OK: force-unwrap
+		local s1: string = b?.label ?? "fallback"  -- OK: rhs non-nullable
+		local s2: string = b!.label  -- OK: force-unwrap
 
-    println(s1)
-    println(s2)
-  end
+		println(s1)
+		println(s2)
+	end
 end

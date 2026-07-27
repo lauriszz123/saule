@@ -1,19 +1,19 @@
 -- Static fields and methods defined on a parent class should be
 -- reachable via the child class name.
 class Entity
-  static maxHealth: integer = 100
+	static maxHealth: integer = 100
 
-  static fn describe() -> string
-    return "entity capped at " .. tostring(self.maxHealth)
-  end
+	static fn describe() -> string
+		return "entity capped at " .. tostring(self.maxHealth)
+	end
 end
 
 class Player extends Entity
-  name: string
+	name: string
 
-  fn init(name: string)
-    self.name = name
-  end
+	fn init(name: string)
+		self.name = name
+	end
 end
 
 -- inherited static field

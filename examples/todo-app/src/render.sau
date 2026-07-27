@@ -1,20 +1,26 @@
 export class Renderer
-  static fn print(tasks: table<Entry>)
-    if #tasks == 0 then
-      println("No tasks found.")
-      return
-    end
+	static fn print(tasks: table<Entry>)
+		if #tasks == 0 then
+			println("No tasks found.")
+			return
+		end
 
-    for i, task in tasks do
-      printf("%s %d.%s %s\n", match task.isDone()
-        case true then "[x]"
+		for i, task in tasks do
+			printf(
+				"%s %d.%s %s\n",
+				match task.isDone()
+					case true then "[x]"
 
-        case false then "[-]"
-      end, i, match task.getDueDate()
-        case nil then ""
+					case false then "[-]"
+				end,
+				i,
+				match task.getDueDate()
+					case nil then ""
 
-        case dueDate then String.format(" (due %s)", Os.date("%Y-%m-%d", dueDate))
-      end, task.getTodo())
-    end
-  end
+					case dueDate then String.format(" (due %s)", Os.date("%Y-%m-%d", dueDate))
+				end,
+				task.getTodo()
+			)
+		end
+	end
 end
