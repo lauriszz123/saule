@@ -167,12 +167,12 @@ export class Interpreter
 
 				case Op.JumpIfZero(target) then
 					if cell == 0 then
-						ip = target
+						ip = (target as integer)!
 					end
 
 				case Op.JumpIfNonZero(t) then
 					if cell != 0 then
-						ip = t
+						ip = (t as integer)!
 					end
 			end
 			ip = ip + 1

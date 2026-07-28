@@ -545,6 +545,7 @@ impl<'a> CollectCx<'a> {
 
     fn visit_expr(&mut self, e: &Spanned<Expr>) {
         match &e.value {
+            Expr::Cast { value, .. } => self.visit_expr(value),
             Expr::Ident(name) => match self.symbol {
                 Symbol::Local { name: tname, def_span } => {
                     if name == tname

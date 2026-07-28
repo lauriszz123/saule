@@ -1,14 +1,12 @@
 //! Hover handler — runs analysis under the shared lock and dispatches
 //! to the standalone `hover` walker module.
 
-use tower_lsp::lsp_types::{
-    Hover, HoverContents, MarkupContent, MarkupKind, Position, Url,
-};
+use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position, Url};
 
 use crate::hover;
 use crate::line_index::LineIndex;
 
-use super::{canonical, Backend};
+use super::{Backend, canonical};
 
 impl Backend {
     /// Resolve hover information at `pos` inside `uri`. Re-runs lex /

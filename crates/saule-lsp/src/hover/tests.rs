@@ -192,7 +192,10 @@ fn root() -> float
 end
 ";
     let md = hover_at_offset(src, "Math.sqrt", 1).unwrap();
-    assert!(md.contains("module Math") || md.contains("type Math"), "got: {md}");
+    assert!(
+        md.contains("module Math") || md.contains("type Math"),
+        "got: {md}"
+    );
     // Module body should list at least one known member.
     assert!(md.contains("sqrt"), "got: {md}");
 }
@@ -229,10 +232,7 @@ end
 #[test]
 fn hovers_imported_class_from_disk() {
     init_stdlib();
-    let dir = std::env::temp_dir().join(format!(
-        "saule-lsp-hover-test-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("saule-lsp-hover-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -270,7 +270,9 @@ end
     // carry hover info, only expressions do).
     let needle = "Storage()";
     let pos = app_src.find(needle).unwrap() + 1;
-    let md = hover_at_with(&module, pos, &imports).map(|(m, _)| m).unwrap();
+    let md = hover_at_with(&module, pos, &imports)
+        .map(|(m, _)| m)
+        .unwrap();
     assert!(md.contains("class Storage"), "got: {md}");
     assert!(md.contains("name: string"), "got: {md}");
     assert!(md.contains("fn save"), "got: {md}");
@@ -292,10 +294,7 @@ end
 #[test]
 fn hovers_imported_free_function() {
     init_stdlib();
-    let dir = std::env::temp_dir().join(format!(
-        "saule-lsp-hover-fn-test-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("saule-lsp-hover-fn-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -836,7 +835,10 @@ end
 fn hover_on_undocumented_code_is_unchanged() {
     let src = "fn add(a: integer, b: integer) -> integer\n  return a + b\nend\n";
     let md = hover_src(src, "fn add").expect("hover");
-    assert_eq!(md, "```saule\nfn add(a: integer, b: integer) -> integer\n```");
+    assert_eq!(
+        md,
+        "```saule\nfn add(a: integer, b: integer) -> integer\n```"
+    );
 }
 
 #[test]
@@ -912,10 +914,7 @@ end
 #[test]
 fn wildcard_import_blurb_lists_only_exported_names() {
     init_stdlib();
-    let dir = std::env::temp_dir().join(format!(
-        "saule-lsp-export-vis-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("saule-lsp-export-vis-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 

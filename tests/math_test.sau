@@ -11,11 +11,11 @@ class Main
 		println(parts[1], parts[2])
 
 		Math.randomseed(99)
-		local a: integer = Math.random(1, 100)
+		local a: integer = Math.random(1, 100) as integer ?? 0
 
 		Math.randomseed(99)
 
-		local b: integer = Math.random(1, 100)
+		local b: integer = Math.random(1, 100) as integer ?? 0
 		println(a, b, a == b)
 
 		println(Math.sqrt(9), tointeger(5.0), Math.type(5), Math.type(5.5), Math.ult(1, 2))

@@ -37,8 +37,7 @@ pub(super) fn locate_word_in(
     while i + pat.len() <= bytes.len() {
         if &bytes[i..i + pat.len()] == pat {
             let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
-            let after_ok =
-                i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
+            let after_ok = i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
             if before_ok && after_ok {
                 return Some((start + i)..(start + i + pat.len()));
             }
@@ -52,11 +51,7 @@ pub(super) fn locate_word_in(
 /// the same name may appear more than once inside a span (e.g. a
 /// comma-separated `implements A, B, C` list).
 #[allow(dead_code)]
-pub(super) fn locate_words_in(
-    source: &str,
-    range: &Range<usize>,
-    name: &str,
-) -> Vec<Range<usize>> {
+pub(super) fn locate_words_in(source: &str, range: &Range<usize>, name: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let end = range.end.min(source.len());
     let start = range.start.min(end);
@@ -72,8 +67,7 @@ pub(super) fn locate_words_in(
     while i + pat.len() <= bytes.len() {
         if &bytes[i..i + pat.len()] == pat {
             let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
-            let after_ok =
-                i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
+            let after_ok = i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
             if before_ok && after_ok {
                 out.push((start + i)..(start + i + pat.len()));
                 i += pat.len();

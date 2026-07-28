@@ -210,6 +210,9 @@ fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
             check_expr(rhs, ctx, errors);
         }
         Expr::Member { obj, .. } | Expr::SafeMember { obj, .. } => check_expr(obj, ctx, errors),
+        // A cast is transparent to control flow — it wraps a value, it
+        // doesn't branch or return.
+        Expr::Cast { value, .. } => check_expr(value, ctx, errors),
         Expr::Index { obj, index } => {
             check_expr(obj, ctx, errors);
             check_expr(index, ctx, errors);

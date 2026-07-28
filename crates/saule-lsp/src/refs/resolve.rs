@@ -518,6 +518,7 @@ impl<'a> ResolveCx<'a> {
             return;
         }
         match &e.value {
+            Expr::Cast { value, .. } => self.visit_expr(value),
             Expr::Ident(name) => {
                 if let Some(local) = self.lookup_local(name) {
                     self.record(e.span.clone(), Symbol::Local {

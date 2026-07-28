@@ -1221,6 +1221,8 @@ version = "2026.1.0"
 dependencies = [
  "miette",
  "saule-ast",
+ "saule-lexer",
+ "saule-parser",
  "thiserror",
 ]
 
@@ -1230,6 +1232,8 @@ version = "2026.1.0"
 dependencies = [
  "miette",
  "saule-ast",
+ "saule-lexer",
+ "saule-parser",
  "saule-semantic",
  "thiserror",
 ]

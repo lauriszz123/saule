@@ -1,0 +1,8 @@
+-- `as` is only for escaping `any`; on an already-typed value it is noise.
+class Main
+	static fn main()
+		local n: integer = 5
+		local s = n as string
+		println(s)
+	end
+end

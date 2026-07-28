@@ -60,6 +60,22 @@ pub enum Expr {
     /// `x!`
     ForceUnwrap(Box<Spanned<Expr>>),
 
+    /// `x as T` — a **checked** downcast out of `any`.
+    ///
+    /// The sole escape hatch from `any`, and the reason `any` can be sound:
+    /// values enter `any` freely, but nothing leaves it without a runtime
+    /// type test. Evaluates to `T?` — the value when it really is a `T`,
+    /// `nil` otherwise — so it composes with the existing nullable
+    /// machinery (`x as integer ?? 0`, `(x as integer)!`) instead of
+    /// introducing a second failure mode.
+    ///
+    /// Legal only when the operand is `any` or `any?`; anywhere else the
+    /// cast is redundant and the typechecker says so.
+    Cast {
+        value: Box<Spanned<Expr>>,
+        ty: Type,
+    },
+
     /// `{a, b, c}` or `{name: "alice", "x y": 1, 42}` — array, map, and
     /// mixed table literals all share this single shape.
     Table(Vec<TableEntry>),

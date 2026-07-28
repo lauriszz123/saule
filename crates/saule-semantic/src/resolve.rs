@@ -508,6 +508,10 @@ impl Resolver {
                 }
             }
             Expr::ForceUnwrap(inner) => self.expr(inner),
+            // Resolve the operand; the target type is resolved separately
+            // by the typechecker, which is where unknown type names are
+            // reported.
+            Expr::Cast { value, .. } => self.expr(value),
             Expr::Table(entries) => {
                 for e in entries {
                     match e {

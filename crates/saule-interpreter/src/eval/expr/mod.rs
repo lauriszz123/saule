@@ -11,6 +11,7 @@
 //! | [`members`]   | `obj.field` and `obj[index]` reads                    |
 
 mod calls;
+mod cast;
 mod construct;
 mod match_;
 mod members;
@@ -70,6 +71,14 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
         Expr::Unary { op, rhs } => {
             let v = eval(rhs, env)?;
             ops::unary(*op, v, span)
+        }
+
+        // `x as T` — runtime type test. Yields the value on a match and
+        // `nil` otherwise; never throws, because the static type is `T?`
+        // and the caller is already obliged to handle the `nil`.
+        Expr::Cast { value, ty } => {
+            let v = eval(value, env)?;
+            Ok(if cast::cast(&v, ty) { v } else { Value::Nil })
         }
 
         Expr::Binary { op, lhs, rhs } => match op {
@@ -202,14 +211,15 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             })))
         }
 
-        Expr::Self_ => {
-            env.borrow().get("self").ok_or_else(|| RuntimeError::TypeError {
+        Expr::Self_ => env
+            .borrow()
+            .get("self")
+            .ok_or_else(|| RuntimeError::TypeError {
                 message: "internal: `self` reached evaluation outside a method — \
                       `saule_semantic::analyze` was not run on this module"
                     .to_string(),
                 span,
-            })
-        },
+            }),
 
         Expr::Match { scrutinee, arms } => match_::eval_match(scrutinee, arms, env, span),
 
