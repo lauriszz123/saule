@@ -8,12 +8,12 @@ use saule_ast::{ClassMember, Decl, Expr, Param, Spanned, Stmt, Type};
 use super::TypeCheckError;
 use super::expr::{
     check_assignment_compat, check_boolean_cond, check_element_compat, check_expr,
-    check_table_key_compat, infer, is_any, is_nullable, narrow_falsy, narrow_truthy,
-    strip_nullable, type_to_string, types_compatible,
+    check_expr_expecting, check_table_key_compat, infer, is_any, is_nullable, narrow_falsy,
+    narrow_truthy, strip_nullable, type_to_string, types_compatible,
 };
 use super::state::{
-    Scope, class_implements_iterable, is_interface, pop_generics, push_generics,
-    set_current_class, with_classes,
+    Scope, class_implements_iterable, is_interface, pop_generics, push_generics, set_current_class,
+    with_classes,
 };
 use super::to_source_span;
 
@@ -99,12 +99,14 @@ pub(super) fn check_stmt(
     match &stmt.value {
         Stmt::Decl(decl) => check_decl(&decl.value, errors),
 
-        Stmt::Local { name, ty, value, .. } => {
+        Stmt::Local {
+            name, ty, value, ..
+        } => {
             if let Some(t) = ty {
                 reject_nil_in_binding_type(t, stmt.span.clone(), errors);
             }
             if let (Some(ty), Some(v)) = (ty, value) {
-                check_expr(v, scope, errors);
+                check_expr_expecting(v, Some(ty), scope, errors);
                 check_assignment_compat(ty, v, scope, errors);
                 // Refine a bare structural annotation (`table`, `function`)
                 // to the value's concrete shape — e.g.
@@ -175,6 +177,7 @@ pub(super) fn check_stmt(
 
             for (i, (name, _, ty_opt)) in names.iter().enumerate() {
                 if let (Some(ty), Some(v)) = (ty_opt, values.get(i)) {
+                    check_expr_expecting(v, Some(ty), scope, errors);
                     check_assignment_compat(ty, v, scope, errors);
                 }
                 if let Some(ty) = ty_opt {
@@ -219,6 +222,14 @@ pub(super) fn check_stmt(
             // it blows up at runtime.
             if let Expr::Member { obj, name } = &target.value {
                 check_member_assign_receiver(obj, name, target.span.clone(), scope, errors);
+                // …and enforce the field's *declared type*. Only the receiver
+                // was validated before, so `self.label = 42` on a
+                // `label: string` field went through unchecked.
+                if let Some(class_name) = member_assign_class(obj, scope)
+                    && let Some(field_ty) = saule_semantic::lookup_field_type(&class_name, name)
+                {
+                    check_assignment_compat(&field_ty, value, scope, errors);
+                }
             }
         }
 
@@ -238,8 +249,7 @@ pub(super) fn check_stmt(
                 let vspan = values[0].span.clone();
                 for (i, target) in targets.iter().enumerate() {
                     if let Expr::Ident(n) = &target.value
-                        && let (Some(ty), Some(found_ty)) =
-                            (scope.lookup(n).cloned(), ts.get(i))
+                        && let (Some(ty), Some(found_ty)) = (scope.lookup(n).cloned(), ts.get(i))
                     {
                         check_type_assignment_compat(&ty, found_ty, vspan.clone(), errors);
                     }
@@ -508,6 +518,9 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                     });
                 }
             }
+            if let Some(parent) = extends {
+                check_overrides(class_name, parent, members, errors);
+            }
             check_class(class_name, members, errors)
         }
         Decl::Function {
@@ -546,6 +559,101 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
     }
 }
 
+/// Every method that shadows one from an ancestor must remain usable where
+/// the ancestor's version was. Without this a subclass could redeclare
+/// `get() -> integer` as `get() -> string`, and a caller holding the parent
+/// type would silently receive the wrong thing.
+///
+/// Parameters are compared invariantly (same count, compatible types) and
+/// the return type covariantly (the child may narrow, never widen), which is
+/// the rule that keeps parent-typed call sites correct. `init` is exempt:
+/// constructors are not dispatched through a parent reference, and
+/// `self.super(...)` already checks its own arguments.
+fn check_overrides(
+    class_name: &str,
+    parent: &str,
+    members: &[Spanned<ClassMember>],
+    errors: &mut Vec<TypeCheckError>,
+) {
+    for member in members {
+        let ClassMember::Method(m) = &member.value else {
+            continue;
+        };
+        if m.name == "init" {
+            continue;
+        }
+        let Some(base) = saule_semantic::lookup_method(parent, &m.name) else {
+            continue;
+        };
+
+        let detail = override_mismatch(m, &base);
+        if let Some(detail) = detail {
+            errors.push(TypeCheckError::IncompatibleOverride {
+                class: class_name.to_string(),
+                parent: parent.to_string(),
+                method: m.name.clone(),
+                detail,
+                span: to_source_span(m.span.clone()),
+            });
+        }
+    }
+}
+
+/// Describes how `m` fails to override `base`, or `None` when it is a valid
+/// override.
+fn override_mismatch(m: &saule_ast::Method, base: &saule_semantic::MethodSig) -> Option<String> {
+    if m.is_static != base.is_static {
+        return Some(if m.is_static {
+            "the parent's is an instance method, this one is `static`".to_string()
+        } else {
+            "the parent's is a `static` method, this one is an instance method".to_string()
+        });
+    }
+
+    // `self` is implicit and typed as the enclosing class, so it is never
+    // comparable across the two and is left out of the arity check.
+    let own: Vec<&Param> = m.params.iter().filter(|p| p.name != "self").collect();
+    let base_params: Vec<&Param> = base.params.iter().filter(|p| p.name != "self").collect();
+
+    if own.len() != base_params.len() {
+        return Some(format!(
+            "the parent takes {} parameter(s), this takes {}",
+            base_params.len(),
+            own.len()
+        ));
+    }
+
+    for (i, (p, bp)) in own.iter().zip(base_params.iter()).enumerate() {
+        if is_any(&p.ty) || is_any(&bp.ty) {
+            continue;
+        }
+        if !types_compatible(&bp.ty, &p.ty) || !types_compatible(&p.ty, &bp.ty) {
+            return Some(format!(
+                "parameter {} is `{}` in the parent but `{}` here",
+                i + 1,
+                type_to_string(&bp.ty),
+                type_to_string(&p.ty)
+            ));
+        }
+    }
+
+    // Return type: the child's must satisfy the parent's contract. An
+    // omitted return type on either side means "unconstrained", so only
+    // compare when both are declared.
+    if let (Some(ret), Some(base_ret)) = (&m.return_ty, &base.return_ty)
+        && !is_any(ret)
+        && !is_any(base_ret)
+        && !types_compatible(base_ret, ret)
+    {
+        return Some(format!(
+            "the parent returns `{}`, this returns `{}`",
+            type_to_string(base_ret),
+            type_to_string(ret)
+        ));
+    }
+    None
+}
+
 pub(super) fn seed_params(scope: &mut Scope, params: &[Param]) {
     for p in params {
         scope.bind(p.name.clone(), p.ty.clone());
@@ -569,7 +677,7 @@ fn check_default_params(params: &[Param], scope: &Scope, errors: &mut Vec<TypeCh
 
 /// Walk a function/method body looking for `return v` statements whose first
 /// value can be proved incompatible with `return_ty`.
-fn check_returns(
+pub(super) fn check_returns(
     body: &[Spanned<Stmt>],
     return_ty: &Type,
     scope: &Scope,
@@ -769,6 +877,27 @@ fn check_class(
 /// Verify that `obj.name = ...` is being written to a receiver that
 /// actually supports field assignment. Class instances and class statics
 /// do; plain tables, primitives, and functions don't.
+/// The class whose field is being written by `obj.field = …`, if the
+/// receiver resolves to one. `Some` for `self`, for an instance-typed
+/// binding, and for a bare class name used as a static receiver; `None` for
+/// tables and anything else, where there is no declared field type to check
+/// against.
+fn member_assign_class(obj: &Spanned<Expr>, scope: &Scope) -> Option<String> {
+    // `Class.staticField = v`. A local of the same name shadows the class,
+    // so only treat a bare identifier as a class when nothing is bound.
+    if let Expr::Ident(n) = &obj.value
+        && scope.lookup(n).is_none()
+        && with_classes(|reg| reg.contains_key(n))
+    {
+        return Some(n.clone());
+    }
+    // `self.field = v` and `instance.field = v`.
+    match strip_nullable(infer(obj, scope)?) {
+        Type::Named(n) => Some(n),
+        _ => None,
+    }
+}
+
 fn check_member_assign_receiver(
     obj: &Spanned<Expr>,
     name: &str,

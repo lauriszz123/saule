@@ -1,0 +1,13 @@
+-- Same gap in return position: forwarding one function's result out of a
+-- function whose declared return type disagrees.
+-- Should be a compile error.
+
+fn inner() -> integer
+  return 5
+end
+
+fn outer() -> string
+  return inner()
+end
+
+println(outer())

@@ -1,0 +1,10 @@
+-- A lambda that omits its return type still has to produce what the target
+-- function type declares. Its return type used to infer as `any`, which
+-- matched everything.
+-- Should be a compile error.
+
+local describe: fn(integer) -> string = fn(x)
+  return x
+end
+
+println(describe(5))

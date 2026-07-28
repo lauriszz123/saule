@@ -1,0 +1,10 @@
+-- Generic user function: `T` binds to `integer` from the argument, so the
+-- call yields `integer` and cannot fill a `string` binding.
+-- Should be a compile error.
+
+fn identity<T>(x: T) -> T
+  return x
+end
+
+local s: string = identity(5)
+println(s)

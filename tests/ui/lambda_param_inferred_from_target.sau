@@ -1,0 +1,10 @@
+-- An untyped lambda parameter takes its type from the target's function
+-- type, so misusing it in the body is a compile error rather than being
+-- silently permitted as `any`.
+-- Should be a compile error.
+
+local double: fn(integer) -> integer = fn(x)
+  return #x
+end
+
+println(double(5))

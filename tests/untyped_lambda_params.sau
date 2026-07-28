@@ -1,0 +1,29 @@
+-- Lambda parameters may omit their type in every lambda form; the type comes
+-- from the target's function type. An explicit annotation still wins.
+
+-- Block-bodied `fn(...)` lambda (the form the README documents).
+local double: fn(integer) -> integer = fn(x)
+    return x * 2
+end
+
+-- Parenthesised arrow lambda.
+local add: fn(integer, integer) -> integer = (a, b) => a + b
+
+-- Bare single-parameter arrow lambda.
+local negate: fn(integer) -> integer = x => -x
+
+-- Explicit types are still accepted and take precedence over the target.
+local shout: fn(string) -> string = fn(s: string)
+    return s .. "!"
+end
+
+-- The inferred parameter type is real: `#` works because `s` is a string.
+local size: fn(string) -> integer = fn(s)
+    return #s
+end
+
+println(double(5))
+println(add(2, 3))
+println(negate(4))
+println(shout("hi"))
+println(size("saule"))

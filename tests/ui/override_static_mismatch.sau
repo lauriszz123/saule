@@ -1,0 +1,21 @@
+-- A `static` method must not stand in for an inherited instance method.
+-- Should be a compile error.
+
+class Base
+  fn init() end
+  fn go() -> integer
+    return 1
+  end
+end
+
+class Derived extends Base
+  fn init()
+    self.super()
+  end
+
+  static fn go() -> integer
+    return 2
+  end
+end
+
+println("declared")

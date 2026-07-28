@@ -37,6 +37,31 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`{class}.{method}` does not match `{parent}.{method}`: {detail}")]
+    #[diagnostic(help(
+        "an override has to be usable everywhere the parent's version is — same parameter \
+         types, same arity, and a return type the parent's callers can accept. Rename the \
+         method if it isn't meant to override."
+    ))]
+    IncompatibleOverride {
+        class: String,
+        parent: String,
+        method: String,
+        detail: String,
+        #[label("incompatible override")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("cannot determine the type of this expression")]
+    #[diagnostic(help(
+        "every checked position needs a known type — annotate the expression, or bind it to a \
+         `local` with an explicit type first. If the value is genuinely dynamic, type it as `any`."
+    ))]
+    UndeterminedType {
+        #[label("type unknown here")]
+        span: miette::SourceSpan,
+    },
+
     #[error("cannot access `{member}` on nullable type `{ty}`")]
     #[diagnostic(help(
         "use `?.` for safe access, `!` to force-unwrap, or guard with `if x != nil then ... end`"

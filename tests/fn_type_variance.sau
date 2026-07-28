@@ -1,0 +1,49 @@
+-- Function types: parameters are contravariant, return types covariant.
+-- Everything here is a valid assignment and must keep working.
+
+class Animal
+    fn init() end
+
+    fn name() -> string
+        return "animal"
+    end
+end
+
+class Dog extends Animal
+    fn init()
+        self.super()
+    end
+end
+
+-- Contravariant parameter: a function accepting any Animal is usable where
+-- one accepting Dogs is required — every Dog is an Animal.
+local takeDog: fn(Dog) -> string = fn(a: Animal) -> string
+    return a.name()
+end
+
+-- Covariant return: returning a Dog satisfies a declared Animal return.
+local makeAnimal: fn() -> Animal = fn() -> Dog
+    return Dog()
+end
+
+-- The same, with the lambda's return type left off and inferred.
+local makeAnimal2: fn() -> Animal = fn()
+    return Dog()
+end
+
+-- Higher-order use: functions as arguments and as return values.
+fn apply(f: fn(integer) -> integer, v: integer) -> integer
+    return f(v)
+end
+
+fn multiplier(n: integer) -> fn(integer) -> integer
+    return x => x * n
+end
+
+local triple: fn(integer) -> integer = multiplier(3)
+
+println(takeDog(Dog()))
+println(makeAnimal().name())
+println(makeAnimal2().name())
+println(apply(x => x + 1, 5))
+println(triple(5))

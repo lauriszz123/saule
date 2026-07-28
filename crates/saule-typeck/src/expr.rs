@@ -2,7 +2,9 @@
 //! access, native-call argument checking, lightweight type inference, and
 //! the `?? != nil` style flow narrowing.
 
-use saule_ast::{BinOp, CallArg, Expr, LambdaBody, PipeStage, Spanned, TableEntry, Type};
+use saule_ast::{
+    BinOp, CallArg, Expr, LambdaBody, Param, PipeStage, Spanned, TableEntry, Type, UnaryOp,
+};
 
 use super::TypeCheckError;
 use super::funcs;
@@ -161,21 +163,7 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                 }
             }
         }
-        Expr::Lambda { params, body, .. } => {
-            for p in params {
-                super::stmt::reject_nil_in_binding_type(&p.ty, p.span.clone(), errors);
-            }
-            let mut lscope = scope.clone();
-            seed_params(&mut lscope, params);
-            match body {
-                LambdaBody::Expr(e) => check_expr(e, &lscope, errors),
-                LambdaBody::Block(stmts) => {
-                    for s in stmts.iter() {
-                        check_stmt(s, &mut lscope, errors);
-                    }
-                }
-            }
-        }
+        Expr::Lambda { params, body, .. } => check_lambda_body(params, body, None, scope, errors),
         Expr::Match { scrutinee, arms } => {
             check_match(expr, scrutinee, arms, scope, errors);
         }
@@ -184,6 +172,93 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
         }
         _ => {}
     }
+}
+
+/// Check a lambda's body in a scope seeded with its parameters.
+///
+/// `expected_ret` is the return type the lambda is required to produce, and
+/// is only supplied when the lambda itself omitted one — a block-bodied
+/// lambda's return type is otherwise unknown, and comparing the target
+/// against that unknown would accept anything.
+fn check_lambda_body(
+    params: &[Param],
+    body: &LambdaBody,
+    expected_ret: Option<&Type>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    for p in params {
+        super::stmt::reject_nil_in_binding_type(&p.ty, p.span.clone(), errors);
+    }
+    let mut lscope = scope.clone();
+    seed_params(&mut lscope, params);
+    match body {
+        LambdaBody::Expr(e) => {
+            check_expr(e, &lscope, errors);
+            // `x => expr` — the expression *is* the return value.
+            if let Some(rt) = expected_ret {
+                check_assignment_compat(rt, e, &lscope, errors);
+            }
+        }
+        LambdaBody::Block(stmts) => {
+            for s in stmts.iter() {
+                check_stmt(s, &mut lscope, errors);
+            }
+            if let Some(rt) = expected_ret {
+                super::stmt::check_returns(stmts, rt, &lscope, errors);
+            }
+        }
+    }
+}
+
+/// [`check_expr`], plus the type the expression is expected to produce.
+///
+/// The expectation matters for one construct: a lambda whose parameters were
+/// written without types. Those parse as `any`, and the target's function
+/// type is the only place their real types can come from — so
+/// `local f: fn(integer) -> integer = fn(x) ... end` checks the body with
+/// `x: integer` rather than `x: any`, and a misuse inside the body is caught.
+/// Every other expression ignores the expectation and checks as usual.
+pub(super) fn check_expr_expecting(
+    expr: &Spanned<Expr>,
+    expected: Option<&Type>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    if let Expr::Lambda {
+        params,
+        body,
+        return_ty,
+    } = &expr.value
+        && let Some(Type::Function {
+            params: want,
+            ret: want_ret,
+        }) = expected
+    {
+        let refined: Vec<Param> = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| match want.get(i) {
+                // Only fill in what the writer left off; an explicit
+                // annotation on the lambda always wins.
+                Some(t) if is_any(&p.ty) => Param {
+                    ty: t.clone(),
+                    ..p.clone()
+                },
+                _ => p.clone(),
+            })
+            .collect();
+        // A lambda that declared its own return type is compared against the
+        // target by `types_compatible`; only fill one in when it omitted one.
+        let expected_ret = match return_ty {
+            Some(_) => None,
+            None if is_any(want_ret) => None,
+            None => Some(&**want_ret),
+        };
+        check_lambda_body(&refined, body, expected_ret, scope, errors);
+        return;
+    }
+    check_expr(expr, scope, errors);
 }
 
 pub(super) fn check_arg(arg: &CallArg, scope: &Scope, errors: &mut Vec<TypeCheckError>) {
@@ -216,11 +291,7 @@ pub(super) fn check_native_args(
     // required — they just accept any value. Natives that genuinely
     // want an optional `any` should register `Nullable(any)` for that
     // slot (e.g. `Os.exit`).
-    let required: usize = sig
-        .params
-        .iter()
-        .take_while(|p| !is_nullable(p))
-        .count();
+    let required: usize = sig.params.iter().take_while(|p| !is_nullable(p)).count();
     let positional: Vec<&CallArg> = args
         .iter()
         .filter(|a| matches!(a, CallArg::Positional(_)))
@@ -250,8 +321,7 @@ pub(super) fn check_native_args(
     // concrete types learned from the actual arguments. Walking left-to-right
     // means earlier args (the table, typically) seed the variable, and later
     // args (the element to insert) get checked against the bound type.
-    let mut subst: std::collections::HashMap<String, Type> =
-        std::collections::HashMap::new();
+    let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
 
     for (i, arg) in args.iter().enumerate() {
         // Pick the expected type for slot `i`:
@@ -395,8 +465,7 @@ fn check_user_method_args(
     // substituted expected type. Non-generic methods skip the unify step
     // and behave like before.
     let type_params = &sig.type_params;
-    let mut subst: std::collections::HashMap<String, Type> =
-        std::collections::HashMap::new();
+    let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
 
     // Positional args consume parameter slots left-to-right; a named arg
     // targets the slot that carries its name, so both forms get their type
@@ -420,8 +489,7 @@ fn check_user_method_args(
             }
             CallArg::Named { name, value } => {
                 // Unknown names are already reported above; skip quietly.
-                let Some((slot, p)) =
-                    sig.params.iter().enumerate().find(|(_, p)| &p.name == name)
+                let Some((slot, p)) = sig.params.iter().enumerate().find(|(_, p)| &p.name == name)
                 else {
                     continue;
                 };
@@ -509,11 +577,34 @@ pub(super) fn substitute(
             key: key.as_ref().map(|k| Box::new(substitute(k, subst, params))),
             value: Box::new(substitute(value, subst, params)),
         },
-        Type::Tuple(items) => Type::Tuple(items.iter().map(|t| substitute(t, subst, params)).collect()),
+        Type::Tuple(items) => {
+            Type::Tuple(items.iter().map(|t| substitute(t, subst, params)).collect())
+        }
         Type::Function { params: ps, ret } => Type::Function {
             params: ps.iter().map(|t| substitute(t, subst, params)).collect(),
             ret: Box::new(substitute(ret, subst, params)),
         },
+    }
+}
+
+/// Whether `ty` still mentions any of `params` after substitution — i.e. a
+/// type parameter the call's arguments never pinned down. Such a type is
+/// unknown, not concrete, so callers treat it as uninferable rather than
+/// letting the bare parameter name escape as if it were a real type.
+pub(super) fn mentions_unbound_param(ty: &Type, params: &[String]) -> bool {
+    match ty {
+        Type::Named(n) => params.iter().any(|p| p == n),
+        Type::Nullable(inner) => mentions_unbound_param(inner, params),
+        Type::Table { key, value } => {
+            key.as_ref()
+                .is_some_and(|k| mentions_unbound_param(k, params))
+                || mentions_unbound_param(value, params)
+        }
+        Type::Tuple(items) => items.iter().any(|t| mentions_unbound_param(t, params)),
+        Type::Function { params: ps, ret } => {
+            ps.iter().any(|t| mentions_unbound_param(t, params))
+                || mentions_unbound_param(ret, params)
+        }
     }
 }
 
@@ -743,9 +834,7 @@ fn report_if_unknown_member(
                             errors.push(TypeCheckError::UnknownMember {
                                 receiver: n,
                                 member: member.to_string(),
-                                span: to_source_span(
-                                    obj.span.end..obj.span.end + member.len() + 1,
-                                ),
+                                span: to_source_span(obj.span.end..obj.span.end + member.len() + 1),
                             });
                         }
                         return;
@@ -876,8 +965,7 @@ fn report_if_user_function_arity(
     // `check_native_args`: walks left-to-right, unifying generic type
     // parameters as we go, then checks each slot for compatibility.
     let type_params = &info.type_params;
-    let mut subst: std::collections::HashMap<String, Type> =
-        std::collections::HashMap::new();
+    let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
 
     for (i, arg) in args.iter().enumerate() {
         let Some(p) = info.params.get(i).or_else(|| {
@@ -1348,6 +1436,20 @@ pub(super) fn check_equality_compat(
     });
 }
 
+/// Lua's multi-value adjustment: a call returning `(A, B)` used where a
+/// single value is expected contributes only `A`. Applied to the *inferred*
+/// side of a compatibility check so `local x: integer = pair()` stays legal
+/// while `local a, b = pair()` still sees the whole tuple.
+pub(super) fn adjust_to_single(ty: Type) -> Type {
+    match ty {
+        Type::Tuple(items) => items
+            .into_iter()
+            .next()
+            .unwrap_or(Type::Named("nil".into())),
+        other => other,
+    }
+}
+
 pub(super) fn check_assignment_compat(
     decl_ty: &Type,
     value: &Spanned<Expr>,
@@ -1463,30 +1565,38 @@ pub(super) fn check_assignment_compat(
         return;
     }
 
-    if let Some(value_ty) = infer(value, scope) {
-        if is_nullable(&value_ty) {
-            errors.push(TypeCheckError::NullableToNonNullable {
-                from: type_to_string(&value_ty),
-                to: type_to_string(decl_ty),
-                span: to_source_span(value.span.clone()),
-            });
-            return;
-        }
-        // General incompatibility (e.g. `table<Storage>` vs `table<string>`
-        // from `Os.args()`). `any` / `nil` stay permissive — they're the
-        // "I don't know" sentinels. Skip when the declared slot is `any`
-        // or a free type parameter for the same reason.
-        if !matches!(&value_ty, Type::Named(n) if n == "nil")
-            && !is_any(&value_ty)
-            && !is_any(decl_ty)
-            && !types_compatible(decl_ty, &value_ty)
-        {
-            errors.push(TypeCheckError::AssignmentTypeMismatch {
-                expected: type_to_string(decl_ty),
-                found: type_to_string(&value_ty),
-                span: to_source_span(value.span.clone()),
-            });
-        }
+    // Strict by construction: an unknown type is an error, never a reason to
+    // skip the check. `infer` covers every expression form and answers `any`
+    // for genuinely dynamic values, so reaching this arm means the type
+    // really could not be worked out — which must not pass silently.
+    let Some(value_ty) = infer(value, scope).map(adjust_to_single) else {
+        errors.push(TypeCheckError::UndeterminedType {
+            span: to_source_span(value.span.clone()),
+        });
+        return;
+    };
+    if is_nullable(&value_ty) {
+        errors.push(TypeCheckError::NullableToNonNullable {
+            from: type_to_string(&value_ty),
+            to: type_to_string(decl_ty),
+            span: to_source_span(value.span.clone()),
+        });
+        return;
+    }
+    // General incompatibility (e.g. `table<Storage>` vs `table<string>`
+    // from `Os.args()`). `any` / `nil` stay permissive — they're the
+    // "I don't know" sentinels. Skip when the declared slot is `any`
+    // or a free type parameter for the same reason.
+    if !matches!(&value_ty, Type::Named(n) if n == "nil")
+        && !is_any(&value_ty)
+        && !is_any(decl_ty)
+        && !types_compatible(decl_ty, &value_ty)
+    {
+        errors.push(TypeCheckError::AssignmentTypeMismatch {
+            expected: type_to_string(decl_ty),
+            found: type_to_string(&value_ty),
+            span: to_source_span(value.span.clone()),
+        });
     }
 }
 
@@ -1541,6 +1651,45 @@ pub(super) fn check_element_compat(
 
 /// Conservative type compatibility — names match (or either is `any`), or
 /// `value_ty` is `Nullable` of a compatible inner, etc.
+/// Compare one position of a function type — a parameter or the return.
+///
+/// `any` on either side is permissive: an untyped lambda parameter parses as
+/// `any`, and a block-bodied lambda's return type is `any` until the body is
+/// analysed, so treating those as mismatches would reject correct code.
+fn fn_part_compatible(expected: &Type, found: &Type) -> bool {
+    is_any(expected) || is_any(found) || types_compatible(expected, found)
+}
+
+/// A table's key type with the array form's implicit key made explicit:
+/// `table<T>` means `table<integer, T>`.
+fn table_key(key: &Option<Box<Type>>) -> Type {
+    key.as_deref()
+        .cloned()
+        .unwrap_or_else(|| Type::Named("integer".into()))
+}
+
+/// Compare one half of a table type — its key type or its value type.
+///
+/// Tables are mutable, so their parameters are **invariant**: a
+/// `table<Dog>` is not a `table<Animal>`. Allowing it would let a write
+/// through the wider alias put an `Animal` into a table the other name
+/// still believes holds only `Dog`s, and the error would surface far from
+/// the assignment that caused it.
+///
+/// `any`, `nil` and generic type parameters stay permissive. They are the
+/// checker's "unknown" sentinels rather than real types — an empty `{}`
+/// literal infers `table<any>`, and native signatures use `any` to mean
+/// "any table at all".
+fn table_part_compatible(expected: &Type, found: &Type) -> bool {
+    if is_any(expected) || is_any(found) {
+        return true;
+    }
+    if matches!(found, Type::Named(n) if n == "nil") {
+        return true;
+    }
+    types_compatible(expected, found) && types_compatible(found, expected)
+}
+
 pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
     // Suppress `is_interface` unused-warning when state moves; reference here.
     let _ = is_interface;
@@ -1574,14 +1723,12 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         // `table<any>` (or `table<any, any>`) matches any table — used by
         // native sigs like `Table.insert(t, ...)` to mean "any table".
         (Type::Table { key: ek, value: ev }, Type::Table { key: vk, value: vv }) => {
-            let key_ok = match (ek, vk) {
-                (None, None) => true,
-                (Some(a), Some(b)) => types_compatible(a, b),
-                // Cross-shape (`table<T>` vs `table<K, V>`) only when one
-                // side is the `any` wildcard.
-                _ => is_any(ev),
-            };
-            key_ok && (is_any(ev) || types_compatible(ev, vv))
+            if is_any(ev) {
+                return true;
+            }
+            // `table<T>` is the array form — integer-keyed — so it compares
+            // against an explicit `table<integer, T>` as the same shape.
+            table_part_compatible(&table_key(ek), &table_key(vk)) && table_part_compatible(ev, vv)
         }
         // Expected table, but value is the bare type-name `table`, `any` or
         // `nil` — accept (caller has erased the element type, or it's nil).
@@ -1598,10 +1745,31 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         (Type::Named(n), Type::Function { .. }) if n == "function" || n == "any" => true,
         (Type::Nullable(a), b) => types_compatible(a, b),
         (a, Type::Nullable(b)) => types_compatible(a, b),
-        // Function / Tuple shapes — only equal-shape is strictly compatible,
-        // but the checker doesn't track those precisely yet. Accept rather
-        // than emit false positives.
-        (Type::Function { .. }, Type::Function { .. }) => true,
+        // Function shapes. Parameters are **contravariant** — the value has
+        // to accept everything a caller of the declared type may pass it —
+        // and the return type is **covariant**: whatever comes back must be
+        // usable as the declared return. That is the rule that keeps a
+        // call through the declared type correct, and it only ever accepts
+        // more than invariance would.
+        (
+            Type::Function {
+                params: ep,
+                ret: er,
+            },
+            Type::Function {
+                params: vp,
+                ret: vr,
+            },
+        ) => {
+            ep.len() == vp.len()
+                && ep
+                    .iter()
+                    .zip(vp.iter())
+                    .all(|(e, v)| fn_part_compatible(v, e))
+                && fn_part_compatible(er, vr)
+        }
+        // Tuple shapes aren't tracked precisely yet; accept rather than
+        // emit false positives.
         (Type::Tuple(_), Type::Tuple(_)) => true,
         // Different kinds (e.g. table vs integer) — reject.
         _ => false,
@@ -1651,10 +1819,34 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         // declared type of that field (walks parents). Methods aren't fields,
         // so this only fires for stored slots declared with `local x: T`.
         Expr::Member { obj, name } => {
+            // `Direction.North` — a variant of a known enum has that enum's
+            // type. Checked before the general member path because the
+            // receiver here is a type name, not a value.
+            if let Expr::Ident(enum_name) = &obj.value
+                && with_enums(|reg| {
+                    reg.get(enum_name)
+                        .is_some_and(|e| e.variants.contains_key(name))
+                })
+            {
+                return Some(Type::Named(enum_name.clone()));
+            }
             let ty = infer(obj, scope)?;
-            let Type::Named(class_name) = strip_nullable(ty) else {
-                return None;
+            let stripped = strip_nullable(ty);
+            // `t.foo` on a table is Lua map sugar for `t["foo"]`. The value
+            // type of a bare `table` is genuinely unknown, so it is `any` —
+            // the checker's explicit "could be anything" — rather than an
+            // absence of information that would silently skip checks.
+            if let Type::Table { value, .. } = &stripped {
+                return Some((**value).clone());
+            }
+            let Type::Named(class_name) = stripped else {
+                return Some(Type::Named("any".into()));
             };
+            // A member of an `any` is itself `any` — the chain stays
+            // explicitly unknown instead of collapsing to "no information".
+            if is_any(&Type::Named(class_name.clone())) {
+                return Some(Type::Named("any".into()));
+            }
             if let Some(t) = saule_semantic::lookup_field_type(&class_name, name) {
                 return Some(t);
             }
@@ -1677,7 +1869,9 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             let ty = infer(obj, scope)?;
             match strip_nullable(ty) {
                 Type::Table { value, .. } => Some(*value),
-                _ => None,
+                // Indexing a string or an `any` yields something the
+                // declaration cannot pin down. `any` says that explicitly.
+                _ => Some(Type::Named("any".into())),
             }
         }
         Expr::ForceUnwrap(inner) => match infer(inner, scope)? {
@@ -1700,13 +1894,31 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                             Some(base)
                         }
                     }
-                    _ => None,
+                    // One side unknown: the coalesce still produces whatever
+                    // the other side says, which is better than knowing
+                    // nothing about the whole expression.
+                    (Some(lt), None) => Some(strip_nullable(lt)),
+                    (None, Some(rt)) => Some(rt),
+                    (None, None) => Some(Type::Named("any".into())),
                 }
             }
             BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
                 Some(Type::Named("boolean".into()))
             }
-            BinOp::And | BinOp::Or => None,
+            // Lua semantics: `and`/`or` evaluate to one of their operands,
+            // not to a boolean. Same base on both sides is that base;
+            // anything else is genuinely a union, reported as `any`.
+            BinOp::And | BinOp::Or => match (infer(lhs, scope), infer(rhs, scope)) {
+                (Some(lt), Some(rt)) => {
+                    let (lb, rb) = (strip_nullable(lt), strip_nullable(rt));
+                    if lb == rb {
+                        Some(lb)
+                    } else {
+                        Some(Type::Named("any".into()))
+                    }
+                }
+                _ => Some(Type::Named("any".into())),
+            },
             BinOp::Concat => Some(Type::Named("string".into())),
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 infer(lhs, scope).or_else(|| infer(rhs, scope))
@@ -1772,6 +1984,59 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 };
                 return first_or_tuple(returns);
             }
+            // A native whose name is known but whose signature is
+            // deliberately unregistered — `Math.abs` and friends, whose
+            // return kind follows their input. That is `any`, not "no
+            // information": the distinction matters because an unknown
+            // type now fails the check rather than skipping it.
+            if let Expr::Member { obj, name } = &callee.value
+                && let Expr::Ident(module) = &obj.value
+                && crate::sigs::has_member(module, name)
+            {
+                return Some(Type::Named("any".into()));
+            }
+            // A call to a top-level user `fn`. Checked last so every rule
+            // above keeps priority — in particular a prelude native of the
+            // same name still resolves the way it always has.
+            //
+            // Without this arm the call inferred as `None`, and because
+            // `check_assignment_compat` treats `None` as "nothing to check",
+            // `local s: string = returns_an_integer()` was accepted silently.
+            if let Expr::Ident(name) = &callee.value
+                && let Some(info) = crate::funcs::lookup(name)
+            {
+                let ret = info.return_ty.as_ref()?;
+                if info.type_params.is_empty() {
+                    return Some(ret.clone());
+                }
+                // Generic `fn id<T>(x: T) -> T`: explicit type arguments are
+                // discarded by the parser, so bind the type params from the
+                // actual argument types, exactly as the native path above does.
+                let mut subst: std::collections::HashMap<String, Type> =
+                    std::collections::HashMap::new();
+                let positional: Vec<&Spanned<Expr>> = args
+                    .iter()
+                    .filter_map(|a| match a {
+                        CallArg::Positional(e) => Some(e),
+                        CallArg::Named { .. } => None,
+                    })
+                    .collect();
+                for (i, param) in info.params.iter().enumerate() {
+                    let Some(arg_expr) = positional.get(i) else {
+                        break;
+                    };
+                    if let Some(found_ty) = infer(arg_expr, scope) {
+                        unify(&param.ty, &found_ty, &info.type_params, &mut subst);
+                    }
+                }
+                let substituted = substitute(ret, &subst, &info.type_params);
+                // An unbound type param (nothing in the args pinned it down)
+                // stays unknown rather than leaking `T` as a concrete name.
+                if mentions_unbound_param(&substituted, &info.type_params) {
+                    return None;
+                }
+                return Some(substituted);
+            }
             None
         }
         // `obj:method(args)` — same lookup as the `obj.method(args)` case.
@@ -1833,7 +2098,30 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             .last()
             .and_then(|s| super::funcs::lookup(&s.name))
             .and_then(|info| info.return_ty.clone()),
-        _ => None,
+        // `-x` keeps the operand's numeric type, `#x` is always an integer
+        // count, `not x` is always a boolean.
+        Expr::Unary { op, rhs } => match op {
+            UnaryOp::Neg => infer(rhs, scope).map(strip_nullable),
+            UnaryOp::Len => Some(Type::Named("integer".into())),
+            UnaryOp::Not => Some(Type::Named("boolean".into())),
+        },
+        // A lambda is a function value. Parameters carry their declared
+        // types (`any` when the writer left them off); the return type comes
+        // from the annotation when present, and from the body otherwise.
+        Expr::Lambda {
+            params,
+            return_ty,
+            body,
+        } => {
+            let ret = return_ty.clone().or_else(|| match body {
+                LambdaBody::Expr(e) => infer(e, scope),
+                LambdaBody::Block(_) => None,
+            });
+            Some(Type::Function {
+                params: params.iter().map(|p| p.ty.clone()).collect(),
+                ret: Box::new(ret.unwrap_or(Type::Named("any".into()))),
+            })
+        }
     }
 }
 
@@ -1919,16 +2207,7 @@ fn matches_base(a: &Type, b: &Type) -> bool {
         (Type::Tuple(xs), Type::Tuple(ys)) => {
             xs.len() == ys.len() && xs.iter().zip(ys).all(|(a, b)| matches_base(a, b))
         }
-        (
-            Type::Table {
-                key: kx,
-                value: vx,
-            },
-            Type::Table {
-                key: ky,
-                value: vy,
-            },
-        ) => {
+        (Type::Table { key: kx, value: vx }, Type::Table { key: ky, value: vy }) => {
             let key_ok = match (kx, ky) {
                 (None, None) => true,
                 (Some(a), Some(b)) => matches_base(a, b),

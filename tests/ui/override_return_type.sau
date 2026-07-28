@@ -1,0 +1,22 @@
+-- A subclass must not widen an inherited method's return type: a caller
+-- holding the parent type would receive something else than declared.
+-- Should be a compile error.
+
+class Base
+  fn init() end
+  fn get() -> integer
+    return 1
+  end
+end
+
+class Derived extends Base
+  fn init()
+    self.super()
+  end
+
+  fn get() -> string
+    return "not an integer"
+  end
+end
+
+println("declared")

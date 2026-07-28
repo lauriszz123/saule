@@ -1,0 +1,6 @@
+-- A string-keyed map is not an integer-keyed one.
+-- Should be a compile error.
+
+local byName: table<string, integer> = {alice: 1}
+local byIndex: table<integer, integer> = byName
+println(#byIndex)
