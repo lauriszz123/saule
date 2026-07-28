@@ -1,0 +1,25 @@
+-- Tables are mutable, so their element type is invariant: `table<Dog>` is
+-- not a `table<Animal>`. Allowing it would let a write through the wider
+-- alias put an `Animal` into a table the other name still believes holds
+-- only `Dog`s.
+-- Should be a compile error.
+
+class Animal
+  fn init() end
+end
+
+class Dog extends Animal
+  fn init()
+    self.super()
+  end
+
+  fn fetch() -> string
+    return "ball"
+  end
+end
+
+local dogs: table<Dog> = {}
+local animals: table<Animal> = dogs
+
+Table.insert(animals, Animal())
+println(dogs[1].fetch())

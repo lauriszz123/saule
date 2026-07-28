@@ -1,0 +1,17 @@
+-- Same gap when the value flows into a declared class field.
+-- Should be a compile error.
+
+fn number() -> integer
+  return 7
+end
+
+class Holder
+  label: string
+
+  fn init()
+    self.label = number()
+  end
+end
+
+local h: Holder = Holder()
+println(h.label)

@@ -1,0 +1,33 @@
+-- The three table shapes and how they relate. `table<T>` is the array form
+-- (integer keys); `table<K, V>` is the map form with K an integer or string.
+-- `table<T>` and `table<integer, T>` are the same type.
+
+-- Array form.
+local names: table<string> = {"alice", "bob"}
+local empty: table<string> = {}
+Table.insert(empty, "later")
+
+-- Explicitly integer-keyed: the same type as the array form, both ways.
+local explicit: table<integer, string> = names
+local implicit: table<string> = explicit
+
+-- Map form.
+local ages: table<string, integer> = {alice: 30, bob: 41}
+ages["carol"] = 22
+
+-- Nested tables keep their element types.
+local groups: table<table<string>> = {names, empty}
+
+-- A bare `table` annotation still accepts anything and refines from the
+-- literal it is initialised with.
+local loose: table = {1, 2, 3}
+
+println(#names)
+println(#empty)
+println(#explicit)
+println(#implicit)
+println(ages["alice"])
+println(ages["carol"])
+println(#groups)
+println(#groups[1])
+println(#loose)

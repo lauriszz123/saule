@@ -1,0 +1,24 @@
+-- Function parameters are contravariant: a function that needs a `Dog`
+-- cannot stand in for one that must accept any `Animal`, because the caller
+-- may hand it something that is not a `Dog`.
+-- Should be a compile error.
+
+class Animal
+  fn init() end
+end
+
+class Dog extends Animal
+  fn init()
+    self.super()
+  end
+
+  fn fetch() -> string
+    return "ball"
+  end
+end
+
+local take: fn(Animal) -> string = fn(d: Dog) -> string
+  return d.fetch()
+end
+
+println(take(Animal()))

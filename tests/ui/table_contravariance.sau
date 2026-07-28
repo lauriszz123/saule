@@ -1,0 +1,17 @@
+-- The other direction is equally invalid: a `table<Animal>` may already hold
+-- something that is not a `Dog`.
+-- Should be a compile error.
+
+class Animal
+  fn init() end
+end
+
+class Dog extends Animal
+  fn init()
+    self.super()
+  end
+end
+
+local animals: table<Animal> = {}
+local dogs: table<Dog> = animals
+println(#dogs)

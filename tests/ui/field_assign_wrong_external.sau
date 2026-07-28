@@ -1,0 +1,13 @@
+-- Same hole from outside the class, through an instance binding.
+-- Should be a compile error.
+
+class Holder
+  label: string
+
+  fn init()
+    self.label = "ok"
+  end
+end
+
+local h: Holder = Holder()
+h.label = 42

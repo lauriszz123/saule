@@ -1,0 +1,17 @@
+-- An override must take the same number of parameters as the parent.
+-- Should be a compile error.
+
+class Base
+  fn init() end
+  fn go(a: integer) -> nil end
+end
+
+class Derived extends Base
+  fn init()
+    self.super()
+  end
+
+  fn go(a: integer, b: integer) -> nil end
+end
+
+println("declared")

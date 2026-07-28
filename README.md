@@ -214,6 +214,44 @@ local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
 
 Tables are Saule's only data structure — same model as Lua. A single table holds both an **array part** (contiguous 1-based integer keys) and a **map part** (everything else: strings, booleans, non-positive integers). The two parts share one value space and one length.
 
+### Table Types
+
+A table type is written in one of two forms:
+
+| Form | Meaning |
+|---|---|
+| `table<V>` | Array: integer keys, `V` values |
+| `table<K, V>` | Map: `K` keys (`integer` or `string`), `V` values |
+| `table` | Any table — element types unknown |
+
+`table<V>` and `table<integer, V>` are the **same type**; the array form just
+leaves the implicit integer key unwritten.
+
+```saule
+local names: table<string> = {"alice", "bob"}          -- array of string
+local same: table<integer, string> = names             -- identical type
+local ages: table<string, integer> = {alice: 30}       -- string-keyed map
+local nested: table<table<string>> = {names}           -- tables nest
+```
+
+### Element Types Are Invariant
+
+Tables are mutable, so a `table<Dog>` is **not** a `table<Animal>` — in
+either direction. Writing through the wider name would put an `Animal` into
+a table the narrower name still believes holds only `Dog`s:
+
+```saule
+local dogs: table<Dog> = {}
+local animals: table<Animal> = dogs    -- ERROR: table<Dog> is not table<Animal>
+Table.insert(animals, Animal())        -- ...this is why
+```
+
+The same applies to key types: `table<string, integer>` and
+`table<integer, integer>` are unrelated.
+
+An empty `{}` literal has no element type yet, so it fills any table slot,
+and a bare `table` annotation accepts anything.
+
 ### Literals
 
 ```saule
@@ -438,6 +476,30 @@ local double: fn(integer) -> integer = fn(x)
 end
 ```
 
+### Parameter Types Are Inferred
+
+Lambda parameters may omit `: T`. The type comes from the function type the
+lambda is being assigned to, so `x` below is a real `integer` inside the body
+— using it as anything else is a compile error, not a silent `any`:
+
+```saule
+local double: fn(integer) -> integer = fn(x)
+    return #x            -- ERROR: cannot take length of an `integer`
+end
+```
+
+This works in all three lambda forms, and an explicit annotation still wins:
+
+```saule
+local add: fn(integer, integer) -> integer = (a, b) => a + b
+local negate: fn(integer) -> integer       = x => -x
+local shout: fn(string) -> string          = fn(s: string) return s .. "!" end
+```
+
+Top-level `fn` declarations are different — their parameters **must** be
+typed. A declaration's signature is the contract its callers read, and there
+is no target to infer it from.
+
 ### Functions as Parameters
 
 ```saule
@@ -641,6 +703,39 @@ Rules:
 - A class can only extend **one** parent
 - Private members from the parent are **not accessible** in the child
 - Public and static members are inherited
+
+### Overriding
+
+Redeclaring an inherited method overrides it. The override has to be usable
+everywhere the parent's version was, because a caller holding the parent type
+cannot know which one it will get. The checker enforces:
+
+- **Same parameter count and types.** Widening or renaming the shape of the
+  call is a compile error.
+- **A return type the parent's callers accept.** Narrowing is fine — an
+  override may return a *subclass* of what the parent declared. Returning
+  something unrelated is a compile error.
+- **Instance stays instance, static stays static.**
+
+```saule
+class Base
+    fn get() -> integer
+        return 1
+    end
+end
+
+class Derived extends Base
+    fn get() -> string        -- ERROR: the parent returns `integer`
+        return "oops"
+    end
+end
+```
+
+`fn init` is exempt — constructors aren't dispatched through a parent
+reference, so a subclass constructor may take whatever parameters it needs
+and forward what the parent wants via `self.super(...)`.
+
+If a method wasn't meant to override anything, give it a different name.
 
 ---
 

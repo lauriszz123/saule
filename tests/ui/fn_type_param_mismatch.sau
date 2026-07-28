@@ -1,0 +1,10 @@
+-- A lambda's declared parameter type must match the function type it is
+-- assigned to. `Function` vs `Function` compatibility used to return true
+-- unconditionally, so this passed.
+-- Should be a compile error.
+
+local double: fn(integer) -> integer = fn(x: string)
+  return 1
+end
+
+println(double(5))

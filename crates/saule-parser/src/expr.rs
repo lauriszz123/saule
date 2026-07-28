@@ -13,6 +13,19 @@ use saule_lexer::Token;
 use crate::error::ParseError;
 use crate::{Parser, mk_binary};
 
+/// Whether a parameter list requires `: T` on every parameter.
+///
+/// Declarations do — a `fn`'s signature is the contract its callers see, and
+/// there is nothing to infer it from. Lambdas don't: an omitted type parses
+/// as `any` and the typechecker refines it from the lambda's target type,
+/// which is what makes `local f: fn(integer) -> integer = fn(x) ... end`
+/// type `x` as `integer`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParamTypes {
+    Required,
+    Optional,
+}
+
 impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
     // Expressions  (lowest precedence first)
@@ -659,7 +672,7 @@ impl Parser {
     fn parse_fn_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let fn_tok = self.advance(); // consume `fn`
 
-        let params = self.parse_param_list()?;
+        let params = self.parse_param_list_typed(ParamTypes::Optional)?;
         let return_ty = self.parse_return_type_opt()?;
         let body = self.parse_block_until(&[Token::End])?;
         let end = self.expect(&Token::End, "`end` to close `fn(...)` lambda")?;
@@ -703,7 +716,7 @@ impl Parser {
 
     pub(crate) fn parse_arrow_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let open = self.expect(&Token::LParen, "`(`")?;
-        let params = self.parse_param_list_inner()?;
+        let params = self.parse_param_list_inner(ParamTypes::Optional)?;
         self.expect(&Token::RParen, "`)` after lambda parameters")?;
         let return_ty = self.parse_return_type_opt()?;
         self.expect(&Token::FatArrow, "`=>` in lambda")?;
@@ -723,28 +736,50 @@ impl Parser {
     // Parameter lists
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Parses `( ... )` and returns the parameter list.
+    /// Parses `( ... )` and returns the parameter list. Declarations require
+    /// a type on every parameter; see [`Self::parse_param`] for why lambdas
+    /// don't.
     pub(crate) fn parse_param_list(&mut self) -> Result<Vec<Param>, ParseError> {
+        self.parse_param_list_typed(ParamTypes::Required)
+    }
+
+    /// [`Self::parse_param_list`] with control over whether parameter types
+    /// may be omitted.
+    pub(crate) fn parse_param_list_typed(
+        &mut self,
+        types: ParamTypes,
+    ) -> Result<Vec<Param>, ParseError> {
         self.expect(&Token::LParen, "`(` to begin parameter list")?;
-        let params = self.parse_param_list_inner()?;
+        let params = self.parse_param_list_inner(types)?;
         self.expect(&Token::RParen, "`)` to close parameter list")?;
         Ok(params)
     }
 
     /// Parses the contents of a parameter list; stops at `)`.
-    pub(crate) fn parse_param_list_inner(&mut self) -> Result<Vec<Param>, ParseError> {
+    pub(crate) fn parse_param_list_inner(
+        &mut self,
+        types: ParamTypes,
+    ) -> Result<Vec<Param>, ParseError> {
         let mut params = Vec::new();
         if self.check(&Token::RParen) {
             return Ok(params);
         }
-        params.push(self.parse_param()?);
+        params.push(self.parse_param(types)?);
         while self.eat(&Token::Comma) {
-            params.push(self.parse_param()?);
+            params.push(self.parse_param(types)?);
         }
         Ok(params)
     }
 
-    pub(crate) fn parse_param(&mut self) -> Result<Param, ParseError> {
+    /// Parse one parameter.
+    ///
+    /// With [`ParamTypes::Optional`] a missing `: T` yields `any`, which the
+    /// typechecker then refines from the lambda's target type — so
+    /// `local f: fn(integer) -> integer = fn(x) ... end` types `x` as
+    /// `integer`. Declarations pass [`ParamTypes::Required`]: a top-level
+    /// `fn` has no target to infer from, and its signature is the contract
+    /// callers rely on.
+    pub(crate) fn parse_param(&mut self, types: ParamTypes) -> Result<Param, ParseError> {
         let start = self.peek().span.start;
         let variadic = self.eat(&Token::Ellipsis);
         // `self` is a keyword token but is also a legal parameter name in
@@ -761,6 +796,8 @@ impl Parser {
             self.parse_type()?
         } else if name == "self" {
             Type::Named("self".to_string())
+        } else if types == ParamTypes::Optional {
+            Type::Named("any".to_string())
         } else {
             return Err(ParseError::Expected {
                 expected: "`:` and parameter type",
