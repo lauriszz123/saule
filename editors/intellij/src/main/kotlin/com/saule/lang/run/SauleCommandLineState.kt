@@ -62,6 +62,10 @@ class SauleCommandLineState(
             cmd.addParameter(config.scriptPath)
         }
         if (config.programArguments.isNotBlank()) {
+            // `--` separates the run target from the script's own argv. Without
+            // it the CLI would read the first program argument as the target,
+            // and reject the rest as unexpected positionals.
+            cmd.addParameter("--")
             cmd.addParameters(ParametersListUtil.parse(config.programArguments))
         }
 

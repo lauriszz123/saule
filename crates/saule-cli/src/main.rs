@@ -1,121 +1,152 @@
-//! `saule` command-line driver — arg parsing and dispatch only. The actual
-//! work lives in:
+//! `saule` command-line driver — dispatch only. The actual work lives in:
 //!
+//! * [`cli`] — the `clap` command surface
 //! * [`init`] — project scaffolding
 //! * [`project`] — `saule.config` parsing and project-mode bootstrap
 //! * [`run`] — file execution pipeline (lex → parse → typecheck → run → `Main`)
 
-use std::{path::PathBuf, process};
+use std::path::Path;
 
+use clap::{CommandFactory, Parser};
+
+use cli::{Cli, Command, RunArgs};
+
+mod cli;
 mod fmt;
 mod init;
 mod project;
 mod run;
 
-const USAGE: &str = "\
-Usage:
-  saule run <file.sau> [args...]   run a single Saule source file
-  saule run [args...]              run the project in the current directory
-  saule run -- [args...]           force project mode, forward args to Os.args()
-  saule fmt <file.sau> ...         print formatted source to stdout
-  saule fmt -w <file.sau> ...      overwrite files in place
-  saule fmt --help                 indent options (--indent, --tabs, --spaces)
-  saule init <name>                scaffold a new Saule project in ./<name>
-  saule --help | -h                show this help
-  saule --version | -V             print the version
-
-Anything after the file path (or after `--` in project mode) is exposed to
-the script via `Os.args()`. In a project directory (one with a saule.config),
-args that don't look like a file path are forwarded automatically.";
-
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cli = Cli::parse();
 
-    let head = args.first().map(String::as_str).unwrap_or("");
-    match head {
-        "" | "-h" | "--help" => {
-            println!("{USAGE}");
+    if cli.version {
+        println!(
+            "Saule programming language version: {}",
+            env!("CARGO_PKG_VERSION")
+        );
+        return;
+    }
+
+    // Bare `saule`: print help and exit 0, matching the pre-clap behaviour.
+    let Some(command) = cli.command else {
+        let _ = Cli::command().print_help();
+        println!();
+        return;
+    };
+
+    match command {
+        Command::Run(args) => cmd_run(args),
+        Command::Fmt(args) => fmt::cmd_fmt(&args),
+        Command::Init(args) => init::cmd_init(&args.name),
+    }
+}
+
+/// Route `saule run` to project or single-file mode.
+///
+/// The only question asked is whether the target is a directory. Nothing
+/// sniffs file extensions and nothing probes for a `saule.config` to guess
+/// the user's intent — script arguments have their own place, after `--`,
+/// so there is nothing left to disambiguate.
+fn cmd_run(args: RunArgs) {
+    saule_interpreter::stdlib::os::set_script_args(args.args);
+
+    match args.target {
+        None => project::run_project(Path::new(".")),
+        Some(target) if target.is_dir() => project::run_project(&target),
+        Some(target) => run::run_file(target, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).expect("args should parse")
+    }
+
+    fn run_args(args: &[&str]) -> RunArgs {
+        match parse(args).command {
+            Some(Command::Run(r)) => r,
+            other => panic!("expected a run command, got {other:?}"),
         }
+    }
 
-        "-v" | "--version" => {
-            println!(
-                "Saule programming language version: {}",
-                env!("CARGO_PKG_VERSION")
-            );
+    #[test]
+    fn bare_run_is_the_current_directory() {
+        let parsed = run_args(&["saule", "run"]);
+        assert_eq!(parsed.target, None);
+        assert!(parsed.args.is_empty());
+    }
+
+    #[test]
+    fn target_is_taken_verbatim_whatever_its_shape() {
+        // No extension sniffing: a directory, a `.sau` file and an
+        // extensionless path all arrive as the same plain target, and the
+        // directory check happens later against the filesystem.
+        for target in ["src/main.sau", "examples/bf", "somescript"] {
+            let parsed = run_args(&["saule", "run", target]);
+            assert_eq!(parsed.target, Some(PathBuf::from(target)));
+            assert!(parsed.args.is_empty());
         }
+    }
 
-        "init" => match args.get(1) {
-            Some(name) => init::cmd_init(name),
-            None => {
-                eprintln!("error: `init` needs a project name\n\n{USAGE}");
-                process::exit(2);
-            }
-        },
+    #[test]
+    fn separator_alone_means_project_mode_with_argv() {
+        // The case the old extension-sniffing existed to handle: a project
+        // that takes a filename of its own must not have it parsed as Saule.
+        let parsed = run_args(&["saule", "run", "--", "input.bf"]);
+        assert_eq!(parsed.target, None);
+        assert_eq!(parsed.args, vec!["input.bf"]);
+    }
 
-        "fmt" => fmt::cmd_fmt(&args[1..]),
+    #[test]
+    fn target_and_argv_can_both_be_given() {
+        let parsed = run_args(&["saule", "run", "f.sau", "--", "a", "b"]);
+        assert_eq!(parsed.target, Some(PathBuf::from("f.sau")));
+        assert_eq!(parsed.args, vec!["a", "b"]);
+    }
 
-        "run" => {
-            // Split `run` args at the first `--`: anything before is for the
-            // CLI (file path or nothing), anything after is forwarded
-            // verbatim as script argv.
-            let run_args: Vec<String> = args.iter().skip(1).cloned().collect();
-            let (cli_part, script_after_sep) = match run_args.iter().position(|a| a == "--") {
-                Some(i) => (run_args[..i].to_vec(), Some(run_args[i + 1..].to_vec())),
-                None => (run_args, None),
-            };
+    #[test]
+    fn script_args_may_look_like_flags() {
+        let parsed = run_args(&["saule", "run", "--", "-v", "--help", "-"]);
+        assert_eq!(parsed.target, None);
+        assert_eq!(parsed.args, vec!["-v", "--help", "-"]);
+    }
 
-            // Decide between project mode and single-file mode:
-            //   * `saule run`                       → project
-            //   * `saule run -- a b c`              → project, argv = a b c
-            //   * `saule run file.sau …`            → single file
-            //   * `saule run thing …` where `thing` isn't a `.sau`/`.saule`
-            //     file AND cwd has `saule.config`   → project, argv = thing …
-            //     (covers things like `saule run input.bf`, where the file
-            //     should be forwarded to the script, not parsed as Saule.)
-            //   * otherwise                         → single file
-            let has_config = PathBuf::from("saule.config").is_file();
-            let first_is_saule_file = cli_part
-                .first()
-                .is_some_and(|s| s.ends_with(".sau") || s.ends_with(".saule"));
-            let is_folder = cli_part
-                .first()
-                .map(|s| PathBuf::from(s).is_dir())
-                .unwrap_or(false);
+    #[test]
+    fn a_second_bare_positional_is_an_error_not_a_guess() {
+        // Previously this silently became "run the project, forward both
+        // words". Ambiguity is now reported instead of resolved by heuristic.
+        assert!(Cli::try_parse_from(["saule", "run", "a", "b"]).is_err());
+    }
 
-            if cli_part.is_empty() || (has_config && !first_is_saule_file) {
-                // Project mode. Script argv = explicit `-- …` part if given,
-                // otherwise everything we accumulated before the (absent) `--`.
-                let argv = script_after_sep.unwrap_or(cli_part);
-                saule_interpreter::stdlib::os::set_script_args(argv);
-                project::run_project(&PathBuf::from("."));
-            } else if is_folder {
-                // If the first arg is a folder, run that as a project in that folder.
-                // Script argv = explicit `<path_to_project> ...args`
-                let mut iter = cli_part.into_iter();
-                let path = iter.next().expect("cli_part non-empty checked above");
-                let mut argv: Vec<String> = iter.collect();
-                if let Some(extra) = script_after_sep {
-                    argv.extend(extra);
-                }
-                saule_interpreter::stdlib::os::set_script_args(argv);
-                project::run_project(&PathBuf::from(path));
-            } else {
-                // Single-file mode. First non-`--` arg is the file path,
-                // everything else (whether before or after `--`) is script argv.
-                let mut iter = cli_part.into_iter();
-                let path = iter.next().expect("cli_part non-empty checked above");
-                let mut argv: Vec<String> = iter.collect();
-                if let Some(extra) = script_after_sep {
-                    argv.extend(extra);
-                }
-                saule_interpreter::stdlib::os::set_script_args(argv);
-                run::run_file(PathBuf::from(path), false);
-            }
+    #[test]
+    fn version_flag_has_both_spellings() {
+        for spelling in ["-v", "-V", "--version"] {
+            assert!(parse(&["saule", spelling]).version, "{spelling} failed");
         }
+    }
 
-        other => {
-            eprintln!("Error: Unknown Command `{other}`\n\n{USAGE}");
-            process::exit(2);
+    #[test]
+    fn init_requires_a_name() {
+        assert!(Cli::try_parse_from(["saule", "init"]).is_err());
+        match parse(&["saule", "init", "demo"]).command {
+            Some(Command::Init(args)) => assert_eq!(args.name, "demo"),
+            other => panic!("expected init, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn unknown_subcommands_are_rejected() {
+        assert!(Cli::try_parse_from(["saule", "frobnicate"]).is_err());
+    }
+
+    #[test]
+    fn the_command_surface_is_internally_consistent() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
     }
 }

@@ -20,37 +20,73 @@ use std::{
     process,
 };
 
+use clap::Args;
 use miette::{NamedSource, Report};
 use saule_fmt::{Comment, CommentKind, ConfigIndent, FmtOptions};
 use saule_lexer::Token;
 
-/// Everything the command line said, after parsing.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct FmtArgs {
-    /// `--write`/`-w`: overwrite in place instead of printing to stdout.
-    write: bool,
+/// `saule fmt [-w] [--indent N] [--tabs|--spaces] <file.sau>...`
+#[derive(Debug, Args)]
+#[command(
+    about = "Format Saule source files",
+    long_about = "\
+Format Saule source files, printing to stdout or rewriting them in place.
+
+Indentation defaults to the canonical 2 spaces, or to whatever the nearest
+`saule.config` declares:
+
+  indent_style: \"tab\"    -- or \"space\"
+  indent_width: 4
+
+The flags below override the config file for this run."
+)]
+pub(crate) struct FmtArgs {
+    /// Files to format; at least one is required.
+    #[arg(required = true, value_name = "FILE")]
     paths: Vec<PathBuf>,
-    /// `--indent` / `--tabs` / `--spaces`, layered over whatever the
-    /// project's `saule.config` said.
-    overrides: ConfigIndent,
+
+    /// Overwrite the files in place instead of printing to stdout.
+    #[arg(short, long)]
+    write: bool,
+
+    /// Columns per indent level (1-16).
+    #[arg(long, value_name = "N", value_parser = parse_indent_width)]
+    indent: Option<usize>,
+
+    /// Indent with hard tabs.
+    #[arg(long, overrides_with = "spaces")]
+    tabs: bool,
+
+    /// Indent with spaces.
+    #[arg(long, overrides_with = "tabs")]
+    spaces: bool,
 }
 
-pub(crate) fn cmd_fmt(args: &[String]) {
-    let parsed = match parse_args(args) {
-        Ok(Some(parsed)) => parsed,
-        // `--help` — already printed, nothing to format.
-        Ok(None) => return,
-        Err(msg) => {
-            eprintln!("error: {msg}\n\n{HELP}");
-            process::exit(2);
+impl FmtArgs {
+    /// The `--indent` / `--tabs` / `--spaces` flags as an override layer to
+    /// apply over whatever the project's `saule.config` said. `--tabs` and
+    /// `--spaces` override each other, so the last one on the command line
+    /// wins and a wrapper script can safely append one.
+    fn overrides(&self) -> ConfigIndent {
+        ConfigIndent {
+            indent_width: self.indent,
+            use_tabs: match (self.tabs, self.spaces) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            },
+            warnings: Vec::new(),
         }
-    };
+    }
+}
 
+pub(crate) fn cmd_fmt(args: &FmtArgs) {
+    let overrides = args.overrides();
     let mut configs = ConfigCache::default();
     let mut had_error = false;
-    for path in &parsed.paths {
-        let options = parsed.overrides.apply_to(configs.options_for(path));
-        if let Err(()) = fmt_one(path, parsed.write, options) {
+    for path in &args.paths {
+        let options = overrides.apply_to(configs.options_for(path));
+        if let Err(()) = fmt_one(path, args.write, options) {
             had_error = true;
         }
     }
@@ -59,51 +95,12 @@ pub(crate) fn cmd_fmt(args: &[String]) {
     }
 }
 
-/// Tiny flag parser — no `--` separator support; fmt has no pass-through
-/// args. Returns `Ok(None)` when `--help` was handled, `Err` with a
-/// user-facing message otherwise.
-fn parse_args(args: &[String]) -> Result<Option<FmtArgs>, String> {
-    let mut out = FmtArgs::default();
-    let mut rest = args.iter();
-    while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "-w" | "--write" => out.write = true,
-            "-h" | "--help" => {
-                println!("{HELP}");
-                return Ok(None);
-            }
-            "--tabs" => out.overrides.use_tabs = Some(true),
-            "--spaces" => out.overrides.use_tabs = Some(false),
-            // `--indent 4` and `--indent=4` are both accepted; the value is
-            // the printer's own 1..=16 range, so a typo can't silently
-            // produce unindented or absurdly indented output.
-            "--indent" => {
-                let value = rest
-                    .next()
-                    .ok_or_else(|| "`--indent` needs a number, e.g. `--indent 4`".to_string())?;
-                out.overrides.indent_width = Some(parse_indent_width(value)?);
-            }
-            other if other.starts_with("--indent=") => {
-                let value = other.trim_start_matches("--indent=");
-                out.overrides.indent_width = Some(parse_indent_width(value)?);
-            }
-            other if other.starts_with('-') => {
-                return Err(format!("unknown fmt flag `{other}`"));
-            }
-            other => out.paths.push(PathBuf::from(other)),
-        }
-    }
-
-    if out.paths.is_empty() {
-        return Err("`fmt` needs at least one file path".to_string());
-    }
-    Ok(Some(out))
-}
-
+/// The printer's own range, enforced at parse time so a typo can't silently
+/// produce unindented or absurdly indented output.
 fn parse_indent_width(raw: &str) -> Result<usize, String> {
     match raw.parse::<usize>() {
         Ok(n) if (1..=16).contains(&n) => Ok(n),
-        _ => Err(format!("`--indent {raw}` is not a number from 1 to 16")),
+        _ => Err(format!("`{raw}` is not a number from 1 to 16")),
     }
 }
 
@@ -212,38 +209,26 @@ fn format_source(name: &str, source: &str, options: FmtOptions) -> Result<String
     ))
 }
 
-const HELP: &str = "\
-Usage:
-  saule fmt <file.sau> [more.sau ...]      print formatted source to stdout
-  saule fmt -w <file.sau> [more.sau ...]   overwrite files in place
-
-Options:
-  -w, --write       overwrite the files in place instead of printing
-      --indent <n>  columns per indent level (1-16)
-      --tabs        indent with hard tabs
-      --spaces      indent with spaces
-  -h, --help        show this help
-
-Indentation defaults to the canonical 2 spaces, or to whatever the nearest
-`saule.config` declares:
-
-  indent_style: \"tab\"    -- or \"space\"
-  indent_width: 4
-
-The flags above override the config file for this run.";
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
-    fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+    /// Wrap `FmtArgs` on its own so the tests exercise the real derive
+    /// without going through the whole `saule fmt …` command surface.
+    #[derive(Debug, Parser)]
+    struct Harness {
+        #[command(flatten)]
+        fmt: FmtArgs,
+    }
+
+    fn try_parse(list: &[&str]) -> Result<FmtArgs, clap::Error> {
+        let argv = std::iter::once("fmt").chain(list.iter().copied());
+        Harness::try_parse_from(argv).map(|h| h.fmt)
     }
 
     fn parse(list: &[&str]) -> FmtArgs {
-        parse_args(&args(list))
-            .expect("args should parse")
-            .expect("not a --help run")
+        try_parse(list).expect("args should parse")
     }
 
     const SRC: &str = "class Main\n  static fn main()\n    println(\"hi\")\n  end\nend\n";
@@ -260,58 +245,68 @@ mod tests {
             parsed.paths,
             vec![PathBuf::from("a.sau"), PathBuf::from("b.sau")]
         );
-        assert!(parsed.overrides.is_empty());
+        assert!(parsed.overrides().is_empty());
+    }
+
+    #[test]
+    fn flags_may_follow_the_paths() {
+        // clap is not positional about flags the way the old parser's loop
+        // happened to be; `saule fmt a.sau -w` works.
+        let parsed = parse(&["a.sau", "-w", "--indent", "4"]);
+        assert!(parsed.write);
+        assert_eq!(parsed.paths, vec![PathBuf::from("a.sau")]);
+        assert_eq!(parsed.overrides().indent_width, Some(4));
     }
 
     #[test]
     fn indent_flag_accepts_both_spellings() {
         assert_eq!(
-            parse(&["--indent", "4", "a.sau"]).overrides.indent_width,
+            parse(&["--indent", "4", "a.sau"]).overrides().indent_width,
             Some(4)
         );
         assert_eq!(
-            parse(&["--indent=8", "a.sau"]).overrides.indent_width,
+            parse(&["--indent=8", "a.sau"]).overrides().indent_width,
             Some(8)
         );
     }
 
     #[test]
     fn tabs_and_spaces_flags_set_the_style() {
-        assert_eq!(parse(&["--tabs", "a.sau"]).overrides.use_tabs, Some(true));
+        assert_eq!(parse(&["--tabs", "a.sau"]).overrides().use_tabs, Some(true));
         assert_eq!(
-            parse(&["--spaces", "a.sau"]).overrides.use_tabs,
+            parse(&["--spaces", "a.sau"]).overrides().use_tabs,
             Some(false)
         );
         // Last one wins, so a wrapper script can append an override.
         assert_eq!(
-            parse(&["--tabs", "--spaces", "a.sau"]).overrides.use_tabs,
+            parse(&["--tabs", "--spaces", "a.sau"]).overrides().use_tabs,
             Some(false)
+        );
+        assert_eq!(
+            parse(&["--spaces", "--tabs", "a.sau"]).overrides().use_tabs,
+            Some(true)
         );
     }
 
     #[test]
     fn bad_indent_values_are_rejected() {
         for bad in [
-            args(&["--indent", "0", "a.sau"]),
-            args(&["--indent", "99", "a.sau"]),
-            args(&["--indent", "wide", "a.sau"]),
-            args(&["--indent=x", "a.sau"]),
+            vec!["--indent", "0", "a.sau"],
+            vec!["--indent", "99", "a.sau"],
+            vec!["--indent", "wide", "a.sau"],
+            vec!["--indent=x", "a.sau"],
             // Missing value: nothing follows the flag.
-            args(&["--indent"]),
+            vec!["--indent"],
         ] {
-            assert!(parse_args(&bad).is_err(), "expected an error for {bad:?}");
+            assert!(try_parse(&bad).is_err(), "expected an error for {bad:?}");
         }
     }
 
     #[test]
     fn unknown_flags_and_empty_paths_are_rejected() {
-        assert!(parse_args(&args(&["--nope", "a.sau"])).is_err());
-        assert!(parse_args(&args(&["-w"])).is_err());
-    }
-
-    #[test]
-    fn help_short_circuits() {
-        assert_eq!(parse_args(&args(&["--help"])), Ok(None));
+        assert!(try_parse(&["--nope", "a.sau"]).is_err());
+        assert!(try_parse(&["-w"]).is_err());
+        assert!(try_parse(&[]).is_err());
     }
 
     #[test]
@@ -323,11 +318,11 @@ mod tests {
     #[test]
     fn flags_drive_the_printed_indent() {
         let parsed = parse(&["--indent", "4", "a.sau"]);
-        let out = format(SRC, parsed.overrides.apply_to(FmtOptions::default()));
+        let out = format(SRC, parsed.overrides().apply_to(FmtOptions::default()));
         assert!(out.contains("\n    static fn main()"), "got:\n{out}");
 
         let parsed = parse(&["--tabs", "a.sau"]);
-        let out = format(SRC, parsed.overrides.apply_to(FmtOptions::default()));
+        let out = format(SRC, parsed.overrides().apply_to(FmtOptions::default()));
         assert!(out.contains("\n\tstatic fn main()"), "got:\n{out}");
     }
 
@@ -338,7 +333,7 @@ mod tests {
         assert!(from_config.use_tabs);
 
         let parsed = parse(&["--spaces", "--indent", "3", "a.sau"]);
-        let out = format(SRC, parsed.overrides.apply_to(from_config));
+        let out = format(SRC, parsed.overrides().apply_to(from_config));
         assert!(out.contains("\n   static fn main()"), "got:\n{out}");
     }
 

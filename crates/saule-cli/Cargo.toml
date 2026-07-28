@@ -16,3 +16,4 @@ saule-semantic = { path = "../saule-semantic" }
 saule-interpreter = { path = "../saule-interpreter" }
 saule-fmt = { path = "../saule-fmt" }
 miette = { version = "7.6.0", features = ["fancy"] }
+clap = { version = "4.6.4", features = ["derive"] }
