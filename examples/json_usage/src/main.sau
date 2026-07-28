@@ -1,4 +1,4 @@
-import Json from "json/json"
+import * from json
 
 class Main
 	static fn main()

@@ -25,11 +25,11 @@
 use saule_ast::{
     CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Module, Param, Spanned, Stmt, Type,
 };
-use saule_semantic::registry::{
-    interface_extends, lookup_field_type, lookup_method, with_classes, with_enums, with_interfaces,
-    ClassRegistry,
-};
 use saule_semantic::MethodSig;
+use saule_semantic::registry::{
+    ClassRegistry, interface_extends, lookup_field_type, lookup_method, with_classes, with_enums,
+    with_interfaces,
+};
 use saule_typeck::sigs::{self, NativeSig};
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, Documentation, MarkupContent,
@@ -37,12 +37,18 @@ use tower_lsp::lsp_types::{
 };
 
 use super::sighelp::render_type;
-use super::{canonical, Backend};
+use super::{Backend, canonical};
 use crate::line_index::LineIndex;
 
 /// Identifier spliced in at the caret. Deliberately unlikely to collide with
 /// real user code.
 const SENTINEL: &str = "__saule_completion__";
+
+/// Whether a path segment can appear in an unquoted import (`import x from
+/// a.b.c`), where each segment has to look like an identifier.
+fn is_ident_segment(seg: &str) -> bool {
+    !seg.is_empty() && seg.chars().all(|c| c == '_' || c.is_alphanumeric())
+}
 
 impl Backend {
     pub(super) async fn completion_at(
@@ -99,7 +105,11 @@ impl Backend {
     /// Modules that can be imported from here: installed native packages plus
     /// every `.sau` file and folder module in the workspace, expressed the way
     /// the author is already spelling paths.
-    fn import_path_items(&self, dir: Option<&std::path::Path>, quoted: bool) -> Vec<CompletionItem> {
+    fn import_path_items(
+        &self,
+        dir: Option<&std::path::Path>,
+        quoted: bool,
+    ) -> Vec<CompletionItem> {
         let sep = if quoted { "/" } else { "." };
         let mut items = Vec::new();
 
@@ -129,6 +139,69 @@ impl Backend {
                 ),
                 "0",
             ));
+        }
+
+        // Dependencies declared in `saule.config`. These live outside the
+        // workspace (`../json`) and are not under the project's own
+        // `src_dirs`, so the workspace scan below never reaches them — without
+        // this, a dependency you can import is a dependency you get no
+        // suggestion for.
+        for dep in saule_interpreter::project::get()
+            .map(|p| p.dependencies)
+            .unwrap_or_default()
+        {
+            // The package itself is importable by bare name only when it
+            // exposes an `init.sau` — the same rule `resolve_import_path`
+            // applies, so completion never offers a path that won't resolve.
+            let has_init = dep
+                .src_dirs
+                .iter()
+                .any(|d| d.join("init.sau").is_file() || d.join("init.saule").is_file());
+            if has_init {
+                items.push(sorted(
+                    item(
+                        dep.name.clone(),
+                        CompletionItemKind::MODULE,
+                        Some("package".into()),
+                    ),
+                    "0",
+                ));
+            }
+
+            // …and every module inside it, as `<dep>/<path>`. A barrel stands
+            // for its folder, matching how the workspace scan below treats one.
+            for src_dir in &dep.src_dirs {
+                for file in crate::workspace::scan_saule_files(src_dir) {
+                    let is_barrel = file.file_stem().and_then(|s| s.to_str()) == Some("init");
+                    let target = if is_barrel {
+                        match file.parent() {
+                            Some(p) => p.to_path_buf(),
+                            None => continue,
+                        }
+                    } else {
+                        file.with_extension("")
+                    };
+                    let Ok(rel) = target.strip_prefix(src_dir) else {
+                        continue;
+                    };
+                    let Some(rel) = rel.to_str() else { continue };
+                    if rel.is_empty() {
+                        continue;
+                    }
+                    let path = format!("{}/{}", dep.name, rel.replace('\\', "/"));
+                    if !quoted && !path.split('/').all(is_ident_segment) {
+                        continue;
+                    }
+                    items.push(sorted(
+                        item(
+                            path.replace('/', sep),
+                            CompletionItemKind::MODULE,
+                            Some(format!("module in `{}`", dep.name)),
+                        ),
+                        "1",
+                    ));
+                }
+            }
         }
 
         // Workspace files, relative to this file's folder first, then to the
@@ -172,11 +245,7 @@ impl Backend {
             }
             let label = rel.replace('/', sep);
             // A bare path can only be written with identifier segments.
-            if !quoted
-                && !label
-                    .split('.')
-                    .all(|seg| !seg.is_empty() && seg.chars().all(|c| c == '_' || c.is_alphanumeric()))
-            {
+            if !quoted && !label.split('.').all(is_ident_segment) {
                 continue;
             }
             if seen.contains(&label) {
@@ -329,13 +398,7 @@ impl Walk {
         self.bind_init(name, ty, None, kind);
     }
 
-    fn bind_init(
-        &mut self,
-        name: &str,
-        ty: Option<Type>,
-        init: Option<Expr>,
-        kind: &'static str,
-    ) {
+    fn bind_init(&mut self, name: &str, ty: Option<Type>, init: Option<Expr>, kind: &'static str) {
         if name != SENTINEL {
             self.scope.push(Visible {
                 name: name.to_string(),
@@ -368,7 +431,9 @@ impl Walk {
     /// Add the bindings a statement introduces into the enclosing block.
     fn declare(&mut self, s: &Stmt) {
         match s {
-            Stmt::Local { name, ty, value, .. } => self.bind_init(
+            Stmt::Local {
+                name, ty, value, ..
+            } => self.bind_init(
                 name,
                 ty.clone(),
                 value.as_ref().map(|v| v.value.clone()),
@@ -724,8 +789,7 @@ fn type_mentions_sentinel(ty: &Type) -> bool {
         Type::Named(n) => n == SENTINEL,
         Type::Nullable(inner) => type_mentions_sentinel(inner),
         Type::Table { key, value } => {
-            key.as_ref().is_some_and(|k| type_mentions_sentinel(k))
-                || type_mentions_sentinel(value)
+            key.as_ref().is_some_and(|k| type_mentions_sentinel(k)) || type_mentions_sentinel(value)
         }
         Type::Tuple(items) => items.iter().any(type_mentions_sentinel),
         Type::Function { params, ret } => {
@@ -776,10 +840,7 @@ fn infer_d(expr: &Expr, found: &Found, depth: usize) -> Option<Recv> {
                     return Some(Recv::Instance(c));
                 }
                 // Un-annotated: infer from what it was initialised with.
-                return v
-                    .init
-                    .as_ref()
-                    .and_then(|e| infer_d(e, found, depth + 1));
+                return v.init.as_ref().and_then(|e| infer_d(e, found, depth + 1));
             }
             if with_classes(|r| r.contains_key(n)) {
                 return Some(Recv::Static(n.clone()));
@@ -805,16 +866,20 @@ fn infer_d(expr: &Expr, found: &Found, depth: usize) -> Option<Recv> {
             Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => {
                 Some(Recv::Instance(n.clone()))
             }
-            Expr::Ident(n) => sig_return(&sigs::lookup(n)?).and_then(named).map(Recv::Instance),
+            Expr::Ident(n) => sig_return(&sigs::lookup(n)?)
+                .and_then(named)
+                .map(Recv::Instance),
             Expr::Member { obj, name } => match infer_d(&obj.value, found, depth + 1)? {
                 Recv::Module(m) => sig_return(&sigs::lookup(&format!("{m}.{name}"))?)
                     .and_then(named)
                     .map(Recv::Instance),
-                Recv::Instance(c) | Recv::Static(c) | Recv::SelfClass(c) => lookup_method(&c, name)?
-                    .return_ty
-                    .as_ref()
-                    .and_then(class_of)
-                    .map(Recv::Instance),
+                Recv::Instance(c) | Recv::Static(c) | Recv::SelfClass(c) => {
+                    lookup_method(&c, name)?
+                        .return_ty
+                        .as_ref()
+                        .and_then(class_of)
+                        .map(Recv::Instance)
+                }
                 Recv::Enum(_) => None,
             },
             _ => None,
@@ -1091,7 +1156,11 @@ fn collect_exports(
             }
             _ => continue,
         };
-        out.push(item(name.clone(), kind, Some(format!("{kind:?}").to_lowercase())));
+        out.push(item(
+            name.clone(),
+            kind,
+            Some(format!("{kind:?}").to_lowercase()),
+        ));
     }
 }
 
@@ -1170,7 +1239,11 @@ fn type_items() -> Vec<CompletionItem> {
 
     with_classes(|r| {
         for n in r.keys() {
-            items.push(item(n.clone(), CompletionItemKind::CLASS, Some("class".into())));
+            items.push(item(
+                n.clone(),
+                CompletionItemKind::CLASS,
+                Some("class".into()),
+            ));
         }
     });
     with_interfaces(|r| {
@@ -1184,7 +1257,11 @@ fn type_items() -> Vec<CompletionItem> {
     });
     with_enums(|r| {
         for n in r.keys() {
-            items.push(item(n.clone(), CompletionItemKind::ENUM, Some("enum".into())));
+            items.push(item(
+                n.clone(),
+                CompletionItemKind::ENUM,
+                Some("enum".into()),
+            ));
         }
     });
     items
@@ -1203,11 +1280,10 @@ fn value_items(found: &Found, module: &Module, stmt_start: bool) -> Vec<Completi
             continue;
         }
         seen.push(v.name.clone());
-        let detail = v
-            .ty
-            .as_ref()
-            .map(|t| format!("{}: {}", v.kind, render_type(t)))
-            .unwrap_or_else(|| v.kind.to_string());
+        let detail =
+            v.ty.as_ref()
+                .map(|t| format!("{}: {}", v.kind, render_type(t)))
+                .unwrap_or_else(|| v.kind.to_string());
         items.push(sorted(
             item(v.name.clone(), CompletionItemKind::VARIABLE, Some(detail)),
             "0",
@@ -1420,8 +1496,24 @@ const PRIMITIVES: &[&str] = &[
 
 /// Keywords that can begin a statement.
 const STATEMENT_KEYWORDS: &[&str] = &[
-    "local", "if", "for", "while", "repeat", "return", "break", "continue", "try", "throw", "fn",
-    "class", "interface", "enum", "export", "import", "match", "do",
+    "local",
+    "if",
+    "for",
+    "while",
+    "repeat",
+    "return",
+    "break",
+    "continue",
+    "try",
+    "throw",
+    "fn",
+    "class",
+    "interface",
+    "enum",
+    "export",
+    "import",
+    "match",
+    "do",
 ];
 
 #[cfg(test)]

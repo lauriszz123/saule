@@ -7,7 +7,7 @@
 --
 -- Build & install the package first (see README.md), then:
 --   saule run examples/native-package/images.sau path/to/sheet.png
-import Graphics, Mouse, Timer, Window from "engine"
+import * from engine
 
 class Main
 	static fn main()

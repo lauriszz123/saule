@@ -28,6 +28,29 @@ pub(crate) fn run_project(dir: &Path) {
         }
     };
 
+    // `kind:` decides whether this project is runnable at all. Checked before
+    // anything else so a library reports what it is, rather than failing later
+    // with a confusing "entry `src/main.sau` does not exist".
+    match config.kind.as_deref() {
+        None | Some("app") => {}
+        Some("library") => {
+            let name = config.name.as_deref().unwrap_or("this project");
+            eprintln!(
+                "error: `{name}` is a library and has no entry point\n\n\
+                 Libraries are imported by other projects rather than run. Add it to a \n\
+                 project's `dependencies:` and `import` it, or set `kind: \"app\"` and an \n\
+                 `entry:` in saule.config to make it runnable."
+            );
+            process::exit(1);
+        }
+        Some(other) => {
+            eprintln!(
+                "error: unknown `kind: \"{other}\"` in saule.config — expected \"app\" or \"library\""
+            );
+            process::exit(1);
+        }
+    }
+
     // Canonicalise the project root so every `pretty_path` / `src_dirs`
     // comparison downstream is comparing apples to apples.
     let root = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
@@ -87,6 +110,9 @@ struct RawConfig {
     name: Option<String>,
     version: Option<String>,
     entry: Option<String>,
+    /// `kind: "app"` (default) or `"library"`. A library has no entry point
+    /// — it exists to be imported by other projects.
+    kind: Option<String>,
     src_dirs: Vec<String>,
     min_saule_version: Option<String>,
     /// Raw `dependencies:` entries — paths (absolute, `~`-expanded, or
@@ -111,6 +137,7 @@ fn read_config(path: &Path) -> std::io::Result<RawConfig> {
             "name" => out.name = Some(unquote(value)),
             "version" => out.version = Some(unquote(value)),
             "entry" => out.entry = Some(unquote(value)),
+            "kind" => out.kind = Some(unquote(value)),
             "src_dirs" => out.src_dirs = parse_list(value),
             "min_saule_version" => out.min_saule_version = Some(unquote(value)),
             "dependencies" => out.dependencies = parse_list(value),

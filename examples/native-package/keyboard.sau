@@ -7,7 +7,7 @@
 --
 -- Build & install the package first (see README.md), then:
 --   saule run examples/native-package/keyboard.sau
-import Graphics, Keyboard, Window from "engine"
+import Graphics, Keyboard, Window from engine
 
 class Main
 	static fn main()

@@ -1293,6 +1293,49 @@ import * from "some/folder/module"
 import * from some.folder.module
 ```
 
+### Apps and Libraries
+
+A project is one of two shapes, declared by `kind:` in `saule.config`:
+
+| `kind` | Has `entry:` | `saule run` | Purpose |
+|---|---|---|---|
+| `"app"` (default) | yes | runs it | a program |
+| `"library"` | no | refuses, and says why | imported by other projects |
+
+Scaffold either with `saule init`:
+
+```sh
+saule init myapp          # an app, with src/main.sau
+saule init mylib --lib    # a library, with src/init.sau
+```
+
+A library's `src/init.sau` is its public surface — whatever that file exports
+is what importers see. Running one is a category error and reports as such
+rather than failing on a missing entry file.
+
+### Importing from a Dependency
+
+A project listed in `dependencies:` is reachable by its `name:`. Naming the
+dependency on its own imports **the package itself**:
+
+```saule
+import Json from "json"          -- the `json` package
+import Parser from "json/lexer"  -- a specific module inside it
+```
+
+A package exposes itself through an **`init.sau`** in one of its `src_dirs` —
+the same [folder module](#folder-modules-initsau) rule that applies anywhere
+else, so there is one convention to learn rather than a special case for
+dependencies. A package without one can still have its modules imported by
+path, but its name alone won't resolve.
+
+```
+json/
+├── saule.config          name: "json"
+└── src/
+    └── init.sau          ← what `import ... from "json"` gets
+```
+
 ### Folder Modules (`init.sau`)
 
 A folder becomes a single importable **module** by giving it an `init.sau`. That file is a *barrel*: whatever it imports becomes the module's public surface, so a folder of files can be consumed as one unit.
@@ -1410,7 +1453,8 @@ Recognised keys:
 |---|---|
 | `name` | Project name; also the import prefix exposed to dependents |
 | `version` | Free-form version string (semver recommended) |
-| `entry` | Path to the entry `.sau` file, relative to the project root |
+| `entry` | Path to the entry `.sau` file, relative to the project root (apps only) |
+| `kind` | `"app"` (default) or `"library"` — a library has no entry point and is imported rather than run |
 | `src_dirs` | List of directories to search when resolving imports |
 | `dependencies` | List of paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory |
 | `min_saule_version` | Refuses to run if the toolchain reports a lower version |
