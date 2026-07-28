@@ -19,12 +19,12 @@ use super::render::{
     collect_enum_variant_fields, render_class_full, render_class_head, render_enum_from_registry,
     render_enum_head, render_enum_variant_decl, render_field, render_function_sig,
     render_interface_from_registry, render_interface_head, render_interface_method,
-    render_method_head, render_method_sig, render_native_sig_full, with_doc, with_param_doc,
-    render_param, render_stdlib_module, render_type, render_variant_pattern,
+    render_method_head, render_method_sig, render_native_sig_full, render_param,
+    render_stdlib_module, render_type, render_variant_pattern, with_doc, with_param_doc,
 };
 use super::util::{
-    collect_named_heads, contains, is_primitive, locate_word_in, named_type,
-    resolve_member, strip_nullable_type,
+    collect_named_heads, contains, is_primitive, locate_word_in, named_type, resolve_member,
+    strip_nullable_type,
 };
 
 /// Collapse an inferred type to the single value it yields in a
@@ -280,6 +280,9 @@ impl<'a> Cx<'a> {
     /// Anything else returns `None`; the caller falls back to `any`.
     fn infer_init_type(&self, init: &Expr) -> Option<Type> {
         match init {
+            // `x as T` is always `T?` — the cast can fail, and the
+            // nullable result is what forces the caller to handle it.
+            Expr::Cast { ty, .. } => Some(Type::Nullable(Box::new(ty.clone()))),
             Expr::Call { callee, args } => {
                 if let Expr::Ident(name) = &callee.value {
                     if with_classes(|r| r.contains_key(name)) {
@@ -461,7 +464,10 @@ impl<'a> Cx<'a> {
                 TableEntry::Positional(v) => (None, self.infer_init_type(&v.value)),
                 TableEntry::Field { key, value } => {
                     has_field = true;
-                    (self.infer_init_type(&key.value), self.infer_init_type(&value.value))
+                    (
+                        self.infer_init_type(&key.value),
+                        self.infer_init_type(&value.value),
+                    )
                 }
             };
             if let Some(vt) = v {
@@ -479,7 +485,11 @@ impl<'a> Cx<'a> {
         }
         match value_ty {
             Some(v) if consistent => Type::Table {
-                key: if has_field { key_ty.map(Box::new) } else { None },
+                key: if has_field {
+                    key_ty.map(Box::new)
+                } else {
+                    None
+                },
                 value: Box::new(v),
             },
             _ => Type::Named("table".into()),
@@ -523,7 +533,13 @@ impl<'a> Cx<'a> {
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
             Stmt::Decl(d) => self.visit_decl(d),
-            Stmt::Local { name, name_span, ty, ty_span, value } => {
+            Stmt::Local {
+                name,
+                name_span,
+                ty,
+                ty_span,
+                value,
+            } => {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
@@ -661,7 +677,9 @@ impl<'a> Cx<'a> {
                 let mark = self.locals.len();
                 self.locals.push(LocalVar {
                     name: var.clone(),
-                    ty: var_ty.clone().unwrap_or_else(|| Type::Named("integer".into())),
+                    ty: var_ty
+                        .clone()
+                        .unwrap_or_else(|| Type::Named("integer".into())),
                     kind: LocalKind::LoopVar,
                 });
                 self.visit_block(body);
@@ -692,10 +710,7 @@ impl<'a> Cx<'a> {
                     let kw_span = s.span.start..kw_end;
                     self.record(
                         kw_span,
-                        format!(
-                            "```saule\n(return) -> {ty}\n```",
-                            ty = render_type(&rt)
-                        ),
+                        format!("```saule\n(return) -> {ty}\n```", ty = render_type(&rt)),
                     );
                 }
                 for e in es {
@@ -764,14 +779,8 @@ impl<'a> Cx<'a> {
                 if let Some(rt) = return_ty {
                     // Locate the return type slice between the closing
                     // `)` of the param list and the start of the body.
-                    let after = params
-                        .last()
-                        .map(|p| p.span.end)
-                        .unwrap_or(d.span.start);
-                    let before = body
-                        .first()
-                        .map(|s| s.span.start)
-                        .unwrap_or(d.span.end);
+                    let after = params.last().map(|p| p.span.end).unwrap_or(d.span.start);
+                    let before = body.first().map(|s| s.span.start).unwrap_or(d.span.end);
                     self.record_type_idents_in(rt, &(after..before));
                 }
                 let params = params.clone();
@@ -802,10 +811,7 @@ impl<'a> Cx<'a> {
                 // the class name and the first member). We use the
                 // first occurrence of each name within the decl span
                 // as the hover target.
-                let header_end = members
-                    .first()
-                    .map(|m| m.span.start)
-                    .unwrap_or(d.span.end);
+                let header_end = members.first().map(|m| m.span.start).unwrap_or(d.span.end);
                 let header_span = d.span.start..header_end;
                 if let Some(parent) = extends {
                     self.record_named_idents_in(&[parent.clone()], &header_span);
@@ -988,11 +994,7 @@ impl<'a> Cx<'a> {
             }
         }
         if let Some(rt) = &m.return_ty {
-            let after = m
-                .params
-                .last()
-                .map(|p| p.span.end)
-                .unwrap_or(m.span.start);
+            let after = m.params.last().map(|p| p.span.end).unwrap_or(m.span.start);
             let before = m.body.first().map(|s| s.span.start).unwrap_or(m.span.end);
             self.record_type_idents_in(rt, &(after..before));
         }
@@ -1013,6 +1015,12 @@ impl<'a> Cx<'a> {
             self.record(e.span.clone(), md);
         }
         match &e.value {
+            // Recurse into the operand so the cast is transparent for
+            // hover; the target type's own idents are handled below.
+            Expr::Cast { value, ty } => {
+                self.visit_expr(value);
+                self.record_type_idents_in(ty, &e.span);
+            }
             Expr::Unary { rhs, .. } => self.visit_expr(rhs),
             Expr::Binary { lhs, rhs, .. } => {
                 self.visit_expr(lhs);
@@ -1119,11 +1127,7 @@ impl<'a> Cx<'a> {
     /// on `dueDate` shows the parameter declaration). `params` carries
     /// the callee's parameter list when we could resolve it, used to
     /// look up the matching declared type.
-    fn visit_call_arg_with_params(
-        &mut self,
-        a: &saule_ast::CallArg,
-        params: Option<&[Param]>,
-    ) {
+    fn visit_call_arg_with_params(&mut self, a: &saule_ast::CallArg, params: Option<&[Param]>) {
         match a {
             saule_ast::CallArg::Positional(e) => self.visit_expr(e),
             saule_ast::CallArg::Named { name, value } => {
@@ -1208,12 +1212,7 @@ impl<'a> Cx<'a> {
             } => {
                 self.record(
                     p.span.clone(),
-                    render_variant_pattern(
-                        enum_name,
-                        variant,
-                        fields,
-                        &self.enum_variant_fields,
-                    ),
+                    render_variant_pattern(enum_name, variant, fields, &self.enum_variant_fields),
                 );
                 for f in fields {
                     self.visit_pattern(f);
@@ -1236,10 +1235,7 @@ impl<'a> Cx<'a> {
                         ),
                     );
                 } else {
-                    self.record(
-                        p.span.clone(),
-                        format!("```saule\n(binding) {name}\n```"),
-                    );
+                    self.record(p.span.clone(), format!("```saule\n(binding) {name}\n```"));
                 }
             }
             Pattern::Wildcard => {
@@ -1382,7 +1378,10 @@ impl<'a> Cx<'a> {
         }
         if with_interfaces(|r| r.contains_key(name)) {
             let extends = with_interfaces(|r| r.get(name).cloned()).unwrap_or_default();
-            return Some(with_doc(render_interface_from_registry(name, &extends), doc));
+            return Some(with_doc(
+                render_interface_from_registry(name, &extends),
+                doc,
+            ));
         }
         if with_enums(|r| r.contains_key(name)) {
             let info = with_enums(|r| r.get(name).cloned())?;
@@ -1467,7 +1466,9 @@ impl<'a> Cx<'a> {
                 }
                 None
             }
-            Expr::MethodCall { obj: inner, method, .. } => {
+            Expr::MethodCall {
+                obj: inner, method, ..
+            } => {
                 // `obj:method(args).foo` — chase the method's
                 // registered return type.
                 let inner_class = self.receiver_class(&inner.value)?;

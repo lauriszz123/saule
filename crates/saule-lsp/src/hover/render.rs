@@ -26,7 +26,13 @@ pub(super) fn render_function_sig(
         s.push('>');
     }
     s.push('(');
-    s.push_str(&params.iter().map(render_param_inline).collect::<Vec<_>>().join(", "));
+    s.push_str(
+        &params
+            .iter()
+            .map(render_param_inline)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
     s.push(')');
     if let Some(rt) = return_ty {
         s.push_str(" -> ");
@@ -112,7 +118,13 @@ pub(super) fn render_param_inline(p: &Param) -> String {
     s
 }
 
-pub(super) fn render_field(owner: &str, is_static: bool, is_private: bool, name: &str, ty: &Type) -> String {
+pub(super) fn render_field(
+    owner: &str,
+    is_static: bool,
+    is_private: bool,
+    name: &str,
+    ty: &Type,
+) -> String {
     let mut s = String::from("```saule\n(field) ");
     if is_private {
         s.push_str("private ");
@@ -131,7 +143,11 @@ pub(super) fn render_field(owner: &str, is_static: bool, is_private: bool, name:
     s
 }
 
-pub(super) fn render_class_head(name: &str, extends: Option<&str>, implements: &[String]) -> String {
+pub(super) fn render_class_head(
+    name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+) -> String {
     let mut s = format!("```saule\nclass {name}");
     if let Some(p) = extends {
         s.push_str(" extends ");
@@ -286,7 +302,11 @@ pub(super) fn render_native_sig_full(sig: &NativeSig) -> String {
     s
 }
 
-pub(super) fn render_interface_head(name: &str, extends: &[String], methods: &[AstMethodSig]) -> String {
+pub(super) fn render_interface_head(
+    name: &str,
+    extends: &[String],
+    methods: &[AstMethodSig],
+) -> String {
     let mut s = format!("```saule\ninterface {name}");
     if !extends.is_empty() {
         s.push_str(" extends ");
@@ -351,7 +371,8 @@ pub(super) fn render_enum_head(name: &str, variants: &[Spanned<EnumVariant>]) ->
     s
 }
 
-pub(super) fn render_enum_from_registry(name: &str, variants: &[(String, usize)]) -> String {    let mut s = format!("```saule\nenum {name} {{\n");
+pub(super) fn render_enum_from_registry(name: &str, variants: &[(String, usize)]) -> String {
+    let mut s = format!("```saule\nenum {name} {{\n");
     for (vn, arity) in variants {
         s.push_str("  ");
         s.push_str(vn);
@@ -395,7 +416,9 @@ pub(super) fn render_type(ty: &Type) -> String {
 /// payload-field shape of each tuple variant. Used by `bind_pattern` to
 /// type the names introduced by `case Enum.Variant(a, b, ...)` patterns
 /// without having to re-find the decl per arm.
-pub(super) fn collect_enum_variant_fields(module: &Module) -> HashMap<(String, String), Vec<Param>> {
+pub(super) fn collect_enum_variant_fields(
+    module: &Module,
+) -> HashMap<(String, String), Vec<Param>> {
     let mut out: HashMap<(String, String), Vec<Param>> = HashMap::new();
     for s in &module.stmts {
         if let Stmt::Decl(d) = &s.value

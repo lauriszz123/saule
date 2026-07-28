@@ -152,6 +152,21 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             check_binary_op(*op, lhs, rhs, scope, errors);
         }
         Expr::ForceUnwrap(inner) => check_expr(inner, scope, errors),
+        // `x as T` is only meaningful when `x` is `any` — that's the one
+        // direction the checker can't verify statically. On an
+        // already-typed value the cast is noise at best and a false sense
+        // of safety at worst, so say so rather than silently allowing it.
+        Expr::Cast { value, .. } => {
+            check_expr(value, scope, errors);
+            if let Some(vt) = infer(value, scope)
+                && !is_any(&strip_nullable(vt.clone()))
+            {
+                errors.push(TypeCheckError::RedundantCast {
+                    found: type_to_string(&vt),
+                    span: to_source_span(value.span.clone()),
+                });
+            }
+        }
         Expr::Table(items) => {
             for entry in items {
                 match entry {
@@ -1486,10 +1501,11 @@ pub(super) fn check_assignment_compat(
     if is_nullable(decl_ty) {
         // Even for nullable slots we still want to reject obviously
         // incompatible value types — e.g. `local x: string? = some_entry`
-        // where `some_entry: Entry?`. `nil` and `any` stay permissive.
+        // where `some_entry: Entry?`. Only `nil` stays permissive; an
+        // `any` value is a downcast and must go through `as`, even into a
+        // nullable slot (`local x: string? = a as string`).
         if let Some(value_ty) = infer(value, scope)
             && !matches!(&value_ty, Type::Named(n) if n == "nil")
-            && !is_any(&value_ty)
             && !types_compatible(decl_ty, &value_ty)
         {
             errors.push(TypeCheckError::AssignmentTypeMismatch {
@@ -1584,11 +1600,10 @@ pub(super) fn check_assignment_compat(
         return;
     }
     // General incompatibility (e.g. `table<Storage>` vs `table<string>`
-    // from `Os.args()`). `any` / `nil` stay permissive — they're the
-    // "I don't know" sentinels. Skip when the declared slot is `any`
-    // or a free type parameter for the same reason.
+    // from `Os.args()`). `nil` stays permissive, and so does an `any`
+    // *slot* — widening into `any` is always safe. An `any` *value* is
+    // not: that is the downcast direction, and it now requires `as`.
     if !matches!(&value_ty, Type::Named(n) if n == "nil")
-        && !is_any(&value_ty)
         && !is_any(decl_ty)
         && !types_compatible(decl_ty, &value_ty)
     {
@@ -1681,7 +1696,15 @@ fn table_key(key: &Option<Box<Type>>) -> Type {
 /// literal infers `table<any>`, and native signatures use `any` to mean
 /// "any table at all".
 fn table_part_compatible(expected: &Type, found: &Type) -> bool {
-    if is_any(expected) || is_any(found) {
+    // An `any` on the **value** side is the untyped-literal case — most
+    // importantly the empty `{}`, which has no element type yet and has to
+    // be able to fill any table slot.
+    //
+    // An `any` in the **slot** is not accepted: tables are mutable and
+    // shared by reference, so letting `table<integer>` alias as
+    // `table<any>` hands out a window through which the container can be
+    // poisoned with values its element type forbids.
+    if is_any(found) {
         return true;
     }
     if matches!(found, Type::Named(n) if n == "nil") {
@@ -1694,11 +1717,18 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
     // Suppress `is_interface` unused-warning when state moves; reference here.
     let _ = is_interface;
     match (expected, value_ty) {
-        // Same-name primitives, plus `any` on either side, plus `nil` on the
-        // value side (nil is universally assignable; nullable-rejection is
-        // handled separately by `NullableToNonNullable`).
+        // Same-name primitives, plus `any` in the **slot** (widening is
+        // always safe), plus `nil` on the value side (nil is universally
+        // assignable; nullable-rejection is handled separately by
+        // `NullableToNonNullable`).
+        //
+        // The reverse — an `any` *value* flowing into a concrete slot — is
+        // deliberately **not** accepted. That direction is a downcast, and
+        // allowing it silently is what used to let `local n: integer = a`
+        // put a string in an integer. Write `a as integer` instead: the
+        // cast is checked at runtime and yields `integer?`.
         (Type::Named(a), Type::Named(b)) => {
-            if a == b || a == "any" || b == "any" || b == "nil" {
+            if a == b || a == "any" || b == "nil" {
                 return true;
             }
             // Generic type parameters in scope match anything — they're
@@ -1720,12 +1750,11 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
             }
             false
         }
-        // `table<any>` (or `table<any, any>`) matches any table — used by
-        // native sigs like `Table.insert(t, ...)` to mean "any table".
+        // Element types are compared through `table_part_compatible`, which
+        // permits an untyped value (`{}`) to fill a typed slot but refuses
+        // to widen a typed table into `table<any>` — see its comment for
+        // why aliasing a mutable container that way is unsound.
         (Type::Table { key: ek, value: ev }, Type::Table { key: vk, value: vv }) => {
-            if is_any(ev) {
-                return true;
-            }
             // `table<T>` is the array form — integer-keyed — so it compares
             // against an explicit `table<integer, T>` as the same shape.
             table_part_compatible(&table_key(ek), &table_key(vk)) && table_part_compatible(ev, vv)
@@ -1815,6 +1844,11 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         Expr::Str(_) => Some(Type::Named("string".into())),
         Expr::Ident(n) => scope.lookup(n).cloned(),
         Expr::Self_ => current_class().map(Type::Named),
+        // `x as T` always produces `T?` — the cast is checked at runtime
+        // and yields `nil` when the value isn't a `T`. Making the result
+        // nullable is what keeps the escape from `any` sound: the caller
+        // has to deal with the failure case via `??`, `!`, or a nil test.
+        Expr::Cast { ty, .. } => Some(Type::Nullable(Box::new(ty.clone()))),
         // `obj.field` — when `obj` resolves to a known class, return the
         // declared type of that field (walks parents). Methods aren't fields,
         // so this only fires for stored slots declared with `local x: T`.
@@ -1860,7 +1894,28 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 ret: Box::new(sig.return_ty.clone().unwrap_or(Type::Named("any".into()))),
             })
         }
-        Expr::SafeMember { .. } => Some(Type::Nullable(Box::new(Type::Named("any".into())))),
+        // `obj?.field` — the same lookup as `obj.field`, wrapped in
+        // `Nullable` because the whole chain yields `nil` when the
+        // receiver is `nil`.
+        //
+        // This used to answer a flat `any?` regardless of the receiver.
+        // That was invisible while an `any` value could flow into any
+        // slot; now that it can't, `b?.label` has to report the field's
+        // real type or every safe-chain would demand a cast.
+        Expr::SafeMember { obj, name } => {
+            let inner = infer(
+                &Spanned::new(
+                    Expr::Member {
+                        obj: obj.clone(),
+                        name: name.clone(),
+                    },
+                    expr.span.clone(),
+                ),
+                scope,
+            )
+            .unwrap_or_else(|| Type::Named("any".into()));
+            Some(Type::Nullable(Box::new(strip_nullable(inner))))
+        }
         // `t[k]` — return the declared element type as-is. If the table
         // was declared `table<V?>` the result is nullable and member
         // access on it will trip the nullable-receiver check; if it was

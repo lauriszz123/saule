@@ -39,6 +39,7 @@ Saule has 9 primitive types, inherited from Lua's type system but statically dec
 | `nil` | Absence of value |
 | `function` | First-class function values |
 | `table<T>` | The only data structure, typed generically |
+| `any` | A value of unknown type. Anything may be assigned **to** an `any`; getting a value back **out** requires a checked [`as` cast](#escaping-any-with-as) |
 | `userdata` | Raw memory for native integrations |
 | `thread` | Coroutines |
 
@@ -124,6 +125,43 @@ local precise: float = float(health) - dmg      -- health promoted to 100.0
 Casting rules:
 - `int(float)` — truncates toward zero, no rounding
 - `float(integer)` — always safe, no precision loss
+
+### Escaping `any` with `as`
+
+`any` is the one type the checker cannot see through, so it is the one type
+that needs a way out. `x as T` is a **checked** cast: it tests the value at
+runtime and evaluates to `T?` — the value when it really is a `T`, and `nil`
+when it isn't.
+
+```saule
+fn describe(y: any) -> string
+    match type(y)
+        case "integer" then return "int " .. tostring(y as integer ?? 0)
+        case "string" then return "str " .. (y as string ?? "?")
+        case _ then return "other"
+    end
+end
+```
+
+Because the result is nullable, the failure case cannot be ignored — combine
+it with `??` for a fallback or `!` to turn it back into a throw:
+
+```saule
+local n: integer = value as integer ?? 0     -- default on mismatch
+local m: integer = (value as integer)!       -- throw on mismatch
+```
+
+This is what makes `any` **sound**: a value annotated `integer` really is an
+integer at runtime, because the only path from `any` to `integer` goes
+through a test.
+
+- `as` binds tighter than every binary operator, so `y as integer ?? 0`
+  reads as `(y as integer) ?? 0`.
+- Class casts respect inheritance — a `Dog` satisfies `as Animal`.
+- `table<T>` is checked **elementwise**, so the element type is honest. That
+  is O(n); an empty table satisfies any element type.
+- `as` on a value whose type is already known is an error, not a no-op —
+  use `int()` / `float()` for numeric conversion.
 - Both are explicit — Saule **never** casts silently
 
 ```saule
@@ -622,7 +660,7 @@ class Counter
     end
 
     fn report()
-        print("Count is " .. count)
+        print("Count is " .. self.count)
     end
 end
 ```

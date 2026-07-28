@@ -1,0 +1,9 @@
+-- Widening a typed table to `table<any>` would let it be poisoned with
+-- values its element type forbids, because tables alias by reference.
+class Main
+	static fn main()
+		local nums: table<integer> = {1}
+		local anys: table<any> = nums
+		println(#anys)
+	end
+end

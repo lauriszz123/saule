@@ -36,7 +36,7 @@ These names are bound at the top of every module — no import required.
 | `type(v: any) -> string` | Returns the runtime type name: `"integer"`, `"float"`, `"string"`, `"boolean"`, `"nil"`, `"function"`, `"table"`, or the class name for instances. |
 | `int(n: integer \| float) -> integer` | Truncating conversion (`int(3.9) == 3`). |
 | `float(n: integer \| float) -> float` | Lossless widening (`float(3) == 3.0`). |
-| `assert(v: any, msg: any?) -> any` | If `v` is truthy, returns it; otherwise throws `msg` (default `"assertion failed"`). |
+| `assert<T>(v: T?, msg: string?) -> T` | If `v` is truthy, returns it with its nullability stripped; otherwise throws `msg` (default `"assertion failed"`). |
 | `error(msg: string) -> nil` | Throws `msg` as a runtime error. Equivalent to `throw msg`. |
 
 ```saule

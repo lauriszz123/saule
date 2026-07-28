@@ -71,7 +71,9 @@ fn check_type_assignment_compat(
         }
         return;
     }
-    if is_any(found_ty) || is_any(decl_ty) {
+    // Widening into an `any` slot is always fine. An `any` value flowing
+    // into a concrete slot is a downcast and must be written `x as T`.
+    if is_any(decl_ty) {
         return;
     }
     if is_nullable(found_ty) && !is_nullable(decl_ty) {
@@ -401,8 +403,17 @@ pub(super) fn check_stmt(
                     }
                     _ => Vec::new(),
                 };
+                // An empty `{}` has no element type to contradict the
+                // annotation, and the body never runs — nothing can be
+                // bound, so nothing can be bound wrongly. Without this the
+                // literal's placeholder `any` element would be read as a
+                // downcast and `for v: integer in {} do` would be rejected.
+                let empty_literal =
+                    matches!(&iter.value, saule_ast::Expr::Table(items) if items.is_empty());
+
                 for ((name, ty_opt), actual) in vars.iter().zip(yielded.iter()) {
                     if let Some(declared) = ty_opt
+                        && !empty_literal
                         && !crate::expr::types_compatible(declared, actual)
                     {
                         errors.push(TypeCheckError::ForBindingTypeMismatch {

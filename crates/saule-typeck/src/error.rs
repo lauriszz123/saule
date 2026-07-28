@@ -28,6 +28,17 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`as` expects an `any` value, but this is already `{found}`")]
+    #[diagnostic(help(
+        "`as` is the checked escape from `any`; a value with a known type needs no cast \
+         (use `int()` / `float()` for numeric conversion)"
+    ))]
+    RedundantCast {
+        found: String,
+        #[label("already has a known type")]
+        span: miette::SourceSpan,
+    },
+
     #[error("cannot assign value of type `{found}` to variable of type `{expected}`")]
     #[diagnostic(help("the value's type isn't compatible with the declared type"))]
     AssignmentTypeMismatch {

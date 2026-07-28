@@ -10,7 +10,7 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Url};
 use crate::line_index::LineIndex;
 use crate::workspace;
 
-use super::{canonical, path_to_uri, Backend, Document};
+use super::{Backend, Document, canonical, path_to_uri};
 
 impl Backend {
     /// so stale results from an older revision can be discarded.

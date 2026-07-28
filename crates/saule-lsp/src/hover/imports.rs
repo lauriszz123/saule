@@ -21,9 +21,15 @@ pub(super) fn aliases_for_file(imported: &Module, names: &ImportNames) -> Vec<(S
     }
 }
 
-pub(super) fn aliases_for_native(exports: &[&'static str], names: &ImportNames) -> Vec<(String, String)> {
+pub(super) fn aliases_for_native(
+    exports: &[&'static str],
+    names: &ImportNames,
+) -> Vec<(String, String)> {
     match names {
-        ImportNames::All => exports.iter().map(|n| ((*n).to_string(), (*n).to_string())).collect(),
+        ImportNames::All => exports
+            .iter()
+            .map(|n| ((*n).to_string(), (*n).to_string()))
+            .collect(),
         ImportNames::List(items) => items
             .iter()
             .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
@@ -34,7 +40,10 @@ pub(super) fn aliases_for_native(exports: &[&'static str], names: &ImportNames) 
 /// Like [`aliases_for_native`] but for dynamic (manifest-described)
 /// packages, whose export names are owned `String`s read from disk rather
 /// than `&'static str` baked into the binary.
-pub(super) fn aliases_for_dynamic(exports: &[String], names: &ImportNames) -> Vec<(String, String)> {
+pub(super) fn aliases_for_dynamic(
+    exports: &[String],
+    names: &ImportNames,
+) -> Vec<(String, String)> {
     match names {
         ImportNames::All => exports.iter().map(|n| (n.clone(), n.clone())).collect(),
         ImportNames::List(items) => items

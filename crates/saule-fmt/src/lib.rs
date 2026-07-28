@@ -365,8 +365,7 @@ impl<'a> Printer<'a> {
     /// its newline, so a bare line break counts as one newline and a
     /// deliberate blank line counts as two.
     fn gap_after_comment(&self, next_start: usize) -> bool {
-        !self.source.is_empty()
-            && self.newlines_in_source(self.last_comment_end, next_start) >= 2
+        !self.source.is_empty() && self.newlines_in_source(self.last_comment_end, next_start) >= 2
     }
 
     // ---- top-level ---------------------------------------------------------
@@ -447,7 +446,9 @@ impl<'a> Printer<'a> {
 
     fn stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
-            Stmt::Local { name, ty, value, .. } => {
+            Stmt::Local {
+                name, ty, value, ..
+            } => {
                 self.write("local ");
                 self.write(name);
                 if let Some(t) = ty {
@@ -1062,6 +1063,24 @@ impl<'a> Printer<'a> {
                 self.expr(inner, MAX_PREC);
                 self.write("!");
             }
+            Expr::Cast { value, ty } => {
+                // `as` sits between the binary operators and the postfix
+                // chain, so it needs parentheses in a postfix context and
+                // none inside a binary one: `(x as integer)!` must keep
+                // its parens (dropping them yields `x as integer!`, which
+                // doesn't parse), while `x as integer != nil` is already
+                // unambiguous.
+                let parens = CAST_PREC < parent_prec;
+                if parens {
+                    self.write("(");
+                }
+                self.expr(value, MAX_PREC);
+                self.write(" as ");
+                self.ty(ty);
+                if parens {
+                    self.write(")");
+                }
+            }
 
             Expr::Table(entries) => {
                 if entries.is_empty() {
@@ -1531,6 +1550,11 @@ impl<'a> Printer<'a> {
 /// Higher than every `bin_prec`, used as the lower bound for operands of
 /// unary / postfix expressions so they always parenthesize inner binaries.
 const MAX_PREC: u8 = 100;
+
+/// Binding strength of `x as T` — above every binary operator (max 6) and
+/// below the postfix chain, mirroring where `cast_expr` sits in the
+/// parser's precedence ladder.
+const CAST_PREC: u8 = MAX_PREC - 1;
 
 /// (precedence, right_associative) for each binary operator, mirroring the
 /// parser's Pratt table closely enough that re-parsing produces the same

@@ -160,7 +160,34 @@ impl Parser {
                 span,
             ));
         }
-        self.postfix_expr()
+        self.cast_expr()
+    }
+
+    /// `expr as T` — sits between the unary and postfix layers.
+    ///
+    /// Binding tighter than every binary operator makes the useful readings
+    /// the default: `y as integer ?? 0` is `(y as integer) ?? 0`, and
+    /// `y as integer + 1` is `(y as integer) + 1`. Binding looser than the
+    /// postfix chain means `obj.field() as string` casts the call's result
+    /// rather than the callee.
+    ///
+    /// The loop tolerates `x as A as B`; it parses, and the typechecker
+    /// rejects it because the second operand is no longer `any`.
+    pub(crate) fn cast_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut expr = self.postfix_expr()?;
+        while self.check(&Token::As) {
+            self.advance();
+            let ty = self.parse_type()?;
+            let span = expr.span.start..self.last_consumed_end();
+            expr = Spanned::new(
+                Expr::Cast {
+                    value: Box::new(expr),
+                    ty,
+                },
+                span,
+            );
+        }
+        Ok(expr)
     }
 
     // ── Postfix layer: chains of  `.x`, `?.x`, `[i]`, `(args)`, `:m(args)`, `!`

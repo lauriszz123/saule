@@ -1087,6 +1087,7 @@ impl Cx {
 
     fn visit_expr(&mut self, e: &Spanned<Expr>) {
         match &e.value {
+            Expr::Cast { value, .. } => self.visit_expr(value),
             Expr::Call { callee, args } => {
                 self.visit_expr(callee);
                 for a in args {
