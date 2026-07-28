@@ -36,10 +36,12 @@ mod return_check;
 
 pub use error::SemanticError;
 pub use registry::{
-    ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, InterfaceRegistry, MethodSig, build_registry,
-    class_implements, class_implements_iterable, clear_registries, install_registries,
-    interface_extends, is_interface, is_subtype_named, lookup_field_type, lookup_member,
-    lookup_method, super_init_target, with_classes, with_enums, with_interfaces,
+    ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, FunctionRegistry, FunctionSig,
+    InterfaceRegistry, MethodSig, build_function_registry, build_registry, class_implements,
+    class_implements_iterable, clear_registries, install_functions, install_registries,
+    interface_extends, is_interface, is_subtype_named, lookup_field_type, lookup_function,
+    lookup_member, lookup_method, super_init_target, with_classes, with_enums, with_functions,
+    with_interfaces,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
@@ -62,6 +64,9 @@ pub struct ModuleSeed {
     pub classes: ClassRegistry,
     pub interfaces: InterfaceRegistry,
     pub enums: EnumRegistry,
+    /// Signatures of the top-level `fn`s the imports bring in, keyed by the
+    /// name they are bound to locally.
+    pub functions: FunctionRegistry,
     /// Local names this module's `import * from "..."` statements bind,
     /// as enumerated by the embedder.
     ///
@@ -107,7 +112,12 @@ pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError
     for (name, info) in built.enums {
         enums.entry(name).or_insert(info);
     }
+    let mut funcs = build_function_registry(module);
+    for (name, sig) in seed.functions {
+        funcs.entry(name).or_insert(sig);
+    }
     install_registries(reg, ifaces, enums);
+    install_functions(funcs);
 
     let mut errors = Vec::new();
 

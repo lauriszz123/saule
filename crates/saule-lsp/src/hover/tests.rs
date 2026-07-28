@@ -162,6 +162,68 @@ end
     assert!(!md.contains("_hidden"), "got: {md}");
 }
 
+/// The constructor reads as the class's own parameter list rather than
+/// as an `init` method buried alphabetically among the others.
+#[test]
+fn class_hover_hoists_the_constructor_onto_the_heading() {
+    let src = "\
+class Entry
+  local todo: string
+  local dueDate: integer?
+  fn init(todo: string, dueDate: integer?)
+self.todo = todo
+self.dueDate = dueDate
+  end
+  fn getTodo() -> string
+return self.todo
+  end
+end
+";
+    let md = hover(src, "Entry").unwrap();
+    assert!(
+        md.contains("class Entry(todo: string, dueDate: integer?)"),
+        "got: {md}"
+    );
+    // The body must not repeat what the heading already says.
+    assert!(!md.contains("fn init"), "got: {md}");
+    assert!(md.contains("fn getTodo() -> string"), "got: {md}");
+}
+
+/// A class with no constructor keeps a bare heading — an empty `()`
+/// would imply a zero-arg constructor the class doesn't declare.
+#[test]
+fn class_hover_omits_parens_when_there_is_no_constructor() {
+    let src = "\
+class Point
+  x: integer = 0
+end
+";
+    let md = hover(src, "Point").unwrap();
+    assert!(md.contains("class Point"), "got: {md}");
+    assert!(!md.contains("class Point("), "got: {md}");
+}
+
+/// A `local fn init` can't be called from outside, so advertising a
+/// call shape on the heading would be a lie.
+#[test]
+fn class_hover_hides_a_private_constructor() {
+    let src = "\
+class Secret
+  local seed: integer
+  local fn init(seed: integer)
+self.seed = seed
+  end
+  fn get() -> integer
+return self.seed
+  end
+end
+";
+    let md = hover(src, "Secret").unwrap();
+    assert!(!md.contains("class Secret("), "got: {md}");
+    assert!(!md.contains("init"), "got: {md}");
+    assert!(md.contains("fn get() -> integer"), "got: {md}");
+}
+
 #[test]
 fn hovers_stdlib_free_function() {
     // `print` is a prelude name with a registered native sig.
@@ -966,4 +1028,141 @@ end
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ─── receivers behind `!`, `?.` and `as` ────────────────────────────────
+
+/// The source every test below hovers into: a nullable local that has to
+/// be unwrapped before its fields can be reached, which is the shape all
+/// of the framework's tree-walking code is written in.
+const UNWRAP_CHAIN: &str = "\
+class Data
+  theme: string
+  fn init()
+    self.theme = \"\"
+  end
+end
+class Element
+  data: Data
+  parent: Element?
+  fn init()
+    self.data = Data()
+    self.parent = nil
+  end
+end
+fn walk(node: Element?) -> string
+  local current: Element? = node
+  local found: string = current!.data.theme
+  return found
+end
+";
+
+#[test]
+fn a_member_reached_through_a_force_unwrap_resolves() {
+    // Regression: `receiver_class` had no `ForceUnwrap` arm, so
+    // `current!.data` fell through to `None` and the hover reported the
+    // *enclosing function* instead — actively misleading, since it named
+    // a symbol that has nothing to do with the token under the cursor.
+    let md = hover(UNWRAP_CHAIN, "data.theme").expect("hover on `data`");
+    assert!(
+        md.contains("Data"),
+        "expected the field's declared type, got:\n{md}"
+    );
+    assert!(
+        !md.contains("fn walk"),
+        "fell back to the enclosing function:\n{md}"
+    );
+}
+
+#[test]
+fn a_field_two_levels_past_a_force_unwrap_resolves() {
+    let md = hover_at_offset(UNWRAP_CHAIN, "data.theme", 6).expect("hover on `theme`");
+    assert!(
+        md.contains("theme"),
+        "expected the `theme` field, got:\n{md}"
+    );
+    assert!(
+        !md.contains("fn walk"),
+        "fell back to the enclosing function:\n{md}"
+    );
+}
+
+#[test]
+fn a_member_reached_through_a_safe_chain_resolves() {
+    let src = UNWRAP_CHAIN.replace("current!.data.theme", "current?.data!.theme");
+    let md = hover_at_offset(&src, "data!.theme", 6).expect("hover on `theme`");
+    assert!(
+        md.contains("theme"),
+        "expected the `theme` field through `?.`, got:\n{md}"
+    );
+}
+
+#[test]
+fn a_member_reached_through_a_cast_resolves() {
+    // `as T` names the receiver's class outright, so the chain past it is
+    // exactly as resolvable as a declared local.
+    let src = "\
+class Data
+  theme: string
+  fn init()
+    self.theme = \"\"
+  end
+end
+fn pick(bag: any) -> string
+  return (bag as Data)!.theme
+end
+";
+    let md = hover_at_offset(src, "!.theme", 2).expect("hover on `theme`");
+    assert!(
+        md.contains("theme"),
+        "expected the `theme` field through `as`, got:\n{md}"
+    );
+}
+
+#[test]
+fn a_member_the_receiver_does_not_declare_says_so() {
+    // Regression: `expr_md` answered `None` for an unresolvable member,
+    // and because `record` keeps the *narrowest* span containing the
+    // cursor, recording nothing here let the enclosing `fn` win — so
+    // hovering a typo'd field described an unrelated function with full
+    // confidence. Name the miss instead; it also stops the fallback.
+    let src = UNWRAP_CHAIN.replace("current!.data.theme", "current!.data.nope");
+    let md = hover_at_offset(&src, "data.nope", 6).expect("hover on `nope`");
+    assert!(
+        md.contains("nope") && md.contains("Data"),
+        "expected the miss to be named, got:\n{md}"
+    );
+    assert!(
+        !md.contains("fn walk"),
+        "fell back to the enclosing function:\n{md}"
+    );
+}
+
+#[test]
+fn a_method_the_receiver_does_not_declare_says_so() {
+    let src = UNWRAP_CHAIN.replace("current!.data.theme", "current!.data.nope()");
+    let md = hover_at_offset(&src, "data.nope", 6).expect("hover on `nope`");
+    assert!(
+        md.contains("nope") && md.contains("Data"),
+        "expected the miss to be named, got:\n{md}"
+    );
+    assert!(
+        !md.contains("fn walk"),
+        "fell back to the enclosing function:\n{md}"
+    );
+}
+
+#[test]
+fn a_member_that_does_resolve_is_unaffected() {
+    // The miss path must not shadow the real one: a declared field still
+    // renders as a field, with its type.
+    let md = hover_at_offset(UNWRAP_CHAIN, "data.theme", 6).expect("hover on `theme`");
+    assert!(
+        md.contains("(field)") && md.contains("string"),
+        "expected the declared field, got:\n{md}"
+    );
+    assert!(
+        !md.contains("No member"),
+        "a declared field was reported as unknown:\n{md}"
+    );
 }

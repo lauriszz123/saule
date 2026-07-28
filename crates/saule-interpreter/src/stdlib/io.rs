@@ -167,11 +167,13 @@ pub fn register_sigs() {
     register("File.close", vec![], vec![nil()]);
     let _ = file;
 
-    // `File`-valued constants on the `Io` static class.
-    use crate::stdlib::sigs::register_member;
-    register_member("Io.stdin");
-    register_member("Io.stdout");
-    register_member("Io.stderr");
+    // `File`-valued constants on the `Io` static class. Typed as `File`
+    // so `Io.stdout.write(...)` resolves through the instance-method sigs
+    // registered just above.
+    use crate::stdlib::sigs::register_const;
+    register_const("Io.stdin", t_named("File"));
+    register_const("Io.stdout", t_named("File"));
+    register_const("Io.stderr", t_named("File"));
 }
 
 // ─── enum helper ───────────────────────────────────────────────────────────

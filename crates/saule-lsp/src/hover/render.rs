@@ -165,8 +165,28 @@ pub(super) fn render_class_head(
 /// listing every non-private field and method in alphabetical order.
 /// This is the same format used for `Ident` hover on a class name and
 /// for hover on a `class` declaration head, so the two views agree.
+///
+/// The constructor is hoisted onto the heading as the class's own
+/// parameter list — `class Entry(todo: string, …)` mirrors the call the
+/// reader actually writes (`Entry("buy milk", nil)`), which `fn init(…)`
+/// buried alphabetically among the methods does not. It is therefore
+/// omitted from the body rather than listed twice.
 pub(super) fn render_class_full(name: &str, info: &ClassInfo) -> String {
     let mut s = format!("```saule\nclass {name}");
+    // A private `init` stays off the heading: the class can't be
+    // constructed from outside, so advertising a call shape would lie.
+    if let Some(ctor) = info.methods.get("init").filter(|sig| !sig.is_private) {
+        s.push('(');
+        s.push_str(
+            &ctor
+                .params
+                .iter()
+                .map(render_param_inline)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        s.push(')');
+    }
     if let Some(p) = &info.parent {
         s.push_str(" extends ");
         s.push_str(p);
@@ -182,7 +202,7 @@ pub(super) fn render_class_full(name: &str, info: &ClassInfo) -> String {
     let mut public: Vec<&String> = info
         .members
         .iter()
-        .filter_map(|(n, priv_)| if *priv_ { None } else { Some(n) })
+        .filter_map(|(n, priv_)| if *priv_ || n == "init" { None } else { Some(n) })
         .collect();
     public.sort();
 

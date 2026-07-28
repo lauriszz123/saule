@@ -591,6 +591,7 @@ fn collect_import_seed_inner(
         };
 
         let (reg, ifaces, enums) = saule_semantic::build_registry(&imported);
+        let funcs = saule_semantic::build_function_registry(&imported);
 
         // For each top-level decl in the imported module, decide which
         // (local) alias to register it under. Wildcard imports adopt the
@@ -605,7 +606,10 @@ fn collect_import_seed_inner(
                 seed.interfaces.entry(alias.clone()).or_insert(ext);
             }
             if let Some(info) = enums.get(&orig).cloned() {
-                seed.enums.entry(alias).or_insert(info);
+                seed.enums.entry(alias.clone()).or_insert(info);
+            }
+            if let Some(sig) = funcs.get(&orig).cloned() {
+                seed.functions.entry(alias).or_insert(sig);
             }
         }
 
@@ -645,6 +649,9 @@ fn merge_barrel_seed(
             for (k, v) in sub.enums {
                 seed.enums.entry(k).or_insert(v);
             }
+            for (k, v) in sub.functions {
+                seed.functions.entry(k).or_insert(v);
+            }
         }
         ImportNames::List(items) => {
             for (orig, alias) in items {
@@ -656,7 +663,10 @@ fn merge_barrel_seed(
                     seed.interfaces.entry(local.clone()).or_insert(v);
                 }
                 if let Some(v) = sub.enums.get(orig).cloned() {
-                    seed.enums.entry(local).or_insert(v);
+                    seed.enums.entry(local.clone()).or_insert(v);
+                }
+                if let Some(v) = sub.functions.get(orig).cloned() {
+                    seed.functions.entry(local).or_insert(v);
                 }
             }
         }

@@ -41,8 +41,40 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+/// Derive the arity facts a [`FunctionInfo`] carries from a parameter list.
+/// Defaults must come last in the grammar, so the counts are enough to
+/// decide whether a given call site supplies a valid number of arguments.
+fn info_from_params(
+    params: &[Param],
+    type_params: &[String],
+    return_ty: &Option<Type>,
+) -> FunctionInfo {
+    FunctionInfo {
+        total: params.len(),
+        defaults: params.iter().filter(|p| p.default.is_some()).count(),
+        variadic: params.last().is_some_and(|p| p.variadic),
+        params: params.to_vec(),
+        type_params: type_params.to_vec(),
+        return_ty: return_ty.clone(),
+    }
+}
+
 pub(super) fn install(module: &Module) {
-    let mut map: HashMap<String, FunctionInfo> = HashMap::new();
+    // Functions this module *imported*. The semantic pass installs them
+    // from the embedder's import seed; without them a call to an imported
+    // `fn` has no signature at all, so its result type is unknown and any
+    // checked position it feeds fails. Locally-declared names overwrite
+    // these below — a module's own `fn` always wins.
+    let mut map: HashMap<String, FunctionInfo> = saule_semantic::with_functions(|reg| {
+        reg.iter()
+            .map(|(name, sig)| {
+                (
+                    name.clone(),
+                    info_from_params(&sig.params, &sig.type_params, &sig.return_ty),
+                )
+            })
+            .collect()
+    });
     for stmt in &module.stmts {
         if let Stmt::Decl(d) = &stmt.value
             && let Decl::Function {
@@ -53,19 +85,9 @@ pub(super) fn install(module: &Module) {
                 ..
             } = &d.value
         {
-            let total = params.len();
-            let defaults = params.iter().filter(|p| p.default.is_some()).count();
-            let variadic = params.last().is_some_and(|p| p.variadic);
             map.insert(
                 name.clone(),
-                FunctionInfo {
-                    total,
-                    defaults,
-                    variadic,
-                    params: params.clone(),
-                    type_params: type_params.clone(),
-                    return_ty: return_ty.clone(),
-                },
+                info_from_params(params, type_params, return_ty),
             );
         }
     }

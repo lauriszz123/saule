@@ -11,7 +11,7 @@ use super::funcs;
 use super::matches::check_match;
 use super::state::{
     Scope, class_implements, current_class, is_interface, is_subtype_named, is_type_param,
-    lookup_member, with_classes, with_enums,
+    lookup_member, pop_generics, push_generics, set_return_ty, with_classes, with_enums,
 };
 use super::stmt::{check_stmt, seed_params};
 use super::to_source_span;
@@ -88,10 +88,18 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             // If the callee resolves to a known native signature, check the
             // argument types positionally. Named arguments are skipped (those
             // aren't supported on natives anyway, and they error at runtime).
-            if let Some(qname) = native_callee_name(callee, scope)
-                && let Some(sig) = crate::sigs::lookup(&qname)
-            {
-                check_native_args(&qname, &sig, args, scope, errors, expr.span.clone());
+            if let Some(qname) = native_callee_name(callee, scope) {
+                if let Some(sig) = crate::sigs::lookup(&qname) {
+                    check_native_args(&qname, &sig, args, scope, errors, expr.span.clone());
+                } else if crate::sigs::lookup_const(&qname).is_some() {
+                    // `Math.huge()` — the member exists but holds a value.
+                    // Say so directly; otherwise the call infers as `any`
+                    // and surfaces as a baffling mismatch at the binding.
+                    errors.push(TypeCheckError::CallOfConstant {
+                        name: qname,
+                        span: to_source_span(expr.span.clone()),
+                    });
+                }
             }
             // `self.super(args)` delegates to the parent's constructor.
             // The receiver-based path below can't see it: `super` is not a
@@ -207,6 +215,11 @@ fn check_lambda_body(
     }
     let mut lscope = scope.clone();
     seed_params(&mut lscope, params);
+    // A `return` inside the lambda returns from the *lambda*, so the body is
+    // walked under the lambda's own return type — `None` included. Inheriting
+    // the enclosing function's would check these returns against a signature
+    // they have nothing to do with.
+    let prev_ret = set_return_ty(expected_ret.cloned());
     match body {
         LambdaBody::Expr(e) => {
             check_expr(e, &lscope, errors);
@@ -219,11 +232,9 @@ fn check_lambda_body(
             for s in stmts.iter() {
                 check_stmt(s, &mut lscope, errors);
             }
-            if let Some(rt) = expected_ret {
-                super::stmt::check_returns(stmts, rt, &lscope, errors);
-            }
         }
     }
+    set_return_ty(prev_ret);
 }
 
 /// [`check_expr`], plus the type the expression is expected to produce.
@@ -385,7 +396,14 @@ pub(super) fn check_native_args(
             });
             continue;
         }
-        if !types_compatible(&expected, &found_ty) {
+        // Table literals are checked entry-by-entry — same rule as the
+        // user-method path; see `check_table_literal_compat`.
+        if !mentions_unbound_param(&expected, &sig.type_params)
+            && check_table_literal_compat(&expected, value_expr, scope, errors)
+        {
+            continue;
+        }
+        if !compatible_under_sig_params(&expected, &found_ty, &sig.type_params) {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
                 callee: callee.to_string(),
                 arg: i + 1,
@@ -555,7 +573,17 @@ fn check_user_method_args(
             });
             continue;
         }
-        if !types_compatible(&expected, &found_ty) {
+        // A table literal is checked entry-by-entry against the declared
+        // shape instead of being inferred and compared whole — see
+        // `check_table_literal_compat`. Runs after `unify` so a generic
+        // slot still gets bound from the argument first, and is skipped
+        // while the expected element type is still an unbound parameter.
+        if !mentions_unbound_param(&expected, type_params)
+            && check_table_literal_compat(&expected, value_expr, scope, errors)
+        {
+            continue;
+        }
+        if !compatible_under_sig_params(&expected, &found_ty, type_params) {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
                 callee: callee_display.to_string(),
                 arg: i + 1,
@@ -573,6 +601,31 @@ fn check_user_method_args(
 /// nullable-into-non-nullable rejection should not fire for it.
 fn is_unbound_type_param(ty: &Type, params: &[String]) -> bool {
     matches!(ty, Type::Named(n) if params.iter().any(|p| p == n))
+}
+
+/// [`types_compatible`] with the *callee's* type parameters treated as
+/// `any`-equivalent for the duration of the check.
+///
+/// `types_compatible` recognises type parameters through [`is_type_param`],
+/// which reads the generics currently in scope — and that set is populated
+/// only for the user *body* being checked, never for the signature being
+/// called into. So a parameter the arguments hadn't pinned down yet reached
+/// the comparison as a bare `Named("V")` and was treated as an unknown
+/// concrete type, which matches nothing: `Table.insert(t, x)` with
+/// `t: table<any>` and `x: any` was rejected as "expects `V`, got `any`".
+///
+/// Scoping the names in makes the *parameter position* permissive without
+/// weakening the surrounding structure — `table<V>` still rejects an
+/// `integer` argument. The push is kept tight around the comparison so it
+/// can't leak into `infer` and shadow a user type that shares the name.
+fn compatible_under_sig_params(expected: &Type, found: &Type, params: &[String]) -> bool {
+    if params.is_empty() {
+        return types_compatible(expected, found);
+    }
+    let added = push_generics(params);
+    let ok = types_compatible(expected, found);
+    pop_generics(added);
+    ok
 }
 
 /// Substitute bound type variables in `ty` with their concrete types from
@@ -633,20 +686,19 @@ pub(super) fn unify(
     subst: &mut std::collections::HashMap<String, Type>,
 ) {
     // A free type-param on the expected side binds to whatever the actual
-    // argument's type is. Strip a leading `Nullable` from `found` so
-    // `table<V>` against `table<Entry>?` still binds `V := Entry`.
+    // argument's type is — **including its nullability**. `Table.insert`
+    // is `insert<V>(table<V>, V)`, so a `table<any?>` first argument has
+    // to bind `V := any?`; stripping the `Nullable` here would bind
+    // `V := any`, and the element type could never be nullable at all.
     if let Type::Named(n) = expected
         && params.iter().any(|p| p == n)
         && !subst.contains_key(n)
     {
-        let bound = match found {
-            Type::Nullable(inner) => (**inner).clone(),
-            other => other.clone(),
-        };
         // Don't bind `V := any` — that would erase the constraint for the
         // remaining args. Leave it unbound so later args can refine it.
-        if !is_any(&bound) {
-            subst.insert(n.clone(), bound);
+        // `any?` is a real constraint though (it permits nil), so it binds.
+        if !is_any(found) {
+            subst.insert(n.clone(), found.clone());
         }
         return;
     }
@@ -1020,7 +1072,7 @@ fn report_if_user_function_arity(
         if is_any(&expected) {
             continue;
         }
-        if !types_compatible(&expected, &found_ty) {
+        if !compatible_under_sig_params(&expected, &found_ty, type_params) {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
                 callee: name.clone(),
                 arg: i + 1,
@@ -1525,59 +1577,7 @@ pub(super) fn check_assignment_compat(
     }
 
     // Table-aware checks for table literals assigned to a typed table.
-    // Splits the literal into its positional and field halves so each can
-    // be validated against the declared table shape independently.
-    if let (
-        Type::Table {
-            key,
-            value: elem_ty,
-        },
-        Expr::Table(items),
-    ) = (decl_ty, &value.value)
-    {
-        let has_positional = items.iter().any(|e| matches!(e, TableEntry::Positional(_)));
-        let has_field = items.iter().any(|e| matches!(e, TableEntry::Field { .. }));
-
-        // `{a, b, c}` literal cannot fill a map-typed table whose key is not
-        // integer-compatible.
-        if let Some(k) = key
-            && !is_integer_like(k)
-            && has_positional
-        {
-            errors.push(TypeCheckError::TableArrayLiteralForMap {
-                key: type_to_string(k),
-                value: type_to_string(elem_ty),
-                span: to_source_span(value.span.clone()),
-            });
-            return;
-        }
-        // Field entries (`name: ...`) require the table to declare a key
-        // type compatible with `string`. Array-typed `table<T>` rejects them.
-        if has_field {
-            let key_ok = match key {
-                None => false,
-                Some(k) => is_string_like(k),
-            };
-            if !key_ok {
-                errors.push(TypeCheckError::TableArrayLiteralForMap {
-                    key: key
-                        .as_deref()
-                        .map(type_to_string)
-                        .unwrap_or_else(|| "integer".to_string()),
-                    value: type_to_string(elem_ty),
-                    span: to_source_span(value.span.clone()),
-                });
-                return;
-            }
-        }
-        // Each value must match the declared value type.
-        for item in items {
-            match item {
-                TableEntry::Positional(e) | TableEntry::Field { value: e, .. } => {
-                    check_element_compat(elem_ty, e, scope, errors);
-                }
-            }
-        }
+    if check_table_literal_compat(decl_ty, value, scope, errors) {
         return;
     }
 
@@ -1647,6 +1647,86 @@ fn is_string_like(ty: &Type) -> bool {
 
 /// Element-of-table compatibility — accepts literals/`Ident`s whose inferred
 /// type matches, and stays quiet otherwise (conservative).
+/// Check a table *literal* against a declared table type, entry by entry.
+/// Returns `true` when the pair was handled — i.e. `expected` is a table
+/// type and `value` is a literal — so callers know to skip their general
+/// infer-then-compare path.
+///
+/// Doing this structurally rather than by inference is what makes
+/// `{ Positioned() }` fill a `table<Widget>` slot. `table<T>` is invariant
+/// (see [`table_part_compatible`]) because a shared mutable container
+/// reachable under two element types can be poisoned through the wider
+/// name — but a literal at the point of use has no second name to be
+/// reached by, so there is nothing for invariance to protect. Inferring it
+/// bottom-up as `table<Positioned>` and *then* demanding invariance
+/// rejects code that is perfectly sound.
+///
+/// The literal's positional and field halves are validated separately
+/// against the declared shape, so a mismatch points at the offending entry
+/// rather than at the whole braces.
+fn check_table_literal_compat(
+    expected: &Type,
+    value: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) -> bool {
+    let (
+        Type::Table {
+            key,
+            value: elem_ty,
+        },
+        Expr::Table(items),
+    ) = (expected, &value.value)
+    else {
+        return false;
+    };
+
+    let has_positional = items.iter().any(|e| matches!(e, TableEntry::Positional(_)));
+    let has_field = items.iter().any(|e| matches!(e, TableEntry::Field { .. }));
+
+    // `{a, b, c}` literal cannot fill a map-typed table whose key is not
+    // integer-compatible.
+    if let Some(k) = key
+        && !is_integer_like(k)
+        && has_positional
+    {
+        errors.push(TypeCheckError::TableArrayLiteralForMap {
+            key: type_to_string(k),
+            value: type_to_string(elem_ty),
+            span: to_source_span(value.span.clone()),
+        });
+        return true;
+    }
+    // Field entries (`name: ...`) require the table to declare a key
+    // type compatible with `string`. Array-typed `table<T>` rejects them.
+    if has_field {
+        let key_ok = match key {
+            None => false,
+            Some(k) => is_string_like(k),
+        };
+        if !key_ok {
+            errors.push(TypeCheckError::TableArrayLiteralForMap {
+                key: key
+                    .as_deref()
+                    .map(type_to_string)
+                    .unwrap_or_else(|| "integer".to_string()),
+                value: type_to_string(elem_ty),
+                span: to_source_span(value.span.clone()),
+            });
+            return true;
+        }
+    }
+    // Each value must match the declared value type.
+    for item in items {
+        match item {
+            TableEntry::Positional(e) | TableEntry::Field { value: e, .. } => {
+                check_element_compat(elem_ty, e, scope, errors);
+            }
+        }
+    }
+    true
+}
+
 pub(super) fn check_element_compat(
     expected: &Type,
     value: &Spanned<Expr>,
@@ -1864,6 +1944,37 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             {
                 return Some(Type::Named(enum_name.clone()));
             }
+            // `Math.pi`, `Os.sep`, `Io.stdout` — a stdlib member holding a
+            // value rather than a callable. Checked before the general
+            // path because the receiver is a module name, which has no
+            // inferable type of its own: falling through would return
+            // `None` and every annotated use would be `UndeterminedType`.
+            if let Expr::Ident(module) = &obj.value
+                && let Some(t) = crate::sigs::lookup_const(&format!("{module}.{name}"))
+            {
+                return Some(t);
+            }
+            // `Cursors.requested` — a static member read off the class
+            // itself. Like the module case above, the receiver is a *name*
+            // and not a value, so `infer` on it answers `None` and the whole
+            // access would come back "type unknown". `Class.method(...)`
+            // already resolves this way in the `Call` arm; a static *field*
+            // read needs the same. A local of the same name wins, which is
+            // why the scope is consulted first.
+            if let Expr::Ident(class_name) = &obj.value
+                && scope.lookup(class_name).is_none()
+                && with_classes(|r| r.contains_key(class_name))
+            {
+                if let Some(t) = saule_semantic::lookup_field_type(class_name, name) {
+                    return Some(t);
+                }
+                if let Some(sig) = saule_semantic::lookup_method(class_name, name) {
+                    return Some(Type::Function {
+                        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                        ret: Box::new(sig.return_ty.clone().unwrap_or(Type::Named("any".into()))),
+                    });
+                }
+            }
             let ty = infer(obj, scope)?;
             let stripped = strip_nullable(ty);
             // `t.foo` on a table is Lua map sugar for `t["foo"]`. The value
@@ -1878,7 +1989,13 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             };
             // A member of an `any` is itself `any` — the chain stays
             // explicitly unknown instead of collapsing to "no information".
-            if is_any(&Type::Named(class_name.clone())) {
+            //
+            // A bare `table` annotation (no element types, e.g. a scratch
+            // slot declared `data: table`) lands here as a plain name
+            // rather than as `Type::Table`, so it needs the same answer as
+            // the branch above: reading a member off it is `any`, not the
+            // absence of a type.
+            if is_any(&Type::Named(class_name.clone())) || class_name == "table" {
                 return Some(Type::Named("any".into()));
             }
             if let Some(t) = saule_semantic::lookup_field_type(&class_name, name) {
@@ -2110,6 +2227,9 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         //   * if arm bases agree → that base (wrapped if nullable seen);
         //   * if arm bases disagree → `any`;
         //   * if no arm could be inferred → `None` (give up conservatively).
+        // A bare `nil` arm contributes nullability but no base: the common
+        // `case _ then nil` fallback must not make the arms "disagree" and
+        // widen an otherwise uniform `string` result to `any`.
         // Block-bodied arms aren't inferable today; they're skipped, but
         // their presence still widens the result to `any` rather than
         // silently dropping a possibly-different branch.
@@ -2121,7 +2241,14 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 match &a.body {
                     saule_ast::MatchBody::Expr(e) => {
                         let Some(t) = infer(e, scope) else { continue };
-                        if matches!(&t, Type::Named(n) if n == "nil") || is_nullable(&t) {
+                        if matches!(&t, Type::Named(n) if n == "nil") {
+                            // A bare `nil` arm only tells us the result is
+                            // nullable — it carries no base of its own, so it
+                            // must not count as a disagreeing shape.
+                            any_nullable = true;
+                            continue;
+                        }
+                        if is_nullable(&t) {
                             any_nullable = true;
                         }
                         bases.push(strip_nullable(t));

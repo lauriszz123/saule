@@ -1,6 +1,6 @@
 import Json from json
 
-class Entry
+export class Entry
 	local todo: string
 	local done: boolean
 	local dueDate: integer?
@@ -60,7 +60,7 @@ export class Storage
 
 		local file: File = Io.open(self.path, IoMode.Read)!
 
-		local data: table? = Json.decode(file.read()!)
+		local data: table? = Json.decode(file.read()!) as table
 		file.close()
 
 		if not data then
@@ -73,9 +73,8 @@ export class Storage
 
 		for _, entry in data do
 			if type(entry) == "table" and type(entry.todo) == "string" and type(entry.done) == "boolean" then
-				local newEntry = Entry(entry.todo)
+				local newEntry = Entry(entry.todo, entry.dueDate)
 				newEntry.setDone(entry.done)
-				newEntry.setDueDate(entry.dueDate)
 				Table.insert(self.storage, newEntry)
 			else
 				return false

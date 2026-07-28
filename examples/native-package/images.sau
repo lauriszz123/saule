@@ -55,7 +55,7 @@ class Main
 			-- The wheel is a per-frame delta, valid only for this `pollEvents`.
 			local wheelX: float, wheelY: float = Mouse.getWheel()
 			if wheelY != 0.0 then
-				zoom = Math.clamp(zoom + wheelY * 0.25, 0.5, 8.0)
+				zoom = Util.clamp(zoom + wheelY * 0.25, 0.5, 8.0)
 			end
 
 			-- Per-frame button edges, so a click is one event rather than a state you

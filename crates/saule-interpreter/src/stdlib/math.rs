@@ -79,7 +79,7 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named, t_nullable, t_number};
+    use crate::stdlib::sigs::{register, register_const, t_named, t_nullable, t_number};
     let any = || t_named("any");
     let n = t_number;
     let i = || t_named("integer");
@@ -95,8 +95,6 @@ pub fn register_sigs() {
     register("Math.floor", vec![n()], vec![i()]);
     register("Math.ceil", vec![n()], vec![i()]);
     register("Math.round", vec![n()], vec![i()]);
-    register("Math.maxinteger", vec![], vec![i()]);
-    register("Math.mininteger", vec![], vec![i()]);
     register("Math.sign", vec![n()], vec![i()]);
 
     // Definitely-float returns; require a number in.
@@ -113,9 +111,16 @@ pub fn register_sigs() {
     register("Math.log", vec![n(), t_nullable(n())], vec![f()]);
     register("Math.deg", vec![n()], vec![f()]);
     register("Math.rad", vec![n()], vec![f()]);
-    register("Math.huge", vec![], vec![f()]);
-    register("Math.pi", vec![], vec![f()]);
-    register("Math.e", vec![], vec![f()]);
+
+    // Constants, not functions — `install` defines these as plain values
+    // (`Value::Float(f64::INFINITY)` and friends). Registering them as
+    // zero-arg natives made `Math.huge` untypeable *and* `Math.huge()`
+    // a runtime "not callable" error, so neither spelling worked.
+    register_const("Math.huge", f());
+    register_const("Math.pi", f());
+    register_const("Math.e", f());
+    register_const("Math.maxinteger", i());
+    register_const("Math.mininteger", i());
 
     // Boolean.
     register("Math.ult", vec![i(), i()], vec![b()]);
