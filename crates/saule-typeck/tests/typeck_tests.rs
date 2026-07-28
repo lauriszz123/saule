@@ -209,6 +209,57 @@ end
     ));
 }
 
+#[test]
+fn a_static_field_read_off_the_class_has_the_declared_type() {
+    // Regression: the receiver of `Cursors.requested` is a class *name*, not a
+    // value, so inferring it as an expression answered "no information" and
+    // every annotated use failed with `UndeterminedType` — even from inside
+    // the class that declared the field.
+    accepts(
+        "class Cursors\n\
+        \x20 static local requested: string = \"\"\n\
+        \x20 static fn apply() -> string\n\
+        \x20   local wanted: string = Cursors.requested\n\
+        \x20   return wanted\n\
+        \x20 end\n\
+        end\n",
+    );
+}
+
+#[test]
+fn a_static_field_read_still_has_to_match_the_slot() {
+    // The inference above must not be a free pass: now that the read has a
+    // type, a mismatched binding is a real error rather than a silent skip.
+    rejects(
+        "class Cursors\n\
+        \x20 static requested: string = \"\"\n\
+        end\n\
+        fn t() -> integer\n\
+        \x20 local n: integer = Cursors.requested\n\
+        \x20 return n\n\
+        end\n",
+        "integer",
+    );
+}
+
+#[test]
+fn a_local_shadowing_a_class_name_wins_over_the_static_lookup() {
+    // `Cursors` here is a table-typed local, so `.requested` is map sugar for
+    // `Cursors["requested"]` and yields the table's value type — the class of
+    // the same name must not hijack the read.
+    rejects(
+        "class Cursors\n\
+        \x20 static requested: string = \"\"\n\
+        end\n\
+        fn t() -> integer\n\
+        \x20 local Cursors: table<string, integer> = {}\n\
+        \x20 local s: string = Cursors.requested\n\
+        \x20 return 0\n\
+        end\n",
+        "string",
+    );
+}
+
 // ─── tables ─────────────────────────────────────────────────────────────
 
 #[test]
@@ -238,6 +289,105 @@ fn a_typed_table_cannot_be_aliased_as_table_any() {
     rejects(
         &in_fn("  local nums: table<integer> = {1}\n  local anys: table<any> = nums"),
         "table",
+    );
+}
+
+#[test]
+fn a_table_literal_argument_is_checked_element_wise() {
+    // Regression: the literal was inferred bottom-up as `table<Dog>` and
+    // then compared against `table<Animal>` under the invariance rule, so
+    // an argument position rejected the very literal a binding accepted.
+    // A literal at the point of use has no second name to be reached by,
+    // so there is no aliasing for invariance to protect against.
+    accepts(&format!(
+        "{HIERARCHY}\
+class Pack
+  fn init(members: table<Animal>)
+    return
+  end
+end
+{}",
+        in_fn("  local p: Pack = Pack({ Dog() })")
+    ));
+}
+
+#[test]
+fn a_table_literal_argument_still_rejects_a_foreign_element() {
+    // Element-wise checking is not a free pass — it points at the entry
+    // that is actually wrong instead of at the whole braces.
+    rejects(
+        &format!(
+            "{HIERARCHY}\
+class Rock
+end
+class Pack
+  fn init(members: table<Animal>)
+    return
+  end
+end
+{}",
+            in_fn("  local p: Pack = Pack({ Dog(), Rock() })")
+        ),
+        "Animal",
+    );
+}
+
+#[test]
+fn a_named_table_argument_is_still_invariant() {
+    // The soundness rule the literal case sidesteps must stay in force for
+    // anything with a name: `Pack` could store a `Cat` through the wider
+    // alias, which the `table<Dog>` binding forbids.
+    rejects(
+        &format!(
+            "{HIERARCHY}\
+class Pack
+  fn init(members: table<Animal>)
+    return
+  end
+end
+{}",
+            in_fn("  local dogs: table<Dog> = { Dog() }\n  local p: Pack = Pack(dogs)")
+        ),
+        "table",
+    );
+}
+
+#[test]
+fn a_member_read_off_a_bare_table_is_any() {
+    // `data: table` has no element types, so `data.handle` is Lua map
+    // sugar whose value is genuinely dynamic. That is `any` — the
+    // checker's explicit "could be anything", which then has to go
+    // through `as` — not an absence of type information.
+    accepts(&format!(
+        "{HIERARCHY}\
+class El
+  data: table
+  fn init()
+    self.data = {{}}
+  end
+end
+{}",
+        in_fn("  local e: El = El()\n  local a: Animal = (e.data.pet as Animal)!")
+    ));
+}
+
+#[test]
+fn a_bare_table_member_still_needs_a_cast() {
+    // The `any` answer must not become a silent downcast: assigning it
+    // straight into a concrete slot is the direction `as` exists for.
+    rejects(
+        &format!(
+            "{HIERARCHY}\
+class El
+  data: table
+  fn init()
+    self.data = {{}}
+  end
+end
+{}",
+            in_fn("  local e: El = El()\n  local a: Animal = e.data.pet")
+        ),
+        "any",
     );
 }
 
@@ -344,6 +494,32 @@ fn a_returned_value_must_match_the_declared_return_type() {
 }
 
 #[test]
+fn a_nil_match_arm_does_not_widen_the_result_to_any() {
+    // Regression: `case _ then nil` used to contribute `nil` as an arm *base*,
+    // which then disagreed with the `string` arms and widened the whole match
+    // to `any?` — rejecting a correct `-> string?` function.
+    accepts(
+        "fn f(e: integer) -> string?\n  return match e\n\
+         \x20   case 110 then \"\\n\"\n\
+         \x20   case 116 then \"\\t\"\n\
+         \x20   case _ then nil\n  end\nend\n",
+    );
+}
+
+#[test]
+fn genuinely_mixed_match_arms_still_widen() {
+    // The nil-arm fix must not disable the widening it was hiding: arms of
+    // truly different shapes are still `any`, so a `string?` return is wrong.
+    rejects(
+        "fn f(e: integer) -> string?\n  return match e\n\
+         \x20   case 110 then \"\\n\"\n\
+         \x20   case 116 then 1\n\
+         \x20   case _ then nil\n  end\nend\n",
+        "string?",
+    );
+}
+
+#[test]
 fn default_parameters_may_be_omitted() {
     accepts(
         "fn f(a: integer, b: integer = 2) -> integer\n  return a + b\nend\n\
@@ -367,6 +543,53 @@ fn a_generic_return_is_checked_against_the_binding() {
         "fn id<T>(v: T) -> T\n  return v\nend\n\
          fn t() -> nothing\n  local s: string = id(1)\n  return\nend\n",
         "string",
+    );
+}
+
+/// A type parameter has to be able to bind to a *nullable* type. This is
+/// the shape of `Table.insert<V>(table<V>, V)` called with a `table<any?>`:
+/// binding `V := any` instead of `V := any?` left `V` unbound (the binder
+/// refuses to bind `any`) and every argument was then rejected against the
+/// bare parameter name.
+#[test]
+fn a_type_parameter_binds_to_a_nullable_element_type() {
+    accepts(
+        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
+         fn t() -> nothing\n  local a: table<any?> = {}\n  local v: any? = nil\n  \
+         push(a, v)\n  return\nend\n",
+    );
+}
+
+#[test]
+fn a_nullable_element_type_still_constrains_later_arguments() {
+    rejects(
+        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
+         fn t() -> nothing\n  local a: table<string?> = {}\n  push(a, 42)\n  return\nend\n",
+        "string?",
+    );
+}
+
+/// A type parameter the arguments haven't pinned down yet is *unknown*, not
+/// a concrete type that happens to be spelled `V`. `table<any>` never binds
+/// it (binding `V := any` would erase the constraint for later arguments),
+/// so the element slot has to stay permissive rather than reject everything.
+#[test]
+fn an_unbound_type_parameter_accepts_an_any_argument() {
+    accepts(
+        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
+         fn t() -> nothing\n  local a: table<any> = {}\n  local x: any = 1\n  \
+         push(a, x)\n  return\nend\n",
+    );
+}
+
+/// …but only at the parameter's own position. The structure around it is
+/// still checked, so a non-table can't fill a `table<V>` slot.
+#[test]
+fn an_unbound_type_parameter_still_checks_the_surrounding_shape() {
+    rejects(
+        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
+         fn t() -> nothing\n  local n: integer = 1\n  push(n, 1)\n  return\nend\n",
+        "table<V>",
     );
 }
 
@@ -407,5 +630,121 @@ fn t() -> nothing
 end
 ",
         "Drawable",
+    );
+}
+
+// ─── returns ────────────────────────────────────────────────────────────
+
+/// A class with an `any?` slot — the shape that made the hole visible: a
+/// read off it is `any?`, which no concrete return type accepts.
+const BOX: &str = "\
+class Box
+  slot: any?
+  fn init()
+    self.slot = nil
+  end
+end
+";
+
+#[test]
+fn a_return_of_a_local_declared_in_a_nested_block_is_checked() {
+    // Regression: returns used to be checked by a *second* walk over the
+    // body, carrying the scope the first walk finished with. That scope
+    // held the parameters and the body's top-level locals, but nothing
+    // bound inside an `if` or a `while` — those went into clones that were
+    // dropped. So `infer` answered `None` for such a name and the check
+    // was skipped, letting an `any` reach a concrete return type and fail
+    // at runtime instead.
+    for block in ["if true then", "while true do", "for i = 1, 3 do"] {
+        rejects(
+            &format!(
+                "{BOX}\
+fn probe(b: Box) -> string
+  {block}
+    local found = b.slot
+    return found
+  end
+  return \"x\"
+end
+"
+            ),
+            "string",
+        );
+    }
+}
+
+#[test]
+fn a_return_of_a_top_level_local_is_still_checked() {
+    // The case that always worked must keep working.
+    rejects(
+        &format!(
+            "{BOX}\
+fn probe(b: Box) -> string
+  local found = b.slot
+  return found
+end
+"
+        ),
+        "string",
+    );
+}
+
+#[test]
+fn a_lambda_return_is_not_checked_against_the_enclosing_function() {
+    // A `return` inside a lambda returns from the lambda. Checking it
+    // against the enclosing signature would reject correct code — the
+    // failure mode of hanging the return type on a thread-local without
+    // pushing a fresh one per body.
+    accepts(
+        "fn outer() -> string\n\
+        \x20 local pick: fn() -> integer = fn()\n\
+        \x20   return 42\n\
+        \x20 end\n\
+        \x20 return \"ok\"\n\
+        end\n",
+    );
+}
+
+#[test]
+fn a_lambda_with_a_declared_return_type_is_still_checked() {
+    // Isolation must not become exemption — including for a `return`
+    // nested inside a block within the lambda.
+    rejects(
+        "fn outer() -> string\n\
+        \x20 local bad: fn() -> integer = fn()\n\
+        \x20   if true then\n\
+        \x20     local s = \"nope\"\n\
+        \x20     return s\n\
+        \x20   end\n\
+        \x20   return 0\n\
+        \x20 end\n\
+        \x20 return \"ok\"\n\
+        end\n",
+        "integer",
+    );
+}
+
+#[test]
+fn a_method_return_is_checked_inside_nested_blocks_too() {
+    // The method walk sets and restores the return type the same way the
+    // free-function walk does; `Theme.of`'s shape is a static method with
+    // the return buried in a loop.
+    rejects(
+        &format!(
+            "{BOX}\
+class T
+  static fn of(b: Box) -> string
+    while true do
+      local found = b.slot
+      if found != nil then
+        return found
+      end
+    end
+    return \"x\"
+  end
+end
+"
+        ),
+        "string",
     );
 }

@@ -42,6 +42,20 @@ thread_local! {
     /// currently being checked. Treated as `any`-equivalent so that
     /// `table<T>`, `T?`, and bare `T` accept any concrete instantiation.
     static GENERICS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+
+    /// Declared return type of the function, method or lambda whose body is
+    /// currently being walked. `None` means "don't check returns here" —
+    /// either nothing was declared, or we are inside a lambda that declared
+    /// nothing, which must not inherit the enclosing function's type.
+    ///
+    /// This is a thread-local for the same reason [`CURRENT_CLASS`] is:
+    /// `check_stmt` is a plain recursive walk with no context parameter, and
+    /// the alternative — a second pass over the body — is what made returns
+    /// unsound. That pass re-walked nested blocks with the scope left behind
+    /// by the first, which never saw bindings made inside an `if` or a
+    /// `while`, so `return found` for a local declared there had no type to
+    /// check and was skipped entirely.
+    static RETURN_TY: RefCell<Option<Type>> = const { RefCell::new(None) };
 }
 
 pub(super) fn current_class() -> Option<String> {
@@ -50,6 +64,19 @@ pub(super) fn current_class() -> Option<String> {
 
 pub(super) fn set_current_class(name: Option<String>) -> Option<String> {
     CURRENT_CLASS.with(|c| std::mem::replace(&mut *c.borrow_mut(), name))
+}
+
+/// The return type `return v` is checked against right here, if any.
+pub(super) fn current_return_ty() -> Option<Type> {
+    RETURN_TY.with(|r| r.borrow().clone())
+}
+
+/// Install `ty` for the body about to be walked, handing back the previous
+/// value. Every caller must restore it — a nested `fn`, method or lambda
+/// body sets its own, and letting one leak outward would check a `return`
+/// against a signature it has nothing to do with.
+pub(super) fn set_return_ty(ty: Option<Type>) -> Option<Type> {
+    RETURN_TY.with(|r| std::mem::replace(&mut *r.borrow_mut(), ty))
 }
 
 /// Add `params` to the in-scope generic set. Returns the names actually

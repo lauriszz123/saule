@@ -135,6 +135,17 @@ pub(super) fn resolve_member(
     None
 }
 
+/// The hover for a member that its receiver's class does not declare.
+///
+/// This is the answer typeck would give at the same position, and it
+/// exists so the walker has *something* to record at the member's own
+/// span: staying silent lets a wider enclosing node supply the hover
+/// instead, which presents a confident description of an unrelated
+/// symbol. Naming the miss is both more useful and less wrong.
+pub(super) fn render_unknown_member(class: &str, name: &str) -> String {
+    format!("```saule\n(unknown) {class}.{name}\n```\nNo member `{name}` on `{class}`.")
+}
+
 pub(super) fn named_type(ty: &Type) -> Option<String> {
     match ty {
         Type::Named(n) => Some(n.clone()),

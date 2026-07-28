@@ -193,11 +193,12 @@ pub fn register_sigs() {
     // call site (e.g. `local a: table<Foo> = Os.args()` would pass).
     register("Os.args", vec![], vec![table_str()]);
 
-    // String-valued constants — record their names so the unknown-member
-    // check doesn't flag them as typos.
-    use crate::stdlib::sigs::register_member;
-    register_member("Os.sep");
-    register_member("Os.lineSep");
+    // String-valued constants. Typed rather than merely name-recorded, so
+    // `local s: string = Os.sep` checks instead of failing as an
+    // undetermined type.
+    use crate::stdlib::sigs::register_const;
+    register_const("Os.sep", s());
+    register_const("Os.lineSep", s());
 }
 
 // ─── enum ──────────────────────────────────────────────────────────────────

@@ -472,6 +472,80 @@ fn assert_errs(src: &str) {
     }
 }
 
+// ── §Stdlib constants ───────────────────────────────────────────────────
+
+/// `Math.huge`, `Os.sep`, `Io.stdout` and friends hold *values*, not
+/// callables. They were registered as zero-arg native signatures, which
+/// broke both spellings: bare use couldn't be typed (`UndeterminedType`)
+/// and the call the signature invited died at runtime on a non-callable
+/// float. These pin the constant down as a typed value.
+mod stdlib_constants {
+    use super::*;
+
+    #[test]
+    fn math_constants_are_typed_values() {
+        assert_eq!(
+            eval("local m: integer = Math.maxinteger\nm").unwrap(),
+            Value::Int(i64::MAX)
+        );
+        assert_eq!(
+            eval("local h: float = Math.huge\nh > 0.0").unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            eval("local p: float = Math.pi\np > 3.0 and p < 3.2").unwrap(),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn os_and_project_constants_are_typed_values() {
+        assert_eq!(
+            eval("local s: string = Os.sep\n#s > 0").unwrap(),
+            Value::Bool(true)
+        );
+        // `Project` is installed even in single-file mode (defaulted), so
+        // its fields are unconditionally present and typed.
+        assert_eq!(
+            eval("local d: table<string> = Project.srcDirs\n#d >= 0").unwrap(),
+            Value::Bool(true)
+        );
+    }
+
+    /// The type is real, not a rubber stamp — a wrong annotation is caught.
+    #[test]
+    fn a_constant_is_checked_against_its_annotation() {
+        assert!(matches!(
+            eval("local h: integer = Math.huge\nh").unwrap_err(),
+            PipelineError::Typeck(saule_typeck::TypeCheckError::AssignmentTypeMismatch { .. })
+        ));
+    }
+
+    /// Calling one is reported as such rather than inferring `any` and
+    /// surfacing as a baffling mismatch at the binding.
+    #[test]
+    fn calling_a_constant_is_rejected_with_a_clear_message() {
+        let err = eval("local h: float = Math.huge()\nh").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PipelineError::Typeck(saule_typeck::TypeCheckError::CallOfConstant { .. })
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    /// Typos must still be caught — the constants table records member
+    /// names too, so the unknown-member check keeps working.
+    #[test]
+    fn an_unknown_math_member_is_still_flagged() {
+        assert!(matches!(
+            eval("local x: float = Math.bogus\nx").unwrap_err(),
+            PipelineError::Typeck(saule_typeck::TypeCheckError::UnknownMember { .. })
+        ));
+    }
+}
+
 // ── §Types & §Casting ───────────────────────────────────────────────────
 
 mod casts {

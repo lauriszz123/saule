@@ -370,7 +370,7 @@ export class Json
 			case "table" then Json.encodeTable(value)
 
 			case _ then Json.encodeString(tostring(value))
-		end
+		en
 	end
 
 	static local fn encodeBool(b: boolean) -> string

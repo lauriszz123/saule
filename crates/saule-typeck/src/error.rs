@@ -302,6 +302,14 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`{name}` is a constant, not a function")]
+    #[diagnostic(help("drop the parentheses — write `{name}` to read its value"))]
+    CallOfConstant {
+        name: String,
+        #[label("not callable")]
+        span: miette::SourceSpan,
+    },
+
     #[error("no member `{member}` on `{receiver}`")]
     #[diagnostic(help(
         "check the spelling, or add `{member}` as a field / method to `{receiver}`"

@@ -69,6 +69,15 @@ thread_local! {
     /// instance of type `File`.
     static VALUE_TYPES: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
+    /// `"Module.member" -> type` for stdlib members that are *values*
+    /// rather than callables — `Math.pi`, `Os.sep`, `Io.stdout`. These
+    /// have no signature (they aren't functions), but they do have a
+    /// type, and without one every annotated use (`local x: float =
+    /// Math.pi`) fails with `UndeterminedType`. Kept separate from
+    /// [`SIGS`] so a constant can never be mistaken for a zero-arg
+    /// function — registering `Math.huge` in `SIGS` is exactly the bug
+    /// this table exists to prevent.
+    static CONSTS: RefCell<HashMap<String, Type>> = RefCell::new(HashMap::new());
     static INIT_DONE: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -134,12 +143,30 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
 }
 
 /// Record `Module.member` as a known stdlib member without attaching a
-/// callable signature. Used for value-only fields (`Math.pi`, `Os.sep`,
-/// `Io.stdout`) and for natives whose signature is intentionally left
-/// unmodelled (e.g. `Math.abs`, `Math.min`, where the return type depends
-/// on input flavour). Bare names (no `.`) are ignored.
+/// callable signature. Used for natives whose signature is intentionally
+/// left unmodelled (e.g. `Math.abs`, `Math.min`, where the return type
+/// depends on input flavour). Bare names (no `.`) are ignored.
+///
+/// For members that hold a *value* of a known type, prefer
+/// [`register_const`] — this function records only the name, so an
+/// annotated use still fails with `UndeterminedType`.
 pub fn register_member(qname: &str) {
     record_member(qname);
+}
+
+/// Register `Module.member` as a typed **constant** — a member that holds
+/// a value rather than a callable (`Math.pi`, `Os.sep`, `Io.stdout`).
+///
+/// This is the counterpart to [`register`]: use that for things you call,
+/// this for things you read. Registering a constant through `register`
+/// with an empty parameter list makes the checker believe it's a zero-arg
+/// function, which then fails both ways — bare use can't be typed, and the
+/// call the signature invites blows up at runtime on a non-callable value.
+pub fn register_const(qname: &str, ty: Type) {
+    record_member(qname);
+    CONSTS.with(|c| {
+        c.borrow_mut().insert(qname.to_string(), ty);
+    });
 }
 
 /// Mark `name` as a known stdlib *type* / module that has **no** static
@@ -186,6 +213,13 @@ pub fn set_initializer(f: fn()) {
 pub fn lookup(name: &str) -> Option<NativeSig> {
     ensure_registered();
     SIGS.with(|s| s.borrow().get(name).cloned())
+}
+
+/// Look up the declared type of a stdlib constant by qualified name
+/// (`"Math.pi"`). Returns `None` for callables and unknown names.
+pub fn lookup_const(qname: &str) -> Option<Type> {
+    ensure_registered();
+    CONSTS.with(|c| c.borrow().get(qname).cloned())
 }
 
 /// Bind a generic native sig's type parameters from the inferred types of

@@ -72,7 +72,21 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker.
 pub fn register_sigs() {
-    // Static fields are looked up as regular class member access; no native
-    // method signatures to register today. Kept for parity with other
-    // stdlib modules so future `Project.foo()` methods slot in cleanly.
+    use crate::stdlib::sigs::{register_const, t_named};
+    use saule_ast::Type;
+
+    // Field-only module — no callables. `install` always defines these
+    // (falling back to a default `ProjectInfo` in single-file mode), so
+    // they are unconditionally present and unconditionally typed.
+    let s = || t_named("string");
+    register_const("Project.name", s());
+    register_const("Project.version", s());
+    register_const("Project.root", s());
+    register_const(
+        "Project.srcDirs",
+        Type::Table {
+            key: None,
+            value: Box::new(s()),
+        },
+    );
 }

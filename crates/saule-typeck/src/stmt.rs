@@ -12,8 +12,8 @@ use super::expr::{
     narrow_truthy, strip_nullable, type_to_string, types_compatible,
 };
 use super::state::{
-    Scope, class_implements_iterable, is_interface, pop_generics, push_generics, set_current_class,
-    with_classes,
+    Scope, class_implements_iterable, current_return_ty, is_interface, pop_generics, push_generics,
+    set_current_class, set_return_ty, with_classes,
 };
 use super::to_source_span;
 
@@ -464,6 +464,14 @@ pub(super) fn check_stmt(
             for v in values {
                 check_expr(v, scope, errors);
             }
+            // Checked here, against the scope as it stands at this exact
+            // statement, rather than in a second pass over the body — see
+            // `RETURN_TY`. `scope` already carries every binding in lexical
+            // scope, including ones made inside the `if` or `while` this
+            // `return` may be nested in.
+            if let Some(return_ty) = current_return_ty() {
+                check_return_values(values, &return_ty, scope, errors);
+            }
         }
 
         Stmt::Throw(e) => check_expr(e, scope, errors),
@@ -546,12 +554,11 @@ fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             let mut scope = Scope::default();
             check_default_params(params, &scope, errors);
             seed_params(&mut scope, params);
+            let prev_ret = set_return_ty(return_ty.clone());
             for s in body {
                 check_stmt(s, &mut scope, errors);
             }
-            if let Some(rt) = return_ty {
-                check_returns(body, rt, &scope, errors);
-            }
+            set_return_ty(prev_ret);
             pop_generics(prev_generics);
         }
         Decl::Interface { methods, .. } => {
@@ -686,96 +693,54 @@ fn check_default_params(params: &[Param], scope: &Scope, errors: &mut Vec<TypeCh
     }
 }
 
-/// Walk a function/method body looking for `return v` statements whose first
-/// value can be proved incompatible with `return_ty`.
-pub(super) fn check_returns(
-    body: &[Spanned<Stmt>],
+/// Check the values of one `return` against the enclosing signature.
+///
+/// Called from `check_stmt`'s `Stmt::Return` arm, so `scope` is the live
+/// lexical environment at the return itself. That is the whole point of
+/// the arrangement: the previous design walked the body a second time with
+/// the scope the first walk finished with, which held the parameters and
+/// the top-level locals but nothing bound inside a nested block. A value
+/// laundered through `local x = ...` inside an `if` was therefore invisible
+/// — `infer` answered `None`, and the check quietly passed.
+fn check_return_values(
+    values: &[Spanned<Expr>],
     return_ty: &Type,
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
 ) {
-    for s in body {
-        walk_returns(&s.value, return_ty, scope, errors);
-    }
-}
-
-fn walk_returns(stmt: &Stmt, return_ty: &Type, scope: &Scope, errors: &mut Vec<TypeCheckError>) {
-    match stmt {
-        Stmt::Return(values) => {
-            // Multi-return: `-> (A, B, C)` paired against `return a, b, c`.
-            // When there's exactly one return value but the function returns
-            // a tuple, the value may be a call that yields the tuple — leave
-            // that case to the per-value path (it'll see Tuple vs Tuple and
-            // accept).
-            if let Type::Tuple(elems) = return_ty
-                && values.len() == elems.len()
-            {
-                for (elem_ty, v) in elems.iter().zip(values.iter()) {
-                    if !is_assignment_compatible(elem_ty, v, scope) {
-                        let found = infer(v, scope)
-                            .map(|t| type_to_string(&t))
-                            .unwrap_or_else(|| "<unknown>".to_string());
-                        errors.push(TypeCheckError::WrongReturnType {
-                            ty: type_to_string(elem_ty),
-                            found,
-                            span: to_source_span(v.span.clone()),
-                        });
-                    }
-                }
-                return;
-            }
-            if let Some(v) = values.first()
-                && !is_assignment_compatible(return_ty, v, scope)
-            {
+    // Multi-return: `-> (A, B, C)` paired against `return a, b, c`.
+    // When there's exactly one return value but the function returns
+    // a tuple, the value may be a call that yields the tuple — leave
+    // that case to the per-value path (it'll see Tuple vs Tuple and
+    // accept).
+    if let Type::Tuple(elems) = return_ty
+        && values.len() == elems.len()
+    {
+        for (elem_ty, v) in elems.iter().zip(values.iter()) {
+            if !is_assignment_compatible(elem_ty, v, scope) {
                 let found = infer(v, scope)
                     .map(|t| type_to_string(&t))
                     .unwrap_or_else(|| "<unknown>".to_string());
                 errors.push(TypeCheckError::WrongReturnType {
-                    ty: type_to_string(return_ty),
+                    ty: type_to_string(elem_ty),
                     found,
                     span: to_source_span(v.span.clone()),
                 });
             }
         }
-        Stmt::If {
-            then_block,
-            elseifs,
-            else_block,
-            ..
-        } => {
-            for s in then_block {
-                walk_returns(&s.value, return_ty, scope, errors);
-            }
-            for (_, b) in elseifs {
-                for s in b {
-                    walk_returns(&s.value, return_ty, scope, errors);
-                }
-            }
-            if let Some(b) = else_block {
-                for s in b {
-                    walk_returns(&s.value, return_ty, scope, errors);
-                }
-            }
-        }
-        Stmt::While { body, .. }
-        | Stmt::Repeat { body, .. }
-        | Stmt::ForNumeric { body, .. }
-        | Stmt::ForIn { body, .. } => {
-            for s in body {
-                walk_returns(&s.value, return_ty, scope, errors);
-            }
-        }
-        Stmt::Try {
-            body, catch_body, ..
-        } => {
-            for s in body {
-                walk_returns(&s.value, return_ty, scope, errors);
-            }
-            for s in catch_body {
-                walk_returns(&s.value, return_ty, scope, errors);
-            }
-        }
-        _ => {}
+        return;
+    }
+    if let Some(v) = values.first()
+        && !is_assignment_compatible(return_ty, v, scope)
+    {
+        let found = infer(v, scope)
+            .map(|t| type_to_string(&t))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        errors.push(TypeCheckError::WrongReturnType {
+            ty: type_to_string(return_ty),
+            found,
+            span: to_source_span(v.span.clone()),
+        });
     }
 }
 
@@ -873,12 +838,11 @@ fn check_class(
             scope.bind("self".to_string(), Type::Named(class_name.to_string()));
             check_default_params(&meth.params, &scope, errors);
             seed_params(&mut scope, &meth.params);
+            let prev_ret = set_return_ty(meth.return_ty.clone());
             for s in &meth.body {
                 check_stmt(s, &mut scope, errors);
             }
-            if let Some(rt) = &meth.return_ty {
-                check_returns(&meth.body, rt, &scope, errors);
-            }
+            set_return_ty(prev_ret);
             pop_generics(prev_generics);
         }
     }

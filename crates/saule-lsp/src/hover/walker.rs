@@ -23,8 +23,8 @@ use super::render::{
     render_stdlib_module, render_type, render_variant_pattern, with_doc, with_param_doc,
 };
 use super::util::{
-    collect_named_heads, contains, is_primitive, locate_word_in, named_type, resolve_member,
-    strip_nullable_type,
+    collect_named_heads, contains, is_primitive, locate_word_in, named_type, render_unknown_member,
+    resolve_member, strip_nullable_type,
 };
 
 /// Collapse an inferred type to the single value it yields in a
@@ -1305,8 +1305,19 @@ impl<'a> Cx<'a> {
 
     /// Render a Markdown blurb for `expr` if we can resolve it from the
     /// registries / surrounding context. Returns `None` for literals
-    /// and unknown names — callers should leave hover empty in that
-    /// case rather than emit a misleading placeholder.
+    /// and unknown names.
+    ///
+    /// `None` does **not** mean "no hover here". [`Cx::record`] keeps the
+    /// narrowest span containing the cursor, so declining to answer for a
+    /// node just lets a wider one — in practice the enclosing `fn` — win
+    /// instead. For a token the user pointed at directly that reads as a
+    /// confident, wrong answer about an unrelated symbol.
+    ///
+    /// So: return `None` only where the node itself is genuinely nothing
+    /// to talk about (a literal, a `nil`). Where we know enough to say
+    /// something is *wrong* — a member that isn't on its receiver — say
+    /// that, via [`render_unknown_member`]. It is both the more useful
+    /// answer and the one that stops the fallback.
     fn expr_md(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Self_ => self
@@ -1344,11 +1355,17 @@ impl<'a> Cx<'a> {
                     ));
                 }
                 let class = self.receiver_class(&obj.value)?;
-                resolve_member(&class, name, false, &self.imports.docs)
+                Some(
+                    resolve_member(&class, name, false, &self.imports.docs)
+                        .unwrap_or_else(|| render_unknown_member(&class, name)),
+                )
             }
             Expr::MethodCall { obj, method, .. } => {
                 let class = self.receiver_class(&obj.value)?;
-                resolve_member(&class, method, true, &self.imports.docs)
+                Some(
+                    resolve_member(&class, method, true, &self.imports.docs)
+                        .unwrap_or_else(|| render_unknown_member(&class, method)),
+                )
             }
             // Generic fallback: surface the inferred type for any
             // expression we can reason about (`#args` -> integer,
@@ -1452,11 +1469,26 @@ impl<'a> Cx<'a> {
                     None
                 }
             }
-            Expr::Member { obj: inner, name } => {
+            Expr::Member { obj: inner, name } | Expr::SafeMember { obj: inner, name } => {
                 let inner_class = self.receiver_class(&inner.value)?;
                 let ty = lookup_field_type(&inner_class, name)?;
                 named_type(&ty)
             }
+            // `x!.foo` — the unwrap doesn't change which class the
+            // receiver names, it only drops the nullability, and
+            // `named_type` already looks through `Nullable`.
+            //
+            // This arm matters more than it looks: a nullable has to be
+            // unwrapped before anything can be read off it, so every
+            // hover through one — which is most tree-walking code —
+            // used to fall through to `None` here and get answered with
+            // the *enclosing function* instead. That isn't a missing
+            // hover, it's a wrong one: it names a symbol that has
+            // nothing to do with the token under the cursor.
+            Expr::ForceUnwrap(inner) => self.receiver_class(&inner.value),
+            // `(x as T).foo` — the cast names the class outright, which
+            // is the whole reason to have written it.
+            Expr::Cast { ty, .. } => named_type(ty),
             Expr::Call { callee, .. } => {
                 // `Class(args).foo` — constructor call returns the class.
                 if let Expr::Ident(name) = &callee.value
