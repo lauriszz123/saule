@@ -8,6 +8,7 @@ use saule_ast::{
     Decl, EnumVariant, Method, MethodSig as AstMethodSig, Module, Param, Pattern, Spanned, Stmt,
     Type,
 };
+use saule_docs::DocBlock;
 use saule_semantic::{ClassInfo, MethodSig};
 use saule_typeck::sigs::NativeSig;
 
@@ -438,6 +439,76 @@ pub(super) fn render_variant_pattern(
         s.push_str(&"_, ".repeat(fields.len()));
         s.truncate(s.len() - 2);
         s.push(')');
+    }
+    s.push_str("\n```");
+    s
+}
+
+// ─── doc comments ───────────────────────────────────────────────────────────
+
+/// Append a declaration's `---` doc comment below its rendered
+/// signature, separated by a horizontal rule so the popup reads as
+/// "here's the shape, here's what it means".
+///
+/// A missing or empty block leaves `md` untouched, which is what keeps
+/// undocumented code hovering exactly as it did before.
+pub(super) fn with_doc(md: String, doc: Option<&DocBlock>) -> String {
+    match doc {
+        Some(d) if !d.is_empty() => format!("{md}\n\n---\n\n{}", d.to_markdown()),
+        _ => md,
+    }
+}
+
+/// Append the `@param <name>` description to a parameter's hover.
+///
+/// Only the prose for this one parameter is shown — the enclosing
+/// function's summary belongs on the function, not on every parameter
+/// inside it.
+pub(super) fn with_param_doc(md: String, doc: Option<&DocBlock>, name: &str) -> String {
+    match doc.and_then(|d| d.param(name)) {
+        Some(desc) if !desc.trim().is_empty() => format!("{md}\n\n---\n\n{desc}"),
+        _ => md,
+    }
+}
+
+/// Signature blurb for one `interface` method. Interface methods are
+/// bodiless `MethodSig`s rather than `Method`s, so they need their own
+/// small renderer to become a hover target in their own right.
+pub(super) fn render_interface_method(owner: &str, m: &AstMethodSig) -> String {
+    let sig = MethodSig {
+        is_static: false,
+        is_private: false,
+        type_params: Vec::new(),
+        params: m.params.clone(),
+        return_ty: m.return_ty.clone(),
+    };
+    render_method_sig(owner, &m.name, &sig)
+}
+
+/// Declaration blurb for one enum variant, so a `---` comment written
+/// above `North` has somewhere to surface.
+pub(super) fn render_enum_variant_decl(owner: &str, v: &EnumVariant) -> String {
+    let mut s = String::from("```saule\n");
+    s.push_str(owner);
+    s.push('.');
+    match v {
+        EnumVariant::Bare(n) => s.push_str(n),
+        EnumVariant::Valued(n, _) => {
+            s.push_str(n);
+            s.push_str(" = …");
+        }
+        EnumVariant::Tuple { name, fields } => {
+            s.push_str(name);
+            s.push('(');
+            s.push_str(
+                &fields
+                    .iter()
+                    .map(render_param_inline)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            s.push(')');
+        }
     }
     s.push_str("\n```");
     s

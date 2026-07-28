@@ -1,0 +1,12 @@
+[package]
+name = "saule-docs"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+
+[dependencies]
+saule-ast = { path = "../saule-ast" }
+
+[dev-dependencies]
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }

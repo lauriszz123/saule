@@ -53,10 +53,17 @@ use render::render_function_sig;
 ///   so hovering anywhere on `import Storage from "storage"` surfaces
 ///   "imports `Storage` from `…/storage.sau`" without re-resolving the
 ///   path during the AST walk.
+/// * `docs` — `---` doc comments harvested from every imported file,
+///   keyed by qualified name (`Storage`, `Storage.put`). The walker
+///   resolves most cross-file symbols through the semantic registries,
+///   which carry types but no source text and therefore no docs; this
+///   index is what lets a hover on an imported class or method show the
+///   prose written next to its declaration in the other file.
 #[derive(Default, Clone, Debug)]
 pub struct ImportContext {
     pub fn_sigs: HashMap<String, String>,
     pub import_blurbs: Vec<(Range<usize>, String)>,
+    pub docs: saule_docs::DocIndex,
 }
 
 /// Find the most specific hover info for `offset` inside `module`.
@@ -114,8 +121,15 @@ pub fn hover_at_with_source(
 /// silently skipped — semantic analysis or the runtime will surface
 /// the user-facing error elsewhere. Native packages contribute their
 /// `exports` list and "native package" label.
-pub fn build_import_context(module: &Module, dir: Option<&Path>) -> ImportContext {
+/// 3. Doc comments from the imported file, merged into
+///    [`ImportContext::docs`] beneath this module's own — so hovering a
+///    *usage* of a documented symbol shows its prose whether it was
+///    declared here or next door.
+pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -> ImportContext {
     let mut ctx = ImportContext::default();
+    // This module's own docs go in first so they win the `merge`
+    // tie-break against any imported name they shadow.
+    ctx.docs = saule_docs::collect(module, source);
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
@@ -188,6 +202,11 @@ pub fn build_import_context(module: &Module, dir: Option<&Path>) -> ImportContex
                 );
             }
         }
+
+        // Harvest the imported file's doc comments while we have its
+        // source in hand — the registries the walker consults later
+        // keep types but drop the text.
+        ctx.docs.merge(saule_docs::collect(&imported, &source));
 
         let aliases = aliases_for_file(&imported, names);
         for (orig, alias) in &aliases {

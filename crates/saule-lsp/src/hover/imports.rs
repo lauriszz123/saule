@@ -44,13 +44,37 @@ pub(super) fn aliases_for_dynamic(exports: &[String], names: &ImportNames) -> Ve
     }
 }
 
+/// The name a declaration contributes to `import *`, or `None` when it
+/// stays private to its module.
+///
+/// This must agree with the module loader's own `exported_name`
+/// ([`saule_interpreter::module`]) — that function is what actually
+/// decides which bindings a wildcard import produces. Matching on the
+/// name alone made the hover blurb advertise private declarations that
+/// then failed to resolve at the use site.
 pub(super) fn exported_name(decl: &Decl) -> Option<&str> {
     match decl {
-        Decl::Function { name, .. }
-        | Decl::Class { name, .. }
-        | Decl::Interface { name, .. }
-        | Decl::Enum { name, .. } => Some(name),
-        Decl::Import { .. } => None,
+        Decl::Function {
+            exported: true,
+            name,
+            ..
+        }
+        | Decl::Class {
+            exported: true,
+            name,
+            ..
+        }
+        | Decl::Interface {
+            exported: true,
+            name,
+            ..
+        }
+        | Decl::Enum {
+            exported: true,
+            name,
+            ..
+        } => Some(name),
+        _ => None,
     }
 }
 

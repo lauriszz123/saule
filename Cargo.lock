@@ -1111,6 +1111,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "saule-docs"
+version = "2026.1.0"
+dependencies = [
+ "saule-ast",
+ "saule-lexer",
+ "saule-parser",
+]
+
+[[package]]
 name = "saule-engine-lib"
 version = "2026.1.0"
 dependencies = [
@@ -1172,6 +1181,7 @@ dependencies = [
  "dashmap 6.2.1",
  "miette",
  "saule-ast",
+ "saule-docs",
  "saule-fmt",
  "saule-interpreter",
  "saule-lexer",

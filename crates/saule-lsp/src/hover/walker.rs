@@ -17,8 +17,9 @@ use saule_semantic::{
 use super::ImportContext;
 use super::render::{
     collect_enum_variant_fields, render_class_full, render_class_head, render_enum_from_registry,
-    render_enum_head, render_field, render_function_sig, render_interface_from_registry,
-    render_interface_head, render_method_head, render_method_sig, render_native_sig_full,
+    render_enum_head, render_enum_variant_decl, render_field, render_function_sig,
+    render_interface_from_registry, render_interface_head, render_interface_method,
+    render_method_head, render_method_sig, render_native_sig_full, with_doc, with_param_doc,
     render_param, render_stdlib_module, render_type, render_variant_pattern,
 };
 use super::util::{
@@ -123,6 +124,16 @@ impl<'a> Cx<'a> {
             }
         }
         self.best = Some(Hit { span, md });
+    }
+
+    /// The `---` doc comment attached to the declaration starting at
+    /// `anchor`, or `None` when it has none (or an empty one).
+    ///
+    /// Callers reach for this once per declaration and thread the
+    /// result through to the parameter loop, so a hover on a parameter
+    /// can surface its `@param` line without re-scanning the source.
+    fn doc_at(&self, anchor: usize) -> Option<saule_docs::DocBlock> {
+        saule_docs::extract(self.source, anchor).filter(|d| !d.is_empty())
     }
 
     /// Walk into a function/method/lambda body with a fresh local
@@ -730,12 +741,19 @@ impl<'a> Cx<'a> {
                 body,
                 ..
             } => {
+                let doc = self.doc_at(d.span.start);
                 self.record(
                     d.span.clone(),
-                    render_function_sig(name, type_params, params, return_ty.as_ref()),
+                    with_doc(
+                        render_function_sig(name, type_params, params, return_ty.as_ref()),
+                        doc.as_ref(),
+                    ),
                 );
                 for p in params {
-                    self.record(p.span.clone(), render_param(p));
+                    self.record(
+                        p.span.clone(),
+                        with_param_doc(render_param(p), doc.as_ref(), &p.name),
+                    );
                     // Type ascription on the param: `x: Storage` —
                     // make `Storage` itself hoverable.
                     self.record_type_idents_in(&p.ty, &p.span);
@@ -777,7 +795,8 @@ impl<'a> Cx<'a> {
                 let md = with_classes(|r| r.get(name).cloned())
                     .map(|info| render_class_full(name, &info))
                     .unwrap_or_else(|| render_class_head(name, extends.as_deref(), implements));
-                self.record(d.span.clone(), md);
+                let doc = self.doc_at(d.span.start);
+                self.record(d.span.clone(), with_doc(md, doc.as_ref()));
                 // Resolve `extends X` / `implements Y, Z` parent and
                 // interface names within the class header (between
                 // the class name and the first member). We use the
@@ -804,10 +823,33 @@ impl<'a> Cx<'a> {
                 methods,
                 ..
             } => {
-                self.record(d.span.clone(), render_interface_head(name, extends, methods));
+                let doc = self.doc_at(d.span.start);
+                self.record(
+                    d.span.clone(),
+                    with_doc(render_interface_head(name, extends, methods), doc.as_ref()),
+                );
                 // Same idea as class `extends` — locate parent
                 // interface names within the interface decl span.
                 self.record_named_idents_in(extends, &d.span);
+                // Each bodiless method is a hover target of its own so
+                // a `---` block written above it has somewhere to go.
+                for m in methods {
+                    if !contains(&m.span, self.offset) {
+                        continue;
+                    }
+                    let mdoc = self.doc_at(m.span.start);
+                    self.record(
+                        m.span.clone(),
+                        with_doc(render_interface_method(name, m), mdoc.as_ref()),
+                    );
+                    for p in &m.params {
+                        self.record(
+                            p.span.clone(),
+                            with_param_doc(render_param(p), mdoc.as_ref(), &p.name),
+                        );
+                        self.record_type_idents_in(&p.ty, &p.span);
+                    }
+                }
             }
             Decl::Enum {
                 name,
@@ -815,7 +857,29 @@ impl<'a> Cx<'a> {
                 methods,
                 ..
             } => {
-                self.record(d.span.clone(), render_enum_head(name, variants));
+                let doc = self.doc_at(d.span.start);
+                self.record(
+                    d.span.clone(),
+                    with_doc(render_enum_head(name, variants), doc.as_ref()),
+                );
+                for v in variants {
+                    if !contains(&v.span, self.offset) {
+                        continue;
+                    }
+                    let vdoc = self.doc_at(v.span.start);
+                    self.record(
+                        v.span.clone(),
+                        with_doc(render_enum_variant_decl(name, &v.value), vdoc.as_ref()),
+                    );
+                    if let saule_ast::EnumVariant::Tuple { fields, .. } = &v.value {
+                        for p in fields {
+                            self.record(
+                                p.span.clone(),
+                                with_param_doc(render_param(p), vdoc.as_ref(), &p.name),
+                            );
+                        }
+                    }
+                }
                 let prev = self.enclosing_class.replace(name.clone());
                 for m in methods {
                     self.visit_method(m, name);
@@ -882,9 +946,13 @@ impl<'a> Cx<'a> {
                 default,
             } => {
                 let owner = self.enclosing_class.as_deref().unwrap_or("");
+                let doc = self.doc_at(m.span.start);
                 self.record(
                     m.span.clone(),
-                    render_field(owner, *is_static, *is_private, name, ty),
+                    with_doc(
+                        render_field(owner, *is_static, *is_private, name, ty),
+                        doc.as_ref(),
+                    ),
                 );
                 // Make `due: integer?` -> hover on `integer` resolve
                 // through the same path bare ident hovers use.
@@ -904,9 +972,16 @@ impl<'a> Cx<'a> {
         if !contains(&m.span, self.offset) {
             return;
         }
-        self.record(m.span.clone(), render_method_head(owner, m));
+        let doc = self.doc_at(m.span.start);
+        self.record(
+            m.span.clone(),
+            with_doc(render_method_head(owner, m), doc.as_ref()),
+        );
         for p in &m.params {
-            self.record(p.span.clone(), render_param(p));
+            self.record(
+                p.span.clone(),
+                with_param_doc(render_param(p), doc.as_ref(), &p.name),
+            );
             self.record_type_idents_in(&p.ty, &p.span);
             if let Some(def) = &p.default {
                 self.visit_expr(def);
@@ -1273,11 +1348,11 @@ impl<'a> Cx<'a> {
                     ));
                 }
                 let class = self.receiver_class(&obj.value)?;
-                resolve_member(&class, name, false)
+                resolve_member(&class, name, false, &self.imports.docs)
             }
             Expr::MethodCall { obj, method, .. } => {
                 let class = self.receiver_class(&obj.value)?;
-                resolve_member(&class, method, true)
+                resolve_member(&class, method, true, &self.imports.docs)
             }
             // Generic fallback: surface the inferred type for any
             // expression we can reason about (`#args` -> integer,
@@ -1298,18 +1373,22 @@ impl<'a> Cx<'a> {
     /// from another `.sau` file. Returns `None` for names we can't tie
     /// to anything (locals, parameters, unknown idents).
     fn resolve_ident(&self, name: &str) -> Option<String> {
+        // Type declarations resolve through the registries, which hold
+        // no source text — pull any `---` block from the doc index so a
+        // hover on a *usage* reads the same as one on the declaration.
+        let doc = self.imports.docs.get(name);
         if let Some(info) = with_classes(|r| r.get(name).cloned()) {
-            return Some(render_class_full(name, &info));
+            return Some(with_doc(render_class_full(name, &info), doc));
         }
         if with_interfaces(|r| r.contains_key(name)) {
             let extends = with_interfaces(|r| r.get(name).cloned()).unwrap_or_default();
-            return Some(render_interface_from_registry(name, &extends));
+            return Some(with_doc(render_interface_from_registry(name, &extends), doc));
         }
         if with_enums(|r| r.contains_key(name)) {
             let info = with_enums(|r| r.get(name).cloned())?;
             let variants: Vec<(String, usize)> =
                 info.variants.iter().map(|(n, a)| (n.clone(), *a)).collect();
-            return Some(render_enum_from_registry(name, &variants));
+            return Some(with_doc(render_enum_from_registry(name, &variants), doc));
         }
         if let Some(sig) = saule_typeck::sigs::lookup(name) {
             return Some(format!(
@@ -1328,7 +1407,7 @@ impl<'a> Cx<'a> {
         // sibling static (`help()` from inside `Main.main()`) and
         // referencing a sibling instance member without `self.`.
         if let Some(class) = &self.enclosing_class {
-            if let Some(md) = resolve_member(class, name, false) {
+            if let Some(md) = resolve_member(class, name, false, &self.imports.docs) {
                 return Some(md);
             }
         }

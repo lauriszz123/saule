@@ -345,13 +345,14 @@ class JsonParser
 	end
 end
 
+--- A JSON Implementation in Saule.
 export class Json
-	-- Parse a JSON document. Returns nil on parse error (or for JSON `null`).
+	--- Parse a JSON document. Returns nil on parse error (or for JSON `null`).
 	static fn decode(source: string) -> any?
 		return JsonParser(source).parseDocument()
 	end
 
-	-- Serialise a Saule value to compact JSON.
+	--- Serialise a Saule value to compact JSON.
 	static fn encode(value: any?) -> string
 		if value == nil then
 			return "null"
