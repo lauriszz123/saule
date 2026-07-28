@@ -75,4 +75,8 @@ pub(crate) struct InitArgs {
     /// Directory to create; also the project's `name:`.
     #[arg(value_name = "NAME")]
     pub name: String,
+
+    /// Scaffold a library — importable by other projects, with no entry point.
+    #[arg(long)]
+    pub lib: bool,
 }

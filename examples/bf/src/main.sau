@@ -1,4 +1,4 @@
-import Interpreter from "interpreter"
+import * from interpreter
 
 class Main
 	static fn usage()

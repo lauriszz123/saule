@@ -1,4 +1,4 @@
-import Util from "engine"
+import Util from engine
 
 -- The generic Util.* signatures thread the table's element type through, so
 -- find returns `T?`, filter/reverse/concat/slice return `table<T>`, reduce

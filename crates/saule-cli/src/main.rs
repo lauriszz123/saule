@@ -38,7 +38,7 @@ fn main() {
     match command {
         Command::Run(args) => cmd_run(args),
         Command::Fmt(args) => fmt::cmd_fmt(&args),
-        Command::Init(args) => init::cmd_init(&args.name),
+        Command::Init(args) => init::cmd_init(&args.name, args.lib),
     }
 }
 
@@ -134,7 +134,21 @@ mod tests {
     fn init_requires_a_name() {
         assert!(Cli::try_parse_from(["saule", "init"]).is_err());
         match parse(&["saule", "init", "demo"]).command {
-            Some(Command::Init(args)) => assert_eq!(args.name, "demo"),
+            Some(Command::Init(args)) => {
+                assert_eq!(args.name, "demo");
+                assert!(!args.lib, "an app is the default shape");
+            }
+            other => panic!("expected init, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn init_lib_selects_the_library_shape() {
+        match parse(&["saule", "init", "demo", "--lib"]).command {
+            Some(Command::Init(args)) => {
+                assert_eq!(args.name, "demo");
+                assert!(args.lib);
+            }
             other => panic!("expected init, got {other:?}"),
         }
     }
