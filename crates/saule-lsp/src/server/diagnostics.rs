@@ -107,6 +107,14 @@ impl Backend {
             }
         };
 
+        // ---- doc comments -------------------------------------------------
+        // Pure source + AST, so this runs before we contend for the
+        // analysis lock. Warnings only: a stale `@param` is worth
+        // flagging but never blocks anything downstream.
+        for w in saule_docs::validate(&module, source) {
+            out.push(doc_warning_diag(&w, source, &line_index));
+        }
+
         // ---- semantic + typeck --------------------------------------------
         // Both use a shared thread-local registry; serialise the pair.
         let _guard = self.analysis_lock.lock().await;
@@ -231,6 +239,23 @@ fn diag_from<D: miette::Diagnostic>(err: &D, source: &str, line_index: &LineInde
         severity: Some(DiagnosticSeverity::ERROR),
         source: Some("saule".to_string()),
         message: err.to_string(),
+        ..Default::default()
+    }
+}
+
+/// Diagnostic for a doc-comment problem. Emitted as a warning, not an
+/// error — the code compiles and runs fine, the prose has just drifted
+/// away from the signature it describes.
+fn doc_warning_diag(
+    w: &saule_docs::DocWarning,
+    source: &str,
+    line_index: &LineIndex,
+) -> Diagnostic {
+    Diagnostic {
+        range: line_index.range(source, w.span.start, w.span.end),
+        severity: Some(DiagnosticSeverity::WARNING),
+        source: Some("saule".to_string()),
+        message: w.message.clone(),
         ..Default::default()
     }
 }

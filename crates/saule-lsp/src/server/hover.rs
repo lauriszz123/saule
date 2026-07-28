@@ -61,7 +61,7 @@ impl Backend {
         // class names introduced by `import` are also visible to the
         // identifier resolver via the registries (the function/blurb
         // info this map adds is purely additive).
-        let import_ctx = hover::build_import_context(&module, module_dir.as_deref());
+        let import_ctx = hover::build_import_context(&module, &source, module_dir.as_deref());
 
         let (md, span) = hover::hover_at_with_source(&module, &source, offset, &import_ctx)?;
         Some(Hover {

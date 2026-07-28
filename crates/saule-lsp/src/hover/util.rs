@@ -7,7 +7,7 @@ use std::ops::Range;
 use saule_ast::Type;
 use saule_semantic::{lookup_field_type, lookup_method};
 
-use super::render::{render_method_sig, render_native_sig_full, render_type};
+use super::render::{render_method_sig, render_native_sig_full, render_type, with_doc};
 
 pub(super) fn contains(r: &Range<usize>, o: usize) -> bool {
     r.start <= o && o <= r.end
@@ -96,20 +96,33 @@ pub(super) fn locate_words_in(
 /// Look up a member or method on `class` and render it. `is_call`
 /// nudges the formatter toward the method shape when both a method and
 /// a same-named field exist (rare, but `lookup_method` returns first).
-pub(super) fn resolve_member(class: &str, name: &str, is_call: bool) -> Option<String> {
+pub(super) fn resolve_member(
+    class: &str,
+    name: &str,
+    is_call: bool,
+    docs: &saule_docs::DocIndex,
+) -> Option<String> {
+    // Docs come from the index rather than the registries: a member is
+    // resolved here through `lookup_method` / `lookup_field_type`,
+    // which carry types but not the source text a `---` block lives in.
+    let doc = docs.get(&format!("{class}.{name}"));
+
     if is_call {
         if let Some(sig) = lookup_method(class, name) {
-            return Some(render_method_sig(class, name, &sig));
+            return Some(with_doc(render_method_sig(class, name, &sig), doc));
         }
     }
     if let Some(ty) = lookup_field_type(class, name) {
-        return Some(format!(
-            "```saule\n(field) {class}.{name}: {ty}\n```",
-            ty = render_type(&ty)
+        return Some(with_doc(
+            format!(
+                "```saule\n(field) {class}.{name}: {ty}\n```",
+                ty = render_type(&ty)
+            ),
+            doc,
         ));
     }
     if let Some(sig) = lookup_method(class, name) {
-        return Some(render_method_sig(class, name, &sig));
+        return Some(with_doc(render_method_sig(class, name, &sig), doc));
     }
     // Stdlib fallback: `Math.sqrt`, `String.byte`, etc.
     let qname = format!("{class}.{name}");

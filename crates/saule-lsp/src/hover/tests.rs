@@ -263,7 +263,7 @@ end
     // analyse, build the import context, then hover.
     let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
-    let imports = build_import_context(&module, Some(&dir));
+    let imports = build_import_context(&module, app_src, Some(&dir));
 
     // Cursor on the constructor call `Storage()` (the type
     // ascription `: Storage` isn't visited — type nodes don't
@@ -321,7 +321,7 @@ end
 
     let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
-    let imports = build_import_context(&module, Some(&dir));
+    let imports = build_import_context(&module, app_src, Some(&dir));
 
     let pos = app_src.find("greet(\"world\")").unwrap() + 1;
     let md = hover_at_with(&module, pos, &imports)
@@ -730,4 +730,241 @@ end
     let md = hover_src_at(src, "self.super(width: 1.0)", "self.super(w".len() - 1)
         .expect("hover named arg");
     assert!(md.contains("width"), "got: {md}");
+}
+
+// ─── `---` doc comments ─────────────────────────────────────────────────
+
+/// Like [`hover_src`] but builds the doc index the way
+/// `Backend::hover_at` does, so usage-site hovers (which resolve
+/// through the semantic registries) can find doc text too.
+fn hover_doc(src: &str, needle: &str) -> Option<String> {
+    init_stdlib();
+    let pos = src.find(needle).expect("needle not found") + 1;
+    let tokens = saule_lexer::Lexer::new(src).tokenize().ok()?;
+    let module = saule_parser::parse(tokens).ok()?;
+    let _ = saule_semantic::analyze(&module);
+    let imports = build_import_context(&module, src, None);
+    hover_at_with_source(&module, src, pos, &imports).map(|(md, _)| md)
+}
+
+/// The exact shape from the design discussion.
+const ENTITY: &str = "\
+--- A base class for all entities.
+class Entity
+  --- Private variable has only descriptions:
+  local var: integer = 10
+
+  --- Some other description for the initializer
+  --- @param a This is a description for the parameter.
+  fn init(a: string)
+  end
+end
+";
+
+#[test]
+fn hover_shows_class_doc() {
+    let md = hover_src(ENTITY, "class Entity").expect("class hover");
+    assert!(
+        md.contains("A base class for all entities."),
+        "missing class summary in:\n{md}"
+    );
+}
+
+#[test]
+fn hover_shows_private_field_doc() {
+    let md = hover_src(ENTITY, "local var").expect("field hover");
+    assert!(
+        md.contains("Private variable has only descriptions:"),
+        "missing field summary in:\n{md}"
+    );
+}
+
+#[test]
+fn hover_shows_method_doc_and_param_list() {
+    let md = hover_src(ENTITY, "fn init").expect("method hover");
+    assert!(
+        md.contains("Some other description for the initializer"),
+        "missing method summary in:\n{md}"
+    );
+    assert!(
+        md.contains("`a` — This is a description for the parameter."),
+        "missing rendered @param in:\n{md}"
+    );
+}
+
+#[test]
+fn hover_on_a_parameter_shows_only_its_own_param_doc() {
+    let md = hover_src_at(ENTITY, "fn init(a: string)", 8).expect("param hover");
+    assert!(
+        md.contains("This is a description for the parameter."),
+        "missing @param text in:\n{md}"
+    );
+    // The enclosing function's summary belongs on the function.
+    assert!(
+        !md.contains("Some other description"),
+        "parameter hover leaked the method summary:\n{md}"
+    );
+}
+
+#[test]
+fn hover_keeps_the_signature_above_the_docs() {
+    let md = hover_src(ENTITY, "fn init").expect("method hover");
+    let sig = md.find("fn Entity.init").expect("signature present");
+    let doc = md.find("Some other description").expect("doc present");
+    assert!(sig < doc, "docs should follow the signature:\n{md}");
+}
+
+#[test]
+fn hover_on_a_usage_site_shows_the_declaration_doc() {
+    let src = "\
+--- A base class for all entities.
+class Entity
+end
+
+fn spawn() -> Entity
+  return Entity()
+end
+";
+    let md = hover_doc(src, "Entity()").expect("usage hover");
+    assert!(
+        md.contains("A base class for all entities."),
+        "usage-site hover missing doc:\n{md}"
+    );
+}
+
+#[test]
+fn hover_on_undocumented_code_is_unchanged() {
+    let src = "fn add(a: integer, b: integer) -> integer\n  return a + b\nend\n";
+    let md = hover_src(src, "fn add").expect("hover");
+    assert_eq!(md, "```saule\nfn add(a: integer, b: integer) -> integer\n```");
+}
+
+#[test]
+fn hover_ignores_a_plain_comment_above_a_declaration() {
+    let src = "-- not documentation\nfn add(a: integer) -> integer\n  return a\nend\n";
+    let md = hover_src(src, "fn add").expect("hover");
+    assert!(
+        !md.contains("not documentation"),
+        "plain `--` comment leaked into hover:\n{md}"
+    );
+}
+
+#[test]
+fn hover_shows_enum_and_variant_docs() {
+    let src = "\
+--- Which way something faces.
+enum Direction
+  --- Toward the top of the screen.
+  North
+  South
+end
+";
+    let enum_md = hover_src(src, "enum Direction").expect("enum hover");
+    assert!(
+        enum_md.contains("Which way something faces."),
+        "missing enum summary in:\n{enum_md}"
+    );
+
+    let variant_md = hover_src(src, "North").expect("variant hover");
+    assert!(
+        variant_md.contains("Toward the top of the screen."),
+        "missing variant summary in:\n{variant_md}"
+    );
+}
+
+#[test]
+fn hover_shows_interface_method_docs() {
+    let src = "\
+--- Anything that can be drawn.
+interface Drawable
+  --- Render to the active surface.
+  fn draw(x: integer)
+end
+";
+    let md = hover_src(src, "fn draw").expect("interface method hover");
+    assert!(
+        md.contains("Render to the active surface."),
+        "missing interface method summary in:\n{md}"
+    );
+}
+
+#[test]
+fn hover_renders_a_return_tag() {
+    let src = "\
+--- Adds two numbers.
+--- @return Their sum.
+fn add(a: integer, b: integer) -> integer
+  return a + b
+end
+";
+    let md = hover_src(src, "fn add").expect("hover");
+    assert!(
+        md.contains("**Returns** — Their sum."),
+        "missing @return in:\n{md}"
+    );
+}
+
+/// A wildcard import must advertise exactly what the module loader
+/// actually brings into scope. Before this test, the hover blurb
+/// listed every top-level declaration regardless of `export`, so a
+/// private helper class appeared in "brings into scope" and then
+/// failed to resolve at the use site.
+#[test]
+fn wildcard_import_blurb_lists_only_exported_names() {
+    init_stdlib();
+    let dir = std::env::temp_dir().join(format!(
+        "saule-lsp-export-vis-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(
+        dir.join("json.sau"),
+        "\
+class JsonParser
+  fn parse(s: string) -> nothing
+  end
+end
+
+export class Json
+  static fn decode(source: string) -> table?
+    return nil
+  end
+end
+
+fn helper() -> nothing
+end
+
+export fn encode(v: table) -> string
+  return \"\"
+end
+",
+    )
+    .unwrap();
+
+    let app_src = "import * from \"json\"\n\nfn run() -> nothing\nend\n";
+    let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
+    let module = saule_parser::parse(tokens).unwrap();
+    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let _ = saule_semantic::analyze_with_seed(&module, seed);
+    let imports = build_import_context(&module, app_src, Some(&dir));
+
+    let pos = app_src.find("json\"").unwrap();
+    let md = hover_at_with_source(&module, app_src, pos, &imports)
+        .map(|(md, _)| md)
+        .expect("import hover");
+
+    assert!(md.contains("Json"), "exported class missing:\n{md}");
+    assert!(md.contains("encode"), "exported fn missing:\n{md}");
+    assert!(
+        !md.contains("JsonParser"),
+        "private class leaked into the import blurb:\n{md}"
+    );
+    assert!(
+        !md.contains("helper"),
+        "private fn leaked into the import blurb:\n{md}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
