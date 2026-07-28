@@ -1354,7 +1354,7 @@ myproject/
 
 There are two ways to run Saule code, with different rules about what the entry file must contain:
 
-**Project mode** — `saule run` invoked inside a directory containing `saule.config`. The file pointed to by `entry:` must declare:
+**Project mode** — `saule run` in a directory containing `saule.config`, or `saule run <dir>` naming one. The file pointed to by `entry:` must declare:
 
 ```saule
 class Main
@@ -1366,7 +1366,14 @@ end
 
 Top-level statements in the entry file still execute first (handy for one-off setup or imports), and then `Main.main()` is called. Without a `Main` class the runner exits with `error: '<entry>' must declare 'class Main' with a 'static fn main()' entry point`.
 
-**Single-file mode** — `saule run path/to/file.sau` with no surrounding `saule.config`. The file is executed top-to-bottom like a Lua script; no `class Main` is required. If the script happens to define one with a `static fn main()`, it is invoked as a convenience after the top-level body finishes.
+**Single-file mode** — `saule run path/to/file.sau`, naming a file rather than a directory. The file is executed top-to-bottom like a Lua script; no `class Main` is required, and any surrounding `saule.config` is ignored. If the script happens to define a `Main` with a `static fn main()`, it is invoked as a convenience after the top-level body finishes.
+
+Whether the target is a directory is the *only* thing that picks between the two modes. Arguments for the program itself go after `--`, where the CLI passes them through untouched to `Os.args()`:
+
+```sh
+saule run -- input.bf          # project in the cwd, Os.args() = ["input.bf"]
+saule run tool.sau -- -v file  # single file; script args may start with `-`
+```
 
 A typical project-mode entry file:
 
