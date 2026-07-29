@@ -108,13 +108,16 @@ pub fn register_sigs() {
 
 fn builtin_print(args: &[Value]) -> Result<Value, String> {
     let parts: Vec<String> = args.iter().map(|v| v.to_display_string()).collect();
-    print!("{}", parts.join("\t"));
+    crate::output::write(crate::output::Stream::Stdout, &parts.join("\t"));
     Ok(Value::Nil)
 }
 
 fn builtin_println(args: &[Value]) -> Result<Value, String> {
     let parts: Vec<String> = args.iter().map(|v| v.to_display_string()).collect();
-    println!("{}", parts.join("\t"));
+    crate::output::write(
+        crate::output::Stream::Stdout,
+        &format!("{}\n", parts.join("\t")),
+    );
     Ok(Value::Nil)
 }
 
@@ -122,7 +125,7 @@ fn builtin_println(args: &[Value]) -> Result<Value, String> {
 /// stdout without a trailing newline.
 fn builtin_printf(args: &[Value]) -> Result<Value, String> {
     let s = crate::stdlib::string::format_args_impl(args)?;
-    print!("{s}");
+    crate::output::write(crate::output::Stream::Stdout, &s);
     Ok(Value::Nil)
 }
 

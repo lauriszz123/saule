@@ -14,7 +14,19 @@ saule-native-abi = { path = "../saule-native-abi" }
 miette = "7.6.0"
 thiserror = "2.0.18"
 toml = "0.8"
-libloading = "0.8"
+# Optional so the interpreter can target `wasm32-unknown-unknown`, where
+# there is no such thing as a dynamically-loaded shared library. Everything
+# else in the crate already compiles for wasm; this was the only blocker.
+libloading = { version = "0.8", optional = true }
+
+[features]
+default = ["native-packages"]
+# Loading third-party native packages (`~/.saule/native_packages/*.so|dylib|dll`)
+# at run time. On by default, so the CLI, the LSP and every existing build are
+# unaffected — turn it off only for targets that cannot dlopen, i.e. wasm.
+# Manifest discovery and the type signatures they contribute stay available
+# either way; only the actual library loading disappears.
+native-packages = ["dep:libloading"]
 
 [dev-dependencies]
 saule-lexer = { path = "../saule-lexer" }
