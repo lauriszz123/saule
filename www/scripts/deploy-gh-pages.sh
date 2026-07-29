@@ -44,6 +44,8 @@ SHA="$(git rev-parse --short HEAD)"
 echo "==> Building the site"
 cd "$WWW_DIR"
 npm run sync-docs
+# `npm run build` triggers `prebuild`, which compiles crates/saule-wasm and
+# runs wasm-bindgen — the playground's runtime is produced here, not committed.
 npm run build
 
 if [[ ! -f "$WWW_DIR/dist/index.html" ]]; then

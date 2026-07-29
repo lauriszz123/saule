@@ -16,6 +16,10 @@ on:
       - 'DOCS.md'
       - 'examples/**'
       - 'editors/vscode/syntaxes/**'
+      # The playground ships a wasm build of the interpreter, so a change to
+      # the language itself changes the site.
+      - 'crates/**'
+      - 'Cargo.lock'
       - '.github/workflows/deploy-www.yml'
   # Lets a deploy be re-run by hand after changing Pages settings.
   workflow_dispatch:
@@ -38,6 +42,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The playground is a WebAssembly build of the interpreter, so the site
+      # cannot be built without a Rust toolchain and the wasm target.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli
+        # Must match the `wasm-bindgen` crate version exactly — a mismatch is a
+        # hard schema error, not a warning. Read it from the lockfile so the
+        # two can never drift.
+        run: |
+          VERSION="$(grep -A 1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | cut -d'"' -f2)"
+          echo "Installing wasm-bindgen-cli $VERSION"
+          cargo install wasm-bindgen-cli --version "$VERSION" --locked
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -55,6 +76,8 @@ jobs:
         run: npm run sync-docs
         working-directory: www
 
+      # `prebuild` compiles crates/saule-wasm and runs wasm-bindgen, so the
+      # playground module is produced here rather than committed.
       - name: Build
         run: npm run build
         working-directory: www

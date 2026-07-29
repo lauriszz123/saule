@@ -1239,6 +1239,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "saule-wasm"
+version = "2026.1.0"
+dependencies = [
+ "js-sys",
+ "miette",
+ "saule-interpreter",
+ "saule-lexer",
+ "saule-parser",
+ "saule-semantic",
+ "saule-typeck",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

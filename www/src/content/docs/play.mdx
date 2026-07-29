@@ -14,23 +14,25 @@ import { Aside } from '@astrojs/starlight/components';
 
 <div style="max-width:52rem; margin:3rem auto 0;">
 
-<Aside type="caution" title="The browser runtime is still being built">
-	The editor, examples and link sharing all work now. **Running** code does
-	not yet: Saule compiles to WebAssembly from the same interpreter the CLI
-	uses, and that build is in progress.
+### How it works
 
-	Until it lands, [install the toolchain](/saule/guides/installation/) and run
-	your program with `saule run`.
-</Aside>
+Your code runs **entirely in your browser**. Saule compiles to WebAssembly
+from the same interpreter the `saule` CLI uses, so the type checker, the
+diagnostics and the runtime all behave exactly as they do locally. Nothing is
+sent to a server — there isn't one.
 
-### What works today
+The module is about 330 KB gzipped and is fetched the first time you press
+Run, so the first run takes a moment longer than the rest.
 
-- A full editor with Saule syntax highlighting, bracket matching and history
-- Eight worked examples covering types, classes, null safety, pattern
-  matching, generics and interfaces
-- **Copy link** encodes your program into the URL, so you can share exactly
-  what you wrote — the code lives in the fragment and is never sent to a
-  server
+Programs execute in a Web Worker. That keeps the page responsive whatever your
+code does, and it is what makes **Stop** possible: a WebAssembly module cannot
+be interrupted from outside, so an infinite loop can only be escaped by
+discarding the worker running it. Press **Stop** or hit <kbd>Esc</kbd>.
+Anything still running after 10 seconds is stopped automatically.
+
+**Copy link** encodes your program into the URL fragment, so you can share
+exactly what you wrote — and because it is a fragment, it never leaves your
+browser either.
 
 ### Notes on the sandbox
 

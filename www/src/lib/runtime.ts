@@ -1,15 +1,14 @@
 /**
  * The playground's execution boundary.
  *
- * Everything the UI needs from the language lives behind `runSaule`. Today it
- * reports that the browser runtime isn't built yet; when `crates/saule-wasm`
- * lands, only the body of `load()` changes — the page, the editor and the
- * output pane all keep working against this same shape.
+ * Saule compiles to WebAssembly from the same interpreter the CLI uses (see
+ * `crates/saule-wasm`), and runs here inside a Web Worker. The worker is not
+ * an optimisation — it is the only way to stop a running program, because a
+ * wasm module cannot be interrupted from the outside. See `saule-worker.ts`.
  *
- * The interface is deliberately the one a real run produces: a stream of
- * output chunks in emission order, plus structured diagnostics carrying byte
- * spans, so the editor can underline the offending range rather than printing
- * a bare message.
+ * The module is ~1.1 MB (~333 KB gzipped) and is fetched lazily: the worker
+ * is not spawned until the first run, so opening `/play/` costs nothing extra
+ * until someone presses Run.
  */
 
 export type DiagnosticSeverity = 'error' | 'warning';
@@ -48,56 +47,183 @@ export class RuntimeUnavailableError extends Error {
 	}
 }
 
-/**
- * Whether a Saule runtime is actually available in this build.
- *
- * The playground checks this on mount so it can explain itself up front
- * instead of letting someone write a program and only then discover that
- * Run does nothing.
- */
-export const RUNTIME_AVAILABLE = false;
-
-type WasmModule = {
-	run: (source: string) => string;
-};
-
-let modulePromise: Promise<WasmModule> | null = null;
-
-/**
- * Load (and memoize) the WebAssembly build of the interpreter.
- *
- * Phase two replaces the throw with:
- *
- *   const wasm = await import('./saule_wasm/saule_wasm.js');
- *   await wasm.default();
- *   return wasm;
- *
- * where `saule_wasm` is the `wasm-bindgen` output of `crates/saule-wasm`.
- * Because it's a dynamic import, the ~1 MB module stays out of the main
- * bundle and only downloads when someone actually opens the playground.
- */
-function load(): Promise<WasmModule> {
-	if (!modulePromise) {
-		modulePromise = Promise.reject(
-			new RuntimeUnavailableError(
-				'The browser runtime is still being built. Saule compiles to ' +
-					'WebAssembly from the same interpreter the CLI uses, and that ' +
-					'work is in progress — until then, install the toolchain to run ' +
-					'your code locally.'
-			)
-		);
-		// Nothing awaits this rejection until someone presses Run, and an
-		// unhandled rejection would otherwise be logged on page load.
-		modulePromise.catch(() => {});
+/** Thrown when a run is cancelled — by the user, or by the timeout. */
+export class RunCancelledError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'RunCancelledError';
 	}
-	return modulePromise;
+}
+
+/**
+ * Whether a Saule runtime is available in this build.
+ *
+ * Kept as an export because the playground reads it on mount. It is now
+ * always true: if the wasm module were missing the site would not build, so
+ * there is no half-working state to guard against.
+ */
+export const RUNTIME_AVAILABLE = true;
+
+/**
+ * How long a program may run before it is killed automatically.
+ *
+ * A backstop for someone who writes an infinite loop and wanders off, not a
+ * performance budget — the Stop button is the primary control. Generous
+ * enough that a legitimately slow program is not cut short.
+ */
+export const RUN_TIMEOUT_MS = 10_000;
+
+type WorkerResponse =
+	| { type: 'ready'; version: string }
+	| { type: 'result'; id: number; json: string }
+	| { type: 'error'; id: number; message: string };
+
+interface Pending {
+	resolve: (value: RunResult) => void;
+	reject: (reason: unknown) => void;
+	startedAt: number;
+	timeout: ReturnType<typeof setTimeout>;
+}
+
+let worker: Worker | null = null;
+let pending: Pending | null = null;
+let nextId = 1;
+
+/** Version string reported by the module once it has initialised. */
+let runtimeVersion: string | null = null;
+export function getRuntimeVersion(): string | null {
+	return runtimeVersion;
+}
+
+/** True while a program is executing. */
+export function isRunning(): boolean {
+	return pending !== null;
+}
+
+function spawnWorker(): Worker {
+	// `new URL(..., import.meta.url)` is the form Vite recognises, so the
+	// worker and the wasm asset are bundled and hashed like everything else.
+	const w = new Worker(new URL('./saule-worker.ts', import.meta.url), {
+		type: 'module',
+	});
+
+	w.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
+		const message = event.data;
+
+		if (message.type === 'ready') {
+			runtimeVersion = message.version;
+			return;
+		}
+
+		// Ignore replies from a run that was already cancelled — its worker
+		// was terminated, but a queued message could still arrive.
+		if (!pending || message.id !== currentId) return;
+
+		const settle = pending;
+		pending = null;
+		clearTimeout(settle.timeout);
+
+		if (message.type === 'error') {
+			settle.reject(new RuntimeUnavailableError(message.message));
+			// A failed module poisons this worker; the next run gets a new one.
+			disposeWorker();
+			return;
+		}
+
+		try {
+			const parsed = JSON.parse(message.json) as Omit<RunResult, 'durationMs'>;
+			settle.resolve({
+				...parsed,
+				durationMs: performance.now() - settle.startedAt,
+			});
+		} catch (err) {
+			settle.reject(
+				new RuntimeUnavailableError(
+					`The runtime returned a malformed result: ${
+						err instanceof Error ? err.message : String(err)
+					}`
+				)
+			);
+		}
+	});
+
+	w.addEventListener('error', (event) => {
+		const settle = pending;
+		pending = null;
+		if (settle) {
+			clearTimeout(settle.timeout);
+			settle.reject(
+				new RuntimeUnavailableError(
+					event.message || 'The Saule runtime failed to start.'
+				)
+			);
+		}
+		disposeWorker();
+	});
+
+	return w;
+}
+
+function disposeWorker() {
+	if (worker) {
+		worker.terminate();
+		worker = null;
+	}
+}
+
+let currentId = 0;
+
+/**
+ * Stop the running program.
+ *
+ * Terminating the worker is the only reliable way: a wasm module in a tight
+ * loop never yields, so there is nothing to politely ask. The next run spawns
+ * a fresh worker, which also means the ~1.1 MB module is re-initialised — a
+ * fair price for being able to escape an infinite loop at all.
+ */
+export function stopSaule(reason = 'Stopped.'): void {
+	const settle = pending;
+	pending = null;
+	if (settle) {
+		clearTimeout(settle.timeout);
+		settle.reject(new RunCancelledError(reason));
+	}
+	disposeWorker();
 }
 
 /** Compile and run a Saule program, returning its output and diagnostics. */
-export async function runSaule(source: string): Promise<RunResult> {
-	const wasm = await load();
-	const started = performance.now();
-	const raw = wasm.run(source);
-	const parsed = JSON.parse(raw) as Omit<RunResult, 'durationMs'>;
-	return { ...parsed, durationMs: performance.now() - started };
+export function runSaule(source: string): Promise<RunResult> {
+	if (pending) {
+		return Promise.reject(new Error('A program is already running.'));
+	}
+
+	if (!worker) {
+		try {
+			worker = spawnWorker();
+		} catch (err) {
+			return Promise.reject(
+				new RuntimeUnavailableError(
+					`Could not start the Saule runtime: ${
+						err instanceof Error ? err.message : String(err)
+					}`
+				)
+			);
+		}
+	}
+
+	const id = nextId++;
+	currentId = id;
+
+	return new Promise<RunResult>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			stopSaule(
+				`The program ran for more than ${
+					RUN_TIMEOUT_MS / 1000
+				} seconds and was stopped. An infinite loop, perhaps?`
+			);
+		}, RUN_TIMEOUT_MS);
+
+		pending = { resolve, reject, startedAt: performance.now(), timeout };
+		worker!.postMessage({ type: 'run', id, source });
+	});
 }

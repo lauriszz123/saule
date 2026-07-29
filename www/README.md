@@ -58,25 +58,50 @@ were never meant to compile standalone.
 
 ## The playground
 
-`src/components/Playground.astro` is the editor UI; `src/lib/runtime.ts` is the
-execution boundary.
+Saule runs in the browser, compiled to WebAssembly from the same interpreter
+the CLI uses.
 
-**The browser runtime does not exist yet.** `runtime.ts` currently reports that
-and nothing runs. Everything else — editing, highlighting, examples, sharing a
-program by URL — works today and needs no changes when the runtime lands.
+| File | Role |
+|---|---|
+| `src/components/Playground.astro` | Editor, examples, output pane, Run/Stop |
+| `src/lib/runtime.ts` | Execution boundary — spawns the worker, parses results |
+| `src/lib/saule-worker.ts` | Runs programs off the main thread |
+| `crates/saule-wasm` | The Rust side: `run(source) -> String` returning JSON |
 
-To finish it, build `crates/saule-wasm` targeting `wasm32-unknown-unknown` with
-`wasm-bindgen`, exposing `run(source) -> string` (JSON matching the `RunResult`
-shape in `runtime.ts`), then replace the body of `load()` with the dynamic
-import sketched in its doc comment and flip `RUNTIME_AVAILABLE` to `true`. The
-known blockers in the interpreter:
+Build the module with:
 
-| Blocker | Where | Fix |
-|---|---|---|
-| `libloading` / dynamic native packages | `dynamic_packages.rs`, `native_host.rs` | Cargo feature, default-on, off for wasm |
-| `print!`/`println!` write to real stdout | `stdlib/core.rs` | Redirect through a swappable writer so output can be captured |
-| `std::fs` in module loader and `Io`/`Os` | `module.rs`, `stdlib/io.rs`, `stdlib/os.rs` | In-memory virtual filesystem behind a trait |
-| `Instant`/`SystemTime`, `process::exit`, `Command` | `stdlib/os.rs` | `js_sys` shims and error-returning stubs |
+```sh
+npm run build:wasm
+```
+
+`npm run dev` and `npm run build` both do this automatically (`predev` /
+`prebuild`), so the only time you need it by hand is after `cargo clean`. It
+needs a Rust toolchain, the `wasm32-unknown-unknown` target, and
+`wasm-bindgen-cli` at the version pinned in `Cargo.lock` — the script says so
+explicitly if any is missing.
+
+Output goes to `src/lib/saule_wasm/` and is **gitignored**: a 1.1 MB binary
+rebuilt on every deploy belongs in CI output, not in history.
+
+### Why a Web Worker
+
+A WebAssembly module cannot be interrupted from the outside. Run
+`while true do end` on the main thread and the page is gone — no repaint, no
+Stop button, no way back but closing the tab. In a worker the page stays
+responsive and `terminate()` is an unconditional kill, which is what makes
+**Stop** (and <kbd>Esc</kbd>) possible. A 10-second timeout stops anything
+still running, as a backstop for someone who wanders off.
+
+Terminating discards the module, so the next run re-initialises it — a fair
+price for being able to escape an infinite loop at all.
+
+### Sandbox
+
+Programs run in single-file mode, as with `saule run file.sau`. `import` is
+unavailable (module resolution needs a filesystem) and so are the real-IO parts
+of `Os`/`Io`; both report ordinary diagnostics rather than crashing. Everything
+else — the full type system, classes, interfaces, enums, pattern matching,
+closures, `String`/`Math`/`Table` — behaves exactly as it does locally.
 
 ## Deployment
 
