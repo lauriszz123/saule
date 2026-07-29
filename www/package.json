@@ -1,0 +1,31 @@
+{
+  "name": "saule-www",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Website, documentation and playground for the Saule programming language.",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "sync-docs": "node scripts/sync-docs.mjs",
+    "check-samples": "node scripts/check-samples.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.5",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/search": "^6.7.1",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.7",
+    "@lezer/highlight": "^1.2.3",
+    "astro": "^7.1.5",
+    "sharp": "^0.35.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}
