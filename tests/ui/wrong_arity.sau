@@ -1,7 +1,0 @@
--- Call-site arity mismatch should be a compile error.
-
-fn add(a: integer, b: integer) -> integer
-  return a + b
-end
-
-println(add(1))

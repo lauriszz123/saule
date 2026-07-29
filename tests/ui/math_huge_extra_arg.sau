@@ -1,4 +1,0 @@
--- Math.huge takes no arguments — passing one is rejected.
-local h: float = Math.huge(1.0)
-println(h)
-

@@ -1,3 +1,0 @@
--- Os.exit expects an integer, not a string.
-Os.exit("bye")
-

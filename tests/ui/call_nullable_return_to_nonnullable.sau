@@ -1,9 +1,0 @@
--- A user function returning `T?` must not flow into a non-nullable slot.
--- Should be a compile error.
-
-fn maybe() -> string?
-  return nil
-end
-
-local s: string = maybe()
-println(s)

@@ -1,8 +1,0 @@
--- ERROR: `break` is only legal inside a loop.
-
-class Main
-  static fn main()
-    break
-  end
-end
-

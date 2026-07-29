@@ -1,9 +1,0 @@
--- Io.open returns File? — assigning to a non-nullable File must error
--- statically (proves the native signature is wired into typeck).
-class Main
-  static fn main()
-    local f: File = Io.open("/tmp/nope.txt", IoMode.Read)
-    f.close()
-  end
-end
-

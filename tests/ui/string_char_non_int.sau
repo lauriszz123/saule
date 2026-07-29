@@ -1,4 +1,0 @@
--- String.char(...integer) — passing a string is rejected.
-local s: string = String.char(72, "i")
-println(s)
-

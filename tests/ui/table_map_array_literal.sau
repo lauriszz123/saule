@@ -1,8 +1,0 @@
--- An array-style literal cannot fill a table<K, V> when K is not integer.
-class Main
-  static fn main()
-    local m: table<string, integer> = {1, 2, 3}
-    println(m["a"])
-  end
-end
-

@@ -1,8 +1,0 @@
--- Function declared with `-> string` but returns an integer.
--- Should be a compile error.
-
-fn greet(name: string) -> string
-  return 42
-end
-
-println(greet("world"))

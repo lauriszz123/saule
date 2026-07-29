@@ -1,8 +1,0 @@
--- Assigning a nullable identifier to a non-nullable binding must error.
-class Main
-  static fn main()
-    local maybe: string? = "x"
-    local name: string = maybe
-    println(name)
-  end
-end

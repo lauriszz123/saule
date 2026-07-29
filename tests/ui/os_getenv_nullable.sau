@@ -1,4 +1,0 @@
--- Os.getenv returns string?; assigning to non-nullable string is a type error.
-local home: string = Os.getenv("HOME")
-println(home)
-

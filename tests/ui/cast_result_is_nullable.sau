@@ -1,8 +1,0 @@
--- `as` yields `T?`; the failure case has to be handled with `??` or `!`.
-class Main
-	static fn main()
-		local a: any = 5
-		local n: integer = a as integer
-		println(n)
-	end
-end

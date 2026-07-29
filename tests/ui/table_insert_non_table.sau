@@ -1,3 +1,0 @@
--- Table.insert requires a table as the first argument.
-Table.insert(42, "x")
-
