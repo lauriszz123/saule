@@ -10,7 +10,17 @@
  */
 ---
 
-<div class="playground" data-playground>
+<!--
+	`not-content` is load-bearing, not decorative. This component renders inside
+	Starlight's `.sl-markdown-content`, whose prose spacing rule puts a 16px
+	`margin-top` on every element that follows a sibling. That reaches into
+	CodeMirror's internal DOM and margins each `.cm-line` and each
+	`.cm-gutterElement` — which not only spaces the code out absurdly, it
+	desynchronises the gutter from the content and breaks CodeMirror's
+	coordinate maths, so clicking and selecting land on the wrong characters.
+	Starlight's rule explicitly exempts `:where(.not-content *)`.
+-->
+<div class="playground not-content" data-playground>
 	<div class="pg-toolbar">
 		<label class="pg-picker">
 			<span class="pg-picker-label">Example</span>
@@ -112,16 +122,28 @@
 		]);
 
 		const theme = EditorView.theme({
+			// Typography is set on the editor root, not partway down the tree.
+			// CodeMirror measures line heights with probe elements of its own,
+			// and those inherit from `.cm-editor` — so if the root's
+			// line-height differs from the lines' (here Starlight's body 1.75
+			// was reaching `.cm-editor` while `.cm-scroller` had 1.6), it
+			// caches wrong heights, sizes every gutter element from them, and
+			// the numbers drift out of step with the code.
 			'&': {
 				height: '100%',
 				fontSize: '0.85rem',
+				fontFamily: 'var(--saule-font-mono)',
+				lineHeight: '1.6',
 				backgroundColor: 'transparent',
 				color: 'var(--cm-text)',
 			},
-			'.cm-content': {
-				fontFamily: 'var(--saule-font-mono)',
-				padding: '0.75rem 0',
-			},
+			// Deliberately no vertical padding on `.cm-content`: CodeMirror
+			// aligns the gutter against it, and padding one without the other
+			// offsets the line numbers from their lines. Breathing room is
+			// added on the `.pg-editor` wrapper instead, outside CodeMirror's
+			// own layout. Line height is set on the scroller so `.cm-content`
+			// and `.cm-gutters` — its two children — inherit the same value.
+			'.cm-content': { fontFamily: 'var(--saule-font-mono)' },
 			'.cm-scroller': { fontFamily: 'var(--saule-font-mono)', lineHeight: '1.6' },
 			'.cm-gutters': {
 				backgroundColor: 'transparent',
@@ -556,6 +578,9 @@
 		flex: 1;
 		overflow: auto;
 		min-height: 0;
+		/* Vertical breathing room lives here rather than on `.cm-content`,
+		   which CodeMirror aligns the line-number gutter against. */
+		padding-block: 0.5rem;
 	}
 
 	/* CodeMirror injects its own DOM, so these need to pierce scoping. */
