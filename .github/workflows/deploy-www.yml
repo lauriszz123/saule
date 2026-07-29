@@ -36,9 +36,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -59,7 +59,10 @@ jobs:
         run: npm run build
         working-directory: www
 
-      - uses: actions/upload-pages-artifact@v3
+      # v4+ excludes dotfiles from the artifact. Astro's output has none, so
+      # `include-hidden-files` is deliberately not set — add it only if the
+      # build starts emitting one.
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: www/dist
 
@@ -71,4 +74,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
