@@ -1,0 +1,619 @@
+---
+/**
+ * The Saule playground: a CodeMirror editor, an example picker, and an
+ * output pane.
+ *
+ * Execution goes through `src/lib/runtime.ts`, which is the only piece that
+ * knows whether a browser runtime exists. Everything on this page — editing,
+ * highlighting, examples, sharing a program by URL — works today and keeps
+ * working unchanged once the WebAssembly build lands.
+ */
+---
+
+<div class="playground" data-playground>
+	<div class="pg-toolbar">
+		<label class="pg-picker">
+			<span class="pg-picker-label">Example</span>
+			<select data-examples aria-label="Load an example program"></select>
+		</label>
+
+		<div class="pg-actions">
+			<button type="button" class="pg-btn pg-btn-primary" data-run>
+				<svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14">
+					<path d="M4 2.5v11l9-5.5-9-5.5Z" fill="currentColor"></path>
+				</svg>
+				Run
+				<kbd>⌘↵</kbd>
+			</button>
+			<button type="button" class="pg-btn" data-reset>Reset</button>
+			<button type="button" class="pg-btn" data-share>Copy link</button>
+		</div>
+	</div>
+
+	<p class="pg-blurb" data-blurb></p>
+
+	<div class="pg-split">
+		<div class="pg-pane pg-pane-editor">
+			<div class="pg-pane-head">
+				<span>main.sau</span>
+			</div>
+			<div class="pg-editor" data-editor></div>
+		</div>
+
+		<div class="pg-pane pg-pane-output">
+			<div class="pg-pane-head">
+				<span>Output</span>
+				<span class="pg-status" data-status></span>
+			</div>
+			<pre class="pg-output" data-output aria-live="polite"><span class="pg-dim"
+					>Press Run to execute the program.</span
+				></pre>
+		</div>
+	</div>
+</div>
+
+<script>
+	import { EditorState, Compartment } from '@codemirror/state';
+	import {
+		EditorView,
+		keymap,
+		lineNumbers,
+		highlightActiveLine,
+		highlightActiveLineGutter,
+		drawSelection,
+		rectangularSelection,
+		highlightSpecialChars,
+	} from '@codemirror/view';
+	import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+	import {
+		syntaxHighlighting,
+		HighlightStyle,
+		bracketMatching,
+		indentUnit,
+	} from '@codemirror/language';
+	import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+	import { tags as t } from '@lezer/highlight';
+
+	import { saule } from '../lib/saule-mode';
+	import { EXAMPLES, DEFAULT_EXAMPLE } from '../lib/playground-examples';
+	import { runSaule, RUNTIME_AVAILABLE, RuntimeUnavailableError } from '../lib/runtime';
+	import type { Diagnostic } from '../lib/runtime';
+
+	const root = document.querySelector<HTMLElement>('[data-playground]');
+	if (root) init(root);
+
+	function init(root: HTMLElement) {
+		const editorHost = root.querySelector<HTMLElement>('[data-editor]')!;
+		const picker = root.querySelector<HTMLSelectElement>('[data-examples]')!;
+		const blurb = root.querySelector<HTMLElement>('[data-blurb]')!;
+		const output = root.querySelector<HTMLElement>('[data-output]')!;
+		const status = root.querySelector<HTMLElement>('[data-status]')!;
+		const runBtn = root.querySelector<HTMLButtonElement>('[data-run]')!;
+		const resetBtn = root.querySelector<HTMLButtonElement>('[data-reset]')!;
+		const shareBtn = root.querySelector<HTMLButtonElement>('[data-share]')!;
+
+		// Colours come from CSS variables so the editor follows Starlight's
+		// light/dark toggle without re-creating the EditorView.
+		const highlight = HighlightStyle.define([
+			{ tag: t.comment, color: 'var(--cm-comment)', fontStyle: 'italic' },
+			{ tag: t.string, color: 'var(--cm-string)' },
+			{ tag: t.number, color: 'var(--cm-number)' },
+			{ tag: t.atom, color: 'var(--cm-atom)' },
+			{ tag: t.keyword, color: 'var(--cm-keyword)' },
+			{ tag: t.definitionKeyword, color: 'var(--cm-decl)', fontWeight: '600' },
+			{ tag: t.operatorKeyword, color: 'var(--cm-keyword)' },
+			{ tag: t.self, color: 'var(--cm-self)', fontStyle: 'italic' },
+			{ tag: t.typeName, color: 'var(--cm-type)' },
+			{ tag: t.function(t.variableName), color: 'var(--cm-fn)' },
+			{ tag: t.variableName, color: 'var(--cm-text)' },
+			{ tag: t.operator, color: 'var(--cm-op)' },
+			{ tag: t.bracket, color: 'var(--cm-op)' },
+			{ tag: t.punctuation, color: 'var(--cm-punct)' },
+		]);
+
+		const theme = EditorView.theme({
+			'&': {
+				height: '100%',
+				fontSize: '0.85rem',
+				backgroundColor: 'transparent',
+				color: 'var(--cm-text)',
+			},
+			'.cm-content': {
+				fontFamily: 'var(--saule-font-mono)',
+				padding: '0.75rem 0',
+			},
+			'.cm-scroller': { fontFamily: 'var(--saule-font-mono)', lineHeight: '1.6' },
+			'.cm-gutters': {
+				backgroundColor: 'transparent',
+				border: 'none',
+				color: 'var(--cm-gutter)',
+			},
+			'.cm-activeLine': { backgroundColor: 'var(--cm-active)' },
+			'.cm-activeLineGutter': {
+				backgroundColor: 'var(--cm-active)',
+				color: 'var(--cm-text)',
+			},
+			'.cm-cursor': { borderLeftColor: 'var(--cm-text)' },
+			'&.cm-focused': { outline: 'none' },
+			'.cm-selectionBackground, ::selection': { backgroundColor: 'var(--cm-selection)' },
+			'&.cm-focused .cm-selectionBackground': { backgroundColor: 'var(--cm-selection)' },
+			'.cm-errorLine': { backgroundColor: 'var(--cm-error-line)' },
+		});
+
+		const readOnly = new Compartment();
+
+		const view = new EditorView({
+			parent: editorHost,
+			state: EditorState.create({
+				doc: initialSource(),
+				extensions: [
+					lineNumbers(),
+					highlightActiveLineGutter(),
+					highlightSpecialChars(),
+					history(),
+					drawSelection(),
+					rectangularSelection(),
+					highlightActiveLine(),
+					bracketMatching(),
+					closeBrackets(),
+					indentUnit.of('    '),
+					saule(),
+					syntaxHighlighting(highlight),
+					theme,
+					EditorView.lineWrapping,
+					keymap.of([
+						{ key: 'Mod-Enter', run: () => (run(), true) },
+						{ key: 'Mod-s', run: () => (run(), true), preventDefault: true },
+						...closeBracketsKeymap,
+						...defaultKeymap,
+						...historyKeymap,
+						indentWithTab,
+					]),
+					readOnly.of(EditorState.readOnly.of(false)),
+				],
+			}),
+		});
+
+		// ---- examples -------------------------------------------------------
+
+		for (const example of EXAMPLES) {
+			const option = document.createElement('option');
+			option.value = example.id;
+			option.textContent = example.label;
+			picker.append(option);
+		}
+
+		let current = DEFAULT_EXAMPLE;
+
+		function load(id: string) {
+			const example = EXAMPLES.find((e) => e.id === id);
+			if (!example) return;
+			current = example;
+			picker.value = example.id;
+			blurb.textContent = example.blurb;
+			view.dispatch({
+				changes: { from: 0, to: view.state.doc.length, insert: example.source },
+			});
+			clearOutput();
+		}
+
+		picker.addEventListener('change', () => {
+			load(picker.value);
+			// A picked example replaces a shared program, so drop the stale hash.
+			history_replace('');
+		});
+
+		resetBtn.addEventListener('click', () => {
+			load(current.id);
+			history_replace('');
+		});
+
+		// ---- sharing --------------------------------------------------------
+
+		/**
+		 * Programs travel in the URL fragment, base64url-encoded. The fragment
+		 * never reaches the server, which matters on GitHub Pages where there
+		 * is no server to reach — and it keeps whatever someone typed out of
+		 * access logs.
+		 */
+		function encode(source: string): string {
+			const bytes = new TextEncoder().encode(source);
+			let binary = '';
+			for (const byte of bytes) binary += String.fromCharCode(byte);
+			return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+		}
+
+		function decode(encoded: string): string | null {
+			try {
+				const padded = encoded.replace(/-/g, '+').replace(/_/g, '/');
+				const binary = atob(padded);
+				const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+				return new TextDecoder().decode(bytes);
+			} catch {
+				return null;
+			}
+		}
+
+		function initialSource(): string {
+			const match = /[#&]code=([^&]+)/.exec(window.location.hash);
+			const shared = match ? decode(match[1]!) : null;
+			return shared ?? DEFAULT_EXAMPLE.source;
+		}
+
+		function history_replace(hash: string) {
+			const url = new URL(window.location.href);
+			url.hash = hash;
+			window.history.replaceState(null, '', url.toString());
+		}
+
+		shareBtn.addEventListener('click', async () => {
+			const encoded = encode(view.state.doc.toString());
+			history_replace(`code=${encoded}`);
+			const label = shareBtn.textContent;
+			try {
+				await navigator.clipboard.writeText(window.location.href);
+				shareBtn.textContent = 'Copied!';
+			} catch {
+				// Clipboard access can be denied; the URL bar still has the link.
+				shareBtn.textContent = 'Link in URL bar';
+			}
+			setTimeout(() => {
+				shareBtn.textContent = label;
+			}, 2000);
+		});
+
+		// ---- running --------------------------------------------------------
+
+		function clearOutput() {
+			output.replaceChildren(dim('Press Run to execute the program.'));
+			status.textContent = '';
+			status.className = 'pg-status';
+		}
+
+		function dim(text: string): HTMLElement {
+			const span = document.createElement('span');
+			span.className = 'pg-dim';
+			span.textContent = text;
+			return span;
+		}
+
+		function line(text: string, className?: string): HTMLElement {
+			const span = document.createElement('span');
+			if (className) span.className = className;
+			span.textContent = text;
+			return span;
+		}
+
+		/** Render a diagnostic the way the CLI does: phase, message, help. */
+		function renderDiagnostic(d: Diagnostic): HTMLElement {
+			const wrap = document.createElement('div');
+			wrap.className = d.severity === 'error' ? 'pg-error' : 'pg-warning';
+
+			wrap.append(line(`${d.phase} ${d.severity}: `, 'pg-diag-label'), line(d.message));
+			if (d.help) {
+				wrap.append(document.createElement('br'), line(`  help: ${d.help}`, 'pg-dim'));
+			}
+			return wrap;
+		}
+
+		let running = false;
+
+		async function run() {
+			if (running) return;
+			running = true;
+			runBtn.disabled = true;
+			status.textContent = 'Running…';
+			status.className = 'pg-status';
+			output.replaceChildren();
+
+			try {
+				const result = await runSaule(view.state.doc.toString());
+
+				const nodes: Node[] = [];
+				for (const chunk of result.output) {
+					nodes.push(line(chunk.text, chunk.stream === 'stderr' ? 'pg-stderr' : undefined));
+				}
+				for (const d of result.diagnostics) nodes.push(renderDiagnostic(d));
+
+				if (!nodes.length) nodes.push(dim('(no output)'));
+				output.replaceChildren(...nodes);
+
+				status.textContent = result.ok
+					? `Finished in ${result.durationMs.toFixed(0)} ms`
+					: `Failed — ${result.diagnostics.length} diagnostic(s)`;
+				status.className = result.ok ? 'pg-status pg-ok' : 'pg-status pg-fail';
+			} catch (err) {
+				const message =
+					err instanceof RuntimeUnavailableError
+						? err.message
+						: `Unexpected failure: ${err instanceof Error ? err.message : String(err)}`;
+
+				const box = document.createElement('div');
+				box.className = 'pg-notice';
+				box.append(line(message));
+				output.replaceChildren(box);
+
+				status.textContent = 'Runtime unavailable';
+				status.className = 'pg-status pg-fail';
+			} finally {
+				running = false;
+				runBtn.disabled = false;
+			}
+		}
+
+		runBtn.addEventListener('click', run);
+
+		// ---- boot -----------------------------------------------------------
+
+		const shared = /[#&]code=/.test(window.location.hash);
+		if (shared) {
+			blurb.textContent = 'Loaded from a shared link.';
+			picker.value = '';
+		} else {
+			load(DEFAULT_EXAMPLE.id);
+		}
+
+		if (!RUNTIME_AVAILABLE) {
+			runBtn.title = 'The browser runtime is still being built';
+			status.textContent = 'Runtime not yet available';
+			status.className = 'pg-status pg-fail';
+		}
+	}
+</script>
+
+<style>
+	/*
+	 * Starlight's splash template caps content at 1080px, which is a good
+	 * measure for prose and far too narrow for a side-by-side editor. Widen
+	 * only the container that actually holds a playground, so every other
+	 * splash page keeps its reading width.
+	 */
+	:global(.sl-container:has(.playground)) {
+		max-width: min(100%, 92rem);
+	}
+
+	.playground {
+		width: 100%;
+		margin-inline: auto;
+
+		--cm-text: var(--sl-color-white);
+		--cm-comment: #7d8590;
+		--cm-string: #a5d6ff;
+		--cm-number: #79c0ff;
+		--cm-atom: #79c0ff;
+		--cm-keyword: #ff7b72;
+		--cm-decl: #ff9e64;
+		--cm-self: #ffa657;
+		--cm-type: #ffd580;
+		--cm-fn: #d2a8ff;
+		--cm-op: #ff7b72;
+		--cm-punct: #8b949e;
+		--cm-gutter: #4d5560;
+		--cm-active: rgb(255 255 255 / 4%);
+		--cm-selection: rgb(240 180 41 / 25%);
+		--cm-error-line: rgb(248 81 73 / 12%);
+	}
+
+	:global(:root[data-theme='light']) .playground {
+		--cm-comment: #6e7781;
+		--cm-string: #0a3069;
+		--cm-number: #0550ae;
+		--cm-atom: #0550ae;
+		--cm-keyword: #cf222e;
+		--cm-decl: #953800;
+		--cm-self: #953800;
+		--cm-type: #7c5314;
+		--cm-fn: #6639ba;
+		--cm-op: #cf222e;
+		--cm-punct: #57606a;
+		--cm-gutter: #a0a6ad;
+		--cm-active: rgb(0 0 0 / 3%);
+		--cm-selection: rgb(240 180 41 / 30%);
+		--cm-error-line: rgb(207 34 46 / 8%);
+	}
+
+	.pg-toolbar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1rem;
+		align-items: end;
+		justify-content: space-between;
+		margin-bottom: 0.75rem;
+	}
+
+	.pg-picker {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+	}
+
+	.pg-picker-label {
+		font-size: var(--sl-text-xs);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--sl-color-gray-3);
+	}
+
+	.pg-picker select {
+		background: var(--sl-color-black);
+		color: var(--sl-color-white);
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.4rem;
+		padding: 0.45rem 0.7rem;
+		font: inherit;
+		font-size: var(--sl-text-sm);
+		min-width: 14rem;
+	}
+
+	.pg-actions {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.pg-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		border: 1px solid var(--sl-color-gray-5);
+		background: var(--sl-color-black);
+		color: var(--sl-color-white);
+		border-radius: 0.4rem;
+		padding: 0.45rem 0.85rem;
+		font: inherit;
+		font-size: var(--sl-text-sm);
+		cursor: pointer;
+		transition: background-color 0.15s, border-color 0.15s;
+	}
+
+	.pg-btn:hover:not(:disabled) {
+		border-color: var(--sl-color-accent);
+	}
+
+	.pg-btn:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.pg-btn-primary {
+		background: var(--sl-color-accent);
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-black);
+		font-weight: 600;
+	}
+
+	.pg-btn kbd {
+		font-family: var(--saule-font-mono);
+		font-size: 0.75em;
+		opacity: 0.7;
+		border: none;
+		background: none;
+		padding: 0;
+	}
+
+	.pg-blurb {
+		margin: 0 0 0.9rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+		min-height: 1.4em;
+	}
+
+	.pg-split {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 1rem;
+		/* Both panes track the taller one, so the editor growing with its
+		   content doesn't leave the output pane short. */
+		align-items: stretch;
+	}
+
+	@media (min-width: 60rem) {
+		.pg-split {
+			grid-template-columns: 1.15fr 1fr;
+		}
+	}
+
+	.pg-pane {
+		display: flex;
+		flex-direction: column;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.6rem;
+		overflow: hidden;
+		background: var(--sl-color-black);
+		/* Tall enough to feel like an editor, capped so it always fits the
+		   viewport without the page itself scrolling. */
+		min-height: min(62vh, 34rem);
+		height: 100%;
+	}
+
+	.pg-pane-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 1rem;
+		padding: 0.5rem 0.85rem;
+		border-bottom: 1px solid var(--sl-color-gray-5);
+		background: var(--sl-color-gray-6);
+		font-size: var(--sl-text-xs);
+		font-family: var(--saule-font-mono);
+		color: var(--sl-color-gray-2);
+	}
+
+	.pg-status {
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+
+	.pg-status.pg-ok {
+		color: #3fb950;
+	}
+
+	.pg-status.pg-fail {
+		color: #f85149;
+	}
+
+	.pg-editor {
+		flex: 1;
+		overflow: auto;
+		min-height: 0;
+	}
+
+	/* CodeMirror injects its own DOM, so these need to pierce scoping. */
+	.pg-editor :global(.cm-editor) {
+		height: 100%;
+	}
+
+	.pg-output {
+		flex: 1;
+		margin: 0;
+		padding: 0.75rem 0.85rem;
+		overflow: auto;
+		font-family: var(--saule-font-mono);
+		font-size: 0.8rem;
+		line-height: 1.6;
+		white-space: pre-wrap;
+		word-break: break-word;
+		color: var(--sl-color-white);
+		background: var(--sl-color-black);
+	}
+
+	.pg-dim {
+		color: var(--sl-color-gray-3);
+	}
+
+	.pg-stderr {
+		color: #f0883e;
+	}
+
+	.pg-error,
+	.pg-warning {
+		margin-block: 0.35rem;
+		padding: 0.5rem 0.7rem;
+		border-radius: 0.35rem;
+		border-left: 3px solid currentcolor;
+	}
+
+	.pg-error {
+		color: #f85149;
+		background: rgb(248 81 73 / 8%);
+	}
+
+	.pg-warning {
+		color: #d29922;
+		background: rgb(210 153 34 / 8%);
+	}
+
+	.pg-diag-label {
+		font-weight: 600;
+		text-transform: capitalize;
+	}
+
+	.pg-notice {
+		padding: 0.85rem 1rem;
+		border-radius: 0.45rem;
+		border: 1px solid var(--sl-color-accent);
+		background: var(--sl-color-accent-low);
+		color: var(--sl-color-white);
+		line-height: 1.6;
+	}
+</style>
