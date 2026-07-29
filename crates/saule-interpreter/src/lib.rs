@@ -40,6 +40,7 @@ pub mod error;
 pub mod eval;
 pub mod module;
 pub mod output;
+pub mod platform;
 pub mod dynamic_packages;
 pub mod native_packages;
 // The host-callback table exists solely so a dlopen'd package can manipulate
