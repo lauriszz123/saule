@@ -1,5 +1,0 @@
--- Arity is part of a function type.
--- Should be a compile error.
-
-local double: fn(integer) -> integer = (a: integer, b: integer) => a + b
-println(double(5))

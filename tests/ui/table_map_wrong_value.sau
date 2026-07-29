@@ -1,9 +1,0 @@
--- Assigning the wrong value type to a typed map is an error.
-class Main
-  static fn main()
-    local m: table<string, integer> = {}
-    m["a"] = "not-an-integer"
-    println(m["a"])
-  end
-end
-

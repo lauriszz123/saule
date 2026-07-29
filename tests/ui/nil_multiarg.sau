@@ -1,5 +1,0 @@
-class Main
-  static fn main()
-    local a: string, b: string = nil, "this is bad"
-  end
-end

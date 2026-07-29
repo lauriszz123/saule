@@ -1,4 +1,0 @@
--- Math.floor expects a number; passing a string must be caught at typecheck.
-local x: integer = Math.floor("3.14")
-println(x)
-

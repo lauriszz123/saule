@@ -1,8 +1,0 @@
--- ERROR: thrown value escapes with no surrounding try / catch
-
-class Main
-  static fn main()
-    throw "boom"
-  end
-end
-

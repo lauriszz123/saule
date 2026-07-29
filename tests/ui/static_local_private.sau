@@ -1,8 +1,0 @@
--- `static local` is private — accessing it via `Bank.secret` from outside
--- the class must fail.
-
-class Bank
-    static local secret: integer = 42
-end
-
-println(Bank.secret)

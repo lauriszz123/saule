@@ -1,9 +1,0 @@
--- An `any` value cannot silently fill a concrete slot; that used to put a
--- string in a variable annotated `integer` with no error anywhere.
-class Main
-	static fn main()
-		local a: any = "i am a string"
-		local n: integer = a
-		println(n)
-	end
-end

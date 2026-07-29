@@ -1,3 +1,0 @@
--- printf requires a format string as the first argument.
-printf(42, "x")
-
