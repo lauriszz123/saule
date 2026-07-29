@@ -80,9 +80,36 @@ known blockers in the interpreter:
 
 ## Deployment
 
+There are two paths, and GitHub's **Settings → Pages → Source** picks between
+them. Use one or the other — the setting cannot serve both.
+
+### Via GitHub Actions (preferred)
+
 `.github/workflows/deploy-www.yml` builds and publishes on every push to `main`
-that touches the site or any of its sources. It requires **Settings → Pages →
-Source → GitHub Actions** to be set once.
+that touches the site or any of its sources. Set **Source → GitHub Actions**
+once, and that is the whole setup.
+
+### Locally, to a `gh-pages` branch (no CI required)
+
+```sh
+www/scripts/deploy-gh-pages.sh --dry-run   # build and stage, don't push
+www/scripts/deploy-gh-pages.sh             # build, commit, push
+```
+
+Then set **Source → Deploy from a branch → `gh-pages` / (root)**.
+
+Use this when Actions cannot run — an account billing lock, or just shipping
+without CI. It produces the identical site; your machine does the building
+instead of a runner. Note it builds from your **working tree**, not from
+`HEAD`, so uncommitted edits get published (the script warns when the tree is
+dirty).
+
+One thing this path needs that the Actions path does not: a `.nojekyll` file.
+Branch-based Pages runs the published files through Jekyll, which silently
+drops directories whose names begin with an underscore — and Astro puts all of
+its CSS and JS in `_astro/`. Without it the site loads as unstyled HTML with
+dead scripts. The script creates the file itself, which is why it is not
+committed under `public/`.
 
 `base` and `site` live in `site.config.mjs`, shared by the Astro config and the
 sync script. Moving to a custom domain means setting `site` to it and dropping
