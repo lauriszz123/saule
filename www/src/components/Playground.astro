@@ -35,6 +35,12 @@
 				Run
 				<kbd>⌘↵</kbd>
 			</button>
+			<button type="button" class="pg-btn pg-btn-stop" data-stop hidden>
+				<svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12">
+					<rect x="3" y="3" width="10" height="10" rx="1" fill="currentColor"></rect>
+				</svg>
+				Stop
+			</button>
 			<button type="button" class="pg-btn" data-reset>Reset</button>
 			<button type="button" class="pg-btn" data-share>Copy link</button>
 		</div>
@@ -86,7 +92,13 @@
 
 	import { saule } from '../lib/saule-mode';
 	import { EXAMPLES, DEFAULT_EXAMPLE } from '../lib/playground-examples';
-	import { runSaule, RUNTIME_AVAILABLE, RuntimeUnavailableError } from '../lib/runtime';
+	import {
+		runSaule,
+		stopSaule,
+		RUNTIME_AVAILABLE,
+		RuntimeUnavailableError,
+		RunCancelledError,
+	} from '../lib/runtime';
 	import type { Diagnostic } from '../lib/runtime';
 
 	const root = document.querySelector<HTMLElement>('[data-playground]');
@@ -99,6 +111,7 @@
 		const output = root.querySelector<HTMLElement>('[data-output]')!;
 		const status = root.querySelector<HTMLElement>('[data-status]')!;
 		const runBtn = root.querySelector<HTMLButtonElement>('[data-run]')!;
+		const stopBtn = root.querySelector<HTMLButtonElement>('[data-stop]')!;
 		const resetBtn = root.querySelector<HTMLButtonElement>('[data-reset]')!;
 		const shareBtn = root.querySelector<HTMLButtonElement>('[data-share]')!;
 
@@ -319,17 +332,29 @@
 		}
 
 		let running = false;
+		/** The first run pays for fetching and initialising the wasm module. */
+		let firstRun = true;
+
+		function setRunning(active: boolean) {
+			running = active;
+			runBtn.disabled = active;
+			// Swap Run for Stop rather than showing both: while a program is
+			// running, stopping it is the only useful action.
+			stopBtn.hidden = !active;
+		}
 
 		async function run() {
 			if (running) return;
-			running = true;
-			runBtn.disabled = true;
-			status.textContent = 'Running…';
+			setRunning(true);
+			// The module is fetched on first use, so say so — a couple of
+			// hundred milliseconds of silence otherwise looks like a hang.
+			status.textContent = firstRun ? 'Starting the runtime…' : 'Running…';
 			status.className = 'pg-status';
 			output.replaceChildren();
 
 			try {
 				const result = await runSaule(view.state.doc.toString());
+				firstRun = false;
 
 				const nodes: Node[] = [];
 				for (const chunk of result.output) {
@@ -345,25 +370,36 @@
 					: `Failed — ${result.diagnostics.length} diagnostic(s)`;
 				status.className = result.ok ? 'pg-status pg-ok' : 'pg-status pg-fail';
 			} catch (err) {
-				const message =
-					err instanceof RuntimeUnavailableError
-						? err.message
-						: `Unexpected failure: ${err instanceof Error ? err.message : String(err)}`;
+				if (err instanceof RunCancelledError) {
+					// Stopped on purpose — by the button or the timeout. Not a
+					// failure of the program, so it reads differently.
+					const box = document.createElement('div');
+					box.className = 'pg-notice';
+					box.append(line(err.message));
+					output.replaceChildren(box);
+					status.textContent = 'Stopped';
+					status.className = 'pg-status pg-fail';
+				} else {
+					const message =
+						err instanceof RuntimeUnavailableError
+							? err.message
+							: `Unexpected failure: ${err instanceof Error ? err.message : String(err)}`;
 
-				const box = document.createElement('div');
-				box.className = 'pg-notice';
-				box.append(line(message));
-				output.replaceChildren(box);
+					const box = document.createElement('div');
+					box.className = 'pg-notice';
+					box.append(line(message));
+					output.replaceChildren(box);
 
-				status.textContent = 'Runtime unavailable';
-				status.className = 'pg-status pg-fail';
+					status.textContent = 'Runtime unavailable';
+					status.className = 'pg-status pg-fail';
+				}
 			} finally {
-				running = false;
-				runBtn.disabled = false;
+				setRunning(false);
 			}
 		}
 
 		runBtn.addEventListener('click', run);
+		stopBtn.addEventListener('click', () => stopSaule());
 
 		// ---- boot -----------------------------------------------------------
 
@@ -380,6 +416,15 @@
 			status.textContent = 'Runtime not yet available';
 			status.className = 'pg-status pg-fail';
 		}
+
+		// Stopping a program is worth a keyboard shortcut of its own, since
+		// the mouse may be nowhere near the button when a loop runs away.
+		document.addEventListener('keydown', (event) => {
+			if (running && event.key === 'Escape') {
+				event.preventDefault();
+				stopSaule();
+			}
+		});
 	}
 </script>
 
@@ -502,6 +547,21 @@
 		border-color: var(--sl-color-accent);
 		color: var(--sl-color-black);
 		font-weight: 600;
+	}
+
+	.pg-btn-stop {
+		border-color: #f85149;
+		color: #f85149;
+		font-weight: 600;
+	}
+
+	.pg-btn-stop:hover {
+		background: rgb(248 81 73 / 12%);
+		border-color: #f85149;
+	}
+
+	.pg-btn[hidden] {
+		display: none;
 	}
 
 	.pg-btn kbd {
