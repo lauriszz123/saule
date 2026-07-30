@@ -41,6 +41,20 @@ fn hover_src(src: &str, needle: &str) -> Option<String> {
     hover_at_with_source(&module, src, pos, &ImportContext::default()).map(|(md, _)| md)
 }
 
+/// As [`hover_src_at`] but with the module's own [`ImportContext`]
+/// built first, exactly as `Backend::hover` does. Needed for anything
+/// that reads `---` blocks through the doc index rather than by
+/// re-scanning source at a declaration anchor.
+fn hover_ctx_at(src: &str, needle: &str, offset: usize) -> Option<String> {
+    init_stdlib();
+    let pos = src.find(needle).expect("needle not found") + offset;
+    let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
+    let module = saule_parser::parse(tokens).expect("parse");
+    let _ = saule_semantic::analyze(&module);
+    let ctx = build_import_context(&module, src, None);
+    hover_at_with_source(&module, src, pos, &ctx).map(|(md, _)| md)
+}
+
 /// As [`hover_src`] but with an explicit `offset` past the needle's
 /// start, for cases where the token of interest isn't at the left
 /// edge of `needle`.
@@ -643,9 +657,12 @@ class Main
 end
 ";
     let md = hover_src_at(src, "count: 3", 1).expect("hover");
-    assert!(md.contains("(named arg)"), "got: {md}");
-    assert!(md.contains("count"), "got: {md}");
-    assert!(md.contains("integer"), "got: {md}");
+    // A named-argument key renders as the parameter it is, qualified by
+    // the callee so the reader can tell which `count:` this is.
+    assert_eq!(
+        md,
+        "```saule\n(parameter) Main.put.count: integer = …\n```"
+    );
 }
 
 #[test]
@@ -1206,4 +1223,252 @@ fn unbound_type_param_does_not_escape_into_local_type() {
     let src = "fn make<T>(n: integer) -> table<T>\n\tlocal out: table<T> = {}\n\treturn out\nend\n\nlocal xs = make(3)\n";
     let md = hover_src_at(src, "xs =", 1).expect("hover on local");
     assert!(md.contains("(local) xs: any"), "{md}");
+}
+
+// ─── anchoring: a declaration answers for its head, not its body ─────────────
+
+/// The regression that motivated anchoring declarations to their name
+/// token. A comment inside a function body used to fall through to the
+/// enclosing `fn` — the popup then described a symbol several lines
+/// away with full confidence, which is what made hover feel random.
+#[test]
+fn a_comment_inside_a_body_hovers_nothing() {
+    let src = "\
+fn build(n: integer) -> integer
+  -- the child of this widget
+  return n
+end
+";
+    assert_eq!(hover_src_at(src, "child of", 1), None);
+}
+
+/// Same fallback, one level out: prose between two members of a class
+/// used to render the whole class blurb.
+#[test]
+fn a_comment_between_class_members_hovers_nothing() {
+    let src = "\
+class Panel
+  x: integer = 0
+  -- a note about layout
+  y: integer = 0
+end
+";
+    assert_eq!(hover_src_at(src, "note about", 1), None);
+}
+
+/// Anchoring must not cost the declaration its own hover: the keyword,
+/// any modifier, and the name all still answer.
+#[test]
+fn a_declaration_still_hovers_across_its_whole_head() {
+    // `export` sits outside the decl's own span, so it is not a hover
+    // target here and never was — the head under test is `fn` onward.
+    let src = "export fn add(a: integer) -> integer\n  return a\nend\n";
+    for needle in ["fn add", "add("] {
+        let md = hover_src_at(src, needle, 1).unwrap_or_else(|| panic!("no hover on {needle}"));
+        assert!(md.contains("fn add(a: integer) -> integer"), "got: {md}");
+    }
+}
+
+/// A literal has nothing to say, and saying it anyway means a hover
+/// fires while the cursor rests in the middle of a sentence of prose.
+#[test]
+fn a_string_literal_hovers_nothing() {
+    let src = "fn f() -> nothing\n  local s: string = \"some prose here\"\nend\n";
+    assert_eq!(hover_src_at(src, "prose", 1), None);
+}
+
+// ─── named arguments ────────────────────────────────────────────────────────
+
+/// A named-argument key is qualified by its callee. Two `child:` keys in
+/// one expression belong to different widgets and must say so.
+#[test]
+fn named_arg_keys_name_the_callee_they_belong_to() {
+    let src = "\
+class Box
+  fn init(child: string, pad: integer = 0)
+  end
+end
+
+class Frame
+  fn init(child: string)
+  end
+end
+
+fn build() -> nothing
+  local a = Box(child: \"x\", pad: 2)
+  local b = Frame(child: \"y\")
+end
+";
+    let outer = hover_src_at(src, "child: \"x\"", 1).expect("hover on Box key");
+    assert_eq!(
+        outer,
+        "```saule\n(parameter) Box.child: string\n```",
+        "got: {outer}"
+    );
+    let inner = hover_src_at(src, "child: \"y\"", 1).expect("hover on Frame key");
+    assert_eq!(
+        inner,
+        "```saule\n(parameter) Frame.child: string\n```",
+        "got: {inner}"
+    );
+    // Defaults are marked the same way the declaration site marks them.
+    let pad = hover_src_at(src, "pad: 2", 1).expect("hover on pad key");
+    assert!(pad.contains("Box.pad: integer = …"), "got: {pad}");
+}
+
+/// A key the callee has no parameter for names the miss rather than
+/// staying silent — silence would let the enclosing call answer in its
+/// place, which is the failure mode this whole area is about.
+#[test]
+fn an_unknown_named_arg_key_says_so() {
+    let src = "\
+class Box
+  fn init(child: string)
+  end
+end
+
+fn build() -> nothing
+  local a = Box(chidl: \"x\")
+end
+";
+    let md = hover_src_at(src, "chidl", 1).expect("hover on typo'd key");
+    assert!(md.contains("(unknown) Box.chidl"), "got: {md}");
+}
+
+/// An `@param` line on the callee reaches the hover on the key, so the
+/// prose lives next to the declaration and surfaces at the call site.
+#[test]
+fn a_named_arg_key_carries_the_param_doc() {
+    let src = "\
+--- Wraps a child.
+--- @param child What to wrap.
+fn wrap(child: string) -> string
+  return child
+end
+
+fn build() -> nothing
+  local a = wrap(child: \"x\")
+end
+";
+    let md = hover_ctx_at(src, "child: \"x\"", 1).expect("hover on key");
+    assert!(md.contains("wrap.child: string"), "got: {md}");
+    assert!(md.contains("What to wrap."), "got: {md}");
+    // The function's own summary belongs on the function, not on every
+    // parameter inside it.
+    assert!(!md.contains("Wraps a child."), "got: {md}");
+}
+
+// ─── loop variables ─────────────────────────────────────────────────────────
+
+/// The binding site of a loop variable hovers the same as a use of it
+/// inside the body. It had no span-tracked node of its own, so it was
+/// the one place in the loop where hover fell through to the function.
+#[test]
+fn a_numeric_loop_variable_hovers_at_its_binding_site() {
+    let src = "\
+fn f() -> nothing
+  for i: integer = 1, 10 do
+print(i)
+  end
+end
+";
+    let decl = hover_src_at(src, "i: integer = 1", 0).expect("hover on binding");
+    assert_eq!(decl, "```saule\n(loop var) i: integer\n```");
+    let use_ = hover_src_at(src, "print(i)", "print(".len()).expect("hover on use");
+    assert_eq!(decl, use_, "binding and use disagree");
+}
+
+#[test]
+fn a_for_in_loop_variable_hovers_at_its_binding_site() {
+    let src = "\
+fn f(names: table<string>) -> nothing
+  for name: string in names do
+print(name)
+  end
+end
+";
+    let md = hover_src_at(src, "name: string in", 0).expect("hover on binding");
+    assert_eq!(md, "```saule\n(loop var) name: string\n```");
+}
+
+/// Free functions reached through a re-export barrel resolve for
+/// named-argument hover.
+///
+/// A barrel (`init.sau`: nothing but `import * from ...`) declares no
+/// functions itself, so a single-level scan of the import target found
+/// none of them and every call to one hovered its keys as a bare name
+/// with no type. Classes never had this problem — they arrive through
+/// the semantic registry seed, which already follows barrels.
+#[test]
+fn named_arg_resolves_through_a_re_export_barrel() {
+    init_stdlib();
+    let dir = std::env::temp_dir().join(format!("saule-lsp-hover-barrel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("kit")).unwrap();
+
+    std::fs::write(
+        dir.join("kit").join("overlay.sau"),
+        "export fn showToast(context: integer, message: string = \"\") -> nothing\nend\n",
+    )
+    .unwrap();
+    // The barrel: re-exports, declares nothing.
+    std::fs::write(
+        dir.join("kit").join("init.sau"),
+        "import * from overlay\n",
+    )
+    .unwrap();
+
+    let app = "\
+import * from kit
+
+fn main() -> nothing
+  showToast(1, message: \"hi\")
+end
+";
+    let tokens = saule_lexer::Lexer::new(app).tokenize().unwrap();
+    let module = saule_parser::parse(tokens).unwrap();
+    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let _ = saule_semantic::analyze_with_seed(&module, seed);
+    let ctx = build_import_context(&module, app, Some(&dir));
+
+    let pos = app.find("message: \"hi\"").unwrap() + 1;
+    let md = hover_at_with_source(&module, app, pos, &ctx)
+        .map(|(m, _)| m)
+        .expect("hover on key");
+    assert_eq!(
+        md,
+        "```saule\n(parameter) showToast.message: string = …\n```",
+        "got: {md}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same barrel must not forward a name its target keeps private.
+#[test]
+fn a_barrel_does_not_forward_a_private_function() {
+    init_stdlib();
+    let dir = std::env::temp_dir().join(format!("saule-lsp-hover-priv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("kit")).unwrap();
+
+    std::fs::write(
+        dir.join("kit").join("impl.sau"),
+        "fn helper(seed: integer = 0) -> nothing\nend\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("kit").join("init.sau"), "import * from impl\n").unwrap();
+
+    let app = "import * from kit\n\nfn main() -> nothing\n  helper(seed: 1)\nend\n";
+    let tokens = saule_lexer::Lexer::new(app).tokenize().unwrap();
+    let module = saule_parser::parse(tokens).unwrap();
+    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let _ = saule_semantic::analyze_with_seed(&module, seed);
+    // A wildcard binds only what its target exports, at every hop.
+    assert!(
+        saule_semantic::lookup_function("helper").is_none(),
+        "a private function crossed the barrel"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
