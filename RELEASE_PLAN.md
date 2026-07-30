@@ -178,7 +178,36 @@ at it. Not verifiable from this machine — `gh` is not installed.
 
 ## Step 2 — Prove the release pipeline
 
-`release.yml` and `ci.yml` are written but have never executed. Everything
+### Blocked: the GitHub account is locked for billing
+
+**Nothing in CI can run until this is fixed.** Every job on the repository
+fails before its first step with:
+
+```
+The job was not started because your account is locked due to a billing issue.
+```
+
+This is not specific to the new workflows. `Check website` and `Deploy website`
+have failed on **every run since they were added on 2026-07-29** — they have
+never once succeeded. The site is live only because
+`www/scripts/deploy-gh-pages.sh` pushes the built output to the `gh-pages`
+branch by hand, and GitHub's own managed "pages build and deployment" job is
+billed differently, so it still runs.
+
+The repository is public, so Actions minutes are free — this is an
+account-level lock (payment method, spending limit, or an unpaid invoice), not
+a minutes overage. Fix it under **GitHub → Settings → Billing**. That is
+account and payment work, so it has to be done by hand; it is not something
+this plan can automate.
+
+`v26.1` **is already tagged and pushed**, and the build never started, so no
+release was published and nothing is half-done. Once billing is unlocked, just
+re-run the failed `Release` run — the tag-push path reads the version from the
+existing tag, so the number does not need to be burned or re-cut.
+
+### Then, once it runs
+
+`release.yml` and `ci.yml` have still never executed a single step. Everything
 downstream assumes they work.
 
 **Do:**
