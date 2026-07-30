@@ -1,0 +1,32 @@
+fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
+	local out: table<U> = {}
+
+	for item: T in items do
+		out[#out + 1] = f(item)
+	end
+
+	return out
+end
+
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+	local result: table<T> = {}
+
+	for item: T in items do
+		if predicate(item) then
+			result[#result + 1] = item
+		end
+	end
+
+	return result
+end
+
+local nums: table = {1, 2, 3, 4, 5, 6}
+
+local evens = filter(nums, x => x % 2 == 0)
+local doubled = map(evens, x => x * 2)
+local lengths = map({"a", "bb", "ccc"}, s => #s)
+println(lengths)
+
+for n in doubled do
+	println(n)
+end

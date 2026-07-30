@@ -20,7 +20,7 @@ use crate::value::{InterfaceObject, Value};
 /// scope.
 pub static ITER_PACKAGE: NativePackage = NativePackage {
     name: "iter",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Iterable", "Iterable2"],
     register_sigs,

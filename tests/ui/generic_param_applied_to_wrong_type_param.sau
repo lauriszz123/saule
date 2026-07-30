@@ -1,0 +1,18 @@
+-- `T` and `U` are independent type parameters, so a `T` is not a `U`.
+-- Applying `f: fn(U) -> U` to an element of `table<T>` used to pass: calls
+-- made *through a function-typed value* were never checked at all, and two
+-- type parameters in scope were treated as mutually compatible.
+-- Should be a compile error.
+
+fn map<T, U>(items: table<T>, f: fn(U) -> U) -> table<U>
+	local out: table<U> = {}
+
+	for item: T in items do
+		out[#out + 1] = f(item)
+	end
+
+	return out
+end
+
+local lengths = map({"a", "bb", "ccc"}, s => #s)
+println(lengths)

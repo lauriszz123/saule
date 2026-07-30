@@ -1,0 +1,9 @@
+[package]
+name = "saule-version"
+version.workspace = true
+edition.workspace = true
+description = "The Saule toolchain's version — one resolved value, shared by every crate."
+license.workspace = true
+build = "build.rs"
+
+[dependencies]

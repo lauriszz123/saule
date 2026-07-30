@@ -35,7 +35,7 @@ use crate::value::{ClassObject, NativeClosure, TableObject, Value};
 /// also works.
 pub static TABLE_PACKAGE: NativePackage = NativePackage {
     name: "table",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Table"],
     register_sigs,

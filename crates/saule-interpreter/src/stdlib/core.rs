@@ -12,7 +12,7 @@ use crate::value::Value;
 /// case — `print` is a language built-in, not a library).
 pub static CORE_PACKAGE: NativePackage = NativePackage {
     name: "core",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &[
         "print",
@@ -107,12 +107,15 @@ pub fn register_sigs() {
 }
 
 fn builtin_print(args: &[Value]) -> Result<Value, String> {
-    print!("{}", display_all(args)?);
+    crate::output::write(crate::output::Stream::Stdout, &display_all(args)?);
     Ok(Value::Nil)
 }
 
 fn builtin_println(args: &[Value]) -> Result<Value, String> {
-    println!("{}", display_all(args)?);
+    crate::output::write(
+        crate::output::Stream::Stdout,
+        &format!("{}\n", display_all(args)?),
+    );
     Ok(Value::Nil)
 }
 
@@ -129,7 +132,7 @@ fn display_all(args: &[Value]) -> Result<String, String> {
 /// stdout without a trailing newline.
 fn builtin_printf(args: &[Value]) -> Result<Value, String> {
     let s = crate::stdlib::string::format_args_impl(args)?;
-    print!("{s}");
+    crate::output::write(crate::output::Stream::Stdout, &s);
     Ok(Value::Nil)
 }
 

@@ -3,6 +3,7 @@ name = "saule-sdk"
 version.workspace = true
 edition.workspace = true
 description = "SDK for building Saule native packages: typed value conversions, manifest registration, and the #[saule_export] macro that generates the C-ABI shim."
+license.workspace = true
 
 [dependencies]
 saule-native-abi = { path = "../saule-native-abi" }

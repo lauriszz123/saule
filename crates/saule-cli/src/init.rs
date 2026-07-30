@@ -38,7 +38,9 @@ pub(crate) fn cmd_init(name: &str, lib: bool) {
          -- Formatting, shared by `saule fmt` and the editor's Reformat.\n\
          -- indent_style: \"space\"  -- or \"tab\"\n\
          -- indent_width: 2        -- columns, 1..=16\n",
-        env!("CARGO_PKG_VERSION")
+        // The short form deliberately: scaffolding `26.8-dev+1a2b3c4` into a
+        // new project would make the config unusable on the actual 26.8.
+        saule_version::VERSION
     );
 
     let main_sau = "\

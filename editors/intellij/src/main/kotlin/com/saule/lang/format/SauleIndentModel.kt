@@ -91,6 +91,26 @@ object SauleIndentModel {
     private val CLOSE_BRACKETS = setOf(")", "]", "}")
 
     /**
+     * Tokens after which an `fn` starts a *type* rather than a definition.
+     *
+     * `fn(T) -> U` written as a parameter's type, a local's annotation or a
+     * return type has no body and no `end`. Treating its `fn` as a block
+     * opener left a frame on the stack that nothing ever closed, and the
+     * damage compounded: with a stray block on top, the `)` closing the
+     * enclosing parameter list no longer matched a `BRACKET` frame, so that
+     * stayed open too. Every later line in the file was then indented by the
+     * leftovers — a file with two such signatures put new lines two blocks
+     * and two continuations deep.
+     *
+     * Only these four contexts qualify, and each admits nothing but a type:
+     * `:` ascribes one, `->` introduces a return type, `<` opens a generic
+     * argument list, and `as` casts to one. Notably absent are `,` and `(` —
+     * an anonymous function passed as an argument (`map(xs, fn(x) … end)`)
+     * follows those, and it really is a block.
+     */
+    private val TYPE_POSITION = setOf(":", "->", "<", "as")
+
+    /**
      * The indent the line spanning `[lineStart, lineEnd)` of [text] should have.
      *
      * The line's own first token matters: `end`, `else` and friends sit one
@@ -103,6 +123,7 @@ object SauleIndentModel {
         lexer.start(text, 0, text.length, 0)
 
         var firstOnLine: String? = null
+        var previous: String? = null
         while (true) {
             val type: IElementType = lexer.tokenType ?: break
             val start = lexer.tokenStart
@@ -113,7 +134,8 @@ object SauleIndentModel {
                     firstOnLine = word
                     break
                 }
-                apply(word, stack)
+                apply(word, previous, stack)
+                previous = word
             }
             lexer.advance()
         }
@@ -144,11 +166,16 @@ object SauleIndentModel {
     private fun isSignificant(type: IElementType): Boolean =
         type != TokenType.WHITE_SPACE && type != T.LINE_COMMENT && type != T.BLOCK_COMMENT
 
-    private fun apply(word: String, stack: ArrayList<Frame>) {
+    private fun apply(word: String, previous: String?, stack: ArrayList<Frame>) {
         when {
             word == "interface" -> stack.add(Frame.INTERFACE)
             // Also covers lambdas — `fn(x) … end` is a block like any other.
-            word == "fn" -> if (stack.lastOrNull() != Frame.INTERFACE) stack.add(Frame.BLOCK)
+            // A `fn` in type position (`f: fn(T) -> U`) opens nothing: it is
+            // a type, it has no body, and no `end` will ever come for it.
+            word == "fn" ->
+                if (stack.lastOrNull() != Frame.INTERFACE && previous !in TYPE_POSITION) {
+                    stack.add(Frame.BLOCK)
+                }
             word in BLOCK_OPENERS -> stack.add(Frame.BLOCK)
             word in CLOSERS -> closeBlock(stack)
             word == "case" -> {

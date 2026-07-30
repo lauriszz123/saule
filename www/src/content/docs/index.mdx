@@ -1,0 +1,203 @@
+---
+title: Saule
+description: A statically typed, class-oriented scripting language with Lua's simplicity and a type system that catches mistakes before you run anything.
+template: splash
+editUrl: false
+lastUpdated: false
+hero:
+  title: Lua's simplicity.<br/>A real type system.
+  tagline: Saule is a statically typed, class-oriented scripting language. Small enough to hold in your head, strict enough to catch the mistake before you ship it.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /saule/guides/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: Try it in your browser
+      link: /saule/play/
+      icon: rocket
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/lauriszz123/saule
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Tabs, TabItem, LinkButton } from '@astrojs/starlight/components';
+
+## Why Saule
+
+<CardGrid stagger>
+	<Card title="Types you can't ignore" icon="approve-check">
+		Every variable is declared. `integer` and `float` are separate types and
+		mixing them is a compile error, not a silent coercion. Tables are
+		generically typed, so a `table<string>` can never quietly acquire an
+		integer.
+	</Card>
+	<Card title="nil is opt-in" icon="warning">
+		A variable cannot hold `nil` unless its type says so with `?`. When it
+		can, the compiler makes you deal with it — safe access, a coalescing
+		default, or a force unwrap you had to type out on purpose.
+	</Card>
+	<Card title="Real classes" icon="puzzle">
+		Inheritance, interfaces, access modifiers and static members are language
+		constructs with actual declarations — not metatable conventions you
+		rediscover in every codebase.
+	</Card>
+	<Card title="Exhaustive matching" icon="list-format">
+		`match` knows your enum's variants and their payloads. Forget a case and
+		the program does not compile.
+	</Card>
+	<Card title="Familiar runtime" icon="seti:lua">
+		Tables, closures, multiple return values, coroutines. If you know Lua,
+		you already know how Saule behaves at run time.
+	</Card>
+	<Card title="Tooling included" icon="setting">
+		A formatter and a language server ship with the compiler. Diagnostics,
+		hover, go-to-definition, inlay hints and formatting in VS Code, Neovim
+		and IntelliJ.
+	</Card>
+</CardGrid>
+
+## See it
+
+<Tabs>
+	<TabItem label="Classes">
+```saule
+export class Player
+    local name: string
+    local health: integer
+
+    static maxHealth: integer = 100
+
+    fn init(name: string, health: integer)
+        self.name = name
+        self.health = health
+    end
+
+    fn damage(amount: integer)
+        self.health = self.health - amount
+
+        if self.health <= 0 then
+            self.health = 0
+            println(self.name .. " has fallen")
+        end
+    end
+end
+
+local p = Player("Arthur", 100)
+p.damage(120)
+```
+	</TabItem>
+	<TabItem label="Null safety">
+```saule
+class User
+    local name: string
+
+    fn init(name: string)
+        self.name = name
+    end
+
+    fn getName() -> string
+        return self.name
+    end
+end
+
+local found: User? = nil
+
+-- `??` supplies a default
+println(found?.getName() ?? "nobody")
+
+-- `#` needs a definite value, so coalesce first
+local len: integer = #(found?.getName() ?? "")
+println(len)
+
+-- `!` forces, and you had to type it on purpose
+local sure: User = User("Arthur")
+println(sure.getName())
+```
+	</TabItem>
+	<TabItem label="Pattern matching">
+```saule
+enum Shape
+    Circle(radius: float),
+    Rect(w: float, h: float)
+end
+
+fn area(s: Shape) -> float
+    return match s
+        case Shape.Circle(r) then Math.pi * r * r
+        case Shape.Rect(w, h) then w * h
+    end
+end
+
+println(area(Shape.Circle(2.0)))
+```
+	</TabItem>
+	<TabItem label="Interfaces">
+```saule
+interface Drawable
+    fn draw() -> nil
+end
+
+interface Named
+    fn name() -> string
+end
+
+class Sprite implements Drawable, Named
+    local label: string
+
+    fn init(label: string)
+        self.label = label
+    end
+
+    fn draw()
+        println("drawing " .. self.label)
+    end
+
+    fn name() -> string
+        return self.label
+    end
+end
+```
+	</TabItem>
+	<TabItem label="Generics">
+```saule
+fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
+    local out: table<U> = {}
+
+    for item: T in items do
+        out[#out + 1] = f(item)
+    end
+
+    return out
+end
+
+local lengths: table<integer> = map<string, integer>({"a", "bb", "ccc"}, s => #s)
+```
+	</TabItem>
+</Tabs>
+
+<div style="display:flex; gap:0.75rem; flex-wrap:wrap; justify-content:center; margin-block:2.5rem;">
+	<LinkButton href="/saule/play/" icon="rocket">Run this in your browser</LinkButton>
+	<LinkButton href="/saule/examples/" variant="secondary" icon="open-book">Browse full examples</LinkButton>
+</div>
+
+## Install
+
+```sh
+git clone https://github.com/lauriszz123/saule.git
+cd saule
+cargo build --release -p saule-cli -p saule-lsp
+./scripts/install_path.sh
+```
+
+Then write a file and run it:
+
+```sh
+saule run hello.sau
+```
+
+Full instructions, including editor setup, are in the
+[installation guide](/saule/guides/installation/).

@@ -35,7 +35,7 @@ use crate::value::{
 /// working without an explicit import.
 pub static IO_PACKAGE: NativePackage = NativePackage {
     name: "io",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Io", "File", "IoMode", "IoSeek"],
     register_sigs,
@@ -389,11 +389,9 @@ fn io_read(args: &[Value]) -> Result<Vec<Value>, String> {
 }
 
 fn io_write(args: &[Value]) -> Result<Vec<Value>, String> {
-    let mut out = std::io::stdout();
     for v in args {
-        let _ = out.write_all(v.to_display_string().as_bytes());
+        crate::output::write(crate::output::Stream::Stdout, &v.to_display_string());
     }
-    let _ = out.flush();
     Ok(vec![Value::Nil])
 }
 
@@ -542,19 +540,15 @@ fn file_write(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Va
             Ok(vec![Value::Nil])
         }
         FileHandle::Stdout => {
-            let mut out = std::io::stdout();
             for v in args {
-                let _ = out.write_all(v.to_display_string().as_bytes());
+                crate::output::write(crate::output::Stream::Stdout, &v.to_display_string());
             }
-            let _ = out.flush();
             Ok(vec![Value::Nil])
         }
         FileHandle::Stderr => {
-            let mut err = std::io::stderr();
             for v in args {
-                let _ = err.write_all(v.to_display_string().as_bytes());
+                crate::output::write(crate::output::Stream::Stderr, &v.to_display_string());
             }
-            let _ = err.flush();
             Ok(vec![Value::Nil])
         }
         FileHandle::Open { writer: None, .. } => Err("file is not opened for writing".to_string()),
@@ -660,11 +654,11 @@ fn file_flush(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
             Ok(vec![Value::Nil])
         }
         FileHandle::Stdout => {
-            let _ = std::io::stdout().flush();
+            crate::output::flush(crate::output::Stream::Stdout);
             Ok(vec![Value::Nil])
         }
         FileHandle::Stderr => {
-            let _ = std::io::stderr().flush();
+            crate::output::flush(crate::output::Stream::Stderr);
             Ok(vec![Value::Nil])
         }
         _ => Ok(vec![Value::Nil]),

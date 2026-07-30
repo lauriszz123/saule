@@ -55,13 +55,17 @@ pub(crate) fn run_project(dir: &Path) {
     // comparison downstream is comparing apples to apples.
     let root = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
 
-    // min_saule_version: refuse to run on a stale toolchain.
-    if let Some(min) = config.min_saule_version.as_deref() {
-        let current = env!("CARGO_PKG_VERSION");
-        if !version_at_least(current, min) {
-            eprintln!("error: this project requires Saule {min} or newer (current: {current})");
-            process::exit(1);
-        }
+    // min_saule_version: refuse to run on a stale toolchain. The comparator
+    // lives in `saule-version` so this check, `Saule.atLeast` in the language,
+    // and the release tooling can't drift apart.
+    if let Some(min) = config.min_saule_version.as_deref()
+        && !saule_version::at_least(min)
+    {
+        eprintln!(
+            "error: this project requires Saule {min} or newer (current: {})",
+            saule_version::FULL
+        );
+        process::exit(1);
     }
 
     let src_dirs: Vec<PathBuf> = config.src_dirs.iter().map(|s| root.join(s)).collect();
@@ -235,28 +239,6 @@ fn parse_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// Numeric compare of dotted version strings (`"0.4.1" >= "0.4.0"`).
-/// Non-numeric components compare as 0; missing components default to 0.
-fn version_at_least(current: &str, required: &str) -> bool {
-    let parse = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .map(|p| {
-                p.chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect::<String>()
-            })
-            .map(|p| p.parse::<u32>().unwrap_or(0))
-            .collect()
-    };
-    let a = parse(current);
-    let b = parse(required);
-    let n = a.len().max(b.len());
-    for i in 0..n {
-        let ai = a.get(i).copied().unwrap_or(0);
-        let bi = b.get(i).copied().unwrap_or(0);
-        if ai != bi {
-            return ai > bi;
-        }
-    }
-    true
-}
+// Version comparison lives in `saule_version::version_at_least` — one
+// comparator for `min_saule_version`, `Saule.atLeast`, and the release
+// tooling, so a project that runs cannot be one the language disagrees about.

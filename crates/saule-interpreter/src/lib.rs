@@ -40,8 +40,14 @@ pub mod error;
 pub mod eval;
 pub mod fxhash;
 pub mod module;
+// The host-callback table exists solely so a dlopen'd package can manipulate
+// host-owned values by handle. Without `native-packages` there is nothing to
+// hand it to, so the whole module goes away rather than sitting dead.
+#[cfg(feature = "native-packages")]
 mod native_host;
 pub mod native_packages;
+pub mod output;
+pub mod platform;
 pub mod project;
 pub mod stdlib;
 pub mod value;

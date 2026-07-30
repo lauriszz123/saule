@@ -1,0 +1,9 @@
+-- The same rule in plain assignment: nothing proves a `T` is a `U`.
+-- Should be a compile error.
+
+fn convert<T, U>(a: T) -> U
+	local x: U = a
+	return x
+end
+
+println(convert(1))

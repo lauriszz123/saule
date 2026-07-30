@@ -142,6 +142,65 @@ class SauleIndentModelTest {
     )
 
     @Test
+    fun `a fn type annotation is not a block`() = assertRoundTrips(
+        """
+        fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
+          local out: table<U> = {}
+
+          for item: T in items do
+            out[#out + 1] = f(item)
+          end
+
+          return out
+        end
+
+        local lengths = map({"a", "bb"}, s => #s)
+        """
+    )
+
+    @Test
+    fun `a fn type in a local annotation is not a block`() = assertRoundTrips(
+        """
+        local double: fn(integer) -> integer = fn(x: integer) -> integer
+          return x * 2
+        end
+
+        println(double(2))
+        """
+    )
+
+    @Test
+    fun `a new line after fn-typed signatures starts at column zero`() {
+        // The reported bug: pressing `o` below the last statement of a file
+        // whose functions take `fn(T) -> U` callbacks produced two tabs and
+        // sixteen spaces. Each `fn` type left a block frame open, and the
+        // stray frame also swallowed the `)` that closed the parameter list,
+        // so the leftovers accumulated per signature.
+        val text =
+            "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n" +
+                "  return items\n" +
+                "end\n" +
+                "\n" +
+                "fn filter<T>(items: table<T>, p: fn(T) -> boolean) -> table<T>\n" +
+                "  return items\n" +
+                "end\n" +
+                "\n" +
+                "local lengths = map({\"a\"}, s => #s)\n" +
+                "\n"
+        assertEquals(SauleIndent.ZERO, indentOfLine(text, 9))
+    }
+
+    @Test
+    fun `an anonymous fn argument is still a block`() {
+        // The counter-case the type-position rule must not break: `fn` after
+        // a comma opens a real body.
+        assertEquals(
+            SauleIndent(1, 1),
+            indentOfLine("map(xs, fn(x: integer) -> integer\n\n", 1),
+        )
+    }
+
+    @Test
     fun `keywords inside strings and comments are ignored`() = assertRoundTrips(
         """
         fn f()

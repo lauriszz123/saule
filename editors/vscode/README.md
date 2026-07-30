@@ -44,7 +44,7 @@ npm run compile
 # or package and install:
 npm install -g @vscode/vsce
 vsce package
-code --install-extension saule-2026.1.0.vsix
+code --install-extension saule-26.1.0.vsix
 ```
 
 For zero-build syntax-only dev, copy the `editors/vscode` folder into

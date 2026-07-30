@@ -1,0 +1,36 @@
+[package]
+name = "saule-wasm"
+version.workspace = true
+edition.workspace = true
+description = "WebAssembly build of the Saule interpreter, powering the web playground."
+license.workspace = true
+
+[lib]
+name = "saule_wasm"
+# `cdylib` produces the `.wasm` that wasm-bindgen post-processes; `rlib` lets
+# the crate's own tests link against it natively, which is what makes the
+# JSON-shaping logic testable without a browser.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+saule-version = { path = "../saule-version" }
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }
+saule-semantic = { path = "../saule-semantic" }
+saule-typeck = { path = "../saule-typeck" }
+# `native-packages` off: the browser cannot dlopen a shared library, and
+# leaving it on would pull `libloading`, which does not build for wasm.
+saule-interpreter = { path = "../saule-interpreter", default-features = false }
+# Spans and help text are read back through miette's `Diagnostic` trait rather
+# than by matching on each error enum, so every phase maps the same way and a
+# new error variant needs no work here.
+miette = "7.6.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Only the browser build needs the JS bindings. Keeping them target-scoped
+# means a native `cargo test --workspace` neither builds nor links them, and
+# the crate's tests run like any other.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"

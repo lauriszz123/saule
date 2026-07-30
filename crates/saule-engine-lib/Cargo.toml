@@ -3,6 +3,7 @@ name = "saule-engine-lib"
 version.workspace = true
 edition.workspace = true
 description = "Love2D-like graphics engine, compiled as a dynamically-loadable Saule native package."
+license.workspace = true
 
 [lib]
 name = "saule_engine_lib"

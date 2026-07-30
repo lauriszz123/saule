@@ -29,20 +29,26 @@
 //! never links the interpreter — the only shared contract is
 //! [`saule_native_abi`].
 
-use crate::fxhash::fxmap;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::{Arc, Once, RwLock};
 
-use libloading::Library;
 use saule_ast::Type;
-use saule_native_abi::{CValue, NativeSymbolFn};
 
 use crate::error::RuntimeError;
 use crate::module::ModuleExports;
-use crate::value::{ClassObject, NativeClosure, Value};
+
+// Only the library-loading half of this module needs these; the manifest and
+// type-signature half compiles on every target.
+#[cfg(feature = "native-packages")]
+use {
+    crate::fxhash::fxmap,
+    crate::value::{ClassObject, NativeClosure, Value},
+    libloading::Library,
+    saule_native_abi::{CValue, NativeSymbolFn},
+    std::cell::RefCell,
+    std::rc::Rc,
+};
 
 /// A single exported method of a class, resolved from the manifest.
 #[derive(Debug, Clone)]
@@ -50,6 +56,9 @@ struct MethodSpec {
     /// Saule-visible name (`circle`).
     name: String,
     /// Symbol exported by the shared library (`saule_engine_graphics_circle`).
+    /// Still parsed without `native-packages` so manifests round-trip
+    /// identically on every target; there is just nothing to resolve it in.
+    #[cfg_attr(not(feature = "native-packages"), allow(dead_code))]
     symbol: String,
     /// Generic type-parameter names from the sig's `fn<...>` prefix.
     type_params: Vec<String>,
@@ -80,6 +89,7 @@ struct Manifest {
     /// Candidate binary filenames in preference-neutral order, e.g.
     /// `["engine.so", "engine.dll", "engine.dylib"]`. [`pick_binary`]
     /// chooses the OS-appropriate one that actually exists.
+    #[cfg_attr(not(feature = "native-packages"), allow(dead_code))]
     binaries: Vec<String>,
     exports: Vec<ClassSpec>,
 }
@@ -92,6 +102,7 @@ static MANIFESTS: RwLock<Option<HashMap<String, Arc<Manifest>>>> = RwLock::new(N
 /// Loaded shared libraries, keyed by package name. Each library is kept
 /// alive for the life of the process (the [`NativeClosure`]s built from it
 /// hold raw function pointers into it).
+#[cfg(feature = "native-packages")]
 static LIBS: RwLock<Option<HashMap<String, Arc<Library>>>> = RwLock::new(None);
 
 static DISCOVER_ONCE: Once = Once::new();
@@ -121,6 +132,7 @@ fn manifests_dir() -> PathBuf {
     saule_home().join("native_manifests")
 }
 
+#[cfg(feature = "native-packages")]
 fn packages_dir() -> PathBuf {
     saule_home().join("native_packages")
 }
@@ -245,6 +257,7 @@ pub fn name_from_sentinel(path: &Path) -> Option<&str> {
 /// Build the importable surface of a dynamic package, loading its shared
 /// library on first use. Called by the module loader when it sees a dynamic
 /// sentinel path.
+#[cfg(feature = "native-packages")]
 pub fn build_exports(
     name: &str,
     import_span: std::ops::Range<usize>,
@@ -270,6 +283,27 @@ pub fn build_exports(
             .insert(class.name.clone(), Value::Class(Rc::new(class_obj)));
     }
     Ok(exports)
+}
+
+/// Stand-in for builds without the `native-packages` feature — wasm, chiefly.
+///
+/// A package's *manifest* is still discovered and its type signatures still
+/// register, so a program that imports one type-checks the same way it does
+/// natively. It just cannot be run, and says so plainly rather than failing
+/// later with a confusing missing-symbol error.
+#[cfg(not(feature = "native-packages"))]
+pub fn build_exports(
+    name: &str,
+    import_span: std::ops::Range<usize>,
+) -> Result<ModuleExports, RuntimeError> {
+    Err(RuntimeError::ImportError {
+        message: format!(
+            "native package `{name}` cannot be loaded in this build: \
+             it needs a dynamically-loadable library, which this target \
+             does not support"
+        ),
+        span: import_span,
+    })
 }
 
 /// Build semantic class metadata for a dynamic package's exported classes,
@@ -346,7 +380,13 @@ fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
 }
 
 // ─── Library loading ────────────────────────────────────────────────────────
+//
+// Everything from here to the end of `call_native` exists only to dlopen a
+// package and marshal calls across the C ABI, so it is gated as one block.
+// The manifest half of this module above stays compiled on every target —
+// `module.rs`, `stdlib/mod.rs` and the LSP all depend on it.
 
+#[cfg(feature = "native-packages")]
 fn load_library(manifest: &Manifest) -> Result<Arc<Library>, String> {
     if let Some(map) = LIBS.read().expect("dynamic lib cache poisoned").as_ref() {
         if let Some(lib) = map.get(&manifest.name) {
@@ -386,6 +426,7 @@ fn load_library(manifest: &Manifest) -> Result<Arc<Library>, String> {
 
 /// Choose the binary to load: prefer the file whose extension matches the
 /// host OS, otherwise fall back to the first listed candidate that exists.
+#[cfg(feature = "native-packages")]
 fn pick_binary(dir: &Path, candidates: &[String]) -> Option<PathBuf> {
     let preferred_ext = if cfg!(windows) {
         "dll"
@@ -411,6 +452,7 @@ fn pick_binary(dir: &Path, candidates: &[String]) -> Option<PathBuf> {
 
 // ─── Class / method construction ────────────────────────────────────────────
 
+#[cfg(feature = "native-packages")]
 fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, String> {
     let mut static_fields = fxmap();
     for method in &spec.methods {
@@ -444,6 +486,7 @@ fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassObject, Stri
 /// `ret_arity` is the number of declared return values: when it exceeds one
 /// the native packs them into a host array-`table`, which this closure
 /// spreads back into a multi-value result.
+#[cfg(feature = "native-packages")]
 fn make_native(
     qname: String,
     lib: Arc<Library>,
@@ -489,6 +532,7 @@ fn make_native(
 /// carry several values directly); the first `arity` array slots become the
 /// result tuple. A non-table result (a misbehaving package) degrades to that
 /// value followed by `nil`s.
+#[cfg(feature = "native-packages")]
 fn spread_multi_return(value: Value, arity: usize) -> Vec<Value> {
     match value {
         Value::Table(t) => {
@@ -510,6 +554,7 @@ fn spread_multi_return(value: Value, arity: usize) -> Vec<Value> {
 /// The call is bracketed by [`crate::native_host::enter`] / `exit` so any
 /// `table` / function arguments (and values the package creates via the host
 /// callbacks) live in the handle registry for the duration of the call.
+#[cfg(feature = "native-packages")]
 fn call_native(raw: NativeSymbolFn, args: &[Value]) -> Result<Value, String> {
     use crate::native_host;
 

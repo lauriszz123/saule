@@ -316,6 +316,7 @@ static HOST_API: StaticHostApi = StaticHostApi(HostApi {
 /// `lib` must be a library just loaded for a native package; the symbol, if
 /// present, must have the [`SetHostFn`] signature (guaranteed for packages
 /// built with `saule-sdk`).
+#[cfg(feature = "native-packages")]
 pub unsafe fn install_host(lib: &libloading::Library) {
     if let Ok(sym) = unsafe { lib.get::<SetHostFn>(SET_HOST_SYMBOL.as_bytes()) } {
         unsafe { sym(&HOST_API.0 as *const HostApi) };

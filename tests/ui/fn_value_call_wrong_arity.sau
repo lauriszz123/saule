@@ -1,0 +1,9 @@
+-- A function type states its arity exactly — no defaults, no variadic —
+-- so a two-argument call through a one-parameter function value is wrong.
+-- Should be a compile error.
+
+fn apply(f: fn(integer) -> integer) -> integer
+	return f(1, 2)
+end
+
+println(apply(x => x + 1))

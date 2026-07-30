@@ -1091,14 +1091,14 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "saule-ast"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "miette",
 ]
 
 [[package]]
 name = "saule-cli"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "clap",
  "miette",
@@ -1108,11 +1108,12 @@ dependencies = [
  "saule-lexer",
  "saule-parser",
  "saule-semantic",
+ "saule-version",
 ]
 
 [[package]]
 name = "saule-docs"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "saule-ast",
  "saule-lexer",
@@ -1121,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "saule-engine-lib"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "arboard",
  "fontdue",
@@ -1133,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "saule-export-macro"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1142,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "saule-fmt"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "saule-ast",
  "saule-lexer",
@@ -1151,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "saule-interpreter"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "libloading",
  "miette",
@@ -1161,13 +1162,14 @@ dependencies = [
  "saule-parser",
  "saule-semantic",
  "saule-typeck",
+ "saule-version",
  "thiserror",
  "toml",
 ]
 
 [[package]]
 name = "saule-lexer"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "miette",
  "saule-ast",
@@ -1176,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "saule-lsp"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "dashmap 6.2.1",
  "miette",
@@ -1188,17 +1190,18 @@ dependencies = [
  "saule-parser",
  "saule-semantic",
  "saule-typeck",
+ "saule-version",
  "tokio",
  "tower-lsp",
 ]
 
 [[package]]
 name = "saule-native-abi"
-version = "2026.1.0"
+version = "26.0.0"
 
 [[package]]
 name = "saule-parser"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "miette",
  "saule-ast",
@@ -1208,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "saule-sdk"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "inventory",
  "saule-export-macro",
@@ -1217,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "saule-semantic"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "miette",
  "saule-ast",
@@ -1228,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "saule-typeck"
-version = "2026.1.0"
+version = "26.0.0"
 dependencies = [
  "miette",
  "saule-ast",
@@ -1236,6 +1239,27 @@ dependencies = [
  "saule-parser",
  "saule-semantic",
  "thiserror",
+]
+
+[[package]]
+name = "saule-version"
+version = "26.0.0"
+
+[[package]]
+name = "saule-wasm"
+version = "26.0.0"
+dependencies = [
+ "js-sys",
+ "miette",
+ "saule-interpreter",
+ "saule-lexer",
+ "saule-parser",
+ "saule-semantic",
+ "saule-typeck",
+ "saule-version",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
