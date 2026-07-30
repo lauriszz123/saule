@@ -29,7 +29,9 @@ use saule_ast::{
     CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Method, Module, Param, Spanned, Stmt,
     TableEntry, Type,
 };
-use saule_semantic::{lookup_field_type, lookup_method, super_init_target, with_classes};
+use saule_semantic::{
+    lookup_field_type, lookup_function, lookup_method, super_init_target, with_classes,
+};
 use std::collections::HashMap;
 use tower_lsp::lsp_types::{
     ParameterInformation, ParameterLabel, Position, SignatureHelp, SignatureInformation, Url,
@@ -81,8 +83,10 @@ impl Backend {
             };
             let _ = saule_semantic::analyze_with_seed(module, seed);
 
-            if let Some(help) = help_from_module(module, offset) {
-                return Some(help);
+            match answer_from_module(module, offset) {
+                Answer::Help(help) => return Some(help),
+                Answer::Suppressed => return None,
+                Answer::Unresolved => {}
             }
         } else if let Some(module) = repair_parse(&source, offset) {
             // Mid-keystroke (`w.moveTo(`, `add(1, `): close the call the
@@ -95,8 +99,10 @@ impl Backend {
             };
             let _ = saule_semantic::analyze_with_seed(&module, seed);
 
-            if let Some(help) = help_from_module(&module, offset) {
-                return Some(help);
+            match answer_from_module(&module, offset) {
+                Answer::Help(help) => return Some(help),
+                Answer::Suppressed => return None,
+                Answer::Unresolved => {}
             }
         }
 
@@ -226,6 +232,15 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             // walker into `hit.user_fn`).
             if let Some((params, ret)) = hit.user_fn {
                 return build_help_user_fn(&name, &params, &ret, &hit.args, offset);
+            }
+            // Declared in another file and imported — `showToast`,
+            // `showDialog`, and every other helper a UI file reaches
+            // through a barrel. `analyze_with_seed` folds imported
+            // top-level functions into the semantic registry, following
+            // re-export chains as it goes, so the signature is already
+            // in hand and no import graph has to be walked here.
+            if let Some(sig) = lookup_function(&name) {
+                return build_help_user_fn(&name, &sig.params, &sig.return_ty, &hit.args, offset);
             }
             // Bare native (`println`, `assert`, ...).
             if let Some(native) = saule_typeck::sigs::lookup(&name) {
@@ -892,6 +907,10 @@ struct Cx {
     /// containing the cursor; `Some(r)` collects everything nested
     /// inside `r`.
     region: Option<std::ops::Range<usize>>,
+    /// Innermost region containing the cursor in which an enclosing
+    /// call's parameter list has stopped applying. Calls that opened
+    /// outside it are dropped — see [`Cx::note_barrier`].
+    barrier: Option<std::ops::Range<usize>>,
     hits: Vec<CallHit>,
 }
 
@@ -917,6 +936,50 @@ impl Cx {
         };
         if keep {
             self.hits.push(hit);
+        }
+    }
+
+    /// Remember a region where the enclosing call's parameter list has
+    /// stopped applying, when the cursor is inside it.
+    ///
+    /// `Column(children: {TextField(onChanged: fn(text: string)` opens
+    /// three things that all stay lexically open until the very end of
+    /// the expression, so a caret parked far inside is technically still
+    /// within every one of them. Positionally the enclosing calls match;
+    /// syntactically they are long since done saying anything useful.
+    /// Two constructs end the conversation:
+    ///
+    /// * **A block-bodied lambda** (`fn(...) ... end`) — the caret is
+    ///   writing statements in a new scope that runs to its own `end`,
+    ///   not filling in an argument. The whole lambda counts, parameter
+    ///   list included: while typing `fn(next: boolean)` you are
+    ///   declaring the callback's parameters, and the enclosing widget
+    ///   has nothing to say about those either. A `=>` lambda's body is
+    ///   a single expression, still visibly one of the arguments, so
+    ///   `map(xs, s => #s)` keeps reporting `map`.
+    ///
+    /// * **A table literal** (`{ ... }`) — its contents are data. The
+    ///   caret between two entries of `children: {…}` is not positioned
+    ///   at any parameter, and answering with the full `Column(...)`
+    ///   list there describes a slot the reader already filled.
+    ///
+    /// Both are barriers only for calls that opened *before* them. A
+    /// call written inside the region resolves normally — `Text(` inside
+    /// a `children` table reports `Text`, which is the whole point.
+    fn note_barrier(&mut self, region: std::ops::Range<usize>) {
+        if !contains(&region, self.offset) {
+            return;
+        }
+        // Deeper regions are visited later, but nesting order alone
+        // isn't enough — a lambda inside a table and a table inside a
+        // lambda both occur. Keep the one that starts latest, which is
+        // the innermost containing the cursor either way.
+        let narrower = self
+            .barrier
+            .as_ref()
+            .is_none_or(|cur| region.start >= cur.start);
+        if narrower {
+            self.barrier = Some(region);
         }
     }
 
@@ -1171,6 +1234,7 @@ impl Cx {
             }
             Expr::ForceUnwrap(inner) => self.visit_expr(inner),
             Expr::Table(entries) => {
+                self.note_barrier(e.span.clone());
                 for entry in entries {
                     match entry {
                         TableEntry::Positional(v) => self.visit_expr(v),
@@ -1182,6 +1246,9 @@ impl Cx {
                 }
             }
             Expr::Lambda { params, body, .. } => {
+                if matches!(body, LambdaBody::Block(_)) {
+                    self.note_barrier(e.span.clone());
+                }
                 self.with_function(params, |this| match body {
                     LambdaBody::Expr(b) => this.visit_expr(b),
                     LambdaBody::Block(b) => this.visit_block(b),
@@ -1468,122 +1535,120 @@ fn collect_enum_variants(module: &Module) -> HashMap<(String, String), Vec<Param
     out
 }
 
-/// Render one signature per call in the expression the cursor is in,
-/// ordered by source position, with `active_signature` on the level the
-/// cursor actually sits in.
+/// Render the signature of the one call the cursor is inside — the
+/// innermost enclosing call that takes arguments.
 ///
-/// Returning the whole expression rather than just the innermost call is
-/// what makes the popup follow the caret in IntelliJ. LSP4IJ sets the
-/// list of signatures *once*, when the popup opens
-/// (`showParameterInfo` -> `setItemsToShow`); on a later cursor move
-/// `updateParameterInfo` re-requests but only feeds the response into
-/// `setUIComponentEnabled` / `setCurrentParameter`. So a response that
-/// swaps in a different single signature is silently ignored, while one
-/// that keeps the same list and moves `activeSignature` does update the
-/// display.
+/// Only that call. A nested widget expression like
+/// `SizedBox(width: …, child: Align(alignment: …, child: ProgressBar(value: …)))`
+/// contains three calls with parameters, and answering with all three
+/// makes IntelliJ open three rows in the popup. Two of them describe
+/// functions the caret is not in, and the reader has to work out which
+/// row is theirs — which for Flutter-shaped code, where nesting is the
+/// normal way to write anything, is most of the time.
 ///
-/// Hence two rules the caret can't break, however it moves — typing
-/// forward, arrowing back, or clicking straight onto some parameter:
+/// Sibling calls the cursor is *not* inside are excluded even though
+/// they sit in the same expression: `Alignment.centerLeft()` earlier on
+/// the line has nothing to do with the argument being typed.
 ///
-/// 1. The list depends only on the *expression*, never on where in it
-///    the cursor is, so every position yields the same rows in the same
-///    order and only the selection differs.
-/// 2. The list never grows between responses (see
-///    [`reconcile_with_client`]), because the popup's rows are built
-///    once and indexed by position thereafter.
-fn help_from_module(module: &Module, offset: usize) -> Option<SignatureHelp> {
-    let walk = |region: Option<std::ops::Range<usize>>| {
-        let mut cx = Cx {
-            offset,
-            locals: Vec::new(),
-            enclosing_class: None,
-            user_fns: collect_user_fns(module),
-            enum_variants: collect_enum_variants(module),
-            region,
-            hits: Vec::new(),
-        };
-        cx.visit_module(module);
-        cx.hits
-    };
-
-    // Pass 1: the calls the cursor is actually inside. The widest of
-    // them is the whole call expression the caret is somewhere within.
-    let enclosing = walk(None);
-    let outermost = enclosing
-        .iter()
-        .max_by_key(|h| h.args_span.end.saturating_sub(h.args_span.start))?
-        .args_span
-        .clone();
-
-    // Pass 2: every call in that expression, cursor-containing or not.
-    // Ordered by source position so an entry keeps its index as the
-    // caret moves — the index is what the client selects by.
-    let mut hits = walk(Some(outermost));
-    hits.sort_by(|a, b| {
-        a.args_span
-            .start
-            .cmp(&b.args_span.start)
-            .then(a.args_span.end.cmp(&b.args_span.end))
-    });
-    // Runaway expression: fall back to just the enclosing chain rather
-    // than filling the popup with every call on the line.
-    if hits.len() > MAX_SIGNATURES {
-        hits = enclosing;
-        hits.sort_by(|a, b| {
-            a.args_span
-                .start
-                .cmp(&b.args_span.start)
-                .then(a.args_span.end.cmp(&b.args_span.end))
-        });
-    }
-
-    // Resolve each level, remembering its span so the innermost one
-    // containing the cursor can be selected afterwards. A level we
-    // can't resolve is skipped, not fatal: `unknownFn(Color(` still
-    // shows `Color`.
-    let mut entries: Vec<(std::ops::Range<usize>, SignatureInformation)> = Vec::new();
-    for hit in hits {
-        let span = hit.args_span.clone();
-        if let Some(help) = resolve_hit(hit, offset) {
-            for sig in help.signatures {
-                entries.push((span.clone(), sig));
-            }
-        }
-    }
-    // Drop levels that take no arguments *before* choosing the active
-    // one. IntelliJ renders those as a bare `<no parameters>` row, and
-    // dropping them first means a cursor inside `update(t.getDelta(|))`
-    // selects the enclosing `update` — which still contains the cursor —
-    // instead of falling back to an arbitrary row.
-    entries.retain(|(_, sig)| sig.parameters.as_ref().is_some_and(|p| !p.is_empty()));
-    if entries.is_empty() {
-        return None;
-    }
-
-    // Active = narrowest surviving entry whose arg list holds the
-    // cursor. Purely a function of the cursor against fixed spans, so
-    // it lands correctly whether the caret got there by typing, by
-    // arrowing back, or by a click straight onto a parameter.
-    let active = entries
-        .iter()
-        .enumerate()
-        .filter(|(_, (span, _))| contains(span, offset))
-        .min_by_key(|(_, (span, _))| span.end.saturating_sub(span.start))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-
-    let signatures: Vec<SignatureInformation> = entries.into_iter().map(|(_, sig)| sig).collect();
-    let active_parameter = signatures[active].active_parameter;
-    Some(SignatureHelp {
-        signatures,
-        active_signature: Some(active as u32),
-        active_parameter,
-    })
+/// The cost is that the popup can go stale. LSP4IJ sets the row list
+/// once, when the popup opens (`showParameterInfo` ->
+/// `setItemsToShow`); a later `updateParameterInfo` re-requests but
+/// feeds the response only into `setUIComponentEnabled` /
+/// `setCurrentParameter`. So moving the caret from an outer call into a
+/// nested one can leave the outer call's label on screen until the popup
+/// is dismissed and reopened (Ctrl+P). That is the trade this function
+/// makes deliberately: one row that is right when it opens, rather than
+/// three rows one of which is right.
+/// What the AST walk concluded at the cursor.
+///
+/// The three-way split exists because the handler has cruder strategies
+/// to fall back on when this one comes up empty, and one of them —
+/// [`textual_fallback`] — resolves by counting unmatched `(` in raw
+/// source. It has no idea what a lambda is. So a deliberate "nothing
+/// applies here" that reported a bare `None` came straight back as the
+/// enclosing widget: inside `Switch(..., onChanged: fn(next: boolean)`
+/// the `Switch(` paren is still unmatched at the caret, and the scanner
+/// dutifully answered `Switch`. Suppression has to be stated, not
+/// implied by absence.
+enum Answer {
+    Help(SignatureHelp),
+    /// The cursor is inside a callback body. No enclosing call applies,
+    /// and no less precise strategy should second-guess that.
+    Suppressed,
+    /// Nothing resolved. A fallback may still succeed.
+    Unresolved,
 }
 
-/// Upper bound on signatures in one response. Keeps a dense expression
-/// from producing an unreadable popup.
-const MAX_SIGNATURES: usize = 8;
+/// [`answer_from_module`] for callers that treat every empty answer the
+/// same way — the tests that assert *what* was reported rather than how
+/// the handler routes an absence. The handler itself must not use this:
+/// collapsing `Suppressed` into `None` is precisely the bug that let
+/// [`textual_fallback`] re-report a call the walker had ruled out.
+#[cfg(test)]
+fn help_from_module(module: &Module, offset: usize) -> Option<SignatureHelp> {
+    match answer_from_module(module, offset) {
+        Answer::Help(h) => Some(h),
+        Answer::Suppressed | Answer::Unresolved => None,
+    }
+}
+
+fn answer_from_module(module: &Module, offset: usize) -> Answer {
+    let mut cx = Cx {
+        offset,
+        locals: Vec::new(),
+        enclosing_class: None,
+        user_fns: collect_user_fns(module),
+        enum_variants: collect_enum_variants(module),
+        region: None,
+        barrier: None,
+        hits: Vec::new(),
+    };
+    cx.visit_module(module);
+
+    // A caret inside a callback body or a table literal answers to that
+    // region, not to the call it was written as an argument to. Calls
+    // that opened before the region began are out of scope, however many
+    // argument lists they still have lexically open.
+    let mut hits = cx.hits;
+    if let Some(b) = &cx.barrier {
+        hits.retain(|h| h.args_span.start >= b.start);
+    }
+
+    // Innermost first: the narrowest argument list containing the cursor
+    // is the call being typed. Walk outward from there so a level we
+    // can't resolve, or one that takes no arguments, yields to its
+    // parent instead of losing the popup — `update(dt: Timer.getDelta(|))`
+    // still answers with `update`.
+    hits.sort_by_key(|h| h.args_span.end.saturating_sub(h.args_span.start));
+
+    for hit in hits {
+        let Some(help) = resolve_hit(hit, offset) else {
+            continue;
+        };
+        // A parameterless call has nothing to say, and IntelliJ renders
+        // it as a literal `<no parameters>` row.
+        let Some(sig) = help
+            .signatures
+            .into_iter()
+            .find(|s| s.parameters.as_ref().is_some_and(|p| !p.is_empty()))
+        else {
+            continue;
+        };
+        let active_parameter = sig.active_parameter;
+        return Answer::Help(SignatureHelp {
+            signatures: vec![sig],
+            active_signature: Some(0),
+            active_parameter,
+        });
+    }
+    // Inside a barrier with nothing of its own to report, the answer is
+    // a definite no — not an invitation to go looking with a blunter
+    // instrument.
+    match cx.barrier {
+        Some(_) => Answer::Suppressed,
+        None => Answer::Unresolved,
+    }
+}
 
 /// Reconcile a fresh response against what the client already shows.
 ///
@@ -1594,9 +1659,13 @@ const MAX_SIGNATURES: usize = 8;
 /// the popup was opened with therefore throws ArrayIndexOutOfBounds
 /// inside the IDE.
 ///
-/// So the list must never grow on a retrigger. When the fresh chain is
-/// longer, keep the client's own list and just move the selection to the
-/// matching entry.
+/// So the list must never grow on a retrigger. When the fresh response
+/// is longer, keep the client's own list and just move the selection to
+/// the matching entry.
+///
+/// Since [`help_from_module`] answers with a single signature this no
+/// longer fires in practice, and it is kept as the guard on an invariant
+/// the IDE crashes on rather than as live logic.
 pub(super) fn reconcile_with_client(fresh: SignatureHelp, prev: &SignatureHelp) -> SignatureHelp {
     if fresh.signatures.len() <= prev.signatures.len() {
         return fresh;
@@ -1688,6 +1757,19 @@ mod tests {
         let module = saule_parser::parse(tokens).expect("parse");
         let _ = saule_semantic::analyze(&module);
         help_from_module(&module, offset)
+    }
+
+    /// The label of the single signature reported at `offset`, panicking
+    /// when there is none — for the cases that assert *which* call
+    /// answered rather than whether one did.
+    fn label_at(src: &str, offset: usize) -> String {
+        help_at(src, offset)
+            .unwrap_or_else(|| panic!("no signature help at {offset}"))
+            .signatures
+            .first()
+            .expect("at least one signature")
+            .label
+            .clone()
     }
 
     #[test]
@@ -2049,10 +2131,13 @@ end
                 "Widget(x: 1.0",
                 "Widget(",
             ),
+            // The caret is on the *slot* that takes the table, not
+            // inside its braces — inside is data, and covered by
+            // `a_table_literal_is_data_not_a_parameter_slot`.
             (
                 "table-literal argument",
                 "  local t = add({1, 2}, 3)\n",
-                "add({1",
+                "add(",
                 "add(",
             ),
             // The piped value fills slot 0, so only `y` is left.
@@ -2367,13 +2452,12 @@ end
         );
     }
 
-    /// A nested call reports one signature per enclosing level,
-    /// innermost first, with `active_signature` on the innermost. The
-    /// whole chain has to be in the *first* response: LSP4IJ fixes the
-    /// signature list when the popup opens and afterwards only moves
-    /// `activeSignature`, so a level missing here can never be shown.
+    /// A nested call reports exactly one signature: the call the caret
+    /// is inside. Enclosing levels are not offered — a popup with a row
+    /// per level makes the reader pick their own function out of a list,
+    /// which in nested widget code is nearly every call.
     #[test]
-    fn nested_call_reports_the_whole_enclosing_chain() {
+    fn nested_call_reports_only_the_call_the_caret_is_in() {
         init_stdlib();
         let src = "class Color
   fn init(r: float = 1.0, g: float = 1.0)
@@ -2395,28 +2479,13 @@ end
         let outer = help_at(src, call + "self.setBackground(".len()).expect("help");
         let inner = help_at(src, call + "self.setBackground(Color(".len()).expect("help");
 
-        // The list is identical from both positions — same entries, same
-        // order. Only `active_signature` moves. This is the property the
-        // IDE depends on: it builds its rows once, from whichever
-        // response opened the popup, and thereafter only re-selects.
-        let labels = |h: &SignatureHelp| -> Vec<String> {
-            h.signatures.iter().map(|s| s.label.clone()).collect()
-        };
-        assert_eq!(
-            labels(&outer),
-            labels(&inner),
-            "signature list must be stable"
-        );
-        assert_eq!(outer.signatures.len(), 2, "got {:?}", labels(&outer));
-        assert!(
-            labels(&outer)[0].starts_with("setBackground("),
-            "source order"
-        );
-        assert!(labels(&outer)[1].starts_with("Color("), "source order");
-
+        // One row each, naming the call that position is inside — never
+        // the other one.
+        assert_eq!(outer.signatures.len(), 1, "{:?}", outer.signatures);
+        assert_eq!(inner.signatures.len(), 1, "{:?}", inner.signatures);
         assert_eq!(outer.active_signature, Some(0));
+        assert_eq!(inner.active_signature, Some(0));
         assert!(active_label(&outer).starts_with("setBackground("));
-        assert_eq!(inner.active_signature, Some(1));
         assert!(active_label(&inner).starts_with("Color("));
     }
 
@@ -2521,9 +2590,8 @@ end
     /// backwards, arrowed forwards again, or clicked straight onto any
     /// argument — every position has to resolve on its own terms.
     ///
-    /// Two invariants, checked at every offset in the expression: the
-    /// signature *list* never changes (the IDE builds its rows once), and
-    /// the *selection* always names the call the caret is really in.
+    /// The invariant checked at every offset in the expression: the one
+    /// signature returned always names the call the caret is really in.
     #[test]
     fn caret_can_land_anywhere_in_a_nested_call() {
         init_stdlib();
@@ -2549,25 +2617,13 @@ end
         let inner_open = "root.setBackground(Color.rgb(".len();
         let inner_close = text.rfind("))").expect("closers");
 
-        // 1. The list is the same at every live position.
-        let mut seen: Option<Vec<String>> = None;
+        // 1. Every live position answers, with exactly one row.
         for i in outer_open..=inner_close + 1 {
             let h = help_at(src, call + i).unwrap_or_else(|| panic!("no help at +{i}"));
-            let labels: Vec<String> = h.signatures.iter().map(|s| s.label.clone()).collect();
-            match &seen {
-                None => seen = Some(labels),
-                Some(prev) => assert_eq!(prev, &labels, "list changed at +{i}"),
-            }
+            assert_eq!(h.signatures.len(), 1, "at +{i}: {:?}", h.signatures);
         }
-        let labels = seen.expect("swept at least one offset");
-        assert_eq!(labels.len(), 2, "{labels:?}");
-        assert!(
-            labels[0].starts_with("setBackground("),
-            "source order: {labels:?}"
-        );
-        assert!(labels[1].starts_with("rgb("), "source order: {labels:?}");
 
-        // 2. The selection tracks the caret, in both directions.
+        // 2. That row tracks the caret, in both directions.
         for i in outer_open..inner_open {
             let h = help_at(src, call + i).expect("help");
             assert!(active_label(&h).starts_with("setBackground("), "at +{i}");
@@ -2588,6 +2644,63 @@ end
             let h = help_at(src, call + inner_open + delta).expect("help");
             assert!(active_label(&h).starts_with("rgb("), "slot {slot}");
             assert_eq!(h.active_parameter, Some(slot), "clicked slot {slot}");
+        }
+    }
+
+    /// The shape this rule exists for: three widgets nested on one line,
+    /// each with parameters. Standing in any one of them reports that
+    /// one — not a menu of all three, and not the sibling call earlier
+    /// on the same line.
+    #[test]
+    fn a_nested_widget_expression_reports_one_row_per_position() {
+        init_stdlib();
+        let src = "class Alignment
+  static fn centerLeft() -> Alignment?
+    return nil
+  end
+end
+
+class ProgressBar
+  fn init(value: float = 0.0)
+  end
+end
+
+class Align
+  fn init(alignment: Alignment? = nil, child: ProgressBar? = nil)
+  end
+end
+
+class SizedBox
+  fn init(width: float? = nil, child: Align? = nil)
+  end
+end
+
+fn probe()
+  local b = SizedBox(width: 120.0, child: Align(alignment: Alignment.centerLeft(), child: ProgressBar(value: 1.0)))
+end
+";
+        let call = src.find("SizedBox(width:").expect("call site");
+        for (case, prefix, expected) in [
+            ("outer", "SizedBox(", "SizedBox("),
+            ("middle", "SizedBox(width: 120.0, child: Align(", "Align("),
+            (
+                "innermost",
+                "SizedBox(width: 120.0, child: Align(alignment: Alignment.centerLeft(), child: ProgressBar(",
+                "ProgressBar(",
+            ),
+        ] {
+            let h = help_at(src, call + prefix.len()).unwrap_or_else(|| panic!("no help: {case}"));
+            assert_eq!(
+                h.signatures.len(),
+                1,
+                "{case}: expected one row, got {:?}",
+                h.signatures.iter().map(|s| &s.label).collect::<Vec<_>>()
+            );
+            assert!(
+                active_label(&h).starts_with(expected),
+                "{case}: expected {expected:?}, got {:?}",
+                active_label(&h)
+            );
         }
     }
 
@@ -2614,18 +2727,330 @@ end
     /// parse: real AST first, repaired AST second, text scan last.
     fn help_mid_keystroke(src: &str, offset: usize) -> Option<SignatureHelp> {
         init_stdlib();
+        // Mirrors `signature_help_at`'s control flow exactly, including
+        // the fall-through. An earlier version of this helper `return`ed
+        // the parsed module's answer instead of falling through, so a
+        // suppression that the real handler then handed to
+        // `textual_fallback` — which re-derived the enclosing widget by
+        // counting parens — looked correct here and wrong in the IDE.
         if let Ok(tokens) = saule_lexer::Lexer::new(src).tokenize()
             && let Ok(module) = saule_parser::parse(tokens)
         {
             let _ = saule_semantic::analyze(&module);
-            return help_from_module(&module, offset);
-        }
-        if let Some(module) = repair_parse(src, offset) {
+            match answer_from_module(&module, offset) {
+                Answer::Help(h) => return Some(h),
+                Answer::Suppressed => return None,
+                Answer::Unresolved => {}
+            }
+        } else if let Some(module) = repair_parse(src, offset) {
             let _ = saule_semantic::analyze(&module);
-            if let Some(h) = help_from_module(&module, offset) {
-                return Some(h);
+            match answer_from_module(&module, offset) {
+                Answer::Help(h) => return Some(h),
+                Answer::Suppressed => return None,
+                Answer::Unresolved => {}
             }
         }
         textual_fallback(src, offset)
+    }
+
+    /// The shape from the UI panel: a callback written inline as a named
+    /// argument, several lines of statements deep. Standing on one of
+    /// those statements, the popup for the enclosing widget must be
+    /// gone — the caret is writing a body, not filling in an argument.
+    #[test]
+    fn a_callback_body_ends_the_enclosing_calls_popup() {
+        let src = "class TextField
+  fn init(placeholder: string = \"\", onChanged: function? = nil)
+  end
+end
+
+class Column
+  fn init(children: table<Widget>? = nil, spacing: float = 0.0)
+  end
+end
+
+fn build()
+  local c = Column(spacing: 4.0, children: {
+    TextField(placeholder: \"name\", onChanged: fn(text: string)
+      local trimmed: string = text
+      local n: integer = 1
+    end)
+  })
+end
+";
+        // Inside the callback body: neither TextField nor Column.
+        for needle in ["local trimmed: string = text", "local n: integer = 1"] {
+            let at = src.find(needle).expect(needle) + 2;
+            assert!(
+                help_at(src, at).is_none(),
+                "popup survived into the callback body at {needle:?}"
+            );
+        }
+        // Still reported on the arguments themselves, either side of it.
+        let at = src.find("placeholder: \"name\"").expect("arg") + 2;
+        assert!(label_at(src, at).starts_with("TextField("));
+        let at = src.find("spacing: 4.0").expect("arg") + 2;
+        assert!(label_at(src, at).starts_with("Column("));
+    }
+
+    /// The suppression has to survive the *whole* handler, not just the
+    /// AST walk.
+    ///
+    /// `help_at` stops at the walker, and the walker was right all along.
+    /// The handler then fell through to [`textual_fallback`], which
+    /// resolves by counting unmatched `(` in raw text: at a caret inside
+    /// the callback body, `Switch(`'s paren is still open, so it happily
+    /// re-reported the widget the walker had just ruled out. Only the
+    /// first body line showed it — one line up, the innermost unmatched
+    /// paren is the lambda's own `fn(`, which resolves to nothing.
+    #[test]
+    fn the_fallback_does_not_resurrect_a_suppressed_call() {
+        let src = "class Switch
+  fn init(value: boolean = false, label: string = \"\", onChanged: function? = nil)
+  end
+end
+
+fn build()
+  local s = Switch(value: true, label: \"Sound\", onChanged: fn(next: boolean)
+    scratch.sound = next
+    rebuild()
+  end)
+end
+";
+        for needle in ["scratch.sound = next", "rebuild()"] {
+            let at = src.find(needle).expect(needle) + 3;
+            assert!(
+                help_mid_keystroke(src, at).is_none(),
+                "textual fallback resurrected the popup at {needle:?}: {:?}",
+                help_mid_keystroke(src, at).map(|h| h.signatures[0].label.clone())
+            );
+        }
+        // The argument keys still answer through the same dispatch.
+        let at = src.find("label: \"Sound\"").expect("arg") + 2;
+        assert!(
+            help_mid_keystroke(src, at)
+                .expect("help on the key")
+                .signatures[0]
+                .label
+                .starts_with("Switch(")
+        );
+    }
+
+    /// A table literal holds data, so the caret inside one is not at any
+    /// parameter. `children: {…}` with ten widgets in it kept the full
+    /// `Column(...)` list on screen for every one of them, describing a
+    /// slot the reader had already filled.
+    #[test]
+    fn a_table_literal_is_data_not_a_parameter_slot() {
+        let src = "class Text
+  fn init(data: string = \"\", size: float = 12.0)
+  end
+end
+
+class Column
+  fn init(children: table<Widget>? = nil, spacing: float = 0.0)
+  end
+end
+
+fn build()
+  local c = Column(spacing: 4.0, children: {
+    Text(data: \"a\"),
+    Text(data: \"b\"),
+  })
+end
+";
+        let open = src.find("children: {").expect("table at the call site");
+
+        // Just inside the opening brace: data, so nothing.
+        let at = open + "children: {".len();
+        assert!(
+            help_at(src, at).is_none(),
+            "reported {:?} just inside the brace",
+            help_at(src, at).map(|h| h.signatures[0].label.clone())
+        );
+        // Between the two entries, likewise.
+        let at = src.find("Text(data: \"b\"").expect("second entry") - 1;
+        assert!(
+            help_at(src, at).is_none(),
+            "reported {:?} between table entries",
+            help_at(src, at).map(|h| h.signatures[0].label.clone())
+        );
+
+        // A call written inside the table resolves normally — that is
+        // the whole point of stopping at the brace rather than earlier.
+        let at = src.find("Text(data: \"a\"").expect("entry") + "Text(".len();
+        assert!(label_at(src, at).starts_with("Text("), "{}", label_at(src, at));
+
+        // And the keys still answer, so you can see what `children`
+        // wants before you open it.
+        assert!(label_at(src, open + 2).starts_with("Column("));
+        let at = src.find("spacing: 4.0").expect("key") + 2;
+        assert!(label_at(src, at).starts_with("Column("));
+    }
+
+    /// A free function declared in another file and imported — through a
+    /// re-export barrel, as every UIKit helper is. `analyze_with_seed`
+    /// puts imported top-level functions in the semantic registry, so
+    /// this needs no import-graph walk of its own.
+    #[test]
+    fn an_imported_free_function_reports_its_signature() {
+        init_stdlib();
+        let dir = std::env::temp_dir().join(format!("saule-sighelp-barrel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("kit")).unwrap();
+        std::fs::write(
+            dir.join("kit").join("overlay.sau"),
+            "export fn showToast(context: integer, message: string = \"\") -> nothing\nend\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("kit").join("init.sau"), "import * from overlay\n").unwrap();
+
+        let src = "import * from kit\n\nfn build()\n  showToast(1, \"hi\")\nend\n";
+        let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
+        let module = saule_parser::parse(tokens).expect("parse");
+        let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+        let _ = saule_semantic::analyze_with_seed(&module, seed);
+
+        let at = src.find("showToast(1").expect("call") + "showToast(".len();
+        let h = help_from_module(&module, at).expect("help for imported fn");
+        assert!(
+            h.signatures[0].label.starts_with("showToast(context: integer"),
+            "got {:?}",
+            h.signatures[0].label
+        );
+        assert_eq!(h.active_parameter, Some(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Where the suppression starts decides whether it works at all.
+    ///
+    /// `(` is a trigger character, so `fn(` re-queries the server and
+    /// re-opens the popup. A barrier that began only at the body would
+    /// answer `TextField` at that keystroke, leaving a freshly-opened
+    /// popup one line above the body — and from there the caret only
+    /// *moves*, which LSP4IJ services without re-labelling or closing.
+    /// The `None` has to land on the trigger, so the whole lambda is
+    /// covered, parameter list included.
+    #[test]
+    fn suppression_starts_at_the_lambda_not_at_its_body() {
+        let src = "class TextField
+  fn init(placeholder: string = \"\", onChanged: function? = nil)
+  end
+end
+
+fn build()
+  local t = TextField(placeholder: \"name\", onChanged: fn(text: string)
+    local n: integer = 1
+  end)
+end
+";
+        let key = src.find("onChanged: fn(text").expect("key");
+        // Choosing what to pass: the widget still answers.
+        assert!(label_at(src, key + 2).starts_with("TextField("));
+        assert!(label_at(src, key + "onChanged:".len()).starts_with("TextField("));
+
+        // Writing the callback: silent from the parameter list onward,
+        // and in particular at the `(` the client re-triggers on.
+        for suffix in ["onChanged: fn(", "onChanged: fn(text", "onChanged: fn(text: string"] {
+            let at = key + suffix.len();
+            assert!(
+                help_at(src, at).is_none(),
+                "still reporting at {suffix:?}: {:?}",
+                help_at(src, at).map(|h| h.signatures[0].label.clone())
+            );
+        }
+    }
+
+    /// An empty body is the case that matters most while typing: the
+    /// caret sits on a blank line in a callback that has no statements
+    /// yet, which is precisely when a stale popup is in the way.
+    #[test]
+    fn an_empty_callback_body_also_ends_it() {
+        let src = "class Button
+  fn init(label: string = \"\", onPressed: function? = nil)
+  end
+end
+
+fn build()
+  local b = Button(label: \"Save\", onPressed: fn()
+
+  end)
+end
+";
+        let at = src.find("fn()\n").expect("lambda") + "fn()\n".len();
+        assert!(help_at(src, at).is_none(), "empty body kept the popup");
+    }
+
+    /// The barrier stops at the body — a call *written inside* it opens
+    /// its own popup as normal.
+    #[test]
+    fn a_call_inside_the_body_still_reports() {
+        let src = "class Button
+  fn init(label: string = \"\", onPressed: function? = nil)
+  end
+end
+
+fn note(message: string, level: integer = 0)
+end
+
+fn build()
+  local b = Button(label: \"Save\", onPressed: fn()
+    note(\"saved\", 1)
+  end)
+end
+";
+        let at = src.find("note(\"saved\"").expect("call") + "note(".len();
+        assert!(label_at(src, at).starts_with("note("), "{}", label_at(src, at));
+    }
+
+    /// A `=>` lambda's body is one expression, still visibly an argument
+    /// of the call — so it is not a barrier.
+    #[test]
+    fn an_expression_lambda_is_not_a_barrier() {
+        let src = "fn apply(items: table<integer>, f: fn(integer) -> integer, tag: string = \"\")
+end
+
+fn build()
+  local out = apply({1}, x => x + 1, tag: \"t\")
+end
+";
+        let at = src.find("x + 1").expect("body") + 1;
+        assert!(
+            label_at(src, at).starts_with("apply("),
+            "got {}",
+            label_at(src, at)
+        );
+    }
+
+    /// Nested callbacks resolve against the innermost body, not an outer
+    /// one that also contains the cursor.
+    #[test]
+    fn the_innermost_body_wins() {
+        let src = "class Button
+  fn init(label: string = \"\", onPressed: function? = nil)
+  end
+end
+
+fn note(message: string, level: integer = 0)
+end
+
+fn build()
+  local b = Button(label: \"a\", onPressed: fn()
+    local inner = Button(label: \"b\", onPressed: fn()
+      note(\"deep\", 2)
+    end)
+  end)
+end
+";
+        // Inside the inner callback's body, on its own call.
+        let at = src.find("note(\"deep\"").expect("call") + "note(".len();
+        assert!(label_at(src, at).starts_with("note("));
+        // On the inner Button's own argument, the inner Button answers.
+        let at = src.find("label: \"b\"").expect("arg") + 2;
+        assert!(label_at(src, at).starts_with("Button("));
+        // A statement in the inner body reports nothing at all.
+        let at = src.find("local inner = Button").expect("stmt") + 2;
+        assert!(help_at(src, at).is_none());
     }
 }

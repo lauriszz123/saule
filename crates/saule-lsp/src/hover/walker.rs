@@ -127,6 +127,17 @@ struct ModuleFn {
     sig: saule_typeck::sigs::NativeSig,
 }
 
+/// A resolved call target, in the shape named-argument hover needs it.
+struct CalleeSig {
+    /// How the callee reads at the call site — `Container`, `Theme.of`,
+    /// `showMenu` — used to qualify the parameter in the popup.
+    display: String,
+    params: Vec<Param>,
+    /// The callee's `---` block, so an `@param child` line reaches the
+    /// hover on the `child:` key.
+    doc: Option<saule_docs::DocBlock>,
+}
+
 /// Index every top-level `fn` in `module` by name. Declaration order
 /// wins on duplicates, which matches how the rest of the pipeline
 /// treats a redeclared name.
@@ -172,6 +183,58 @@ impl<'a> Cx<'a> {
             }
         }
         self.best = Some(Hit { span, md });
+    }
+
+    /// The span of a declaration's *name* token, for anchoring the
+    /// declaration's own hover.
+    ///
+    /// Recording a declaration against its full span — header *and*
+    /// body — makes every byte inside that body which no narrower node
+    /// claims resolve to the declaration's signature: a comment, a blank
+    /// line, the gap between two arguments. The popup then presents a
+    /// confident description of a symbol the cursor is nowhere near,
+    /// which is the single largest source of hovers that read as random.
+    /// Anchored to the name token instead, those positions correctly
+    /// produce no hover at all.
+    ///
+    /// The span runs from the start of the declaration to the end of its
+    /// name, so the introducing keyword and any `export` / `local` /
+    /// `static` modifier hover as part of the thing they introduce —
+    /// pointing at `fn` and getting nothing would be its own small
+    /// annoyance. It is the *body* that must be excluded, and is.
+    ///
+    /// `head_end` bounds the search to the declaration header so a body
+    /// that happens to mention the name (recursion, a same-named local)
+    /// can't win the match. Falls back to the full span when the name
+    /// isn't locatable, which is what keeps the source-less [`hover_at`]
+    /// entry point answering as it always has.
+    fn decl_name_span(&self, span: &Range<usize>, name: &str, head_end: usize) -> Range<usize> {
+        let end = head_end.clamp(span.start, span.end);
+        match locate_word_in(self.source, &(span.start..end), name) {
+            Some(m) => span.start..m.end,
+            None => span.clone(),
+        }
+    }
+
+    /// Record the hover for a loop variable at its binding site, found
+    /// by locating the name inside the loop header `search`. Renders
+    /// identically to a use of the same variable inside the body, so
+    /// `for i` and the `i` two lines down agree.
+    ///
+    /// Also makes the type ascription's own head (`for x: Color in ...`)
+    /// hoverable, matching what parameters and locals already do.
+    fn record_loop_var(&mut self, search: &Range<usize>, name: &str, ty: &Type) {
+        let Some(span) = locate_word_in(self.source, search, name) else {
+            return;
+        };
+        self.record(
+            span,
+            format!(
+                "```saule\n(loop var) {name}: {ty}\n```",
+                ty = render_type(ty)
+            ),
+        );
+        self.record_type_idents_in(ty, search);
     }
 
     /// The `---` doc comment attached to the declaration starting at
@@ -768,12 +831,19 @@ impl<'a> Cx<'a> {
                 if let Some(st) = step {
                     self.visit_expr(st);
                 }
+                let ty = var_ty
+                    .clone()
+                    .unwrap_or_else(|| Type::Named("integer".into()));
+                // The binding site itself. Uses within the body resolve
+                // through `lookup_local`, but `for i: integer = 1, 20`
+                // has no span-tracked node of its own — without this the
+                // declaration is the one place in the loop where hovering
+                // `i` falls through to the enclosing function.
+                self.record_loop_var(&(s.span.start..from.span.start), var, &ty);
                 let mark = self.locals.len();
                 self.locals.push(LocalVar {
                     name: var.clone(),
-                    ty: var_ty
-                        .clone()
-                        .unwrap_or_else(|| Type::Named("integer".into())),
+                    ty,
                     kind: LocalKind::LoopVar,
                 });
                 self.visit_block(body);
@@ -782,10 +852,13 @@ impl<'a> Cx<'a> {
             Stmt::ForIn { vars, iter, body } => {
                 self.visit_expr(iter);
                 let mark = self.locals.len();
+                let header = s.span.start..iter.span.start;
                 for (name, ty) in vars {
+                    let ty = ty.clone().unwrap_or_else(|| Type::Named("any".into()));
+                    self.record_loop_var(&header, name, &ty);
                     self.locals.push(LocalVar {
                         name: name.clone(),
-                        ty: ty.clone().unwrap_or_else(|| Type::Named("any".into())),
+                        ty,
                         kind: LocalKind::LoopVar,
                     });
                 }
@@ -851,8 +924,14 @@ impl<'a> Cx<'a> {
                 ..
             } => {
                 let doc = self.doc_at(d.span.start);
+                let head_end = params
+                    .first()
+                    .map(|p| p.span.start)
+                    .or_else(|| body.first().map(|s| s.span.start))
+                    .unwrap_or(d.span.end);
+                let name_span = self.decl_name_span(&d.span, name, head_end);
                 self.record(
-                    d.span.clone(),
+                    name_span,
                     with_doc(
                         render_function_sig(name, type_params, params, return_ty.as_ref()),
                         doc.as_ref(),
@@ -899,13 +978,14 @@ impl<'a> Cx<'a> {
                     .map(|info| render_class_full(name, &info))
                     .unwrap_or_else(|| render_class_head(name, extends.as_deref(), implements));
                 let doc = self.doc_at(d.span.start);
-                self.record(d.span.clone(), with_doc(md, doc.as_ref()));
+                let header_end = members.first().map(|m| m.span.start).unwrap_or(d.span.end);
+                let name_span = self.decl_name_span(&d.span, name, header_end);
+                self.record(name_span, with_doc(md, doc.as_ref()));
                 // Resolve `extends X` / `implements Y, Z` parent and
                 // interface names within the class header (between
                 // the class name and the first member). We use the
                 // first occurrence of each name within the decl span
                 // as the hover target.
-                let header_end = members.first().map(|m| m.span.start).unwrap_or(d.span.end);
                 let header_span = d.span.start..header_end;
                 if let Some(parent) = extends {
                     self.record_named_idents_in(&[parent.clone()], &header_span);
@@ -924,8 +1004,10 @@ impl<'a> Cx<'a> {
                 ..
             } => {
                 let doc = self.doc_at(d.span.start);
+                let head_end = methods.first().map(|m| m.span.start).unwrap_or(d.span.end);
+                let name_span = self.decl_name_span(&d.span, name, head_end);
                 self.record(
-                    d.span.clone(),
+                    name_span,
                     with_doc(render_interface_head(name, extends, methods), doc.as_ref()),
                 );
                 // Same idea as class `extends` — locate parent
@@ -958,8 +1040,10 @@ impl<'a> Cx<'a> {
                 ..
             } => {
                 let doc = self.doc_at(d.span.start);
+                let head_end = variants.first().map(|v| v.span.start).unwrap_or(d.span.end);
+                let name_span = self.decl_name_span(&d.span, name, head_end);
                 self.record(
-                    d.span.clone(),
+                    name_span,
                     with_doc(render_enum_head(name, variants), doc.as_ref()),
                 );
                 for v in variants {
@@ -1008,10 +1092,7 @@ impl<'a> Cx<'a> {
                         // sees and would hover.
                         if let Some(span) = locate_word_in(self.source, &d.span, local) {
                             if contains(&span, self.offset) {
-                                if let Some(md) = self
-                                    .resolve_ident(local)
-                                    .or_else(|| self.imports.fn_sigs.get(local).cloned())
-                                {
+                                if let Some(md) = self.resolve_ident(local) {
                                     self.record(span, md);
                                 }
                             }
@@ -1073,8 +1154,15 @@ impl<'a> Cx<'a> {
             return;
         }
         let doc = self.doc_at(m.span.start);
+        let head_end = m
+            .params
+            .first()
+            .map(|p| p.span.start)
+            .or_else(|| m.body.first().map(|s| s.span.start))
+            .unwrap_or(m.span.end);
+        let name_span = self.decl_name_span(&m.span, &m.name, head_end);
         self.record(
-            m.span.clone(),
+            name_span,
             with_doc(render_method_head(owner, m), doc.as_ref()),
         );
         for p in &m.params {
@@ -1127,19 +1215,24 @@ impl<'a> Cx<'a> {
             }
             Expr::Call { callee, args } => {
                 self.visit_expr(callee);
-                let params = self.callee_params(&callee.value);
+                let sig = self.callee_sig(&callee.value);
                 for a in args {
-                    self.visit_call_arg_with_params(a, params.as_deref());
+                    self.visit_call_arg_with_params(a, sig.as_ref());
                 }
             }
             Expr::MethodCall { obj, method, args } => {
                 self.visit_expr(obj);
-                let params = self
-                    .receiver_class(&obj.value)
-                    .and_then(|c| lookup_method(&c, method))
-                    .map(|sig| sig.params);
+                let sig = self.receiver_class(&obj.value).and_then(|class| {
+                    let m = lookup_method(&class, method)?;
+                    let key = format!("{class}.{method}");
+                    Some(CalleeSig {
+                        params: m.params,
+                        doc: self.imports.docs.get(&key).cloned(),
+                        display: key,
+                    })
+                });
                 for a in args {
-                    self.visit_call_arg_with_params(a, params.as_deref());
+                    self.visit_call_arg_with_params(a, sig.as_ref());
                 }
             }
             Expr::ForceUnwrap(inner) => self.visit_expr(inner),
@@ -1218,71 +1311,130 @@ impl<'a> Cx<'a> {
 
     /// Like [`visit_call_arg`] but also surfaces hover info on a named
     /// argument's *key* (`storage.add(item, dueDate: due)` -> hovering
-    /// on `dueDate` shows the parameter declaration). `params` carries
-    /// the callee's parameter list when we could resolve it, used to
-    /// look up the matching declared type.
-    fn visit_call_arg_with_params(&mut self, a: &saule_ast::CallArg, params: Option<&[Param]>) {
+    /// on `dueDate` shows the parameter declaration). `callee` carries
+    /// the resolved callee when we found one, so the key can be rendered
+    /// as the parameter it actually is.
+    fn visit_call_arg_with_params(&mut self, a: &saule_ast::CallArg, callee: Option<&CalleeSig>) {
         match a {
             saule_ast::CallArg::Positional(e) => self.visit_expr(e),
             saule_ast::CallArg::Named { name, value } => {
                 let key_search = value.span.start.saturating_sub(name.len() + 4)..value.span.start;
-                if let Some(span) = locate_word_in(self.source, &key_search, name) {
-                    if contains(&span, self.offset) {
-                        let md = match params.and_then(|ps| ps.iter().find(|p| &p.name == name)) {
-                            Some(p) => format!(
-                                "```saule\n(named arg) {name}: {ty}\n```",
-                                ty = render_type(&p.ty)
-                            ),
-                            None => format!("```saule\n(named arg) {name}\n```"),
-                        };
-                        self.record(span, md);
-                    }
+                if let Some(span) = locate_word_in(self.source, &key_search, name)
+                    && contains(&span, self.offset)
+                {
+                    self.record(span, self.render_named_arg(name, callee));
                 }
                 self.visit_expr(value);
             }
         }
     }
 
-    /// Best-effort: extract the declared parameter list of `callee`
-    /// for named-argument hover. Handles the common shapes —
-    /// constructor calls, sibling free / static calls, and free
-    /// function references — without trying to be exhaustive.
-    fn callee_params(&self, callee: &Expr) -> Option<Vec<Param>> {
+    /// The hover for a named argument's key.
+    ///
+    /// A named-argument key *is* the callee's parameter, so it renders
+    /// as one — same `(parameter)` label, same `= …` default marker as
+    /// the declaration site, and qualified by the callee's name.
+    ///
+    /// The qualifier is what makes this readable in Flutter-shaped code.
+    /// A single build method here holds eight `child:` keys belonging to
+    /// six different widgets; unqualified they all rendered the identical
+    /// `child: Widget?` blurb, so the popup confirmed nothing about
+    /// which one the cursor was on. `Container.child` does.
+    fn render_named_arg(&self, name: &str, callee: Option<&CalleeSig>) -> String {
+        let Some(c) = callee else {
+            // Callee unresolved — say only what we actually know rather
+            // than inventing a type.
+            return format!("```saule\n(parameter) {name}\n```");
+        };
+        let Some(p) = c.params.iter().find(|p| p.name == name) else {
+            // Callee resolved but has no such parameter. Naming the miss
+            // is the same service `render_unknown_member` performs, and
+            // it stops a wider node from answering in its place.
+            return format!(
+                "```saule\n(unknown) {owner}.{name}\n```\nNo parameter `{name}` on `{owner}`.",
+                owner = c.display
+            );
+        };
+        let mut s = String::from("```saule\n(parameter) ");
+        if !c.display.is_empty() {
+            s.push_str(&c.display);
+            s.push('.');
+        }
+        if p.variadic {
+            s.push_str("...");
+        }
+        s.push_str(&p.name);
+        s.push_str(": ");
+        s.push_str(&render_type(&p.ty));
+        if p.default.is_some() {
+            s.push_str(" = …");
+        }
+        s.push_str("\n```");
+        with_param_doc(s, c.doc.as_ref(), name)
+    }
+
+    /// Best-effort: resolve `callee` to the name and parameter list
+    /// named-argument hover needs. Handles the common shapes —
+    /// constructor calls, sibling free / static / method calls, and
+    /// functions imported from another file — without trying to be
+    /// exhaustive.
+    fn callee_sig(&self, callee: &Expr) -> Option<CalleeSig> {
+        let sig = |display: String, params: Vec<Param>, doc_key: &str| CalleeSig {
+            params,
+            doc: self.imports.docs.get(doc_key).cloned(),
+            display,
+        };
         match callee {
             Expr::Ident(name) => {
                 // Constructor: `init` method, falling through to a
                 // bare `Class()` call (which uses no init params).
                 if with_classes(|r| r.contains_key(name)) {
-                    return lookup_method(name, "init").map(|sig| sig.params);
+                    let params = lookup_method(name, "init").map(|s| s.params)?;
+                    // Constructor prose is conventionally written on the
+                    // class, so try that before `Class.init`.
+                    let key = if self.imports.docs.get(name).is_some() {
+                        name.clone()
+                    } else {
+                        format!("{name}.init")
+                    };
+                    return Some(sig(name.clone(), params, &key));
                 }
-                if let Some(class) = &self.enclosing_class {
-                    if let Some(sig) = lookup_method(class, name) {
-                        return Some(sig.params);
-                    }
+                if let Some(class) = &self.enclosing_class
+                    && let Some(m) = lookup_method(class, name)
+                {
+                    return Some(sig(
+                        format!("{class}.{name}"),
+                        m.params,
+                        &format!("{class}.{name}"),
+                    ));
                 }
                 // Sibling top-level `fn` — the one free-call shape where
                 // we do have the declared parameter *names*.
                 if let Some(f) = self.module_fns.get(name) {
-                    return Some(f.params.clone());
+                    return Some(sig(name.clone(), f.params.clone(), name));
                 }
-                if let Some(sig) = saule_typeck::sigs::lookup(name) {
-                    let _ = sig;
-                    // Native sigs only know positional types, not
-                    // parameter names — they can't drive named-arg
-                    // hover. Treat them as unresolved.
-                    return None;
+                // A free function imported from another `.sau` file,
+                // including through a re-export barrel — the
+                // `showDialog(builder: …)` helpers a UI file is full of.
+                // The seed registers these by local alias, so no import
+                // walk is needed here.
+                if let Some(f) = saule_semantic::lookup_function(name) {
+                    return Some(sig(name.clone(), f.params, name));
                 }
+                // Native sigs (`Math.sqrt`, `print`) know positional
+                // types but no parameter names, so they can't drive
+                // named-arg hover. Treat them as unresolved.
                 None
             }
             Expr::Member { obj, name } => {
-                if let Some((_, sig)) = self.super_target(name, &obj.value) {
-                    return Some(sig.params);
+                if let Some((owner, m)) = self.super_target(name, &obj.value) {
+                    let key = format!("{owner}.init");
+                    return Some(sig(format!("{owner}.init"), m.params, &key));
                 }
                 let class = self.receiver_class(&obj.value)?;
-                if let Some(sig) = lookup_method(&class, name) {
-                    return Some(sig.params);
-                }
-                None
+                let m = lookup_method(&class, name)?;
+                let key = format!("{class}.{name}");
+                Some(sig(key.clone(), m.params, &key))
             }
             _ => None,
         }
@@ -1466,6 +1618,11 @@ impl<'a> Cx<'a> {
                         .unwrap_or_else(|| render_unknown_member(&class, method)),
                 )
             }
+            // A literal is its own documentation. Answering `(expr):
+            // string` for a cursor inside a sentence of prose is the
+            // kind of hover that fires where the reader asked nothing,
+            // and the type it reports was never in doubt.
+            Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Str(_) | Expr::Nil => None,
             // Generic fallback: surface the inferred type for any
             // expression we can reason about (`#args` -> integer,
             // `args[1]` -> string, `not foo` -> boolean, lambdas,
@@ -1533,10 +1690,15 @@ impl<'a> Cx<'a> {
                 return Some(md);
             }
         }
-        // Imported user function — final fallback. The caller built
-        // this map from the current module's `import` declarations.
-        if let Some(md) = self.imports.fn_sigs.get(name) {
-            return Some(md.clone());
+        // A top-level function imported from another file — final
+        // fallback. `analyze_with_seed` registers these under the local
+        // alias, following re-export barrels, so a name reached through
+        // `import * from UIKit` resolves the same as a direct one.
+        if let Some(sig) = saule_semantic::lookup_function(name) {
+            return Some(with_doc(
+                render_function_sig(name, &sig.type_params, &sig.params, sig.return_ty.as_ref()),
+                doc,
+            ));
         }
         None
     }

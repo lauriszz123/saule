@@ -26,7 +26,6 @@ mod tests;
 mod util;
 mod walker;
 
-use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
 
@@ -36,32 +35,31 @@ use imports::{
     aliases_for_dynamic, aliases_for_file, aliases_for_native, render_file_import_blurb,
     render_native_import_blurb, render_unresolved_import,
 };
-use render::render_function_sig;
 
 /// Out-of-band import information passed into [`hover_at_with`] so the
 /// resolver can answer questions the AST + registries don't cover on
 /// their own:
 ///
-/// * `fn_sigs` — top-level functions imported from another `.sau` file
-///   or a native package, keyed by the *local alias* under which they
-///   appear in the importing module's scope. Free functions never make
-///   it into the class / interface / enum registry, so without this map
-///   hovering on `foo` after `import { foo } from "lib"` would fall
-///   through to "unknown ident".
 /// * `import_blurbs` — pre-rendered Markdown for each `import` statement
 ///   keyed by its source span. The cursor is matched against the keys
 ///   so hovering anywhere on `import Storage from "storage"` surfaces
 ///   "imports `Storage` from `…/storage.sau`" without re-resolving the
 ///   path during the AST walk.
-/// * `docs` — `---` doc comments harvested from every imported file,
+/// * `docs` — `---` doc comments harvested from each imported file,
 ///   keyed by qualified name (`Storage`, `Storage.put`). The walker
 ///   resolves most cross-file symbols through the semantic registries,
 ///   which carry types but no source text and therefore no docs; this
 ///   index is what lets a hover on an imported class or method show the
 ///   prose written next to its declaration in the other file.
+///
+/// Imported *functions* are deliberately absent. They live in the
+/// semantic function registry, which `analyze_with_seed` fills — from a
+/// seed that already follows re-export barrels and already applies
+/// `as`-aliases. Collecting them a second time here meant walking the
+/// import graph twice per request, and cost far more than it sounds:
+/// see [`build_import_context`].
 #[derive(Default, Clone, Debug)]
 pub struct ImportContext {
-    pub fn_sigs: HashMap<String, String>,
     pub import_blurbs: Vec<(Range<usize>, String)>,
     pub docs: saule_docs::DocIndex,
 }
@@ -111,25 +109,35 @@ pub fn hover_at_with_source(
 /// statement, resolving the target file (or native package), and
 /// extracting:
 ///
-/// 1. Top-level free function signatures, keyed by the local alias the
-///    importer sees them under.
-/// 2. A pre-rendered "imports `X` from `Y`" blurb keyed by the import
+/// 1. A pre-rendered "imports `X` from `Y`" blurb keyed by the import
 ///    statement's source span, so hovering anywhere on the statement
 ///    shows where the names come from.
+/// 2. Doc comments from the imported file, merged into
+///    [`ImportContext::docs`] beneath this module's own — so hovering a
+///    *usage* of a documented symbol shows its prose whether it was
+///    declared here or next door.
 ///
 /// Best-effort: any import that fails to resolve / read / parse is
 /// silently skipped — semantic analysis or the runtime will surface
 /// the user-facing error elsewhere. Native packages contribute their
 /// `exports` list and "native package" label.
-/// 3. Doc comments from the imported file, merged into
-///    [`ImportContext::docs`] beneath this module's own — so hovering a
-///    *usage* of a documented symbol shows its prose whether it was
-///    declared here or next door.
+///
+/// **One hop only, deliberately.** This runs on every hover request, and
+/// the obvious-looking extension — following `import *` re-export chains
+/// so a barrel's contents are reachable — is a trap. Sibling modules
+/// import each other, so without a visited set the walk re-parses shared
+/// files along every path that reaches them: for a project importing a
+/// 24-file UIKit barrel that turned a 24ms graph walk into 1.8 *seconds*
+/// per hover. Nothing needs it either. Classes, interfaces, enums and
+/// functions all arrive through `analyze_with_seed`, whose seed does
+/// follow barrels — and does keep a visited set.
 pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -> ImportContext {
-    let mut ctx = ImportContext::default();
     // This module's own docs go in first so they win the `merge`
     // tie-break against any imported name they shadow.
-    ctx.docs = saule_docs::collect(module, source);
+    let mut ctx = ImportContext {
+        docs: saule_docs::collect(module, source),
+        ..Default::default()
+    };
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
@@ -181,55 +189,19 @@ pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -
             continue;
         };
 
-        // Collect every top-level function the imported file declares,
-        // keyed by its declared name. The alias map below decides
-        // which ones (and under what local name) actually land in the
-        // importing module's scope.
-        let mut imported_fns: HashMap<String, String> = HashMap::new();
-        for s in &imported.stmts {
-            if let Stmt::Decl(d) = &s.value
-                && let Decl::Function {
-                    name,
-                    type_params,
-                    params,
-                    return_ty,
-                    ..
-                } = &d.value
-            {
-                imported_fns.insert(
-                    name.clone(),
-                    render_function_sig(name, type_params, params, return_ty.as_ref()),
-                );
-            }
-        }
-
-        // Harvest the imported file's doc comments while we have its
-        // source in hand — the registries the walker consults later
-        // keep types but drop the text.
+        // Harvest the target's doc comments while its source is in hand
+        // — the registries the walker consults keep types but drop the
+        // text. One level only: this is the file the `import` statement
+        // names, not the graph behind it.
         ctx.docs.merge(saule_docs::collect(&imported, &source));
-
-        let aliases = aliases_for_file(&imported, names);
-        for (orig, alias) in &aliases {
-            if let Some(md) = imported_fns.get(orig) {
-                // Re-render with the alias name so hovering on the
-                // local binding shows the name the user actually
-                // typed, not the upstream one.
-                if alias != orig {
-                    if let Some(rendered) = imported_fns.get(orig) {
-                        ctx.fn_sigs.insert(
-                            alias.clone(),
-                            rendered.replacen(&format!("fn {orig}"), &format!("fn {alias}"), 1),
-                        );
-                        continue;
-                    }
-                }
-                ctx.fn_sigs.insert(alias.clone(), md.clone());
-            }
-        }
 
         ctx.import_blurbs.push((
             d.span.clone(),
-            render_file_import_blurb(path, &abs.display().to_string(), &aliases),
+            render_file_import_blurb(
+                path,
+                &abs.display().to_string(),
+                &aliases_for_file(&imported, names),
+            ),
         ));
     }
 
