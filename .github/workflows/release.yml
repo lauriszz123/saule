@@ -286,25 +286,40 @@ jobs:
         run: |
           set -euo pipefail
           notes="$(mktemp)"
+
+          # The one-line installer is RELEASE_PLAN.md step 3 and does not exist
+          # yet. Until `www/public/install.sh` ships, these notes describe the
+          # manual path — which actually works — rather than a curl command
+          # that would 404. Swap the two blocks when step 3 lands.
           cat > "$notes" <<EOF
           ## Install
 
-          macOS / Linux:
+          Download the archive for your platform below, verify it, and put both
+          binaries somewhere on your \`PATH\`:
 
           \`\`\`sh
-          curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
+          tar xzf saule-$VERSION-<triple>.tar.gz
+          mkdir -p ~/.saule/bin
+          cp saule-$VERSION-<triple>/saule saule-$VERSION-<triple>/saule-lsp ~/.saule/bin/
+          export PATH="\$HOME/.saule/bin:\$PATH"
           \`\`\`
 
-          Windows (PowerShell):
+          Verify the download first — \`SHA256SUMS\` covers every archive:
 
-          \`\`\`powershell
-          irm https://lauriszz123.github.io/saule/install.ps1 | iex
+          \`\`\`sh
+          shasum -a 256 -c SHA256SUMS --ignore-missing
           \`\`\`
 
           Then \`saule --version\` should print \`saule $VERSION\`.
 
-          Every archive contains \`saule\` and \`saule-lsp\`. Verify a download
-          against \`SHA256SUMS\` before unpacking it.
+          Install **both** binaries. \`saule-lsp\` is the language server every
+          editor plugin uses; without it on \`PATH\` you get syntax highlighting
+          and indentation but no diagnostics, hover, or formatting.
+
+          On macOS, if you downloaded the archive in a browser rather than with
+          \`curl\`, clear the quarantine flag: \`xattr -dr com.apple.quarantine ~/.saule/bin\`.
+
+          A one-line \`curl | sh\` installer is next — see RELEASE_PLAN.md step 3.
           EOF
 
           gh release create "$TAG" \
