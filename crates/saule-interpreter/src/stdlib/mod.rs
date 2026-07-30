@@ -33,6 +33,7 @@ pub mod project;
 pub mod sigs;
 pub mod string;
 pub mod table;
+pub mod version;
 
 /// Install every `auto_prelude` package's bindings into `env`. Called
 /// by [`crate::env::Environment::with_prelude`] right after the env is
@@ -57,6 +58,7 @@ pub fn register_builtin_packages() {
     register(&io::IO_PACKAGE);
     register(&os::OS_PACKAGE);
     register(&project::PROJECT_PACKAGE);
+    register(&version::VERSION_PACKAGE);
 }
 
 /// Walk every registered package and let it register its native

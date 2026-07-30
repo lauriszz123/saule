@@ -2,7 +2,7 @@
 title: "Conventions"
 description: "A handful of patterns repeat across the stdlib:"
 sidebar:
-  order: 7
+  order: 8
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

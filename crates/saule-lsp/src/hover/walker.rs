@@ -58,6 +58,7 @@ pub(super) fn run(
         imports,
         locals: Vec::new(),
         enum_variant_fields: collect_enum_variant_fields(module),
+        module_fns: collect_module_fns(module),
     };
     cx.visit_module(module);
     cx.best.map(|h| (h.md, h.span))
@@ -107,6 +108,53 @@ struct Cx<'a> {
     /// bindings inside `match` arms can be typed without re-walking
     /// every enum decl per arm.
     enum_variant_fields: HashMap<(String, String), Vec<Param>>,
+    /// The free functions this module declares at top level, keyed by
+    /// name. Free functions never reach the class / interface / enum
+    /// registries, so without this a hover on a *call* to a sibling
+    /// function (`map(...)` below `fn map<T, U>`) had nothing to
+    /// resolve against and fell through to `None`.
+    module_fns: HashMap<String, ModuleFn>,
+}
+
+/// A top-level `fn` of the module under the cursor, in the three shapes
+/// the walker needs it: rendered for hover, as an AST parameter list for
+/// named-argument hover, and as a [`NativeSig`] so the generic
+/// instantiation machinery in `saule_typeck::sigs` can bind its type
+/// parameters against actual argument types.
+struct ModuleFn {
+    md: String,
+    params: Vec<Param>,
+    sig: saule_typeck::sigs::NativeSig,
+}
+
+/// Index every top-level `fn` in `module` by name. Declaration order
+/// wins on duplicates, which matches how the rest of the pipeline
+/// treats a redeclared name.
+fn collect_module_fns(module: &Module) -> HashMap<String, ModuleFn> {
+    let mut out = HashMap::new();
+    for stmt in &module.stmts {
+        if let Stmt::Decl(d) = &stmt.value
+            && let Decl::Function {
+                name,
+                type_params,
+                params,
+                return_ty,
+                ..
+            } = &d.value
+        {
+            out.entry(name.clone()).or_insert_with(|| ModuleFn {
+                md: render_function_sig(name, type_params, params, return_ty.as_ref()),
+                params: params.clone(),
+                sig: saule_typeck::sigs::NativeSig {
+                    type_params: type_params.clone(),
+                    params: params.iter().map(|p| p.ty.clone()).collect(),
+                    variadic: None,
+                    returns: return_ty.clone().into_iter().collect(),
+                },
+            });
+        }
+    }
+    out
 }
 
 impl<'a> Cx<'a> {
@@ -288,6 +336,24 @@ impl<'a> Cx<'a> {
                     if with_classes(|r| r.contains_key(name)) {
                         return Some(Type::Named(name.clone()));
                     }
+                    // Call to a function declared at top level in this
+                    // same file. Its type parameters are bound from the
+                    // actual argument types, so `map(table<string>, …)`
+                    // infers `table<U>`'s `U` rather than leaving the
+                    // local at bare `any`.
+                    if let Some(f) = self.module_fns.get(name) {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&f.sig, &arg_types)
+                            .into_iter()
+                            .next()
+                            // A type parameter the arguments didn't pin
+                            // down would come back as its own bare name
+                            // (`table<U>`). That's "unknown", not a
+                            // type — fall through to `any`.
+                            .filter(|t| {
+                                !saule_typeck::sigs::mentions_unbound_param(t, &f.sig.type_params)
+                            });
+                    }
                     // Non-constructor free call: consult native-sig
                     // returns or imported function signatures. We
                     // don't have ASTs for those, so return None and
@@ -386,12 +452,15 @@ impl<'a> Cx<'a> {
                 }
             }
             Expr::Lambda {
-                params, return_ty, ..
+                params,
+                return_ty,
+                body,
             } => Some(Type::Function {
                 params: params.iter().map(|p| p.ty.clone()).collect(),
                 ret: Box::new(
                     return_ty
                         .clone()
+                        .or_else(|| self.infer_lambda_return(params, body))
                         .unwrap_or_else(|| Type::Named("any".into())),
                 ),
             }),
@@ -415,6 +484,9 @@ impl<'a> Cx<'a> {
                 // where `fn` is a free function; the piped value is
                 // prepended at call time.
                 let last = stages.last()?;
+                if let Some(f) = self.module_fns.get(&last.name) {
+                    return f.sig.returns.first().cloned();
+                }
                 if let Some(sig) = saule_typeck::sigs::lookup(&last.name) {
                     return sig.returns.first().cloned();
                 }
@@ -447,6 +519,28 @@ impl<'a> Cx<'a> {
             Expr::Bool(_) => Some(Type::Named("boolean".into())),
             Expr::Nil => Some(Type::Nullable(Box::new(Type::Named("any".into())))),
         }
+    }
+
+    /// Best-effort return type of an unannotated expression-bodied
+    /// lambda (`s => #s` is `fn(any) -> integer`). This is what lets a
+    /// generic call like `map(items, s => #s)` bind the callback's
+    /// result type instead of settling for `table<any>`.
+    ///
+    /// Two deliberate limits. Block-bodied lambdas are skipped: their
+    /// `return` statements would need the full statement walk, and a
+    /// wrong answer here is worse than `any`. And a lambda whose
+    /// parameters shadow an in-scope binding is skipped too — the body
+    /// is inferred against the *enclosing* scope (the parameters aren't
+    /// pushed, since inference runs behind `&self`), so a shadowed name
+    /// would silently resolve to the outer variable's type.
+    fn infer_lambda_return(&self, params: &[Param], body: &saule_ast::LambdaBody) -> Option<Type> {
+        let saule_ast::LambdaBody::Expr(e) = body else {
+            return None;
+        };
+        if params.iter().any(|p| self.lookup_local(&p.name).is_some()) {
+            return None;
+        }
+        Some(first_value_type(self.infer_init_type(&e.value)))
     }
 
     /// Infer a `table<V>` (array literal) or `table<K, V>` (map literal)
@@ -1166,6 +1260,11 @@ impl<'a> Cx<'a> {
                         return Some(sig.params);
                     }
                 }
+                // Sibling top-level `fn` — the one free-call shape where
+                // we do have the declared parameter *names*.
+                if let Some(f) = self.module_fns.get(name) {
+                    return Some(f.params.clone());
+                }
                 if let Some(sig) = saule_typeck::sigs::lookup(name) {
                     let _ = sig;
                     // Native sigs only know positional types, not
@@ -1405,6 +1504,13 @@ impl<'a> Cx<'a> {
             let variants: Vec<(String, usize)> =
                 info.variants.iter().map(|(n, a)| (n.clone(), *a)).collect();
             return Some(with_doc(render_enum_from_registry(name, &variants), doc));
+        }
+        // Free function declared at top level in *this* module. Checked
+        // ahead of the native signatures because a local declaration
+        // shadows a stdlib name of the same spelling for the rest of
+        // the file, and the hover should follow the same rule.
+        if let Some(f) = self.module_fns.get(name) {
+            return Some(with_doc(f.md.clone(), doc));
         }
         if let Some(sig) = saule_typeck::sigs::lookup(name) {
             return Some(format!(

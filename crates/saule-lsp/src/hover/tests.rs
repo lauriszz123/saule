@@ -1166,3 +1166,44 @@ fn a_member_that_does_resolve_is_unaffected() {
         "a declared field was reported as unknown:\n{md}"
     );
 }
+
+/// A call to a free function declared in the same file resolves to its
+/// signature — free functions never reach the semantic registries, so
+/// this path goes through the walker's module-level `fn` index.
+#[test]
+fn hover_call_to_sibling_free_function() {
+    let src = "fn greet(name: string) -> string\n\treturn name\nend\n\nlocal g = greet(\"a\")\n";
+    let md = hover_src_at(src, "greet(\"a\")", 1).expect("hover on call site");
+    assert!(md.contains("fn greet(name: string) -> string"), "{md}");
+}
+
+/// Same, for a generic function: the rendered signature keeps its type
+/// parameters and the generic types in the parameter list.
+#[test]
+fn hover_call_to_sibling_generic_function() {
+    let src = "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n\tlocal out: table<U> = {}\n\treturn out\nend\n\nlocal lengths = map({\"a\"}, s => #s)\n";
+    let md = hover_src_at(src, "map({", 1).expect("hover on generic call site");
+    assert!(
+        md.contains("fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>"),
+        "{md}"
+    );
+}
+
+/// A local initialized from a generic sibling function gets the
+/// *instantiated* return type, with the callback's result type bound
+/// from its body.
+#[test]
+fn local_type_from_generic_sibling_call() {
+    let src = "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n\tlocal out: table<U> = {}\n\treturn out\nend\n\nlocal lengths = map({\"a\"}, s => #s)\n";
+    let md = hover_src_at(src, "lengths =", 1).expect("hover on local");
+    assert!(md.contains("(local) lengths: table<integer>"), "{md}");
+}
+
+/// A type parameter the call never pins down must not escape into the
+/// hover as if it were a real type — the local falls back to `any`.
+#[test]
+fn unbound_type_param_does_not_escape_into_local_type() {
+    let src = "fn make<T>(n: integer) -> table<T>\n\tlocal out: table<T> = {}\n\treturn out\nend\n\nlocal xs = make(3)\n";
+    let md = hover_src_at(src, "xs =", 1).expect("hover on local");
+    assert!(md.contains("(local) xs: any"), "{md}");
+}

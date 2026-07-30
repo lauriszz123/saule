@@ -1,0 +1,91 @@
+name: CI
+
+# The gate on the Rust side of the repo. Until this existed, nothing ran
+# `cargo test` or the `.sau` fixtures on push — the only automation was the
+# two website workflows, which build the compiler but never test it.
+#
+# Deliberately kept to one platform. The release workflow builds all six
+# triples, and that is where a platform-specific break shows up; running the
+# full matrix on every push would cost minutes to catch almost nothing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A force-push should not leave the previous run burning a runner.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # saule-version's build script reads git tags to work out the build
+          # number. It degrades gracefully without them, but fetching means CI
+          # reports the same version a developer's machine would.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Both lint steps are non-blocking *for now*. The repo has pre-existing
+      # drift — around 190 rustfmt hunks (mostly in saule-engine-lib,
+      # saule-lsp/refs and saule-lsp/server) and a handful of clippy warnings
+      # in saule-fmt, saule-semantic and saule-cli — none of it introduced by
+      # the work that added this file.
+      #
+      # Making them blocking on day one would mean a red CI on the very first
+      # push, which teaches everyone to ignore CI. Instead: run
+      # `cargo fmt --all` and clear the clippy warnings as one dedicated
+      # commit, then delete both `continue-on-error` lines. Tracked as a
+      # prerequisite in RELEASE_PLAN.md step 2.
+      - name: Formatting
+        continue-on-error: true
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --exclude saule-engine-lib -- -D warnings
+
+      # `saule-engine-lib` is excluded deliberately. It is an *example* native
+      # package — a minifb/arboard graphics demo — and the release workflow
+      # doesn't build it either (`-p saule-cli -p saule-lsp`). Gating the
+      # toolchain on whether a windowing library links on a headless Linux
+      # runner would add a failure mode without protecting anything that ships.
+      # Build it in a dedicated job with the right apt packages if it ever
+      # needs coverage.
+      - name: Unit and integration tests
+        run: cargo test --workspace --locked --exclude saule-engine-lib
+
+      # The 110 `.sau` fixtures under tests/ are the language's real
+      # regression suite and are not reachable from `cargo test`.
+      - name: Build the CLI for the fixtures
+        run: cargo build --locked -p saule-cli
+
+      - name: Language fixtures
+        run: ./run_tests.sh
+
+      - name: Version surfaces agree
+        run: |
+          set -euo pipefail
+          # Three places report the version and they are all fed by the same
+          # crate; this catches a wiring mistake that no unit test would,
+          # because each surface formats the value independently.
+          cli="$(./target/debug/saule --version)"
+          lsp="$(cargo run -q --locked -p saule-lsp -- --version)"
+          echo "cli: $cli"
+          echo "lsp: $lsp"
+          [ "${cli#saule }" = "${lsp#saule-lsp }" ] || {
+            echo "::error::saule and saule-lsp report different versions"
+            exit 1
+          }

@@ -3,6 +3,7 @@ name = "saule-ast"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
+license.workspace = true
 
 [dependencies]
 miette = "7.6.0"

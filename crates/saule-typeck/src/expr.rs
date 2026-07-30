@@ -64,6 +64,7 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             } else {
                 check_expr(callee, scope, errors);
                 report_if_user_function_arity(callee, args, scope, errors, expr.span.clone());
+                report_if_function_value_call(callee, args, scope, errors, expr.span.clone());
             }
             for a in args {
                 check_arg(a, scope, errors);
@@ -971,6 +972,100 @@ fn report_if_enum_variant_arity(
     }
 }
 
+/// Check a call made *through a value* of function type — a parameter,
+/// local or loop variable declared `fn(A, B) -> R` — rather than through
+/// a name the checker can resolve to a declaration.
+///
+/// Nothing else covers this shape: `report_if_user_function_arity` looks
+/// the name up in the top-level function table, and the native path
+/// looks it up in the signature registry, so a callable *binding* fell
+/// through both and its call was never checked at all — not arity, not
+/// argument types. That is the hole that let
+/// `fn map<T, U>(items: table<T>, f: fn(U) -> U)` apply `f` to a `T`
+/// without complaint.
+///
+/// Deliberately narrow:
+///
+/// * Only the `Expr::Ident` callee shape. `obj.field(...)` parses as a
+///   member call and is handled by the class-method paths above.
+/// * A bare `function` annotation (as opposed to `fn(...) -> ...`)
+///   carries no parameter list, so there is nothing to check.
+/// * Named arguments are skipped — a function *type* records no
+///   parameter names, so a named argument can't be matched to a slot.
+///   The runtime still rejects it.
+fn report_if_function_value_call(
+    callee: &Spanned<Expr>,
+    args: &[CallArg],
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+    span: std::ops::Range<usize>,
+) {
+    let Expr::Ident(name) = &callee.value else {
+        return;
+    };
+    // A declaration of the same name wins: the binding paths above have
+    // already checked the call, and re-checking would double-report.
+    if funcs::lookup(name).is_some() || crate::sigs::lookup(name).is_some() {
+        return;
+    }
+    let Some(ty) = scope.lookup(name) else {
+        return;
+    };
+    let Type::Function {
+        params: expected_params,
+        ..
+    } = strip_nullable(ty.clone())
+    else {
+        return;
+    };
+    if args.iter().any(|a| matches!(a, CallArg::Named { .. })) {
+        return;
+    }
+
+    // A function type states its arity exactly — there are no defaults
+    // and no variadic slot to write in one.
+    if args.len() != expected_params.len() {
+        errors.push(TypeCheckError::FunctionArity {
+            callee: name.clone(),
+            expected: expected_params.len(),
+            found: args.len(),
+            span: to_source_span(span),
+        });
+        return;
+    }
+
+    for (i, (arg, expected)) in args.iter().zip(expected_params.iter()).enumerate() {
+        let CallArg::Positional(value_expr) = arg else {
+            continue;
+        };
+        if is_any(expected) {
+            continue;
+        }
+        let Some(found_ty) = infer(value_expr, scope) else {
+            continue;
+        };
+        if !is_nullable(expected) && is_nullable(&found_ty) {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: name.clone(),
+                arg: i + 1,
+                expected: type_to_string(expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+            continue;
+        }
+        if !types_compatible(expected, &found_ty) {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: name.clone(),
+                arg: i + 1,
+                expected: type_to_string(expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+        }
+    }
+}
+
 /// Emit [`TypeCheckError::FunctionArity`] for direct calls to top-level
 /// user-defined functions when the supplied positional-argument count
 /// can't match the declared signature.
@@ -1811,10 +1906,21 @@ pub(super) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
             if a == b || a == "any" || b == "nil" {
                 return true;
             }
-            // Generic type parameters in scope match anything — they're
-            // effectively `any` from the body's point of view.
-            if is_type_param(a) || is_type_param(b) {
-                return true;
+            // Generic type parameters in scope are treated as `any`
+            // against *concrete* types — the body can't know what they
+            // bind to, and rejecting there would make every generic
+            // function unwritable.
+            //
+            // Two type parameters are different: `T` and `U` are rigid
+            // and independent, so no value of one is known to be the
+            // other. `fn map<T, U>(items: table<T>, f: fn(U) -> U)`
+            // applying `f` to a `T` is precisely the mistake this
+            // catches; treating them as interchangeable made the whole
+            // point of declaring two parameters unenforced.
+            match (is_type_param(a), is_type_param(b)) {
+                (true, true) => return a == b,
+                (true, false) | (false, true) => return true,
+                (false, false) => {}
             }
             // `number` is the sentinel used in native sigs to mean
             // "integer or float" — accept either.
@@ -2166,6 +2272,18 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 && crate::sigs::has_member(module, name)
             {
                 return Some(Type::Named("any".into()));
+            }
+            // A call through a value of function type — `f(x)` where `f`
+            // is a parameter or local declared `fn(A) -> R`. Its result is
+            // the declared return type; without this the call inferred as
+            // `None` and everything downstream of it went unchecked.
+            if let Expr::Ident(name) = &callee.value
+                && funcs::lookup(name).is_none()
+                && crate::sigs::lookup(name).is_none()
+                && let Some(ty) = scope.lookup(name)
+                && let Type::Function { ret, .. } = strip_nullable(ty.clone())
+            {
+                return Some(*ret);
             }
             // A call to a top-level user `fn`. Checked last so every rule
             // above keeps priority — in particular a prelude native of the

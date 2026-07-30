@@ -3,6 +3,7 @@ name = "saule-wasm"
 version.workspace = true
 edition.workspace = true
 description = "WebAssembly build of the Saule interpreter, powering the web playground."
+license.workspace = true
 
 [lib]
 name = "saule_wasm"
@@ -12,6 +13,7 @@ name = "saule_wasm"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+saule-version = { path = "../saule-version" }
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }

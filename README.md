@@ -1480,7 +1480,7 @@ version: "1.0.0"
 entry: "main.sau"
 src_dirs: ["src"]
 dependencies: ["../shared-lib", "~/code/json"]
-min_saule_version: "2026.1.0"
+min_saule_version: "26.1"
 indent_style: "space"
 indent_width: 2
 ```

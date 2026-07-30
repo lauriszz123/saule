@@ -13,7 +13,7 @@ use crate::value::{ClassObject, NativeClosure, Value};
 /// `String.format(…)` also works.
 pub static STRING_PACKAGE: NativePackage = NativePackage {
     name: "string",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["String"],
     register_sigs,

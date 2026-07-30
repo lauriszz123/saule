@@ -21,10 +21,10 @@ fn main() {
     let cli = Cli::parse();
 
     if cli.version {
-        println!(
-            "Saule programming language version: {}",
-            env!("CARGO_PKG_VERSION")
-        );
+        // The long form: a development build says so, and says which commit,
+        // because "saule 26.7" in a bug report should only ever mean the
+        // released 26.7.
+        println!("saule {}", saule_version::FULL);
         return;
     }
 

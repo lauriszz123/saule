@@ -211,7 +211,16 @@ const ORDER = {
 		'imports-and-file-structure',
 		'project-configuration',
 	],
-	stdlib: ['prelude-always-in-scope', 'string', 'math', 'table', 'io-file', 'os', 'conventions'],
+	stdlib: [
+		'prelude-always-in-scope',
+		'string',
+		'math',
+		'table',
+		'io-file',
+		'os',
+		'saule',
+		'conventions',
+	],
 };
 
 function planDocument({ file, dir, sourcePath }) {

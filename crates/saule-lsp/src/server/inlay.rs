@@ -111,7 +111,16 @@ struct Cx<'a> {
     /// Top-level user functions discovered in the module, populated by
     /// `collect_user_fns` before traversal so call sites resolve
     /// regardless of declaration order.
-    user_fns: HashMap<String, Vec<Param>>,
+    user_fns: HashMap<String, UserFn>,
+}
+
+/// A top-level user function, in the two shapes the hint passes need:
+/// its declared parameters (for argument-name hints) and a
+/// [`NativeSig`](saule_typeck::sigs::NativeSig) view so a call's return
+/// type can be instantiated against the actual argument types.
+struct UserFn {
+    params: Vec<Param>,
+    sig: saule_typeck::sigs::NativeSig,
 }
 
 impl<'a> Cx<'a> {
@@ -519,6 +528,21 @@ impl<'a> Cx<'a> {
                     if with_classes(|r| r.contains_key(name)) {
                         return Some(Type::Named(name.clone()));
                     }
+                    // Sibling top-level `fn` — bind its type parameters
+                    // from the actual arguments, exactly as for a generic
+                    // native.
+                    if let Some(f) = self.user_fns.get(name) {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&f.sig, &arg_types)
+                            .into_iter()
+                            .next()
+                            // A type parameter the arguments didn't pin
+                            // down comes back as its own bare name — no
+                            // hint beats a hint reading `: table<U>`.
+                            .filter(|t| {
+                                !saule_typeck::sigs::mentions_unbound_param(t, &f.sig.type_params)
+                            });
+                    }
                     if let Some(sig) = saule_typeck::sigs::lookup(name) {
                         let arg_types = self.positional_arg_types(args);
                         return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
@@ -560,8 +584,45 @@ impl<'a> Cx<'a> {
             }
             Expr::Self_ => self.enclosing_class.clone().map(Type::Named),
             Expr::Table(entries) => Some(self.infer_table_literal(entries)),
+            // `#xs` / `not x` have a type regardless of their operand;
+            // `-x` takes the operand's. Cheap, and it's what lets a
+            // callback body like `s => #s` pin down a generic result.
+            Expr::Unary { op, rhs } => match op {
+                saule_ast::UnaryOp::Len => Some(Type::Named("integer".into())),
+                saule_ast::UnaryOp::Not => Some(Type::Named("boolean".into())),
+                saule_ast::UnaryOp::Neg => self.infer_type(&rhs.value),
+            },
+            Expr::Lambda { params, return_ty, body } => Some(Type::Function {
+                params: params.iter().map(|p| p.ty.clone()).collect(),
+                ret: Box::new(
+                    return_ty
+                        .clone()
+                        .or_else(|| self.infer_lambda_return(params, body))
+                        .unwrap_or_else(|| Type::Named("any".into())),
+                ),
+            }),
             _ => None,
         }
+    }
+
+    /// Best-effort return type of an unannotated expression-bodied
+    /// lambda, so a generic call like `map(items, s => #s)` can bind the
+    /// callback's result type. Mirrors the hover walker's helper of the
+    /// same name, including its two limits: block bodies are skipped, and
+    /// so is any lambda whose parameters shadow an in-scope binding (the
+    /// body is inferred against the enclosing scope, where a shadowed
+    /// name would resolve to the wrong local).
+    fn infer_lambda_return(&self, params: &[Param], body: &LambdaBody) -> Option<Type> {
+        let LambdaBody::Expr(e) = body else {
+            return None;
+        };
+        if params
+            .iter()
+            .any(|p| self.locals.iter().any(|l| l.name == p.name))
+        {
+            return None;
+        }
+        Some(first_value_type(self.infer_type(&e.value)))
     }
 
     /// Infer a `table<V>` (array literal) or `table<K, V>` (map literal)
@@ -692,8 +753,8 @@ impl<'a> Cx<'a> {
                         return Some(CalleeParams::Named(sig.params));
                     }
                 }
-                if let Some(params) = self.user_fns.get(name) {
-                    return Some(CalleeParams::Named(params.clone()));
+                if let Some(f) = self.user_fns.get(name) {
+                    return Some(CalleeParams::Named(f.params.clone()));
                 }
                 // Bare native (`assert`, `tonumber`, ...): synthesise
                 // names from the registered native sig so the user
@@ -779,12 +840,26 @@ enum CalleeParams {
 /// Pre-pass: collect every top-level `fn name(...)` declaration so the
 /// param-hint walker can resolve free-call expressions whose target
 /// is a user-defined function (not a class init, not a stdlib native).
-fn collect_user_fns(module: &Module) -> HashMap<String, Vec<Param>> {
+fn collect_user_fns(module: &Module) -> HashMap<String, UserFn> {
     let mut out = HashMap::new();
     for s in &module.stmts {
         if let Stmt::Decl(d) = &s.value {
-            if let Decl::Function { name, params, .. } = &d.value {
-                out.insert(name.clone(), params.clone());
+            if let Decl::Function {
+                name, type_params, params, return_ty, ..
+            } = &d.value
+            {
+                out.insert(
+                    name.clone(),
+                    UserFn {
+                        params: params.clone(),
+                        sig: saule_typeck::sigs::NativeSig {
+                            type_params: type_params.clone(),
+                            params: params.iter().map(|p| p.ty.clone()).collect(),
+                            variadic: None,
+                            returns: return_ty.clone().into_iter().collect(),
+                        },
+                    },
+                );
             }
         }
     }
@@ -799,6 +874,16 @@ fn render_type(ty: &Type) -> Option<String> {
         Type::Named(n) if n == "any" || n.is_empty() => None,
         Type::Named(n) => Some(n.clone()),
         Type::Nullable(inner) => render_type(inner).map(|s| format!("{s}?")),
+        // Element types are worth showing — `local xs = map(names, …)`
+        // reads much better as `xs : table<integer>` than as nothing at
+        // all. Rendered only when every component renders, so an `any`
+        // anywhere inside still suppresses the whole hint rather than
+        // spending screen width on `table<any>`.
+        Type::Table { key: None, value } => render_type(value).map(|v| format!("table<{v}>")),
+        Type::Table { key: Some(key), value } => match (render_type(key), render_type(value)) {
+            (Some(k), Some(v)) => Some(format!("table<{k}, {v}>")),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -841,6 +926,48 @@ mod tests {
             .into_iter()
             .map(|h| (h.kind, h.byte, h.label))
             .collect()
+    }
+
+    /// A call to a top-level user function carries its declared return
+    /// type into the local's hint.
+    #[test]
+    fn type_hint_from_user_function_return() {
+        let src = "fn first(items: table<string>) -> string\n  return items[1]\nend\n\nlocal x = first({\"a\"})\n";
+        let hints = raw_hints(src);
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": string"),
+            "{hints:?}"
+        );
+    }
+
+    /// A generic user function binds its type parameters from the actual
+    /// arguments — including the result type of an expression-bodied
+    /// callback.
+    #[test]
+    fn type_hint_from_generic_user_function() {
+        let src = "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n  local out: table<U> = {}\n  return out\nend\n\nlocal lengths = map({\"a\"}, s => #s)\n";
+        let hints = raw_hints(src);
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": table<integer>"),
+            "{hints:?}"
+        );
+    }
+
+    /// When the arguments never pin a type parameter down, no hint at all
+    /// — a label reading `: table<U>` names something the user can't act
+    /// on.
+    #[test]
+    fn no_type_hint_when_type_param_stays_unbound() {
+        let src = "fn make<T>(n: integer) -> table<T>\n  local out: table<T> = {}\n  return out\nend\n\nlocal xs = make(3)\n";
+        let hints = raw_hints(src);
+        assert!(
+            !hints.iter().any(|(k, _, _)| *k == InlayHintKind::TYPE),
+            "{hints:?}"
+        );
     }
 
     #[test]
