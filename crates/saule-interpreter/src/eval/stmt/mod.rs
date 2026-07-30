@@ -109,10 +109,7 @@ pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow
     }
 }
 
-fn exec_inner(
-    stmt: &Spanned<Stmt>,
-    env: &Rc<RefCell<Environment>>,
-) -> Result<Flow, RuntimeError> {
+fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow, RuntimeError> {
     let span = stmt.span.clone();
     match &stmt.value {
         Stmt::Local { name, value, .. } => {

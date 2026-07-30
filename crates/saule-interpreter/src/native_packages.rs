@@ -100,8 +100,7 @@ pub struct NativePackage {
 // `Send + Sync`, and `Builtins` is owned data we clone on read.
 
 /// Process-global registry of every package that has been installed.
-static REGISTRY: RwLock<Option<HashMap<&'static str, &'static NativePackage>>> =
-    RwLock::new(None);
+static REGISTRY: RwLock<Option<HashMap<&'static str, &'static NativePackage>>> = RwLock::new(None);
 
 /// Registration order — drives auto-prelude install order so a
 /// package's `install` runs after any package it implicitly relies on
@@ -112,13 +111,14 @@ static ORDER: RwLock<Option<Vec<&'static str>>> = RwLock::new(None);
 
 /// Aggregated builtins from every registered package. Consumed by the
 /// semantic builtins provider; appended to on every [`register`].
-static AGGREGATED_BUILTINS: RwLock<Option<saule_semantic::builtins::Builtins>> =
-    RwLock::new(None);
+static AGGREGATED_BUILTINS: RwLock<Option<saule_semantic::builtins::Builtins>> = RwLock::new(None);
 
 /// Aggregated prelude names from every `auto_prelude` package.
 static AGGREGATED_PRELUDE: RwLock<Option<Vec<&'static str>>> = RwLock::new(None);
 
-fn with_registry_mut<R>(f: impl FnOnce(&mut HashMap<&'static str, &'static NativePackage>) -> R) -> R {
+fn with_registry_mut<R>(
+    f: impl FnOnce(&mut HashMap<&'static str, &'static NativePackage>) -> R,
+) -> R {
     let mut guard = REGISTRY.write().expect("native package registry poisoned");
     f(guard.get_or_insert_with(HashMap::new))
 }

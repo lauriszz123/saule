@@ -234,8 +234,7 @@ fn locate_word(
     while i + pat.len() <= bytes.len() {
         if &bytes[i..i + pat.len()] == pat {
             let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
-            let after_ok =
-                i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
+            let after_ok = i + pat.len() == bytes.len() || !is_ident_byte(bytes[i + pat.len()]);
             if before_ok && after_ok {
                 return Some((start + i)..(start + i + pat.len()));
             }
@@ -353,4 +352,3 @@ mod tests {
         assert_eq!(syms[0].name, "main");
     }
 }
-

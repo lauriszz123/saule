@@ -1,0 +1,22 @@
+-- `+` on a class that doesn't implement `OpAdd`. The class has an `add`
+-- method, but no `implements` clause — the opt-in is what makes the
+-- operator legal, so this must still be an error.
+class Point
+	local x: integer
+
+	fn init(x: integer)
+		self.x = x
+	end
+
+	fn add(other: Point) -> Point
+		return Point(self.x + other.x)
+	end
+end
+
+class Main
+	static fn main()
+		local p: Point = Point(1)
+		local q: Point = p + Point(2)
+		println(q.x)
+	end
+end

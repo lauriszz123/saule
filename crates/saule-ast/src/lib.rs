@@ -9,6 +9,7 @@
 //! | [`expr`]  | [`Expr`], [`Pattern`], [`MatchArm`]/[`MatchBody`], [`CallArg`], [`LambdaBody`], [`UnaryOp`]/[`BinOp`], [`Param`] |
 //! | [`stmt`]  | The [`Stmt`] enum |
 //! | [`decl`]  | [`Decl`], [`ClassMember`], [`Method`]/[`MethodSig`], [`EnumVariant`], [`ImportNames`] |
+//! | [`ops`]   | Operator-overloading contracts (the built-in `Op*` interfaces) |
 //!
 //! All public items are re-exported flat so downstream crates keep using
 //! `saule_ast::{Type, Expr, Stmt, ...}` without caring about the split.
@@ -17,6 +18,7 @@ use std::ops::Range;
 
 mod decl;
 mod expr;
+pub mod ops;
 mod stmt;
 mod types;
 

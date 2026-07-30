@@ -12,8 +12,8 @@ use saule_semantic::{
 };
 
 use super::util::{
-    declared_name, inferred_type_of, locate_import_path, locate_word_in, locate_words_in,
-    member_name_span, named_type, strip_nullable, LocalBind,
+    LocalBind, declared_name, inferred_type_of, locate_import_path, locate_word_in,
+    locate_words_in, member_name_span, named_type, strip_nullable,
 };
 use super::{Hit, Symbol};
 
@@ -72,7 +72,9 @@ impl<'a> CollectCx<'a> {
                 }
                 None
             }
-            Expr::MethodCall { obj: inner, method, .. } => {
+            Expr::MethodCall {
+                obj: inner, method, ..
+            } => {
                 let ic = self.receiver_class(&inner.value)?;
                 let sig = lookup_method(&ic, method)?;
                 named_type(sig.return_ty.as_ref()?)
@@ -120,12 +122,14 @@ impl<'a> CollectCx<'a> {
     fn enter_function(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
         let saved = std::mem::take(&mut self.locals);
         for p in params {
-            let def_span =
-                locate_word_in(self.source, &p.span, &p.name).unwrap_or(p.span.clone());
+            let def_span = locate_word_in(self.source, &p.span, &p.name).unwrap_or(p.span.clone());
             // Param binding sites aren't a Local "definition" in the
             // referencing-search sense unless the target Symbol is
             // exactly this binding — handled in `visit_param_binding`.
-            if let Symbol::Local { name, def_span: target_def } = self.symbol
+            if let Symbol::Local {
+                name,
+                def_span: target_def,
+            } = self.symbol
                 && name == &p.name
                 && target_def == &def_span
             {
@@ -150,13 +154,18 @@ impl<'a> CollectCx<'a> {
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
             Stmt::Decl(d) => self.visit_decl(d),
-            Stmt::Local { name, ty, value, .. } => {
+            Stmt::Local {
+                name, ty, value, ..
+            } => {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
                 let def_span = locate_word_in(self.source, &s.span, name);
                 if let Some(span) = &def_span {
-                    if let Symbol::Local { name: tname, def_span: tspan } = self.symbol
+                    if let Symbol::Local {
+                        name: tname,
+                        def_span: tspan,
+                    } = self.symbol
                         && tname == name
                         && tspan == span
                     {
@@ -180,7 +189,10 @@ impl<'a> CollectCx<'a> {
                 for (i, (name, name_span, ty)) in names.iter().enumerate() {
                     let def_span = Some(name_span.clone());
                     if let Some(span) = &def_span {
-                        if let Symbol::Local { name: tname, def_span: tspan } = self.symbol
+                        if let Symbol::Local {
+                            name: tname,
+                            def_span: tspan,
+                        } = self.symbol
                             && tname == name
                             && tspan == span
                         {
@@ -268,8 +280,8 @@ impl<'a> CollectCx<'a> {
                 if let Some(st) = step {
                     self.visit_expr(st);
                 }
-                let span = locate_word_in(self.source, &s.span, var)
-                    .unwrap_or_else(|| s.span.clone());
+                let span =
+                    locate_word_in(self.source, &s.span, var).unwrap_or_else(|| s.span.clone());
                 if let Symbol::Local { name, def_span } = self.symbol
                     && name == var
                     && def_span == &span
@@ -280,7 +292,9 @@ impl<'a> CollectCx<'a> {
                 self.locals.push(LocalBind {
                     name: var.clone(),
                     def_span: span,
-                    ty: var_ty.clone().unwrap_or_else(|| Type::Named("integer".into())),
+                    ty: var_ty
+                        .clone()
+                        .unwrap_or_else(|| Type::Named("integer".into())),
                 });
                 for s in body {
                     self.visit_stmt(s);
@@ -293,7 +307,10 @@ impl<'a> CollectCx<'a> {
                 for (name, ty) in vars {
                     let span = locate_word_in(self.source, &s.span, name)
                         .unwrap_or_else(|| s.span.clone());
-                    if let Symbol::Local { name: tname, def_span } = self.symbol
+                    if let Symbol::Local {
+                        name: tname,
+                        def_span,
+                    } = self.symbol
                         && tname == name
                         && def_span == &span
                     {
@@ -359,10 +376,7 @@ impl<'a> CollectCx<'a> {
     fn visit_decl(&mut self, d: &Spanned<Decl>) {
         match &d.value {
             Decl::Function {
-                name,
-                params,
-                body,
-                ..
+                name, params, body, ..
             } => {
                 if let Symbol::Function(target) = self.symbol
                     && target == name
@@ -419,7 +433,12 @@ impl<'a> CollectCx<'a> {
                 // a span-bounded source scan inside the decl head.
                 let _ = methods;
             }
-            Decl::Enum { name, variants, methods, .. } => {
+            Decl::Enum {
+                name,
+                variants,
+                methods,
+                ..
+            } => {
                 if let Symbol::Enum(target) = self.symbol
                     && target == name
                     && let Some(span) = locate_word_in(self.source, &d.span, name)
@@ -431,7 +450,10 @@ impl<'a> CollectCx<'a> {
                         EnumVariant::Bare(n) | EnumVariant::Valued(n, _) => n,
                         EnumVariant::Tuple { name, .. } => name,
                     };
-                    if let Symbol::EnumVariant { enum_name: en, variant } = self.symbol
+                    if let Symbol::EnumVariant {
+                        enum_name: en,
+                        variant,
+                    } = self.symbol
                         && en == name
                         && variant == vname
                         && let Some(span) = locate_word_in(self.source, &v.span, vname)
@@ -448,9 +470,7 @@ impl<'a> CollectCx<'a> {
                 }
                 self.enclosing_class = prev;
             }
-            Decl::Import {
-                path, quoted, ..
-            } => {
+            Decl::Import { path, quoted, .. } => {
                 if let Symbol::ImportPath(target) = self.symbol
                     && target == path
                     && let Some(span) = locate_import_path(self.source, &d.span, path, *quoted)
@@ -477,14 +497,12 @@ impl<'a> CollectCx<'a> {
             _ => return,
         };
         let head_end = match &d.value {
-            Decl::Class { members, .. } => members
-                .first()
-                .map(|m| m.span.start)
-                .unwrap_or(d.span.end),
-            Decl::Interface { methods, .. } => methods
-                .first()
-                .map(|m| m.span.start)
-                .unwrap_or(d.span.end),
+            Decl::Class { members, .. } => {
+                members.first().map(|m| m.span.start).unwrap_or(d.span.end)
+            }
+            Decl::Interface { methods, .. } => {
+                methods.first().map(|m| m.span.start).unwrap_or(d.span.end)
+            }
             _ => d.span.end,
         };
         let head = d.span.start..head_end;
@@ -508,7 +526,10 @@ impl<'a> CollectCx<'a> {
         let class = self.enclosing_class.clone().unwrap_or_default();
         match &m.value {
             ClassMember::Field { name, default, .. } => {
-                if let Symbol::Field { class: tc, name: tn } = self.symbol
+                if let Symbol::Field {
+                    class: tc,
+                    name: tn,
+                } = self.symbol
                     && tc == &class
                     && tn == name
                     && let Some(span) = locate_word_in(self.source, &m.span, name)
@@ -524,7 +545,10 @@ impl<'a> CollectCx<'a> {
     }
 
     fn visit_method(&mut self, meth: &Method, class: &str) {
-        if let Symbol::Method { class: tc, name: tn } = self.symbol
+        if let Symbol::Method {
+            class: tc,
+            name: tn,
+        } = self.symbol
             && tc == class
             && tn == &meth.name
             && let Some(span) = locate_word_in(self.source, &meth.span, &meth.name)
@@ -547,9 +571,14 @@ impl<'a> CollectCx<'a> {
         match &e.value {
             Expr::Cast { value, .. } => self.visit_expr(value),
             Expr::Ident(name) => match self.symbol {
-                Symbol::Local { name: tname, def_span } => {
+                Symbol::Local {
+                    name: tname,
+                    def_span,
+                } => {
                     if name == tname
-                        && self.lookup_local(name).is_some_and(|l| &l.def_span == def_span)
+                        && self
+                            .lookup_local(name)
+                            .is_some_and(|l| &l.def_span == def_span)
                     {
                         self.push(e.span.clone(), false);
                     }
@@ -573,7 +602,10 @@ impl<'a> CollectCx<'a> {
                 // what the cursor resolver records for it.
                 if name == "super"
                     && matches!(obj.value, Expr::Self_)
-                    && let Symbol::Method { class: tc, name: tn } = self.symbol
+                    && let Symbol::Method {
+                        class: tc,
+                        name: tn,
+                    } = self.symbol
                     && tn == "init"
                     && let Some(enclosing) = &self.enclosing_class
                     && let Some((owner, _)) = super_init_target(enclosing)
@@ -584,12 +616,18 @@ impl<'a> CollectCx<'a> {
                 }
                 let class = self.receiver_class(&obj.value);
                 match self.symbol {
-                    Symbol::Field { class: tc, name: tn } => {
+                    Symbol::Field {
+                        class: tc,
+                        name: tn,
+                    } => {
                         if name == tn && class.as_deref() == Some(tc.as_str()) {
                             self.push(span, false);
                         }
                     }
-                    Symbol::Method { class: tc, name: tn } => {
+                    Symbol::Method {
+                        class: tc,
+                        name: tn,
+                    } => {
                         if name == tn && class.as_deref() == Some(tc.as_str()) {
                             self.push(span, false);
                         }
@@ -614,7 +652,10 @@ impl<'a> CollectCx<'a> {
             }
             Expr::MethodCall { obj, method, args } => {
                 self.visit_expr(obj);
-                if let Symbol::Method { class: tc, name: tn } = self.symbol
+                if let Symbol::Method {
+                    class: tc,
+                    name: tn,
+                } = self.symbol
                     && method == tn
                     && let Some(class) = self.receiver_class(&obj.value)
                     && &class == tc
@@ -657,7 +698,8 @@ impl<'a> CollectCx<'a> {
             }
             Expr::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
-                let scrut_ty = inferred_type_of(&scrutinee.value, &self.locals, &self.enclosing_class);
+                let scrut_ty =
+                    inferred_type_of(&scrutinee.value, &self.locals, &self.enclosing_class);
                 for arm in arms {
                     let saved = self.locals.len();
                     self.bind_pattern(&arm.pattern, scrut_ty.as_ref());
@@ -697,16 +739,21 @@ impl<'a> CollectCx<'a> {
 
     fn visit_pattern(&mut self, p: &Spanned<Pattern>) {
         match &p.value {
-            Pattern::Variant { enum_name, variant, fields } => {
+            Pattern::Variant {
+                enum_name,
+                variant,
+                fields,
+            } => {
                 match self.symbol {
                     Symbol::Enum(t) if t == enum_name => {
                         if let Some(span) = locate_word_in(self.source, &p.span, enum_name) {
                             self.push(span, false);
                         }
                     }
-                    Symbol::EnumVariant { enum_name: tn, variant: tv }
-                        if tn == enum_name && tv == variant =>
-                    {
+                    Symbol::EnumVariant {
+                        enum_name: tn,
+                        variant: tv,
+                    } if tn == enum_name && tv == variant => {
                         let after = p.span.start + enum_name.len() + 1;
                         let lookup = after..p.span.end;
                         if let Some(span) = locate_word_in(self.source, &lookup, variant) {
@@ -765,4 +812,3 @@ impl<'a> CollectCx<'a> {
 // ──────────────────────────────────────────────────────────────────────────────
 // Shared helpers
 // ──────────────────────────────────────────────────────────────────────────────
-

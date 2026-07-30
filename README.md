@@ -99,6 +99,24 @@ local q: float = float(7) / 2.0    -- 3.5
 
 Because mixing kinds is a compile error, `7 / 2.0` won't silently produce `3.5` — the checker rejects it and forces an explicit `float(7)` (or `int(2.0)`) so the intent is visible at the call site.
 
+### Exponentiation
+
+`^` raises a number to a power. It binds tighter than every other arithmetic operator — tighter than unary minus, too — and is right-associative:
+
+```saule
+local squared: integer = 5 ^ 2      -- 25
+local tower: integer = 2 ^ 3 ^ 2    -- 512, i.e. 2 ^ (3 ^ 2)
+local neg: integer = -2 ^ 2         -- -4, i.e. -(2 ^ 2)
+local root: float = 2.0 ^ 0.5       -- 1.4142135623730951
+```
+
+Like `/`, `^` follows the type of its operands rather than promoting: `integer ^ integer` stays an `integer`. A negative exponent has no integer answer, so it is an error — convert first if you want one:
+
+```saule
+local half: float = 2.0 ^ -1.0      -- 0.5
+local bad: integer = 2 ^ -1         -- ERROR: negative exponent on integers
+```
+
 ### `nil` Is a Value, Not a Binding Type
 
 `nil` exists only as the **value** that inhabits a nullable slot. Writing `: nil` as a binding type is rejected so the meaning of the type system stays "every variable has a real type, and `?` says whether it can be empty":
@@ -934,6 +952,106 @@ end
 ```
 
 The loop also accepts raw step closures and plain `table` values directly — `Iterable` is just the contract that makes user-defined classes look the same.
+
+### Operator Overloading
+
+`Iterable` isn't the only built-in contract. A family of `Op*` interfaces lets a class define what the operators mean for its own instances — Saule's answer to Lua's `__add`, `__sub`, `__concat`, … metamethods, with one interface per operator so a class opts into exactly what it can support.
+
+| Interface | Operator | Method |
+|---|---|---|
+| `OpAdd<T, R>` | `a + b` | `fn add(other: T) -> R` |
+| `OpSub<T, R>` | `a - b` | `fn sub(other: T) -> R` |
+| `OpMul<T, R>` | `a * b` | `fn mul(other: T) -> R` |
+| `OpDiv<T, R>` | `a / b` | `fn div(other: T) -> R` |
+| `OpMod<T, R>` | `a % b` | `fn mod(other: T) -> R` |
+| `OpPow<T, R>` | `a ^ b` | `fn pow(other: T) -> R` |
+| `OpNeg<R>` | `-a` | `fn neg() -> R` |
+| `OpLen` | `#a` | `fn len() -> integer` |
+| `OpConcat<T, R>` | `a .. b` | `fn concat(other: T) -> R` |
+| `OpEq<T>` | `a == b`, `a != b` | `fn equals(other: T) -> boolean` |
+| `OpCompare<T>` | `<`, `<=`, `>`, `>=` | `fn compare(other: T) -> integer` |
+| `OpToString` | `tostring(a)`, `print(a)` | `fn toString() -> string` |
+
+They are always in scope — no import needed, like `Iterable`.
+
+```saule
+export class Vec2 implements OpAdd<Vec2, Vec2>, OpMul<Vec2, Vec2>, OpEq<Vec2>, OpToString
+    local x: float
+    local y: float
+
+    fn init(x: float, y: float)
+        self.x = x
+        self.y = y
+    end
+
+    fn add(other: Vec2) -> Vec2
+        return Vec2(self.x + other.x, self.y + other.y)
+    end
+
+    fn mul(other: Vec2) -> Vec2
+        return Vec2(self.x * other.x, self.y * other.y)
+    end
+
+    fn equals(other: Vec2) -> boolean
+        return self.x == other.x and self.y == other.y
+    end
+
+    fn toString() -> string
+        return "(" .. self.x .. ", " .. self.y .. ")"
+    end
+end
+
+local a: Vec2 = Vec2(1.0, 2.0)
+local b: Vec2 = Vec2(3.0, 4.0)
+
+local sum: Vec2 = a + b       -- (4.0, 6.0)
+print(sum)                    -- toString() runs here
+print(a == Vec2(1.0, 2.0))    -- true — equals(), not identity
+```
+
+The result type comes from the method's own return type, so `a + b` above is a `Vec2` and can fill a `Vec2` slot with no cast.
+
+#### Dispatch Rules
+
+**The `implements` clause is the opt-in.** Defining `fn add(...)` without listing `OpAdd` leaves `+` a compile error — the operator is part of a class's public contract, not something a method name enables by accident.
+
+**Arithmetic and `..` dispatch on the left operand.** `vec - 2` looks for `Vec2.sub`; `2 - vec` is an error rather than silently computing `vec - 2`. Put the class on the left, or give the other type its own overload.
+
+**`==` and the ordering operators are symmetric** — either side may carry the overload — and always produce a `boolean`.
+
+**One `compare` covers all four ordering operators.** It returns an `integer`: negative when `self` sorts first, zero when the two are equivalent, positive when `self` sorts last.
+
+```saule
+export class Version implements OpCompare<Version>
+    local major: integer
+    local minor: integer
+
+    fn init(major: integer, minor: integer)
+        self.major = major
+        self.minor = minor
+    end
+
+    fn compare(other: Version) -> integer
+        if self.major != other.major then
+            return self.major - other.major
+        end
+
+        return self.minor - other.minor
+    end
+end
+
+local old: Version = Version(1, 9)
+local new: Version = Version(2, 0)
+
+print(old < new)     -- true
+print(new >= old)    -- true
+```
+
+**`nil` never reaches an overload.** `v == nil` stays the nullability check it looks like rather than calling `equals(other: Vec2)` with nothing in hand — the same restriction Lua puts on `__eq`.
+
+**`OpToString` also drives `..`.** A class with `OpToString` but no `OpConcat` can sit on either side of `..` and renders itself into the resulting string; `OpConcat` takes over when you want `..` to build something other than a string.
+
+**Overloads are inherited.** A subclass gets its parent's operators, and can override any of them by redefining the method.
 
 ---
 

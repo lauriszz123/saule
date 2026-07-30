@@ -54,7 +54,6 @@ fn resolve_options(uri: &Url, options: &FormattingOptions) -> FmtOptions {
 }
 
 impl Backend {
-
     /// Format the cached source for `uri` and return a single TextEdit
     /// replacing the whole document. Returns `None` if the document is
     /// missing or fails to lex/parse — the client should leave the
@@ -155,7 +154,10 @@ mod tests {
     #[test]
     fn insert_spaces_false_emits_tabs() {
         let out = format_source(SRC, fmt_options(&opts(4, false))).unwrap();
-        assert!(out.contains("\n\tstatic fn main()"), "expected tabs, got:\n{out}");
+        assert!(
+            out.contains("\n\tstatic fn main()"),
+            "expected tabs, got:\n{out}"
+        );
     }
 
     #[test]

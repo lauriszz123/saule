@@ -118,14 +118,20 @@ end
 fn resolves_quoted_import_path() {
     let src = "import * from \"entities/Player\"\n";
     let s = resolve(src, "entities/Player");
-    assert!(matches!(&s, Symbol::ImportPath(p) if p == "entities/Player"), "got: {s:?}");
+    assert!(
+        matches!(&s, Symbol::ImportPath(p) if p == "entities/Player"),
+        "got: {s:?}"
+    );
 }
 
 #[test]
 fn resolves_bare_import_path() {
     let src = "import * from Geometry\n";
     let s = resolve(src, "Geometry");
-    assert!(matches!(&s, Symbol::ImportPath(p) if p == "Geometry"), "got: {s:?}");
+    assert!(
+        matches!(&s, Symbol::ImportPath(p) if p == "Geometry"),
+        "got: {s:?}"
+    );
 }
 
 #[test]

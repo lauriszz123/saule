@@ -1567,6 +1567,8 @@ fn bin_prec(op: BinOp) -> (u8, bool) {
         BinOp::Concat => (4, true),
         BinOp::Add | BinOp::Sub => (5, false),
         BinOp::Mul | BinOp::Div | BinOp::Mod => (6, false),
+        // `^` binds tighter than unary minus and is right-associative.
+        BinOp::Pow => (7, true),
     }
 }
 
@@ -1577,6 +1579,7 @@ fn bin_sym(op: BinOp) -> &'static str {
         BinOp::Mul => "*",
         BinOp::Div => "/",
         BinOp::Mod => "%",
+        BinOp::Pow => "^",
         BinOp::Eq => "==",
         BinOp::NotEq => "!=",
         BinOp::Lt => "<",

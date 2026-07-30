@@ -111,7 +111,7 @@
         },
         {
           "name": "keyword.operator.saule",
-          "match": "(\\.\\.\\.|\\.\\.|->|[+\\-*/%=#])"
+          "match": "(\\.\\.\\.|\\.\\.|->|[+\\-*/%^=#])"
         },
         {
           "name": "punctuation.section.brackets.saule",

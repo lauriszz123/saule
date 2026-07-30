@@ -1,0 +1,22 @@
+-- Arithmetic dispatches on the left operand only, so an `integer` on the
+-- left can't reach `Amount.add` — otherwise `2 - amount` would quietly
+-- compute `amount - 2`.
+class Amount implements OpAdd
+	local n: integer
+
+	fn init(n: integer)
+		self.n = n
+	end
+
+	fn add(other: Amount) -> Amount
+		return Amount(self.n + other.n)
+	end
+end
+
+class Main
+	static fn main()
+		local a: Amount = Amount(1)
+		local b: Amount = 5 + a
+		println(b.n)
+	end
+end

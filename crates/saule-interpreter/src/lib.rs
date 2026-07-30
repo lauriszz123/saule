@@ -34,14 +34,14 @@ use std::rc::Rc;
 
 use saule_ast::Module;
 
+pub mod dynamic_packages;
 pub mod env;
-pub mod fxhash;
 pub mod error;
 pub mod eval;
+pub mod fxhash;
 pub mod module;
-pub mod dynamic_packages;
-pub mod native_packages;
 mod native_host;
+pub mod native_packages;
 pub mod project;
 pub mod stdlib;
 pub mod value;

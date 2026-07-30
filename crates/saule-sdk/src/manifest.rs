@@ -69,12 +69,17 @@ pub fn render() -> Result<String, String> {
 
     let mut out = String::new();
     out.push_str("# AUTO-GENERATED from #[saule_export] declarations — do not edit by hand.\n");
-    out.push_str("# Edit the Rust source and regenerate with the package's gen-manifest binary.\n\n");
+    out.push_str(
+        "# Edit the Rust source and regenerate with the package's gen-manifest binary.\n\n",
+    );
 
     out.push_str("[package]\n");
     out.push_str(&format!("name = {}\n", toml_string(pkg.name)));
     out.push_str(&format!("version = {}\n", toml_string(pkg.version)));
-    out.push_str(&format!("binary = {}\n", toml_string(&pkg.binary.join(", "))));
+    out.push_str(&format!(
+        "binary = {}\n",
+        toml_string(&pkg.binary.join(", "))
+    ));
 
     for class in &classes {
         out.push('\n');

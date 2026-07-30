@@ -1,0 +1,138 @@
+-- Every built-in operator interface, exercised on one class.
+--
+-- `Money` overloads arithmetic, ordering, equality, length, negation and
+-- stringification; `Tag` overloads `..` so concatenation builds a `Tag`
+-- rather than a string.
+
+class Money implements OpAdd, OpSub, OpMul, OpDiv, OpMod, OpPow, OpNeg, OpLen, OpEq, OpCompare, OpToString
+	local cents: integer
+
+	fn init(cents: integer)
+		self.cents = cents
+	end
+
+	fn get() -> integer
+		return self.cents
+	end
+
+	fn add(other: Money) -> Money
+		return Money(self.cents + other.get())
+	end
+
+	fn sub(other: Money) -> Money
+		return Money(self.cents - other.get())
+	end
+
+	fn mul(other: Money) -> Money
+		return Money(self.cents * other.get())
+	end
+
+	fn div(other: Money) -> Money
+		return Money(self.cents / other.get())
+	end
+
+	fn mod(other: Money) -> Money
+		return Money(self.cents % other.get())
+	end
+
+	fn pow(other: Money) -> Money
+		return Money(self.cents ^ other.get())
+	end
+
+	fn neg() -> Money
+		return Money(-self.cents)
+	end
+
+	-- `#m` — number of decimal digits, just to prove the hook works.
+	fn len() -> integer
+		return #tostring(self.cents)
+	end
+
+	fn equals(other: Money) -> boolean
+		return self.cents == other.get()
+	end
+
+	fn compare(other: Money) -> integer
+		return self.cents - other.get()
+	end
+
+	fn toString() -> string
+		return self.cents .. "c"
+	end
+end
+
+class Tag implements OpConcat, OpToString
+	local text: string
+
+	fn init(text: string)
+		self.text = text
+	end
+
+	fn get() -> string
+		return self.text
+	end
+
+	fn concat(other: Tag) -> Tag
+		return Tag(self.text .. "-" .. other.get())
+	end
+
+	fn toString() -> string
+		return "<" .. self.text .. ">"
+	end
+end
+
+class Main
+	static fn main()
+		local a: Money = Money(300)
+		local b: Money = Money(120)
+
+		-- Arithmetic dispatches to `add` / `sub` / ... and keeps the
+		-- declared return type, so these all bind to `Money`.
+		local sum: Money = a + b
+		local diff: Money = a - b
+		local prod: Money = Money(4) * Money(5)
+		local quot: Money = a / b
+		local rest: Money = a % b
+		local power: Money = Money(2) ^ Money(10)
+
+		println(sum.get())      -- 420
+		println(diff.get())     -- 180
+		println(prod.get())     -- 20
+		println(quot.get())     -- 2
+		println(rest.get())     -- 60
+		println(power.get())    -- 1024
+
+		-- Unary `-` and `#`.
+		local flipped: Money = -a
+		println(flipped.get())  -- -300
+		println(#a)             -- 3
+
+		-- `==` / `!=` go through `equals`, so two distinct instances
+		-- holding the same amount are equal.
+		println(Money(300) == a)     -- true
+		println(Money(301) == a)     -- false
+		println(Money(301) != a)     -- true
+
+		-- Identity is no longer what `==` means, but `nil` checks still
+		-- work — they never reach the overload.
+		local maybe: Money? = nil
+		println(maybe == nil)        -- true
+
+		-- All four ordering operators run off the single `compare`.
+		println(b < a)          -- true
+		println(b <= a)         -- true
+		println(a > b)          -- true
+		println(a >= a)         -- true
+		println(a < b)          -- false
+
+		-- `tostring` / `print` / `..` pick up `toString`.
+		println(tostring(a))         -- 300c
+		println("cost: " .. a)       -- cost: 300c
+		println(a)                   -- 300c
+
+		-- `..` with an `OpConcat` overload produces a `Tag`, not a string.
+		local joined: Tag = Tag("red") .. Tag("blue")
+		println(joined.get())        -- red-blue
+		println(tostring(joined))    -- <red-blue>
+	end
+end

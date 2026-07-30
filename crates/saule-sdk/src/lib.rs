@@ -55,11 +55,11 @@ pub use saule_export_macro::saule_export;
 /// `saule_package!` declaration macro, the conversion traits, and the
 /// Saule-typed `S*` bridge types.
 pub mod prelude {
+    pub use crate::convert::{FromSaule, IntoSaule};
     pub use crate::saule_export;
     pub use crate::saule_package;
-    pub use crate::convert::{FromSaule, IntoSaule};
     pub use crate::types::{
-        SBool, SElem, SFloat, SFunction, SInteger, SString, STable, SValue, Untyped, T, U, V, W,
+        SBool, SElem, SFloat, SFunction, SInteger, SString, STable, SValue, T, U, Untyped, V, W,
     };
 }
 
@@ -72,7 +72,7 @@ pub mod __private {
     pub use crate::host::__set_host;
     pub use crate::manifest::{ExportedClass, ExportedMethod, PackageInfo};
     pub use inventory;
-    pub use saule_native_abi::{return_error, CValue, HostApi, NativeSymbolFn};
+    pub use saule_native_abi::{CValue, HostApi, NativeSymbolFn, return_error};
 }
 
 /// Declare the package and its classes for manifest generation.

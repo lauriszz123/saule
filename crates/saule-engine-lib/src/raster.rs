@@ -382,7 +382,11 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
 
     // Sort by top edge so the active list can be advanced with a cursor rather
     // than rescanning every edge for every sub-scanline.
-    edges.sort_by(|a, b| a.y_top.partial_cmp(&b.y_top).unwrap_or(std::cmp::Ordering::Equal));
+    edges.sort_by(|a, b| {
+        a.y_top
+            .partial_cmp(&b.y_top)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let width = px1 - px0;
     let mut coverage = vec![0.0f32; width];
@@ -609,10 +613,8 @@ fn clamp_inside(value: f64, extent: f64) -> f64 {
 /// Recognise a pure integer translation, the case a direct copy is valid for.
 fn axis_aligned_offset(t: &Transform) -> Option<(i64, i64)> {
     const EPS: f64 = 1e-6;
-    let unit = (t.a - 1.0).abs() < EPS
-        && (t.d - 1.0).abs() < EPS
-        && t.b.abs() < EPS
-        && t.c.abs() < EPS;
+    let unit =
+        (t.a - 1.0).abs() < EPS && (t.d - 1.0).abs() < EPS && t.b.abs() < EPS && t.c.abs() < EPS;
     if !unit {
         return None;
     }
@@ -772,7 +774,10 @@ mod tests {
         let rect = vec![vec![(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)]];
         fill_paths(&mut s, &rect, &paint([1.0, 0.0, 0.0, 1.0], 10, 10));
 
-        assert!((alpha_at(&s, 3, 3) - 1.0).abs() < 0.01, "interior not opaque");
+        assert!(
+            (alpha_at(&s, 3, 3) - 1.0).abs() < 0.01,
+            "interior not opaque"
+        );
         assert!((red_at(&s, 3, 3) - 1.0).abs() < 0.01, "wrong colour");
         assert!(alpha_at(&s, 1, 3) < 0.01, "leaked left of the rect");
         assert!(alpha_at(&s, 6, 3) < 0.01, "leaked right of the rect");
@@ -807,8 +812,14 @@ mod tests {
         p.clip = Rect::new(0.0, 0.0, 5.0, 10.0);
         let rect = vec![vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]];
         fill_paths(&mut s, &rect, &p);
-        assert!(alpha_at(&s, 2, 2) > 0.9, "inside the scissor should be drawn");
-        assert!(alpha_at(&s, 7, 2) < 0.01, "outside the scissor must be clipped");
+        assert!(
+            alpha_at(&s, 2, 2) > 0.9,
+            "inside the scissor should be drawn"
+        );
+        assert!(
+            alpha_at(&s, 7, 2) < 0.01,
+            "outside the scissor must be clipped"
+        );
     }
 
     #[test]
@@ -831,7 +842,10 @@ mod tests {
         p.blend = BlendMode::Replace;
         let rect = vec![vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]];
         fill_paths(&mut s, &rect, &p);
-        assert!(alpha_at(&s, 2, 2) < 0.01, "replace should have zeroed alpha");
+        assert!(
+            alpha_at(&s, 2, 2) < 0.01,
+            "replace should have zeroed alpha"
+        );
     }
 
     #[test]
@@ -842,7 +856,10 @@ mod tests {
         let rect = vec![vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]];
         fill_paths(&mut s, &rect, &p);
         fill_paths(&mut s, &rect, &p);
-        assert!((red_at(&s, 2, 2) - 1.0).abs() < 0.02, "two 0.5 adds should saturate");
+        assert!(
+            (red_at(&s, 2, 2) - 1.0).abs() < 0.02,
+            "two 0.5 adds should saturate"
+        );
     }
 
     #[test]
@@ -900,8 +917,14 @@ mod tests {
             &Transform::translation(2.0, 2.0),
             &paint([1.0, 1.0, 1.0, 1.0], 8, 8),
         );
-        assert!((red_at(&dst, 2, 2) - 1.0).abs() < 0.02, "opaque pixel not copied");
-        assert!(alpha_at(&dst, 3, 2) < 0.01, "transparent source pixel wrote through");
+        assert!(
+            (red_at(&dst, 2, 2) - 1.0).abs() < 0.02,
+            "opaque pixel not copied"
+        );
+        assert!(
+            alpha_at(&dst, 3, 2) < 0.01,
+            "transparent source pixel wrote through"
+        );
     }
 
     #[test]

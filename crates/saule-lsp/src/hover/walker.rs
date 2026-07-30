@@ -380,7 +380,7 @@ impl<'a> Cx<'a> {
                         .infer_init_type(&lhs.value)
                         .map(strip_nullable_type)
                         .or_else(|| self.infer_init_type(&rhs.value)),
-                    Add | Sub | Mul | Div | Mod => self
+                    Add | Sub | Mul | Div | Mod | Pow => self
                         .infer_init_type(&lhs.value)
                         .or_else(|| self.infer_init_type(&rhs.value)),
                 }

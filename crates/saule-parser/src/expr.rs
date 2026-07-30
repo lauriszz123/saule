@@ -160,7 +160,22 @@ impl Parser {
                 span,
             ));
         }
-        self.cast_expr()
+        self.pow_expr()
+    }
+
+    /// `a ^ b` — exponentiation.
+    ///
+    /// Sits *below* the unary layer and is right-associative, matching Lua:
+    /// `-2 ^ 2` is `-(2 ^ 2)`, `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`, and the right
+    /// operand may itself be unary so `2 ^ -1` parses.
+    pub(crate) fn pow_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let left = self.cast_expr()?;
+        if self.check(&Token::Caret) {
+            self.advance();
+            let right = self.unary_expr()?;
+            return Ok(mk_binary(BinOp::Pow, left, right));
+        }
+        Ok(left)
     }
 
     /// `expr as T` — sits between the unary and postfix layers.

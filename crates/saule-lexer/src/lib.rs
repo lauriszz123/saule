@@ -423,6 +423,7 @@ impl<'src> Lexer<'src> {
             '*' => (Token::Star, 1),
             '/' => (Token::Slash, 1),
             '%' => (Token::Percent, 1),
+            '^' => (Token::Caret, 1),
             '#' => (Token::Hash, 1),
             _ => return Err(LexerError::Unexpected(start..start + c.len_utf8())),
         };

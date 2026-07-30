@@ -21,9 +21,9 @@ use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
 
-use saule_native_abi::{tag, CValue, Handle, HostApi, SetHostFn, SET_HOST_SYMBOL};
+use saule_native_abi::{CValue, Handle, HostApi, SET_HOST_SYMBOL, SetHostFn, tag};
 
-use crate::eval::expr::{call_value_multi, EvaluatedArg};
+use crate::eval::expr::{EvaluatedArg, call_value_multi};
 use crate::value::{TableObject, Value};
 
 thread_local! {
@@ -252,7 +252,9 @@ unsafe extern "C" fn table_keys(_ctx: *mut c_void, h: Handle) -> Handle {
     for k in t.map.keys() {
         keys.push(k.to_value());
     }
-    register(Value::Table(Rc::new(RefCell::new(TableObject::from_array(keys)))))
+    register(Value::Table(Rc::new(RefCell::new(
+        TableObject::from_array(keys),
+    ))))
 }
 
 unsafe extern "C" fn func_call(

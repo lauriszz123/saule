@@ -9,7 +9,7 @@ use tower_lsp::lsp_types::{DocumentHighlight, DocumentHighlightKind, Position, U
 use crate::line_index::LineIndex;
 use crate::refs;
 
-use super::{canonical, Backend};
+use super::{Backend, canonical};
 
 impl Backend {
     /// Resolve the cursor and return one highlight per occurrence in
@@ -17,11 +17,7 @@ impl Backend {
     /// [`DocumentHighlightKind::WRITE`]; reference sites
     /// [`DocumentHighlightKind::READ`]. Returns an empty vec for
     /// closed documents, lex/parse failures, or cursors on whitespace.
-    pub(super) async fn highlights_at(
-        &self,
-        uri: &Url,
-        pos: Position,
-    ) -> Vec<DocumentHighlight> {
+    pub(super) async fn highlights_at(&self, uri: &Url, pos: Position) -> Vec<DocumentHighlight> {
         let entry = match self.docs.get(uri.as_str()) {
             Some(e) => e,
             None => return Vec::new(),
@@ -135,4 +131,3 @@ mod tests {
         assert!(hits.len() >= 3, "want def + uses, got {hits:?}");
     }
 }
-

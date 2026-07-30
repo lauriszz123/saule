@@ -1,0 +1,20 @@
+-- `add` declares an `Amount` operand, so `+ 5` doesn't type-check.
+class Amount implements OpAdd
+	local n: integer
+
+	fn init(n: integer)
+		self.n = n
+	end
+
+	fn add(other: Amount) -> Amount
+		return Amount(self.n + other.n)
+	end
+end
+
+class Main
+	static fn main()
+		local a: Amount = Amount(1)
+		local b: Amount = a + 5
+		println(b.n)
+	end
+end

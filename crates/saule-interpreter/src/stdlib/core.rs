@@ -107,15 +107,22 @@ pub fn register_sigs() {
 }
 
 fn builtin_print(args: &[Value]) -> Result<Value, String> {
-    let parts: Vec<String> = args.iter().map(|v| v.to_display_string()).collect();
-    print!("{}", parts.join("\t"));
+    print!("{}", display_all(args)?);
     Ok(Value::Nil)
 }
 
 fn builtin_println(args: &[Value]) -> Result<Value, String> {
-    let parts: Vec<String> = args.iter().map(|v| v.to_display_string()).collect();
-    println!("{}", parts.join("\t"));
+    println!("{}", display_all(args)?);
     Ok(Value::Nil)
+}
+
+/// Tab-join the arguments, honouring any `OpToString` overload.
+fn display_all(args: &[Value]) -> Result<String, String> {
+    let parts: Result<Vec<String>, String> = args
+        .iter()
+        .map(crate::eval::ops::display_value_native)
+        .collect();
+    Ok(parts?.join("\t"))
 }
 
 /// `printf(fmt, ...)` — same format spec as `String.format`, written to
@@ -128,7 +135,9 @@ fn builtin_printf(args: &[Value]) -> Result<Value, String> {
 
 fn builtin_tostring(args: &[Value]) -> Result<Value, String> {
     let v = args.first().cloned().unwrap_or(Value::Nil);
-    Ok(Value::Str(Rc::new(v.to_display_string())))
+    Ok(Value::Str(Rc::new(crate::eval::ops::display_value_native(
+        &v,
+    )?)))
 }
 
 fn builtin_type(args: &[Value]) -> Result<Value, String> {

@@ -154,6 +154,47 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("cannot use `{op}` on a `{class}`")]
+    #[diagnostic(help(
+        "overload the operator: add `implements {interface}` to `{class}` and define `fn {method}(...)`"
+    ))]
+    OperatorNotImplemented {
+        op: &'static str,
+        class: String,
+        interface: &'static str,
+        method: &'static str,
+        #[label("operator not overloaded for this class")]
+        span: miette::SourceSpan,
+    },
+
+    #[error(
+        "`{class}` overloads `{op}`, but `{op}` dispatches on its left operand — which is `{found}`"
+    )]
+    #[diagnostic(help(
+        "put the `{class}` value on the left, or give the left operand's type its own `{op}` overload"
+    ))]
+    OperatorDispatchesOnLeft {
+        op: &'static str,
+        class: String,
+        found: String,
+        #[label("left operand cannot drive this operator")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{class}.{method}` expects `{expected}`, got `{found}`")]
+    #[diagnostic(help(
+        "`{op}` on a `{class}` calls `{method}`, so the other operand must be `{expected}`"
+    ))]
+    OperatorOperandTypeMismatch {
+        op: &'static str,
+        class: String,
+        method: &'static str,
+        expected: String,
+        found: String,
+        #[label("wrong operand type for this operator")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`for` binding `{name}` declared as `{declared}`, but the iterator yields `{actual}`")]
     #[diagnostic(help(
         "change the binding's type to `{actual}` (or drop the annotation to let it infer)"

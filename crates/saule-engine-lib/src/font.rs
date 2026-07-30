@@ -113,9 +113,7 @@ impl FontRes {
 
     /// Kerning adjustment to apply between two adjacent glyphs.
     fn kern(&self, a: char, b: char) -> f64 {
-        self.face
-            .horizontal_kern(a, b, self.size)
-            .unwrap_or(0.0) as f64
+        self.face.horizontal_kern(a, b, self.size).unwrap_or(0.0) as f64
     }
 
     /// Lay a single line out into `(char, pen_x)` pairs, caching every glyph it

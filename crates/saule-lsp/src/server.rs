@@ -23,8 +23,8 @@ mod format;
 mod highlight;
 mod hover;
 mod inlay;
-mod nav;
 mod native_names;
+mod nav;
 mod sighelp;
 mod symbols;
 
@@ -320,12 +320,11 @@ impl LanguageServer for Backend {
         Ok(self.completion_at(&p.text_document.uri, p.position).await)
     }
 
-    async fn signature_help(
-        &self,
-        params: SignatureHelpParams,
-    ) -> Result<Option<SignatureHelp>> {
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let p = params.text_document_position_params;
-        let help = self.signature_help_at(&p.text_document.uri, p.position).await;
+        let help = self
+            .signature_help_at(&p.text_document.uri, p.position)
+            .await;
         // Never hand back a longer signature list than the popup was
         // opened with — IntelliJ indexes its existing rows by it.
         let prev = params

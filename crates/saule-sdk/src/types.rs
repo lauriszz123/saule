@@ -29,9 +29,9 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
-use saule_native_abi::{tag, CValue, Handle};
+use saule_native_abi::{CValue, Handle, tag};
 
-use crate::convert::{require, FromSaule, IntoSaule};
+use crate::convert::{FromSaule, IntoSaule, require};
 use crate::host;
 
 /// Hash an already-hashable value with the standard hasher.
@@ -382,7 +382,9 @@ impl<T> Clone for STable<T> {
 impl<T> Copy for STable<T> {}
 impl<T> fmt::Debug for STable<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("STable").field("handle", &self.handle).finish()
+        f.debug_struct("STable")
+            .field("handle", &self.handle)
+            .finish()
     }
 }
 
