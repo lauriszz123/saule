@@ -258,10 +258,12 @@ mod browser {
     }
 
     /// The toolchain version this module was built from, so the playground can
-    /// show which release it is running.
+    /// show which release it is running. The long form, because a playground
+    /// built from an untagged commit should say so rather than claim to be the
+    /// release it is heading toward.
     #[wasm_bindgen]
     pub fn version() -> String {
-        env!("CARGO_PKG_VERSION").to_string()
+        saule_version::FULL.to_string()
     }
 }
 
@@ -280,9 +282,8 @@ mod tests {
     impl saule_interpreter::platform::Platform for Sandbox {}
 
     fn json(source: &str) -> serde_json::Value {
-        let raw = saule_interpreter::platform::with_platform(Box::new(Sandbox), || {
-            run_to_json(source)
-        });
+        let raw =
+            saule_interpreter::platform::with_platform(Box::new(Sandbox), || run_to_json(source));
         serde_json::from_str(&raw).expect("valid JSON")
     }
 

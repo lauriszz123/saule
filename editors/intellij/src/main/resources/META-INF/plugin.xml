@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.saule.lang</id>
     <name>Saule</name>
-    <version>2026.1.0</version>
+    <version>26.1</version>
     <vendor url="https://github.com/">Saule</vendor>
 
     <description><![CDATA[

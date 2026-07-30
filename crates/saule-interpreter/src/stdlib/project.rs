@@ -21,7 +21,7 @@ use crate::value::{ClassObject, FieldDef, TableObject, Value};
 /// `Project.name` references keep working.
 pub static PROJECT_PACKAGE: NativePackage = NativePackage {
     name: "project",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Project"],
     register_sigs,

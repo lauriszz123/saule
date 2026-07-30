@@ -35,7 +35,7 @@ use crate::value::{
 /// working without an explicit import.
 pub static IO_PACKAGE: NativePackage = NativePackage {
     name: "io",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Io", "File", "IoMode", "IoSeek"],
     register_sigs,

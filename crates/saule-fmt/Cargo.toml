@@ -3,6 +3,7 @@ name = "saule-fmt"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
+license.workspace = true
 
 [dependencies]
 saule-ast = { path = "../saule-ast" }

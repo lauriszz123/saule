@@ -12,7 +12,7 @@ use crate::value::Value;
 /// case — `print` is a language built-in, not a library).
 pub static CORE_PACKAGE: NativePackage = NativePackage {
     name: "core",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &[
         "print",

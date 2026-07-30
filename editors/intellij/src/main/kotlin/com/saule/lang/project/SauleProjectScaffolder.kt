@@ -13,7 +13,7 @@ object SauleProjectScaffolder {
 
     /** Toolchain version written into `min_saule_version`. Kept in sync with the
      *  workspace `Cargo.toml` (`workspace.package.version`). */
-    const val SAULE_VERSION = "2026.1.0"
+    const val SAULE_VERSION = "26.1"
 
     fun scaffold(root: File, projectName: String) {
         File(root, "src").mkdirs()

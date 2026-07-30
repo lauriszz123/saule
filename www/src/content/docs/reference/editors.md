@@ -46,7 +46,7 @@ and install it properly:
 ```sh
 npm install -g @vscode/vsce
 vsce package
-code --install-extension saule-2026.1.0.vsix
+code --install-extension saule-26.1.0.vsix
 ```
 
 ### Settings

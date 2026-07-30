@@ -28,7 +28,7 @@ name: "bf"
 version: "0.1.0"
 entry: "src/main.sau"
 src_dirs: ["src"]
-min_saule_version: "2026.1.0"
+min_saule_version: "26.1"
 ```
 
 ## `src/main.sau`

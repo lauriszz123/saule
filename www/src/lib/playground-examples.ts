@@ -178,12 +178,12 @@ fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
     return out
 end
 
-local nums: table<integer> = {1, 2, 3, 4, 5, 6}
+local nums: table = {1, 2, 3, 4, 5, 6}
 
-local evens: table<integer> = filter<integer>(nums, x => x % 2 == 0)
-local doubled: table<integer> = map<integer, integer>(evens, x => x * 2)
+local evens = filter(nums, x => x % 2 == 0)
+local doubled = map(evens, x => x * 2)
 
-for n: integer in doubled do
+for n in doubled do
     println(n)
 end
 `,
@@ -230,10 +230,10 @@ end
 local goblin: Monster = Monster("Goblin", 30)
 
 goblin.damage(20)
-println(goblin.getName() .. " alive? " .. tostring(goblin.isAlive()))
+println(goblin.getName() .. " alive? " .. (goblin.isAlive() and "yes" or "no"))
 
 goblin.damage(20)
-println(goblin.getName() .. " alive? " .. tostring(goblin.isAlive()))
+println(goblin.getName() .. " alive? " .. (goblin.isAlive() and "yes" or "no"))
 `,
 	},
 	{

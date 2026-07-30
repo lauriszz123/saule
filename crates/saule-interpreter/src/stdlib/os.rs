@@ -33,7 +33,7 @@ use crate::value::{
 /// the existing bare-name call sites keep working.
 pub static OS_PACKAGE: NativePackage = NativePackage {
     name: "os",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Os", "OsPlatform", "FsKind", "FsInfo"],
     register_sigs,

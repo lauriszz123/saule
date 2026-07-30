@@ -3,6 +3,7 @@ name = "saule-native-abi"
 version.workspace = true
 edition.workspace = true
 description = "Stable C-ABI boundary types shared between the Saule interpreter and dynamically-loaded native packages."
+license.workspace = true
 
 [lib]
 name = "saule_native_abi"
