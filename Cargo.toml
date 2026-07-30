@@ -3,6 +3,16 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "2026.1.0"
+# Cargo requires three semver components, but the toolchain's version has two
+# (`26.7` — see crates/saule-version). This value carries exactly one piece of
+# information: **the major component is the year of record**, the single place
+# the year is written down. The build number here stays `0.0` because Cargo's
+# copy is internal metadata that nothing user-facing ever prints; the real
+# version is resolved at compile time by `saule-version`'s build script and is
+# what `saule --version`, `Saule.version` and every release artifact report.
+#
+# In January: bump `26` to `27` here and nowhere else.
+version = "26.0.0"
 edition = "2024"
 description = "Saule — a statically typed, class-oriented scripting language."
+license = "MIT"

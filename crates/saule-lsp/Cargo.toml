@@ -3,6 +3,7 @@ name = "saule-lsp"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "saule-lsp"
@@ -10,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 saule-ast = { path = "../saule-ast" }
+saule-version = { path = "../saule-version" }
 saule-docs = { path = "../saule-docs" }
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }

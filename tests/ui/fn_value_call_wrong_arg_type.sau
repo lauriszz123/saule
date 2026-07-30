@@ -1,0 +1,9 @@
+-- A call through a function-typed parameter is checked like any other
+-- call: `f` takes an `integer`, so a string argument is an error.
+-- Should be a compile error.
+
+fn apply(f: fn(integer) -> integer) -> integer
+	return f("nope")
+end
+
+println(apply(x => x + 1))

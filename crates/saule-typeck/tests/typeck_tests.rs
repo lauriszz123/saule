@@ -748,3 +748,124 @@ end
         "string",
     );
 }
+
+// ── calls through function-typed values, and rigid type parameters ─────
+
+#[test]
+fn applying_a_callback_to_the_wrong_type_param_is_rejected() {
+    // The motivating case: `f` is declared `fn(U) -> U` but applied to an
+    // element of `table<T>`. Nothing proves a `T` is a `U`, and the call
+    // goes through a *value* of function type, which used to be checked
+    // nowhere at all.
+    rejects(
+        "fn map<T, U>(items: table<T>, f: fn(U) -> U) -> table<U>\n\
+        \x20 local out: table<U> = {}\n\
+        \x20 for item: T in items do\n\
+        \x20   out[#out + 1] = f(item)\n\
+        \x20 end\n\
+        \x20 return out\n\
+        end\n",
+        "argument 1 of `f`",
+    );
+}
+
+#[test]
+fn the_same_function_with_matching_type_params_is_accepted() {
+    // The corrected signature — `f: fn(T) -> U` — must stay clean, or the
+    // rule above would make generic higher-order code unwritable.
+    accepts(
+        "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n\
+        \x20 local out: table<U> = {}\n\
+        \x20 for item: T in items do\n\
+        \x20   out[#out + 1] = f(item)\n\
+        \x20 end\n\
+        \x20 return out\n\
+        end\n",
+    );
+}
+
+#[test]
+fn one_type_param_does_not_satisfy_another() {
+    // The same rule outside a call: two type parameters are independent,
+    // so neither can fill the other's slot.
+    rejects(
+        "fn convert<T, U>(a: T) -> U\n\
+        \x20 local x: U = a\n\
+        \x20 return x\n\
+        end\n",
+        "`U`",
+    );
+}
+
+#[test]
+fn a_type_param_still_accepts_a_concrete_value() {
+    // Leniency the other way is deliberate: the body can't know what `T`
+    // binds to, so a concrete value flowing into a `T` slot is allowed.
+    // Tightening this would make every generic function unwritable.
+    accepts(
+        "fn wrap<T>(x: T) -> table<T>\n\
+        \x20 local out: table<T> = {}\n\
+        \x20 out[1] = x\n\
+        \x20 return out\n\
+        end\n",
+    );
+}
+
+#[test]
+fn a_call_through_a_function_value_checks_argument_types() {
+    rejects(
+        "fn apply(f: fn(integer) -> integer) -> integer\n\
+        \x20 return f(\"nope\")\n\
+        end\n",
+        "argument 1 of `f`",
+    );
+}
+
+#[test]
+fn a_call_through_a_function_value_checks_arity() {
+    // A function type has no defaults and no variadic slot, so its arity
+    // is exact.
+    rejects(
+        "fn apply(f: fn(integer) -> integer) -> integer\n\
+        \x20 return f(1, 2)\n\
+        end\n",
+        "expects 1 argument",
+    );
+}
+
+#[test]
+fn a_call_through_a_function_local_is_checked_too() {
+    // Not just parameters — any binding of function type.
+    rejects(
+        "fn main()\n\
+        \x20 local g: fn(integer) -> integer = x => x\n\
+        \x20 local r = g(\"s\")\n\
+        end\n",
+        "argument 1 of `g`",
+    );
+}
+
+#[test]
+fn a_function_value_call_yields_its_declared_return_type() {
+    // The call's result type is now known, so the binding it feeds is
+    // checked rather than skipped.
+    rejects(
+        "fn apply(f: fn(integer) -> string) -> integer\n\
+        \x20 local n: integer = f(1)\n\
+        \x20 return n\n\
+        end\n",
+        "string",
+    );
+}
+
+#[test]
+fn a_bare_function_annotation_is_still_unchecked() {
+    // `function` carries no parameter list, so there is nothing to check
+    // against — this must not start erroring.
+    accepts(
+        "fn apply(f: function) -> integer\n\
+        \x20 f(1, 2, 3)\n\
+        \x20 return 1\n\
+        end\n",
+    );
+}

@@ -1,0 +1,61 @@
+name: Check website
+
+# Two guarantees, both of which are easy to break by editing prose:
+#
+#   1. Every Saule sample the website shows by hand actually compiles and runs
+#      — checked against the real compiler built from this commit.
+#   2. The generated docs under www/src/content/docs are in sync with the
+#      README.md / DOCS.md / examples they come from, so a committed page can
+#      never contradict its source.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'www/**'
+      - 'README.md'
+      - 'DOCS.md'
+      - 'examples/**'
+      - 'crates/**'
+      - '.github/workflows/check-www.yml'
+
+jobs:
+  samples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: www/package-lock.json
+
+      - name: Build the compiler
+        run: cargo build --release -p saule-cli
+
+      - name: Install website dependencies
+        run: npm ci
+        working-directory: www
+
+      - name: Every documented sample compiles and runs
+        run: npm run check-samples
+        working-directory: www
+
+      - name: Generated docs are up to date
+        working-directory: www
+        run: |
+          npm run sync-docs
+          if ! git diff --quiet -- src/content/docs; then
+            echo "::error::Generated docs are stale. Run 'npm run sync-docs' in www/ and commit the result."
+            git diff --stat -- src/content/docs
+            exit 1
+          fi
+
+      - name: Build the site
+        run: npm run build
+        working-directory: www

@@ -3,6 +3,7 @@ name = "saule-export-macro"
 version.workspace = true
 edition.workspace = true
 description = "Attribute macro that registers a native package's exported methods for manifest generation."
+license.workspace = true
 
 [lib]
 proc-macro = true

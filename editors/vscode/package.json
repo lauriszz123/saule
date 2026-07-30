@@ -2,7 +2,7 @@
   "name": "saule",
   "displayName": "Saule",
   "description": "Language support for the Saule programming language: syntax highlighting plus a full language server (diagnostics, hover, go-to-definition, references, document symbols, inlay hints, signature help, and formatting).",
-  "version": "2026.1.0",
+  "version": "26.1.0",
   "publisher": "saule",
   "license": "MIT",
   "engines": { "vscode": "^1.91.0" },

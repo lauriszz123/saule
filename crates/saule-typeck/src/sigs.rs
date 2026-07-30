@@ -241,6 +241,18 @@ pub fn instantiate_returns(sig: &NativeSig, arg_types: &[Option<Type>]) -> Vec<T
         .collect()
 }
 
+/// Does `ty` still mention one of `type_params` after instantiation?
+///
+/// [`instantiate_returns`] leaves a type parameter the arguments never
+/// pinned down standing as its own bare name, so `map(t, f)` can come
+/// back as `table<U>`. That isn't a type the user wrote or can act on —
+/// tools should treat it as "not inferred" rather than render it. Thin
+/// re-export of the checker's own post-substitution guard so the LSP
+/// applies exactly the same rule.
+pub fn mentions_unbound_param(ty: &Type, type_params: &[String]) -> bool {
+    crate::expr::mentions_unbound_param(ty, type_params)
+}
+
 /// Same as [`instantiate_returns`] but for a *semantic* method signature
 /// (e.g. a dynamic native package's class method seeded into
 /// `saule_semantic`). Returns the substituted return type, or `None` when

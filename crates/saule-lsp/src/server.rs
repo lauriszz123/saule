@@ -184,7 +184,7 @@ impl LanguageServer for Backend {
             },
             server_info: Some(ServerInfo {
                 name: "saule-lsp".to_string(),
-                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                version: Some(saule_version::FULL.to_string()),
             }),
         })
     }

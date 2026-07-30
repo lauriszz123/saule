@@ -21,7 +21,6 @@
 use crate::fxhash::fxmap;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
@@ -34,7 +33,7 @@ use crate::value::{
 /// the existing bare-name call sites keep working.
 pub static OS_PACKAGE: NativePackage = NativePackage {
     name: "os",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Os", "OsPlatform", "FsKind", "FsInfo"],
     register_sigs,
@@ -240,7 +239,9 @@ fn install_platform_enum(env: &Rc<RefCell<Environment>>) {
 
 thread_local! {
     static SCRIPT_ARGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    static START_INSTANT: Instant = Instant::now();
+    /// Tie-breaker for `Os.tmpname` so it stays unique even on a host that
+    /// offers neither a clock nor a pid.
+    static TMP_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Called from the CLI before running user code to publish argv to `Os.args()`.
@@ -332,16 +333,15 @@ fn line_sep() -> &'static str {
 // ─── time ──────────────────────────────────────────────────────────────────
 
 fn os_time(_args: &[Value]) -> Result<Vec<Value>, String> {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    Ok(vec![Value::Int(secs)])
+    let secs =
+        crate::platform::unix_time_secs().ok_or_else(|| crate::platform::unavailable("Os.time"))?;
+    Ok(vec![Value::Int(secs as i64)])
 }
 
 fn os_clock(_args: &[Value]) -> Result<Vec<Value>, String> {
-    let elapsed = START_INSTANT.with(|i| i.elapsed());
-    Ok(vec![Value::Float(elapsed.as_secs_f64())])
+    let elapsed = crate::platform::monotonic_secs()
+        .ok_or_else(|| crate::platform::unavailable("Os.clock"))?;
+    Ok(vec![Value::Float(elapsed)])
 }
 
 fn os_difftime(args: &[Value]) -> Result<Vec<Value>, String> {
@@ -363,10 +363,11 @@ fn os_date(args: &[Value]) -> Result<Vec<Value>, String> {
     };
     let epoch = match args.get(1) {
         Some(Value::Int(n)) => *n,
-        Some(Value::Nil) | None => SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
+        // Only the implicit "now" needs a clock — `Os.date("%Y", 0)` formats
+        // a caller-supplied instant and works anywhere.
+        Some(Value::Nil) | None => crate::platform::unix_time_secs()
+            .ok_or_else(|| crate::platform::unavailable("Os.date with no explicit time"))?
+            as i64,
         Some(other) => {
             return Err(format!(
                 "Os.date: time must be an integer, got `{}`",
@@ -389,8 +390,10 @@ fn os_sleep(args: &[Value]) -> Result<Vec<Value>, String> {
         }
         None => return Err("Os.sleep missing argument 1".to_string()),
     };
-    if secs > 0.0 && secs.is_finite() {
-        std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+    if secs > 0.0 && secs.is_finite() && !crate::platform::sleep(secs) {
+        // Better to say so than to return immediately and leave a program
+        // spinning through a loop it expected to be paced.
+        return Err(crate::platform::unavailable("Os.sleep"));
     }
     Ok(nil_vec())
 }
@@ -485,12 +488,19 @@ fn os_tmpname(_args: &[Value]) -> Result<Vec<Value>, String> {
     // create the file (matching Lua's `os.tmpname` contract), so callers can
     // `Io.open` it with whatever mode they need.
     let dir = std::env::temp_dir();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
+    // Uniqueness, not accuracy — so this stays total on a host with no clock
+    // and no pid, falling back to a per-thread counter. `Os.tmpname` must not
+    // be the thing that throws.
+    let stamp = crate::platform::unix_time_secs()
+        .map(|s| (s * 1e9) as u128)
         .unwrap_or(0);
-    let pid = std::process::id();
-    let path = dir.join(format!("saule_{pid}_{nanos}.tmp"));
+    let pid = crate::platform::pid().unwrap_or(0);
+    let seq = TMP_SEQ.with(|c| {
+        let next = c.get() + 1;
+        c.set(next);
+        next
+    });
+    let path = dir.join(format!("saule_{pid}_{stamp}_{seq}.tmp"));
     Ok(vec![str_value(path.to_string_lossy().into_owned())])
 }
 
@@ -507,7 +517,13 @@ fn os_exit(args: &[Value]) -> Result<Vec<Value>, String> {
             ));
         }
     };
-    std::process::exit(code);
+    // Natively this diverges. Where the host cannot terminate — a wasm
+    // module, which would otherwise be torn down mid-run — it records the
+    // code and returns, and we unwind with an error instead. The embedder
+    // pairs that error with `platform::take_exit()` to tell a deliberate
+    // `Os.exit(0)` from a crash.
+    crate::platform::exit(code);
+    Err(format!("program exited with code {code}"))
 }
 
 fn os_execute(args: &[Value]) -> Result<Vec<Value>, String> {
@@ -529,7 +545,10 @@ fn os_execute(args: &[Value]) -> Result<Vec<Value>, String> {
 }
 
 fn os_pid(_args: &[Value]) -> Result<Vec<Value>, String> {
-    Ok(vec![Value::Int(std::process::id() as i64)])
+    // 0 rather than an error: "no process" is a truthful answer for a
+    // sandboxed host, and callers use this for uniqueness, not control.
+    let pid = crate::platform::pid().unwrap_or(0);
+    Ok(vec![Value::Int(pid as i64)])
 }
 
 fn os_platform(_args: &[Value]) -> Result<Vec<Value>, String> {
@@ -865,10 +884,12 @@ fn os_fs_info(args: &[Value]) -> Result<Vec<Value>, String> {
         "Other"
     };
 
+    // Not a clock read: this converts the timestamp the filesystem already
+    // gave us, so it needs no `Platform` and cannot panic on wasm.
     let modified_at = meta
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| Value::Int(d.as_secs() as i64))
         .unwrap_or(Value::Nil);
 

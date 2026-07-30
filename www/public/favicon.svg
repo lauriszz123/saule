@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="Saule">
+  <!-- A sun: solid core, eight rays. "Saulė" is Lithuanian for sun. -->
+  <circle cx="16" cy="16" r="6.5" fill="#f0b429"/>
+  <g stroke="#f0b429" stroke-width="2.4" stroke-linecap="round">
+    <path d="M16 2.5v4"/>
+    <path d="M16 25.5v4"/>
+    <path d="M2.5 16h4"/>
+    <path d="M25.5 16h4"/>
+    <path d="M6.4 6.4l2.9 2.9"/>
+    <path d="M22.7 22.7l2.9 2.9"/>
+    <path d="M25.6 6.4l-2.9 2.9"/>
+    <path d="M9.3 22.7l-2.9 2.9"/>
+  </g>
+</svg>

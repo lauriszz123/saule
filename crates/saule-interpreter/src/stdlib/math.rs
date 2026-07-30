@@ -15,7 +15,7 @@ use crate::value::{ClassObject, Value};
 /// also works.
 pub static MATH_PACKAGE: NativePackage = NativePackage {
     name: "math",
-    version: env!("CARGO_PKG_VERSION"),
+    version: saule_version::VERSION,
     install,
     exports: &["Math"],
     register_sigs,
