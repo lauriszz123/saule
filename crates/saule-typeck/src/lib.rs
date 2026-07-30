@@ -28,6 +28,7 @@
 //! | [`stmt`]    | Statement & declaration walker, class field-init checks, return-type checks |
 //! | [`expr`]    | Expression walker, type inference, native-call args, flow narrowing |
 //! | [`matches`] | `match` exhaustiveness, pattern/scrutinee compat, arm-type unification |
+//! | [`ops`]     | Operator overloading via the built-in `Op*` interfaces |
 //! | [`sigs`]    | Native-function signature registry (consumed by `expr`, populated by embedders) |
 
 use saule_ast::Module;
@@ -37,6 +38,7 @@ mod error;
 mod expr;
 mod funcs;
 mod matches;
+mod ops;
 pub mod sigs;
 mod state;
 mod stmt;

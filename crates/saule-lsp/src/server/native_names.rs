@@ -105,9 +105,21 @@ fn stdlib_table() -> &'static HashMap<&'static str, &'static [&'static str]> {
 
         // ── Math ────────────────────────────────────────────────
         for f in &[
-            "Math.floor", "Math.ceil", "Math.round", "Math.sign", "Math.sqrt",
-            "Math.sin", "Math.cos", "Math.tan", "Math.asin", "Math.acos",
-            "Math.exp", "Math.deg", "Math.rad", "Math.abs", "Math.type",
+            "Math.floor",
+            "Math.ceil",
+            "Math.round",
+            "Math.sign",
+            "Math.sqrt",
+            "Math.sin",
+            "Math.cos",
+            "Math.tan",
+            "Math.asin",
+            "Math.acos",
+            "Math.exp",
+            "Math.deg",
+            "Math.rad",
+            "Math.abs",
+            "Math.type",
         ] {
             m.insert(f, &["n"]);
         }

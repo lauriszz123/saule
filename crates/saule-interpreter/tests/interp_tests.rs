@@ -1399,6 +1399,23 @@ mod operators {
         assert_int("3 * 7", 21);
         assert_int("20 / 4", 5);
         assert_int("17 % 5", 2);
+        assert_int("2 ^ 10", 1024);
+    }
+    #[test]
+    fn pow_precedence_and_associativity() {
+        // Right-associative and tighter than unary minus, like Lua.
+        assert_int("2 ^ 3 ^ 2", 512);
+        assert_int("-2 ^ 2", -4);
+        assert_int("3 * 2 ^ 3", 24);
+    }
+    #[test]
+    fn pow_negative_integer_exponent_errors() {
+        // `integer ^ integer` stays an integer, so there is no answer to
+        // give — better an error than a silently truncated 0.
+        assert!(matches!(
+            eval("2 ^ -1").unwrap_err(),
+            PipelineError::Runtime(RuntimeError::TypeError { .. })
+        ));
     }
     #[test]
     fn comparison_full() {
@@ -1429,5 +1446,146 @@ mod operators {
             x?.length ?? "n/a"
         "#;
         assert_str(src, "n/a");
+    }
+}
+
+// ── §Operator overloading ───────────────────────────────────────────────
+
+mod operator_overloading {
+    use super::*;
+
+    /// A class overloading `+`, `==`, `<`, and `tostring`. Reused by the
+    /// tests below, which each append their own expression.
+    fn with_money(expr: &str) -> String {
+        format!(
+            r#"
+            class Money implements OpAdd, OpEq, OpCompare, OpToString
+                local cents: integer
+                fn init(c: integer)
+                    self.cents = c
+                end
+                fn get() -> integer return self.cents end
+                fn add(other: Money) -> Money return Money(self.cents + other.get()) end
+                fn equals(other: Money) -> boolean return self.cents == other.get() end
+                fn compare(other: Money) -> integer return self.cents - other.get() end
+                fn toString() -> string return self.cents .. "c" end
+            end
+            {expr}
+        "#
+        )
+    }
+
+    #[test]
+    fn add_returns_the_declared_type() {
+        assert_int(&with_money("(Money(2) + Money(3)).get()"), 5);
+    }
+
+    #[test]
+    fn equality_uses_the_overload_not_identity() {
+        // Two distinct instances holding the same amount are equal, which
+        // pointer identity would never report.
+        assert_bool(&with_money("Money(7) == Money(7)"), true);
+        assert_bool(&with_money("Money(7) != Money(8)"), true);
+    }
+
+    #[test]
+    fn nil_never_reaches_the_overload() {
+        // `equals(other: Money)` would fault on a `nil`; `m == nil` has to
+        // stay the nullability check it looks like.
+        let src = with_money("local m: Money? = nil\nm == nil");
+        assert_bool(&src, true);
+    }
+
+    #[test]
+    fn one_compare_drives_all_four_orderings() {
+        assert_bool(&with_money("Money(1) < Money(2)"), true);
+        assert_bool(&with_money("Money(2) <= Money(2)"), true);
+        assert_bool(&with_money("Money(3) > Money(2)"), true);
+        assert_bool(&with_money("Money(3) >= Money(3)"), true);
+        assert_bool(&with_money("Money(3) < Money(2)"), false);
+    }
+
+    #[test]
+    fn tostring_overload_drives_tostring_and_concat() {
+        assert_str(&with_money(r#"tostring(Money(42))"#), "42c");
+        assert_str(&with_money(r#""cost " .. Money(42)"#), "cost 42c");
+    }
+
+    #[test]
+    fn overloads_are_inherited() {
+        let src = r#"
+            class Base implements OpAdd
+                local n: integer
+                fn init(n: integer)
+                    self.n = n
+                end
+                fn get() -> integer return self.n end
+                fn add(other: Base) -> Base return Base(self.n + other.get()) end
+            end
+            class Derived extends Base
+                fn init(n: integer)
+                    self.super(n)
+                end
+            end
+            (Derived(4) + Base(5)).get()
+        "#;
+        assert_int(src, 9);
+    }
+
+    #[test]
+    fn implements_clause_is_the_opt_in() {
+        // The method alone isn't enough — without `implements OpAdd` the
+        // operator stays a compile error.
+        let src = r#"
+            class Point
+                local x: integer
+                fn init(x: integer)
+                    self.x = x
+                end
+                fn get() -> integer return self.x end
+                fn add(other: Point) -> Point return Point(self.x + other.get()) end
+            end
+            Point(1) + Point(2)
+        "#;
+        assert!(matches!(
+            eval(src).unwrap_err(),
+            PipelineError::Typeck(saule_typeck::TypeCheckError::OperatorNotImplemented { .. })
+        ));
+    }
+
+    #[test]
+    fn arithmetic_dispatches_on_the_left_operand() {
+        // `2 + money` must not quietly become `money + 2`.
+        let src = with_money("2 + Money(1)");
+        assert!(matches!(
+            eval(&src).unwrap_err(),
+            PipelineError::Typeck(saule_typeck::TypeCheckError::OperatorDispatchesOnLeft { .. })
+        ));
+    }
+
+    #[test]
+    fn operand_type_is_checked_against_the_method_signature() {
+        let src = with_money("Money(1) + 5");
+        assert!(matches!(
+            eval(&src).unwrap_err(),
+            PipelineError::Typeck(saule_typeck::TypeCheckError::OperatorOperandTypeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn plain_instances_still_compare_by_identity() {
+        // No `OpEq` means `==` keeps its built-in meaning rather than
+        // becoming an error.
+        let src = r#"
+            class Plain
+                local n: integer
+                fn init(n: integer)
+                    self.n = n
+                end
+            end
+            local a: Plain = Plain(1)
+            a == a
+        "#;
+        assert_bool(src, true);
     }
 }

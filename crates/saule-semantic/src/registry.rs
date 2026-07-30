@@ -338,6 +338,10 @@ pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, Enu
     // see them even without explicit declarations in user code.
     ifaces.entry("Iterable".into()).or_default();
     ifaces.entry("Iterable2".into()).or_default();
+    // Same for the operator interfaces, so `implements OpAdd<…>` resolves.
+    for contract in saule_ast::ops::OPERATOR_CONTRACTS {
+        ifaces.entry(contract.interface.to_string()).or_default();
+    }
     (reg, ifaces, enums)
 }
 

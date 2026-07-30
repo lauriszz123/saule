@@ -105,12 +105,7 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
 /// later parameter slots and the return list. Use for
 /// `Table.insert<V>(table<V>, V, integer?)`, `Table.remove<V>(table<V>, integer?) -> V?`,
 /// etc.
-pub fn register_g(
-    name: &str,
-    type_params: Vec<&str>,
-    params: Vec<Type>,
-    returns: Vec<Type>,
-) {
+pub fn register_g(name: &str, type_params: Vec<&str>, params: Vec<Type>, returns: Vec<Type>) {
     record_member(name);
     SIGS.with(|s| {
         s.borrow_mut().insert(
@@ -439,4 +434,3 @@ mod tests {
         );
     }
 }
-

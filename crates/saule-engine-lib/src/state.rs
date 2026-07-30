@@ -192,11 +192,9 @@ impl MouseState {
 
     /// The wheel delta in notches: 1.0 per click, positive away from the user.
     fn read_wheel(window: &Window) -> (f64, f64) {
-        window
-            .get_scroll_wheel()
-            .map_or((0.0, 0.0), |(x, y)| {
-                (f64::from(x) / WHEEL_NOTCH, f64::from(y) / WHEEL_NOTCH)
-            })
+        window.get_scroll_wheel().map_or((0.0, 0.0), |(x, y)| {
+            (f64::from(x) / WHEEL_NOTCH, f64::from(y) / WHEEL_NOTCH)
+        })
     }
 
     /// `1` = left, `2` = right, `3` = middle; anything else is not a button.
@@ -728,7 +726,8 @@ impl Engine {
     }
 
     pub fn set_line_join(&mut self, join: &str) -> Result<(), String> {
-        self.st.line_join = LineJoin::parse(join).map_err(|e| format!("Graphics.setLineJoin: {e}"))?;
+        self.st.line_join =
+            LineJoin::parse(join).map_err(|e| format!("Graphics.setLineJoin: {e}"))?;
         Ok(())
     }
 
@@ -761,7 +760,11 @@ impl Engine {
     }
 
     pub fn default_filter(&self) -> &'static str {
-        if self.linear_filter { "linear" } else { "nearest" }
+        if self.linear_filter {
+            "linear"
+        } else {
+            "nearest"
+        }
     }
 
     /// The device-space bounding box of a local rectangle under the current
@@ -1210,7 +1213,9 @@ fn draw_line(
     let baseline = y + font.ascent();
     let (glyphs, _) = font.layout(text);
     for (ch, pen) in glyphs {
-        let Some(glyph) = font.glyph(ch) else { continue };
+        let Some(glyph) = font.glyph(ch) else {
+            continue;
+        };
         if glyph.mask.w == 0 || glyph.mask.h == 0 {
             continue; // whitespace carries advance but no pixels
         }

@@ -1,8 +1,8 @@
 //! Instance construction (`new Class(args)`) and enum tuple-variant
 //! constructors.
 
-use std::cell::RefCell;
 use crate::fxhash::FxHashMap as HashMap;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::env::Environment;

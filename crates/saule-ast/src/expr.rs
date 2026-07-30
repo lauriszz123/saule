@@ -216,6 +216,7 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    Pow,
     // Comparison
     Eq,
     NotEq,

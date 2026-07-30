@@ -1,0 +1,18 @@
+-- `^` exponentiation. Integer bases stay integers (like `/` stays integer
+-- division); floats use real exponentiation.
+class Main
+	static fn main()
+		println(2 ^ 10)          -- 1024
+		println(2 ^ 3 ^ 2)       -- 512 — right-associative, so 2 ^ (3 ^ 2)
+		println(-2 ^ 2)          -- -4 — binds tighter than unary minus
+		println(2.0 ^ 0.5)       -- 1.4142135623730951
+		println(2.0 ^ -1.0)      -- 0.5
+
+		-- Binds tighter than `*`, looser than a call or field access.
+		println(3 * 2 ^ 3)       -- 24
+
+		local base: integer = 5
+		local squared: integer = base ^ 2
+		println(squared)         -- 25
+	end
+end

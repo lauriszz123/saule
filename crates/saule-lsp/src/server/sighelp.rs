@@ -26,8 +26,8 @@
 //! repair can't parse; it resolves the callee by name from raw text.
 
 use saule_ast::{
-    CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Method, Module, Param, Spanned,
-    Stmt, TableEntry, Type,
+    CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Method, Module, Param, Spanned, Stmt,
+    TableEntry, Type,
 };
 use saule_semantic::{lookup_field_type, lookup_method, super_init_target, with_classes};
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ use tower_lsp::lsp_types::{
 
 use crate::line_index::LineIndex;
 
-use super::{canonical, Backend};
+use super::{Backend, canonical};
 
 impl Backend {
     /// Resolve signature help at `pos` inside `uri`. Returns `None`
@@ -185,7 +185,10 @@ impl Backend {
         self.client
             .log_message(
                 tower_lsp::lsp_types::MessageType::INFO,
-                format!("sighelp {}:{} -> {got}  ::  {marked}", pos.line, pos.character),
+                format!(
+                    "sighelp {}:{} -> {got}  ::  {marked}",
+                    pos.line, pos.character
+                ),
             )
             .await;
     }
@@ -259,13 +262,15 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                 .as_ref()
                 .and_then(|c| lookup_method(c, &name))
                 .or_else(|| {
-                    hit.user_fn.clone().map(|(params, ret)| saule_semantic::MethodSig {
-                        is_static: false,
-                        is_private: false,
-                        type_params: Vec::new(),
-                        params,
-                        return_ty: ret,
-                    })
+                    hit.user_fn
+                        .clone()
+                        .map(|(params, ret)| saule_semantic::MethodSig {
+                            is_static: false,
+                            is_private: false,
+                            type_params: Vec::new(),
+                            params,
+                            return_ty: ret,
+                        })
                 })?;
             let piped = saule_semantic::MethodSig {
                 params: sig.params.iter().skip(1).cloned().collect(),
@@ -275,10 +280,7 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
         }
         CalleeRef::Native(qname) => {
             let native = saule_typeck::sigs::lookup(&qname)?;
-            let display = qname
-                .rsplit_once('.')
-                .map(|(_, n)| n)
-                .unwrap_or(&qname);
+            let display = qname.rsplit_once('.').map(|(_, n)| n).unwrap_or(&qname);
             build_help_native(display, &qname, &native, &hit.args, offset)
         }
     }
@@ -580,7 +582,10 @@ fn build_help_native(
             label.push_str(", ");
         }
         let start = utf16_len(&label);
-        let vname = names.get(positional_n).map(|s| s.as_str()).unwrap_or("rest");
+        let vname = names
+            .get(positional_n)
+            .map(|s| s.as_str())
+            .unwrap_or("rest");
         label.push_str("...");
         label.push_str(vname);
         label.push_str(": ");
@@ -672,10 +677,7 @@ fn enclosing_class_textual(source: &str, offset: usize) -> Option<String> {
     for (idx, _) in prefix.match_indices("class ") {
         // Require the keyword to be at start-of-line (ignoring leading
         // whitespace) so we don't trip on `class` inside identifiers.
-        let line_start = prefix[..idx]
-            .rfind('\n')
-            .map(|n| n + 1)
-            .unwrap_or(0);
+        let line_start = prefix[..idx].rfind('\n').map(|n| n + 1).unwrap_or(0);
         if prefix[line_start..idx].chars().all(|c| c.is_whitespace()) {
             let after = &prefix[idx + "class ".len()..];
             let name: String = after
@@ -810,11 +812,7 @@ pub(super) fn render_type(ty: &Type) -> String {
         },
         Type::Tuple(parts) => format!(
             "({})",
-            parts
-                .iter()
-                .map(render_type)
-                .collect::<Vec<_>>()
-                .join(", ")
+            parts.iter().map(render_type).collect::<Vec<_>>().join(", ")
         ),
     }
 }
@@ -826,15 +824,23 @@ pub(super) fn render_type(ty: &Type) -> String {
 #[derive(Clone)]
 enum CalleeRef {
     Free(String),
-    Method { class: String, name: String },
+    Method {
+        class: String,
+        name: String,
+    },
     /// `self.super(...)` — the `init` of `owner`, the nearest ancestor
     /// that declares one. Kept separate from `Method` so the rendered
     /// label can say `View.init` instead of a bare `init`.
-    SuperInit { owner: String },
+    SuperInit {
+        owner: String,
+    },
     /// `Shape.Circle(...)` — a tuple-style enum variant used as a
     /// constructor. Its fields are `Param`s on the AST, so they're
     /// carried here directly rather than looked up in a registry.
-    Variant { display: String, fields: Vec<Param> },
+    Variant {
+        display: String,
+        fields: Vec<Param>,
+    },
     /// `when(x):stage(...)` — the piped value fills the first parameter,
     /// so the rendered signature drops it.
     PipeStage(String),
@@ -922,7 +928,9 @@ impl Cx {
 
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
-            Stmt::Local { name, ty, value, .. } => {
+            Stmt::Local {
+                name, ty, value, ..
+            } => {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
@@ -1027,7 +1035,9 @@ impl Cx {
                 }
             }
             Stmt::Throw(e) => self.visit_expr(e),
-            Stmt::Try { body, catch_body, .. } => {
+            Stmt::Try {
+                body, catch_body, ..
+            } => {
                 self.visit_block(body);
                 self.visit_block(catch_body);
             }
@@ -1046,7 +1056,10 @@ impl Cx {
                     if let ClassMember::Method(meth) = &m.value {
                         self.visit_method(meth);
                     }
-                    if let ClassMember::Field { default: Some(d), .. } = &m.value {
+                    if let ClassMember::Field {
+                        default: Some(d), ..
+                    } = &m.value
+                    {
                         self.visit_expr(d);
                     }
                 }
@@ -1203,8 +1216,7 @@ impl Cx {
                 // Tuple-style enum variant used as a constructor:
                 // `Shape.Circle(1.0)`.
                 if let Expr::Ident(enum_name) = &obj.value
-                    && let Some(fields) =
-                        self.enum_variants.get(&(enum_name.clone(), name.clone()))
+                    && let Some(fields) = self.enum_variants.get(&(enum_name.clone(), name.clone()))
                 {
                     return Some(CalleeRef::Variant {
                         display: format!("{enum_name}.{name}"),
@@ -1560,8 +1572,7 @@ fn help_from_module(module: &Module, offset: usize) -> Option<SignatureHelp> {
         .map(|(i, _)| i)
         .unwrap_or(0);
 
-    let signatures: Vec<SignatureInformation> =
-        entries.into_iter().map(|(_, sig)| sig).collect();
+    let signatures: Vec<SignatureInformation> = entries.into_iter().map(|(_, sig)| sig).collect();
     let active_parameter = signatures[active].active_parameter;
     Some(SignatureHelp {
         signatures,
@@ -1586,10 +1597,7 @@ const MAX_SIGNATURES: usize = 8;
 /// So the list must never grow on a retrigger. When the fresh chain is
 /// longer, keep the client's own list and just move the selection to the
 /// matching entry.
-pub(super) fn reconcile_with_client(
-    fresh: SignatureHelp,
-    prev: &SignatureHelp,
-) -> SignatureHelp {
+pub(super) fn reconcile_with_client(fresh: SignatureHelp, prev: &SignatureHelp) -> SignatureHelp {
     if fresh.signatures.len() <= prev.signatures.len() {
         return fresh;
     }
@@ -1758,7 +1766,8 @@ mod tests {
 
     #[test]
     fn fallback_resolves_method_call_via_dot() {
-        let prelude = "class Foo\n  fn bar(n: integer, m: integer) -> integer\n    return n\n  end\nend\n";
+        let prelude =
+            "class Foo\n  fn bar(n: integer, m: integer) -> integer\n    return n\n  end\nend\n";
         let snippet = "Foo().bar(1, ";
         let h = fallback_help(prelude, snippet, 0).expect("fallback help");
         assert!(h.signatures[0].label.starts_with("bar("));
@@ -1861,7 +1870,10 @@ mod tests {
         let h = help(src, "find(\"", 5).expect("help");
         let label = &h.signatures[0].label;
         assert!(label.contains("s: "), "expected `s:` in {label}");
-        assert!(label.contains("pattern: "), "expected `pattern:` in {label}");
+        assert!(
+            label.contains("pattern: "),
+            "expected `pattern:` in {label}"
+        );
         assert!(label.contains("init"), "expected `init` in {label}");
     }
 
@@ -1909,7 +1921,6 @@ end
         assert!(h.signatures[0].label.starts_with("Base.init("));
         assert_eq!(h.active_parameter, Some(1));
     }
-
 
     // ── coverage matrix: every call form the language has ─────────
     //
@@ -1974,7 +1985,12 @@ end
         init_stdlib();
         let cases: Vec<(&str, &str, &str, &str)> = vec![
             ("free fn", "  local r = add(1, 2)\n", "add(1", "add("),
-            ("constructor", "  local w = Widget(1.0, 2.0)\n", "Widget(1.0", "Widget("),
+            (
+                "constructor",
+                "  local w = Widget(1.0, 2.0)\n",
+                "Widget(1.0",
+                "Widget(",
+            ),
             (
                 "method on annotated local",
                 "  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(3.0, 4.0)\n",
@@ -2000,7 +2016,12 @@ end
                 "moveTo(3.0",
                 "moveTo(",
             ),
-            ("stdlib module fn", "  local n = Math.floor(3.14)\n", "floor(3.14", "floor("),
+            (
+                "stdlib module fn",
+                "  local n = Math.floor(3.14)\n",
+                "floor(3.14",
+                "floor(",
+            ),
             ("bare native", "  println(1)\n", "println(1", "println("),
             (
                 "enum tuple variant",
@@ -2016,11 +2037,31 @@ end
                 "f(1",
                 "f(",
             ),
-            ("nested inner call", "  local r = add(add(1, 2), 3)\n", "add(1", "add("),
-            ("named argument", "  local w = Widget(x: 1.0, y: 2.0)\n", "Widget(x: 1.0", "Widget("),
-            ("table-literal argument", "  local t = add({1, 2}, 3)\n", "add({1", "add("),
+            (
+                "nested inner call",
+                "  local r = add(add(1, 2), 3)\n",
+                "add(1",
+                "add(",
+            ),
+            (
+                "named argument",
+                "  local w = Widget(x: 1.0, y: 2.0)\n",
+                "Widget(x: 1.0",
+                "Widget(",
+            ),
+            (
+                "table-literal argument",
+                "  local t = add({1, 2}, 3)\n",
+                "add({1",
+                "add(",
+            ),
             // The piped value fills slot 0, so only `y` is left.
-            ("pipeline stage", "  local n = when(4):add(3)\n", "add(3", "add(y: integer)"),
+            (
+                "pipeline stage",
+                "  local n = when(4):add(3)\n",
+                "add(3",
+                "add(y: integer)",
+            ),
         ];
         for (case, body, needle, expected) in cases {
             let src = format!("{FIXTURE}\nfn probe()\n{body}end\n");
@@ -2075,8 +2116,18 @@ end
         init_stdlib();
         for (case, snippet, expected, active) in [
             ("free fn", "fn probe()\n  local r = add(", "add(", 0),
-            ("free fn second arg", "fn probe()\n  local r = add(1, ", "add(", 1),
-            ("constructor", "fn probe()\n  local w = Widget(", "Widget(", 0),
+            (
+                "free fn second arg",
+                "fn probe()\n  local r = add(1, ",
+                "add(",
+                1,
+            ),
+            (
+                "constructor",
+                "fn probe()\n  local w = Widget(",
+                "Widget(",
+                0,
+            ),
             (
                 "method on annotated local",
                 "fn probe()\n  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(",
@@ -2096,9 +2147,19 @@ end
                 "moveTo(",
                 0,
             ),
-            ("stdlib module fn", "fn probe()\n  local n = Math.floor(", "floor(", 0),
+            (
+                "stdlib module fn",
+                "fn probe()\n  local n = Math.floor(",
+                "floor(",
+                0,
+            ),
             ("bare native", "fn probe()\n  println(", "println(", 0),
-            ("enum tuple variant", "fn probe()\n  local s = Shape.Circle(", "Shape.Circle(", 0),
+            (
+                "enum tuple variant",
+                "fn probe()\n  local s = Shape.Circle(",
+                "Shape.Circle(",
+                0,
+            ),
             (
                 "self.method",
                 "class Probe extends Widget\n  fn go()\n    self.moveTo(",
@@ -2117,7 +2178,12 @@ end
                 "apply(",
                 0,
             ),
-            ("nested inner call", "fn probe()\n  local r = add(add(", "add(", 0),
+            (
+                "nested inner call",
+                "fn probe()\n  local r = add(add(",
+                "add(",
+                0,
+            ),
         ] {
             let src = format!("{FIXTURE}\n{snippet}");
             let offset = src.len();
@@ -2134,11 +2200,13 @@ end
     #[test]
     fn named_argument_highlights_its_own_slot() {
         init_stdlib();
-        let src = format!("{FIXTURE}
+        let src = format!(
+            "{FIXTURE}
 fn probe()
   local w = Widget(y: 2.0)
 end
-");
+"
+        );
         let h = help_at(&src, call_offset(&src, "Widget(y: 2")).expect("help");
         assert_eq!(h.active_parameter, Some(1));
     }
@@ -2231,7 +2299,10 @@ end
                 sig.label
             );
             let slice = String::from_utf16(&units[s as usize..e as usize]).expect("utf16");
-            assert!(slice.starts_with(["r", "g", "b"][i]), "param {i} sliced to {slice:?}");
+            assert!(
+                slice.starts_with(["r", "g", "b"][i]),
+                "param {i} sliced to {slice:?}"
+            );
         }
     }
 
@@ -2262,13 +2333,32 @@ end
         // setBackground(Color())
         // ^0           ^13    ^20
         for (case, at, expected) in [
-            ("before the argument", call + "setBackground(".len(), "setBackground("),
-            ("on the callee name", call + "setBackground(Color".len(), "setBackground("),
-            ("inside the inner parens", call + "setBackground(Color(".len(), "Color("),
-            ("after the inner call", call + "setBackground(Color()".len(), "setBackground("),
+            (
+                "before the argument",
+                call + "setBackground(".len(),
+                "setBackground(",
+            ),
+            (
+                "on the callee name",
+                call + "setBackground(Color".len(),
+                "setBackground(",
+            ),
+            (
+                "inside the inner parens",
+                call + "setBackground(Color(".len(),
+                "Color(",
+            ),
+            (
+                "after the inner call",
+                call + "setBackground(Color()".len(),
+                "setBackground(",
+            ),
         ] {
             let got = label(help_at(src, at), case);
-            assert!(got.starts_with(expected), "{case}: expected {expected:?}, got {got:?}");
+            assert!(
+                got.starts_with(expected),
+                "{case}: expected {expected:?}, got {got:?}"
+            );
         }
         // Past the outer `)` the popup belongs to nobody.
         assert!(
@@ -2312,9 +2402,16 @@ end
         let labels = |h: &SignatureHelp| -> Vec<String> {
             h.signatures.iter().map(|s| s.label.clone()).collect()
         };
-        assert_eq!(labels(&outer), labels(&inner), "signature list must be stable");
+        assert_eq!(
+            labels(&outer),
+            labels(&inner),
+            "signature list must be stable"
+        );
         assert_eq!(outer.signatures.len(), 2, "got {:?}", labels(&outer));
-        assert!(labels(&outer)[0].starts_with("setBackground("), "source order");
+        assert!(
+            labels(&outer)[0].starts_with("setBackground("),
+            "source order"
+        );
         assert!(labels(&outer)[1].starts_with("Color("), "source order");
 
         assert_eq!(outer.active_signature, Some(0));
@@ -2346,7 +2443,11 @@ end
             active_parameter: Some(0),
         };
         let out = reconcile_with_client(fresh, &prev);
-        assert_eq!(out.signatures.len(), 1, "must not exceed the client's row count");
+        assert_eq!(
+            out.signatures.len(),
+            1,
+            "must not exceed the client's row count"
+        );
 
         // Shrinking or staying level is safe, so the fresh answer wins.
         let fresh = SignatureHelp {
@@ -2388,7 +2489,11 @@ end
         // dropped, leaving the enclosing `update` as the only row.
         let h = help_at(src, call + "root.update(t.getDelta(".len()).expect("help");
         let labels: Vec<&str> = h.signatures.iter().map(|s| s.label.as_str()).collect();
-        assert_eq!(labels.len(), 1, "getDelta should be filtered out: {labels:?}");
+        assert_eq!(
+            labels.len(),
+            1,
+            "getDelta should be filtered out: {labels:?}"
+        );
         assert!(labels[0].starts_with("update("), "{labels:?}");
         assert!(active_label(&h).starts_with("update("));
 
@@ -2406,7 +2511,10 @@ fn probe()
 end
 ";
         let at = src.find("t.getDelta()").expect("call") + "t.getDelta(".len();
-        assert!(help_at(src, at).is_none(), "parameterless call should not open a popup");
+        assert!(
+            help_at(src, at).is_none(),
+            "parameterless call should not open a popup"
+        );
     }
 
     /// The caret is not required to arrive by typing. It can be arrowed
@@ -2453,7 +2561,10 @@ end
         }
         let labels = seen.expect("swept at least one offset");
         assert_eq!(labels.len(), 2, "{labels:?}");
-        assert!(labels[0].starts_with("setBackground("), "source order: {labels:?}");
+        assert!(
+            labels[0].starts_with("setBackground("),
+            "source order: {labels:?}"
+        );
         assert!(labels[1].starts_with("rgb("), "source order: {labels:?}");
 
         // 2. The selection tracks the caret, in both directions.

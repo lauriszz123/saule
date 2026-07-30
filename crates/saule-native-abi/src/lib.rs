@@ -124,18 +124,12 @@ pub struct HostApi {
     ) -> i32,
 
     /// Append `val` to the table's array part. Returns `0` on success.
-    pub table_push: unsafe extern "C" fn(
-        ctx: *mut core::ffi::c_void,
-        table: Handle,
-        val: *const CValue,
-    ) -> i32,
+    pub table_push:
+        unsafe extern "C" fn(ctx: *mut core::ffi::c_void, table: Handle, val: *const CValue) -> i32,
 
     /// Remove `key` from the table. Returns `0` on success.
-    pub table_remove: unsafe extern "C" fn(
-        ctx: *mut core::ffi::c_void,
-        table: Handle,
-        key: *const CValue,
-    ) -> i32,
+    pub table_remove:
+        unsafe extern "C" fn(ctx: *mut core::ffi::c_void, table: Handle, key: *const CValue) -> i32,
 
     /// Return a *new* array-table handle holding this table's keys, so a
     /// package can iterate without an open iterator protocol. `0` on error.

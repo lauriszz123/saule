@@ -9,7 +9,7 @@ use tower_lsp::lsp_types::{Location, Position, Url};
 use crate::line_index::LineIndex;
 use crate::refs::{self, Symbol};
 
-use super::{canonical, path_to_uri, Backend};
+use super::{Backend, canonical, path_to_uri};
 
 /// Cursor resolution result threaded between the resolve step and the
 /// workspace walk: the URI we resolved against (used to bound a local
@@ -39,8 +39,7 @@ impl Backend {
                 let Some(dir) = importer.parent() else {
                     return Vec::new();
                 };
-                let Some(target) = saule_interpreter::module::resolve_import_path(dir, path)
-                else {
+                let Some(target) = saule_interpreter::module::resolve_import_path(dir, path) else {
                     return Vec::new();
                 };
                 let Some(target_uri) = path_to_uri(&target) else {
@@ -70,9 +69,7 @@ impl Backend {
             return Vec::new();
         };
         match ctx.symbol {
-            Symbol::Local { .. } => {
-                self.collect_in_file(&ctx.uri, &ctx.symbol, false, include_def)
-            }
+            Symbol::Local { .. } => self.collect_in_file(&ctx.uri, &ctx.symbol, false, include_def),
             Symbol::ImportPath(ref _path) => {
                 // References to an import path = every importer.
                 self.collect_in_workspace(&ctx, false).await
@@ -136,7 +133,9 @@ impl Backend {
                     .ok()
                     .and_then(|p| std::fs::read_to_string(&p).ok())
             });
-        let Some(source) = source else { return Vec::new() };
+        let Some(source) = source else {
+            return Vec::new();
+        };
         let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
             return Vec::new();
         };
@@ -177,7 +176,9 @@ impl Backend {
 
         let mut out: Vec<Location> = Vec::new();
         for abs in files {
-            let Some(uri) = path_to_uri(&abs) else { continue };
+            let Some(uri) = path_to_uri(&abs) else {
+                continue;
+            };
             let source = self
                 .docs
                 .get(uri.as_str())

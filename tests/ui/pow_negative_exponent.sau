@@ -1,0 +1,8 @@
+-- `integer ^ integer` stays an integer, so a negative exponent has no
+-- answer to give. Use floats when you want a fractional result.
+class Main
+	static fn main()
+		local n: integer = 2 ^ -3
+		println(n)
+	end
+end

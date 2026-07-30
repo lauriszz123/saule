@@ -18,7 +18,7 @@
 //! | `Option<T>`     | `T?`       |
 //! | `()`            | `nil`      |
 
-use saule_native_abi::{return_string, tag, CValue};
+use saule_native_abi::{CValue, return_string, tag};
 
 /// Decode an argument from the positional argument slice.
 ///

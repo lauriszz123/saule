@@ -140,17 +140,25 @@ pub fn discover() {
                 if path.extension().and_then(|e| e.to_str()) != Some("toml") {
                     continue;
                 }
-                match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| parse_manifest(&t)) {
+                match std::fs::read_to_string(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|t| parse_manifest(&t))
+                {
                     Ok(manifest) => {
                         map.insert(manifest.name.clone(), Arc::new(manifest));
                     }
                     Err(err) => {
-                        eprintln!("saule: ignoring native manifest `{}`: {err}", path.display());
+                        eprintln!(
+                            "saule: ignoring native manifest `{}`: {err}",
+                            path.display()
+                        );
                     }
                 }
             }
         }
-        *MANIFESTS.write().expect("dynamic manifest registry poisoned") = Some(map);
+        *MANIFESTS
+            .write()
+            .expect("dynamic manifest registry poisoned") = Some(map);
     });
 }
 
@@ -158,14 +166,20 @@ pub fn discover() {
 /// Wired into the typeck initializer so it runs once per thread that
 /// type-checks — see [`crate::stdlib::register_all_sigs`].
 pub fn register_sigs() {
-    let guard = MANIFESTS.read().expect("dynamic manifest registry poisoned");
+    let guard = MANIFESTS
+        .read()
+        .expect("dynamic manifest registry poisoned");
     let Some(map) = guard.as_ref() else { return };
     for manifest in map.values() {
         for class in &manifest.exports {
             for method in &class.methods {
                 let qname = format!("{}.{}", class.name, method.name);
                 if method.type_params.is_empty() {
-                    saule_typeck::sigs::register(&qname, method.params.clone(), method.returns.clone());
+                    saule_typeck::sigs::register(
+                        &qname,
+                        method.params.clone(),
+                        method.returns.clone(),
+                    );
                 } else {
                     let tps: Vec<&str> = method.type_params.iter().map(String::as_str).collect();
                     saule_typeck::sigs::register_g(
@@ -182,7 +196,9 @@ pub fn register_sigs() {
 
 /// Look up a discovered package by import name.
 fn lookup(name: &str) -> Option<Arc<Manifest>> {
-    let guard = MANIFESTS.read().expect("dynamic manifest registry poisoned");
+    let guard = MANIFESTS
+        .read()
+        .expect("dynamic manifest registry poisoned");
     guard.as_ref().and_then(|m| m.get(name).cloned())
 }
 
@@ -194,7 +210,9 @@ pub fn is_dynamic_package(name: &str) -> bool {
 /// Every discovered dynamic package's import name. Used by tooling (the LSP's
 /// import completion) to offer installed packages as import targets.
 pub fn package_names() -> Vec<String> {
-    let guard = MANIFESTS.read().expect("dynamic manifest registry poisoned");
+    let guard = MANIFESTS
+        .read()
+        .expect("dynamic manifest registry poisoned");
     guard
         .as_ref()
         .map(|m| m.keys().cloned().collect())
@@ -227,7 +245,10 @@ pub fn name_from_sentinel(path: &Path) -> Option<&str> {
 /// Build the importable surface of a dynamic package, loading its shared
 /// library on first use. Called by the module loader when it sees a dynamic
 /// sentinel path.
-pub fn build_exports(name: &str, import_span: std::ops::Range<usize>) -> Result<ModuleExports, RuntimeError> {
+pub fn build_exports(
+    name: &str,
+    import_span: std::ops::Range<usize>,
+) -> Result<ModuleExports, RuntimeError> {
     let manifest = lookup(name).ok_or_else(|| RuntimeError::ImportError {
         message: format!("native package `{name}` is no longer registered"),
         span: import_span.clone(),
@@ -472,9 +493,7 @@ fn spread_multi_return(value: Value, arity: usize) -> Vec<Value> {
     match value {
         Value::Table(t) => {
             let t = t.borrow();
-            (1..=arity as i64)
-                .map(|i| t.get(&Value::Int(i)))
-                .collect()
+            (1..=arity as i64).map(|i| t.get(&Value::Int(i))).collect()
         }
         other => {
             let mut out = Vec::with_capacity(arity);
@@ -572,9 +591,9 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
             let mut methods = Vec::new();
             if let Some(arr) = class_tbl.get("methods").and_then(|v| v.as_array()) {
                 for entry in arr {
-                    let mt = entry
-                        .as_table()
-                        .ok_or_else(|| format!("`exports.{class_name}.methods` entries must be tables"))?;
+                    let mt = entry.as_table().ok_or_else(|| {
+                        format!("`exports.{class_name}.methods` entries must be tables")
+                    })?;
                     let mname = mt
                         .get("name")
                         .and_then(|v| v.as_str())
@@ -587,7 +606,9 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
                     let symbol = mt
                         .get("native_symbol")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| format!("`{class_name}.{mname}` is missing `native_symbol`"))?
+                        .ok_or_else(|| {
+                            format!("`{class_name}.{mname}` is missing `native_symbol`")
+                        })?
                         .to_string();
                     let (type_params, param_names, params, returns) = parse_sig(sig)
                         .map_err(|e| format!("`{class_name}.{mname}` has an invalid sig: {e}"))?;
@@ -629,7 +650,9 @@ fn parse_sig(sig: &str) -> Result<(Vec<String>, Vec<String>, Vec<Type>, Vec<Type
     // Optional `<T, U>` generic prefix: collect the type-parameter names.
     let mut type_params = Vec::new();
     let s = if let Some(rest) = s.strip_prefix('<') {
-        let gt = rest.find('>').ok_or("unbalanced `<...>` in type parameters")?;
+        let gt = rest
+            .find('>')
+            .ok_or("unbalanced `<...>` in type parameters")?;
         for p in split_top_level(&rest[..gt]) {
             type_params.push(p);
         }
@@ -714,10 +737,7 @@ fn parse_type(tok: &str) -> Type {
         return saule_typeck::sigs::t_nullable(parse_type(base));
     }
     // `table<T>` / `table<K, V>` — anything else falls through to a named type.
-    if let Some(inner) = t
-        .strip_prefix("table<")
-        .and_then(|r| r.strip_suffix('>'))
-    {
+    if let Some(inner) = t.strip_prefix("table<").and_then(|r| r.strip_suffix('>')) {
         let parts = split_top_level(inner);
         return match parts.as_slice() {
             [v] => saule_typeck::sigs::t_table(parse_type(v)),

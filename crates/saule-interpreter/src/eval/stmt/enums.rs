@@ -1,7 +1,7 @@
 //! `enum` declaration execution.
 
-use std::cell::RefCell;
 use crate::fxhash::FxHashMap as HashMap;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use saule_ast::{EnumVariant, Method, Spanned};

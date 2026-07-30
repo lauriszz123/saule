@@ -19,8 +19,8 @@
 //! seeded by `analyze_with_seed`.
 
 use saule_ast::{
-    CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Method, Module, Param, Spanned,
-    Stmt, TableEntry, Type,
+    CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Method, Module, Param, Spanned, Stmt,
+    TableEntry, Type,
 };
 use saule_semantic::{lookup_method, with_classes};
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Url};
 
 use crate::line_index::LineIndex;
 
-use super::{canonical, Backend};
+use super::{Backend, canonical};
 
 impl Backend {
     /// Compute inlay hints for `uri`. Re-runs analysis under the shared
@@ -125,7 +125,13 @@ impl<'a> Cx<'a> {
 
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
-            Stmt::Local { name, ty, value, name_span, .. } => {
+            Stmt::Local {
+                name,
+                ty,
+                value,
+                name_span,
+                ..
+            } => {
                 let resolved_ty = match ty.clone() {
                     // A bare structural annotation (`table` / `function`) is
                     // refined against the initializer so generic natives can
@@ -291,7 +297,10 @@ impl<'a> Cx<'a> {
                     if let ClassMember::Method(meth) = &m.value {
                         self.visit_method(meth);
                     }
-                    if let ClassMember::Field { default: Some(d), .. } = &m.value {
+                    if let ClassMember::Field {
+                        default: Some(d), ..
+                    } = &m.value
+                    {
                         self.visit_expr(d);
                     }
                 }
@@ -434,11 +443,11 @@ impl<'a> Cx<'a> {
         // sigs don't carry per-slot variadic info — at most one
         // trailing variadic slot — so we mark only that last one.
         let slots: Vec<(String, bool)> = match params {
-            CalleeParams::Named(ps) => ps
-                .iter()
-                .map(|p| (p.name.clone(), p.variadic))
-                .collect(),
-            CalleeParams::Native { names, has_variadic } => names
+            CalleeParams::Named(ps) => ps.iter().map(|p| (p.name.clone(), p.variadic)).collect(),
+            CalleeParams::Native {
+                names,
+                has_variadic,
+            } => names
                 .iter()
                 .enumerate()
                 .map(|(i, n)| (n.clone(), *has_variadic && i + 1 == names.len()))
@@ -451,7 +460,9 @@ impl<'a> Cx<'a> {
                     pi += 1;
                 }
                 CallArg::Positional(value) => {
-                    let Some((name, is_var)) = slots.get(pi) else { break };
+                    let Some((name, is_var)) = slots.get(pi) else {
+                        break;
+                    };
                     pi += 1;
                     if *is_var {
                         break;
@@ -596,7 +607,11 @@ impl<'a> Cx<'a> {
         }
         match value_ty {
             Some(v) if consistent => Type::Table {
-                key: if has_field { key_ty.map(Box::new) } else { None },
+                key: if has_field {
+                    key_ty.map(Box::new)
+                } else {
+                    None
+                },
                 value: Box::new(v),
             },
             _ => Type::Named("table".into()),
@@ -644,12 +659,7 @@ impl<'a> Cx<'a> {
         match obj {
             Expr::Self_ => self.enclosing_class.clone(),
             Expr::Ident(name) => {
-                if let Some(local) = self
-                    .locals
-                    .iter()
-                    .rev()
-                    .find(|l| l.name == *name)
-                {
+                if let Some(local) = self.locals.iter().rev().find(|l| l.name == *name) {
                     if let Type::Named(n) = &local.ty {
                         return Some(n.clone());
                     }
@@ -684,8 +694,7 @@ impl<'a> Cx<'a> {
         match callee {
             Expr::Ident(name) => {
                 if with_classes(|r| r.contains_key(name)) {
-                    return lookup_method(name, "init")
-                        .map(|sig| CalleeParams::Named(sig.params));
+                    return lookup_method(name, "init").map(|sig| CalleeParams::Named(sig.params));
                 }
                 if let Some(class) = &self.enclosing_class {
                     if let Some(sig) = lookup_method(class, name) {
@@ -773,7 +782,10 @@ impl<'a> Cx<'a> {
 /// named params).
 enum CalleeParams {
     Named(Vec<Param>),
-    Native { names: Vec<String>, has_variadic: bool },
+    Native {
+        names: Vec<String>,
+        has_variadic: bool,
+    },
 }
 
 /// Pre-pass: collect every top-level `fn name(...)` declaration so the
@@ -972,4 +984,3 @@ mod tests {
         assert!(labels.is_empty(), "expected no param hints, got {hints:?}");
     }
 }
-

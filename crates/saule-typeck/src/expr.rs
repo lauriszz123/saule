@@ -153,7 +153,12 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             check_expr(obj, scope, errors);
             check_expr(index, scope, errors);
         }
-        Expr::Unary { rhs, .. } => check_expr(rhs, scope, errors),
+        Expr::Unary { op, rhs } => {
+            check_expr(rhs, scope, errors);
+            // `-v` / `#v` on a class instance need an `OpNeg` / `OpLen`
+            // overload; anything else is a runtime type error.
+            super::ops::check_unary(*op, rhs, scope, errors);
+        }
         Expr::Binary { op, lhs, rhs } => {
             check_expr(lhs, scope, errors);
             check_expr(rhs, scope, errors);
@@ -1140,23 +1145,7 @@ fn is_concat_like(ty: &Type) -> bool {
 
 /// Friendly printable name of a binary operator, used in diagnostics.
 fn binop_name(op: BinOp) -> &'static str {
-    match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
-        BinOp::Div => "/",
-        BinOp::Mod => "%",
-        BinOp::Eq => "==",
-        BinOp::NotEq => "!=",
-        BinOp::Lt => "<",
-        BinOp::LtEq => "<=",
-        BinOp::Gt => ">",
-        BinOp::GtEq => ">=",
-        BinOp::And => "and",
-        BinOp::Or => "or",
-        BinOp::Concat => "..",
-        BinOp::Coalesce => "??",
-    }
+    saule_ast::ops::binop_symbol(op)
 }
 
 /// Per-operator type validation. Each branch checks just enough to flag
@@ -1169,10 +1158,16 @@ pub(super) fn check_binary_op(
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
 ) {
+    // A class instance on either side means the operator is whatever that
+    // class's `Op*` overload says it is; the numeric/string rules below
+    // don't apply and would only pile on a confusing second error.
+    if super::ops::check_binary(op, lhs, rhs, scope, errors) {
+        return;
+    }
     match op {
         BinOp::Coalesce => check_coalesce_fallback(lhs, rhs, scope, errors),
         BinOp::Eq | BinOp::NotEq => check_equality_compat(op, lhs, rhs, scope, errors),
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
             let name = binop_name(op);
             check_operand_kind(
                 name,
@@ -2091,9 +2086,14 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 }
                 _ => Some(Type::Named("any".into())),
             },
-            BinOp::Concat => Some(Type::Named("string".into())),
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                infer(lhs, scope).or_else(|| infer(rhs, scope))
+            // `..` yields whatever an `OpConcat` overload returns, and a
+            // plain `string` otherwise.
+            BinOp::Concat => super::ops::infer_binary(*op, lhs, scope)
+                .or_else(|| Some(Type::Named("string".into()))),
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
+                super::ops::infer_binary(*op, lhs, scope)
+                    .or_else(|| infer(lhs, scope))
+                    .or_else(|| infer(rhs, scope))
             }
         },
         // `Foo(args)` where `Foo` is a known class → produces a `Foo`.
@@ -2281,12 +2281,13 @@ pub(super) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             .and_then(|s| super::funcs::lookup(&s.name))
             .and_then(|info| info.return_ty.clone()),
         // `-x` keeps the operand's numeric type, `#x` is always an integer
-        // count, `not x` is always a boolean.
-        Expr::Unary { op, rhs } => match op {
+        // count, `not x` is always a boolean — unless the operand is a
+        // class overloading `OpNeg` / `OpLen`, which names its own result.
+        Expr::Unary { op, rhs } => super::ops::infer_unary(*op, rhs, scope).or_else(|| match op {
             UnaryOp::Neg => infer(rhs, scope).map(strip_nullable),
             UnaryOp::Len => Some(Type::Named("integer".into())),
             UnaryOp::Not => Some(Type::Named("boolean".into())),
-        },
+        }),
         // A lambda is a function value. Parameters carry their declared
         // types (`any` when the writer left them off); the return type comes
         // from the annotation when present, and from the body otherwise.

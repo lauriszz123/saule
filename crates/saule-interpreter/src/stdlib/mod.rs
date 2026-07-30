@@ -28,6 +28,7 @@ pub mod core;
 pub mod io;
 pub mod iter;
 pub mod math;
+pub mod ops;
 pub mod os;
 pub mod project;
 pub mod sigs;
@@ -51,6 +52,7 @@ pub fn register_builtin_packages() {
     use crate::native_packages::register;
     register(&core::CORE_PACKAGE);
     register(&iter::ITER_PACKAGE);
+    register(&ops::OPS_PACKAGE);
     register(&math::MATH_PACKAGE);
     register(&string::STRING_PACKAGE);
     register(&table::TABLE_PACKAGE);

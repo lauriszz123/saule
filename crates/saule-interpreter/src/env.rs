@@ -4,8 +4,8 @@
 //! body, etc.) creates a child via [`Environment::with_parent`] and is
 //! dropped when execution leaves the scope.
 
-use std::cell::RefCell;
 use crate::fxhash::FxHashMap as HashMap;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -119,7 +119,10 @@ impl Environment {
             .and_then(|c| resolve_static_write(c, name))
         {
             Some(StaticTarget::Field(owner)) => {
-                owner.static_fields.borrow_mut().insert(name.to_string(), value);
+                owner
+                    .static_fields
+                    .borrow_mut()
+                    .insert(name.to_string(), value);
                 return true;
             }
             // Assigning to a static *method*'s name. `static_methods` is

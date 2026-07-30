@@ -281,7 +281,10 @@ fn long_parameter_lists_wrap() {
     let src = "class Main\n  static fn wide(alpha: integer, bravo: integer, charlie: integer, delta: integer, echo: integer, foxtrot: integer) -> integer\n    return alpha\n  end\nend\n";
     let out = format_str(src).expect("format");
     assert!(out.contains("wide(\n"), "params did not wrap:\n{out}");
-    assert!(out.contains(") -> integer"), "return type misplaced:\n{out}");
+    assert!(
+        out.contains(") -> integer"),
+        "return type misplaced:\n{out}"
+    );
 }
 
 /// Wrapped lists must not emit a trailing comma: unlike table literals, the
@@ -306,7 +309,10 @@ fn wrapped_lists_reparse() {
 fn short_calls_stay_inline() {
     let src = "class Main\n  static fn main()\n    println(1, 2, 3)\n  end\nend\n";
     let out = format_str(src).expect("format");
-    assert!(out.contains("println(1, 2, 3)"), "short call was wrapped:\n{out}");
+    assert!(
+        out.contains("println(1, 2, 3)"),
+        "short call was wrapped:\n{out}"
+    );
 }
 
 /// Float literals keep the spelling the author chose. The AST only carries the
@@ -327,7 +333,15 @@ class Main
 end
 ";
     let out = format_with_comments(src).expect("format");
-    for needle in ["= 0f", "= .5", "= 1.50", "= -.25", "= 2F", "case 0f", "case -1.0"] {
+    for needle in [
+        "= 0f",
+        "= .5",
+        "= 1.50",
+        "= -.25",
+        "= 2F",
+        "case 0f",
+        "case -1.0",
+    ] {
         assert!(
             out.contains(needle),
             "literal {needle:?} was rewritten:\n{out}"
@@ -366,7 +380,10 @@ fn indent_width_is_configurable() {
             ..FmtOptions::default()
         },
     );
-    assert!(four.contains("\n    static fn main()"), "want 4 spaces:\n{four}");
+    assert!(
+        four.contains("\n    static fn main()"),
+        "want 4 spaces:\n{four}"
+    );
 
     let tabs = saule_fmt::format_module_with_options(
         &module,

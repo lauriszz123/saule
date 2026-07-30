@@ -1,7 +1,7 @@
 //! `class` declarations, field templates, and instance state.
 
-use std::cell::RefCell;
 use crate::fxhash::FxHashMap as HashMap;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use saule_ast::{Expr, Spanned};

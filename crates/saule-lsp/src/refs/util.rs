@@ -25,7 +25,11 @@ pub(super) fn is_ident_byte(b: u8) -> bool {
 /// non-identifier bytes) inside `source[range]`. Returns the absolute
 /// byte range of the match, or `None` if `name` doesn't appear there
 /// as a standalone identifier.
-pub(super) fn locate_word_in(source: &str, range: &Range<usize>, name: &str) -> Option<Range<usize>> {
+pub(super) fn locate_word_in(
+    source: &str,
+    range: &Range<usize>,
+    name: &str,
+) -> Option<Range<usize>> {
     let end = range.end.min(source.len());
     let start = range.start.min(end);
     let slice = source.get(start..end)?;
@@ -132,7 +136,11 @@ pub(super) fn inferred_type_of(
 ) -> Option<Type> {
     match init {
         Expr::Self_ => enclosing_class.as_ref().map(|c| Type::Named(c.clone())),
-        Expr::Ident(n) => locals.iter().rev().find(|l| &l.name == n).map(|l| l.ty.clone()),
+        Expr::Ident(n) => locals
+            .iter()
+            .rev()
+            .find(|l| &l.name == n)
+            .map(|l| l.ty.clone()),
         Expr::Call { callee, .. } => {
             if let Expr::Ident(n) = &callee.value
                 && with_classes(|r| r.contains_key(n))
@@ -177,11 +185,7 @@ pub(super) fn locate_import_path(
     let tail = source.get(after_from..end)?;
     let start = after_from + (tail.len() - tail.trim_start().len());
 
-    if start < end {
-        Some(start..end)
-    } else {
-        None
-    }
+    if start < end { Some(start..end) } else { None }
 }
 
 /// Find the byte range of `path`'s string-literal occurrence inside an

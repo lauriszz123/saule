@@ -106,7 +106,10 @@ fn assign_member(
 fn set_static_in_chain(class: &Rc<ClassObject>, name: &str, value: Value) -> bool {
     match class.declaring_static_field(name) {
         Some(owner) => {
-            owner.static_fields.borrow_mut().insert(name.to_string(), value);
+            owner
+                .static_fields
+                .borrow_mut()
+                .insert(name.to_string(), value);
             true
         }
         None => false,

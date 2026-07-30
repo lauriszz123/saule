@@ -12,8 +12,8 @@ use saule_semantic::{
 };
 
 use super::util::{
-    contains, inferred_type_of, locate_import_path, locate_word_in, member_name_span,
-    named_type, strip_nullable, LocalBind,
+    LocalBind, contains, inferred_type_of, locate_import_path, locate_word_in, member_name_span,
+    named_type, strip_nullable,
 };
 use super::{Resolved, Symbol};
 
@@ -59,8 +59,7 @@ impl<'a> ResolveCx<'a> {
     fn enter_function(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
         let saved = std::mem::take(&mut self.locals);
         for p in params {
-            let def_span =
-                locate_word_in(self.source, &p.span, &p.name).unwrap_or(p.span.clone());
+            let def_span = locate_word_in(self.source, &p.span, &p.name).unwrap_or(p.span.clone());
             self.locals.push(LocalBind {
                 name: p.name.clone(),
                 def_span,
@@ -104,7 +103,9 @@ impl<'a> ResolveCx<'a> {
                 }
                 None
             }
-            Expr::MethodCall { obj: inner, method, .. } => {
+            Expr::MethodCall {
+                obj: inner, method, ..
+            } => {
                 let inner_class = self.receiver_class(&inner.value)?;
                 let sig = lookup_method(&inner_class, method)?;
                 named_type(sig.return_ty.as_ref()?)
@@ -163,27 +164,40 @@ impl<'a> ResolveCx<'a> {
         }
         match &s.value {
             Stmt::Decl(d) => self.visit_decl(d),
-            Stmt::Local { name, ty, value, .. } => {
+            Stmt::Local {
+                name, ty, value, ..
+            } => {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
                 if let Some(span) = locate_word_in(self.source, &s.span, name) {
-                    self.record(span.clone(), Symbol::Local {
-                        name: name.clone(),
-                        def_span: span,
-                    });
+                    self.record(
+                        span.clone(),
+                        Symbol::Local {
+                            name: name.clone(),
+                            def_span: span,
+                        },
+                    );
                 }
-                self.push_local_binding(name, ty.clone(), value.as_ref().map(|v| &v.value), &s.span);
+                self.push_local_binding(
+                    name,
+                    ty.clone(),
+                    value.as_ref().map(|v| &v.value),
+                    &s.span,
+                );
             }
             Stmt::LocalMulti { names, values } => {
                 for v in values {
                     self.visit_expr(v);
                 }
                 for (i, (name, name_span, ty)) in names.iter().enumerate() {
-                    self.record(name_span.clone(), Symbol::Local {
-                        name: name.clone(),
-                        def_span: name_span.clone(),
-                    });
+                    self.record(
+                        name_span.clone(),
+                        Symbol::Local {
+                            name: name.clone(),
+                            def_span: name_span.clone(),
+                        },
+                    );
                     let init = values.get(i).map(|v| &v.value);
                     self.push_local_binding(name, ty.clone(), init, &s.span);
                 }
@@ -258,17 +272,22 @@ impl<'a> ResolveCx<'a> {
                 if let Some(st) = step {
                     self.visit_expr(st);
                 }
-                let span = locate_word_in(self.source, &s.span, var)
-                    .unwrap_or_else(|| s.span.clone());
-                self.record(span.clone(), Symbol::Local {
-                    name: var.clone(),
-                    def_span: span.clone(),
-                });
+                let span =
+                    locate_word_in(self.source, &s.span, var).unwrap_or_else(|| s.span.clone());
+                self.record(
+                    span.clone(),
+                    Symbol::Local {
+                        name: var.clone(),
+                        def_span: span.clone(),
+                    },
+                );
                 let saved = self.locals.len();
                 self.locals.push(LocalBind {
                     name: var.clone(),
                     def_span: span,
-                    ty: var_ty.clone().unwrap_or_else(|| Type::Named("integer".into())),
+                    ty: var_ty
+                        .clone()
+                        .unwrap_or_else(|| Type::Named("integer".into())),
                 });
                 for s in body {
                     self.visit_stmt(s);
@@ -281,10 +300,13 @@ impl<'a> ResolveCx<'a> {
                 for (name, ty) in vars {
                     let span = locate_word_in(self.source, &s.span, name)
                         .unwrap_or_else(|| s.span.clone());
-                    self.record(span.clone(), Symbol::Local {
-                        name: name.clone(),
-                        def_span: span.clone(),
-                    });
+                    self.record(
+                        span.clone(),
+                        Symbol::Local {
+                            name: name.clone(),
+                            def_span: span.clone(),
+                        },
+                    );
                     self.locals.push(LocalBind {
                         name: name.clone(),
                         def_span: span,
@@ -315,10 +337,13 @@ impl<'a> ResolveCx<'a> {
                 });
                 let span = locate_word_in(self.source, &s.span, catch_var)
                     .unwrap_or_else(|| s.span.clone());
-                self.record(span.clone(), Symbol::Local {
-                    name: catch_var.clone(),
-                    def_span: span.clone(),
-                });
+                self.record(
+                    span.clone(),
+                    Symbol::Local {
+                        name: catch_var.clone(),
+                        def_span: span.clone(),
+                    },
+                );
                 let saved = self.locals.len();
                 self.locals.push(LocalBind {
                     name: catch_var.clone(),
@@ -345,7 +370,8 @@ impl<'a> ResolveCx<'a> {
             Some(e) => self.infer_local_ty(e),
             None => Type::Named("any".into()),
         });
-        let span = locate_word_in(self.source, stmt_span, name).unwrap_or_else(|| stmt_span.clone());
+        let span =
+            locate_word_in(self.source, stmt_span, name).unwrap_or_else(|| stmt_span.clone());
         self.locals.push(LocalBind {
             name: name.to_string(),
             def_span: span,
@@ -355,8 +381,15 @@ impl<'a> ResolveCx<'a> {
 
     fn push_locals_from_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
-            Stmt::Local { name, ty, value, .. } => {
-                self.push_local_binding(name, ty.clone(), value.as_ref().map(|v| &v.value), &s.span);
+            Stmt::Local {
+                name, ty, value, ..
+            } => {
+                self.push_local_binding(
+                    name,
+                    ty.clone(),
+                    value.as_ref().map(|v| &v.value),
+                    &s.span,
+                );
             }
             Stmt::LocalMulti { names, values } => {
                 for (i, (name, _, ty)) in names.iter().enumerate() {
@@ -380,10 +413,7 @@ impl<'a> ResolveCx<'a> {
         }
         match &d.value {
             Decl::Function {
-                name,
-                params,
-                body,
-                ..
+                name, params, body, ..
             } => {
                 if let Some(span) = locate_word_in(self.source, &d.span, name) {
                     self.record(span, Symbol::Function(name.clone()));
@@ -391,10 +421,13 @@ impl<'a> ResolveCx<'a> {
                 self.enter_function(params, |this| {
                     for p in params {
                         if let Some(span) = locate_word_in(this.source, &p.span, &p.name) {
-                            this.record(span.clone(), Symbol::Local {
-                                name: p.name.clone(),
-                                def_span: span,
-                            });
+                            this.record(
+                                span.clone(),
+                                Symbol::Local {
+                                    name: p.name.clone(),
+                                    def_span: span,
+                                },
+                            );
                         }
                         if let Some(def) = &p.default {
                             this.visit_expr(def);
@@ -420,7 +453,12 @@ impl<'a> ResolveCx<'a> {
                     self.record(span, Symbol::Interface(name.clone()));
                 }
             }
-            Decl::Enum { name, variants, methods, .. } => {
+            Decl::Enum {
+                name,
+                variants,
+                methods,
+                ..
+            } => {
                 if let Some(span) = locate_word_in(self.source, &d.span, name) {
                     self.record(span, Symbol::Enum(name.clone()));
                 }
@@ -430,10 +468,13 @@ impl<'a> ResolveCx<'a> {
                         EnumVariant::Tuple { name, fields } => (name.as_str(), Some(fields)),
                     };
                     if let Some(span) = locate_word_in(self.source, &v.span, vname) {
-                        self.record(span, Symbol::EnumVariant {
-                            enum_name: name.clone(),
-                            variant: vname.to_string(),
-                        });
+                        self.record(
+                            span,
+                            Symbol::EnumVariant {
+                                enum_name: name.clone(),
+                                variant: vname.to_string(),
+                            },
+                        );
                     }
                     if let Some(fs) = fields {
                         for p in fs {
@@ -452,9 +493,7 @@ impl<'a> ResolveCx<'a> {
                 }
                 self.enclosing_class = prev;
             }
-            Decl::Import {
-                path, quoted, ..
-            } => {
+            Decl::Import { path, quoted, .. } => {
                 // Find the path inside the import statement — quoted between
                 // the matching quotes, bare at the end of the declaration.
                 if let Some(span) = locate_import_path(self.source, &d.span, path, *quoted) {
@@ -472,10 +511,13 @@ impl<'a> ResolveCx<'a> {
         match &m.value {
             ClassMember::Field { name, default, .. } => {
                 if let Some(span) = locate_word_in(self.source, &m.span, name) {
-                    self.record(span, Symbol::Field {
-                        class: class.clone(),
-                        name: name.clone(),
-                    });
+                    self.record(
+                        span,
+                        Symbol::Field {
+                            class: class.clone(),
+                            name: name.clone(),
+                        },
+                    );
                 }
                 if let Some(def) = default {
                     self.visit_expr(def);
@@ -490,18 +532,24 @@ impl<'a> ResolveCx<'a> {
             return;
         }
         if let Some(span) = locate_word_in(self.source, &meth.span, &meth.name) {
-            self.record(span, Symbol::Method {
-                class: class.to_string(),
-                name: meth.name.clone(),
-            });
+            self.record(
+                span,
+                Symbol::Method {
+                    class: class.to_string(),
+                    name: meth.name.clone(),
+                },
+            );
         }
         self.enter_function(&meth.params, |this| {
             for p in &meth.params {
                 if let Some(span) = locate_word_in(this.source, &p.span, &p.name) {
-                    this.record(span.clone(), Symbol::Local {
-                        name: p.name.clone(),
-                        def_span: span,
-                    });
+                    this.record(
+                        span.clone(),
+                        Symbol::Local {
+                            name: p.name.clone(),
+                            def_span: span,
+                        },
+                    );
                 }
                 if let Some(def) = &p.default {
                     this.visit_expr(def);
@@ -521,10 +569,13 @@ impl<'a> ResolveCx<'a> {
             Expr::Cast { value, .. } => self.visit_expr(value),
             Expr::Ident(name) => {
                 if let Some(local) = self.lookup_local(name) {
-                    self.record(e.span.clone(), Symbol::Local {
-                        name: name.clone(),
-                        def_span: local.def_span.clone(),
-                    });
+                    self.record(
+                        e.span.clone(),
+                        Symbol::Local {
+                            name: name.clone(),
+                            def_span: local.def_span.clone(),
+                        },
+                    );
                 } else if with_classes(|r| r.contains_key(name)) {
                     self.record(e.span.clone(), Symbol::Class(name.clone()));
                 } else if with_interfaces(|r| r.contains_key(name)) {
@@ -546,8 +597,7 @@ impl<'a> ResolveCx<'a> {
                 }
             }
             Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
-                if let Some(span) =
-                    member_name_span(self.source, obj.span.end, e.span.end, name)
+                if let Some(span) = member_name_span(self.source, obj.span.end, e.span.end, name)
                     && contains(&span, self.offset)
                 {
                     // `self.super(...)` names no member of the enclosing
@@ -596,16 +646,22 @@ impl<'a> ResolveCx<'a> {
                             );
                             return;
                         }
-                        self.record(span, Symbol::Field {
-                            class,
-                            name: name.clone(),
-                        });
+                        self.record(
+                            span,
+                            Symbol::Field {
+                                class,
+                                name: name.clone(),
+                            },
+                        );
                         return;
                     }
-                    self.record(span, Symbol::Field {
-                        class: String::new(),
-                        name: name.clone(),
-                    });
+                    self.record(
+                        span,
+                        Symbol::Field {
+                            class: String::new(),
+                            name: name.clone(),
+                        },
+                    );
                     return;
                 }
                 self.visit_expr(obj);
@@ -621,15 +677,17 @@ impl<'a> ResolveCx<'a> {
                 }
             }
             Expr::MethodCall { obj, method, args } => {
-                if let Some(span) =
-                    member_name_span(self.source, obj.span.end, e.span.end, method)
+                if let Some(span) = member_name_span(self.source, obj.span.end, e.span.end, method)
                     && contains(&span, self.offset)
                 {
                     if let Some(class) = self.receiver_class(&obj.value) {
-                        self.record(span, Symbol::Method {
-                            class,
-                            name: method.clone(),
-                        });
+                        self.record(
+                            span,
+                            Symbol::Method {
+                                class,
+                                name: method.clone(),
+                            },
+                        );
                     }
                     return;
                 }
@@ -668,7 +726,8 @@ impl<'a> ResolveCx<'a> {
             }
             Expr::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
-                let scrut_ty = inferred_type_of(&scrutinee.value, &self.locals, &self.enclosing_class);
+                let scrut_ty =
+                    inferred_type_of(&scrutinee.value, &self.locals, &self.enclosing_class);
                 for arm in arms {
                     let saved = self.locals.len();
                     self.bind_pattern(&arm.pattern, scrut_ty.as_ref());
@@ -711,7 +770,11 @@ impl<'a> ResolveCx<'a> {
             return;
         }
         match &p.value {
-            Pattern::Variant { enum_name, variant, fields } => {
+            Pattern::Variant {
+                enum_name,
+                variant,
+                fields,
+            } => {
                 // Enum name and variant name appear in source as
                 // `Enum.Variant(...)`. Locate each within the pattern
                 // span; the enum name comes first, then the variant
@@ -722,17 +785,18 @@ impl<'a> ResolveCx<'a> {
                     self.record(espan, Symbol::Enum(enum_name.clone()));
                     return;
                 }
-                let after_enum = p.span.start
-                    + enum_name.len()
-                    + 1; // dot
+                let after_enum = p.span.start + enum_name.len() + 1; // dot
                 let lookup_range = after_enum..p.span.end;
                 if let Some(vspan) = locate_word_in(self.source, &lookup_range, variant)
                     && contains(&vspan, self.offset)
                 {
-                    self.record(vspan, Symbol::EnumVariant {
-                        enum_name: enum_name.clone(),
-                        variant: variant.clone(),
-                    });
+                    self.record(
+                        vspan,
+                        Symbol::EnumVariant {
+                            enum_name: enum_name.clone(),
+                            variant: variant.clone(),
+                        },
+                    );
                     return;
                 }
                 for f in fields {
@@ -748,10 +812,13 @@ impl<'a> ResolveCx<'a> {
                 if let Some(span) = locate_word_in(self.source, &p.span, name)
                     && contains(&span, self.offset)
                 {
-                    self.record(span.clone(), Symbol::Local {
-                        name: name.clone(),
-                        def_span: span,
-                    });
+                    self.record(
+                        span.clone(),
+                        Symbol::Local {
+                            name: name.clone(),
+                            def_span: span,
+                        },
+                    );
                 }
             }
             _ => {}

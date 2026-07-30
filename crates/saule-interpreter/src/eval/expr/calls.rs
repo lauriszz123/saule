@@ -81,9 +81,7 @@ fn native_positional_args(
     args: &[EvaluatedArg],
     span: &std::ops::Range<usize>,
 ) -> Result<Vec<Value>, RuntimeError> {
-    let has_named = args
-        .iter()
-        .any(|a| matches!(a, EvaluatedArg::Named { .. }));
+    let has_named = args.iter().any(|a| matches!(a, EvaluatedArg::Named { .. }));
 
     if !has_named {
         return Ok(args
@@ -136,7 +134,10 @@ fn native_positional_args(
                 slots[next_positional] = Some(value.clone());
                 next_positional += 1;
             }
-            EvaluatedArg::Named { name: arg_name, value } => {
+            EvaluatedArg::Named {
+                name: arg_name,
+                value,
+            } => {
                 seen_named = true;
                 let Some(idx) = param_names.iter().position(|p| p == arg_name) else {
                     return Err(RuntimeError::TypeError {

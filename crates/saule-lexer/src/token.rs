@@ -56,6 +56,7 @@ pub enum Token {
     Star,
     Slash,
     Percent,
+    Caret, // `^` exponentiation
     EqEq,
     NotEq,
     Lt,
