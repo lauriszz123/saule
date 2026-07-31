@@ -78,6 +78,24 @@ local q: float = float(7) / 2.0    -- 3.5
 
 Because mixing kinds is a compile error, `7 / 2.0` won't silently produce `3.5` — the checker rejects it and forces an explicit `float(7)` (or `int(2.0)`) so the intent is visible at the call site.
 
+### Exponentiation
+
+`^` raises a number to a power. It binds tighter than every other arithmetic operator — tighter than unary minus, too — and is right-associative:
+
+```saule
+local squared: integer = 5 ^ 2      -- 25
+local tower: integer = 2 ^ 3 ^ 2    -- 512, i.e. 2 ^ (3 ^ 2)
+local neg: integer = -2 ^ 2         -- -4, i.e. -(2 ^ 2)
+local root: float = 2.0 ^ 0.5       -- 1.4142135623730951
+```
+
+Like `/`, `^` follows the type of its operands rather than promoting: `integer ^ integer` stays an `integer`. A negative exponent has no integer answer, so it is an error — convert first if you want one:
+
+```saule
+local half: float = 2.0 ^ -1.0      -- 0.5
+local bad: integer = 2 ^ -1         -- ERROR: negative exponent on integers
+```
+
 ### `nil` Is a Value, Not a Binding Type
 
 `nil` exists only as the **value** that inhabits a nullable slot. Writing `: nil` as a binding type is rejected so the meaning of the type system stays "every variable has a real type, and `?` says whether it can be empty":

@@ -237,6 +237,86 @@ println(goblin.getName() .. " alive? " .. (goblin.isAlive() and "yes" or "no"))
 `,
 	},
 	{
+		id: 'operators',
+		label: 'Operator overloading',
+		blurb: 'Classes define what `+`, `==`, `<` and `tostring` mean for them.',
+		source: `-- Operators are interfaces. A class opts into \`+\`, \`-\`, \`==\`, \`<\` or
+-- \`tostring\` by implementing the matching \`Op*\` contract — Saule's answer
+-- to Lua's __add / __sub / __eq metamethods.
+
+class Vec2 implements OpAdd<Vec2, Vec2>, OpSub<Vec2, Vec2>, OpNeg<Vec2>, OpEq<Vec2>, OpToString
+    local x: float
+    local y: float
+
+    fn init(x: float, y: float)
+        self.x = x
+        self.y = y
+    end
+
+    fn add(other: Vec2) -> Vec2
+        return Vec2(self.x + other.x, self.y + other.y)
+    end
+
+    fn sub(other: Vec2) -> Vec2
+        return Vec2(self.x - other.x, self.y - other.y)
+    end
+
+    fn neg() -> Vec2
+        return Vec2(-self.x, -self.y)
+    end
+
+    fn equals(other: Vec2) -> boolean
+        return self.x == other.x and self.y == other.y
+    end
+
+    fn toString() -> string
+        return "(" .. self.x .. ", " .. self.y .. ")"
+    end
+end
+
+local a: Vec2 = Vec2(1.0, 2.0)
+local b: Vec2 = Vec2(3.0, 4.0)
+
+-- The result type comes from the method, so \`a + b\` is a \`Vec2\`.
+local sum: Vec2 = a + b
+
+println(sum)                     -- toString() runs here
+println(a - b)
+println(-a)
+println(a == Vec2(1.0, 2.0))     -- equals(), not pointer identity
+
+-- One \`compare\` drives all four ordering operators. It returns a negative
+-- number when self sorts first, zero when equivalent, positive when last.
+class Version implements OpCompare<Version>
+    local major: integer
+    local minor: integer
+
+    fn init(major: integer, minor: integer)
+        self.major = major
+        self.minor = minor
+    end
+
+    fn compare(other: Version) -> integer
+        if self.major != other.major then
+            return self.major - other.major
+        end
+
+        return self.minor - other.minor
+    end
+end
+
+local old: Version = Version(1, 9)
+local fresh: Version = Version(2, 0)
+
+println(old < fresh)
+println(fresh >= old)
+
+-- \`^\` is exponentiation: right-associative and tighter than unary minus.
+println(2 ^ 10)
+println(2 ^ 3 ^ 2)
+`,
+	},
+	{
 		id: 'fizzbuzz',
 		label: 'FizzBuzz',
 		blurb: 'Loops and conditionals, the traditional way.',

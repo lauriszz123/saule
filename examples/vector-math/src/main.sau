@@ -1,0 +1,63 @@
+import Vec2 from "vec2"
+import Path from "path"
+
+class Main
+	static fn main()
+		local a: Vec2 = Vec2(1.0, 2.0)
+		local b: Vec2 = Vec2(3.0, 4.0)
+
+		println("a         = " .. a)
+		println("b         = " .. b)
+		println("a + b     = " .. (a + b))
+		println("b - a     = " .. (b - a))
+		println("a * b     = " .. (a * b))
+		println("-a        = " .. (-a))
+
+		-- `==` runs Vec2.equals, so an independently built vector matches.
+		println("a == (1,2)? " .. tostring(a == Vec2(1.0, 2.0)))
+		println("a == b?     " .. tostring(a == b))
+
+		Main.simulate()
+		Main.walk()
+	end
+
+	-- A euler step reads like the physics it models once `+` and `*` mean
+	-- something for vectors.
+	static fn simulate()
+		println("")
+		println("-- falling body --")
+
+		local gravity: Vec2 = Vec2(0.0, -9.81)
+		local position: Vec2 = Vec2(0.0, 100.0)
+		local velocity: Vec2 = Vec2(12.0, 0.0)
+		local dt: float = 0.5
+
+		for step = 1, 4 do
+			velocity = velocity + gravity.scale(dt)
+			position = position + velocity.scale(dt)
+
+			printf("t=%.1f  pos=%s\n", float(step) * dt, tostring(position))
+		end
+	end
+
+	-- `#` and `..` on a class, via OpLen and OpConcat.
+	static fn walk()
+		println("")
+		println("-- paths --")
+
+		local first: Path = Path({ Vec2(0.0, 0.0), Vec2(3.0, 4.0) })
+		local second: Path = Path({ Vec2(3.0, 8.0), Vec2(0.0, 8.0) })
+
+		-- `..` builds a Path here, not a string — that is OpConcat.
+		local whole: Path = first .. second
+
+		-- Note the `tostring`. Once a class overloads `..`, putting it on
+		-- the left of a `..` calls *its* `concat`, so `"x = " .. path` is a
+		-- type error rather than string interpolation. `Vec2` above has no
+		-- OpConcat, which is why it can be interpolated directly.
+		printf("first  = %s  (#%d)\n", tostring(first), #first)
+		printf("second = %s  (#%d)\n", tostring(second), #second)
+		printf("joined = %s  (#%d)\n", tostring(whole), #whole)
+		printf("travel^2 = %.1f\n", whole.travelSquared())
+	end
+end

@@ -304,6 +304,14 @@ const EXAMPLES = [
 		run: 'saule run -- .',
 		files: ['src/main.sau'],
 	},
+	{
+		dir: 'vector-math',
+		title: 'Operator Overloading',
+		blurb:
+			'A `Vec2` that adds, negates, compares and prints like a built-in number, plus a `Path` where `#` counts points and concatenation joins two paths. Shows how each operator is an interface whose method supplies both the behaviour and the result type.',
+		run: 'saule run',
+		files: ['src/vec2.sau', 'src/path.sau', 'src/main.sau'],
+	},
 	// `json_usage` is deliberately absent: as of this writing it does not
 	// typecheck (`Json.decode` returns `any?`, which the example assigns
 	// straight to a `table?`). It stays linked under "Also in the repository"

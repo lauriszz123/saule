@@ -1472,3 +1472,119 @@ fn a_barrel_does_not_forward_a_private_function() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ─── closures see the scope around them ─────────────────────────────────────
+
+/// A lambda captures the names around it, so hover inside one has to
+/// see them.
+///
+/// The walker used to start every lambda body with an empty scope, so a
+/// captured name resolved to nothing and hover fell through to the next
+/// node out — the lambda itself. A cursor on `rebuild()` four lines into
+/// a callback answered `(expr): fn(boolean) -> any`, describing the
+/// callback rather than the token under the cursor.
+#[test]
+fn a_lambda_body_sees_the_enclosing_scope() {
+    let src = "\
+class Panel
+  fn build(scratch: table) -> nothing
+    local rebuild: function = fn()
+      print(1)
+    end
+    local count: integer = 0
+    self.each(fn(next: boolean)
+      scratch.sound = next
+      rebuild()
+      print(count)
+    end)
+  end
+  fn each(f: function) -> nothing
+  end
+end
+";
+    // Captured parameter, captured local, and the lambda's own param.
+    assert_eq!(
+        hover_src_at(src, "scratch.sound = next", 1).as_deref(),
+        Some("```saule\n(parameter) scratch: table\n```")
+    );
+    assert_eq!(
+        hover_src_at(src, "rebuild()\n", 1).as_deref(),
+        Some("```saule\n(local) rebuild: fn() -> any\n```")
+    );
+    assert_eq!(
+        hover_src_at(src, "print(count)", "print(".len()).as_deref(),
+        Some("```saule\n(local) count: integer\n```")
+    );
+    assert_eq!(
+        hover_src_at(src, "next\n", 0).as_deref(),
+        Some("```saule\n(parameter) next: boolean\n```")
+    );
+}
+
+/// A method body still does *not* see a sibling method's locals — only
+/// lambdas inherit.
+#[test]
+fn a_method_body_does_not_see_a_siblings_locals() {
+    let src = "\
+class Panel
+  fn a() -> nothing
+    local secret: integer = 1
+  end
+  fn b() -> nothing
+    print(secret)
+  end
+end
+";
+    let md = hover_src_at(src, "print(secret)", "print(".len());
+    assert!(
+        md.as_deref().is_none_or(|m| !m.contains("(local) secret")),
+        "leaked a sibling method's local: {md:?}"
+    );
+}
+
+// ─── enum variants are members too ──────────────────────────────────────────
+
+/// `CrossAxisAlignment.Stretch` is a variant, not a class member. Enums
+/// reach the member path on equal terms with classes, so a lookup that
+/// only consulted the class registry reported `(unknown)` on a name
+/// declared three lines up.
+#[test]
+fn an_enum_variant_hovers_as_a_variant() {
+    let src = "\
+enum Align
+  Start
+  Stretch
+end
+
+enum Event
+  Click(x: integer, y: integer)
+end
+
+fn probe() -> nothing
+  local a = Align.Stretch
+  local e = Event.Click(1, 2)
+end
+";
+    assert_eq!(
+        hover_src_at(src, "Align.Stretch\n", "Align.".len()).as_deref(),
+        Some("```saule\n(variant) Align.Stretch\n```")
+    );
+    // A tuple variant carries its arity.
+    assert_eq!(
+        hover_src_at(src, "Event.Click(1", "Event.".len()).as_deref(),
+        Some("```saule\n(variant) Event.Click(_, _)\n```")
+    );
+    // A name the enum really doesn't have is still reported as a miss.
+    let md = hover_src_at(src, "Align.Stretch\n", "Align.".len()).unwrap();
+    assert!(!md.contains("(unknown)"), "got: {md}");
+}
+
+/// An untyped `table` accepts any key, so "no member" would be a false
+/// statement about correct code.
+#[test]
+fn a_key_on_an_untyped_table_is_not_an_unknown_member() {
+    let src = "fn probe(scratch: table) -> nothing\n  scratch.sound = true\nend\n";
+    let md = hover_src_at(src, "scratch.sound", "scratch.".len() + 1).expect("hover");
+    assert!(md.contains("(key) sound: any"), "got: {md}");
+    assert!(!md.contains("No member"), "got: {md}");
+}

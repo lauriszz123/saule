@@ -247,12 +247,23 @@ impl<'a> Cx<'a> {
         saule_docs::extract(self.source, anchor).filter(|d| !d.is_empty())
     }
 
-    /// Walk into a function/method/lambda body with a fresh local
-    /// scope. Saves and restores the outer scope so a hover request
-    /// inside a closure doesn't see locals from the enclosing function
-    /// (which would be confusing) and vice versa.
-    fn enter_function(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
-        let saved = std::mem::take(&mut self.locals);
+    /// Walk into a lambda body, *keeping* the enclosing scope and
+    /// stacking the lambda's own parameters on top of it.
+    ///
+    /// A lambda is a closure: the names around it are exactly the names
+    /// its body can use. Starting it with a fresh scope — as this used
+    /// to — meant every captured name went unresolved inside the body,
+    /// and hover fell through to the next node out. So a cursor on
+    /// `rebuild()` or `scratch` inside `onChanged: fn(next: boolean)`
+    /// answered with the *lambda's own type*, `(expr): fn(boolean) ->
+    /// any`, which describes the callback rather than the token the
+    /// cursor is on.
+    ///
+    /// Function and method declarations still reset — see
+    /// [`Cx::enter_function_with_return`]. Their bodies genuinely do not
+    /// see a sibling method's locals.
+    fn enter_lambda(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
+        let mark = self.locals.len();
         for p in params {
             self.locals.push(LocalVar {
                 name: p.name.clone(),
@@ -261,10 +272,12 @@ impl<'a> Cx<'a> {
             });
         }
         body(self);
-        self.locals = saved;
+        self.locals.truncate(mark);
     }
 
-    /// Like [`enter_function`] but also tracks the function's declared
+    /// Like [`Cx::enter_lambda`] but for a `fn` / method declaration:
+    /// the outer scope is replaced rather than extended, since a method
+    /// body cannot see a sibling's locals. Also tracks the declared
     /// return type so a hover on the `return` keyword inside the body
     /// can surface it.
     fn enter_function_with_return(
@@ -1255,7 +1268,7 @@ impl<'a> Cx<'a> {
                     }
                 }
                 let params = params.clone();
-                self.enter_function(&params, |this| match body {
+                self.enter_lambda(&params, |this| match body {
                     saule_ast::LambdaBody::Expr(b) => this.visit_expr(b),
                     saule_ast::LambdaBody::Block(b) => this.visit_block(b),
                 });

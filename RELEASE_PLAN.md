@@ -191,8 +191,9 @@ This is not specific to the new workflows. `Check website` and `Deploy website`
 have failed on **every run since they were added on 2026-07-29** — they have
 never once succeeded. The site is live only because
 `www/scripts/deploy-gh-pages.sh` pushes the built output to the `gh-pages`
-branch by hand, and GitHub's own managed "pages build and deployment" job is
-billed differently, so it still runs.
+branch by hand (`deploy-gh-pages.ps1` is the same thing for PowerShell), and
+GitHub's own managed "pages build and deployment" job is billed differently, so
+it still runs.
 
 The repository is public, so Actions minutes are free — this is an
 account-level lock (payment method, spending limit, or an unpaid invoice), not

@@ -1,0 +1,65 @@
+-- A 2D vector that behaves like a number.
+--
+-- Each `Op*` interface in the `implements` list turns on one operator. The
+-- method it names is what actually runs, and its return type is what the
+-- expression evaluates to — so `a + b` below is a `Vec2`, not an `any`.
+
+export class Vec2 implements OpAdd<Vec2, Vec2>, OpSub<Vec2, Vec2>, OpMul<Vec2, Vec2>, OpNeg<Vec2>, OpEq<Vec2>, OpToString
+	local x: float
+	local y: float
+
+	fn init(x: float, y: float)
+		self.x = x
+		self.y = y
+	end
+
+	fn getX() -> float
+		return self.x
+	end
+
+	fn getY() -> float
+		return self.y
+	end
+
+	-- `a + b`
+	fn add(other: Vec2) -> Vec2
+		return Vec2(self.x + other.x, self.y + other.y)
+	end
+
+	-- `a - b`
+	fn sub(other: Vec2) -> Vec2
+		return Vec2(self.x - other.x, self.y - other.y)
+	end
+
+	-- `a * b` — componentwise. `scale` below covers the by-a-float case,
+	-- because arithmetic dispatches on the *left* operand and a `float` on
+	-- the left has no idea what a `Vec2` is.
+	fn mul(other: Vec2) -> Vec2
+		return Vec2(self.x * other.x, self.y * other.y)
+	end
+
+	-- `-a`
+	fn neg() -> Vec2
+		return Vec2(-self.x, -self.y)
+	end
+
+	-- `a == b` / `a != b`. Without this, `==` compares identity, so two
+	-- separately built vectors holding the same numbers would be unequal.
+	fn equals(other: Vec2) -> boolean
+		return self.x == other.x and self.y == other.y
+	end
+
+	-- `tostring(a)`, and what `print` / `..` use.
+	fn toString() -> string
+		return "(" .. self.x .. ", " .. self.y .. ")"
+	end
+
+	fn scale(k: float) -> Vec2
+		return Vec2(self.x * k, self.y * k)
+	end
+
+	-- `^` is exponentiation, so this reads the way the maths does.
+	fn lengthSquared() -> float
+		return self.x ^ 2.0 + self.y ^ 2.0
+	end
+end

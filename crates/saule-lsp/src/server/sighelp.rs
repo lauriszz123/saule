@@ -83,7 +83,7 @@ impl Backend {
             };
             let _ = saule_semantic::analyze_with_seed(module, seed);
 
-            match answer_from_module(module, offset) {
+            match answer_from_module(module, &source, offset) {
                 Answer::Help(help) => return Some(help),
                 Answer::Suppressed => return None,
                 Answer::Unresolved => {}
@@ -99,7 +99,7 @@ impl Backend {
             };
             let _ = saule_semantic::analyze_with_seed(&module, seed);
 
-            match answer_from_module(&module, offset) {
+            match answer_from_module(&module, &source, offset) {
                 Answer::Help(help) => return Some(help),
                 Answer::Suppressed => return None,
                 Answer::Unresolved => {}
@@ -201,20 +201,29 @@ impl Backend {
 }
 
 fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
-    match hit.callee {
+    // How the call is headed in the popup: the dotted path the reader
+    // wrote, so `Theme.of(...)` and `One.two.three(...)` name themselves
+    // in full rather than collapsing to a bare `of` / `three`.
+    let ml = hit.multiline;
+    let shown = |fallback: &str| -> String {
+        hit.display.clone().unwrap_or_else(|| fallback.to_string())
+    };
+    match &hit.callee {
         CalleeRef::Free(name) => {
+            let name = name.clone();
+            let head = shown(&name);
             if with_classes(|r| r.contains_key(&name)) {
-                return build_help(&name, lookup_method(&name, "init"), &hit.args, offset);
+                return build_help(&head, lookup_method(&name, "init"), &hit.args, offset, ml);
             }
             if let Some(class) = &hit.enclosing_class {
                 if let Some(sig) = lookup_method(class, &name) {
-                    return build_help(&name, Some(sig), &hit.args, offset);
+                    return build_help(&head, Some(sig), &hit.args, offset, ml);
                 }
             }
             // Callback held in a local / parameter: `f(...)` where
             // `f: fn(integer) -> string`. The type carries no parameter
             // names, so they're synthesised.
-            if let Some((params, ret)) = hit.local_fn {
+            if let Some((params, ret)) = hit.local_fn.clone() {
                 let params: Vec<Param> = params
                     .into_iter()
                     .enumerate()
@@ -226,12 +235,12 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                         span: 0..0,
                     })
                     .collect();
-                return build_help_user_fn(&name, &params, &Some(ret), &hit.args, offset);
+                return build_help_user_fn(&head, &params, &Some(ret), &hit.args, offset, ml);
             }
             // User-defined top-level function (collected by the AST
             // walker into `hit.user_fn`).
-            if let Some((params, ret)) = hit.user_fn {
-                return build_help_user_fn(&name, &params, &ret, &hit.args, offset);
+            if let Some((params, ret)) = hit.user_fn.clone() {
+                return build_help_user_fn(&head, &params, &ret, &hit.args, offset, ml);
             }
             // Declared in another file and imported — `showToast`,
             // `showDialog`, and every other helper a UI file reaches
@@ -240,34 +249,36 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             // re-export chains as it goes, so the signature is already
             // in hand and no import graph has to be walked here.
             if let Some(sig) = lookup_function(&name) {
-                return build_help_user_fn(&name, &sig.params, &sig.return_ty, &hit.args, offset);
+                return build_help_user_fn(&head, &sig.params, &sig.return_ty, &hit.args, offset, ml);
             }
             // Bare native (`println`, `assert`, ...).
             if let Some(native) = saule_typeck::sigs::lookup(&name) {
-                return build_help_native(&name, &name, &native, &hit.args, offset);
+                return build_help_native(&head, &name, &native, &hit.args, offset, ml);
             }
             None
         }
         CalleeRef::Method { class, name } => {
-            if let Some(sig) = lookup_method(&class, &name) {
-                return build_help(&name, Some(sig), &hit.args, offset);
+            let head = shown(&format!("{class}.{name}"));
+            if let Some(sig) = lookup_method(class, name) {
+                return build_help(&head, Some(sig), &hit.args, offset, ml);
             }
             // Stdlib value-type instance method (e.g. `file.write` where
             // `file: File`). Native sigs are registered as `File.write`.
             let qname = format!("{class}.{name}");
             if let Some(native) = saule_typeck::sigs::lookup(&qname) {
-                return build_help_native(&name, &qname, &native, &hit.args, offset);
+                return build_help_native(&head, &qname, &native, &hit.args, offset, ml);
             }
             None
         }
         CalleeRef::SuperInit { owner } => build_help(
             &format!("{owner}.init"),
-            lookup_method(&owner, "init"),
+            lookup_method(owner, "init"),
             &hit.args,
             offset,
+            ml,
         ),
         CalleeRef::Variant { display, fields } => {
-            build_help_user_fn(&display, &fields, &None, &hit.args, offset)
+            build_help_user_fn(display, fields, &None, &hit.args, offset, ml)
         }
         CalleeRef::PipeStage(name) => {
             // Resolve the stage like a free call, then drop the first
@@ -275,7 +286,7 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             let sig = hit
                 .enclosing_class
                 .as_ref()
-                .and_then(|c| lookup_method(c, &name))
+                .and_then(|c| lookup_method(c, name))
                 .or_else(|| {
                     hit.user_fn
                         .clone()
@@ -291,12 +302,13 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                 params: sig.params.iter().skip(1).cloned().collect(),
                 ..sig
             };
-            build_help(&name, Some(piped), &hit.args, offset)
+            build_help(name, Some(piped), &hit.args, offset, ml)
         }
         CalleeRef::Native(qname) => {
-            let native = saule_typeck::sigs::lookup(&qname)?;
-            let display = qname.rsplit_once('.').map(|(_, n)| n).unwrap_or(&qname);
-            build_help_native(display, &qname, &native, &hit.args, offset)
+            let native = saule_typeck::sigs::lookup(qname)?;
+            // The qualified name in full — `Os.exists`, not `exists`.
+            let head = shown(qname);
+            build_help_native(&head, qname, &native, &hit.args, offset, ml)
         }
     }
 }
@@ -507,16 +519,19 @@ fn textual_fallback(source: &str, offset: usize) -> Option<SignatureHelp> {
         {
             return build_help_simple(&format!("{owner}.init"), sig, active);
         }
+        // Qualified the same way the AST path qualifies it, so a call
+        // that falls back mid-keystroke doesn't change its heading and
+        // then change back once the buffer parses again.
+        let qname = format!("{recv}.{name}");
         if with_classes(|r| r.contains_key(recv)) {
             if let Some(sig) = lookup_method(recv, name) {
-                return build_help_simple(name, sig, active);
+                return build_help_simple(&qname, sig, active);
             }
         }
         // Stdlib module call (`Os.exists`, `String.find`, ...) or
         // value-type instance method (`File.write`).
-        let qname = format!("{recv}.{name}");
         if let Some(native) = saule_typeck::sigs::lookup(&qname) {
-            return build_help_native_simple(name, &qname, &native, active);
+            return build_help_native_simple(&qname, &qname, &native, active);
         }
         return None;
     }
@@ -555,7 +570,9 @@ fn build_help_simple(
     let arity = sig.params.len();
     let active = active.min(arity.saturating_sub(1));
     let dummy_args: Vec<CallArgInfo> = Vec::new();
-    let mut help = build_help(name, Some(sig), &dummy_args, 0)?;
+    // Single-line: the textual fallback works from raw text with no
+    // argument spans, so it can't tell how the call was laid out.
+    let mut help = build_help(name, Some(sig), &dummy_args, 0, false)?;
     if let Some(s) = help.signatures.first_mut() {
         s.active_parameter = Some(active as u32);
     }
@@ -573,6 +590,7 @@ fn build_help_native(
     sig: &saule_typeck::sigs::NativeSig,
     args: &[CallArgInfo],
     offset: usize,
+    multiline: bool,
 ) -> Option<SignatureHelp> {
     let names = super::native_names::param_names(qname, sig);
     let mut label = String::new();
@@ -580,10 +598,20 @@ fn build_help_native(
     label.push('(');
     let mut param_ranges: Vec<(u32, u32)> = Vec::new();
     let positional_n = sig.params.len();
-    for (i, ty) in sig.params.iter().enumerate() {
-        if i > 0 {
-            label.push_str(", ");
+    // Same separator rule as `render_signature_label`: the comma stays
+    // on the line it ends, the next parameter starts the following one.
+    let sep = |label: &mut String, first: bool| {
+        if !first {
+            label.push(',');
         }
+        if multiline {
+            label.push_str("\n  ");
+        } else if !first {
+            label.push(' ');
+        }
+    };
+    for (i, ty) in sig.params.iter().enumerate() {
+        sep(&mut label, i == 0);
         let start = utf16_len(&label);
         let pname = names.get(i).map(|s| s.as_str()).unwrap_or("value");
         label.push_str(pname);
@@ -593,9 +621,7 @@ fn build_help_native(
         param_ranges.push((start, end));
     }
     if let Some(var_ty) = &sig.variadic {
-        if positional_n > 0 {
-            label.push_str(", ");
-        }
+        sep(&mut label, positional_n == 0);
         let start = utf16_len(&label);
         let vname = names
             .get(positional_n)
@@ -607,6 +633,9 @@ fn build_help_native(
         label.push_str(&render_type(var_ty));
         let end = utf16_len(&label);
         param_ranges.push((start, end));
+    }
+    if multiline && !param_ranges.is_empty() {
+        label.push('\n');
     }
     label.push(')');
     if !sig.returns.is_empty() {
@@ -650,7 +679,7 @@ fn build_help_native_simple(
     let total = sig.params.len() + usize::from(sig.variadic.is_some());
     let active = if total == 0 { 0 } else { active.min(total - 1) };
     let dummy_args: Vec<CallArgInfo> = Vec::new();
-    let mut help = build_help_native(display, qname, sig, &dummy_args, 0)?;
+    let mut help = build_help_native(display, qname, sig, &dummy_args, 0, false)?;
     if let Some(s) = help.signatures.first_mut() {
         s.active_parameter = Some(active as u32);
     }
@@ -667,6 +696,7 @@ fn build_help_user_fn(
     return_ty: &Option<Type>,
     args: &[CallArgInfo],
     offset: usize,
+    multiline: bool,
 ) -> Option<SignatureHelp> {
     use saule_semantic::MethodSig;
     let sig = MethodSig {
@@ -676,7 +706,7 @@ fn build_help_user_fn(
         params: params.to_vec(),
         return_ty: return_ty.clone(),
     };
-    build_help(name, Some(sig), args, offset)
+    build_help(name, Some(sig), args, offset, multiline)
 }
 
 /// Best-effort scan for the enclosing `class Name` whose body brackets
@@ -707,23 +737,31 @@ fn enclosing_class_textual(source: &str, offset: usize) -> Option<String> {
     last
 }
 
-fn build_help(
+/// Render `name(p1: T1, p2: T2, ...) -> R`, or the same across lines
+/// when `multiline`, and record each parameter's `[start, end)` UTF-16
+/// offsets within the label so the editor can highlight the active one.
+///
+/// The multi-line form mirrors the call the reader is looking at: a
+/// twelve-parameter widget written one argument per line gets a
+/// signature shaped the same way, instead of a single line that runs
+/// off the side of the popup.
+fn render_signature_label(
     name: &str,
-    sig: Option<saule_semantic::MethodSig>,
-    args: &[CallArgInfo],
-    offset: usize,
-) -> Option<SignatureHelp> {
-    let sig = sig?;
-    // Render `name(p1: T1, p2: T2, ...)` and remember each param's
-    // [start, end) byte offsets within the rendered label so the
-    // editor can highlight the active one.
-    let mut label = String::new();
-    label.push_str(name);
+    params: &[Param],
+    return_ty: Option<&Type>,
+    multiline: bool,
+) -> (String, Vec<(u32, u32)>) {
+    let mut label = String::from(name);
     label.push('(');
-    let mut param_ranges: Vec<(u32, u32)> = Vec::new();
-    for (i, p) in sig.params.iter().enumerate() {
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    for (i, p) in params.iter().enumerate() {
         if i > 0 {
-            label.push_str(", ");
+            label.push(',');
+        }
+        if multiline {
+            label.push_str("\n  ");
+        } else if i > 0 {
+            label.push(' ');
         }
         let start = utf16_len(&label);
         label.push_str(&p.name);
@@ -735,14 +773,29 @@ fn build_help(
         if p.default.is_some() {
             label.push_str(" = …");
         }
-        let end = utf16_len(&label);
-        param_ranges.push((start, end));
+        ranges.push((start, utf16_len(&label)));
+    }
+    if multiline && !params.is_empty() {
+        label.push('\n');
     }
     label.push(')');
-    if let Some(rt) = &sig.return_ty {
+    if let Some(rt) = return_ty {
         label.push_str(" -> ");
         label.push_str(&render_type(rt));
     }
+    (label, ranges)
+}
+
+fn build_help(
+    name: &str,
+    sig: Option<saule_semantic::MethodSig>,
+    args: &[CallArgInfo],
+    offset: usize,
+    multiline: bool,
+) -> Option<SignatureHelp> {
+    let sig = sig?;
+    let (label, param_ranges) =
+        render_signature_label(name, &sig.params, sig.return_ty.as_ref(), multiline);
 
     let parameters = param_ranges
         .into_iter()
@@ -890,9 +943,35 @@ struct CallHit {
     /// Source span of the entire arg list region — used to disambiguate
     /// nested calls (the smallest enclosing call wins).
     args_span: std::ops::Range<usize>,
+    /// The callee as the reader wrote it — `add`, `Theme.of`,
+    /// `One.two.three`. `None` when the callee isn't a plain dotted
+    /// chain of names, and the resolved owner is used instead.
+    display: Option<String>,
+    /// Whether the call's argument list is spread over more than one
+    /// line in the source. The rendered signature mirrors it, so a call
+    /// written across lines reads as one.
+    multiline: bool,
 }
 
-struct Cx {
+/// The callee written as it appears in the source: `add`, `Theme.of`,
+/// `One.two.three`.
+///
+/// `None` for anything that isn't a plain chain of names — a call
+/// result, an index, a parenthesised expression — where there is no
+/// dotted path to show and the resolved owner is the better answer.
+fn dotted_path(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Ident(n) => Some(n.clone()),
+        Expr::Self_ => Some("self".to_string()),
+        Expr::Member { obj, name } => Some(format!("{}.{name}", dotted_path(&obj.value)?)),
+        _ => None,
+    }
+}
+
+struct Cx<'a> {
+    /// The document text, for deciding whether a call is written across
+    /// lines. Empty when a caller has no source to give.
+    source: &'a str,
     offset: usize,
     locals: Vec<Local>,
     enclosing_class: Option<String>,
@@ -919,7 +998,47 @@ struct Local {
     ty: Type,
 }
 
-impl Cx {
+impl Cx<'_> {
+    /// Whether the call is written across lines, measured from its
+    /// opening paren to the last argument present. Drives the
+    /// one-parameter-per-line rendering, so the popup matches the shape
+    /// of the call the reader is looking at.
+    ///
+    /// Deliberately not the whole `args_span`. For a call the user has
+    /// only just opened (`w.moveTo(|`), [`repair_parse`] closes it by
+    /// appending to the *end of the document*, so that span swallows
+    /// every line in between and would report a freshly-typed call as
+    /// multi-line. A call with no arguments yet cannot be laid out
+    /// across lines, so it never is.
+    fn call_spans_lines(
+        &self,
+        args_span: &std::ops::Range<usize>,
+        args: &[CallArgInfo],
+    ) -> bool {
+        let Some(last) = args.iter().map(|a| a.span.end).max() else {
+            return false;
+        };
+        let end = last.min(self.source.len());
+        let start = args_span.start.min(end);
+        self.source
+            .get(start..end)
+            .is_some_and(|s| s.contains('\n'))
+    }
+
+    /// The callee as the reader wrote it, with a leading `self`
+    /// replaced by the class it stands for: `Theme.of`,
+    /// `One.two.three`, and `Panel.reset` rather than `self.reset`.
+    fn callee_display(&self, callee: &Expr) -> Option<String> {
+        let path = dotted_path(callee)?;
+        let Some(rest) = path.strip_prefix("self.") else {
+            return Some(path);
+        };
+        match &self.enclosing_class {
+            Some(class) => Some(format!("{class}.{rest}")),
+            None => Some(path),
+        }
+    }
+
     /// Two collection modes, one per pass in [`help_from_module`].
     ///
     /// `region: None` — only calls whose argument list contains the
@@ -1174,13 +1293,17 @@ impl Cx {
                         CalleeRef::Free(n) => (self.user_fns.get(n).cloned(), self.local_fn(n)),
                         _ => (None, None),
                     };
+                    let args_span = args_span(&callee.span, args, e.span.end);
+                    let arg_infos = build_arg_infos(args);
                     self.record(CallHit {
                         callee: callee_ref,
-                        args: build_arg_infos(args),
                         enclosing_class: self.enclosing_class.clone(),
                         user_fn,
                         local_fn,
-                        args_span: args_span(&callee.span, args, e.span.end),
+                        display: self.callee_display(&callee.value),
+                        multiline: self.call_spans_lines(&args_span, &arg_infos),
+                        args: arg_infos,
+                        args_span,
                     });
                 }
             }
@@ -1190,16 +1313,25 @@ impl Cx {
                     visit_arg(self, a);
                 }
                 if let Some(class) = self.receiver_class(&obj.value) {
+                    let args_span = method_args_span(&obj.span, method, e.span.end);
+                    // `obj:method(...)` — the receiver's own path, then
+                    // the method, so a chain reads the way it was typed.
+                    let display = self
+                        .callee_display(&obj.value)
+                        .map(|recv| format!("{recv}.{method}"));
+                    let arg_infos = build_arg_infos(args);
                     self.record(CallHit {
                         callee: CalleeRef::Method {
                             class,
                             name: method.clone(),
                         },
-                        args: build_arg_infos(args),
                         enclosing_class: self.enclosing_class.clone(),
                         user_fn: None,
                         local_fn: None,
-                        args_span: method_args_span(&obj.span, method, e.span.end),
+                        display,
+                        multiline: self.call_spans_lines(&args_span, &arg_infos),
+                        args: arg_infos,
+                        args_span,
                     });
                 }
             }
@@ -1212,13 +1344,19 @@ impl Cx {
                     // `:name(` — the arg region starts after the stage
                     // name, which sits one `:` past the stage's start.
                     let args_start = st.span.start + 1 + st.name.len();
+                    let args_span = args_start.min(st.span.end)..st.span.end;
+                    let arg_infos = build_arg_infos(&st.args);
                     self.record(CallHit {
                         callee: CalleeRef::PipeStage(st.name.clone()),
-                        args: build_arg_infos(&st.args),
                         enclosing_class: self.enclosing_class.clone(),
                         user_fn: self.user_fns.get(&st.name).cloned(),
                         local_fn: None,
-                        args_span: args_start.min(st.span.end)..st.span.end,
+                        // A stage's name is its own display; the piped
+                        // receiver is upstream, not part of the callee.
+                        display: None,
+                        multiline: self.call_spans_lines(&args_span, &arg_infos),
+                        args: arg_infos,
+                        args_span,
                     });
                 }
             }
@@ -1585,15 +1723,16 @@ enum Answer {
 /// collapsing `Suppressed` into `None` is precisely the bug that let
 /// [`textual_fallback`] re-report a call the walker had ruled out.
 #[cfg(test)]
-fn help_from_module(module: &Module, offset: usize) -> Option<SignatureHelp> {
-    match answer_from_module(module, offset) {
+fn help_from_module(module: &Module, source: &str, offset: usize) -> Option<SignatureHelp> {
+    match answer_from_module(module, source, offset) {
         Answer::Help(h) => Some(h),
         Answer::Suppressed | Answer::Unresolved => None,
     }
 }
 
-fn answer_from_module(module: &Module, offset: usize) -> Answer {
+fn answer_from_module(module: &Module, source: &str, offset: usize) -> Answer {
     let mut cx = Cx {
+        source,
         offset,
         locals: Vec::new(),
         enclosing_class: None,
@@ -1728,7 +1867,7 @@ fn build_help_user_fn_simple(
 ) -> Option<SignatureHelp> {
     let total = params.len().max(1);
     let active = active.min(total - 1);
-    let mut help = build_help_user_fn(name, params, return_ty, &[], 0)?;
+    let mut help = build_help_user_fn(name, params, return_ty, &[], 0, false)?;
     if let Some(s) = help.signatures.first_mut() {
         s.active_parameter = Some(active as u32);
     }
@@ -1756,7 +1895,7 @@ mod tests {
         let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
         let module = saule_parser::parse(tokens).expect("parse");
         let _ = saule_semantic::analyze(&module);
-        help_from_module(&module, offset)
+        help_from_module(&module, src, offset)
     }
 
     /// The label of the single signature reported at `offset`, panicking
@@ -1797,7 +1936,7 @@ mod tests {
         let src = "class Foo\n  fn bar(n: integer) -> integer\n    return n\n  end\nend\n\nfn main()\n  local f: Foo = Foo()\n  local r = f.bar(7)\nend\n";
         let h = help(src, "bar(7", 4).expect("help");
         let sig = &h.signatures[0];
-        assert!(sig.label.starts_with("bar("), "label={}", sig.label);
+        assert!(sig.label.starts_with("f.bar("), "label={}", sig.label);
         assert!(sig.label.contains("n: integer"), "label={}", sig.label);
     }
 
@@ -1872,7 +2011,7 @@ mod tests {
         let src = "fn main()\n  local n = Math.floor(3.14)\nend\n";
         let h = help(src, "floor(3", 6).expect("help");
         let sig = &h.signatures[0];
-        assert!(sig.label.starts_with("floor("), "label={}", sig.label);
+        assert!(sig.label.starts_with("Math.floor("), "label={}", sig.label);
         assert_eq!(h.active_parameter, Some(0));
     }
 
@@ -1884,7 +2023,7 @@ mod tests {
         let snippet = "  local n = Math.floor(";
         let h = fallback_help(prelude, snippet, 0).expect("fallback help");
         let sig = &h.signatures[0];
-        assert!(sig.label.starts_with("floor("), "label={}", sig.label);
+        assert!(sig.label.starts_with("Math.floor("), "label={}", sig.label);
         assert_eq!(h.active_parameter, Some(0));
     }
 
@@ -1894,7 +2033,7 @@ mod tests {
         let prelude = "";
         let snippet = "  local r = Math.atan(1, ";
         let h = fallback_help(prelude, snippet, 0).expect("fallback help");
-        assert!(h.signatures[0].label.starts_with("atan("));
+        assert!(h.signatures[0].label.starts_with("Math.atan("));
         assert_eq!(h.active_parameter, Some(1));
     }
 
@@ -2077,32 +2216,34 @@ end
                 "method on annotated local",
                 "  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(3.0, 4.0)\n",
                 "moveTo(3.0",
-                "moveTo(",
+                "w.moveTo(",
             ),
             (
                 "method on inferred local",
                 "  local w = Widget(1.0, 2.0)\n  w.moveTo(3.0, 4.0)\n",
                 "moveTo(3.0",
-                "moveTo(",
+                "w.moveTo(",
             ),
-            ("static method", "  Widget.make(1)\n", "make(1", "make("),
+            ("static method", "  Widget.make(1)\n", "make(1", "Widget.make("),
             (
+                // No plain dotted path to show — the receiver is a call
+                // — so the heading falls back to the resolved owner.
                 "method on constructor result",
                 "  Widget(1.0, 2.0).moveTo(3.0, 4.0)\n",
                 "moveTo(3.0",
-                "moveTo(",
+                "Widget.moveTo(",
             ),
             (
                 "method on call result",
                 "  Widget.make(1).moveTo(3.0, 4.0)\n",
                 "moveTo(3.0",
-                "moveTo(",
+                "Widget.moveTo(",
             ),
             (
                 "stdlib module fn",
                 "  local n = Math.floor(3.14)\n",
                 "floor(3.14",
-                "floor(",
+                "Math.floor(",
             ),
             ("bare native", "  println(1)\n", "println(1", "println("),
             (
@@ -2182,11 +2323,11 @@ end
         );
         for (case, needle, expected) in [
             ("self.super", "self.super(1.0", "Widget.init("),
-            ("self.method", "self.go2(1", "go2("),
-            ("method on parameter", "w.moveTo(3.0", "moveTo("),
-            ("method on field", "self.tint.apply(1.0", "apply("),
+            ("self.method", "self.go2(1", "Probe.go2("),
+            ("method on parameter", "w.moveTo(3.0", "w.moveTo("),
+            ("method on field", "self.tint.apply(1.0", "Probe.tint.apply("),
             ("bare sibling method", "\n    go2(1", "go2("),
-            ("own static via class name", "Probe.stat(1", "stat("),
+            ("own static via class name", "Probe.stat(1", "Probe.stat("),
         ] {
             let got = label(help_at(&src, call_offset(&src, needle)), case);
             assert!(got.starts_with(expected), "{case}: got {got:?}");
@@ -2216,26 +2357,26 @@ end
             (
                 "method on annotated local",
                 "fn probe()\n  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(",
-                "moveTo(",
+                "w.moveTo(",
                 0,
             ),
             (
                 "method on inferred local",
                 "fn probe()\n  local w = Widget(1.0, 2.0)\n  w.moveTo(",
-                "moveTo(",
+                "w.moveTo(",
                 0,
             ),
-            ("static method", "fn probe()\n  Widget.make(", "make(", 0),
+            ("static method", "fn probe()\n  Widget.make(", "Widget.make(", 0),
             (
                 "method on constructor result",
                 "fn probe()\n  Widget(1.0, 2.0).moveTo(",
-                "moveTo(",
+                "Widget.moveTo(",
                 0,
             ),
             (
                 "stdlib module fn",
                 "fn probe()\n  local n = Math.floor(",
-                "floor(",
+                "Math.floor(",
                 0,
             ),
             ("bare native", "fn probe()\n  println(", "println(", 0),
@@ -2246,9 +2387,10 @@ end
                 0,
             ),
             (
+                // `self.` reads as the class it stands for.
                 "self.method",
                 "class Probe extends Widget\n  fn go()\n    self.moveTo(",
-                "moveTo(",
+                "Probe.moveTo(",
                 0,
             ),
             (
@@ -2260,7 +2402,7 @@ end
             (
                 "method on field",
                 "class Probe extends Widget\n  tint: Color\n  fn go()\n    self.tint.apply(",
-                "apply(",
+                "Probe.tint.apply(",
                 0,
             ),
             (
@@ -2308,7 +2450,7 @@ end
                 "method on local",
                 "fn probe()\n  local w: Widget = Widget(1.0, 2.0)\n  w.moveTo(",
                 "\nend\n",
-                "moveTo(",
+                "w.moveTo(",
                 0,
             ),
             (
@@ -2336,7 +2478,7 @@ end
                 "method on field",
                 "class Probe extends Widget\n  tint: Color\n  fn go()\n    self.tint.apply(",
                 "\n  end\nend\n",
-                "apply(",
+                "Probe.tint.apply(",
                 0,
             ),
         ] {
@@ -2485,7 +2627,7 @@ end
         assert_eq!(inner.signatures.len(), 1, "{:?}", inner.signatures);
         assert_eq!(outer.active_signature, Some(0));
         assert_eq!(inner.active_signature, Some(0));
-        assert!(active_label(&outer).starts_with("setBackground("));
+        assert!(active_label(&outer).starts_with("PanelView.setBackground("));
         assert!(active_label(&inner).starts_with("Color("));
     }
 
@@ -2563,8 +2705,8 @@ end
             1,
             "getDelta should be filtered out: {labels:?}"
         );
-        assert!(labels[0].starts_with("update("), "{labels:?}");
-        assert!(active_label(&h).starts_with("update("));
+        assert!(labels[0].starts_with("root.update("), "{labels:?}");
+        assert!(active_label(&h).starts_with("root.update("));
 
         // Caret inside the parameterless call with nothing enclosing it:
         // no popup at all.
@@ -2626,15 +2768,15 @@ end
         // 2. That row tracks the caret, in both directions.
         for i in outer_open..inner_open {
             let h = help_at(src, call + i).expect("help");
-            assert!(active_label(&h).starts_with("setBackground("), "at +{i}");
+            assert!(active_label(&h).starts_with("root.setBackground("), "at +{i}");
         }
         for i in inner_open..=inner_close {
             let h = help_at(src, call + i).expect("help");
-            assert!(active_label(&h).starts_with("rgb("), "at +{i}");
+            assert!(active_label(&h).starts_with("Color.rgb("), "at +{i}");
         }
         // Between the two closing parens we're back in the outer call.
         let h = help_at(src, call + inner_close + 1).expect("help");
-        assert!(active_label(&h).starts_with("setBackground("));
+        assert!(active_label(&h).starts_with("root.setBackground("));
         // Past the whole expression there's nothing to show.
         assert!(help_at(src, call + text.len()).is_none());
 
@@ -2642,7 +2784,7 @@ end
         //    including jumping backwards from the third to the first.
         for (slot, delta) in [(0u32, 0usize), (1, 4), (2, 8), (0, 0)] {
             let h = help_at(src, call + inner_open + delta).expect("help");
-            assert!(active_label(&h).starts_with("rgb("), "slot {slot}");
+            assert!(active_label(&h).starts_with("Color.rgb("), "slot {slot}");
             assert_eq!(h.active_parameter, Some(slot), "clicked slot {slot}");
         }
     }
@@ -2720,7 +2862,7 @@ end
         let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
         let module = saule_parser::parse(tokens).expect("parse");
         let _ = saule_semantic::analyze(&module);
-        help_from_module(&module, offset)
+        help_from_module(&module, src, offset)
     }
 
     /// Mirrors `signature_help_at`'s dispatch for a buffer that may not
@@ -2737,14 +2879,14 @@ end
             && let Ok(module) = saule_parser::parse(tokens)
         {
             let _ = saule_semantic::analyze(&module);
-            match answer_from_module(&module, offset) {
+            match answer_from_module(&module, src, offset) {
                 Answer::Help(h) => return Some(h),
                 Answer::Suppressed => return None,
                 Answer::Unresolved => {}
             }
         } else if let Some(module) = repair_parse(src, offset) {
             let _ = saule_semantic::analyze(&module);
-            match answer_from_module(&module, offset) {
+            match answer_from_module(&module, src, offset) {
                 Answer::Help(h) => return Some(h),
                 Answer::Suppressed => return None,
                 Answer::Unresolved => {}
@@ -2836,6 +2978,101 @@ end
         );
     }
 
+    /// The signature is laid out the way the call is: a widget written
+    /// one argument per line gets one parameter per line, rather than a
+    /// single line that runs off the side of the popup.
+    #[test]
+    fn a_multiline_call_gets_a_multiline_signature() {
+        let src = "class Column
+  fn init(children: table<Widget>? = nil, spacing: float = 0.0)
+  end
+end
+
+fn build()
+  local wide = Column(
+    children: nil,
+    spacing: 4.0
+  )
+  local tight = Column(children: nil, spacing: 4.0)
+end
+";
+        let at = src.find("children: nil,\n").expect("multi-line call") + 2;
+        assert_eq!(
+            label_at(src, at),
+            "Column(\n  children: table<Widget>? = \u{2026},\n  spacing: float = \u{2026}\n)"
+        );
+
+        // The same call on one line stays on one line.
+        let at = src.find("Column(children: nil").expect("single-line call") + "Column(".len();
+        assert_eq!(
+            label_at(src, at),
+            "Column(children: table<Widget>? = \u{2026}, spacing: float = \u{2026})"
+        );
+    }
+
+    /// A call the user has only just opened is not "multi-line" merely
+    /// because the rest of the file sits below it. `repair_parse` closes
+    /// such a call by appending at the end of the document, so its
+    /// argument region reaches there — the layout is therefore measured
+    /// over the arguments actually written.
+    #[test]
+    fn a_freshly_opened_call_is_not_multiline() {
+        let src = "fn note(message: string, level: integer = 0)\nend\n\nfn build()\n  note(\nend\n";
+        let at = src.find("note(\n").expect("call") + "note(".len();
+        let h = help_mid_keystroke(src, at).expect("help");
+        assert_eq!(
+            h.signatures[0].label,
+            "note(message: string, level: integer = \u{2026})"
+        );
+    }
+
+    /// The heading names the callee the way it was written, so a static
+    /// call reads `Theme.of` and a chain reads its whole path.
+    #[test]
+    fn the_heading_carries_the_dotted_callee_path() {
+        let src = "class ThemeData
+  fn init(dark: boolean = false)
+  end
+end
+
+class Theme
+  static fn of(context: integer) -> ThemeData?
+    return nil
+  end
+end
+
+class Inner
+  fn three(x: integer)
+  end
+end
+
+class Mid
+  two: Inner
+  fn init(two: Inner)
+    self.two = two
+  end
+end
+
+fn probe(one: Mid)
+  Theme.of(1)
+  one.two.three(1)
+end
+";
+        let at = src.find("Theme.of(1)").expect("static call") + "Theme.of(".len();
+        assert!(
+            label_at(src, at).starts_with("Theme.of(context: integer)"),
+            "{}",
+            label_at(src, at)
+        );
+
+        let at = src.find("one.two.three(1)").expect("chain") + "one.two.three(".len();
+        assert!(
+            label_at(src, at).starts_with("one.two.three(x: integer)"),
+            "{}",
+            label_at(src, at)
+        );
+    }
+
     /// A table literal holds data, so the caret inside one is not at any
     /// parameter. `children: {…}` with ten widgets in it kept the full
     /// `Column(...)` list on screen for every one of them, describing a
@@ -2912,7 +3149,7 @@ end
         let _ = saule_semantic::analyze_with_seed(&module, seed);
 
         let at = src.find("showToast(1").expect("call") + "showToast(".len();
-        let h = help_from_module(&module, at).expect("help for imported fn");
+        let h = help_from_module(&module, src, at).expect("help for imported fn");
         assert!(
             h.signatures[0].label.starts_with("showToast(context: integer"),
             "got {:?}",

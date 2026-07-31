@@ -101,6 +101,25 @@ pub(super) fn resolve_member(
     // which carry types but not the source text a `---` block lives in.
     let doc = docs.get(&format!("{class}.{name}"));
 
+    // `CrossAxisAlignment.Stretch` — an enum variant, not a class
+    // member. Enums reach `receiver_class` on equal terms with classes,
+    // so without this the lookups below all miss and the hover reports
+    // `(unknown)` on a name the reader can see declared.
+    if let Some(variant) = enum_variant(class, name) {
+        return Some(with_doc(variant, doc));
+    }
+
+    // An untyped bag takes any key, so "no member" would be false —
+    // `scratch.sound` on a `scratch: table` is perfectly good code.
+    // Answering here also keeps a wider node from supplying a hover
+    // about some unrelated symbol, which is the job `render_unknown_member`
+    // does for receivers that really do have a fixed set of members.
+    if matches!(class, "table" | "any") {
+        return Some(format!(
+            "```saule\n(key) {name}: any\n```\nRead off an untyped `{class}`, which accepts any key."
+        ));
+    }
+
     if is_call {
         if let Some(sig) = lookup_method(class, name) {
             return Some(with_doc(render_method_sig(class, name, &sig), doc));
@@ -133,6 +152,24 @@ pub(super) fn resolve_member(
         return Some(format!("```saule\n(member) {class}.{name}\n```"));
     }
     None
+}
+
+/// Render `Enum.Variant` when `owner` is an enum that declares
+/// `variant`, carrying the payload arity for a tuple-style one.
+///
+/// `None` when `owner` isn't an enum, or doesn't have that variant —
+/// the latter still being a real miss worth reporting as such.
+fn enum_variant(owner: &str, variant: &str) -> Option<String> {
+    let info = saule_semantic::with_enums(|r| r.get(owner).cloned())?;
+    let (_, arity) = info.variants.iter().find(|(n, _)| n.as_str() == variant)?;
+    let mut s = format!("```saule\n(variant) {owner}.{variant}");
+    if *arity > 0 {
+        s.push('(');
+        s.push_str(&vec!["_"; *arity].join(", "));
+        s.push(')');
+    }
+    s.push_str("\n```");
+    Some(s)
 }
 
 /// The hover for a member that its receiver's class does not declare.

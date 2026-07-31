@@ -2,7 +2,7 @@
 title: "Todo App"
 description: "A complete command-line application: argument parsing with Os.args(), JSON persistence through the json library declared in dependencies:, match over subcommands, and rendering split into its own module."
 sidebar:
-  order: 3
+  order: 4
 ---
 
 <!-- Generated from examples/todo-app by `npm run sync-docs`. Edit the example, not this file. -->
