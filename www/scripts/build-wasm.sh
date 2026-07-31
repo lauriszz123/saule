@@ -30,14 +30,33 @@ TARGET="wasm32-unknown-unknown"
 # Setting RUSTC explicitly is what actually works. Don't derive the toolchain
 # directory by hand either — the host triple ("aarch64") is not what
 # `uname -m` prints ("arm64").
+#
+# Find rustup the same way wasm-bindgen is found below, and for the same
+# reason: on Windows the installer drops it in ~/.cargo/bin without putting
+# that directory on the PATH npm hands to this script. Skipping the block
+# because `command -v` came up empty is not harmless — the target check is
+# what turns a missing wasm32 std into one clear line instead of a
+# "can't find crate for `core`" from deep inside the build.
+RUSTUP=""
 if command -v rustup >/dev/null 2>&1; then
-	if ! rustup target list --installed 2>/dev/null | grep -qx "$TARGET"; then
+	RUSTUP="$(command -v rustup)"
+else
+	for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin/rustup" "$HOME/.cargo/bin/rustup"; do
+		if [[ -x "$candidate" ]]; then
+			RUSTUP="$candidate"
+			break
+		fi
+	done
+fi
+
+if [[ -n "$RUSTUP" ]]; then
+	if ! "$RUSTUP" target list --installed 2>/dev/null | grep -qx "$TARGET"; then
 		echo "error: the $TARGET target is not installed." >&2
 		echo "       Add it with:  rustup target add $TARGET" >&2
 		exit 1
 	fi
-	CARGO=("$(rustup which cargo)")
-	RUSTC="$(rustup which rustc)"
+	CARGO=("$("$RUSTUP" which cargo)")
+	RUSTC="$("$RUSTUP" which rustc)"
 	export RUSTC
 else
 	CARGO=(cargo)

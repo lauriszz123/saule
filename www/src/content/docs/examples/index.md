@@ -14,6 +14,7 @@ clone and run.
 | Example | What it shows |
 |---|---|
 | [Filesystem Info](/saule/examples/fs-info-example/) | Inspects one path with Os.fsInfo and reports what it is. Shows nullable returns for paths that may not exist, and match over an enum with a _ fallback. |
+| [Operator Overloading](/saule/examples/vector-math/) | A Vec2 that adds, negates, compares and prints like a built-in number, plus a Path where # counts points and concatenation joins two paths. Shows how each operator is an interface whose method supplies both the behaviour and the result type. |
 | [Todo App](/saule/examples/todo-app/) | A complete command-line application: argument parsing with Os.args(), JSON persistence through the json library declared in dependencies:, match over subcommands, and rendering split into its own module. |
 | [Brainfuck Interpreter](/saule/examples/bf/) | An interpreter for another language, in about 240 lines. Tables as a tape, a dispatch loop, and a program that takes its source file from Os.args(). |
 | [Graphics Window](/saule/examples/toying/) | Opens a window and draws a rectangle that follows the mouse, using the Love2D-style engine native package. Shows how Saule calls into a dynamically-loaded Rust library. |

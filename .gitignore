@@ -36,3 +36,9 @@ www/.astro/
 # crates/saule-wasm on every deploy — belongs in CI output, not in history.
 www/src/lib/saule_wasm/
 
+# Scratch worktree used by www/scripts/deploy-gh-pages.{sh,ps1} to stage the
+# `gh-pages` branch. A --dry-run leaves it behind on purpose so the result can
+# be inspected; without this line the whole built site shows up as untracked in
+# the main tree, and a stray `git add -A` would commit it onto the wrong branch.
+.gh-pages-worktree/
+

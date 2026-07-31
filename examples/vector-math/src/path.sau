@@ -1,0 +1,70 @@
+-- A list of points, showing the two operators that aren't arithmetic.
+--
+-- `OpLen` backs `#path`, and `OpConcat` backs `a .. b` — which here joins
+-- two paths into a longer one rather than producing a string. That is the
+-- difference between `OpConcat` and `OpToString`: the first decides what
+-- `..` *builds*, the second only decides how a value renders.
+
+import Vec2 from "vec2"
+
+export class Path implements OpLen, OpConcat<Path, Path>, OpToString
+	local points: table<Vec2>
+
+	fn init(points: table<Vec2>)
+		self.points = points
+	end
+
+	fn getPoints() -> table<Vec2>
+		return self.points
+	end
+
+	-- `#path`
+	fn len() -> integer
+		return #self.points
+	end
+
+	-- `a .. b`
+	fn concat(other: Path) -> Path
+		local joined: table<Vec2> = {}
+
+		for p: Vec2 in self.points do
+			joined[#joined + 1] = p
+		end
+
+		for p: Vec2 in other.getPoints() do
+			joined[#joined + 1] = p
+		end
+
+		return Path(joined)
+	end
+
+	fn toString() -> string
+		local out: string = ""
+
+		for p: Vec2 in self.points do
+			if out != "" then
+				out = out .. " -> "
+			end
+
+			out = out .. tostring(p)
+		end
+
+		return out
+	end
+
+	-- Total distance walked, using `-` and `lengthSquared` on Vec2.
+	fn travelSquared() -> float
+		local total: float = 0.0
+		local prev: Vec2? = nil
+
+		for p: Vec2 in self.points do
+			if prev != nil then
+				total = total + (p - prev!).lengthSquared()
+			end
+
+			prev = p
+		end
+
+		return total
+	end
+end

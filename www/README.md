@@ -121,6 +121,19 @@ www/scripts/deploy-gh-pages.sh --dry-run   # build and stage, don't push
 www/scripts/deploy-gh-pages.sh             # build, commit, push
 ```
 
+On Windows, `deploy-gh-pages.ps1` is the same script in PowerShell — same
+steps, same branch, same result:
+
+```powershell
+pwsh -File www\scripts\deploy-gh-pages.ps1 -DryRun   # build and stage, don't push
+pwsh -File www\scripts\deploy-gh-pages.ps1           # build, commit, push
+```
+
+It runs on Windows PowerShell 5.1 as well, if that is what you have. `bash`
+still has to exist somewhere because `npm run build` shells out to
+`scripts/build-wasm.sh`; the script finds the one Git for Windows installs and
+puts it on `PATH` for the build, so a normal Git install needs no setup.
+
 Then set **Source → Deploy from a branch → `gh-pages` / (root)**.
 
 Use this when Actions cannot run — an account billing lock, or just shipping
