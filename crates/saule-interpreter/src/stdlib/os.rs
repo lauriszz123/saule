@@ -931,7 +931,9 @@ pub fn builtin_registries() -> (
     // FsKind ────────────────────────────────────────────────────────────
     let mut fskind = EnumInfo::default();
     for v in ["File", "Dir", "Symlink", "Other"] {
-        fskind.variants.insert(v.to_string(), 0);
+        fskind
+            .variants
+            .insert(v.to_string(), saule_semantic::VariantInfo::default());
     }
     enums.insert("FsKind".to_string(), fskind);
 

@@ -9,6 +9,20 @@
 --   saule run examples/native-package/images.sau path/to/sheet.png
 import * from engine
 
+-- `Util` is the table-helper class the package exports; it has no numeric
+-- helpers, so the zoom clamp is spelled out here.
+fn clamp(value: float, low: float, high: float) -> float
+	if value < low then
+		return low
+	end
+
+	if value > high then
+		return high
+	end
+
+	return value
+end
+
 class Main
 	static fn main()
 		-- The sheet is expected to be a grid of 16x16 cells; pass your own on the
@@ -50,21 +64,20 @@ class Main
 		local elapsed: float = 0.0
 
 		while Window.isOpen() do
-			Window.pollEvents()
+			-- Everything that happened since the last frame, in order. Each
+			-- entry is `[kind, payload…]`; see keyboard.sau for decoding these
+			-- into an enum, which is what a larger program wants.
+			for event: table in Window.pollEvents() do
+				match tostring(event[1])
+					case "wheelMoved" then
+						zoom = clamp(zoom + float(event[3]) * 0.25, 0.5, 8.0)
 
-			-- The wheel is a per-frame delta, valid only for this `pollEvents`.
-			local wheelX: float, wheelY: float = Mouse.getWheel()
-			if wheelY != 0.0 then
-				zoom = Util.clamp(zoom + wheelY * 0.25, 0.5, 8.0)
-			end
+					case "mousePressed" then printf("clicked button %d\n", int(event[4]))
 
-			-- Per-frame button edges, so a click is one event rather than a state you
-			-- have to diff yourself.
-			if Mouse.wasPressed(1) then
-				println("clicked")
-			end
-			if Mouse.wasReleased(1) then
-				println("released")
+					case "mouseReleased" then printf("released button %d\n", int(event[4]))
+
+					case _ then nil
+				end
 			end
 
 			-- Cursor feedback: an I-beam over the left half of the window.

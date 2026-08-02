@@ -52,11 +52,33 @@ pub struct ClassInfo {
 pub type ClassRegistry = HashMap<String, ClassInfo>;
 pub type InterfaceRegistry = HashMap<String, Vec<String>>;
 
-/// Enum info: variant name -> payload arity (0 for `Bare`/`Valued`,
-/// N for `Tuple { fields: [...; N] }`).
+/// One variant's payload shape.
+///
+/// Empty for `Bare` and `Valued`; for `Tuple { fields }` it is the declared
+/// fields in order. Keeping the whole [`Param`] rather than just its type is
+/// what lets a match arm bind `case Shape.Rect(w, h)` at the declared types
+/// instead of `any`, and leaves the names available for diagnostics.
+#[derive(Default, Clone, Debug)]
+pub struct VariantInfo {
+    pub fields: Vec<Param>,
+}
+
+impl VariantInfo {
+    /// How many values a pattern for this variant must bind.
+    pub fn arity(&self) -> usize {
+        self.fields.len()
+    }
+
+    /// The declared type of payload slot `at`.
+    pub fn field_ty(&self, at: usize) -> Option<&Type> {
+        self.fields.get(at).map(|f| &f.ty)
+    }
+}
+
+/// Enum info: variant name -> payload shape.
 #[derive(Default, Clone, Debug)]
 pub struct EnumInfo {
-    pub variants: HashMap<String, usize>,
+    pub variants: HashMap<String, VariantInfo>,
 }
 pub type EnumRegistry = HashMap<String, EnumInfo>;
 
@@ -321,12 +343,12 @@ pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, Enu
                 Decl::Enum { name, variants, .. } => {
                     let mut info = EnumInfo::default();
                     for v in variants {
-                        let (vname, arity) = match &v.value {
-                            EnumVariant::Bare(n) => (n.clone(), 0),
-                            EnumVariant::Valued(n, _) => (n.clone(), 0),
-                            EnumVariant::Tuple { name, fields } => (name.clone(), fields.len()),
+                        let (vname, fields) = match &v.value {
+                            EnumVariant::Bare(n) => (n.clone(), Vec::new()),
+                            EnumVariant::Valued(n, _) => (n.clone(), Vec::new()),
+                            EnumVariant::Tuple { name, fields } => (name.clone(), fields.clone()),
                         };
-                        info.variants.insert(vname, arity);
+                        info.variants.insert(vname, VariantInfo { fields });
                     }
                     enums.insert(name.clone(), info);
                 }

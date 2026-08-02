@@ -92,6 +92,50 @@ a1, a2 [, arctype])`, `polygon(mode, points)`, `line(x1, y1, x2, y2)`,
 **Lifecycle** — `create(width, height [, title, resizable])`, `isOpen()`,
 `pollEvents()`, `close()`
 
+### The event queue
+
+`pollEvents()` pumps the OS queue and returns everything that happened since
+the last call, in order. This is the primary input API — the level queries on
+`Keyboard` and `Mouse` answer only what a queue cannot ("is this held *now*").
+
+Each entry is a positional record, `[kind, payload…]`:
+
+| kind | payload |
+| --- | --- |
+| `keyPressed`, `keyReleased` | `key`, `shift`, `ctrl`, `alt` |
+| `textInput` | `text` |
+| `mouseMoved` | `x`, `y`, `dx`, `dy` |
+| `mousePressed`, `mouseReleased` | `x`, `y`, `button` |
+| `wheelMoved` | `dx`, `dy` (notches, positive away from the user) |
+| `resized` | `width`, `height` |
+| `focusChanged` | `focused` |
+| `closed` | — |
+
+The native ABI has no enum-variant type, so the tagged union is rebuilt on the
+Saule side. `examples/native-package/keyboard.sau` shows the decoder pattern,
+and UIKit ships one in its `Events.sau`:
+
+```saule
+for ev: Event in pollEvents() do
+	match ev
+		case Event.KeyPressed(key, _, ctrl, _) when ctrl then shortcut(key)
+		case Event.TextInput(text) then insert(text)
+		case _ then nil
+	end
+end
+```
+
+**Ordering.** Keyboard messages keep true arrival order — they are recorded in
+the backend's input callback as each OS message lands, and modifiers are
+captured at that moment rather than read back at the end of the frame. Mouse
+and window events are derived per frame, since the backend offers no callback
+for them, so within one frame the order is: window changes, mouse motion, mouse
+buttons, wheel, then the keyboard log. Motion before buttons is the one that
+matters — a click is always delivered against an up-to-date pointer position.
+
+Ignoring the return value is fine: `pollEvents()` still pumps the queue, which
+is all a game loop reading held keys needs.
+
 **Geometry** — `getSize()`, `getPosition()`, `setPosition(x, y)`
 
 **Chrome** — `setTitle(title)`, `setTopmost(topmost)`, `isFocused()`
@@ -116,25 +160,18 @@ rather than guessing.
 
 ## The `Mouse` API
 
-The same polling shape as `Keyboard`, for the same reason.
+Motion, buttons and the wheel arrive as events (see above); what stays here is
+the state a queue cannot answer.
 
-**Position** — `getPos()`
+**Position** — `getPos()`, where the pointer is right now.
 
-**Buttons** — `isDown(button)`, `wasPressed(button)`, `wasReleased(button)`.
-`1` = left, `2` = right, `3` = middle.
-
-**Wheel** — `getWheel() -> (x, y)`, the movement since the last
-`Window.pollEvents()`, in **notches**: one click of the wheel is `1.0`, positive
-away from the user. Most mice report only `y`, and both are `0` on a frame with
-no scrolling. This stands in for Love2D's `love.wheelmoved`.
+**Buttons** — `isDown(button)`, whether it is held right now. `1` = left,
+`2` = right, `3` = middle.
 
 **Cursor** — `setCursor(style)`, `setVisible(visible)`. Styles are `"arrow"`,
 `"ibeam"`, `"crosshair"`, `"hand"`, `"grab"`, `"resizeleftright"`,
 `"resizeupdown"`, `"resizeall"`; an unknown name is an error rather than a
 silent no-op.
-
-Everything except `getPos` is latched at `pollEvents`, so all of it describes
-one consistent instant.
 
 Input is sampled after *both* of minifb's message pumps — `update` in
 `pollEvents` and the one inside `update_with_buffer` in `present` — and the
@@ -157,18 +194,18 @@ dropping it would take the copied text with it.
 
 ## The `Keyboard` API
 
-A polling take on `love.keyboard`. Love2D splits keyboard input between level
-queries and callbacks (`love.keypressed`, `love.keyreleased`, `love.textinput`);
-Saule owns the loop here, so the callbacks become per-frame queries instead.
+Love2D splits keyboard input between level queries and callbacks
+(`love.keypressed`, `love.keyreleased`, `love.textinput`). Saule owns the loop
+here, so the callbacks become `KeyPressed` / `KeyReleased` / `TextInput` events
+in the queue, and what remains on `Keyboard` is the level half.
 
 **Held keys** — `isDown(key)`, `isAnyDown({key, ...})`, `getKeysDown()`
 
-**Edges** — `wasPressed(key)`, `wasReleased(key)`, `getKeysPressed()`,
-`getKeysReleased()`
-
 **Key repeat** — `setKeyRepeat(enable)`, `hasKeyRepeat()`
 
-**Text** — `getTextInput()`, `setTextInput(enable)`, `hasTextInput()`
+**Text gate** — `setTextInput(enable)`, `hasTextInput()`. Off means no
+`TextInput` events are produced; disabling it mid-frame also drops text already
+typed this frame, so a handler never sees input the app has just declined.
 
 Key names are Love2D's `KeyConstant` strings — `"a"`, `"space"`, `"lshift"`,
 `"return"`, `"kp0"`, `"/"` — so code reads the same as its Love2D equivalent.
@@ -178,16 +215,17 @@ on the whole surface.
 
 ### Differences from Love2D worth knowing
 
-- `wasPressed` / `wasReleased` (and the `getKeys*` accessors) are measured
-  against the last `Window.pollEvents()` — that call is the frame boundary. A
-  key tapped and released between two polls is not reported.
+- The callbacks are a queue, not per-frame flags. A key tapped and released
+  between two polls still reports both edges, and two taps of the same key in
+  one frame stay two events — neither survives a level-diffing API.
 - `isAnyDown({"lshift", "rshift"})` replaces Love2D's variadic
   `isDown(key, ...)`, since native calls take a fixed argument list.
-- `getTextInput()` drains the text typed since the previous call, the way
-  `love.textinput` would deliver it — layout- and modifier-aware, so shift+`a`
-  arrives as `"A"`. Unread text is capped at 4 KiB.
-- `setKeyRepeat(true)` makes a held key keep reporting `wasPressed` after a
-  0.25 s delay, then every 0.05 s.
+- `TextInput` carries text the way `love.textinput` would deliver it — layout-
+  and modifier-aware, so shift+`a` arrives as `"A"`. A run of characters
+  coalesces into one event, capped at 4 KiB.
+- `setKeyRepeat(true)` makes a held key keep emitting `KeyPressed` after a
+  0.25 s delay, then every 0.05 s. Repeats are synthesised by the engine, so
+  they land after the frame's real messages.
 - **Not implemented**: scancodes (`isScancodeDown`, `getScancodeFromKey`,
   `getKeyFromScancode`). The windowing backend reports keys already mapped
   through the OS layout, so there is no honest physical-position code to hand

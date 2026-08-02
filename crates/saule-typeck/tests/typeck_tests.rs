@@ -869,3 +869,80 @@ fn a_bare_function_annotation_is_still_unchecked() {
         end\n",
     );
 }
+
+#[test]
+fn a_variant_payload_binds_at_its_declared_type() {
+    // The registry records each tuple variant's field types, so a match arm
+    // binds the payload as declared rather than as `any`. Using `w` and `h`
+    // as floats has to need no conversion.
+    accepts(
+        "enum Shape\n\
+        \x20 Rect(w: float, h: float),\n\
+        \x20 Empty\n\
+        end\n\
+        fn area(s: Shape) -> float\n\
+        \x20 return match s\n\
+        \x20   case Shape.Rect(w, h) then w * h\n\
+        \x20   case Shape.Empty then 0.0\n\
+        \x20 end\n\
+        end\n",
+    );
+}
+
+#[test]
+fn a_variant_payload_used_at_the_wrong_type_is_rejected() {
+    // The other half of the guarantee: binding at the declared type is only
+    // worth anything if a mismatch is caught. This passed silently while the
+    // payload came through as `any`.
+    rejects(
+        "enum Shape\n\
+        \x20 Rect(w: float, h: float)\n\
+        end\n\
+        fn label(text: string) -> string\n\
+        \x20 return text\n\
+        end\n\
+        fn describe(s: Shape) -> string\n\
+        \x20 return match s\n\
+        \x20   case Shape.Rect(w, _) then label(w)\n\
+        \x20 end\n\
+        end\n",
+        "argument 1 of `label`",
+    );
+}
+
+#[test]
+fn variant_payload_types_follow_the_declaration_order() {
+    // A slot is typed by its position, so reading the first one as if it were
+    // the second is an error even though both names are bound.
+    rejects(
+        "enum Tagged\n\
+        \x20 Pair(name: string, count: integer)\n\
+        end\n\
+        fn double(n: integer) -> integer\n\
+        \x20 return n + n\n\
+        end\n\
+        fn total(t: Tagged) -> integer\n\
+        \x20 return match t\n\
+        \x20   case Tagged.Pair(name, _) then double(name)\n\
+        \x20 end\n\
+        end\n",
+        "argument 1 of `double`",
+    );
+}
+
+#[test]
+fn a_bare_variant_binds_nothing_and_stays_accepted() {
+    // Variants with no payload have no fields to type; they must keep working.
+    accepts(
+        "enum Flag\n\
+        \x20 On,\n\
+        \x20 Off\n\
+        end\n\
+        fn pick(f: Flag) -> integer\n\
+        \x20 return match f\n\
+        \x20   case Flag.On then 1\n\
+        \x20   case Flag.Off then 0\n\
+        \x20 end\n\
+        end\n",
+    );
+}

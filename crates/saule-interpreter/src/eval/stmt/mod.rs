@@ -88,11 +88,36 @@ pub fn exec_block(
     Ok(last)
 }
 
+/// Whether running `stmts` needs a scope of its own.
+///
+/// Only three statements bind a name into the block they appear in: `local`,
+/// its multi-assign form, and a declaration (`fn` / `class` / `interface` /
+/// `enum` / `import`). Everything else either binds nothing or builds its own
+/// scope — a `for` makes one per iteration for the loop variable, `try` makes
+/// one each for the body and the catch.
+///
+/// A block that binds nothing cannot shadow anything, so reads and writes
+/// resolve identically with or without the extra scope. Skipping it matters
+/// because the scope is per *iteration*: `while i < n do i = i + 1 end` was
+/// allocating an `Rc<RefCell<Environment>>` every time round a loop whose body
+/// declares nothing.
+fn block_binds_names(stmts: &[Spanned<Stmt>]) -> bool {
+    stmts.iter().any(|s| {
+        matches!(
+            s.value,
+            Stmt::Local { .. } | Stmt::LocalMulti { .. } | Stmt::Decl(_)
+        )
+    })
+}
+
 /// Run a block in a fresh child scope. The scope is dropped on return.
 fn exec_scoped_block(
     stmts: &[Spanned<Stmt>],
     parent: &Rc<RefCell<Environment>>,
 ) -> Result<Flow, RuntimeError> {
+    if !block_binds_names(stmts) {
+        return exec_block(stmts, parent);
+    }
     let scope = Environment::with_parent(parent.clone());
     exec_block(stmts, &scope)
 }
@@ -261,6 +286,7 @@ fn exec_decl(decl: &Spanned<Decl>, env: &Rc<RefCell<Environment>>) -> Result<Flo
         } => {
             let func = FunctionObject {
                 name: Some(name.clone()),
+                param_keys: FunctionObject::intern_params(params),
                 params: params.clone(),
                 body: FunctionBody::Block(body.as_slice().into()),
                 closure: env.clone(),
@@ -293,6 +319,7 @@ pub(super) fn make_function(
 ) -> FunctionObject {
     FunctionObject {
         name,
+        param_keys: FunctionObject::intern_params(&params),
         params,
         body: FunctionBody::Block(body.into()),
         closure: closure.clone(),

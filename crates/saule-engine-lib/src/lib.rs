@@ -23,6 +23,7 @@
 //! ```
 
 mod clipboard;
+mod event;
 mod font;
 mod geom;
 mod graphics;
@@ -79,16 +80,11 @@ pub fn anchor() {
     // Keyboard exports
     black_box(keyboard::saule_export_Keyboard_isDown as *const ());
     black_box(keyboard::saule_export_Keyboard_isAnyDown as *const ());
-    black_box(keyboard::saule_export_Keyboard_wasPressed as *const ());
-    black_box(keyboard::saule_export_Keyboard_wasReleased as *const ());
     black_box(keyboard::saule_export_Keyboard_getKeysDown as *const ());
-    black_box(keyboard::saule_export_Keyboard_getKeysPressed as *const ());
-    black_box(keyboard::saule_export_Keyboard_getKeysReleased as *const ());
     black_box(keyboard::saule_export_Keyboard_setKeyRepeat as *const ());
     black_box(keyboard::saule_export_Keyboard_hasKeyRepeat as *const ());
     black_box(keyboard::saule_export_Keyboard_setTextInput as *const ());
     black_box(keyboard::saule_export_Keyboard_hasTextInput as *const ());
-    black_box(keyboard::saule_export_Keyboard_getTextInput as *const ());
 
     // Mouse exports
     black_box(mouse::saule_export_Mouse_isDown as *const ());

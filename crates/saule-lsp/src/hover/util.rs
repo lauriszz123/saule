@@ -161,11 +161,19 @@ pub(super) fn resolve_member(
 /// the latter still being a real miss worth reporting as such.
 fn enum_variant(owner: &str, variant: &str) -> Option<String> {
     let info = saule_semantic::with_enums(|r| r.get(owner).cloned())?;
-    let (_, arity) = info.variants.iter().find(|(n, _)| n.as_str() == variant)?;
+    let (_, shape) = info.variants.iter().find(|(n, _)| n.as_str() == variant)?;
+
     let mut s = format!("```saule\n(variant) {owner}.{variant}");
-    if *arity > 0 {
+    if shape.arity() > 0 {
+        // The declared payload, named and typed the way the enum spells it —
+        // which is what tells you the order to destructure in.
+        let fields: Vec<String> = shape
+            .fields
+            .iter()
+            .map(|f| format!("{}: {}", f.name, super::render::render_type(&f.ty)))
+            .collect();
         s.push('(');
-        s.push_str(&vec!["_"; *arity].join(", "));
+        s.push_str(&fields.join(", "));
         s.push(')');
     }
     s.push_str("\n```");

@@ -118,6 +118,30 @@ impl Surface {
         self.buf[idx] = pack(a, r, g, b);
     }
 
+    /// Alpha-composite an 8-bit source over pixel `idx` at coverage `cov8`.
+    ///
+    /// This is the integer twin of [`BlendMode::Alpha`]'s arm in
+    /// [`Surface::blend`] — the same formula, but with no float conversions in
+    /// the loop. Alpha is by far the most-used mode (every translucent fill,
+    /// every glyph, every canvas composite), and the eight int↔float
+    /// conversions the general path spends per pixel dominate it, so the modes
+    /// part ways here and share only their arithmetic.
+    ///
+    /// Results can differ from the float path by one unit in the last place,
+    /// which is below the precision the framebuffer can hold anyway.
+    #[inline]
+    fn blend_alpha8(&mut self, idx: usize, src: Src8, cov8: u32) {
+        let sa = div255(src.a * cov8);
+        if sa == 0 {
+            return;
+        }
+        if sa == 255 {
+            self.buf[idx] = src.packed();
+            return;
+        }
+        self.buf[idx] = lerp_argb(src.opaque_packed(), self.buf[idx], sa);
+    }
+
     /// Sample a pixel, returning transparent black outside the surface.
     #[inline]
     fn sample_nearest(&self, x: f64, y: f64) -> (f32, f32, f32, f32) {
@@ -168,6 +192,105 @@ fn unpack(p: u32) -> (f32, f32, f32, f32) {
 fn pack(a: f32, r: f32, g: f32, b: f32) -> u32 {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
     (q(a) << 24) | (q(r) << 16) | (q(g) << 8) | q(b)
+}
+
+/// Divide by 255 with round-to-nearest, without a division.
+///
+/// Exact for every product two 8-bit channels can make.
+#[inline]
+fn div255(x: u32) -> u32 {
+    let x = x + 128;
+    (x + (x >> 8)) >> 8
+}
+
+/// `src * a + dst * (255 - a)` across all four channels of two packed pixels.
+///
+/// Red and blue are held in one word and alpha and green in another, each
+/// channel with an empty byte above it. A channel times an 8-bit weight tops
+/// out at 65025, so it cannot carry into its neighbour — which means two
+/// channels ride along with every multiply, and the rounding division by 255
+/// is done on both at once.
+///
+/// `src`'s alpha byte is the source's *contribution*, so callers compositing a
+/// colour at coverage pass 255 there and put the real weight in `a`.
+#[inline]
+fn lerp_argb(src: u32, dst: u32, a: u32) -> u32 {
+    const LANES: u32 = 0x00FF_00FF;
+    const HALF: u32 = 0x0080_0080;
+    let inv = 255 - a;
+
+    let rb = (src & LANES) * a + (dst & LANES) * inv + HALF;
+    let rb = ((rb + ((rb >> 8) & LANES)) >> 8) & LANES;
+
+    let ag = ((src >> 8) & LANES) * a + ((dst >> 8) & LANES) * inv + HALF;
+    let ag = ((ag + ((ag >> 8) & LANES)) >> 8) & LANES;
+
+    (ag << 8) | rb
+}
+
+/// A colour quantized to 8 bits per channel, hoisted out of a pixel loop.
+///
+/// Converting the paint colour once per draw call rather than once per pixel is
+/// most of what makes [`Surface::blend_alpha8`] worth having.
+#[derive(Clone, Copy)]
+struct Src8 {
+    a: u32,
+    r: u32,
+    g: u32,
+    b: u32,
+}
+
+impl Src8 {
+    #[inline]
+    fn new(color: [f32; 4]) -> Self {
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+        Src8 {
+            a: q(color[3]),
+            r: q(color[0]),
+            g: q(color[1]),
+            b: q(color[2]),
+        }
+    }
+
+    /// Split a stored pixel back into channels.
+    #[inline]
+    fn from_pixel(p: u32) -> Self {
+        Src8 {
+            a: (p >> 24) & 0xFF,
+            r: (p >> 16) & 0xFF,
+            g: (p >> 8) & 0xFF,
+            b: p & 0xFF,
+        }
+    }
+
+    /// Modulate by another colour — how a blit applies its paint tint.
+    #[inline]
+    fn modulate(self, t: Src8) -> Self {
+        Src8 {
+            a: div255(self.a * t.a),
+            r: div255(self.r * t.r),
+            g: div255(self.g * t.g),
+            b: div255(self.b * t.b),
+        }
+    }
+
+    #[inline]
+    fn is_opaque_white(self) -> bool {
+        self.a == 255 && self.r == 255 && self.g == 255 && self.b == 255
+    }
+
+    #[inline]
+    fn packed(self) -> u32 {
+        (self.a << 24) | (self.r << 16) | (self.g << 8) | self.b
+    }
+
+    /// The colour with a full alpha byte — what [`lerp_argb`] wants, since the
+    /// weight travels separately and the alpha channel composites as if the
+    /// source were solid there.
+    #[inline]
+    fn opaque_packed(self) -> u32 {
+        self.packed() | 0xFF00_0000
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +426,28 @@ impl Paint {
             0.0
         }
     }
+
+    /// The packed pixel a fully covered sample resolves to, when the paint is
+    /// opaque and its blend mode doesn't read the destination.
+    ///
+    /// Those are the paints whose interior pixels are a straight overwrite, so
+    /// a run of them can be filled in one go instead of blended one at a time.
+    /// Returns `None` for anything that has to go through [`Surface::blend`].
+    #[inline]
+    fn opaque_pixel(&self) -> Option<u32> {
+        if self.color[3] < 1.0 {
+            return None;
+        }
+        match self.blend {
+            BlendMode::Alpha | BlendMode::Replace => Some(pack(
+                self.color[3],
+                self.color[0],
+                self.color[1],
+                self.color[2],
+            )),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +474,11 @@ struct Edge {
 pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
     let clip = paint.clip.intersect(&Rect::surface(surf.w, surf.h));
     if clip.is_empty() {
+        return;
+    }
+
+    if let Some(rect) = axis_aligned_rect(paths) {
+        fill_axis_aligned_rect(surf, rect, paint, clip);
         return;
     }
 
@@ -392,12 +542,28 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
     let mut coverage = vec![0.0f32; width];
     let mut crossings: Vec<(f64, i32)> = Vec::with_capacity(16);
     let mut active: Vec<usize> = Vec::with_capacity(16);
+    // The column ranges the current row actually covers.
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(16);
     let mut cursor = 0usize;
 
     let sub_weight = 1.0 / SUBSAMPLES as f32;
+    let solid = paint.opaque_pixel();
+    // Alpha is the only mode with an integer implementation; the rest keep the
+    // general float path.
+    let src8 = (paint.blend == BlendMode::Alpha).then(|| Src8::new(paint.color));
+    if src8.is_some_and(|s| s.a == 0) {
+        return; // fully transparent alpha paint writes nothing
+    }
 
     for py in py0..py1 {
-        coverage.fill(0.0);
+        // The column ranges this row actually covers. A hollow shape — a
+        // border, a focus ring, an outlined card — covers only a sliver at each
+        // edge while its *envelope* is the whole width, so these have to stay
+        // separate rather than collapse into one range. Both the blend scan and
+        // the clear then skip the empty middle, which is the difference between
+        // a 1px outline costing a sliver and costing the whole rectangle it
+        // encloses.
+        spans.clear();
         let row_bot = py as f64 + 1.0;
 
         // Admit edges that start within this row, retire ones that ended above.
@@ -430,7 +596,7 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
                 if !was_inside && is_inside {
                     span_start = x;
                 } else if was_inside && !is_inside {
-                    add_span(
+                    let covered = add_span(
                         &mut coverage,
                         px0,
                         px1,
@@ -438,37 +604,343 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
                         x.min(clip.x1),
                         sub_weight,
                     );
+
+                    if let Some(range) = covered {
+                        spans.push(range);
+                    }
                 }
             }
         }
 
+        if spans.is_empty() {
+            continue; // this row is entirely outside the shape
+        }
+        merge_spans(&mut spans);
+
         let row = py * surf.w;
-        for (i, &cov) in coverage.iter().enumerate() {
-            let c = paint.shape(cov);
-            if c > 0.0 {
-                surf.blend(row + px0 + i, paint.color, c, paint.blend);
+        for &(lo, hi) in spans.iter() {
+            match solid {
+                // Opaque paint: the fully covered interior is a memory fill,
+                // and only the feathered edge pixels need a real blend. On a
+                // large shape that is the difference between one blend per
+                // pixel and a handful per row.
+                Some(px) => {
+                    let mut i = lo;
+                    while i < hi {
+                        if paint.shape(coverage[i]) >= 1.0 {
+                            let start = i;
+                            while i < hi && paint.shape(coverage[i]) >= 1.0 {
+                                i += 1;
+                            }
+                            surf.buf[row + px0 + start..row + px0 + i].fill(px);
+                        } else {
+                            let c = paint.shape(coverage[i]);
+                            if c > 0.0 {
+                                // Opaque `Replace` also lands here, and its
+                                // edge pixels need the Replace formula, so this
+                                // defers to the mode rather than assuming
+                                // alpha.
+                                match src8 {
+                                    Some(s) => surf.blend_alpha8(row + px0 + i, s, cov8(c)),
+                                    None => surf.blend(row + px0 + i, paint.color, c, paint.blend),
+                                }
+                            }
+                            i += 1;
+                        }
+                    }
+                }
+                // Translucent paint — no run is a plain overwrite, so every
+                // covered pixel is composited. Shadows and overlays live here.
+                None => match src8 {
+                    // A fully covered run all composites at the same weight, so
+                    // hoisting it out leaves an inner loop with nothing in it
+                    // but the blend itself.
+                    Some(s) => {
+                        let sp = s.opaque_packed();
+                        let mut i = lo;
+                        while i < hi {
+                            let c = paint.shape(coverage[i]);
+                            if c >= 1.0 {
+                                let start = i;
+                                while i < hi && paint.shape(coverage[i]) >= 1.0 {
+                                    i += 1;
+                                }
+                                for px in &mut surf.buf[row + px0 + start..row + px0 + i] {
+                                    *px = lerp_argb(sp, *px, s.a);
+                                }
+                            } else {
+                                if c > 0.0 {
+                                    surf.blend_alpha8(row + px0 + i, s, cov8(c));
+                                }
+                                i += 1;
+                            }
+                        }
+                    }
+                    None => {
+                        for (i, &cov) in coverage[lo..hi].iter().enumerate() {
+                            let c = paint.shape(cov);
+                            if c > 0.0 {
+                                surf.blend(row + px0 + lo + i, paint.color, c, paint.blend);
+                            }
+                        }
+                    }
+                },
+            }
+
+            // Hand the next row a zeroed buffer. Only what was just used can be
+            // non-zero, so this costs the covered columns, not the bbox width.
+            coverage[lo..hi].fill(0.0);
+        }
+    }
+}
+
+/// Composite a horizontal run of pixels that all share one coverage value.
+///
+/// `start` and `end` are absolute indices into the surface. Splitting this out
+/// is what lets the rectangle path below write a whole row with one call.
+#[inline]
+fn blend_run(
+    surf: &mut Surface,
+    start: usize,
+    end: usize,
+    coverage: f32,
+    paint: &Paint,
+    solid: Option<u32>,
+    src8: Option<Src8>,
+) {
+    if end <= start {
+        return;
+    }
+    let c = paint.shape(coverage);
+    if c <= 0.0 {
+        return;
+    }
+
+    if c >= 1.0 {
+        if let Some(px) = solid {
+            surf.buf[start..end].fill(px);
+            return;
+        }
+        if let Some(s) = src8 {
+            let sp = s.opaque_packed();
+            for px in &mut surf.buf[start..end] {
+                *px = lerp_argb(sp, *px, s.a);
+            }
+            return;
+        }
+    }
+
+    match src8 {
+        Some(s) => {
+            let q = cov8(c);
+            for i in start..end {
+                surf.blend_alpha8(i, s, q);
+            }
+        }
+        None => {
+            for i in start..end {
+                surf.blend(i, paint.color, c, paint.blend);
             }
         }
     }
 }
 
-/// Accumulate a horizontal span's exact per-pixel overlap into `coverage`.
+/// Recognise a lone axis-aligned rectangle among the paths to be filled.
+///
+/// Backgrounds, cards, dividers, selection bands, table cells — a UI is mostly
+/// these, and they need none of the scanline machinery.
+fn axis_aligned_rect(paths: &[Vec<Point>]) -> Option<Rect> {
+    if paths.len() != 1 || paths[0].len() != 4 {
+        return None;
+    }
+    let p = &paths[0];
+    let (x0, y0) = p[0];
+    let (x1, y1) = p[1];
+    let (x2, y2) = p[2];
+    let (x3, y3) = p[3];
+
+    // Wound either way round, starting along either axis.
+    let flat = (y0 == y1 && x1 == x2 && y2 == y3 && x3 == x0)
+        || (x0 == x1 && y1 == y2 && x2 == x3 && y3 == y0);
+    if !flat {
+        return None;
+    }
+
+    let rect = Rect {
+        x0: x0.min(x1).min(x2).min(x3),
+        y0: y0.min(y1).min(y2).min(y3),
+        x1: x0.max(x1).max(x2).max(x3),
+        y1: y0.max(y1).max(y2).max(y3),
+    };
+    if !(rect.x0.is_finite() && rect.y0.is_finite() && rect.x1.is_finite() && rect.y1.is_finite()) {
+        return None;
+    }
+
+    Some(rect)
+}
+
+/// Fill an axis-aligned rectangle directly.
+///
+/// Every row is three runs — a partial left pixel, a solid middle, a partial
+/// right pixel — so there is nothing to sort, no active edge list, and no
+/// per-pixel coverage buffer. The middle of an opaque rectangle becomes a
+/// single memory fill per row.
+///
+/// Vertical coverage is counted in the same [`SUBSAMPLES`] steps the scanline
+/// filler uses and horizontal overlap is exact in both, so this produces
+/// byte-identical output — it is purely a shorter route to the same pixels.
+fn fill_axis_aligned_rect(surf: &mut Surface, rect: Rect, paint: &Paint, clip: Rect) {
+    let r = rect.intersect(&clip);
+    if r.is_empty() {
+        return;
+    }
+    let (px0, py0, px1, py1) = r.pixel_bounds(surf.w, surf.h);
+    if px1 <= px0 || py1 <= py0 {
+        return;
+    }
+
+    let solid = paint.opaque_pixel();
+    let src8 = (paint.blend == BlendMode::Alpha).then(|| Src8::new(paint.color));
+    if src8.is_some_and(|s| s.a == 0) {
+        return;
+    }
+
+    // Horizontal layout of a row, shared by all of them.
+    let first = px0;
+    let last = px1 - 1;
+    let left_cov = ((first + 1) as f64).min(r.x1) - (first as f64).max(r.x0);
+    let right_cov = ((last + 1) as f64).min(r.x1) - (last as f64).max(r.x0);
+    let mid_start = (first + 1).min(px1);
+    let mid_end = last.max(mid_start);
+
+    for py in py0..py1 {
+        let mut inside = 0;
+        for s in 0..SUBSAMPLES {
+            let sy = py as f64 + (s as f64 + 0.5) / SUBSAMPLES as f64;
+            if sy >= r.y0 && sy < r.y1 {
+                inside += 1;
+            }
+        }
+        if inside == 0 {
+            continue;
+        }
+        let vcov = inside as f32 / SUBSAMPLES as f32;
+        let row = py * surf.w;
+
+        if first == last {
+            // A rectangle less than two pixels wide is only its edge column.
+            blend_run(
+                surf,
+                row + first,
+                row + first + 1,
+                vcov * (r.x1 - r.x0).min(1.0) as f32,
+                paint,
+                solid,
+                src8,
+            );
+            continue;
+        }
+
+        blend_run(
+            surf,
+            row + first,
+            row + first + 1,
+            vcov * left_cov as f32,
+            paint,
+            solid,
+            src8,
+        );
+        blend_run(
+            surf,
+            row + mid_start,
+            row + mid_end,
+            vcov,
+            paint,
+            solid,
+            src8,
+        );
+        blend_run(
+            surf,
+            row + last,
+            row + last + 1,
+            vcov * right_cov as f32,
+            paint,
+            solid,
+            src8,
+        );
+    }
+}
+
+/// Sort and coalesce a row's column ranges in place.
+///
+/// Every sub-scanline contributes its own ranges and they overlap heavily — the
+/// four samples of a solid shape give four near-identical ones — so collapsing
+/// them first keeps each covered column blended exactly once.
+fn merge_spans(spans: &mut Vec<(usize, usize)>) {
+    spans.sort_unstable();
+
+    let mut write = 0;
+    for read in 1..spans.len() {
+        if spans[read].0 <= spans[write].1 {
+            spans[write].1 = spans[write].1.max(spans[read].1);
+        } else {
+            write += 1;
+            spans[write] = spans[read];
+        }
+    }
+    spans.truncate(write + 1);
+}
+
+/// Quantize a coverage weight to the 0..=255 the integer blender takes.
 #[inline]
-fn add_span(coverage: &mut [f32], px0: usize, px1: usize, x_start: f64, x_end: f64, weight: f32) {
+fn cov8(c: f32) -> u32 {
+    (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u32
+}
+
+/// Accumulate a horizontal span's exact per-pixel overlap into `coverage`,
+/// returning the half-open range of `coverage` indices it touched.
+///
+/// Only the two end pixels can be partially covered; everything between them
+/// takes the whole `weight`. Splitting the span that way keeps the interior —
+/// which is nearly all of it on a wide shape — a flat add that vectorizes,
+/// instead of a per-pixel clamp against the span bounds.
+#[inline]
+fn add_span(
+    coverage: &mut [f32],
+    px0: usize,
+    px1: usize,
+    x_start: f64,
+    x_end: f64,
+    weight: f32,
+) -> Option<(usize, usize)> {
     let lo = x_start.max(px0 as f64);
     let hi = x_end.min(px1 as f64);
     if hi <= lo {
-        return;
+        return None;
     }
     let first = lo.floor() as usize;
     let last = (hi.ceil() as usize).min(px1);
-    for px in first..last {
-        let l = lo.max(px as f64);
-        let r = hi.min(px as f64 + 1.0);
-        if r > l {
-            coverage[px - px0] += (r - l) as f32 * weight;
-        }
+    if last <= first {
+        return None;
     }
+    let touched = Some((first - px0, last - px0));
+    if last - first == 1 {
+        coverage[first - px0] += (hi - lo) as f32 * weight;
+        return touched;
+    }
+
+    coverage[first - px0] += ((first + 1) as f64 - lo) as f32 * weight;
+
+    let inner_end = (hi.floor() as usize).min(last);
+    for c in &mut coverage[first + 1 - px0..inner_end - px0] {
+        *c += weight;
+    }
+
+    if inner_end < last {
+        coverage[inner_end - px0] += (hi - inner_end as f64) as f32 * weight;
+    }
+
+    touched
 }
 
 // ---------------------------------------------------------------------------
@@ -497,6 +969,10 @@ pub fn blit_mask(surf: &mut Surface, mask: &Mask, xform: &Transform, paint: &Pai
         return;
     }
 
+    // The mask's own bytes are already 0..=255 coverage, so on the alpha path
+    // a glyph never touches floating point at all.
+    let src8 = (paint.blend == BlendMode::Alpha).then(|| Src8::new(paint.color));
+
     if let Some((ox, oy)) = axis_aligned_offset(xform) {
         let rect = Rect::new(ox as f64, oy as f64, mask.w as f64, mask.h as f64);
         let (x0, y0, x1, y1) = rect.intersect(&clip).pixel_bounds(surf.w, surf.h);
@@ -506,7 +982,12 @@ pub fn blit_mask(surf: &mut Surface, mask: &Mask, xform: &Transform, paint: &Pai
             for px in x0..x1 {
                 let a = mask.data[src_row + (px as i64 - ox) as usize];
                 if a > 0 {
-                    surf.blend(dst_row + px, paint.color, a as f32 / 255.0, paint.blend);
+                    match src8 {
+                        Some(s) => surf.blend_alpha8(dst_row + px, s, a as u32),
+                        None => {
+                            surf.blend(dst_row + px, paint.color, a as f32 / 255.0, paint.blend)
+                        }
+                    }
                 }
             }
         }
@@ -563,6 +1044,58 @@ pub fn blit_surface_sub(
     if clip.is_empty() {
         return;
     }
+
+    // 1:1 at an integer offset — an overlay layer composited back over the
+    // screen, which is the case that actually costs a full frame's worth of
+    // pixels. Nothing here needs sampling: source and destination pixels
+    // correspond exactly, so the inverse transform, the bounds rejection and
+    // the half-pixel inset all fall away, and a fully opaque row is a memcpy.
+    if let Some((ox, oy)) =
+        axis_aligned_offset(xform).filter(|_| is_integral(&sub) && paint.blend == BlendMode::Alpha)
+    {
+        let tint = Src8::new(paint.color);
+        if tint.a == 0 {
+            return;
+        }
+        let rect = Rect::new(ox as f64, oy as f64, sub_w, sub_h);
+        let (x0, y0, x1, y1) = rect.intersect(&clip).pixel_bounds(dst.w, dst.h);
+        let (sx0, sy0) = (sub.x0 as i64, sub.y0 as i64);
+        // Untinted is the overwhelmingly common case — a layer composited
+        // as-is — and it skips the channel-wise modulate entirely, so the
+        // branch is hoisted out of the row rather than tested per pixel.
+        let plain = tint.is_opaque_white();
+
+        for py in y0..y1 {
+            let src_base =
+                (py as i64 - oy + sy0) as usize * src.w + (x0 as i64 - ox + sx0) as usize;
+            let dst_base = py * dst.w + x0;
+
+            if plain {
+                for k in 0..x1 - x0 {
+                    let s = src.buf[src_base + k];
+                    let sa = s >> 24;
+                    if sa == 0 {
+                        continue;
+                    }
+                    dst.buf[dst_base + k] = if sa == 255 {
+                        s
+                    } else {
+                        lerp_argb(s | 0xFF00_0000, dst.buf[dst_base + k], sa)
+                    };
+                }
+            } else {
+                for k in 0..x1 - x0 {
+                    let s = src.buf[src_base + k];
+                    if s >> 24 == 0 {
+                        continue;
+                    }
+                    dst.blend_alpha8(dst_base + k, Src8::from_pixel(s).modulate(tint), 255);
+                }
+            }
+        }
+        return;
+    }
+
     let Some(inv) = xform.inverse() else { return };
     let bounds = transformed_bounds(xform, sub_w, sub_h);
     let (x0, y0, x1, y1) = bounds.intersect(&clip).pixel_bounds(dst.w, dst.h);
@@ -599,6 +1132,12 @@ pub fn blit_surface_sub(
             dst.blend(dst_row + px, tint, 1.0, paint.blend);
         }
     }
+}
+
+/// Whether a source region lands on whole pixels, so it can be indexed
+/// directly instead of sampled.
+fn is_integral(r: &Rect) -> bool {
+    r.x0.fract() == 0.0 && r.y0.fract() == 0.0 && r.x1.fract() == 0.0 && r.y1.fract() == 0.0
 }
 
 /// Pin a source coordinate to the half-pixel-inset interior of a `0..extent`
@@ -932,6 +1471,232 @@ mod tests {
         let a = Rect::new(0.0, 0.0, 4.0, 4.0);
         let b = Rect::new(10.0, 10.0, 4.0, 4.0);
         assert!(a.intersect(&b).is_empty());
+    }
+
+    /// Largest per-channel difference between two surfaces.
+    fn max_channel_delta(a: &Surface, b: &Surface) -> (u32, usize) {
+        let mut worst = (0, 0);
+        for i in 0..a.buf.len() {
+            for shift in [24, 16, 8, 0] {
+                let l = (a.buf[i] >> shift) & 0xFF;
+                let r = (b.buf[i] >> shift) & 0xFF;
+                if l.abs_diff(r) > worst.0 {
+                    worst = (l.abs_diff(r), i);
+                }
+            }
+        }
+        worst
+    }
+
+    /// A shape rotated 45° so every row has feathered edges — the fast paths
+    /// have to hand those partial pixels back to the blender rather than
+    /// snapping them solid.
+    fn diamond() -> Vec<Vec<Point>> {
+        vec![vec![(9.0, 2.0), (17.0, 10.0), (9.0, 18.0), (1.0, 10.0)]]
+    }
+
+    /// The opaque run-fill writes the packed colour straight in, so it has to
+    /// agree with the general blender exactly — no rounding slack at all.
+    #[test]
+    fn the_opaque_fast_path_matches_a_blended_fill_exactly() {
+        let mut fast = Surface::new(20, 20);
+        let p = paint([0.2, 0.6, 0.9, 1.0], 20, 20);
+        fill_paths(&mut fast, &diamond(), &p);
+
+        // Same coverage, but forced down the per-pixel float branch by a mode
+        // the fast path always declines. Over transparent black, Screen and
+        // Alpha reduce to the same thing.
+        let mut reference = Surface::new(20, 20);
+        let mut slow = p;
+        slow.blend = BlendMode::Screen;
+        assert!(slow.opaque_pixel().is_none(), "control must stay generic");
+        fill_paths(&mut reference, &diamond(), &slow);
+
+        let (delta, at) = max_channel_delta(&fast, &reference);
+        assert_eq!(delta, 0, "opaque fill differs at pixel {at}");
+    }
+
+    /// A translucent fill — a shadow or a scrim — composites in integer
+    /// arithmetic, which is allowed to round differently from the float path
+    /// but never by more than one unit in the last place.
+    #[test]
+    fn the_integer_alpha_blend_tracks_the_float_blend_within_one_lsb() {
+        for alpha in [0.25, 0.5, 0.75] {
+            let mut fast = Surface::opaque(20, 20);
+            let p = paint([0.2, 0.6, 0.9, alpha], 20, 20);
+            fill_paths(&mut fast, &diamond(), &p);
+
+            let mut reference = Surface::opaque(20, 20);
+            let mut slow = p;
+            slow.blend = BlendMode::Screen;
+            fill_paths(&mut reference, &diamond(), &slow);
+
+            // Screen over an opaque *black* destination still reduces to alpha
+            // compositing, so the two remain comparable.
+            let (delta, at) = max_channel_delta(&fast, &reference);
+            assert!(delta <= 1, "alpha {alpha}: off by {delta} at pixel {at}");
+        }
+    }
+
+    /// The 1:1 canvas composite — an overlay layer drawn back over the screen —
+    /// must land on the same pixels as the sampling path it short-circuits.
+    #[test]
+    fn the_direct_canvas_blit_matches_the_sampled_one() {
+        // A layer with an opaque region, a translucent region, and holes.
+        let mut layer = Surface::new(16, 16);
+        for y in 0..16 {
+            for x in 0..16 {
+                layer.buf[y * 16 + x] = match (x / 4 + y / 4) % 3 {
+                    0 => 0,
+                    1 => pack(1.0, 0.9, 0.3, 0.1),
+                    _ => pack(0.5, 0.1, 0.4, 0.8),
+                };
+            }
+        }
+
+        for tint in [[1.0, 1.0, 1.0, 1.0], [1.0, 0.5, 0.5, 0.8]] {
+            let mut direct = Surface::opaque(24, 24);
+            let p = paint(tint, 24, 24);
+            blit_surface(&mut direct, &layer, &Transform::translation(3.0, 5.0), &p);
+
+            // Far enough off an integer offset to decline the direct path —
+            // `axis_aligned_offset` tolerates 1e-6 — but far too small to move
+            // which source pixel any destination pixel samples. So this goes
+            // through the inverse transform and the sampler on the same pixels.
+            let nudged = Transform::translation(3.0 + 1e-5, 5.0 + 1e-5);
+            assert!(
+                axis_aligned_offset(&nudged).is_none(),
+                "the control has to decline the direct path, or this proves nothing"
+            );
+            let mut sampled = Surface::opaque(24, 24);
+            blit_surface(&mut sampled, &layer, &nudged, &p);
+
+            let (delta, at) = max_channel_delta(&direct, &sampled);
+            assert!(delta <= 1, "tint {tint:?}: off by {delta} at pixel {at}");
+        }
+    }
+
+    #[test]
+    fn a_full_row_span_accumulates_exactly_one_unit_of_coverage() {
+        // The split into leading partial / interior / trailing partial must not
+        // drop or double-count a pixel at either boundary.
+        let mut cov = vec![0.0f32; 6];
+        add_span(&mut cov, 0, 6, 1.25, 4.5, 1.0);
+        let expected = [0.0, 0.75, 1.0, 1.0, 0.5, 0.0];
+        for (i, (got, want)) in cov.iter().zip(expected).enumerate() {
+            assert!((got - want).abs() < 1e-6, "pixel {i}: {got} != {want}");
+        }
+    }
+
+    /// The coverage buffer is reused across rows and only the part a row
+    /// touched is cleared. A shape that narrows as it descends would expose a
+    /// wrong clear immediately: the wide rows above would leave coverage behind
+    /// in columns the narrow rows below never reach.
+    #[test]
+    fn a_narrowing_shape_leaves_no_stale_coverage_below() {
+        let mut s = Surface::new(24, 24);
+        // Right triangle: row 0 spans the full width, the last row barely one
+        // pixel.
+        let tri = vec![vec![(0.0, 0.0), (20.0, 0.0), (0.0, 20.0)]];
+        fill_paths(&mut s, &tri, &paint([1.0, 1.0, 1.0, 1.0], 24, 24));
+
+        for y in 0..20 {
+            // Everything past the hypotenuse (x + y = 20) must be untouched.
+            for x in (20 - y + 1)..24 {
+                assert!(
+                    alpha_at(&s, x, y) < 0.01,
+                    "stale coverage at ({x},{y}) below a wider row"
+                );
+            }
+        }
+        assert!(
+            alpha_at(&s, 1, 1) > 0.9,
+            "the triangle itself should be drawn"
+        );
+    }
+
+    /// A hollow shape is the case the row-extent tracking exists for. Its hole
+    /// must stay untouched, and the band around it must still be solid.
+    #[test]
+    fn a_ring_fills_its_band_and_spares_its_hole() {
+        let mut s = Surface::opaque(40, 40);
+        // Outer ring wound one way, inner wound the other, so the nonzero rule
+        // punches the hole out.
+        let outer = vec![(4.0, 4.0), (36.0, 4.0), (36.0, 36.0), (4.0, 36.0)];
+        let inner = vec![(10.0, 10.0), (10.0, 30.0), (30.0, 30.0), (30.0, 10.0)];
+        let mut p = paint([1.0, 0.0, 0.0, 1.0], 40, 40);
+        p.blend = BlendMode::Alpha;
+        fill_paths(&mut s, &[outer, inner], &p);
+
+        assert!(
+            (red_at(&s, 6, 20) - 1.0).abs() < 0.01,
+            "left band not filled"
+        );
+        assert!(
+            (red_at(&s, 33, 20) - 1.0).abs() < 0.01,
+            "right band not filled"
+        );
+        assert!(red_at(&s, 20, 20) < 0.01, "the hole was painted over");
+        assert!(red_at(&s, 2, 20) < 0.01, "paint leaked outside the ring");
+    }
+
+    /// The rectangle path is a shortcut, not a different renderer: it has to
+    /// land on exactly the pixels the scanline filler would have written.
+    ///
+    /// The control is the same rectangle with an extra collinear vertex — five
+    /// points, so `axis_aligned_rect` declines it — which is geometrically
+    /// identical but goes the long way round.
+    #[test]
+    fn the_rectangle_shortcut_is_byte_identical_to_the_scanline_filler() {
+        let cases = [
+            (2.0, 3.0, 12.0, 9.0),   // whole pixels
+            (2.25, 3.5, 12.75, 9.5), // fractional on every edge
+            (4.6, 4.4, 5.2, 11.9),   // narrower than two pixels
+            (-3.0, -2.5, 8.0, 6.25), // starting off the surface
+        ];
+
+        for (x0, y0, x1, y1) in cases {
+            for alpha in [1.0, 0.45] {
+                let p = paint([0.3, 0.7, 0.2, alpha], 20, 20);
+
+                let mut fast = Surface::opaque(20, 20);
+                let quad = vec![vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)]];
+                assert!(
+                    axis_aligned_rect(&quad).is_some(),
+                    "should take the shortcut"
+                );
+                fill_paths(&mut fast, &quad, &p);
+
+                let mut slow = Surface::opaque(20, 20);
+                let midpoint = (x0 + x1) * 0.5;
+                let split = vec![vec![(x0, y0), (midpoint, y0), (x1, y0), (x1, y1), (x0, y1)]];
+                assert!(
+                    axis_aligned_rect(&split).is_none(),
+                    "the control must decline the shortcut"
+                );
+                fill_paths(&mut slow, &split, &p);
+
+                let (delta, at) = max_channel_delta(&fast, &slow);
+                assert_eq!(
+                    delta, 0,
+                    "rect ({x0},{y0})-({x1},{y1}) at alpha {alpha} differs at pixel {at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_rectangle_shortcut_declines_anything_that_is_not_one() {
+        // A diamond: four points, none of the edges axis-aligned.
+        let diamond = vec![vec![(5.0, 0.0), (10.0, 5.0), (5.0, 10.0), (0.0, 5.0)]];
+        assert!(axis_aligned_rect(&diamond).is_none());
+
+        // Two rectangles at once — the nonzero rule may punch a hole.
+        let pair = vec![
+            vec![(0.0, 0.0), (8.0, 0.0), (8.0, 8.0), (0.0, 8.0)],
+            vec![(2.0, 2.0), (2.0, 6.0), (6.0, 6.0), (6.0, 2.0)],
+        ];
+        assert!(axis_aligned_rect(&pair).is_none());
     }
 
     #[test]

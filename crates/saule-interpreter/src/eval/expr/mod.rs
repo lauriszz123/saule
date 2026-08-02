@@ -203,6 +203,7 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             };
             Ok(Value::Function(Rc::new(FunctionObject {
                 name: None,
+                param_keys: FunctionObject::intern_params(params),
                 params: params.clone(),
                 body,
                 closure: env.clone(),

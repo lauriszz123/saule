@@ -222,7 +222,7 @@ fn check_pattern(
             with_enums(|e| {
                 if let Some(info) = e.get(enum_name) {
                     known_enum = true;
-                    if let Some(&arity) = info.variants.get(variant) {
+                    if let Some(arity) = info.variants.get(variant).map(|v| v.arity()) {
                         if fields.len() != arity {
                             errors.push(TypeCheckError::MatchVariantArityMismatch {
                                 variant: format!("{enum_name}.{variant}"),
@@ -279,18 +279,33 @@ fn check_pattern_literal_compat(
     }
 }
 
-/// Bind the variables introduced by a pattern into `scope`. Best-effort
-/// typing: scrutinee-typed for top-level binds, `any` for sub-patterns whose
-/// type we can't easily derive.
+/// Bind the variables introduced by a pattern into `scope`.
+///
+/// A top-level bind takes the scrutinee's type, and a variant's payload binds
+/// take the types declared on the variant — so `case Shape.Rect(w, h)` gives
+/// `w` and `h` whatever `Rect(w: float, h: float)` said they were, and using
+/// them as floats needs no cast. Anything the declaration cannot answer for
+/// (a tuple sub-pattern, an unknown enum) still falls back to `any`.
 fn bind_pattern(pat: &Pattern, scrut_ty: Option<&Type>, scope: &mut Scope) {
     match pat {
         Pattern::Bind(name) => {
             let ty = scrut_ty.cloned().unwrap_or(Type::Named("any".into()));
             scope.bind(name.clone(), ty);
         }
-        Pattern::Variant { fields, .. } => {
-            for f in fields {
-                bind_pattern(&f.value, None, scope);
+        Pattern::Variant {
+            enum_name,
+            variant,
+            fields,
+        } => {
+            let declared: Vec<Option<Type>> = with_enums(|e| {
+                let shape = e.get(enum_name).and_then(|info| info.variants.get(variant));
+                (0..fields.len())
+                    .map(|i| shape.and_then(|s| s.field_ty(i)).cloned())
+                    .collect()
+            });
+
+            for (f, ty) in fields.iter().zip(declared) {
+                bind_pattern(&f.value, ty.as_ref(), scope);
             }
         }
         Pattern::Tuple(fields) => {
