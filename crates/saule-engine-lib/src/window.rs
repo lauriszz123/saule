@@ -75,12 +75,24 @@ pub(crate) fn window_is_open() -> bool {
     state::with(|e| e.is_open()).unwrap_or(false)
 }
 
-/// `Window.pollEvents()` — pump the OS event queue once per frame so `isOpen`
-/// and input stay fresh at the top of the loop.
+/// `Window.pollEvents()` — pump the OS event queue and return everything that
+/// happened since the last call.
+///
+/// Each entry is `[kind, payload…]`: `["keyPressed", key, shift, ctrl, alt]`,
+/// `["mouseMoved", x, y, dx, dy]`, `["textInput", text]`, and so on. The
+/// tagged-union shape does not survive the native ABI, so the Saule side
+/// rebuilds it — `UIKit/Events.sau` decodes these into an `Event` enum with
+/// tuple payloads to `match` on.
+///
+/// This is the primary input API. `Keyboard.isDown` and `Mouse.getPos` remain
+/// for the question events cannot answer — what is held *right now* — but the
+/// per-frame edge queries are gone; a press is an event.
 #[saule_export(class = "Window", name = "pollEvents")]
-fn window_poll_events() -> Result<(), String> {
-    state::with(|e| e.poll_events())?;
-    Ok(())
+fn window_poll_events() -> Result<saule_sdk::types::STable, String> {
+    state::with(|e| {
+        e.poll_events();
+        crate::event::to_table(e.events())
+    })?
 }
 
 /// `Window.close()` — close the window and end the loop.

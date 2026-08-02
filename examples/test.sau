@@ -11,7 +11,7 @@ end
 fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
 	local result: table<T> = {}
 
-	for item: T in items do
+	for item in items do
 		if predicate(item) then
 			result[#result + 1] = item
 		end
@@ -20,6 +20,7 @@ fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
 	return result
 end
 
+--- A nigger
 local nums: table = {1, 2, 3, 4, 5, 6}
 
 local evens = filter(nums, x => x % 2 == 0)

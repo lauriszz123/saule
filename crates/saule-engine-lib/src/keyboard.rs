@@ -1,18 +1,20 @@
-//! Keyboard module — a polling take on Love2D's `love.keyboard`.
+//! Keyboard module — Love2D's `love.keyboard`, split between a queue and a
+//! set of level queries.
 //!
 //! Love2D splits keyboard input in two: level queries (`love.keyboard.isDown`)
 //! and callbacks (`love.keypressed`, `love.keyreleased`, `love.textinput`).
 //! Saule owns the game loop here and the engine has no callback registry, so
-//! the callbacks become per-frame *queries*: `wasPressed` / `wasReleased` and
-//! `getTextInput`. All three are relative to the last `Window.pollEvents()`,
-//! which is the frame boundary the loop already has.
+//! the callbacks become *events*, drained by `Window.pollEvents()` — see
+//! [`crate::event`]. What stays in this module is the level half, plus the
+//! machinery the queue is built from: the ordered message log ([`LOG`]) and the
+//! edge bitsets ([`EDGES`]) that drive held-key timing and repeat.
 //!
 //! Key names follow Love2D's `KeyConstant` strings — `"a"`, `"space"`,
 //! `"lshift"`, `"return"`, `"kp0"`, `"/"` — so code reads the same as its
 //! Love2D equivalent. Unrecognised names never panic: they simply report as
 //! "not down".
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::Instant;
 
 use minifb::{InputCallback, Key, Window};
@@ -315,8 +317,9 @@ pub struct KeyState {
     released: [bool; KEY_SLOTS],
     /// Seconds each key has been held, or `-1` while it is up.
     held: [f32; KEY_SLOTS],
-    /// Keys whose repeat timer fired this frame; `wasPressed` reports these
-    /// alongside genuine presses.
+    /// Keys whose repeat timer fired this frame. These are the engine's own
+    /// invention rather than OS messages, so the event queue synthesises a
+    /// `KeyPressed` for each after the frame's real ones.
     repeated: [bool; KEY_SLOTS],
     repeat: bool,
     last_sync: Instant,
@@ -374,20 +377,6 @@ impl KeyState {
         }
     }
 
-    /// `true` if the key went down this frame, or its repeat timer fired.
-    ///
-    /// A key tapped and let go entirely within one frame still reports here —
-    /// that is the whole point of latching edges at the callback.
-    pub fn is_pressed(&self, key: Key) -> bool {
-        let i = key as usize;
-        self.pressed[i] || self.repeated[i]
-    }
-
-    /// `true` if the key came up this frame.
-    pub fn is_released(&self, key: Key) -> bool {
-        self.released[key as usize]
-    }
-
     /// The names of every key matching `pick`, in [`KEY_TABLE`] order.
     fn names_where(&self, pick: impl Fn(&Self, Key) -> bool) -> Vec<&'static str> {
         KEY_TABLE
@@ -395,6 +384,15 @@ impl KeyState {
             .filter(|(k, _)| pick(self, *k))
             .map(|(_, name)| *name)
             .collect()
+    }
+
+    /// Keys whose repeat timer fired this frame, in [`KEY_TABLE`] order.
+    ///
+    /// These are not OS messages, so they are absent from the ordered log and
+    /// the event queue synthesises a `KeyPressed` for each. Holding backspace
+    /// in a text field depends on it.
+    pub fn repeated_names(&self) -> Vec<&'static str> {
+        self.names_where(|s, k| s.repeated[k as usize])
     }
 
     pub fn set_repeat(&mut self, enabled: bool) {
@@ -423,30 +421,23 @@ fn repeat_fired(before: f32, after: f32) -> bool {
 // Text input
 // ---------------------------------------------------------------------------
 
-/// Text typed since the last `Keyboard.getTextInput()`, plus the `setTextInput`
-/// gate.
-///
-/// This lives outside [`crate::state::Engine`] because minifb delivers
-/// characters from inside `window.update()` — i.e. while the engine is already
-/// mutably borrowed. The interpreter is single-threaded, so a `thread_local` is
-/// both sufficient and the only thing the callback can reach.
-struct TextState {
-    enabled: bool,
-    buf: String,
-}
-
+// The `setTextInput` gate.
+//
+// This lives outside `crate::state::Engine` because minifb delivers characters
+// from inside `window.update()` — i.e. while the engine is already mutably
+// borrowed. The interpreter is single-threaded, so a `thread_local` is both
+// sufficient and the only thing the callback can reach.
+//
+// There is no buffer any more: typed text leaves as a `TextInput` event, in
+// order with the key messages around it, rather than as a pile drained whenever
+// the app got round to asking.
 thread_local! {
-    static TEXT: RefCell<TextState> = const {
-        RefCell::new(TextState {
-            // Love2D starts with text input enabled on desktop.
-            enabled: true,
-            buf: String::new(),
-        })
-    };
+    // Love2D starts with text input enabled on desktop.
+    static TEXT_ENABLED: Cell<bool> = const { Cell::new(true) };
 }
 
-/// Cap on unread typed text, so a program that never drains the buffer cannot
-/// grow it without bound.
+/// Cap on the characters held in one coalesced `Text` message, so a program
+/// that stops polling cannot grow it without bound.
 const TEXT_LIMIT: usize = 4096;
 
 /// Key edges seen since the last [`KeyState::sync`], recorded as the backend
@@ -476,6 +467,80 @@ thread_local! {
     };
 }
 
+/// One keyboard message, in the order the backend handed it over.
+///
+/// The [`EDGES`] bitsets answer "did this key go down at some point this
+/// frame", which is all the level-state API ever needed. An event queue has to
+/// say *in what order*, and has to keep two taps of the same key apart, so the
+/// callback also appends here. Modifiers are captured at message time rather
+/// than read back later, because by the end of the frame the shift key may well
+/// be up again.
+pub(crate) enum KeyMessage {
+    Down {
+        key: Key,
+        mods: Modifiers,
+    },
+    Up {
+        key: Key,
+        mods: Modifiers,
+    },
+    /// A run of typed characters. Consecutive characters coalesce into one
+    /// message, so a fast typist costs one event rather than one per letter.
+    Text(String),
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Modifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+/// Cap on unread messages, matching [`TEXT_LIMIT`]'s reasoning: a program that
+/// stops polling must not grow this without bound.
+const LOG_LIMIT: usize = 1024;
+
+thread_local! {
+    static LOG: RefCell<Vec<KeyMessage>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Take this frame's keyboard messages in arrival order.
+pub(crate) fn drain_messages() -> Vec<KeyMessage> {
+    LOG.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
+
+/// Whether the given slot is held, per the callback's own live view.
+fn live_any(edges: &EdgeState, keys: [Key; 2]) -> bool {
+    keys.iter().any(|k| {
+        let i = *k as usize;
+        i < KEY_SLOTS && edges.live[i]
+    })
+}
+
+fn current_mods(edges: &EdgeState) -> Modifiers {
+    Modifiers {
+        shift: live_any(edges, [Key::LeftShift, Key::RightShift]),
+        ctrl: live_any(edges, [Key::LeftCtrl, Key::RightCtrl]),
+        alt: live_any(edges, [Key::LeftAlt, Key::RightAlt]),
+    }
+}
+
+fn push_message(msg: KeyMessage) {
+    LOG.with(|cell| {
+        let mut log = cell.borrow_mut();
+        // Coalesce a run of characters into the message already at the back.
+        if let (KeyMessage::Text(incoming), Some(KeyMessage::Text(tail))) = (&msg, log.last_mut()) {
+            if tail.len() + incoming.len() <= TEXT_LIMIT {
+                tail.push_str(incoming);
+            }
+            return;
+        }
+        if log.len() < LOG_LIMIT {
+            log.push(msg);
+        }
+    });
+}
+
 /// Take this frame's edges, leaving the buffer empty for the next one.
 fn drain_edges() -> ([bool; KEY_SLOTS], [bool; KEY_SLOTS]) {
     EDGES.with(|cell| {
@@ -496,16 +561,13 @@ impl InputCallback for TextCollector {
             return;
         };
         // Backspace, Return and friends arrive here on some backends; they are
-        // key presses, not text, and `wasPressed` already reports them.
+        // key presses, not text, and already have their own `KeyPressed`.
         if ch.is_control() {
             return;
         }
-        TEXT.with(|cell| {
-            let mut text = cell.borrow_mut();
-            if text.enabled && text.buf.len() + ch.len_utf8() <= TEXT_LIMIT {
-                text.buf.push(ch);
-            }
-        });
+        if TEXT_ENABLED.with(Cell::get) {
+            push_message(KeyMessage::Text(ch.to_string()));
+        }
     }
 
     fn set_key_state(&mut self, key: Key, state: bool) {
@@ -513,10 +575,10 @@ impl InputCallback for TextCollector {
         if i >= KEY_SLOTS {
             return; // `Key::Unknown`, and anything a future backend adds
         }
-        EDGES.with(|cell| {
+        let message = EDGES.with(|cell| {
             let mut edges = cell.borrow_mut();
             if edges.live[i] == state {
-                return; // OS auto-repeat, or a duplicate message
+                return None; // OS auto-repeat, or a duplicate message
             }
             edges.live[i] = state;
             if state {
@@ -524,13 +586,26 @@ impl InputCallback for TextCollector {
             } else {
                 edges.released[i] = true;
             }
+            // Read the modifiers now: `live` is already updated, so a shift
+            // press reports itself as shifted, matching how every other
+            // toolkit reports it.
+            let mods = current_mods(&edges);
+            Some(if state {
+                KeyMessage::Down { key, mods }
+            } else {
+                KeyMessage::Up { key, mods }
+            })
         });
+
+        if let Some(message) = message {
+            push_message(message);
+        }
     }
 }
 
 /// Drop the text and key edges buffered from a previous window session.
 pub(crate) fn reset_input() {
-    TEXT.with(|cell| cell.borrow_mut().buf.clear());
+    LOG.with(|cell| cell.borrow_mut().clear());
     EDGES.with(|cell| {
         *cell.borrow_mut() = EdgeState {
             pressed: [false; KEY_SLOTS],
@@ -567,27 +642,6 @@ fn keyboard_is_any_down(keys: STable<SString>) -> Result<bool, String> {
     Ok(false)
 }
 
-/// `Keyboard.wasPressed(key)` — `true` if the key went down since the previous
-/// `Window.pollEvents()`. The polling equivalent of Love2D's `love.keypressed`
-/// callback; with `setKeyRepeat(true)` it also fires on repeats.
-#[saule_export(class = "Keyboard", name = "wasPressed")]
-fn keyboard_was_pressed(key: String) -> bool {
-    match parse_key(&key) {
-        Some(k) => state::with(|e| e.keys().is_pressed(k)).unwrap_or(false),
-        None => false,
-    }
-}
-
-/// `Keyboard.wasReleased(key)` — `true` if the key came up since the previous
-/// `Window.pollEvents()`. The polling equivalent of `love.keyreleased`.
-#[saule_export(class = "Keyboard", name = "wasReleased")]
-fn keyboard_was_released(key: String) -> bool {
-    match parse_key(&key) {
-        Some(k) => state::with(|e| e.keys().is_released(k)).unwrap_or(false),
-        None => false,
-    }
-}
-
 /// `Keyboard.getKeysDown()` — the names of every key currently held.
 #[saule_export(class = "Keyboard", name = "getKeysDown")]
 fn keyboard_get_keys_down() -> Result<STable<SString>, String> {
@@ -595,24 +649,8 @@ fn keyboard_get_keys_down() -> Result<STable<SString>, String> {
     names_table(&names)
 }
 
-/// `Keyboard.getKeysPressed()` — the names of every key that went down this
-/// frame, in the same order `getKeysDown` uses.
-#[saule_export(class = "Keyboard", name = "getKeysPressed")]
-fn keyboard_get_keys_pressed() -> Result<STable<SString>, String> {
-    let names = state::with(|e| e.keys().names_where(KeyState::is_pressed)).unwrap_or_default();
-    names_table(&names)
-}
-
-/// `Keyboard.getKeysReleased()` — the names of every key that came up this
-/// frame.
-#[saule_export(class = "Keyboard", name = "getKeysReleased")]
-fn keyboard_get_keys_released() -> Result<STable<SString>, String> {
-    let names = state::with(|e| e.keys().names_where(KeyState::is_released)).unwrap_or_default();
-    names_table(&names)
-}
-
-/// `Keyboard.setKeyRepeat(enable)` — when enabled, a held key keeps reporting
-/// `wasPressed` after a short delay, the way a text field wants. Off by
+/// `Keyboard.setKeyRepeat(enable)` — when enabled, a held key keeps emitting
+/// `KeyPressed` events after a short delay, the way a text field wants. Off by
 /// default, matching Love2D.
 #[saule_export(class = "Keyboard", name = "setKeyRepeat")]
 fn keyboard_set_key_repeat(enable: bool) -> Result<(), String> {
@@ -629,29 +667,22 @@ fn keyboard_has_key_repeat() -> Result<bool, String> {
 /// Disabling it also drops whatever has been buffered.
 #[saule_export(class = "Keyboard", name = "setTextInput")]
 fn keyboard_set_text_input(enable: bool) {
-    TEXT.with(|cell| {
-        let mut text = cell.borrow_mut();
-        text.enabled = enable;
-        if !enable {
-            text.buf.clear();
-        }
-    });
+    TEXT_ENABLED.with(|enabled| enabled.set(enable));
+
+    if !enable {
+        // Drop text already queued this frame, so disabling mid-frame does not
+        // deliver a keystroke the app has just said it does not want.
+        LOG.with(|cell| {
+            cell.borrow_mut()
+                .retain(|m| !matches!(m, KeyMessage::Text(_)))
+        });
+    }
 }
 
 /// `Keyboard.hasTextInput()` — whether typed text is being collected.
 #[saule_export(class = "Keyboard", name = "hasTextInput")]
 fn keyboard_has_text_input() -> bool {
-    TEXT.with(|cell| cell.borrow().enabled)
-}
-
-/// `Keyboard.getTextInput()` — the text typed since the last call, and clears
-/// the buffer. This is the polling equivalent of Love2D's `love.textinput`
-/// callback: it is layout- and modifier-aware (so `shift`+`a` gives `"A"`),
-/// unlike the raw key names `wasPressed` reports. Returns `""` when nothing was
-/// typed or when `setTextInput(false)` is in effect.
-#[saule_export(class = "Keyboard", name = "getTextInput")]
-fn keyboard_get_text_input() -> String {
-    TEXT.with(|cell| std::mem::take(&mut cell.borrow_mut().buf))
+    TEXT_ENABLED.with(Cell::get)
 }
 
 /// Shared by `isDown` and `isAnyDown`: level state straight from the window,
@@ -722,60 +753,131 @@ mod tests {
         keys.released = released;
     }
 
+    /// Render the drained log compactly, so a test can assert on the whole
+    /// frame's worth of messages in order.
+    fn log_summary() -> Vec<String> {
+        drain_messages()
+            .into_iter()
+            .map(|m| match m {
+                KeyMessage::Down { key, mods } => {
+                    format!("down:{}{}", key_name(key).unwrap_or("?"), mod_suffix(mods))
+                }
+                KeyMessage::Up { key, mods } => {
+                    format!("up:{}{}", key_name(key).unwrap_or("?"), mod_suffix(mods))
+                }
+                KeyMessage::Text(t) => format!("text:{t}"),
+            })
+            .collect()
+    }
+
+    fn mod_suffix(mods: Modifiers) -> String {
+        let mut out = String::new();
+        if mods.shift {
+            out.push_str("+shift");
+        }
+        if mods.ctrl {
+            out.push_str("+ctrl");
+        }
+        if mods.alt {
+            out.push_str("+alt");
+        }
+        out
+    }
+
     #[test]
-    fn edges_are_relative_to_the_previous_frame() {
+    fn key_messages_arrive_in_order_and_only_on_edges() {
         reset_input();
         let mut keys = KeyState::default();
 
-        // Frame 1: the key goes down.
+        // Down, then the OS repeating the down message for a held key, then up.
+        // Only the two real edges are messages.
         TextCollector.set_key_state(Key::Space, true);
-        sync_with(&mut keys, &[Key::Space]);
-        assert!(keys.is_pressed(Key::Space));
-        assert!(!keys.is_released(Key::Space));
-
-        // Frame 2: still held — a press is an edge, not a level. The OS repeats
-        // the down message for a held key; that is not a new press.
         TextCollector.set_key_state(Key::Space, true);
-        sync_with(&mut keys, &[Key::Space]);
-        assert!(!keys.is_pressed(Key::Space));
-
-        // Frame 3: released.
         TextCollector.set_key_state(Key::Space, false);
         sync_with(&mut keys, &[]);
-        assert!(keys.is_released(Key::Space));
-        assert!(!keys.is_pressed(Key::Space));
+
+        assert_eq!(log_summary(), vec!["down:space", "up:space"]);
+    }
+
+    /// The ordering the state API could not express: two taps of the same key
+    /// inside one frame, and text interleaved with the keys around it.
+    #[test]
+    fn a_double_tap_and_interleaved_text_keep_their_order() {
+        reset_input();
+        keyboard_set_text_input(true);
+
+        TextCollector.set_key_state(Key::A, true);
+        TextCollector.add_char('a' as u32);
+        TextCollector.set_key_state(Key::A, false);
+        TextCollector.set_key_state(Key::A, true);
+        TextCollector.add_char('a' as u32);
+        TextCollector.set_key_state(Key::A, false);
+
+        assert_eq!(
+            log_summary(),
+            vec!["down:a", "text:a", "up:a", "down:a", "text:a", "up:a"]
+        );
+    }
+
+    #[test]
+    fn a_run_of_characters_coalesces_into_one_message() {
+        reset_input();
+        keyboard_set_text_input(true);
+
+        for ch in "hello".chars() {
+            TextCollector.add_char(ch as u32);
+        }
+
+        assert_eq!(log_summary(), vec!["text:hello"]);
+    }
+
+    #[test]
+    fn modifiers_are_captured_when_the_message_arrives() {
+        reset_input();
+
+        // Shift goes down, then a letter, then shift comes up and another
+        // letter follows. Reading modifiers at the end of the frame would call
+        // both unshifted.
+        TextCollector.set_key_state(Key::LeftShift, true);
+        TextCollector.set_key_state(Key::A, true);
+        TextCollector.set_key_state(Key::A, false);
+        TextCollector.set_key_state(Key::LeftShift, false);
+        TextCollector.set_key_state(Key::B, true);
+
+        assert_eq!(
+            log_summary(),
+            vec![
+                "down:lshift+shift",
+                "down:a+shift",
+                "up:a+shift",
+                "up:lshift",
+                "down:b",
+            ]
+        );
     }
 
     #[test]
     fn a_tap_inside_one_frame_still_reports_a_press() {
         // The regression this whole mechanism exists for: press and release
         // both land between two frames, so every level snapshot says "up".
-        // Diffing levels loses the keystroke; latching edges keeps it.
+        // Diffing levels loses the keystroke; recording messages keeps it.
         reset_input();
-        let mut keys = KeyState::default();
 
         TextCollector.set_key_state(Key::Backspace, true);
         TextCollector.set_key_state(Key::Backspace, false);
-        sync_with(&mut keys, &[]);
 
-        assert!(keys.is_pressed(Key::Backspace));
-        assert!(keys.is_released(Key::Backspace));
-
-        // And it is a one-frame event, not a sticky one.
-        sync_with(&mut keys, &[]);
-        assert!(!keys.is_pressed(Key::Backspace));
-        assert!(!keys.is_released(Key::Backspace));
+        assert_eq!(log_summary(), vec!["down:backspace", "up:backspace"]);
+        // And draining is what clears it — the next frame starts empty.
+        assert!(log_summary().is_empty());
     }
 
     #[test]
-    fn edges_do_not_leak_between_window_sessions() {
+    fn messages_do_not_leak_between_window_sessions() {
         reset_input();
         TextCollector.set_key_state(Key::Escape, true);
         reset_input();
 
-        let mut keys = KeyState::default();
-        sync_with(&mut keys, &[]);
-        assert!(!keys.is_pressed(Key::Escape));
+        assert!(log_summary().is_empty());
     }
 
     #[test]
@@ -797,17 +899,40 @@ mod tests {
 
     #[test]
     fn text_input_gate_drops_characters_while_disabled() {
+        reset_input();
         keyboard_set_text_input(false);
         TextCollector.add_char('x' as u32);
-        assert_eq!(keyboard_get_text_input(), "");
+        assert!(log_summary().is_empty());
 
         keyboard_set_text_input(true);
         TextCollector.add_char('h' as u32);
         TextCollector.add_char('i' as u32);
         // Control characters are key presses, not text.
         TextCollector.add_char('\n' as u32);
-        assert_eq!(keyboard_get_text_input(), "hi");
-        // Reading drains the buffer.
-        assert_eq!(keyboard_get_text_input(), "");
+        assert_eq!(log_summary(), vec!["text:hi"]);
+    }
+
+    #[test]
+    fn disabling_text_input_discards_what_was_already_typed_this_frame() {
+        reset_input();
+        keyboard_set_text_input(true);
+        TextCollector.set_key_state(Key::A, true);
+        TextCollector.add_char('a' as u32);
+
+        keyboard_set_text_input(false);
+
+        // The keystroke stays — it is a key press either way — but the text
+        // the app just said it did not want is gone.
+        assert_eq!(log_summary(), vec!["down:a"]);
+        keyboard_set_text_input(true);
+    }
+
+    #[test]
+    fn a_repeating_key_reports_its_name_for_the_event_queue() {
+        let mut keys = KeyState::default();
+        keys.set_repeat(true);
+        keys.repeated[Key::Backspace as usize] = true;
+
+        assert_eq!(keys.repeated_names(), vec!["backspace"]);
     }
 }

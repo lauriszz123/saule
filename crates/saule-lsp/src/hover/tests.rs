@@ -659,10 +659,7 @@ end
     let md = hover_src_at(src, "count: 3", 1).expect("hover");
     // A named-argument key renders as the parameter it is, qualified by
     // the callee so the reader can tell which `count:` this is.
-    assert_eq!(
-        md,
-        "```saule\n(parameter) Main.put.count: integer = …\n```"
-    );
+    assert_eq!(md, "```saule\n(parameter) Main.put.count: integer = …\n```");
 }
 
 #[test]
@@ -1301,14 +1298,12 @@ end
 ";
     let outer = hover_src_at(src, "child: \"x\"", 1).expect("hover on Box key");
     assert_eq!(
-        outer,
-        "```saule\n(parameter) Box.child: string\n```",
+        outer, "```saule\n(parameter) Box.child: string\n```",
         "got: {outer}"
     );
     let inner = hover_src_at(src, "child: \"y\"", 1).expect("hover on Frame key");
     assert_eq!(
-        inner,
-        "```saule\n(parameter) Frame.child: string\n```",
+        inner, "```saule\n(parameter) Frame.child: string\n```",
         "got: {inner}"
     );
     // Defaults are marked the same way the declaration site marks them.
@@ -1412,11 +1407,7 @@ fn named_arg_resolves_through_a_re_export_barrel() {
     )
     .unwrap();
     // The barrel: re-exports, declares nothing.
-    std::fs::write(
-        dir.join("kit").join("init.sau"),
-        "import * from overlay\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("kit").join("init.sau"), "import * from overlay\n").unwrap();
 
     let app = "\
 import * from kit
@@ -1436,8 +1427,7 @@ end
         .map(|(m, _)| m)
         .expect("hover on key");
     assert_eq!(
-        md,
-        "```saule\n(parameter) showToast.message: string = …\n```",
+        md, "```saule\n(parameter) showToast.message: string = …\n```",
         "got: {md}"
     );
 
@@ -1569,10 +1559,11 @@ end
         hover_src_at(src, "Align.Stretch\n", "Align.".len()).as_deref(),
         Some("```saule\n(variant) Align.Stretch\n```")
     );
-    // A tuple variant carries its arity.
+    // A tuple variant shows its payload named and typed, which is what tells
+    // you the order to destructure it in.
     assert_eq!(
         hover_src_at(src, "Event.Click(1", "Event.".len()).as_deref(),
-        Some("```saule\n(variant) Event.Click(_, _)\n```")
+        Some("```saule\n(variant) Event.Click(x: integer, y: integer)\n```")
     );
     // A name the enum really doesn't have is still reported as a miss.
     let md = hover_src_at(src, "Align.Stretch\n", "Align.".len()).unwrap();
@@ -1587,4 +1578,88 @@ fn a_key_on_an_untyped_table_is_not_an_unknown_member() {
     let md = hover_src_at(src, "scratch.sound", "scratch.".len() + 1).expect("hover");
     assert!(md.contains("(key) sound: any"), "got: {md}");
     assert!(!md.contains("No member"), "got: {md}");
+}
+
+/// A loop variable takes its type from what the iterable yields.
+///
+/// `for item in items` over a `table<T>` is the ordinary way to write a
+/// loop, and an unannotated variable used to default to `any` — the one
+/// answer hover already had enough in hand to rule out.
+#[test]
+fn a_loop_variable_is_typed_by_what_it_iterates() {
+    let src = "\
+fn filter<T>(items: table<T>) -> nothing
+  for item in items do
+    print(item)
+  end
+end
+
+fn pairs(scores: table<string, integer>) -> nothing
+  for name, score in scores do
+    print(name)
+  end
+end
+
+fn indexed(names: table<string>) -> nothing
+  for i, n in names do
+    print(i)
+  end
+end
+";
+    // The generic element type, at the binding and at a use.
+    let ty = |needle: &str, delta: usize| {
+        hover_src_at(src, needle, delta).unwrap_or_else(|| panic!("no hover on {needle}"))
+    };
+    assert_eq!(ty("item in items", 0), "```saule\n(loop var) item: T\n```");
+    assert_eq!(
+        ty("print(item)", "print(".len()),
+        "```saule\n(loop var) item: T\n```"
+    );
+
+    // Two variables over `table<K, V>` take key then value.
+    assert_eq!(
+        ty("name, score in", 0),
+        "```saule\n(loop var) name: string\n```"
+    );
+    assert_eq!(
+        ty("score in scores", 0),
+        "```saule\n(loop var) score: integer\n```"
+    );
+
+    // Array-style `table<V>` has no declared key, so the index is an integer.
+    assert_eq!(
+        ty("i, n in names", 0),
+        "```saule\n(loop var) i: integer\n```"
+    );
+    assert_eq!(
+        ty("n in names do\n    print(i)", 0),
+        "```saule\n(loop var) n: string\n```"
+    );
+}
+
+/// An explicit ascription is the author's word on the matter and is not
+/// second-guessed; an iterable that says nothing still yields `any`.
+#[test]
+fn loop_variable_inference_defers_to_annotations() {
+    let src = "\
+fn annotated(names: table<string>) -> nothing
+  for n: any in names do
+    print(n)
+  end
+end
+
+fn untyped(bag: table) -> nothing
+  for v in bag do
+    print(v)
+  end
+end
+";
+    assert_eq!(
+        hover_src_at(src, "n: any in", 0).as_deref(),
+        Some("```saule\n(loop var) n: any\n```")
+    );
+    assert_eq!(
+        hover_src_at(src, "v in bag", 0).as_deref(),
+        Some("```saule\n(loop var) v: any\n```")
+    );
 }

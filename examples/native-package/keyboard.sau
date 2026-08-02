@@ -1,45 +1,88 @@
--- The Keyboard API: held keys, per-frame edges, and typed text.
+-- The Keyboard API: an event queue, held keys, and typed text.
 --
 -- Saule owns the loop, so Love2D's `love.keypressed` / `love.keyreleased` /
--- `love.textinput` callbacks become queries you make once per frame:
--- `wasPressed`, `wasReleased`, and `getTextInput`. All three are measured
--- against the last `Window.pollEvents()`.
+-- `love.textinput` callbacks become entries in the list `Window.pollEvents()`
+-- returns. They arrive in the order the OS delivered them, which means two
+-- taps of the same key inside one frame stay two taps, and typed text stays
+-- interleaved with the keys around it.
+--
+-- The native ABI has no enum-variant type, so the engine sends each event as a
+-- positional record — `["keyPressed", key, shift, ctrl, alt]`. Decoding those
+-- into a real enum, as below, is the idiomatic way to consume them; UIKit ships
+-- exactly this in its `Events.sau`.
 --
 -- Build & install the package first (see README.md), then:
 --   saule run examples/native-package/keyboard.sau
 import Graphics, Keyboard, Window from engine
 
+enum Event
+	KeyPressed(key: string, shift: boolean, ctrl: boolean, alt: boolean),
+	KeyReleased(key: string),
+	TextInput(text: string),
+	Other
+end
+
+-- One record -> one `Event`. The fields come out of an untyped table, so each
+-- is narrowed here; past this point the payloads carry their declared types.
+fn decode(record: table) -> Event
+	return match tostring(record[1])
+		case "keyPressed" then
+			Event.KeyPressed(
+				tostring(record[2]),
+				record[3] == true,
+				record[4] == true,
+				record[5] == true
+			)
+
+		case "keyReleased" then Event.KeyReleased(tostring(record[2]))
+
+		case "textInput" then Event.TextInput(tostring(record[2]))
+
+		case _ then Event.Other
+	end
+end
+
 class Main
 	static fn main()
 		Window.create(720, 420, title: "Saule Keyboard Example")
 
-		-- Key repeat makes a held key keep reporting `wasPressed` after a short
+		-- Key repeat makes a held key keep emitting `KeyPressed` after a short
 		-- delay — what a text field wants for backspace and the arrows.
 		Keyboard.setKeyRepeat(true)
 
-		-- A little text field, driven entirely by the keyboard API.
+		-- A little text field, driven entirely by the event queue.
 		local typed: string = ""
 		-- A box moved with the arrows or WASD.
 		local x: float = 360.0
 		local y: float = 280.0
 
 		while Window.isOpen() do
-			Window.pollEvents()
+			for record: table in Window.pollEvents() do
+				match decode(record)
+					-- Text is layout- and modifier-aware, so shift+a arrives as
+					-- "A". Never assemble text out of key names.
+					case Event.TextInput(text) then typed = typed .. text
 
-			-- Text is layout- and modifier-aware, so shift+a arrives as "A".
-			typed = typed .. Keyboard.getTextInput()
+					-- Editing keys are not text, so they arrive as key events.
+					case Event.KeyPressed("backspace", _, _, _) then
+						if #typed > 0 then
+							typed = String.sub(typed, 1, #typed - 1)
+						end
 
-			-- Editing keys are not text, so they come from the edge queries.
-			if Keyboard.wasPressed("backspace") and #typed > 0 then
-				typed = String.sub(typed, 1, #typed - 1)
+					case Event.KeyPressed("return", _, _, _) then typed = ""
+
+					case Event.KeyPressed(key, shift, _, _) then
+						printf("pressed %s (shift=%s)\n", key, tostring(shift))
+
+					case Event.KeyReleased(key) then printf("released %s\n", key)
+
+					case _ then nil
+				end
 			end
 
-			if Keyboard.wasPressed("return") then
-				typed = ""
-			end
-
-			-- Held keys drive continuous movement; a modifier check is just two
-			-- more held keys.
+			-- Held keys drive continuous movement. This is the question the
+			-- event queue deliberately does not answer: "is it down right now"
+			-- is level state, so it stays a query.
 			local step: float = 4.0
 			if Keyboard.isAnyDown({"lshift", "rshift"}) then
 				step = 8.0
@@ -76,17 +119,6 @@ class Main
 
 			Graphics.setColor(0.5, 0.8, 1.0)
 			Graphics.print("down: " .. held, 24.0, 96.0)
-
-			-- The same information Love2D's keypressed/keyreleased would hand you.
-			local pressed: table<string> = Keyboard.getKeysPressed()
-			for _, key in pressed do
-				printf("pressed %s\n", key)
-			end
-
-			local released: table<string> = Keyboard.getKeysReleased()
-			for _, key in released do
-				printf("released %s\n", key)
-			end
 
 			Graphics.setColor(1.0, 0.8, 0.2)
 			Graphics.rectangle("fill", x - 20.0, y - 20.0, 40.0, 40.0)

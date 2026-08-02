@@ -354,21 +354,6 @@ sig = "fn() -> table<string>"
 native_symbol = "saule_export_Keyboard_getKeysDown"
 
 [[exports.Keyboard.methods]]
-name = "getKeysPressed"
-sig = "fn() -> table<string>"
-native_symbol = "saule_export_Keyboard_getKeysPressed"
-
-[[exports.Keyboard.methods]]
-name = "getKeysReleased"
-sig = "fn() -> table<string>"
-native_symbol = "saule_export_Keyboard_getKeysReleased"
-
-[[exports.Keyboard.methods]]
-name = "getTextInput"
-sig = "fn() -> string"
-native_symbol = "saule_export_Keyboard_getTextInput"
-
-[[exports.Keyboard.methods]]
 name = "hasKeyRepeat"
 sig = "fn() -> boolean"
 native_symbol = "saule_export_Keyboard_hasKeyRepeat"
@@ -398,16 +383,6 @@ name = "setTextInput"
 sig = "fn(enable: boolean) -> nil"
 native_symbol = "saule_export_Keyboard_setTextInput"
 
-[[exports.Keyboard.methods]]
-name = "wasPressed"
-sig = "fn(key: string) -> boolean"
-native_symbol = "saule_export_Keyboard_wasPressed"
-
-[[exports.Keyboard.methods]]
-name = "wasReleased"
-sig = "fn(key: string) -> boolean"
-native_symbol = "saule_export_Keyboard_wasReleased"
-
 [exports.Mouse]
 type = "class"
 doc = "Mouse input state."
@@ -416,11 +391,6 @@ doc = "Mouse input state."
 name = "getPos"
 sig = "fn() -> (float, float)"
 native_symbol = "saule_export_Mouse_getPos"
-
-[[exports.Mouse.methods]]
-name = "getWheel"
-sig = "fn() -> (float, float)"
-native_symbol = "saule_export_Mouse_getWheel"
 
 [[exports.Mouse.methods]]
 name = "isDown"
@@ -436,16 +406,6 @@ native_symbol = "saule_export_Mouse_setCursor"
 name = "setVisible"
 sig = "fn(visible: boolean) -> nil"
 native_symbol = "saule_export_Mouse_setVisible"
-
-[[exports.Mouse.methods]]
-name = "wasPressed"
-sig = "fn(button: integer) -> boolean"
-native_symbol = "saule_export_Mouse_wasPressed"
-
-[[exports.Mouse.methods]]
-name = "wasReleased"
-sig = "fn(button: integer) -> boolean"
-native_symbol = "saule_export_Mouse_wasReleased"
 
 [exports.Timer]
 type = "class"
@@ -581,7 +541,7 @@ native_symbol = "saule_export_Window_isOpen"
 
 [[exports.Window.methods]]
 name = "pollEvents"
-sig = "fn() -> nil"
+sig = "fn() -> table"
 native_symbol = "saule_export_Window_pollEvents"
 
 [[exports.Window.methods]]

@@ -37,11 +37,11 @@ mod return_check;
 pub use error::SemanticError;
 pub use registry::{
     ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, FunctionRegistry, FunctionSig,
-    InterfaceRegistry, MethodSig, build_function_registry, build_registry, class_implements,
-    class_implements_iterable, clear_registries, install_functions, install_registries,
-    interface_extends, is_interface, is_subtype_named, lookup_field_type, lookup_function,
-    lookup_member, lookup_method, super_init_target, with_classes, with_enums, with_functions,
-    with_interfaces,
+    InterfaceRegistry, MethodSig, VariantInfo, build_function_registry, build_registry,
+    class_implements, class_implements_iterable, clear_registries, install_functions,
+    install_registries, interface_extends, is_interface, is_subtype_named, lookup_field_type,
+    lookup_function, lookup_member, lookup_method, super_init_target, with_classes, with_enums,
+    with_functions, with_interfaces,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this

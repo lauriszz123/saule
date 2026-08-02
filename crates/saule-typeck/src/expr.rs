@@ -957,7 +957,7 @@ fn report_if_enum_variant_arity(
     };
     let Some(arity) = with_enums(|r| {
         r.get(enum_name)
-            .and_then(|info| info.variants.get(variant).copied())
+            .and_then(|info| info.variants.get(variant).map(|v| v.arity()))
     }) else {
         return;
     };

@@ -79,7 +79,13 @@ pub(crate) fn construct(
         scope
             .borrow_mut()
             .define(SUPER_OWNER_BINDING.to_string(), Value::Class(class.clone()));
-        bind_params(&scope, user_params(&ctor), args, &span)?;
+        bind_params(
+            &scope,
+            user_params(&ctor),
+            ctor.user_param_keys(),
+            args,
+            &span,
+        )?;
         run_function_body(&ctor, &scope, span)?;
     }
 

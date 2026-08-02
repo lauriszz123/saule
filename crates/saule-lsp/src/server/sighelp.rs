@@ -205,9 +205,8 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
     // wrote, so `Theme.of(...)` and `One.two.three(...)` name themselves
     // in full rather than collapsing to a bare `of` / `three`.
     let ml = hit.multiline;
-    let shown = |fallback: &str| -> String {
-        hit.display.clone().unwrap_or_else(|| fallback.to_string())
-    };
+    let shown =
+        |fallback: &str| -> String { hit.display.clone().unwrap_or_else(|| fallback.to_string()) };
     match &hit.callee {
         CalleeRef::Free(name) => {
             let name = name.clone();
@@ -249,7 +248,14 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             // re-export chains as it goes, so the signature is already
             // in hand and no import graph has to be walked here.
             if let Some(sig) = lookup_function(&name) {
-                return build_help_user_fn(&head, &sig.params, &sig.return_ty, &hit.args, offset, ml);
+                return build_help_user_fn(
+                    &head,
+                    &sig.params,
+                    &sig.return_ty,
+                    &hit.args,
+                    offset,
+                    ml,
+                );
             }
             // Bare native (`println`, `assert`, ...).
             if let Some(native) = saule_typeck::sigs::lookup(&name) {
@@ -1010,11 +1016,7 @@ impl Cx<'_> {
     /// every line in between and would report a freshly-typed call as
     /// multi-line. A call with no arguments yet cannot be laid out
     /// across lines, so it never is.
-    fn call_spans_lines(
-        &self,
-        args_span: &std::ops::Range<usize>,
-        args: &[CallArgInfo],
-    ) -> bool {
+    fn call_spans_lines(&self, args_span: &std::ops::Range<usize>, args: &[CallArgInfo]) -> bool {
         let Some(last) = args.iter().map(|a| a.span.end).max() else {
             return false;
         };
@@ -2224,7 +2226,12 @@ end
                 "moveTo(3.0",
                 "w.moveTo(",
             ),
-            ("static method", "  Widget.make(1)\n", "make(1", "Widget.make("),
+            (
+                "static method",
+                "  Widget.make(1)\n",
+                "make(1",
+                "Widget.make(",
+            ),
             (
                 // No plain dotted path to show — the receiver is a call
                 // — so the heading falls back to the resolved owner.
@@ -2325,7 +2332,11 @@ end
             ("self.super", "self.super(1.0", "Widget.init("),
             ("self.method", "self.go2(1", "Probe.go2("),
             ("method on parameter", "w.moveTo(3.0", "w.moveTo("),
-            ("method on field", "self.tint.apply(1.0", "Probe.tint.apply("),
+            (
+                "method on field",
+                "self.tint.apply(1.0",
+                "Probe.tint.apply(",
+            ),
             ("bare sibling method", "\n    go2(1", "go2("),
             ("own static via class name", "Probe.stat(1", "Probe.stat("),
         ] {
@@ -2366,7 +2377,12 @@ end
                 "w.moveTo(",
                 0,
             ),
-            ("static method", "fn probe()\n  Widget.make(", "Widget.make(", 0),
+            (
+                "static method",
+                "fn probe()\n  Widget.make(",
+                "Widget.make(",
+                0,
+            ),
             (
                 "method on constructor result",
                 "fn probe()\n  Widget(1.0, 2.0).moveTo(",
@@ -2768,7 +2784,10 @@ end
         // 2. That row tracks the caret, in both directions.
         for i in outer_open..inner_open {
             let h = help_at(src, call + i).expect("help");
-            assert!(active_label(&h).starts_with("root.setBackground("), "at +{i}");
+            assert!(
+                active_label(&h).starts_with("root.setBackground("),
+                "at +{i}"
+            );
         }
         for i in inner_open..=inner_close {
             let h = help_at(src, call + i).expect("help");
@@ -3116,7 +3135,11 @@ end
         // A call written inside the table resolves normally — that is
         // the whole point of stopping at the brace rather than earlier.
         let at = src.find("Text(data: \"a\"").expect("entry") + "Text(".len();
-        assert!(label_at(src, at).starts_with("Text("), "{}", label_at(src, at));
+        assert!(
+            label_at(src, at).starts_with("Text("),
+            "{}",
+            label_at(src, at)
+        );
 
         // And the keys still answer, so you can see what `children`
         // wants before you open it.
@@ -3151,7 +3174,9 @@ end
         let at = src.find("showToast(1").expect("call") + "showToast(".len();
         let h = help_from_module(&module, src, at).expect("help for imported fn");
         assert!(
-            h.signatures[0].label.starts_with("showToast(context: integer"),
+            h.signatures[0]
+                .label
+                .starts_with("showToast(context: integer"),
             "got {:?}",
             h.signatures[0].label
         );
@@ -3189,7 +3214,11 @@ end
 
         // Writing the callback: silent from the parameter list onward,
         // and in particular at the `(` the client re-triggers on.
-        for suffix in ["onChanged: fn(", "onChanged: fn(text", "onChanged: fn(text: string"] {
+        for suffix in [
+            "onChanged: fn(",
+            "onChanged: fn(text",
+            "onChanged: fn(text: string",
+        ] {
             let at = key + suffix.len();
             assert!(
                 help_at(src, at).is_none(),
@@ -3238,7 +3267,11 @@ fn build()
 end
 ";
         let at = src.find("note(\"saved\"").expect("call") + "note(".len();
-        assert!(label_at(src, at).starts_with("note("), "{}", label_at(src, at));
+        assert!(
+            label_at(src, at).starts_with("note("),
+            "{}",
+            label_at(src, at)
+        );
     }
 
     /// A `=>` lambda's body is one expression, still visibly an argument

@@ -21,7 +21,7 @@ use crate::value::{ClassObject, Value};
 #[derive(Debug, Default)]
 pub struct Environment {
     parent: Option<Rc<RefCell<Environment>>>,
-    vars: HashMap<String, Value>,
+    vars: HashMap<Rc<str>, Value>,
     /// Set on a method-call scope so the class's statics are reachable by
     /// bare name inside the body. Consulted by [`get`](Self::get) *after*
     /// `vars` and *before* `parent`, which reproduces the precedence of
@@ -75,8 +75,14 @@ impl Environment {
     }
 
     /// Define (or shadow) a local in this scope.
-    pub fn define(&mut self, name: String, value: Value) {
-        self.vars.insert(name, value);
+    ///
+    /// The key is an `Rc<str>` so the hot paths can hand over a name they
+    /// already hold — a function's interned parameter names, or the `self`
+    /// key — and pay a refcount bump instead of a fresh allocation. Cold
+    /// paths passing a `String` or `&str` still convert, which is what they
+    /// did before.
+    pub fn define(&mut self, name: impl Into<Rc<str>>, value: Value) {
+        self.vars.insert(name.into(), value);
     }
 
     /// Make `class`'s statics visible by bare name in this scope. See
@@ -129,7 +135,7 @@ impl Environment {
             // immutable, so the binding can only be shadowed for the rest
             // of this scope, which is what the old eager injection did.
             Some(StaticTarget::Method) => {
-                self.vars.insert(name.to_string(), value);
+                self.vars.insert(Rc::from(name), value);
                 return true;
             }
             None => {}

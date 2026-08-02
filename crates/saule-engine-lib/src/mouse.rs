@@ -24,30 +24,6 @@ pub(crate) fn mouse_is_down(button: i64) -> bool {
     state::with(|e| e.mouse().is_down(button)).unwrap_or(false)
 }
 
-/// `Mouse.wasPressed(button)` — `true` if the button went down since the last
-/// `Window.pollEvents()`: the click edge, without tracking the previous state
-/// yourself.
-#[saule_export(class = "Mouse", name = "wasPressed")]
-pub(crate) fn mouse_was_pressed(button: i64) -> bool {
-    state::with(|e| e.mouse().was_pressed(button)).unwrap_or(false)
-}
-
-/// `Mouse.wasReleased(button)` — `true` if the button came up since the last
-/// `Window.pollEvents()`.
-#[saule_export(class = "Mouse", name = "wasReleased")]
-pub(crate) fn mouse_was_released(button: i64) -> bool {
-    state::with(|e| e.mouse().was_released(button)).unwrap_or(false)
-}
-
-/// `Mouse.getWheel()` — wheel movement since the last `Window.pollEvents()`,
-/// as `x, y`. Positive `y` scrolls up, away from the user; most mice report
-/// only `y`. Both are `0` on a frame with no scrolling, so this is safe to
-/// read every frame.
-#[saule_export(class = "Mouse", name = "getWheel")]
-pub(crate) fn mouse_get_wheel() -> Result<(f64, f64), String> {
-    state::with(|e| e.mouse().wheel())
-}
-
 /// `Mouse.setCursor(style)` — swap the cursor image. One of `"arrow"`,
 /// `"ibeam"`, `"crosshair"`, `"hand"`, `"grab"`, `"resizeleftright"`,
 /// `"resizeupdown"`, `"resizeall"`.

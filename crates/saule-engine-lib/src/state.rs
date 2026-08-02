@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use minifb::{CursorStyle, Key, MouseButton, MouseMode, Scale, Window, WindowOptions};
 
+use crate::event::Event;
 use crate::font::{self, Align, FontRes};
 use crate::geom::{self, ArcType, LineJoin, Point, Transform};
 use crate::keyboard::{self, KeyState, TextCollector};
@@ -123,8 +124,8 @@ enum Saved {
 ///
 /// minifb reports the wheel as a delta that is only valid for the `update`
 /// that produced it, so it has to be captured at the frame boundary or it is
-/// lost. Buttons are sampled the same way to give `wasPressed` / `wasReleased`
-/// the same "since the last `pollEvents`" meaning the keyboard has.
+/// lost. Buttons are sampled the same way, and both feed the `MousePressed` /
+/// `MouseReleased` / `WheelMoved` events the frame's queue is built from.
 #[derive(Default)]
 pub struct MouseState {
     /// Left, right, middle — indices 0, 1, 2 (button numbers 1, 2, 3).
@@ -253,6 +254,13 @@ pub struct Engine {
     /// OS scale factor, refreshed each frame so dragging a window between
     /// monitors of different DPI is picked up.
     scale: f64,
+    /// This frame's events, rebuilt by every [`Engine::poll_events`].
+    events: Vec<Event>,
+    /// Previous pointer position, for the motion delta. `None` until the
+    /// pointer is first seen, so the opening frame reports no phantom move.
+    last_mouse: Option<(f64, f64)>,
+    /// Previous focus state, so only changes are reported.
+    last_focused: bool,
 }
 
 thread_local! {
@@ -290,7 +298,7 @@ pub fn create(width: i64, height: i64, title: &str, resizable: bool) -> Result<(
     window.set_target_fps(0);
 
     // Typed text and key edges arrive through this callback while `update`
-    // pumps the queue; `Keyboard.getTextInput` and `KeyState::sync` drain what
+    // pumps the queue; `Engine::collect_events` and `KeyState::sync` drain what
     // it collects.
     window.set_input_callback(Box::new(TextCollector));
     keyboard::reset_input();
@@ -312,6 +320,9 @@ pub fn create(width: i64, height: i64, title: &str, resizable: bool) -> Result<(
             mouse: MouseState::default(),
             next_frame: Instant::now() + FRAME_DUR,
             scale,
+            events: Vec::new(),
+            last_mouse: None,
+            last_focused: true,
         });
     });
     Ok(())
@@ -353,8 +364,8 @@ impl Engine {
 
     /// This frame's mouse state: held buttons, edges, and wheel movement.
     ///
-    /// Everything comes from the same `pollEvents` snapshot, so `isDown`,
-    /// `wasPressed` and `wasReleased` always describe one consistent instant.
+    /// Everything comes from the same `pollEvents` snapshot, so `isDown` and
+    /// the button events built from it describe one consistent instant.
     pub fn mouse(&self) -> &MouseState {
         &self.mouse
     }
@@ -401,7 +412,7 @@ impl Engine {
             .collect()
     }
 
-    /// This frame's keyboard edges (`wasPressed` / `wasReleased`).
+    /// This frame's latched keyboard state — held keys and repeat timing.
     pub fn keys(&self) -> &KeyState {
         &self.keys
     }
@@ -427,7 +438,126 @@ impl Engine {
         self.window.update();
         self.keys.sync(&self.window);
         self.mouse.sync(&self.window);
-        self.sync_surface();
+
+        let resized = self.sync_surface();
+        self.collect_events(resized);
+    }
+
+    /// This frame's events, in the order described on [`crate::event`].
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+
+    /// Rebuild [`Engine::events`] from the state just latched.
+    ///
+    /// Window changes come first, then pointer motion, then buttons and wheel,
+    /// then the keyboard log in true arrival order. Motion before buttons is
+    /// the ordering that matters: a click must be delivered against an
+    /// up-to-date pointer position.
+    fn collect_events(&mut self, resized: Option<(usize, usize)>) {
+        self.events.clear();
+
+        if let Some((w, h)) = resized {
+            self.events.push(Event::Resized {
+                width: w as i64,
+                height: h as i64,
+            });
+        }
+
+        let focused = self.window.is_active();
+        if focused != self.last_focused {
+            self.last_focused = focused;
+            self.events.push(Event::FocusChanged(focused));
+        }
+
+        if !self.is_open() {
+            self.events.push(Event::Closed);
+        }
+
+        let (x, y) = self.mouse_pos();
+        match self.last_mouse {
+            Some((px, py)) if px != x || py != y => {
+                self.events.push(Event::MouseMoved {
+                    x,
+                    y,
+                    dx: x - px,
+                    dy: y - py,
+                });
+            }
+            // The first sighting is a position, not a movement.
+            None => self.events.push(Event::MouseMoved {
+                x,
+                y,
+                dx: 0.0,
+                dy: 0.0,
+            }),
+            _ => {}
+        }
+        self.last_mouse = Some((x, y));
+
+        for button in 1..=3 {
+            if self.mouse.was_pressed(button) {
+                self.events.push(Event::MousePressed { x, y, button });
+            }
+            if self.mouse.was_released(button) {
+                self.events.push(Event::MouseReleased { x, y, button });
+            }
+        }
+
+        let (wheel_x, wheel_y) = self.mouse.wheel();
+        if wheel_x != 0.0 || wheel_y != 0.0 {
+            self.events.push(Event::WheelMoved {
+                dx: wheel_x,
+                dy: wheel_y,
+            });
+        }
+
+        for message in keyboard::drain_messages() {
+            let event = match message {
+                keyboard::KeyMessage::Down { key, mods } => {
+                    keyboard::key_name(key).map(|key| Event::KeyPressed {
+                        key,
+                        shift: mods.shift,
+                        ctrl: mods.ctrl,
+                        alt: mods.alt,
+                    })
+                }
+                keyboard::KeyMessage::Up { key, mods } => {
+                    keyboard::key_name(key).map(|key| Event::KeyReleased {
+                        key,
+                        shift: mods.shift,
+                        ctrl: mods.ctrl,
+                        alt: mods.alt,
+                    })
+                }
+                keyboard::KeyMessage::Text(text) => Some(Event::TextInput(text)),
+            };
+
+            if let Some(event) = event {
+                self.events.push(event);
+            }
+        }
+
+        // Key repeat is the engine's own invention rather than an OS message,
+        // so it is synthesised after the real ones. Held modifiers are read at
+        // level, which is exactly right for a key that is still down.
+        let mods = self.held_modifiers();
+        for key in self.keys.repeated_names() {
+            self.events.push(Event::KeyPressed {
+                key,
+                shift: mods.shift,
+                ctrl: mods.ctrl,
+                alt: mods.alt,
+            });
+        }
+    }
+
+    fn held_modifiers(&self) -> keyboard::Modifiers {
+        keyboard::Modifiers {
+            shift: self.is_key_down(Key::LeftShift) || self.is_key_down(Key::RightShift),
+            ctrl: self.is_key_down(Key::LeftCtrl) || self.is_key_down(Key::RightCtrl),
+            alt: self.is_key_down(Key::LeftAlt) || self.is_key_down(Key::RightAlt),
+        }
     }
 
     /// Match the framebuffer to the window, and refresh the scale factor.
@@ -436,17 +566,23 @@ impl Engine {
     /// `update_with_buffer` rejects a mismatch, and drawing into the old one
     /// would clip to the previous size. The scale is re-read here too, so
     /// dragging a window onto a monitor with different DPI is picked up.
-    fn sync_surface(&mut self) {
+    /// Returns the new size when the framebuffer was actually replaced, which
+    /// is what a `Resized` event reports.
+    fn sync_surface(&mut self) -> Option<(usize, usize)> {
         let (w, h) = self.window.get_size();
+        let mut resized = None;
 
         if w > 0 && h > 0 && (w != self.screen.w || h != self.screen.h) {
             self.screen = Surface::opaque(w, h);
             // A scissor from the old size could be entirely outside the new
             // one, which would silently blank the frame.
             self.st.scissor = None;
+            resized = Some((w, h));
         }
 
         self.scale = query_scale(&self.window);
+
+        resized
     }
 
     pub fn set_title(&mut self, title: &str) {

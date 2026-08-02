@@ -121,17 +121,19 @@ windowed build would drop that and close on the OS quit event.
 | `Graphics.clear(r, g, b) -> nil` | Begin a frame (clear to colour). |
 | `Graphics.present() -> nil` | End a frame (swap buffers). |
 
-Input is read inside that loop, between `pollEvents` and `present`. See
-[keyboard.sau](keyboard.sau) for the `Keyboard` surface — held keys
-(`isDown`, `isAnyDown`), per-frame edges (`wasPressed`, `wasReleased`, which
-stand in for Love2D's `keypressed` / `keyreleased` callbacks), and typed text
-(`getTextInput`, standing in for `love.textinput`).
+Input arrives from `pollEvents` itself, which returns everything that happened
+since the last frame in order — key presses and releases, typed text, mouse
+motion, buttons, the wheel, and window changes. Each entry is a positional
+record `[kind, payload…]`; the engine README has the full table.
 
-`Mouse` follows the same shape: position (`getPos`), held buttons (`isDown`),
-per-frame edges (`wasPressed`, `wasReleased`), wheel movement since the last
-`pollEvents` (`getWheel`), and the cursor image (`setCursor`, `setVisible`).
-Everything but `getPos` comes from one `pollEvents` snapshot, so the queries
-always describe the same instant.
+See [keyboard.sau](keyboard.sau) for the pattern: decode the records into an
+`enum` once, then `match` on it. That is how the callbacks Love2D would give you
+(`keypressed`, `keyreleased`, `textinput`) are spelled here, and unlike
+per-frame flags it keeps two taps of the same key inside one frame apart.
+
+What stays a query is the state a queue cannot answer: `Keyboard.isDown`,
+`isAnyDown`, `getKeysDown`, and `Mouse.getPos` / `isDown` all report what is
+true *right now*. `Mouse.setCursor` / `setVisible` set the cursor image.
 
 Images are PNG files loaded with `Graphics.newImage(path)`. They share the
 handle registry with canvases, so one handle works everywhere:

@@ -178,6 +178,7 @@ fn native_positional_args(
 pub(super) fn bind_params(
     scope: &Rc<RefCell<Environment>>,
     params: &[saule_ast::Param],
+    keys: &[Rc<str>],
     args: &[EvaluatedArg],
     span: &std::ops::Range<usize>,
 ) -> Result<(), RuntimeError> {
@@ -241,7 +242,7 @@ pub(super) fn bind_params(
                     }
                 },
             };
-            scope.borrow_mut().define(param.name.clone(), value);
+            scope.borrow_mut().define(Rc::clone(&keys[i]), value);
         }
         return Ok(());
     }
@@ -323,7 +324,7 @@ pub(super) fn bind_params(
     for (i, param) in params.iter().enumerate() {
         if param.variadic {
             scope.borrow_mut().define(
-                param.name.clone(),
+                Rc::clone(&keys[i]),
                 Value::Table(Rc::new(RefCell::new(
                     crate::value::TableObject::from_array(variadic_values.clone()),
                 ))),
@@ -344,7 +345,7 @@ pub(super) fn bind_params(
                 span,
             ));
         };
-        scope.borrow_mut().define(param.name.clone(), value);
+        scope.borrow_mut().define(Rc::clone(&keys[i]), value);
     }
     Ok(())
 }
@@ -500,6 +501,17 @@ fn run_function_body_multi_inner(
     }
 }
 
+thread_local! {
+    // `self` is bound on every method and constructor call. Interning it once
+    // keeps that from allocating a `String` each time.
+    static SELF_KEY: Rc<str> = Rc::from("self");
+}
+
+/// The shared `self` binding key.
+pub(super) fn self_key() -> Rc<str> {
+    SELF_KEY.with(Rc::clone)
+}
+
 /// Skip a leading `self` parameter (so explicit-self style still works
 /// alongside the implicit-self style this language prefers).
 pub(super) fn user_params(f: &FunctionObject) -> &[saule_ast::Param] {
@@ -530,7 +542,7 @@ fn call_function_multi(
     if let Some(class) = f.resolved_owner() {
         inject_class_statics(&scope, &class);
     }
-    bind_params(&scope, &f.params, args, &span)?;
+    bind_params(&scope, &f.params, &f.param_keys, args, &span)?;
     run_function_body_multi(f, &scope, span)
 }
 
@@ -544,8 +556,8 @@ pub(super) fn call_instance_method_multi(
     if let Value::Instance(inst) = &receiver {
         inject_class_statics(&scope, &inst.borrow().class);
     }
-    scope.borrow_mut().define("self".to_string(), receiver);
-    bind_params(&scope, user_params(f), args, &span)?;
+    scope.borrow_mut().define(self_key(), receiver);
+    bind_params(&scope, user_params(f), f.user_param_keys(), args, &span)?;
     run_function_body_multi(f, &scope, span)
 }
 
@@ -571,8 +583,8 @@ pub(super) fn call_static_method_multi(
     inject_class_statics(&scope, class);
     scope
         .borrow_mut()
-        .define("self".to_string(), Value::Class(class.clone()));
-    bind_params(&scope, user_params(f), args, &span)?;
+        .define(self_key(), Value::Class(class.clone()));
+    bind_params(&scope, user_params(f), f.user_param_keys(), args, &span)?;
     run_function_body_multi(f, &scope, span)
 }
 
@@ -732,7 +744,13 @@ pub(super) fn super_call(
         SUPER_OWNER_BINDING.to_string(),
         Value::Class(parent.clone()),
     );
-    bind_params(&scope, user_params(&ctor), &vs, &span)?;
+    bind_params(
+        &scope,
+        user_params(&ctor),
+        ctor.user_param_keys(),
+        &vs,
+        &span,
+    )?;
     run_function_body(&ctor, &scope, span).map(|_| Value::Nil)
 }
 

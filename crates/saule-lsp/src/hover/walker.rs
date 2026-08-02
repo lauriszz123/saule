@@ -216,6 +216,33 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// What `for … in iter` binds, given how many variables the loop
+    /// declares. Returns one type per variable, shortest-first; an empty
+    /// vec when the iterable's type says nothing useful.
+    ///
+    /// A single variable takes the element: `for item in items` over
+    /// `table<T>` binds `T`. Two variables take key and value, with the
+    /// key defaulting to `integer` for an array-style `table<V>` that
+    /// declares no key type.
+    fn iteration_types(&self, iter: &Expr, vars: usize) -> Vec<Type> {
+        let ty = match self.infer_init_type(iter) {
+            Some(Type::Nullable(inner)) => *inner,
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let Type::Table { key, value } = ty else {
+            return Vec::new();
+        };
+        if vars >= 2 {
+            let k = key
+                .map(|k| *k)
+                .unwrap_or_else(|| Type::Named("integer".into()));
+            vec![k, *value]
+        } else {
+            vec![*value]
+        }
+    }
+
     /// Record the hover for a loop variable at its binding site, found
     /// by locating the name inside the loop header `search`. Renders
     /// identically to a use of the same variable inside the body, so
@@ -866,8 +893,17 @@ impl<'a> Cx<'a> {
                 self.visit_expr(iter);
                 let mark = self.locals.len();
                 let header = s.span.start..iter.span.start;
-                for (name, ty) in vars {
-                    let ty = ty.clone().unwrap_or_else(|| Type::Named("any".into()));
+                // What the iterable yields, for the vars that were left
+                // unannotated. `for item in items` over a `table<T>` is
+                // the normal way to write a loop, and defaulting those
+                // to `any` reported the one thing hover already knew to
+                // be wrong.
+                let yielded = self.iteration_types(&iter.value, vars.len());
+                for (i, (name, ty)) in vars.iter().enumerate() {
+                    let ty = ty
+                        .clone()
+                        .or_else(|| yielded.get(i).cloned())
+                        .unwrap_or_else(|| Type::Named("any".into()));
                     self.record_loop_var(&header, name, &ty);
                     self.locals.push(LocalVar {
                         name: name.clone(),
@@ -1671,8 +1707,11 @@ impl<'a> Cx<'a> {
         }
         if with_enums(|r| r.contains_key(name)) {
             let info = with_enums(|r| r.get(name).cloned())?;
-            let variants: Vec<(String, usize)> =
-                info.variants.iter().map(|(n, a)| (n.clone(), *a)).collect();
+            let variants: Vec<(String, usize)> = info
+                .variants
+                .iter()
+                .map(|(n, v)| (n.clone(), v.arity()))
+                .collect();
             return Some(with_doc(render_enum_from_registry(name, &variants), doc));
         }
         // Free function declared at top level in *this* module. Checked
