@@ -162,11 +162,11 @@ fn fmt_one(path: &PathBuf, write: bool, options: FmtOptions) -> Result<(), ()> {
     };
 
     if write {
-        if formatted != source {
-            if let Err(err) = fs::write(path, &formatted) {
-                eprintln!("error writing file '{}': {}", path.display(), err);
-                return Err(());
-            }
+        if formatted != source
+            && let Err(err) = fs::write(path, &formatted)
+        {
+            eprintln!("error writing file '{}': {}", path.display(), err);
+            return Err(());
         }
     } else {
         print!("{formatted}");
@@ -175,7 +175,7 @@ fn fmt_one(path: &PathBuf, write: bool, options: FmtOptions) -> Result<(), ()> {
 }
 
 fn format_source(name: &str, source: &str, options: FmtOptions) -> Result<String, Report> {
-    let make_src = || NamedSource::new(name.to_string(), source.to_string());
+    let make_src = || NamedSource::new(name, source.to_string());
     let raw = saule_lexer::Lexer::new(source)
         .tokenize_with_trivia()
         .map_err(|e| Report::new(e).with_source_code(make_src()))?;

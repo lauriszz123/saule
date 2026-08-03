@@ -207,11 +207,11 @@ impl Backend {
         // projects aren't supported (the interpreter holds a single
         // `ProjectInfo` slot).
         for root in &roots {
-            if let Some(project_root) = workspace::find_project_root(root) {
-                if let Some(info) = workspace::load_project(&project_root) {
-                    *self.project_info.lock().await = Some(info);
-                    break;
-                }
+            if let Some(project_root) = workspace::find_project_root(root)
+                && let Some(info) = workspace::load_project(&project_root)
+            {
+                *self.project_info.lock().await = Some(info);
+                break;
             }
         }
 

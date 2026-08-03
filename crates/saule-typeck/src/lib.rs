@@ -38,7 +38,7 @@ mod error;
 mod expr;
 mod funcs;
 mod matches;
-mod ops;
+pub mod ops;
 pub mod sigs;
 mod state;
 mod stmt;

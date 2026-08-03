@@ -47,7 +47,7 @@ fn run_source(
     // static check runs. Idempotent.
     saule_interpreter::init();
 
-    let make_src = || NamedSource::new(name.to_string(), source.clone());
+    let make_src = || NamedSource::new(name, source.clone());
 
     let tokens = saule_lexer::Lexer::new(&source)
         .tokenize()

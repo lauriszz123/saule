@@ -446,6 +446,10 @@ fn graphics_get_canvas() -> Result<i64, String> {
 
 /// `Graphics.draw(canvas, x, y [, angle, sx, sy, ox, oy])` — composite a canvas
 /// onto the current target, tinted by the current colour.
+// The arity is the language-level `Graphics.draw` signature, which mirrors
+// LÖVE's; grouping the transform args into a struct here would only change
+// the Rust side of a shape the Saule API already fixes.
+#[allow(clippy::too_many_arguments)]
 #[saule_export(class = "Graphics", name = "draw")]
 fn graphics_draw(
     canvas: i64,

@@ -184,10 +184,10 @@ impl FontRes {
 /// report an actionable error pointing at `Graphics.newFont`.
 pub fn load_default(size: f64) -> Option<FontRes> {
     for path in default_font_candidates() {
-        if let Ok(bytes) = std::fs::read(path) {
-            if let Ok(font) = FontRes::from_bytes(&bytes, size) {
-                return Some(font);
-            }
+        if let Ok(bytes) = std::fs::read(path)
+            && let Ok(font) = FontRes::from_bytes(&bytes, size)
+        {
+            return Some(font);
         }
     }
     None

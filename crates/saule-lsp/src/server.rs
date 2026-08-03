@@ -112,12 +112,11 @@ impl LanguageServer for Backend {
             }
         }
         #[allow(deprecated)]
-        if roots.is_empty() {
-            if let Some(root_uri) = params.root_uri {
-                if let Ok(p) = root_uri.to_file_path() {
-                    roots.push(p);
-                }
-            }
+        if roots.is_empty()
+            && let Some(root_uri) = params.root_uri
+            && let Ok(p) = root_uri.to_file_path()
+        {
+            roots.push(p);
         }
         *self.workspace_roots.lock().await = roots;
 
@@ -227,11 +226,11 @@ impl LanguageServer for Backend {
         // Don't clear diagnostics — the file is still part of the
         // workspace. Re-analyse from disk so the Problems pane keeps
         // showing any errors that were live when the user closed it.
-        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
-            if self.workspace_files.contains_key(&abs) {
-                self.refresh_path(&abs, uri).await;
-                return;
-            }
+        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p))
+            && self.workspace_files.contains_key(&abs)
+        {
+            self.refresh_path(&abs, uri).await;
+            return;
         }
         // File isn't tracked (untitled buffer, outside workspace) —
         // safe to clear stale diagnostics.

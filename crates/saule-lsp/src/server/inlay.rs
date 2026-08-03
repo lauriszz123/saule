@@ -123,6 +123,23 @@ struct UserFn {
     sig: saule_typeck::sigs::NativeSig,
 }
 
+impl crate::exprty::TypeSource for Cx<'_> {
+    fn type_of(&self, expr: &Expr) -> Option<Type> {
+        self.infer_type(expr)
+    }
+
+    fn stage_sig(&self, name: &str) -> Option<saule_typeck::sigs::NativeSig> {
+        self.user_fns
+            .get(name)
+            .map(|f| f.sig.clone())
+            .or_else(|| saule_typeck::sigs::lookup(name))
+    }
+
+    fn arg_types(&self, args: &[CallArg]) -> Vec<Option<Type>> {
+        self.positional_arg_types(args)
+    }
+}
+
 impl<'a> Cx<'a> {
     // ── traversal ───────────────────────────────────────────────────
 
@@ -157,18 +174,17 @@ impl<'a> Cx<'a> {
                         .and_then(|v| self.infer_type(&v.value))
                         .map(|t| first_value_type(Some(t))),
                 };
-                if ty.is_none() {
-                    if let Some(ref t) = resolved_ty {
-                        if let Some(label) = render_type(t) {
-                            self.out.push(RawHint {
-                                byte: name_span.end,
-                                label: format!(": {label}"),
-                                kind: InlayHintKind::TYPE,
-                                padding_left: None,
-                                padding_right: None,
-                            });
-                        }
-                    }
+                if ty.is_none()
+                    && let Some(ref t) = resolved_ty
+                    && let Some(label) = render_type(t)
+                {
+                    self.out.push(RawHint {
+                        byte: name_span.end,
+                        label: format!(": {label}"),
+                        kind: InlayHintKind::TYPE,
+                        padding_left: None,
+                        padding_right: None,
+                    });
                 }
                 if let Some(v) = value {
                     self.visit_expr(v);
@@ -191,16 +207,16 @@ impl<'a> Cx<'a> {
                         .clone()
                         .or_else(|| spread.get(i).cloned())
                         .unwrap_or(Type::Named("any".into()));
-                    if t.is_none() {
-                        if let Some(label) = render_type(&resolved) {
-                            self.out.push(RawHint {
-                                byte: name_span.end,
-                                label: format!(": {label}"),
-                                kind: InlayHintKind::TYPE,
-                                padding_left: None,
-                                padding_right: None,
-                            });
-                        }
+                    if t.is_none()
+                        && let Some(label) = render_type(&resolved)
+                    {
+                        self.out.push(RawHint {
+                            byte: name_span.end,
+                            label: format!(": {label}"),
+                            kind: InlayHintKind::TYPE,
+                            padding_left: None,
+                            padding_right: None,
+                        });
                     }
                     self.locals.push(Local {
                         name: n.clone(),
@@ -476,10 +492,10 @@ impl<'a> Cx<'a> {
                     if *is_var {
                         break;
                     }
-                    if let Expr::Ident(n) = &value.value {
-                        if n == name {
-                            continue;
-                        }
+                    if let Expr::Ident(n) = &value.value
+                        && n == name
+                    {
+                        continue;
                     }
                     if name.is_empty() {
                         continue;
@@ -595,32 +611,13 @@ impl<'a> Cx<'a> {
             }
             Expr::Self_ => self.enclosing_class.clone().map(Type::Named),
             Expr::Table(entries) => Some(self.infer_table_literal(entries)),
-            // `#xs` / `not x` have a type regardless of their operand;
-            // `-x` takes the operand's. Cheap, and it's what lets a
-            // callback body like `s => #s` pin down a generic result.
-            Expr::Unary { op, rhs } => match op {
-                saule_ast::UnaryOp::Len => Some(Type::Named("integer".into())),
-                saule_ast::UnaryOp::Not => Some(Type::Named("boolean".into())),
-                saule_ast::UnaryOp::Neg => self.infer_type(&rhs.value),
-            },
-            // Comparisons and `..` have a type of their own; the arithmetic
-            // operators take whichever operand we can type. Same reason as
-            // the unary arm above — it's what lets a callback body like
-            // `x => x * 2` pin down a generic result.
+            // Operators are typed by the rules in [`crate::exprty`], shared
+            // with the hover walker and mirrored from the checker. Typing
+            // them at all is what lets a callback body like `x => x * 2`
+            // pin down a generic result.
+            Expr::Unary { op, rhs } => crate::exprty::unary_type(self, *op, &rhs.value),
             Expr::Binary { op, lhs, rhs } => {
-                use saule_ast::BinOp::*;
-                match op {
-                    Eq | NotEq | Lt | LtEq | Gt | GtEq | And | Or => {
-                        Some(Type::Named("boolean".into()))
-                    }
-                    Concat => Some(Type::Named("string".into())),
-                    Coalesce => self
-                        .infer_type(&lhs.value)
-                        .or_else(|| self.infer_type(&rhs.value)),
-                    Add | Sub | Mul | Div | Mod | Pow => self
-                        .infer_type(&lhs.value)
-                        .or_else(|| self.infer_type(&rhs.value)),
-                }
+                crate::exprty::binary_type(self, *op, &lhs.value, &rhs.value)
             }
             Expr::Lambda {
                 params,
@@ -635,23 +632,7 @@ impl<'a> Cx<'a> {
                         .unwrap_or_else(|| Type::Named("any".into())),
                 ),
             }),
-            // `when(x):a():b()` — thread the value type through every
-            // stage so each stage's type parameters are bound from what
-            // actually reaches it. Reading the last stage's declared
-            // return alone would hint the bare parameter name.
-            Expr::Pipe { source, stages } => {
-                let mut current = self.infer_type(&source.value);
-                for st in stages {
-                    let sig = self
-                        .user_fns
-                        .get(&st.name)
-                        .map(|f| f.sig.clone())
-                        .or_else(|| saule_typeck::sigs::lookup(&st.name))?;
-                    let arg_types = self.positional_arg_types(&st.args);
-                    current = saule_typeck::sigs::instantiate_pipe_stage(&sig, current, &arg_types);
-                }
-                current
-            }
+            Expr::Pipe { source, stages } => crate::exprty::pipe_type(self, &source.value, stages),
             _ => None,
         }
     }
@@ -760,10 +741,10 @@ impl<'a> Cx<'a> {
         match obj {
             Expr::Self_ => self.enclosing_class.clone(),
             Expr::Ident(name) => {
-                if let Some(local) = self.locals.iter().rev().find(|l| l.name == *name) {
-                    if let Type::Named(n) = &local.ty {
-                        return Some(n.clone());
-                    }
+                if let Some(local) = self.locals.iter().rev().find(|l| l.name == *name)
+                    && let Type::Named(n) = &local.ty
+                {
+                    return Some(n.clone());
                 }
                 if with_classes(|r| r.contains_key(name)) {
                     return Some(name.clone());
@@ -771,10 +752,10 @@ impl<'a> Cx<'a> {
                 None
             }
             Expr::Call { callee, .. } => {
-                if let Expr::Ident(n) = &callee.value {
-                    if with_classes(|r| r.contains_key(n)) {
-                        return Some(n.clone());
-                    }
+                if let Expr::Ident(n) = &callee.value
+                    && with_classes(|r| r.contains_key(n))
+                {
+                    return Some(n.clone());
                 }
                 None
             }
@@ -797,10 +778,10 @@ impl<'a> Cx<'a> {
                 if with_classes(|r| r.contains_key(name)) {
                     return lookup_method(name, "init").map(|sig| CalleeParams::Named(sig.params));
                 }
-                if let Some(class) = &self.enclosing_class {
-                    if let Some(sig) = lookup_method(class, name) {
-                        return Some(CalleeParams::Named(sig.params));
-                    }
+                if let Some(class) = &self.enclosing_class
+                    && let Some(sig) = lookup_method(class, name)
+                {
+                    return Some(CalleeParams::Named(sig.params));
                 }
                 if let Some(f) = self.user_fns.get(name) {
                     return Some(CalleeParams::Named(f.params.clone()));
@@ -895,28 +876,27 @@ enum CalleeParams {
 fn collect_user_fns(module: &Module) -> HashMap<String, UserFn> {
     let mut out = HashMap::new();
     for s in &module.stmts {
-        if let Stmt::Decl(d) = &s.value {
-            if let Decl::Function {
+        if let Stmt::Decl(d) = &s.value
+            && let Decl::Function {
                 name,
                 type_params,
                 params,
                 return_ty,
                 ..
             } = &d.value
-            {
-                out.insert(
-                    name.clone(),
-                    UserFn {
-                        params: params.clone(),
-                        sig: saule_typeck::sigs::NativeSig {
-                            type_params: type_params.clone(),
-                            params: params.iter().map(|p| p.ty.clone()).collect(),
-                            variadic: None,
-                            returns: return_ty.clone().into_iter().collect(),
-                        },
+        {
+            out.insert(
+                name.clone(),
+                UserFn {
+                    params: params.clone(),
+                    sig: saule_typeck::sigs::NativeSig {
+                        type_params: type_params.clone(),
+                        params: params.iter().map(|p| p.ty.clone()).collect(),
+                        variadic: None,
+                        returns: return_ty.clone().into_iter().collect(),
                     },
-                );
-            }
+                },
+            );
         }
     }
     out
@@ -1013,6 +993,67 @@ mod tests {
                 .iter()
                 .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": table<integer>"),
             "{hints:?}"
+        );
+    }
+
+    /// `a ?? b` drops the left side's nullability — that's the operator's
+    /// whole job. Hinting `: integer?` here contradicted the checker,
+    /// which accepts `local co: integer = maybe() ?? 0`.
+    #[test]
+    fn type_hint_for_coalesce_drops_nullability() {
+        let src = "fn maybe() -> integer?\n  return 1\nend\n\nlocal co = maybe() ?? 0\n";
+        let hints = raw_hints(src);
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer"),
+            "{hints:?}"
+        );
+    }
+
+    /// `and` / `or` evaluate to an *operand*, not a boolean (Lua
+    /// semantics). `name() or "default"` is a `string`, and the checker
+    /// accepts it as one.
+    #[test]
+    fn type_hint_for_or_takes_the_operand_type() {
+        let src = "fn name() -> string\n  return \"a\"\nend\n\nlocal lo = name() or \"default\"\n";
+        let hints = raw_hints(src);
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": string"),
+            "{hints:?}"
+        );
+    }
+
+    /// An overloaded operator names its own result type: `Vec2 + Vec2` is
+    /// a `Vec2`, and `Vec2 .. Vec2` is whatever `OpConcat` declares —
+    /// not the hardcoded `string` the built-in rule assumes.
+    #[test]
+    fn type_hint_from_operator_overload() {
+        let src = concat!(
+            "class Vec2 implements OpAdd<Vec2, Vec2>, OpConcat<Vec2, integer>\n",
+            "  local x: float\n",
+            "  fn init(x: float)\n    self.x = x\n  end\n",
+            "  fn add(other: Vec2) -> Vec2\n    return Vec2(self.x)\n  end\n",
+            "  fn concat(other: Vec2) -> integer\n    return 1\n  end\n",
+            "end\n\n",
+            "local a = Vec2(1.0)\n",
+            "local sum = a + a\n",
+            "local joined = a .. a\n",
+        );
+        let hints = raw_hints(src);
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": Vec2"),
+            "expected `+` to yield Vec2: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer"),
+            "expected `..` overload to yield integer: {hints:?}"
         );
     }
 

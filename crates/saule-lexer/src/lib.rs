@@ -267,17 +267,17 @@ impl<'src> Lexer<'src> {
         // float without a fractional part: `1f` is `1.0`. Only treat it as a
         // suffix when no further identifier character follows, which keeps
         // `1foo` lexing as `1` then `foo` rather than `1f` then `oo`.
-        if let Some(&(sfx_i, sfx)) = self.chars.peek() {
-            if sfx == 'f' || sfx == 'F' {
-                let mut look = self.chars.clone();
-                look.next(); // skip the suffix
-                let continues_ident =
-                    matches!(look.peek(), Some(&(_, c)) if c.is_alphanumeric() || c == '_');
-                if !continues_ident {
-                    self.chars.next();
-                    is_float = true;
-                    end = sfx_i + sfx.len_utf8();
-                }
+        if let Some(&(sfx_i, sfx)) = self.chars.peek()
+            && (sfx == 'f' || sfx == 'F')
+        {
+            let mut look = self.chars.clone();
+            look.next(); // skip the suffix
+            let continues_ident =
+                matches!(look.peek(), Some(&(_, c)) if c.is_alphanumeric() || c == '_');
+            if !continues_ident {
+                self.chars.next();
+                is_float = true;
+                end = sfx_i + sfx.len_utf8();
             }
         }
 

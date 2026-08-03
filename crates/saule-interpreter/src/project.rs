@@ -58,12 +58,11 @@ pub fn get() -> Option<ProjectInfo> {
 /// project root and the project has a non-empty name; otherwise return the
 /// absolute path unchanged.
 pub fn pretty_path(abs_path: &Path) -> String {
-    if let Some(info) = get() {
-        if !info.name.is_empty() {
-            if let Ok(rel) = abs_path.strip_prefix(&info.root) {
-                return format!("{}/{}", info.name, rel.display());
-            }
-        }
+    if let Some(info) = get()
+        && !info.name.is_empty()
+        && let Ok(rel) = abs_path.strip_prefix(&info.root)
+    {
+        return format!("{}/{}", info.name, rel.display());
     }
     abs_path.display().to_string()
 }

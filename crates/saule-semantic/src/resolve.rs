@@ -395,7 +395,7 @@ impl Resolver {
             }
         }
 
-        let prev_class = std::mem::replace(&mut self.in_class, Some(class_name.to_string()));
+        let prev_class = self.in_class.replace(class_name.to_string());
         self.push_scope();
         // Make the class's static members visible by bare name.
         for n in static_names {

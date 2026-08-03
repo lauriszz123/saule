@@ -1094,8 +1094,9 @@ fn report_if_user_function_arity(
         return;
     }
 
+    // Arity check. Either branch reports and returns on failure, so
+    // reaching past this point means the count is good.
     let positional = args.len();
-    let arity_ok;
     if info.variadic {
         // With a variadic last param, `total - 1 - defaults` is the
         // minimum required positional count.
@@ -1109,7 +1110,6 @@ fn report_if_user_function_arity(
             });
             return;
         }
-        arity_ok = true;
     } else {
         let min_required = info.total.saturating_sub(info.defaults);
         if positional < min_required || positional > info.total {
@@ -1121,11 +1121,6 @@ fn report_if_user_function_arity(
             });
             return;
         }
-        arity_ok = true;
-    }
-
-    if !arity_ok {
-        return;
     }
 
     // Argument-type validation. Mirrors `check_user_method_args` /

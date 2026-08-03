@@ -28,11 +28,15 @@ impl fmt::Debug for NativeFn {
     }
 }
 
+/// The body of a [`NativeClosure`]: positional arguments in, multiple
+/// return values or an error message out.
+pub type NativeClosureFn = Box<dyn Fn(&[Value]) -> Result<Vec<Value>, String>>;
+
 /// Stateful Rust-implemented function. The closure may capture arbitrary
 /// Rust state (e.g. an iterator's cursor) and may return multiple values.
 pub struct NativeClosure {
     pub name: &'static str,
-    pub func: Box<dyn Fn(&[Value]) -> Result<Vec<Value>, String>>,
+    pub func: NativeClosureFn,
     /// Declared parameter names, in order. When non-empty, the call site
     /// accepts named arguments and reorders them into positional slots
     /// before invoking `func`. Empty for closures that only take positional

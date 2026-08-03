@@ -158,10 +158,10 @@ fn unquote(s: &str) -> String {
 /// Expand a leading `~` to the user's home directory; pass anything else
 /// through unchanged.
 fn expand_tilde(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home).join(rest);
-        }
+    if let Some(rest) = p.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return PathBuf::from(home).join(rest);
     }
     PathBuf::from(p)
 }

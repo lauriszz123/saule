@@ -32,13 +32,13 @@ pub(super) fn param_names(qname: &str, sig: &NativeSig) -> Vec<String> {
     // declared positional arity.
     out.truncate(sig.params.len());
     while out.len() < sig.params.len() {
-        out.push(derive_one(&sig.params[out.len()], out.len()));
+        out.push(derive_one(&sig.params[out.len()]));
     }
     if sig.variadic.is_some() {
         let var_name = sig
             .variadic
             .as_ref()
-            .map(|t| derive_one(t, out.len()))
+            .map(derive_one)
             .unwrap_or_else(|| "rest".to_string());
         out.push(var_name);
     }
@@ -51,7 +51,7 @@ pub(super) fn param_names(qname: &str, sig: &NativeSig) -> Vec<String> {
 /// Derive a name from a `Type`. Returns short, idiomatic identifiers
 /// rather than raw type names — `string` becomes `s`, not `string` —
 /// so the inlay rendering reads as code rather than a type ascription.
-fn derive_one(ty: &Type, idx: usize) -> String {
+fn derive_one(ty: &Type) -> String {
     let base = match ty {
         Type::Named(n) => match n.as_str() {
             "string" => "s",
@@ -69,7 +69,7 @@ fn derive_one(ty: &Type, idx: usize) -> String {
                 "value"
             }
         },
-        Type::Nullable(inner) => return derive_one(inner, idx),
+        Type::Nullable(inner) => return derive_one(inner),
         Type::Function { .. } => "fn",
         Type::Table { .. } => "t",
         Type::Tuple(_) => "tup",
@@ -78,11 +78,7 @@ fn derive_one(ty: &Type, idx: usize) -> String {
 }
 
 fn derive_from_types(types: &[Type]) -> Vec<String> {
-    types
-        .iter()
-        .enumerate()
-        .map(|(i, t)| derive_one(t, i))
-        .collect()
+    types.iter().map(derive_one).collect()
 }
 
 fn deduplicate(names: &mut [String]) {

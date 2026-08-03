@@ -223,11 +223,11 @@ impl Sink for CaptureSink {
         // Coalesce consecutive writes to the same stream. A `println` of five
         // arguments is several writes; storing them as one chunk keeps the
         // consumer's job simple without losing any ordering information.
-        if let Some(last) = chunks.last_mut() {
-            if last.stream == stream {
-                last.text.push_str(text);
-                return;
-            }
+        if let Some(last) = chunks.last_mut()
+            && last.stream == stream
+        {
+            last.text.push_str(text);
+            return;
         }
         chunks.push(Chunk {
             stream,

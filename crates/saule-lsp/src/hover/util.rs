@@ -120,10 +120,8 @@ pub(super) fn resolve_member(
         ));
     }
 
-    if is_call {
-        if let Some(sig) = lookup_method(class, name) {
-            return Some(with_doc(render_method_sig(class, name, &sig), doc));
-        }
+    if is_call && let Some(sig) = lookup_method(class, name) {
+        return Some(with_doc(render_method_sig(class, name, &sig), doc));
     }
     if let Some(ty) = lookup_field_type(class, name) {
         return Some(with_doc(

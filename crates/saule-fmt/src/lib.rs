@@ -384,10 +384,12 @@ impl<'a> Printer<'a> {
                     self.blank_line();
                 }
             } else if i > 0 {
+                // A blank line either because the author wrote one, or
+                // because these two statement kinds always want one.
                 let prev_stmt_end = m.stmts[i - 1].span.end;
-                if self.newlines_in_source(prev_stmt_end, s.span.start) >= 2 {
-                    self.blank_line();
-                } else if needs_top_separator(&m.stmts[i - 1].value, &s.value) {
+                if self.newlines_in_source(prev_stmt_end, s.span.start) >= 2
+                    || needs_top_separator(&m.stmts[i - 1].value, &s.value)
+                {
                     self.blank_line();
                 }
             }
@@ -803,10 +805,13 @@ impl<'a> Printer<'a> {
                     self.blank_line();
                 }
             } else if i > 0 {
+                // A blank line either because the author wrote one, or
+                // because a method always stands apart from its neighbour.
                 let prev_member_end = members[i - 1].span.end;
-                if self.newlines_in_source(prev_member_end, m.span.start) >= 2 {
-                    self.blank_line();
-                } else if is_method || prev_was_method {
+                if self.newlines_in_source(prev_member_end, m.span.start) >= 2
+                    || is_method
+                    || prev_was_method
+                {
                     self.blank_line();
                 }
             }
@@ -930,7 +935,7 @@ impl<'a> Printer<'a> {
         }
         let start_col = self.current_column();
         let inline = self.render_params_inline(ps);
-        if self.force_inline || start_col + inline.len() + 1 <= self.max_width() {
+        if self.force_inline || start_col + inline.len() < self.max_width() {
             self.write(&inline);
             return;
         }
@@ -1361,7 +1366,7 @@ impl<'a> Printer<'a> {
         let start_col = self.current_column();
         let inline = self.render_call_args_inline(args);
         // `+ 1` reserves the closing paren.
-        if self.force_inline || start_col + inline.len() + 1 <= self.max_width() {
+        if self.force_inline || start_col + inline.len() < self.max_width() {
             self.write(&inline);
             return;
         }
@@ -1725,10 +1730,10 @@ fn next_if_chunk_start(
     if let Some((cond, _)) = remaining_elseifs.first() {
         return cond.span.start;
     }
-    if let Some(eb) = else_block {
-        if let Some(first) = eb.first() {
-            return first.span.start;
-        }
+    if let Some(eb) = else_block
+        && let Some(first) = eb.first()
+    {
+        return first.span.start;
     }
     fallback
 }

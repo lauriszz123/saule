@@ -214,10 +214,10 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             if with_classes(|r| r.contains_key(&name)) {
                 return build_help(&head, lookup_method(&name, "init"), &hit.args, offset, ml);
             }
-            if let Some(class) = &hit.enclosing_class {
-                if let Some(sig) = lookup_method(class, &name) {
-                    return build_help(&head, Some(sig), &hit.args, offset, ml);
-                }
+            if let Some(class) = &hit.enclosing_class
+                && let Some(sig) = lookup_method(class, &name)
+            {
+                return build_help(&head, Some(sig), &hit.args, offset, ml);
             }
             // Callback held in a local / parameter: `f(...)` where
             // `f: fn(integer) -> string`. The type carries no parameter
@@ -464,10 +464,8 @@ fn textual_fallback(source: &str, offset: usize) -> Option<SignatureHelp> {
             }
             b'[' => bracket_depth -= 1,
             b'{' => brace_depth -= 1,
-            b',' => {
-                if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
-                    commas += 1;
-                }
+            b',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                commas += 1;
             }
             _ => {}
         }
@@ -529,10 +527,10 @@ fn textual_fallback(source: &str, offset: usize) -> Option<SignatureHelp> {
         // that falls back mid-keystroke doesn't change its heading and
         // then change back once the buffer parses again.
         let qname = format!("{recv}.{name}");
-        if with_classes(|r| r.contains_key(recv)) {
-            if let Some(sig) = lookup_method(recv, name) {
-                return build_help_simple(&qname, sig, active);
-            }
+        if with_classes(|r| r.contains_key(recv))
+            && let Some(sig) = lookup_method(recv, name)
+        {
+            return build_help_simple(&qname, sig, active);
         }
         // Stdlib module call (`Os.exists`, `String.find`, ...) or
         // value-type instance method (`File.write`).
@@ -549,10 +547,10 @@ fn textual_fallback(source: &str, offset: usize) -> Option<SignatureHelp> {
         let sig = lookup_method(name, "init")?;
         return build_help_simple(name, sig, active);
     }
-    if let Some(class) = enclosing_class_textual(source, offset) {
-        if let Some(sig) = lookup_method(&class, name) {
-            return build_help_simple(name, sig, active);
-        }
+    if let Some(class) = enclosing_class_textual(source, offset)
+        && let Some(sig) = lookup_method(&class, name)
+    {
+        return build_help_simple(name, sig, active);
     }
     // User-defined free function. Re-parse the source defensively so
     // we can pick up `fn name(...)` even when the parse failed during
@@ -853,7 +851,7 @@ fn active_parameter(args: &[CallArgInfo], offset: usize, arity: usize) -> usize 
             idx += 1;
         }
     }
-    idx.min(arity.saturating_sub(1).max(0))
+    idx.min(arity.saturating_sub(1))
 }
 
 /// Length of `s` in UTF-16 code units.
@@ -1638,16 +1636,15 @@ fn contains(span: &std::ops::Range<usize>, offset: usize) -> bool {
 fn collect_user_fns(module: &Module) -> HashMap<String, (Vec<Param>, Option<Type>)> {
     let mut out = HashMap::new();
     for s in &module.stmts {
-        if let Stmt::Decl(d) = &s.value {
-            if let Decl::Function {
+        if let Stmt::Decl(d) = &s.value
+            && let Decl::Function {
                 name,
                 params,
                 return_ty,
                 ..
             } = &d.value
-            {
-                out.insert(name.clone(), (params.clone(), return_ty.clone()));
-            }
+        {
+            out.insert(name.clone(), (params.clone(), return_ty.clone()));
         }
     }
     out
@@ -1833,12 +1830,11 @@ pub(super) fn reconcile_with_client(fresh: SignatureHelp, prev: &SignatureHelp) 
 /// (the failing tokens may be elsewhere in the file).
 fn lookup_user_fn_textual(source: &str, name: &str) -> Option<(Vec<Param>, Option<Type>)> {
     // First try parsing the source as-is.
-    if let Ok(tokens) = saule_lexer::Lexer::new(source).tokenize() {
-        if let Ok(module) = saule_parser::parse(tokens) {
-            if let Some(found) = collect_user_fns(&module).remove(name) {
-                return Some(found);
-            }
-        }
+    if let Ok(tokens) = saule_lexer::Lexer::new(source).tokenize()
+        && let Ok(module) = saule_parser::parse(tokens)
+        && let Some(found) = collect_user_fns(&module).remove(name)
+    {
+        return Some(found);
     }
     // Mid-keystroke: the buffer has an unclosed `(` somewhere. Try
     // synthesising a closed buffer by appending `) end` enough times
@@ -1847,12 +1843,11 @@ fn lookup_user_fn_textual(source: &str, name: &str) -> Option<(Vec<Param>, Optio
     // already finished typing.
     for suffix in [") end", ") end\nend", ") end\nend\nend"] {
         let patched = format!("{source}{suffix}");
-        if let Ok(tokens) = saule_lexer::Lexer::new(&patched).tokenize() {
-            if let Ok(module) = saule_parser::parse(tokens) {
-                if let Some(found) = collect_user_fns(&module).remove(name) {
-                    return Some(found);
-                }
-            }
+        if let Ok(tokens) = saule_lexer::Lexer::new(&patched).tokenize()
+            && let Ok(module) = saule_parser::parse(tokens)
+            && let Some(found) = collect_user_fns(&module).remove(name)
+        {
+            return Some(found);
         }
     }
     None
@@ -2525,7 +2520,7 @@ fn probe()
   local c = Color(1.0)
 end
 ";
-        let h = help_at(&src, src.rfind("Color(1.0").unwrap() + "Color(".len()).expect("help");
+        let h = help_at(src, src.rfind("Color(1.0").unwrap() + "Color(".len()).expect("help");
         let sig = &h.signatures[0];
         let units: Vec<u16> = sig.label.encode_utf16().collect();
         assert!(sig.label.contains(" = …"), "label={}", sig.label);

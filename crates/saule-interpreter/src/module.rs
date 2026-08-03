@@ -339,12 +339,10 @@ fn collect_exports(
             continue;
         }
 
-        if reexport_imports {
-            if let Decl::Import { names, path, .. } = &decl.value {
-                for local in imported_local_names(names, path, dir, loader) {
-                    if let Some(value) = env.borrow().get(&local) {
-                        exports.values.insert(local, value);
-                    }
+        if reexport_imports && let Decl::Import { names, path, .. } = &decl.value {
+            for local in imported_local_names(names, path, dir, loader) {
+                if let Some(value) = env.borrow().get(&local) {
+                    exports.values.insert(local, value);
                 }
             }
         }
