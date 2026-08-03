@@ -241,6 +241,31 @@ pub fn instantiate_returns(sig: &NativeSig, arg_types: &[Option<Type>]) -> Vec<T
         .collect()
 }
 
+/// Instantiate one stage of a `when(x):stage(args)` chain and return the
+/// type it produces.
+///
+/// A stage is an ordinary call with the piped value spliced in as argument
+/// 0, so `incoming` binds against `sig.params[0]` and `arg_types` fills the
+/// rest. Chaining this across a pipeline is what lets a generic stage
+/// answer `table<integer>` instead of its own declared `table<T>`.
+///
+/// Returns `None` when the stage declares no return type, or when a type
+/// parameter nothing pinned down survives substitution — the same
+/// "not inferred" rule [`mentions_unbound_param`] documents.
+pub fn instantiate_pipe_stage(
+    sig: &NativeSig,
+    incoming: Option<Type>,
+    arg_types: &[Option<Type>],
+) -> Option<Type> {
+    let mut all = Vec::with_capacity(arg_types.len() + 1);
+    all.push(incoming);
+    all.extend(arg_types.iter().cloned());
+    instantiate_returns(sig, &all)
+        .into_iter()
+        .next()
+        .filter(|t| !mentions_unbound_param(t, &sig.type_params))
+}
+
 /// Does `ty` still mention one of `type_params` after instantiation?
 ///
 /// [`instantiate_returns`] leaves a type parameter the arguments never

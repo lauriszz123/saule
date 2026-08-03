@@ -1,0 +1,21 @@
+-- A generic pipeline stage still checks the shape of the piped value.
+--
+-- Binding `T` from the incoming type is not the same as accepting anything:
+-- `filter<T>` wants a `table<T>`, and a `string` has no `T` to bind — the
+-- structure doesn't line up at all.
+
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+	local result: table<T> = {}
+
+	for item in items do
+		if predicate(item) then
+			result[#result + 1] = item
+		end
+	end
+
+	return result
+end
+
+local err = when("hello"):filter(x => true)
+-- COMPILE ERROR: pipeline stage `filter` expects `table<T>`, got `string`
+print(err)

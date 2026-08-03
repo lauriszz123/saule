@@ -1,0 +1,57 @@
+-- Generic pipeline stages.
+--
+-- A `when(...)` stage is an ordinary call with the piped value spliced in
+-- as its first argument, so a generic stage binds its type parameters the
+-- same way a direct call does: from what actually reaches it.
+--
+-- `filter<T>` declares `table<T>`; piping a `table<integer>` in binds
+-- `T := integer`, which is both what makes the stage legal and what makes
+-- the *next* stage see a `table<integer>` rather than a bare `table<T>`.
+
+fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
+	local out: table<U> = {}
+
+	for item: T in items do
+		out[#out + 1] = f(item)
+	end
+
+	return out
+end
+
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+	local result: table<T> = {}
+
+	for item in items do
+		if predicate(item) then
+			result[#result + 1] = item
+		end
+	end
+
+	return result
+end
+
+fn total(nums: table<integer>) -> integer
+	local sum: integer = 0
+	for n in nums do
+		sum = sum + n
+	end
+	return sum
+end
+
+-- The annotations are the assertion: they only typecheck if the chain
+-- instantiated `T` and `U` instead of leaving the parameter names standing.
+local doubled: table<integer> = when({1, 2, 3, 4, 5, 6})
+	:filter(x => x % 2 == 0)
+	:map(x => x * 2)
+print(doubled)
+
+-- The threaded type also has to satisfy a *non*-generic stage downstream,
+-- which is what proves `map` handed on `table<integer>` and not `table<U>`.
+local sum: integer = when({1, 2, 3})
+	:map(n => n * 10)
+	:total()
+print(sum)
+
+-- Changing the element type mid-chain: `table<string>` in, `table<integer>` out.
+local lengths: table<integer> = when({"a", "bb", "ccc"}):map(s => #s)
+print(lengths)
