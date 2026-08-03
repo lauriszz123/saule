@@ -946,3 +946,80 @@ fn a_bare_variant_binds_nothing_and_stays_accepted() {
         end\n",
     );
 }
+
+// ─── `when(...)` pipelines over generic stages ──────────────────────────────
+
+/// The declarations the pipeline tests below chain together: a generic
+/// `filter` that preserves its element type and a generic `map` that
+/// changes it.
+const GENERIC_STAGES: &str = "fn filter<T>(items: table<T>, p: fn(T) -> boolean) -> table<T>\n\
+    \x20 return items\n\
+    end\n\
+    fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n\
+    \x20 local out: table<U> = {}\n\
+    \x20 return out\n\
+    end\n";
+
+#[test]
+fn a_generic_stage_binds_its_type_params_from_the_piped_value() {
+    // `filter` declares `table<T>`; the piped `table<integer>` is what says
+    // what `T` is. Comparing the two as unrelated concrete types rejected
+    // every generic stage that was ever written.
+    accepts(&format!(
+        "{GENERIC_STAGES}local doubled = when({{1, 2, 3}}):filter(x => x % 2 == 0)\n"
+    ));
+}
+
+#[test]
+fn a_pipeline_threads_the_instantiated_type_into_the_next_stage() {
+    // `filter` hands on `table<integer>`, not its own `table<T>` — which is
+    // exactly what `map`'s `table<T>` slot then binds against.
+    accepts(&format!(
+        "{GENERIC_STAGES}local doubled: table<integer> = when({{1, 2, 3}})\n\
+        \x20 :filter(x => x % 2 == 0)\n\
+        \x20 :map(x => x * 2)\n"
+    ));
+}
+
+#[test]
+fn a_generic_stage_still_rejects_a_structurally_wrong_value() {
+    // Binding `T` from the piped value is not the same as accepting
+    // anything: a `string` has no element type for `table<T>` to bind.
+    rejects(
+        &format!("{GENERIC_STAGES}local err = when(\"hello\"):filter(x => true)\n"),
+        "pipeline stage `filter`",
+    );
+}
+
+#[test]
+fn the_instantiated_type_is_what_a_later_stage_is_checked_against() {
+    // `map` over a `table<integer>` produces `table<integer>`, and `join`
+    // wants strings. The mismatch is only visible once the chain carries
+    // instantiated types rather than parameter names.
+    rejects(
+        &format!(
+            "{GENERIC_STAGES}fn join(parts: table<string>) -> string\n\
+            \x20 return \"\"\n\
+            end\n\
+            local err = when({{1, 2}}):map(n => n * 2):join()\n"
+        ),
+        "pipeline stage `join`",
+    );
+}
+
+#[test]
+fn an_unbound_stage_type_param_does_not_leak_into_the_next_check() {
+    // Nothing pins `U` down here, so the chain's type is unknown rather
+    // than a literal `table<U>` — and an unknown value must not manufacture
+    // a mismatch against the following stage.
+    accepts(&format!(
+        "{GENERIC_STAGES}fn make<V>(items: table<integer>) -> table<V>\n\
+        \x20 local out: table<V> = {{}}\n\
+        \x20 return out\n\
+        end\n\
+        fn join(parts: table<string>) -> string\n\
+        \x20 return \"\"\n\
+        end\n\
+        local err = when({{1, 2}}):make():join()\n"
+    ));
+}

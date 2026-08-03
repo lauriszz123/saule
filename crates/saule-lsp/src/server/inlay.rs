@@ -603,6 +603,25 @@ impl<'a> Cx<'a> {
                 saule_ast::UnaryOp::Not => Some(Type::Named("boolean".into())),
                 saule_ast::UnaryOp::Neg => self.infer_type(&rhs.value),
             },
+            // Comparisons and `..` have a type of their own; the arithmetic
+            // operators take whichever operand we can type. Same reason as
+            // the unary arm above — it's what lets a callback body like
+            // `x => x * 2` pin down a generic result.
+            Expr::Binary { op, lhs, rhs } => {
+                use saule_ast::BinOp::*;
+                match op {
+                    Eq | NotEq | Lt | LtEq | Gt | GtEq | And | Or => {
+                        Some(Type::Named("boolean".into()))
+                    }
+                    Concat => Some(Type::Named("string".into())),
+                    Coalesce => self
+                        .infer_type(&lhs.value)
+                        .or_else(|| self.infer_type(&rhs.value)),
+                    Add | Sub | Mul | Div | Mod | Pow => self
+                        .infer_type(&lhs.value)
+                        .or_else(|| self.infer_type(&rhs.value)),
+                }
+            }
             Expr::Lambda {
                 params,
                 return_ty,
@@ -616,6 +635,23 @@ impl<'a> Cx<'a> {
                         .unwrap_or_else(|| Type::Named("any".into())),
                 ),
             }),
+            // `when(x):a():b()` — thread the value type through every
+            // stage so each stage's type parameters are bound from what
+            // actually reaches it. Reading the last stage's declared
+            // return alone would hint the bare parameter name.
+            Expr::Pipe { source, stages } => {
+                let mut current = self.infer_type(&source.value);
+                for st in stages {
+                    let sig = self
+                        .user_fns
+                        .get(&st.name)
+                        .map(|f| f.sig.clone())
+                        .or_else(|| saule_typeck::sigs::lookup(&st.name))?;
+                    let arg_types = self.positional_arg_types(&st.args);
+                    current = saule_typeck::sigs::instantiate_pipe_stage(&sig, current, &arg_types);
+                }
+                current
+            }
             _ => None,
         }
     }
@@ -971,6 +1007,26 @@ mod tests {
     #[test]
     fn type_hint_from_generic_user_function() {
         let src = "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n  local out: table<U> = {}\n  return out\nend\n\nlocal lengths = map({\"a\"}, s => #s)\n";
+        let hints = raw_hints(src);
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": table<integer>"),
+            "{hints:?}"
+        );
+    }
+
+    /// A `when(...)` chain threads its value type through every stage, so
+    /// the generic stages instantiate instead of hinting `: table<U>`.
+    #[test]
+    fn type_hint_from_generic_pipeline() {
+        let src = concat!(
+            "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n",
+            "  local out: table<U> = {}\n  return out\nend\n\n",
+            "fn filter<T>(items: table<T>, p: fn(T) -> boolean) -> table<T>\n",
+            "  return items\nend\n\n",
+            "local doubled = when({1, 2, 3}):filter(x => x % 2 == 0):map(x => x * 2)\n",
+        );
         let hints = raw_hints(src);
         assert!(
             hints

@@ -582,18 +582,24 @@ impl<'a> Cx<'a> {
                     },
                 })
             }
-            Expr::Pipe { stages, .. } => {
-                // Last stage's return type. Each stage is `:fn(args)`
-                // where `fn` is a free function; the piped value is
-                // prepended at call time.
-                let last = stages.last()?;
-                if let Some(f) = self.module_fns.get(&last.name) {
-                    return f.sig.returns.first().cloned();
+            Expr::Pipe { source, stages } => {
+                // Each stage is `:fn(args)` where `fn` is a free function
+                // and the piped value is prepended at call time. Walking
+                // the chain rather than reading the last stage's declared
+                // return is what instantiates its type parameters — the
+                // last stage of a generic chain declares `table<U>`, and
+                // only the value that reaches it says what `U` is.
+                let mut current = self.infer_init_type(&source.value);
+                for st in stages {
+                    let sig = self
+                        .module_fns
+                        .get(&st.name)
+                        .map(|f| f.sig.clone())
+                        .or_else(|| saule_typeck::sigs::lookup(&st.name))?;
+                    let arg_types = self.positional_arg_types(&st.args);
+                    current = saule_typeck::sigs::instantiate_pipe_stage(&sig, current, &arg_types);
                 }
-                if let Some(sig) = saule_typeck::sigs::lookup(&last.name) {
-                    return sig.returns.first().cloned();
-                }
-                None
+                current
             }
             Expr::Ident(name) => {
                 if let Some(local) = self.lookup_local(name) {

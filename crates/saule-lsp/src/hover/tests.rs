@@ -1213,6 +1213,23 @@ fn local_type_from_generic_sibling_call() {
     assert!(md.contains("(local) lengths: table<integer>"), "{md}");
 }
 
+/// A local initialized from a `when(...)` chain of generic stages gets
+/// the type the *chain* produces. Reading the last stage's declared
+/// return alone reported `table<U>` — the parameter name of a function
+/// the call site had already instantiated.
+#[test]
+fn local_type_from_generic_pipeline() {
+    let src = concat!(
+        "fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>\n",
+        "\tlocal out: table<U> = {}\n\treturn out\nend\n\n",
+        "fn filter<T>(items: table<T>, p: fn(T) -> boolean) -> table<T>\n",
+        "\treturn items\nend\n\n",
+        "local doubled = when({1, 2, 3}):filter(x => x % 2 == 0):map(x => x * 2)\n",
+    );
+    let md = hover_src_at(src, "doubled =", 1).expect("hover on local");
+    assert!(md.contains("(local) doubled: table<integer>"), "{md}");
+}
+
 /// A type parameter the call never pins down must not escape into the
 /// hover as if it were a real type — the local falls back to `any`.
 #[test]
