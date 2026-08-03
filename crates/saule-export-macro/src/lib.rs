@@ -383,21 +383,18 @@ fn unwrap_return(output: &ReturnType) -> (Option<Type>, bool) {
         return (None, false);
     };
     // Treat `-> ()` like no return.
-    if let Type::Tuple(t) = &**ty {
-        if t.elems.is_empty() {
-            return (None, false);
-        }
+    if let Type::Tuple(t) = &**ty
+        && t.elems.is_empty()
+    {
+        return (None, false);
     }
-    if let Type::Path(tp) = &**ty {
-        if let Some(seg) = tp.path.segments.last() {
-            if seg.ident == "Result" {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(GenericArgument::Type(t)) = args.args.iter().next() {
-                        return (Some(t.clone()), true);
-                    }
-                }
-            }
-        }
+    if let Type::Path(tp) = &**ty
+        && let Some(seg) = tp.path.segments.last()
+        && seg.ident == "Result"
+        && let PathArguments::AngleBracketed(args) = &seg.arguments
+        && let Some(GenericArgument::Type(t)) = args.args.iter().next()
+    {
+        return (Some(t.clone()), true);
     }
     (Some((**ty).clone()), false)
 }

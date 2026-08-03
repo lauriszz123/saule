@@ -71,7 +71,7 @@ fn util_divmod(a: i64, b: i64) -> Result<(i64, i64), String> {
 fn util_filter(t: STable<T>, f: SFunction) -> Result<STable<T>, String> {
     let out = STable::new();
     for v in t.to_vec()? {
-        if is_truthy(&f.call(&[v.clone()])?) {
+        if is_truthy(&f.call(std::slice::from_ref(&v))?) {
             out.push(v)?;
         }
     }
@@ -96,7 +96,7 @@ fn util_reduce(t: STable<T>, f: SFunction, init: SElem<U>) -> Result<SElem<U>, S
 #[saule_export(class = "Util", name = "find")]
 fn util_find(t: STable<T>, f: SFunction) -> Result<Option<SElem<T>>, String> {
     for v in t.to_vec()? {
-        if is_truthy(&f.call(&[v.clone()])?) {
+        if is_truthy(&f.call(std::slice::from_ref(&v))?) {
             return Ok(Some(SElem::new(v)));
         }
     }

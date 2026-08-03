@@ -172,20 +172,18 @@ pub(super) fn check_match(
 
     // Arm body type unification — flag the first pair that don't agree.
     let mut first_ty: Option<Type> = None;
-    for ty_opt in &arm_types {
-        if let Some(t) = ty_opt {
-            if let Some(first) = &first_ty {
-                if !types_compatible(first, t) && !types_compatible(t, first) {
-                    errors.push(TypeCheckError::MatchArmTypeMismatch {
-                        expected: type_to_string(first),
-                        found: type_to_string(t),
-                        span: to_source_span(match_expr.span.clone()),
-                    });
-                    break;
-                }
-            } else {
-                first_ty = Some(t.clone());
+    for t in arm_types.iter().flatten() {
+        if let Some(first) = &first_ty {
+            if !types_compatible(first, t) && !types_compatible(t, first) {
+                errors.push(TypeCheckError::MatchArmTypeMismatch {
+                    expected: type_to_string(first),
+                    found: type_to_string(t),
+                    span: to_source_span(match_expr.span.clone()),
+                });
+                break;
             }
+        } else {
+            first_ty = Some(t.clone());
         }
     }
 }

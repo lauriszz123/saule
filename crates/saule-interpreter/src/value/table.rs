@@ -166,10 +166,11 @@ impl TableObject {
 
     /// Read by arbitrary value index. Returns `Nil` for missing keys.
     pub fn get(&self, key: &Value) -> Value {
-        if let Value::Int(i) = key {
-            if *i >= 1 && (*i as usize) <= self.array.len() {
-                return self.array[(*i as usize) - 1].clone();
-            }
+        if let Value::Int(i) = key
+            && *i >= 1
+            && (*i as usize) <= self.array.len()
+        {
+            return self.array[(*i as usize) - 1].clone();
         }
         if let Value::Str(s) = key {
             return self.get_str(s);

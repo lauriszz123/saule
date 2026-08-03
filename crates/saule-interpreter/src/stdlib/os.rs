@@ -254,7 +254,7 @@ pub fn set_script_args(args: Vec<String>) {
 fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, String>) -> Value {
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
-        func: Box::new(move |args| func(args)),
+        func: Box::new(func),
         param_names: Vec::new(),
     }))
 }
@@ -632,7 +632,7 @@ fn civil_from_epoch(epoch: i64) -> (i64, u32, u32, u32, u32, u32, u32, u32) {
     let y_shifted = yoe as i64 + era * 400;
     let doy = (doe - (365 * yoe + yoe / 4 - yoe / 100)) as u32;
     let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let d = doy - (153 * mp + 2) / 5 + 1;
     let m_shifted = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m_shifted <= 2 {
         y_shifted + 1
@@ -652,7 +652,7 @@ fn civil_from_epoch(epoch: i64) -> (i64, u32, u32, u32, u32, u32, u32, u32) {
     // Weekday: Unix epoch day 0 was a Thursday (4).
     let wday = (((days + 4) % 7 + 7) % 7) as u32;
 
-    (year, m_shifted as u32, d, hh, mm, ss, wday, yday)
+    (year, m_shifted, d, hh, mm, ss, wday, yday)
 }
 
 /// Inverse of `civil_from_epoch`: convert a UTC civil date/time to a unix

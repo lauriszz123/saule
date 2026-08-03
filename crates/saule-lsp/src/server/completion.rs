@@ -416,11 +416,11 @@ impl Walk {
         let mark = self.scope.len();
         for s in stmts {
             // A bare sentinel statement means the caret starts a statement.
-            if let Stmt::Expr(e) = &s.value {
-                if matches!(&e.value, Expr::Ident(n) if n == SENTINEL) {
-                    self.record(Ctx::Value { stmt_start: true });
-                    continue;
-                }
+            if let Stmt::Expr(e) = &s.value
+                && matches!(&e.value, Expr::Ident(n) if n == SENTINEL)
+            {
+                self.record(Ctx::Value { stmt_start: true });
+                continue;
             }
             self.stmt(&s.value);
             self.declare(&s.value);
@@ -1143,14 +1143,11 @@ fn collect_exports(
             } => (name, CompletionItemKind::ENUM),
             // A barrel publishes what it imports; follow those.
             Decl::Import { path, .. } => {
-                if abs.file_stem().and_then(|s| s.to_str()) == Some("init") {
-                    if let Some(parent) = abs.parent() {
-                        if let Some(next) =
-                            saule_interpreter::module::resolve_import_path(parent, path)
-                        {
-                            collect_exports(&next, depth + 1, out, seen);
-                        }
-                    }
+                if abs.file_stem().and_then(|s| s.to_str()) == Some("init")
+                    && let Some(parent) = abs.parent()
+                    && let Some(next) = saule_interpreter::module::resolve_import_path(parent, path)
+                {
+                    collect_exports(&next, depth + 1, out, seen);
                 }
                 continue;
             }
@@ -1307,25 +1304,23 @@ fn value_items(found: &Found, module: &Module, stmt_start: bool) -> Vec<Completi
 
     // Module-level functions declared in this file.
     for stmt in &module.stmts {
-        if let Stmt::Decl(d) = &stmt.value {
-            if let Decl::Function {
+        if let Stmt::Decl(d) = &stmt.value
+            && let Decl::Function {
                 name,
                 params,
                 return_ty,
                 ..
             } = &d.value
-            {
-                if name != SENTINEL {
-                    items.push(sorted(
-                        item(
-                            name.clone(),
-                            CompletionItemKind::FUNCTION,
-                            Some(render_fn_sig(name, params, return_ty.as_ref())),
-                        ),
-                        "2",
-                    ));
-                }
-            }
+            && name != SENTINEL
+        {
+            items.push(sorted(
+                item(
+                    name.clone(),
+                    CompletionItemKind::FUNCTION,
+                    Some(render_fn_sig(name, params, return_ty.as_ref())),
+                ),
+                "2",
+            ));
         }
     }
 

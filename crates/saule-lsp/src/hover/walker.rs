@@ -168,6 +168,23 @@ fn collect_module_fns(module: &Module) -> HashMap<String, ModuleFn> {
     out
 }
 
+impl crate::exprty::TypeSource for Cx<'_> {
+    fn type_of(&self, expr: &Expr) -> Option<Type> {
+        self.infer_init_type(expr)
+    }
+
+    fn stage_sig(&self, name: &str) -> Option<saule_typeck::sigs::NativeSig> {
+        self.module_fns
+            .get(name)
+            .map(|f| f.sig.clone())
+            .or_else(|| saule_typeck::sigs::lookup(name))
+    }
+
+    fn arg_types(&self, args: &[CallArg]) -> Vec<Option<Type>> {
+        self.positional_arg_types(args)
+    }
+}
+
 impl<'a> Cx<'a> {
     /// Record `md` as the hover for `span` when `span` contains the
     /// cursor and is strictly narrower than any prior match.
@@ -470,11 +487,11 @@ impl<'a> Cx<'a> {
                     // Sibling free function inside a class body —
                     // reach through the enclosing-class registry the
                     // same way `resolve_ident` does for hover.
-                    if let Some(class) = &self.enclosing_class {
-                        if let Some(sig) = lookup_method(class, name) {
-                            let arg_types = self.positional_arg_types(args);
-                            return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
-                        }
+                    if let Some(class) = &self.enclosing_class
+                        && let Some(sig) = lookup_method(class, name)
+                    {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
                     }
                 }
                 // `recv.method(args)` — dot-call on an instance or
@@ -533,26 +550,11 @@ impl<'a> Cx<'a> {
                 let ty = self.infer_init_type(&inner.value)?;
                 Some(strip_nullable_type(ty))
             }
-            Expr::Unary { op, rhs } => match op {
-                saule_ast::UnaryOp::Not => Some(Type::Named("boolean".into())),
-                saule_ast::UnaryOp::Len => Some(Type::Named("integer".into())),
-                saule_ast::UnaryOp::Neg => self.infer_init_type(&rhs.value),
-            },
+            // Operators are typed by the rules in [`crate::exprty`], shared
+            // with the inlay walker and mirrored from the checker.
+            Expr::Unary { op, rhs } => crate::exprty::unary_type(self, *op, &rhs.value),
             Expr::Binary { op, lhs, rhs } => {
-                use saule_ast::BinOp::*;
-                match op {
-                    Eq | NotEq | Lt | LtEq | Gt | GtEq | And | Or => {
-                        Some(Type::Named("boolean".into()))
-                    }
-                    Concat => Some(Type::Named("string".into())),
-                    Coalesce => self
-                        .infer_init_type(&lhs.value)
-                        .map(strip_nullable_type)
-                        .or_else(|| self.infer_init_type(&rhs.value)),
-                    Add | Sub | Mul | Div | Mod | Pow => self
-                        .infer_init_type(&lhs.value)
-                        .or_else(|| self.infer_init_type(&rhs.value)),
-                }
+                crate::exprty::binary_type(self, *op, &lhs.value, &rhs.value)
             }
             Expr::Lambda {
                 params,
@@ -582,25 +584,7 @@ impl<'a> Cx<'a> {
                     },
                 })
             }
-            Expr::Pipe { source, stages } => {
-                // Each stage is `:fn(args)` where `fn` is a free function
-                // and the piped value is prepended at call time. Walking
-                // the chain rather than reading the last stage's declared
-                // return is what instantiates its type parameters — the
-                // last stage of a generic chain declares `table<U>`, and
-                // only the value that reaches it says what `U` is.
-                let mut current = self.infer_init_type(&source.value);
-                for st in stages {
-                    let sig = self
-                        .module_fns
-                        .get(&st.name)
-                        .map(|f| f.sig.clone())
-                        .or_else(|| saule_typeck::sigs::lookup(&st.name))?;
-                    let arg_types = self.positional_arg_types(&st.args);
-                    current = saule_typeck::sigs::instantiate_pipe_stage(&sig, current, &arg_types);
-                }
-                current
-            }
+            Expr::Pipe { source, stages } => crate::exprty::pipe_type(self, &source.value, stages),
             Expr::Ident(name) => {
                 if let Some(local) = self.lookup_local(name) {
                     return Some(local.ty.clone());
@@ -777,12 +761,11 @@ impl<'a> Cx<'a> {
                 // resolve the head named type through the same
                 // identifier path that handles bare class / interface
                 // / enum references in expressions.
-                if let (Some(span), Some(t)) = (ty_span, ty.as_ref()) {
-                    if let Some(head) = named_type(t) {
-                        if let Some(md) = self.resolve_ident(&head) {
-                            self.record(span.clone(), md);
-                        }
-                    }
+                if let (Some(span), Some(t)) = (ty_span, ty.as_ref())
+                    && let Some(head) = named_type(t)
+                    && let Some(md) = self.resolve_ident(&head)
+                {
+                    self.record(span.clone(), md);
                 }
                 self.locals.push(LocalVar {
                     name: name.clone(),
@@ -1043,7 +1026,7 @@ impl<'a> Cx<'a> {
                 // as the hover target.
                 let header_span = d.span.start..header_end;
                 if let Some(parent) = extends {
-                    self.record_named_idents_in(&[parent.clone()], &header_span);
+                    self.record_named_idents_in(std::slice::from_ref(parent), &header_span);
                 }
                 self.record_named_idents_in(implements, &header_span);
                 let prev = self.enclosing_class.replace(name.clone());
@@ -1145,23 +1128,20 @@ impl<'a> Cx<'a> {
                         let local = alias.as_deref().unwrap_or(orig);
                         // Local alias span — the name the importer
                         // sees and would hover.
-                        if let Some(span) = locate_word_in(self.source, &d.span, local) {
-                            if contains(&span, self.offset) {
-                                if let Some(md) = self.resolve_ident(local) {
-                                    self.record(span, md);
-                                }
-                            }
+                        if let Some(span) = locate_word_in(self.source, &d.span, local)
+                            && contains(&span, self.offset)
+                            && let Some(md) = self.resolve_ident(local)
+                        {
+                            self.record(span, md);
                         }
                         // Original (upstream) name when an alias was
                         // used: `import X as Y` — both should hover.
-                        if alias.is_some() {
-                            if let Some(span) = locate_word_in(self.source, &d.span, orig) {
-                                if contains(&span, self.offset) {
-                                    if let Some(md) = self.resolve_ident(orig) {
-                                        self.record(span, md);
-                                    }
-                                }
-                            }
+                        if alias.is_some()
+                            && let Some(span) = locate_word_in(self.source, &d.span, orig)
+                            && contains(&span, self.offset)
+                            && let Some(md) = self.resolve_ident(orig)
+                        {
+                            self.record(span, md);
                         }
                     }
                 }
@@ -1743,10 +1723,10 @@ impl<'a> Cx<'a> {
         // method or field of the enclosing class. Covers calling a
         // sibling static (`help()` from inside `Main.main()`) and
         // referencing a sibling instance member without `self.`.
-        if let Some(class) = &self.enclosing_class {
-            if let Some(md) = resolve_member(class, name, false, &self.imports.docs) {
-                return Some(md);
-            }
+        if let Some(class) = &self.enclosing_class
+            && let Some(md) = resolve_member(class, name, false, &self.imports.docs)
+        {
+            return Some(md);
         }
         // A top-level function imported from another file — final
         // fallback. `analyze_with_seed` registers these under the local

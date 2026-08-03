@@ -3,6 +3,7 @@
 //! Communicates over stdin/stdout (the conventional LSP transport).
 //! Editors launch this binary as a child process and speak LSP to it.
 
+mod exprty;
 mod hover;
 mod line_index;
 mod refs;
@@ -41,7 +42,10 @@ async fn main() {
 /// surface is two strings and will stay that way, because everything else a
 /// language server is told arrives over the protocol.
 fn handle_cli_args() -> bool {
-    for arg in std::env::args().skip(1) {
+    // Only the first argument is ever consulted: every branch below either
+    // prints and stops or exits, so a second argument could never be
+    // reached. Written as `nth(1)` rather than a loop to say so outright.
+    if let Some(arg) = std::env::args().nth(1) {
         match arg.as_str() {
             "-v" | "-V" | "--version" => {
                 println!("saule-lsp {}", saule_version::FULL);

@@ -161,16 +161,15 @@ impl<'a> CollectCx<'a> {
                     self.visit_expr(v);
                 }
                 let def_span = locate_word_in(self.source, &s.span, name);
-                if let Some(span) = &def_span {
-                    if let Symbol::Local {
+                if let Some(span) = &def_span
+                    && let Symbol::Local {
                         name: tname,
                         def_span: tspan,
                     } = self.symbol
-                        && tname == name
-                        && tspan == span
-                    {
-                        self.push(span.clone(), true);
-                    }
+                    && tname == name
+                    && tspan == span
+                {
+                    self.push(span.clone(), true);
                 }
                 let resolved = ty.clone().unwrap_or_else(|| match value {
                     Some(v) => self.infer_local_ty(&v.value),
@@ -187,17 +186,14 @@ impl<'a> CollectCx<'a> {
                     self.visit_expr(v);
                 }
                 for (i, (name, name_span, ty)) in names.iter().enumerate() {
-                    let def_span = Some(name_span.clone());
-                    if let Some(span) = &def_span {
-                        if let Symbol::Local {
-                            name: tname,
-                            def_span: tspan,
-                        } = self.symbol
-                            && tname == name
-                            && tspan == span
-                        {
-                            self.push(span.clone(), true);
-                        }
+                    if let Symbol::Local {
+                        name: tname,
+                        def_span: tspan,
+                    } = self.symbol
+                        && tname == name
+                        && tspan == name_span
+                    {
+                        self.push(name_span.clone(), true);
                     }
                     let resolved = ty.clone().unwrap_or_else(|| match values.get(i) {
                         Some(v) => self.infer_local_ty(&v.value),
@@ -205,7 +201,7 @@ impl<'a> CollectCx<'a> {
                     });
                     self.locals.push(LocalBind {
                         name: name.clone(),
-                        def_span: def_span.unwrap_or_else(|| s.span.clone()),
+                        def_span: name_span.clone(),
                         ty: resolved,
                     });
                 }
@@ -583,10 +579,10 @@ impl<'a> CollectCx<'a> {
                         self.push(e.span.clone(), false);
                     }
                 }
-                Symbol::Class(t) | Symbol::Interface(t) | Symbol::Enum(t) | Symbol::Function(t) => {
-                    if name == t && self.lookup_local(name).is_none() {
-                        self.push(e.span.clone(), false);
-                    }
+                Symbol::Class(t) | Symbol::Interface(t) | Symbol::Enum(t) | Symbol::Function(t)
+                    if name == t && self.lookup_local(name).is_none() =>
+                {
+                    self.push(e.span.clone(), false);
                 }
                 _ => {}
             },
@@ -632,10 +628,10 @@ impl<'a> CollectCx<'a> {
                             self.push(span, false);
                         }
                     }
-                    Symbol::EnumVariant { enum_name, variant } => {
-                        if name == variant && class.as_deref() == Some(enum_name.as_str()) {
-                            self.push(span, false);
-                        }
+                    Symbol::EnumVariant { enum_name, variant }
+                        if name == variant && class.as_deref() == Some(enum_name.as_str()) =>
+                    {
+                        self.push(span, false);
                     }
                     _ => {}
                 }

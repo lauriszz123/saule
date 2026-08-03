@@ -209,7 +209,7 @@ fn install_enum(env: &Rc<RefCell<Environment>>, name: &str, variants: &[(&str, &
 fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, String>) -> Value {
     Value::NativeClosure(Rc::new(NativeClosure {
         name,
-        func: Box::new(move |args| func(args)),
+        func: Box::new(func),
         param_names: Vec::new(),
     }))
 }

@@ -68,7 +68,7 @@ pub(crate) fn construct(
         fields: HashMap::default(),
     }));
 
-    init_fields(&class, &inst, &span)?;
+    init_fields(&class, &inst)?;
 
     if let Some(ctor) = constructor_chain(&class) {
         let scope = Environment::with_parent(ctor.closure.clone());
@@ -95,10 +95,9 @@ pub(crate) fn construct(
 fn init_fields(
     class: &Rc<ClassObject>,
     inst: &Rc<RefCell<InstanceObject>>,
-    span: &std::ops::Range<usize>,
 ) -> Result<(), RuntimeError> {
     if let Some(parent) = &class.parent {
-        init_fields(parent, inst, span)?;
+        init_fields(parent, inst)?;
     }
     let scope = if let Some(ctor) = &class.constructor {
         Environment::with_parent(ctor.closure.clone())

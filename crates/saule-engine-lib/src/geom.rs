@@ -336,12 +336,12 @@ pub fn stroke(path: &[Point], closed: bool, width: f64, join: LineJoin) -> Vec<V
             _ => pts.push(p),
         }
     }
-    if closed {
-        if let (Some(&first), Some(&last)) = (pts.first(), pts.last()) {
-            if (first.0 - last.0).abs() < 1e-9 && (first.1 - last.1).abs() < 1e-9 {
-                pts.pop();
-            }
-        }
+    if closed
+        && let (Some(&first), Some(&last)) = (pts.first(), pts.last())
+        && (first.0 - last.0).abs() < 1e-9
+        && (first.1 - last.1).abs() < 1e-9
+    {
+        pts.pop();
     }
 
     if pts.len() < 2 {

@@ -25,14 +25,19 @@ use super::expr::{infer, is_any, strip_nullable, type_to_string, types_compatibl
 use super::state::{Scope, class_implements, with_classes};
 use super::to_source_span;
 
-/// The class an operand denotes, when it denotes one. Operator overloading
+/// The class a *type* denotes, when it denotes one. Operator overloading
 /// applies to class instances only — a `table`, an `any`, or a primitive
 /// keeps the built-in behaviour.
-pub(super) fn operand_class(expr: &Spanned<Expr>, scope: &Scope) -> Option<String> {
-    let Type::Named(name) = strip_nullable(infer(expr, scope)?) else {
+fn class_of(ty: &Type) -> Option<String> {
+    let Type::Named(name) = strip_nullable(ty.clone()) else {
         return None;
     };
     with_classes(|reg| reg.contains_key(&name)).then_some(name)
+}
+
+/// The class an operand denotes, when it denotes one.
+pub(super) fn operand_class(expr: &Spanned<Expr>, scope: &Scope) -> Option<String> {
+    class_of(&infer(expr, scope)?)
 }
 
 /// Can `class` be the receiver of `contract`'s operator? It must both
@@ -260,12 +265,18 @@ pub(super) fn check_unary(
 // Inference
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Result type of `lhs op rhs` when it resolves to an operator overload.
-/// `None` means "not an overload" — the caller's built-in rule applies.
+/// Result type of `lhs op rhs` when `lhs`'s **type** resolves to a class
+/// that overloads `op`. `None` means "not an overload" — the caller's
+/// built-in rule applies.
 ///
 /// Only the left operand is consulted: the symmetric operators are
 /// `boolean` whoever implements them, and everything else dispatches left.
-pub(super) fn infer_binary(op: BinOp, lhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
+///
+/// This is the type-driven half of [`infer_binary`], split out so callers
+/// that already know the operand's type and have no [`Scope`] — the LSP's
+/// hover and inlay walkers — apply exactly the same rule instead of
+/// re-deriving a weaker one.
+pub fn overload_binary_result(op: BinOp, lhs_ty: &Type) -> Option<Type> {
     let contract = binary_contract(op)?;
     if matches!(
         op,
@@ -273,19 +284,24 @@ pub(super) fn infer_binary(op: BinOp, lhs: &Spanned<Expr>, scope: &Scope) -> Opt
     ) {
         return None;
     }
-    let class = operand_class(lhs, scope)?;
-    if !honours(&class, &contract) {
-        return None;
-    }
-    result_ty(&class, &contract)
+    let class = class_of(lhs_ty)?;
+    honours(&class, &contract).then(|| result_ty(&class, &contract))?
+}
+
+/// Result type of `op rhs` when `rhs`'s **type** resolves to a class that
+/// overloads `op`. Scope-free counterpart of [`infer_unary`].
+pub fn overload_unary_result(op: UnaryOp, rhs_ty: &Type) -> Option<Type> {
+    let contract = unary_contract(op)?;
+    let class = class_of(rhs_ty)?;
+    honours(&class, &contract).then(|| result_ty(&class, &contract))?
+}
+
+/// Result type of `lhs op rhs` when it resolves to an operator overload.
+pub(super) fn infer_binary(op: BinOp, lhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
+    overload_binary_result(op, &infer(lhs, scope)?)
 }
 
 /// Result type of `op rhs` when it resolves to an operator overload.
 pub(super) fn infer_unary(op: UnaryOp, rhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
-    let contract = unary_contract(op)?;
-    let class = operand_class(rhs, scope)?;
-    if !honours(&class, &contract) {
-        return None;
-    }
-    result_ty(&class, &contract)
+    overload_unary_result(op, &infer(rhs, scope)?)
 }

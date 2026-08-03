@@ -53,7 +53,7 @@ pub(crate) fn call_value_multi(
         }
         Value::Function(f) => call_function_multi(&f, args, span),
         Value::NativeClosure(nc) => {
-            let positional = native_positional_args(&nc.name, &nc.param_names, args, &span)?;
+            let positional = native_positional_args(nc.name, &nc.param_names, args, &span)?;
             (nc.func)(&positional).map_err(|message| RuntimeError::TypeError { message, span })
         }
         Value::Class(c) => construct(c, args, span).map(|v| vec![v]),

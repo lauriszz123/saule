@@ -388,10 +388,10 @@ fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
 
 #[cfg(feature = "native-packages")]
 fn load_library(manifest: &Manifest) -> Result<Arc<Library>, String> {
-    if let Some(map) = LIBS.read().expect("dynamic lib cache poisoned").as_ref() {
-        if let Some(lib) = map.get(&manifest.name) {
-            return Ok(lib.clone());
-        }
+    if let Some(map) = LIBS.read().expect("dynamic lib cache poisoned").as_ref()
+        && let Some(lib) = map.get(&manifest.name)
+    {
+        return Ok(lib.clone());
     }
 
     let dir = packages_dir();
@@ -683,12 +683,14 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
     })
 }
 
-/// Parse a `fn<T>(a: T, b: U) -> R` signature string into
-/// `(type_params, param_names, params, returns)` using the typeck type
-/// builders. The optional `<...>` prefix lists generic type-parameter names.
-/// A `nil` (or absent) return becomes `[nil]`; a parenthesised
-/// `(A, B)` return becomes a multi-return.
-fn parse_sig(sig: &str) -> Result<(Vec<String>, Vec<String>, Vec<Type>, Vec<Type>), String> {
+/// A parsed signature: `(type_params, param_names, params, returns)`.
+type ParsedSig = (Vec<String>, Vec<String>, Vec<Type>, Vec<Type>);
+
+/// Parse a `fn<T>(a: T, b: U) -> R` signature string into a [`ParsedSig`]
+/// using the typeck type builders. The optional `<...>` prefix lists
+/// generic type-parameter names. A `nil` (or absent) return becomes
+/// `[nil]`; a parenthesised `(A, B)` return becomes a multi-return.
+fn parse_sig(sig: &str) -> Result<ParsedSig, String> {
     let s = sig.trim();
     let s = s.strip_prefix("fn").unwrap_or(s).trim_start();
 
