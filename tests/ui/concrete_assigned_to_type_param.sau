@@ -1,0 +1,11 @@
+-- The same rule the other way: `T` may well be `string`, so an
+-- `integer` cannot fill a `T` slot either.
+-- Should be a compile error.
+
+fn seed<T>() -> T
+	local acc: T = 0
+
+	return acc
+end
+
+println(seed<string>())

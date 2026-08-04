@@ -39,9 +39,23 @@ thread_local! {
     static CURRENT_CLASS: RefCell<Option<String>> = const { RefCell::new(None) };
 
     /// Generic type-parameter names in scope for the function/method body
-    /// currently being checked. Treated as `any`-equivalent so that
-    /// `table<T>`, `T?`, and bare `T` accept any concrete instantiation.
+    /// currently being checked.
+    ///
+    /// These are **rigid**: universally quantified by the signature, so
+    /// inside the body a `T` is opaque. It is not a supertype of any
+    /// concrete type and no concrete type is a `T` — the caller picks
+    /// what it stands for, and the body must work for every choice.
     static GENERICS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+
+    /// Type-parameter names belonging to a *signature being called into*,
+    /// pushed for the duration of one argument comparison.
+    ///
+    /// The opposite of [`GENERICS`]: these are inference variables, not
+    /// rigid types. One that the arguments haven't pinned down yet binds
+    /// to whatever this position supplies, so it stays permissive —
+    /// `Table.insert<V>(table<V>, V)` called with an `any` must not be
+    /// read as "expects `V`, got `any`".
+    static SIG_PARAMS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 
     /// Declared return type of the function, method or lambda whose body is
     /// currently being walked. `None` means "don't check returns here" —
@@ -107,4 +121,35 @@ pub(super) fn pop_generics(added: Vec<String>) {
 /// True if `name` names a type parameter in scope for the current body.
 pub(super) fn is_type_param(name: &str) -> bool {
     GENERICS.with(|g| g.borrow().contains(name))
+}
+
+/// Scope the callee's type-parameter names in for one comparison. Kept
+/// separate from [`push_generics`] because the two mean opposite things
+/// — see [`SIG_PARAMS`].
+pub(super) fn push_sig_params(params: &[String]) -> Vec<String> {
+    let mut added = Vec::new();
+    SIG_PARAMS.with(|g| {
+        let mut set = g.borrow_mut();
+        for p in params {
+            if set.insert(p.clone()) {
+                added.push(p.clone());
+            }
+        }
+    });
+    added
+}
+
+pub(super) fn pop_sig_params(added: Vec<String>) {
+    SIG_PARAMS.with(|g| {
+        let mut set = g.borrow_mut();
+        for p in added {
+            set.remove(&p);
+        }
+    });
+}
+
+/// True if `name` is an inference variable of the signature currently
+/// being called into.
+pub(super) fn is_sig_param(name: &str) -> bool {
+    SIG_PARAMS.with(|g| g.borrow().contains(name))
 }

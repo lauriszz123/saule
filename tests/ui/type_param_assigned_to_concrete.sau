@@ -1,0 +1,15 @@
+-- A type parameter is the caller's choice, so nothing inside the body
+-- proves a `T` is an `integer` — the annotation would be a lie, and the
+-- value would fail much later at the first operation that cared.
+-- Should be a compile error.
+
+fn firstAsInt<T>(items: table<T>) -> integer
+	for item: T in items do
+		local n: integer = item
+		return n * 2
+	end
+
+	return 0
+end
+
+println(firstAsInt({"alpha"}))

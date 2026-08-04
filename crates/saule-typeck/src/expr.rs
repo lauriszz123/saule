@@ -22,7 +22,7 @@ use saule_ast::{CallArg, Expr, LambdaBody, Param, Spanned, TableEntry, Type};
 
 use super::TypeCheckError;
 use super::matches::check_match;
-use super::state::{Scope, current_class, set_return_ty, with_classes};
+use super::state::{Scope, current_class, is_type_param, set_return_ty, with_classes};
 use super::stmt::{check_stmt, seed_params};
 use super::to_source_span;
 
@@ -39,29 +39,6 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             report_if_private(obj, name, scope, errors);
             report_if_unknown_member(obj, name, scope, errors);
         }
-        Expr::MethodCall { obj, method, args } => {
-            check_expr(obj, scope, errors);
-            report_if_nullable_receiver(obj, method, scope, errors);
-            report_if_private(obj, method, scope, errors);
-            report_if_unknown_member(obj, method, scope, errors);
-            for a in args {
-                check_arg(a, scope, errors);
-            }
-            // Validate positional argument types against the user method sig.
-            if let Some(ty) = infer(obj, scope)
-                && let Type::Named(class_name) = strip_nullable(ty)
-                && let Some(sig) = saule_semantic::lookup_method(&class_name, method)
-            {
-                check_user_method_args(
-                    &format!("{class_name}.{method}"),
-                    &sig,
-                    args,
-                    scope,
-                    errors,
-                    expr.span.clone(),
-                );
-            }
-        }
         Expr::Call { callee, args } => {
             // `obj.method(args)` is parsed as Call(Member { obj, name }, args)
             // — same nullable-receiver rule applies.
@@ -76,8 +53,13 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                 report_if_user_function_arity(callee, args, scope, errors, expr.span.clone());
                 report_if_function_value_call(callee, args, scope, errors, expr.span.clone());
             }
-            for a in args {
-                check_arg(a, scope, errors);
+            // Each argument is walked against the type its slot expects,
+            // which is what types an untyped lambda's parameters — see
+            // `expected_arg_types`. Every other expression ignores the
+            // expectation and checks exactly as before.
+            let expected = expected_arg_types(&callee.value, args, scope);
+            for (i, a) in args.iter().enumerate() {
+                check_arg_expecting(a, expected.get(i).and_then(|t| t.as_ref()), scope, errors);
             }
             // Constructor call: `ClassName(args)` dispatches to `init`.
             // Validate args against the class's `init` signature so that
@@ -176,19 +158,27 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             check_binary_op(*op, lhs, rhs, scope, errors);
         }
         Expr::ForceUnwrap(inner) => check_expr(inner, scope, errors),
-        // `x as T` is only meaningful when `x` is `any` — that's the one
-        // direction the checker can't verify statically. On an
-        // already-typed value the cast is noise at best and a false sense
-        // of safety at worst, so say so rather than silently allowing it.
+        // `x as T` is only meaningful when the checker cannot know what
+        // `x` holds. That is `any` — and a generic type parameter, which
+        // is exactly as unknown inside the body: it stands for whatever
+        // the caller chose. Since a rigid `T` no longer flows into a
+        // concrete slot on its own, the cast is the only checked way to
+        // narrow one, and rejecting it would leave no way at all.
+        //
+        // On an already-typed value the cast is noise at best and a false
+        // sense of safety at worst, so say so rather than allow it.
         Expr::Cast { value, .. } => {
             check_expr(value, scope, errors);
-            if let Some(vt) = infer(value, scope)
-                && !is_any(&strip_nullable(vt.clone()))
-            {
-                errors.push(TypeCheckError::RedundantCast {
-                    found: type_to_string(&vt),
-                    span: to_source_span(value.span.clone()),
-                });
+            if let Some(vt) = infer(value, scope) {
+                let base = strip_nullable(vt.clone());
+                let narrowable =
+                    is_any(&base) || matches!(&base, Type::Named(n) if is_type_param(n));
+                if !narrowable {
+                    errors.push(TypeCheckError::RedundantCast {
+                        found: type_to_string(&vt),
+                        span: to_source_span(value.span.clone()),
+                    });
+                }
             }
         }
         Expr::Table(items) => {
@@ -304,14 +294,31 @@ pub(super) fn check_expr_expecting(
 }
 
 pub(super) fn check_arg(arg: &CallArg, scope: &Scope, errors: &mut Vec<TypeCheckError>) {
+    check_arg_expecting(arg, None, scope, errors)
+}
+
+/// [`check_arg`] carrying the type the argument's slot expects, so a
+/// lambda written without parameter types is checked as the callee
+/// declared it rather than as `any`.
+pub(super) fn check_arg_expecting(
+    arg: &CallArg,
+    expected: Option<&Type>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
     match arg {
-        CallArg::Positional(e) | CallArg::Named { value: e, .. } => check_expr(e, scope, errors),
+        CallArg::Positional(e) | CallArg::Named { value: e, .. } => {
+            check_expr_expecting(e, expected, scope, errors)
+        }
     }
 }
 
 pub(super) fn type_to_string(ty: &Type) -> String {
     match ty {
-        Type::Named(n) => n.clone(),
+        // A call check renames the callee's type parameters apart from
+        // the caller's; undo that here so a diagnostic quotes `T`, not
+        // the internal `T$`.
+        Type::Named(n) => unfreshen_name(n).to_string(),
         Type::Nullable(inner) => format!("{}?", type_to_string(inner)),
         Type::Table { key: None, value } => format!("table<{}>", type_to_string(value)),
         Type::Table {

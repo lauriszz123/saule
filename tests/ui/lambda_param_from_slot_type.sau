@@ -1,0 +1,21 @@
+-- An untyped lambda parameter takes its type from the slot it fills, so
+-- `x` here is the `integer` the piped `table<integer>` bound `T` to —
+-- not the `any` it parsed as. Passing it to a `string` parameter is
+-- therefore a real mismatch, and used to be absorbed silently.
+-- Should be a compile error.
+
+fn takesStr(s: string) -> boolean
+	return #s > 0
+end
+
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+	return items
+end
+
+class Main
+	static fn main()
+		local kept: table<integer> = when({1, 2, 3}):filter(x => takesStr(x))
+
+		println(#kept)
+	end
+end

@@ -3,7 +3,8 @@
 
 use crate::refs::Symbol;
 use crate::refs::util::{
-    LocalBind, inferred_type_of, locate_word_in, member_name_span, strip_nullable,
+    LocalBind, field_owner, inferred_type_of, locate_word_in, member_name_span, method_owner,
+    strip_nullable,
 };
 use saule_ast::{CallArg, Expr, LambdaBody, MatchBody, Pattern, Spanned, TableEntry, Type};
 use saule_semantic::super_init_target;
@@ -60,11 +61,21 @@ impl<'a> CollectCx<'a> {
                 }
                 let class = self.receiver_class(&obj.value);
                 match self.symbol {
+                    // An inherited member is keyed on the class that
+                    // declares it, so the receiver's own class is walked
+                    // up the chain before comparing — exactly what the
+                    // cursor resolver does.
                     Symbol::Field {
                         class: tc,
                         name: tn,
                     } => {
-                        if name == tn && class.as_deref() == Some(tc.as_str()) {
+                        if name == tn
+                            && class
+                                .as_deref()
+                                .and_then(|c| field_owner(c, name))
+                                .as_deref()
+                                == Some(tc.as_str())
+                        {
                             self.push(span, false);
                         }
                     }
@@ -72,7 +83,13 @@ impl<'a> CollectCx<'a> {
                         class: tc,
                         name: tn,
                     } => {
-                        if name == tn && class.as_deref() == Some(tc.as_str()) {
+                        if name == tn
+                            && class
+                                .as_deref()
+                                .and_then(|c| method_owner(c, name))
+                                .as_deref()
+                                == Some(tc.as_str())
+                        {
                             self.push(span, false);
                         }
                     }
@@ -94,24 +111,6 @@ impl<'a> CollectCx<'a> {
                     self.visit_call_arg(a);
                 }
             }
-            Expr::MethodCall { obj, method, args } => {
-                self.visit_expr(obj);
-                if let Symbol::Method {
-                    class: tc,
-                    name: tn,
-                } = self.symbol
-                    && method == tn
-                    && let Some(class) = self.receiver_class(&obj.value)
-                    && &class == tc
-                    && let Some(span) =
-                        member_name_span(self.source, obj.span.end, e.span.end, method)
-                {
-                    self.push(span, false);
-                }
-                for a in args {
-                    self.visit_call_arg(a);
-                }
-            }
             Expr::Unary { rhs, .. } => self.visit_expr(rhs),
             Expr::Binary { lhs, rhs, .. } => {
                 self.visit_expr(lhs);
@@ -129,13 +128,29 @@ impl<'a> CollectCx<'a> {
                     }
                 }
             }
-            Expr::Lambda { params, body, .. } => {
+            Expr::Lambda {
+                params,
+                return_ty,
+                body,
+            } => {
                 let params_clone = params.clone();
-                self.enter_function(&params_clone, |this| match body {
-                    LambdaBody::Expr(b) => this.visit_expr(b),
-                    LambdaBody::Block(b) => {
-                        for s in b.iter() {
-                            this.visit_stmt(s);
+                self.enter_lambda(&params_clone, |this| {
+                    for p in params {
+                        this.collect_type_name_refs_in(&p.ty, &p.span);
+                        if let Some(def) = &p.default {
+                            this.visit_expr(def);
+                        }
+                    }
+                    if let Some(rt) = return_ty {
+                        let after = params.last().map(|p| p.span.end).unwrap_or(e.span.start);
+                        this.collect_type_name_refs_in(rt, &(after..e.span.end));
+                    }
+                    match body {
+                        LambdaBody::Expr(b) => this.visit_expr(b),
+                        LambdaBody::Block(b) => {
+                            for s in b.iter() {
+                                this.visit_stmt(s);
+                            }
                         }
                     }
                 });
@@ -165,6 +180,13 @@ impl<'a> CollectCx<'a> {
             Expr::Pipe { source, stages } => {
                 self.visit_expr(source);
                 for st in stages {
+                    // `:stage()` calls the free function `stage`.
+                    if let Symbol::Function(target) = self.symbol
+                        && target == &st.name
+                        && let Some(span) = locate_word_in(self.source, &st.span, &st.name)
+                    {
+                        self.push(span, false);
+                    }
                     for a in &st.args {
                         self.visit_call_arg(a);
                     }

@@ -11,6 +11,120 @@ use crate::to_source_span;
 
 use super::*;
 
+/// The parameter list of whatever `callee` resolves to, in the shape
+/// argument expectations need: slot types, slot names (empty for natives,
+/// which record no names), and the signature's own type parameters.
+///
+/// Mirrors the dispatch in [`check_expr`]'s `Call` arm, in the same
+/// precedence order.
+fn callee_signature(callee: &Expr, scope: &Scope) -> Option<(Vec<Type>, Vec<String>, Vec<String>)> {
+    let from_params = |params: &[saule_ast::Param], type_params: Vec<String>| {
+        (
+            params.iter().map(|p| p.ty.clone()).collect(),
+            params.iter().map(|p| p.name.clone()).collect(),
+            type_params,
+        )
+    };
+    match callee {
+        Expr::Ident(name) => {
+            // Constructor call: `ClassName(args)` dispatches to `init`.
+            if with_classes(|r| r.contains_key(name))
+                && let Some(sig) = saule_semantic::lookup_method(name, "init")
+            {
+                return Some(from_params(&sig.params, sig.type_params));
+            }
+            // A sibling member reached without `self.` inside a class body.
+            if let Some(class) = current_class()
+                && let Some(sig) = saule_semantic::lookup_method(&class, name)
+            {
+                return Some(from_params(&sig.params, sig.type_params));
+            }
+            if let Some(info) = funcs::lookup(name) {
+                return Some(from_params(&info.params, info.type_params.clone()));
+            }
+            let sig = crate::sigs::lookup(name)?;
+            Some((sig.params, Vec::new(), sig.type_params))
+        }
+        Expr::Member { obj, name } => {
+            // `self.super(args)` delegates to the parent's constructor.
+            if name == "super"
+                && matches!(obj.value, Expr::Self_)
+                && let Some(class) = current_class()
+                && let Some((_, sig)) = saule_semantic::super_init_target(&class)
+            {
+                return Some(from_params(&sig.params, sig.type_params));
+            }
+            let class_name = match &obj.value {
+                Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => Some(n.clone()),
+                Expr::Self_ => current_class(),
+                _ => infer(obj, scope).and_then(|t| match strip_nullable(t) {
+                    Type::Named(n) if with_classes(|r| r.contains_key(&n)) => Some(n),
+                    _ => None,
+                }),
+            };
+            if let Some(class_name) = class_name
+                && let Some(sig) = saule_semantic::lookup_method(&class_name, name)
+            {
+                return Some(from_params(&sig.params, sig.type_params));
+            }
+            // Stdlib module or value-type member.
+            let qname = native_callee_name(&Spanned::new(callee.clone(), 0..0), scope)?;
+            let sig = crate::sigs::lookup(&qname)?;
+            Some((sig.params, Vec::new(), sig.type_params))
+        }
+        _ => None,
+    }
+}
+
+/// The type each argument of `callee(args)` is expected to have, with the
+/// callee's generics bound from the arguments themselves.
+///
+/// Aligned with `args`. `None` where the callee doesn't resolve, the slot
+/// doesn't exist, or the type still mentions a parameter nothing pinned
+/// down.
+///
+/// This exists for one construct: a lambda argument whose parameters were
+/// written without types. Those parse as `any`, and the callee's
+/// signature is the only place their real types can come from — so
+/// `keep(nums, x => …)` checks the body with `x: integer`, and a misuse
+/// inside it is caught instead of being absorbed by `any`.
+pub(crate) fn expected_arg_types(
+    callee: &Expr,
+    args: &[CallArg],
+    scope: &Scope,
+) -> Vec<Option<Type>> {
+    let Some((params, names, type_params)) = callee_signature(callee, scope) else {
+        return vec![None; args.len()];
+    };
+    // Which slot each argument fills: positional arguments consume slots
+    // left to right, a named argument targets the slot with its name.
+    let mut next = 0usize;
+    let slots: Vec<Option<usize>> = args
+        .iter()
+        .map(|a| match a {
+            CallArg::Positional(_) => {
+                let i = next;
+                next += 1;
+                (i < params.len()).then_some(i)
+            }
+            CallArg::Named { name, .. } => names.iter().position(|n| n == name),
+        })
+        .collect();
+
+    let mut found: Vec<Option<Type>> = vec![None; params.len()];
+    for (arg, slot) in args.iter().zip(slots.iter()) {
+        if let Some(i) = slot {
+            let (CallArg::Positional(e) | CallArg::Named { value: e, .. }) = arg;
+            found[*i] = infer(e, scope);
+        }
+    }
+    let expected = instantiate_param_types(&params, &type_params, &found);
+    slots
+        .iter()
+        .map(|s| s.and_then(|i| expected.get(i).cloned().flatten()))
+        .collect()
+}
+
 /// Check positional arguments of a native call against the registered
 /// signature. Skips named arguments (natives don't support them; the runtime
 /// will surface that as an error).
@@ -65,6 +179,11 @@ pub(crate) fn check_native_args(
     // concrete types learned from the actual arguments. Walking left-to-right
     // means earlier args (the table, typically) seed the variable, and later
     // args (the element to insert) get checked against the bound type.
+    //
+    // The parameters are renamed apart from the caller's first — see
+    // [`Freshened`] — so everything below works in fresh space.
+    let fresh = Freshened::new(&sig.type_params);
+    let type_params = &fresh.params;
     let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
 
     for (i, arg) in args.iter().enumerate() {
@@ -72,9 +191,9 @@ pub(crate) fn check_native_args(
         //   - within declared params: use `params[i]`
         //   - past the end: use the variadic element type (or stop if absent)
         let expected_raw = match sig.params.get(i) {
-            Some(t) => t,
+            Some(t) => fresh.rename(t),
             None => match &sig.variadic {
-                Some(t) => t,
+                Some(t) => fresh.rename(t),
                 None => break,
             },
         };
@@ -83,7 +202,7 @@ pub(crate) fn check_native_args(
             CallArg::Named { .. } => continue,
         };
         // Substitute any already-bound type params before checking.
-        let expected = substitute(expected_raw, &subst, &sig.type_params);
+        let expected = substitute(&expected_raw, &subst, type_params);
         let Some(found_ty) = infer(value_expr, scope) else {
             // Even without an inferred type, try to refine the substitution
             // from sibling args downstream — but we have nothing to do here.
@@ -92,8 +211,8 @@ pub(crate) fn check_native_args(
         // Refine the substitution from this arg/expected pair before the
         // compatibility check, so a generic slot that's still free becomes
         // bound rather than rejected.
-        unify(&expected, &found_ty, &sig.type_params, &mut subst);
-        let expected = substitute(&expected, &subst, &sig.type_params);
+        unify(&expected, &found_ty, type_params, &mut subst);
+        let expected = substitute(&expected, &subst, type_params);
         if is_any(&expected) {
             continue;
         }
@@ -101,7 +220,7 @@ pub(crate) fn check_native_args(
         // even though `types_compatible` would accept it. Skip when the
         // expected type is still a free type parameter — `V` is allowed
         // to bind to `any?` so the nullable arg is legitimate.
-        if !is_unbound_type_param(&expected, &sig.type_params)
+        if !is_unbound_type_param(&expected, type_params)
             && !is_nullable(&expected)
             && is_nullable(&found_ty)
         {
@@ -116,12 +235,12 @@ pub(crate) fn check_native_args(
         }
         // Table literals are checked entry-by-entry — same rule as the
         // user-method path; see `check_table_literal_compat`.
-        if !mentions_unbound_param(&expected, &sig.type_params)
+        if !mentions_unbound_param(&expected, type_params)
             && check_table_literal_compat(&expected, value_expr, scope, errors)
         {
             continue;
         }
-        if !compatible_under_sig_params(&expected, &found_ty, &sig.type_params) {
+        if !compatible_under_sig_params(&expected, &found_ty, type_params) {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
                 callee: callee.to_string(),
                 arg: i + 1,
@@ -214,8 +333,10 @@ pub(crate) fn check_user_method_args(
     // Bind the method's generic type parameters (e.g. `<T, U>`) from the
     // actual arguments left-to-right, then check each slot against the
     // substituted expected type. Non-generic methods skip the unify step
-    // and behave like before.
-    let type_params = &sig.type_params;
+    // and behave like before. Renamed apart from the caller's parameters
+    // first — see [`Freshened`].
+    let fresh = Freshened::new(&sig.type_params);
+    let type_params = &fresh.params;
     let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
 
     // Positional args consume parameter slots left-to-right; a named arg
@@ -250,11 +371,7 @@ pub(crate) fn check_user_method_args(
         if p.variadic {
             continue;
         }
-        let expected = if type_params.is_empty() {
-            p.ty.clone()
-        } else {
-            substitute(&p.ty, &subst, type_params)
-        };
+        let expected = substitute(&fresh.rename(&p.ty), &subst, type_params);
         if is_any(&expected) {
             continue;
         }
@@ -264,11 +381,7 @@ pub(crate) fn check_user_method_args(
         if !type_params.is_empty() {
             unify(&expected, &found_ty, type_params, &mut subst);
         }
-        let expected = if type_params.is_empty() {
-            expected
-        } else {
-            substitute(&expected, &subst, type_params)
-        };
+        let expected = substitute(&expected, &subst, type_params);
         if is_any(&expected) {
             continue;
         }
@@ -325,6 +438,7 @@ pub(crate) fn semantic_method_return(
     if sig.type_params.is_empty() {
         return Some(ret);
     }
+    let fresh = Freshened::new(&sig.type_params);
     let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
     let positional = args.iter().filter_map(|a| match a {
         CallArg::Positional(e) => Some(e),
@@ -332,10 +446,19 @@ pub(crate) fn semantic_method_return(
     });
     for (p, arg_expr) in sig.params.iter().zip(positional) {
         if let Some(found_ty) = infer(arg_expr, scope) {
-            unify(&p.ty, &found_ty, &sig.type_params, &mut subst);
+            unify(&fresh.rename(&p.ty), &found_ty, &fresh.params, &mut subst);
         }
     }
-    Some(substitute(&ret, &subst, &sig.type_params))
+    let resolved = substitute(&fresh.rename(&ret), &subst, &fresh.params);
+    // A parameter the arguments never pinned down is unknown, not a
+    // type. Returning the bare name would hand back the *callee's* `T`
+    // for the caller to compare against its own — names that look equal
+    // and mean nothing to each other. `instantiate_returns` filters the
+    // same case for native signatures.
+    if mentions_unbound_param(&resolved, &fresh.params) {
+        return None;
+    }
+    Some(resolved)
 }
 
 pub(crate) fn report_if_nullable_receiver(
@@ -683,7 +806,8 @@ pub(crate) fn report_if_user_function_arity(
     // Argument-type validation. Mirrors `check_user_method_args` /
     // `check_native_args`: walks left-to-right, unifying generic type
     // parameters as we go, then checks each slot for compatibility.
-    let type_params = &info.type_params;
+    let fresh = Freshened::new(&info.type_params);
+    let type_params = &fresh.params;
     let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
 
     for (i, arg) in args.iter().enumerate() {
@@ -702,11 +826,7 @@ pub(crate) fn report_if_user_function_arity(
         let CallArg::Positional(value_expr) = arg else {
             continue;
         };
-        let expected = if type_params.is_empty() {
-            p.ty.clone()
-        } else {
-            substitute(&p.ty, &subst, type_params)
-        };
+        let expected = substitute(&fresh.rename(&p.ty), &subst, type_params);
         if is_any(&expected) {
             continue;
         }
@@ -716,11 +836,7 @@ pub(crate) fn report_if_user_function_arity(
         if !type_params.is_empty() {
             unify(&expected, &found_ty, type_params, &mut subst);
         }
-        let expected = if type_params.is_empty() {
-            expected
-        } else {
-            substitute(&expected, &subst, type_params)
-        };
+        let expected = substitute(&expected, &subst, type_params);
         if is_any(&expected) {
             continue;
         }

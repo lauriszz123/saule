@@ -210,6 +210,15 @@ fn render_type(ty: &Type) -> Option<String> {
     }
 }
 
+/// Peel one `Nullable` wrapper — what `!` asserts, and what a safe
+/// chain re-applies over the field it reads.
+fn strip_nullable(ty: Type) -> Type {
+    match ty {
+        Type::Nullable(inner) => *inner,
+        other => other,
+    }
+}
+
 /// Collapse an inferred type to the single value it yields in a single-value
 /// context: a multi-return tuple becomes its first component, anything else
 /// passes through, and `None` becomes `any`.

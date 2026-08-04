@@ -16,7 +16,7 @@ use saule_ast::{CallArg, Decl, Expr, Module, Param, Spanned, Stmt, Type};
 
 use super::ImportContext;
 use super::render::{collect_enum_variant_fields, render_function_sig, render_type};
-use super::util::named_type;
+use super::util::{locate_word_in, named_type};
 
 /// Collapse an inferred type to the single value it yields in a
 /// single-value context: a multi-return tuple becomes its first
@@ -124,9 +124,29 @@ struct CalleeSig {
     /// `showMenu` — used to qualify the parameter in the popup.
     display: String,
     params: Vec<Param>,
+    /// The callee's own generic parameters, so an argument's expected
+    /// type can be instantiated from the other arguments rather than
+    /// reported as the bare `T` the signature spells.
+    type_params: Vec<String>,
     /// The callee's `---` block, so an `@param child` line reaches the
     /// hover on the `child:` key.
     doc: Option<saule_docs::DocBlock>,
+}
+
+impl CalleeSig {
+    /// The type each argument slot expects, with this callee's generics
+    /// bound from the argument types.
+    fn expected_arg_types(&self, arg_types: &[Option<Type>]) -> Vec<Option<Type>> {
+        saule_typeck::sigs::instantiate_params(
+            &saule_typeck::sigs::NativeSig {
+                type_params: self.type_params.clone(),
+                params: self.params.iter().map(|p| p.ty.clone()).collect(),
+                variadic: None,
+                returns: Vec::new(),
+            },
+            arg_types,
+        )
+    }
 }
 
 /// Index every top-level `fn` in `module` by name. Declaration order
@@ -265,6 +285,18 @@ impl<'a> Cx<'a> {
                             ty = render_type(&resolved)
                         ),
                     );
+                    // `local a: Point, b: Point = …` — each ascription
+                    // lives between its own name and the next one.
+                    // `LocalMulti` tracks no `ty_span`, so it is found
+                    // by scanning that slice.
+                    if let Some(t) = ty {
+                        let end = names
+                            .get(i + 1)
+                            .map(|(_, next, _)| next.start)
+                            .or_else(|| values.first().map(|v| v.span.start))
+                            .unwrap_or(s.span.end);
+                        self.record_type_idents_in(t, &(name_span.end..end.max(name_span.end)));
+                    }
                     self.locals.push(LocalVar {
                         name: name.clone(),
                         ty: resolved,
@@ -404,6 +436,29 @@ impl<'a> Cx<'a> {
                 let mark = self.locals.len();
                 self.visit_block(body);
                 self.locals.truncate(mark);
+                // The `catch e: T` clause is a binding site with no
+                // span-tracked node of its own — the same hole loop
+                // variables had. Scan the clause itself (after the last
+                // body statement, before the catch block) so a local in
+                // the `try` body sharing the name can't be mistaken for
+                // it.
+                let clause = body.last().map(|b| b.span.end).unwrap_or(s.span.start)
+                    ..catch_body
+                        .first()
+                        .map(|c| c.span.start)
+                        .unwrap_or(s.span.end);
+                if clause.start <= clause.end {
+                    if let Some(span) = locate_word_in(self.source, &clause, catch_var) {
+                        self.record(
+                            span,
+                            format!(
+                                "```saule\n(error) {catch_var}: {ty}\n```",
+                                ty = render_type(catch_ty)
+                            ),
+                        );
+                    }
+                    self.record_type_idents_in(catch_ty, &clause);
+                }
                 let mark = self.locals.len();
                 self.locals.push(LocalVar {
                     name: catch_var.clone(),

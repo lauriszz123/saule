@@ -7,7 +7,7 @@ mod types;
 
 use saule_ast::{Module, Spanned, Stmt, Type};
 
-use super::util::{LocalBind, locate_word_in};
+use super::util::{LocalBind, catch_var_span, locate_word_in};
 use super::{Hit, Symbol};
 
 pub(super) fn run(module: &Module, source: &str, symbol: &Symbol) -> Vec<Hit> {
@@ -46,6 +46,10 @@ impl<'a> CollectCx<'a> {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
+                if let Some(t) = ty {
+                    let head_end = value.as_ref().map(|v| v.span.start).unwrap_or(s.span.end);
+                    self.collect_type_name_refs_in(t, &(s.span.start..head_end));
+                }
                 let def_span = locate_word_in(self.source, &s.span, name);
                 if let Some(span) = &def_span
                     && let Symbol::Local {
@@ -80,6 +84,13 @@ impl<'a> CollectCx<'a> {
                         && tspan == name_span
                     {
                         self.push(name_span.clone(), true);
+                    }
+                    if let Some(t) = ty {
+                        let end = names
+                            .get(i + 1)
+                            .map(|(_, next, _)| next.start)
+                            .unwrap_or(s.span.end);
+                        self.collect_type_name_refs_in(t, &(name_span.end..end));
                     }
                     let resolved = ty.clone().unwrap_or_else(|| match values.get(i) {
                         Some(v) => self.infer_local_ty(&v.value),
@@ -170,6 +181,9 @@ impl<'a> CollectCx<'a> {
                 {
                     self.push(span.clone(), true);
                 }
+                if let Some(t) = var_ty {
+                    self.collect_type_name_refs_in(t, &(span.end..from.span.start));
+                }
                 let saved = self.locals.len();
                 self.locals.push(LocalBind {
                     name: var.clone(),
@@ -197,6 +211,9 @@ impl<'a> CollectCx<'a> {
                         && def_span == &span
                     {
                         self.push(span.clone(), true);
+                    }
+                    if let Some(t) = ty {
+                        self.collect_type_name_refs_in(t, &(span.end..iter.span.start));
                     }
                     self.locals.push(LocalBind {
                         name: name.clone(),
@@ -226,14 +243,18 @@ impl<'a> CollectCx<'a> {
                         this.visit_stmt(s);
                     }
                 });
-                let span = locate_word_in(self.source, &s.span, catch_var)
-                    .unwrap_or_else(|| s.span.clone());
+                let span = catch_var_span(self.source, &s.span, body, catch_var);
                 if let Symbol::Local { name, def_span } = self.symbol
                     && name == catch_var
                     && def_span == &span
                 {
                     self.push(span.clone(), true);
                 }
+                let ty_end = catch_body
+                    .first()
+                    .map(|c| c.span.start)
+                    .unwrap_or(s.span.end);
+                self.collect_type_name_refs_in(catch_ty, &(span.end..ty_end));
                 let saved = self.locals.len();
                 self.locals.push(LocalBind {
                     name: catch_var.clone(),

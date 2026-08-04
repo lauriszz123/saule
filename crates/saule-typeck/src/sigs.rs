@@ -266,6 +266,38 @@ pub fn instantiate_pipe_stage(
         .filter(|t| !mentions_unbound_param(t, &sig.type_params))
 }
 
+/// The type each *parameter* slot expects once `sig`'s type parameters
+/// are bound from the argument types — the mirror of
+/// [`instantiate_returns`], looking the other way down the signature.
+///
+/// This is what an untyped lambda argument's parameters take their types
+/// from: `filter(table<integer>, x => …)` expects `fn(integer) ->
+/// boolean` in slot 1, so `x` is an `integer`. A slot still mentioning an
+/// unbound parameter comes back `None`, on the rule
+/// [`mentions_unbound_param`] states.
+pub fn instantiate_params(sig: &NativeSig, arg_types: &[Option<Type>]) -> Vec<Option<Type>> {
+    crate::expr::instantiate_param_types(&sig.params, &sig.type_params, arg_types)
+}
+
+/// [`instantiate_params`] for one stage of a `when(x):stage(args)` chain:
+/// the piped value fills slot 0, so the returned list covers the
+/// *explicit* arguments only.
+pub fn instantiate_pipe_stage_params(
+    sig: &NativeSig,
+    incoming: Option<Type>,
+    arg_types: &[Option<Type>],
+) -> Vec<Option<Type>> {
+    let mut all = Vec::with_capacity(arg_types.len() + 1);
+    all.push(incoming);
+    all.extend(arg_types.iter().cloned());
+    let mut slots = instantiate_params(sig, &all);
+    if slots.is_empty() {
+        return slots;
+    }
+    slots.remove(0);
+    slots
+}
+
 /// Does `ty` still mention one of `type_params` after instantiation?
 ///
 /// [`instantiate_returns`] leaves a type parameter the arguments never

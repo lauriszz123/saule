@@ -48,13 +48,6 @@ impl Resolver {
                     self.call_arg(a);
                 }
             }
-            Expr::MethodCall { obj, args, .. } => {
-                self.check_arg_ordering(args);
-                self.expr(obj);
-                for a in args {
-                    self.call_arg(a);
-                }
-            }
             Expr::ForceUnwrap(inner) => self.expr(inner),
             // Resolve the operand; the target type is resolved separately
             // by the typechecker, which is where unknown type names are

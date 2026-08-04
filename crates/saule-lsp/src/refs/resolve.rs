@@ -7,7 +7,7 @@ mod types;
 
 use saule_ast::{Module, Spanned, Stmt, Type};
 
-use super::util::{LocalBind, contains, locate_word_in};
+use super::util::{LocalBind, catch_var_span, contains, locate_word_in};
 use super::{Resolved, Symbol};
 
 pub(super) fn run(module: &Module, source: &str, offset: usize) -> Option<Resolved> {
@@ -55,6 +55,13 @@ impl<'a> ResolveCx<'a> {
                 if let Some(v) = value {
                     self.visit_expr(v);
                 }
+                if let Some(t) = ty {
+                    // Bound to the head so a class name spelled in both
+                    // the ascription and the initialiser (`local p:
+                    // Player = Player()`) picks the ascription.
+                    let head_end = value.as_ref().map(|v| v.span.start).unwrap_or(s.span.end);
+                    self.record_type_names_in(t, &(s.span.start..head_end));
+                }
                 if let Some(span) = locate_word_in(self.source, &s.span, name) {
                     self.record(
                         span.clone(),
@@ -83,6 +90,15 @@ impl<'a> ResolveCx<'a> {
                             def_span: name_span.clone(),
                         },
                     );
+                    if let Some(t) = ty {
+                        // Each name's ascription lives between it and
+                        // the next name.
+                        let end = names
+                            .get(i + 1)
+                            .map(|(_, next, _)| next.start)
+                            .unwrap_or(s.span.end);
+                        self.record_type_names_in(t, &(name_span.end..end));
+                    }
                     let init = values.get(i).map(|v| &v.value);
                     self.push_local_binding(name, ty.clone(), init, &s.span);
                 }
@@ -166,6 +182,9 @@ impl<'a> ResolveCx<'a> {
                         def_span: span.clone(),
                     },
                 );
+                if let Some(t) = var_ty {
+                    self.record_type_names_in(t, &(span.end..from.span.start));
+                }
                 let saved = self.locals.len();
                 self.locals.push(LocalBind {
                     name: var.clone(),
@@ -192,6 +211,9 @@ impl<'a> ResolveCx<'a> {
                             def_span: span.clone(),
                         },
                     );
+                    if let Some(t) = ty {
+                        self.record_type_names_in(t, &(span.end..iter.span.start));
+                    }
                     self.locals.push(LocalBind {
                         name: name.clone(),
                         def_span: span,
@@ -220,8 +242,7 @@ impl<'a> ResolveCx<'a> {
                         this.visit_stmt(s);
                     }
                 });
-                let span = locate_word_in(self.source, &s.span, catch_var)
-                    .unwrap_or_else(|| s.span.clone());
+                let span = catch_var_span(self.source, &s.span, body, catch_var);
                 self.record(
                     span.clone(),
                     Symbol::Local {
@@ -229,6 +250,11 @@ impl<'a> ResolveCx<'a> {
                         def_span: span.clone(),
                     },
                 );
+                let ty_end = catch_body
+                    .first()
+                    .map(|c| c.span.start)
+                    .unwrap_or(s.span.end);
+                self.record_type_names_in(catch_ty, &(span.end..ty_end));
                 let saved = self.locals.len();
                 self.locals.push(LocalBind {
                     name: catch_var.clone(),

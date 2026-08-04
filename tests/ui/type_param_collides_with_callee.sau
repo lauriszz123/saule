@@ -1,0 +1,16 @@
+-- Everybody names their type parameter `T`, and two of them are still
+-- unrelated: `caller`'s `T` is not `takesInt`'s `T`, and neither is an
+-- `integer`. Comparing by spelling let the caller's `T` fill the
+-- `integer` slot whenever the callee happened to declare a `T` of its
+-- own — this program ran, and printed a string from an `integer` slot.
+-- Should be a compile error.
+
+fn takesInt<T>(n: integer, item: T) -> integer
+	return n
+end
+
+fn caller<T>(x: T) -> integer
+	return takesInt(x, x)
+end
+
+println(caller("hello"))

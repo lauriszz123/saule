@@ -16,6 +16,46 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// Walk a lambda body, optionally against the type its slot expects.
+    ///
+    /// Two things happen here. The enclosing scope is *kept* — a lambda
+    /// is a closure, so a hint inside one has to resolve the names around
+    /// it; starting fresh meant a local initialised from a captured
+    /// variable got no hint at all. And an omitted parameter type is
+    /// filled in from `expected`, which is the only place it can come
+    /// from, so hints inside the body see the real type instead of `any`.
+    pub(crate) fn visit_lambda(
+        &mut self,
+        params: &[Param],
+        body: &LambdaBody,
+        expected: Option<&Type>,
+    ) {
+        let mark = self.locals.len();
+        for p in crate::exprty::refine_lambda_params(params, expected) {
+            self.locals.push(Local {
+                name: p.name.clone(),
+                ty: p.ty.clone(),
+            });
+        }
+        match body {
+            LambdaBody::Expr(b) => self.visit_expr(b),
+            LambdaBody::Block(b) => self.visit_block(b),
+        }
+        self.locals.truncate(mark);
+    }
+
+    /// [`visit_expr`] carrying the type this position expects, so a
+    /// lambda's untyped parameters are walked as the callee declared them.
+    pub(crate) fn visit_expr_expecting(&mut self, e: &Spanned<Expr>, expected: Option<&Type>) {
+        if let Expr::Lambda { params, body, .. } = &e.value
+            && expected.is_some()
+        {
+            self.visit_lambda(params, body, expected);
+            return;
+        }
+        self.visit_expr(e);
+    }
+
     pub(crate) fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
             Stmt::Local {
@@ -238,23 +278,25 @@ impl<'a> Cx<'a> {
                 self.visit_expr(callee);
                 let params = self.callee_params(&callee.value);
                 self.emit_param_hints(args, params.as_ref());
-                for a in args {
-                    self.visit_call_arg(a);
-                }
-            }
-            Expr::MethodCall { obj, method, args } => {
-                self.visit_expr(obj);
-                let params = self.method_callee_params(&obj.value, method);
-                self.emit_param_hints(args, params.as_ref());
-                for a in args {
-                    self.visit_call_arg(a);
+                let expected = self.expected_arg_types(&callee.value, args);
+                for (i, a) in args.iter().enumerate() {
+                    self.visit_call_arg_expecting(a, expected.get(i).and_then(|t| t.as_ref()));
                 }
             }
             Expr::Pipe { source, stages } => {
                 self.visit_expr(source);
-                for st in stages {
-                    for a in &st.args {
-                        self.visit_call_arg(a);
+                // Each stage's generics bind from the value reaching it,
+                // so an untyped lambda argument gets a real parameter type.
+                let expectations =
+                    crate::exprty::pipe_stage_expectations(self, &source.value, stages);
+                for (si, st) in stages.iter().enumerate() {
+                    for (ai, a) in st.args.iter().enumerate() {
+                        let want = expectations
+                            .get(si)
+                            .and_then(|v| v.get(ai))
+                            .cloned()
+                            .flatten();
+                        self.visit_call_arg_expecting(a, want.as_ref());
                     }
                 }
             }
@@ -280,20 +322,7 @@ impl<'a> Cx<'a> {
                     }
                 }
             }
-            Expr::Lambda { params, body, .. } => {
-                let saved = std::mem::take(&mut self.locals);
-                for p in params {
-                    self.locals.push(Local {
-                        name: p.name.clone(),
-                        ty: p.ty.clone(),
-                    });
-                }
-                match body {
-                    LambdaBody::Expr(b) => self.visit_expr(b),
-                    LambdaBody::Block(b) => self.visit_block(b),
-                }
-                self.locals = saved;
-            }
+            Expr::Lambda { params, body, .. } => self.visit_lambda(params, body, None),
             Expr::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
                 for arm in arms {
@@ -316,9 +345,11 @@ impl<'a> Cx<'a> {
         }
     }
 
-    pub(crate) fn visit_call_arg(&mut self, a: &CallArg) {
+    pub(crate) fn visit_call_arg_expecting(&mut self, a: &CallArg, expected: Option<&Type>) {
         match a {
-            CallArg::Positional(e) | CallArg::Named { value: e, .. } => self.visit_expr(e),
+            CallArg::Positional(e) | CallArg::Named { value: e, .. } => {
+                self.visit_expr_expecting(e, expected)
+            }
         }
     }
 

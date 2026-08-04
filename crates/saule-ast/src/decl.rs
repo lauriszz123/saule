@@ -15,8 +15,10 @@ pub enum Decl {
         name: String,
         /// Generic type parameters declared with `<T, U>` after the name.
         ///
-        /// Erased at runtime; the typechecker treats these names as
-        /// universally compatible inside the body.
+        /// Erased at runtime. Inside the body the typechecker treats each
+        /// name as *rigid*: it stands for whatever the caller picked, so
+        /// it matches only itself. Widening into `any` is free; narrowing
+        /// to a concrete type needs the checked `as`.
         type_params: Vec<String>,
         params: Vec<Param>,
         return_ty: Option<Type>,

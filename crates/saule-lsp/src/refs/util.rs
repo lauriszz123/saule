@@ -4,8 +4,10 @@
 
 use std::ops::Range;
 
-use saule_ast::{Decl, Expr, Type};
-use saule_semantic::with_classes;
+use saule_ast::{Decl, Expr, Spanned, Stmt, Type};
+use saule_semantic::{with_classes, with_enums, with_interfaces};
+
+use super::Symbol;
 
 /// One local binding tracked during the walk. `def_span` is the byte
 /// range of the identifier at the declaration site so each binding has
@@ -99,6 +101,114 @@ pub(super) fn member_name_span(
 ) -> Option<Range<usize>> {
     let range = obj_end..parent_end.max(obj_end);
     locate_word_in(source, &range, name)
+}
+
+/// The class that actually declares method `name`, walking up from
+/// `class` through its ancestors.
+///
+/// The receiver's static type is only where lookup *starts*: `c.greet()`
+/// on a `Child` whose `greet` comes from `Base` has to navigate to
+/// `Base`, and find-references has to count it as a `Base::greet` use.
+/// Keying the symbol on the receiver's class instead left inherited
+/// members with no definition site at all.
+pub(super) fn method_owner(class: &str, name: &str) -> Option<String> {
+    with_classes(|reg| {
+        let mut cur = Some(class.to_string());
+        while let Some(cname) = cur {
+            let info = reg.get(&cname)?;
+            if info.methods.contains_key(name) {
+                return Some(cname);
+            }
+            cur = info.parent.clone();
+        }
+        None
+    })
+}
+
+/// Same as [`method_owner`] for a field.
+pub(super) fn field_owner(class: &str, name: &str) -> Option<String> {
+    with_classes(|reg| {
+        let mut cur = Some(class.to_string());
+        while let Some(cname) = cur {
+            let info = reg.get(&cname)?;
+            if info.field_types.contains_key(name) {
+                return Some(cname);
+            }
+            cur = info.parent.clone();
+        }
+        None
+    })
+}
+
+/// Byte range of the variable bound by a `try … catch <var>` clause.
+///
+/// The AST keeps no span for it, and scanning the whole statement finds
+/// the wrong word whenever the `try` body declares a local of the same
+/// name — so the scan starts after the last body statement, where the
+/// `catch` clause always is.
+pub(super) fn catch_var_span(
+    source: &str,
+    stmt_span: &Range<usize>,
+    body: &[Spanned<Stmt>],
+    catch_var: &str,
+) -> Range<usize> {
+    let start = body
+        .last()
+        .map(|s| s.span.end)
+        .unwrap_or(stmt_span.start)
+        .max(stmt_span.start);
+    locate_word_in(source, &(start..stmt_span.end), catch_var).unwrap_or_else(|| stmt_span.clone())
+}
+
+/// Every named type head reachable from `ty` — `table<K, Player>` and
+/// `fn(Point) -> Color?` all contribute their class-ish names, so a
+/// cursor on any of them can navigate.
+pub(super) fn named_type_heads(ty: &Type, out: &mut Vec<String>) {
+    match ty {
+        Type::Named(n) => out.push(n.clone()),
+        Type::Nullable(inner) => named_type_heads(inner, out),
+        Type::Table { key, value } => {
+            if let Some(k) = key {
+                named_type_heads(k, out);
+            }
+            named_type_heads(value, out);
+        }
+        Type::Tuple(items) => {
+            for it in items {
+                named_type_heads(it, out);
+            }
+        }
+        Type::Function { params, ret } => {
+            for p in params {
+                named_type_heads(p, out);
+            }
+            named_type_heads(ret, out);
+        }
+    }
+}
+
+/// `true` when `name` matches no stdlib module, value type, or native
+/// function — leaving "free function declared somewhere in this
+/// workspace" as the only thing it can be.
+pub(super) fn is_workspace_function_name(name: &str) -> bool {
+    !saule_typeck::sigs::is_module(name)
+        && !saule_typeck::sigs::is_value_type(name)
+        && saule_typeck::sigs::lookup(name).is_none()
+}
+
+/// The symbol a name written in type position denotes, or `None` for
+/// primitives, generic type parameters, and anything else the semantic
+/// registries don't know.
+pub(super) fn type_name_symbol(name: &str) -> Option<Symbol> {
+    if with_classes(|r| r.contains_key(name)) {
+        Some(Symbol::Class(name.to_string()))
+    } else if with_interfaces(|r| r.contains_key(name)) {
+        Some(Symbol::Interface(name.to_string()))
+    } else if with_enums(|r| r.contains_key(name)) {
+        Some(Symbol::Enum(name.to_string()))
+    } else {
+        None
+    }
 }
 
 pub(super) fn declared_name(d: &Decl) -> &str {

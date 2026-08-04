@@ -12,7 +12,7 @@ use crate::hover::util::{
 };
 use saule_ast::{Expr, Param, Type};
 use saule_semantic::{
-    lookup_field_type, lookup_method, super_init_target, with_classes, with_enums, with_interfaces,
+    lookup_field_type, super_init_target, with_classes, with_enums, with_interfaces,
 };
 use std::ops::Range;
 
@@ -144,8 +144,21 @@ impl<'a> Cx<'a> {
     /// Function and method declarations still reset — see
     /// [`Cx::enter_function_with_return`]. Their bodies genuinely do not
     /// see a sibling method's locals.
-    pub(crate) fn enter_lambda(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
+    ///
+    /// The *return* type does not carry in, though: a `return` inside a
+    /// lambda returns from the lambda. Inheriting the enclosing
+    /// function's annotation made the keyword report a type the
+    /// statement has nothing to do with, so an unannotated lambda
+    /// reports none rather than someone else's.
+    pub(crate) fn enter_lambda(
+        &mut self,
+        params: &[Param],
+        return_ty: Option<&Type>,
+        body: impl FnOnce(&mut Self),
+    ) {
         let mark = self.locals.len();
+        let saved_ret = self.enclosing_return_ty.take();
+        self.enclosing_return_ty = return_ty.cloned();
         for p in params {
             self.locals.push(LocalVar {
                 name: p.name.clone(),
@@ -155,6 +168,7 @@ impl<'a> Cx<'a> {
         }
         body(self);
         self.locals.truncate(mark);
+        self.enclosing_return_ty = saved_ret;
     }
 
     /// Like [`Cx::enter_lambda`] but for a `fn` / method declaration:
@@ -374,15 +388,6 @@ impl<'a> Cx<'a> {
                     return Some(name.clone());
                 }
                 None
-            }
-            Expr::MethodCall {
-                obj: inner, method, ..
-            } => {
-                // `obj:method(args).foo` — chase the method's
-                // registered return type.
-                let inner_class = self.receiver_class(&inner.value)?;
-                let sig = lookup_method(&inner_class, method)?;
-                named_type(sig.return_ty.as_ref()?)
             }
             Expr::Index { obj: inner, .. } => {
                 // `tbl[i].foo` — the receiver's class is the element

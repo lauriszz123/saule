@@ -160,3 +160,62 @@ pub(crate) fn pipe_type<S: TypeSource + ?Sized>(
     }
     current
 }
+
+/// The type each stage's *explicit* arguments are expected to have, one
+/// list per stage of the chain.
+///
+/// Threading the value type through the chain is what makes these
+/// concrete: `when(nums):filter(x => …)` binds `T := integer` from the
+/// piped `table<integer>`, so the predicate slot expects
+/// `fn(integer) -> boolean` — and that is where the untyped `x` gets its
+/// type. Mirrors what the checker does in `check_pipe`, so hover reports
+/// the type the body is actually checked against.
+pub(crate) fn pipe_stage_expectations<S: TypeSource + ?Sized>(
+    cx: &S,
+    source: &Expr,
+    stages: &[PipeStage],
+) -> Vec<Vec<Option<Type>>> {
+    let mut current = cx.type_of(source);
+    let mut out = Vec::with_capacity(stages.len());
+    for stage in stages {
+        let Some(sig) = cx.stage_sig(&stage.name) else {
+            // Chain broken — no expectations from here on.
+            out.resize(stages.len(), Vec::new());
+            return out;
+        };
+        let arg_types = cx.arg_types(&stage.args);
+        out.push(saule_typeck::sigs::instantiate_pipe_stage_params(
+            &sig,
+            current.clone(),
+            &arg_types,
+        ));
+        current = saule_typeck::sigs::instantiate_pipe_stage(&sig, current, &arg_types);
+    }
+    out
+}
+
+/// Fill in a lambda's untyped parameters from the function type its slot
+/// expects.
+///
+/// An omitted parameter type parses as `any`, and the target's function
+/// type is the only place the real one can come from. An explicit
+/// annotation on the lambda always wins — same rule the checker applies.
+pub(crate) fn refine_lambda_params(
+    params: &[saule_ast::Param],
+    expected: Option<&Type>,
+) -> Vec<saule_ast::Param> {
+    let Some(Type::Function { params: want, .. }) = expected else {
+        return params.to_vec();
+    };
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| match want.get(i) {
+            Some(t) if matches!(&p.ty, Type::Named(n) if n == "any") => saule_ast::Param {
+                ty: t.clone(),
+                ..p.clone()
+            },
+            _ => p.clone(),
+        })
+        .collect()
+}

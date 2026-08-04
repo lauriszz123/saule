@@ -40,17 +40,7 @@ pub(crate) fn bind_stage_generics(
     if let (Some(first), Some(actual)) = (info.params.first(), incoming) {
         unify(&first.ty, actual, &info.type_params, &mut subst);
     }
-    // The piped value already took slot 0, so explicit args start at 1.
-    let mut next = 1usize;
-    for arg in args {
-        let param = match arg {
-            CallArg::Positional(_) => {
-                let p = info.params.get(next);
-                next += 1;
-                p
-            }
-            CallArg::Named { name, .. } => info.params.iter().find(|p| &p.name == name),
-        };
+    for (arg, param) in stage_arg_slots(info, args) {
         let (Some(param), CallArg::Positional(e) | CallArg::Named { value: e, .. }) = (param, arg)
         else {
             continue;
@@ -61,6 +51,53 @@ pub(crate) fn bind_stage_generics(
         }
     }
     subst
+}
+
+/// Pair each explicit stage argument with the parameter it fills.
+///
+/// The piped value already took slot 0, so positional arguments start at
+/// 1; a named argument goes to the parameter carrying its name. Shared so
+/// generic binding and argument checking can't drift into disagreeing
+/// about which slot an argument is in.
+fn stage_arg_slots<'a>(
+    info: &'a funcs::FunctionInfo,
+    args: &'a [CallArg],
+) -> Vec<(&'a CallArg, Option<&'a saule_ast::Param>)> {
+    let mut next = 1usize;
+    args.iter()
+        .map(|arg| {
+            let param = match arg {
+                CallArg::Positional(_) => {
+                    let p = info.params.get(next);
+                    next += 1;
+                    p
+                }
+                CallArg::Named { name, .. } => info.params.iter().find(|p| &p.name == name),
+            };
+            (arg, param)
+        })
+        .collect()
+}
+
+/// Walk a stage's explicit arguments, each against the type its slot
+/// expects once the stage's generics are bound.
+///
+/// The expectation is what gives an untyped lambda parameter its type:
+/// `when(nums):filter(x => …)` binds `T := integer` from the piped
+/// value, so `x` is an `integer` rather than the `any` it parsed as.
+fn check_stage_args(
+    info: &funcs::FunctionInfo,
+    args: &[CallArg],
+    subst: &std::collections::HashMap<String, Type>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    for (arg, param) in stage_arg_slots(info, args) {
+        let (CallArg::Positional(e) | CallArg::Named { value: e, .. }) = arg;
+        let expected = param.map(|p| substitute(&p.ty, subst, &info.type_params));
+        let expected = expected.filter(|t| !mentions_unbound_param(t, &info.type_params));
+        check_expr_expecting(e, expected.as_ref(), scope, errors);
+    }
 }
 
 /// A stage's return type with [`bind_stage_generics`]'s bindings applied.
@@ -114,19 +151,25 @@ pub(crate) fn check_pipe(
     errors: &mut Vec<TypeCheckError>,
 ) {
     check_expr(source, scope, errors);
-    for stage in stages {
-        for a in &stage.args {
-            check_arg(a, scope, errors);
-        }
-    }
 
     // Walk the chain left-to-right, threading the "current value type"
     // through each stage. `None` means "we lost the trail" — we keep
     // walking so syntactic errors in later stages still surface, but
     // skip arg-0 type compatibility checks.
+    //
+    // A stage's arguments are walked *inside* this loop rather than in a
+    // pass of their own: the type an argument is expected to have isn't
+    // known until the stage's generics have been bound from the value
+    // reaching it, and that expectation is what types an untyped lambda
+    // parameter.
     let mut current: Option<Type> = infer(source, scope);
     for stage in stages {
         let Some(info) = crate::funcs::lookup(&stage.name) else {
+            // Unresolvable stage — no expectations to offer, but the
+            // arguments still deserve checking on their own terms.
+            for a in &stage.args {
+                check_arg(a, scope, errors);
+            }
             errors.push(TypeCheckError::UnknownPipeStage {
                 stage: stage.name.clone(),
                 span: to_source_span(stage.span.clone()),
@@ -140,6 +183,9 @@ pub(crate) fn check_pipe(
         // explicit args must fit into `params[1..]` (respecting defaults
         // and variadics).
         if info.total == 0 && !info.variadic {
+            for a in &stage.args {
+                check_arg(a, scope, errors);
+            }
             errors.push(TypeCheckError::PipeStageArity {
                 stage: stage.name.clone(),
                 expected: 1,
@@ -172,6 +218,9 @@ pub(crate) fn check_pipe(
         // Bind the stage's type parameters before comparing anything, so a
         // generic stage is checked as the caller actually instantiated it.
         let subst = bind_stage_generics(&info, current.as_ref(), &stage.args, scope);
+
+        // Now the arguments, each against what its slot expects.
+        check_stage_args(&info, &stage.args, &subst, scope, errors);
 
         // First-arg type check — the headline pipeline diagnostic.
         if let (Some(actual), Some(expected_param)) = (current.as_ref(), info.params.first()) {

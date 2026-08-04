@@ -209,11 +209,6 @@ pub(crate) fn eval_values(
             let vs = eval_call_args(args, env)?;
             call_value_multi(cv, &vs, span)
         }
-        Expr::MethodCall { obj, method, args } => {
-            let receiver = eval(obj, env)?;
-            let evaled = eval_call_args(args, env)?;
-            invoke_method_multi(&receiver, method, evaled, span)
-        }
         _ => Ok(vec![eval(expr, env)?]),
     }
 }

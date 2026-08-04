@@ -1,10 +1,10 @@
 //! Local scope tracking and the lightweight type inference the walk
 //! needs to decide which class a receiver denotes.
 
-use crate::refs::util::{LocalBind, locate_word_in, named_type};
+use crate::refs::util::{LocalBind, locate_word_in, named_type, named_type_heads};
 use crate::refs::{Hit, Symbol};
 use saule_ast::{Expr, Param, Type};
-use saule_semantic::{lookup_field_type, lookup_method, with_classes, with_enums};
+use saule_semantic::{lookup_field_type, with_classes, with_enums};
 use std::ops::Range;
 
 use super::*;
@@ -44,13 +44,6 @@ impl<'a> CollectCx<'a> {
                 }
                 None
             }
-            Expr::MethodCall {
-                obj: inner, method, ..
-            } => {
-                let ic = self.receiver_class(&inner.value)?;
-                let sig = lookup_method(&ic, method)?;
-                named_type(sig.return_ty.as_ref()?)
-            }
             _ => None,
         }
     }
@@ -74,15 +67,6 @@ impl<'a> CollectCx<'a> {
                 }
                 Type::Named("any".into())
             }
-            Expr::MethodCall { obj, method, .. } => {
-                if let Some(class) = self.receiver_class(&obj.value)
-                    && let Some(sig) = lookup_method(&class, method)
-                    && let Some(rt) = sig.return_ty
-                {
-                    return rt;
-                }
-                Type::Named("any".into())
-            }
             _ => Type::Named("any".into()),
         }
     }
@@ -93,11 +77,27 @@ impl<'a> CollectCx<'a> {
 
     pub(crate) fn enter_function(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
         let saved = std::mem::take(&mut self.locals);
+        self.push_params(params);
+        body(self);
+        self.locals = saved;
+    }
+
+    /// Lambda bodies keep the enclosing scope — see the matching
+    /// `ResolveCx::enter_lambda`, whose bindings this must agree with
+    /// for a captured local's references to be found at all.
+    pub(crate) fn enter_lambda(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
+        let mark = self.locals.len();
+        self.push_params(params);
+        body(self);
+        self.locals.truncate(mark);
+    }
+
+    fn push_params(&mut self, params: &[Param]) {
         for p in params {
             let def_span = locate_word_in(self.source, &p.span, &p.name).unwrap_or(p.span.clone());
             // Param binding sites aren't a Local "definition" in the
             // referencing-search sense unless the target Symbol is
-            // exactly this binding — handled in `visit_param_binding`.
+            // exactly this binding.
             if let Symbol::Local {
                 name,
                 def_span: target_def,
@@ -113,7 +113,22 @@ impl<'a> CollectCx<'a> {
                 ty: p.ty.clone(),
             });
         }
-        body(self);
-        self.locals = saved;
+    }
+
+    /// Emit a reference for every mention of the target class /
+    /// interface / enum inside a type ascription found in `search`.
+    pub(crate) fn collect_type_name_refs_in(&mut self, ty: &Type, search: &Range<usize>) {
+        let target = match self.symbol {
+            Symbol::Class(n) | Symbol::Interface(n) | Symbol::Enum(n) => n.clone(),
+            _ => return,
+        };
+        let mut names = Vec::new();
+        named_type_heads(ty, &mut names);
+        if !names.iter().any(|n| n == &target) {
+            return;
+        }
+        if let Some(span) = locate_word_in(self.source, search, &target) {
+            self.push(span, false);
+        }
     }
 }
