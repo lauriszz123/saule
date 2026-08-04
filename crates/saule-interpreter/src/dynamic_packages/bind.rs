@@ -3,16 +3,22 @@
 
 use crate::error::RuntimeError;
 use crate::module::ModuleExports;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+
+// Everything below is reachable only from the library-loading half of this
+// module — see the block comment above `load_library`. It is gated with the
+// code that uses it, or a build without the feature (wasm, chiefly) fails to
+// resolve `libloading` and warns on the rest.
+#[cfg(feature = "native-packages")]
 use {
     crate::fxhash::fxmap,
     crate::value::{ClassObject, NativeClosure, Value},
     libloading::Library,
     saule_native_abi::{CValue, NativeSymbolFn},
     std::cell::RefCell,
+    std::collections::HashMap,
+    std::path::{Path, PathBuf},
     std::rc::Rc,
+    std::sync::Arc,
 };
 
 use super::*;
