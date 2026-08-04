@@ -17,7 +17,7 @@ class Main
 		println("kitchen_sink.json:")
 
 		-- We know that it exists so we can force unwrap.
-		local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!)
+		local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!) as table
 
 		if raw == nil then
 			println("Failed to parse!")
@@ -60,13 +60,17 @@ class Main
 		end
 
 		match type(v)
-			case "table" then Main.dumpTable(v!, indent)
+			case "table" then Main.dumpTable(v as table, indent)
 
 			case t then println(indent .. "(" .. t .. ") " .. tostring(v))
 		end
 	end
 
-	static fn dumpTable(t: table, indent: string)
+	static fn dumpTable(t: table?, indent: string)
+		if t == nil then
+			return
+		end
+
 		local next: string = indent .. "  "
 
 		for k, v in t do
