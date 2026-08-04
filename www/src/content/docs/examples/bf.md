@@ -132,17 +132,22 @@ class InputBuffer
 		if self.eof then
 			return 0
 		end
+
 		if self.pos > String.len(self.pending) then
 			local line: string? = Io.read("L")
+
 			if line == nil then
 				self.eof = true
 				return 0
 			end
+
 			self.pending = line!
 			self.pos = 1
 		end
+
 		local b: integer = String.byte(self.pending, self.pos) ?? 0
 		self.pos = self.pos + 1
+
 		return b
 	end
 end
@@ -160,6 +165,7 @@ export class Interpreter
 		local code: table<Op> = {}
 		local stack: table<integer> = {}
 		local n: integer = 0
+
 		for ch, col in String.iter(self.source) do
 			match ch
 				case "+" then
@@ -200,9 +206,11 @@ export class Interpreter
 				case _ then nil  -- comment byte, ignored
 			end
 		end
+
 		if #stack > 0 then
 			throw "unmatched `[` (opened by op #" .. tostring(stack[1]) .. ")"
 		end
+
 		return code
 	end
 
@@ -215,7 +223,9 @@ export class Interpreter
 				return n
 			end
 		end
+
 		code[n + 1] = op
+
 		return n + 1
 	end
 
@@ -245,8 +255,10 @@ export class Interpreter
 		local input: InputBuffer = InputBuffer()
 		local ip: integer = 1
 		local dp: integer = 0
+
 		while code[ip] != nil do
 			local cell: integer = tape[dp] ?? 0
+
 			match code[ip]!
 				case Op.Inc(by) then
 					tape[dp] = self.wrap(cell + by)
@@ -261,14 +273,15 @@ export class Interpreter
 
 				case Op.JumpIfZero(target) then
 					if cell == 0 then
-						ip = (target as integer)!
+						ip = target
 					end
 
 				case Op.JumpIfNonZero(t) then
 					if cell != 0 then
-						ip = (t as integer)!
+						ip = t
 					end
 			end
+
 			ip = ip + 1
 		end
 	end

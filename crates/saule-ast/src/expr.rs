@@ -168,6 +168,71 @@ pub enum CallArg {
     Named { name: String, value: Spanned<Expr> },
 }
 
+impl CallArg {
+    /// Whether this argument has the shape a **trailing block** desugars to:
+    /// a positional, block-bodied lambda.
+    ///
+    /// `f(a) do … end` is sugar for `f(a, fn() … end)` — the parser produces
+    /// the same tree for both, so this is a shape test, not a flag. Only the
+    /// *final* argument of a call is a trailing block; see
+    /// [`resolve_arg_slots`] for the binding rule that follows from it.
+    pub fn is_trailing_block(&self) -> bool {
+        matches!(
+            self,
+            CallArg::Positional(e)
+                if matches!(&e.value, Expr::Lambda { body: LambdaBody::Block(_), .. })
+        )
+    }
+}
+
+/// Resolve which parameter slot each call argument fills.
+///
+/// Positional arguments consume slots left to right; a named argument targets
+/// the slot carrying its name. The one exception is a **trailing block** — the
+/// final argument when it is a positional block-bodied lambda, which is what
+/// `f(x) do … end` produces. It binds to the callee's **last parameter**,
+/// wherever the arguments before it landed, and it is the only positional
+/// argument allowed to follow named ones.
+///
+/// Binding to the last parameter rather than to the next free slot is what
+/// makes the form work with defaults in between:
+///
+/// ```text
+/// fn panel(title: string, spacing: integer = 0, body: fn() -> nil) -> nil
+///
+/// panel(title: "Stats") do … end     -- block → `body`, `spacing` defaults
+/// panel("Stats", 2) do … end         -- block → `body`, spacing → 2
+/// ```
+///
+/// Filling the next free slot would put the block in `spacing` and report
+/// `body` as missing. Swift and Kotlin resolve trailing closures the same way.
+///
+/// `param_names` is the callee's parameter list in declaration order. A slot
+/// past its end, or a name matching no parameter, yields `None` — reporting
+/// arity, duplicate and unknown-name errors is the caller's job. In particular
+/// a trailing block can land on a slot a named argument already claimed
+/// (`view(body: f) do … end`), which is a duplicate for the caller to report.
+pub fn resolve_arg_slots(args: &[CallArg], param_names: &[&str]) -> Vec<Option<usize>> {
+    let trailing = args
+        .len()
+        .checked_sub(1)
+        .filter(|&i| args[i].is_trailing_block());
+
+    let mut next = 0usize;
+    args.iter()
+        .enumerate()
+        .map(|(idx, a)| match a {
+            CallArg::Named { name, .. } => param_names.iter().position(|n| n == name),
+            CallArg::Positional(_) if Some(idx) == trailing => param_names.len().checked_sub(1),
+            CallArg::Positional(_) => {
+                let i = next;
+                next += 1;
+                (i < param_names.len()).then_some(i)
+            }
+        })
+        .collect()
+}
+
 /// One entry inside a `{ ... }` table literal.
 ///
 /// * `Positional` — appended to the array part with successive 1-based keys.

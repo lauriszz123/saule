@@ -1262,3 +1262,71 @@ end
     }
     assert!(defs(src, &s).is_empty(), "no definition site: {s:?}");
 }
+
+// ── Trailing blocks ─────────────────────────────────────────────────────────
+
+/// A trailing block's parameter is a symbol like any other: goto-definition
+/// from a use inside the block lands on the `do (n)` binding site.
+#[test]
+fn trailing_block_param_resolves_to_its_binding() {
+    let src = "\
+fn each(items: table<integer>, body: fn(integer) -> nil) -> nil
+  body(items[1])
+end
+
+fn main() -> nil
+  each({1}) do (n)
+    print(n)
+    print(n + 1)
+  end
+end
+";
+    // Occurrence 0 is the `do (n)` binding; 1 and 2 are the uses.
+    let sym = try_resolve_ident(src, "n", 1).expect("symbol on the first use");
+    let span = def_span(src, &sym);
+    assert_eq!(line_at(src, span.start), "each({1}) do (n)");
+    assert_eq!(ref_count(src, &sym), 2, "both uses inside the block");
+}
+
+/// A local captured by a trailing block resolves to the enclosing
+/// declaration, not to anything inside the block.
+#[test]
+fn a_capture_inside_a_trailing_block_resolves_outward() {
+    let src = "\
+fn repeated(times: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+fn main() -> nil
+  local label: string = \"hi\"
+  repeated(times: 2) do
+    print(label)
+  end
+end
+";
+    let sym = try_resolve_ident(src, "label", 1).expect("symbol on the capture");
+    let span = def_span(src, &sym);
+    assert_eq!(line_at(src, span.start), "local label: string = \"hi\"");
+}
+
+/// The callee of a call carrying a trailing block is still found as a
+/// reference to the function.
+#[test]
+fn a_call_with_a_trailing_block_counts_as_a_reference() {
+    let src = "\
+fn repeated(times: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+fn main() -> nil
+  repeated(times: 1) do
+    print(1)
+  end
+  repeated(times: 2) do
+    print(2)
+  end
+end
+";
+    let sym = try_resolve_ident(src, "repeated", 0).expect("symbol on the declaration");
+    assert_eq!(ref_count(src, &sym), 2, "both call sites");
+}

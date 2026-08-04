@@ -141,7 +141,9 @@ pub(crate) fn dispatch_member_call_multi(
             let mut positional = Vec::with_capacity(args.len());
             for a in args {
                 match a {
-                    EvaluatedArg::Positional(v) => positional.push(v),
+                    EvaluatedArg::Positional(v) | EvaluatedArg::TrailingBlock(v) => {
+                        positional.push(v)
+                    }
                     EvaluatedArg::Named { .. } => {
                         return Err(RuntimeError::TypeError {
                             message: format!(

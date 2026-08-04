@@ -1,0 +1,69 @@
+-- Trailing blocks: `f(args) do ... end` passes a block-bodied lambda as the
+-- call's last argument. Sugar only — the tree is identical to writing
+-- `f(args, fn() ... end)`.
+
+-- A trailing block after named arguments binds to `body`, the first parameter
+-- no other argument claimed.
+fn view(spacing: integer, body: fn() -> nil) -> nil
+	println("view spacing=" .. spacing)
+	body()
+end
+
+-- Parameters and a return type hang off `do`, exactly as they do off `fn`.
+fn mapEach(items: table<integer>, transform: fn(integer) -> integer) -> table<integer>
+	local out: table<integer> = {}
+	for i, v in items do
+		out[i] = transform(v)
+	end
+	return out
+end
+
+fn repeated(times: integer, body: fn() -> nil) -> nil
+	for _ = 1, times do
+		body()
+	end
+end
+
+class Main
+	static fn main()
+		view(spacing: 10) do
+			println("Hello")
+			println("OK")
+		end
+
+		-- Parameter types are inferred from the callee's signature, so `n` is
+		-- a real `integer` here.
+		local doubled: table<integer> = mapEach({1, 2, 3}) do (n) -> integer
+			return n * 2
+		end
+		println(doubled[1])  -- 2
+		println(doubled[3])  -- 6
+
+		-- Blocks capture their environment and nest.
+		local count: integer = 0
+		repeated(times: 3) do
+			count = count + 1
+			repeated(times: 2) do
+				count = count + 10
+			end
+		end
+		println(count)  -- 63
+
+		-- Control flow works inside a block, which is the whole reason it is a
+		-- block and not a table.
+		repeated(times: 2) do
+			for i = 1, 2 do
+				if i == 2 then
+					println("i=" .. i)
+				end
+			end
+		end
+
+		-- A `do` in a loop header always belongs to the loop.
+		local n: integer = 0
+		while n < 2 do
+			n = n + 1
+		end
+		println(n)  -- 2
+	end
+end

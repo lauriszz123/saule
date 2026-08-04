@@ -2503,3 +2503,123 @@ end
         "the `map` stage's parameter, typed by what `filter` produced"
     );
 }
+
+// ── Trailing blocks ─────────────────────────────────────────────────────────
+
+/// A trailing block's parameter reads as the callee declared it, not as the
+/// `any` an omitted annotation parses to — the same refinement an inline
+/// lambda argument gets.
+#[test]
+fn a_trailing_block_parameter_hovers_with_the_declared_type() {
+    let src = "\
+fn each(items: table<integer>, body: fn(integer) -> nil) -> nil
+  body(items[1])
+end
+
+fn main() -> nil
+  each({1}) do (n)
+    print(n)
+  end
+end
+";
+    assert_eq!(
+        hover_ident(src, "n", 0).as_deref(),
+        Some("```saule\n(parameter) n: integer\n```"),
+        "binding site"
+    );
+    assert_eq!(
+        hover_ident(src, "n", 1).as_deref(),
+        Some("```saule\n(parameter) n: integer\n```"),
+        "use inside the block"
+    );
+}
+
+/// The block binds to the parameter the slot rule gives it, so a named
+/// argument ahead of it must not shift its type. Here `spacing` is named, so
+/// the block is `body` and `n` is its `string` parameter — reading the block
+/// as slot 0 would type `n` as `integer`.
+#[test]
+fn a_trailing_block_after_a_named_argument_hovers_from_the_right_slot() {
+    let src = "\
+fn view(spacing: integer, body: fn(string) -> nil) -> nil
+  body(\"x\")
+end
+
+fn main() -> nil
+  view(spacing: 10) do (n)
+    print(n)
+  end
+end
+";
+    assert_eq!(
+        hover_ident(src, "n", 0).as_deref(),
+        Some("```saule\n(parameter) n: string\n```")
+    );
+}
+
+/// A trailing block body is an ordinary scope: it sees the names around it,
+/// and its own parameter shadows them only inside.
+#[test]
+fn a_trailing_block_body_sees_the_enclosing_scope() {
+    let src = "\
+fn repeated(times: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+fn main() -> nil
+  local label: string = \"hi\"
+  repeated(times: 2) do
+    print(label)
+  end
+end
+";
+    assert_eq!(
+        hover_ident(src, "label", 1).as_deref(),
+        Some("```saule\n(local) label: string\n```"),
+        "captured local is visible inside the block"
+    );
+}
+
+/// Hovering a named argument's key still resolves to the callee's parameter
+/// when a trailing block follows it.
+#[test]
+fn a_named_argument_before_a_trailing_block_still_hovers_as_a_parameter() {
+    let src = "\
+fn view(spacing: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+fn main() -> nil
+  view(spacing: 10) do
+    print(1)
+  end
+end
+";
+    let md = hover_ident(src, "spacing", 1).expect("hover on the named-arg key");
+    assert!(
+        md.contains("(parameter)") && md.contains("spacing: integer"),
+        "{md}"
+    );
+}
+
+/// A generic callee binds its type parameters from the arguments, and the
+/// trailing block's parameter follows — `n` is the element type of the table
+/// that was passed, not `T`.
+#[test]
+fn a_trailing_block_parameter_resolves_a_generic_element_type() {
+    let src = "\
+fn eachOf<T>(items: table<T>, body: fn(T) -> nil) -> nil
+  body(items[1])
+end
+
+fn main() -> nil
+  eachOf({\"a\"}) do (n)
+    print(n)
+  end
+end
+";
+    assert_eq!(
+        hover_ident(src, "n", 0).as_deref(),
+        Some("```saule\n(parameter) n: string\n```")
+    );
+}

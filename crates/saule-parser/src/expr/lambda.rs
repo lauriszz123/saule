@@ -28,31 +28,76 @@ impl Parser {
         ))
     }
 
-    /// Heuristic: peeks past a balanced `(...)` and checks for `=>` to decide
-    /// whether `(` starts an arrow lambda or a parenthesised expression.
-    pub(crate) fn looks_like_arrow_lambda(&self) -> bool {
-        // Walk tokens until we balance the opening paren.
-        let mut depth = 0i32;
-        let mut i = self.pos;
-        while i < self.tokens.len() {
-            match self.tokens[i].value {
-                Token::LParen => depth += 1,
-                Token::RParen => {
-                    depth -= 1;
-                    if depth == 0 {
-                        // Look at the token after the closing `)`.
-                        return matches!(
-                            self.tokens.get(i + 1).map(|t| &t.value),
-                            Some(Token::FatArrow)
-                        );
-                    }
-                }
-                Token::Eof => return false,
-                _ => {}
-            }
-            i += 1;
+    /// `do (params) -> T … end` — the block half of a trailing-block call.
+    ///
+    /// Produces an ordinary [`Expr::Lambda`], so everything downstream (the
+    /// typechecker's lambda-argument inference, the interpreter's closure
+    /// construction, every LSP walker) handles it without knowing this sugar
+    /// exists. The caller has already parsed the argument list and appends the
+    /// result as the final positional argument.
+    ///
+    /// Both the parameter list and the return type are optional; the common
+    /// case is a bare `do … end` taking nothing. A `(` immediately after `do`
+    /// is always read as a parameter list, never as a parenthesised expression
+    /// statement opening the block.
+    pub(crate) fn parse_trailing_block(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let do_tok = self.expect(&Token::Do, "`do` to open a trailing block")?;
+        let (params, return_ty) = if self.check(&Token::LParen) {
+            let params = self.parse_param_list_typed(ParamTypes::Optional)?;
+            (params, self.parse_return_type_opt()?)
+        } else {
+            (Vec::new(), None)
+        };
+        // A trailing block's body is a fresh statement context: a `do` inside it
+        // belongs to whatever call it follows, not to an enclosing loop header.
+        let body = self.with_trailing_block(|p| p.parse_block_until(&[Token::End]))?;
+        let end = self.expect(&Token::End, "`end` to close trailing block")?;
+        Ok(Spanned::new(
+            Expr::Lambda {
+                params,
+                return_ty,
+                body: LambdaBody::Block(body.into()),
+            },
+            do_tok.span.start..end.span.end,
+        ))
+    }
+
+    /// Decide whether `(` starts an arrow lambda or a parenthesised
+    /// expression, by speculatively parsing the lambda's header and rewinding.
+    ///
+    /// The header is `(params) [-> T] =>`, and the optional return type is why
+    /// this is a real parse rather than a token peek: `-> T` is the full type
+    /// grammar (`table<K, V>`, `fn(A) -> B`, trailing `?`), so scanning for the
+    /// `=>` by hand would mean a second copy of that grammar to keep in sync.
+    /// Parsing it with [`Self::parse_type`] cannot drift.
+    ///
+    /// Nothing is committed: parameter parsing has no side effects beyond the
+    /// cursor, and errors are returned rather than recorded, so a failed
+    /// attempt simply means "not a lambda" and the caller falls through to the
+    /// parenthesised-expression path.
+    pub(crate) fn looks_like_arrow_lambda(&mut self) -> bool {
+        let start = self.pos;
+        let ok = self.try_arrow_lambda_header();
+        self.pos = start;
+        ok
+    }
+
+    /// The speculative half of [`Self::looks_like_arrow_lambda`]. Leaves the
+    /// cursor wherever it got to; the caller rewinds.
+    fn try_arrow_lambda_header(&mut self) -> bool {
+        if self.expect(&Token::LParen, "`(`").is_err() {
+            return false;
         }
-        false
+        if self.parse_param_list_inner(ParamTypes::Optional).is_err() {
+            return false;
+        }
+        if self.expect(&Token::RParen, "`)`").is_err() {
+            return false;
+        }
+        if self.parse_return_type_opt().is_err() {
+            return false;
+        }
+        self.check(&Token::FatArrow)
     }
 
     pub(crate) fn parse_arrow_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {

@@ -47,7 +47,7 @@ impl Parser {
                 }
                 Token::LBracket => {
                     self.advance();
-                    let index = self.parse_expression()?;
+                    let index = self.with_trailing_block(|p| p.parse_expression())?;
                     let close = self.expect(&Token::RBracket, "`]` after index")?;
                     let span = expr.span.start..close.span.end;
                     expr = Spanned::new(
@@ -83,6 +83,23 @@ impl Parser {
                         span,
                     );
                 }
+                // `f(args) do (p) … end` — trailing block. Sugar for passing a
+                // lambda as the final positional argument, so `View(spacing: 10)
+                // do … end` is exactly `View(spacing: 10, fn() … end)`.
+                //
+                // Requiring the receiver to already be a `Call` keeps the form
+                // anchored to an argument list: a bare `while x do` can never be
+                // mistaken for one, and `View do … end` (no parens) is a clear
+                // error rather than a silently different parse.
+                Token::Do if !self.no_trailing_block && matches!(expr.value, Expr::Call { .. }) => {
+                    let block = self.parse_trailing_block()?;
+                    let span = expr.span.start..block.span.end;
+                    let Expr::Call { callee, mut args } = expr.value else {
+                        unreachable!("guarded by the match arm above")
+                    };
+                    args.push(CallArg::Positional(block));
+                    expr = Spanned::new(Expr::Call { callee, args }, span);
+                }
                 Token::Bang => {
                     let bang = self.advance();
                     let span = expr.span.start..bang.span.end;
@@ -114,10 +131,12 @@ impl Parser {
         {
             self.advance();
             self.advance();
-            let value = self.parse_expression()?;
+            let value = self.with_trailing_block(|p| p.parse_expression())?;
             return Ok(CallArg::Named { name, value });
         }
-        Ok(CallArg::Positional(self.parse_expression()?))
+        Ok(CallArg::Positional(
+            self.with_trailing_block(|p| p.parse_expression())?,
+        ))
     }
 
     // ── Primary expressions ─────────────────────────────────────────────────

@@ -130,10 +130,16 @@ impl Resolver {
     }
 
     pub(crate) fn check_arg_ordering(&mut self, args: &[CallArg]) {
+        // A trailing block (`f(spacing: 10) do … end`) is positional but is
+        // written after the parentheses, so it is exempt from the ordering
+        // rule. It binds to the first unclaimed parameter — see
+        // `saule_ast::resolve_arg_slots`.
+        let last = args.len().saturating_sub(1);
         let mut seen_named = false;
-        for a in args {
+        for (i, a) in args.iter().enumerate() {
             match a {
                 CallArg::Named { .. } => seen_named = true,
+                CallArg::Positional(_) if i == last && a.is_trailing_block() => {}
                 CallArg::Positional(e) if seen_named => {
                     self.errors.push(SemanticError::PositionalAfterNamed {
                         span: to_source_span(e.span.clone()),

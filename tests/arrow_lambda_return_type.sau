@@ -1,0 +1,49 @@
+-- Arrow lambdas may declare a return type between the parameter list and the
+-- `=>`. The return type is the full type grammar, so the parser decides
+-- `(` starts a lambda by parsing the header rather than scanning for `=>`.
+
+fn apply(f: fn(integer) -> integer) -> integer
+	return f(3)
+end
+
+class Box
+	v: integer = 0
+	fn init(v: integer)
+		self.v = v
+	end
+	fn get() -> integer
+		return self.v
+	end
+end
+
+class Main
+	static fn main()
+		-- Typed parameter and explicit return type.
+		println(apply((n: integer) -> integer => n * 2))  -- 6
+
+		-- The parameter type is still inferred when only the return is written.
+		println(apply((n) -> integer => n + 1))  -- 4
+
+		-- A generic return type: the `<...>` sits between `)` and `=>`.
+		local pack: fn(integer) -> table<integer> = (n: integer) -> table<integer> => {n}
+		println(pack(7)[1])  -- 7
+
+		-- A nullable return type.
+		local maybe: fn(integer) -> integer? = (n: integer) -> integer? => nil
+		println(maybe(1) ?? -1)  -- -1
+
+		-- A function-typed return, which contains its own `->`.
+		local mk: fn(integer) -> fn(integer) -> integer = (n: integer) -> fn(integer) -> integer => (m: integer) -> integer => n + m
+		println(mk(2)(3))  -- 5
+
+		-- No return type: unchanged.
+		local id: fn(integer) -> integer = (n: integer) => n
+		println(id(9))  -- 9
+
+		-- Parenthesised expressions still parse as expressions.
+		println((1 + 2) * 3)  -- 9
+		println((Box(5)).get())  -- 5
+		println(((7)))  -- 7
+		println((-3) + 1)  -- -2
+	end
+end

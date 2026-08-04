@@ -1443,3 +1443,52 @@ end
     let at = src.find("local inner = Button").expect("stmt") + 2;
     assert!(help_at(src, at).is_none());
 }
+
+// ── Trailing blocks ─────────────────────────────────────────────────────────
+
+/// Signature help inside a call's parentheses is unaffected by a trailing
+/// block hanging off the end of it.
+#[test]
+fn signature_inside_the_parens_of_a_call_with_a_trailing_block() {
+    let src = "\
+fn repeated(times: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+fn main() -> nil
+  repeated(2) do
+    print(1)
+  end
+end
+";
+    let h = help(src, "repeated(2)", 9).expect("help");
+    let sig = &h.signatures[0];
+    assert!(sig.label.starts_with("repeated("), "label={}", sig.label);
+    assert!(sig.label.contains("times: integer"), "label={}", sig.label);
+    assert_eq!(h.active_parameter, Some(0));
+}
+
+/// A nested call written inside a trailing block gets its own signature help
+/// — the block body is an ordinary statement context.
+#[test]
+fn signature_for_a_call_nested_in_a_trailing_block() {
+    let src = "\
+fn scaled(value: integer, by: integer) -> integer
+  return value * by
+end
+
+fn repeated(times: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+fn main() -> nil
+  repeated(2) do
+    print(scaled(3, 4))
+  end
+end
+";
+    let h = help(src, "scaled(3", 7).expect("help");
+    let sig = &h.signatures[0];
+    assert!(sig.label.starts_with("scaled("), "label={}", sig.label);
+    assert_eq!(h.active_parameter, Some(0));
+}

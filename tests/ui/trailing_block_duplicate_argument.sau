@@ -1,0 +1,10 @@
+-- The trailing block fills the first unclaimed parameter. When every
+-- parameter is already supplied there is nothing left for it to bind to.
+
+fn view(spacing: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+view(spacing: 1, body: fn() end) do
+  println("hi")
+end

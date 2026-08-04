@@ -1235,3 +1235,112 @@ fn an_unbound_stage_type_param_does_not_leak_into_the_next_check() {
         local err = when({{1, 2}}):make():join()\n"
     ));
 }
+
+// ─── a lambda's declared return type binds its body ──────────────────────
+
+/// A lambda that declares `-> T` must actually return a `T`. The declaration
+/// used to be checked against the target's signature but never against the
+/// body, so the annotation guaranteed nothing about what came back.
+#[test]
+fn rejects_lambda_body_violating_its_own_return_type() {
+    rejects(
+        "\
+fn apply(f: fn(integer) -> integer) -> integer
+  return f(1)
+end
+
+fn t() -> nothing
+  apply(fn(n) -> integer
+    return \"nope\"
+  end)
+  return
+end
+",
+        "return",
+    );
+}
+
+/// Same hole through the trailing-block spelling — it is the same tree, so it
+/// must produce the same error.
+#[test]
+fn rejects_trailing_block_body_violating_its_own_return_type() {
+    rejects(
+        "\
+fn apply(f: fn(integer) -> integer) -> integer
+  return f(1)
+end
+
+fn t() -> nothing
+  apply() do (n) -> integer
+    return \"nope\"
+  end
+  return
+end
+",
+        "return",
+    );
+}
+
+/// With no target type to check against, the lambda's own annotation is still
+/// the contract its body has to meet.
+#[test]
+fn rejects_untargeted_lambda_body_violating_its_own_return_type() {
+    rejects(
+        &in_fn("  local f = fn(n: integer) -> integer\n    return \"nope\"\n  end"),
+        "return",
+    );
+}
+
+/// A lambda that omits its return type still inherits the target's, so the
+/// pre-existing inference path is untouched.
+#[test]
+fn rejects_lambda_body_violating_the_targets_return_type() {
+    rejects(
+        "\
+fn apply(f: fn(integer) -> integer) -> integer
+  return f(1)
+end
+
+fn t() -> nothing
+  apply(fn(n)
+    return \"nope\"
+  end)
+  return
+end
+",
+        "return",
+    );
+}
+
+/// The honest cases keep passing: a declared return type that the body meets,
+/// through both spellings.
+#[test]
+fn accepts_lambda_and_trailing_block_meeting_their_return_type() {
+    accepts(
+        "\
+fn apply(f: fn(integer) -> integer) -> integer
+  return f(1)
+end
+
+fn t() -> nothing
+  apply(fn(n) -> integer
+    return n * 2
+  end)
+  apply() do (n) -> integer
+    return n * 3
+  end
+  return
+end
+",
+    );
+}
+
+/// An expression-bodied lambda was always checked against the return type its
+/// target supplies; guard against a regression from the block-body fix.
+#[test]
+fn rejects_arrow_lambda_violating_its_return_type() {
+    rejects(
+        &in_fn("  local f: fn(integer) -> integer = n => \"nope\""),
+        "integer",
+    );
+}

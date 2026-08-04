@@ -1,0 +1,95 @@
+import Canvas from "canvas"
+
+-- The widget set. Every widget is a class, and constructing one draws it.
+--
+-- A widget that has children declares that as its **last** initialiser
+-- parameter — a `fn() -> nil` — so callers hand the children over as a
+-- trailing block:
+--
+--     Panel(title: "Session") do
+--         Field("player", "ada")
+--     end
+--
+-- which is exactly `Panel(title: "Session", fn() Field("player", "ada") end)`.
+-- Because `body` is last, anything in front of it can be named, positional or
+-- defaulted, and the block still lands on `body`.
+
+-- ── Leaves ──────────────────────────────────────────────────────────────
+
+export class Text
+	fn init(value: string)
+		Canvas.add(value)
+	end
+end
+
+export class Button
+	fn init(label: string)
+		Canvas.add("[ " .. label .. " ]")
+	end
+end
+
+-- A label on the left and a value on the right, `width` apart.
+export class Field
+	fn init(label: string, value: string, width: integer = 22)
+		local gap: integer = width - String.len(label) - String.len(value)
+		if gap < 1 then
+			gap = 1
+		end
+		Canvas.add(label .. String.rep(" ", gap) .. value)
+	end
+end
+
+export class Rule
+	fn init(width: integer = 22)
+		Canvas.add(String.rep("-", width))
+	end
+end
+
+-- ── Containers ──────────────────────────────────────────────────────────
+
+-- Frames its children in a box with a title.
+--
+-- `spacing` sits between `title` and `body` and has a default, so
+-- `Panel(title: "x") do … end` skips it entirely and the block still binds to
+-- `body`. A trailing block always fills the callee's last parameter.
+export class Panel
+	fn init(title: string, spacing: integer = 0, body: fn() -> nil)
+		local start: integer = Canvas.mark()
+		body()
+		local kids: table<string> = Canvas.since(start)
+
+		local inner: integer = Canvas.widthOf(kids)
+		if String.len(title) > inner then
+			inner = String.len(title)
+		end
+		kids = Canvas.padAll(kids, inner)
+
+		local blank: string = "| " .. String.rep(" ", inner) .. " |"
+		Canvas.add("+-" .. title .. String.rep("-", inner - String.len(title)) .. "-+")
+		local i: integer = 0
+		while i < spacing do
+			Canvas.add(blank)
+			i = i + 1
+		end
+		for _, line in kids do
+			Canvas.add("| " .. line .. " |")
+		end
+		i = 0
+		while i < spacing do
+			Canvas.add(blank)
+			i = i + 1
+		end
+		Canvas.add("+" .. String.rep("-", inner + 2) .. "+")
+	end
+end
+
+-- Lays its children out side by side rather than stacked, with `spacing`
+-- blanks between columns — so a `Row` block reads as "these, across".
+export class Row
+	fn init(spacing: integer = 2, body: fn() -> nil)
+		local start: integer = Canvas.mark()
+		body()
+		local kids: table<string> = Canvas.since(start)
+		Canvas.add(Table.concat(kids, String.rep(" ", spacing)))
+	end
+end

@@ -52,6 +52,11 @@ pub(crate) struct Walk {
     scope: Vec<Visible>,
     class: Option<String>,
     found: Option<Found>,
+    /// Top-level `fn` signatures, so a lambda argument's parameters can be
+    /// refined from the slot they fill. An omitted annotation parses as `any`,
+    /// and the callee is the only place the real type comes from — without
+    /// this, `each(items) do (item)` offers `item: any`.
+    user_fns: std::collections::HashMap<String, (Vec<Param>, Option<Type>)>,
 }
 
 impl Walk {
@@ -60,6 +65,7 @@ impl Walk {
             scope: Vec::new(),
             class: None,
             found: None,
+            user_fns: crate::server::sighelp::walk::collect_user_fns(module),
         };
         w.block(&module.stmts);
         w.found
@@ -385,7 +391,7 @@ impl Walk {
             }
             Expr::Call { callee, args } => {
                 self.expr(callee);
-                self.args(args);
+                self.call_args(&callee.value, args);
             }
             Expr::Table(entries) => {
                 for entry in entries {
@@ -395,18 +401,7 @@ impl Walk {
                     }
                 }
             }
-            Expr::Lambda { params, body, .. } => {
-                self.params(params);
-                let mark = self.scope.len();
-                for p in params {
-                    self.bind(&p.name, Some(p.ty.clone()), "parameter");
-                }
-                match body {
-                    LambdaBody::Expr(e) => self.expr(e),
-                    LambdaBody::Block(b) => self.block(b),
-                }
-                self.scope.truncate(mark);
-            }
+            Expr::Lambda { params, body, .. } => self.lambda(params, body, None),
             Expr::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
                 for arm in arms {
@@ -439,6 +434,68 @@ impl Walk {
                 CallArg::Named { value, .. } => self.expr(value),
             }
         }
+    }
+
+    /// [`Self::args`], but a lambda argument is walked against the parameter
+    /// type of the slot it fills — including a trailing block, which takes the
+    /// first slot no other argument claimed.
+    fn call_args(&mut self, callee: &Expr, args: &[CallArg]) {
+        let Some(params) = self.callee_params(callee) else {
+            self.args(args);
+            return;
+        };
+        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        let slots = saule_ast::resolve_arg_slots(args, &names);
+        for (a, slot) in args.iter().zip(slots.iter()) {
+            let (CallArg::Positional(e) | CallArg::Named { value: e, .. }) = a;
+            let want = slot.and_then(|i| params.get(i)).map(|p| &p.ty);
+            match (&e.value, want) {
+                (Expr::Lambda { params, body, .. }, Some(Type::Function { params: want, .. })) => {
+                    self.lambda(params, body, Some(want))
+                }
+                _ => self.expr(e),
+            }
+        }
+    }
+
+    /// The callee's declared parameters, for the callee shapes a lambda
+    /// argument realistically appears under: a top-level `fn`, a method on the
+    /// enclosing class, and a class constructor.
+    fn callee_params(&self, callee: &Expr) -> Option<Vec<Param>> {
+        match callee {
+            Expr::Ident(name) => {
+                if saule_semantic::with_classes(|r| r.contains_key(name)) {
+                    return saule_semantic::lookup_method(name, "init").map(|s| s.params);
+                }
+                if let Some(class) = &self.class
+                    && let Some(sig) = saule_semantic::lookup_method(class, name)
+                {
+                    return Some(sig.params);
+                }
+                self.user_fns.get(name).map(|(ps, _)| ps.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Walk a lambda body with its parameters bound. `want` carries the
+    /// parameter types the callee declared, which fill in any the writer
+    /// omitted — an explicit annotation on the lambda always wins.
+    fn lambda(&mut self, params: &[Param], body: &LambdaBody, want: Option<&[Type]>) {
+        self.params(params);
+        let mark = self.scope.len();
+        for (i, p) in params.iter().enumerate() {
+            let ty = match want.and_then(|w| w.get(i)) {
+                Some(t) if matches!(&p.ty, Type::Named(n) if n == "any") => t.clone(),
+                _ => p.ty.clone(),
+            };
+            self.bind(&p.name, Some(ty), "parameter");
+        }
+        match body {
+            LambdaBody::Expr(e) => self.expr(e),
+            LambdaBody::Block(b) => self.block(b),
+        }
+        self.scope.truncate(mark);
     }
 }
 

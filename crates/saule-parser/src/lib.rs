@@ -8,7 +8,11 @@
 //!   * Expressions follow a standard precedence ladder, lowest at the top:
 //!     `or` → `and` → `==`/`!=` → `<`/`<=`/`>`/`>=` → `??` → `..` → `+`/`-`
 //!     → `*`/`/`/`%` → unary (`-`, `not`, `#`) → postfix (`.`, `?.`, `[]`,
-//!     `(...)`, `:method(...)`, `!`) → primary.
+//!     `(...)`, `:method(...)`, `do … end`, `!`) → primary.
+//!   * A call may carry a **trailing block** — `f(a) do (p) … end`, sugar for
+//!     passing a block-bodied lambda as the final argument. Because loop
+//!     headers also end in `do`, the form is suppressed while parsing a
+//!     `while`/`for` header; see [`Parser::without_trailing_block`].
 //!   * Statements use keyword-led forms (`if … then … end`, `while … do … end`,
 //!     `for v = a, b [, s] do … end`, `for v in iter do … end`,
 //!     `repeat … until cond`, `try … catch e: T … end`).
@@ -59,11 +63,51 @@ pub fn parse(tokens: Vec<Spanned<Token>>) -> Result<Module, ParseError> {
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
+    /// Suppresses the trailing-block call form (`f(x) do … end`) while parsing
+    /// the header expression of a `while`/`for`, where a following `do` belongs
+    /// to the loop rather than to the call. See [`Parser::without_trailing_block`].
+    no_trailing_block: bool,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Spanned<Token>>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            no_trailing_block: false,
+        }
+    }
+
+    /// Runs `f` with the trailing-block form disabled, restoring the previous
+    /// setting afterwards.
+    ///
+    /// `while queue.pop() do … end` and `for x in items() do … end` end their
+    /// header with a call followed by `do`, which is exactly the shape of a
+    /// trailing block. The loop wins: inside a header, `do` always closes the
+    /// header. Writing a trailing block there is still possible by
+    /// parenthesising it — `while (next() do … end) do … end` — because the
+    /// flag is cleared for nested parenthesised and bracketed expressions.
+    pub(crate) fn without_trailing_block<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let prev = std::mem::replace(&mut self.no_trailing_block, true);
+        let out = f(self);
+        self.no_trailing_block = prev;
+        out
+    }
+
+    /// Runs `f` with the trailing-block form re-enabled. Used by delimited
+    /// sub-expressions (`( … )`, `[ … ]`, argument lists, table literals),
+    /// where a `do` cannot possibly belong to an enclosing loop header.
+    pub(crate) fn with_trailing_block<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let prev = std::mem::replace(&mut self.no_trailing_block, false);
+        let out = f(self);
+        self.no_trailing_block = prev;
+        out
     }
 
     // ── Cursor helpers ──────────────────────────────────────────────────────

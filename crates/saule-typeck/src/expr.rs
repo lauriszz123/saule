@@ -192,7 +192,14 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                 }
             }
         }
-        Expr::Lambda { params, body, .. } => check_lambda_body(params, body, None, scope, errors),
+        // No target type here, so the lambda's own annotation is the only
+        // contract its body has — without it a declared `-> T` on a lambda
+        // that isn't being assigned anywhere would go unchecked.
+        Expr::Lambda {
+            params,
+            body,
+            return_ty,
+        } => check_lambda_body(params, body, return_ty.as_ref(), scope, errors),
         Expr::Match { scrutinee, arms } => {
             check_match(expr, scrutinee, arms, scope, errors);
         }
@@ -205,10 +212,10 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
 
 /// Check a lambda's body in a scope seeded with its parameters.
 ///
-/// `expected_ret` is the return type the lambda is required to produce, and
-/// is only supplied when the lambda itself omitted one — a block-bodied
-/// lambda's return type is otherwise unknown, and comparing the target
-/// against that unknown would accept anything.
+/// `expected_ret` is the return type the lambda's body is required to
+/// produce: its own `-> T` annotation when it has one, otherwise the return
+/// type of whatever target it is being checked against. `None` means neither
+/// exists and the body's returns are unconstrained.
 fn check_lambda_body(
     params: &[Param],
     body: &LambdaBody,
@@ -280,10 +287,12 @@ pub(super) fn check_expr_expecting(
                 _ => p.clone(),
             })
             .collect();
-        // A lambda that declared its own return type is compared against the
-        // target by `types_compatible`; only fill one in when it omitted one.
+        // A declared return type governs the body: it is the contract the
+        // `return` statements have to meet, and `types_compatible` separately
+        // checks it against the target. Only fall back to the target's return
+        // type when the lambda omitted one.
         let expected_ret = match return_ty {
-            Some(_) => None,
+            Some(rt) => Some(rt),
             None if is_any(want_ret) => None,
             None => Some(&**want_ret),
         };

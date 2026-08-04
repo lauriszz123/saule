@@ -1,0 +1,12 @@
+-- A trailing block's parameters are inferred from the callee's signature, so
+-- using one at the wrong type is a compile error rather than a silent `any`.
+
+fn each(items: table<integer>, body: fn(integer) -> nil) -> nil
+  for _, v in items do
+    body(v)
+  end
+end
+
+each({1, 2}) do (v)
+  println(#v)
+end

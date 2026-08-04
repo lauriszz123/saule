@@ -40,7 +40,16 @@ const SUPER_OWNER_BINDING: &str = "__saule_super_owner";
 #[derive(Clone)]
 pub(crate) enum EvaluatedArg {
     Positional(Value),
-    Named { name: String, value: Value },
+    Named {
+        name: String,
+        value: Value,
+    },
+    /// A trailing block (`f(spacing: 10) do … end`) written after a named
+    /// argument. Positional in every respect except that it binds to the first
+    /// parameter no other argument claimed rather than to the next index —
+    /// see [`saule_ast::resolve_arg_slots`]. A trailing block with no named
+    /// arguments alongside it is an ordinary [`EvaluatedArg::Positional`].
+    TrailingBlock(Value),
 }
 
 pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Value, RuntimeError> {
