@@ -17,29 +17,28 @@ class Main
 		println("kitchen_sink.json:")
 
 		-- We know that it exists so we can force unwrap.
-		local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json")!) as table
+		local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json") ?? "") as table
 
 		if raw == nil then
 			println("Failed to parse!")
 			return
 		end
 
-		local data: table = raw
-		Main.dumpTable(data, "  ")
+		Main.dumpTable(raw, "  ")
 
 		-- Mutate: clear a key, add a key, change a value.
-		data["draft"] = nil
-		data["lastRun"] = "2026-05-28T00:00:00Z"
-		data.version = data.version + 1
+		raw["draft"] = nil
+		raw["lastRun"] = "2026-05-28T00:00:00Z"
+		raw.version = raw.version + 1
 
 		-- Write the modified copy to a separate file so the original
 		-- kitchen_sink.json stays untouched between runs.
-		Main.saveJson("kitchen_sink_modified.json", data)
+		Main.saveJson("kitchen_sink_modified.json", raw)
 	end
 
 	static fn loadFile(path: string) -> string?
 		if Os.exists(path) then
-			local file: File = Io.open(path, IoMode.Read)!
+			local file = Io.open(path, IoMode.Read)!
 			local source: string? = file.read("a")
 			file.close()
 
@@ -48,9 +47,9 @@ class Main
 	end
 
 	static fn saveJson(path: string, object: table)
-		local file: File = Io.open(path, IoMode.Write)!
-		file.write(Json.encode(object))
-		file.close()
+		local file = Io.open(path, IoMode.Write)
+		file?.write(Json.encode(object))
+		file?.close()
 	end
 
 	static fn dumpAny(v: any?, indent: string)
@@ -71,7 +70,7 @@ class Main
 			return
 		end
 
-		local next: string = indent .. "  "
+		local next = indent .. "  "
 
 		for k, v in t do
 			local label: string = indent .. tostring(k)
