@@ -83,13 +83,16 @@ export class Canvas
 	static fn since(mark: integer) -> table<string>
 		local taken: table<string> = {}
 		local i: integer = mark + 1
+
 		while i <= #Canvas.lines do
 			Table.insert(taken, Canvas.lines[i])
 			i = i + 1
 		end
+
 		while #Canvas.lines > mark do
 			Table.remove(Canvas.lines)
 		end
+
 		return taken
 	end
 

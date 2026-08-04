@@ -81,15 +81,30 @@ impl<'a> Cx<'a> {
                             .next();
                     }
                 }
-                // `recv.method(args)` — dot-call on a module or instance.
+                // `recv.method(args)` — dot-call on a class instance or on
+                // a stdlib module. The receiver may not resolve to a class
+                // at all (`Os.fsInfo(p)`), so a failed `receiver_class`
+                // falls through to the module-qualified native lookup
+                // rather than giving up — mirrors `callee_params`.
                 if let Expr::Member { obj, name } = &callee.value {
-                    let class = self.receiver_class(&obj.value)?;
-                    if let Some(sig) = lookup_method(&class, name) {
-                        let arg_types = self.positional_arg_types(args);
-                        return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
+                    if let Some(class) = self.receiver_class(&obj.value) {
+                        if let Some(sig) = lookup_method(&class, name) {
+                            let arg_types = self.positional_arg_types(args);
+                            return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
+                        }
+                        let qname = format!("{class}.{name}");
+                        if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
+                            let arg_types = self.positional_arg_types(args);
+                            return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                                .into_iter()
+                                .next();
+                        }
                     }
-                    let qname = format!("{class}.{name}");
-                    if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
+                    // Stdlib module call: `Os.fsInfo(path)` — receiver is a
+                    // bare identifier registered as a module, not a class.
+                    if let Expr::Ident(recv) = &obj.value
+                        && let Some(sig) = saule_typeck::sigs::lookup(&format!("{recv}.{name}"))
+                    {
                         let arg_types = self.positional_arg_types(args);
                         return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
                             .into_iter()
@@ -133,8 +148,17 @@ impl<'a> Cx<'a> {
             // reference has no useful label (function types don't
             // render), so only fields answer here.
             Expr::Member { obj, name } => {
-                let class = self.receiver_class(&obj.value)?;
-                lookup_field_type(&class, name)
+                if let Some(class) = self.receiver_class(&obj.value)
+                    && let Some(ty) = lookup_field_type(&class, name)
+                {
+                    return Some(ty);
+                }
+                // `Os.sep`, `Math.pi` — a typed stdlib constant read off a
+                // module identifier, which resolves to no class.
+                match &obj.value {
+                    Expr::Ident(recv) => saule_typeck::sigs::lookup_const(&format!("{recv}.{name}")),
+                    _ => None,
+                }
             }
             // `obj?.field` yields nil when the receiver does, so the
             // whole chain is nullable whatever the field says.
@@ -299,11 +323,19 @@ impl<'a> Cx<'a> {
                 .map(method_sig_as_native)
                 .or_else(|| self.user_fns.get(name).map(|f| f.sig.clone()))
                 .or_else(|| saule_typeck::sigs::lookup(name)),
-            Expr::Member { obj, name } => self.receiver_class(&obj.value).and_then(|class| {
-                lookup_method(&class, name)
-                    .map(method_sig_as_native)
-                    .or_else(|| saule_typeck::sigs::lookup(&format!("{class}.{name}")))
-            }),
+            Expr::Member { obj, name } => self
+                .receiver_class(&obj.value)
+                .and_then(|class| {
+                    lookup_method(&class, name)
+                        .map(method_sig_as_native)
+                        .or_else(|| saule_typeck::sigs::lookup(&format!("{class}.{name}")))
+                })
+                // Stdlib module receiver (`Os.fsInfo`) — no class to
+                // resolve, so fall back to the qualified native sig.
+                .or_else(|| match &obj.value {
+                    Expr::Ident(recv) => saule_typeck::sigs::lookup(&format!("{recv}.{name}")),
+                    _ => None,
+                }),
             _ => None,
         };
         let Some(sig) = sig else {

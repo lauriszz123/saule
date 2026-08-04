@@ -303,9 +303,23 @@ pub(super) fn check_stmt(
                 }
             }
             check_expr(iter, scope, errors);
+            // A nullable iterable is a real bug — the loop blows up the
+            // moment the value is nil. Report it, then carry on with the
+            // unwrapped type so the body still gets typed bindings and
+            // its own mistakes surface in the same pass.
+            let iter_ty = match infer(iter, scope) {
+                Some(Type::Nullable(inner)) => {
+                    errors.push(TypeCheckError::NullableIteration {
+                        ty: crate::expr::type_to_string(&Type::Nullable(inner.clone())),
+                        span: to_source_span(iter.span.clone()),
+                    });
+                    Some(*inner)
+                }
+                other => other,
+            };
             // If the iter expression is a known class instance, it must
             // implement `Iterable` or `Iterable2` (walking the parent chain).
-            if let Some(Type::Named(class_name)) = infer(iter, scope)
+            if let Some(Type::Named(class_name)) = iter_ty.clone()
                 && with_classes(|reg| reg.contains_key(&class_name))
                 && !class_implements_iterable(&class_name)
             {
@@ -318,7 +332,7 @@ pub(super) fn check_stmt(
             // what each binding receives. Reject mismatched annotations so
             // e.g. `for k: string, v: string in table<Entry>` flags both
             // bindings rather than letting them silently lie.
-            if let Some(Type::Table { key, value }) = infer(iter, scope) {
+            if let Some(Type::Table { key, value }) = iter_ty.clone() {
                 let yielded: Vec<Type> = match vars.len() {
                     1 => vec![(*value).clone()],
                     2 => {
@@ -359,22 +373,21 @@ pub(super) fn check_stmt(
             // `task: Entry`. Without this, downstream method calls and
             // exhaustiveness checks (e.g. `match task.isDone()` over a
             // `boolean`) lose their receiver type and bail.
-            let yielded_from_iter: Vec<Type> =
-                if let Some(Type::Table { key, value }) = infer(iter, scope) {
-                    match vars.len() {
-                        1 => vec![(*value).clone()],
-                        2 => {
-                            let k_ty = key
-                                .as_deref()
-                                .cloned()
-                                .unwrap_or_else(|| Type::Named("integer".into()));
-                            vec![k_ty, (*value).clone()]
-                        }
-                        _ => Vec::new(),
+            let yielded_from_iter: Vec<Type> = if let Some(Type::Table { key, value }) = iter_ty {
+                match vars.len() {
+                    1 => vec![(*value).clone()],
+                    2 => {
+                        let k_ty = key
+                            .as_deref()
+                            .cloned()
+                            .unwrap_or_else(|| Type::Named("integer".into()));
+                        vec![k_ty, (*value).clone()]
                     }
-                } else {
-                    Vec::new()
-                };
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
             for (i, (name, ty_opt)) in vars.iter().enumerate() {
                 if let Some(ty) = ty_opt {
                     body_scope.bind(name.clone(), ty.clone());

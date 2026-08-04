@@ -144,6 +144,16 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("cannot iterate over nullable type `{ty}`")]
+    #[diagnostic(help(
+        "guard with `if x != nil then ... end` (or `if not x then ... end`) before the loop, or force-unwrap with `!`"
+    ))]
+    NullableIteration {
+        ty: String,
+        #[label("iterating this may be `nil`")]
+        span: miette::SourceSpan,
+    },
+
     #[error("cannot iterate over a `{class}` — it does not implement `Iterable` or `Iterable2`")]
     #[diagnostic(help(
         "add `implements Iterable<T>` (or `Iterable2<K, V>`) to `{class}` and define `fn iter() -> fn(): T?` returning a step closure"
