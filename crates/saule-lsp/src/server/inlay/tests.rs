@@ -256,6 +256,37 @@ fn parameter_hint_for_stdlib_module_call() {
     assert!(labels.contains(&&"pattern:".to_string()), "got {hints:?}");
 }
 
+/// A stdlib module call gets a type hint just like a user function
+/// does. The receiver (`Os`) is a module, not a class, so resolution
+/// has to fall back to the qualified native sig.
+#[test]
+fn type_hint_for_stdlib_module_call() {
+    init_stdlib();
+    let src = "fn main(path: string)\n  local info = Os.fsInfo(path)\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": FsInfo?"),
+        "{hints:?}"
+    );
+}
+
+/// A typed stdlib constant (`Os.sep`) reads as its declared type even
+/// though the module isn't a class.
+#[test]
+fn type_hint_for_stdlib_module_constant() {
+    init_stdlib();
+    let src = "fn main()\n  local sep = Os.sep\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": string"),
+        "{hints:?}"
+    );
+}
+
 #[test]
 fn parameter_hint_suppressed_for_println() {
     init_stdlib();

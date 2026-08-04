@@ -1,0 +1,88 @@
+-- Flow narrowing understands `not x`, not just `== nil` / `!= nil`.
+-- Code reached because `not x` was false has a non-nil `x`, and the
+-- checker now says so. Before this, the guard idiom below only worked in
+-- its `== nil` spelling and everything downstream stayed nullable.
+class Entry
+	local todo: string
+
+	fn init(todo: string)
+		self.todo = todo
+	end
+
+	fn getTodo() -> string
+		return self.todo
+	end
+end
+
+fn maybeName(ok: boolean) -> string?
+	if ok then
+		return "hello"
+	end
+
+	return
+end
+
+fn maybeEntries(ok: boolean) -> table<Entry>?
+	if ok then
+		return {Entry("write docs")}
+	end
+
+	return
+end
+
+-- `if not x then <diverge> end` — the fall-through path has a `string`.
+fn guarded(ok: boolean) -> string
+	local name = maybeName(ok)
+
+	if not name then
+		return "(none)"
+	end
+
+	return name
+end
+
+-- The else side of the same guard: `not name` being false means `name`
+-- is a `string`, so the branch needs no force-unwrap.
+fn inElse(ok: boolean) -> string
+	local name = maybeName(ok)
+
+	if not name then
+		return "(none)"
+	else
+		return name
+	end
+end
+
+-- The narrowed table iterates with typed bindings, so `entry` is an
+-- `Entry` and its methods resolve.
+fn count(ok: boolean) -> integer
+	local entries = maybeEntries(ok)
+
+	if not entries then
+		return 0
+	end
+
+	local total = 0
+
+	for _, entry in entries do
+		total = total + #entry.getTodo()
+	end
+
+	return total
+end
+
+class Main
+	static fn main()
+		println(guarded(true))
+		println(guarded(false))
+		println(inElse(true))
+		println(count(true))
+		println(count(false))
+
+		-- expected: hello
+		--           (none)
+		--           hello
+		--           10
+		--           0
+	end
+end

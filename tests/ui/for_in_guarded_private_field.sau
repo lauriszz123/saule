@@ -1,0 +1,29 @@
+-- `if not x then return end` narrows `x` the same way `if x == nil then`
+-- does. With the nullable stripped, the loop binds `entry: Entry` — and
+-- the private-member rule applies to it like anywhere else.
+
+class Entry
+  local done: boolean
+
+  fn init()
+    self.done = false
+  end
+end
+
+fn decode() -> any
+  return {}
+end
+
+fn main()
+  local data = decode() as table<Entry>
+
+  if not data then
+    return
+  end
+
+  for _, entry in data do
+    println(entry.done)
+  end
+end
+
+main()

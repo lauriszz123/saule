@@ -13,7 +13,7 @@ class Main
 
 	static fn main()
 		local storage = Storage("todo.json")
-		local args: table = Os.args()
+		local args = Os.args()
 
 		if not Os.exists("todo.json") then
 			storage.save()

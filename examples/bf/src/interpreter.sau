@@ -156,14 +156,14 @@ export class Interpreter
 	end
 
 	fn run()
-		local code: table<Op> = self.precompute()
-		local tape: table<integer, integer> = {}
-		local input: InputBuffer = InputBuffer()
-		local ip: integer = 1
-		local dp: integer = 0
+		local tape: table<integer> = {}
+		local code = self.precompute()
+		local input = InputBuffer()
+		local ip = 1
+		local dp = 0
 
 		while code[ip] != nil do
-			local cell: integer = tape[dp] ?? 0
+			local cell = tape[dp] ?? 0
 
 			match code[ip]!
 				case Op.Inc(by) then
