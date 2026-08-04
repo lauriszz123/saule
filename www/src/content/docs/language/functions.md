@@ -1,6 +1,6 @@
 ---
 title: "Functions"
-description: "The when(...) keyword starts a colon-based pipeline (\"Saule style\"). It wraps a value, and every subsequent :func(args) calls func with the upstream…"
+description: "Inside the body a type parameter is rigid: T stands for whatever the caller picked, so it matches only itself. Widening into any is free, but narrowing…"
 sidebar:
   order: 4
 ---
@@ -94,6 +94,27 @@ end
 local nums: table<integer> = {1, 2, 3, 4, 5, 6}
 local evens: table<integer> = filter<integer>(nums, x => x % 2 == 0)
 ```
+
+Inside the body a type parameter is **rigid**: `T` stands for whatever the caller picked, so it matches only itself. Widening into `any` is free, but narrowing to a concrete type is a downcast and goes through the checked `as` — the same escape `any` uses:
+
+```saule
+fn onlyInts<T>(items: table<T>) -> table<integer>
+    local result: table<integer> = {}
+
+    for item: T in items do
+        local n: integer = item          -- rejected: a `T` is not an `integer`
+        local n: integer? = item as integer   -- checked at runtime, may be nil
+
+        if n != nil then
+            result[#result + 1] = n!
+        end
+    end
+
+    return result
+end
+```
+
+Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function you are *calling* is not the `T` declared by the one you are writing, however alike they read.
 
 ### Piping with `when(...):`
 
