@@ -1,5 +1,5 @@
 //! Calling user functions, native functions, instance/static methods, and
-//! dispatching `obj.member(args)` / `obj:method(args)` calls.
+//! dispatching `obj.member(args)` calls.
 
 mod binding;
 mod invoke;

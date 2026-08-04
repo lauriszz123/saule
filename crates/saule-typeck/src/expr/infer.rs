@@ -324,16 +324,6 @@ pub(crate) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             }
             None
         }
-        // `obj:method(args)` — same lookup as the `obj.method(args)` case.
-        Expr::MethodCall { obj, method, .. } => {
-            if let Some(ty) = infer(obj, scope)
-                && let Type::Named(class_name) = strip_nullable(ty)
-                && let Some(sig) = saule_semantic::lookup_method(&class_name, method)
-            {
-                return sig.return_ty;
-            }
-            None
-        }
         // A `match` expression has the type of its unified arm bodies.
         // We collect every arm's inferred type and:
         //   * if any arm yields nil / Nullable → the result is `Nullable(base)`;

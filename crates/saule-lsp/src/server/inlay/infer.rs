@@ -1,10 +1,21 @@
 //! The walker's own type inference, and the callee resolution the
 //! parameter-name hints need.
 
-use saule_ast::{CallArg, Expr, LambdaBody, Param, Spanned, TableEntry, Type};
-use saule_semantic::{lookup_method, with_classes};
+use saule_ast::{CallArg, Expr, LambdaBody, MatchBody, Param, Spanned, Stmt, TableEntry, Type};
+use saule_semantic::{lookup_field_type, lookup_method, with_classes};
 
 use super::*;
+
+/// A semantic method signature in the shape the generic-instantiation
+/// helpers take.
+fn method_sig_as_native(sig: saule_semantic::MethodSig) -> saule_typeck::sigs::NativeSig {
+    saule_typeck::sigs::NativeSig {
+        type_params: sig.type_params,
+        params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+        variadic: None,
+        returns: sig.return_ty.into_iter().collect(),
+    }
+}
 
 impl<'a> Cx<'a> {
     /// Expand a value-expression list into the flat list of value types it
@@ -87,21 +98,6 @@ impl<'a> Cx<'a> {
                 }
                 None
             }
-            Expr::MethodCall { obj, method, args } => {
-                let class = self.receiver_class(&obj.value)?;
-                if let Some(sig) = lookup_method(&class, method) {
-                    let arg_types = self.positional_arg_types(args);
-                    return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
-                }
-                let qname = format!("{class}.{method}");
-                if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
-                    let arg_types = self.positional_arg_types(args);
-                    return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
-                        .into_iter()
-                        .next();
-                }
-                None
-            }
             Expr::Self_ => self.enclosing_class.clone().map(Type::Named),
             Expr::Table(entries) => Some(self.infer_table_literal(entries)),
             // Operators are typed by the rules in [`crate::exprty`], shared
@@ -126,7 +122,43 @@ impl<'a> Cx<'a> {
                 ),
             }),
             Expr::Pipe { source, stages } => crate::exprty::pipe_type(self, &source.value, stages),
-            _ => None,
+            // `x as T` is `T?` — the cast is checked at runtime and
+            // yields nil when the value isn't a `T`. Worth a hint
+            // precisely *because* of the `?`: it is the reason the
+            // result still has to be unwrapped.
+            Expr::Cast { ty, .. } => Some(Type::Nullable(Box::new(ty.clone()))),
+            // `x!` drops the nullability the unwrap just asserted away.
+            Expr::ForceUnwrap(inner) => Some(strip_nullable(self.infer_type(&inner.value)?)),
+            // `obj.field` — the field's declared type. A bare method
+            // reference has no useful label (function types don't
+            // render), so only fields answer here.
+            Expr::Member { obj, name } => {
+                let class = self.receiver_class(&obj.value)?;
+                lookup_field_type(&class, name)
+            }
+            // `obj?.field` yields nil when the receiver does, so the
+            // whole chain is nullable whatever the field says.
+            Expr::SafeMember { obj, name } => {
+                let class = self.receiver_class(&obj.value)?;
+                let inner = lookup_field_type(&class, name)?;
+                Some(Type::Nullable(Box::new(strip_nullable(inner))))
+            }
+            // `t[k]` — the declared element type. Indexing anything else
+            // says nothing the declaration can pin down.
+            Expr::Index { obj, .. } => match strip_nullable(self.infer_type(&obj.value)?) {
+                Type::Table { value, .. } => Some(*value),
+                _ => None,
+            },
+            // Every arm of a `match` produces the same type — the
+            // checker enforces it — so the first one speaks for all.
+            Expr::Match { arms, .. } => arms.first().and_then(|arm| match &arm.body {
+                MatchBody::Expr(e) => self.infer_type(&e.value),
+                MatchBody::Block(b) => match b.last().map(|s| &s.value) {
+                    Some(Stmt::Expr(e)) => self.infer_type(&e.value),
+                    Some(Stmt::Return(rs)) => rs.first().and_then(|e| self.infer_type(&e.value)),
+                    _ => None,
+                },
+            }),
         }
     }
 
@@ -252,17 +284,32 @@ impl<'a> Cx<'a> {
                 }
                 None
             }
-            Expr::MethodCall { obj, method, .. } => {
-                let cls = self.receiver_class(&obj.value)?;
-                let sig = lookup_method(&cls, method)?;
-                if let Type::Named(n) = sig.return_ty? {
-                    Some(n)
-                } else {
-                    None
-                }
-            }
             _ => None,
         }
+    }
+
+    /// The type each argument slot expects, with the callee's generics
+    /// bound from the argument types. Only the shapes carrying a
+    /// signature answer; everything else yields `None` per slot.
+    pub(crate) fn expected_arg_types(&self, callee: &Expr, args: &[CallArg]) -> Vec<Option<Type>> {
+        let sig = match callee {
+            Expr::Ident(name) => with_classes(|r| r.contains_key(name))
+                .then(|| lookup_method(name, "init"))
+                .flatten()
+                .map(method_sig_as_native)
+                .or_else(|| self.user_fns.get(name).map(|f| f.sig.clone()))
+                .or_else(|| saule_typeck::sigs::lookup(name)),
+            Expr::Member { obj, name } => self.receiver_class(&obj.value).and_then(|class| {
+                lookup_method(&class, name)
+                    .map(method_sig_as_native)
+                    .or_else(|| saule_typeck::sigs::lookup(&format!("{class}.{name}")))
+            }),
+            _ => None,
+        };
+        let Some(sig) = sig else {
+            return vec![None; args.len()];
+        };
+        saule_typeck::sigs::instantiate_params(&sig, &self.positional_arg_types(args))
     }
 
     pub(crate) fn callee_params(&self, callee: &Expr) -> Option<CalleeParams> {
@@ -318,33 +365,5 @@ impl<'a> Cx<'a> {
             }
             _ => None,
         }
-    }
-
-    /// Resolve the parameter list for `obj.method(...)`. Mirrors the
-    /// Member-arm in [`Self::callee_params`] but specialised for
-    /// `Expr::MethodCall` whose AST keeps `method` as a bare string.
-    pub(crate) fn method_callee_params(&self, obj: &Expr, method: &str) -> Option<CalleeParams> {
-        if let Some(class) = self.receiver_class(obj) {
-            if let Some(sig) = lookup_method(&class, method) {
-                return Some(CalleeParams::Named(sig.params));
-            }
-            let qname = format!("{class}.{method}");
-            if let Some(native) = saule_typeck::sigs::lookup(&qname) {
-                return Some(CalleeParams::Native {
-                    names: crate::server::native_names::param_names(&qname, &native),
-                    has_variadic: native.variadic.is_some(),
-                });
-            }
-        }
-        if let Expr::Ident(recv) = obj {
-            let qname = format!("{recv}.{method}");
-            if let Some(native) = saule_typeck::sigs::lookup(&qname) {
-                return Some(CalleeParams::Native {
-                    names: crate::server::native_names::param_names(&qname, &native),
-                    has_variadic: native.variadic.is_some(),
-                });
-            }
-        }
-        None
     }
 }

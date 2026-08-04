@@ -8,7 +8,6 @@ use crate::hover::util::{
     contains, locate_word_in, render_unknown_member, resolve_member, strip_nullable_type,
 };
 use saule_ast::{Expr, Pattern, Spanned, Type};
-use saule_semantic::lookup_method;
 
 use super::*;
 
@@ -42,23 +41,27 @@ impl<'a> Cx<'a> {
             Expr::Call { callee, args } => {
                 self.visit_expr(callee);
                 let sig = self.callee_sig(&callee.value);
+                // What each slot expects, with the callee's generics
+                // bound from the arguments — `map(names, s => #s)` gives
+                // `s` the element type of `names`, not `any`.
+                let expected = sig
+                    .as_ref()
+                    .map(|s| s.expected_arg_types(&self.positional_arg_types(args)))
+                    .unwrap_or_default();
+                let mut slot = 0usize;
                 for a in args {
-                    self.visit_call_arg_with_params(a, sig.as_ref());
-                }
-            }
-            Expr::MethodCall { obj, method, args } => {
-                self.visit_expr(obj);
-                let sig = self.receiver_class(&obj.value).and_then(|class| {
-                    let m = lookup_method(&class, method)?;
-                    let key = format!("{class}.{method}");
-                    Some(CalleeSig {
-                        params: m.params,
-                        doc: self.imports.docs.get(&key).cloned(),
-                        display: key,
-                    })
-                });
-                for a in args {
-                    self.visit_call_arg_with_params(a, sig.as_ref());
+                    let want = match a {
+                        saule_ast::CallArg::Positional(_) => {
+                            let i = slot;
+                            slot += 1;
+                            expected.get(i).cloned().flatten()
+                        }
+                        saule_ast::CallArg::Named { name, .. } => sig
+                            .as_ref()
+                            .and_then(|s| s.params.iter().position(|p| &p.name == name))
+                            .and_then(|i| expected.get(i).cloned().flatten()),
+                    };
+                    self.visit_call_arg_with_params(a, sig.as_ref(), want.as_ref());
                 }
             }
             Expr::ForceUnwrap(inner) => self.visit_expr(inner),
@@ -73,19 +76,11 @@ impl<'a> Cx<'a> {
                     }
                 }
             }
-            Expr::Lambda { params, body, .. } => {
-                for p in params {
-                    self.record(p.span.clone(), render_param(p));
-                    if let Some(def) = &p.default {
-                        self.visit_expr(def);
-                    }
-                }
-                let params = params.clone();
-                self.enter_lambda(&params, |this| match body {
-                    saule_ast::LambdaBody::Expr(b) => this.visit_expr(b),
-                    saule_ast::LambdaBody::Block(b) => this.visit_block(b),
-                });
-            }
+            Expr::Lambda {
+                params,
+                return_ty,
+                body,
+            } => self.visit_lambda(e, params, return_ty, body),
             Expr::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
                 let scrut_ty = self.infer_init_type(&scrutinee.value);
@@ -108,12 +103,32 @@ impl<'a> Cx<'a> {
             }
             Expr::Pipe { source, stages } => {
                 self.visit_expr(source);
-                for st in stages {
+                // Each stage's generics are bound from the value that
+                // reaches it, so `:filter(x => …)` over a `table<integer>`
+                // reads `x` as an `integer`.
+                let expectations =
+                    crate::exprty::pipe_stage_expectations(self, &source.value, stages);
+                for (si, st) in stages.iter().enumerate() {
+                    // A stage is a call to the free function it names,
+                    // so the name hovers as that function. Without this
+                    // the cursor fell through to the whole pipeline and
+                    // was answered with the type the chain produces.
+                    if let Some(span) = locate_word_in(self.source, &st.span, &st.name)
+                        && contains(&span, self.offset)
+                        && let Some(md) = self.resolve_ident(&st.name)
+                    {
+                        self.record(span, md);
+                    }
                     // Stdlib pipe stages (`|> Math.sqrt`) carry only
                     // positional types — no parameter names — so we
                     // can't resolve named-arg keys against them.
-                    for a in &st.args {
-                        self.visit_call_arg_with_params(a, None);
+                    for (ai, a) in st.args.iter().enumerate() {
+                        let want = expectations
+                            .get(si)
+                            .and_then(|v| v.get(ai))
+                            .cloned()
+                            .flatten();
+                        self.visit_call_arg_with_params(a, None, want.as_ref());
                     }
                 }
             }
@@ -135,6 +150,70 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// Walk a lambda with the parameter list it should be *read* with.
+    ///
+    /// Split out from the `Expr::Lambda` arm so a call site can hand in
+    /// parameters refined from the slot's expected type: an omitted
+    /// annotation parses as `any`, and the callee's signature is the only
+    /// place the real type comes from.
+    pub(crate) fn visit_lambda(
+        &mut self,
+        e: &Spanned<Expr>,
+        params: &[Param],
+        return_ty: &Option<Type>,
+        body: &saule_ast::LambdaBody,
+    ) {
+        for p in params {
+            self.record(p.span.clone(), render_param(p));
+            // `fn(s: Storage)` — the ascription's own head is a hover
+            // target, exactly as on a `fn` declaration.
+            self.record_type_idents_in(&p.ty, &p.span);
+            if let Some(def) = &p.default {
+                self.visit_expr(def);
+            }
+        }
+        if let Some(rt) = return_ty {
+            // The return type sits between the parameter list and the body.
+            let after = params.last().map(|p| p.span.end).unwrap_or(e.span.start);
+            let before = match body {
+                saule_ast::LambdaBody::Expr(b) => b.span.start,
+                saule_ast::LambdaBody::Block(b) => {
+                    b.first().map(|s| s.span.start).unwrap_or(e.span.end)
+                }
+            };
+            self.record_type_idents_in(rt, &(after..before.max(after)));
+        }
+        let params = params.to_vec();
+        let return_ty = return_ty.clone();
+        self.enter_lambda(&params, return_ty.as_ref(), |this| match body {
+            saule_ast::LambdaBody::Expr(b) => this.visit_expr(b),
+            saule_ast::LambdaBody::Block(b) => this.visit_block(b),
+        });
+    }
+
+    /// [`visit_expr`] carrying the type this position expects, so a
+    /// lambda's untyped parameters are read as the callee declared them.
+    pub(crate) fn visit_expr_expecting(&mut self, e: &Spanned<Expr>, expected: Option<&Type>) {
+        if let Expr::Lambda {
+            params,
+            return_ty,
+            body,
+        } = &e.value
+            && expected.is_some()
+        {
+            if !contains(&e.span, self.offset) {
+                return;
+            }
+            if let Some(md) = self.expr_md(&e.value) {
+                self.record(e.span.clone(), md);
+            }
+            let refined = crate::exprty::refine_lambda_params(params, expected);
+            self.visit_lambda(e, &refined, return_ty, body);
+            return;
+        }
+        self.visit_expr(e);
+    }
+
     /// Like [`visit_call_arg`] but also surfaces hover info on a named
     /// argument's *key* (`storage.add(item, dueDate: due)` -> hovering
     /// on `dueDate` shows the parameter declaration). `callee` carries
@@ -144,9 +223,10 @@ impl<'a> Cx<'a> {
         &mut self,
         a: &saule_ast::CallArg,
         callee: Option<&CalleeSig>,
+        expected: Option<&Type>,
     ) {
         match a {
-            saule_ast::CallArg::Positional(e) => self.visit_expr(e),
+            saule_ast::CallArg::Positional(e) => self.visit_expr_expecting(e, expected),
             saule_ast::CallArg::Named { name, value } => {
                 let key_search = value.span.start.saturating_sub(name.len() + 4)..value.span.start;
                 if let Some(span) = locate_word_in(self.source, &key_search, name)
@@ -154,7 +234,7 @@ impl<'a> Cx<'a> {
                 {
                     self.record(span, self.render_named_arg(name, callee));
                 }
-                self.visit_expr(value);
+                self.visit_expr_expecting(value, expected);
             }
         }
     }
@@ -372,13 +452,6 @@ impl<'a> Cx<'a> {
                 Some(
                     resolve_member(&class, name, false, &self.imports.docs)
                         .unwrap_or_else(|| render_unknown_member(&class, name)),
-                )
-            }
-            Expr::MethodCall { obj, method, .. } => {
-                let class = self.receiver_class(&obj.value)?;
-                Some(
-                    resolve_member(&class, method, true, &self.imports.docs)
-                        .unwrap_or_else(|| render_unknown_member(&class, method)),
                 )
             }
             // A literal is its own documentation. Answering `(expr):

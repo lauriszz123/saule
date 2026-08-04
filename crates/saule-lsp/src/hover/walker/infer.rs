@@ -49,7 +49,7 @@ impl<'a> Cx<'a> {
     /// account for the bulk of real-world `local`s in Saule code:
     ///
     /// * `Class(args)` — constructor call returns `Class`.
-    /// * `obj:method(args)` — uses the registered method's return type.
+    /// * `obj.method(args)` — uses the registered method's return type.
     /// * `obj.field` — uses the field's declared type.
     /// * Existing local — propagates its known type.
     /// * `self` inside a method — the enclosing class.
@@ -105,8 +105,8 @@ impl<'a> Cx<'a> {
                     }
                 }
                 // `recv.method(args)` — dot-call on an instance or
-                // module. Resolve the receiver's class and chase the
-                // method's return type the same way `MethodCall` does.
+                // module. Resolve the receiver's class, then chase the
+                // method's registered return type.
                 if let Expr::Member { obj, name } = &callee.value {
                     let class = self.receiver_class(&obj.value)?;
                     if let Some(sig) = lookup_method(&class, name) {
@@ -120,21 +120,6 @@ impl<'a> Cx<'a> {
                             .into_iter()
                             .next();
                     }
-                }
-                None
-            }
-            Expr::MethodCall { obj, method, args } => {
-                let class = self.receiver_class(&obj.value)?;
-                if let Some(sig) = lookup_method(&class, method) {
-                    let arg_types = self.positional_arg_types(args);
-                    return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
-                }
-                let qname = format!("{class}.{method}");
-                if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
-                    let arg_types = self.positional_arg_types(args);
-                    return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
-                        .into_iter()
-                        .next();
                 }
                 None
             }
@@ -325,17 +310,20 @@ impl<'a> Cx<'a> {
     /// functions imported from another file — without trying to be
     /// exhaustive.
     pub(crate) fn callee_sig(&self, callee: &Expr) -> Option<CalleeSig> {
-        let sig = |display: String, params: Vec<Param>, doc_key: &str| CalleeSig {
-            params,
-            doc: self.imports.docs.get(doc_key).cloned(),
-            display,
+        let sig = |display: String, params: Vec<Param>, type_params: Vec<String>, doc_key: &str| {
+            CalleeSig {
+                params,
+                type_params,
+                doc: self.imports.docs.get(doc_key).cloned(),
+                display,
+            }
         };
         match callee {
             Expr::Ident(name) => {
                 // Constructor: `init` method, falling through to a
                 // bare `Class()` call (which uses no init params).
                 if with_classes(|r| r.contains_key(name)) {
-                    let params = lookup_method(name, "init").map(|s| s.params)?;
+                    let init = lookup_method(name, "init")?;
                     // Constructor prose is conventionally written on the
                     // class, so try that before `Class.init`.
                     let key = if self.imports.docs.get(name).is_some() {
@@ -343,7 +331,7 @@ impl<'a> Cx<'a> {
                     } else {
                         format!("{name}.init")
                     };
-                    return Some(sig(name.clone(), params, &key));
+                    return Some(sig(name.clone(), init.params, init.type_params, &key));
                 }
                 if let Some(class) = &self.enclosing_class
                     && let Some(m) = lookup_method(class, name)
@@ -351,13 +339,19 @@ impl<'a> Cx<'a> {
                     return Some(sig(
                         format!("{class}.{name}"),
                         m.params,
+                        m.type_params,
                         &format!("{class}.{name}"),
                     ));
                 }
                 // Sibling top-level `fn` — the one free-call shape where
                 // we do have the declared parameter *names*.
                 if let Some(f) = self.module_fns.get(name) {
-                    return Some(sig(name.clone(), f.params.clone(), name));
+                    return Some(sig(
+                        name.clone(),
+                        f.params.clone(),
+                        f.sig.type_params.clone(),
+                        name,
+                    ));
                 }
                 // A free function imported from another `.sau` file,
                 // including through a re-export barrel — the
@@ -365,7 +359,7 @@ impl<'a> Cx<'a> {
                 // The seed registers these by local alias, so no import
                 // walk is needed here.
                 if let Some(f) = saule_semantic::lookup_function(name) {
-                    return Some(sig(name.clone(), f.params, name));
+                    return Some(sig(name.clone(), f.params, f.type_params, name));
                 }
                 // Native sigs (`Math.sqrt`, `print`) know positional
                 // types but no parameter names, so they can't drive
@@ -375,12 +369,12 @@ impl<'a> Cx<'a> {
             Expr::Member { obj, name } => {
                 if let Some((owner, m)) = self.super_target(name, &obj.value) {
                     let key = format!("{owner}.init");
-                    return Some(sig(format!("{owner}.init"), m.params, &key));
+                    return Some(sig(format!("{owner}.init"), m.params, m.type_params, &key));
                 }
                 let class = self.receiver_class(&obj.value)?;
                 let m = lookup_method(&class, name)?;
                 let key = format!("{class}.{name}");
-                Some(sig(key.clone(), m.params, &key))
+                Some(sig(key.clone(), m.params, m.type_params, &key))
             }
             _ => None,
         }

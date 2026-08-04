@@ -1,0 +1,43 @@
+-- Narrowing a type parameter goes through `as`, the same checked escape
+-- `any` uses. A rigid `T` is whatever the caller picked, so the cast is
+-- a runtime test: it yields `integer?`, and the miss has to be handled.
+--
+-- The unchecked form — `local n: integer = item` — is rejected; see
+-- `ui/type_param_assigned_to_concrete.sau`.
+fn onlyInts<T>(items: table<T>) -> table<integer>
+	local result: table<integer> = {}
+
+	for item: T in items do
+		local n: integer? = item as integer
+
+		if n != nil then
+			result[#result + 1] = n!
+		end
+	end
+
+	return result
+end
+
+-- Widening the other way needs no cast: `any` accepts anything, type
+-- parameters included.
+fn describe<T>(x: T) -> string
+	local slot: any = x
+
+	return type(slot)
+end
+
+class Main
+	static fn main()
+		local mixed: table<any> = {1, "two", 3, true}
+
+		for n: integer in onlyInts(mixed) do
+			print(n, " ")
+		end
+		println()
+
+		println(describe("hello"))
+
+		-- expected: 1 3
+		--           string
+	end
+end

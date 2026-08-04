@@ -51,12 +51,6 @@ pub enum Expr {
         callee: Box<Spanned<Expr>>,
         args: Vec<CallArg>,
     },
-    /// `obj:method(a, b)`
-    MethodCall {
-        obj: Box<Spanned<Expr>>,
-        method: String,
-        args: Vec<CallArg>,
-    },
     /// `x!`
     ForceUnwrap(Box<Spanned<Expr>>),
 

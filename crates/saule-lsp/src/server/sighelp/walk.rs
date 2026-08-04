@@ -1,8 +1,8 @@
 //! The AST walk that locates the smallest enclosing call.
 //!
 //! [`Cx`] descends the tree tracking locals and the enclosing class, and
-//! stops at the innermost `Expr::Call` / `Expr::MethodCall` / pipeline
-//! stage whose argument span contains the cursor.
+//! stops at the innermost `Expr::Call` / pipeline stage whose argument
+//! span contains the cursor.
 
 use saule_ast::{
     CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Method, Module, Param, Spanned, Stmt,
@@ -363,34 +363,6 @@ impl Cx<'_> {
                     });
                 }
             }
-            Expr::MethodCall { obj, method, args } => {
-                self.visit_expr(obj);
-                for a in args {
-                    visit_arg(self, a);
-                }
-                if let Some(class) = self.receiver_class(&obj.value) {
-                    let args_span = method_args_span(&obj.span, method, e.span.end);
-                    // `obj:method(...)` — the receiver's own path, then
-                    // the method, so a chain reads the way it was typed.
-                    let display = self
-                        .callee_display(&obj.value)
-                        .map(|recv| format!("{recv}.{method}"));
-                    let arg_infos = build_arg_infos(args);
-                    self.record(CallHit {
-                        callee: CalleeRef::Method {
-                            class,
-                            name: method.clone(),
-                        },
-                        enclosing_class: self.enclosing_class.clone(),
-                        user_fn: None,
-                        local_fn: None,
-                        display,
-                        multiline: self.call_spans_lines(&args_span, &arg_infos),
-                        args: arg_infos,
-                        args_span,
-                    });
-                }
-            }
             Expr::Pipe { source, stages } => {
                 self.visit_expr(source);
                 for st in stages {
@@ -543,10 +515,6 @@ impl Cx<'_> {
                 }
                 _ => None,
             },
-            Expr::MethodCall { obj, method, .. } => {
-                let cls = self.receiver_class(&obj.value)?;
-                class_of(&lookup_method(&cls, method)?.return_ty?)
-            }
             // `maybeWidget!.moveTo(` — force-unwrap is transparent here.
             Expr::ForceUnwrap(inner) => self.receiver_class(&inner.value),
             _ => None,
@@ -591,11 +559,6 @@ impl Cx<'_> {
                     .unwrap_or_else(any),
                 _ => any(),
             },
-            Expr::MethodCall { obj, method, .. } => self
-                .receiver_class(&obj.value)
-                .and_then(|c| lookup_method(&c, method))
-                .and_then(|sig| sig.return_ty)
-                .unwrap_or_else(any),
             Expr::Member { obj, name } => self
                 .receiver_class(&obj.value)
                 .and_then(|c| lookup_field_type(&c, name))
@@ -651,24 +614,6 @@ pub(crate) fn args_span(
     call_end: usize,
 ) -> std::ops::Range<usize> {
     callee_or_obj.end..call_end
-}
-
-/// `(...)` region of `obj.method(...)`. The callee here is the
-/// *receiver*, so its span stops before `.method` — stepping over the
-/// dot and the name lands on the `(` and gives the same boundaries a
-/// free call gets. Falls back to the receiver's end if the arithmetic
-/// overshoots (whitespace around the `.`, and so on).
-pub(crate) fn method_args_span(
-    obj: &std::ops::Range<usize>,
-    method: &str,
-    call_end: usize,
-) -> std::ops::Range<usize> {
-    let lparen = obj.end + 1 + method.len();
-    if lparen < call_end {
-        lparen..call_end
-    } else {
-        obj.end..call_end
-    }
 }
 
 /// Is the cursor inside this call's argument list?

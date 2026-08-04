@@ -3,10 +3,11 @@
 
 use crate::refs::Symbol;
 use crate::refs::util::{
-    LocalBind, contains, inferred_type_of, locate_word_in, member_name_span, strip_nullable,
+    LocalBind, contains, field_owner, inferred_type_of, is_workspace_function_name, locate_word_in,
+    member_name_span, method_owner, strip_nullable,
 };
 use saule_ast::{CallArg, Expr, LambdaBody, MatchBody, Pattern, Spanned, TableEntry, Type};
-use saule_semantic::{lookup_method, super_init_target, with_classes, with_enums, with_interfaces};
+use saule_semantic::{super_init_target, with_classes, with_enums, with_interfaces};
 
 use super::*;
 
@@ -32,10 +33,7 @@ impl<'a> ResolveCx<'a> {
                     self.record(e.span.clone(), Symbol::Interface(name.clone()));
                 } else if with_enums(|r| r.contains_key(name)) {
                     self.record(e.span.clone(), Symbol::Enum(name.clone()));
-                } else if !saule_typeck::sigs::is_module(name)
-                    && !saule_typeck::sigs::is_value_type(name)
-                    && saule_typeck::sigs::lookup(name).is_none()
-                {
+                } else if is_workspace_function_name(name) {
                     // Unrecognised — assume free function declared in
                     // this workspace.
                     self.record(e.span.clone(), Symbol::Function(name.clone()));
@@ -85,12 +83,15 @@ impl<'a> ResolveCx<'a> {
                             return;
                         }
                         // Static method access through a class name —
-                        // treat as a method reference.
-                        if lookup_method(&class, name).is_some() {
+                        // treat as a method reference. An inherited
+                        // member is keyed on the class that declares
+                        // it, not on the receiver's own class, so the
+                        // definition is findable.
+                        if let Some(owner) = method_owner(&class, name) {
                             self.record(
                                 span,
                                 Symbol::Method {
-                                    class,
+                                    class: owner,
                                     name: name.clone(),
                                 },
                             );
@@ -99,7 +100,7 @@ impl<'a> ResolveCx<'a> {
                         self.record(
                             span,
                             Symbol::Field {
-                                class,
+                                class: field_owner(&class, name).unwrap_or(class),
                                 name: name.clone(),
                             },
                         );
@@ -126,26 +127,6 @@ impl<'a> ResolveCx<'a> {
                     self.visit_call_arg(a);
                 }
             }
-            Expr::MethodCall { obj, method, args } => {
-                if let Some(span) = member_name_span(self.source, obj.span.end, e.span.end, method)
-                    && contains(&span, self.offset)
-                {
-                    if let Some(class) = self.receiver_class(&obj.value) {
-                        self.record(
-                            span,
-                            Symbol::Method {
-                                class,
-                                name: method.clone(),
-                            },
-                        );
-                    }
-                    return;
-                }
-                self.visit_expr(obj);
-                for a in args {
-                    self.visit_call_arg(a);
-                }
-            }
             Expr::Unary { rhs, .. } => self.visit_expr(rhs),
             Expr::Binary { lhs, rhs, .. } => {
                 self.visit_expr(lhs);
@@ -163,13 +144,26 @@ impl<'a> ResolveCx<'a> {
                     }
                 }
             }
-            Expr::Lambda { params, body, .. } => {
+            Expr::Lambda {
+                params,
+                return_ty,
+                body,
+            } => {
                 let params_clone = params.clone();
-                self.enter_function(&params_clone, |this| match body {
-                    LambdaBody::Expr(b) => this.visit_expr(b),
-                    LambdaBody::Block(b) => {
-                        for s in b.iter() {
-                            this.visit_stmt(s);
+                self.enter_lambda(&params_clone, |this| {
+                    for p in params {
+                        this.visit_param(p);
+                    }
+                    if let Some(rt) = return_ty {
+                        let after = params.last().map(|p| p.span.end).unwrap_or(e.span.start);
+                        this.record_type_names_in(rt, &(after..e.span.end));
+                    }
+                    match body {
+                        LambdaBody::Expr(b) => this.visit_expr(b),
+                        LambdaBody::Block(b) => {
+                            for s in b.iter() {
+                                this.visit_stmt(s);
+                            }
                         }
                     }
                 });
@@ -199,6 +193,17 @@ impl<'a> ResolveCx<'a> {
             Expr::Pipe { source, stages } => {
                 self.visit_expr(source);
                 for st in stages {
+                    // A stage is an ordinary free-function call with the
+                    // upstream value threaded in, so `:shout()` navigates
+                    // to `fn shout`.
+                    if let Some(span) = locate_word_in(self.source, &st.span, &st.name)
+                        && contains(&span, self.offset)
+                    {
+                        if is_workspace_function_name(&st.name) {
+                            self.record(span, Symbol::Function(st.name.clone()));
+                        }
+                        return;
+                    }
                     for a in &st.args {
                         self.visit_call_arg(a);
                     }

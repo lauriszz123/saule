@@ -373,14 +373,6 @@ impl Walk {
                     self.expr(obj);
                 }
             }
-            Expr::MethodCall { obj, method, args } => {
-                if method == SENTINEL {
-                    self.record(Ctx::Member((**obj).clone()));
-                } else {
-                    self.expr(obj);
-                    self.args(args);
-                }
-            }
             Expr::Unary { rhs, .. } => self.expr(rhs),
             Expr::ForceUnwrap(inner) => self.expr(inner),
             Expr::Binary { lhs, rhs, .. } => {

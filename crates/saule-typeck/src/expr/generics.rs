@@ -3,7 +3,7 @@
 
 use saule_ast::Type;
 
-use crate::state::{pop_generics, push_generics};
+use crate::state::{pop_sig_params, push_sig_params};
 
 use super::*;
 
@@ -15,21 +15,85 @@ pub(crate) fn is_unbound_type_param(ty: &Type, params: &[String]) -> bool {
     matches!(ty, Type::Named(n) if params.iter().any(|p| p == n))
 }
 
-/// [`types_compatible`] with the *callee's* type parameters treated as
-/// `any`-equivalent for the duration of the check.
+/// Suffix marking a type-parameter name as freshened. `$` is not an
+/// identifier byte in the lexer, so no name written in source — and no
+/// type name a native registers — can ever collide with one of these.
+const FRESH_MARKER: &str = "$";
+
+/// Strip the freshening suffix so diagnostics quote the parameter the
+/// way the signature spells it. Applied at the single rendering point
+/// rather than at each error site, so a fresh name can never reach the
+/// user however it got there.
+pub(crate) fn unfreshen_name(name: &str) -> &str {
+    name.strip_suffix(FRESH_MARKER).unwrap_or(name)
+}
+
+/// A callee's type parameters, renamed apart from everything in the
+/// caller's scope.
 ///
-/// `types_compatible` recognises type parameters through [`is_type_param`],
-/// which reads the generics currently in scope — and that set is populated
-/// only for the user *body* being checked, never for the signature being
-/// called into. So a parameter the arguments hadn't pinned down yet reached
-/// the comparison as a bare `Named("V")` and was treated as an unknown
-/// concrete type, which matches nothing: `Table.insert(t, x)` with
-/// `t: table<any>` and `x: any` was rejected as "expects `V`, got `any`".
+/// Two signatures that both spell a parameter `T` are still two
+/// different types, and one of them may be *rigid* — a `T` belonging to
+/// the function whose body we are checking. Comparing by name alone
+/// cannot tell them apart, so the callee's `T` made the caller's `T`
+/// permissive for the duration of the check, and
+/// `g(myT)` against `fn g<T>(n: integer)` slipped through.
+///
+/// Renaming happens once, up front: every later `unify` / `substitute` /
+/// compatibility step then works in fresh space, where a leftover
+/// parameter name can only be the callee's.
+pub(crate) struct Freshened {
+    /// The renamed parameters, to hand to [`unify`] and friends.
+    pub(crate) params: Vec<String>,
+    originals: Vec<String>,
+    renames: std::collections::HashMap<String, Type>,
+}
+
+impl Freshened {
+    pub(crate) fn new(type_params: &[String]) -> Self {
+        let params: Vec<String> = type_params
+            .iter()
+            .map(|p| format!("{p}{FRESH_MARKER}"))
+            .collect();
+        let renames = type_params
+            .iter()
+            .zip(params.iter())
+            .map(|(orig, fresh)| (orig.clone(), Type::Named(fresh.clone())))
+            .collect();
+        Self {
+            params,
+            originals: type_params.to_vec(),
+            renames,
+        }
+    }
+
+    /// Rewrite a type written in the signature's own parameter names into
+    /// fresh space. A non-generic signature renames nothing.
+    pub(crate) fn rename(&self, ty: &Type) -> Type {
+        if self.originals.is_empty() {
+            return ty.clone();
+        }
+        substitute(ty, &self.renames, &self.originals)
+    }
+}
+
+/// [`types_compatible`] with the *callee's* type parameters treated as
+/// inference variables for the duration of the check.
+///
+/// A parameter the arguments haven't pinned down yet reaches the
+/// comparison as a bare `Named("V")`. Read as an unknown concrete type it
+/// matches nothing, and `Table.insert(t, x)` with `t: table<any>` and
+/// `x: any` was rejected as "expects `V`, got `any`".
 ///
 /// Scoping the names in makes the *parameter position* permissive without
 /// weakening the surrounding structure — `table<V>` still rejects an
 /// `integer` argument. The push is kept tight around the comparison so it
 /// can't leak into `infer` and shadow a user type that shares the name.
+///
+/// These go into their own set rather than the body's generics: the two
+/// are opposites. A rigid `T` from the enclosing signature is opaque and
+/// matches only itself, while a `V` from the callee binds to whatever it
+/// is handed. Sharing one set is what made every rigid parameter as
+/// permissive as `any`, so `local n: integer = someT` type-checked.
 pub(crate) fn compatible_under_sig_params(
     expected: &Type,
     found: &Type,
@@ -38,9 +102,9 @@ pub(crate) fn compatible_under_sig_params(
     if params.is_empty() {
         return types_compatible(expected, found);
     }
-    let added = push_generics(params);
+    let added = push_sig_params(params);
     let ok = types_compatible(expected, found);
-    pop_generics(added);
+    pop_sig_params(added);
     ok
 }
 
@@ -90,6 +154,40 @@ pub(crate) fn mentions_unbound_param(ty: &Type, params: &[String]) -> bool {
                 || mentions_unbound_param(ret, params)
         }
     }
+}
+
+/// The type each parameter slot actually expects at a call site, with the
+/// signature's own generics bound from the argument types.
+///
+/// `filter<T>(items: table<T>, predicate: fn(T) -> boolean)` handed a
+/// `table<integer>` expects `fn(integer) -> boolean` in slot 1 — and that
+/// is where an untyped lambda's parameters get their types from.
+///
+/// A slot still mentioning a parameter nothing pinned down comes back
+/// `None`: not a type anyone wrote, and refining a lambda against it
+/// would put a bare parameter name on the reader's screen.
+pub(crate) fn instantiate_param_types(
+    params: &[Type],
+    type_params: &[String],
+    arg_types: &[Option<Type>],
+) -> Vec<Option<Type>> {
+    let fresh = Freshened::new(type_params);
+    let renamed: Vec<Type> = params.iter().map(|t| fresh.rename(t)).collect();
+    let mut subst = std::collections::HashMap::new();
+    // Every argument binds before anything is read back, so a lambda in
+    // slot 1 sees what slot 0 pinned down.
+    for (expected, found) in renamed.iter().zip(arg_types.iter()) {
+        if let Some(found_ty) = found {
+            unify(expected, found_ty, &fresh.params, &mut subst);
+        }
+    }
+    renamed
+        .iter()
+        .map(|t| {
+            let resolved = substitute(t, &subst, &fresh.params);
+            (!mentions_unbound_param(&resolved, &fresh.params)).then_some(resolved)
+        })
+        .collect()
 }
 
 /// One-way unification: bind type-param names in `expected` to corresponding

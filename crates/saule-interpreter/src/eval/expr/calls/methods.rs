@@ -248,18 +248,6 @@ pub(crate) fn super_owner_class(env: &Rc<RefCell<Environment>>) -> Option<Rc<Cla
     }
 }
 
-/// Dispatch `receiver:name(args)` (the colon-call form). Delegates to the
-/// shared [`dispatch_member_call`] so the dot and colon forms behave the
-/// same way at runtime.
-pub(crate) fn invoke_method(
-    receiver: &Value,
-    name: &str,
-    args: Vec<EvaluatedArg>,
-    span: std::ops::Range<usize>,
-) -> Result<Value, RuntimeError> {
-    dispatch_member_call(receiver, name, args, span)
-}
-
 pub(crate) fn invoke_method_multi(
     receiver: &Value,
     name: &str,

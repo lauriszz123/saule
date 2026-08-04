@@ -75,14 +75,6 @@ impl<'a> Printer<'a> {
                 self.call_args(args);
                 self.write(")");
             }
-            Expr::MethodCall { obj, method, args } => {
-                self.expr(obj, MAX_PREC);
-                self.write(":");
-                self.write(method);
-                self.write("(");
-                self.call_args(args);
-                self.write(")");
-            }
             Expr::ForceUnwrap(inner) => {
                 self.expr(inner, MAX_PREC);
                 self.write("!");

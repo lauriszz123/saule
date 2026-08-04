@@ -9,9 +9,9 @@
 //!    [`repair_parse`] appends the missing closers and parses that.
 //!    Appending never shifts the offsets before the cursor, so the
 //!    same walk works on the repaired tree.
-//! 2. Walk the AST to find the smallest `Expr::Call` /
-//!    `Expr::MethodCall` / pipeline stage whose argument span (the
-//!    `(...)` parens region) contains the cursor.
+//! 2. Walk the AST to find the smallest `Expr::Call` / pipeline stage
+//!    whose argument span (the `(...)` parens region) contains the
+//!    cursor.
 //! 3. Resolve the callee to a parameter list: free function, class
 //!    constructor, method (on a local, field, parameter, or call
 //!    result), sibling / static method, `self.super`, enum tuple

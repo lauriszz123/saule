@@ -11,7 +11,11 @@ impl<'a> CollectCx<'a> {
     pub(crate) fn visit_decl(&mut self, d: &Spanned<Decl>) {
         match &d.value {
             Decl::Function {
-                name, params, body, ..
+                name,
+                params,
+                return_ty,
+                body,
+                ..
             } => {
                 if let Symbol::Function(target) = self.symbol
                     && target == name
@@ -19,8 +23,14 @@ impl<'a> CollectCx<'a> {
                 {
                     self.push(span, true);
                 }
+                if let Some(rt) = return_ty {
+                    let after = params.last().map(|p| p.span.end).unwrap_or(d.span.start);
+                    let before = body.first().map(|s| s.span.start).unwrap_or(d.span.end);
+                    self.collect_type_name_refs_in(rt, &(after..before));
+                }
                 self.enter_function(params, |this| {
                     for p in params {
+                        this.collect_type_name_refs_in(&p.ty, &p.span);
                         if let Some(def) = &p.default {
                             this.visit_expr(def);
                         }
@@ -160,7 +170,9 @@ impl<'a> CollectCx<'a> {
     pub(crate) fn visit_member(&mut self, m: &Spanned<ClassMember>) {
         let class = self.enclosing_class.clone().unwrap_or_default();
         match &m.value {
-            ClassMember::Field { name, default, .. } => {
+            ClassMember::Field {
+                name, ty, default, ..
+            } => {
                 if let Symbol::Field {
                     class: tc,
                     name: tn,
@@ -171,6 +183,7 @@ impl<'a> CollectCx<'a> {
                 {
                     self.push(span, true);
                 }
+                self.collect_type_name_refs_in(ty, &m.span);
                 if let Some(def) = default {
                     self.visit_expr(def);
                 }
@@ -190,8 +203,22 @@ impl<'a> CollectCx<'a> {
         {
             self.push(span, true);
         }
+        if let Some(rt) = &meth.return_ty {
+            let after = meth
+                .params
+                .last()
+                .map(|p| p.span.end)
+                .unwrap_or(meth.span.start);
+            let before = meth
+                .body
+                .first()
+                .map(|s| s.span.start)
+                .unwrap_or(meth.span.end);
+            self.collect_type_name_refs_in(rt, &(after..before));
+        }
         self.enter_function(&meth.params, |this| {
             for p in &meth.params {
+                this.collect_type_name_refs_in(&p.ty, &p.span);
                 if let Some(def) = &p.default {
                     this.visit_expr(def);
                 }

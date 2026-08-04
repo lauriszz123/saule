@@ -23,7 +23,7 @@ pub struct ClassObject {
     /// Instance-field templates evaluated on construction.
     pub field_defs: Vec<FieldDef>,
     /// Instance methods, keyed by name. First parameter is the user-written
-    /// `self`, so calling `obj:method(a)` is the same as `method(obj, a)`.
+    /// `self`, so calling `obj.method(a)` is the same as `method(obj, a)`.
     pub methods: HashMap<String, Rc<FunctionObject>>,
     /// Static fields. Mutable through `ClassName.field = …`.
     pub static_fields: RefCell<HashMap<String, Value>>,

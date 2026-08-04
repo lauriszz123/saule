@@ -6,7 +6,9 @@
 use saule_ast::{BinOp, Expr, Spanned, TableEntry, Type};
 
 use crate::TypeCheckError;
-use crate::state::{Scope, class_implements, is_interface, is_subtype_named, is_type_param};
+use crate::state::{
+    Scope, class_implements, is_interface, is_sig_param, is_subtype_named, is_type_param,
+};
 use crate::to_source_span;
 
 use super::*;
@@ -319,20 +321,31 @@ pub(crate) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
             if a == b || a == "any" || b == "nil" {
                 return true;
             }
-            // Generic type parameters in scope are treated as `any`
-            // against *concrete* types — the body can't know what they
-            // bind to, and rejecting there would make every generic
-            // function unwritable.
+            // An inference variable from the signature being called into
+            // binds to whatever this position supplies — see
+            // `compatible_under_sig_params`. Checked before the rigid
+            // rule below, since the two sets can share a name.
+            if is_sig_param(a) || is_sig_param(b) {
+                return true;
+            }
+            // A type parameter of the body being checked is **rigid**:
+            // universally quantified, so it matches only itself.
             //
-            // Two type parameters are different: `T` and `U` are rigid
-            // and independent, so no value of one is known to be the
-            // other. `fn map<T, U>(items: table<T>, f: fn(U) -> U)`
-            // applying `f` to a `T` is precisely the mistake this
-            // catches; treating them as interchangeable made the whole
-            // point of declaring two parameters unenforced.
+            // `T` and `U` are independent — `fn map<T, U>(items:
+            // table<T>, f: fn(U) -> U)` applying `f` to a `T` is the
+            // mistake that catches.
+            //
+            // A concrete type is no better. `T` stands for whatever the
+            // caller picked, so `local n: integer = someT` is a downcast
+            // and `local t: T = 0` an upcast, and neither is knowable
+            // here. Both used to pass, which made every generic body a
+            // hole in the type system: the value flowed on unchecked and
+            // failed much later, at the first operation that cared.
+            // `any` is *not* affected — it is handled above, so widening
+            // a `T` into an `any` slot stays free.
             match (is_type_param(a), is_type_param(b)) {
                 (true, true) => return a == b,
-                (true, false) | (false, true) => return true,
+                (true, false) | (false, true) => return false,
                 (false, false) => {}
             }
             // `number` is the sentinel used in native sigs to mean

@@ -1,0 +1,57 @@
+-- An untyped lambda parameter takes its type from the slot it fills.
+-- Nothing here is annotated, and every `x` / `s` below is checked as the
+-- callee declared it — a generic stage binds its parameter from the value
+-- flowing into it first.
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+	local result: table<T> = {}
+
+	for item: T in items do
+		if predicate(item) then
+			result[#result + 1] = item
+		end
+	end
+
+	return result
+end
+
+fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
+	local out: table<U> = {}
+
+	for item: T in items do
+		out[#out + 1] = f(item)
+	end
+
+	return out
+end
+
+fn double(n: integer) -> integer
+	return n * 2
+end
+
+fn width(s: string) -> integer
+	return #s
+end
+
+class Main
+	static fn main()
+		-- Piped: `T` binds to `integer`, so `x` is an `integer` and can
+		-- be handed to a function that demands one.
+		local evens: table<integer> = when({1, 2, 3, 4}):filter(x => double(x) % 4 == 0)
+
+		for n: integer in evens do
+			print(n, " ")
+		end
+		println()
+
+		-- Plain call: `s` is the element type of the table argument.
+		local widths: table<integer> = map({"a", "bb", "ccc"}, s => width(s))
+
+		for w: integer in widths do
+			print(w, " ")
+		end
+		println()
+
+		-- expected: 2 4
+		--           1 2 3
+	end
+end

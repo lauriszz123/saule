@@ -158,11 +158,6 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             let index_value = eval(index, env)?;
             members::read_index(&receiver, index_value, span)
         }
-        Expr::MethodCall { obj, method, args } => {
-            let receiver = eval(obj, env)?;
-            let evaled = calls::eval_call_args_pub(args, env)?;
-            calls::invoke_method(&receiver, method, evaled, span)
-        }
         Expr::ForceUnwrap(inner) => {
             let v = eval(inner, env)?;
             if matches!(v, Value::Nil) {

@@ -136,6 +136,10 @@ impl<'a> Cx<'a> {
                         );
                         self.record_type_idents_in(&p.ty, &p.span);
                     }
+                    if let Some(rt) = &m.return_ty {
+                        let after = m.params.last().map(|p| p.span.end).unwrap_or(m.span.start);
+                        self.record_type_idents_in(rt, &(after..m.span.end));
+                    }
                 }
             }
             Decl::Enum {
@@ -166,6 +170,7 @@ impl<'a> Cx<'a> {
                                 p.span.clone(),
                                 with_param_doc(render_param(p), vdoc.as_ref(), &p.name),
                             );
+                            self.record_type_idents_in(&p.ty, &p.span);
                         }
                     }
                 }

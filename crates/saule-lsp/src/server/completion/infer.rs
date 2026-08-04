@@ -92,14 +92,6 @@ pub(crate) fn infer_d(expr: &Expr, found: &Found, depth: usize) -> Option<Recv> 
             },
             _ => None,
         },
-        Expr::MethodCall { obj, method, .. } => {
-            let owner = owner_class_d(&obj.value, found, depth + 1)?;
-            lookup_method(&owner, method)?
-                .return_ty
-                .as_ref()
-                .and_then(class_of)
-                .map(Recv::Instance)
-        }
         // `maybe!.` — force-unwrap keeps the underlying type.
         Expr::ForceUnwrap(inner) => infer_d(&inner.value, found, depth + 1),
         _ => None,

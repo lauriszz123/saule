@@ -79,6 +79,55 @@ fn hover_at_offset(src: &str, needle: &str, offset: usize) -> Option<String> {
     hover_at(&module, pos).map(|(md, _)| md)
 }
 
+/// Byte range of the `n`-th (0-based) word-bounded occurrence of the
+/// identifier `name`. Counting whole identifiers rather than substrings
+/// is what lets a test say "the `x` in the body", not "the fourth
+/// character sequence that happens to read `x`".
+fn ident_span(src: &str, name: &str, n: usize) -> std::ops::Range<usize> {
+    let mut spans = Vec::new();
+    let bytes = src.as_bytes();
+    let pat = name.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = 0;
+    while i + pat.len() <= bytes.len() {
+        if &bytes[i..i + pat.len()] == pat
+            && (i == 0 || !is_ident(bytes[i - 1]))
+            && (i + pat.len() == bytes.len() || !is_ident(bytes[i + pat.len()]))
+        {
+            spans.push(i..i + pat.len());
+            i += pat.len();
+            continue;
+        }
+        i += 1;
+    }
+    spans
+        .get(n)
+        .unwrap_or_else(|| {
+            panic!(
+                "source has {} occurrence(s) of {name:?}, wanted #{n}",
+                spans.len()
+            )
+        })
+        .clone()
+}
+
+/// Hover with the cursor in the middle of the `n`-th occurrence of the
+/// identifier `name`, through the full production path (source text plus
+/// a real [`ImportContext`]) — what an editor actually asks for.
+fn hover_ident(src: &str, name: &str, n: usize) -> Option<String> {
+    let span = ident_span(src, name, n);
+    hover_offset(src, span.start + (span.end - span.start) / 2)
+}
+
+fn hover_offset(src: &str, offset: usize) -> Option<String> {
+    init_stdlib();
+    let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
+    let module = saule_parser::parse(tokens).expect("parse");
+    let _ = saule_semantic::analyze(&module);
+    let ctx = build_import_context(&module, src, None);
+    hover_at_with_source(&module, src, offset, &ctx).map(|(md, _)| md)
+}
+
 #[test]
 fn hovers_top_level_function() {
     let src = "fn add(a: integer, b: integer) -> integer\n  return a + b\nend\n";
@@ -1678,5 +1727,779 @@ end
     assert_eq!(
         hover_src_at(src, "v in bag", 0).as_deref(),
         Some("```saule\n(loop var) v: any\n```")
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Lambdas
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A lambda parameter hovers as a parameter, at its binding site and at
+/// every use inside the body.
+#[test]
+fn a_lambda_parameter_hovers_at_its_binding_and_its_uses() {
+    let src = "\
+fn main() -> nothing
+  local double: fn(integer) -> integer = fn(x: integer)
+    return x * 2
+  end
+  print(double(2))
+end
+";
+    assert_eq!(
+        hover_ident(src, "x", 0).as_deref(),
+        Some("```saule\n(parameter) x: integer\n```")
+    );
+    assert_eq!(
+        hover_ident(src, "x", 1).as_deref(),
+        Some("```saule\n(parameter) x: integer\n```")
+    );
+}
+
+/// A class named in a lambda parameter's type ascription resolves to the
+/// class, the same way it does on a `fn` declaration's parameter.
+#[test]
+fn a_lambda_param_type_ascription_resolves() {
+    let src = "\
+class Storage
+  fn put(v: integer) -> nothing
+  end
+end
+
+fn main() -> nothing
+  local save: fn(Storage) -> nothing = fn(s: Storage)
+    s.put(1)
+  end
+end
+";
+    let md = hover_ident(src, "Storage", 2).expect("hover on the lambda param's type");
+    assert!(md.contains("class Storage"), "got: {md}");
+}
+
+/// The lambda's own return-type annotation resolves too.
+#[test]
+fn a_lambda_return_type_ascription_resolves() {
+    let src = "\
+class Storage
+  fn init()
+  end
+end
+
+fn main() -> nothing
+  local make: fn() -> Storage = fn() -> Storage
+    return Storage()
+  end
+end
+";
+    let md = hover_ident(src, "Storage", 2).expect("hover on the lambda's return type");
+    assert!(md.contains("class Storage"), "got: {md}");
+}
+
+/// A lambda parameter shadows an enclosing local of the same name only
+/// inside the lambda.
+#[test]
+fn a_lambda_param_shadows_an_enclosing_local() {
+    let src = "\
+fn main() -> nothing
+  local value: string = \"outer\"
+  local f: fn(integer) -> integer = fn(value: integer)
+    return value + 1
+  end
+  print(value)
+end
+";
+    assert_eq!(
+        hover_ident(src, "value", 2).as_deref(),
+        Some("```saule\n(parameter) value: integer\n```"),
+        "inside the lambda the parameter wins"
+    );
+    assert_eq!(
+        hover_ident(src, "value", 3).as_deref(),
+        Some("```saule\n(local) value: string\n```"),
+        "past the lambda the enclosing local is visible again"
+    );
+}
+
+/// A lambda passed inline as a call argument still gets a scope of its
+/// own — the parameter hovers as a parameter, not as whatever the name
+/// means outside.
+#[test]
+fn a_lambda_argument_binds_its_own_parameters() {
+    let src = "\
+fn apply(items: table<integer>, f: fn(integer) -> integer) -> nothing
+end
+
+fn main() -> nothing
+  apply({1, 2}, fn(n: integer)
+    return n * 2
+  end)
+end
+";
+    assert_eq!(
+        hover_ident(src, "n", 1).as_deref(),
+        Some("```saule\n(parameter) n: integer\n```")
+    );
+}
+
+/// A local declared inside a block-bodied lambda does not leak out of it.
+#[test]
+fn a_lambda_body_local_does_not_leak_out() {
+    let src = "\
+fn main() -> nothing
+  local run: fn() -> integer = fn()
+    local scratch: integer = 1
+    return scratch
+  end
+  print(scratch)
+end
+";
+    assert_eq!(
+        hover_ident(src, "scratch", 1).as_deref(),
+        Some("```saule\n(local) scratch: integer\n```"),
+        "inside the lambda"
+    );
+    let after = hover_ident(src, "scratch", 2);
+    assert!(
+        after.as_deref().is_none_or(|m| !m.contains("(local)")),
+        "leaked the lambda's local past its body: {after:?}"
+    );
+}
+
+/// A `return` inside a lambda belongs to the lambda, not to the
+/// function the lambda was written in.
+#[test]
+fn a_return_inside_a_lambda_reports_the_lambdas_own_type() {
+    let src = "\
+fn main() -> string
+  local count: fn() -> integer = fn() -> integer
+    return 1
+  end
+  return \"done\"
+end
+";
+    assert_eq!(
+        hover_offset(src, src.find("return 1").expect("inner return") + 1).as_deref(),
+        Some("```saule\n(return) -> integer\n```"),
+        "the lambda's own annotation, not the enclosing function's"
+    );
+    assert_eq!(
+        hover_offset(src, src.rfind("return \"done\"").expect("outer return") + 1).as_deref(),
+        Some("```saule\n(return) -> string\n```"),
+        "the enclosing function's own return is unaffected"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Pipes
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A pipe stage is a call to a free function, so its name hovers as that
+/// function — not as the type of the pipeline it sits in.
+#[test]
+fn a_pipe_stage_name_hovers_as_the_function_it_calls() {
+    let src = "\
+fn shout(msg: string) -> string
+  return msg .. \"!\"
+end
+
+fn main() -> nothing
+  print(when(\"hi\"):shout())
+end
+";
+    let md = hover_ident(src, "shout", 1).expect("hover on the stage name");
+    assert!(md.contains("fn shout"), "got: {md}");
+    assert!(md.contains("msg: string"), "got: {md}");
+}
+
+/// An argument passed to a stage is an ordinary expression.
+#[test]
+fn a_pipe_stage_argument_hovers_as_itself() {
+    let src = "\
+fn repeatStr(msg: string, times: integer) -> string
+  return msg
+end
+
+fn main() -> nothing
+  local count: integer = 3
+  print(when(\"hi\"):repeatStr(count))
+end
+";
+    assert_eq!(
+        hover_ident(src, "count", 1).as_deref(),
+        Some("```saule\n(local) count: integer\n```")
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// try / catch
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// The catch variable hovers at its binding site, the way a loop
+/// variable and a parameter do — not only where it is used.
+#[test]
+fn a_catch_variable_hovers_at_its_binding_site() {
+    let src = "\
+fn main() -> nothing
+  try
+    throw \"boom\"
+  catch err: string
+    print(err)
+  end
+end
+";
+    assert_eq!(
+        hover_ident(src, "err", 0).as_deref(),
+        Some("```saule\n(error) err: string\n```"),
+        "at the `catch` clause"
+    );
+    assert_eq!(
+        hover_ident(src, "err", 1).as_deref(),
+        Some("```saule\n(error) err: string\n```"),
+        "in the catch body"
+    );
+}
+
+/// A class named as the caught type resolves to the class.
+#[test]
+fn a_catch_type_ascription_resolves() {
+    let src = "\
+class ParseError
+  fn init()
+  end
+end
+
+fn main() -> nothing
+  try
+    throw ParseError()
+  catch e: ParseError
+    print(\"failed\")
+  end
+end
+";
+    let md = hover_ident(src, "ParseError", 2).expect("hover on the caught type");
+    assert!(md.contains("class ParseError"), "got: {md}");
+}
+
+/// The catch variable is scoped to the catch block.
+#[test]
+fn a_catch_variable_does_not_leak_past_the_block() {
+    let src = "\
+fn main() -> nothing
+  try
+    throw \"boom\"
+  catch err: string
+    print(err)
+  end
+  print(err)
+end
+";
+    let after = hover_ident(src, "err", 2);
+    assert!(
+        after.as_deref().is_none_or(|m| !m.contains("(error)")),
+        "leaked the catch binding past its block: {after:?}"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Type ascriptions the walker has to find by scanning
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Multi-binding locals carry ascriptions too.
+#[test]
+fn a_multi_binding_local_hovers_its_names_and_types() {
+    let src = "\
+class Point
+  fn init()
+  end
+end
+
+fn make() -> (Point, Point)
+  return Point(), Point()
+end
+
+fn main() -> nothing
+  local a: Point, b: Point = make()
+  print(a)
+end
+";
+    assert_eq!(
+        hover_ident(src, "a", 0).as_deref(),
+        Some("```saule\n(local) a: Point\n```")
+    );
+    let md = hover_ident(src, "Point", 5).expect("hover on the first binding's type");
+    assert!(md.contains("class Point"), "got: {md}");
+}
+
+/// An interface method's return type resolves, like its parameter types
+/// already do.
+#[test]
+fn an_interface_method_return_type_resolves() {
+    let src = "\
+class Storage
+  fn init()
+  end
+end
+
+interface Factory
+  fn build(seed: Storage) -> Storage
+end
+";
+    let param_ty = hover_ident(src, "Storage", 1).expect("hover on the param type");
+    assert!(param_ty.contains("class Storage"), "got: {param_ty}");
+    let return_ty = hover_ident(src, "Storage", 2).expect("hover on the return type");
+    assert!(return_ty.contains("class Storage"), "got: {return_ty}");
+}
+
+/// An enum's tuple-variant payload type resolves.
+#[test]
+fn an_enum_payload_type_ascription_resolves() {
+    let src = "\
+class Point
+  fn init()
+  end
+end
+
+enum Event
+  Click(at: Point),
+  Quit
+end
+";
+    let md = hover_ident(src, "Point", 1).expect("hover on the payload type");
+    assert!(md.contains("class Point"), "got: {md}");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Members through inheritance and containers
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A method declared on the parent hovers with the parent's signature
+/// when reached through a subclass instance.
+#[test]
+fn an_inherited_method_hovers_through_a_subclass_receiver() {
+    let src = "\
+class Base
+  fn greet() -> string
+    return \"hello\"
+  end
+end
+
+class Child extends Base
+end
+
+fn main() -> nothing
+  local c: Child = Child()
+  print(c.greet())
+end
+";
+    let md = hover_ident(src, "greet", 1).expect("hover on the inherited call");
+    assert!(md.contains("greet"), "got: {md}");
+    assert!(md.contains("-> string"), "got: {md}");
+    assert!(!md.contains("(unknown)"), "got: {md}");
+}
+
+/// Likewise for an inherited field.
+#[test]
+fn an_inherited_field_hovers_through_self_in_the_subclass() {
+    let src = "\
+class Base
+  label: string = \"base\"
+end
+
+class Child extends Base
+  fn shout() -> string
+    return self.label
+  end
+end
+";
+    let md = hover_ident(src, "label", 1).expect("hover on the inherited field");
+    assert!(md.contains(": string"), "got: {md}");
+    assert!(!md.contains("(unknown)"), "got: {md}");
+}
+
+/// A member read off an element of a `table<Class>`.
+#[test]
+fn a_member_of_an_indexed_element_resolves() {
+    let src = "\
+class Item
+  name: string = \"\"
+end
+
+fn first(items: table<Item>) -> string
+  return items[1].name
+end
+";
+    let md = hover_ident(src, "name", 1).expect("hover on the indexed element's field");
+    assert!(md.contains("Item.name"), "got: {md}");
+}
+
+/// A static field reached through the class name.
+#[test]
+fn a_static_field_hovers_through_the_class_name() {
+    let src = "\
+class Config
+  static local retries: integer = 3
+
+  static fn get() -> integer
+    return Config.retries
+  end
+end
+";
+    let md = hover_ident(src, "retries", 1).expect("hover on the static field");
+    assert!(md.contains("retries"), "got: {md}");
+    assert!(!md.contains("(unknown)"), "got: {md}");
+}
+
+/// `self` inside an enum method names the enum.
+#[test]
+fn self_inside_an_enum_method_names_the_enum() {
+    let src = "\
+enum Status
+  Ok,
+  Err
+
+  fn describe() -> string
+    return match self
+      case Status.Ok then \"ok\"
+      case Status.Err then \"err\"
+    end
+  end
+end
+";
+    let md = hover_ident(src, "self", 0).expect("hover on self");
+    assert!(md.contains("Status"), "got: {md}");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Shadowing
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A parameter shadows a field of the same name; `self.size` still names
+/// the field.
+#[test]
+fn a_method_param_shadows_a_field_of_the_same_name() {
+    let src = "\
+class Box
+  size: integer = 0
+
+  fn resize(size: integer) -> nothing
+    self.size = size
+  end
+end
+";
+    assert_eq!(
+        hover_ident(src, "size", 3).as_deref(),
+        Some("```saule\n(parameter) size: integer\n```"),
+        "the assignment's right-hand side is the parameter"
+    );
+    let field = hover_ident(src, "size", 2).expect("hover on self.size");
+    assert!(field.contains("Box.size"), "got: {field}");
+}
+
+/// A local declared in an inner block shadows the outer one, and the
+/// outer one is back after the block.
+#[test]
+fn an_inner_block_local_shadows_and_then_restores() {
+    let src = "\
+fn main() -> nothing
+  local n: integer = 1
+  if n > 0 then
+    local n: string = \"inner\"
+    print(n)
+  end
+  print(n)
+end
+";
+    assert_eq!(
+        hover_ident(src, "n", 3).as_deref(),
+        Some("```saule\n(local) n: string\n```")
+    );
+    assert_eq!(
+        hover_ident(src, "n", 4).as_deref(),
+        Some("```saule\n(local) n: integer\n```")
+    );
+}
+
+/// A `repeat … until` condition can see the body's locals, so hover
+/// must too.
+#[test]
+fn a_repeat_until_condition_sees_the_body_locals() {
+    let src = "\
+fn main() -> nothing
+  repeat
+    local done: boolean = true
+  until done
+end
+";
+    assert_eq!(
+        hover_ident(src, "done", 1).as_deref(),
+        Some("```saule\n(local) done: boolean\n```")
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Expressions that only get visited as someone else's child
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// The class named by an `as` cast resolves.
+#[test]
+fn a_cast_target_type_resolves() {
+    let src = "\
+class Storage
+  fn init()
+  end
+end
+
+fn pick(bag: any) -> nothing
+  local s: Storage? = bag as Storage
+end
+";
+    let md = hover_ident(src, "Storage", 2).expect("hover on the cast's target type");
+    assert!(md.contains("class Storage"), "got: {md}");
+}
+
+/// A parameter default is an expression like any other.
+#[test]
+fn a_param_default_expression_hovers() {
+    let src = "\
+class Limits
+  static local max: integer = 10
+end
+
+fn clamp(value: integer, ceiling: integer = Limits.max) -> integer
+  return value
+end
+";
+    let md = hover_ident(src, "max", 1).expect("hover inside the default");
+    assert!(md.contains("max"), "got: {md}");
+    assert!(!md.contains("(unknown)"), "got: {md}");
+}
+
+/// So is a field's default.
+#[test]
+fn a_field_default_expression_hovers() {
+    let src = "\
+class Limits
+  static local max: integer = 10
+end
+
+class Box
+  ceiling: integer = Limits.max
+end
+";
+    let md = hover_ident(src, "max", 1).expect("hover inside the field default");
+    assert!(md.contains("max"), "got: {md}");
+    assert!(!md.contains("(unknown)"), "got: {md}");
+}
+
+/// An argument nested inside another call still hovers as itself.
+#[test]
+fn a_nested_call_argument_hovers_as_itself() {
+    let src = "\
+fn double(n: integer) -> integer
+  return n * 2
+end
+
+fn main() -> nothing
+  local seed: integer = 2
+  print(double(double(seed)))
+end
+";
+    assert_eq!(
+        hover_ident(src, "seed", 1).as_deref(),
+        Some("```saule\n(local) seed: integer\n```")
+    );
+}
+
+/// A value inside a table literal hovers as itself.
+#[test]
+fn a_table_literal_entry_hovers_as_itself() {
+    let src = "\
+fn main() -> nothing
+  local n: integer = 1
+  local t: table<integer> = {n, n + 1}
+end
+";
+    assert_eq!(
+        hover_ident(src, "n", 1).as_deref(),
+        Some("```saule\n(local) n: integer\n```")
+    );
+}
+
+/// A static method's own declaration says it is static.
+#[test]
+fn a_static_method_declaration_reads_as_static() {
+    let src = "\
+class Util
+  static fn twice(n: integer) -> integer
+    return n * 2
+  end
+end
+";
+    let md = hover_ident(src, "twice", 0).expect("hover on the declaration");
+    assert!(md.contains("static fn"), "got: {md}");
+    assert!(md.contains("Util.twice"), "got: {md}");
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Negative cases
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A keyword that closes a block is not a symbol.
+#[test]
+fn a_block_terminator_hovers_nothing() {
+    let src = "\
+fn build(n: integer) -> integer
+  return n
+end
+";
+    let end_kw = src.rfind("end").expect("end");
+    assert!(
+        hover_offset(src, end_kw + 1).is_none(),
+        "got: {:?}",
+        hover_offset(src, end_kw + 1)
+    );
+}
+
+/// A name that is declared nowhere must not be described as a binding
+/// that exists.
+#[test]
+fn an_undeclared_name_is_not_reported_as_a_binding() {
+    let src = "\
+fn build() -> nothing
+  print(mysteryValue)
+end
+";
+    let md = hover_ident(src, "mysteryValue", 0);
+    assert!(
+        md.as_deref()
+            .is_none_or(|m| !m.contains("(local)") && !m.contains("(parameter)")),
+        "got: {md:?}"
+    );
+}
+
+// ─── untyped lambda parameters take the callee's type ───────────────────────
+
+/// A lambda parameter written without a type parses as `any`. The slot it
+/// fills is the only place its real type can come from, so a pipeline
+/// stage binds it from the value flowing in: `when(nums):filter(x => …)`
+/// over a `table<integer>` makes `x` an `integer`.
+#[test]
+fn a_pipe_stage_lambda_param_takes_the_stages_element_type() {
+    let src = "\
+fn keep(items: table<integer>, f: fn(integer) -> boolean) -> table<integer>
+  return items
+end
+
+fn main() -> nothing
+  local evens = when({1, 2, 3}):keep(x => x > 1)
+end
+";
+    assert_eq!(
+        hover_ident(src, "x", 1).as_deref(),
+        Some("```saule\n(parameter) x: integer\n```")
+    );
+}
+
+/// The generic form is the one that matters in practice — `T` is bound
+/// from the piped value, so the predicate's parameter is concrete.
+#[test]
+fn a_generic_pipe_stage_binds_its_lambda_param() {
+    let src = "\
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+  return items
+end
+
+fn main() -> nothing
+  local evens = when({1, 2, 3}):filter(x => x > 1)
+end
+";
+    assert_eq!(
+        hover_ident(src, "x", 1).as_deref(),
+        Some("```saule\n(parameter) x: integer\n```")
+    );
+}
+
+/// Same for an ordinary call argument.
+#[test]
+fn a_call_argument_lambda_param_takes_the_declared_type() {
+    let src = "\
+fn apply(items: table<string>, f: fn(string) -> integer) -> integer
+  return 0
+end
+
+fn main() -> nothing
+  local n = apply({\"a\"}, s => #s)
+end
+";
+    assert_eq!(
+        hover_ident(src, "s", 1).as_deref(),
+        Some("```saule\n(parameter) s: string\n```")
+    );
+}
+
+/// An explicit annotation on the lambda always wins over the slot — only
+/// an omitted one gets filled in. (A written `: any` is indistinguishable
+/// from an omitted type in the AST, so the check uses a type that isn't.)
+#[test]
+fn an_annotated_lambda_param_is_not_overridden() {
+    let src = "\
+fn apply(items: table<string>, f: fn(string) -> integer) -> integer
+  return 0
+end
+
+fn main() -> nothing
+  local n = apply({\"a\"}, (s: integer) => s)
+end
+";
+    assert_eq!(
+        hover_ident(src, "s", 1).as_deref(),
+        Some("```saule\n(parameter) s: integer\n```")
+    );
+}
+
+/// A parameter the arguments never pin down stays unknown rather than
+/// being reported as the signature's own parameter name.
+#[test]
+fn an_unbound_stage_param_does_not_leak_its_name() {
+    let src = "\
+fn build<T>(seed: integer, make: fn(T) -> T) -> integer
+  return seed
+end
+
+fn main() -> nothing
+  local n = build(1, x => x)
+end
+";
+    let md = hover_ident(src, "x", 1);
+    assert!(
+        md.as_deref().is_none_or(|m| !m.contains(": T")),
+        "leaked the signature's own parameter name: {md:?}"
+    );
+}
+
+/// The reported case: a two-stage chain, where the second stage's lambda
+/// parameter comes from the type the *first* stage produced.
+#[test]
+fn a_later_pipe_stage_lambda_param_follows_the_chain() {
+    let src = "\
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+  return items
+end
+
+fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
+  local out: table<U> = {}
+  return out
+end
+
+fn main() -> nothing
+  local doubled = when({1, 2, 3})
+                  :filter(x => x % 2 == 0)
+                  :map(x => x * 2)
+end
+";
+    assert_eq!(
+        hover_ident(src, "x", 3).as_deref(),
+        Some("```saule\n(parameter) x: integer\n```"),
+        "the `map` stage's parameter, typed by what `filter` produced"
     );
 }

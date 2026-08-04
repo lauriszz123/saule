@@ -798,10 +798,9 @@ fn one_type_param_does_not_satisfy_another() {
 }
 
 #[test]
-fn a_type_param_still_accepts_a_concrete_value() {
-    // Leniency the other way is deliberate: the body can't know what `T`
-    // binds to, so a concrete value flowing into a `T` slot is allowed.
-    // Tightening this would make every generic function unwritable.
+fn a_type_param_slot_accepts_a_value_of_that_same_param() {
+    // What a rigid `T` *does* accept: another `T`. This is the shape
+    // nearly all generic code is built from, and it must stay clean.
     accepts(
         "fn wrap<T>(x: T) -> table<T>\n\
         \x20 local out: table<T> = {}\n\
@@ -809,6 +808,219 @@ fn a_type_param_still_accepts_a_concrete_value() {
         \x20 return out\n\
         end\n",
     );
+}
+
+/// A type parameter is universally quantified: the *caller* decides what
+/// it stands for, so inside the body nothing proves a `T` is an
+/// `integer`. Letting it through made the annotation a lie — the value
+/// flowed on unchecked and failed much later, at the first operation
+/// that cared about the real type.
+#[test]
+fn a_type_param_does_not_satisfy_a_concrete_type() {
+    rejects(
+        "fn firstAsInt<T>(items: table<T>) -> integer\n\
+        \x20 for item: T in items do\n\
+        \x20   local n: integer = item\n\
+        \x20   return n\n\
+        \x20 end\n\
+        \x20 return 0\n\
+        end\n",
+        "`integer`",
+    );
+}
+
+/// And the reverse: `T` may well be `string`, so an `integer` cannot
+/// fill a `T` slot either.
+#[test]
+fn a_concrete_type_does_not_satisfy_a_type_param() {
+    rejects(
+        "fn seed<T>() -> T\n\
+        \x20 local acc: T = 0\n\
+        \x20 return acc\n\
+        end\n",
+        "`T`",
+    );
+}
+
+/// Widening stays free — `any` accepts everything, type parameters
+/// included. This is what keeps `print(item)` and every other
+/// `any`-taking call writable inside a generic body.
+#[test]
+fn a_type_param_widens_into_any() {
+    accepts(
+        "fn box<T>(x: T) -> any\n\
+        \x20 local slot: any = x\n\
+        \x20 return slot\n\
+        end\n",
+    );
+}
+
+/// With the direct assignment closed, `as` is how a body narrows a `T` —
+/// the same checked escape `any` uses. It yields `integer?`, so the
+/// failure case has to be handled.
+#[test]
+fn a_type_param_can_be_narrowed_with_a_checked_cast() {
+    accepts(
+        "fn firstAsInt<T>(items: table<T>) -> integer\n\
+        \x20 for item: T in items do\n\
+        \x20   local n: integer? = item as integer\n\
+        \x20   return n ?? 0\n\
+        \x20 end\n\
+        \x20 return 0\n\
+        end\n",
+    );
+}
+
+/// Opening `as` up to type parameters must not open it to everything: on
+/// a value whose type is already known the cast is still noise.
+#[test]
+fn a_cast_on_a_concrete_value_is_still_rejected() {
+    rejects(
+        "fn nope(x: string) -> integer\n\
+        \x20 local n: integer? = x as integer\n\
+        \x20 return n ?? 0\n\
+        end\n",
+        "already",
+    );
+}
+
+/// A generic *signature* being called into is the opposite case: its
+/// parameters are inference variables, so one the arguments haven't
+/// pinned down still binds to whatever this position supplies. Sharing
+/// one set with the body's rigid parameters is what made the rule above
+/// unenforceable.
+#[test]
+fn an_unbound_param_of_a_called_signature_stays_permissive() {
+    accepts(
+        "fn insert<V>(into: table<V>, item: V) -> nothing\n\
+        end\n\
+        fn fill(bag: table<any>, x: any) -> nothing\n\
+        \x20 insert(bag, x)\n\
+        end\n",
+    );
+}
+
+/// Everybody names their type parameter `T`, and two of them are still
+/// unrelated. The callee's parameters are renamed apart before the call
+/// is checked, so the caller's rigid `T` stays rigid — comparing by
+/// spelling alone let a `T` fill an `integer` slot whenever the callee
+/// happened to declare a `T` of its own.
+#[test]
+fn a_callee_sharing_a_param_name_does_not_soften_the_callers() {
+    rejects(
+        "fn takesInt<T>(n: integer, item: T) -> integer\n\
+        \x20 return n\n\
+        end\n\
+        fn caller<T>(x: T) -> integer\n\
+        \x20 return takesInt(x, x)\n\
+        end\n",
+        "expects `integer`",
+    );
+}
+
+/// The renaming must not cost the legitimate case: a callee parameter
+/// binds to the caller's `T` exactly as before, whatever either calls it.
+#[test]
+fn a_callee_param_still_binds_to_the_callers_type_param() {
+    accepts(
+        "fn wrap<T>(item: T) -> table<T>\n\
+        \x20 local out: table<T> = {}\n\
+        \x20 out[1] = item\n\
+        \x20 return out\n\
+        end\n\
+        fn caller<T>(x: T) -> table<T>\n\
+        \x20 return wrap(x)\n\
+        end\n",
+    );
+}
+
+/// An untyped lambda parameter takes its type from the slot it fills.
+/// It parses as `any`, and the callee's signature is the only place the
+/// real type can come from — so a misuse inside the body is caught
+/// instead of being absorbed by `any`.
+#[test]
+fn a_lambda_argument_param_takes_the_declared_slot_type() {
+    rejects(
+        "fn takesInt(n: integer) -> integer\n\
+        \x20 return n\n\
+        end\n\
+        fn apply(f: fn(string) -> integer) -> integer\n\
+        \x20 return 0\n\
+        end\n\
+        fn run() -> integer\n\
+        \x20 return apply(s => takesInt(s))\n\
+        end\n",
+        "expects `integer`",
+    );
+}
+
+/// …and the correct body is accepted, with the parameter's real type
+/// driving the check rather than everything being permitted.
+#[test]
+fn a_lambda_argument_body_checks_against_the_real_param_type() {
+    accepts(
+        "fn takesStr(s: string) -> integer\n\
+        \x20 return 1\n\
+        end\n\
+        fn apply(f: fn(string) -> integer) -> integer\n\
+        \x20 return 0\n\
+        end\n\
+        fn run() -> integer\n\
+        \x20 return apply(s => takesStr(s))\n\
+        end\n",
+    );
+}
+
+/// A pipeline stage binds its generics from the value flowing in, so the
+/// predicate's parameter is concrete by the time the body is checked.
+#[test]
+fn a_pipe_stage_lambda_param_is_bound_from_the_piped_value() {
+    rejects(
+        "fn takesStr(s: string) -> boolean\n\
+        \x20 return true\n\
+        end\n\
+        fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>\n\
+        \x20 return items\n\
+        end\n\
+        fn run() -> table<integer>\n\
+        \x20 return when({1, 2}):filter(x => takesStr(x))\n\
+        end\n",
+        "expects `string`",
+    );
+}
+
+/// An unbound parameter offers no expectation, so the body is checked as
+/// permissively as before rather than against a bare parameter name.
+#[test]
+fn an_unbound_slot_leaves_a_lambda_param_alone() {
+    accepts(
+        "fn build<T>(seed: integer, make: fn(T) -> T) -> integer\n\
+        \x20 return seed\n\
+        end\n\
+        fn run() -> integer\n\
+        \x20 return build(1, x => x)\n\
+        end\n",
+    );
+}
+
+/// The renamed parameter is an internal detail — a diagnostic quotes the
+/// name the signature actually spells.
+#[test]
+fn a_diagnostic_never_shows_the_renamed_parameter() {
+    let errs = errors(
+        "fn takesInt<T>(n: integer, item: T) -> integer\n\
+        \x20 return n\n\
+        end\n\
+        fn caller<T>(x: T) -> integer\n\
+        \x20 return takesInt(x, x)\n\
+        end\n",
+    );
+    let joined = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(!joined.contains('$'), "renaming leaked into: {joined}");
 }
 
 #[test]

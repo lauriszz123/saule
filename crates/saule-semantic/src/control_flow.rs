@@ -223,12 +223,6 @@ fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                 check_call_arg(a, ctx, errors);
             }
         }
-        Expr::MethodCall { obj, args, .. } => {
-            check_expr(obj, ctx, errors);
-            for a in args {
-                check_call_arg(a, ctx, errors);
-            }
-        }
         Expr::ForceUnwrap(inner) => check_expr(inner, ctx, errors),
         Expr::Table(entries) => {
             for e in entries {

@@ -273,3 +273,175 @@ fn parameter_hint_suppressed_for_println() {
         .collect();
     assert!(labels.is_empty(), "expected no param hints, got {hints:?}");
 }
+
+// ─── expressions the walker used to have nothing to say about ───────────────
+
+/// `x as T` is `T?`. This is the shape the checked narrowing of a
+/// generic value takes, so it is exactly where a reader wants the hint:
+/// the `?` is why the result still has to be unwrapped.
+#[test]
+fn type_hint_for_a_checked_cast() {
+    let src = "fn pick(bag: any) -> nothing\n  local n = bag as integer\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer?"),
+        "{hints:?}"
+    );
+}
+
+/// Casting a generic value is the same shape — a `T` narrowed to a
+/// concrete type, which is how a generic body has to do it.
+#[test]
+fn type_hint_for_a_cast_from_a_type_param() {
+    let src = "fn firstInt<T>(items: table<T>) -> nothing\n  for item: T in items do\n    local n = item as integer\n  end\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer?"),
+        "{hints:?}"
+    );
+}
+
+/// `!` asserts the nullability away, so the hint must not keep it.
+#[test]
+fn type_hint_for_a_force_unwrap_drops_nullability() {
+    let src = "fn pick(bag: any) -> nothing\n  local n = (bag as integer)!\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer"),
+        "{hints:?}"
+    );
+}
+
+/// A field read carries the field's declared type.
+#[test]
+fn type_hint_from_a_field_read() {
+    let src = "class Point\n  x: integer = 0\nend\n\nfn use() -> nothing\n  local p = Point()\n  local got = p.x\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer"),
+        "{hints:?}"
+    );
+}
+
+/// A safe chain yields nil when the receiver does, so the whole read is
+/// nullable however the field is declared.
+#[test]
+fn type_hint_from_a_safe_chain_is_nullable() {
+    let src = "class Point\n  x: integer = 0\nend\n\nfn use() -> nothing\n  local p = Point()\n  local got = p?.x\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer?"),
+        "{hints:?}"
+    );
+}
+
+/// Indexing a table gives its element type.
+#[test]
+fn type_hint_from_indexing_a_table() {
+    let src = "fn use(names: table<string>) -> nothing\n  local first = names[1]\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": string"),
+        "{hints:?}"
+    );
+}
+
+/// Every arm of a `match` produces the same type, so the first speaks
+/// for the whole expression.
+#[test]
+fn type_hint_from_a_match_expression() {
+    let src = "fn label(n: integer) -> nothing\n  local text = match n\n    case 0 then \"zero\"\n    case v then \"many\"\n  end\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": string"),
+        "{hints:?}"
+    );
+}
+
+/// The reported case, end to end: inside a generic `filter`, a local
+/// initialised by narrowing the loop variable gets the same ghost-text
+/// treatment every other inferred local already had.
+#[test]
+fn type_hint_inside_a_generic_filter_body() {
+    let src = "\
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+  local result: table<T> = {}
+
+  for item in items do
+    if predicate(item) then
+      local int = item as integer
+      result[#result + 1] = item
+    end
+  end
+
+  return result
+end
+";
+    let hints = raw_hints(src);
+    let types: Vec<&String> = hints
+        .iter()
+        .filter(|(k, _, _)| *k == InlayHintKind::TYPE)
+        .map(|(_, _, l)| l)
+        .collect();
+    assert_eq!(types, vec![": integer?"], "{hints:?}");
+}
+
+// ─── lambdas see their slot's type, and the scope around them ───────────────
+
+/// A local inside a lambda body is typed from the lambda's parameter,
+/// which the callee's signature supplies — the parameter parses as `any`
+/// and the slot is the only place its real type comes from.
+#[test]
+fn type_hint_inside_a_lambda_uses_the_slots_param_type() {
+    let src = "fn apply(items: table<string>, f: fn(string) -> integer) -> integer\n  return 0\nend\n\nfn main() -> nothing\n  local n = apply({\"a\"}, fn(s)\n    local size = #s\n    return size\n  end)\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer"),
+        "{hints:?}"
+    );
+}
+
+/// Same through a generic pipeline stage: `T` binds from the piped value,
+/// so the predicate's parameter is concrete inside the body.
+#[test]
+fn type_hint_inside_a_generic_pipe_stage_lambda() {
+    let src = "fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>\n  return items\nend\n\nfn main() -> nothing\n  local evens = when({1, 2}):filter(fn(x)\n    local doubled = x * 2\n    return doubled > 2\n  end)\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer"),
+        "{hints:?}"
+    );
+}
+
+/// A lambda is a closure, so a hint in its body resolves the names around
+/// it. The walker used to enter with an empty scope, and a local
+/// initialised from a captured variable got no hint at all.
+#[test]
+fn type_hint_inside_a_lambda_sees_the_enclosing_scope() {
+    let src = "fn run(f: fn() -> integer) -> integer\n  return 0\nend\n\nfn main() -> nothing\n  local factor: integer = 3\n  local n = run(fn()\n    local scaled = factor\n    return scaled\n  end)\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer"),
+        "captured local went untyped: {hints:?}"
+    );
+}

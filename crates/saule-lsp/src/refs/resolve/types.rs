@@ -1,10 +1,12 @@
 //! Local scope tracking and the lightweight type inference the walk
 //! needs to decide which class a receiver denotes.
 
-use crate::refs::util::{LocalBind, contains, locate_word_in, named_type};
+use crate::refs::util::{
+    LocalBind, contains, locate_word_in, named_type, named_type_heads, type_name_symbol,
+};
 use crate::refs::{Resolved, Symbol};
 use saule_ast::{Expr, Param, Spanned, Stmt, Type};
-use saule_semantic::{lookup_field_type, lookup_method, with_classes, with_enums};
+use saule_semantic::{lookup_field_type, with_classes, with_enums};
 use std::ops::Range;
 
 use super::*;
@@ -30,6 +32,28 @@ impl<'a> ResolveCx<'a> {
 
     pub(crate) fn enter_function(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
         let saved = std::mem::take(&mut self.locals);
+        self.push_params(params);
+        body(self);
+        self.locals = saved;
+    }
+
+    /// Walk into a lambda body *keeping* the enclosing scope and
+    /// stacking the lambda's own parameters on top of it.
+    ///
+    /// A lambda is a closure, so every name around it is a name its body
+    /// can use. Entering with a fresh scope — as this used to, sharing
+    /// [`Self::enter_function`] — meant a captured local resolved to
+    /// nothing and fell through to the "unknown identifier, must be a
+    /// free function" branch, so goto-definition on it searched the
+    /// whole workspace for a function that doesn't exist.
+    pub(crate) fn enter_lambda(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
+        let mark = self.locals.len();
+        self.push_params(params);
+        body(self);
+        self.locals.truncate(mark);
+    }
+
+    fn push_params(&mut self, params: &[Param]) {
         for p in params {
             let def_span = locate_word_in(self.source, &p.span, &p.name).unwrap_or(p.span.clone());
             self.locals.push(LocalBind {
@@ -38,8 +62,48 @@ impl<'a> ResolveCx<'a> {
                 ty: p.ty.clone(),
             });
         }
-        body(self);
-        self.locals = saved;
+    }
+
+    /// Record the parameter's own binding site plus any class-ish name
+    /// in its type ascription, then walk its default expression.
+    pub(crate) fn visit_param(&mut self, p: &Param) {
+        if let Some(span) = locate_word_in(self.source, &p.span, &p.name) {
+            self.record(
+                span.clone(),
+                Symbol::Local {
+                    name: p.name.clone(),
+                    def_span: span,
+                },
+            );
+        }
+        self.record_type_names_in(&p.ty, &p.span);
+        if let Some(def) = &p.default {
+            self.visit_expr(def);
+        }
+    }
+
+    /// Make the class / interface / enum names written inside a type
+    /// ascription navigable: `local p: Player` should reach `Player`'s
+    /// declaration exactly like the `Player()` call on the same line
+    /// does. `search` bounds where in the source the names are looked
+    /// for (a parameter's span, a statement's head, …).
+    pub(crate) fn record_type_names_in(&mut self, ty: &Type, search: &Range<usize>) {
+        if !contains(search, self.offset) {
+            return;
+        }
+        let mut names = Vec::new();
+        named_type_heads(ty, &mut names);
+        for name in names {
+            let Some(span) = locate_word_in(self.source, search, &name) else {
+                continue;
+            };
+            if !contains(&span, self.offset) {
+                continue;
+            }
+            if let Some(sym) = type_name_symbol(&name) {
+                self.record(span, sym);
+            }
+        }
     }
 
     /// Best-effort receiver type resolution, mirroring the hover
@@ -75,13 +139,6 @@ impl<'a> ResolveCx<'a> {
                 }
                 None
             }
-            Expr::MethodCall {
-                obj: inner, method, ..
-            } => {
-                let inner_class = self.receiver_class(&inner.value)?;
-                let sig = lookup_method(&inner_class, method)?;
-                named_type(sig.return_ty.as_ref()?)
-            }
             _ => None,
         }
     }
@@ -102,15 +159,6 @@ impl<'a> ResolveCx<'a> {
                     && with_classes(|r| r.contains_key(n))
                 {
                     return Type::Named(n.clone());
-                }
-                Type::Named("any".into())
-            }
-            Expr::MethodCall { obj, method, .. } => {
-                if let Some(class) = self.receiver_class(&obj.value)
-                    && let Some(sig) = lookup_method(&class, method)
-                    && let Some(rt) = sig.return_ty
-                {
-                    return rt;
                 }
                 Type::Named("any".into())
             }
