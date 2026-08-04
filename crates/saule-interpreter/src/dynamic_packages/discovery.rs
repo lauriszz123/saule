@@ -1,6 +1,8 @@
 //! Finding installed packages on disk and registering their
 //! signatures with the typechecker.
 
+// Only the `LIBS` cache below holds one, and that is feature-gated too.
+#[cfg(feature = "native-packages")]
 use libloading::Library;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
