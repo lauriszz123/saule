@@ -39,7 +39,7 @@ class Main
 
 		-- A canvas is an image you draw yourself. Handy as a pre-rendered
 		-- background: paint it once, then blit it every frame.
-		local backdrop: integer = Graphics.newCanvas(180, 120)
+		local backdrop = Graphics.newCanvas(180, 120)
 		Graphics.setCanvas(backdrop)
 		for i: integer = 0, 11 do
 			Graphics.setColor(0.15 + float(i) * 0.05, 0.2, 0.45, 1.0)
@@ -48,9 +48,9 @@ class Main
 		Graphics.setCanvas()
 
 		-- Loading is not cached by the engine, so do it once, outside the loop.
-		local sheet: integer = 0
-		local sheetWidth: integer = 0
-		local sheetHeight: integer = 0
+		local sheet = 0
+		local sheetWidth = 0
+		local sheetHeight = 0
 
 		if path != nil then
 			sheet = Graphics.newImage(path!)
@@ -59,9 +59,9 @@ class Main
 		end
 
 		-- Wheel-driven zoom, clamped to something sane.
-		local zoom: float = 2.0
-		local frame: integer = 0
-		local elapsed: float = 0.0
+		local zoom = 2.0
+		local frame = 0
+		local elapsed = 0.0
 
 		while Window.isOpen() do
 			-- Everything that happened since the last frame, in order. Each
@@ -81,7 +81,7 @@ class Main
 			end
 
 			-- Cursor feedback: an I-beam over the left half of the window.
-			local mouseX: float, mouseY: float = Mouse.getPos()
+			local mouseX, mouseY = Mouse.getPos()
 			if mouseX < 360.0 then
 				Mouse.setCursor("ibeam")
 			else
