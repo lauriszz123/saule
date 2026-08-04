@@ -26,7 +26,17 @@ pub(crate) fn reject_nil_in_binding_type(
             Type::Nullable(inner) => walk(inner),
             Type::Table { key, value } => key.as_deref().map(walk).unwrap_or(false) || walk(value),
             Type::Tuple(items) => items.iter().any(walk),
-            Type::Function { params, ret } => params.iter().any(walk) || walk(ret),
+            Type::Function { params, ret } => params.iter().any(walk) || walk_return(ret),
+        }
+    }
+    /// The return slot of a function *type* is a return position, so a bare
+    /// `nil` there is the same unit return a declaration writes — the rule
+    /// that spares `fn foo() -> nil` has to spare `body: fn() -> nil` too.
+    /// Nested occurrences (`fn() -> table<nil>`) are still binding types.
+    fn walk_return(ty: &Type) -> bool {
+        match ty {
+            Type::Named(n) => n != "nil" && walk(ty),
+            other => walk(other),
         }
     }
     if walk(ty) {

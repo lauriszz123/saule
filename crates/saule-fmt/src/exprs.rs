@@ -70,10 +70,38 @@ impl<'a> Printer<'a> {
                 self.write("]");
             }
             Expr::Call { callee, args } => {
+                // A final block-bodied lambda argument prints as a trailing
+                // block — `f(a, fn() … end)` and `f(a) do … end` are the same
+                // tree, and the trailing form is the one worth normalising to.
+                // Suppressed under `force_inline`, where the caller is
+                // measuring a single-line rendering and a block can't fit.
+                let trailing = if self.force_inline {
+                    None
+                } else {
+                    trailing_block_arg(args)
+                };
                 self.expr(callee, MAX_PREC);
                 self.write("(");
-                self.call_args(args);
+                self.call_args(trailing.map_or(args, |t| t.leading));
                 self.write(")");
+                if let Some(t) = trailing {
+                    self.write(" do");
+                    // The parser only looks for a return type after a
+                    // parameter list, so `-> T` needs `()` even when there
+                    // are no parameters.
+                    if !t.params.is_empty() || t.return_ty.is_some() {
+                        self.write(" (");
+                        self.params(t.params);
+                        self.write(")");
+                    }
+                    if let Some(rt) = t.return_ty {
+                        self.write(" -> ");
+                        self.ty(rt);
+                    }
+                    self.newline();
+                    self.block(t.body, outer_end);
+                    self.write("end");
+                }
             }
             Expr::ForceUnwrap(inner) => {
                 self.expr(inner, MAX_PREC);
@@ -425,4 +453,41 @@ impl<'a> Printer<'a> {
             _ => format_float(f),
         }
     }
+}
+
+/// A call's arguments split for trailing-block printing: everything that stays
+/// inside the parentheses, plus the pieces of the final lambda that moves out
+/// after them.
+#[derive(Clone, Copy)]
+pub(crate) struct TrailingBlock<'t> {
+    leading: &'t [CallArg],
+    params: &'t [saule_ast::Param],
+    return_ty: Option<&'t saule_ast::Type>,
+    body: &'t [Spanned<saule_ast::Stmt>],
+}
+
+/// Recognises `f(…, fn(p) … end)` — a call whose last argument is a positional
+/// block-bodied lambda — so it can be printed as `f(…) do (p) … end`.
+///
+/// Named arguments may precede it (`View(spacing: 10) do … end`); only the
+/// final argument's shape matters.
+fn trailing_block_arg(args: &[CallArg]) -> Option<TrailingBlock<'_>> {
+    let (last, leading) = args.split_last()?;
+    let CallArg::Positional(e) = last else {
+        return None;
+    };
+    let Expr::Lambda {
+        params,
+        return_ty,
+        body: LambdaBody::Block(stmts),
+    } = &e.value
+    else {
+        return None;
+    };
+    Some(TrailingBlock {
+        leading,
+        params,
+        return_ty: return_ty.as_ref(),
+        body: stmts,
+    })
 }

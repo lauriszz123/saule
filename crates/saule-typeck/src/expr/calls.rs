@@ -97,19 +97,10 @@ pub(crate) fn expected_arg_types(
         return vec![None; args.len()];
     };
     // Which slot each argument fills: positional arguments consume slots
-    // left to right, a named argument targets the slot with its name.
-    let mut next = 0usize;
-    let slots: Vec<Option<usize>> = args
-        .iter()
-        .map(|a| match a {
-            CallArg::Positional(_) => {
-                let i = next;
-                next += 1;
-                (i < params.len()).then_some(i)
-            }
-            CallArg::Named { name, .. } => names.iter().position(|n| n == name),
-        })
-        .collect();
+    // left to right, a named argument targets the slot with its name, and a
+    // trailing block takes the first slot nothing else claimed.
+    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let slots = saule_ast::resolve_arg_slots(args, &name_refs);
 
     let mut found: Vec<Option<Type>> = vec![None; params.len()];
     for (arg, slot) in args.iter().zip(slots.iter()) {
@@ -286,17 +277,11 @@ pub(crate) fn check_user_method_args(
     let has_variadic = sig.params.last().is_some_and(|p| p.variadic);
     // A required slot counts as filled either by its position or by a named
     // argument carrying its name — `Box(w: 5, h: 6)` fills both of
-    // `fn init(w, h = 2)` even though it passes nothing positionally.
-    let filled: usize = sig.params[..required]
-        .iter()
-        .enumerate()
-        .filter(|(i, p)| {
-            *i < positional.len()
-                || args
-                    .iter()
-                    .any(|a| matches!(a, CallArg::Named { name, .. } if name == &p.name))
-        })
-        .count();
+    // `fn init(w, h = 2)` even though it passes nothing positionally. A
+    // trailing block fills the first slot nothing else claimed.
+    let param_names: Vec<&str> = sig.params.iter().map(|p| p.name.as_str()).collect();
+    let slots = saule_ast::resolve_arg_slots(args, &param_names);
+    let filled: usize = (0..required).filter(|i| slots.contains(&Some(*i))).count();
     if filled < required {
         errors.push(TypeCheckError::NativeArity {
             callee: callee_display.to_string(),
@@ -342,31 +327,21 @@ pub(crate) fn check_user_method_args(
     // Positional args consume parameter slots left-to-right; a named arg
     // targets the slot that carries its name, so both forms get their type
     // checked (`Text(color: 3)` is as wrong as `Text(3)`).
-    let mut next_slot = 0usize;
-    for arg in args.iter() {
-        let (p, value_expr, i) = match arg {
-            CallArg::Positional(e) => {
-                let slot = next_slot;
-                next_slot += 1;
-                let Some(p) = sig.params.get(slot).or_else(|| {
-                    if has_variadic {
-                        sig.params.last()
-                    } else {
-                        None
-                    }
-                }) else {
-                    break;
-                };
-                (p, e, slot)
+    for (arg, slot) in args.iter().zip(slots.iter()) {
+        let (CallArg::Positional(value_expr)
+        | CallArg::Named {
+            value: value_expr, ..
+        }) = arg;
+        let (p, i) = match slot {
+            Some(slot) => (&sig.params[*slot], *slot),
+            // Past the declared parameters: a variadic tail swallows it,
+            // otherwise the arity check above already reported it. An unknown
+            // named argument lands here too and was reported above.
+            None if has_variadic && matches!(arg, CallArg::Positional(_)) => {
+                let last = sig.params.len() - 1;
+                (&sig.params[last], last)
             }
-            CallArg::Named { name, value } => {
-                // Unknown names are already reported above; skip quietly.
-                let Some((slot, p)) = sig.params.iter().enumerate().find(|(_, p)| &p.name == name)
-                else {
-                    continue;
-                };
-                (p, value, slot)
-            }
+            None => continue,
         };
         if p.variadic {
             continue;

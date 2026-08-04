@@ -29,7 +29,7 @@ mod repair;
 #[cfg(test)]
 mod tests;
 mod textual;
-mod walk;
+pub(crate) mod walk;
 
 pub(crate) use render::*;
 pub(crate) use repair::*;

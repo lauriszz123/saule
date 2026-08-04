@@ -258,3 +258,280 @@ fn parses_unquoted_named_import_with_alias() {
         _ => panic!("expected import"),
     }
 }
+
+// ── Trailing blocks ─────────────────────────────────────────────────────────
+
+/// Unwraps `stmts[0]` as an expression statement holding a call, returning its
+/// argument list.
+fn call_args_of(m: &Module) -> &[CallArg] {
+    match &m.stmts[0].value {
+        Stmt::Expr(e) => match &e.value {
+            Expr::Call { args, .. } => args,
+            other => panic!("expected call, got {other:?}"),
+        },
+        other => panic!("expected expression statement, got {other:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_becomes_final_lambda_argument() {
+    let m = parse_src("View(spacing: 10)\ndo\n    Text(\"Hello\")\nend");
+    let args = call_args_of(&m);
+    assert_eq!(args.len(), 2);
+    assert!(matches!(args[0], CallArg::Named { .. }));
+    match &args[1] {
+        CallArg::Positional(e) => match &e.value {
+            Expr::Lambda {
+                params,
+                return_ty,
+                body: LambdaBody::Block(stmts),
+            } => {
+                assert!(params.is_empty());
+                assert!(return_ty.is_none());
+                assert_eq!(stmts.len(), 1);
+            }
+            other => panic!("expected block lambda, got {other:?}"),
+        },
+        other => panic!("expected positional arg, got {other:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_is_identical_to_explicit_lambda_argument() {
+    let sugar = parse_src("each(items)\ndo (item)\n    print(item)\nend");
+    let desugared = parse_src("each(items, fn(item)\n    print(item)\nend)");
+    // Spans differ; the shapes must not.
+    let (a, b) = (call_args_of(&sugar), call_args_of(&desugared));
+    assert_eq!(a.len(), b.len());
+    match (&a[1], &b[1]) {
+        (CallArg::Positional(x), CallArg::Positional(y)) => match (&x.value, &y.value) {
+            (
+                Expr::Lambda {
+                    params: pa,
+                    body: LambdaBody::Block(ba),
+                    ..
+                },
+                Expr::Lambda {
+                    params: pb,
+                    body: LambdaBody::Block(bb),
+                    ..
+                },
+            ) => {
+                assert_eq!(pa.len(), pb.len());
+                assert_eq!(pa[0].name, pb[0].name);
+                assert_eq!(ba.len(), bb.len());
+            }
+            other => panic!("expected two block lambdas, got {other:?}"),
+        },
+        other => panic!("expected positional args, got {other:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_takes_typed_params_and_return_type() {
+    let m = parse_src("map(nums)\ndo (n: integer) -> integer\n    return n * 2\nend");
+    match &call_args_of(&m)[1] {
+        CallArg::Positional(e) => match &e.value {
+            Expr::Lambda {
+                params, return_ty, ..
+            } => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].ty, Type::Named("integer".to_string()));
+                assert_eq!(
+                    return_ty.as_ref(),
+                    Some(&Type::Named("integer".to_string()))
+                );
+            }
+            other => panic!("expected lambda, got {other:?}"),
+        },
+        other => panic!("expected positional arg, got {other:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_attaches_to_method_calls() {
+    let m = parse_src("ui.panel(title: \"x\")\ndo\n    ui.text(\"y\")\nend");
+    assert_eq!(call_args_of(&m).len(), 2);
+}
+
+#[test]
+fn trailing_block_chains_with_further_postfix() {
+    // The result of the call is still an ordinary expression.
+    let m = parse_src("build()\ndo\n    return 1\nend.value");
+    match &m.stmts[0].value {
+        Stmt::Expr(e) => assert!(matches!(e.value, Expr::Member { .. })),
+        other => panic!("expected expression statement, got {other:?}"),
+    }
+}
+
+#[test]
+fn while_header_do_belongs_to_the_loop() {
+    // Without the header suppression this parses as `while (queue.pop() do … end)`
+    // and then fails looking for the loop's own `do`.
+    let m = parse_src("while queue.pop() do\n    x = 1\nend");
+    assert!(matches!(m.stmts[0].value, Stmt::While { .. }));
+}
+
+#[test]
+fn for_in_header_do_belongs_to_the_loop() {
+    let m = parse_src("for v in items() do\n    x = v\nend");
+    assert!(matches!(m.stmts[0].value, Stmt::ForIn { .. }));
+}
+
+#[test]
+fn numeric_for_header_do_belongs_to_the_loop() {
+    let m = parse_src("for i = 1, count() do\n    x = i\nend");
+    assert!(matches!(m.stmts[0].value, Stmt::ForNumeric { .. }));
+}
+
+#[test]
+fn trailing_block_allowed_inside_a_loop_body() {
+    // Suppression is scoped to the header, not the whole statement.
+    let m = parse_src("while ok do\n    View()\n    do\n        Text(\"hi\")\n    end\nend");
+    match &m.stmts[0].value {
+        Stmt::While { body, .. } => match &body[0].value {
+            Stmt::Expr(e) => match &e.value {
+                Expr::Call { args, .. } => assert_eq!(args.len(), 1),
+                other => panic!("expected call, got {other:?}"),
+            },
+            other => panic!("expected expression statement, got {other:?}"),
+        },
+        other => panic!("expected while, got {other:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_allowed_inside_a_loop_header_when_parenthesised() {
+    let m = parse_src("while (frame() do\n    return true\nend) do\n    x = 1\nend");
+    assert!(matches!(m.stmts[0].value, Stmt::While { .. }));
+}
+
+#[test]
+fn trailing_block_allowed_inside_an_argument_list_in_a_header() {
+    let m = parse_src("while any(check() do\n    return true\nend) do\n    x = 1\nend");
+    assert!(matches!(m.stmts[0].value, Stmt::While { .. }));
+}
+
+#[test]
+fn bare_identifier_takes_no_trailing_block() {
+    // Only a call can carry one, so `View do … end` is an error rather than a
+    // silently different parse.
+    let tokens = Lexer::new("View do\n    Text(\"hi\")\nend")
+        .tokenize()
+        .expect("lex ok");
+    assert!(parse(tokens).is_err());
+}
+
+// ── Arrow lambdas with a declared return type ───────────────────────────────
+
+/// Unwraps `local x = <lambda>` and returns the lambda's parts.
+fn local_lambda(m: &Module) -> (&Vec<Param>, &Option<Type>) {
+    match &m.stmts[0].value {
+        Stmt::Local { value: Some(e), .. } => match &e.value {
+            Expr::Lambda {
+                params, return_ty, ..
+            } => (params, return_ty),
+            other => panic!("expected lambda, got {other:?}"),
+        },
+        other => panic!("expected local with initialiser, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_arrow_lambda_with_a_return_type() {
+    let m = parse_src("local f = (n: integer) -> integer => n * 2");
+    let (params, return_ty) = local_lambda(&m);
+    assert_eq!(params.len(), 1);
+    assert_eq!(
+        return_ty.as_ref(),
+        Some(&Type::Named("integer".to_string()))
+    );
+}
+
+#[test]
+fn parses_arrow_lambda_with_a_return_type_and_untyped_params() {
+    let m = parse_src("local f = (n) -> integer => n + 1");
+    let (params, return_ty) = local_lambda(&m);
+    assert_eq!(params[0].ty, Type::Named("any".to_string()));
+    assert_eq!(
+        return_ty.as_ref(),
+        Some(&Type::Named("integer".to_string()))
+    );
+}
+
+#[test]
+fn parses_arrow_lambda_with_a_generic_return_type() {
+    // The return type is the full type grammar, not a single token — the
+    // lookahead has to parse it to find the `=>` past the `<...>`.
+    let m = parse_src("local f = (n: integer) -> table<integer> => {n}");
+    let (_, return_ty) = local_lambda(&m);
+    assert_eq!(
+        return_ty.as_ref(),
+        Some(&Type::Table {
+            key: None,
+            value: Box::new(Type::Named("integer".to_string())),
+        })
+    );
+}
+
+#[test]
+fn parses_arrow_lambda_with_a_nullable_return_type() {
+    let m = parse_src("local f = (n: integer) -> integer? => nil");
+    let (_, return_ty) = local_lambda(&m);
+    assert!(matches!(return_ty, Some(Type::Nullable(_))));
+}
+
+#[test]
+fn parses_arrow_lambda_returning_a_function_type() {
+    // `-> fn(integer) -> integer` contains its own `->`, so a scanner looking
+    // for the first `=>` after the parens has several chances to go wrong.
+    let m = parse_src("local f = (n: integer) -> fn(integer) -> integer => (m: integer) => n + m");
+    let (_, return_ty) = local_lambda(&m);
+    assert!(matches!(return_ty, Some(Type::Function { .. })));
+}
+
+#[test]
+fn parses_zero_param_arrow_lambda_with_a_return_type() {
+    let m = parse_src("local f = () -> integer => 1");
+    let (params, return_ty) = local_lambda(&m);
+    assert!(params.is_empty());
+    assert_eq!(
+        return_ty.as_ref(),
+        Some(&Type::Named("integer".to_string()))
+    );
+}
+
+/// The lookahead speculatively parses a parameter list; when that doesn't pan
+/// out the `(` must still parse as an ordinary parenthesised expression.
+#[test]
+fn parenthesised_expressions_are_unaffected_by_the_lambda_lookahead() {
+    for src in [
+        "local x = (1 + 2) * 3",
+        "local x = (twice)(4)",
+        "local x = (Box(5)).get()",
+        "local x = ((7))",
+        "local x = (-3) + 1",
+        "local x = (a.b).c",
+    ] {
+        let m = parse_src(src);
+        match &m.stmts[0].value {
+            Stmt::Local { value: Some(e), .. } => assert!(
+                !matches!(e.value, Expr::Lambda { .. }),
+                "{src} parsed as a lambda"
+            ),
+            other => panic!("expected local, got {other:?}"),
+        }
+    }
+}
+
+/// A parameter list that parses but isn't followed by `=>` is not a lambda.
+#[test]
+fn a_parenthesised_identifier_without_a_fat_arrow_is_not_a_lambda() {
+    let m = parse_src("local x = (y)");
+    match &m.stmts[0].value {
+        Stmt::Local { value: Some(e), .. } => {
+            assert!(matches!(e.value, Expr::Ident(_)), "got {:?}", e.value)
+        }
+        other => panic!("expected local, got {other:?}"),
+    }
+}

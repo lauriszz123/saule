@@ -1589,3 +1589,189 @@ mod operator_overloading {
         assert_bool(src, true);
     }
 }
+
+// ── Trailing blocks ─────────────────────────────────────────────────────────
+
+#[test]
+fn trailing_block_runs_as_the_final_argument() {
+    let src = r#"
+fn twice(body: fn() -> nil) -> nil
+    body()
+    body()
+end
+
+local n: integer = 0
+twice()
+do
+    n = n + 1
+end
+n
+"#;
+    assert_eq!(eval(src).unwrap(), Value::Int(2));
+}
+
+#[test]
+fn trailing_block_receives_parameters() {
+    let src = r#"
+fn each(items: table<integer>, body: fn(integer) -> nil) -> nil
+    for _, v in items do
+        body(v)
+    end
+end
+
+local total: integer = 0
+each({1, 2, 3})
+do (v)
+    total = total + v
+end
+total
+"#;
+    assert_eq!(eval(src).unwrap(), Value::Int(6));
+}
+
+#[test]
+fn trailing_block_params_infer_from_the_parameter_type() {
+    // `v` is a real `integer` inside the block, so a string op on it is an
+    // error rather than a silent `any`.
+    let src = r#"
+fn each(items: table<integer>, body: fn(integer) -> nil) -> nil
+    for _, v in items do
+        body(v)
+    end
+end
+
+each({1})
+do (v)
+    print(#v)
+end
+"#;
+    assert!(eval(src).is_err());
+}
+
+#[test]
+fn trailing_block_follows_named_arguments() {
+    let src = r#"
+fn repeated(times: integer, body: fn() -> nil) -> nil
+    for _ = 1, times do
+        body()
+    end
+end
+
+local n: integer = 0
+repeated(times: 3)
+do
+    n = n + 1
+end
+n
+"#;
+    assert_eq!(eval(src).unwrap(), Value::Int(3));
+}
+
+#[test]
+fn trailing_block_closes_over_its_environment() {
+    let src = r#"
+fn apply(body: fn(integer) -> integer) -> integer
+    return body(10)
+end
+
+local factor: integer = 3
+apply()
+do (n) -> integer
+    return n * factor
+end
+"#;
+    assert_eq!(eval(src).unwrap(), Value::Int(30));
+}
+
+#[test]
+fn trailing_block_nests() {
+    let src = r#"
+fn group(label: string, body: fn() -> nil) -> nil
+    body()
+end
+
+local log: string = ""
+group("outer")
+do
+    log = log .. "a"
+    group("inner")
+    do
+        log = log .. "b"
+    end
+end
+log
+"#;
+    match eval(src).unwrap() {
+        Value::Str(s) => assert_eq!(&*s, "ab"),
+        v => panic!("expected string, got {v:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_arity_is_checked() {
+    let src = r#"
+fn once(body: fn() -> nil) -> nil
+    body()
+end
+
+once()
+do (extra)
+    print(extra)
+end
+"#;
+    assert!(eval(src).is_err());
+}
+
+#[test]
+fn trailing_block_binds_to_the_last_parameter_over_a_default() {
+    // `spacing` sits between the named argument and the block. Binding the
+    // block to the next free slot would put it in `spacing` and report `body`
+    // missing; it belongs to the last parameter.
+    let src = r#"
+fn panel(title: string, spacing: integer = 7, body: fn() -> nil) -> nil
+    body()
+    print(title .. ":" .. spacing)
+end
+
+local out: string = ""
+panel(title: "Stats")
+do
+    out = out .. "child "
+end
+out
+"#;
+    match eval(src).unwrap() {
+        Value::Str(s) => assert_eq!(&*s, "child "),
+        v => panic!("expected string, got {v:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_binds_to_the_last_parameter_with_positional_args() {
+    let src = r#"
+fn panel(title: string, spacing: integer = 0, body: fn() -> integer) -> integer
+    return body() + spacing
+end
+
+panel("Stats", 2)
+do
+    return 10
+end
+"#;
+    assert_eq!(eval(src).unwrap(), Value::Int(12));
+}
+
+#[test]
+fn trailing_block_duplicating_a_named_last_parameter_is_an_error() {
+    let src = r#"
+fn view(spacing: integer, body: fn() -> nil) -> nil
+    body()
+end
+
+view(spacing: 1, body: fn() end)
+do
+    print(1)
+end
+"#;
+    assert!(eval(src).is_err());
+}

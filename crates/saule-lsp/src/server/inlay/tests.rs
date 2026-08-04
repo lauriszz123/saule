@@ -445,3 +445,93 @@ fn type_hint_inside_a_lambda_sees_the_enclosing_scope() {
         "captured local went untyped: {hints:?}"
     );
 }
+
+// ── Trailing blocks ─────────────────────────────────────────────────────────
+
+/// A trailing block gets no `body:` parameter hint. The label would land on
+/// the `do` keyword, and which parameter a trailing block fills is already
+/// unambiguous from the syntax.
+#[test]
+fn no_parameter_hint_on_a_trailing_block() {
+    let src = "\
+fn repeated(times: integer, body: fn() -> nil) -> nil
+  body()
+end
+
+fn main() -> nil
+  repeated(2) do
+    print(1)
+  end
+end
+";
+    let hints = raw_hints(src);
+    assert!(
+        !hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::PARAMETER && l == "body:"),
+        "{hints:?}"
+    );
+    // The ordinary argument ahead of it still gets one.
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::PARAMETER && l == "times:"),
+        "{hints:?}"
+    );
+}
+
+/// The call's return type still reaches the local's type hint when the last
+/// argument is written as a trailing block.
+#[test]
+fn type_hint_from_a_call_with_a_trailing_block() {
+    let src = "\
+fn mapEach(items: table<integer>, transform: fn(integer) -> integer) -> table<integer>
+  local out: table<integer> = {}
+  return out
+end
+
+fn main() -> nil
+  local doubled = mapEach({1, 2}) do (n) -> integer
+    return n * 2
+  end
+end
+";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": table<integer>"),
+        "{hints:?}"
+    );
+}
+
+/// Only the *final* argument is a trailing block. A block-bodied lambda
+/// earlier in the list is an ordinary argument, keeps its parameter hint, and
+/// must not shift the hints after it.
+#[test]
+fn parameter_hints_survive_a_non_final_block_lambda() {
+    let src = "\
+fn run(before: fn() -> nil, times: integer) -> nil
+  before()
+end
+
+fn main() -> nil
+  run(fn()
+    print(1)
+  end, 3)
+end
+";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::PARAMETER && l == "before:"),
+        "{hints:?}"
+    );
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::PARAMETER && l == "times:"),
+        "{hints:?}"
+    );
+}

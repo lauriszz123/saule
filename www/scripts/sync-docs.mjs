@@ -333,6 +333,14 @@ const EXAMPLES = [
 		files: ['src/main.sau', 'src/interpreter.sau'],
 	},
 	{
+		dir: 'ui-blocks',
+		title: 'Declarative UI',
+		blurb:
+			'A miniature SwiftUI-shaped toolkit drawn to the terminal: every widget is a class, constructing one draws it, and containers take their children as a trailing block (`Panel(title: "…") do … end`). Shows an immediate-mode layout engine that builds no widget tree, and why a block beats a table of children — `if` and `for` work inside one.',
+		run: 'saule run',
+		files: ['src/canvas.sau', 'src/widgets.sau', 'src/main.sau'],
+	},
+	{
 		dir: 'toying',
 		title: 'Graphics Window',
 		blurb:

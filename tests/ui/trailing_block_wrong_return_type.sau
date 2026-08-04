@@ -1,0 +1,14 @@
+-- A trailing block's declared return type is a contract on its body, not just
+-- a signature compared against the callee's parameter.
+
+fn mapEach(items: table<integer>, transform: fn(integer) -> integer) -> table<integer>
+  local out: table<integer> = {}
+  for i, v in items do
+    out[i] = transform(v)
+  end
+  return out
+end
+
+local doubled: table<integer> = mapEach({1, 2}) do (n) -> integer
+  return "not an integer"
+end

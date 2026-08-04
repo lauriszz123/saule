@@ -333,6 +333,104 @@ println(2 ^ 3 ^ 2)
 end
 `,
 	},
+	{
+		id: 'trailingblocks',
+		label: 'Trailing blocks',
+		blurb: 'A declarative UI, where a container takes its children as a do ... end block.',
+		source: `class Ui
+    static lines: table<string> = {}
+
+    static fn text(value: string) -> nil
+        Table.insert(Ui.lines, value)
+    end
+
+    static fn mark() -> integer
+        return #Ui.lines
+    end
+
+    static fn since(mark: integer) -> table<string>
+        local taken: table<string> = {}
+        local i: integer = mark + 1
+
+        while i <= #Ui.lines do
+            Table.insert(taken, Ui.lines[i])
+            i = i + 1
+        end
+
+        while #Ui.lines > mark do
+            Table.remove(Ui.lines)
+        end
+
+        return taken
+    end
+end
+
+-- The last parameter is a function, so callers can pass it as a trailing
+-- block. Because it is last, "spacing" may sit in front of it with a default
+-- and be skipped at the call site: the block still lands on "body".
+class Panel
+    fn init(title: string, spacing: integer = 0, body: fn() -> nil)
+        local start: integer = Ui.mark()
+        body()
+        local kids: table<string> = Ui.since(start)
+
+        local inner: integer = String.len(title)
+        for _, line in kids do
+            if String.len(line) > inner then
+                inner = String.len(line)
+            end
+        end
+
+        Ui.text("+" .. title .. String.rep("-", inner - String.len(title)) .. "+")
+
+        local i: integer = 0
+        while i < spacing do
+            Ui.text("|" .. String.rep(" ", inner) .. "|")
+            i = i + 1
+        end
+
+        for _, line in kids do
+            Ui.text("|" .. line .. String.rep(" ", inner - String.len(line)) .. "|")
+        end
+
+        Ui.text("+" .. String.rep("-", inner) .. "+")
+    end
+end
+
+class Text
+    fn init(value: string)
+        Ui.text(value)
+    end
+end
+
+-- The call below is exactly:
+--     Panel(title: "Saule", spacing: 1, fn()
+--         ...
+--     end)
+-- Same call, less ceremony. Try rewriting it that way and re-running.
+Panel(title: "Saule", spacing: 1) do
+    Text("Trailing blocks!")
+
+    Panel(title: "Scores") do
+        -- A block holds statements, so "for" and "if" work inside it.
+        local names: table<string> = {"ada", "grace", "linus"}
+        local scores: table<integer> = {120, 340, 90}
+
+        for i, name in names do
+            if scores[i] >= 100 then
+                Text(name .. ": " .. scores[i] .. " *")
+            else
+                Text(name .. ": " .. scores[i])
+            end
+        end
+    end
+end
+
+for _, line in Ui.lines do
+    println(line)
+end
+`,
+	},
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0]!;

@@ -39,7 +39,7 @@ class Main
 	end
 
 	static fn main()
-		local args: table<string> = Os.args()
+		local args = Os.args()
 
 		match args[1]
 			case nil then Main.usage()

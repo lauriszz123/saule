@@ -377,7 +377,16 @@ impl<'a> Cx<'a> {
                 .collect(),
         };
         let mut pi = 0;
-        for arg in args {
+        let last = args.len().saturating_sub(1);
+        for (i, arg) in args.iter().enumerate() {
+            // A trailing block's hint would render on the `do` keyword, past
+            // the closing paren — and which parameter it fills is already
+            // plain from the syntax. Skip it rather than label it. Only the
+            // *final* argument can be one: a block-bodied lambda earlier in
+            // the list is an ordinary argument and still gets its hint.
+            if i == last && arg.is_trailing_block() {
+                continue;
+            }
             match arg {
                 CallArg::Named { .. } => {
                     pi += 1;

@@ -34,7 +34,9 @@ pub(crate) fn call_value_multi(
             let mut positional = Vec::with_capacity(args.len());
             for arg in args {
                 match arg {
-                    EvaluatedArg::Positional(v) => positional.push(v.clone()),
+                    EvaluatedArg::Positional(v) | EvaluatedArg::TrailingBlock(v) => {
+                        positional.push(v.clone())
+                    }
                     EvaluatedArg::Named { name: _, .. } => {
                         return Err(RuntimeError::TypeError {
                             message: format!(

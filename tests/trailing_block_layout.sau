@@ -1,0 +1,111 @@
+-- The `examples/ui-blocks` pattern, condensed into one self-checking file so
+-- CI gates it: an immediate-mode layout where every container takes its
+-- children as a trailing block.
+--
+-- Exercises the parts that are easy to break: a container's `body` parameter
+-- sitting after a defaulted one, nesting, and `for` / `if` running inside a
+-- block.
+
+class Ui
+	static lines: table<string> = {}
+
+	static fn text(value: string) -> nil
+		Table.insert(Ui.lines, value)
+	end
+
+	static fn mark() -> integer
+		return #Ui.lines
+	end
+
+	static fn since(mark: integer) -> table<string>
+		local taken: table<string> = {}
+		local i: integer = mark + 1
+		while i <= #Ui.lines do
+			Table.insert(taken, Ui.lines[i])
+			i = i + 1
+		end
+		while #Ui.lines > mark do
+			Table.remove(Ui.lines)
+		end
+		return taken
+	end
+
+	-- `body` is last, so `pad` can be skipped and the block still binds here.
+	static fn panel(title: string, pad: integer = 0, body: fn() -> nil) -> nil
+		local start: integer = Ui.mark()
+		body()
+		local kids: table<string> = Ui.since(start)
+
+		local inner: integer = String.len(title)
+		for _, line in kids do
+			if String.len(line) > inner then
+				inner = String.len(line)
+			end
+		end
+
+		Table.insert(Ui.lines, "+" .. title .. String.rep("-", inner - String.len(title)) .. "+")
+		local i: integer = 0
+		while i < pad do
+			Table.insert(Ui.lines, "|" .. String.rep(" ", inner) .. "|")
+			i = i + 1
+		end
+		for _, line in kids do
+			Table.insert(Ui.lines, "|" .. line .. String.rep(" ", inner - String.len(line)) .. "|")
+		end
+		Table.insert(Ui.lines, "+" .. String.rep("-", inner) .. "+")
+	end
+
+	static fn draw(body: fn() -> nil) -> string
+		Ui.lines = {}
+		body()
+		return Table.concat(Ui.lines, "\n")
+	end
+end
+
+class Main
+	static local names: table<string> = {"ada", "grace"}
+
+	static fn main()
+		-- `draw`'s only parameter is the block.
+		local out: string = Ui.draw() do
+			-- `pad` is named here...
+			Ui.panel(title: "outer", pad: 1) do
+				Ui.text("hi")
+
+				-- ...and skipped here, which is the case that breaks if a
+				-- trailing block binds to the next free slot instead of the
+				-- last parameter.
+				Ui.panel(title: "inner") do
+					for _, name in Main.names do
+						if String.len(name) > 3 then
+							Ui.text(name .. "!")
+						else
+							Ui.text(name)
+						end
+					end
+				end
+			end
+		end
+
+		-- The inner panel is 6 wide: "grace" is longer than 3 so it gains a
+		-- "!", which is wider than the "inner" title. The outer panel is then
+		-- sized to that framed child, not to its own title.
+		local want: string = "+outer---+\n"
+			.. "|        |\n"
+			.. "|hi      |\n"
+			.. "|+inner-+|\n"
+			.. "||ada   ||\n"
+			.. "||grace!||\n"
+			.. "|+------+|\n"
+			.. "+--------+"
+
+		if out != want then
+			println("got:")
+			println(out)
+			println("want:")
+			println(want)
+			throw "layout mismatch"
+		end
+		println("layout ok")
+	end
+end

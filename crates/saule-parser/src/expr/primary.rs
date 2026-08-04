@@ -72,7 +72,7 @@ impl Parser {
                 } else {
                     // Parenthesised expression.
                     self.advance();
-                    let inner = self.parse_expression()?;
+                    let inner = self.with_trailing_block(|p| p.parse_expression())?;
                     self.expect(&Token::RParen, "`)`")?;
                     Ok(inner)
                 }
@@ -87,15 +87,18 @@ impl Parser {
     pub(crate) fn parse_table_literal(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let open = self.advance(); // consume `{`
         let mut items: Vec<TableEntry> = Vec::new();
-        if !self.check(&Token::RBrace) {
-            items.push(self.parse_table_entry()?);
-            while self.eat(&Token::Comma) {
-                if self.check(&Token::RBrace) {
-                    break; // allow trailing comma
+        self.with_trailing_block(|p| {
+            if !p.check(&Token::RBrace) {
+                items.push(p.parse_table_entry()?);
+                while p.eat(&Token::Comma) {
+                    if p.check(&Token::RBrace) {
+                        break; // allow trailing comma
+                    }
+                    items.push(p.parse_table_entry()?);
                 }
-                items.push(self.parse_table_entry()?);
             }
-        }
+            Ok(())
+        })?;
         let close = self.expect(&Token::RBrace, "`}` to close table literal")?;
         let span = open.span.start..close.span.end;
         Ok(Spanned::new(Expr::Table(items), span))

@@ -1,0 +1,10 @@
+-- Only a call can carry a trailing block; a bare name cannot.
+-- `view do ... end` must be a parse error, not a differently-shaped parse.
+
+fn view(body: fn() -> nil) -> nil
+  body()
+end
+
+view do
+  println("hi")
+end

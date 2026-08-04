@@ -48,19 +48,16 @@ impl<'a> Cx<'a> {
                     .as_ref()
                     .map(|s| s.expected_arg_types(&self.positional_arg_types(args)))
                     .unwrap_or_default();
-                let mut slot = 0usize;
-                for a in args {
-                    let want = match a {
-                        saule_ast::CallArg::Positional(_) => {
-                            let i = slot;
-                            slot += 1;
-                            expected.get(i).cloned().flatten()
-                        }
-                        saule_ast::CallArg::Named { name, .. } => sig
-                            .as_ref()
-                            .and_then(|s| s.params.iter().position(|p| &p.name == name))
-                            .and_then(|i| expected.get(i).cloned().flatten()),
-                    };
+                // Slot assignment follows the same rule the typechecker and
+                // interpreter use, so a trailing block after a named argument
+                // is read against the parameter it actually binds to.
+                let names: Vec<&str> = sig
+                    .as_ref()
+                    .map(|s| s.params.iter().map(|p| p.name.as_str()).collect())
+                    .unwrap_or_default();
+                let slots = saule_ast::resolve_arg_slots(args, &names);
+                for (a, slot) in args.iter().zip(slots.iter()) {
+                    let want = slot.and_then(|i| expected.get(i).cloned().flatten());
                     self.visit_call_arg_with_params(a, sig.as_ref(), want.as_ref());
                 }
             }

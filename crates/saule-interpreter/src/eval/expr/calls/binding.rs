@@ -29,7 +29,7 @@ pub(crate) fn native_positional_args(
         return Ok(args
             .iter()
             .map(|a| match a {
-                EvaluatedArg::Positional(v) => v.clone(),
+                EvaluatedArg::Positional(v) | EvaluatedArg::TrailingBlock(v) => v.clone(),
                 // No named args present, so this branch is unreachable, but
                 // map exhaustively rather than panic.
                 EvaluatedArg::Named { value, .. } => value.clone(),
@@ -75,6 +75,28 @@ pub(crate) fn native_positional_args(
                 }
                 slots[next_positional] = Some(value.clone());
                 next_positional += 1;
+            }
+            // Written after the parentheses, so it is exempt from the
+            // positional-before-named rule and binds to the last parameter.
+            EvaluatedArg::TrailingBlock(value) => {
+                let Some(idx) = slots.len().checked_sub(1) else {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "`{name}` takes no parameters, so it cannot take a trailing block"
+                        ),
+                        span: span.clone(),
+                    });
+                };
+                if slots[idx].is_some() {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "duplicate argument for parameter `{}` — a trailing block binds to the last parameter, which was already supplied",
+                            param_names[idx]
+                        ),
+                        span: span.clone(),
+                    });
+                }
+                slots[idx] = Some(value.clone());
             }
             EvaluatedArg::Named {
                 name: arg_name,
@@ -154,7 +176,16 @@ pub(crate) fn bind_params(
     // the shape of nearly every call in a program. Arguments map onto
     // parameters by index, so there's nothing to reorder and none of the
     // buffers the general path needs.
-    if variadic_idx.is_none() && !args.iter().any(|a| matches!(a, EvaluatedArg::Named { .. })) {
+    // A trailing block sits at its positional index only when the call fills
+    // every parameter; otherwise it has to be reordered onto the last slot, and
+    // the general path below does that.
+    if variadic_idx.is_none()
+        && !args.iter().any(|a| matches!(a, EvaluatedArg::Named { .. }))
+        && (args.len() == params.len()
+            || !args
+                .iter()
+                .any(|a| matches!(a, EvaluatedArg::TrailingBlock(_))))
+    {
         if args.len() > params.len() {
             return Err(RuntimeError::TypeError {
                 message: format!(
@@ -167,7 +198,7 @@ pub(crate) fn bind_params(
         }
         for (i, param) in params.iter().enumerate() {
             let value = match args.get(i) {
-                Some(EvaluatedArg::Positional(v)) => v.clone(),
+                Some(EvaluatedArg::Positional(v) | EvaluatedArg::TrailingBlock(v)) => v.clone(),
                 // `any(Named)` above ruled this out; map it exhaustively
                 // rather than panic.
                 Some(EvaluatedArg::Named { value, .. }) => value.clone(),
@@ -226,6 +257,29 @@ pub(crate) fn bind_params(
                 }
                 assigned[next_positional] = Some(value.clone());
                 next_positional += 1;
+            }
+            // See `saule_ast::resolve_arg_slots`: a trailing block binds to
+            // the callee's last parameter, so `panel(title: "Stats") do … end`
+            // reaches `body` even when a defaulted `spacing` sits in between.
+            EvaluatedArg::TrailingBlock(value) => {
+                let Some(idx) = params.len().checked_sub(1) else {
+                    return Err(RuntimeError::TypeError {
+                        message:
+                            "this function takes no parameters, so it cannot take a trailing block"
+                                .to_string(),
+                        span: span.clone(),
+                    });
+                };
+                if assigned[idx].is_some() {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "duplicate argument for parameter `{}` — a trailing block binds to the last parameter, which was already supplied",
+                            params[idx].name
+                        ),
+                        span: span.clone(),
+                    });
+                }
+                assigned[idx] = Some(value.clone());
             }
             EvaluatedArg::Named { name, value } => {
                 seen_named = true;
@@ -346,13 +400,27 @@ pub(crate) fn missing_argument_error(
     }
 }
 
+/// Index of the argument that binds as a trailing block rather than by
+/// position: the final argument, when it is a block-bodied lambda. It targets
+/// the callee's last parameter, which coincides with its positional index only
+/// when the call supplies every parameter.
+pub(crate) fn trailing_block_index(args: &[CallArg]) -> Option<usize> {
+    args.len()
+        .checked_sub(1)
+        .filter(|&i| args[i].is_trailing_block())
+}
+
 pub(crate) fn eval_call_args(
     args: &[CallArg],
     env: &Rc<RefCell<Environment>>,
 ) -> Result<Vec<EvaluatedArg>, RuntimeError> {
     let mut out = Vec::with_capacity(args.len());
-    for arg in args {
+    let trailing = trailing_block_index(args);
+    for (i, arg) in args.iter().enumerate() {
         match arg {
+            CallArg::Positional(expr) if Some(i) == trailing => {
+                out.push(EvaluatedArg::TrailingBlock(eval(expr, env)?))
+            }
             CallArg::Positional(expr) => out.push(EvaluatedArg::Positional(eval(expr, env)?)),
             CallArg::Named { name, value } => out.push(EvaluatedArg::Named {
                 name: name.clone(),

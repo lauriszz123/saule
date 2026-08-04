@@ -1,0 +1,88 @@
+-- The surface widgets draw onto, and the root of every screen.
+--
+--     local screen: Canvas = Canvas() do
+--         Text("hello")
+--     end
+--
+-- `Canvas`'s initialiser takes the screen's contents as its last parameter, so
+-- it can be written as a trailing block. Everything constructed inside that
+-- block draws onto the canvas as it is constructed — by the time `Canvas()`
+-- returns, the screen is already built.
+--
+-- The buffer is one flat list of lines plus the two operations that make
+-- nesting work:
+--
+--   * `mark()`  — remember how many lines exist right now
+--   * `since()` — take back everything drawn after a mark
+--
+-- A container marks, runs its body (during which the children append their own
+-- lines), then takes back exactly what they drew. That is the entire "child
+-- list" an immediate-mode UI needs — no widget tree is ever built.
+export class Canvas
+	-- Where widgets draw. Ambient rather than passed around, so a widget's
+	-- initialiser needs no parameter for it.
+	static lines: table<string> = {}
+
+	local out: string = ""
+
+	fn init(body: fn() -> nil)
+		Canvas.lines = {}
+		body()
+		self.out = Table.concat(Canvas.lines, "\n")
+	end
+
+	fn render() -> string
+		return self.out
+	end
+
+	-- ── The drawing surface ─────────────────────────────────────────────
+
+	static fn add(line: string) -> nil
+		Table.insert(Canvas.lines, line)
+	end
+
+	static fn mark() -> integer
+		return #Canvas.lines
+	end
+
+	-- Remove and return every line added after `mark`.
+	static fn since(mark: integer) -> table<string>
+		local taken: table<string> = {}
+		local i: integer = mark + 1
+
+		while i <= #Canvas.lines do
+			Table.insert(taken, Canvas.lines[i])
+			i = i + 1
+		end
+
+		while #Canvas.lines > mark do
+			Table.remove(Canvas.lines)
+		end
+
+		return taken
+	end
+
+	-- ── Measuring ───────────────────────────────────────────────────────
+
+	-- Width of the widest line. A container is sized to its contents, and the
+	-- contents are only known once its body has run.
+	static fn widthOf(lines: table<string>) -> integer
+		local w: integer = 0
+		for _, line in lines do
+			local n: integer = String.len(line)
+			if n > w then
+				w = n
+			end
+		end
+		return w
+	end
+
+	-- Pad each line out to `w` so a frame's right edge lines up.
+	static fn padAll(lines: table<string>, w: integer) -> table<string>
+		local out: table<string> = {}
+		for _, line in lines do
+			Table.insert(out, line .. String.rep(" ", w - String.len(line)))
+		end
+		return out
+	end
+end

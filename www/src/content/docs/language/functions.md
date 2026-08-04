@@ -1,11 +1,13 @@
 ---
 title: "Functions"
-description: "Inside the body a type parameter is rigid: T stands for whatever the caller picked, so it matches only itself. Widening into any is free, but narrowing…"
+description: "Functions are declared with fn, take typed parameters, and state what they return. Parameters may carry defaults, be passed by name, or be variadic."
 sidebar:
   order: 4
 ---
 
 <!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+
+Functions are declared with `fn`, take typed parameters, and state what they return. Parameters may carry defaults, be passed by name, or be variadic.
 
 ### Basic Functions
 

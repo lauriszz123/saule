@@ -146,7 +146,7 @@ impl Parser {
 
     pub(crate) fn parse_while(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let kw = self.advance(); // `while`
-        let cond = self.parse_expression()?;
+        let cond = self.without_trailing_block(|p| p.parse_expression())?;
         self.expect(&Token::Do, "`do` after `while` condition")?;
         let body = self.parse_block_until(&[Token::End])?;
         let end = self.expect(&Token::End, "`end` to close `while`")?;
@@ -179,11 +179,11 @@ impl Parser {
 
         // Lua-style numeric for loop: `for i = from, to [, step] do ... end`
         if self.eat(&Token::Assign) {
-            let from = self.parse_expression()?;
+            let from = self.without_trailing_block(|p| p.parse_expression())?;
             self.expect(&Token::Comma, "`,` after start value in numeric `for`")?;
-            let to = self.parse_expression()?;
+            let to = self.without_trailing_block(|p| p.parse_expression())?;
             let step = if self.eat(&Token::Comma) {
-                Some(self.parse_expression()?)
+                Some(self.without_trailing_block(|p| p.parse_expression())?)
             } else {
                 None
             };
@@ -215,7 +215,7 @@ impl Parser {
             vars.push((n, t));
         }
         self.expect(&Token::In, "`in` or `=` in `for`")?;
-        let iter = self.parse_expression()?;
+        let iter = self.without_trailing_block(|p| p.parse_expression())?;
         self.expect(&Token::Do, "`do` in for-in")?;
         let body = self.parse_block_until(&[Token::End])?;
         let end = self.expect(&Token::End, "`end` to close `for`")?;
