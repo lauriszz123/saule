@@ -43,6 +43,24 @@ pub enum Decl {
         variants: Vec<Spanned<EnumVariant>>,
         methods: Vec<Method>,
     },
+    /// `export name: T = expr` — a module-level variable published to
+    /// importers, the module-scope counterpart of a class's public field.
+    ///
+    /// Only the exported spelling reaches this node: an unexported
+    /// module-level binding is written `local name = expr` and stays a
+    /// [`Stmt::Local`].
+    Variable {
+        exported: bool,
+        name: String,
+        /// Byte range of the declared name, for tooling (hover,
+        /// go-to-definition) that wants the identifier rather than the
+        /// whole statement.
+        name_span: std::ops::Range<usize>,
+        ty: Option<Type>,
+        /// Byte range of the type ascription, when one was written.
+        ty_span: Option<std::ops::Range<usize>>,
+        value: Option<Spanned<Expr>>,
+    },
     Import {
         names: ImportNames,
         /// The module path with `.` / `/` separators, e.g. `some.folder.module`

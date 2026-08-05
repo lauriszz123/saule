@@ -18,6 +18,17 @@ pub enum SemanticError {
         span: miette::SourceSpan,
     },
 
+    #[error("static field `{field}` of class `{class}` is never initialized")]
+    #[diagnostic(help(
+        "give it a value in the declaration (`static local {field}: ... = ...`) or mark the type nullable with `?` — a static has no `init` to assign it in"
+    ))]
+    StaticFieldNotInitialized {
+        class: String,
+        field: String,
+        #[label("declared without a value")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`{which}` is only valid inside a loop")]
     #[diagnostic(help("move this inside a `for`, `while`, or `repeat` loop"))]
     LoopControlOutsideLoop {

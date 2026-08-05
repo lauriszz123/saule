@@ -1,0 +1,16 @@
+-- A class without an `init` has nowhere to assign its fields, so a
+-- non-nullable field with no default starts out `nil`. Reported the same
+-- way as a field the constructor forgets.
+class Player
+	local name: string
+
+	fn shout() -> string
+		return self.name
+	end
+end
+
+class Main
+	static fn main()
+		println(Player().shout())
+	end
+end

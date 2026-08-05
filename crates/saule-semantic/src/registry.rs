@@ -97,11 +97,17 @@ pub struct FunctionSig {
 
 pub type FunctionRegistry = HashMap<String, FunctionSig>;
 
+/// Declared types of module-level `export name: T = value` variables,
+/// keyed by the name they are visible under locally (so an
+/// `import x as y` entry is filed under `y`).
+pub type VariableRegistry = HashMap<String, Type>;
+
 thread_local! {
     static CLASSES: RefCell<ClassRegistry> = RefCell::new(HashMap::new());
     static INTERFACES: RefCell<InterfaceRegistry> = RefCell::new(HashMap::new());
     static ENUMS: RefCell<EnumRegistry> = RefCell::new(HashMap::new());
     static FUNCTIONS: RefCell<FunctionRegistry> = RefCell::new(HashMap::new());
+    static VARIABLES: RefCell<VariableRegistry> = RefCell::new(HashMap::new());
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -122,6 +128,10 @@ pub fn with_enums<R>(f: impl FnOnce(&EnumRegistry) -> R) -> R {
 
 pub fn with_functions<R>(f: impl FnOnce(&FunctionRegistry) -> R) -> R {
     FUNCTIONS.with(|c| f(&c.borrow()))
+}
+
+pub fn with_variables<R>(f: impl FnOnce(&VariableRegistry) -> R) -> R {
+    VARIABLES.with(|c| f(&c.borrow()))
 }
 
 /// Look up a top-level function's signature by its *local* name — the
@@ -405,9 +415,31 @@ pub fn install_functions(funcs: FunctionRegistry) {
     FUNCTIONS.with(|c| *c.borrow_mut() = funcs);
 }
 
+pub fn install_variables(vars: VariableRegistry) {
+    VARIABLES.with(|c| *c.borrow_mut() = vars);
+}
+
+/// Declared types of the module's own `export name: T` variables. An
+/// un-annotated variable contributes nothing — there is no declared type
+/// to record, and inference at the use site is left to fall through.
+pub fn build_variable_registry(module: &Module) -> VariableRegistry {
+    let mut out = VariableRegistry::new();
+    for stmt in &module.stmts {
+        if let Stmt::Decl(d) = &stmt.value
+            && let Decl::Variable {
+                name, ty: Some(t), ..
+            } = &d.value
+        {
+            out.insert(name.clone(), t.clone());
+        }
+    }
+    out
+}
+
 pub fn clear_registries() {
     CLASSES.with(|c| c.borrow_mut().clear());
     INTERFACES.with(|c| c.borrow_mut().clear());
     ENUMS.with(|c| c.borrow_mut().clear());
     FUNCTIONS.with(|c| c.borrow_mut().clear());
+    VARIABLES.with(|c| c.borrow_mut().clear());
 }

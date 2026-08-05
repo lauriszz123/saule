@@ -12,20 +12,60 @@ impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
 
     pub(crate) fn parse_export(&mut self) -> Result<Spanned<Stmt>, ParseError> {
-        self.advance(); // consume `export`
+        let kw = self.advance(); // consume `export`
         let decl = match self.peek().value {
             Token::Fn => self.parse_fn_decl(true, false)?,
             Token::Class => self.parse_class_decl(true)?,
             Token::Interface => self.parse_interface_decl(true)?,
             Token::Enum => self.parse_enum_decl(true)?,
+            // `export name: T = expr` — a module-level variable. No keyword
+            // introduces it, so an identifier here is the whole signal.
+            Token::Identifier(_) => self.parse_variable_decl(true, kw.span.start)?,
             _ => {
                 return Err(ParseError::Expected {
-                    expected: "a declaration after `export`",
+                    expected: "a declaration or `name: T = value` after `export`",
                     span: self.peek().span.clone(),
                 });
             }
         };
         Ok(stmt_decl(decl))
+    }
+
+    /// `name: T = expr`, the body of an `export`ed module variable. The
+    /// annotation and the initializer are each optional in the grammar;
+    /// leaving the value off is what the "never initialized" check in
+    /// typeck reports against a non-nullable `T`.
+    pub(crate) fn parse_variable_decl(
+        &mut self,
+        exported: bool,
+        start: usize,
+    ) -> Result<Spanned<Decl>, ParseError> {
+        let (name, name_span) = self.expect_ident("variable name")?;
+        let (ty, ty_span) = if self.eat(&Token::Colon) {
+            let ty_start = self.peek().span.start;
+            let t = self.parse_type()?;
+            (Some(t), Some(ty_start..self.last_consumed_end()))
+        } else {
+            (None, None)
+        };
+        let (value, end) = if self.eat(&Token::Assign) {
+            let e = self.parse_expression()?;
+            let end = e.span.end;
+            (Some(e), end)
+        } else {
+            (None, self.last_consumed_end())
+        };
+        Ok(Spanned::new(
+            Decl::Variable {
+                exported,
+                name,
+                name_span,
+                ty,
+                ty_span,
+                value,
+            },
+            start..end,
+        ))
     }
 
     pub(crate) fn parse_fn_decl(

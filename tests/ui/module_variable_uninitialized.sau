@@ -1,0 +1,10 @@
+-- A module variable follows the same rule as every other binding: a
+-- non-nullable type with no value would start out `nil`. Give it a value
+-- or mark the type `string?`.
+export appName: string
+
+class Main
+	static fn main()
+		println(appName)
+	end
+end

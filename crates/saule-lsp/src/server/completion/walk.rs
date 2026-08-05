@@ -320,6 +320,21 @@ impl Walk {
                     self.block(&m.body);
                 }
             }
+            // Module variables are in scope for the whole file, so bind the
+            // name before walking on — completion inside a later function
+            // body should offer it.
+            Decl::Variable {
+                name, ty, value, ..
+            } => {
+                self.ty(ty.as_ref());
+                self.opt_expr(value.as_ref());
+                self.bind_init(
+                    name,
+                    ty.clone(),
+                    value.as_ref().map(|v| v.value.clone()),
+                    "module variable",
+                );
+            }
             Decl::Import {
                 names,
                 path,

@@ -216,7 +216,8 @@ pub(super) fn declared_name(d: &Decl) -> &str {
         Decl::Function { name, .. }
         | Decl::Class { name, .. }
         | Decl::Interface { name, .. }
-        | Decl::Enum { name, .. } => name,
+        | Decl::Enum { name, .. }
+        | Decl::Variable { name, .. } => name,
         Decl::Import { .. } => "",
     }
 }

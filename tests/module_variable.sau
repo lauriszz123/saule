@@ -1,0 +1,24 @@
+-- `export name: T = value` declares a module-level variable: the module
+-- scope counterpart of a class's public field. It is visible to every
+-- function in the file and importable by name.
+export appName: string = "Saule"
+export version: integer = 26
+export retries = 3
+export pending: string?
+
+export fn banner() -> string
+	return appName .. " v" .. version
+end
+
+class Main
+	static fn main()
+		println(banner())
+		println(retries)
+		println(pending ?? "nothing pending")
+
+		-- Module variables are mutable, and the write is type-checked
+		-- against the declaration.
+		version = version + 1
+		println(banner())
+	end
+end

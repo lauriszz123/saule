@@ -349,6 +349,14 @@ fn needs_top_separator(prev: &Stmt, next: &Stmt) -> bool {
     if p_is_import && n_is_import {
         return false;
     }
+    // Module variables read as a block of constants, like a run of imports:
+    // keep consecutive ones together and let the author's own blank lines
+    // group them.
+    let p_is_var = matches!(prev, Stmt::Decl(d) if matches!(d.value, Decl::Variable { .. }));
+    let n_is_var = matches!(next, Stmt::Decl(d) if matches!(d.value, Decl::Variable { .. }));
+    if p_is_var && n_is_var {
+        return false;
+    }
     let p_is_decl = matches!(prev, Stmt::Decl(_));
     let n_is_decl = matches!(next, Stmt::Decl(_));
     p_is_decl || n_is_decl

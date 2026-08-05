@@ -1,0 +1,10 @@
+-- A `static local` with a non-nullable type and no value is `nil` at every
+-- read: there is no `init` running before the first access to assign it.
+-- Either give it a value here or mark the type nullable (`table<integer>?`).
+class Main
+	static local scores: table<integer>
+
+	static fn main()
+		println(Main.scores[1])
+	end
+end

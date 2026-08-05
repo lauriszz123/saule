@@ -153,7 +153,7 @@ local err = when(5):to_str():square()
 
 Rules:
 - The chain needs **at least one** `:stage()` after `when(...)` — a bare `when(x)` is a parse error so the keyword's purpose stays unambiguous.
-- Stage targets are resolved as **free functions** in scope (locals, globals, top-level `fn`). Class methods and lambdas aren't pipeable today.
+- Stage targets are resolved as **free functions** in scope (locals, module variables, top-level `fn`). Class methods and lambdas aren't pipeable today.
 - The piped value always becomes argument `#1`; declared defaults and the variadic tail still apply to the remaining parameters as usual.
 
 ---

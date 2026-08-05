@@ -279,6 +279,11 @@ fn exported_name(decl: &Decl) -> Option<&str> {
             exported: true,
             name,
             ..
+        }
+        | Decl::Variable {
+            exported: true,
+            name,
+            ..
         } => Some(name),
         _ => None,
     }

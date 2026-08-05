@@ -1,0 +1,9 @@
+-- Parallel binding with fewer values than names: `port` gets no value and
+-- is therefore `nil`, which its non-nullable `integer` forbids — the same
+-- rule as a bare `local port: integer`.
+class Main
+	static fn main()
+		local host: string, port: integer = "localhost"
+		println(host .. ":" .. port)
+	end
+end

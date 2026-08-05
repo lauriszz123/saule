@@ -197,6 +197,14 @@ fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                 check_block(&meth.body, Ctx::enter_function(), errors);
             }
         }
+        // The initializer runs at module scope, so `break` / `continue` in
+        // it are as invalid as anywhere else outside a loop — `ctx` is
+        // passed through unchanged to say so.
+        Decl::Variable { value, .. } => {
+            if let Some(v) = value {
+                check_expr(v, ctx, errors);
+            }
+        }
         // Interface / Import declarations have no executable body.
         Decl::Interface { .. } | Decl::Import { .. } => {}
     }

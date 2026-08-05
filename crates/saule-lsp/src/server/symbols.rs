@@ -12,6 +12,7 @@ use saule_ast::{ClassMember, Decl, EnumVariant, Method, Module, Stmt};
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind, Url};
 
 use crate::line_index::LineIndex;
+use crate::server::sighelp::render_type;
 
 use super::Backend;
 
@@ -158,6 +159,18 @@ fn build(module: &Module, source: &str, idx: &LineIndex) -> Vec<DocumentSymbol> 
                     source,
                     idx,
                     Some(children),
+                ));
+            }
+            Decl::Variable { name, ty, .. } => {
+                out.push(symbol(
+                    name,
+                    SymbolKind::VARIABLE,
+                    ty.as_ref().map(render_type),
+                    &d.span,
+                    name,
+                    source,
+                    idx,
+                    None,
                 ));
             }
             Decl::Import { .. } => {

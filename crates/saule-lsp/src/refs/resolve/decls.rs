@@ -115,6 +115,28 @@ impl<'a> ResolveCx<'a> {
                 }
                 self.enclosing_class = prev;
             }
+            Decl::Variable {
+                name,
+                name_span,
+                ty,
+                value,
+                ..
+            } => {
+                if let Some(v) = value {
+                    self.visit_expr(v);
+                }
+                if let Some(t) = ty {
+                    let head_end = value.as_ref().map(|v| v.span.start).unwrap_or(d.span.end);
+                    self.record_type_names_in(t, &(d.span.start..head_end));
+                }
+                self.record(
+                    name_span.clone(),
+                    Symbol::Local {
+                        name: name.clone(),
+                        def_span: name_span.clone(),
+                    },
+                );
+            }
             Decl::Import { path, quoted, .. } => {
                 // Find the path inside the import statement — quoted between
                 // the matching quotes, bare at the end of the declaration.

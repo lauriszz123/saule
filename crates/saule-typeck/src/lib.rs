@@ -42,6 +42,7 @@ pub mod ops;
 pub mod sigs;
 mod state;
 mod stmt;
+mod vars;
 
 pub use error::TypeCheckError;
 
@@ -55,6 +56,7 @@ pub use error::TypeCheckError;
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
     let _restore = state::set_current_class(None);
     funcs::install(module);
+    vars::install(module);
 
     let mut errors = Vec::new();
     let mut scope = state::Scope::default();
@@ -63,5 +65,6 @@ pub fn check(module: &Module) -> Vec<TypeCheckError> {
     }
 
     funcs::clear();
+    vars::clear();
     errors
 }

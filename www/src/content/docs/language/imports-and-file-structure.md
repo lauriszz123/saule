@@ -107,7 +107,7 @@ Re-exporting is **only** done by `init.sau` / `init.saule`. Any other file keeps
 
 ### Exporting
 
-Add `export` before a class, interface, enum, or function to make it accessible from other files:
+Add `export` before a class, interface, enum, function, or variable to make it accessible from other files:
 
 ```saule
 export class Player
@@ -120,7 +120,11 @@ export fn clamp(value: integer, min: integer, max: integer) -> integer
 
     return value
 end
+
+export maxPlayers: integer = 8
 ```
+
+An `export name: T = value` is a **module variable** (see [Variables](/saule/language/variables/)) — a single value shared by every file that imports it, not a copy per importer.
 
 A file without `export` is private to itself — even sibling files in the same folder can't see its declarations. The only way to share code across files is to `export` it and `import` it explicitly.
 

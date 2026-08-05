@@ -2623,3 +2623,37 @@ end
         Some("```saule\n(parameter) n: string\n```")
     );
 }
+
+/// Hovering the declaring identifier of `export name: T = value` reports it
+/// as a module variable with its declared type.
+#[test]
+fn a_module_variable_hovers_with_its_declared_type() {
+    let src = "\
+export appName: string = \"Saule\"
+
+fn banner() -> string
+  return appName
+end
+";
+    assert_eq!(
+        hover(src, "appName").as_deref(),
+        Some("```saule\n(export) appName: string\n```")
+    );
+}
+
+/// With no annotation the type comes from the initializer, the same way an
+/// un-annotated `local` is rendered.
+#[test]
+fn an_unannotated_module_variable_hovers_with_its_inferred_type() {
+    let src = "\
+export retries = 3
+
+fn main() -> nil
+  print(retries)
+end
+";
+    assert_eq!(
+        hover(src, "retries").as_deref(),
+        Some("```saule\n(export) retries: integer\n```")
+    );
+}

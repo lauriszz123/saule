@@ -1,0 +1,10 @@
+-- Writes to a module variable are checked against its declared type, from
+-- anywhere in the file.
+export count: integer = 0
+
+class Main
+	static fn main()
+		count = "not a number"
+		println(count)
+	end
+end

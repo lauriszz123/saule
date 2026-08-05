@@ -305,6 +305,16 @@ fn exec_decl(decl: &Spanned<Decl>, env: &Rc<RefCell<Environment>>) -> Result<Flo
             methods,
             ..
         } => enums::exec_enum_decl(name, variants, methods, env, span),
+        Decl::Variable { name, value, .. } => {
+            // No initializer means `nil` — the same rule locals follow. The
+            // typechecker only lets that through for a nullable type.
+            let v = match value {
+                Some(expr_node) => expr::eval(expr_node, env)?,
+                None => Value::Nil,
+            };
+            env.borrow_mut().define(name.clone(), v);
+            Ok(Flow::nil())
+        }
         Decl::Import { names, path, .. } => imports::exec_import(names, path, env, span),
     }
 }

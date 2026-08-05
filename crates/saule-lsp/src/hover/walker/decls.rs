@@ -180,6 +180,40 @@ impl<'a> Cx<'a> {
                 }
                 self.enclosing_class = prev;
             }
+            Decl::Variable {
+                name,
+                name_span,
+                ty,
+                ty_span,
+                value,
+                ..
+            } => {
+                if let Some(v) = value {
+                    self.visit_expr(v);
+                }
+                let doc = self.doc_at(d.span.start);
+                let resolved = ty
+                    .clone()
+                    .or_else(|| value.as_ref().and_then(|v| self.infer_init_type(&v.value)))
+                    .unwrap_or_else(|| saule_ast::Type::Named("any".into()));
+                self.record(
+                    name_span.clone(),
+                    with_doc(
+                        format!(
+                            "```saule\n(export) {name}: {ty}\n```",
+                            ty = crate::hover::render::render_type(&resolved)
+                        ),
+                        doc.as_ref(),
+                    ),
+                );
+                // Cursor on the annotation itself (`export s: Storage = …`
+                // -> hover on `Storage`).
+                if let Some(span) = ty_span
+                    && let Some(t) = ty.as_ref()
+                {
+                    self.record_type_idents_in(t, span);
+                }
+            }
             Decl::Import { names, .. } => {
                 // Best match wins: walk the precomputed blurbs and
                 // record any whose span contains the cursor. Spans

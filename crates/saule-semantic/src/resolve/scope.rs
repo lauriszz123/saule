@@ -30,7 +30,8 @@ pub(crate) fn collect_module_scope(module: &Module) -> HashSet<String> {
                 Decl::Function { name, .. }
                 | Decl::Class { name, .. }
                 | Decl::Interface { name, .. }
-                | Decl::Enum { name, .. } => {
+                | Decl::Enum { name, .. }
+                | Decl::Variable { name, .. } => {
                     scope.insert(name.clone());
                 }
                 Decl::Import { names, .. } => match names {

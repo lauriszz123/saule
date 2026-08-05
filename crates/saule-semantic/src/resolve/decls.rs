@@ -55,6 +55,14 @@ impl Resolver {
                     self.in_method = prev_method;
                 }
             }
+            // The initializer resolves in module scope, where the name is
+            // already bound by `collect_module_scope` — a module variable is
+            // visible to everything in the file, including code above it.
+            Decl::Variable { value, .. } => {
+                if let Some(v) = value {
+                    self.expr(v);
+                }
+            }
             // Interface declarations carry only signatures; no body to walk.
             // Import declarations don't host expressions.
             Decl::Interface { .. } | Decl::Import { .. } => {}

@@ -96,6 +96,40 @@ end
 | `static field: T = value` | class-level, shared, public |
 | `static local field: T = value` | class-level, shared, private |
 
+### Field Initialization
+
+The rule for [locals](/saule/language/variables/#nullable-without-initializer) holds for fields too: a non-nullable field is never allowed to start out `nil`. Every field must therefore get its value from one of three places — a default in the declaration, an assignment in `init`, or a `?` on its type:
+
+```saule
+class Player
+    local name: string = "anon"     -- ok: default
+    local level: integer            -- ok: `init` assigns it
+    local clan: string?             -- ok: nullable, starts nil
+
+    fn init(level: integer)
+        self.level = level
+    end
+end
+```
+
+Leave all three off and the field is reported at compile time:
+
+```saule
+class Player
+    local level: integer            -- ERROR: never initialized
+end
+```
+
+That covers a class with no `init` at all (there is nowhere to assign the field) as well as an `init` that forgets one.
+
+Static fields are stricter — nothing runs before the first read of a static, so `init` is not an option and the value has to be in the declaration:
+
+```saule
+static local scores: table<integer> = {}    -- ok
+static local scores: table<integer>?        -- ok, starts nil
+static local scores: table<integer>         -- ERROR: never initialized
+```
+
 ### Static Members
 
 Static fields and methods belong to the class itself, not to instances. They are accessed via the class name from the outside, or by bare name (or `self.name` in a `static fn`) from inside:
