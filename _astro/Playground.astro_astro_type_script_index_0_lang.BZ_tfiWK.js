@@ -24,6 +24,17 @@ local speed: float = 3.14
 println("health: ", health)
 println("speed:  ", speed)
 
+-- A whole number that belongs in a float has to say so. Three ways,
+-- all the same value:
+local a: float = 2.0
+local b: float = 2f     -- the \`f\` suffix forces a float
+local c: float = .5 * 4f -- the integer part may be omitted
+
+println(a, b, c)
+
+-- Which is why \`2f\` is nicer than \`float(2)\` mid-expression:
+println(speed * 2f)
+
 -- Conversions are explicit, never implicit.
 println(float(health) / 3.0)
 println(int(speed))
