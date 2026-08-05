@@ -262,20 +262,18 @@ fn format_float(f: f64) -> String {
     }
 }
 
-fn quote_str(s: &str) -> String {
-    // The lexer accepts `"…"` and `'…'` alike but keeps only the decoded value,
-    // so the original delimiter is gone by the time the formatter runs and has
-    // to be chosen rather than preserved.
-    //
-    // The rule is the one that needs the fewest backslashes: double quotes
-    // normally, single quotes only when the text contains a `"` and no `'`.
-    // So `'he said "hi"'` survives a format intact instead of turning into
-    // `"he said \"hi\""`, and everything else normalises to one house style.
-    let quote = if s.contains('"') && !s.contains('\'') {
+/// Render `s` as a string literal, using `preferred` as the delimiter when the
+/// caller knows which one the source had.
+///
+/// With no preference the rule is whichever needs the fewest backslashes:
+/// double quotes normally, single quotes only when the text contains a `"` and
+/// no `'`, so a synthesised `he said "hi"` still comes out readable.
+fn quote_str_with(s: &str, preferred: Option<char>) -> String {
+    let quote = preferred.unwrap_or(if s.contains('"') && !s.contains('\'') {
         '\''
     } else {
         '"'
-    };
+    });
 
     let mut out = String::with_capacity(s.len() + 2);
     out.push(quote);

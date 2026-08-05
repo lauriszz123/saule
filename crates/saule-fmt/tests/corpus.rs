@@ -508,12 +508,78 @@ fn format_with_options(src: &str, options: saule_fmt::FmtOptions) -> Result<Stri
 
 // ── String quoting ──────────────────────────────────────────────────────────
 //
-// The lexer accepts `"…"` and `'…'` but keeps only the decoded value, so the
-// formatter picks a delimiter rather than preserving one. The rule is whichever
-// needs fewer backslashes.
+// `Token::String` carries only the decoded value, so the delimiter is gone by
+// the time the AST exists. The printer reads it back out of the source at the
+// literal's span — the same way it preserves float spelling — so a format is
+// not allowed to change which quote the author wrote.
+
+/// Format with the source available, which is what `saule fmt` and the LSP do.
+fn format_with_source(src: &str) -> String {
+    let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex ok");
+    let module = saule_parser::parse(tokens).expect("parse ok");
+    saule_fmt::format_module_with_comments(&module, src, &[])
+}
 
 #[test]
-fn quotes_normalise_to_double() {
+fn quote_style_is_preserved() {
+    for src in [
+        "local s = 'hello'",
+        r#"local s = "hello""#,
+        r#"local s = 'he said "hi"'"#,
+        r#"local s = "it's fine""#,
+        // Escaping the delimiter is preserved too, rather than being
+        // "optimised" into the other quote style.
+        r#"local s = "say \"hi\"""#,
+        r#"local s = 'it\'s'"#,
+    ] {
+        assert_eq!(
+            format_with_source(src).trim(),
+            src,
+            "formatting changed the quote style"
+        );
+    }
+}
+
+#[test]
+fn quote_style_is_preserved_in_every_position() {
+    for src in [
+        // Pattern literal in a match arm.
+        "local r = match v\n  case 'a' then 1\n  case _ then 2\nend",
+        // Non-identifier table key.
+        "local t = { 'a b': 1 }",
+        // Import path.
+        "import x from 'a/b'",
+    ] {
+        let out = format_with_source(src);
+        assert!(
+            out.contains('\''),
+            "single quotes lost in: {src}\n got: {out}"
+        );
+    }
+}
+
+#[test]
+fn quote_choice_is_idempotent() {
+    for src in [
+        "local s = 'hello'",
+        r#"local s = "hello""#,
+        r#"local s = 'he said "hi"'"#,
+        "import x from 'a/b'",
+    ] {
+        let once = format_with_source(src);
+        let twice = format_with_source(&once);
+        assert_eq!(once, twice, "not idempotent: {src}");
+    }
+}
+
+#[test]
+fn without_source_a_delimiter_is_chosen_by_escape_count() {
+    // `format_module` has no source to consult, so it picks whichever quote
+    // needs fewer backslashes.
+    assert_eq!(
+        format_str(r#"local s = 'he said "hi"'"#).unwrap().trim(),
+        r#"local s = 'he said "hi"'"#
+    );
     assert_eq!(
         format_str("local s = 'hello'").unwrap().trim(),
         r#"local s = "hello""#
@@ -521,41 +587,10 @@ fn quotes_normalise_to_double() {
 }
 
 #[test]
-fn single_quotes_used_when_they_avoid_escaping() {
-    // Contains `"` and no `'`, so single quotes leave it unescaped.
-    assert_eq!(
-        format_str(r#"local s = 'he said "hi"'"#).unwrap().trim(),
-        r#"local s = 'he said "hi"'"#
-    );
-}
-
-#[test]
-fn double_quotes_when_both_kinds_appear() {
-    // No delimiter avoids escaping, so the house style wins and `"` is escaped.
-    assert_eq!(
-        format_str(r#"local s = 'it\'s "x"'"#).unwrap().trim(),
-        r#"local s = "it's \"x\"""#
-    );
-}
-
-#[test]
 fn control_characters_survive_a_round_trip() {
     // This used to emit `\x00`, which the lexer rejects — formatting produced
     // a file that no longer lexed.
-    let once = format_str(r#"local s = "a\0b""#).unwrap();
-    let twice = format_str(&once).expect("formatted output must still lex");
-    assert_eq!(once, twice);
-}
-
-#[test]
-fn quote_choice_is_idempotent() {
-    for src in [
-        "local s = 'hello'",
-        r#"local s = 'he said "hi"'"#,
-        r#"local s = "it's fine""#,
-    ] {
-        let once = format_str(src).unwrap();
-        let twice = format_str(&once).unwrap();
-        assert_eq!(once, twice, "not idempotent: {src}");
-    }
+    let once = format_with_source(r#"local s = "a\0b""#);
+    let twice = format_with_source(&once);
+    assert_eq!(once, twice, "formatted output must still lex");
 }

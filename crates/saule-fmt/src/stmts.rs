@@ -279,7 +279,10 @@ impl<'a> Printer<'a> {
                 self.write(&s);
             }
             Pattern::Bool(b) => self.write(if *b { "true" } else { "false" }),
-            Pattern::Str(s) => self.write(&quote_str(s)),
+            Pattern::Str(s) => {
+                let lit = self.str_lit(s, &p.span);
+                self.write(&lit);
+            }
             Pattern::Variant {
                 enum_name,
                 variant,
