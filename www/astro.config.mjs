@@ -17,7 +17,7 @@ export default defineConfig({
 			title: 'Saule',
 			description:
 				'A statically typed, class-oriented scripting language with Lua’s simplicity and a real type system.',
-			tagline: 'Lua’s simplicity. A real type system.',
+			tagline: 'Lua’s simplicity. Now it argues back.',
 			logo: {
 				src: './src/assets/logo.svg',
 				replacesTitle: false,
@@ -38,8 +38,20 @@ export default defineConfig({
 				styleOverrides: {
 					borderRadius: '0.5rem',
 					codeFontFamily: 'var(--saule-font-mono)',
+					// GitHub's themes bring their own cool grey backgrounds
+					// (#f6f8fa and #0d1117). Against this site's warm neutrals
+					// that inverts the colour temperature at the edge of every
+					// code block, so the code surface comes from the palette
+					// instead and only the token colours stay GitHub's.
+					//
+					// Deliberately just the surfaces: the frame chrome — the
+					// terminal title bar with its three dots, the editor tab —
+					// is what makes a `sh` block read as a terminal window, and
+					// it is left to Expressive Code.
+					codeBackground: 'var(--saule-code-bg)',
 					frames: {
 						shadowColor: 'transparent',
+						terminalBackground: 'var(--saule-code-bg)',
 					},
 				},
 			},

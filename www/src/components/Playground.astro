@@ -1,12 +1,16 @@
 ---
 /**
- * The Saule playground: a CodeMirror editor, an example picker, and an
- * output pane.
+ * The Saule playground: a CodeMirror editor, a program picker, and an output
+ * pane.
+ *
+ * The picker holds two kinds of program. Examples ship with the site and are
+ * read-only in the sense that editing one never overwrites it — you fork it
+ * into a script of your own. Scripts are what the visitor writes, and they
+ * live in `localStorage` (see `lib/playground-storage.ts`); they autosave,
+ * rename and delete, and they share by link exactly as examples do.
  *
  * Execution goes through `src/lib/runtime.ts`, which is the only piece that
- * knows whether a browser runtime exists. Everything on this page — editing,
- * highlighting, examples, sharing a program by URL — works today and keeps
- * working unchanged once the WebAssembly build lands.
+ * knows how a program actually runs.
  */
 ---
 
@@ -22,10 +26,18 @@
 -->
 <div class="playground not-content" data-playground>
 	<div class="pg-toolbar">
-		<label class="pg-picker">
-			<span class="pg-picker-label">Example</span>
-			<select data-examples aria-label="Load an example program"></select>
-		</label>
+		<div class="pg-picker-group">
+			<label class="pg-picker">
+				<span class="pg-picker-label">Program</span>
+				<select data-examples aria-label="Open an example or one of your scripts"></select>
+			</label>
+			<button type="button" class="pg-btn" data-new title="Start a script of your own">
+				<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
+					<path d="M7 2h2v5h5v2H9v5H7V9H2V7h5V2Z" fill="currentColor"></path>
+				</svg>
+				New
+			</button>
+		</div>
 
 		<div class="pg-actions">
 			<button type="button" class="pg-btn pg-btn-primary" data-run>
@@ -41,7 +53,10 @@
 				</svg>
 				Stop
 			</button>
-			<button type="button" class="pg-btn" data-reset>Reset</button>
+			<button type="button" class="pg-btn" data-save-as hidden>Save as my script</button>
+			<button type="button" class="pg-btn" data-reset hidden>Reset</button>
+			<button type="button" class="pg-btn" data-rename hidden>Rename</button>
+			<button type="button" class="pg-btn pg-btn-danger-ghost" data-delete hidden>Delete</button>
 			<button type="button" class="pg-btn" data-share>Copy link</button>
 		</div>
 	</div>
@@ -51,7 +66,8 @@
 	<div class="pg-split">
 		<div class="pg-pane pg-pane-editor">
 			<div class="pg-pane-head">
-				<span>main.sau</span>
+				<span data-filename>main.sau</span>
+				<span class="pg-savestate" data-savestate></span>
 			</div>
 			<div class="pg-editor" data-editor></div>
 		</div>
@@ -66,6 +82,29 @@
 				></pre>
 		</div>
 	</div>
+
+	<!--
+		One dialog serves naming, renaming and confirming a delete: they differ
+		only in their title, whether the text field is shown, and whether the
+		confirm button is destructive. `method="dialog"` means Enter in the
+		field confirms and Escape cancels without any keyboard handling here.
+	-->
+	<dialog class="pg-dialog" data-dialog>
+		<form method="dialog" class="pg-dialog-form" data-dialog-form>
+			<h2 class="pg-dialog-title" data-dialog-title></h2>
+			<p class="pg-dialog-body" data-dialog-body hidden></p>
+			<label class="pg-dialog-field" data-dialog-field>
+				<span>File name</span>
+				<input type="text" data-dialog-input autocomplete="off" spellcheck="false" />
+			</label>
+			<div class="pg-dialog-actions">
+				<button type="button" class="pg-btn" data-dialog-cancel>Cancel</button>
+				<button type="submit" value="confirm" class="pg-btn pg-btn-primary" data-dialog-confirm>
+					Save
+				</button>
+			</div>
+		</form>
+	</dialog>
 </div>
 
 <script>
@@ -93,6 +132,20 @@
 	import { saule } from '../lib/saule-mode';
 	import { EXAMPLES, DEFAULT_EXAMPLE } from '../lib/playground-examples';
 	import {
+		listScripts,
+		getScript,
+		createScript,
+		updateScript,
+		renameScript,
+		deleteScript,
+		normaliseName,
+		uniqueName,
+		isPersistent,
+		lastOpened,
+		rememberLast,
+	} from '../lib/playground-storage';
+	import type { UserScript } from '../lib/playground-storage';
+	import {
 		runSaule,
 		stopSaule,
 		RUNTIME_AVAILABLE,
@@ -100,6 +153,11 @@
 		RunCancelledError,
 	} from '../lib/runtime';
 	import type { Diagnostic } from '../lib/runtime';
+
+	/** What a brand-new script starts with — enough to press Run against. */
+	const STARTER = `-- A script of your own. It saves in this browser as you type.
+println("Hello from my script!")
+`;
 
 	const root = document.querySelector<HTMLElement>('[data-playground]');
 	if (root) init(root);
@@ -114,6 +172,44 @@
 		const stopBtn = root.querySelector<HTMLButtonElement>('[data-stop]')!;
 		const resetBtn = root.querySelector<HTMLButtonElement>('[data-reset]')!;
 		const shareBtn = root.querySelector<HTMLButtonElement>('[data-share]')!;
+		const newBtn = root.querySelector<HTMLButtonElement>('[data-new]')!;
+		const saveAsBtn = root.querySelector<HTMLButtonElement>('[data-save-as]')!;
+		const renameBtn = root.querySelector<HTMLButtonElement>('[data-rename]')!;
+		const deleteBtn = root.querySelector<HTMLButtonElement>('[data-delete]')!;
+		const filename = root.querySelector<HTMLElement>('[data-filename]')!;
+		const savestate = root.querySelector<HTMLElement>('[data-savestate]')!;
+
+		const dialog = root.querySelector<HTMLDialogElement>('[data-dialog]')!;
+		const dialogTitle = root.querySelector<HTMLElement>('[data-dialog-title]')!;
+		const dialogBody = root.querySelector<HTMLElement>('[data-dialog-body]')!;
+		const dialogField = root.querySelector<HTMLElement>('[data-dialog-field]')!;
+		const dialogInput = root.querySelector<HTMLInputElement>('[data-dialog-input]')!;
+		const dialogCancel = root.querySelector<HTMLButtonElement>('[data-dialog-cancel]')!;
+		const dialogConfirm = root.querySelector<HTMLButtonElement>('[data-dialog-confirm]')!;
+
+		/**
+		 * What the editor is currently showing. `example` and `user` name an
+		 * entry in the picker; `shared` is a program that arrived in the URL
+		 * and belongs to neither list until it is saved.
+		 */
+		type Current =
+			| { kind: 'example'; id: string }
+			| { kind: 'user'; id: string }
+			| { kind: 'shared'; name: string };
+
+		/**
+		 * Whether scripts survive a reload. False in Safari's private mode and
+		 * wherever storage is denied — the playground still works, but it says
+		 * so in the editor's title bar instead of quietly losing files.
+		 */
+		const persistent = isPersistent();
+
+		let current: Current = { kind: 'example', id: DEFAULT_EXAMPLE.id };
+		/** True while a `load` is writing the document, so the autosave sits it out. */
+		let applying = false;
+		/** Edits to an example or a shared program, which have nowhere to go yet. */
+		let dirty = false;
+		let saveTimer: number | undefined;
 
 		// Colours come from CSS variables so the editor follows Starlight's
 		// light/dark toggle without re-creating the EditorView.
@@ -170,17 +266,39 @@
 			},
 			'.cm-cursor': { borderLeftColor: 'var(--cm-text)' },
 			'&.cm-focused': { outline: 'none' },
-			'.cm-selectionBackground, ::selection': { backgroundColor: 'var(--cm-selection)' },
-			'&.cm-focused .cm-selectionBackground': { backgroundColor: 'var(--cm-selection)' },
+			// Selection is drawn by `drawSelection` as absolutely positioned
+			// rectangles, not by the browser: the native `::selection` inside
+			// `.cm-line` is forced transparent at `Prec.highest`, so styling
+			// it here would do nothing. What has to be overridden instead is
+			// CodeMirror's base theme, and its selectors are deliberately
+			// specific:
+			//
+			//   &light .cm-selectionBackground                                  (3)
+			//   &light.cm-focused > .cm-scroller > .cm-selectionLayer
+			//       .cm-selectionBackground                                     (5)
+			//
+			// A bare `.cm-selectionBackground` is 2 and silently loses — which
+			// is why the editor used to select in CodeMirror's default
+			// lavender however this theme was written. Adding `.cm-editor`
+			// puts each rule one class above its counterpart. (`&light` is the
+			// branch in play because this theme does not declare itself dark;
+			// it tracks Starlight's toggle through CSS variables instead.)
+			'&.cm-editor .cm-selectionLayer .cm-selectionBackground': {
+				backgroundColor: 'var(--cm-selection)',
+			},
+			'&.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+				backgroundColor: 'var(--cm-selection)',
+			},
 			'.cm-errorLine': { backgroundColor: 'var(--cm-error-line)' },
 		});
 
 		const readOnly = new Compartment();
+		const startup = resolveStartup();
 
 		const view = new EditorView({
 			parent: editorHost,
 			state: EditorState.create({
-				doc: initialSource(),
+				doc: startup.source,
 				extensions: [
 					lineNumbers(),
 					highlightActiveLineGutter(),
@@ -205,42 +323,328 @@
 						indentWithTab,
 					]),
 					readOnly.of(EditorState.readOnly.of(false)),
+					EditorView.updateListener.of((update) => {
+						if (update.docChanged && !applying) onEdit();
+					}),
 				],
 			}),
 		});
 
-		// ---- examples -------------------------------------------------------
+		// ---- the picker -----------------------------------------------------
 
-		for (const example of EXAMPLES) {
-			const option = document.createElement('option');
-			option.value = example.id;
-			option.textContent = example.label;
-			picker.append(option);
+		/** The option value for whatever is open, or '' for a shared program. */
+		function currentValue(): string {
+			if (current.kind === 'shared') return 'shared';
+			return `${current.kind}:${current.id}`;
 		}
 
-		let current = DEFAULT_EXAMPLE;
+		/**
+		 * Rebuild both groups from scratch. Scripts are listed first: once
+		 * someone has files of their own, those are what they came back for.
+		 */
+		function renderPicker() {
+			picker.replaceChildren();
 
-		function load(id: string) {
-			const example = EXAMPLES.find((e) => e.id === id);
-			if (!example) return;
-			current = example;
-			picker.value = example.id;
+			const scripts = listScripts();
+			if (scripts.length) {
+				const group = document.createElement('optgroup');
+				group.label = 'My scripts';
+				for (const script of scripts) {
+					const option = document.createElement('option');
+					option.value = `user:${script.id}`;
+					option.textContent = script.name;
+					group.append(option);
+				}
+				picker.append(group);
+			}
+
+			const examples = document.createElement('optgroup');
+			examples.label = 'Examples';
+			for (const example of EXAMPLES) {
+				const option = document.createElement('option');
+				option.value = `example:${example.id}`;
+				option.textContent = example.label;
+				examples.append(option);
+			}
+			picker.append(examples);
+
+			// A shared program is in neither list, so it needs a placeholder to
+			// select — otherwise the picker would show an unrelated entry.
+			if (current.kind === 'shared') {
+				const option = document.createElement('option');
+				option.value = 'shared';
+				option.textContent = `${current.name} (shared link)`;
+				picker.prepend(option);
+			}
+
+			picker.value = currentValue();
+		}
+
+		// ---- opening programs -----------------------------------------------
+
+		/** Replace the document without the change counting as a user edit. */
+		function setDoc(source: string) {
+			applying = true;
+			view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } });
+			applying = false;
+		}
+
+		function openExample(id: string) {
+			const example = EXAMPLES.find((e) => e.id === id) ?? DEFAULT_EXAMPLE;
+			current = { kind: 'example', id: example.id };
+			dirty = false;
+			setDoc(example.source);
 			blurb.textContent = example.blurb;
-			view.dispatch({
-				changes: { from: 0, to: view.state.doc.length, insert: example.source },
-			});
+			afterOpen();
+		}
+
+		function openScript(script: UserScript) {
+			current = { kind: 'user', id: script.id };
+			dirty = false;
+			setDoc(script.source);
+			blurb.textContent = 'Your script. Edits save as you type.';
+			afterOpen();
+		}
+
+		function openShared(name: string, source: string) {
+			current = { kind: 'shared', name };
+			dirty = false;
+			setDoc(source);
+			blurb.textContent = 'Loaded from a shared link — save it to keep it.';
+			afterOpen({ keepHash: true });
+		}
+
+		function afterOpen(options: { keepHash?: boolean } = {}) {
+			if (!options.keepHash) history_replace('');
+			rememberLast(current.kind === 'shared' ? null : currentValue());
+			renderPicker();
+			applyMode();
 			clearOutput();
 		}
 
-		picker.addEventListener('change', () => {
-			load(picker.value);
-			// A picked example replaces a shared program, so drop the stale hash.
-			history_replace('');
+		/** Show the actions that make sense for what is open, and say so. */
+		function applyMode() {
+			const isUser = current.kind === 'user';
+			resetBtn.hidden = current.kind !== 'example';
+			renameBtn.hidden = !isUser;
+			deleteBtn.hidden = !isUser;
+			saveAsBtn.hidden = isUser;
+
+			if (isUser) {
+				const script = getScript(current.id);
+				filename.textContent = script?.name ?? 'untitled.sau';
+			} else if (current.kind === 'shared') {
+				filename.textContent = current.name;
+			} else {
+				filename.textContent = 'main.sau';
+			}
+
+			setSaveState(isUser ? 'saved' : dirty ? 'unsaved' : 'clean');
+		}
+
+		function setSaveState(state: 'saved' | 'saving' | 'unsaved' | 'clean') {
+			savestate.className = 'pg-savestate';
+			if (state === 'clean') {
+				savestate.textContent = '';
+			} else if (state === 'saving') {
+				savestate.textContent = 'saving…';
+			} else if (state === 'saved') {
+				savestate.textContent = persistent ? 'saved' : 'this session only';
+				savestate.classList.add(persistent ? 'pg-saved' : 'pg-unsaved');
+			} else {
+				savestate.textContent = 'unsaved';
+				savestate.classList.add('pg-unsaved');
+			}
+		}
+
+		/**
+		 * Every edit either autosaves, or is flagged as having nowhere to go.
+		 * Examples and shared programs are never written over: editing one
+		 * just offers "Save as my script".
+		 */
+		function onEdit() {
+			// The hash describes a program that no longer matches the buffer.
+			if (window.location.hash) history_replace('');
+
+			if (current.kind !== 'user') {
+				if (!dirty) {
+					dirty = true;
+					setSaveState('unsaved');
+				}
+				return;
+			}
+
+			setSaveState('saving');
+			window.clearTimeout(saveTimer);
+			saveTimer = window.setTimeout(() => {
+				if (current.kind !== 'user') return;
+				const saved = updateScript(current.id, view.state.doc.toString());
+				// Deleted in another tab; fall back rather than resurrect it.
+				if (!saved) {
+					openExample(DEFAULT_EXAMPLE.id);
+					return;
+				}
+				setSaveState('saved');
+			}, 400);
+		}
+
+		/** Flush a pending autosave, so an action never races the debounce. */
+		function flushSave() {
+			if (saveTimer === undefined) return;
+			window.clearTimeout(saveTimer);
+			saveTimer = undefined;
+			if (current.kind === 'user') updateScript(current.id, view.state.doc.toString());
+		}
+
+		/** Ask before throwing away edits that are not being autosaved. */
+		async function confirmDiscard(): Promise<boolean> {
+			if (!dirty || current.kind === 'user') return true;
+			const answer = await openDialog({
+				title: 'Discard your changes?',
+				body: 'This program is not one of your scripts, so its edits are not saved. Save it as a script first to keep them.',
+				confirm: 'Discard',
+				danger: true,
+			});
+			return answer !== null;
+		}
+
+		picker.addEventListener('change', async () => {
+			const value = picker.value;
+			if (value === currentValue()) return;
+			if (!(await confirmDiscard())) {
+				picker.value = currentValue();
+				return;
+			}
+
+			if (value.startsWith('user:')) {
+				const script = getScript(value.slice(5));
+				if (script) openScript(script);
+				else renderPicker();
+			} else if (value.startsWith('example:')) {
+				openExample(value.slice(8));
+			}
 		});
 
 		resetBtn.addEventListener('click', () => {
-			load(current.id);
-			history_replace('');
+			if (current.kind === 'example') openExample(current.id);
+		});
+
+		// ---- scripts of your own --------------------------------------------
+
+		newBtn.addEventListener('click', async () => {
+			if (!(await confirmDiscard())) return;
+			const name = await openDialog({
+				title: 'New script',
+				input: uniqueName('scratch.sau'),
+				confirm: 'Create',
+			});
+			if (name === null) return;
+			openScript(createScript(name, STARTER));
+			view.focus();
+		});
+
+		saveAsBtn.addEventListener('click', async () => {
+			const suggested =
+				current.kind === 'shared'
+					? current.name
+					: `${EXAMPLES.find((e) => e.id === current.id)?.id ?? 'program'}.sau`;
+			const name = await openDialog({
+				title: 'Save as my script',
+				body: 'Saved in this browser only. Use Copy link to take it elsewhere.',
+				input: uniqueName(suggested),
+				confirm: 'Save',
+			});
+			if (name === null) return;
+			openScript(createScript(name, view.state.doc.toString()));
+		});
+
+		renameBtn.addEventListener('click', async () => {
+			if (current.kind !== 'user') return;
+			const script = getScript(current.id);
+			if (!script) return;
+			const name = await openDialog({
+				title: 'Rename script',
+				input: script.name,
+				confirm: 'Rename',
+			});
+			if (name === null) return;
+			renameScript(script.id, name || script.name);
+			renderPicker();
+			applyMode();
+		});
+
+		deleteBtn.addEventListener('click', async () => {
+			if (current.kind !== 'user') return;
+			const script = getScript(current.id);
+			if (!script) return;
+			const answer = await openDialog({
+				title: `Delete ${script.name}?`,
+				body: 'This cannot be undone.',
+				confirm: 'Delete',
+				danger: true,
+			});
+			if (answer === null) return;
+			window.clearTimeout(saveTimer);
+			saveTimer = undefined;
+			deleteScript(script.id);
+			openExample(DEFAULT_EXAMPLE.id);
+		});
+
+		// ---- the dialog ------------------------------------------------------
+
+		interface DialogOptions {
+			title: string;
+			body?: string;
+			/** Initial text. Omit for a confirmation with no field. */
+			input?: string;
+			confirm: string;
+			danger?: boolean;
+		}
+
+		/** Resolves to the typed name, '' for a fieldless confirm, or null. */
+		function openDialog(options: DialogOptions): Promise<string | null> {
+			const wantsInput = options.input !== undefined;
+
+			dialogTitle.textContent = options.title;
+			dialogBody.textContent = options.body ?? '';
+			dialogBody.hidden = !options.body;
+			dialogField.hidden = !wantsInput;
+			dialogInput.value = options.input ?? '';
+			dialogInput.disabled = !wantsInput;
+			dialogConfirm.textContent = options.confirm;
+			dialogConfirm.classList.toggle('pg-btn-danger', !!options.danger);
+			dialogConfirm.classList.toggle('pg-btn-primary', !options.danger);
+
+			return new Promise((resolve) => {
+				dialog.addEventListener(
+					'close',
+					() => {
+						if (dialog.returnValue !== 'confirm') return resolve(null);
+						resolve(wantsInput ? normaliseName(dialogInput.value) : '');
+					},
+					{ once: true },
+				);
+				dialog.returnValue = '';
+				dialog.showModal();
+				if (wantsInput) dialogInput.select();
+			});
+		}
+
+		// Cancel is a plain button rather than a second submit, so Enter in the
+		// text field always means "confirm" whatever the DOM order is.
+		dialogCancel.addEventListener('click', () => dialog.close(''));
+		// Implicit submission would normally handle Enter, but it is easy to
+		// suppress by accident (an outer keydown handler, an automated key
+		// event) and a name dialog that ignores Enter feels broken. Take it
+		// over explicitly, cancelling the implicit path so it fires once.
+		dialogInput.addEventListener('keydown', (event) => {
+			if (event.key !== 'Enter') return;
+			event.preventDefault();
+			dialogConfirm.click();
+		});
+		// Clicking the backdrop — anywhere outside the form — cancels too.
+		dialog.addEventListener('click', (event) => {
+			if (event.target === dialog) dialog.close('');
 		});
 
 		// ---- sharing --------------------------------------------------------
@@ -269,10 +673,38 @@
 			}
 		}
 
-		function initialSource(): string {
-			const match = /[#&]code=([^&]+)/.exec(window.location.hash);
-			const shared = match ? decode(match[1]!) : null;
-			return shared ?? DEFAULT_EXAMPLE.source;
+		/**
+		 * What to open on arrival, in order of how specific the request is: a
+		 * shared link, then whatever was open last, then the first example.
+		 * Called before the editor exists, so it only returns a description.
+		 */
+		function resolveStartup():
+			| { kind: 'example'; id: string; source: string }
+			| { kind: 'user'; id: string; source: string }
+			| { kind: 'shared'; name: string; source: string } {
+			const code = /[#&]code=([^&]+)/.exec(window.location.hash);
+			const shared = code ? decode(code[1]!) : null;
+			if (shared !== null) {
+				const named = /[#&]name=([^&]+)/.exec(window.location.hash);
+				const name = normaliseName(named ? (decode(named[1]!) ?? 'shared.sau') : 'shared.sau');
+				// Reloading a link you copied from your own script should
+				// reopen that script, not offer to save a second copy of it.
+				const mine = listScripts().find((s) => s.name === name && s.source === shared);
+				if (mine) return { kind: 'user', id: mine.id, source: mine.source };
+				return { kind: 'shared', name, source: shared };
+			}
+
+			const last = lastOpened();
+			if (last?.startsWith('user:')) {
+				const script = getScript(last.slice(5));
+				if (script) return { kind: 'user', id: script.id, source: script.source };
+			}
+			if (last?.startsWith('example:')) {
+				const example = EXAMPLES.find((e) => e.id === last.slice(8));
+				if (example) return { kind: 'example', id: example.id, source: example.source };
+			}
+
+			return { kind: 'example', id: DEFAULT_EXAMPLE.id, source: DEFAULT_EXAMPLE.source };
 		}
 
 		function history_replace(hash: string) {
@@ -282,8 +714,14 @@
 		}
 
 		shareBtn.addEventListener('click', async () => {
-			const encoded = encode(view.state.doc.toString());
-			history_replace(`code=${encoded}`);
+			flushSave();
+			// The name rides along so the recipient opens `parser.sau`, not an
+			// anonymous buffer — and so "Save as my script" can suggest it.
+			const name = current.kind === 'example' ? null : filename.textContent;
+			const parts = [`code=${encode(view.state.doc.toString())}`];
+			if (name) parts.push(`name=${encode(name)}`);
+			history_replace(parts.join('&'));
+
 			const label = shareBtn.textContent;
 			try {
 				await navigator.clipboard.writeText(window.location.href);
@@ -403,13 +841,14 @@
 
 		// ---- boot -----------------------------------------------------------
 
-		const shared = /[#&]code=/.test(window.location.hash);
-		if (shared) {
-			blurb.textContent = 'Loaded from a shared link.';
-			picker.value = '';
-		} else {
-			load(DEFAULT_EXAMPLE.id);
-		}
+		// The document is already in the editor — `resolveStartup` fed it to
+		// `EditorState.create`. What is left is the chrome around it, and the
+		// `open*` helpers do that without re-writing an identical document.
+		if (startup.kind === 'shared') openShared(startup.name, startup.source);
+		else if (startup.kind === 'user') {
+			const script = getScript(startup.id)!;
+			openScript(script);
+		} else openExample(startup.id);
 
 		if (!RUNTIME_AVAILABLE) {
 			runBtn.title = 'The browser runtime is still being built';
@@ -443,8 +882,20 @@
 		width: 100%;
 		margin-inline: auto;
 
+		/*
+		 * Syntax colours. The hues are GitHub's, because they are familiar and
+		 * well separated, but everything achromatic — comments, punctuation,
+		 * the gutter, the active-line wash — is warm rather than the cold
+		 * blue-grey of the original: on this background a blue-grey comment
+		 * reads as a different material from the code around it.
+		 *
+		 * The greys are also lifted. Line numbers at #4d5560 were 2.3:1
+		 * against the pane, below the 3:1 floor for anything you are expected
+		 * to read, and they are the one part of an editor people scan
+		 * deliberately.
+		 */
 		--cm-text: var(--sl-color-white);
-		--cm-comment: #7d8590;
+		--cm-comment: #8b8474;
 		--cm-string: #a5d6ff;
 		--cm-number: #79c0ff;
 		--cm-atom: #79c0ff;
@@ -454,15 +905,15 @@
 		--cm-type: #ffd580;
 		--cm-fn: #d2a8ff;
 		--cm-op: #ff7b72;
-		--cm-punct: #8b949e;
-		--cm-gutter: #4d5560;
-		--cm-active: rgb(255 255 255 / 4%);
-		--cm-selection: rgb(240 180 41 / 25%);
-		--cm-error-line: rgb(248 81 73 / 12%);
+		--cm-punct: #9a9282;
+		--cm-gutter: #746c5d;
+		--cm-active: rgb(255 235 190 / 5%);
+		--cm-selection: var(--saule-selection);
+		--cm-error-line: var(--saule-danger-soft);
 	}
 
 	:global(:root[data-theme='light']) .playground {
-		--cm-comment: #6e7781;
+		--cm-comment: #6b6455;
 		--cm-string: #0a3069;
 		--cm-number: #0550ae;
 		--cm-atom: #0550ae;
@@ -472,11 +923,9 @@
 		--cm-type: #7c5314;
 		--cm-fn: #6639ba;
 		--cm-op: #cf222e;
-		--cm-punct: #57606a;
-		--cm-gutter: #a0a6ad;
-		--cm-active: rgb(0 0 0 / 3%);
-		--cm-selection: rgb(240 180 41 / 30%);
-		--cm-error-line: rgb(207 34 46 / 8%);
+		--cm-punct: #5f594e;
+		--cm-gutter: #8f8878;
+		--cm-active: rgb(90 60 0 / 4%);
 	}
 
 	.pg-toolbar {
@@ -486,6 +935,15 @@
 		align-items: end;
 		justify-content: space-between;
 		margin-bottom: 0.75rem;
+	}
+
+	/* The picker and New belong together — one is "open something", the other
+	   is "open something that does not exist yet" — so they share a row and
+	   the button sits on the select's baseline, not the label's. */
+	.pg-picker-group {
+		display: flex;
+		align-items: end;
+		gap: 0.5rem;
 	}
 
 	.pg-picker {
@@ -550,14 +1008,39 @@
 	}
 
 	.pg-btn-stop {
-		border-color: #f85149;
-		color: #f85149;
+		border-color: var(--saule-danger);
+		color: var(--saule-danger);
 		font-weight: 600;
 	}
 
 	.pg-btn-stop:hover {
-		background: rgb(248 81 73 / 12%);
-		border-color: #f85149;
+		background: var(--saule-danger-soft);
+		border-color: var(--saule-danger);
+	}
+
+	/* Delete sits in a row of neutral buttons, so it is tinted rather than
+	   filled: a solid red button next to Run would pull the eye to the one
+	   action nobody is looking for. It fills in on hover, once the pointer
+	   has already committed to it. */
+	.pg-btn-danger-ghost {
+		color: var(--saule-danger);
+	}
+
+	.pg-btn-danger-ghost:hover:not(:disabled) {
+		border-color: var(--saule-danger);
+		background: var(--saule-danger-soft);
+	}
+
+	.pg-btn-danger {
+		background: var(--saule-danger);
+		border-color: var(--saule-danger);
+		color: var(--sl-color-black);
+		font-weight: 600;
+	}
+
+	.pg-btn-danger:hover:not(:disabled) {
+		border-color: var(--saule-danger);
+		filter: brightness(1.08);
 	}
 
 	.pg-btn[hidden] {
@@ -627,11 +1110,23 @@
 	}
 
 	.pg-status.pg-ok {
-		color: #3fb950;
+		color: var(--saule-success);
 	}
 
 	.pg-status.pg-fail {
-		color: #f85149;
+		color: var(--saule-danger);
+	}
+
+	/* Save state is reassurance, not information: it should be legible when
+	   looked for and invisible otherwise, so it stays at the pane header's
+	   own weight and only takes colour when something is *not* saved. */
+	.pg-savestate {
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+
+	.pg-savestate.pg-unsaved {
+		color: var(--saule-warning);
 	}
 
 	.pg-editor {
@@ -662,43 +1157,136 @@
 		background: var(--sl-color-black);
 	}
 
-	.pg-dim {
+	/*
+	 * Everything in the output pane is built by the script above with
+	 * `document.createElement`, so none of it carries the `data-astro-cid`
+	 * attribute Astro adds when it scopes a stylesheet — a plain `.pg-error`
+	 * rule here compiles to `.pg-error[data-astro-cid-…]` and matches
+	 * nothing, which is why diagnostics used to render as undifferentiated
+	 * white text. Scoping by the static ancestor and going `:global` on the
+	 * generated part is what makes these apply, without leaking the class
+	 * names to the rest of the site.
+	 */
+	.pg-output :global(.pg-dim) {
 		color: var(--sl-color-gray-3);
 	}
 
-	.pg-stderr {
-		color: #f0883e;
+	.pg-output :global(.pg-stderr) {
+		color: var(--saule-stderr);
 	}
 
-	.pg-error,
-	.pg-warning {
+	.pg-output :global(.pg-error),
+	.pg-output :global(.pg-warning) {
 		margin-block: 0.35rem;
 		padding: 0.5rem 0.7rem;
 		border-radius: 0.35rem;
 		border-left: 3px solid currentcolor;
 	}
 
-	.pg-error {
-		color: #f85149;
-		background: rgb(248 81 73 / 8%);
+	.pg-output :global(.pg-error) {
+		color: var(--saule-danger);
+		background: var(--saule-danger-tint);
 	}
 
-	.pg-warning {
-		color: #d29922;
-		background: rgb(210 153 34 / 8%);
+	.pg-output :global(.pg-warning) {
+		color: var(--saule-warning);
+		background: var(--saule-warning-tint);
 	}
 
-	.pg-diag-label {
+	.pg-output :global(.pg-diag-label) {
 		font-weight: 600;
 		text-transform: capitalize;
 	}
 
-	.pg-notice {
+	.pg-output :global(.pg-notice) {
 		padding: 0.85rem 1rem;
 		border-radius: 0.45rem;
 		border: 1px solid var(--sl-color-accent);
 		background: var(--sl-color-accent-low);
 		color: var(--sl-color-white);
 		line-height: 1.6;
+	}
+
+	/* The one `.pg-dim` that is in the markup rather than generated. */
+	.pg-dim {
+		color: var(--sl-color-gray-3);
+	}
+
+	/* ---- naming, renaming and deleting scripts ---------------------------- */
+
+	.pg-dialog {
+		/* Starlight's reset zeroes every margin, which includes the `auto`
+		   the UA stylesheet uses to centre an open dialog. Put it back. */
+		inset: 0;
+		margin: auto;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.6rem;
+		background: var(--sl-color-black);
+		color: var(--sl-color-white);
+		padding: 0;
+		width: min(26rem, calc(100vw - 2rem));
+		box-shadow: var(--sl-shadow-lg);
+	}
+
+	.pg-dialog::backdrop {
+		background: var(--sl-color-backdrop-overlay);
+	}
+
+	.pg-dialog-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.85rem;
+		padding: 1.1rem 1.2rem;
+	}
+
+	.pg-dialog-title {
+		margin: 0;
+		font-size: var(--sl-text-lg);
+		line-height: 1.3;
+	}
+
+	.pg-dialog-body {
+		margin: 0;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+		line-height: 1.5;
+	}
+
+	.pg-dialog-field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+
+	.pg-dialog-field[hidden] {
+		display: none;
+	}
+
+	.pg-dialog-field span {
+		font-size: var(--sl-text-xs);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--sl-color-gray-3);
+	}
+
+	.pg-dialog-field input {
+		font-family: var(--saule-font-mono);
+		font-size: var(--sl-text-sm);
+		padding: 0.5rem 0.7rem;
+		border-radius: 0.4rem;
+		border: 1px solid var(--sl-color-gray-5);
+		background: var(--sl-color-gray-6);
+		color: var(--sl-color-white);
+	}
+
+	.pg-dialog-field input:focus {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: -1px;
+	}
+
+	.pg-dialog-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
 	}
 </style>

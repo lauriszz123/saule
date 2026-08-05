@@ -43,7 +43,7 @@ Saule has 9 primitive types, inherited from Lua's type system but statically dec
 | `userdata` | Raw memory for native integrations |
 | `thread` | Coroutines |
 
-All types must be declared. A variable cannot be `nil` unless its type is marked nullable with `?`.
+Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what you wrote. A variable cannot be `nil` unless its type is marked nullable with `?`.
 
 ### Integer vs Float
 
@@ -66,6 +66,31 @@ local result = health - dmg    -- ERROR: cannot mix integer and float
 
 Saule never auto-promotes — the checker catches this at compile time, so a hidden `int / int` truncating into a `float` slot is impossible.
 
+### Float Literals
+
+Because the two types never mix implicitly, a whole number that belongs in a
+`float` has to *say* it is one. There are two ways to write it:
+
+```saule
+local ratio: float = 0.75
+local half: float = .5         -- the integer part may be omitted
+local speed: float = 10f       -- `f` / `F` suffix: this is 10.0
+local scale: float = 1.0       -- the same thing, written out
+local exact: float = 2.5f      -- allowed, though the `.5` already decided it
+```
+
+The suffix earns its keep in expressions, where `10f` is considerably easier to
+read than `float(10)`:
+
+```saule
+local speed: float = 3.5
+println(speed * 2f)            -- 7.0
+```
+
+A trailing dot is **not** a float: `1.` lexes as `1` followed by `.`, which is
+what keeps `1..2` (concatenation) and `1.foo` (member access) unambiguous.
+Write `1.0` or `1f` instead.
+
 ### Base Prefixes
 
 Integers can be written in hex or binary, with `_` allowed anywhere as a digit
@@ -80,7 +105,8 @@ local glyph: integer = 0xE5CD     -- a font codepoint
 
 Both forms produce ordinary `integer` values — there is no separate type. A
 prefix with no digits (`0x`) or an invalid digit for the base (`0xGG`, `0b102`)
-is a lex error.
+is a lex error. The `_` separator belongs to these two forms only: in decimal,
+`1_000` is the number `1` followed by an identifier.
 
 ### Integer Division
 
@@ -1888,6 +1914,19 @@ end
 | `then` | Begin a `match` arm body / `if` branch |
 | `nil` | Absence of value |
 | `true / false` | Boolean literals |
+
+### Literals
+
+| Literal | Type | Notes |
+|---|---|---|
+| `42` | `integer` | |
+| `0xFF`, `0b1010` | `integer` | `_` may separate digits: `0xFF_80_00` |
+| `3.14` | `float` | |
+| `.5` | `float` | The integer part may be omitted |
+| `10f`, `10F` | `float` | Suffix form of `10.0` |
+| `"text"` | `string` | |
+| `true`, `false` | `boolean` | |
+| `nil` | — | Only assignable to a nullable (`T?`) slot |
 
 ### Operators
 

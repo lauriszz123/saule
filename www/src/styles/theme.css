@@ -18,14 +18,41 @@
 	--saule-amber-400: #f0b429;
 	--saule-amber-500: #de911d;
 	--saule-amber-600: #b7791f;
+	--saule-amber-700: #975a16;
 	--saule-amber-800: #7c5314;
 	--saule-amber-900: #513c06;
+
+	/*
+	 * Starlight tints its asides and badges from four named hues. Two of them
+	 * need moving to live alongside an amber accent:
+	 *
+	 * - orange (`:::caution`) sat at 41°, which is the accent's own hue — a
+	 *   caution box and ordinary site chrome read as the same colour. Pushed
+	 *   to 26° it is unmistakably a warmer red-orange, still "caution", and no
+	 *   longer competing with the brand.
+	 * - blue (`:::note`) at 234° is a violet-leaning electric blue that fights
+	 *   the warm greys. At 212° it is the accent's near-complement, which is
+	 *   the most legible thing to put next to amber and reads as calm rather
+	 *   than loud.
+	 *
+	 * Purple (`:::tip`) keeps its hue but not its intensity — see below — and
+	 * green and red are already far enough from the accent to stand alone.
+	 */
+	--sl-hue-orange: 26;
+	--sl-hue-blue: 212;
+	--sl-hue-purple: 300;
 }
 
 /* Dark theme (Starlight's default). */
 :root {
 	--sl-color-accent-low: #4a3407;
-	--sl-color-accent: var(--saule-amber-600);
+	/*
+	 * One step up the ramp from the light theme's accent. Contrast is not
+	 * symmetric between themes: amber-600 on this near-black background is
+	 * 4.2:1, under the 4.5:1 floor for body text, while amber-500 reaches
+	 * 6.9:1 — both as a link colour and as the fill behind dark button text.
+	 */
+	--sl-color-accent: var(--saule-amber-500);
 	--sl-color-accent-high: var(--saule-amber-200);
 
 	--sl-color-white: #fffdf8;
@@ -36,12 +63,73 @@
 	--sl-color-gray-5: #3d3830;
 	--sl-color-gray-6: #2a261f;
 	--sl-color-black: #191712;
+
+	/*
+	 * Semantic colours, for anything that is not brand chrome: run results,
+	 * diagnostics, stderr. Each theme gets its own value rather than one set
+	 * of dark-background colours used twice — a green that reads at 5.8:1 on
+	 * near-black drops to 2:1 on a near-white pane, which is the difference
+	 * between "passed" and an invisible label.
+	 */
+	--saule-success: #3fb950;
+	--saule-danger: #f85149;
+	--saule-warning: #d29922;
+	--saule-stderr: #f0883e;
+	--saule-danger-soft: rgb(248 81 73 / 12%);
+	--saule-danger-tint: rgb(248 81 73 / 8%);
+	--saule-warning-tint: rgb(210 153 34 / 8%);
+
+	/*
+	 * Selection. The browser default is a saturated lavender that sits on the
+	 * opposite side of the wheel from everything here, and at full opacity it
+	 * buries syntax colours underneath it. This is a translucent warm tint
+	 * instead: it lifts the background about three steps in lightness without
+	 * adding chroma of its own, so red keywords, blue strings and amber types
+	 * all stay themselves and all stay above 4.5:1 on top of it.
+	 */
+	--saule-selection: rgb(240 200 130 / 26%);
+
+	/*
+	 * Aside and badge tints, restated at Starlight's own lightness steps but
+	 * roughly half its saturation.
+	 *
+	 * The greys on this site carry a warm tint, which is a low-chroma colour
+	 * of its own; a 90%-saturated lilac panel dropped onto it does not read as
+	 * "the same site, emphasised", it reads as a foreign element. Halving the
+	 * chroma puts these surfaces in the same register as the background while
+	 * leaving the hues — and so the meanings — completely distinguishable.
+	 * Lightness is untouched, so every text-on-tint pair keeps the contrast
+	 * Starlight designed for.
+	 */
+	--sl-color-orange-low: hsl(var(--sl-hue-orange) 45% 18%);
+	--sl-color-orange: hsl(var(--sl-hue-orange) 75% 62%);
+	--sl-color-orange-high: hsl(var(--sl-hue-orange) 75% 85%);
+	--sl-color-blue-low: hsl(var(--sl-hue-blue) 40% 20%);
+	--sl-color-blue: hsl(var(--sl-hue-blue) 70% 62%);
+	--sl-color-blue-high: hsl(var(--sl-hue-blue) 70% 85%);
+	--sl-color-purple-low: hsl(var(--sl-hue-purple) 25% 20%);
+	--sl-color-purple: hsl(var(--sl-hue-purple) 45% 68%);
+	--sl-color-purple-high: hsl(var(--sl-hue-purple) 45% 87%);
+	--sl-color-green-low: hsl(var(--sl-hue-green) 35% 17%);
+	--sl-color-green: hsl(var(--sl-hue-green) 55% 58%);
+	--sl-color-green-high: hsl(var(--sl-hue-green) 50% 84%);
+	--sl-color-red-low: hsl(var(--sl-hue-red) 40% 20%);
+	--sl-color-red: hsl(var(--sl-hue-red) 70% 62%);
+	--sl-color-red-high: hsl(var(--sl-hue-red) 70% 86%);
+
+	/* Code is a surface of its own, so it steps away from the page rather than
+	   matching it — but in the same direction the rest of the site leans. The
+	   theme this replaces was a cool grey, which on a warm page reads as a
+	   screenshot from somewhere else. */
+	--saule-code-bg: #13110c;
 }
 
 /* Light theme. */
 :root[data-theme='light'] {
 	--sl-color-accent-low: var(--saule-amber-100);
-	--sl-color-accent: var(--saule-amber-600);
+	/* amber-600 is only 3.6:1 on the near-white background; amber-700 is
+	   5.5:1, and carries white button text at the same ratio. */
+	--sl-color-accent: var(--saule-amber-700);
 	--sl-color-accent-high: var(--saule-amber-900);
 
 	--sl-color-white: #191712;
@@ -53,6 +141,48 @@
 	--sl-color-gray-6: #eeeae1;
 	--sl-color-gray-7: #f7f4ed;
 	--sl-color-black: #fffdf8;
+
+	/* Same hues, dropped in lightness until they clear 4.5:1 against both the
+	   near-white page and the slightly darker pane headers. */
+	--saule-success: #146c2e;
+	--saule-danger: #a40e26;
+	--saule-warning: #8a5c00;
+	--saule-stderr: #bc4c00;
+	--saule-danger-soft: rgb(164 14 38 / 10%);
+	--saule-danger-tint: rgb(164 14 38 / 7%);
+	--saule-warning-tint: rgb(138 92 0 / 8%);
+
+	/* Darker and slightly more saturated than the dark theme's tint: the same
+	   26% of a pale colour would be invisible on a near-white background. */
+	--saule-selection: rgb(183 121 31 / 24%);
+
+	/* The same de-saturation, at the light theme's lightness steps. */
+	--sl-color-orange-high: hsl(var(--sl-hue-orange) 75% 26%);
+	--sl-color-orange: hsl(var(--sl-hue-orange) 70% 48%);
+	--sl-color-orange-low: hsl(var(--sl-hue-orange) 70% 92%);
+	--sl-color-blue-high: hsl(var(--sl-hue-blue) 75% 28%);
+	--sl-color-blue: hsl(var(--sl-hue-blue) 65% 45%);
+	--sl-color-blue-low: hsl(var(--sl-hue-blue) 60% 92%);
+	--sl-color-purple-high: hsl(var(--sl-hue-purple) 45% 30%);
+	--sl-color-purple: hsl(var(--sl-hue-purple) 35% 50%);
+	--sl-color-purple-low: hsl(var(--sl-hue-purple) 40% 93%);
+	--sl-color-green-high: hsl(var(--sl-hue-green) 70% 20%);
+	--sl-color-green: hsl(var(--sl-hue-green) 60% 34%);
+	--sl-color-green-low: hsl(var(--sl-hue-green) 45% 90%);
+	--sl-color-red-high: hsl(var(--sl-hue-red) 70% 30%);
+	--sl-color-red: hsl(var(--sl-hue-red) 60% 45%);
+	--sl-color-red-low: hsl(var(--sl-hue-red) 60% 93%);
+
+	--saule-code-bg: #faf6ed;
+}
+
+/*
+ * Selection, everywhere — prose, code blocks, the playground's output pane.
+ * Left translucent and with no `color` of its own so it tints whatever it
+ * covers rather than flattening it to a single foreground colour.
+ */
+::selection {
+	background-color: var(--saule-selection);
 }
 
 /* The site logo is a sun mark; give it a little breathing room. */
