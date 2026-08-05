@@ -19,7 +19,10 @@ impl<'a> Printer<'a> {
                 self.write(&s);
             }
             Expr::Bool(b) => self.write(if *b { "true" } else { "false" }),
-            Expr::Str(s) => self.write(&quote_str(s)),
+            Expr::Str(s) => {
+                let lit = self.str_lit(s, &e.span);
+                self.write(&lit);
+            }
             Expr::Nil => self.write("nil"),
             Expr::Ident(n) => self.write(n),
             Expr::Self_ => self.write("self"),
@@ -372,7 +375,8 @@ impl<'a> Printer<'a> {
                     if is_ident(s) {
                         self.write(s);
                     } else {
-                        self.write(&quote_str(s));
+                        let lit = self.str_lit(s, &key.span);
+                        self.write(&lit);
                     }
                 } else {
                     self.expr(key, 0);
@@ -452,6 +456,39 @@ impl<'a> Printer<'a> {
             Some(raw) if float_text_matches(raw, f) => raw.to_string(),
             _ => format_float(f),
         }
+    }
+
+    /// Render a string literal, keeping whichever quote style it was written
+    /// with.
+    ///
+    /// `Token::String` carries only the decoded value, so the delimiter is
+    /// gone by the time the AST exists. Rather than widen the token and every
+    /// consumer of `Expr::Str` to carry it, read it back out of the source at
+    /// the literal's span — the same trick [`Self::float_lit`] uses to keep
+    /// `1f` from being reprinted as `1.0`.
+    ///
+    /// Falls back to picking a delimiter when there is no source to consult
+    /// (`format_module`) or when the span isn't a quoted literal at all — a
+    /// `{ key: value }` table entry parses to `Expr::Str` whose span covers a
+    /// bare identifier.
+    pub(crate) fn str_lit(&self, s: &str, span: &Range<usize>) -> String {
+        quote_str_with(s, self.source_quote(span))
+    }
+
+    /// The quote character at `span`'s first byte, if it is one.
+    fn source_quote(&self, span: &Range<usize>) -> Option<char> {
+        let c = self.source.get(span.start..)?.chars().next()?;
+        (c == '"' || c == '\'').then_some(c)
+    }
+
+    /// The quote character immediately before `end`, if it is one.
+    ///
+    /// For `import x from "a/b"` the path has no span of its own — the only
+    /// position recorded is the declaration's end, which the parser places
+    /// just past the closing quote.
+    pub(crate) fn source_quote_ending_at(&self, end: usize) -> Option<char> {
+        let c = self.source.get(..end)?.chars().next_back()?;
+        (c == '"' || c == '\'').then_some(c)
     }
 }
 

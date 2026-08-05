@@ -141,10 +141,9 @@ Anything else after a backslash is a lex error — there is no hex or unicode
 escape, so use `String.char` for codepoints. A literal newline inside a string
 is allowed and is kept as-is.
 
-`saule fmt` does not preserve which quote you used: it writes double quotes
-unless the text contains a `"` and no `'`, in which case single quotes avoid
-the escaping. So `'he said "hi"'` is left alone, and `'hello'` becomes
-`"hello"`.
+`saule fmt` leaves the choice alone. It reads the delimiter back out of your
+source, so formatting never rewrites `'hello'` into `"hello"` — in a string
+literal, a pattern, a table key or an import path.
 
 ### Integer Division
 

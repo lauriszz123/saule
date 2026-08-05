@@ -193,9 +193,11 @@ impl<'a> Printer<'a> {
                         }
                     }
                 }
-                // Preserve how the author spelled the path.
+                // Preserve how the author spelled the path — both whether it
+                // was quoted at all, and which quote was used.
                 if *quoted {
-                    self.writef(format_args!(" from {}", quote_str(path)));
+                    let q = self.source_quote_ending_at(decl_end);
+                    self.writef(format_args!(" from {}", quote_str_with(path, q)));
                 } else {
                     self.writef(format_args!(" from {path}"));
                 }
