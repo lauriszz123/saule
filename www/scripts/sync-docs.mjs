@@ -138,7 +138,10 @@ function buildAnchorIndex(plans) {
 	const index = new Map();
 	for (const plan of plans) {
 		for (const section of plan.sections) {
-			const route = withBase(`/${plan.dir}/${section.fileSlug}/`);
+			// `section.dir`, not `plan.dir`: a rerouted section (see REROUTE)
+			// is written somewhere other than its document's default directory,
+			// and a link to it has to point where the page actually landed.
+			const route = withBase(`/${section.dir}/${section.fileSlug}/`);
 			// The h2 itself becomes the page, so it has no fragment.
 			index.set(section.sourceSlug, route);
 			for (const h of headingsOf(section.body)) {
@@ -187,11 +190,17 @@ function rewriteLinks(body, index, { file, section }) {
 
 /**
  * Sections that shouldn't become pages: a hand-maintained table of contents
- * is redundant once Starlight generates the sidebar, and "Quick Reference"
- * is routed to its own top-level page instead of the language guide.
+ * is redundant once Starlight generates the sidebar.
+ *
+ * "Quick Reference" and "Grammar" are reference material rather than parts of
+ * the language guide — they are things you come back to, not things you read
+ * once — so they are routed out of `language/` into `reference/`.
  */
 const SKIP = new Set(['Table of Contents']);
-const REROUTE = new Map([['Quick Reference', { dir: 'reference', fileSlug: 'quick-reference' }]]);
+const REROUTE = new Map([
+	['Quick Reference', { dir: 'reference', fileSlug: 'quick-reference' }],
+	['Grammar', { dir: 'reference', fileSlug: 'grammar' }],
+]);
 
 /** Explicit sidebar ordering — teaching order, not the order of the README. */
 const ORDER = {

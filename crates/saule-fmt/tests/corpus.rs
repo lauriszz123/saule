@@ -505,3 +505,57 @@ fn format_with_options(src: &str, options: saule_fmt::FmtOptions) -> Result<Stri
         &module, src, &comments, options,
     ))
 }
+
+// ── String quoting ──────────────────────────────────────────────────────────
+//
+// The lexer accepts `"…"` and `'…'` but keeps only the decoded value, so the
+// formatter picks a delimiter rather than preserving one. The rule is whichever
+// needs fewer backslashes.
+
+#[test]
+fn quotes_normalise_to_double() {
+    assert_eq!(
+        format_str("local s = 'hello'").unwrap().trim(),
+        r#"local s = "hello""#
+    );
+}
+
+#[test]
+fn single_quotes_used_when_they_avoid_escaping() {
+    // Contains `"` and no `'`, so single quotes leave it unescaped.
+    assert_eq!(
+        format_str(r#"local s = 'he said "hi"'"#).unwrap().trim(),
+        r#"local s = 'he said "hi"'"#
+    );
+}
+
+#[test]
+fn double_quotes_when_both_kinds_appear() {
+    // No delimiter avoids escaping, so the house style wins and `"` is escaped.
+    assert_eq!(
+        format_str(r#"local s = 'it\'s "x"'"#).unwrap().trim(),
+        r#"local s = "it's \"x\"""#
+    );
+}
+
+#[test]
+fn control_characters_survive_a_round_trip() {
+    // This used to emit `\x00`, which the lexer rejects — formatting produced
+    // a file that no longer lexed.
+    let once = format_str(r#"local s = "a\0b""#).unwrap();
+    let twice = format_str(&once).expect("formatted output must still lex");
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn quote_choice_is_idempotent() {
+    for src in [
+        "local s = 'hello'",
+        r#"local s = 'he said "hi"'"#,
+        r#"local s = "it's fine""#,
+    ] {
+        let once = format_str(src).unwrap();
+        let twice = format_str(&once).unwrap();
+        assert_eq!(once, twice, "not idempotent: {src}");
+    }
+}

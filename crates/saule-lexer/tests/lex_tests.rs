@@ -330,3 +330,62 @@ fn unterminated_block_comment_errors() {
         Err(LexerError::UnterminatedBlockComment(_))
     ));
 }
+
+// ── Single-quoted strings ───────────────────────────────────────────────────
+//
+// `'…'` and `"…"` are interchangeable, as in Lua. Only the delimiter that
+// opened a literal closes it, so each style carries the other unescaped.
+
+#[test]
+fn single_quoted_string() {
+    assert_eq!(
+        lex("'hello'"),
+        vec![Token::String("hello".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn quote_styles_produce_identical_tokens() {
+    assert_eq!(lex("'hello'"), lex("\"hello\""));
+}
+
+#[test]
+fn opposite_quote_needs_no_escape() {
+    assert_eq!(
+        lex(r#"'he said "hi"'"#),
+        vec![Token::String("he said \"hi\"".into()), Token::Eof]
+    );
+    assert_eq!(
+        lex(r#""it's fine""#),
+        vec![Token::String("it's fine".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn both_quote_escapes_work_in_either_style() {
+    assert_eq!(
+        lex(r#"'\'\"'"#),
+        vec![Token::String("'\"".into()), Token::Eof]
+    );
+    assert_eq!(
+        lex(r#""\'\"""#),
+        vec![Token::String("'\"".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn unterminated_single_quoted_string_errors() {
+    assert!(matches!(
+        Lexer::new("'oops").tokenize(),
+        Err(LexerError::UnterminatedString(_))
+    ));
+}
+
+#[test]
+fn a_quote_does_not_close_the_other_style() {
+    // The `"` here is ordinary text, so the literal runs to the second `'`.
+    assert_eq!(
+        lex("'a\"b'"),
+        vec![Token::String("a\"b".into()), Token::Eof]
+    );
+}

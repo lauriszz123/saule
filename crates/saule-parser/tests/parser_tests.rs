@@ -535,3 +535,57 @@ fn a_parenthesised_identifier_without_a_fat_arrow_is_not_a_lambda() {
         other => panic!("expected local, got {other:?}"),
     }
 }
+
+// ── Semicolon separators ────────────────────────────────────────────────────
+//
+// `;` is a separator, never a statement. It used to be consumed *inside*
+// `parse_statement`, which meant a `;` sitting immediately before the end of a
+// block committed the parser to a statement that wasn't there — every one of
+// these parsed as "expected an expression".
+
+#[test]
+fn trailing_semicolon_at_end_of_file() {
+    let m = parse_src("local a = 1;");
+    assert_eq!(m.stmts.len(), 1);
+}
+
+#[test]
+fn file_of_only_semicolons_is_empty() {
+    let m = parse_src(";;;");
+    assert!(m.stmts.is_empty());
+}
+
+#[test]
+fn leading_and_doubled_semicolons_are_separators() {
+    let m = parse_src("; local a = 1;; local b = 2");
+    assert_eq!(m.stmts.len(), 2);
+}
+
+#[test]
+fn semicolon_before_block_terminators() {
+    // One case per terminator `parse_block_until` is asked to stop at.
+    for src in [
+        "if c then\n x = 1;\nend",
+        "if c then\n x = 1;\nelse\n y = 2;\nend",
+        "while c do\n x = 1;\nend",
+        "repeat\n x = 1;\nuntil c",
+        "fn f()\n x = 1;\nend",
+        "try\n x = 1;\ncatch e: string\n y = 2;\nend",
+    ] {
+        let m = parse_src(src);
+        assert_eq!(m.stmts.len(), 1, "expected one statement from: {src}");
+    }
+}
+
+#[test]
+fn semicolon_does_not_produce_an_empty_statement() {
+    // The block is a single statement, not one statement plus a stray empty.
+    let m = parse_src("fn f()\n x = 1;\nend");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Function { body, .. } => assert_eq!(body.len(), 1),
+            _ => panic!("expected a function"),
+        },
+        _ => panic!("expected a declaration"),
+    }
+}

@@ -1,8 +1,12 @@
 ---
 title: "Quick Reference"
+description: "The tables below are for looking something up at a glance. For the exact shape of every construct, see the Grammar."
 ---
 
 <!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+
+The tables below are for looking something up at a glance. For the exact shape
+of every construct, see the [Grammar](/saule/reference/grammar/).
 
 ### Keywords
 

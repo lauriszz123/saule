@@ -76,8 +76,10 @@ const sauleStream = StreamLanguage.define<State>({
 			return 'comment';
 		}
 
-		// Strings, with backslash escapes. An unterminated string colours to
-		// end of line rather than bleeding into the rest of the document.
+		// Strings, in either quote style, with backslash escapes. Only the
+		// delimiter that opened the literal closes it, matching the lexer. An
+		// unterminated string colours to end of line rather than bleeding into
+		// the rest of the document.
 		const quote = stream.peek();
 		if (quote === '"' || quote === "'") {
 			stream.next();
@@ -90,12 +92,30 @@ const sauleStream = StreamLanguage.define<State>({
 			return 'string';
 		}
 
-		// Numbers: hex/binary/octal prefixes, then floats, then integers.
-		if (stream.match(/^0[xX][0-9a-fA-F_]+/) || stream.match(/^0[bB][01_]+/) ||
-			stream.match(/^0[oO][0-7_]+/)) {
+		// Numbers, following `Lexer::number` in `crates/saule-lexer` exactly —
+		// highlighting that accepts more than the lexer does is worse than
+		// none, because it makes a lex error look like valid code.
+		//
+		// Hex and binary first: their digits include `f`, so `0xFF_80f` has to
+		// be claimed here before the float suffix below can take the `f`.
+		// There is no octal form and no exponent notation, and `_` separates
+		// digits only inside these two prefixes — in decimal, `1_000` is `1`
+		// followed by the identifier `_000`.
+		if (stream.match(/^0[xX][0-9a-fA-F_]+/) || stream.match(/^0[bB][01_]+/)) {
 			return 'number';
 		}
-		if (stream.match(/^\d[\d_]*\.\d[\d_]*([eE][+-]?\d+)?/) || stream.match(/^\d[\d_]*([eE][+-]?\d+)?/)) {
+		// Floats before integers, so `1.5` is not read as `1` then `.5`. The
+		// fractional part needs a digit after the dot — that is what keeps
+		// `1..2` (concatenation) and `1.foo` (member access) intact — while
+		// the integer part may be omitted entirely: `.5`.
+		//
+		// The `f`/`F` suffix forces a float, and only counts as a suffix when
+		// no identifier character follows it, so `2f` is `2.0` but `2foo` is
+		// `2` then `foo`.
+		if (stream.match(/^(?:\d+\.\d+|\.\d+)(?:[fF](?![A-Za-z0-9_]))?/)) {
+			return 'number';
+		}
+		if (stream.match(/^\d+(?:[fF](?![A-Za-z0-9_]))?/)) {
 			return 'number';
 		}
 
