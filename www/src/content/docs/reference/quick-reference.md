@@ -38,6 +38,19 @@ title: "Quick Reference"
 | `nil` | Absence of value |
 | `true / false` | Boolean literals |
 
+### Literals
+
+| Literal | Type | Notes |
+|---|---|---|
+| `42` | `integer` | |
+| `0xFF`, `0b1010` | `integer` | `_` may separate digits: `0xFF_80_00` |
+| `3.14` | `float` | |
+| `.5` | `float` | The integer part may be omitted |
+| `10f`, `10F` | `float` | Suffix form of `10.0` |
+| `"text"` | `string` | |
+| `true`, `false` | `boolean` | |
+| `nil` | — | Only assignable to a nullable (`T?`) slot |
+
 ### Operators
 
 | Operator | Meaning |

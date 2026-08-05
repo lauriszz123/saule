@@ -49,7 +49,7 @@ class Main
 	end
 
 	static fn run(path: string)
-		local info: FsInfo? = Os.fsInfo(path)
+		local info = Os.fsInfo(path)
 
 		if info == nil then
 			printf("Error: Path not found: %s\n", path)

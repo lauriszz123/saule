@@ -24,8 +24,9 @@ top-to-bottom like a Lua script, and no `class Main` is required.
 
 ## Adding types
 
-Every variable is declared with a type. The compiler checks them before a
-single line executes.
+Types are checked before a single line executes. On a local the annotation is
+optional — the initializer implies it — but writing it out is the clearer
+habit, and parameters and fields have to state theirs.
 
 ```saule
 local name: string = "Arthur"

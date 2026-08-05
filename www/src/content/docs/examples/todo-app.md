@@ -49,7 +49,7 @@ class Main
 
 	static fn main()
 		local storage = Storage("todo.json")
-		local args: table = Os.args()
+		local args = Os.args()
 
 		if not Os.exists("todo.json") then
 			storage.save()
@@ -196,10 +196,12 @@ export class Storage
 			return false
 		end
 
-		local file: File = Io.open(self.path, IoMode.Read)!
+		local file = Io.open(self.path, IoMode.Read)
 
-		local data: table? = Json.decode(file.read()!) as table
-		file.close()
+		-- Decoded JSON is plain tables, not `Entry` instances — the rows
+		-- below are validated field by field and fed through `Entry(...)`.
+		local data = Json.decode(file?.read()) as table<any>
+		file?.close()
 
 		if not data then
 			return false
@@ -210,13 +212,26 @@ export class Storage
 		end
 
 		for _, entry in data do
-			if type(entry) == "table" and type(entry.todo) == "string" and type(entry.done) == "boolean" then
-				local newEntry = Entry(entry.todo, entry.dueDate)
-				newEntry.setDone(entry.done)
-				Table.insert(self.storage, newEntry)
-			else
+			if type(entry) != "table" then
 				return false
 			end
+
+			-- `as` is the checked cast out of `any`: it yields nil when the
+			-- stored value has the wrong shape, so a nil here means the file
+			-- is malformed.
+			local todo = entry.todo as string
+			if todo == nil then
+				return false
+			end
+
+			local done = entry.done as boolean
+			if done == nil then
+				return false
+			end
+
+			local newEntry = Entry(todo, entry.dueDate as integer)
+			newEntry.setDone(done)
+			Table.insert(self.storage, newEntry)
 		end
 
 		return true
@@ -230,9 +245,9 @@ export class Storage
 		end
 
 		local jsonData: string = Json.encode(data)
-		local file: File = Io.open(self.path, IoMode.Write)!
-		file.write(jsonData)
-		file.close()
+		local file = Io.open(self.path, IoMode.Write)
+		file?.write(jsonData)
+		file?.close()
 	end
 
 	fn add(item: string, dueDate: integer?)
