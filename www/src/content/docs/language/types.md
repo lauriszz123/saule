@@ -87,6 +87,42 @@ prefix with no digits (`0x`) or an invalid digit for the base (`0xGG`, `0b102`)
 is a lex error. The `_` separator belongs to these two forms only: in decimal,
 `1_000` is the number `1` followed by an identifier.
 
+### String Literals
+
+Strings are written with either `"` or `'`, exactly as in Lua. The two are the
+same type and the same syntax — only the quote that opened a literal closes it,
+so each style lets the other appear unescaped:
+
+```saule
+local plain: string = "hello"
+local same: string = 'hello'
+
+local quoted: string = 'he said "hi"'
+local possessive: string = "it's fine"
+```
+
+Seven escapes are recognised, and both quote escapes work in either style, so
+moving a literal between them never invalidates one:
+
+| Escape | Meaning |
+|---|---|
+| `\n` | Newline |
+| `\t` | Tab |
+| `\r` | Carriage return |
+| `\0` | NUL |
+| `\\` | Backslash |
+| `\"` | Double quote |
+| `\'` | Single quote |
+
+Anything else after a backslash is a lex error — there is no hex or unicode
+escape, so use `String.char` for codepoints. A literal newline inside a string
+is allowed and is kept as-is.
+
+`saule fmt` does not preserve which quote you used: it writes double quotes
+unless the text contains a `"` and no `'`, in which case single quotes avoid
+the escaping. So `'he said "hi"'` is left alone, and `'hello'` becomes
+`"hello"`.
+
 ### Integer Division
 
 `/` on two integers is **integer division** (Lua / C semantics) — the result is the truncated quotient, never a float:

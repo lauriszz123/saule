@@ -50,9 +50,14 @@ jobs:
         working-directory: www
         run: |
           npm run sync-docs
-          if ! git diff --quiet -- src/content/docs; then
+          # `git status --porcelain`, not `git diff`: a new `##` section in the
+          # README generates a page that does not exist yet, and an *untracked*
+          # file is invisible to `git diff`. That would let a new documentation
+          # page pass CI and then be missing from the repository.
+          changed="$(git status --porcelain -- src/content/docs)"
+          if [ -n "$changed" ]; then
             echo "::error::Generated docs are stale. Run 'npm run sync-docs' in www/ and commit the result."
-            git diff --stat -- src/content/docs
+            echo "$changed"
             exit 1
           fi
 

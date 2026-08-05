@@ -76,6 +76,7 @@ export default defineConfig({
 					label: 'Reference',
 					items: [
 						{ label: 'Quick Reference', slug: 'reference/quick-reference' },
+						{ label: 'Grammar', slug: 'reference/grammar' },
 						{ label: 'CLI', slug: 'reference/cli' },
 						{ label: 'Editor Support', slug: 'reference/editors' },
 					],

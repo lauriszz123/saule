@@ -120,7 +120,7 @@ impl<'src> Lexer<'src> {
                 '0'..='9' => self.number(start)?,
                 _ if dot_starts_float => self.number(start)?,
                 'a'..='z' | 'A'..='Z' | '_' => self.ident_or_keyword(start),
-                '"' => self.string(start)?,
+                '"' | '\'' => self.string(start, c)?,
                 _ => self.symbol(start)?,
             };
 
@@ -433,14 +433,25 @@ impl<'src> Lexer<'src> {
         })
     }
 
-    fn string(&mut self, start: usize) -> Result<Spanned<Token>, LexerError> {
-        self.chars.next(); // consume opening "
+    /// Lex a string literal delimited by `quote` — `"` or `'`.
+    ///
+    /// The two spellings are interchangeable, as in Lua: only the delimiter
+    /// that opened the literal closes it, so the *other* quote needs no
+    /// escaping inside it (`'he said "hi"'`). Both `\"` and `\'` are accepted
+    /// in either kind, so moving a literal between them never invalidates an
+    /// escape that was already there.
+    ///
+    /// The delimiter is not recorded on the token: `Token::String` carries the
+    /// decoded value, and nothing downstream can tell the two spellings apart.
+    /// See `quote_str` in `saule-fmt` for how the formatter picks one again.
+    fn string(&mut self, start: usize, quote: char) -> Result<Spanned<Token>, LexerError> {
+        self.chars.next(); // consume the opening quote
         let mut s = String::new();
         let end;
         loop {
             match self.chars.next() {
-                Some((i, '"')) => {
-                    end = i + 1;
+                Some((i, c)) if c == quote => {
+                    end = i + c.len_utf8();
                     break;
                 }
                 Some((_, '\\')) => match self.chars.next() {
@@ -450,6 +461,7 @@ impl<'src> Lexer<'src> {
                     Some((_, '0')) => s.push('\0'),
                     Some((_, '\\')) => s.push('\\'),
                     Some((_, '"')) => s.push('"'),
+                    Some((_, '\'')) => s.push('\''),
                     Some((i, c)) => return Err(LexerError::BadEscape(i..i + c.len_utf8())),
                     None => return Err(LexerError::UnterminatedString(start..self.source.len())),
                 },

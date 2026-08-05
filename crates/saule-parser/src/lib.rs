@@ -52,7 +52,16 @@ use std::ops::Range;
 pub fn parse(tokens: Vec<Spanned<Token>>) -> Result<Module, ParseError> {
     let mut p = Parser::new(tokens);
     let mut stmts = Vec::new();
-    while !p.is_eof() {
+    loop {
+        // Semicolons are separators, not statements, so they have to be
+        // consumed *before* deciding whether anything is left to parse.
+        // Skipping them inside `parse_statement` instead would commit to a
+        // statement that isn't there: `local a = 1;` would consume the `;`,
+        // find EOF, and report "expected an expression".
+        p.skip_semicolons();
+        if p.is_eof() {
+            break;
+        }
         stmts.push(p.parse_statement()?);
     }
     Ok(Module { stmts })
@@ -144,6 +153,12 @@ impl Parser {
         } else {
             self.tokens[self.pos - 1].span.end
         }
+    }
+
+    /// Consumes any run of `;` separators. Callers use this at the point where
+    /// they decide whether a block or the module has ended.
+    pub(crate) fn skip_semicolons(&mut self) {
+        while self.eat(&Token::Semi) {}
     }
 
     pub(crate) fn eat(&mut self, t: &Token) -> bool {

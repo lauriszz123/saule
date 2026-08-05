@@ -13,9 +13,10 @@ impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
 
     pub fn parse_statement(&mut self) -> Result<Spanned<Stmt>, ParseError> {
-        // Optional `;` separators are skipped.
-        while self.eat(&Token::Semi) {}
-
+        // Any leading `;` has already been consumed by the caller — see
+        // `parse` and `parse_block_until`, which skip separators before
+        // testing for the end of the block. This function is only ever
+        // entered when a statement really does follow.
         let tok = self.peek().clone();
         match tok.value {
             Token::Local => self.parse_local(),
@@ -308,12 +309,20 @@ impl Parser {
 
     /// Parses statements until one of the given terminator keywords is next.
     /// Does NOT consume the terminator.
+    ///
+    /// Separators are skipped before each terminator test, so a block may end
+    /// with one: `local a = 1;` directly before `end` is a block of a single
+    /// statement, not a statement followed by an empty one.
     pub(crate) fn parse_block_until(
         &mut self,
         terminators: &[Token],
     ) -> Result<Vec<Spanned<Stmt>>, ParseError> {
         let mut stmts = Vec::new();
-        while !self.is_eof() && !terminators.iter().any(|t| self.check(t)) {
+        loop {
+            self.skip_semicolons();
+            if self.is_eof() || terminators.iter().any(|t| self.check(t)) {
+                break;
+            }
             stmts.push(self.parse_statement()?);
         }
         Ok(stmts)

@@ -26,11 +26,22 @@ syntax match  sauleCompare    "==\|!=\|<=\|>=\|[<>]"
 syntax match  sauleArrow      "->\|=>"
 
 " ── Numbers ─────────────────────────────────────────────────────────────
-syntax match  sauleFloat       "\<\d\+\.\d\+\([eE][+-]\=\d\+\)\=\>"
+" Mirrors `Lexer::number` in crates/saule-lexer: hex and binary prefixes take
+" `_` separators, the fractional part needs a digit on both sides of the dot
+" (so `1..2` stays concatenation), the integer part may be omitted, and an
+" `f`/`F` suffix forces a float. There is no exponent notation.
+syntax match  sauleNumber      "\<0[xX][0-9a-fA-F_]\+\>"
+syntax match  sauleNumber      "\<0[bB][01_]\+\>"
+syntax match  sauleFloat       "\<\d\+\.\d\+[fF]\=\>"
+syntax match  sauleFloat       "\%([[:alnum:]_.]\)\@<!\.\d\+[fF]\=\>"
+syntax match  sauleFloat       "\<\d\+[fF]\>"
 syntax match  sauleNumber      "\<\d\+\>"
 
 " ── Strings ─────────────────────────────────────────────────────────────
-syntax region sauleString      start=+"+ skip=+\\"+ end=+"+ contains=sauleEscape
+" Both quote styles, as in Lua: only the delimiter that opened the literal
+" closes it, so the other quote needs no escaping inside.
+syntax region sauleString      start=+"+ skip=+\\.+ end=+"+ contains=sauleEscape
+syntax region sauleString      start=+'+ skip=+\\.+ end=+'+ contains=sauleEscape
 syntax match  sauleEscape      "\\." contained
 
 " ── Types ───────────────────────────────────────────────────────────────

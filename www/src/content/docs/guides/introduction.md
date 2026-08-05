@@ -57,8 +57,9 @@ modifiers and static members are language constructs with real declarations
 instead of metatable conventions you rediscover in every codebase.
 
 **Exhaustive pattern matching.** [`match`](/saule/language/pattern-matching/)
-knows your enum's variants and its payloads, and it will not compile if you
-forgot one.
+takes a value apart and binds what it finds — enum variants and their payloads,
+`nil`, literals, tuples — and it will not compile if you leave a case
+unhandled.
 
 ## Where to go next
 

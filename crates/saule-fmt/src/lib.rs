@@ -263,20 +263,43 @@ fn format_float(f: f64) -> String {
 }
 
 fn quote_str(s: &str) -> String {
+    // The lexer accepts `"…"` and `'…'` alike but keeps only the decoded value,
+    // so the original delimiter is gone by the time the formatter runs and has
+    // to be chosen rather than preserved.
+    //
+    // The rule is the one that needs the fewest backslashes: double quotes
+    // normally, single quotes only when the text contains a `"` and no `'`.
+    // So `'he said "hi"'` survives a format intact instead of turning into
+    // `"he said \"hi\""`, and everything else normalises to one house style.
+    let quote = if s.contains('"') && !s.contains('\'') {
+        '\''
+    } else {
+        '"'
+    };
+
     let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
+    out.push(quote);
     for c in s.chars() {
         match c {
-            '"' => out.push_str("\\\""),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            '\0' => out.push_str("\\0"),
+            // Any other control character is written through as itself. This
+            // used to emit `\x00`-style escapes, which the lexer has never
+            // accepted — formatting `"a\0b"` produced a file that no longer
+            // lexed. Saule has no hex escape, and the lexer takes a raw
+            // control character inside a string, so passing it through is what
+            // actually round-trips.
             c => out.push(c),
         }
     }
-    out.push('"');
+    out.push(quote);
     out
 }
 
