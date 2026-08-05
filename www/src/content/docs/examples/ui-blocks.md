@@ -226,7 +226,7 @@ end
 
 ```saule title="src/main.sau"
 import Canvas from "canvas"
-import Panel, Row, Text, Button, Field, Rule from "widgets"
+import * from "widgets"
 
 -- A tiny declarative UI, drawn to the terminal.
 --
@@ -235,7 +235,7 @@ import Panel, Row, Text, Button, Field, Rule from "widgets"
 -- the initialiser's last argument, without the `fn(` / `end)` ceremony.
 class Main
 	static local players: table<string> = {"ada", "grace", "linus"}
-	static local scores: table<integer> = {120, 340, 90}
+	static local scores: table<integer> = {120, 95, 87}
 
 	static fn main()
 		local screen = Canvas() do

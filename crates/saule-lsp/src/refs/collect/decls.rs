@@ -115,6 +115,32 @@ impl<'a> CollectCx<'a> {
                 }
                 self.enclosing_class = prev;
             }
+            // A module variable renames like a local: the declaration plus
+            // every bare use of the name in this file.
+            Decl::Variable {
+                name,
+                name_span,
+                ty,
+                value,
+                ..
+            } => {
+                if let Some(v) = value {
+                    self.visit_expr(v);
+                }
+                if let Some(t) = ty {
+                    let head_end = value.as_ref().map(|v| v.span.start).unwrap_or(d.span.end);
+                    self.collect_type_name_refs_in(t, &(d.span.start..head_end));
+                }
+                if let Symbol::Local {
+                    name: tname,
+                    def_span: tspan,
+                } = self.symbol
+                    && tname == name
+                    && tspan == name_span
+                {
+                    self.push(name_span.clone(), true);
+                }
+            }
             Decl::Import { path, quoted, .. } => {
                 if let Symbol::ImportPath(target) = self.symbol
                     && target == path

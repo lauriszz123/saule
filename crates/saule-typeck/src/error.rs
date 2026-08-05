@@ -17,6 +17,17 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("module variable `{name}` is never initialized")]
+    #[diagnostic(help(
+        "give it a value (`export {name}: {ty} = ...`) or mark the type nullable with `?` — a module variable has no constructor to assign it in"
+    ))]
+    UninitializedVariable {
+        name: String,
+        ty: String,
+        #[label("declared without a value")]
+        span: miette::SourceSpan,
+    },
+
     #[error("cannot assign a nullable value of type `{from}` to non-nullable type `{to}`")]
     #[diagnostic(help(
         "guard with `if x != nil then ... end`, use `??` to provide a fallback, or force-unwrap with `!`"

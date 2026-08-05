@@ -1,8 +1,13 @@
 //! Definite-assignment check for class fields.
 //!
 //! Every non-nullable instance field without a default must be assigned
-//! `self.field = ...` somewhere inside the class's `init` constructor.
-//! Defaults and nullable types are exempt.
+//! `self.field = ...` somewhere inside the class's `init` constructor. A
+//! class with no `init` at all has nowhere to do that, so every such field
+//! is reported. Defaults and nullable types are exempt.
+//!
+//! `static local` fields are stricter: nothing runs before the first read
+//! of a static, so there is no constructor-shaped escape hatch. A
+//! non-nullable static must carry its value in the declaration.
 
 use saule_ast::{ClassMember, Expr, Method, Spanned, Stmt, Type};
 
@@ -29,31 +34,42 @@ pub(crate) fn check_class(
         }
     }
 
-    let Some(body) = ctor_body else { return };
-
+    // No `init` means no field is ever assigned — the empty set below then
+    // reports every non-nullable field without a default, which is right:
+    // instances of such a class would start out holding `nil`.
     let mut assigned: Vec<String> = Vec::new();
-    for s in body {
-        collect_self_assignments(&s.value, &mut assigned);
+    if let Some(body) = ctor_body {
+        for s in body {
+            collect_self_assignments(&s.value, &mut assigned);
+        }
     }
+
     for m in members {
-        if let ClassMember::Field {
-            is_static: false,
+        let ClassMember::Field {
+            is_static,
             name,
             ty,
             default,
             ..
         } = &m.value
-        {
-            if default.is_some() || is_nullable(ty) {
-                continue;
-            }
-            if !assigned.iter().any(|a| a == name) {
-                errors.push(SemanticError::FieldNotInitialized {
-                    class: class_name.to_string(),
-                    field: name.clone(),
-                    span: to_source_span(m.span.clone()),
-                });
-            }
+        else {
+            continue;
+        };
+        if default.is_some() || is_nullable(ty) {
+            continue;
+        }
+        if *is_static {
+            errors.push(SemanticError::StaticFieldNotInitialized {
+                class: class_name.to_string(),
+                field: name.clone(),
+                span: to_source_span(m.span.clone()),
+            });
+        } else if !assigned.iter().any(|a| a == name) {
+            errors.push(SemanticError::FieldNotInitialized {
+                class: class_name.to_string(),
+                field: name.clone(),
+                span: to_source_span(m.span.clone()),
+            });
         }
     }
 }

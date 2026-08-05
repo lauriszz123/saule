@@ -6,9 +6,11 @@ alone, without inferring types:
 
 - **Registry build** — collects all declared classes, interfaces and enums
   into one shared source of truth (`registry`) that later passes consult.
-- **Definite assignment** — every non-nullable instance field of a class
-  with a constructor must be assigned `self.field = ...` in that
-  constructor.
+- **Definite assignment** — every non-nullable instance field must be
+  assigned `self.field = ...` in the class's `init` (a class without an
+  `init` has nowhere to do that, so every such field is reported), and
+  every non-nullable `static local` field must carry a value in its
+  declaration. Defaults and nullable types are exempt.
 - **Control-flow validity** — `break` / `continue` only inside loops;
   `return` only inside functions.
 

@@ -5,9 +5,10 @@
 //! * **Class/interface/enum registry build** — exposed publicly so later
 //!   passes (the typechecker, future name-resolution work) consult one
 //!   source of truth for what's declared. See [`registry`].
-//! * **Definite-assignment** — every non-nullable instance field of a class
-//!   with a constructor must be assigned `self.field = ...` inside that
-//!   constructor.
+//! * **Definite-assignment** — every non-nullable instance field must be
+//!   assigned `self.field = ...` inside the class's constructor, and every
+//!   non-nullable `static local` field must carry a value in its
+//!   declaration. See [`field_init`].
 //! * **Control-flow validity** — `break` and `continue` are only valid
 //!   inside loops; `return` is only valid inside functions.
 //!
@@ -37,11 +38,12 @@ mod return_check;
 pub use error::SemanticError;
 pub use registry::{
     ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, FunctionRegistry, FunctionSig,
-    InterfaceRegistry, MethodSig, VariantInfo, build_function_registry, build_registry,
-    class_implements, class_implements_iterable, clear_registries, install_functions,
-    install_registries, interface_extends, is_interface, is_subtype_named, lookup_field_type,
-    lookup_function, lookup_member, lookup_method, super_init_target, with_classes, with_enums,
-    with_functions, with_interfaces,
+    InterfaceRegistry, MethodSig, VariableRegistry, VariantInfo, build_function_registry,
+    build_registry, build_variable_registry, class_implements, class_implements_iterable,
+    clear_registries, install_functions, install_registries, install_variables, interface_extends,
+    is_interface, is_subtype_named, lookup_field_type, lookup_function, lookup_member,
+    lookup_method, super_init_target, with_classes, with_enums, with_functions, with_interfaces,
+    with_variables,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
@@ -67,6 +69,9 @@ pub struct ModuleSeed {
     /// Signatures of the top-level `fn`s the imports bring in, keyed by the
     /// name they are bound to locally.
     pub functions: FunctionRegistry,
+    /// Declared types of the `export name: T = value` module variables the
+    /// imports bring in, keyed by their local name.
+    pub variables: VariableRegistry,
     /// Local names this module's `import * from "..."` statements bind,
     /// as enumerated by the embedder.
     ///
@@ -116,8 +121,13 @@ pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError
     for (name, sig) in seed.functions {
         funcs.entry(name).or_insert(sig);
     }
+    let mut vars = build_variable_registry(module);
+    for (name, ty) in seed.variables {
+        vars.entry(name).or_insert(ty);
+    }
     install_registries(reg, ifaces, enums);
     install_functions(funcs);
+    install_variables(vars);
 
     let mut errors = Vec::new();
 

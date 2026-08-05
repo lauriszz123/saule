@@ -72,6 +72,41 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             set_return_ty(prev_ret);
             pop_generics(prev_generics);
         }
+        // `export name: T = value` — the module-scope sibling of a `local`,
+        // and checked by exactly the same two rules: the initializer must
+        // fit the annotation, and a missing initializer means `nil`, which
+        // only a nullable `T` accepts.
+        Decl::Variable {
+            name,
+            name_span,
+            ty,
+            value,
+            ..
+        } => {
+            // The initializer is checked in an empty scope: it runs at
+            // module level, where no local is in scope yet.
+            let scope = Scope::default();
+            if let Some(t) = ty {
+                reject_nil_in_binding_type(t, name_span.clone(), errors);
+            }
+            match (ty, value) {
+                (Some(t), Some(v)) => {
+                    check_expr_expecting(v, Some(t), &scope, errors);
+                    check_assignment_compat(t, v, &scope, errors);
+                }
+                (None, Some(v)) => check_expr(v, &scope, errors),
+                (Some(t), None) => {
+                    if !is_nullable(t) {
+                        errors.push(TypeCheckError::UninitializedVariable {
+                            name: name.clone(),
+                            ty: type_to_string(t),
+                            span: to_source_span(name_span.clone()),
+                        });
+                    }
+                }
+                (None, None) => {}
+            }
+        }
         Decl::Interface { methods, .. } => {
             for sig in methods {
                 reject_nil_in_params(&sig.params, errors);

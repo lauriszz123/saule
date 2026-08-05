@@ -29,6 +29,8 @@ pub enum ItemKind {
     Method,
     Field,
     Variant,
+    /// A module-level `export name: T = value`.
+    Variable,
 }
 
 /// A declaration that may carry a doc comment.
@@ -91,6 +93,13 @@ pub fn walk(module: &Module) -> Vec<DocItem<'_>> {
                     }
                 }
             }
+
+            Decl::Variable { name, .. } => out.push(DocItem {
+                qname: name.clone(),
+                anchor,
+                params: NONE,
+                kind: ItemKind::Variable,
+            }),
 
             Decl::Interface { name, methods, .. } => {
                 out.push(DocItem {

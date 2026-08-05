@@ -173,6 +173,26 @@ impl<'a> Printer<'a> {
                 self.indent -= 1;
                 self.write("end");
             }
+            Decl::Variable {
+                exported,
+                name,
+                ty,
+                value,
+                ..
+            } => {
+                if *exported {
+                    self.write("export ");
+                }
+                self.write(name);
+                if let Some(t) = ty {
+                    self.write(": ");
+                    self.ty(t);
+                }
+                if let Some(v) = value {
+                    self.write(" = ");
+                    self.expr(v, 0);
+                }
+            }
             Decl::Import {
                 names,
                 path,

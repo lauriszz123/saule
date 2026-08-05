@@ -18,7 +18,10 @@ pub(crate) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         Expr::Float(_) => Some(Type::Named("float".into())),
         Expr::Bool(_) => Some(Type::Named("boolean".into())),
         Expr::Str(_) => Some(Type::Named("string".into())),
-        Expr::Ident(n) => scope.lookup(n).cloned(),
+        // A module variable (`export name: T = ...`) is visible file-wide
+        // but lives in no lexical scope, so it is consulted only after the
+        // scope misses — a local of the same name shadows it.
+        Expr::Ident(n) => scope.lookup(n).cloned().or_else(|| crate::vars::lookup(n)),
         Expr::Self_ => current_class().map(Type::Named),
         // `x as T` always produces `T?` — the cast is checked at runtime
         // and yields `nil` when the value isn't a `T`. Making the result

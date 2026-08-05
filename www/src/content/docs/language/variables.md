@@ -1,13 +1,13 @@
 ---
 title: "Variables"
-description: "Saule follows Lua's scoping model: local makes a binding lexically scoped (visible only inside the block / function / file where it was declared), and…"
+description: "Saule follows Lua's scoping model with one deliberate departure: local makes a binding lexically scoped (visible only inside the block / function /…"
 sidebar:
   order: 2
 ---
 
 <!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
 
-Saule follows Lua's scoping model: `local` makes a binding **lexically scoped** (visible only inside the block / function / file where it was declared), and an assignment **without** `local` creates an **implicit global** (visible from anywhere after that point). The type annotation is optional in either form — when omitted, the type is inferred from the initializer.
+Saule follows Lua's scoping model with one deliberate departure: `local` makes a binding **lexically scoped** (visible only inside the block / function / file where it was declared), and there are no implicit globals — assigning to a name that was never declared is an error, not a new binding. To publish a name beyond its file, declare it with `export`. The type annotation is optional in either form — when omitted, the type is inferred from the initializer.
 
 ### Local (Recommended)
 
@@ -20,20 +20,41 @@ local speed: float = 1.5
 local alive: boolean = true
 ```
 
-### Global
+### Module Variables
 
-Drop `local` to publish the binding as a top-level name. Use sparingly — globals defeat scope-based reasoning and are the usual source of "where did this value come from?" bugs:
+`export name: T = value` declares a variable at module scope — the file-level counterpart of a class's public field. It is visible to every function in the file and importable by name from other modules:
 
 ```saule
-appName: string = "MyGame"        -- global
-version = 1                       -- global, type inferred
+-- config.sau
+export appName: string = "MyGame"
+export version = 1                  -- inferred integer
 
-fn showHeader()
-    print(appName .. " v" .. version)   -- visible here without import
+export fn showHeader()
+    print(appName .. " v" .. version)   -- visible file-wide
 end
 ```
 
-A global is created on its **first** assignment. Subsequent `name = expr` (still no `local`) updates that global. Inside a function, an assignment to an undeclared name follows the same rule — it creates / updates the global.
+```saule
+-- main.sau
+import appName, showHeader from "config"
+
+print(appName)
+```
+
+Module variables are mutable, and every write is checked against the declared type:
+
+```saule
+version = version + 1        -- ok
+version = "two"              -- ERROR: `string` into `integer`
+```
+
+Use them sparingly — mutable state reachable from anywhere is the usual source of "where did this value come from?" bugs. A name with no `export` stays private to its file; write those as ordinary `local`s.
+
+There is no implicit-global form. Assigning to a name that was never declared is an error, so a misspelled target is reported instead of silently creating a second variable:
+
+```saule
+apName = "MyGame"            -- ERROR: cannot assign to undeclared variable
+```
 
 ### Inferred Type
 
@@ -66,6 +87,13 @@ A `local` declaration with no initializer is implicitly `nil`, so the type must 
 local pending: string? = nil    -- ok
 local pending: string?          -- ok, same thing
 local pending: string           -- ERROR: `string` is never nil
+```
+
+The same applies to any name a multiple binding leaves without a value, and to a module variable:
+
+```saule
+local host: string, port: integer = "localhost"   -- ERROR: `port` is nil
+export appName: string                            -- ERROR: `string` is never nil
 ```
 
 ### Reassignment

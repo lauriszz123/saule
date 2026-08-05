@@ -112,7 +112,26 @@ pub(super) fn check_stmt(
                 if let Some(ty) = ty_opt {
                     let bound = match values.get(i) {
                         Some(v) => refine_bare_binding(ty, v, scope),
-                        None => ty.clone(),
+                        None => {
+                            // Fewer values than names — this one binds `nil`,
+                            // same as a `local x: T` with no initializer.
+                            // A lone call as the RHS is exempt: the tuple
+                            // spread above only fires when we could infer the
+                            // callee's return tuple, and a multi-return whose
+                            // type we couldn't resolve still fills these names
+                            // at runtime. Only a call can do that — a literal
+                            // or a variable never spreads.
+                            let maybe_spread = values.len() == 1
+                                && names.len() > 1
+                                && matches!(values[0].value, Expr::Call { .. });
+                            if !is_nullable(ty) && !maybe_spread {
+                                errors.push(TypeCheckError::NilToNonNullable {
+                                    ty: type_to_string(ty),
+                                    span: to_source_span(stmt.span.clone()),
+                                });
+                            }
+                            ty.clone()
+                        }
                     };
                     scope.bind(name.clone(), bound);
                 } else if let Some(v) = values.get(i)
@@ -126,8 +145,12 @@ pub(super) fn check_stmt(
         Stmt::Assign { target, value } => {
             check_expr(target, scope, errors);
             check_expr(value, scope, errors);
+            // A module variable is assignable from anywhere in the file, so
+            // its declared type has to constrain the write the same way a
+            // local's does — hence the same scope-then-module lookup order
+            // `infer` uses for reads.
             if let Expr::Ident(n) = &target.value
-                && let Some(ty) = scope.lookup(n).cloned()
+                && let Some(ty) = scope.lookup(n).cloned().or_else(|| crate::vars::lookup(n))
             {
                 check_assignment_compat(&ty, value, scope, errors);
             }

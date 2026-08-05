@@ -589,3 +589,62 @@ fn semicolon_does_not_produce_an_empty_statement() {
         _ => panic!("expected a declaration"),
     }
 }
+
+#[test]
+fn parses_exported_module_variable() {
+    let m = parse_src("export appName: string = \"Saule\"");
+    assert_eq!(m.stmts.len(), 1);
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Variable {
+                exported,
+                name,
+                ty: Some(Type::Named(ty)),
+                value: Some(_),
+                ..
+            } => {
+                assert!(exported);
+                assert_eq!(name, "appName");
+                assert_eq!(ty, "string");
+            }
+            other => panic!("expected a variable decl, got {other:?}"),
+        },
+        other => panic!("expected a decl, got {other:?}"),
+    }
+}
+
+/// The annotation and the initializer are independently optional: the
+/// bare-name form is what the "never initialized" check reports against.
+#[test]
+fn parses_module_variable_without_initializer() {
+    let m = parse_src("export pending: string?");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Variable {
+                name,
+                ty: Some(Type::Nullable(_)),
+                value: None,
+                ..
+            } => assert_eq!(name, "pending"),
+            other => panic!("expected a nullable variable decl, got {other:?}"),
+        },
+        other => panic!("expected a decl, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_module_variable_with_inferred_type() {
+    let m = parse_src("export retries = 3");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Variable {
+                name,
+                ty: None,
+                value: Some(_),
+                ..
+            } => assert_eq!(name, "retries"),
+            other => panic!("expected an un-annotated variable decl, got {other:?}"),
+        },
+        other => panic!("expected a decl, got {other:?}"),
+    }
+}

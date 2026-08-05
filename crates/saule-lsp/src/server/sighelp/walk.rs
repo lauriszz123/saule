@@ -308,6 +308,11 @@ impl Cx<'_> {
                     self.visit_method(m);
                 }
             }
+            Decl::Variable { value, .. } => {
+                if let Some(v) = value {
+                    self.visit_expr(v);
+                }
+            }
             Decl::Interface { .. } | Decl::Import { .. } => {}
         }
     }
