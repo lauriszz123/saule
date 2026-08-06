@@ -4,7 +4,7 @@
 use crate::refs::Symbol;
 use crate::refs::util::{
     LocalBind, contains, field_owner, inferred_type_of, is_workspace_function_name, locate_word_in,
-    member_name_span, method_owner, strip_nullable,
+    member_name_span, method_owner, static_method_owner, strip_nullable,
 };
 use saule_ast::{CallArg, Expr, LambdaBody, MatchBody, Pattern, Spanned, TableEntry, Type};
 use saule_semantic::{super_init_target, with_classes, with_enums, with_interfaces};
@@ -25,6 +25,21 @@ impl<'a> ResolveCx<'a> {
                         Symbol::Local {
                             name: name.clone(),
                             def_span: local.def_span.clone(),
+                        },
+                    );
+                } else if let Some(owner) = self
+                    .enclosing_class
+                    .as_deref()
+                    .and_then(|c| static_method_owner(c, name))
+                {
+                    // Bare call to one of the enclosing class's statics
+                    // (`help()` inside `Main`) — a method reference, not
+                    // a free function.
+                    self.record(
+                        e.span.clone(),
+                        Symbol::Method {
+                            class: owner,
+                            name: name.clone(),
                         },
                     );
                 } else if with_classes(|r| r.contains_key(name)) {

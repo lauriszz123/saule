@@ -1,0 +1,9 @@
+// Production build: the extension only, no tests.
+//
+// `.vscodeignore` can't be relied on to drop them — vsce applies its negation
+// patterns last, so `!out/**/*.js` re-includes anything excluded before it.
+// Not compiling the tests in the first place is unambiguous.
+{
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "out", "src/**/*.test.ts"]
+}

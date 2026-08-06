@@ -737,6 +737,95 @@ end
     assert_eq!(def_span(src, &s), ident_span(src, "twice", 0));
 }
 
+/// A static method called by bare name from a sibling method of the same
+/// class. This used to resolve to a free `Symbol::Function`, which no
+/// file declares — leaving goto-definition with nothing to jump to.
+#[test]
+fn resolves_static_method_called_by_bare_name() {
+    let src = "\
+class Main
+  static fn help()
+    println(\"usage\")
+  end
+
+  static fn main()
+    help()
+  end
+end
+";
+    let s = resolve_ident(src, "help", 1);
+    assert!(
+        matches!(&s, Symbol::Method { class, name } if class == "Main" && name == "help"),
+        "got: {s:?}"
+    );
+    assert_eq!(def_span(src, &s), ident_span(src, "help", 0));
+    assert_eq!(ref_count(src, &s), 1, "the bare call site");
+}
+
+/// The bare-name path walks the inheritance chain, like the interpreter's
+/// static lookup — the definition lives on the parent.
+#[test]
+fn resolves_inherited_static_method_called_by_bare_name() {
+    let src = "\
+class Base
+  static fn shared()
+    println(\"base\")
+  end
+end
+
+class Child extends Base
+  static fn run()
+    shared()
+  end
+end
+";
+    let s = resolve_ident(src, "shared", 1);
+    assert!(
+        matches!(&s, Symbol::Method { class, name } if class == "Base" && name == "shared"),
+        "got: {s:?}"
+    );
+    assert_eq!(def_span(src, &s), ident_span(src, "shared", 0));
+}
+
+/// A local shadowing a static's name still resolves to the local — bare
+/// names hit locals before the class's statics.
+#[test]
+fn a_local_shadows_a_same_named_static_method() {
+    let src = "\
+class Main
+  static fn help()
+    println(\"usage\")
+  end
+
+  static fn main()
+    local help = 1
+    println(help)
+  end
+end
+";
+    let s = resolve_ident(src, "help", 2);
+    assert!(matches!(&s, Symbol::Local { .. }), "got: {s:?}");
+}
+
+/// An instance method is unreachable by bare name, so such an identifier
+/// must not be claimed as a reference to it.
+#[test]
+fn a_bare_name_does_not_resolve_to_an_instance_method() {
+    let src = "\
+class Greeter
+  fn hi()
+    println(\"hello\")
+  end
+
+  static fn run()
+    hi()
+  end
+end
+";
+    let s = resolve_ident(src, "hi", 1);
+    assert!(!matches!(&s, Symbol::Method { .. }), "got: {s:?}");
+}
+
 /// The class name at a construction site is a reference to the class.
 #[test]
 fn resolves_class_name_at_a_construction_site() {

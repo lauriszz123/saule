@@ -8,13 +8,16 @@
     { "open": "{", "close": "}" },
     { "open": "[", "close": "]" },
     { "open": "(", "close": ")" },
-    { "open": "\"", "close": "\"", "notIn": ["string"] }
+    { "open": "\"", "close": "\"", "notIn": ["string"] },
+    { "open": "'", "close": "'", "notIn": ["string"] },
+    { "open": "--[[", "close": " ]]", "notIn": ["string", "comment"] }
   ],
   "surroundingPairs": [
-    ["{", "}"], ["[", "]"], ["(", ")"], ["\"", "\""]
+    ["{", "}"], ["[", "]"], ["(", ")"], ["\"", "\""], ["'", "'"]
   ],
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(class|interface|enum|fn|if|else|for|while|repeat|do|try|catch)\\b.*$|.*\\bthen\\s*$|.*\\bdo\\s*$|.*\\{\\s*$",
-    "decreaseIndentPattern": "^\\s*(end|else|until|catch|\\})\\b"
+    "increaseIndentPattern": "^\\s*((export\\s+|local\\s+)*(class|interface|enum|fn)\\b|(repeat|try|else|match)\\b).*$|.*\\b(then|do)\\s*$|.*[\\(\\[\\{]\\s*$",
+    "decreaseIndentPattern": "^\\s*(end|until|else|elseif|catch|case|[\\)\\]\\}])\\b"
   }
 }
