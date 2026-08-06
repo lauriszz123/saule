@@ -81,6 +81,10 @@ fn is_nullable(ty: &Type) -> bool {
 /// Walk a statement collecting every `self.NAME` that appears on the LHS of
 /// an `=`. Recurses through control-flow statements so an assignment inside
 /// an `if` still counts.
+///
+/// `Stmt::CompoundAssign` is deliberately *not* collected: `self.n += 1`
+/// reads `self.n` before it writes it, so it initialises nothing and a field
+/// whose only mention in `init` is a compound assignment is still uninitialised.
 fn collect_self_assignments(stmt: &Stmt, out: &mut Vec<String>) {
     match stmt {
         Stmt::Assign { target, .. } => {

@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use crate::{Decl, Expr, Spanned, Type};
+use crate::{BinOp, Decl, Expr, Spanned, Type};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
@@ -39,6 +39,20 @@ pub enum Stmt {
     AssignMulti {
         targets: Vec<Spanned<Expr>>,
         values: Vec<Spanned<Expr>>,
+    },
+    /// `lhs op= rhs` — compound assignment: `+=`, `-=`, `*=`, `/=`, `%=`,
+    /// `^=`, `..=`. `op` is the underlying binary operator, so the result
+    /// is whatever `lhs op rhs` produces, including through an `Op*`
+    /// overload.
+    ///
+    /// This is a node of its own rather than parse-time sugar for
+    /// `target = target op value` because the target must be evaluated
+    /// exactly once: desugaring would call `f()` twice in `t[f()] += 1`
+    /// and re-evaluate the receiver in `next().count += 1`.
+    CompoundAssign {
+        target: Spanned<Expr>,
+        op: BinOp,
+        value: Spanned<Expr>,
     },
     /// Expression used as a statement (typically a call).
     Expr(Spanned<Expr>),

@@ -1,16 +1,17 @@
-//! Assignment statements (`a = …`, `a, b = …`, `obj.field = …`,
+//! Assignment statements (`a = …`, `a op= …`, `a, b = …`, `obj.field = …`,
 //! `tbl[index] = …`).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_ast::{Expr, Spanned};
+use saule_ast::{BinOp, Expr, Spanned};
 
 use crate::env::Environment;
 use crate::error::RuntimeError;
 use crate::value::{ClassObject, Value};
 
-use super::super::{Flow, expr};
+use super::super::expr::members::{read_index, read_member};
+use super::super::{Flow, expr, ops};
 
 pub(super) fn exec_assign(
     target: &Spanned<Expr>,
@@ -19,6 +20,63 @@ pub(super) fn exec_assign(
 ) -> Result<Flow, RuntimeError> {
     let v = expr::eval(value, env)?;
     assign_target(target, v, env)
+}
+
+/// `target op= value` — read the target, combine, write back.
+///
+/// Each arm resolves the target's *place* once and then reuses it for both
+/// the read and the write. That is the whole reason compound assignment is
+/// not desugared to `target = target op value` in the parser: `t[i()] += 1`
+/// must call `i()` once, and `make().total += 1` must update the object
+/// `make()` returned rather than a second, freshly built one.
+///
+/// The combine itself goes through [`ops::binary`], so a class that
+/// implements `OpAdd` gets `+=` for free with exactly the semantics its
+/// `add` method defines.
+pub(super) fn exec_compound_assign(
+    target: &Spanned<Expr>,
+    op: BinOp,
+    value: &Spanned<Expr>,
+    env: &Rc<RefCell<Environment>>,
+) -> Result<Flow, RuntimeError> {
+    let span = target.span.start..value.span.end;
+
+    match &target.value {
+        Expr::Ident(name) => {
+            let current = env
+                .borrow()
+                .get(name)
+                .ok_or_else(|| RuntimeError::TypeError {
+                    message: format!(
+                        "internal: compound assignment to undeclared `{name}` reached \
+                         evaluation — `saule_semantic::analyze` was not run on \
+                         this module"
+                    ),
+                    span: target.span.clone(),
+                })?;
+            let rhs = expr::eval(value, env)?;
+            let combined = ops::binary(op, current, rhs, span)?;
+            assign_target(target, combined, env)
+        }
+        Expr::Member { obj, name } => {
+            let receiver = expr::eval(obj, env)?;
+            let current = read_member(&receiver, name, target.span.clone())?;
+            let rhs = expr::eval(value, env)?;
+            let combined = ops::binary(op, current, rhs, span)?;
+            assign_member(&receiver, name, combined, target.span.clone())
+        }
+        Expr::Index { obj, index } => {
+            let receiver = expr::eval(obj, env)?;
+            let index_value = expr::eval(index, env)?;
+            let current = read_index(&receiver, index_value.clone(), target.span.clone())?;
+            let rhs = expr::eval(value, env)?;
+            let combined = ops::binary(op, current, rhs, span)?;
+            assign_index(&receiver, index_value, combined, target.span.clone())
+        }
+        _ => Err(RuntimeError::InvalidAssignTarget {
+            span: target.span.clone(),
+        }),
+    }
 }
 
 pub(super) fn assign_target(

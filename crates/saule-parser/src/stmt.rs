@@ -1,11 +1,31 @@
 //! Statement parsing: local, control flow (if/while/repeat/for/try),
 //! return, throw, expression-statement-or-assignment, plus block helpers.
 
-use saule_ast::{Spanned, Stmt};
+use saule_ast::{BinOp, Spanned, Stmt};
 use saule_lexer::Token;
 
 use crate::error::ParseError;
 use crate::{Parser, stmt_decl};
+
+/// The binary operator behind a compound-assignment token, or `None` if the
+/// token isn't one.
+///
+/// The comparison and logical operators have no compound form: `a <= b` is
+/// already a valid expression, so `a <== b` would be ambiguous, and `and=` /
+/// `or=` would have to answer whether the RHS is evaluated when the operator
+/// short-circuits.
+fn compound_assign_op(tok: &Token) -> Option<BinOp> {
+    Some(match tok {
+        Token::PlusEq => BinOp::Add,
+        Token::MinusEq => BinOp::Sub,
+        Token::StarEq => BinOp::Mul,
+        Token::SlashEq => BinOp::Div,
+        Token::PercentEq => BinOp::Mod,
+        Token::CaretEq => BinOp::Pow,
+        Token::DotDotEq => BinOp::Concat,
+        _ => return None,
+    })
+}
 
 impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
@@ -292,6 +312,23 @@ impl Parser {
             return Ok(Spanned::new(
                 Stmt::AssignMulti { targets, values },
                 start..end,
+            ));
+        }
+
+        // `a op= b`. Checked before plain `=` simply because the tokens are
+        // distinct; the RHS is a full expression, so `x += a + b` updates by
+        // the whole sum.
+        if let Some(op) = compound_assign_op(&self.peek().value) {
+            self.advance();
+            let value = self.parse_expression()?;
+            let span = expr.span.start..value.span.end;
+            return Ok(Spanned::new(
+                Stmt::CompoundAssign {
+                    target: expr,
+                    op,
+                    value,
+                },
+                span,
             ));
         }
 

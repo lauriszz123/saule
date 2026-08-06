@@ -14,7 +14,7 @@ mod calls;
 mod cast;
 mod construct;
 mod match_;
-mod members;
+pub(crate) mod members;
 
 pub(crate) use calls::{
     call_function, call_static_method_public, call_value_multi, eval_values, invoke_method_multi,

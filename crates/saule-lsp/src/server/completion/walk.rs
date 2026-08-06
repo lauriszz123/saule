@@ -160,7 +160,7 @@ impl Walk {
                 }
                 self.exprs(values);
             }
-            Stmt::Assign { target, value } => {
+            Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
                 self.expr(target);
                 self.expr(value);
             }

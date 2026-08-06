@@ -379,6 +379,84 @@ local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
 
 > Class **fields** are a separate thing — they live on instances or the class itself, not in the surrounding scope. They use `name: T = expr` for public and `local name: T = expr` for private. See [Classes → Access Modifiers](#access-modifiers).
 
+### Compound Assignment
+
+`target op= value` reads the target, applies `op`, and writes the result back.
+There is one form per arithmetic operator, plus `..=` for concatenation:
+
+```saule
+local hp: integer = 100
+hp -= 25                        -- same as `hp = hp - 25`
+hp *= 2
+hp %= 7
+
+local scale: float = 1.0
+scale /= 4.0
+
+local label: string = "level "
+label ..= "3"                   -- "level 3"
+
+local charge: integer = 2
+charge ^= 10                    -- 1024
+```
+
+The right-hand side is a **full expression**, so it is combined before the
+operator applies — `p *= 3 + 4` multiplies by 7, not by 3:
+
+```saule
+local p: integer = 2
+p *= 3 + 4                      -- 14
+```
+
+Any assignable target works — locals, module variables, table elements,
+instance fields, and statics:
+
+```saule
+local scores: table<integer> = {10, 20}
+scores[2] += 5                  -- 25
+
+class Counter
+  n: integer
+  static total: integer = 0
+
+  fn init()
+    self.n = 0
+  end
+
+  fn bump()
+    self.n += 1
+    Counter.total += 1
+  end
+end
+```
+
+The target is evaluated **exactly once**, so a side-effecting subscript or
+receiver runs a single time — `queue[next()] += 1` calls `next()` once, not
+twice.
+
+Typing follows `target = target op value` exactly: the operator's own operand
+rules apply, and the *result* has to fit the target's declared type. Both of
+these are compile errors:
+
+```saule
+local n: integer = 1
+n /= 2.0                        -- ERROR: cannot mix integer and float
+n ..= "x"                       -- ERROR: `..` yields a string, `n` is an integer
+```
+
+Compound assignment is a **statement**, not an expression — `local x = (y += 1)`
+does not parse. It also routes through operator overloads, so a class that
+implements `OpAdd` supports `+=` with no extra work:
+
+```saule
+local v: Vec = Vec(1, 2)
+v += Vec(10, 20)                -- calls Vec.add
+```
+
+There is deliberately no compound form for the comparison or logical operators:
+`and=` / `or=` would have to answer whether the right-hand side is evaluated
+when the operator short-circuits.
+
 ---
 
 ## Tables
@@ -2071,6 +2149,8 @@ of every construct, see the [Grammar](#grammar).
 | `>`, `<`, `>=`, `<=` | Comparisons |
 | `and`, `or`, `not` | Boolean logic |
 | `+`, `-`, `*`, `/`, `%` | Arithmetic (`/` on two `integer`s truncates) |
+| `^` | Exponentiation (right-associative, binds tighter than unary `-`) |
+| `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=` | Compound assignment |
 | `:` | Pipeline stage call inside `when(...)` |
 | `int()` | Cast float to integer, truncates toward zero |
 | `float()` | Cast integer to float, always safe |
@@ -2094,6 +2174,7 @@ chunk ::= {stat}
 stat ::= ';'
        | local
        | assign
+       | compoundAssign
        | exp
        | if
        | while
@@ -2109,6 +2190,9 @@ stat ::= ';'
 
 local  ::= 'local' nameDecl {',' nameDecl} ['=' explist]
 assign ::= exp {',' exp} '=' explist
+
+compoundAssign ::= exp compoundOp exp
+compoundOp     ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '..='
 
 if     ::= 'if' exp 'then' chunk
            {'elseif' exp 'then' chunk}

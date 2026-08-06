@@ -594,3 +594,39 @@ fn control_characters_survive_a_round_trip() {
     let twice = format_with_source(&once);
     assert_eq!(once, twice, "formatted output must still lex");
 }
+
+// ── Compound assignment ──────────────────────────────────────────────────
+
+#[test]
+fn compound_assignment_is_normalised_to_single_spaces() {
+    for (src, expected) in [
+        ("n+=2", "n += 2"),
+        ("n   -=   3", "n -= 3"),
+        ("n*=4", "n *= 4"),
+        ("n/=5", "n /= 5"),
+        ("n%=6", "n %= 6"),
+        ("n^=7", "n ^= 7"),
+        ("s..=\"b\"", "s ..= \"b\""),
+        ("obj.count+=1", "obj.count += 1"),
+        ("t[i]+=1", "t[i] += 1"),
+    ] {
+        assert_eq!(format_str(src).unwrap().trim(), expected, "source: {src}");
+    }
+}
+
+#[test]
+fn compound_assignment_rhs_is_not_parenthesised() {
+    // The RHS runs to the end of the statement, so no operator inside it
+    // can bind loosely enough to need brackets.
+    assert_eq!(format_str("n *= 3 + 4").unwrap().trim(), "n *= 3 + 4");
+    assert_eq!(format_str("s ..= a .. b").unwrap().trim(), "s ..= a .. b");
+}
+
+#[test]
+fn compound_assignment_formatting_is_idempotent() {
+    for src in ["n+=2", "s..=\"b\"", "t[i] %= 3", "obj.f ^= 2"] {
+        let once = format_str(src).unwrap();
+        let twice = format_str(&once).unwrap();
+        assert_eq!(once, twice, "source: {src}");
+    }
+}

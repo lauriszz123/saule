@@ -145,44 +145,31 @@ pub(super) fn check_stmt(
         Stmt::Assign { target, value } => {
             check_expr(target, scope, errors);
             check_expr(value, scope, errors);
-            // A module variable is assignable from anywhere in the file, so
-            // its declared type has to constrain the write the same way a
-            // local's does — hence the same scope-then-module lookup order
-            // `infer` uses for reads.
-            if let Expr::Ident(n) = &target.value
-                && let Some(ty) = scope.lookup(n).cloned().or_else(|| crate::vars::lookup(n))
-            {
-                check_assignment_compat(&ty, value, scope, errors);
-            }
-            // `t[k] = v` — enforce the table's static key/value types.
-            if let Expr::Index { obj, index } = &target.value
-                && let Some(Type::Table {
-                    key,
-                    value: elem_ty,
-                }) = infer(obj, scope)
-            {
-                let key_ty = key
-                    .as_deref()
-                    .cloned()
-                    .unwrap_or_else(|| Type::Named("integer".into()));
-                check_table_key_compat(&key_ty, index, scope, errors);
-                check_element_compat(&elem_ty, value, scope, errors);
-            }
-            // `obj.field = v` — only class instances and class statics support
-            // dotted-field assignment. Catches `tbl.foo = ...` on plain
-            // tables, where `tbl["foo"] = ...` is the intended form, before
-            // it blows up at runtime.
-            if let Expr::Member { obj, name } = &target.value {
-                check_member_assign_receiver(obj, name, target.span.clone(), scope, errors);
-                // …and enforce the field's *declared type*. Only the receiver
-                // was validated before, so `self.label = 42` on a
-                // `label: string` field went through unchecked.
-                if let Some(class_name) = member_assign_class(obj, scope)
-                    && let Some(field_ty) = saule_semantic::lookup_field_type(&class_name, name)
-                {
-                    check_assignment_compat(&field_ty, value, scope, errors);
-                }
-            }
+            check_write_to_target(target, value, scope, errors);
+        }
+
+        Stmt::CompoundAssign { target, op, value } => {
+            // `a op= b` is typed as `a = a op b`. Building that binary node
+            // is what lets the operator's own rules apply unchanged —
+            // numeric-only for `+`, string-or-numeric for `..`, `Op*`
+            // overloads for class instances — and gives the target's
+            // declared type something with the *result* type to check
+            // against, so `local n: integer = 1; n /= 2` is caught the same
+            // way `n = n / 2` is.
+            //
+            // `check_expr` on the synthetic node recurses into both operands,
+            // so target and value are checked here too; checking them again
+            // separately would double every diagnostic they produce.
+            let combined = Spanned::new(
+                Expr::Binary {
+                    op: *op,
+                    lhs: Box::new(target.clone()),
+                    rhs: Box::new(value.clone()),
+                },
+                target.span.start..value.span.end,
+            );
+            check_expr(&combined, scope, errors);
+            check_write_to_target(target, &combined, scope, errors);
         }
 
         Stmt::AssignMulti { targets, values } => {
@@ -458,6 +445,59 @@ pub(super) fn check_stmt(
         }
 
         Stmt::Break | Stmt::Continue => {}
+    }
+}
+
+/// The rules that govern writing `value` into `target`, independent of how
+/// the written value was spelled.
+///
+/// Shared by `a = v` and `a op= v`; for the latter, `value` is the synthetic
+/// `a op v` binary, since that — not the bare RHS — is what actually lands in
+/// the target. Both operands have already been walked by the caller, so this
+/// only reasons about types.
+fn check_write_to_target(
+    target: &Spanned<Expr>,
+    value: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    // A module variable is assignable from anywhere in the file, so
+    // its declared type has to constrain the write the same way a
+    // local's does — hence the same scope-then-module lookup order
+    // `infer` uses for reads.
+    if let Expr::Ident(n) = &target.value
+        && let Some(ty) = scope.lookup(n).cloned().or_else(|| crate::vars::lookup(n))
+    {
+        check_assignment_compat(&ty, value, scope, errors);
+    }
+    // `t[k] = v` — enforce the table's static key/value types.
+    if let Expr::Index { obj, index } = &target.value
+        && let Some(Type::Table {
+            key,
+            value: elem_ty,
+        }) = infer(obj, scope)
+    {
+        let key_ty = key
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| Type::Named("integer".into()));
+        check_table_key_compat(&key_ty, index, scope, errors);
+        check_element_compat(&elem_ty, value, scope, errors);
+    }
+    // `obj.field = v` — only class instances and class statics support
+    // dotted-field assignment. Catches `tbl.foo = ...` on plain
+    // tables, where `tbl["foo"] = ...` is the intended form, before
+    // it blows up at runtime.
+    if let Expr::Member { obj, name } = &target.value {
+        check_member_assign_receiver(obj, name, target.span.clone(), scope, errors);
+        // …and enforce the field's *declared type*. Only the receiver
+        // was validated before, so `self.label = 42` on a
+        // `label: string` field went through unchecked.
+        if let Some(class_name) = member_assign_class(obj, scope)
+            && let Some(field_ty) = saule_semantic::lookup_field_type(&class_name, name)
+        {
+            check_assignment_compat(&field_ty, value, scope, errors);
+        }
     }
 }
 

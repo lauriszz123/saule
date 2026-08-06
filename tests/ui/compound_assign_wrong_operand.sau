@@ -1,0 +1,9 @@
+-- `a op= b` applies the operator's own rules: `+` is arithmetic, so a
+-- `string` target is as wrong here as it would be in `s = s + 1`.
+class Main
+	static fn main()
+		local s: string = "a"
+		s += 1
+		println(s)
+	end
+end

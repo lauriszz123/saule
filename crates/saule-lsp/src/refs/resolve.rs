@@ -103,7 +103,7 @@ impl<'a> ResolveCx<'a> {
                     self.push_local_binding(name, ty.clone(), init, &s.span);
                 }
             }
-            Stmt::Assign { target, value } => {
+            Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
                 self.visit_expr(target);
                 self.visit_expr(value);
             }

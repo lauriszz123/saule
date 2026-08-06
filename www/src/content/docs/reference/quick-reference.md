@@ -68,6 +68,8 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `>`, `<`, `>=`, `<=` | Comparisons |
 | `and`, `or`, `not` | Boolean logic |
 | `+`, `-`, `*`, `/`, `%` | Arithmetic (`/` on two `integer`s truncates) |
+| `^` | Exponentiation (right-associative, binds tighter than unary `-`) |
+| `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=` | Compound assignment |
 | `:` | Pipeline stage call inside `when(...)` |
 | `int()` | Cast float to integer, truncates toward zero |
 | `float()` | Cast integer to float, always safe |

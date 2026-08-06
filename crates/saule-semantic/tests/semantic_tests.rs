@@ -305,3 +305,45 @@ end
 ",
     );
 }
+
+// ── Compound assignment ──────────────────────────────────────────────────
+
+#[test]
+fn compound_assignment_requires_a_declared_target() {
+    rejects("zzz += 1", "zzz");
+    accepts("local n: integer = 0\nn += 1");
+}
+
+#[test]
+fn compound_assignment_resolves_names_in_the_value() {
+    rejects("local n: integer = 0\nn += nope", "nope");
+}
+
+#[test]
+fn compound_assignment_does_not_initialise_a_field() {
+    // `self.n += 1` reads `self.n` before writing it, so it cannot be what
+    // brings the field into existence — the definite-initialisation check
+    // must still fire.
+    rejects(
+        r#"
+        class C
+            n: integer
+            fn init()
+                self.n += 1
+            end
+        end
+        "#,
+        "n",
+    );
+    accepts(
+        r#"
+        class C
+            n: integer
+            fn init()
+                self.n = 0
+                self.n += 1
+            end
+        end
+        "#,
+    );
+}

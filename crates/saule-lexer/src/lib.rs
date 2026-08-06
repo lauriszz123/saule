@@ -347,11 +347,23 @@ impl<'src> Lexer<'src> {
     fn symbol(&mut self, start: usize) -> Result<Spanned<Token>, LexerError> {
         let (_, c) = self.chars.next().unwrap();
         let (tok, len) = match c {
-            '+' => (Token::Plus, 1),
+            '+' => match self.chars.peek() {
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::PlusEq, 2)
+                }
+                _ => (Token::Plus, 1),
+            },
+            // `--` never reaches here: the comment scan in
+            // `tokenize_with_trivia` claims it before `symbol` is called.
             '-' => match self.chars.peek() {
                 Some(&(_, '>')) => {
                     self.chars.next();
                     (Token::Arrow, 2)
+                }
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::MinusEq, 2)
                 }
                 _ => (Token::Minus, 1),
             },
@@ -405,6 +417,9 @@ impl<'src> Lexer<'src> {
                     if matches!(self.chars.peek(), Some(&(_, '.'))) {
                         self.chars.next();
                         (Token::Ellipsis, 3)
+                    } else if matches!(self.chars.peek(), Some(&(_, '='))) {
+                        self.chars.next();
+                        (Token::DotDotEq, 3)
                     } else {
                         (Token::DotDot, 2)
                     }
@@ -420,10 +435,34 @@ impl<'src> Lexer<'src> {
             ',' => (Token::Comma, 1),
             ':' => (Token::Colon, 1),
             ';' => (Token::Semi, 1),
-            '*' => (Token::Star, 1),
-            '/' => (Token::Slash, 1),
-            '%' => (Token::Percent, 1),
-            '^' => (Token::Caret, 1),
+            '*' => match self.chars.peek() {
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::StarEq, 2)
+                }
+                _ => (Token::Star, 1),
+            },
+            '/' => match self.chars.peek() {
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::SlashEq, 2)
+                }
+                _ => (Token::Slash, 1),
+            },
+            '%' => match self.chars.peek() {
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::PercentEq, 2)
+                }
+                _ => (Token::Percent, 1),
+            },
+            '^' => match self.chars.peek() {
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::CaretEq, 2)
+                }
+                _ => (Token::Caret, 1),
+            },
             '#' => (Token::Hash, 1),
             _ => return Err(LexerError::Unexpected(start..start + c.len_utf8())),
         };

@@ -132,7 +132,7 @@ impl<'a> Cx<'a> {
                 }
             }
             Stmt::Decl(d) => self.visit_decl(d),
-            Stmt::Assign { target, value } => {
+            Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
                 self.visit_expr(target);
                 self.visit_expr(value);
             }
