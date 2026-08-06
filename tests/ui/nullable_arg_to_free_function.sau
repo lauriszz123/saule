@@ -1,0 +1,18 @@
+-- Passing a `T?` into a `T` parameter must be a compile error for a direct
+-- call to a top-level `fn`, exactly as it already was for methods and for
+-- native functions.
+--
+-- This path was the one arg-check of the three that omitted the nullability
+-- guard, so every free function was a hole in null safety: the call
+-- type-checked and then failed at runtime *inside* the callee, blaming the
+-- callee's body rather than the call site.
+fn shout(s: string) -> string
+	return s .. "!"
+end
+
+class Main
+	static fn main()
+		local maybe: string? = "hi"
+		println(shout(maybe))
+	end
+end

@@ -1,4 +1,4 @@
-//! Instance construction (`new Class(args)`) and enum tuple-variant
+//! Instance construction (`Class(args)`) and enum tuple-variant
 //! constructors.
 
 use crate::fxhash::FxHashMap as HashMap;
@@ -56,7 +56,7 @@ pub(super) fn make_tuple_variant_ctor(
     }))
 }
 
-/// `new Class(args)` — create an instance, populate field defaults, then
+/// `Class(args)` — create an instance, populate field defaults, then
 /// run the constructor (if any) with `self` bound to the new object.
 pub(crate) fn construct(
     class: Rc<ClassObject>,

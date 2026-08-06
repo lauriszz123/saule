@@ -156,7 +156,9 @@ impl<'a> Cx<'a> {
                 // `Os.sep`, `Math.pi` — a typed stdlib constant read off a
                 // module identifier, which resolves to no class.
                 match &obj.value {
-                    Expr::Ident(recv) => saule_typeck::sigs::lookup_const(&format!("{recv}.{name}")),
+                    Expr::Ident(recv) => {
+                        saule_typeck::sigs::lookup_const(&format!("{recv}.{name}"))
+                    }
                     _ => None,
                 }
             }

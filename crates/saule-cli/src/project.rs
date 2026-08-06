@@ -10,7 +10,77 @@ use std::{
 
 use crate::run::run_file;
 
+/// A project after its `saule.config` has been read and
+/// [`saule_interpreter::project::set`] has been called.
+///
+/// Produced by [`configure_project`] and consumed by both `run` (which wants
+/// the entry point) and `check` (which wants every source file).
+pub(crate) struct Project {
+    /// Directories to search for this project's own sources, in declaration
+    /// order.
+    ///
+    /// Not always the same list as [`saule_interpreter::project::ProjectInfo`]
+    /// gets. A config that omits `src_dirs:` leaves that one empty, because
+    /// import resolution treats it as "no *extra* roots beyond the importing
+    /// file's own directory" — which is a coherent meaning, and one `run` has
+    /// always relied on. It is not a coherent meaning for "where do this
+    /// project's files live", so this list falls back to `<root>/src`, which
+    /// is both the `entry:` default and what a *dependency*'s `src_dirs`
+    /// already defaults to (see `resolve_dependencies`).
+    pub src_dirs: Vec<PathBuf>,
+    /// Absolute path to `entry:`. `None` for `kind: "library"`, which has no
+    /// entry point by definition.
+    pub entry: Option<PathBuf>,
+}
+
+impl Project {
+    /// Every `.sau` file under `src_dirs`, sorted, deduplicated.
+    ///
+    /// `check` walks all of them rather than following imports from the entry
+    /// point: a file no one imports yet is exactly the file whose errors you
+    /// want to hear about before you import it.
+    pub fn source_files(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for dir in &self.src_dirs {
+            collect_sau_files(dir, &mut out);
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+}
+
+fn collect_sau_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_sau_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "sau") {
+            out.push(path.canonicalize().unwrap_or(path));
+        }
+    }
+}
+
 pub(crate) fn run_project(dir: &Path) {
+    let project = configure_project(dir, /* require_entry */ true);
+    // `require_entry` guarantees this; a library exits inside `configure_project`.
+    let entry = project.entry.unwrap_or_else(|| {
+        eprintln!("error: project has no entry point");
+        process::exit(1);
+    });
+    run_file(entry, true);
+}
+
+/// Read `saule.config`, validate it, install the interpreter's project
+/// context, and report where the sources live.
+///
+/// `require_entry` distinguishes the two callers: `run` cannot proceed without
+/// an entry point and exits with an explanation for a library, while `check`
+/// is perfectly happy to check a library and just gets `entry: None`.
+pub(crate) fn configure_project(dir: &Path, require_entry: bool) -> Project {
     let config_path = dir.join("saule.config");
     if !config_path.exists() {
         eprintln!(
@@ -31,24 +101,29 @@ pub(crate) fn run_project(dir: &Path) {
     // `kind:` decides whether this project is runnable at all. Checked before
     // anything else so a library reports what it is, rather than failing later
     // with a confusing "entry `src/main.sau` does not exist".
+    //
+    // A library is only an error for `run`. `check` sets `require_entry =
+    // false` because type-checking a library is exactly what a library author
+    // wants — arguably more than an app author does.
+    let is_library = matches!(config.kind.as_deref(), Some("library"));
     match config.kind.as_deref() {
-        None | Some("app") => {}
-        Some("library") => {
-            let name = config.name.as_deref().unwrap_or("this project");
-            eprintln!(
-                "error: `{name}` is a library and has no entry point\n\n\
-                 Libraries are imported by other projects rather than run. Add it to a \n\
-                 project's `dependencies:` and `import` it, or set `kind: \"app\"` and an \n\
-                 `entry:` in saule.config to make it runnable."
-            );
-            process::exit(1);
-        }
+        None | Some("app") | Some("library") => {}
         Some(other) => {
             eprintln!(
                 "error: unknown `kind: \"{other}\"` in saule.config — expected \"app\" or \"library\""
             );
             process::exit(1);
         }
+    }
+    if is_library && require_entry {
+        let name = config.name.as_deref().unwrap_or("this project");
+        eprintln!(
+            "error: `{name}` is a library and has no entry point\n\n\
+             Libraries are imported by other projects rather than run. Add it to a \n\
+             project's `dependencies:` and `import` it, or set `kind: \"app\"` and an \n\
+             `entry:` in saule.config to make it runnable."
+        );
+        process::exit(1);
     }
 
     // Canonicalise the project root so every `pretty_path` / `src_dirs`
@@ -86,24 +161,47 @@ pub(crate) fn run_project(dir: &Path) {
         name: config.name.clone().unwrap_or_default(),
         version: config.version.clone().unwrap_or_default(),
         root: root.clone(),
-        src_dirs,
+        src_dirs: src_dirs.clone(),
         dependencies,
     });
 
-    let entry_rel = config
-        .entry
-        .clone()
-        .unwrap_or_else(|| "src/main.sau".to_string());
-    let entry_path = root.join(&entry_rel);
-    if !entry_path.is_file() {
-        eprintln!(
-            "error: entry `{entry_rel}` (from saule.config) does not exist at `{}`",
-            entry_path.display()
-        );
-        process::exit(1);
-    }
+    let entry = if is_library {
+        None
+    } else {
+        let entry_rel = config
+            .entry
+            .clone()
+            .unwrap_or_else(|| "src/main.sau".to_string());
+        let entry_path = root.join(&entry_rel);
+        // Only fatal for `run`. `check` still has every source file to work
+        // through, and a missing entry is one of the things it should report
+        // rather than die on.
+        if !entry_path.is_file() {
+            if require_entry {
+                eprintln!(
+                    "error: entry `{entry_rel}` (from saule.config) does not exist at `{}`",
+                    entry_path.display()
+                );
+                process::exit(1);
+            }
+            None
+        } else {
+            Some(entry_path)
+        }
+    };
 
-    run_file(entry_path, true);
+    // See `Project::src_dirs` for why this default is applied here and not to
+    // the `ProjectInfo` above.
+    let walk_dirs = if src_dirs.is_empty() {
+        vec![root.join("src")]
+    } else {
+        src_dirs
+    };
+
+    Project {
+        src_dirs: walk_dirs,
+        entry,
+    }
 }
 
 /// Parsed `saule.config`. Unknown keys are silently dropped; the format is

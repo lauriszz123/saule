@@ -1,0 +1,13 @@
+-- Unbounded recursion must produce a catchable `stack overflow` diagnostic,
+-- not a native stack overflow. Before the depth guard in
+-- `saule_interpreter::eval::DepthGuard` this aborted the process with
+-- SIGABRT — no span, no message, and no chance for `try`/`catch` to run.
+local fn forever(n: integer) -> integer
+	return forever(n + 1)
+end
+
+class Main
+	static fn main()
+		println(forever(0))
+	end
+end

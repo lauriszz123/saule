@@ -31,8 +31,35 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     Run(RunArgs),
+    Check(CheckArgs),
     Fmt(FmtArgs),
     Init(InitArgs),
+}
+
+/// `saule check [TARGET]`
+///
+/// Mirrors `run`'s target rules — directory (or absent) means project mode,
+/// a file means that file alone — so the two commands never disagree about
+/// what they are looking at.
+#[derive(Debug, Args)]
+#[command(
+    about = "Type-check a project or a source file without running it",
+    long_about = "\
+Type-check a project or a source file without running it.
+
+  saule check                the project in the current directory
+  saule check <dir>          the project rooted at <dir>
+  saule check <file.sau>     that file, on its own
+
+Reports every diagnostic rather than stopping at the first, and in project
+mode checks every `.sau` file under `src_dirs` — not only what the entry
+point imports. Exits non-zero when anything is reported, so it can gate CI.
+Libraries (`kind: \"library\"`) have no entry point and check normally."
+)]
+pub(crate) struct CheckArgs {
+    /// Project directory or `.sau` file. Defaults to the current directory.
+    #[arg(value_name = "TARGET")]
+    pub target: Option<PathBuf>,
 }
 
 /// `saule run [TARGET] [-- ARGS...]`

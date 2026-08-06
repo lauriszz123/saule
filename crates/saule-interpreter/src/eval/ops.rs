@@ -112,7 +112,14 @@ pub fn binary(
 ) -> Result<Value, RuntimeError> {
     use BinOp::*;
 
-    if let Some(v) = try_overload(op, &l, &r, &span)? {
+    // Only an instance can carry an operator overload — `has_overload` returns
+    // `false` for every other variant, so every `Some`/`Err` path inside
+    // `try_overload` is already gated on one. Checking here instead means the
+    // overwhelmingly common `int + int` / `float * float` shapes skip the
+    // contract lookup and the per-operator match entirely.
+    if (matches!(l, Value::Instance(_)) || matches!(r, Value::Instance(_)))
+        && let Some(v) = try_overload(op, &l, &r, &span)?
+    {
         return Ok(v);
     }
 
@@ -273,8 +280,9 @@ fn arithmetic(
     match (l, r) {
         (Value::Int(a), Value::Int(b)) => int_op(op, a, b, span),
         (Value::Float(a), Value::Float(b)) => Ok(Value::Float(float_op(op, a, b))),
-        // README: mixing `integer` and `float` is a compile error. We
-        // surface it at runtime since the typechecker isn't built yet.
+        // README: mixing `integer` and `float` is a compile error, and
+        // `saule-typeck` does reject it. This arm still exists because the
+        // low-level `run()` entry point can execute an unchecked module.
         (Value::Int(_), Value::Float(_)) | (Value::Float(_), Value::Int(_)) => {
             Err(RuntimeError::NumericMix { span })
         }
@@ -291,6 +299,13 @@ fn arithmetic(
     }
 }
 
+/// Integer arithmetic. `integer` is an `i64` and **overflow wraps** — the
+/// documented choice (README, "Integer Overflow"), matching Lua 5.4.
+///
+/// `wrapping_*` is deliberate rather than incidental: the plain operators
+/// would panic in a debug build and wrap in release, so the same program
+/// would behave differently depending on how the toolchain was compiled.
+/// Wrapping everywhere at least makes the semantics one thing.
 fn int_op(op: BinOp, a: i64, b: i64, span: std::ops::Range<usize>) -> Result<Value, RuntimeError> {
     use BinOp::*;
     match op {

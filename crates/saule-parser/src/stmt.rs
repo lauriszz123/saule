@@ -13,6 +13,12 @@ impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
 
     pub fn parse_statement(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        self.nested(Self::parse_statement_inner)
+    }
+
+    /// Bounded by [`Parser::parse_statement`] — every nested block re-enters
+    /// through it, so block nesting is counted alongside expression nesting.
+    fn parse_statement_inner(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         // Any leading `;` has already been consumed by the caller — see
         // `parse` and `parse_block_until`, which skip separators before
         // testing for the end of the block. This function is only ever

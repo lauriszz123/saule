@@ -1,0 +1,13 @@
+-- Arithmetic and `..` on a nullable must be a compile error. `check_operand_kind`
+-- tests the *stripped* base type, so before this check an `integer?` passed the
+-- "is it numeric?" test on the strength of the `integer` inside it, and the
+-- failure surfaced at runtime instead.
+--
+-- Limited to identifiers, which is exactly the set `expr::narrow` can prove
+-- non-nil — so `if count != nil then count + 1 end` still compiles.
+class Main
+	static fn main()
+		local count: integer? = 1
+		println(count + 1)
+	end
+end

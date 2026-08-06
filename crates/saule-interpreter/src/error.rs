@@ -125,6 +125,24 @@ pub enum RuntimeError {
         span: std::ops::Range<usize>,
     },
 
+    /// Evaluation nested deeper than [`crate::eval::MAX_EVAL_DEPTH`].
+    ///
+    /// The interpreter is a recursive tree-walker, so a deeply-recursive
+    /// Saule program consumes the *native* stack. Without this guard the
+    /// process dies with `fatal runtime error: stack overflow` — no span,
+    /// no message, no chance for a `catch` to run, and in the language
+    /// server it takes the whole editor session down. The counter turns
+    /// that into an ordinary catchable error.
+    #[error("stack overflow: evaluation nested more than {limit} levels deep")]
+    #[diagnostic(help(
+        "this is usually unbounded recursion — check that the recursive call has a base case"
+    ))]
+    StackOverflow {
+        limit: u32,
+        #[label("while evaluating this")]
+        span: std::ops::Range<usize>,
+    },
+
     /// Sentinel: a `return` / `break` / `continue` statement executed
     /// inside an expression context (e.g. a `match` arm). The actual
     /// `Flow` is parked in `crate::eval::stmt::pending_flow` and the

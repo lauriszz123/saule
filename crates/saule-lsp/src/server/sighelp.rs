@@ -81,7 +81,11 @@ impl Backend {
 
         if let Some(module) = parsed.as_ref() {
             let seed = match &module_dir {
-                Some(d) => saule_interpreter::module::collect_import_seed(module, d),
+                Some(d) => saule_interpreter::module::collect_import_seed_with(
+                    module,
+                    d,
+                    &self.source_overlay(),
+                ),
                 None => saule_semantic::ModuleSeed::default(),
             };
             let _ = saule_semantic::analyze_with_seed(module, seed);
@@ -97,7 +101,11 @@ impl Backend {
             // appended at the end, so byte offsets up to the cursor —
             // and therefore the cursor itself — are unaffected.
             let seed = match &module_dir {
-                Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
+                Some(d) => saule_interpreter::module::collect_import_seed_with(
+                    &module,
+                    d,
+                    &self.source_overlay(),
+                ),
                 None => saule_semantic::ModuleSeed::default(),
             };
             let _ = saule_semantic::analyze_with_seed(&module, seed);

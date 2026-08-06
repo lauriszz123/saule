@@ -81,6 +81,11 @@ pub(crate) fn run_function_body_multi(
     scope: &Rc<RefCell<Environment>>,
     span: std::ops::Range<usize>,
 ) -> Result<Vec<Value>, RuntimeError> {
+    // Every user-defined body — free function, method, constructor, lambda —
+    // funnels through here, which makes it the one place a recursion counter
+    // has to live. Held for the duration of the body so the guard's `Drop`
+    // unwinds the count on the error paths too.
+    let _depth = crate::eval::DepthGuard::enter(&span)?;
     let raw = run_function_body_multi_inner(f, scope, span);
     match (raw, f.source.as_ref()) {
         (Err(e), Some(src)) => Err(attach_module_source(e, src)),

@@ -79,3 +79,87 @@ fn an_unknown_package_name_resolves_to_nothing() {
     assert_eq!(resolve_import_path(&root, "nope"), None);
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// Parse `src` as a module, for the overlay tests below.
+fn parse_module(src: &str) -> saule_ast::Module {
+    let tokens = saule_lexer::Lexer::new(src).tokenize().unwrap();
+    saule_parser::parse(tokens).unwrap()
+}
+
+#[test]
+fn the_import_seed_reads_imports_from_disk_by_default() {
+    // Baseline for the overlay test below: with no overlay, the seed sees
+    // exactly what is on disk.
+    let root = tmp("seed-disk");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("lib.sau"),
+        "export class Widget\n\tfn spin() end\nend\n",
+    )
+    .unwrap();
+
+    let importer = parse_module("import Widget from \"lib\"\n");
+    let seed = collect_import_seed(&importer, &src);
+
+    assert!(
+        seed.classes.contains_key("Widget"),
+        "on-disk class should be seeded"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn an_overlay_supersedes_the_on_disk_copy_of_an_import() {
+    // The language-server case: the editor holds an unsaved buffer whose
+    // contents differ from the file. The importer's analysis has to see the
+    // buffer, not the stale file — otherwise renaming a class in one file
+    // leaves every importer reporting against the old name until you save.
+    let root = tmp("seed-overlay");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let lib = src.join("lib.sau");
+    std::fs::write(&lib, "export class OldName\n\tfn spin() end\nend\n").unwrap();
+
+    let importer = parse_module("import NewName from \"lib\"\n");
+    let buffer = "export class NewName\n\tfn spin() end\nend\n".to_string();
+    let lib_canonical = lib.canonicalize().unwrap_or_else(|_| lib.clone());
+
+    let seed = collect_import_seed_with(&importer, &src, &|p: &Path| {
+        (p == lib_canonical || p == lib).then(|| buffer.clone())
+    });
+
+    assert!(
+        seed.classes.contains_key("NewName"),
+        "the unsaved buffer's class should be seeded"
+    );
+    assert!(
+        !seed.classes.contains_key("OldName"),
+        "the stale on-disk class must not leak through"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn an_overlay_that_declines_falls_back_to_disk() {
+    // Returning `None` means "I have nothing for this path" — the walk must
+    // then read the file as usual. Files the editor has not opened take this
+    // path on every request.
+    let root = tmp("seed-passthrough");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("lib.sau"),
+        "export class Widget\n\tfn spin() end\nend\n",
+    )
+    .unwrap();
+
+    let importer = parse_module("import Widget from \"lib\"\n");
+    let seed = collect_import_seed_with(&importer, &src, &|_| None);
+
+    assert!(
+        seed.classes.contains_key("Widget"),
+        "declining the overlay should fall back to the file"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
