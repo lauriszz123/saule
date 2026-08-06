@@ -125,7 +125,7 @@ class Main
 
 				Renderer.print(storage.getAll())
 
-			case _ then Main.help()
+			case _ then help()
 		end
 
 		storage.save()
