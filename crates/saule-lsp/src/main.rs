@@ -35,17 +35,17 @@ async fn main() {
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 
-/// Handle the only two flags a language server has any business accepting.
+/// Handle the handful of flags a language server has any business accepting.
 /// Returns `true` when the process should exit instead of serving.
 ///
 /// Deliberately hand-rolled rather than pulled in via `clap`: the argument
-/// surface is two strings and will stay that way, because everything else a
+/// surface is a few strings and will stay that way, because everything else a
 /// language server is told arrives over the protocol.
 fn handle_cli_args() -> bool {
-    // Only the first argument is ever consulted: every branch below either
-    // prints and stops or exits, so a second argument could never be
-    // reached. Written as `nth(1)` rather than a loop to say so outright.
-    if let Some(arg) = std::env::args().nth(1) {
+    // Every argument is inspected, not just the first: `--stdio` arrives
+    // *after* whatever extra args the editor was configured with, so
+    // stopping at `nth(1)` would reject a perfectly ordinary launch.
+    for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-v" | "-V" | "--version" => {
                 println!("saule-lsp {}", saule_version::FULL);
@@ -60,6 +60,8 @@ Speaks LSP over stdin/stdout. Editors launch it; you normally don't.
 
   -v, --version    print the version and exit
   -h, --help       print this message and exit
+      --stdio      serve over stdin/stdout (the default; accepted for clients
+                   that pass it explicitly)
 
 Run with no arguments to serve. Editor setup: \
 https://lauriszz123.github.io/saule/reference/editors/",
@@ -67,6 +69,13 @@ https://lauriszz123.github.io/saule/reference/editors/",
                 );
                 return true;
             }
+            // stdio is the only transport we speak, so this is a no-op — but
+            // it has to be accepted, because clients pass it unconditionally.
+            // `vscode-languageclient` appends `--stdio` to the command line
+            // for any `TransportKind.stdio` server; rejecting it killed the
+            // process before the `initialize` handshake, which the editor
+            // surfaced only as "connection got disposed".
+            "--stdio" => {}
             // Anything else is reported rather than ignored: silently serving
             // despite an unrecognised flag is how a typo'd editor config turns
             // into "the language server does nothing and I can't tell why".
