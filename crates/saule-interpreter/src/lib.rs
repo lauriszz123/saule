@@ -49,6 +49,7 @@ pub mod native_packages;
 pub mod output;
 pub mod platform;
 pub mod project;
+pub(crate) mod recycle;
 pub mod stdlib;
 pub mod value;
 

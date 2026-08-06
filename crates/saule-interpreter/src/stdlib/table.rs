@@ -281,30 +281,42 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
     // borrowed table while the sort is in flight.
     let mut elements: Vec<Value> = table.borrow().array.clone();
 
-    // Sort with a fallible comparator using a single bubbling error slot.
-    let mut sort_err: Option<String> = None;
-    elements.sort_by(|a, b| {
-        if sort_err.is_some() {
-            return std::cmp::Ordering::Equal;
-        }
-        match invoke_comp(&comp, a, b) {
-            Ok(true) => std::cmp::Ordering::Less,
-            Ok(false) => match invoke_comp(&comp, b, a) {
-                Ok(true) => std::cmp::Ordering::Greater,
-                Ok(false) => std::cmp::Ordering::Equal,
-                Err(e) => {
-                    sort_err = Some(e);
-                    std::cmp::Ordering::Equal
+    // Bottom-up merge sort, driven by `cmp(a, b)` alone.
+    //
+    // `sort_by` wants a three-way `Ordering`, which a boolean "a before b"
+    // predicate can only produce by asking twice — once as `cmp(a, b)` and,
+    // when that is false, again as `cmp(b, a)` to tell Greater from Equal.
+    // That is a Saule-level call per extra probe, and it fired on rougly half
+    // of every comparison in the sort. Merging needs only the one question
+    // ("does the right element belong before the left?"), so this asks it
+    // once, and taking the left element on a tie keeps the sort stable.
+    let mut buf: Vec<Value> = Vec::with_capacity(elements.len());
+    let n = elements.len();
+    let mut width = 1;
+    while width < n {
+        let mut lo = 0;
+        while lo < n {
+            let mid = (lo + width).min(n);
+            let hi = (lo + 2 * width).min(n);
+            if mid < hi {
+                buf.clear();
+                let (mut i, mut j) = (lo, mid);
+                while i < mid && j < hi {
+                    if invoke_comp(&comp, &elements[j], &elements[i])? {
+                        buf.push(elements[j].clone());
+                        j += 1;
+                    } else {
+                        buf.push(elements[i].clone());
+                        i += 1;
+                    }
                 }
-            },
-            Err(e) => {
-                sort_err = Some(e);
-                std::cmp::Ordering::Equal
+                buf.extend_from_slice(&elements[i..mid]);
+                buf.extend_from_slice(&elements[j..hi]);
+                elements[lo..hi].clone_from_slice(&buf);
             }
+            lo += 2 * width;
         }
-    });
-    if let Some(e) = sort_err {
-        return Err(e);
+        width *= 2;
     }
 
     table.borrow_mut().array = elements;

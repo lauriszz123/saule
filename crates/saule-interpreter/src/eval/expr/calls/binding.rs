@@ -414,7 +414,8 @@ pub(crate) fn eval_call_args(
     args: &[CallArg],
     env: &Rc<RefCell<Environment>>,
 ) -> Result<Vec<EvaluatedArg>, RuntimeError> {
-    let mut out = Vec::with_capacity(args.len());
+    let mut out = crate::recycle::take_args();
+    out.reserve(args.len());
     let trailing = trailing_block_index(args);
     for (i, arg) in args.iter().enumerate() {
         match arg {

@@ -1,0 +1,13 @@
+class Main
+	static fn main()
+		local n: integer = 200000
+		local t: table<integer> = {}
+		local seed: integer = 12345
+		for i: integer = 1, n do
+			seed = (seed * 1103515245 + 12345) % 2147483648
+			Table.insert(t, seed)
+		end
+		Table.sort(t, (a, b) => (a as integer)! < (b as integer)!)
+		println(t[1] .. " " .. t[n])
+	end
+end

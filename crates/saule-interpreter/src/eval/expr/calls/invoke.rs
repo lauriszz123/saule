@@ -7,6 +7,7 @@ use crate::error::RuntimeError;
 use crate::eval::Flow;
 use crate::eval::expr::construct::construct;
 use crate::eval::expr::{EvaluatedArg, eval, first_or_nil};
+use crate::recycle::give_args;
 use crate::value::{FunctionBody, FunctionObject, Value};
 use saule_ast::{Expr, Spanned};
 use std::cell::RefCell;
@@ -49,7 +50,7 @@ pub(crate) fn call_value_multi(
                 }
             }
             (nf.func)(&positional)
-                .map(|v| vec![v])
+                .map(crate::recycle::values_of)
                 .map_err(|message| RuntimeError::TypeError { message, span })
         }
         Value::Function(f) => call_function_multi(&f, args, span),
@@ -57,7 +58,7 @@ pub(crate) fn call_value_multi(
             let positional = native_positional_args(nc.name, &nc.param_names, args, &span)?;
             (nc.func)(&positional).map_err(|message| RuntimeError::TypeError { message, span })
         }
-        Value::Class(c) => construct(c, args, span).map(|v| vec![v]),
+        Value::Class(c) => construct(c, args, span).map(crate::recycle::values_of),
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "value of type `{}` is not callable — only functions, classes, and methods can be called",
@@ -100,11 +101,11 @@ pub(crate) fn run_function_body_multi_inner(
 ) -> Result<Vec<Value>, RuntimeError> {
     let outcome = match &f.body {
         FunctionBody::Block(stmts) => crate::eval::stmt::exec_block(stmts, scope)?,
-        FunctionBody::Expr(e) => Flow::Return(vec![eval(e, scope)?]),
+        FunctionBody::Expr(e) => Flow::Return(crate::recycle::values_of(eval(e, scope)?)),
     };
     match outcome {
         Flow::Return(values) => Ok(values),
-        Flow::Normal(_) => Ok(vec![Value::Nil]),
+        Flow::Normal(_) => Ok(crate::recycle::values_of(Value::Nil)),
         // `break` / `continue` escaping a function body is rejected by
         // `saule_semantic`'s control-flow walker before we ever evaluate.
         // Reaching this arm means the caller skipped semantic — surface as
@@ -177,7 +178,9 @@ pub(crate) fn call_function_multi(
         inject_class_statics(&scope, &class);
     }
     bind_params(&scope, &f.params, &f.param_keys, args, &span)?;
-    run_function_body_multi(f, &scope, span)
+    let result = run_function_body_multi(f, &scope, span);
+    Environment::release(scope);
+    result
 }
 
 /// `eval_values` lives in the parent module but its body forwards into the
@@ -191,11 +194,13 @@ pub(crate) fn eval_values(
         Expr::Call { callee, args } => {
             if let Expr::Member { obj, name } = &callee.value {
                 if name == "super" {
-                    return Ok(vec![super_call(obj, args, env, span)?]);
+                    return Ok(crate::recycle::values_of(super_call(obj, args, env, span)?));
                 }
                 let receiver = eval(obj, env)?;
                 let vs = eval_call_args(args, env)?;
-                return dispatch_member_call_multi(&receiver, name, vs, span);
+                let out = dispatch_member_call_multi(&receiver, name, &vs, span);
+                give_args(vs);
+                return out;
             }
 
             // `obj?.method(args)` — same short-circuit as in `eval`'s
@@ -206,16 +211,20 @@ pub(crate) fn eval_values(
             if let Expr::SafeMember { obj, name } = &callee.value {
                 let receiver = eval(obj, env)?;
                 if matches!(receiver, Value::Nil) {
-                    return Ok(vec![Value::Nil]);
+                    return Ok(crate::recycle::values_of(Value::Nil));
                 }
                 let vs = eval_call_args(args, env)?;
-                return dispatch_member_call_multi(&receiver, name, vs, span);
+                let out = dispatch_member_call_multi(&receiver, name, &vs, span);
+                give_args(vs);
+                return out;
             }
 
             let cv = eval(callee, env)?;
             let vs = eval_call_args(args, env)?;
-            call_value_multi(cv, &vs, span)
+            let out = call_value_multi(cv, &vs, span);
+            give_args(vs);
+            out
         }
-        _ => Ok(vec![eval(expr, env)?]),
+        _ => Ok(crate::recycle::values_of(eval(expr, env)?)),
     }
 }

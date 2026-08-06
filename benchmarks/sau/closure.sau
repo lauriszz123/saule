@@ -1,0 +1,11 @@
+class Main
+	static fn main()
+		local n: integer = 1000000
+		local add: fn(integer, integer) -> integer = (a, b) => a + b
+		local s: integer = 0
+		for i: integer = 1, n do
+			s = add(s, i)
+		end
+		println(s)
+	end
+end

@@ -1,0 +1,27 @@
+class Main
+	static fn main()
+		local w: integer = 200
+		local h: integer = 200
+		local maxIter: integer = 50
+		local count: integer = 0
+		for py: integer = 0, h - 1 do
+			local y0: float = float(py) / float(h) * 2.0 - 1.0
+			for px: integer = 0, w - 1 do
+				local x0: float = float(px) / float(w) * 3.0 - 2.0
+				local x: float = 0.0
+				local y: float = 0.0
+				local it: integer = 0
+				while x * x + y * y <= 4.0 and it < maxIter do
+					local xt: float = x * x - y * y + x0
+					y = 2.0 * x * y + y0
+					x = xt
+					it = it + 1
+				end
+				if it == maxIter then
+					count = count + 1
+				end
+			end
+		end
+		println(count)
+	end
+end
