@@ -22,11 +22,20 @@ setlocal endofline
 " `%` jumps between block delimiters, not just brackets — the equivalent of the
 " IntelliJ plugin's brace matcher, extended to Saule's word-keyword blocks.
 " Requires the bundled matchit plugin (`:packadd matchit`, default in Neovim).
+"
+" `do` is listed because a *trailing block* — `Canvas() do … end`, the sugar
+" for a call whose last argument is a block-bodied lambda — opens a block of
+" its own. The `do` that merely ends a `for` / `while` header does not, and
+" neither does an `fn` writing a type or an interface's bare signature;
+" `b:match_skip` hides those, or the extra openers would pair every later `end`
+" in the file with the wrong keyword. `lua/saule/match.lua` tells them apart
+" using the same model that indents them.
 let b:match_ignorecase = 0
 let b:match_words =
-      \ '\<\%(class\|interface\|enum\|if\|while\|for\|repeat\|try\|match\|fn\)\>'
+      \ '\<\%(class\|interface\|enum\|if\|while\|for\|repeat\|try\|match\|fn\|do\)\>'
       \ . ':\<\%(elseif\|else\|catch\|case\)\>'
       \ . ':\<\%(end\|until\)\>'
+let b:match_skip = "v:lua.require'saule.match'.skip()"
 
 " Parameter info follows the cursor: the hint appears whenever the cursor is
 " inside a call's parens, not only when `(` is typed. Set
@@ -49,6 +58,6 @@ command! -buffer -nargs=* SauleRunFile
 let b:undo_ftplugin =
       \ "setlocal commentstring< comments< expandtab< shiftwidth< softtabstop<"
       \ . " tabstop< textwidth< colorcolumn< fixendofline< endofline<"
-      \ . " | unlet! b:match_words b:match_ignorecase"
+      \ . " | unlet! b:match_words b:match_ignorecase b:match_skip"
       \ . " | delcommand SauleRun | delcommand SauleRunFile"
       \ . " | delcommand SauleInlayHints"

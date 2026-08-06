@@ -23,9 +23,14 @@ export const INDENT_DEFAULT = 2;
  * `Case` is a `match` arm: `case … then` followed by a newline indents its
  * statements, and the arm is closed by the next `case` or by the `match`'s
  * `end` rather than by one of its own.
+ *
+ * `LoopHeader` is a `for` / `while` block whose header has not reached its
+ * `do` yet. It is a block like any other — it just remembers that the next
+ * `do` belongs to the header and so must not open a second one.
  */
 const enum Frame {
   Block,
+  LoopHeader,
   Interface,
   Case,
   Bracket,
@@ -36,12 +41,21 @@ const BLOCK_OPENERS = new Set([
   "class",
   "enum",
   "if",
-  "while",
-  "for",
   "repeat",
   "try",
   "match",
 ]);
+
+/**
+ * Loop keywords, whose header runs up to a `do`.
+ *
+ * Kept apart from [BLOCK_OPENERS] only so that `do` can tell the two uses of
+ * itself apart: it terminates a loop header (which has already opened a
+ * block), and anywhere else it opens a *trailing block* — `Canvas() do … end`,
+ * the sugar for a call whose last argument is a block-bodied lambda
+ * (`saule_fmt::trailing_block_arg`). Both bodies are one level in.
+ */
+const LOOP_OPENERS = new Set(["while", "for"]);
 
 /** Keywords that continue the enclosing block: written one level out. */
 const CONTINUATIONS = new Set(["else", "elseif", "catch"]);
@@ -197,6 +211,17 @@ function apply(
     }
   } else if (BLOCK_OPENERS.has(word)) {
     stack.push(Frame.Block);
+  } else if (LOOP_OPENERS.has(word)) {
+    stack.push(Frame.LoopHeader);
+  } else if (word === "do") {
+    // Closing a loop header costs nothing — `for`/`while` opened the block
+    // already — but a `do` anywhere else is a trailing block, and that one is
+    // its own level.
+    if (top === Frame.LoopHeader) {
+      stack[stack.length - 1] = Frame.Block;
+    } else {
+      stack.push(Frame.Block);
+    }
   } else if (CLOSERS.has(word)) {
     closeBlock(stack);
   } else if (word === "case") {
@@ -218,6 +243,7 @@ function closeBlock(stack: Frame[]): void {
   while (
     stack.length > 0 &&
     stack[stack.length - 1] !== Frame.Block &&
+    stack[stack.length - 1] !== Frame.LoopHeader &&
     stack[stack.length - 1] !== Frame.Interface
   ) {
     stack.pop();

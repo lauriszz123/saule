@@ -58,6 +58,52 @@ test("loops and repeat until", () => {
   `);
 });
 
+test("a trailing block is a level of its own", () => {
+  // `f(a) do … end` is sugar for a call whose last argument is a block-bodied
+  // lambda, so its body indents exactly like any other block.
+  assertRoundTrips(`
+    fn f()
+      local screen = Canvas() do
+        Panel(title: "Saule UI", spacing: 1) do
+          Text("Trailing blocks, drawn.")
+        end
+      end
+
+      println(screen.render())
+    end
+  `);
+});
+
+test("a loop header's `do` opens one block, not two", () => {
+  // The `do` closing a `for` / `while` header belongs to the loop, which is
+  // already open; only a `do` outside a header opens a block of its own. Get
+  // that wrong and each loop swallows an extra `end`.
+  assertRoundTrips(`
+    fn f()
+      Row(spacing: 3) do
+        for i, name in players do
+          while ready(name) do
+            Button(name)
+          end
+        end
+      end
+
+      done()
+    end
+  `);
+});
+
+test("both kinds of `do` indent their body once", () => {
+  for (const opener of ["while x", "for i in xs", "Canvas()", "f(a, b)"]) {
+    assertIndent(new SauleIndent(1, 0), indentOfLine(`${opener} do\n\n`, 1), opener);
+    assertIndent(
+      SauleIndent.ZERO,
+      indentOfLine(`${opener} do\n  step()\nend\n\n`, 3),
+      opener,
+    );
+  }
+});
+
 test("match arms stay at body level", () => {
   assertRoundTrips(`
     fn f()
@@ -225,6 +271,7 @@ test("a closer typed at the body indent still resolves one level out", () => {
     "if a then",
     "while a do",
     "for i in x do",
+    "Canvas() do",
     "try",
     "match x",
   ]) {

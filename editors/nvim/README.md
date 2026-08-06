@@ -124,7 +124,10 @@ Editor-side, without the server:
 * **Two-space indentation** — matching `FmtOptions::default()` in `saule-fmt`,
   so typing and `saule fmt` agree.
 * **`%` between block delimiters** — `class`/`fn`/`if`/… ↔ `else`/`case`/… ↔
-  `end`/`until`, via the bundled matchit plugin.
+  `end`/`until`, via the bundled matchit plugin. A trailing block's `do`
+  (`Canvas() do … end`) counts as an opener; the `do` ending a `for`/`while`
+  header, an `fn` writing a type, and an interface's bare signatures do not,
+  since no `end` comes for them.
 * **Inlay hints** — the ghost text showing inferred local types (`: integer`)
   and parameter names (`left:`, `right:`) at call sites. Neovim has the
   feature but leaves it off until something enables it, so the ftplugin does,

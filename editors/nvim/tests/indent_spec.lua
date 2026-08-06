@@ -124,6 +124,42 @@ end
 
 -- ── cases ───────────────────────────────────────────────────────────────────
 
+--- The 1-based byte offset of the `n`th whole-word `word` in `text`.
+local function nth_word_offset(text, word, n)
+  local init, found = 1, 0
+  while true do
+    local first, last = text:find("%f[%w_]" .. word .. "%f[^%w_]", init)
+    if first == nil then
+      return nil
+    end
+    found = found + 1
+    if found == n then
+      return first
+    end
+    init = last + 1
+  end
+end
+
+--- Asserts whether the `n`th `word` of `text` is one of the keywords that look
+--- like a block opener without being one.
+local function assert_false_opener(set, text, word, n, expected)
+  checks = checks + 1
+  local offset = nth_word_offset(text, word, n)
+  if offset == nil then
+    fail(string.format("`%s` #%d is not in the sample", word, n))
+  elseif (set[offset] == true) ~= expected then
+    fail(
+      string.format(
+        "`%s` #%d: expected false_openers[%d] to be %s",
+        word,
+        n,
+        offset,
+        tostring(expected)
+      )
+    )
+  end
+end
+
 test("class body and methods", function()
   assert_round_trips([[
     export class Warrior extends Entity
@@ -166,6 +202,48 @@ test("loops and repeat until", function()
       until done
     end
   ]])
+end)
+
+test("a trailing block is a level of its own", function()
+  -- `f(a) do … end` is sugar for a call whose last argument is a block-bodied
+  -- lambda, so its body indents exactly like any other block.
+  assert_round_trips([[
+    fn f()
+      local screen = Canvas() do
+        Panel(title: "Saule UI", spacing: 1) do
+          Text("Trailing blocks, drawn.")
+        end
+      end
+
+      println(screen.render())
+    end
+  ]])
+end)
+
+test("a loop header's `do` opens one block, not two", function()
+  -- The `do` closing a `for` / `while` header belongs to the loop, which is
+  -- already open; only a `do` outside a header opens a block of its own. Get
+  -- that wrong and each loop swallows an extra `end`.
+  assert_round_trips([[
+    fn f()
+      Row(spacing: 3) do
+        for i, name in players do
+          while ready(name) do
+            Button(name)
+          end
+        end
+      end
+
+      done()
+    end
+  ]])
+end)
+
+test("both kinds of `do` indent their body once", function()
+  for _, opener in ipairs({ "while x", "for i in xs", "Canvas()", "f(a, b)" }) do
+    assert_indent(1, 0, opener .. " do\n\n", 1, opener)
+    assert_indent(0, 0, opener .. " do\n  step()\nend\n\n", 3, opener)
+  end
 end)
 
 test("match arms stay at body level", function()
@@ -328,7 +406,7 @@ test("a closer typed at the body indent still resolves one level out", function(
   -- level and the closer has just been typed into it. The answer must not
   -- depend on the whitespace already there.
   local openers =
-    { "fn f()", "if a then", "while a do", "for i in x do", "try", "match x" }
+    { "fn f()", "if a then", "while a do", "for i in x do", "Canvas() do", "try", "match x" }
   for _, opener in ipairs(openers) do
     assert_indent(1, 0, "class A\n  " .. opener .. "\n    end\n", 2, opener)
   end
@@ -340,6 +418,37 @@ end)
 test("a closer that turns out to be an identifier keeps the body indent", function()
   -- `end` dedents as it is typed, so `endless` has to put it back.
   assert_indent(2, 0, "class A\n  fn f()\n    endless()\n", 2)
+end)
+
+-- `false_openers` has no counterpart in the other two ports: they match
+-- brackets, not keywords, so only Neovim's `%` needs to know which keywords
+-- open no block.
+test("false_openers hides the keywords that open no block", function()
+  local text = trim_indent([[
+    interface Drawable
+      fn draw(target: any)
+    end
+
+    fn map(items: table<T>, f: fn(T) -> U)
+      local screen = Canvas() do
+        for i in items do
+          while ready(i) do
+            f(i)
+          end
+        end
+      end
+    end
+  ]])
+  local false_openers = indent.false_openers(text)
+
+  -- `fn map`, the lambda-shaped `fn` of a real body, and the trailing `do`
+  -- all open a block; the rest only look like it.
+  assert_false_opener(false_openers, text, "fn", 1, true) -- interface signature
+  assert_false_opener(false_openers, text, "fn", 2, false) -- fn map(...)
+  assert_false_opener(false_openers, text, "fn", 3, true) -- `f: fn(T) -> U`
+  assert_false_opener(false_openers, text, "do", 1, false) -- Canvas() do
+  assert_false_opener(false_openers, text, "do", 2, true) -- for … do
+  assert_false_opener(false_openers, text, "do", 3, true) -- while … do
 end)
 
 test("keyword_typed_at fires only on a bare closer", function()
