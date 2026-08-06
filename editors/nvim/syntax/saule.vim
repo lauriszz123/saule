@@ -15,7 +15,7 @@ syntax match  sauleVariable    "\<[a-z_][A-Za-z0-9_]*\>"
 " ── Operators / punctuation ─────────────────────────────────────────────
 " Order matters: longer / more specific patterns are defined *after* the
 " shorter ones so they win the tie-break at the same start column.
-syntax match  sauleOperator   "\.\.\.\|\.\.\|[+\-*/%=#]"
+syntax match  sauleOperator   "\.\.\.\|\.\.\|[+\-*/%^=#]"
 syntax match  sauleNullable   "??\|?\.\|[!?]"
 syntax match  sauleBracket    "[(){}\[\]]"
 syntax match  sauleDelimiter  "[,;:.]"
@@ -24,6 +24,10 @@ syntax match  sauleCompare    "==\|!=\|<=\|>=\|[<>]"
 " Arrows are their own thing so they can be coloured distinctly from
 " comparisons (return-type `->` and lambda `=>`).
 syntax match  sauleArrow      "->\|=>"
+" Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`). Defined
+" last so it wins the tie-break against `sauleOperator` at the same start
+" column — otherwise `..=` would highlight as `..` followed by a stray `=`.
+syntax match  sauleOperator   "\.\.=\|[+\-*/%^]="
 
 " ── Numbers ─────────────────────────────────────────────────────────────
 " Mirrors `Lexer::number` in crates/saule-lexer: hex and binary prefixes take

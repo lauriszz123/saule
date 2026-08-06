@@ -1775,3 +1775,124 @@ end
 "#;
     assert!(eval(src).is_err());
 }
+
+// ── Compound assignment ──────────────────────────────────────────────────
+
+#[test]
+fn compound_assignment_arithmetic() {
+    assert_eq!(eval("local n = 10\nn += 5\nn").unwrap(), Value::Int(15));
+    assert_eq!(eval("local n = 10\nn -= 5\nn").unwrap(), Value::Int(5));
+    assert_eq!(eval("local n = 10\nn *= 5\nn").unwrap(), Value::Int(50));
+    assert_eq!(eval("local n = 10\nn /= 5\nn").unwrap(), Value::Int(2));
+    assert_eq!(eval("local n = 10\nn %= 4\nn").unwrap(), Value::Int(2));
+    assert_eq!(eval("local n = 2\nn ^= 10\nn").unwrap(), Value::Int(1024));
+}
+
+#[test]
+fn compound_assignment_concat() {
+    assert_eq!(
+        eval("local s = \"foo\"\ns ..= \"bar\"\ns").unwrap(),
+        Value::Str(Rc::new("foobar".into()))
+    );
+}
+
+#[test]
+fn compound_assignment_rhs_is_the_whole_expression() {
+    // `p *= 3 + 4` is `p * 7`, not `(p * 3) + 4`.
+    assert_eq!(eval("local p = 2\np *= 3 + 4\np").unwrap(), Value::Int(14));
+}
+
+#[test]
+fn compound_assignment_updates_a_table_element() {
+    assert_eq!(
+        eval("local t = {10, 20}\nt[2] += 5\nt[2]").unwrap(),
+        Value::Int(25)
+    );
+}
+
+#[test]
+fn compound_assignment_updates_an_instance_field() {
+    let src = r#"
+        class Counter
+            n: integer
+            fn init()
+                self.n = 0
+            end
+            fn bump()
+                self.n += 3
+            end
+        end
+        local c = Counter()
+        c.bump()
+        c.n += 1
+        c.n
+    "#;
+    assert_eq!(eval(src).unwrap(), Value::Int(4));
+}
+
+#[test]
+fn compound_assignment_evaluates_an_index_target_once() {
+    // The whole reason `Stmt::CompoundAssign` exists rather than parse-time
+    // desugaring to `t[i()] = t[i()] + 1`: a side-effecting subscript must
+    // run exactly once.
+    let src = r#"
+        local calls: integer = 0
+        fn idx() -> integer
+            calls += 1
+            return 1
+        end
+        local t = {10}
+        t[idx()] += 5
+        calls
+    "#;
+    assert_eq!(eval(src).unwrap(), Value::Int(1));
+}
+
+#[test]
+fn compound_assignment_evaluates_a_member_receiver_once() {
+    let src = r#"
+        class Box
+            n: integer
+            fn init()
+                self.n = 0
+            end
+        end
+        local calls: integer = 0
+        local shared = Box()
+        fn get() -> Box
+            calls += 1
+            return shared
+        end
+        get().n += 7
+        calls * 100 + shared.n
+    "#;
+    // One call to `get()`, and the update landed on the shared instance.
+    assert_eq!(eval(src).unwrap(), Value::Int(107));
+}
+
+#[test]
+fn compound_assignment_dispatches_to_an_operator_overload() {
+    let src = r#"
+        class Vec implements OpAdd<Vec, Vec>
+            x: integer
+            fn init(x: integer)
+                self.x = x
+            end
+            fn add(other: Vec) -> Vec
+                return Vec(self.x + other.x)
+            end
+        end
+        local v = Vec(1)
+        v += Vec(10)
+        v.x
+    "#;
+    assert_eq!(eval(src).unwrap(), Value::Int(11));
+}
+
+#[test]
+fn compound_assignment_to_undeclared_is_rejected() {
+    assert!(matches!(
+        eval("zzz += 1").unwrap_err(),
+        PipelineError::Semantic(SemanticError::AssignToUndeclared { .. })
+    ));
+}

@@ -22,6 +22,7 @@ chunk ::= {stat}
 stat ::= ';'
        | local
        | assign
+       | compoundAssign
        | exp
        | if
        | while
@@ -37,6 +38,9 @@ stat ::= ';'
 
 local  ::= 'local' nameDecl {',' nameDecl} ['=' explist]
 assign ::= exp {',' exp} '=' explist
+
+compoundAssign ::= exp compoundOp exp
+compoundOp     ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '..='
 
 if     ::= 'if' exp 'then' chunk
            {'elseif' exp 'then' chunk}

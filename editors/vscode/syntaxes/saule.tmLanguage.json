@@ -117,6 +117,11 @@
     "operators": {
       "patterns": [
         {
+          "comment": "Compound assignment first, so `..=` is one token rather than `..` plus a stray `=`.",
+          "name": "keyword.operator.assignment.saule",
+          "match": "(\\.\\.=|[+\\-*/%^]=)"
+        },
+        {
           "name": "keyword.operator.comparison.saule",
           "match": "(==|!=|<=|>=|=>|<|>)"
         },

@@ -1344,3 +1344,78 @@ fn rejects_arrow_lambda_violating_its_return_type() {
         "integer",
     );
 }
+
+// ── Compound assignment ──────────────────────────────────────────────────
+//
+// `a op= b` is typed as `a = a op b`: the operator's own operand rules
+// apply, and the *result* is what the target's declared type must accept.
+
+#[test]
+fn compound_assignment_accepts_matching_types() {
+    accepts("local n: integer = 1\nn += 2");
+    accepts("local f: float = 1.0\nf *= 2.0");
+    accepts("local s: string = \"a\"\ns ..= \"b\"");
+    accepts("local n: integer = 2\nn ^= 3");
+}
+
+#[test]
+fn compound_assignment_enforces_operand_rules() {
+    rejects("local s: string = \"a\"\ns += 1", "`+`");
+    rejects("local n: integer = 1\nn *= \"x\"", "`*`");
+}
+
+#[test]
+fn compound_assignment_does_not_promote_numeric_kinds() {
+    // Same rule as `n = n / 2.0`: Saule never mixes `integer` and `float`.
+    rejects("local n: integer = 1\nn /= 2.0", "integer");
+    rejects("local f: float = 1.0\nf += 1", "float");
+}
+
+#[test]
+fn compound_assignment_checks_the_result_against_the_target_type() {
+    // `..` on an integer is legal, but the `string` result is not
+    // assignable back into an `integer` binding.
+    rejects("local n: integer = 1\nn ..= \"x\"", "integer");
+}
+
+#[test]
+fn compound_assignment_enforces_declared_field_types() {
+    rejects(
+        r#"
+        class C
+            label: string
+            fn init()
+                self.label = "a"
+            end
+        end
+        local c: C = C()
+        c.label += 5
+        "#,
+        "`+`",
+    );
+}
+
+#[test]
+fn compound_assignment_enforces_table_element_types() {
+    rejects("local t: table<string> = {\"a\"}\nt[1] += 1", "`+`");
+    accepts("local t: table<integer> = {1}\nt[1] += 1");
+}
+
+#[test]
+fn compound_assignment_allows_operator_overloads() {
+    accepts(
+        r#"
+        class Vec implements OpAdd<Vec, Vec>
+            x: integer
+            fn init(x: integer)
+                self.x = x
+            end
+            fn add(other: Vec) -> Vec
+                return Vec(self.x + other.x)
+            end
+        end
+        local v: Vec = Vec(1)
+        v += Vec(2)
+        "#,
+    );
+}

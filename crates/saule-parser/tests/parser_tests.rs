@@ -648,3 +648,73 @@ fn parses_module_variable_with_inferred_type() {
         other => panic!("expected a decl, got {other:?}"),
     }
 }
+
+// ── Compound assignment ──────────────────────────────────────────────────
+
+#[test]
+fn parses_every_compound_assignment_operator() {
+    let cases = [
+        ("a += 1", BinOp::Add),
+        ("a -= 1", BinOp::Sub),
+        ("a *= 1", BinOp::Mul),
+        ("a /= 1", BinOp::Div),
+        ("a %= 1", BinOp::Mod),
+        ("a ^= 1", BinOp::Pow),
+        ("a ..= 1", BinOp::Concat),
+    ];
+    for (src, expected) in cases {
+        let m = parse_src(src);
+        match &m.stmts[0].value {
+            Stmt::CompoundAssign { target, op, .. } => {
+                assert_eq!(*op, expected, "{src}");
+                assert!(matches!(&target.value, Expr::Ident(n) if n == "a"), "{src}");
+            }
+            other => panic!("expected compound assign for `{src}`, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn compound_assignment_rhs_is_a_full_expression() {
+    // `x *= 3 + 4` multiplies by 7, not by 3 — the RHS runs to the end of
+    // the statement rather than binding only the next primary.
+    let m = parse_src("x *= 3 + 4");
+    match &m.stmts[0].value {
+        Stmt::CompoundAssign { op, value, .. } => {
+            assert_eq!(*op, BinOp::Mul);
+            assert!(matches!(&value.value, Expr::Binary { op: BinOp::Add, .. }));
+        }
+        other => panic!("expected compound assign, got {other:?}"),
+    }
+}
+
+#[test]
+fn compound_assignment_accepts_member_and_index_targets() {
+    match &parse_src("obj.count += 1").stmts[0].value {
+        Stmt::CompoundAssign { target, .. } => {
+            assert!(matches!(&target.value, Expr::Member { name, .. } if name == "count"));
+        }
+        other => panic!("expected compound assign, got {other:?}"),
+    }
+    match &parse_src("t[i] ..= \"x\"").stmts[0].value {
+        Stmt::CompoundAssign { target, op, .. } => {
+            assert_eq!(*op, BinOp::Concat);
+            assert!(matches!(&target.value, Expr::Index { .. }));
+        }
+        other => panic!("expected compound assign, got {other:?}"),
+    }
+}
+
+#[test]
+fn compound_assignment_span_covers_target_through_value() {
+    let m = parse_src("count += 10");
+    assert_eq!(m.stmts[0].span, 0..11);
+}
+
+#[test]
+fn plain_assignment_is_still_plain() {
+    assert!(matches!(
+        &parse_src("a = 1").stmts[0].value,
+        Stmt::Assign { .. }
+    ));
+}

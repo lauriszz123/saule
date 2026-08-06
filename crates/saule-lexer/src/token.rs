@@ -84,6 +84,16 @@ pub enum Token {
     Arrow,    // `->`
     FatArrow, // `=>`
 
+    // Compound assignment. `a op= b` updates `a` in place; see
+    // `Stmt::CompoundAssign` for why these are not desugared at parse time.
+    PlusEq,    // `+=`
+    MinusEq,   // `-=`
+    StarEq,    // `*=`
+    SlashEq,   // `/=`
+    PercentEq, // `%=`
+    CaretEq,   // `^=`
+    DotDotEq,  // `..=`
+
     // Trivia
     //
     // Comments are produced by [`crate::Lexer::tokenize_with_trivia`] only;

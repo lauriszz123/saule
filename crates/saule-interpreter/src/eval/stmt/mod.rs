@@ -160,6 +160,10 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
 
         Stmt::Assign { target, value } => assign::exec_assign(target, value, env),
 
+        Stmt::CompoundAssign { target, op, value } => {
+            assign::exec_compound_assign(target, *op, value, env)
+        }
+
         Stmt::AssignMulti { targets, values } => {
             // Evaluate all RHS expressions first to support parallel
             // semantics (e.g. `a, b = b, a + b`).

@@ -304,7 +304,7 @@ impl<'a> Cx<'a> {
                     });
                 }
             }
-            Stmt::Assign { target, value } => {
+            Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
                 self.visit_expr(target);
                 self.visit_expr(value);
             }

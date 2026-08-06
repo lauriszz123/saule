@@ -389,3 +389,75 @@ fn a_quote_does_not_close_the_other_style() {
         vec![Token::String("a\"b".into()), Token::Eof]
     );
 }
+
+// ── Compound assignment ──────────────────────────────────────────────────
+
+#[test]
+fn compound_assignment_operators() {
+    assert_eq!(
+        lex("a += b -= c *= d /= e %= f ^= g ..= h"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::PlusEq,
+            Token::Identifier("b".into()),
+            Token::MinusEq,
+            Token::Identifier("c".into()),
+            Token::StarEq,
+            Token::Identifier("d".into()),
+            Token::SlashEq,
+            Token::Identifier("e".into()),
+            Token::PercentEq,
+            Token::Identifier("f".into()),
+            Token::CaretEq,
+            Token::Identifier("g".into()),
+            Token::DotDotEq,
+            Token::Identifier("h".into()),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn compound_assignment_does_not_shadow_existing_operators() {
+    // `-=` must not eat the `->` return arrow, `..=` must not eat `...`,
+    // and `==` / `<=` / `>=` / `!=` are untouched.
+    assert_eq!(
+        lex("-> ... == <= >= != .. ="),
+        vec![
+            Token::Arrow,
+            Token::Ellipsis,
+            Token::EqEq,
+            Token::LtEq,
+            Token::GtEq,
+            Token::NotEq,
+            Token::DotDot,
+            Token::Assign,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn minus_eq_is_not_confused_with_a_comment() {
+    // `--` opens a comment and is claimed before `symbol` runs, so `-=`
+    // has to survive sitting right next to one.
+    assert_eq!(
+        lex("a -= 1 -- note\nb += 2"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::MinusEq,
+            Token::Int(1),
+            Token::Identifier("b".into()),
+            Token::PlusEq,
+            Token::Int(2),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn compound_assignment_spans_cover_the_whole_operator() {
+    let toks = Lexer::new("a ..= b").tokenize().unwrap();
+    assert_eq!(toks[1].value, Token::DotDotEq);
+    assert_eq!(toks[1].span, 2..5);
+}

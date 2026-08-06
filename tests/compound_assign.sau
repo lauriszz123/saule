@@ -1,0 +1,88 @@
+-- Compound assignment: `a op= b` reads `a`, combines with `b`, writes back.
+-- Every form must work on locals, table elements, instance fields, and
+-- statics, and the target has to be evaluated exactly once.
+
+local n: integer = 10
+n += 5
+n -= 3
+n *= 4
+n /= 2
+n %= 7
+n ^= 2
+println(n)
+
+local f: float = 10.0
+f /= 4.0
+println(f)
+
+local s: string = "a"
+s ..= "b"
+s ..= "c" .. "d"
+println(s)
+
+-- The RHS is a full expression, so this multiplies by 7, not by 3.
+local p: integer = 2
+p *= 3 + 4
+println(p)
+
+-- Table element as target.
+local t: table<integer> = {10, 20}
+t[2] += 5
+println(t[2])
+
+-- A side-effecting subscript runs once, not twice.
+local calls: integer = 0
+
+fn idx() -> integer
+  calls += 1
+  return 1
+end
+
+t[idx()] += 1
+println(calls .. ":" .. t[1])
+
+class Counter
+  n: integer
+  static total: integer = 0
+
+  fn init()
+    self.n = 0
+  end
+
+  fn bump()
+    self.n += 3
+    Counter.total += 1
+  end
+end
+
+local c: Counter = Counter()
+c.bump()
+c.bump()
+c.n += 1
+println(c.n .. ":" .. Counter.total)
+
+-- `+=` goes through the class's `OpAdd` overload.
+class Vec implements OpAdd<Vec, Vec>
+  x: integer
+  y: integer
+
+  fn init(x: integer, y: integer)
+    self.x = x
+    self.y = y
+  end
+
+  fn add(other: Vec) -> Vec
+    return Vec(self.x + other.x, self.y + other.y)
+  end
+end
+
+local v: Vec = Vec(1, 2)
+v += Vec(10, 20)
+println(v.x .. "," .. v.y)
+
+-- Compound assignment inside a loop body.
+local sum: integer = 0
+for i: integer = 1, 5 do
+  sum += i
+end
+println(sum)

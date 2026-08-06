@@ -19,7 +19,7 @@ pub(crate) fn table_index_to_slot(index: &Value) -> Result<Option<usize>, String
     }
 }
 
-pub(super) fn read_index(
+pub(crate) fn read_index(
     receiver: &Value,
     index: Value,
     span: std::ops::Range<usize>,
@@ -47,7 +47,7 @@ pub(super) fn read_index(
 /// On a class:
 ///   1. static fields,
 ///   2. static methods.
-pub(super) fn read_member(
+pub(crate) fn read_member(
     receiver: &Value,
     name: &str,
     span: std::ops::Range<usize>,

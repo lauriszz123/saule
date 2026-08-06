@@ -149,7 +149,11 @@ impl Resolver {
                     self.declare(n);
                 }
             }
-            Stmt::Assign { target, value } => {
+            // Compound assignment resolves exactly like plain assignment:
+            // an ident target still has to be declared, and `a op= b` reading
+            // `a` before writing it makes that requirement stricter, not
+            // looser.
+            Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
                 if let Expr::Ident(name) = &target.value
                     && !self.resolved(name)
                 {

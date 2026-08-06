@@ -90,7 +90,7 @@ fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
                 check_expr(v, ctx, errors);
             }
         }
-        Stmt::Assign { target, value } => {
+        Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
             check_expr(target, ctx, errors);
             check_expr(value, ctx, errors);
         }

@@ -86,6 +86,14 @@ impl<'a> Printer<'a> {
                 self.write(" = ");
                 self.expr(value, 0);
             }
+            Stmt::CompoundAssign { target, op, value } => {
+                self.expr(target, 0);
+                self.writef(format_args!(" {}= ", bin_sym(*op)));
+                // Precedence 0: the RHS of `op=` is delimited by the end of
+                // the statement, so it never needs parenthesising — `x *= a + b`
+                // round-trips as written.
+                self.expr(value, 0);
+            }
             Stmt::AssignMulti { targets, values } => {
                 self.expr_list(targets);
                 self.write(" = ");

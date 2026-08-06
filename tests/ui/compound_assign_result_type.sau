@@ -1,0 +1,9 @@
+-- `..` on an integer is legal and yields a `string`, but the result still
+-- has to be assignable back into the target — an `integer` binding here.
+class Main
+	static fn main()
+		local n: integer = 1
+		n ..= "x"
+		println(n)
+	end
+end
