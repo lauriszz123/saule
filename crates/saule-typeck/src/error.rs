@@ -327,6 +327,17 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("operator `{op}` cannot be applied to a nullable `{found}`")]
+    #[diagnostic(help(
+        "check for nil first (`if x != nil then`), supply a fallback with `??`, or force-unwrap with `!`"
+    ))]
+    NullableOperand {
+        op: &'static str,
+        found: String,
+        #[label("this may be `nil`")]
+        span: miette::SourceSpan,
+    },
+
     #[error("pattern of type `{found}` cannot match scrutinee of type `{expected}`")]
     #[diagnostic(help("change the pattern to match the scrutinee's type"))]
     MatchPatternTypeMismatch {

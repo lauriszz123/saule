@@ -84,6 +84,39 @@ pub struct Backend {
 }
 
 impl Backend {
+    /// A [`saule_interpreter::module::SourceOverlay`] backed by the open-document
+    /// cache, for the import walk to consult ahead of the filesystem.
+    ///
+    /// Without it every cross-file lookup — diagnostics, hover, completion,
+    /// signature help, inlay hints, goto-definition — read imported modules
+    /// straight off disk, so an *unsaved* edit in an imported file was
+    /// invisible to its importers. Change a method's signature in `storage.sau`
+    /// and `main.sau` would keep reporting against the version last written to
+    /// disk until you saved.
+    ///
+    /// `docs` is keyed by the URI string the client sent, which is not
+    /// guaranteed to be the canonical spelling the import resolver produces
+    /// (symlinked roots, `..` segments). The exact-URI hit is the fast path;
+    /// the scan below is the correctness path, and it is bounded by the number
+    /// of *open* editor buffers, not by workspace size.
+    pub(crate) fn source_overlay(&self) -> impl Fn(&Path) -> Option<String> + '_ {
+        move |path: &Path| {
+            let want = canonical(path).unwrap_or_else(|| path.to_path_buf());
+            if let Some(uri) = path_to_uri(&want)
+                && let Some(doc) = self.docs.get(uri.as_str())
+            {
+                return Some(doc.source.clone());
+            }
+            self.docs.iter().find_map(|entry| {
+                let doc_path = Url::parse(entry.key())
+                    .ok()
+                    .and_then(|u| u.to_file_path().ok())?;
+                let doc_path = canonical(&doc_path).unwrap_or(doc_path);
+                (doc_path == want).then(|| entry.source.clone())
+            })
+        }
+    }
+
     pub fn new(client: Client) -> Self {
         Self {
             client,

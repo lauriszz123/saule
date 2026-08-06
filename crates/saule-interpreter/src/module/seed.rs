@@ -49,10 +49,41 @@ pub(crate) fn imported_local_names(
 /// silently skipped — semantic/typeck will surface the user-facing error
 /// (or, in the import-fails case, the runtime loader will).
 pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::ModuleSeed {
+    collect_import_seed_with(module, dir, &|_| None)
+}
+
+/// Where an imported module's source text comes from.
+///
+/// Returning `Some(text)` supplies that file's contents in place of what is
+/// on disk; `None` means "read the file normally".
+///
+/// This exists for the language server. Its authoritative copy of an open
+/// file is the buffer the editor last sent, which for an unsaved file is *not*
+/// what `read_to_string` returns — so without an overlay, `main.sau`'s
+/// diagnostics, hover, and completions were all computed against a stale
+/// on-disk version of every file it imports. Editing a module and watching its
+/// importer's errors fail to update was the visible symptom.
+pub type SourceOverlay<'a> = &'a dyn Fn(&Path) -> Option<String>;
+
+/// [`collect_import_seed`], but consulting `overlay` before the filesystem for
+/// every module it reads — transitively, including through barrel modules.
+pub fn collect_import_seed_with(
+    module: &Module,
+    dir: &Path,
+    overlay: SourceOverlay<'_>,
+) -> saule_semantic::ModuleSeed {
     let mut visited = HashSet::new();
-    let mut seed = collect_import_seed_inner(module, dir, &mut visited, 0);
-    seed.wildcard_names = collect_wildcard_names(module, dir);
+    let mut seed = collect_import_seed_inner(module, dir, &mut visited, 0, overlay);
+    seed.wildcard_names = collect_wildcard_names(module, dir, overlay);
     seed
+}
+
+/// Read a module's source, preferring `overlay` over the filesystem.
+fn read_module_source(abs: &Path, overlay: SourceOverlay<'_>) -> Option<String> {
+    match overlay(abs) {
+        Some(text) => Some(text),
+        None => std::fs::read_to_string(abs).ok(),
+    }
 }
 
 /// Union of the local names every `import * from "..."` in `module` binds.
@@ -61,7 +92,11 @@ pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::Modul
 /// name resolver reads that as "unknown names may be in scope here" and
 /// stops reporting undefined names for the whole module. Enumerating them
 /// is what lets a typo inside a file that globs a module still be caught.
-pub(crate) fn collect_wildcard_names(module: &Module, dir: &Path) -> Option<HashSet<String>> {
+pub(crate) fn collect_wildcard_names(
+    module: &Module,
+    dir: &Path,
+    overlay: SourceOverlay<'_>,
+) -> Option<HashSet<String>> {
     let mut out = HashSet::new();
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
@@ -73,7 +108,7 @@ pub(crate) fn collect_wildcard_names(module: &Module, dir: &Path) -> Option<Hash
         else {
             continue;
         };
-        out.extend(static_import_names(dir, path, names, 0)?);
+        out.extend(static_import_names(dir, path, names, 0, overlay)?);
     }
     Some(out)
 }
@@ -90,6 +125,7 @@ pub(crate) fn static_import_names(
     path: &str,
     names: &ImportNames,
     depth: usize,
+    overlay: SourceOverlay<'_>,
 ) -> Option<Vec<String>> {
     // A name list is its own answer — no need to look at the target.
     if let ImportNames::List(items) = names {
@@ -112,7 +148,7 @@ pub(crate) fn static_import_names(
 
     // Glob over a file module: its `export`ed top-level declarations.
     let abs = resolve_import_path(dir, path)?;
-    let source = std::fs::read_to_string(&abs).ok()?;
+    let source = read_module_source(&abs, overlay)?;
     let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
     let imported = saule_parser::parse(tokens).ok()?;
 
@@ -142,7 +178,13 @@ pub(crate) fn static_import_names(
             let Decl::Import { names, path, .. } = &d.value else {
                 continue;
             };
-            out.extend(static_import_names(&sub_dir, path, names, depth + 1)?);
+            out.extend(static_import_names(
+                &sub_dir,
+                path,
+                names,
+                depth + 1,
+                overlay,
+            )?);
         }
     }
 
@@ -159,6 +201,7 @@ pub(crate) fn collect_import_seed_inner(
     dir: &Path,
     visited: &mut HashSet<PathBuf>,
     depth: usize,
+    overlay: SourceOverlay<'_>,
 ) -> saule_semantic::ModuleSeed {
     let mut seed = saule_semantic::ModuleSeed::default();
 
@@ -203,7 +246,7 @@ pub(crate) fn collect_import_seed_inner(
         let Some(abs) = resolve_import_path(dir, path) else {
             continue;
         };
-        let Ok(source) = std::fs::read_to_string(&abs) else {
+        let Some(source) = read_module_source(&abs, overlay) else {
             continue;
         };
         let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
@@ -249,7 +292,7 @@ pub(crate) fn collect_import_seed_inner(
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let sub = collect_import_seed_inner(&imported, &sub_dir, visited, depth + 1);
+            let sub = collect_import_seed_inner(&imported, &sub_dir, visited, depth + 1, overlay);
             merge_barrel_seed(&mut seed, sub, names);
         }
     }

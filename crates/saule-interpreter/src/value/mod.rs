@@ -58,7 +58,8 @@ pub enum Value {
     /// A class declaration — carries its statics, instance template, and
     /// optional parent. Compared by identity.
     Class(Rc<ClassObject>),
-    /// An instance produced by `new ClassName(args)`. Fields are mutable
+    /// An instance produced by calling a class: `ClassName(args)`. Fields are
+    /// mutable
     /// behind a `RefCell`; identity is the `Rc` pointer.
     Instance(Rc<RefCell<InstanceObject>>),
     /// An enum variant: carries the enum name, variant name, and optional
@@ -145,7 +146,7 @@ impl Value {
     }
 }
 
-// Equality is used by tests and by the `==` / `~=` operators. Functions
+// Equality is used by tests and by the `==` / `!=` operators. Functions
 // (native or user-defined) compare by identity.
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {

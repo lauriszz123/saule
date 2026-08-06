@@ -135,7 +135,7 @@ pub(crate) fn check_binary_op(
 
 /// Check that a single operand satisfies a predicate; emit if not. Stays
 /// silent when inference fails, the operand is `any`, or the operand is
-/// `nil` (nullable misuse is reported elsewhere).
+/// literally `nil`.
 pub(crate) fn check_operand_kind(
     op: &'static str,
     expected: &'static str,
@@ -152,6 +152,35 @@ pub(crate) fn check_operand_kind(
         return;
     }
     if matches!(&base, Type::Named(n) if n == "nil") {
+        return;
+    }
+    // A `T?` operand is rejected before the kind test, because the kind test
+    // runs on the *stripped* base and would otherwise wave `maybeName .. "!"`
+    // through on the strength of the `string` inside the `string?`.
+    //
+    // Null safety is enforced on assignment and at call sites; operators were
+    // the gap, which meant `count + 1` on an `integer?` type-checked and then
+    // failed at runtime.
+    //
+    // Deliberately limited to *identifiers*. `narrow` (see `expr::narrow`)
+    // only tracks identifiers, so a bare name is exactly the case where the
+    // checker can also see the `if x != nil` that makes the operand safe —
+    // the diagnostic is therefore always actionable. Extending it to fields
+    // would reject the common and correct
+    //
+    //     if self.dueDate == nil then return end
+    //     return Os.time() >= self.dueDate
+    //
+    // because field narrowing does not exist, leaving `!` or a local copy as
+    // the only way out. Requiring that is a language-design decision (it is
+    // the rule Kotlin picked for mutable properties) and needs field
+    // narrowing built first, so it is not made here.
+    if is_nullable(&t) && matches!(arg.value, Expr::Ident(_)) {
+        errors.push(TypeCheckError::NullableOperand {
+            op,
+            found: type_to_string(&t),
+            span: to_source_span(arg.span.clone()),
+        });
         return;
     }
     if !pred(&base) {

@@ -155,7 +155,11 @@ impl Backend {
         // interfaces / enums from sibling files so cross-file lookups
         // (e.g. `Json.decode(...)` from `import "json"`) resolve.
         let seed = match &module_dir {
-            Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
+            Some(d) => saule_interpreter::module::collect_import_seed_with(
+                &module,
+                d,
+                &self.source_overlay(),
+            ),
             None => saule_semantic::ModuleSeed::default(),
         };
         for e in saule_semantic::analyze_with_seed(&module, seed) {

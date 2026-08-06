@@ -30,11 +30,11 @@ Saule is a statically typed, class-oriented language inspired by Lua's simplicit
 
 ## Types
 
-Saule has 9 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule:
+Saule has 8 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule:
 
 | Type | Description |
 |---|---|
-| `integer` | Whole numbers, no decimal component |
+| `integer` | Whole numbers, no decimal component. 64-bit signed; [overflow wraps](#integer-overflow) |
 | `float` | Decimal numbers, 64-bit precision |
 | `string` | Immutable sequences of characters |
 | `boolean` | `true` or `false` |
@@ -42,10 +42,17 @@ Saule has 9 primitive types, inherited from Lua's type system but statically dec
 | `function` | First-class function values |
 | `table<T>` | The only data structure, typed generically |
 | `any` | A value of unknown type. Anything may be assigned **to** an `any`; getting a value back **out** requires a checked [`as` cast](#escaping-any-with-as) |
-| `userdata` | Raw memory for native integrations |
-| `thread` | Coroutines |
 
 Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what you wrote. A variable cannot be `nil` unless its type is marked nullable with `?`.
+
+### Reserved: `userdata` and `thread`
+
+Lua has these and Saule keeps the names reserved, but **neither is implemented yet**. The typechecker will accept `local h: userdata` as an annotation and then nothing in the language can produce a value to satisfy it — there is no literal, no constructor, and no standard-library function returning either. Don't reach for them:
+
+- `userdata` — raw memory for native integrations. Native packages currently exchange values through `table` and the native SDK's own types instead.
+- `thread` — coroutines. Saule has no concurrency primitives today; there is no `coroutine` module.
+
+They are listed here so the omission is visible rather than surprising.
 
 ### Integer vs Float
 
@@ -161,6 +168,23 @@ local q: float = float(7) / 2.0    -- 3.5
 ```
 
 Because mixing kinds is a compile error, `7 / 2.0` won't silently produce `3.5` — the checker rejects it and forces an explicit `float(7)` (or `int(2.0)`) so the intent is visible at the call site.
+
+Dividing by zero is a runtime error for both `/` and `%`, not a `nan` or an `inf`:
+
+```saule
+local q: integer = 7 / 0     -- ERROR: division by zero
+```
+
+### Integer Overflow
+
+`integer` is a signed 64-bit value, spanning `-9223372036854775808` to `9223372036854775807`. Arithmetic that leaves that range **wraps around** rather than trapping — the same rule Lua 5.4 uses:
+
+```saule
+local big: integer = 9223372036854775807
+println(big + 1)             -- -9223372036854775808, not an error
+```
+
+This is the one place Saule does not catch a numeric mistake for you. It is a deliberate trade — a check on every add costs more than it saves for a language used at this scale — but it means a counter or an accumulator that could plausibly reach 2⁶³ needs its own bound. Use `float` when a value's magnitude is genuinely unbounded and precision matters more than exactness.
 
 ### Exponentiation
 

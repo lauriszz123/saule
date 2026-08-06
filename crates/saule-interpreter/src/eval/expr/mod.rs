@@ -6,7 +6,7 @@
 //! | Module        | Contents                                              |
 //! |---------------|-------------------------------------------------------|
 //! | [`calls`]     | call/dispatch/super machinery, `bind_params`          |
-//! | [`construct`] | `new ClassName(...)`, tuple-variant constructors      |
+//! | [`construct`] | `ClassName(...)`, tuple-variant constructors          |
 //! | [`match_`]    | `match` evaluation and pattern matching               |
 //! | [`members`]   | `obj.field` and `obj[index]` reads                    |
 

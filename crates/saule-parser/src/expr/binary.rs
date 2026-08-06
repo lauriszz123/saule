@@ -8,8 +8,12 @@ use saule_ast::{BinOp, Expr, Spanned, UnaryOp};
 use saule_lexer::Token;
 
 impl Parser {
+    /// Entry to the precedence ladder, and the one place every nested
+    /// sub-expression re-enters it — parenthesised groups, call arguments,
+    /// index brackets, table entries. Counting depth here therefore bounds
+    /// expression recursion without touching each individual rung.
     pub(crate) fn parse_expression(&mut self) -> Result<Spanned<Expr>, ParseError> {
-        self.or_expr()
+        self.nested(|p| p.or_expr())
     }
 
     pub(crate) fn or_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {

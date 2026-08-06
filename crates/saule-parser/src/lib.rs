@@ -69,6 +69,18 @@ pub fn parse(tokens: Vec<Spanned<Token>>) -> Result<Module, ParseError> {
 
 // ─── Parser state ────────────────────────────────────────────────────────────
 
+/// Maximum grammatical nesting depth.
+///
+/// Recursive descent turns source nesting into native-stack recursion, so
+/// without a bound a pathological input — `((((…1…))))` — aborts the process
+/// with an uncatchable stack overflow rather than reporting a parse error.
+/// That matters most in the language server, which parses incomplete input on
+/// every keystroke and would take the editor session down with it.
+///
+/// Set well above anything hand-written (real code rarely passes 30) and well
+/// under what the stack can take, so the error is always the binding limit.
+pub const MAX_NESTING_DEPTH: u32 = 256;
+
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
@@ -76,6 +88,10 @@ pub struct Parser {
     /// the header expression of a `while`/`for`, where a following `do` belongs
     /// to the loop rather than to the call. See [`Parser::without_trailing_block`].
     no_trailing_block: bool,
+    /// Current grammatical nesting depth — see [`MAX_NESTING_DEPTH`] and
+    /// [`Parser::nested`]. Parser state rather than a thread-local because
+    /// there is already a `&mut self` threaded through every rule.
+    depth: u32,
 }
 
 impl Parser {
@@ -84,6 +100,7 @@ impl Parser {
             tokens,
             pos: 0,
             no_trailing_block: false,
+            depth: 0,
         }
     }
 
@@ -103,6 +120,28 @@ impl Parser {
         let prev = std::mem::replace(&mut self.no_trailing_block, true);
         let out = f(self);
         self.no_trailing_block = prev;
+        out
+    }
+
+    /// Runs `f` one grammatical level deeper, refusing past
+    /// [`MAX_NESTING_DEPTH`].
+    ///
+    /// The decrement is unconditional — it runs on the error path too — so a
+    /// parser that recovers and keeps going does not carry a stale count into
+    /// the rest of the file.
+    pub(crate) fn nested<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(ParseError::TooDeep {
+                limit: MAX_NESTING_DEPTH,
+                span: self.peek().span.clone(),
+            });
+        }
+        self.depth += 1;
+        let out = f(self);
+        self.depth -= 1;
         out
     }
 

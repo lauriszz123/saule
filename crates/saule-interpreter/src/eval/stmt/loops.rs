@@ -64,10 +64,15 @@ fn run_numeric_loop_int(
     body: &[Spanned<Stmt>],
     parent: &Rc<RefCell<Environment>>,
 ) -> Result<Flow, RuntimeError> {
+    // Intern the loop variable's name once. `define` takes an `Rc<str>`, so
+    // handing it a `&str` per iteration would allocate a `String` *and* an
+    // `Rc` every time round — two heap allocations per iteration for a name
+    // that never changes.
+    let key: Rc<str> = Rc::from(var);
     let mut i = from;
     while (step > 0 && i <= to) || (step < 0 && i >= to) {
         let scope = Environment::with_parent(parent.clone());
-        scope.borrow_mut().define(var.to_string(), Value::Int(i));
+        scope.borrow_mut().define(Rc::clone(&key), Value::Int(i));
         match exec_block(body, &scope)? {
             Flow::Normal(_) | Flow::Continue => {}
             Flow::Break => return Ok(Flow::nil()),
@@ -91,10 +96,12 @@ fn run_numeric_loop_float(
     body: &[Spanned<Stmt>],
     parent: &Rc<RefCell<Environment>>,
 ) -> Result<Flow, RuntimeError> {
+    // Interned once — see `run_numeric_loop_int`.
+    let key: Rc<str> = Rc::from(var);
     let mut i = from;
     while (step > 0.0 && i <= to) || (step < 0.0 && i >= to) {
         let scope = Environment::with_parent(parent.clone());
-        scope.borrow_mut().define(var.to_string(), Value::Float(i));
+        scope.borrow_mut().define(Rc::clone(&key), Value::Float(i));
         match exec_block(body, &scope)? {
             Flow::Normal(_) | Flow::Continue => {}
             Flow::Break => return Ok(Flow::nil()),
@@ -112,6 +119,9 @@ pub(super) fn exec_for_in(
     env: &Rc<RefCell<Environment>>,
     span: std::ops::Range<usize>,
 ) -> Result<Flow, RuntimeError> {
+    // Interned once for the whole loop — see `run_numeric_loop_int`. Both the
+    // table path and the closure-driver path below bind these every iteration.
+    let keys: Vec<Rc<str>> = vars.iter().map(|(n, _)| Rc::from(n.as_str())).collect();
     let iter_value = expr::eval(iter, env)?;
     match iter_value {
         Value::Table(items) => {
@@ -136,13 +146,13 @@ pub(super) fn exec_for_in(
 
             let run_iter = |key: Value, value: Value| -> Result<Flow, RuntimeError> {
                 let scope = Environment::with_parent(env.clone());
-                match vars {
-                    [(name, _)] => {
-                        scope.borrow_mut().define(name.clone(), value);
+                match keys.as_slice() {
+                    [name] => {
+                        scope.borrow_mut().define(Rc::clone(name), value);
                     }
-                    [(key_name, _), (value_name, _)] => {
-                        scope.borrow_mut().define(key_name.clone(), key);
-                        scope.borrow_mut().define(value_name.clone(), value);
+                    [key_name, value_name] => {
+                        scope.borrow_mut().define(Rc::clone(key_name), key);
+                        scope.borrow_mut().define(Rc::clone(value_name), value);
                     }
                     _ => {
                         return Err(RuntimeError::TypeError {
@@ -227,9 +237,9 @@ pub(super) fn exec_for_in(
                 let scope = Environment::with_parent(env.clone());
                 {
                     let mut scope_mut = scope.borrow_mut();
-                    for (i, (name, _)) in vars.iter().enumerate() {
+                    for (i, name) in keys.iter().enumerate() {
                         let v = values.get(i).cloned().unwrap_or(Value::Nil);
-                        scope_mut.define(name.clone(), v);
+                        scope_mut.define(Rc::clone(name), v);
                     }
                 }
                 match exec_block(body, &scope)? {

@@ -815,6 +815,28 @@ pub(crate) fn report_if_user_function_arity(
         if is_any(&expected) {
             continue;
         }
+        // Same rule, same reasoning, as `check_user_method_args` and
+        // `check_native_args`: `types_compatible` is the *structural*
+        // predicate and strips `Nullable` on both sides, so passing a `T?`
+        // into a `T` slot has to be rejected here or not at all.
+        //
+        // This path — a direct call to a top-level `fn` — was the one place
+        // the check was missing, which made every free function a hole in
+        // null safety: `f(maybeNil)` type-checked and then failed at runtime
+        // inside `f`, pointing at `f`'s body rather than at the call.
+        if !is_unbound_type_param(&expected, type_params)
+            && !is_nullable(&expected)
+            && is_nullable(&found_ty)
+        {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: name.clone(),
+                arg: i + 1,
+                expected: type_to_string(&expected),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+            continue;
+        }
         if !compatible_under_sig_params(&expected, &found_ty, type_params) {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
                 callee: name.clone(),

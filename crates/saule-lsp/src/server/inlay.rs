@@ -59,7 +59,11 @@ impl Backend {
             saule_interpreter::project::set(info);
         }
         let seed = match &module_dir {
-            Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
+            Some(d) => saule_interpreter::module::collect_import_seed_with(
+                &module,
+                d,
+                &self.source_overlay(),
+            ),
             None => saule_semantic::ModuleSeed::default(),
         };
         let _ = saule_semantic::analyze_with_seed(&module, seed);

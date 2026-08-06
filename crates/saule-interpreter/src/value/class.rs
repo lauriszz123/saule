@@ -29,8 +29,8 @@ pub struct ClassObject {
     pub static_fields: RefCell<HashMap<String, Value>>,
     /// Static methods (no implicit `self`).
     pub static_methods: HashMap<String, Rc<FunctionObject>>,
-    /// `constructor(args) … end`. None means the class has no explicit
-    /// constructor — `new` still produces a valid instance.
+    /// `init(args) … end`. None means the class has no explicit
+    /// constructor — calling the class still produces a valid instance.
     pub constructor: Option<Rc<FunctionObject>>,
 }
 

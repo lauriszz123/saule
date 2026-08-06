@@ -38,23 +38,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Both lint steps are non-blocking *for now*. The repo has pre-existing
-      # drift — around 190 rustfmt hunks (mostly in saule-engine-lib,
-      # saule-lsp/refs and saule-lsp/server) and a handful of clippy warnings
-      # in saule-fmt, saule-semantic and saule-cli — none of it introduced by
-      # the work that added this file.
-      #
-      # Making them blocking on day one would mean a red CI on the very first
-      # push, which teaches everyone to ignore CI. Instead: run
-      # `cargo fmt --all` and clear the clippy warnings as one dedicated
-      # commit, then delete both `continue-on-error` lines. Tracked as a
-      # prerequisite in RELEASE_PLAN.md step 2.
+      # Both lint steps are blocking. They were `continue-on-error` while the
+      # repo carried pre-existing drift (~190 rustfmt hunks and a handful of
+      # clippy warnings); that backlog has since been cleared, so the gates are
+      # live and the tree is expected to stay clean. Run `cargo fmt --all`
+      # before pushing.
       - name: Formatting
-        continue-on-error: true
         run: cargo fmt --all --check
 
       - name: Clippy
-        continue-on-error: true
         run: cargo clippy --workspace --all-targets --exclude saule-engine-lib -- -D warnings
 
       # `saule-engine-lib` is excluded deliberately. It is an *example* native
@@ -67,8 +59,8 @@ jobs:
       - name: Unit and integration tests
         run: cargo test --workspace --locked --exclude saule-engine-lib
 
-      # The 110 `.sau` fixtures under tests/ are the language's real
-      # regression suite and are not reachable from `cargo test`.
+      # The `.sau` fixtures under tests/ are the language's real regression
+      # suite and are not reachable from `cargo test`.
       - name: Build the CLI for the fixtures
         run: cargo build --locked -p saule-cli
 
