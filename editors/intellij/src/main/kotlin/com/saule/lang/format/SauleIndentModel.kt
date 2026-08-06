@@ -65,12 +65,27 @@ object SauleIndentModel {
      * [CASE] is a `match` arm: `case … then` followed by a newline indents its
      * statements, and the arm is closed by the next `case` or by the `match`'s
      * `end` rather than by one of its own.
+     *
+     * [LOOP_HEADER] is a `for` / `while` block whose header has not reached its
+     * `do` yet. It is a block like any other — it just remembers that the next
+     * `do` belongs to the header and so must not open a second one.
      */
-    private enum class Frame { BLOCK, INTERFACE, CASE, BRACKET }
+    private enum class Frame { BLOCK, LOOP_HEADER, INTERFACE, CASE, BRACKET }
 
     /** Keywords that open a block closed by `end` (or, for `repeat`, `until`). */
-    private val BLOCK_OPENERS =
-        setOf("class", "enum", "if", "while", "for", "repeat", "try", "match")
+    private val BLOCK_OPENERS = setOf("class", "enum", "if", "repeat", "try", "match")
+
+    /**
+     * Loop keywords, whose header runs up to a `do`.
+     *
+     * Kept apart from [BLOCK_OPENERS] only so that `do` can tell the two uses
+     * of itself apart: it terminates a loop header (which has already opened a
+     * block), and anywhere else it opens a *trailing block* —
+     * `Canvas() do … end`, the sugar for a call whose last argument is a
+     * block-bodied lambda ([saule_fmt::trailing_block_arg]). Both bodies are
+     * one level in.
+     */
+    private val LOOP_OPENERS = setOf("while", "for")
 
     /** Keywords that continue the enclosing block: written one level out. */
     private val CONTINUATIONS = setOf("else", "elseif", "catch")
@@ -177,6 +192,16 @@ object SauleIndentModel {
                     stack.add(Frame.BLOCK)
                 }
             word in BLOCK_OPENERS -> stack.add(Frame.BLOCK)
+            word in LOOP_OPENERS -> stack.add(Frame.LOOP_HEADER)
+            // Closing a loop header costs nothing — `for`/`while` opened the
+            // block already — but a `do` anywhere else is a trailing block,
+            // and that one is its own level.
+            word == "do" ->
+                if (stack.lastOrNull() == Frame.LOOP_HEADER) {
+                    stack[stack.lastIndex] = Frame.BLOCK
+                } else {
+                    stack.add(Frame.BLOCK)
+                }
             word in CLOSERS -> closeBlock(stack)
             word == "case" -> {
                 if (stack.lastOrNull() == Frame.CASE) stack.removeLast()
@@ -193,7 +218,11 @@ object SauleIndentModel {
      * `match` and all of its arms at once.
      */
     private fun closeBlock(stack: ArrayList<Frame>) {
-        while (stack.isNotEmpty() && stack.last() != Frame.BLOCK && stack.last() != Frame.INTERFACE) {
+        while (stack.isNotEmpty() &&
+            stack.last() != Frame.BLOCK &&
+            stack.last() != Frame.LOOP_HEADER &&
+            stack.last() != Frame.INTERFACE
+        ) {
             stack.removeLast()
         }
         if (stack.isNotEmpty()) stack.removeLast()

@@ -61,6 +61,55 @@ class SauleIndentModelTest {
     )
 
     @Test
+    fun `a trailing block is a level of its own`() = assertRoundTrips(
+        // `f(a) do … end` is sugar for a call whose last argument is a
+        // block-bodied lambda, so its body indents like any other block.
+        """
+        fn f()
+          local screen = Canvas() do
+            Panel(title: "Saule UI", spacing: 1) do
+              Text("Trailing blocks, drawn.")
+            end
+          end
+
+          println(screen.render())
+        end
+        """
+    )
+
+    @Test
+    fun `a loop header's do opens one block, not two`() = assertRoundTrips(
+        // The `do` closing a `for` / `while` header belongs to the loop, which
+        // is already open; only a `do` outside a header opens a block of its
+        // own. Get that wrong and each loop swallows an extra `end`.
+        """
+        fn f()
+          Row(spacing: 3) do
+            for i, name in players do
+              while ready(name) do
+                Button(name)
+              end
+            end
+          end
+
+          done()
+        end
+        """
+    )
+
+    @Test
+    fun `both kinds of do indent their body once`() {
+        for (opener in listOf("while x", "for i in xs", "Canvas()", "f(a, b)")) {
+            assertEquals(opener, SauleIndent(1, 0), indentOfLine("$opener do\n\n", 1))
+            assertEquals(
+                opener,
+                SauleIndent.ZERO,
+                indentOfLine("$opener do\n  step()\nend\n\n", 3),
+            )
+        }
+    }
+
+    @Test
     fun `match arms stay at body level`() = assertRoundTrips(
         """
         fn f()
@@ -242,7 +291,9 @@ class SauleIndentModelTest {
         // What the editor sees mid-keystroke: Enter has indented the line to
         // the body level and the closer has just been typed into it. The
         // answer must not depend on the whitespace already there.
-        for (opener in listOf("fn f()", "if a then", "while a do", "for i in x do", "try", "match x")) {
+        val openers =
+            listOf("fn f()", "if a then", "while a do", "for i in x do", "Canvas() do", "try", "match x")
+        for (opener in openers) {
             val text = "class A\n  $opener\n    end\n"
             assertEquals(opener, SauleIndent(1, 0), indentOfLine(text, 2))
         }

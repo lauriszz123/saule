@@ -25,7 +25,11 @@ local M = {}
 -- `CASE` is a `match` arm: `case … then` followed by a newline indents its
 -- statements, and the arm is closed by the next `case` or by the `match`'s
 -- `end` rather than by one of its own.
-local BLOCK, INTERFACE, CASE, BRACKET = 1, 2, 3, 4
+--
+-- `LOOP_HEADER` is a `for` / `while` block whose header has not reached its
+-- `do` yet. It is a block like any other — it just remembers that the next
+-- `do` belongs to the header and so must not open a second one.
+local BLOCK, LOOP_HEADER, INTERFACE, CASE, BRACKET = 1, 2, 3, 4, 5
 
 local function set(list)
   local out = {}
@@ -36,8 +40,16 @@ local function set(list)
 end
 
 --- Keywords that open a block closed by `end` (or, for `repeat`, `until`).
-local BLOCK_OPENERS =
-  set({ "class", "enum", "if", "while", "for", "repeat", "try", "match" })
+local BLOCK_OPENERS = set({ "class", "enum", "if", "repeat", "try", "match" })
+
+--- Loop keywords, whose header runs up to a `do`.
+---
+--- Kept apart from `BLOCK_OPENERS` only so that `do` can tell the two uses of
+--- itself apart: it terminates a loop header (which has already opened a
+--- block), and anywhere else it opens a *trailing block* — `Canvas() do … end`,
+--- the sugar for a call whose last argument is a block-bodied lambda
+--- (`saule_fmt::trailing_block_arg`). Both bodies are one level in.
+local LOOP_OPENERS = set({ "while", "for" })
 
 --- Keywords that continue the enclosing block: written one level out.
 local CONTINUATIONS = set({ "else", "elseif", "catch" })
@@ -189,11 +201,27 @@ local function apply(word, previous, stack)
     end
   elseif BLOCK_OPENERS[word] then
     stack[#stack + 1] = BLOCK
+  elseif LOOP_OPENERS[word] then
+    stack[#stack + 1] = LOOP_HEADER
+  elseif word == "do" then
+    -- Closing a loop header costs nothing — `for`/`while` opened the block
+    -- already — but a `do` anywhere else is a trailing block, and that one is
+    -- its own level.
+    if top == LOOP_HEADER then
+      stack[#stack] = BLOCK
+    else
+      stack[#stack + 1] = BLOCK
+    end
   elseif CLOSERS[word] then
     -- Pop one real block. Any `case` arms — and any brackets left open by
     -- half-typed code — are discarded with it, mirroring how `end` closes a
     -- `match` and all of its arms at once.
-    while #stack > 0 and stack[#stack] ~= BLOCK and stack[#stack] ~= INTERFACE do
+    while
+      #stack > 0
+      and stack[#stack] ~= BLOCK
+      and stack[#stack] ~= LOOP_HEADER
+      and stack[#stack] ~= INTERFACE
+    do
       stack[#stack] = nil
     end
     if #stack > 0 then
@@ -276,6 +304,36 @@ function M.indent_for_line(text, line_start, line_end)
   end
 
   return math.max(0, blocks - block_dedent), math.max(0, brackets - bracket_dedent)
+end
+
+--- Keywords that open a block only sometimes; see `M.false_openers`.
+local AMBIGUOUS_OPENERS = set({ "fn", "do" })
+
+--- The 1-based byte offsets of every keyword in `text` that *looks* like it
+--- opens a block but does not, as a set: a `do` closing a `for` / `while`
+--- header (the loop opened the block), an `fn` writing a type
+--- (`f: fn(T) -> U`), and an interface's bare method signatures.
+---
+--- `%` needs this. `b:match_words` in `ftplugin/saule.vim` pairs the block
+--- keywords with `end` by counting them, so it has to be shown the openers
+--- that really are one — otherwise a trailing block's `end` pairs with the
+--- enclosing `fn`, exactly the bug this model has for indenting.
+---
+--- Neovim-only: the other two ports match brackets rather than keywords, so
+--- there is nothing to keep in step with here. The answer comes out of the
+--- shared stack machine either way — a keyword opens a block if and only if
+--- applying it pushes a frame.
+function M.false_openers(text)
+  local stack, previous, out = {}, nil, {}
+  for _, token in ipairs(tokens(text, #text)) do
+    local before = #stack
+    apply(token.word, previous, stack)
+    if #stack == before and AMBIGUOUS_OPENERS[token.word] then
+      out[token.start] = true
+    end
+    previous = token.word
+  end
+  return out
 end
 
 local MAX_KEYWORD_LENGTH = 6 -- `elseif`
