@@ -125,6 +125,29 @@ pub(super) fn method_owner(class: &str, name: &str) -> Option<String> {
     })
 }
 
+/// The class declaring the *static* method `name`, walking up from
+/// `class` through its ancestors.
+///
+/// A bare `help()` inside a method body is not a free function: the
+/// interpreter resolves bare names against the enclosing class's statics
+/// (nearest class first) before the global scope, so goto-definition has
+/// to look there too. Only statics qualify — an instance method is
+/// unreachable by bare name, and claiming it here would send the cursor
+/// to the wrong declaration.
+pub(super) fn static_method_owner(class: &str, name: &str) -> Option<String> {
+    with_classes(|reg| {
+        let mut cur = Some(class.to_string());
+        while let Some(cname) = cur {
+            let info = reg.get(&cname)?;
+            if info.methods.get(name).is_some_and(|m| m.is_static) {
+                return Some(cname);
+            }
+            cur = info.parent.clone();
+        }
+        None
+    })
+}
+
 /// Same as [`method_owner`] for a field.
 pub(super) fn field_owner(class: &str, name: &str) -> Option<String> {
     with_classes(|reg| {

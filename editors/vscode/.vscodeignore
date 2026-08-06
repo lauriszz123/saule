@@ -5,9 +5,12 @@
 # automatically, so only production deps are bundled.
 .vscode/**
 src/**
-tsconfig.json
+tsconfig*.json
 .gitignore
 package-lock.json
 **/*.map
 **/*.ts
 !out/**/*.js
+# The compiled tests are kept out by not building them at all — see
+# tsconfig.build.json. A pattern here would not work: vsce applies negations
+# like the `!` above last, which would re-include them.

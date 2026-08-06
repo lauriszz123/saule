@@ -37,7 +37,19 @@
         "saule.server.path": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to the `saule-lsp` executable. When empty, the extension searches the workspace's `target/release` and `target/debug` folders, then falls back to `saule-lsp` on your `PATH`.",
+          "markdownDescription": "Absolute path to the `saule-lsp` executable. When empty, the extension honours the `SAULE_LSP_PATH` environment variable, then `#saule.toolchainDir#`, then walks up from each workspace folder looking for `target/release` and `target/debug`, and finally falls back to `saule-lsp` on your `PATH`.",
+          "scope": "machine-overridable"
+        },
+        "saule.cli.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `saule` executable used by the **Saule: Run File** and **Saule: Run Project** commands. Resolved the same way as `#saule.server.path#`, honouring the `SAULE_PATH` environment variable.",
+          "scope": "machine-overridable"
+        },
+        "saule.toolchainDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Directory containing the Saule toolchain binaries (`saule`, `saule-lsp`). Used when no explicit path is set for a binary.",
           "scope": "machine-overridable"
         },
         "saule.server.extraArgs": {
@@ -64,13 +76,47 @@
         "command": "saule.showServerOutput",
         "title": "Show Language Server Output",
         "category": "Saule"
+      },
+      {
+        "command": "saule.runFile",
+        "title": "Run File",
+        "category": "Saule"
+      },
+      {
+        "command": "saule.runProject",
+        "title": "Run Project",
+        "category": "Saule"
       }
-    ]
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "saule.runFile",
+          "when": "editorLangId == saule"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "saule.runFile",
+          "when": "editorLangId == saule",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "configurationDefaults": {
+      "[saule]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.formatOnType": true
+      }
+    }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run clean && tsc -p ./tsconfig.build.json",
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "tsc -p ./ && node --test out/*.test.js"
   },
   "dependencies": {
     "vscode-languageclient": "^10.0.0"

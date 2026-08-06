@@ -4,7 +4,7 @@
 use crate::refs::Symbol;
 use crate::refs::util::{
     LocalBind, field_owner, inferred_type_of, locate_word_in, member_name_span, method_owner,
-    strip_nullable,
+    static_method_owner, strip_nullable,
 };
 use saule_ast::{CallArg, Expr, LambdaBody, MatchBody, Pattern, Spanned, TableEntry, Type};
 use saule_semantic::super_init_target;
@@ -32,6 +32,25 @@ impl<'a> CollectCx<'a> {
                     if name == t && self.lookup_local(name).is_none() =>
                 {
                     self.push(e.span.clone(), false);
+                }
+                // Bare reference to an enclosing class's static method —
+                // mirrors what the cursor resolver records for `help()`
+                // written inside the class that declares it.
+                Symbol::Method {
+                    class: tc,
+                    name: tn,
+                } => {
+                    if name == tn
+                        && self.lookup_local(name).is_none()
+                        && self
+                            .enclosing_class
+                            .as_deref()
+                            .and_then(|c| static_method_owner(c, name))
+                            .as_deref()
+                            == Some(tc.as_str())
+                    {
+                        self.push(e.span.clone(), false);
+                    }
                 }
                 _ => {}
             },
