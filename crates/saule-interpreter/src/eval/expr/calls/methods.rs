@@ -24,7 +24,9 @@ pub(crate) fn call_instance_method_multi(
     }
     scope.borrow_mut().define(self_key(), receiver);
     bind_params(&scope, user_params(f), f.user_param_keys(), args, &span)?;
-    run_function_body_multi(f, &scope, span)
+    let result = run_function_body_multi(f, &scope, span);
+    Environment::release(scope);
+    result
 }
 
 /// Invoke a static method with `self` bound to the class itself.
@@ -51,7 +53,9 @@ pub(crate) fn call_static_method_multi(
         .borrow_mut()
         .define(self_key(), Value::Class(class.clone()));
     bind_params(&scope, user_params(f), f.user_param_keys(), args, &span)?;
-    run_function_body_multi(f, &scope, span)
+    let result = run_function_body_multi(f, &scope, span);
+    Environment::release(scope);
+    result
 }
 
 /// Make the class's static fields and methods directly visible inside a
@@ -81,7 +85,7 @@ pub(crate) fn call_static_method_public(
 pub(crate) fn dispatch_member_call(
     receiver: &Value,
     name: &str,
-    args: Vec<EvaluatedArg>,
+    args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
     Ok(first_or_nil(dispatch_member_call_multi(
@@ -92,20 +96,20 @@ pub(crate) fn dispatch_member_call(
 pub(crate) fn dispatch_member_call_multi(
     receiver: &Value,
     name: &str,
-    args: Vec<EvaluatedArg>,
+    args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Vec<Value>, RuntimeError> {
     match receiver {
         Value::Instance(inst) => {
             let class = inst.borrow().class.clone();
             if let Some(m) = class.lookup_method(name) {
-                return call_instance_method_multi(&m, receiver.clone(), &args, span);
+                return call_instance_method_multi(&m, receiver.clone(), args, span);
             }
             if let Some(m) = class.lookup_static_method(name) {
-                return call_static_method_multi(&m, &class, &args, span);
+                return call_static_method_multi(&m, &class, args, span);
             }
             if let Some(v) = inst.borrow().fields.get(name).cloned() {
-                return call_value_multi(v, &args, span);
+                return call_value_multi(v, args, span);
             }
             Err(RuntimeError::TypeError {
                 message: format!(
@@ -117,10 +121,10 @@ pub(crate) fn dispatch_member_call_multi(
         }
         Value::Class(class) => {
             if let Some(m) = class.lookup_static_method(name) {
-                return call_static_method_multi(&m, class, &args, span);
+                return call_static_method_multi(&m, class, args, span);
             }
             if let Some(v) = class.lookup_static_field(name) {
-                return call_value_multi(v, &args, span);
+                return call_value_multi(v, args, span);
             }
             Err(RuntimeError::TypeError {
                 message: format!(
@@ -133,8 +137,8 @@ pub(crate) fn dispatch_member_call_multi(
         Value::EnumVariant(_variant) => {
             let v = read_member(receiver, name, span.clone())?;
             match v {
-                Value::Function(m) => call_instance_method_multi(&m, receiver.clone(), &args, span),
-                _ => call_value_multi(v, &args, span),
+                Value::Function(m) => call_instance_method_multi(&m, receiver.clone(), args, span),
+                _ => call_value_multi(v, args, span),
             }
         }
         Value::File(handle) => {
@@ -142,7 +146,7 @@ pub(crate) fn dispatch_member_call_multi(
             for a in args {
                 match a {
                     EvaluatedArg::Positional(v) | EvaluatedArg::TrailingBlock(v) => {
-                        positional.push(v)
+                        positional.push(v.clone())
                     }
                     EvaluatedArg::Named { .. } => {
                         return Err(RuntimeError::TypeError {
@@ -159,7 +163,7 @@ pub(crate) fn dispatch_member_call_multi(
         }
         _ => {
             let v = read_member(receiver, name, span.clone())?;
-            call_value_multi(v, &args, span)
+            call_value_multi(v, args, span)
         }
     }
 }
@@ -220,7 +224,9 @@ pub(crate) fn super_call(
         &vs,
         &span,
     )?;
-    run_function_body(&ctor, &scope, span).map(|_| Value::Nil)
+    let result = run_function_body(&ctor, &scope, span).map(|_| Value::Nil);
+    Environment::release(scope);
+    result
 }
 
 pub(crate) fn eval_super_args(
@@ -256,5 +262,7 @@ pub(crate) fn invoke_method_multi(
     args: Vec<EvaluatedArg>,
     span: std::ops::Range<usize>,
 ) -> Result<Vec<Value>, RuntimeError> {
-    dispatch_member_call_multi(receiver, name, args, span)
+    let out = dispatch_member_call_multi(receiver, name, &args, span);
+    crate::recycle::give_args(args);
+    out
 }

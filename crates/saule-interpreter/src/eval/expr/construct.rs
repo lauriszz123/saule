@@ -86,7 +86,9 @@ pub(crate) fn construct(
             args,
             &span,
         )?;
-        run_function_body(&ctor, &scope, span)?;
+        let result = run_function_body(&ctor, &scope, span);
+        Environment::release(scope);
+        result?;
     }
 
     Ok(Value::Instance(inst))

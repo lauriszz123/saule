@@ -33,6 +33,19 @@ pub struct Environment {
     loader: Option<Rc<RefCell<ModuleLoader>>>,
 }
 
+/// How many spent scopes to keep alive for reuse.
+///
+/// Scopes are handed back as the evaluator unwinds, so the pool only ever
+/// needs to cover the deepest point of a call chain plus a little slack; a
+/// bound keeps a program that briefly nests deeply from holding onto the
+/// memory for the rest of the run.
+const POOL_CAPACITY: usize = 128;
+
+thread_local! {
+    static POOL: RefCell<Vec<Rc<RefCell<Environment>>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
 impl Environment {
     /// Empty global scope.
     pub fn new() -> Rc<RefCell<Self>> {
@@ -40,7 +53,15 @@ impl Environment {
     }
 
     /// Child scope of `parent`.
+    ///
+    /// Takes a scope from the recycle pool when one is free, so the common
+    /// case costs a pointer pop rather than an `Rc` allocation plus the
+    /// bucket array `vars` grows on its first insert. See [`release`].
     pub fn with_parent(parent: Rc<RefCell<Self>>) -> Rc<RefCell<Self>> {
+        if let Some(env) = POOL.with(|p| p.borrow_mut().pop()) {
+            env.borrow_mut().parent = Some(parent);
+            return env;
+        }
         Rc::new(RefCell::new(Self {
             parent: Some(parent),
             vars: HashMap::default(),
@@ -48,6 +69,63 @@ impl Environment {
             module_dir: None,
             loader: None,
         }))
+    }
+
+    /// Offer a finished scope back to the recycle pool.
+    ///
+    /// A scope is reusable only when nothing else can still observe it —
+    /// `strong_count == 1` means no closure captured it and no child scope
+    /// outlived it, so its identity is dead and the next
+    /// [`with_parent`](Self::with_parent) may hand the same allocation out
+    /// again. Anything captured is simply dropped as before, which is what
+    /// keeps per-call and per-iteration capture semantics intact.
+    ///
+    /// The bindings are cleared but `vars`'s capacity is kept — that
+    /// retained bucket array is most of the point, since a scope holding a
+    /// handful of parameters otherwise pays a fresh table allocation on
+    /// every single call.
+    pub fn release(scope: Rc<RefCell<Self>>) {
+        if Rc::strong_count(&scope) != 1 {
+            return;
+        }
+        {
+            let mut b = scope.borrow_mut();
+            b.vars.clear();
+            b.statics_owner = None;
+            b.module_dir = None;
+            b.loader = None;
+            // Dropped last, and outside the pool's borrow: releasing the
+            // parent link can cascade into dropping a whole closure chain.
+            b.parent = None;
+        }
+        POOL.with(|p| {
+            let mut pool = p.borrow_mut();
+            if pool.len() < POOL_CAPACITY {
+                pool.push(scope);
+            }
+        });
+    }
+
+    /// Hand back a loop body's scope for the next iteration.
+    ///
+    /// A loop body gets a scope of its own per iteration so a closure built in
+    /// one pass keeps the values that pass saw. Almost no body builds a
+    /// closure, and for those the scope is dead the moment the iteration ends
+    /// — building a fresh one every time round was the single largest cost in
+    /// a tight loop.
+    ///
+    /// This is [`release`](Self::release) plus [`with_parent`](Self::with_parent)
+    /// collapsed into one step: when the scope is uncaptured its parent link
+    /// is already the right one, so clearing the bindings is the whole job and
+    /// the pool need not be touched at all. When something *did* capture it,
+    /// it is left alone and a new scope starts the next iteration, which is
+    /// what keeps per-iteration capture semantics intact.
+    pub fn recycle(scope: Rc<RefCell<Self>>, parent: &Rc<RefCell<Self>>) -> Rc<RefCell<Self>> {
+        if Rc::strong_count(&scope) == 1 {
+            scope.borrow_mut().vars.clear();
+            return scope;
+        }
+        Self::with_parent(parent.clone())
     }
 
     /// Global scope pre-populated with the standard built-ins.

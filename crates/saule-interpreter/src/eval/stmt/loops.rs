@@ -70,14 +70,15 @@ fn run_numeric_loop_int(
     // that never changes.
     let key: Rc<str> = Rc::from(var);
     let mut i = from;
+    let mut scope = Environment::with_parent(parent.clone());
     while (step > 0 && i <= to) || (step < 0 && i >= to) {
-        let scope = Environment::with_parent(parent.clone());
         scope.borrow_mut().define(Rc::clone(&key), Value::Int(i));
         match exec_block(body, &scope)? {
             Flow::Normal(_) | Flow::Continue => {}
             Flow::Break => return Ok(Flow::nil()),
             ret @ Flow::Return(_) => return Ok(ret),
         }
+        scope = Environment::recycle(scope, parent);
         // Detect overflow so a too-large step doesn't loop forever.
         let (next, overflow) = i.overflowing_add(step);
         if overflow {
@@ -99,14 +100,15 @@ fn run_numeric_loop_float(
     // Interned once — see `run_numeric_loop_int`.
     let key: Rc<str> = Rc::from(var);
     let mut i = from;
+    let mut scope = Environment::with_parent(parent.clone());
     while (step > 0.0 && i <= to) || (step < 0.0 && i >= to) {
-        let scope = Environment::with_parent(parent.clone());
         scope.borrow_mut().define(Rc::clone(&key), Value::Float(i));
         match exec_block(body, &scope)? {
             Flow::Normal(_) | Flow::Continue => {}
             Flow::Break => return Ok(Flow::nil()),
             ret @ Flow::Return(_) => return Ok(ret),
         }
+        scope = Environment::recycle(scope, parent);
         i += step;
     }
     Ok(Flow::nil())
@@ -144,8 +146,10 @@ pub(super) fn exec_for_in(
                 (array, map_entries)
             };
 
-            let run_iter = |key: Value, value: Value| -> Result<Flow, RuntimeError> {
-                let scope = Environment::with_parent(env.clone());
+            let run_iter = |scope: &Rc<RefCell<Environment>>,
+                            key: Value,
+                            value: Value|
+             -> Result<Flow, RuntimeError> {
                 match keys.as_slice() {
                     [name] => {
                         scope.borrow_mut().define(Rc::clone(name), value);
@@ -164,22 +168,25 @@ pub(super) fn exec_for_in(
                         });
                     }
                 }
-                exec_block(body, &scope)
+                exec_block(body, scope)
             };
 
+            let mut scope = Environment::with_parent(env.clone());
             for (i, value) in array.into_iter().enumerate() {
-                match run_iter(Value::Int((i + 1) as i64), value)? {
+                match run_iter(&scope, Value::Int((i + 1) as i64), value)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::nil()),
                     ret @ Flow::Return(_) => return Ok(ret),
                 }
+                scope = Environment::recycle(scope, env);
             }
             for (k, v) in map_entries {
-                match run_iter(k.to_value(), v)? {
+                match run_iter(&scope, k.to_value(), v)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::nil()),
                     ret @ Flow::Return(_) => return Ok(ret),
                 }
+                scope = Environment::recycle(scope, env);
             }
             Ok(Flow::nil())
         }
@@ -229,12 +236,12 @@ pub(super) fn exec_for_in(
             // the first returned value is `nil` (Lua's nil-terminator). Each
             // step's returns are bound positionally across the loop variables
             // (extras → nil, surplus values dropped).
+            let mut scope = Environment::with_parent(env.clone());
             loop {
                 let values = expr::call_value_multi(driver.clone(), &[], span.clone())?;
                 if values.first().is_none_or(|v| matches!(v, Value::Nil)) {
                     break;
                 }
-                let scope = Environment::with_parent(env.clone());
                 {
                     let mut scope_mut = scope.borrow_mut();
                     for (i, name) in keys.iter().enumerate() {
@@ -247,6 +254,7 @@ pub(super) fn exec_for_in(
                     Flow::Break => return Ok(Flow::nil()),
                     ret @ Flow::Return(_) => return Ok(ret),
                 }
+                scope = Environment::recycle(scope, env);
             }
             Ok(Flow::nil())
         }

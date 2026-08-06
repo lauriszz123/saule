@@ -126,7 +126,9 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 }
                 let receiver = eval(obj, env)?;
                 let vs = calls::eval_call_args_pub(args, env)?;
-                return calls::dispatch_member_call(&receiver, name, vs, span);
+                let out = calls::dispatch_member_call(&receiver, name, &vs, span);
+                crate::recycle::give_args(vs);
+                return out;
             }
 
             // `obj?.method(args)` — short-circuit the *entire* call when the
@@ -142,12 +144,16 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                     return Ok(Value::Nil);
                 }
                 let vs = calls::eval_call_args_pub(args, env)?;
-                return calls::dispatch_member_call(&receiver, name, vs, span);
+                let out = calls::dispatch_member_call(&receiver, name, &vs, span);
+                crate::recycle::give_args(vs);
+                return out;
             }
 
             let cv = eval(callee, env)?;
             let vs = calls::eval_call_args_pub(args, env)?;
-            calls::call_value_pub(cv, &vs, span)
+            let out = calls::call_value_pub(cv, &vs, span);
+            crate::recycle::give_args(vs);
+            out
         }
 
         Expr::Member { obj, name } => {
@@ -261,8 +267,19 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
     }
 }
 
-fn first_or_nil(values: Vec<Value>) -> Value {
-    values.into_iter().next().unwrap_or(Value::Nil)
+/// Narrow a call's multi-value result down to the single value an expression
+/// context wants, and hand the carrier back to the free list.
+///
+/// This is where the overwhelming majority of result vectors die, which makes
+/// it the natural place to recycle them — see [`crate::recycle`].
+fn first_or_nil(mut values: Vec<Value>) -> Value {
+    let first = if values.is_empty() {
+        Value::Nil
+    } else {
+        values.swap_remove(0)
+    };
+    crate::recycle::give_values(values);
+    first
 }
 
 fn is_nullable_type(ty: &Type) -> bool {

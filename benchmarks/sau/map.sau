@@ -1,0 +1,14 @@
+class Main
+	static fn main()
+		local n: integer = 300000
+		local m: table<string, integer> = {}
+		for i: integer = 1, n do
+			m["key" .. i] = i
+		end
+		local s: integer = 0
+		for i: integer = 1, n do
+			s = s + (m["key" .. i] ?? 0)
+		end
+		println(s)
+	end
+end

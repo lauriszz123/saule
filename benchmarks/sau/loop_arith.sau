@@ -1,0 +1,10 @@
+class Main
+	static fn main()
+		local n: integer = 5000000
+		local s: integer = 0
+		for i: integer = 1, n do
+			s = s + i * 2 - 1
+		end
+		println(s)
+	end
+end

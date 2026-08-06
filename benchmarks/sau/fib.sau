@@ -1,0 +1,10 @@
+class Main
+	static fn fib(n: integer) -> integer
+		if n < 2 then return n end
+		return Main.fib(n - 1) + Main.fib(n - 2)
+	end
+
+	static fn main()
+		println(Main.fib(28))
+	end
+end

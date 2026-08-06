@@ -119,7 +119,9 @@ fn exec_scoped_block(
         return exec_block(stmts, parent);
     }
     let scope = Environment::with_parent(parent.clone());
-    exec_block(stmts, &scope)
+    let flow = exec_block(stmts, &scope);
+    Environment::release(scope);
+    flow
 }
 
 /// Execute a single statement.
@@ -198,12 +200,27 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
         }
 
         Stmt::While { cond, body } => {
+            // One scope for the whole loop rather than one per iteration: a
+            // body that binds nothing needs none at all, and one that does
+            // gets the same scope handed back each time round unless a
+            // closure captured it. See `Environment::recycle`.
+            let mut scope = block_binds_names(body).then(|| Environment::with_parent(env.clone()));
             while expr::eval(cond, env)?.is_truthy() {
-                match exec_scoped_block(body, env)? {
+                let flow = match &scope {
+                    Some(s) => exec_block(body, s)?,
+                    None => exec_block(body, env)?,
+                };
+                if let Some(spent) = scope.take() {
+                    scope = Some(Environment::recycle(spent, env));
+                }
+                match flow {
                     Flow::Normal(_) | Flow::Continue => continue,
                     Flow::Break => break,
                     ret @ Flow::Return(_) => return Ok(ret),
                 }
+            }
+            if let Some(spent) = scope {
+                Environment::release(spent);
             }
             Ok(Flow::nil())
         }
@@ -211,8 +228,8 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
         Stmt::Repeat { body, cond } => {
             // Lua semantics: the `until` condition sees locals declared in
             // the body, so condition and body must share the same scope.
+            let mut scope = Environment::with_parent(env.clone());
             loop {
-                let scope = Environment::with_parent(env.clone());
                 match exec_block(body, &scope)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => break,
@@ -221,7 +238,9 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
                 if expr::eval(cond, &scope)?.is_truthy() {
                     break;
                 }
+                scope = Environment::recycle(scope, env);
             }
+            Environment::release(scope);
             Ok(Flow::nil())
         }
 
@@ -238,7 +257,7 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
 
         Stmt::Return(exprs) => {
             let values = if exprs.is_empty() {
-                vec![Value::Nil]
+                crate::recycle::values_of(Value::Nil)
             } else {
                 eval_expr_list(exprs, env)?
             };
@@ -271,10 +290,15 @@ fn eval_expr_list(
     exprs: &[Spanned<Expr>],
     env: &Rc<RefCell<Environment>>,
 ) -> Result<Vec<Value>, RuntimeError> {
-    let mut out = Vec::new();
+    let mut out = crate::recycle::take_values();
     for (i, expr_node) in exprs.iter().enumerate() {
         if i + 1 == exprs.len() {
-            out.extend(expr::eval_values(expr_node, env)?);
+            // `append` rather than `extend` so the carrier the call returned
+            // can go back to the free list instead of being dropped — see
+            // [`crate::recycle`]. `return f(x)` takes this path.
+            let mut tail = expr::eval_values(expr_node, env)?;
+            out.append(&mut tail);
+            crate::recycle::give_values(tail);
         } else {
             out.push(expr::eval(expr_node, env)?);
         }

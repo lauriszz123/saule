@@ -1,0 +1,11 @@
+class Main
+	static fn main()
+		local n: integer = 200000
+		local total: integer = 0
+		for i: integer = 1, n do
+			local s: string = "item-" .. i .. "-tail"
+			total = total + String.len(s)
+		end
+		println(total)
+	end
+end

@@ -16,3 +16,13 @@ version = "26.0.0"
 edition = "2024"
 description = "Saule — a statically typed, class-oriented scripting language."
 license = "MIT"
+
+# The interpreter is a tree walker: `eval` calls `exec` calls `eval`, across
+# half a dozen modules and two crates. Cargo's default release profile splits
+# the work into 16 codegen units and skips cross-crate LTO, which is exactly
+# the shape that stops those calls from inlining into each other. Turning both
+# knobs measured 3-6% off every program in `benchmarks/` — small, but paid for
+# once in build time rather than on every run.
+[profile.release]
+lto = "fat"
+codegen-units = 1
