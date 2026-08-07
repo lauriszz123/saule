@@ -132,7 +132,7 @@ impl Resolver {
     pub(crate) fn check_arg_ordering(&mut self, args: &[CallArg]) {
         // A trailing block (`f(spacing: 10) do … end`) is positional but is
         // written after the parentheses, so it is exempt from the ordering
-        // rule. It binds to the first unclaimed parameter — see
+        // rule. It binds to the callback parameter — see
         // `saule_ast::resolve_arg_slots`.
         let last = args.len().saturating_sub(1);
         let mut seen_named = false;

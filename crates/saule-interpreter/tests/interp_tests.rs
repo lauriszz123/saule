@@ -1762,6 +1762,65 @@ end
 }
 
 #[test]
+fn trailing_block_skips_a_non_callback_parameter_that_follows_the_callback() {
+    // `enabled` is the last parameter but cannot hold a block; the callback
+    // is `onSelected`. Binding by position alone put the function in
+    // `enabled` and left `onSelected` at its default, so the block never ran
+    // and the widget silently did nothing.
+    let src = r#"
+fn menuItem(label: string = "", onSelected: fn() -> nil = () => nil, enabled: boolean = true) -> string
+    onSelected()
+    return label .. ":" .. tostring(enabled)
+end
+
+menuItem("Open")
+do
+    print("chosen")
+end
+"#;
+    match eval(src).unwrap() {
+        Value::Str(s) => assert_eq!(&*s, "Open:true"),
+        v => panic!("expected string, got {v:?}"),
+    }
+}
+
+#[test]
+fn trailing_block_takes_the_callback_slot_after_a_named_argument() {
+    let src = r#"
+fn menuItem(label: string = "", onSelected: fn() -> nil = () => nil, enabled: boolean = true) -> boolean
+    onSelected()
+    return enabled
+end
+
+menuItem(label: "Open")
+do
+    print("chosen")
+end
+"#;
+    assert_eq!(eval(src).unwrap(), Value::Bool(true));
+}
+
+#[test]
+fn trailing_block_falls_through_when_the_callback_slot_is_taken() {
+    // The positional `() => nil` already owns `onSelected`, so the block has
+    // nowhere sensible to go: it lands on the last parameter, and a `boolean`
+    // slot handed a function is a mismatch the checker reports rather than
+    // one the callback rule quietly absorbs.
+    let src = r#"
+fn menuItem(label: string = "", onSelected: fn() -> nil = () => nil, enabled: boolean = true) -> boolean
+    onSelected()
+    return enabled
+end
+
+menuItem("Open", () => nil)
+do
+    print("chosen")
+end
+"#;
+    assert!(eval(src).is_err());
+}
+
+#[test]
 fn trailing_block_duplicating_a_named_last_parameter_is_an_error() {
     let src = r#"
 fn view(spacing: integer, body: fn() -> nil) -> nil

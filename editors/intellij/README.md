@@ -17,6 +17,7 @@ Ultimate-only native LSP API.
 | Colouring, brace matching, commenting, colour-settings page | Native IntelliJ lexer (`com.saule.lang.lexer.SauleLexer`) |
 | Indentation while typing (Enter, `Adjust Indent`, auto-dedent of `end`) | `com.saule.lang.format.SauleIndentModel` |
 | Diagnostics, hover, navigation, symbols, inlay hints, signature help, formatting | `saule-lsp` binary, connected via LSP4IJ |
+| Reformat on save (on by default) | `com.saule.lang.format.SauleFormatOnSave` |
 | New Project / New Module scaffolding | `SauleModuleType` + `SauleModuleBuilder` (writes `saule.config`, `src/main.sau`, …) |
 | Running scripts & projects | `SauleRunConfigurationType` + producer → `saule run` |
 
@@ -66,6 +67,21 @@ but *Use tab character* (with *Smart tabs*, *Tab size*, *Indent* and
   reads the same options off the file and sends them as the `insertSpaces` /
   `tabSize` of the `textDocument/formatting` request, and `saule-lsp` feeds
   them straight into `FmtOptions`.
+
+* **Save.** Every `.sau` file is reformatted as it is written — Ctrl+S, *Save
+  All*, IdeaVim's `:w`, or the autosave that fires when the IDE loses focus.
+  This is on by default; the checkbox lives in **Settings ▸ Tools ▸ Actions on
+  Save** ("Reformat Saule files") and is mirrored on the Saule settings page.
+
+  It is a Saule action rather than the platform's own *Reformat code* on save,
+  because that one can't work here: it starts LSP4IJ's **asynchronous** format
+  and the file is written before the server's edits come back — the file looks
+  unformatted, and the buffer quietly goes modified again a moment later.
+  `SauleFormatOnSave` sets the platform's `FORMAT_DOCUMENT_SYNCHRONOUSLY` flag
+  and formats from inside a write action, so the edits are applied inline and
+  the bytes that reach disk are the formatted ones. Leaving the platform's
+  *Reformat code* box ticked as well is harmless — it just reformats
+  already-formatted text.
 
 Note that LSP has a single `tabSize` where the page has both **Indent** and
 **Tab size**. The request carries whichever of the two decides the width of one
@@ -176,7 +192,7 @@ editors/intellij/
 │  │  ├─ SauleCommenter / SauleBraceMatcher
 │  │  ├─ SauleCodeStyleSettingsProvider   Code Style ▸ Saule page
 │  │  ├─ editor/        Enter + typed-char indent handlers
-│  │  ├─ format/        SauleIndentModel + LineIndentProvider
+│  │  ├─ format/        SauleIndentModel + LineIndentProvider + FormatOnSave
 │  │  ├─ lexer/         SauleLexer + SauleTokenTypes
 │  │  ├─ highlight/     SyntaxHighlighter (+factory) + ColorSettingsPage
 │  │  └─ lsp/           SauleLanguageServerFactory + SauleLspLocator

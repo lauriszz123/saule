@@ -630,3 +630,43 @@ fn compound_assignment_formatting_is_idempotent() {
         assert_eq!(once, twice, "source: {src}");
     }
 }
+
+// ── Trailing blocks ─────────────────────────────────────────────────────────
+//
+// `f(a, fn() … end)` and `f(a) do … end` parse to the same tree, so the
+// printer cannot tell them apart from the AST alone — it reads the lambda's
+// span back out of the source, the same trick it uses for quotes and floats.
+// Moving a lambda out of the parentheses is a rewrite, not a reformat: the
+// trailing form binds to the callee's last free function-typed parameter,
+// which the formatter has no signatures to reason about.
+
+#[test]
+fn a_lambda_written_inside_the_parentheses_stays_there() {
+    let src = "MenuItem(\"Open\", fn()\n  showToast(\"Open\")\nend)";
+    assert_eq!(format_with_source(src).trim(), src);
+}
+
+#[test]
+fn a_lambda_written_as_a_trailing_block_stays_one() {
+    let src = "MenuItem(\"Open\") do\n  showToast(\"Open\")\nend";
+    assert_eq!(format_with_source(src).trim(), src);
+}
+
+#[test]
+fn a_trailing_block_keeps_its_parameters_and_return_type() {
+    let src = "apply() do (n: integer) -> integer\n  return n * 2\nend";
+    assert_eq!(format_with_source(src).trim(), src);
+}
+
+#[test]
+fn both_trailing_block_spellings_are_idempotent() {
+    for src in [
+        "MenuItem(\"Open\", fn()\n  showToast(\"Open\")\nend)",
+        "MenuItem(\"Open\") do\n  showToast(\"Open\")\nend",
+        "View(spacing: 10) do\n  print(1)\nend",
+    ] {
+        let once = format_with_source(src);
+        let twice = format_with_source(&once);
+        assert_eq!(once, twice, "not idempotent: {src}");
+    }
+}
