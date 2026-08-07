@@ -1,0 +1,467 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from ThemeData
+import * from Theme
+import * from Icon
+
+-- ============================================================================
+-- Grids and tables
+-- ============================================================================
+--
+-- Both are composed out of `Row`, `Column`, `SizedBox` and `Expanded` rather
+-- than written as render widgets. That is not laziness: columns line up across
+-- rows *because* every row is built from the same width rules, so alignment is
+-- structural rather than something the layout has to keep in sync.
+
+-- A fixed-column grid.
+--
+--     GridView(columns: 3, spacing: 8.0, runSpacing: 8.0, children: cards)
+--
+-- Every cell gets an equal share of the width. `aspectRatio` fixes the cell
+-- height as a multiple of that width; leave it out and each row is as tall as
+-- its tallest child.
+--
+-- Every child is built up front — for a long grid, put it in a scroll view and
+-- keep the count in the hundreds.
+export class GridView extends StatelessWidget
+	children: table<Widget>
+	columns: integer
+	spacing: float
+	runSpacing: float
+	aspectRatio: float?
+
+	fn init(
+		children: table<Widget> = {},
+		columns: integer = 2,
+		spacing: float = 8.0,
+		runSpacing: float = 8.0,
+		aspectRatio: float? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.children = children
+		self.columns = columns
+		self.spacing = spacing
+		self.runSpacing = runSpacing
+		self.aspectRatio = aspectRatio
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local perRow: integer = self.columns
+
+		if perRow < 1 then
+			perRow = 1
+		end
+
+		local rows: table<Widget> = {}
+		local index: integer = 1
+
+		while index <= #self.children do
+			local cells: table<Widget> = {}
+			local column: integer = 1
+
+			while column <= perRow do
+				local cell: Widget = SizedBox()
+
+				if index <= #self.children then
+					cell = self.children[index]
+				end
+
+				local sized: Widget = cell
+				local ratio: float? = self.aspectRatio
+
+				if ratio != nil then
+					sized = AspectRatio(ratio!, cell)
+				end
+
+				-- The trailing cells of a short last row are empty `Expanded`s,
+				-- so the real ones keep their column width instead of stretching
+				-- to fill the gap.
+				cells[#cells + 1] = Expanded(child: sized)
+
+				index = index + 1
+				column = column + 1
+			end
+
+			rows[#rows + 1] = Row(
+				crossAxisAlignment: CrossAxisAlignment.Stretch,
+				spacing: self.spacing,
+				children: cells
+			)
+		end
+
+		return Column(
+			crossAxisAlignment: CrossAxisAlignment.Stretch,
+			mainAxisSize: MainAxisSize.Min,
+			spacing: self.runSpacing,
+			children: rows
+		)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Table
+-- ----------------------------------------------------------------------------
+
+export enum SortOrder
+	None,
+	Ascending,
+	Descending
+end
+
+-- One column: a heading, a width rule, and whether it can be sorted.
+--
+-- A `width` pins the column; leaving it out shares the remaining space by
+-- `flex`, so a table of "id, name, date" can pin the narrow ones and let the
+-- name take what is left.
+export class TableColumn
+	title: string
+	width: float?
+	flex: integer
+	align: Alignment
+	sortable: boolean
+
+	fn init(
+		title: string = "",
+		width: float? = nil,
+		flex: integer = 1,
+		align: Alignment? = nil,
+		sortable: boolean = false
+	)
+		self.title = title
+		self.width = width
+		self.flex = flex
+		self.align = align ?? Alignment.centerLeft()
+		self.sortable = sortable
+	end
+end
+
+-- One row of cells. `key` is worth setting on anything sortable or filterable:
+-- it is what carries a row's element — and any state inside it — when the order
+-- changes.
+export class TableRow
+	cells: table<Widget>
+	key: string?
+	onTap: function?
+
+	fn init(cells: table<Widget> = {}, key: string? = nil, onTap: function? = nil)
+		self.cells = cells
+		self.key = key
+		self.onTap = onTap
+	end
+end
+
+-- A table with aligned columns, a sortable header and striped rows.
+--
+--     DataTable(
+--         columns: {
+--             TableColumn("Name", sortable: true),
+--             TableColumn("Size", width: 90.0, align: Alignment.centerRight())
+--         },
+--         rows: rows,
+--         sortColumn: 1,
+--         sortOrder: SortOrder.Ascending,
+--         onSort: fn(column: integer, order: SortOrder) ... end
+--     )
+--
+-- Sorting is *reported*, not performed: the table draws the order you give it
+-- and tells you which header was clicked, so the data stays yours.
+export class DataTable extends StatelessWidget
+	columns: table<TableColumn>
+	rows: table<TableRow>
+
+	sortColumn: integer
+	sortOrder: SortOrder
+	onSort: function?
+
+	striped: boolean
+	rowPadding: EdgeInsets?
+
+	fn init(
+		columns: table<TableColumn> = {},
+		rows: table<TableRow> = {},
+		sortColumn: integer = 0,
+		sortOrder: SortOrder = SortOrder.None,
+		onSort: function? = nil,
+		striped: boolean = true,
+		rowPadding: EdgeInsets? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.columns = columns
+		self.rows = rows
+		self.sortColumn = sortColumn
+		self.sortOrder = sortOrder
+		self.onSort = onSort
+		self.striped = striped
+		self.rowPadding = rowPadding
+	end
+
+	-- Wrap one cell in the width rule its column declares. Both branches produce
+	-- a widget the flex layout sizes, which is what keeps the columns aligned.
+	local fn sized(column: TableColumn, child: Widget) -> Widget
+		local width: float? = column.width
+
+		if width != nil then
+			return SizedBox(width: width!, child: child)
+		end
+
+		return Expanded(flex: column.flex, child: child)
+	end
+
+	local fn padding() -> EdgeInsets
+		return self.rowPadding ?? EdgeInsets.symmetric(horizontal: 10.0, vertical: 7.0)
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local out: table<Widget> = {self.header(context, theme)}
+		local i: integer = 1
+
+		while i <= #self.rows do
+			out[#out + 1] = TableRowView(
+				row: self.rows[i],
+				columns: self.columns,
+				padding: self.padding(),
+				striped: self.striped and i % 2 == 0,
+				key: self.rows[i].key
+			)
+
+			i = i + 1
+		end
+
+		return Column(
+			crossAxisAlignment: CrossAxisAlignment.Stretch,
+			mainAxisSize: MainAxisSize.Min,
+			children: out
+		)
+	end
+
+	local fn header(context: BuildContext, theme: ThemeData) -> Widget
+		local cells: table<Widget> = {}
+		local i: integer = 1
+
+		while i <= #self.columns do
+			local column: TableColumn = self.columns[i]
+			local at: integer = i
+
+			cells[#cells + 1] = self.sized(
+				column,
+				TableHeaderCell(
+					column: column,
+					order: self.orderFor(i),
+					theme: theme,
+					onTap: fn()
+						self.sortBy(at)
+					end
+				)
+			)
+
+			i = i + 1
+		end
+
+		return Column(
+			crossAxisAlignment: CrossAxisAlignment.Stretch,
+			mainAxisSize: MainAxisSize.Min,
+			children: {
+				Container(
+					color: theme.surfaceLight,
+					padding: self.padding(),
+					child: Row(crossAxisAlignment: CrossAxisAlignment.Center, children: cells)
+				),
+				Container(height: 1.0, color: theme.border),
+			}
+		)
+	end
+
+	local fn orderFor(column: integer) -> SortOrder
+		if column != self.sortColumn then
+			return SortOrder.None
+		end
+
+		return self.sortOrder
+	end
+
+	-- Clicking the sorted column flips it; clicking another starts ascending.
+	local fn sortBy(column: integer) -> nil
+		local callback: function? = self.onSort
+
+		if callback == nil or column < 1 or column > #self.columns then
+			return
+		end
+
+		if not self.columns[column].sortable then
+			return
+		end
+
+		local next: SortOrder = SortOrder.Ascending
+
+		if column == self.sortColumn and self.sortOrder == SortOrder.Ascending then
+			next = SortOrder.Descending
+		end
+
+		callback!(column, next)
+	end
+end
+
+-- A header cell: the title, plus an arrow when it is the sorted column.
+export class TableHeaderCell extends StatelessWidget
+	column: TableColumn
+	order: SortOrder
+	theme: ThemeData
+	onTap: function?
+
+	fn init(
+		column: TableColumn,
+		order: SortOrder = SortOrder.None,
+		theme: ThemeData? = nil,
+		onTap: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.column = column
+		self.order = order
+		self.theme = theme ?? ThemeData()
+		self.onTap = onTap
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local scratch: ElementData = context.data()
+		local hovered: boolean = scratch.hovered == true
+
+		local ink: Color = self.theme.textMuted
+
+		if self.order != SortOrder.None or hovered and self.column.sortable then
+			ink = self.theme.text
+		end
+
+		local label: Widget = Text(
+			self.column.title,
+			style: TextStyle(color: ink),
+			softWrap: false,
+			maxLines: 1
+		)
+
+		if self.order != SortOrder.None then
+			local arrow: integer = Icons.arrowUpward
+
+			if self.order == SortOrder.Descending then
+				arrow = Icons.arrowDownward
+			end
+
+			label = Row(
+				mainAxisSize: MainAxisSize.Min,
+				spacing: 4.0,
+				children: {label, Icon(arrow, 14.0, ink)}
+			)
+		end
+
+		local cell: Widget = Align(alignment: self.column.align, child: label)
+
+		if not self.column.sortable then
+			return cell
+		end
+
+		return MouseRegion(
+			cursor: "hand",
+			child: GestureDetector(
+				child: cell,
+				onTap: self.onTap,
+				onHover: fn(inside: boolean)
+					scratch.hovered = inside
+					context.markNeedsBuild()
+				end
+			)
+		)
+	end
+end
+
+-- One data row: striped, hover-highlighted, and tappable when the row says so.
+export class TableRowView extends StatelessWidget
+	row: TableRow
+	columns: table<TableColumn>
+	padding: EdgeInsets
+	striped: boolean
+
+	fn init(
+		row: TableRow,
+		columns: table<TableColumn> = {},
+		padding: EdgeInsets? = nil,
+		striped: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.row = row
+		self.columns = columns
+		self.padding = padding ?? EdgeInsets.symmetric(horizontal: 10.0, vertical: 7.0)
+		self.striped = striped
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local hovered: boolean = scratch.hovered == true
+
+		local fill: Color? = nil
+
+		if self.striped then
+			fill = theme.surfaceLight.withAlpha(0.4)
+		end
+
+		if hovered and self.row.onTap != nil then
+			fill = theme.surfaceLight
+		end
+
+		local cells: table<Widget> = {}
+		local i: integer = 1
+
+		while i <= #self.columns do
+			local column: TableColumn = self.columns[i]
+			local content: Widget = SizedBox()
+
+			if i <= #self.row.cells then
+				content = self.row.cells[i]
+			end
+
+			local aligned: Widget = Align(alignment: column.align, child: content)
+			local width: float? = column.width
+
+			if width != nil then
+				cells[#cells + 1] = SizedBox(width: width!, child: aligned)
+			else
+				cells[#cells + 1] = Expanded(flex: column.flex, child: aligned)
+			end
+
+			i = i + 1
+		end
+
+		local body: Widget = Container(
+			color: fill,
+			padding: self.padding,
+			child: Row(crossAxisAlignment: CrossAxisAlignment.Center, children: cells)
+		)
+
+		if self.row.onTap == nil then
+			return body
+		end
+
+		return GestureDetector(
+			child: body,
+			onTap: self.row.onTap,
+			onHover: fn(inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
+		)
+	end
+end

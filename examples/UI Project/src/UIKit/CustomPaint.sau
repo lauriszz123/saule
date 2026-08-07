@@ -1,0 +1,107 @@
+import * from engine
+import * from Geometry
+import * from Framework
+
+-- ============================================================================
+-- Drawing your own pixels
+-- ============================================================================
+
+-- Hand a widget a box and draw into it yourself.
+--
+--     CustomPaint(
+--         height: 200.0,
+--         painter: fn(x: float, y: float, width: float, height: float)
+--             Colors.primary.apply()
+--             Graphics.circle("fill", x + width / 2.0, y + height / 2.0, 40.0)
+--         end
+--     )
+--
+-- The painter is `fn(x: float, y: float, width: float, height: float)`, called
+-- every frame with this widget's absolute position and size. Draw with the raw
+-- `Graphics` API — this is the escape hatch out of the widget system, for game
+-- worlds, charts, and anything else where a tree of boxes is the wrong shape.
+--
+-- The painter runs inside the widget tree's paint pass, so it inherits the
+-- current clip: content is confined to the surrounding scroll view or
+-- `ClipRect` without any work on your part. Set `clip: true` to also confine it
+-- to this widget's own box.
+--
+-- Sizing works like `SizedBox`: give `width` / `height` to fix an axis, leave
+-- them out to fill whatever the parent allows. A `child` is painted *after* the
+-- painter, so it layers UI on top of your drawing.
+export class CustomPaint extends SingleChildWidget
+	painter: function?
+	width: float?
+	height: float?
+	clip: boolean
+
+	fn init(
+		painter: function? = nil,
+		width: float? = nil,
+		height: float? = nil,
+		child: Widget? = nil,
+		clip: boolean = false,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.painter = painter
+		self.width = width
+		self.height = height
+		self.clip = clip
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local inner: BoxConstraints = constraints
+		local width: float? = self.width
+		local height: float? = self.height
+
+		if width != nil then
+			inner = inner.withTightWidth(width!)
+		end
+
+		if height != nil then
+			inner = inner.withTightHeight(height!)
+		end
+
+		-- Fill the box unless an axis was pinned, so a bare CustomPaint behaves
+		-- like a canvas rather than collapsing to nothing.
+		local size: Size = inner.biggest()
+		local child: Element? = el.childAt(1)
+
+		if child != nil then
+			child!.layout(BoxConstraints.tight(size))
+			child!.offset = Offset.zero()
+		end
+
+		return size
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local painter: function? = self.painter
+
+		if painter == nil then
+			el.paintChildren(x, y)
+
+			return
+		end
+
+		local sx: float, sy: float, sw: float, sh: float = Graphics.getScissor()
+
+		if self.clip then
+			Graphics.intersectScissor(x, y, el.size.width, el.size.height)
+		end
+
+		-- `push`/`pop` keeps a painter that translates or rotates from leaking
+		-- its transform into the rest of the tree.
+		Graphics.push()
+		painter!(x, y, el.size.width, el.size.height)
+		Graphics.pop()
+
+		if self.clip then
+			Graphics.setScissor(sx, sy, sw, sh)
+		end
+
+		el.paintChildren(x, y)
+	end
+end

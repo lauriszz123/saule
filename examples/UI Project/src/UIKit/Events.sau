@@ -1,0 +1,155 @@
+import * from engine
+
+-- ============================================================================
+-- Input events
+-- ============================================================================
+--
+-- `Window.pollEvents()` hands back everything that happened since the last
+-- frame, in order. The engine is a native package and the ABI has no
+-- enum-variant type, so it sends each event as a positional record —
+-- `["keyPressed", key, shift, ctrl, alt]` — and this file rebuilds it into a
+-- real tagged union you can `match` on:
+--
+--     for ev: Event in pollEvents() do
+--         match ev
+--             case Event.KeyPressed(key, _, ctrl, _) when ctrl then shortcut(key)
+--             case Event.TextInput(text) then insert(text)
+--             case Event.MouseMoved(x, y, _, _) then hover(x, y)
+--             case _ then nil
+--         end
+--     end
+--
+-- Events replaced the old per-frame edge queries (`Keyboard.wasPressed` and
+-- friends). Those could not say what order two keys arrived in, and collapsed
+-- two taps of the same key inside one frame into one. What survives of the
+-- polling API is the level state — `Keyboard.isDown`, `Mouse.getPos` — because
+-- "is this held right now" is a question an event stream genuinely cannot
+-- answer without every caller keeping its own set.
+
+export enum Event
+
+	-- A key went down. Repeats arrive as further `KeyPressed` events while the
+	-- key is held, provided `runApp` enabled key repeat.
+	KeyPressed(key: string, shift: boolean, ctrl: boolean, alt: boolean),
+	KeyReleased(key: string, shift: boolean, ctrl: boolean, alt: boolean),
+
+	-- Text typed, already layout- and modifier-aware — shift+a arrives as "A".
+	-- Never assemble text out of `KeyPressed`. A fast run of characters comes
+	-- through as one event, not one per letter.
+	TextInput(text: string),
+
+	-- The pointer moved, in physical window pixels. `dx`/`dy` are the movement
+	-- since the previous position, and are zero on the first sighting.
+	MouseMoved(x: float, y: float, dx: float, dy: float),
+
+	-- Button 1 is left, 2 right, 3 middle.
+	MousePressed(x: float, y: float, button: integer),
+	MouseReleased(x: float, y: float, button: integer),
+
+	-- Wheel movement in notches, positive away from the user.
+	WheelMoved(dx: float, dy: float),
+
+	-- The framebuffer was replaced at this new size, so it is blank and the
+	-- frame has to be redrawn.
+	Resized(width: integer, height: integer),
+	FocusChanged(focused: boolean),
+
+	-- The user asked to close the window; `Window.isOpen()` is already false.
+	Closed
+end
+
+-- --- record accessors --------------------------------------------------------
+--
+-- The records arrive untyped, so each field is narrowed on the way out. A
+-- missing or wrong-typed field yields a harmless zero value rather than
+-- throwing: a malformed event should not take the app down mid-frame.
+
+local fn text(record: table, at: integer) -> string
+	local value: any = record[at]
+
+	if value == nil then
+		return ""
+	end
+
+	return tostring(value)
+end
+
+local fn number(record: table, at: integer) -> float
+	local value: any = record[at]
+
+	if value == nil then
+		return 0.0
+	end
+
+	return float(value)
+end
+
+local fn whole(record: table, at: integer) -> integer
+	local value: any = record[at]
+
+	if value == nil then
+		return 0
+	end
+
+	return int(value)
+end
+
+local fn flag(record: table, at: integer) -> boolean
+	return record[at] == true
+end
+
+-- Turn one engine record into an `Event`, or `nil` for a kind this build of
+-- UIKit does not know — a newer engine stays usable rather than crashing.
+export fn decodeEvent(record: table) -> Event?
+	return match text(record, 1)
+		case "keyPressed" then
+			Event.KeyPressed(text(record, 2), flag(record, 3), flag(record, 4), flag(record, 5))
+
+		case "keyReleased" then
+			Event.KeyReleased(text(record, 2), flag(record, 3), flag(record, 4), flag(record, 5))
+
+		case "textInput" then Event.TextInput(text(record, 2))
+
+		case "mouseMoved" then
+			Event.MouseMoved(
+				number(record, 2),
+				number(record, 3),
+				number(record, 4),
+				number(record, 5)
+			)
+
+		case "mousePressed" then
+			Event.MousePressed(number(record, 2), number(record, 3), whole(record, 4))
+
+		case "mouseReleased" then
+			Event.MouseReleased(number(record, 2), number(record, 3), whole(record, 4))
+
+		case "wheelMoved" then Event.WheelMoved(number(record, 2), number(record, 3))
+
+		case "resized" then Event.Resized(whole(record, 2), whole(record, 3))
+
+		case "focusChanged" then Event.FocusChanged(flag(record, 2))
+
+		case "closed" then Event.Closed
+
+		case _ then nil
+	end
+end
+
+-- Pump the OS queue and return this frame's events, decoded.
+--
+-- This is the only place the raw engine call belongs; everything else in the
+-- toolkit works in terms of `Event`.
+export fn pollEvents() -> table<Event>
+	local out: table<Event> = {}
+
+	for record: table in Window.pollEvents() do
+		local decoded: Event? = decodeEvent(record)
+
+		if decoded != nil then
+			out[#out + 1] = decoded!
+		end
+	end
+
+	return out
+end

@@ -1,0 +1,1578 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from Overlay
+import * from ThemeData
+import * from Theme
+import * from Icon
+import * from Tween
+import * from Animation
+
+-- ============================================================================
+-- Controls
+-- ============================================================================
+--
+-- The standard set. Every one of them is focusable, operable from the keyboard,
+-- and themed — so a control dropped into an app inherits its palette without
+-- being told about it.
+--
+-- They follow `Button`'s shape: stateless widgets keeping hover, press and
+-- focus flags in element scratch, which survives the rebuild each interaction
+-- triggers.
+
+-- Where an element sits in window coordinates.
+--
+-- Offsets are stored relative to the parent, so the absolute position is the
+-- sum up the chain. A dropdown needs it to put its menu in the right place.
+export fn absoluteOf(element: Element) -> Offset
+	local x: float = 0.0
+	local y: float = 0.0
+	local node: Element? = element
+	local walking: boolean = true
+
+	while walking do
+		local current: Element? = node
+
+		if current == nil then
+			walking = false
+		else
+			x = x + current!.offset.dx
+			y = y + current!.offset.dy
+			node = current!.parent
+		end
+	end
+
+	return Offset(x, y)
+end
+
+-- ----------------------------------------------------------------------------
+-- Checkbox, Radio, Switch
+-- ----------------------------------------------------------------------------
+
+-- The box itself, without the label. Drawn rather than composed because a tick
+-- is two lines and a rounded square.
+export class CheckMark extends Widget
+	checked: boolean
+	enabled: boolean
+	hovered: boolean
+	focused: boolean
+	theme: ThemeData
+	side: float
+
+	fn init(
+		checked: boolean = false,
+		enabled: boolean = true,
+		hovered: boolean = false,
+		focused: boolean = false,
+		theme: ThemeData? = nil,
+		side: float = 18.0,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.checked = checked
+		self.enabled = enabled
+		self.hovered = hovered
+		self.focused = focused
+		self.theme = theme ?? ThemeData()
+		self.side = side
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		return constraints.constrain(Size(self.side, self.side))
+	end
+
+	-- This is the cheap half of the two animation shapes: a render widget owns
+	-- its controllers, advances them here, and asks for the next frame with
+	-- `Repaint.request()`. Nothing rebuilds and nothing is laid out again — the
+	-- box is simply drawn differently, so a tick sweeping on costs a repaint
+	-- and no build work whatsoever.
+	fn tick(el: Element, dt: float) -> nil
+		local bag: table = el.data.scratch
+		local mark: AnimationController = motionOn(bag, "mark", self.checked, 0.2, EasingTypes.OutCubic)
+		local glow: AnimationController = motionOn(bag, "glow", self.hovered, 0.14)
+		local ring: AnimationController = motionOn(bag, "ring", self.focused, 0.12)
+
+		local moved: boolean = mark.step(dt)
+
+		if glow.step(dt) then
+			moved = true
+		end
+
+		if ring.step(dt) then
+			moved = true
+		end
+
+		if moved then
+			Repaint.request()
+		end
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local side: float = el.size.width
+		local bag: table = el.data.scratch
+
+		-- Re-aimed here as well as in `tick`, because a freshly mounted element
+		-- paints before it has ever ticked — and a box built already-checked
+		-- has to draw checked rather than sweeping itself on.
+		local ticked: float = motionOn(bag, "mark", self.checked, 0.2, EasingTypes.OutCubic).value
+		local lit: float = motionOn(bag, "glow", self.hovered, 0.14).value
+		local ringAt: float = motionOn(bag, "ring", self.focused, 0.12).value
+
+		local fill: Color = self.theme.surface.lerp(self.theme.primary, ticked)
+		local edge: Color = self.theme.border.lerp(self.theme.primary, atLeast(ticked, lit))
+
+		if not self.enabled then
+			fill = self.theme.surface
+			edge = self.theme.border.withAlpha(0.5)
+		end
+
+		fill.apply()
+		Graphics.rectangle("fill", x, y, side, side, 4.0, 4.0)
+
+		edge.apply()
+		Graphics.setLineWidth(1.0)
+		Graphics.rectangle("line", x, y, side, side, 4.0, 4.0)
+
+		if ticked > 0.0 then
+			-- A tick, drawn as two strokes across the middle of the box — and
+			-- drawn *on*, short stroke first and then the long one up. Giving
+			-- each stroke its own share of the progress is what makes it read
+			-- as a pen moving rather than a line growing diagonally.
+			self.theme.text.apply()
+			Graphics.setLineWidth(2.0)
+
+			local cornerX: float = x + side * 0.44
+			local cornerY: float = y + side * 0.72
+			local startX: float = x + side * 0.24
+			local startY: float = y + side * 0.52
+			local endX: float = x + side * 0.78
+			local endY: float = y + side * 0.3
+
+			local down: float = atMost(ticked / 0.4, 1.0)
+			Graphics.line(
+				startX,
+				startY,
+				startX + (cornerX - startX) * down,
+				startY + (cornerY - startY) * down
+			)
+
+			if ticked > 0.4 then
+				local up: float = (ticked - 0.4) / 0.6
+				Graphics.line(
+					cornerX,
+					cornerY,
+					cornerX + (endX - cornerX) * up,
+					cornerY + (endY - cornerY) * up
+				)
+			end
+		end
+
+		if ringAt > 0.0 then
+			self.theme.text.withAlpha(ringAt).apply()
+			Graphics.setLineWidth(1.0)
+			Graphics.rectangle("line", x - 3.0, y - 3.0, side + 6.0, side + 6.0, 6.0, 6.0)
+		end
+	end
+end
+
+-- A labelled checkbox.
+--
+--     Checkbox(
+--         value: agreed,
+--         label: "I agree",
+--         onChanged: fn(next: boolean)
+--             agreed = next
+--         end
+--     )
+--
+-- `onChanged` is `fn(value: boolean)`. The widget does not keep the value —
+-- hand it back the one it gave you, the way every other controlled input works.
+export class Checkbox extends StatelessWidget
+	value: boolean
+	label: string
+	onChanged: function?
+	enabled: boolean
+	autofocus: boolean
+
+	fn init(
+		value: boolean = false,
+		label: string = "",
+		onChanged: function? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.label = label
+		self.onChanged = onChanged
+		self.enabled = enabled
+		self.autofocus = autofocus
+	end
+
+	local fn toggle() -> nil
+		local changed: function? = self.onChanged
+
+		if changed != nil and self.enabled then
+			changed(not self.value)
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+
+		local mark: Widget = CheckMark(
+			checked: self.value,
+			enabled: self.enabled,
+			hovered: scratch.hovered == true,
+			focused: scratch.focused == true,
+			theme: theme
+		)
+
+		local row: Widget = mark
+
+		if #self.label > 0 then
+			local label: TextStyle = theme.body
+
+			if not self.enabled then
+				label = theme.caption
+			end
+
+			row = Row(
+				mainAxisSize: MainAxisSize.Min,
+				spacing: 8.0,
+				children: {mark, Text(self.label, style: label)}
+			)
+		end
+
+		if not self.enabled then
+			return row
+		end
+
+		return Focus(
+			child: GestureDetector(
+				child: row,
+				onTap: fn()
+					self.toggle()
+				end,
+				onTapDown: fn()
+					node.requestFocus()
+				end,
+				onHover: fn(inside: boolean)
+					scratch.hovered = inside
+					context.markNeedsBuild()
+				end
+			),
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if not isActivator(event) then
+					return false
+				end
+
+				self.toggle()
+
+				return true
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- One option out of several. `Radio` compares `value` with `groupValue`; the
+-- one that matches is the selected one, and `onChanged` reports the value that
+-- was picked.
+export class Radio extends StatelessWidget
+	value: string
+	groupValue: string
+	label: string
+	onChanged: function?
+	enabled: boolean
+	autofocus: boolean
+
+	fn init(
+		value: string = "",
+		groupValue: string = "",
+		label: string = "",
+		onChanged: function? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.groupValue = groupValue
+		self.label = label
+		self.onChanged = onChanged
+		self.enabled = enabled
+		self.autofocus = autofocus
+	end
+
+	local fn select() -> nil
+		local changed: function? = self.onChanged
+
+		if changed != nil and self.enabled then
+			changed(self.value)
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+
+		local dot: Widget = RadioDot(
+			selected: self.value == self.groupValue,
+			enabled: self.enabled,
+			hovered: scratch.hovered == true,
+			focused: scratch.focused == true,
+			theme: theme
+		)
+
+		local row: Widget = dot
+
+		if #self.label > 0 then
+			local label: TextStyle = theme.body
+
+			if not self.enabled then
+				label = theme.caption
+			end
+
+			row = Row(
+				mainAxisSize: MainAxisSize.Min,
+				spacing: 8.0,
+				children: {dot, Text(self.label, style: label)}
+			)
+		end
+
+		if not self.enabled then
+			return row
+		end
+
+		return Focus(
+			child: GestureDetector(
+				child: row,
+				onTap: fn()
+					self.select()
+				end,
+				onTapDown: fn()
+					node.requestFocus()
+				end,
+				onHover: fn(inside: boolean)
+					scratch.hovered = inside
+					context.markNeedsBuild()
+				end
+			),
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if not isActivator(event) then
+					return false
+				end
+
+				self.select()
+
+				return true
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+export class RadioDot extends Widget
+	selected: boolean
+	enabled: boolean
+	hovered: boolean
+	focused: boolean
+	theme: ThemeData
+	side: float
+
+	fn init(
+		selected: boolean = false,
+		enabled: boolean = true,
+		hovered: boolean = false,
+		focused: boolean = false,
+		theme: ThemeData? = nil,
+		side: float = 18.0,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.selected = selected
+		self.enabled = enabled
+		self.hovered = hovered
+		self.focused = focused
+		self.theme = theme ?? ThemeData()
+		self.side = side
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		return constraints.constrain(Size(self.side, self.side))
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		local bag: table = el.data.scratch
+		local dot: AnimationController = motionOn(bag, "dot", self.selected, 0.18, EasingTypes.OutCubic)
+		local glow: AnimationController = motionOn(bag, "glow", self.hovered, 0.14)
+		local ring: AnimationController = motionOn(bag, "ring", self.focused, 0.12)
+
+		local moved: boolean = dot.step(dt)
+
+		if glow.step(dt) then
+			moved = true
+		end
+
+		if ring.step(dt) then
+			moved = true
+		end
+
+		if moved then
+			Repaint.request()
+		end
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local radius: float = el.size.width / 2.0
+		local centreX: float = x + radius
+		local centreY: float = y + radius
+		local bag: table = el.data.scratch
+
+		local picked: float = motionOn(bag, "dot", self.selected, 0.18, EasingTypes.OutCubic).value
+		local lit: float = motionOn(bag, "glow", self.hovered, 0.14).value
+		local ringAt: float = motionOn(bag, "ring", self.focused, 0.12).value
+
+		local edge: Color = self.theme.border.lerp(self.theme.primary, atLeast(picked, lit))
+
+		if not self.enabled then
+			edge = self.theme.border.withAlpha(0.5)
+		end
+
+		self.theme.surface.apply()
+		Graphics.circle("fill", centreX, centreY, radius)
+
+		edge.apply()
+		Graphics.setLineWidth(1.0)
+		Graphics.circle("line", centreX, centreY, radius)
+
+		-- The dot grows out of the middle rather than appearing at full size.
+		if picked > 0.0 then
+			self.theme.primary.apply()
+			Graphics.circle("fill", centreX, centreY, radius * 0.5 * picked)
+		end
+
+		if ringAt > 0.0 then
+			self.theme.text.withAlpha(ringAt).apply()
+			Graphics.circle("line", centreX, centreY, radius + 3.0)
+		end
+	end
+end
+
+-- A sliding on/off switch. Same contract as `Checkbox`, different shape.
+export class Switch extends StatelessWidget
+	value: boolean
+	label: string
+	onChanged: function?
+	enabled: boolean
+	autofocus: boolean
+
+	fn init(
+		value: boolean = false,
+		label: string = "",
+		onChanged: function? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.label = label
+		self.onChanged = onChanged
+		self.enabled = enabled
+		self.autofocus = autofocus
+	end
+
+	local fn toggle() -> nil
+		local changed: function? = self.onChanged
+
+		if changed != nil and self.enabled then
+			changed(not self.value)
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+
+		local track: Widget = SwitchTrack(
+			on: self.value,
+			enabled: self.enabled,
+			focused: scratch.focused == true,
+			theme: theme
+		)
+
+		local row: Widget = track
+
+		if #self.label > 0 then
+			row = Row(
+				mainAxisSize: MainAxisSize.Min,
+				spacing: 8.0,
+				children: {track, Text(self.label, style: theme.body)}
+			)
+		end
+
+		if not self.enabled then
+			return row
+		end
+
+		return Focus(
+			child: GestureDetector(
+				child: row,
+				onTap: fn()
+					self.toggle()
+				end,
+				onTapDown: fn()
+					node.requestFocus()
+				end
+			),
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if not isActivator(event) then
+					return false
+				end
+
+				self.toggle()
+
+				return true
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+export class SwitchTrack extends Widget
+	on: boolean
+	enabled: boolean
+	focused: boolean
+	theme: ThemeData
+
+	fn init(
+		on: boolean = false,
+		enabled: boolean = true,
+		focused: boolean = false,
+		theme: ThemeData? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.on = on
+		self.enabled = enabled
+		self.focused = focused
+		self.theme = theme ?? ThemeData()
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		return constraints.constrain(Size(38.0, 20.0))
+	end
+
+	-- The knob slides and the track fades between the two colours on the same
+	-- 0..1 value, which is the whole reason a switch is worth animating: the
+	-- travel is what tells you which way it was thrown.
+	fn tick(el: Element, dt: float) -> nil
+		local bag: table = el.data.scratch
+		local knob: AnimationController = motionOn(bag, "knob", self.on, 0.19, EasingTypes.InOutCubic)
+		local ring: AnimationController = motionOn(bag, "ring", self.focused, 0.12)
+
+		local moved: boolean = knob.step(dt)
+
+		if ring.step(dt) then
+			moved = true
+		end
+
+		if moved then
+			Repaint.request()
+		end
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local height: float = el.size.height
+		local radius: float = height / 2.0
+		local bag: table = el.data.scratch
+
+		local thrown: float = motionOn(bag, "knob", self.on, 0.19, EasingTypes.InOutCubic).value
+		local ringAt: float = motionOn(bag, "ring", self.focused, 0.12).value
+
+		local track: Color = self.theme.border.lerp(self.theme.primary, thrown)
+
+		if not self.enabled then
+			track = track.withAlpha(0.5)
+		end
+
+		track.apply()
+		Graphics.rectangle("fill", x, y, el.size.width, height, radius, radius)
+
+		local restX: float = x + radius
+		local throwX: float = x + el.size.width - radius
+		local knobX: float = restX + (throwX - restX) * thrown
+
+		self.theme.text.apply()
+		Graphics.circle("fill", knobX, y + radius, radius - 3.0)
+
+		if ringAt > 0.0 then
+			self.theme.text.withAlpha(ringAt).apply()
+			Graphics.setLineWidth(1.0)
+			Graphics.rectangle(
+				"line",
+				x - 3.0,
+				y - 3.0,
+				el.size.width + 6.0,
+				height + 6.0,
+				radius + 3.0,
+				radius + 3.0
+			)
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Slider
+-- ----------------------------------------------------------------------------
+
+-- A value between `min` and `max`, set by dragging, clicking, or the arrows.
+--
+--     Slider(
+--         value: volume,
+--         onChanged: fn(next: float)
+--             volume = next
+--         end
+--     )
+--
+-- `onChanged` is `fn(value: float)`. `step` snaps the value; leave it at 0 for
+-- continuous. Arrow keys move by `step` when set, or a hundredth of the range.
+export class Slider extends StatelessWidget
+	value: float
+	min: float
+	max: float
+	step: float
+	onChanged: function?
+	enabled: boolean
+	autofocus: boolean
+	width: float?
+
+	fn init(
+		value: float = 0.0,
+		min: float = 0.0,
+		max: float = 1.0,
+		step: float = 0.0,
+		onChanged: function? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		width: float? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.min = min
+		self.max = max
+		self.step = step
+		self.onChanged = onChanged
+		self.enabled = enabled
+		self.autofocus = autofocus
+		self.width = width
+	end
+
+	-- Snap and clamp, then report — the one place a new value is produced.
+	local fn emit(raw: float) -> nil
+		local changed: function? = self.onChanged
+
+		if changed == nil or not self.enabled then
+			return
+		end
+
+		local span: float = self.max - self.min
+
+		if span <= 0.0 then
+			return
+		end
+
+		local next: float = raw
+
+		if self.step > 0.0 then
+			local steps: float = float(int((raw - self.min) / self.step + 0.5))
+			next = self.min + steps * self.step
+		end
+
+		next = atLeast(atMost(next, self.max), self.min)
+
+		if next != self.value then
+			changed!(next)
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+		local span: float = self.max - self.min
+		local fraction: float = 0.0
+
+		if span > 0.0 then
+			fraction = atLeastZero(atMost((self.value - self.min) / span, 1.0))
+		end
+
+		local track: Widget = SliderTrack(
+			fraction: fraction,
+			enabled: self.enabled,
+			focused: scratch.focused == true,
+			hovered: scratch.hovered == true,
+			theme: theme,
+			onSeek: fn(at: float)
+				-- The track reports where it was grabbed, in its own 0..1 space; the
+				-- widget owns the arithmetic that turns that into a value.
+
+				self.emit(self.min + at * span)
+			end,
+			onPress: fn()
+				nodeFor(scratch).requestFocus()
+			end
+		)
+
+		local sized: Widget = track
+
+		if self.width != nil then
+			sized = SizedBox(width: self.width, child: track)
+		end
+
+		if not self.enabled then
+			return sized
+		end
+
+		local nudge: float = span / 100.0
+
+		if self.step > 0.0 then
+			nudge = self.step
+		end
+
+		return Focus(
+			child: sized,
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if event.key == "left" or event.key == "down" then
+					self.emit(self.value - nudge)
+
+					return true
+				elseif event.key == "right" or event.key == "up" then
+					self.emit(self.value + nudge)
+
+					return true
+				elseif event.key == "home" then
+					self.emit(self.min)
+
+					return true
+				elseif event.key == "end" then
+					self.emit(self.max)
+
+					return true
+				end
+
+				return false
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- The track and thumb. It handles its own pointer input rather than sitting in
+-- a `GestureDetector`, because turning a click into a value needs the width —
+-- and only the render widget knows that.
+export class SliderTrack extends Widget
+	fraction: float
+	enabled: boolean
+	focused: boolean
+	hovered: boolean
+	theme: ThemeData
+	onSeek: function?
+
+	-- The track consumes the press itself, so focusing on click has to happen
+	-- here rather than in an enclosing `GestureDetector` that never sees it.
+	onPress: function?
+
+	fn init(
+		fraction: float = 0.0,
+		enabled: boolean = true,
+		focused: boolean = false,
+		hovered: boolean = false,
+		theme: ThemeData? = nil,
+		onSeek: function? = nil,
+		onPress: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.fraction = fraction
+		self.enabled = enabled
+		self.focused = focused
+		self.hovered = hovered
+		self.theme = theme ?? ThemeData()
+		self.onSeek = onSeek
+		self.onPress = onPress
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local width: float = 160.0
+
+		if constraints.hasBoundedWidth() then
+			width = constraints.maxWidth
+		end
+
+		return constraints.constrain(Size(width, 22.0))
+	end
+
+	local fn seek(el: Element, x: float) -> nil
+		local usable: float = el.size.width - 16.0
+
+		if usable <= 0.0 then
+			return
+		end
+
+		local callback: function? = self.onSeek
+
+		if callback != nil then
+			callback!(atLeastZero(atMost((x - 8.0) / usable, 1.0)))
+		end
+	end
+
+	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
+		if not self.enabled then
+			return false
+		end
+
+		if event.kind == PointerKind.Down then
+			if not inside then
+				return false
+			end
+
+			el.data.dragging = true
+
+			local press: function? = self.onPress
+			if press != nil then
+				press()
+			end
+
+			self.seek(el, x)
+
+			return true
+		end
+
+		if event.kind == PointerKind.Move then
+			-- Keep tracking after the pointer leaves: releasing a slider only
+			-- because the cursor drifted off it is maddening.
+			if el.data.dragging == true then
+				self.seek(el, x)
+			end
+
+			return false
+		end
+
+		if event.kind == PointerKind.Up then
+			el.data.dragging = false
+		end
+
+		return false
+	end
+
+	-- The fill follows the value, and the knob swells while the control is live.
+	--
+	-- The fill is a `Tracker` rather than a plain controller because the value
+	-- keeps moving: an arrow key pressed twice retargets mid-run, and easing
+	-- from wherever it got to is what keeps that smooth.
+	fn tick(el: Element, dt: float) -> nil
+		local bag: table = el.data.scratch
+		local swell: AnimationController = motionOn(bag, "swell", self.hovered or self.focused, 0.12)
+		local ring: AnimationController = motionOn(bag, "ring", self.focused, 0.12)
+		local fill: Tracker = self.fill(el)
+
+		local moved: boolean = fill.step(dt)
+
+		if swell.step(dt) then
+			moved = true
+		end
+
+		if ring.step(dt) then
+			moved = true
+		end
+
+		if moved then
+			Repaint.request()
+		end
+	end
+
+	-- Dragging is the one case that must not ease. The pointer sets the value
+	-- *after* this frame's tick, so the snap has to happen wherever the tracker
+	-- is read — which is here, on the way to both `tick` and `paint`.
+	local fn fill(el: Element) -> Tracker
+		local tracked: Tracker = trackerIn(el.data.scratch, "fill", self.fraction, 0.16)
+
+		if el.data.dragging == true then
+			tracked.snap(self.fraction)
+		end
+
+		return tracked
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local height: float = el.size.height
+		local middle: float = y + height / 2.0
+		local left: float = x + 8.0
+		local usable: float = el.size.width - 16.0
+		local bag: table = el.data.scratch
+
+		local filled: float = usable * self.fill(el).current
+		local swell: float = motionOn(bag, "swell", self.hovered or self.focused, 0.12).value
+		local ringAt: float = motionOn(bag, "ring", self.focused, 0.12).value
+
+		local rail: Color = self.theme.border
+		local accent: Color = self.theme.primary
+
+		if not self.enabled then
+			rail = rail.withAlpha(0.5)
+			accent = accent.withAlpha(0.5)
+		end
+
+		rail.apply()
+		Graphics.rectangle("fill", left, middle - 2.0, usable, 4.0, 2.0, 2.0)
+
+		accent.apply()
+		Graphics.rectangle("fill", left, middle - 2.0, filled, 4.0, 2.0, 2.0)
+
+		local knob: float = 7.0 + swell
+
+		accent.apply()
+		Graphics.circle("fill", left + filled, middle, knob)
+
+		if ringAt > 0.0 then
+			self.theme.text.withAlpha(ringAt).apply()
+			Graphics.setLineWidth(1.0)
+			Graphics.circle("line", left + filled, middle, knob + 3.0)
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- ProgressBar
+-- ----------------------------------------------------------------------------
+
+-- A read-only bar. `value` runs 0..1; pass nil for an indeterminate one, which
+-- animates off the clock rather than off a rebuild.
+export class ProgressBar extends StatelessWidget
+	value: float?
+	height: float
+	color: Color?
+
+	fn init(value: float? = nil, height: float = 6.0, color: Color? = nil, key: string? = nil)
+		self.super(key)
+
+		self.value = value
+		self.height = height
+		self.color = color
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+
+		return ProgressTrack(
+			value: self.value,
+			height: self.height,
+			color: self.color ?? theme.primary,
+			track: theme.border
+		)
+	end
+end
+
+-- The bar itself. Split out because a render widget has no `BuildContext` to
+-- read the theme from.
+export class ProgressTrack extends Widget
+	value: float?
+	height: float
+	color: Color
+	track: Color
+
+	fn init(
+		value: float? = nil,
+		height: float = 6.0,
+		color: Color? = nil,
+		track: Color? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.height = height
+		self.color = color ?? Colors.primary
+		self.track = track ?? Colors.border
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local width: float = 160.0
+
+		if constraints.hasBoundedWidth() then
+			width = constraints.maxWidth
+		end
+
+		return constraints.constrain(Size(width, self.height))
+	end
+
+	-- A determinate bar eases towards whatever it was last given, so a value
+	-- that arrives in jumps — a download reporting every few hundred
+	-- kilobytes — still reads as a bar filling rather than a bar teleporting.
+	fn tick(el: Element, dt: float) -> nil
+		local value: float? = self.value
+
+		if value == nil then
+			return
+		end
+
+		if trackerIn(el.data.scratch, "fill", atLeastZero(atMost(value!, 1.0))).step(dt) then
+			Repaint.request()
+		end
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local radius: float = el.size.height / 2.0
+
+		self.track.apply()
+		Graphics.rectangle("fill", x, y, el.size.width, el.size.height, radius, radius)
+
+		self.color.apply()
+
+		local value: float? = self.value
+
+		if value != nil then
+			local tracked: Tracker = trackerIn(
+				el.data.scratch,
+				"fill",
+				atLeastZero(atMost(value!, 1.0))
+			)
+			local filled: float = el.size.width * tracked.current
+			Graphics.rectangle("fill", x, y, filled, el.size.height, radius, radius)
+
+			return
+		end
+
+		-- Indeterminate: a short bar sweeping back and forth once a second.
+		-- The sweep comes off the clock rather than a rebuild, so it has to ask
+		-- for the next frame itself.
+		Repaint.request()
+
+		local phase: float = Timer.getTime() - float(int(Timer.getTime()))
+		local sweep: float = el.size.width * 0.3
+		local travel: float = (el.size.width + sweep) * phase - sweep
+
+		Graphics.rectangle(
+			"fill",
+			atLeast(x, x + travel),
+			y,
+			atMost(sweep, el.size.width - atLeastZero(travel)),
+			el.size.height,
+			radius,
+			radius
+		)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Dropdown
+-- ----------------------------------------------------------------------------
+
+-- A closed box that opens a menu of options — the control the overlay makes
+-- possible.
+--
+--     Dropdown(
+--         value: country,
+--         options: {"Lithuania", "Latvia", "Estonia"},
+--         onChanged: fn(next: string)
+--             country = next
+--         end
+--     )
+--
+-- `onChanged` is `fn(value: string)`. The menu is an overlay entry, so it
+-- escapes any scroll view or panel the dropdown happens to sit in.
+export class Dropdown extends StatelessWidget
+	value: string
+	options: table<string>
+	placeholder: string
+	onChanged: function?
+	enabled: boolean
+	autofocus: boolean
+	width: float?
+
+	fn init(
+		value: string = "",
+		options: table<string> = {},
+		placeholder: string = "Select…",
+		onChanged: function? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		width: float? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.options = options
+		self.placeholder = placeholder
+		self.onChanged = onChanged
+		self.enabled = enabled
+		self.autofocus = autofocus
+		self.width = width
+	end
+
+	-- Open the menu directly under the closed box, matched to its width.
+	local fn open(context: BuildContext) -> nil
+		local items: table<MenuItem> = {}
+
+		for option: string in self.options do
+			local picked: string = option
+
+			items[#items + 1] = MenuItem(
+				option,
+				fn()
+					local changed: function? = self.onChanged
+
+					if changed != nil then
+						changed(picked)
+					end
+				end
+			)
+		end
+
+		local size: Size = context.size()
+		local origin: Offset = absoluteOf(context.element())
+
+		showMenu(context, origin.dx, origin.dy + size.height + 4.0, items: items, width: size.width)
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		if not self.enabled then
+			return
+		end
+
+		if motionOn(el.data.scratch, "focus", el.data.focused, 0.14).step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+		local focused: boolean = scratch.focused == true
+
+		local label: string = self.value
+		local style: TextStyle = theme.body
+
+		if #label == 0 then
+			label = self.placeholder
+			style = theme.caption
+		end
+
+		local edge: Color = theme.border.lerp(
+			theme.primary,
+			motionOn(scratch.scratch, "focus", focused, 0.14).value
+		)
+
+		local box: Widget = Container(
+			width: self.width,
+			color: theme.surface,
+			border: edge,
+			radius: theme.radius,
+			padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
+			child: Row(
+				children: {
+					Expanded(child: Text(label, style: style, softWrap: false, maxLines: 1)),
+					Icon(Icons.expandMore, 18.0, theme.textMuted),
+				}
+			)
+		)
+
+		if not self.enabled then
+			return box
+		end
+
+		return Focus(
+			child: GestureDetector(
+				child: box,
+				onTap: fn()
+					self.open(context)
+				end,
+				onTapDown: fn()
+					node.requestFocus()
+				end
+			),
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if not isActivator(event) and event.key != "down" then
+					return false
+				end
+
+				self.open(context)
+
+				return true
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Tabs
+-- ----------------------------------------------------------------------------
+
+-- The strip of labels. One focus stop for the whole bar, with the arrows moving
+-- between tabs — which is how a tab strip is meant to behave, and why each tab
+-- is not separately focusable.
+export class TabBar extends StatelessWidget
+	tabs: table<string>
+	index: integer
+	onChanged: function?
+	enabled: boolean
+	autofocus: boolean
+
+	fn init(
+		tabs: table<string> = {},
+		index: integer = 1,
+		onChanged: function? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.tabs = tabs
+		self.index = index
+		self.onChanged = onChanged
+		self.enabled = enabled
+		self.autofocus = autofocus
+	end
+
+	-- Clamp and report. Every path into a new tab goes through here.
+	local fn select(next: integer) -> nil
+		local changed: function? = self.onChanged
+
+		if changed == nil or not self.enabled or #self.tabs == 0 then
+			return
+		end
+
+		local target: integer = next
+
+		if target < 1 then
+			target = #self.tabs
+		end
+
+		if target > #self.tabs then
+			target = 1
+		end
+
+		if target != self.index then
+			changed!(target)
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+		local focused: boolean = scratch.focused == true
+
+		local labels: table<Widget> = {}
+		local i: integer = 1
+
+		while i <= #self.tabs do
+			local at: integer = i
+
+			labels[#labels + 1] = TabLabel(
+				label: self.tabs[i],
+				selected: i == self.index,
+				focused: focused and i == self.index,
+				theme: theme,
+				key: "tab" .. i,
+				onSelected: fn()
+					node.requestFocus()
+					self.select(at)
+				end
+			)
+
+			i = i + 1
+		end
+
+		local strip: Widget = Row(mainAxisSize: MainAxisSize.Min, children: labels)
+
+		if not self.enabled then
+			return strip
+		end
+
+		return Focus(
+			child: strip,
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if event.key == "left" then
+					self.select(self.index - 1)
+
+					return true
+				elseif event.key == "right" then
+					self.select(self.index + 1)
+
+					return true
+				elseif event.key == "home" then
+					self.select(1)
+
+					return true
+				elseif event.key == "end" then
+					self.select(#self.tabs)
+
+					return true
+				end
+
+				return false
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- The bar under the selected tab. It wraps the label rather than sitting under
+-- it in a `Column`, because it has to be exactly as wide as the label — and a
+-- childless box in a `Column` lays out at zero width, which is why this used to
+-- draw nothing at all.
+--
+-- It animates itself: `tick` advances the controller and asks for a repaint, so
+-- moving the selection redraws two tabs and rebuilds neither.
+export class TabIndicator extends SingleChildWidget
+	active: boolean
+	color: Color
+	thickness: float
+
+	fn init(
+		active: boolean = false,
+		color: Color? = nil,
+		thickness: float = 2.0,
+		child: Widget? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.active = active
+		self.color = color ?? Colors.primary
+		self.thickness = thickness
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			return constraints.constrain(Size(0.0, self.thickness))
+		end
+
+		local size: Size = child!.layout(constraints)
+		child!.offset = Offset.zero()
+
+		return constraints.constrain(Size(size.width, size.height + self.thickness))
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		local grow: AnimationController = motionOn(
+			el.data.scratch,
+			"grow",
+			self.active,
+			0.18,
+			EasingTypes.OutCubic
+		)
+
+		if grow.step(dt) then
+			Repaint.request()
+		end
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		el.paintChildren(x, y)
+
+		local grown: float = motionOn(
+			el.data.scratch,
+			"grow",
+			self.active,
+			0.18,
+			EasingTypes.OutCubic
+		).value
+
+		if grown <= 0.0 then
+			return
+		end
+
+		-- Grows out of the middle, so the selection reads as landing on the tab
+		-- rather than the bar being switched on.
+		local width: float = el.size.width * grown
+		local left: float = x + (el.size.width - width) / 2.0
+
+		self.color.apply()
+		Graphics.rectangle("fill", left, y + el.size.height - self.thickness, width, self.thickness)
+	end
+end
+
+-- One tab: a label with an indicator under it.
+export class TabLabel extends StatelessWidget
+	label: string
+	selected: boolean
+	focused: boolean
+	theme: ThemeData
+	onSelected: function?
+
+	fn init(
+		label: string = "",
+		selected: boolean = false,
+		focused: boolean = false,
+		theme: ThemeData? = nil,
+		onSelected: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.label = label
+		self.selected = selected
+		self.focused = focused
+		self.theme = theme ?? ThemeData()
+		self.onSelected = onSelected
+	end
+
+	-- Only the label colour is rebuilt here; the indicator animates itself in
+	-- `TabIndicator.paint` without touching the build system.
+	fn tick(el: Element, dt: float) -> nil
+		local lit: boolean = self.selected or el.data.hovered == true
+
+		if motionOn(el.data.scratch, "ink", lit, 0.14).step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local scratch: ElementData = context.data()
+		local hovered: boolean = scratch.hovered == true
+
+		local inkAt: float = motionOn(scratch.scratch, "ink", self.selected or hovered, 0.14).value
+		local ink: Color = self.theme.textMuted.lerp(self.theme.text, inkAt)
+
+		local bar: Color = self.theme.primary
+
+		if self.focused then
+			bar = self.theme.text
+		end
+
+		local content: Widget = TabIndicator(
+			active: self.selected or self.focused,
+			color: bar,
+			child: Padding(
+				EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
+				Text(self.label, style: TextStyle(color: ink))
+			)
+		)
+
+		return GestureDetector(
+			child: content,
+			onTap: self.onSelected,
+			onHover: fn(inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- A tab strip with the matching panel under it.
+--
+--     Tabs(
+--         tabs: {"Details", "History"},
+--         index: current,
+--         children: {detailsPane, historyPane},
+--         onChanged: fn(next: integer)
+--             current = next
+--         end
+--     )
+--
+-- Controlled, like every other control here: it renders the index you give it
+-- and reports the one that was picked. Only the selected child is built, so an
+-- expensive pane costs nothing until you switch to it.
+export class Tabs extends StatelessWidget
+	tabs: table<string>
+	children: table<Widget>
+	index: integer
+	onChanged: function?
+	autofocus: boolean
+
+	fn init(
+		tabs: table<string> = {},
+		children: table<Widget> = {},
+		index: integer = 1,
+		onChanged: function? = nil,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.tabs = tabs
+		self.children = children
+		self.index = index
+		self.onChanged = onChanged
+		self.autofocus = autofocus
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local selected: Widget = SizedBox()
+
+		if self.index >= 1 and self.index <= #self.children then
+			selected = self.children[self.index]
+		end
+
+		return Column(
+			crossAxisAlignment: CrossAxisAlignment.Stretch,
+			children: {
+				TabBar(tabs: self.tabs, index: self.index, onChanged: self.onChanged, autofocus: self.autofocus),
+				Container(height: 1.0, color: theme.border),
+				Expanded(child: selected),
+			}
+		)
+	end
+end

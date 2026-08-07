@@ -1,0 +1,757 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from Overlay
+import * from ThemeData
+import * from Theme
+import * from Controls
+import * from Icon
+import * from Tween
+import * from Animation
+
+-- ============================================================================
+-- Dates
+-- ============================================================================
+--
+-- A calendar value plus the picker that edits it.
+--
+-- The arithmetic is done in *days since the epoch* rather than by
+-- month-by-month fiddling: convert to a day number, add, convert back. That
+-- makes "the 31st plus one month" and "the day after the 28th of February"
+-- fall out correctly instead of needing special cases.
+
+local monthNames: table<string> = {
+	"January",
+	"February",
+	"March",
+	"April",
+	"May",
+	"June",
+	"July",
+	"August",
+	"September",
+	"October",
+	"November",
+	"December",
+}
+
+local monthLengths: table<integer> = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+
+local weekdayNames: table<string> = {"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"}
+
+-- `int()` only converts numbers, so a date read out of `Os.date` is parsed a
+-- digit at a time.
+local fn parseInt(text: string) -> integer
+	local value: integer = 0
+	local i: integer = 1
+
+	while i <= String.len(text) do
+		local code: integer? = String.byte(text, i)
+
+		if code != nil and code! >= 48 and code! <= 57 then
+			value = value * 10 + (code! - 48)
+		end
+
+		i = i + 1
+	end
+
+	return value
+end
+
+local fn atMostInt(value: integer, ceiling: integer) -> integer
+	if value > ceiling then
+		return ceiling
+	end
+
+	return value
+end
+
+export class Date
+	year: integer
+	month: integer
+	day: integer
+
+	fn init(year: integer = 1970, month: integer = 1, day: integer = 1)
+		self.year = year
+		self.month = month
+		self.day = day
+	end
+
+	static fn today() -> Date
+		return Date(parseInt(Os.date("%Y")), parseInt(Os.date("%m")), parseInt(Os.date("%d")))
+	end
+
+	static fn isLeapYear(year: integer) -> boolean
+		return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+	end
+
+	static fn lengthOfMonth(year: integer, month: integer) -> integer
+		if month < 1 or month > 12 then
+			return 30
+		end
+
+		if month == 2 and Date.isLeapYear(year) then
+			return 29
+		end
+
+		return monthLengths[month]
+	end
+
+	static fn monthName(month: integer) -> string
+		if month < 1 or month > 12 then
+			return "?"
+		end
+
+		return monthNames[month]
+	end
+
+	static fn weekdayName(weekday: integer) -> string
+		return weekdayNames[weekday + 1]
+	end
+
+	-- Days since 1970-01-01, by Howard Hinnant's civil-calendar algorithm.
+	--
+	-- It assumes floor division, which for Saule's truncating `/` means years
+	-- from 1 AD onward — everything a UI will ever show.
+	static fn toEpochDay(year: integer, month: integer, day: integer) -> integer
+		local y: integer = year
+
+		if month <= 2 then
+			y = y - 1
+		end
+
+		local era: integer = y / 400
+		local yoe: integer = y - era * 400
+
+		local shifted: integer = month + 9
+
+		if month > 2 then
+			shifted = month - 3
+		end
+
+		local doy: integer = (153 * shifted + 2) / 5 + day - 1
+		local doe: integer = yoe * 365 + yoe / 4 - yoe / 100 + doy
+
+		return era * 146097 + doe - 719468
+	end
+
+	static fn fromEpochDay(days: integer) -> Date
+		local z: integer = days + 719468
+		local era: integer = z / 146097
+		local doe: integer = z - era * 146097
+		local yoe: integer = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+		local y: integer = yoe + era * 400
+		local doy: integer = doe - (365 * yoe + yoe / 4 - yoe / 100)
+		local mp: integer = (5 * doy + 2) / 153
+		local d: integer = doy - (153 * mp + 2) / 5 + 1
+
+		local m: integer = mp - 9
+
+		if mp < 10 then
+			m = mp + 3
+		end
+
+		if m <= 2 then
+			y = y + 1
+		end
+
+		return Date(y, m, d)
+	end
+
+	fn epochDay() -> integer
+		return Date.toEpochDay(self.year, self.month, self.day)
+	end
+
+	-- 0 = Sunday. 1970-01-01 was a Thursday, hence the +4.
+	fn weekday() -> integer
+		local shifted: integer = (self.epochDay() + 4) % 7
+
+		if shifted < 0 then
+			return shifted + 7
+		end
+
+		return shifted
+	end
+
+	fn daysInMonth() -> integer
+		return Date.lengthOfMonth(self.year, self.month)
+	end
+
+	fn addDays(count: integer) -> Date
+		return Date.fromEpochDay(self.epochDay() + count)
+	end
+
+	-- Add whole months, clamping the day to the target month's length so
+	-- "31 January plus one month" lands on the 28th or 29th rather than
+	-- spilling into March.
+	fn addMonths(count: integer) -> Date
+		local total: integer = self.year * 12 + self.month - 1 + count
+		local year: integer = total / 12
+		local month: integer = total % 12 + 1
+
+		if month < 1 then
+			month = month + 12
+			year = year - 1
+		end
+
+		local day: integer = atMostInt(self.day, Date.lengthOfMonth(year, month))
+
+		return Date(year, month, day)
+	end
+
+	fn startOfMonth() -> Date
+		return Date(self.year, self.month, 1)
+	end
+
+	fn equals(other: Date) -> boolean
+		return self.year == other.year and self.month == other.month and self.day == other.day
+	end
+
+	fn isBefore(other: Date) -> boolean
+		return self.epochDay() < other.epochDay()
+	end
+
+	-- ISO order, which sorts correctly as a string.
+	fn toString() -> string
+		return String.format("%04d-%02d-%02d", self.year, self.month, self.day)
+	end
+
+	fn describe() -> string
+		return String.format("%d %s %d", self.day, Date.monthName(self.month), self.year)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- The calendar popup
+-- ----------------------------------------------------------------------------
+
+-- Show a month grid anchored at a point, and call `onPicked` with the chosen
+-- date. Clicking outside or pressing Escape closes it.
+--
+-- `onPicked` is `fn(date: Date)`.
+--
+-- The month on display and the keyboard cursor live in a table captured by the
+-- entry's builder — the overlay rebuilds the layer by calling that builder
+-- again, so anything it closes over is the layer's state.
+export fn showDatePicker(
+	context: BuildContext,
+	x: float,
+	y: float,
+	selected: Date? = nil,
+	onPicked: function? = nil
+) -> OverlayHandle?
+	local owner: BuildOwner? = context.owner()
+
+	if owner == nil then
+		return nil
+	end
+
+	local overlay: OverlayManager = owner!.overlay()
+	local entry: OverlayEntry = OverlayEntry(fn()
+		return SizedBox()
+	end)
+
+	local handle: OverlayHandle = OverlayHandle(overlay, entry)
+	local chosen: Date = selected ?? Date.today()
+	local state: table = {cursor: chosen, month: chosen.startOfMonth()}
+
+	local pick: function = fn(date: Date)
+		handle.dismiss()
+
+		if onPicked != nil then
+			onPicked!(date)
+		end
+	end
+
+	local moveCursor: function = fn(days: integer)
+		local next: Date = state.cursor.addDays(days)
+		state.cursor = next
+		state.month = next.startOfMonth()
+		handle.refresh()
+	end
+
+	local moveMonth: function = fn(months: integer)
+		state.month = state.month.addMonths(months)
+		handle.refresh()
+	end
+
+	entry.builder = fn()
+		local windowWidth: integer, windowHeight: integer = Window.getSize()
+		local width: float = 232.0
+		local height: float = 260.0
+		local left: float = atMost(x, float(windowWidth) - width - 8.0)
+		local top: float = atMost(y, float(windowHeight) - height - 8.0)
+
+		return ModalBarrier(
+			onDismiss: fn()
+				handle.dismiss()
+			end,
+			child: Focus(
+				modal: true,
+				autofocus: true,
+				tabStop: false,
+				onKeyDown: fn(event: KeyEvent)
+					if event.key == "escape" then
+						handle.dismiss()
+
+						return true
+					elseif event.key == "left" then
+						moveCursor(-1)
+
+						return true
+					elseif event.key == "right" then
+						moveCursor(1)
+
+						return true
+					elseif event.key == "up" then
+						moveCursor(-7)
+
+						return true
+					elseif event.key == "down" then
+						moveCursor(7)
+
+						return true
+					elseif event.key == "pageup" then
+						moveMonth(-1)
+
+						return true
+					elseif event.key == "pagedown" then
+						moveMonth(1)
+
+						return true
+					elseif event.key == "return" or event.key == "space" then
+						pick(state.cursor)
+
+						return true
+					end
+
+					return false
+				end,
+				child: Stack(
+					children: {
+						Positioned(
+							left: atLeastZero(left),
+							top: atLeastZero(top),
+							width: width,
+							child: OverlayMotion(
+								handle: handle,
+								rise: 8.0,
+								child: CalendarCard(
+									month: state.month,
+									selected: chosen,
+									cursor: state.cursor,
+									onPick: pick,
+									onMonth: moveMonth
+								)
+							)
+						),
+					}
+				)
+			)
+		)
+	end
+
+	overlay.insert(entry)
+
+	return handle
+end
+
+-- The card itself: a month header, weekday initials, and the day grid.
+export class CalendarCard extends StatelessWidget
+	month: Date
+	selected: Date
+	cursor: Date
+	onPick: function?
+	onMonth: function?
+
+	fn init(
+		month: Date,
+		selected: Date,
+		cursor: Date,
+		onPick: function? = nil,
+		onMonth: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.month = month
+		self.selected = selected
+		self.cursor = cursor
+		self.onPick = onPick
+		self.onMonth = onMonth
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+
+		return Container(
+			color: theme.surfaceLight,
+			border: theme.border,
+			radius: 8.0,
+			padding: EdgeInsets.all(10.0),
+			child: Column(
+				crossAxisAlignment: CrossAxisAlignment.Stretch,
+				mainAxisSize: MainAxisSize.Min,
+				spacing: 6.0,
+				children: {self.header(theme), self.weekdays(theme), self.grid(theme)}
+			)
+		)
+	end
+
+	local fn header(theme: ThemeData) -> Widget
+		return Row(
+			children: {
+				CalendarStep(
+					icon: Icons.chevronLeft,
+					theme: theme,
+					onTap: fn()
+						if self.onMonth != nil then
+							self.onMonth!(-1)
+						end
+					end
+				),
+				Expanded(
+					child: Align(
+						alignment: Alignment.center(),
+						child: Text(Date.monthName(self.month.month) .. " " .. self.month.year, style: theme.body)
+					)
+				),
+				CalendarStep(
+					icon: Icons.chevronRight,
+					theme: theme,
+					onTap: fn()
+						if self.onMonth != nil then
+							self.onMonth!(1)
+						end
+					end
+				),
+			}
+		)
+	end
+
+	local fn weekdays(theme: ThemeData) -> Widget
+		local cells: table<Widget> = {}
+		local i: integer = 0
+
+		while i <= 6 do
+			cells[#cells + 1] = Expanded(
+				child: Align(
+					alignment: Alignment.center(),
+					child: Text(Date.weekdayName(i), style: theme.caption)
+				)
+			)
+
+			i = i + 1
+		end
+
+		return Row(children: cells)
+	end
+
+	-- Six rows of seven, starting from the Sunday on or before the 1st, so
+	-- every month renders in the same amount of space.
+	local fn grid(theme: ThemeData) -> Widget
+		local first: Date = self.month.startOfMonth()
+		local start: Date = first.addDays(-first.weekday())
+		local rows: table<Widget> = {}
+		local row: integer = 0
+
+		while row <= 5 do
+			local cells: table<Widget> = {}
+			local column: integer = 0
+
+			while column <= 6 do
+				local date: Date = start.addDays(row * 7 + column)
+
+				cells[#cells + 1] = Expanded(
+					child: CalendarDay(
+						date: date,
+						muted: date.month != self.month.month,
+						selected: date.equals(self.selected),
+						cursor: date.equals(self.cursor),
+						theme: theme,
+						onTap: fn()
+							if self.onPick != nil then
+								self.onPick!(date)
+							end
+						end
+					)
+				)
+
+				column = column + 1
+			end
+
+			rows[#rows + 1] = Row(children: cells)
+			row = row + 1
+		end
+
+		return Column(crossAxisAlignment: CrossAxisAlignment.Stretch, children: rows)
+	end
+end
+
+-- The `<` / `>` month buttons.
+export class CalendarStep extends StatelessWidget
+	icon: integer
+	theme: ThemeData
+	onTap: function?
+
+	fn init(icon: integer = 0, theme: ThemeData? = nil, onTap: function? = nil, key: string? = nil)
+		self.super(key)
+
+		self.icon = icon
+		self.theme = theme ?? ThemeData()
+		self.onTap = onTap
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		if motionOn(el.data.scratch, "hover", el.data.hovered == true, 0.11).step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local scratch: ElementData = context.data()
+		local lit: float = motionOn(scratch.scratch, "hover", scratch.hovered == true, 0.11).value
+
+		return GestureDetector(
+			child: Container(
+				color: self.theme.surface.withAlpha(lit),
+				radius: 4.0,
+				padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+				child: Icon(self.icon, 18.0, self.theme.text)
+			),
+			onTap: self.onTap,
+			onHover: fn(inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- One day cell.
+export class CalendarDay extends StatelessWidget
+	date: Date
+	muted: boolean
+	selected: boolean
+	cursor: boolean
+	theme: ThemeData
+	onTap: function?
+
+	fn init(
+		date: Date,
+		muted: boolean = false,
+		selected: boolean = false,
+		cursor: boolean = false,
+		theme: ThemeData? = nil,
+		onTap: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.date = date
+		self.muted = muted
+		self.selected = selected
+		self.cursor = cursor
+		self.theme = theme ?? ThemeData()
+		self.onTap = onTap
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		local bag: table = el.data.scratch
+		local lit: AnimationController = motionOn(bag, "hover", el.data.hovered == true, 0.11)
+		local held: AnimationController = motionOn(bag, "picked", self.selected, 0.16, EasingTypes.OutCubic)
+
+		local moved: boolean = lit.step(dt)
+
+		if held.step(dt) then
+			moved = true
+		end
+
+		if moved then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local scratch: ElementData = context.data()
+		local hovered: boolean = scratch.hovered == true
+		local bag: table = scratch.scratch
+
+		local lit: float = motionOn(bag, "hover", hovered, 0.11).value
+		local held: float = motionOn(bag, "picked", self.selected, 0.16, EasingTypes.OutCubic).value
+
+		local ink: Color = self.theme.text
+		local edge: Color? = nil
+
+		if self.muted then
+			ink = self.theme.textMuted.withAlpha(0.6)
+		end
+
+		-- Hover washes in first, then the selection washes over it — so moving
+		-- across the grid and landing on a day is one continuous change rather
+		-- than two swaps.
+		local fill: Color = self.theme.surface.withAlpha(lit)
+		fill = fill.lerp(self.theme.primary, held)
+
+		-- The keyboard cursor is an outline, so it reads as separate from the
+		-- selection it is moving over.
+		if self.cursor and not self.selected then
+			edge = self.theme.primary
+		end
+
+		return GestureDetector(
+			child: Container(
+				color: fill,
+				border: edge,
+				radius: 4.0,
+				padding: EdgeInsets.symmetric(horizontal: 2.0, vertical: 5.0),
+				alignment: Alignment.center(),
+				child: Text(self.date.day .. "", style: TextStyle(color: ink))
+			),
+			onTap: self.onTap,
+			onHover: fn(inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- DateField
+-- ----------------------------------------------------------------------------
+
+-- A box showing a date, which opens the calendar when clicked or activated.
+--
+--     DateField(
+--         value: due,
+--         onChanged: fn(next: Date)
+--             due = next
+--         end
+--     )
+export class DateField extends StatelessWidget
+	value: Date?
+	placeholder: string
+	onChanged: function?
+	enabled: boolean
+	autofocus: boolean
+	width: float?
+
+	fn init(
+		value: Date? = nil,
+		placeholder: string = "Pick a date…",
+		onChanged: function? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		width: float? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.placeholder = placeholder
+		self.onChanged = onChanged
+		self.enabled = enabled
+		self.autofocus = autofocus
+		self.width = width
+	end
+
+	local fn open(context: BuildContext) -> nil
+		local origin: Offset = absoluteOf(context.element())
+
+		showDatePicker(
+			context,
+			origin.dx,
+			origin.dy + context.size().height + 4.0,
+			self.value,
+			fn(picked: Date)
+				local changed: function? = self.onChanged
+
+				if changed != nil then
+					changed(picked)
+				end
+			end
+		)
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		if not self.enabled then
+			return
+		end
+
+		if motionOn(el.data.scratch, "focus", el.data.focused, 0.14).step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+		local focused: boolean = scratch.focused == true
+
+		local label: string = self.placeholder
+		local style: TextStyle = theme.caption
+		local value: Date? = self.value
+
+		if value != nil then
+			label = value!.describe()
+			style = theme.body
+		end
+
+		local edge: Color = theme.border.lerp(
+			theme.primary,
+			motionOn(scratch.scratch, "focus", focused, 0.14).value
+		)
+
+		local box: Widget = Container(
+			width: self.width,
+			color: theme.surface,
+			border: edge,
+			radius: theme.radius,
+			padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
+			child: Row(
+				children: {
+					Expanded(child: Text(label, style: style, softWrap: false, maxLines: 1)),
+					Icon(Icons.calendarToday, 18.0, theme.textMuted),
+				}
+			)
+		)
+
+		if not self.enabled then
+			return box
+		end
+
+		return Focus(
+			child: GestureDetector(
+				child: box,
+				onTap: fn()
+					self.open(context)
+				end,
+				onTapDown: fn()
+					node.requestFocus()
+				end
+			),
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if event.key != "return" and event.key != "space" and event.key != "down" then
+					return false
+				end
+
+				self.open(context)
+
+				return true
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+end

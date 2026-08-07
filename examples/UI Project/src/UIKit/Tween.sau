@@ -1,0 +1,254 @@
+class EasingFunctions
+	static fn linear(t: float)
+		return t
+	end
+
+	static fn easeInQuad(t: float)
+		return t * t
+	end
+
+	static fn easeOutQuad(t: float)
+		return t * (2.0 - t)
+	end
+
+	static fn easeInOutQuad(t: float)
+		if t < 0.5 then
+			return 2.0 * t * t
+		else
+			return -1.0 + (4.0 - 2.0 * t) * t
+		end
+	end
+
+	static fn easeInCubic(t: float)
+		return t * t * t
+	end
+
+	static fn easeOutCubic(t: float)
+		t = t - 1.0
+		return t * t * t + 1.0
+	end
+
+	static fn easeInOutCubic(t: float)
+		if t < 0.5 then
+			return 4.0 * t * t * t
+		else
+			t = t - 1.0
+			return 4.0 * t * t * t + 1.0
+		end
+	end
+
+	static fn easeInQuart(t: float)
+		return t * t * t * t
+	end
+
+	static fn easeOutQuart(t: float)
+		t = t - 1.0
+		return 1.0 - t * t * t * t
+	end
+
+	static fn easeInOutQuart(t: float)
+		if t < 0.5 then
+			return 8.0 * t * t * t * t
+		else
+			t = t - 1.0
+			return 1.0 - 8.0 * t * t * t * t
+		end
+	end
+
+	static fn easeInQuint(t: float)
+		return t * t * t * t * t
+	end
+
+	static fn easeOutQuint(t: float)
+		t = t - 1.0
+		return t * t * t * t * t + 1.0
+	end
+
+	static fn easeInOutQuint(t: float)
+		if t < 0.5 then
+			return 16.0 * t * t * t * t * t
+		else
+			t = t - 1.0
+			return 16.0 * t * t * t * t * t + 1.0
+		end
+	end
+
+	static fn easeInSine(t: float)
+		return 1.0 - Math.cos(t * Math.pi / 2.0)
+	end
+
+	static fn easeOutSine(t: float)
+		return Math.sin(t * Math.pi / 2.0)
+	end
+
+	static fn easeInOutSine(t: float)
+		return -(Math.cos(Math.pi * t) - 1.0) / 2.0
+	end
+
+	static fn easeInExpo(t: float)
+		return t == 0.0 and 0.0 or Math.pow(2.0, 10.0 * (t - 1.0))
+	end
+
+	static fn easeOutExpo(t: float)
+		return t == 1.0 and 1.0 or 1.0 - Math.pow(2.0, -10.0 * t)
+	end
+
+	static fn easeInOutExpo(t: float)
+		if t == 0.0 then
+			return 0.0
+		end
+		if t == 1.0 then
+			return 1.0
+		end
+		if t < 0.5 then
+			return Math.pow(2.0, 20.0 * t - 10.0) / 2.0
+		else
+			return (2.0 - Math.pow(2.0, -20.0 * t + 10.0)) / 2.0
+		end
+	end
+
+	static local c4: float = 2.0 * Math.pi / 3.0
+	static local c5: float = 2.0 * Math.pi / 4.5
+
+	static fn easeInElastic(t: float)
+		if t == 0.0 then
+			return 0.0
+		end
+		if t == 1.0 then
+			return 1.0
+		end
+		return -Math.pow(2.0, 10.0 * t - 10.0) * Math.sin((t * 10.0 - 10.75) * c4)
+	end
+
+	static fn easeOutElastic(t: float)
+		if t == 0.0 then
+			return 0.0
+		end
+		if t == 1.0 then
+			return 1.0
+		end
+		return Math.pow(2.0, -10.0 * t) * Math.sin((t * 10.0 - 0.75) * c5) + 1.0
+	end
+
+	static fn easeInOutElastic(t: float)
+		if t == 0.0 then
+			return 0.0
+		end
+		if t == 1.0 then
+			return 1.0
+		end
+		if t < 0.5 then
+			return -(Math.pow(2.0, 20.0 * t - 10.0) * Math.sin((20.0 * t - 11.125) * c5)) / 2.0
+		else
+			return Math.pow(2.0, -20.0 * t + 10.0) * Math.sin((20.0 * t - 11.125) * c5) / 2.0 + 1.0
+		end
+	end
+end
+
+export enum EasingTypes
+	Linear,
+	InQuad,
+	InCubic,
+	InQuart,
+	InQuint,
+	InSine,
+	InExpo,
+	InElastic,
+	OutQuad,
+	OutCubic,
+	OutQuart,
+	OutQuint,
+	OutSine,
+	OutExpo,
+	OutElastic,
+
+	-- Ease in *and* out: slow at both ends, quickest in the middle. This is
+	-- what a two-way UI transition wants — a knob sliding, a panel opening —
+	-- because the curve reads the same run backwards as forwards.
+	InOutQuad,
+	InOutCubic,
+	InOutQuart,
+	InOutQuint,
+	InOutSine,
+	InOutExpo,
+	InOutElastic
+end
+
+export class Tween
+	local running: boolean
+	local ended: boolean
+	local duration: float = 0.0
+	local current: float
+	local easingType: EasingTypes
+
+	fn init(easingType: EasingTypes)
+		self.running = false
+		self.ended = true
+		self.current = 0.0
+		self.easingType = easingType
+	end
+
+	fn start(duration: float?)
+		self.duration = match duration
+			case nil then 0.0
+
+			case v then v
+		end
+
+		self.ended = false
+		self.running = true
+		self.current = 0.0
+	end
+
+	fn stop()
+		self.current = self.duration
+		self.ended = true
+		self.running = false
+	end
+
+	fn setEasingType(easingType: EasingTypes)
+		self.easingType = easingType
+	end
+
+	fn step(dt: float) -> float
+		self.current = self.current + dt
+
+		if self.current >= self.duration then
+			self.ended = true
+			self.running = false
+			self.current = self.current - dt
+
+			return 1.0
+		end
+
+		local x = self.current / self.duration
+
+		return match self.easingType
+			case EasingTypes.Linear then EasingFunctions.linear(x)
+
+			case EasingTypes.InQuad then EasingFunctions.easeInQuad(x)
+			case EasingTypes.InCubic then EasingFunctions.easeInCubic(x)
+			case EasingTypes.InQuart then EasingFunctions.easeInQuart(x)
+			case EasingTypes.InQuint then EasingFunctions.easeInQuint(x)
+			case EasingTypes.InSine then EasingFunctions.easeInSine(x)
+			case EasingTypes.InExpo then EasingFunctions.easeInExpo(x)
+			case EasingTypes.InElastic then EasingFunctions.easeInElastic(x)
+
+			case EasingTypes.OutQuad then EasingFunctions.easeOutQuad(x)
+			case EasingTypes.OutCubic then EasingFunctions.easeOutCubic(x)
+			case EasingTypes.OutQuart then EasingFunctions.easeOutQuart(x)
+			case EasingTypes.OutQuint then EasingFunctions.easeOutQuint(x)
+			case EasingTypes.OutSine then EasingFunctions.easeOutSine(x)
+			case EasingTypes.OutExpo then EasingFunctions.easeOutExpo(x)
+			case EasingTypes.OutElastic then EasingFunctions.easeOutElastic(x)
+
+			case EasingTypes.InOutQuad then EasingFunctions.easeInOutQuad(x)
+			case EasingTypes.InOutCubic then EasingFunctions.easeInOutCubic(x)
+			case EasingTypes.InOutQuart then EasingFunctions.easeInOutQuart(x)
+			case EasingTypes.InOutQuint then EasingFunctions.easeInOutQuint(x)
+			case EasingTypes.InOutSine then EasingFunctions.easeInOutSine(x)
+			case EasingTypes.InOutExpo then EasingFunctions.easeInOutExpo(x)
+			case EasingTypes.InOutElastic then EasingFunctions.easeInOutElastic(x)
+		end
+	end
+end

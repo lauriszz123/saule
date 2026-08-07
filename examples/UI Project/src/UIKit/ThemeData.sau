@@ -1,0 +1,151 @@
+import * from Geometry
+import * from Color
+import * from TextStyle
+
+-- ============================================================================
+-- Theme data
+-- ============================================================================
+--
+-- Split out from Theme.sau so that Framework.sau can name this type.
+--
+-- `Element.data.theme` holds a `ThemeData`, which means `ElementData` has to
+-- name it, which means Framework.sau has to import it. The `Theme` *widget*
+-- extends `StatelessWidget` and so must sit above the framework — but the data
+-- it carries is only colours, text styles and metrics, and depends on nothing
+-- from the framework at all. Keeping the two in one file forced the element's
+-- theme slot to be typed `any?` and every read of it to go through an `as`.
+--
+-- So the data lives below the framework and the widget above it, and the slot
+-- is properly typed.
+
+-- Everything a themed widget reads.
+--
+-- Build one with `ThemeData()` for the defaults, or `dark()` / `light()`, and
+-- override individual fields through the constructor's named arguments.
+export class ThemeData
+	-- Surfaces, from the page background upward.
+	background: Color
+	surface: Color
+	surfaceLight: Color
+	border: Color
+
+	-- Content.
+	text: Color
+	textMuted: Color
+
+	-- Accents.
+	primary: Color
+	success: Color
+	warning: Color
+	danger: Color
+
+	-- Colour used behind selected text and for selection handles.
+	selection: Color
+
+	-- Type.
+	body: TextStyle
+	title: TextStyle
+	caption: TextStyle
+
+	-- Metrics shared by the controls, so a theme change resizes consistently.
+	radius: float
+	spacing: float
+	controlPadding: EdgeInsets
+
+	fn init(
+		background: Color? = nil,
+		surface: Color? = nil,
+		surfaceLight: Color? = nil,
+		border: Color? = nil,
+		text: Color? = nil,
+		textMuted: Color? = nil,
+		primary: Color? = nil,
+		success: Color? = nil,
+		warning: Color? = nil,
+		danger: Color? = nil,
+		selection: Color? = nil,
+		body: TextStyle? = nil,
+		title: TextStyle? = nil,
+		caption: TextStyle? = nil,
+		radius: float = 6.0,
+		spacing: float = 10.0,
+		controlPadding: EdgeInsets? = nil
+	)
+		self.background = background ?? Colors.surface
+		self.surface = surface ?? Colors.surface
+		self.surfaceLight = surfaceLight ?? Colors.surfaceLight
+		self.border = border ?? Colors.border
+		self.text = text ?? Colors.text
+		self.textMuted = textMuted ?? Colors.textMuted
+		self.primary = primary ?? Colors.primary
+		self.success = success ?? Colors.success
+		self.warning = warning ?? Colors.warning
+		self.danger = danger ?? Colors.danger
+		self.selection = selection ?? self.primary.withAlpha(0.35)
+		self.body = body ?? TextStyle(color: self.text)
+		self.title = title ?? TextStyle(color: self.text, size: 20.0)
+		self.caption = caption ?? TextStyle(color: self.textMuted)
+		self.radius = radius
+		self.spacing = spacing
+		self.controlPadding = controlPadding ?? EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0)
+	end
+
+	-- The default: the dark palette the kit ships with.
+	static fn dark() -> ThemeData
+		return ThemeData()
+	end
+
+	static fn light() -> ThemeData
+		return ThemeData(
+			background: Color.rgb(246, 247, 249),
+			surface: Color.rgb(255, 255, 255),
+			surfaceLight: Color.rgb(238, 240, 244),
+			border: Color.rgb(206, 211, 220),
+			text: Color.rgb(28, 31, 38),
+			textMuted: Color.rgb(104, 112, 128),
+			primary: Color.rgb(48, 100, 208)
+		)
+	end
+
+	-- A copy with some fields replaced — for "the same theme, but danger-red
+	-- accents" without restating the palette.
+	fn copyWith(
+		background: Color? = nil,
+		surface: Color? = nil,
+		surfaceLight: Color? = nil,
+		border: Color? = nil,
+		text: Color? = nil,
+		textMuted: Color? = nil,
+		primary: Color? = nil,
+		success: Color? = nil,
+		warning: Color? = nil,
+		danger: Color? = nil,
+		selection: Color? = nil,
+		body: TextStyle? = nil,
+		title: TextStyle? = nil,
+		caption: TextStyle? = nil,
+		radius: float? = nil,
+		spacing: float? = nil,
+		controlPadding: EdgeInsets? = nil
+	) -> ThemeData
+		return ThemeData(
+			background ?? self.background,
+			surface ?? self.surface,
+			surfaceLight ?? self.surfaceLight,
+			border ?? self.border,
+			text ?? self.text,
+			textMuted ?? self.textMuted,
+			primary ?? self.primary,
+			success ?? self.success,
+			warning ?? self.warning,
+			danger ?? self.danger,
+			selection ?? self.selection,
+			body ?? self.body,
+			title ?? self.title,
+			caption ?? self.caption,
+			radius ?? self.radius,
+			spacing ?? self.spacing,
+			controlPadding ?? self.controlPadding
+		)
+	end
+end

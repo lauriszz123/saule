@@ -1,0 +1,296 @@
+import * from engine
+import * from Color
+import * from Geometry
+
+-- Split on a single-character separator. `String.find` gives the next
+-- occurrence; everything between the cursors is one piece, including empty
+-- ones, so a blank line survives wrapping.
+export fn splitOn(text: string, separator: string) -> table<string>
+	local out: table<string> = {}
+	local cursor: integer = 1
+	local scanning: boolean = true
+
+	while scanning do
+		local start: integer?, stop: integer? = String.find(text, separator, cursor)
+
+		if start == nil then
+			scanning = false
+		else
+			out[#out + 1] = String.sub(text, cursor, start! - 1)
+			cursor = start! + String.len(separator)
+		end
+	end
+
+	out[#out + 1] = String.sub(text, cursor)
+
+	return out
+end
+
+-- How a `Text` widget is drawn, plus the measurement the layout pass needs.
+--
+-- Fonts are a global, handle-based resource in the engine, so styles share a
+-- process-wide cache keyed by size: asking for the same size twice reuses the
+-- same handle instead of allocating a new atlas every frame.
+export class TextStyle
+	color: Color
+	size: float?
+
+	static local fonts: table = {}
+
+	fn init(color: Color? = nil, size: float? = nil)
+		self.color = color ?? Colors.text
+		self.size = size
+	end
+
+	fn withColor(color: Color) -> TextStyle
+		return TextStyle(color, self.size)
+	end
+
+	fn withSize(size: float) -> TextStyle
+		return TextStyle(self.color, size)
+	end
+
+	-- Bind the font this style asks for.
+	--
+	-- A style with no size binds handle 0, the engine's default face. It has to
+	-- bind *something*: fonts are global state, so leaving whatever the last
+	-- style set would make a widget's measured size depend on the order the
+	-- tree happened to be walked in.
+	fn applyFont() -> nil
+		local size: float? = self.size
+		local scale: float = Display.scale()
+
+		if size == nil then
+			-- The default face has no size to scale, so a scaled display gets
+			-- the same glyphs magnified by the root transform. Give a size to
+			-- any text that needs to stay sharp.
+			Graphics.setFont(0)
+
+			return
+		end
+
+		-- Rasterize at the *physical* size: a glyph built at 13px and then
+		-- magnified by the root transform is blurry, and type is the one thing
+		-- that shows it immediately.
+		local physical: float = size! * scale
+		local key: string = String.format("%.2f", physical)
+		local cached = fonts[key]
+
+		if cached == nil then
+			local created: integer = Graphics.newFont(physical)
+			fonts[key] = created
+			Graphics.setFont(created)
+		else
+			Graphics.setFont(cached)
+		end
+	end
+
+	-- Font *and* colour — what `paint` wants.
+	fn apply() -> nil
+		self.applyFont()
+		self.color.apply()
+	end
+
+	-- Intrinsic size of `text` in this style. Requires a live window: the
+	-- engine measures against the real font atlas.
+	-- Size of `text` in *logical* units — the space layout should reserve.
+	--
+	-- The font is physical, so the raw measurement is divided back down. That
+	-- keeps every layout calculation in one coordinate system.
+	fn measure(text: string) -> Size
+		self.applyFont()
+
+		local scale: float = self.fontScale()
+
+		return Size(Graphics.getTextWidth(text) / scale, Graphics.getFontHeight() / scale)
+	end
+
+	-- Height of one line, independent of the text in it.
+	fn lineHeight() -> float
+		self.applyFont()
+
+		return Graphics.getFontHeight() / self.fontScale()
+	end
+
+	-- The factor the bound font was built at. The default face is never
+	-- rebuilt, so it measures 1:1 and is magnified by the root transform.
+	local fn fontScale() -> float
+		if self.size == nil then
+			return 1.0
+		end
+
+		return Display.scale()
+	end
+
+	-- Draw `text` with its top-left at the logical point `x, y`.
+	--
+	-- Every text-drawing widget goes through here rather than calling
+	-- `Graphics.print` itself. On a scaled display the glyphs are already
+	-- physical, so this maps the anchor into device space and draws with the
+	-- transform reset — `transformPoint` rather than a multiply, so it stays
+	-- correct inside a translated or nested transform too.
+	fn draw(text: string, x: float, y: float) -> nil
+		self.apply()
+
+		if self.fontScale() == 1.0 then
+			Graphics.print(text, x, y)
+
+			return
+		end
+
+		local px: float, py: float = Graphics.transformPoint(x, y)
+
+		Graphics.push()
+		Graphics.origin()
+		Graphics.print(text, px, py)
+		Graphics.pop()
+	end
+
+	-- Split `text` into lines that each fit within `maxWidth`.
+	--
+	-- Explicit newlines always break. Within a paragraph the break is greedy and
+	-- on spaces, which is what a UI wants — no hyphenation, no justification. A
+	-- single word wider than `maxWidth` is left to overflow rather than being
+	-- chopped mid-word, since that reads worse than a clipped edge.
+	fn wrap(text: string, maxWidth: float) -> table<string>
+		local out: table<string> = {}
+
+		for paragraph: string in splitOn(text, "\n") do
+			self.wrapParagraph(paragraph, maxWidth, out)
+		end
+
+		if #out == 0 then
+			out[1] = ""
+		end
+
+		return out
+	end
+
+	local fn wrapParagraph(paragraph: string, maxWidth: float, out: table<string>) -> nil
+		if #paragraph == 0 then
+			out[#out + 1] = ""
+
+			return
+		end
+
+		if self.measure(paragraph).width <= maxWidth then
+			out[#out + 1] = paragraph
+
+			return
+		end
+
+		local line: string = ""
+
+		for word: string in splitOn(paragraph, " ") do
+			local candidate: string = word
+
+			if #line > 0 then
+				candidate = line .. " " .. word
+			end
+
+			if self.measure(candidate).width <= maxWidth then
+				line = candidate
+			else
+				if #line > 0 then
+					out[#out + 1] = line
+				end
+
+				line = word
+			end
+		end
+
+		if #line > 0 then
+			out[#out + 1] = line
+		end
+	end
+
+	-- Where each visual line *starts*, as a 1-based index into `text`.
+	--
+	-- The editing counterpart to `wrap`. Returning indices rather than strings
+	-- is the whole point: an editor has to map a caret position to a line and
+	-- back, and re-joined strings lose that correspondence the moment the text
+	-- contains a double space or a break that swallowed one.
+	--
+	-- The first entry is always 1, so the result is never empty.
+	fn wrapIndices(text: string, maxWidth: float, softWrap: boolean = true) -> table<integer>
+		local starts: table<integer> = {1}
+		local length: integer = String.len(text)
+
+		if length == 0 then
+			return starts
+		end
+
+		local lineStart: integer = 1
+		-- Last index a break could go at, i.e. after the most recent space.
+		local lastBreak: integer = 0
+		local i: integer = 1
+
+		while i <= length do
+			local ch: string = String.sub(text, i, i)
+
+			if ch == "\n" then
+				starts[#starts + 1] = i + 1
+				lineStart = i + 1
+				lastBreak = 0
+			else
+				if ch == " " then
+					lastBreak = i
+				end
+
+				if softWrap and maxWidth < Math.huge then
+					local width: float = self.measure(String.sub(text, lineStart, i)).width
+
+					if width > maxWidth and i > lineStart then
+						-- Break after the last space if there was one, otherwise
+						-- mid-word rather than overflowing forever.
+						local at: integer = i
+
+						if lastBreak > lineStart then
+							at = lastBreak + 1
+						end
+
+						starts[#starts + 1] = at
+						lineStart = at
+						lastBreak = 0
+						i = at - 1
+					end
+				end
+			end
+
+			i = i + 1
+		end
+
+		return starts
+	end
+
+	-- The caret index closest to `x` pixels into `text` — what a click on a text
+	-- field resolves to. Walks the prefixes and picks the nearest boundary, so
+	-- clicking the right half of a character lands after it.
+	fn indexAt(text: string, x: float) -> integer
+		local length: integer = String.len(text)
+
+		if x <= 0.0 or length == 0 then
+			return 0
+		end
+
+		local previous: float = 0.0
+		local i: integer = 1
+
+		while i <= length do
+			local width: float = self.measure(String.sub(text, 1, i)).width
+
+			if width >= x then
+				if x - previous < width - x then
+					return i - 1
+				end
+
+				return i
+			end
+
+			previous = width
+			i = i + 1
+		end
+
+		return length
+	end
+end
