@@ -18,7 +18,9 @@ mod init;
 mod project;
 mod run;
 
-/// Stack reserved for the thread the toolchain actually runs on.
+/// Stack reserved for the thread the toolchain actually runs on, on every
+/// platform except macOS (see [`main`] for why macOS stays on the first
+/// thread and how it gets its stack instead).
 ///
 /// The interpreter is a recursive tree-walker: one Saule call costs a chain of
 /// native frames, and those frames are large (they carry `Result<Vec<Value>,
@@ -42,6 +44,18 @@ mod run;
 const RUN_STACK_SIZE: usize = 1024 * 1024 * 1024;
 
 fn main() {
+    // macOS: stay on the process's first thread. AppKit refuses window and
+    // menu work from anywhere else — `Window.create` on a spawned thread dies
+    // in `-[NSApplication setMainMenu:]` with an uncatchable
+    // `NSInternalInconsistencyException` — and minifb pumps the event queue
+    // from whichever thread opened the window, so the whole interpreter has to
+    // live here. The stack this thread gets is set by the linker in
+    // `build.rs`, because a thread's stack cannot be resized after exec.
+    if cfg!(target_os = "macos") {
+        real_main();
+        return;
+    }
+
     // Everything runs on the big-stack thread; `main` only joins it and
     // forwards the exit code. Nothing below should call `std::process::exit`
     // expecting to bypass this.

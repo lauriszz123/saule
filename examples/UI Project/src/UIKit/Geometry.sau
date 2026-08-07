@@ -12,389 +12,389 @@
 -- `Math.max` is declared as `number`, which won't bind to a `float` slot, so
 -- the layout code uses these instead.
 export fn atLeast(value: float, floor: float) -> float
-	if value < floor then
-		return floor
-	end
+  if value < floor then
+    return floor
+  end
 
-	return value
+  return value
 end
 
 export fn atLeastZero(value: float) -> float
-	return atLeast(value, 0.0)
+  return atLeast(value, 0.0)
 end
 
 export fn atMost(value: float, ceiling: float) -> float
-	if value > ceiling then
-		return ceiling
-	end
+  if value > ceiling then
+    return ceiling
+  end
 
-	return value
+  return value
 end
 
 export class Size
-	width: float
-	height: float
+  width: float
+  height: float
 
-	fn init(width: float = 0.0, height: float = 0.0)
-		self.width = width
-		self.height = height
-	end
+  fn init(width: float = 0.0, height: float = 0.0)
+    self.width = width
+    self.height = height
+  end
 
-	static fn zero() -> Size
-		return Size(0.0, 0.0)
-	end
+  static fn zero() -> Size
+    return Size(0.0, 0.0)
+  end
 
-	static fn square(side: float) -> Size
-		return Size(side, side)
-	end
+  static fn square(side: float) -> Size
+    return Size(side, side)
+  end
 
-	fn describe() -> string
-		return String.format("Size(%.1f, %.1f)", self.width, self.height)
-	end
+  fn describe() -> string
+    return String.format("Size(%.1f, %.1f)", self.width, self.height)
+  end
 end
 
 export class Offset
-	dx: float
-	dy: float
+  dx: float
+  dy: float
 
-	fn init(dx: float = 0.0, dy: float = 0.0)
-		self.dx = dx
-		self.dy = dy
-	end
+  fn init(dx: float = 0.0, dy: float = 0.0)
+    self.dx = dx
+    self.dy = dy
+  end
 
-	static fn zero() -> Offset
-		return Offset(0.0, 0.0)
-	end
+  static fn zero() -> Offset
+    return Offset(0.0, 0.0)
+  end
 
-	fn translate(dx: float, dy: float) -> Offset
-		return Offset(self.dx + dx, self.dy + dy)
-	end
+  fn translate(dx: float, dy: float) -> Offset
+    return Offset(self.dx + dx, self.dy + dy)
+  end
 
-	fn describe() -> string
-		return String.format("Offset(%.1f, %.1f)", self.dx, self.dy)
-	end
+  fn describe() -> string
+    return String.format("Offset(%.1f, %.1f)", self.dx, self.dy)
+  end
 end
 
 -- A positioned box. Used where a plain `Size` isn't enough — a spritesheet
 -- cell, a hit region, a chart's plot area.
 export class Rect
-	x: float
-	y: float
-	width: float
-	height: float
+  x: float
+  y: float
+  width: float
+  height: float
 
-	fn init(x: float = 0.0, y: float = 0.0, width: float = 0.0, height: float = 0.0)
-		self.x = x
-		self.y = y
-		self.width = width
-		self.height = height
-	end
+  fn init(x: float = 0.0, y: float = 0.0, width: float = 0.0, height: float = 0.0)
+    self.x = x
+    self.y = y
+    self.width = width
+    self.height = height
+  end
 
-	static fn fromSize(size: Size) -> Rect
-		return Rect(0.0, 0.0, size.width, size.height)
-	end
+  static fn fromSize(size: Size) -> Rect
+    return Rect(0.0, 0.0, size.width, size.height)
+  end
 
-	-- One cell of a grid-sliced spritesheet, numbered left to right, top to
-	-- bottom starting at 0.
-	static fn cell(index: integer, width: float, height: float, columns: integer) -> Rect
-		local column: integer = index % columns
-		local row: integer = index / columns
+  -- One cell of a grid-sliced spritesheet, numbered left to right, top to
+  -- bottom starting at 0.
+  static fn cell(index: integer, width: float, height: float, columns: integer) -> Rect
+    local column: integer = index % columns
+    local row: integer = index / columns
 
-		return Rect(float(column) * width, float(row) * height, width, height)
-	end
+    return Rect(float(column) * width, float(row) * height, width, height)
+  end
 
-	fn right() -> float
-		return self.x + self.width
-	end
+  fn right() -> float
+    return self.x + self.width
+  end
 
-	fn bottom() -> float
-		return self.y + self.height
-	end
+  fn bottom() -> float
+    return self.y + self.height
+  end
 
-	fn size() -> Size
-		return Size(self.width, self.height)
-	end
+  fn size() -> Size
+    return Size(self.width, self.height)
+  end
 
-	fn contains(px: float, py: float) -> boolean
-		return px >= self.x and py >= self.y and px < self.right() and py < self.bottom()
-	end
+  fn contains(px: float, py: float) -> boolean
+    return px >= self.x and py >= self.y and px < self.right() and py < self.bottom()
+  end
 
-	fn translate(dx: float, dy: float) -> Rect
-		return Rect(self.x + dx, self.y + dy, self.width, self.height)
-	end
+  fn translate(dx: float, dy: float) -> Rect
+    return Rect(self.x + dx, self.y + dy, self.width, self.height)
+  end
 end
 
 -- Padding / margin, one value per edge.
 export class EdgeInsets
-	left: float
-	top: float
-	right: float
-	bottom: float
+  left: float
+  top: float
+  right: float
+  bottom: float
 
-	fn init(left: float = 0.0, top: float = 0.0, right: float = 0.0, bottom: float = 0.0)
-		self.left = left
-		self.top = top
-		self.right = right
-		self.bottom = bottom
-	end
+  fn init(left: float = 0.0, top: float = 0.0, right: float = 0.0, bottom: float = 0.0)
+    self.left = left
+    self.top = top
+    self.right = right
+    self.bottom = bottom
+  end
 
-	static fn zero() -> EdgeInsets
-		return EdgeInsets(0.0, 0.0, 0.0, 0.0)
-	end
+  static fn zero() -> EdgeInsets
+    return EdgeInsets(0.0, 0.0, 0.0, 0.0)
+  end
 
-	static fn all(value: float) -> EdgeInsets
-		return EdgeInsets(value, value, value, value)
-	end
+  static fn all(value: float) -> EdgeInsets
+    return EdgeInsets(value, value, value, value)
+  end
 
-	static fn symmetric(horizontal: float = 0.0, vertical: float = 0.0) -> EdgeInsets
-		return EdgeInsets(horizontal, vertical, horizontal, vertical)
-	end
+  static fn symmetric(horizontal: float = 0.0, vertical: float = 0.0) -> EdgeInsets
+    return EdgeInsets(horizontal, vertical, horizontal, vertical)
+  end
 
-	static fn only(left: float = 0.0, top: float = 0.0, right: float = 0.0, bottom: float = 0.0) -> EdgeInsets
-		return EdgeInsets(left, top, right, bottom)
-	end
+  static fn only(left: float = 0.0, top: float = 0.0, right: float = 0.0, bottom: float = 0.0) -> EdgeInsets
+    return EdgeInsets(left, top, right, bottom)
+  end
 
-	-- Total space consumed on each axis.
-	fn horizontal() -> float
-		return self.left + self.right
-	end
+  -- Total space consumed on each axis.
+  fn horizontal() -> float
+    return self.left + self.right
+  end
 
-	fn vertical() -> float
-		return self.top + self.bottom
-	end
+  fn vertical() -> float
+    return self.top + self.bottom
+  end
 end
 
 -- A point in a box expressed in relative coordinates: `-1` is the leading
 -- edge, `0` the centre, `1` the trailing edge — same convention as Flutter.
 export class Alignment
-	x: float
-	y: float
+  x: float
+  y: float
 
-	fn init(x: float = 0.0, y: float = 0.0)
-		self.x = x
-		self.y = y
-	end
+  fn init(x: float = 0.0, y: float = 0.0)
+    self.x = x
+    self.y = y
+  end
 
-	static fn topLeft() -> Alignment
-		return Alignment(-1.0, -1.0)
-	end
+  static fn topLeft() -> Alignment
+    return Alignment(-1.0, -1.0)
+  end
 
-	static fn topCenter() -> Alignment
-		return Alignment(0.0, -1.0)
-	end
+  static fn topCenter() -> Alignment
+    return Alignment(0.0, -1.0)
+  end
 
-	static fn topRight() -> Alignment
-		return Alignment(1.0, -1.0)
-	end
+  static fn topRight() -> Alignment
+    return Alignment(1.0, -1.0)
+  end
 
-	static fn centerLeft() -> Alignment
-		return Alignment(-1.0, 0.0)
-	end
+  static fn centerLeft() -> Alignment
+    return Alignment(-1.0, 0.0)
+  end
 
-	static fn center() -> Alignment
-		return Alignment(0.0, 0.0)
-	end
+  static fn center() -> Alignment
+    return Alignment(0.0, 0.0)
+  end
 
-	static fn centerRight() -> Alignment
-		return Alignment(1.0, 0.0)
-	end
+  static fn centerRight() -> Alignment
+    return Alignment(1.0, 0.0)
+  end
 
-	static fn bottomLeft() -> Alignment
-		return Alignment(-1.0, 1.0)
-	end
+  static fn bottomLeft() -> Alignment
+    return Alignment(-1.0, 1.0)
+  end
 
-	static fn bottomCenter() -> Alignment
-		return Alignment(0.0, 1.0)
-	end
+  static fn bottomCenter() -> Alignment
+    return Alignment(0.0, 1.0)
+  end
 
-	static fn bottomRight() -> Alignment
-		return Alignment(1.0, 1.0)
-	end
+  static fn bottomRight() -> Alignment
+    return Alignment(1.0, 1.0)
+  end
 
-	-- Where a `child`-sized box sits inside a `parent`-sized box.
-	fn inscribe(child: Size, parent: Size) -> Offset
-		local freeX: float = parent.width - child.width
-		local freeY: float = parent.height - child.height
+  -- Where a `child`-sized box sits inside a `parent`-sized box.
+  fn inscribe(child: Size, parent: Size) -> Offset
+    local freeX: float = parent.width - child.width
+    local freeY: float = parent.height - child.height
 
-		return Offset(freeX * (self.x + 1.0) / 2.0, freeY * (self.y + 1.0) / 2.0)
-	end
+    return Offset(freeX * (self.x + 1.0) / 2.0, freeY * (self.y + 1.0) / 2.0)
+  end
 end
 
 -- The immutable "how big are you allowed to be" message a parent sends down.
 -- An unbounded axis carries `Math.huge` as its maximum, exactly like Flutter's
 -- `double.infinity`.
 export class BoxConstraints
-	minWidth: float
-	maxWidth: float
-	minHeight: float
-	maxHeight: float
+  minWidth: float
+  maxWidth: float
+  minHeight: float
+  maxHeight: float
 
-	fn init(minWidth: float, maxWidth: float, minHeight: float, maxHeight: float)
-		self.minWidth = minWidth
-		self.maxWidth = maxWidth
-		self.minHeight = minHeight
-		self.maxHeight = maxHeight
-	end
+  fn init(minWidth: float, maxWidth: float, minHeight: float, maxHeight: float)
+    self.minWidth = minWidth
+    self.maxWidth = maxWidth
+    self.minHeight = minHeight
+    self.maxHeight = maxHeight
+  end
 
-	static fn infinity() -> float
-		return Math.huge
-	end
+  static fn infinity() -> float
+    return Math.huge
+  end
 
-	-- No constraint at all: any size is legal.
-	static fn unbounded() -> BoxConstraints
-		return BoxConstraints(0.0, Math.huge, 0.0, Math.huge)
-	end
+  -- No constraint at all: any size is legal.
+  static fn unbounded() -> BoxConstraints
+    return BoxConstraints(0.0, Math.huge, 0.0, Math.huge)
+  end
 
-	-- Exactly this size, nothing else.
-	static fn tight(size: Size) -> BoxConstraints
-		return BoxConstraints(size.width, size.width, size.height, size.height)
-	end
+  -- Exactly this size, nothing else.
+  static fn tight(size: Size) -> BoxConstraints
+    return BoxConstraints(size.width, size.width, size.height, size.height)
+  end
 
-	-- Tight on the axes that were given, unbounded on the rest.
-	static fn tightFor(width: float? = nil, height: float? = nil) -> BoxConstraints
-		local minW: float = 0.0
-		local maxW: float = Math.huge
-		local minH: float = 0.0
-		local maxH: float = Math.huge
+  -- Tight on the axes that were given, unbounded on the rest.
+  static fn tightFor(width: float? = nil, height: float? = nil) -> BoxConstraints
+    local minW: float = 0.0
+    local maxW: float = Math.huge
+    local minH: float = 0.0
+    local maxH: float = Math.huge
 
-		if width != nil then
-			minW = width
-			maxW = width
-		end
+    if width != nil then
+      minW = width
+      maxW = width
+    end
 
-		if height != nil then
-			minH = height
-			maxH = height
-		end
+    if height != nil then
+      minH = height
+      maxH = height
+    end
 
-		return BoxConstraints(minW, maxW, minH, maxH)
-	end
+    return BoxConstraints(minW, maxW, minH, maxH)
+  end
 
-	-- At most this size, but smaller is fine.
-	static fn loose(size: Size) -> BoxConstraints
-		return BoxConstraints(0.0, size.width, 0.0, size.height)
-	end
+  -- At most this size, but smaller is fine.
+  static fn loose(size: Size) -> BoxConstraints
+    return BoxConstraints(0.0, size.width, 0.0, size.height)
+  end
 
-	fn hasBoundedWidth() -> boolean
-		return self.maxWidth < Math.huge
-	end
+  fn hasBoundedWidth() -> boolean
+    return self.maxWidth < Math.huge
+  end
 
-	fn hasBoundedHeight() -> boolean
-		return self.maxHeight < Math.huge
-	end
+  fn hasBoundedHeight() -> boolean
+    return self.maxHeight < Math.huge
+  end
 
-	fn hasTightWidth() -> boolean
-		return self.minWidth >= self.maxWidth
-	end
+  fn hasTightWidth() -> boolean
+    return self.minWidth >= self.maxWidth
+  end
 
-	fn hasTightHeight() -> boolean
-		return self.minHeight >= self.maxHeight
-	end
+  fn hasTightHeight() -> boolean
+    return self.minHeight >= self.maxHeight
+  end
 
-	fn constrainWidth(width: float) -> float
-		if width < self.minWidth then
-			return self.minWidth
-		end
+  fn constrainWidth(width: float) -> float
+    if width < self.minWidth then
+      return self.minWidth
+    end
 
-		if width > self.maxWidth then
-			return self.maxWidth
-		end
+    if width > self.maxWidth then
+      return self.maxWidth
+    end
 
-		return width
-	end
+    return width
+  end
 
-	fn constrainHeight(height: float) -> float
-		if height < self.minHeight then
-			return self.minHeight
-		end
+  fn constrainHeight(height: float) -> float
+    if height < self.minHeight then
+      return self.minHeight
+    end
 
-		if height > self.maxHeight then
-			return self.maxHeight
-		end
+    if height > self.maxHeight then
+      return self.maxHeight
+    end
 
-		return height
-	end
+    return height
+  end
 
-	fn constrain(size: Size) -> Size
-		return Size(self.constrainWidth(size.width), self.constrainHeight(size.height))
-	end
+  fn constrain(size: Size) -> Size
+    return Size(self.constrainWidth(size.width), self.constrainHeight(size.height))
+  end
 
-	-- The largest size these constraints allow. Unbounded axes fall back to
-	-- their minimum — "as big as possible" is meaningless without a bound.
-	fn biggest() -> Size
-		local w: float = self.maxWidth
-		local h: float = self.maxHeight
+  -- The largest size these constraints allow. Unbounded axes fall back to
+  -- their minimum — "as big as possible" is meaningless without a bound.
+  fn biggest() -> Size
+    local w: float = self.maxWidth
+    local h: float = self.maxHeight
 
-		if w >= Math.huge then
-			w = self.minWidth
-		end
+    if w >= Math.huge then
+      w = self.minWidth
+    end
 
-		if h >= Math.huge then
-			h = self.minHeight
-		end
+    if h >= Math.huge then
+      h = self.minHeight
+    end
 
-		return Size(w, h)
-	end
+    return Size(w, h)
+  end
 
-	fn smallest() -> Size
-		return Size(self.minWidth, self.minHeight)
-	end
+  fn smallest() -> Size
+    return Size(self.minWidth, self.minHeight)
+  end
 
-	-- Same maximums, no minimums — what a parent passes to a child it intends
-	-- to position rather than stretch.
-	fn loosen() -> BoxConstraints
-		return BoxConstraints(0.0, self.maxWidth, 0.0, self.maxHeight)
-	end
+  -- Same maximums, no minimums — what a parent passes to a child it intends
+  -- to position rather than stretch.
+  fn loosen() -> BoxConstraints
+    return BoxConstraints(0.0, self.maxWidth, 0.0, self.maxHeight)
+  end
 
-	-- Shrink by `insets` on every edge, clamping at zero.
-	fn deflate(insets: EdgeInsets) -> BoxConstraints
-		local h: float = insets.horizontal()
-		local v: float = insets.vertical()
+  -- Shrink by `insets` on every edge, clamping at zero.
+  fn deflate(insets: EdgeInsets) -> BoxConstraints
+    local h: float = insets.horizontal()
+    local v: float = insets.vertical()
 
-		local minW: float = atLeastZero(self.minWidth - h)
-		local minH: float = atLeastZero(self.minHeight - v)
-		local maxW: float = self.maxWidth
-		local maxH: float = self.maxHeight
+    local minW: float = atLeastZero(self.minWidth - h)
+    local minH: float = atLeastZero(self.minHeight - v)
+    local maxW: float = self.maxWidth
+    local maxH: float = self.maxHeight
 
-		if maxW < Math.huge then
-			maxW = atLeast(maxW - h, minW)
-		end
+    if maxW < Math.huge then
+      maxW = atLeast(maxW - h, minW)
+    end
 
-		if maxH < Math.huge then
-			maxH = atLeast(maxH - v, minH)
-		end
+    if maxH < Math.huge then
+      maxH = atLeast(maxH - v, minH)
+    end
 
-		return BoxConstraints(minW, maxW, minH, maxH)
-	end
+    return BoxConstraints(minW, maxW, minH, maxH)
+  end
 
-	fn withTightWidth(width: float) -> BoxConstraints
-		local w: float = self.constrainWidth(width)
+  fn withTightWidth(width: float) -> BoxConstraints
+    local w: float = self.constrainWidth(width)
 
-		return BoxConstraints(w, w, self.minHeight, self.maxHeight)
-	end
+    return BoxConstraints(w, w, self.minHeight, self.maxHeight)
+  end
 
-	fn withTightHeight(height: float) -> BoxConstraints
-		local h: float = self.constrainHeight(height)
+  fn withTightHeight(height: float) -> BoxConstraints
+    local h: float = self.constrainHeight(height)
 
-		return BoxConstraints(self.minWidth, self.maxWidth, h, h)
-	end
+    return BoxConstraints(self.minWidth, self.maxWidth, h, h)
+  end
 
-	-- Whether two constraints are the same box. The relayout cache compares
-	-- with this: identical constraints plus an unchanged subtree means last
-	-- frame's size is still correct.
-	fn sameAs(other: BoxConstraints) -> boolean
-		return self.minWidth == other.minWidth and self.maxWidth == other.maxWidth and self.minHeight == other.minHeight and self.maxHeight == other.maxHeight
-	end
+  -- Whether two constraints are the same box. The relayout cache compares
+  -- with this: identical constraints plus an unchanged subtree means last
+  -- frame's size is still correct.
+  fn sameAs(other: BoxConstraints) -> boolean
+    return self.minWidth == other.minWidth and self.maxWidth == other.maxWidth and self.minHeight == other.minHeight and self.maxHeight == other.maxHeight
+  end
 
-	fn describe() -> string
-		return String.format(
-			"BoxConstraints(w %.1f..%.1f, h %.1f..%.1f)",
-			self.minWidth,
-			self.maxWidth,
-			self.minHeight,
-			self.maxHeight
-		)
-	end
+  fn describe() -> string
+    return String.format(
+      "BoxConstraints(w %.1f..%.1f, h %.1f..%.1f)",
+      self.minWidth,
+      self.maxWidth,
+      self.minHeight,
+      self.maxHeight
+    )
+  end
 end
 
 -- The display's scale factor, and the conversion helpers that go with it.
@@ -409,26 +409,26 @@ end
 -- *physical* size and draws with the transform reset, so type stays crisp while
 -- everything around it is laid out in logical units.
 export class Display
-	static local factor: float = 1.0
+  static local factor: float = 1.0
 
-	static fn scale() -> float
-		return Display.factor
-	end
+  static fn scale() -> float
+    return Display.factor
+  end
 
-	-- Refreshed once per frame by `runApp`; dragging a window between monitors
-	-- of different density changes it mid-run.
-	static fn setScale(scale: float)
-		if scale > 0.0 then
-			Display.factor = scale
-		end
-	end
+  -- Refreshed once per frame by `runApp`; dragging a window between monitors
+  -- of different density changes it mid-run.
+  static fn setScale(scale: float)
+    if scale > 0.0 then
+      Display.factor = scale
+    end
+  end
 
-	-- Logical units for a physical measurement, and back.
-	static fn toLogical(value: float) -> float
-		return value / Display.factor
-	end
+  -- Logical units for a physical measurement, and back.
+  static fn toLogical(value: float) -> float
+    return value / Display.factor
+  end
 
-	static fn toPhysical(value: float) -> float
-		return value * Display.factor
-	end
+  static fn toPhysical(value: float) -> float
+    return value * Display.factor
+  end
 end
