@@ -1,0 +1,113 @@
+import * from Geometry
+import * from Color
+import * from Framework
+import * from Layout
+
+-- ============================================================================
+-- The app entry point
+-- ============================================================================
+--
+-- SwiftUI's `@main struct MyApp: App { var body: some Scene { WindowGroup { … } } }`
+-- has three parts: a type that *is* the app, a `body` describing scenes rather
+-- than views, and a runtime that starts it. Saule has no attributes and no
+-- protocol conformance to hang a program entry on, but the rest transfers
+-- directly:
+--
+--     export class CounterApp extends App
+--         fn body() -> Scene
+--             return WindowGroup(title: "Counter", width: 420, height: 480) do
+--                 ContentView()
+--             end
+--         end
+--     end
+--
+--     class Main
+--         static fn main()
+--             CounterApp().run()
+--         end
+--     end
+--
+-- `Main.main` stays, because that is the entry Saule actually calls. What it
+-- does is one line, and everything about the app — its window, its size, its
+-- root view — is declared on the app class where it belongs, instead of being
+-- spelled out as arguments to `runApp` at the call site.
+
+-- What an app's `body` describes. One window today; the type exists so that a
+-- second window kind, or a menu-bar extra, can be added without changing the
+-- shape of every app that already exists.
+export class Scene
+	fn init()
+	end
+
+	-- Open whatever this scene describes and drive it until it closes.
+	fn present() -> nil
+	end
+end
+
+-- A window, and the view inside it.
+--
+--     WindowGroup(title: "Counter", width: 420, height: 480) do
+--         ContentView()
+--     end
+--
+-- The block is the same content block every container takes, so a window with
+-- several top-level views gets a `VStack` around them.
+export class WindowGroup extends Scene
+	title: string
+	width: integer
+	height: integer
+	background: Color?
+	keyRepeat: boolean
+	root: View?
+
+	fn init(
+		title: string = "Saule",
+		width: integer = 800,
+		height: integer = 600,
+		background: Color? = nil,
+		keyRepeat: boolean = true,
+		root: View? = nil,
+		content: (fn() -> nil)? = nil
+	)
+		self.super()
+
+		self.title = title
+		self.width = width
+		self.height = height
+		self.background = background
+		self.keyRepeat = keyRepeat
+		self.root = childOf(root, content)
+	end
+
+	fn present() -> nil
+		runApp(
+			self.root ?? Frame(),
+			width: self.width,
+			height: self.height,
+			title: self.title,
+			background: self.background,
+			keyRepeat: self.keyRepeat
+		)
+	end
+end
+
+-- Extend this and override `body`.
+--
+-- The split from `View` is the same one SwiftUI makes: a view's `body` returns
+-- views and is called on every rebuild, an app's `body` returns scenes and is
+-- called once. Keeping them separate is what stops "the window is 900 wide"
+-- from being a thing a rebuild could change.
+export class App
+	fn init()
+	end
+
+	-- Describe the app. Override this.
+	fn body() -> Scene
+		return WindowGroup()
+	end
+
+	-- Start it. Returns when the last window closes.
+	fn run() -> nil
+		self.body().present()
+	end
+end

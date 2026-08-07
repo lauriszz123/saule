@@ -24,23 +24,23 @@ import * from Animation
 -- Put one under a dialog and clicks can't reach the screen behind. `onDismiss`
 -- makes clicking outside close it, which is what a menu wants and a confirm
 -- dialog usually doesn't.
-export class ModalBarrier extends SingleChildWidget
+export class ModalBarrier extends SingleChildView
 	color: Color?
 	onDismiss: function?
 
-	fn init(child: Widget? = nil, color: Color? = nil, onDismiss: function? = nil, key: string? = nil)
+	fn init(child: View? = nil, color: Color? = nil, onDismiss: function? = nil, key: string? = nil)
 		self.super(child, key)
 
 		self.color = color
 		self.onDismiss = onDismiss
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local size: Size = constraints.biggest()
 		local child: Element? = el.childAt(1)
 
 		if child != nil then
-			child!.layout(BoxConstraints.tight(size))
+			child!.layout(Constraints.tight(size))
 			child!.offset = Offset.zero()
 		end
 
@@ -59,7 +59,7 @@ export class ModalBarrier extends SingleChildWidget
 	end
 
 	-- The barrier is behind the dialog in paint order, so the dialog's own
-	-- widgets get the press first; anything that reaches here landed outside.
+	-- views get the press first; anything that reaches here landed outside.
 	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
 		if not inside then
 			return false
@@ -107,7 +107,7 @@ export class OverlayHandle
 	-- Ask the layer to animate out and take itself away once it has.
 	--
 	-- This is what a dismissal should call. `close` cannot animate anything,
-	-- because removing the entry destroys the very widgets that would have to
+	-- because removing the entry destroys the very views that would have to
 	-- draw the exit — so the removal is deferred to `settle` instead, and until
 	-- then the layer is still mounted and still being ticked.
 	fn dismiss() -> nil
@@ -164,16 +164,16 @@ end
 -- text field would lose its caret and its contents the moment it finished
 -- opening. `Opacity` already short-circuits at 1, so the cost of leaving it
 -- there is one comparison.
-export class OverlayMotion extends StatelessWidget
+export class OverlayMotion extends View
 	handle: OverlayHandle
-	child: Widget?
+	child: View?
 	rise: float
 
-	fn init(handle: OverlayHandle, child: Widget? = nil, rise: float = 10.0, key: string? = nil)
+	fn init(handle: OverlayHandle, child: View? = nil, rise: float = 10.0, key: string? = nil)
 		self.super(key)
 
 		self.handle = handle
-		self.child = child
+		self.child = claimed(child)
 		self.rise = rise
 	end
 
@@ -185,40 +185,38 @@ export class OverlayMotion extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local shown: float = self.handle.progress()
 
-		return Padding(
-			EdgeInsets.only(top: self.rise * (1.0 - shown)),
-			Opacity(opacity: shown, child: self.child ?? SizedBox())
-		)
+		return (self.child ?? Frame())
+			.opacity(shown)
+			.padding(insets: EdgeInsets.only(top: self.rise * (1.0 - shown)))
 	end
 end
 
 -- Show a modal dialog, centred, over a dimmed screen.
 --
---     local handle: OverlayHandle? = showDialog(
---         context,
---         builder: fn()
---             return Column(children: {Text("Delete this?"), ...})
---         end
---     )
+--     local handle: OverlayHandle? = showDialog(context) do
+--         return VStack(children: {Text("Delete this?"), ...})
+--     end
 --     ...
 --     handle?.close()
 --
--- The `builder` supplies the dialog's *contents*; the frame, padding and
+-- The `content` block supplies the dialog's *contents*; the frame, padding and
 -- background come from here. Focus is confined to the dialog while it is open,
 -- so Tab can't wander into the screen behind it.
 --
--- Returns nil only if the context has no owner, which means the widget calling
+-- Returns nil only if the context has no owner, which means the view calling
 -- it was never mounted.
 export fn showDialog(
 	context: BuildContext,
-	builder: function,
 	width: float? = nil,
 	dismissible: boolean = true,
 	barrierColor: Color? = nil,
-	background: Color? = nil
+	background: Color? = nil,
+	content: function = fn() -> View
+		return Frame()
+	end
 ) -> OverlayHandle?
 	local owner: BuildOwner? = context.owner()
 
@@ -228,7 +226,7 @@ export fn showDialog(
 
 	local overlay: OverlayManager = owner!.overlay()
 	local entry: OverlayEntry = OverlayEntry() do
-		return SizedBox()
+		return Frame()
 	end
 
 	local handle: OverlayHandle = OverlayHandle(overlay, entry)
@@ -267,13 +265,13 @@ export fn showDialog(
 					child: OverlayMotion(
 						handle: handle,
 						rise: 14.0,
-						child: Container(
+						child: Box(
 							width: width ?? 360.0,
 							color: background ?? Colors.surfaceLight,
 							border: Colors.border,
 							radius: 10.0,
 							padding: EdgeInsets.all(20.0),
-							child: builder()
+							child: content()
 						)
 					)
 				)
@@ -311,13 +309,13 @@ export fn showMenu(
 
 	local overlay: OverlayManager = owner!.overlay()
 	local entry: OverlayEntry = OverlayEntry() do
-		return SizedBox()
+		return Frame()
 	end
 
 	local handle: OverlayHandle = OverlayHandle(overlay, entry)
 
 	entry.builder = fn()
-		local rows: table<Widget> = {}
+		local rows: table<View> = {}
 
 		for item: MenuItem in items do
 			rows[#rows + 1] = MenuRow(item, handle)
@@ -345,7 +343,7 @@ export fn showMenu(
 
 					return false
 				end,
-				child: Stack(
+				child: ZStack(
 					children: {
 						Positioned(
 							left: atLeastZero(left),
@@ -354,14 +352,14 @@ export fn showMenu(
 							child: OverlayMotion(
 								handle: handle,
 								rise: 8.0,
-								child: Container(
+								child: Box(
 									color: Colors.surfaceLight,
 									border: Colors.border,
 									radius: 8.0,
 									padding: EdgeInsets.all(6.0),
-									child: Column(
-										crossAxisAlignment: CrossAxisAlignment.Stretch,
-										mainAxisSize: MainAxisSize.Min,
+									child: VStack(
+										alignment: StackAlignment.Fill,
+										sizing: StackSize.Fit,
 										children: rows
 									)
 								)
@@ -392,7 +390,7 @@ export class MenuItem
 end
 
 -- A menu row: highlights on hover, closes the menu when chosen.
-export class MenuRow extends StatelessWidget
+export class MenuRow extends View
 	item: MenuItem
 	handle: OverlayHandle
 
@@ -413,7 +411,7 @@ export class MenuRow extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local data: ElementData = context.data()
 		local hovered: boolean = data.hovered
 
@@ -428,7 +426,7 @@ export class MenuRow extends StatelessWidget
 		local lit: float = motionOn(data.scratch, "hover", hovered, 0.11).value
 		local fill: Color = Colors.primary.withAlpha(lit)
 
-		local row: Widget = Container(
+		local row: View = Box(
 			color: fill,
 			radius: 4.0,
 			padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
@@ -440,7 +438,7 @@ export class MenuRow extends StatelessWidget
 			return row
 		end
 
-		return GestureDetector(
+		return GestureArea(
 			child: row,
 			onTap: fn()
 				self.handle.dismiss()
@@ -462,15 +460,15 @@ end
 --
 --     Tooltip(message: "Delete", child: iconButton)
 --
--- It is an overlay entry rather than a `Stack` sibling, so it is never clipped
--- by a scroll view or covered by a later widget.
-export class Tooltip extends SingleChildWidget
+-- It is an overlay entry rather than a `ZStack` sibling, so it is never clipped
+-- by a scroll view or covered by a later view.
+export class Tooltip extends SingleChildView
 	message: string
 
 	-- Seconds of hovering before it appears.
 	delay: float
 
-	fn init(child: Widget? = nil, message: string = "", delay: float = 0.4, key: string? = nil)
+	fn init(child: View? = nil, message: string = "", delay: float = 0.4, key: string? = nil)
 		self.super(child, key)
 
 		self.message = message
@@ -478,7 +476,7 @@ export class Tooltip extends SingleChildWidget
 	end
 
 	-- Hover and pointer position come straight off the broadcast Move events;
-	-- no `GestureDetector` in between.
+	-- no `GestureArea` in between.
 	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
 		if event.kind != PointerKind.Move then
 			return false
@@ -548,7 +546,7 @@ export class Tooltip extends SingleChildWidget
 		-- Placeholder first, so the builder below can close over the handle it
 		-- needs for the fade — the same knot `showDialog` and `showMenu` untie.
 		local entry: OverlayEntry = OverlayEntry() do
-			return SizedBox()
+			return Frame()
 		end
 
 		local handle: OverlayHandle = OverlayHandle(overlay, entry)
@@ -563,7 +561,7 @@ export class Tooltip extends SingleChildWidget
 			local left: float = atMost(pointerX + 14.0, float(windowWidth) - estimated - 8.0)
 			local top: float = atMost(pointerY + 20.0, float(windowHeight) - 34.0)
 
-			return Stack(
+			return ZStack(
 				children: {
 					Positioned(
 						left: atLeastZero(left),
@@ -571,7 +569,7 @@ export class Tooltip extends SingleChildWidget
 						child: OverlayMotion(
 							handle: handle,
 							rise: 5.0,
-							child: Container(
+							child: Box(
 								color: Colors.black.withAlpha(0.85),
 								radius: 4.0,
 								padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
@@ -614,7 +612,7 @@ export fn showToast(
 
 	local overlay: OverlayManager = owner!.overlay()
 	local entry: OverlayEntry = OverlayEntry() do
-		return SizedBox()
+		return Frame()
 	end
 
 	local handle: OverlayHandle = OverlayHandle(overlay, entry)
@@ -637,7 +635,7 @@ end
 
 -- The layer itself. It owns the countdown, using the per-frame `tick` hook —
 -- no `State`, and no rebuild until the moment it disappears.
-export class ToastLayer extends StatelessWidget
+export class ToastLayer extends View
 	message: string
 	duration: float
 	color: Color?
@@ -696,7 +694,7 @@ export class ToastLayer extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local shown: float = motionIn(
 			context.data().scratch,
@@ -705,23 +703,18 @@ export class ToastLayer extends StatelessWidget
 			EasingTypes.OutCubic
 		).value
 
-		-- `Opacity` wraps the box rather than the `Align`, so the canvas it
-		-- allocates is the size of the toast instead of the whole window.
-		return Align(
-			alignment: Alignment.bottomCenter(),
-			child: Padding(
-				EdgeInsets.only(bottom: 16.0 + 12.0 * shown),
-				Opacity(
-					opacity: shown,
-					child: Container(
-						color: self.color ?? theme.surfaceLight,
-						border: theme.border,
-						radius: 6.0,
-						padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
-						child: Text(self.message, style: theme.body, softWrap: false, maxLines: 1)
-					)
-				)
-			)
+		-- `.opacity` sits on the box rather than on the alignment, so the canvas
+		-- it allocates is the size of the toast instead of the whole window.
+		-- Read the chain bottom-up and that ordering is right there in it.
+		return Box(
+			color: self.color ?? theme.surfaceLight,
+			border: theme.border,
+			radius: 6.0,
+			padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+			child: Text(self.message, style: theme.body, softWrap: false, maxLines: 1)
 		)
+			.opacity(shown)
+			.padding(insets: EdgeInsets.only(bottom: 16.0 + 12.0 * shown))
+			.aligned(Alignment.bottomCenter())
 	end
 end

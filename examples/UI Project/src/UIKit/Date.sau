@@ -253,7 +253,7 @@ export fn showDatePicker(
 
 	local overlay: OverlayManager = owner!.overlay()
 	local entry: OverlayEntry = OverlayEntry(fn()
-		return SizedBox()
+		return Frame()
 	end)
 
 	local handle: OverlayHandle = OverlayHandle(overlay, entry)
@@ -332,7 +332,7 @@ export fn showDatePicker(
 
 					return false
 				end,
-				child: Stack(
+				child: ZStack(
 					children: {
 						Positioned(
 							left: atLeastZero(left),
@@ -362,7 +362,7 @@ export fn showDatePicker(
 end
 
 -- The card itself: a month header, weekday initials, and the day grid.
-export class CalendarCard extends StatelessWidget
+export class CalendarCard extends View
 	month: Date
 	selected: Date
 	cursor: Date
@@ -386,25 +386,25 @@ export class CalendarCard extends StatelessWidget
 		self.onMonth = onMonth
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 
-		return Container(
+		return Box(
 			color: theme.surfaceLight,
 			border: theme.border,
 			radius: 8.0,
 			padding: EdgeInsets.all(10.0),
-			child: Column(
-				crossAxisAlignment: CrossAxisAlignment.Stretch,
-				mainAxisSize: MainAxisSize.Min,
+			child: VStack(
+				alignment: StackAlignment.Fill,
+				sizing: StackSize.Fit,
 				spacing: 6.0,
 				children: {self.header(theme), self.weekdays(theme), self.grid(theme)}
 			)
 		)
 	end
 
-	local fn header(theme: ThemeData) -> Widget
-		return Row(
+	local fn header(theme: ThemeData) -> View
+		return HStack(
 			children: {
 				CalendarStep(
 					icon: Icons.chevronLeft,
@@ -415,12 +415,9 @@ export class CalendarCard extends StatelessWidget
 						end
 					end
 				),
-				Expanded(
-					child: Align(
-						alignment: Alignment.center(),
-						child: Text(Date.monthName(self.month.month) .. " " .. self.month.year, style: theme.body)
-					)
-				),
+				Text(Date.monthName(self.month.month) .. " " .. self.month.year, style: theme.body)
+					.centered()
+					.expanded(),
 				CalendarStep(
 					icon: Icons.chevronRight,
 					theme: theme,
@@ -434,67 +431,62 @@ export class CalendarCard extends StatelessWidget
 		)
 	end
 
-	local fn weekdays(theme: ThemeData) -> Widget
-		local cells: table<Widget> = {}
+	local fn weekdays(theme: ThemeData) -> View
+		local cells: table<View> = {}
 		local i: integer = 0
 
 		while i <= 6 do
-			cells[#cells + 1] = Expanded(
-				child: Align(
-					alignment: Alignment.center(),
-					child: Text(Date.weekdayName(i), style: theme.caption)
-				)
-			)
+			cells[#cells + 1] = Text(Date.weekdayName(i), style: theme.caption)
+				.centered()
+				.expanded()
 
 			i = i + 1
 		end
 
-		return Row(children: cells)
+		return HStack(children: cells)
 	end
 
 	-- Six rows of seven, starting from the Sunday on or before the 1st, so
 	-- every month renders in the same amount of space.
-	local fn grid(theme: ThemeData) -> Widget
+	local fn grid(theme: ThemeData) -> View
 		local first: Date = self.month.startOfMonth()
 		local start: Date = first.addDays(-first.weekday())
-		local rows: table<Widget> = {}
+		local rows: table<View> = {}
 		local row: integer = 0
 
 		while row <= 5 do
-			local cells: table<Widget> = {}
+			local cells: table<View> = {}
 			local column: integer = 0
 
 			while column <= 6 do
 				local date: Date = start.addDays(row * 7 + column)
 
-				cells[#cells + 1] = Expanded(
-					child: CalendarDay(
-						date: date,
-						muted: date.month != self.month.month,
-						selected: date.equals(self.selected),
-						cursor: date.equals(self.cursor),
-						theme: theme,
-						onTap: fn()
-							if self.onPick != nil then
-								self.onPick!(date)
-							end
+				cells[#cells + 1] = CalendarDay(
+					date: date,
+					muted: date.month != self.month.month,
+					selected: date.equals(self.selected),
+					cursor: date.equals(self.cursor),
+					theme: theme,
+					onTap: fn()
+						if self.onPick != nil then
+							self.onPick!(date)
 						end
-					)
-				)
+					end
+				).expanded()
 
 				column = column + 1
 			end
 
-			rows[#rows + 1] = Row(children: cells)
+			rows[#rows + 1] = HStack(children: cells)
 			row = row + 1
 		end
 
-		return Column(crossAxisAlignment: CrossAxisAlignment.Stretch, children: rows)
+		return VStack(alignment: StackAlignment.Fill, children: rows)
 	end
 end
 
 -- The `<` / `>` month buttons.
-export class CalendarStep extends StatelessWidget
+export class CalendarStep extends View
 	icon: integer
 	theme: ThemeData
 	onTap: function?
@@ -513,12 +505,12 @@ export class CalendarStep extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local scratch: ElementData = context.data()
 		local lit: float = motionOn(scratch.scratch, "hover", scratch.hovered == true, 0.11).value
 
-		return GestureDetector(
-			child: Container(
+		return GestureArea(
+			child: Box(
 				color: self.theme.surface.withAlpha(lit),
 				radius: 4.0,
 				padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
@@ -534,7 +526,7 @@ export class CalendarStep extends StatelessWidget
 end
 
 -- One day cell.
-export class CalendarDay extends StatelessWidget
+export class CalendarDay extends View
 	date: Date
 	muted: boolean
 	selected: boolean
@@ -577,7 +569,7 @@ export class CalendarDay extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local scratch: ElementData = context.data()
 		local hovered: boolean = scratch.hovered == true
 		local bag: table = scratch.scratch
@@ -604,8 +596,8 @@ export class CalendarDay extends StatelessWidget
 			edge = self.theme.primary
 		end
 
-		return GestureDetector(
-			child: Container(
+		return GestureArea(
+			child: Box(
 				color: fill,
 				border: edge,
 				radius: 4.0,
@@ -634,7 +626,7 @@ end
 --             due = next
 --         end
 --     )
-export class DateField extends StatelessWidget
+export class DateField extends View
 	value: Date?
 	placeholder: string
 	onChanged: function?
@@ -689,7 +681,7 @@ export class DateField extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
@@ -709,18 +701,16 @@ export class DateField extends StatelessWidget
 			motionOn(scratch.scratch, "focus", focused, 0.14).value
 		)
 
-		local box: Widget = Container(
+		local box: View = Box(
 			width: self.width,
 			color: theme.surface,
 			border: edge,
 			radius: theme.radius,
 			padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
-			child: Row(
-				children: {
-					Expanded(child: Text(label, style: style, softWrap: false, maxLines: 1)),
-					Icon(Icons.calendarToday, 18.0, theme.textMuted),
-				}
-			)
+			child: HStack() do
+				Text(label, style: style, softWrap: false, maxLines: 1).expanded()
+				Icon(Icons.calendarToday, 18.0, theme.textMuted)
+			end
 		)
 
 		if not self.enabled then
@@ -728,7 +718,7 @@ export class DateField extends StatelessWidget
 		end
 
 		return Focus(
-			child: GestureDetector(
+			child: GestureArea(
 				child: box,
 				onTap: fn()
 					self.open(context)

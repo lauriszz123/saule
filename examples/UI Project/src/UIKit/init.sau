@@ -1,6 +1,6 @@
 -- Barrel: everything listed here becomes the public surface of `UIKit`.
 -- Order follows the dependency chain — values, then the framework, then the
--- widgets built on top of it.
+-- views built on top of it.
 import * from Geometry
 import * from Color
 import * from TextStyle
@@ -16,7 +16,7 @@ import * from Animation
 import * from Overlay
 import * from Icon
 import * from Scroll
-import * from CustomPaint
+import * from Canvas
 import * from Image
 import * from Button
 import * from Controls
@@ -24,4 +24,11 @@ import * from Date
 import * from Shell
 import * from Data
 import * from TextField
-import * from TextArea
+import * from TextEditor
+
+-- Last: it names every view above to implement `View`'s modifiers, and
+-- installs itself as it loads.
+import * from Modifiers
+
+-- The entry point sits on top of everything, `runApp` included.
+import * from App

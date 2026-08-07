@@ -1,0 +1,112 @@
+import * from Geometry
+import * from Color
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from Overlay
+
+-- ============================================================================
+-- The modifier implementation
+-- ============================================================================
+--
+-- `View`'s chainable modifiers — `.padding()`, `.background()`, `.frame()` and
+-- the rest — are declared in `Framework.sau`, next to the class they hang off.
+-- They cannot *build* anything there: a `Padding` comes from `Layout.sau` and a
+-- `Tooltip` from `Overlay.sau`, and both of those import `Framework.sau`
+-- already. Saule rejects circular imports rather than resolving them lazily, so
+-- `View` naming those classes directly is not an option.
+--
+-- This file is the other end of that split. It sits above every widget file in
+-- the import order, so it can name all of them, and it hands `Framework` an
+-- implementation of the `ViewModifiers` interface to call back into.
+--
+-- The cost is one interface hop per modifier — an ordinary method call on a
+-- single long-lived instance. The alternative was moving `Padding`, `Box`,
+-- `Align`, `Clip`, `Expand`, `Opacity`, `GestureArea`, `CursorArea` and
+-- `Tooltip` into `Framework.sau` so that `View` could see them, which would
+-- have collapsed six well-separated files into one.
+
+export class UIKitModifiers implements ViewModifiers
+	fn init()
+	end
+
+	fn padding(child: View, insets: EdgeInsets) -> View
+		return Padding(insets, child)
+	end
+
+	-- Straight to `Surface`, not through `Box`. Two reasons: it is one element
+	-- rather than a composite that builds one, and `Box.body` *is* this chain
+	-- written out — routing back through it would recurse forever.
+	fn background(
+		child: View,
+		color: Color?,
+		radius: float,
+		border: Color?,
+		borderWidth: float
+	) -> View
+		return Surface(color, radius, border, borderWidth, child)
+	end
+
+	fn frame(child: View, width: float?, height: float?) -> View
+		return Frame(width, height, child)
+	end
+
+	fn limits(
+		child: View,
+		minWidth: float?,
+		maxWidth: float?,
+		minHeight: float?,
+		maxHeight: float?
+	) -> View
+		return FrameLimits(child, minWidth, maxWidth, minHeight, maxHeight)
+	end
+
+	fn expand(child: View, weight: integer) -> View
+		return Expand(child, weight)
+	end
+
+	fn align(child: View, alignment: Alignment) -> View
+		return Align(alignment, child)
+	end
+
+	fn clip(child: View) -> View
+		return Clip(child)
+	end
+
+	fn opacity(child: View, value: float) -> View
+		return Opacity(value, child)
+	end
+
+	-- One entry point for both buttons: the pointer system routes them the
+	-- same way, and only the callback slot differs.
+	fn onTap(child: View, action: function, secondary: boolean) -> View
+		if secondary then
+			return GestureArea(child: child, onSecondaryTap: action)
+		end
+
+		return GestureArea(child: child, onTap: action)
+	end
+
+	fn onHover(child: View, action: function) -> View
+		return GestureArea(child: child, onHover: action)
+	end
+
+	fn tooltip(child: View, message: string) -> View
+		return Tooltip(child, message)
+	end
+
+	fn cursor(child: View, name: string) -> View
+		return CursorArea(child, name)
+	end
+
+	-- `ScrollView do a; b end` collected two views for one slot. SwiftUI stacks
+	-- them, so this does too.
+	fn stack(children: table<View>) -> View
+		return VStack(children: children, alignment: StackAlignment.Fill, sizing: StackSize.Fit)
+	end
+end
+
+-- Runs on import. `UIKit/init.sau` lists this file last, so every `View` a
+-- program can reach already has its modifiers by the time `runApp` is called.
+Modifiers.install(UIKitModifiers())

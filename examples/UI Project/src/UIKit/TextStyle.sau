@@ -26,7 +26,7 @@ export fn splitOn(text: string, separator: string) -> table<string>
 	return out
 end
 
--- How a `Text` widget is drawn, plus the measurement the layout pass needs.
+-- How a `Text` view is drawn, plus the measurement the layout pass needs.
 --
 -- Fonts are a global, handle-based resource in the engine, so styles share a
 -- process-wide cache keyed by size: asking for the same size twice reuses the
@@ -54,7 +54,7 @@ export class TextStyle
 	--
 	-- A style with no size binds handle 0, the engine's default face. It has to
 	-- bind *something*: fonts are global state, so leaving whatever the last
-	-- style set would make a widget's measured size depend on the order the
+	-- style set would make a view's measured size depend on the order the
 	-- tree happened to be walked in.
 	fn applyFont() -> nil
 		local size: float? = self.size
@@ -124,7 +124,7 @@ export class TextStyle
 
 	-- Draw `text` with its top-left at the logical point `x, y`.
 	--
-	-- Every text-drawing widget goes through here rather than calling
+	-- Every text-drawing view goes through here rather than calling
 	-- `Graphics.print` itself. On a scaled display the glyphs are already
 	-- physical, so this maps the anchor into device space and draws with the
 	-- transform reset — `transformPoint` rather than a multiply, so it stays

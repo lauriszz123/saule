@@ -9,16 +9,16 @@ import * from TextStyle
 -- Split out from Theme.sau so that Framework.sau can name this type.
 --
 -- `Element.data.theme` holds a `ThemeData`, which means `ElementData` has to
--- name it, which means Framework.sau has to import it. The `Theme` *widget*
--- extends `StatelessWidget` and so must sit above the framework — but the data
+-- name it, which means Framework.sau has to import it. The `Theme` *view*
+-- extends `View` and so must sit above the framework — but the data
 -- it carries is only colours, text styles and metrics, and depends on nothing
 -- from the framework at all. Keeping the two in one file forced the element's
 -- theme slot to be typed `any?` and every read of it to go through an `as`.
 --
--- So the data lives below the framework and the widget above it, and the slot
+-- So the data lives below the framework and the view above it, and the slot
 -- is properly typed.
 
--- Everything a themed widget reads.
+-- Everything a themed view reads.
 --
 -- Build one with `ThemeData()` for the defaults, or `dark()` / `light()`, and
 -- override individual fields through the constructor's named arguments.

@@ -17,7 +17,7 @@ import * from Animation
 -- ============================================================================
 --
 -- `TextField` edits one line; this edits many. The string operations are the
--- same — `TextEditor` already does them — so everything here is about the
+-- same — `TextEngine` already does them — so everything here is about the
 -- second dimension: which visual line a caret index falls on, and which index a
 -- point on screen corresponds to.
 
@@ -144,7 +144,7 @@ export class LineMap
 end
 
 -- Draws multi-line text, a selection that spans lines, and a caret.
-export class EditableParagraph extends Widget
+export class EditableParagraph extends View
 	text: string
 	caret: integer
 	anchor: integer
@@ -201,7 +201,7 @@ export class EditableParagraph extends Widget
 		return cached!
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local style: TextStyle = self.resolved()
 		local map: LineMap = self.mapFor(el, constraints.maxWidth)
 		local widest: float = 0.0
@@ -300,7 +300,7 @@ end
 
 -- A multi-line text editor.
 --
---     TextArea(
+--     TextEditor(
 --         value: notes,
 --         minLines: 4,
 --         onChanged: fn(text: string)
@@ -313,9 +313,9 @@ end
 -- work on the current line, and the selection spans lines. Text wraps to the
 -- width it is given.
 --
--- Give it a bounded height — an `Expanded`, a `SizedBox`, or `minLines` — and
--- wrap it in a `SingleChildScrollView` if the content can outgrow that.
-export class TextArea extends StatelessWidget
+-- Give it a bounded height — an `Expand`, a `Frame`, or `minLines` — and
+-- wrap it in a `ScrollView` if the content can outgrow that.
+export class TextEditor extends View
 	value: string
 	placeholder: string
 	onChanged: function?
@@ -386,7 +386,7 @@ export class TextArea extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local data: ElementData = context.data()
 		local scratch: table = data.scratch
@@ -400,7 +400,7 @@ export class TextArea extends StatelessWidget
 		local node: FocusNode = nodeFor(data)
 		local focused: boolean = data.focused
 		local style: TextStyle = self.style ?? theme.body
-		local editor: TextEditor = TextEditor(scratch, context, self.onChanged)
+		local editor: TextEngine = TextEngine(scratch, context, self.onChanged)
 		local padding: EdgeInsets = self.padding ?? EdgeInsets.all(10.0)
 
 		local paragraph: EditableParagraph = EditableParagraph(
@@ -420,11 +420,10 @@ export class TextArea extends StatelessWidget
 			motionOn(scratch, "focus", focused, 0.15).value
 		)
 
-		local body: Widget = Container(
-			child: SizedBox(
-				height: style.lineHeight() * float(self.minLines),
-				child: Align(alignment: Alignment.topLeft(), child: paragraph)
-			),
+		local inner: View = Box(
+			child: paragraph
+				.aligned(Alignment.topLeft())
+				.frame(height: style.lineHeight() * float(self.minLines)),
 			width: self.width,
 			color: self.background ?? theme.surface,
 			radius: self.radius,
@@ -434,7 +433,7 @@ export class TextArea extends StatelessWidget
 		)
 
 		if not self.enabled then
-			return body
+			return inner
 		end
 
 		-- Clicks arrive in the padded box's space; the text starts one padding
@@ -451,10 +450,8 @@ export class TextArea extends StatelessWidget
 		end
 
 		return Focus(
-			child: MouseRegion(
-				cursor: "ibeam",
-				child: GestureDetector(
-				child: body,
+			child: GestureArea(
+				child: inner,
 				onTapDown: fn()
 					node.requestFocus()
 				end,
@@ -474,8 +471,7 @@ export class TextArea extends StatelessWidget
 				onDragTo: fn(x: float, y: float)
 					seek(x, y, true)
 				end
-				)
-			),
+			).cursor("ibeam"),
 			node: node,
 			autofocus: self.autofocus,
 			wantsText: true,
@@ -509,7 +505,7 @@ export class TextArea extends StatelessWidget
 	-- shared behaviour, so the two stay consistent.
 	local fn edit(
 		event: KeyEvent,
-		editor: TextEditor,
+		editor: TextEngine,
 		style: TextStyle,
 		width: float
 	) -> boolean

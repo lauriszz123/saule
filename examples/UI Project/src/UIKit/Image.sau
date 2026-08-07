@@ -9,8 +9,8 @@ import * from Framework
 
 -- Loads PNGs once and hands back engine handles.
 --
--- Decoding is not cheap and a widget's `layout` runs every frame, so the cache
--- is what makes `Image(path: "icon.png")` safe to write inside a `build`.
+-- Decoding is not cheap and a view's `layout` runs every frame, so the cache
+-- is what makes `Image(path: "icon.png")` safe to write inside a `body`.
 -- Handles are process-wide, matching the engine's own registry.
 export class Images
 	static local handles: table = {}
@@ -72,7 +72,7 @@ export class Images
 end
 
 -- How an image fills a box that isn't its natural shape.
-export enum BoxFit
+export enum ContentMode
 	-- Natural size, no scaling.
 	None,
 	-- Stretch to the box, ignoring the aspect ratio.
@@ -85,13 +85,13 @@ end
 
 -- Draw a PNG.
 --
---     Image(path: "assets/logo.png", height: 64.0, fit: BoxFit.Contain)
+--     Image(path: "assets/logo.png", height: 64.0, fit: ContentMode.Contain)
 --
 -- With no `width` / `height` it takes the image's natural size. `frame`
 -- selects a cell out of a spritesheet, in image pixels.
-export class Image extends Widget
+export class Image extends View
 	path: string
-	fit: BoxFit
+	fit: ContentMode
 	width: float?
 	height: float?
 
@@ -103,7 +103,7 @@ export class Image extends Widget
 
 	fn init(
 		path: string = "",
-		fit: BoxFit = BoxFit.Contain,
+		fit: ContentMode = ContentMode.Contain,
 		width: float? = nil,
 		height: float? = nil,
 		frame: Rect? = nil,
@@ -132,7 +132,7 @@ export class Image extends Widget
 		return Images.size(self.path)
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local natural: Size = self.source()
 		local width: float? = self.width
 		local height: float? = self.height
@@ -184,14 +184,14 @@ export class Image extends Widget
 		local scaleY: float = el.size.height / natural.height
 
 		-- Aspect-preserving fits use one scale for both axes; `None` uses none.
-		if self.fit == BoxFit.None then
+		if self.fit == ContentMode.None then
 			scaleX = 1.0
 			scaleY = 1.0
-		elseif self.fit == BoxFit.Contain then
+		elseif self.fit == ContentMode.Contain then
 			local uniform: float = atMost(scaleX, scaleY)
 			scaleX = uniform
 			scaleY = uniform
-		elseif self.fit == BoxFit.Cover then
+		elseif self.fit == ContentMode.Cover then
 			local uniform: float = atLeast(scaleX, scaleY)
 			scaleX = uniform
 			scaleY = uniform

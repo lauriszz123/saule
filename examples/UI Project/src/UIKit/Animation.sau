@@ -8,9 +8,9 @@ import * from Tween
 -- ============================================================================
 --
 -- `Tween` already knows how to turn elapsed time into an eased 0..1 value. What
--- was missing is the part that drives it every frame and rebuilds the widgets
+-- was missing is the part that drives it every frame and rebuilds the views
 -- that depend on it — that is `AnimationController`, and `AnimatedBuilder` is
--- the widget that listens.
+-- the view that listens.
 
 -- A 0..1 value that advances with the frame clock.
 --
@@ -104,7 +104,7 @@ export class AnimationController
 	-- The run is shortened in proportion to the distance left, so turning back
 	-- half way costs half the time and the value keeps a constant speed.
 	-- Re-aiming at the target it is already heading for does nothing, so this
-	-- is safe to call every frame — and that is how the widgets here use it.
+	-- is safe to call every frame — and that is how the views here use it.
 	fn animateTo(target: float) -> nil
 		local aim: float = atLeastZero(atMost(target, 1.0))
 
@@ -263,7 +263,7 @@ end
 -- ----------------------------------------------------------------------------
 --
 -- A controller has to outlive the rebuilds it causes, so it cannot be built in
--- `build` — but the widgets here are stateless, keeping their interaction flags
+-- `body` — but the views here are stateless, keeping their interaction flags
 -- in element scratch. These put the controller in the same place, created the
 -- first time it is asked for and found again on every frame after.
 --
@@ -425,31 +425,28 @@ end
 
 -- Rebuilds its subtree while a controller runs.
 --
---     AnimatedBuilder(
---         controller: fade,
---         builder: fn(value: float)
---             return Container(color: Colors.primary.withAlpha(value), ...)
---         end
---     )
+--     AnimatedBuilder(controller: fade) do (value: float)
+--         return Box(color: Colors.primary.withAlpha(value), ...)
+--     end
 --
--- The builder is `fn(value: float) -> Widget`. This is the only widget that
+-- The content block is `fn(value: float) -> View`. This is the only view that
 -- advances a controller, and it only marks itself dirty on a frame where the
 -- value actually moved — so a finished animation costs one comparison per
 -- frame, not a rebuild.
 --
 -- It is stateless on purpose: the controller is the state, and it lives with
--- whoever created it. That also means the builder closure is always the fresh
+-- whoever created it. That also means the content closure is always the fresh
 -- one from the last rebuild, so an animation can safely close over values that
 -- change underneath it.
-export class AnimatedBuilder extends StatelessWidget
+export class AnimatedBuilder extends View
 	controller: AnimationController
-	builder: function
+	content: function
 
-	fn init(controller: AnimationController, builder: function, key: string? = nil)
+	fn init(controller: AnimationController, content: function, key: string? = nil)
 		self.super(key)
 
 		self.controller = controller
-		self.builder = builder
+		self.content = content
 	end
 
 	fn tick(el: Element, dt: float) -> nil
@@ -458,7 +455,7 @@ export class AnimatedBuilder extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget?
-		return self.builder(self.controller.value)
+	fn body(context: BuildContext) -> View?
+		return self.content(self.controller.value)
 	end
 end

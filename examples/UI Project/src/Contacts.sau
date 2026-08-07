@@ -1,0 +1,457 @@
+import * from UIKit
+import * from Shared
+
+-- One row of the table. A plain value: the screen's state owns the list, and
+-- the table is handed a fresh view of it on every rebuild.
+export class Contact
+	name: string
+	email: string
+	role: string
+	tags: table<string>
+	added: Date
+
+	-- Stable across sorts and deletes, which is what the table row keys on.
+	id: integer
+
+	fn init(
+		id: integer = 0,
+		name: string = "",
+		email: string = "",
+		role: string = "",
+		tags: table<string> = {},
+		added: Date? = nil
+	)
+		self.id = id
+		self.name = name
+		self.email = email
+		self.role = role
+		self.tags = tags
+		self.added = added ?? Date.today()
+	end
+end
+
+-- A form that files what you type into a sortable table.
+--
+-- Stateful rather than `context.state`: there are eight fields, a growing list
+-- and a validation message, and they want names and types rather than string
+-- keys in a scratch bag.
+export class ContactsScreen extends StatefulView
+	fn init(key: string? = nil)
+		self.super(key)
+	end
+
+	fn createState() -> State?
+		return ContactsState()
+	end
+end
+
+class ContactsState extends State
+	local contacts: table<Contact>
+	local nextId: integer
+
+	-- The form.
+	local name: string
+	local email: string
+	local role: string
+	local added: Date
+	local tags: table<string>
+	local tagDraft: string
+	local error: string
+
+	-- Sorting is reported by the table and performed here, so the order stays
+	-- the state's business.
+	local sortColumn: integer
+	local sortOrder: SortOrder
+
+	fn init()
+		self.super()
+
+		self.contacts = {}
+		self.nextId = 1
+		self.name = ""
+		self.email = ""
+		self.role = "Engineering"
+		self.added = Date.today()
+		self.tags = {}
+		self.tagDraft = ""
+		self.error = ""
+		self.sortColumn = 0
+		self.sortOrder = SortOrder.None
+	end
+
+	fn initState() -> nil
+		-- Two rows so the table is not empty on arrival. Everything about them
+		-- is reachable through the form, so nothing here is privileged.
+		self.add(Contact(0, "Ada Lovelace", "ada@analytical.dev", "Engineering", {"founder", "notes"}))
+		self.add(Contact(0, "Grace Hopper", "grace@navy.mil", "Operations", {"compiler"}))
+	end
+
+	-- --- mutations -----------------------------------------------------------
+
+	local fn add(contact: Contact) -> nil
+		contact.id = self.nextId
+		self.nextId = self.nextId + 1
+		self.contacts[#self.contacts + 1] = contact
+	end
+
+	local fn submit() -> nil
+		local name: string = trimmed(self.name)
+		local email: string = trimmed(self.email)
+
+		if String.len(name) == 0 then
+			self.setState() do
+				self.error = "A name is required."
+			end
+
+			return
+		end
+
+		if not contains(email, "@") then
+			self.setState() do
+				self.error = "That does not look like an email address."
+			end
+
+			return
+		end
+
+		self.setState() do
+			-- The tag list is copied, or the next edit to the form would
+			-- reach into the row that was just filed.
+			local tags: table<string> = {}
+
+			for tag: string in self.tags do
+				tags[#tags + 1] = tag
+			end
+
+			self.add(Contact(0, name, email, self.role, tags, self.added))
+			self.reset()
+		end
+	end
+
+	local fn reset() -> nil
+		self.name = ""
+		self.email = ""
+		self.role = "Engineering"
+		self.added = Date.today()
+		self.tags = {}
+		self.tagDraft = ""
+		self.error = ""
+	end
+
+	local fn addTag() -> nil
+		local tag: string = String.lower(trimmed(self.tagDraft))
+
+		if String.len(tag) == 0 then
+			return
+		end
+
+		for existing: string in self.tags do
+			if existing == tag then
+				self.setState() do
+					self.tagDraft = ""
+				end
+
+				return
+			end
+		end
+
+		self.setState() do
+			self.tags[#self.tags + 1] = tag
+			self.tagDraft = ""
+		end
+	end
+
+	local fn removeTag(at: integer) -> nil
+		self.setState() do
+			Table.remove(self.tags, at)
+		end
+	end
+
+	local fn removeContact(id: integer) -> nil
+		self.setState() do
+			local i: integer = 1
+
+			while i <= #self.contacts do
+				if self.contacts[i].id == id then
+					Table.remove(self.contacts, i)
+
+					return
+				end
+
+				i = i + 1
+			end
+		end
+	end
+
+	-- Insertion sort over a copy: the list is tens of rows, and keeping the
+	-- state's own order untouched means "no sort" can always go back to it.
+	local fn sorted() -> table<Contact>
+		local out: table<Contact> = {}
+
+		for contact: Contact in self.contacts do
+			out[#out + 1] = contact
+		end
+
+		if self.sortOrder == SortOrder.None or self.sortColumn == 0 then
+			return out
+		end
+
+		local i: integer = 2
+
+		while i <= #out do
+			local moving: Contact = out[i]
+			local j: integer = i - 1
+
+			while j >= 1 and self.after(out[j], moving) do
+				out[j + 1] = out[j]
+				j = j - 1
+			end
+
+			out[j + 1] = moving
+			i = i + 1
+		end
+
+		return out
+	end
+
+	local fn after(left: Contact, right: Contact) -> boolean
+		local a: string = self.sortKey(left)
+		local b: string = self.sortKey(right)
+
+		if self.sortOrder == SortOrder.Descending then
+			return a < b
+		end
+
+		return a > b
+	end
+
+	local fn sortKey(contact: Contact) -> string
+		if self.sortColumn == 2 then
+			return String.lower(contact.email)
+		end
+
+		if self.sortColumn == 3 then
+			return contact.role
+		end
+
+		if self.sortColumn == 4 then
+			return contact.added.toString()
+		end
+
+		return String.lower(contact.name)
+	end
+
+	-- --- view ----------------------------------------------------------------
+
+	fn body(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+		local count: integer = #self.contacts
+		local label: string = count .. " contacts"
+
+		if count == 1 then
+			label = "1 contact"
+		end
+
+		return RouteScreen(title: "Contacts", actions: {Chip(label: label, color: theme.surfaceLight)}) do
+			VStack(alignment: StackAlignment.Fill, spacing: 16.0) do
+				self.form(context, theme)
+				self.contactsTable(context, theme).expanded()
+			end.padding(20.0)
+		end
+	end
+
+	-- The form. Two rows of fields, then the tag editor, then the actions.
+	local fn form(context: BuildContext, theme: ThemeData) -> View
+		return Card() do
+			VStack(alignment: StackAlignment.Fill, spacing: 12.0) do
+				Text("New contact").font(17.0).foregroundStyle(theme.text)
+
+				HStack(spacing: 12.0) do
+					TextField(value: self.name, placeholder: "Full name") do (text: string)
+						self.name = text
+					end.expanded()
+
+					TextField(value: self.email, placeholder: "Email") do (text: string)
+						self.email = text
+					end.expanded()
+				end
+
+				HStack(spacing: 12.0) do
+					Picker(
+						value: self.role,
+						options: {"Engineering", "Design", "Operations", "Research"},
+						width: 200.0
+					) do (next: string)
+						self.setState() do
+							self.role = next
+						end
+					end
+
+					DateField(value: self.added, width: 190.0) do (picked: Date)
+						self.setState() do
+							self.added = picked
+						end
+					end
+
+					Spacer()
+				end
+
+				self.tagEditor(theme)
+
+				-- Only present when there is something to say, so the form does
+				-- not reserve a blank line for an error that may never come.
+				if String.len(self.error) > 0 then
+					HStack(sizing: StackSize.Fit, spacing: 6.0) do
+						Icon(Icons.error, 14.0, theme.danger)
+						Text(self.error).font(12.0).foregroundStyle(theme.danger)
+					end
+				end
+
+				HStack(spacing: 10.0) do
+					Spacer()
+
+					Button(label: "Clear", color: theme.surfaceLight) do
+						self.setState() do
+							self.reset()
+						end
+					end
+
+					Button(label: "Add contact", color: theme.success) do
+						self.submit()
+					end
+				end
+			end
+		end
+	end
+
+	-- Type a tag, press Enter or the button. Each chip carries its own ×.
+	local fn tagEditor(theme: ThemeData) -> View
+		return VStack(alignment: StackAlignment.Fill, spacing: 8.0) do
+			HStack(spacing: 10.0) do
+				TextField(
+					value: self.tagDraft,
+					placeholder: "Add a tag, then press Enter",
+					onChanged: fn(text: string)
+						self.tagDraft = text
+					end
+				) do (text: string)
+					self.addTag()
+				end.expanded()
+
+				Button(label: "Add tag", color: theme.surfaceLight) do
+					self.addTag()
+				end
+			end
+
+			if #self.tags > 0 then
+				local chips: table<View> = {}
+				local i: integer = 1
+
+				while i <= #self.tags do
+					local at: integer = i
+
+					chips[#chips + 1] = Chip(
+						label: self.tags[i],
+						color: theme.primary.withAlpha(0.18),
+						textColor: theme.primary
+					) do
+						self.removeTag(at)
+					end
+
+					i = i + 1
+				end
+
+				FlowStack(spacing: 6.0, runSpacing: 6.0, children: chips)
+			end
+		end
+	end
+
+	-- The table. Sorting is reported by the header and performed above; the
+	-- delete button lives in the last cell of each row.
+	local fn contactsTable(context: BuildContext, theme: ThemeData) -> View
+		if #self.contacts == 0 then
+			return Card(padding: 40.0) do
+				EmptyState(
+					icon: Icons.group,
+					title: "No contacts yet",
+					detail: "Fill the form above and they will show up here."
+				)
+			end
+		end
+
+		local rows: table<TableRow> = {}
+
+		for contact: Contact in self.sorted() do
+			local id: integer = contact.id
+
+			rows[#rows + 1] = TableRow(
+				key: "contact" .. id,
+				cells: {
+					self.nameCell(contact, theme),
+					Text(contact.email).font(13.0).foregroundStyle(theme.textMuted),
+					Chip(label: contact.role, color: theme.surfaceLight).aligned(
+						Alignment.centerLeft()
+					),
+					self.tagCell(contact, theme),
+					IconButton(icon: Icons.delete, tooltip: "Remove", size: 16.0) do
+						self.removeContact(id)
+					end.aligned(Alignment.centerRight()),
+				}
+			)
+		end
+
+		local grid: View = TableView(
+			columns: {
+				TableColumn("Name", flex: 3, sortable: true),
+				TableColumn("Email", flex: 3, sortable: true),
+				TableColumn("Team", width: 140.0, sortable: true),
+				TableColumn("Tags", flex: 3),
+				TableColumn("", width: 52.0, align: Alignment.centerRight()),
+			},
+			rows: rows,
+			sortColumn: self.sortColumn,
+			sortOrder: self.sortOrder
+		) do (column: integer, order: SortOrder)
+			self.setState() do
+				self.sortColumn = column
+				self.sortOrder = order
+			end
+		end
+
+		-- `child:`, not a block. A block only collects views *constructed inside
+		-- it*, and `grid` was built above — a bare `grid` on its own line is not
+		-- even a statement, so the block would collect nothing and the table
+		-- would end up beside the scroll view instead of in it.
+		--
+		-- `ScrollView() do show(grid) end` is the other way to say this. Here
+		-- the slot is named and there is exactly one child, so `child:` wins.
+		return ScrollView(child: grid)
+			.clipped()
+			.background(theme.surface, radius: 10.0, border: theme.border)
+	end
+
+	local fn nameCell(contact: Contact, theme: ThemeData) -> View
+		return HStack(spacing: 10.0) do
+			Avatar(name: contact.name, size: 28.0)
+			Text(contact.name).font(13.0).foregroundStyle(theme.text)
+		end
+	end
+
+	local fn tagCell(contact: Contact, theme: ThemeData) -> View
+		if #contact.tags == 0 then
+			return Text("—").font(13.0).foregroundStyle(theme.textMuted.withAlpha(0.6))
+		end
+
+		local chips: table<View> = {}
+
+		for tag: string in contact.tags do
+			chips[#chips + 1] = Chip(
+				label: tag,
+				color: theme.primary.withAlpha(0.16),
+				textColor: theme.primary
+			)
+		end
+
+		return FlowStack(spacing: 4.0, runSpacing: 4.0, children: chips)
+	end
+end

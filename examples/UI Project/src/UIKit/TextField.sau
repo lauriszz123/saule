@@ -14,7 +14,7 @@ import * from Animation
 -- ============================================================================
 
 -- Half a second on, half a second off, straight off the clock — no rebuild and
--- no per-frame state. Shared with `TextArea`.
+-- no per-frame state. Shared with `TextEditor`.
 export fn blinkOn() -> boolean
 	local now: float = Timer.getTime()
 	local second: float = float(int(now))
@@ -77,7 +77,7 @@ end
 --
 -- The caret blinks off the wall clock inside `paint` rather than off a rebuild,
 -- so an idle field costs nothing.
-export class EditableText extends Widget
+export class EditableText extends View
 	text: string
 
 	-- Characters to the left of the caret.
@@ -137,7 +137,7 @@ export class EditableText extends Widget
 		return index
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local style: TextStyle = self.resolved()
 		local shown: string = self.text
 
@@ -210,13 +210,25 @@ end
 -- caret, drag to select, and Tab is deliberately left alone so it still moves
 -- focus.
 --
--- It fills the width it is given. Inside a `Row`, wrap it in `Expanded` or a
--- `SizedBox` — a row's main axis is unbounded.
-export class TextField extends StatelessWidget
+-- It fills the width it is given. Inside an `HStack`, wrap it in `Expand` or a
+-- `Frame` — a row's main axis is unbounded.
+export class TextField extends View
 	value: string
 	placeholder: string
-	onChanged: function?
+	-- `onSubmitted` is declared *before* `onChanged` on purpose. A trailing
+	-- block binds to the last function-typed parameter nothing else claimed, so
+	-- this order makes the two natural spellings mean what they look like:
+	--
+	--     TextField(value: name) do (text) name = text end     -- onChanged
+	--
+	--     TextField(value: name, onChanged: fn(text) … end) do (text)
+	--         submit()                                          -- onSubmitted
+	--     end
+	--
+	-- Declared the other way round, the first form would silently fill
+	-- `onSubmitted` and the field would appear to ignore every keystroke.
 	onSubmitted: function?
+	onChanged: function?
 
 	style: TextStyle?
 	placeholderStyle: TextStyle?
@@ -230,11 +242,20 @@ export class TextField extends StatelessWidget
 	enabled: boolean
 	autofocus: boolean
 
+	-- Draw the contents as asterisks. The field still *holds* the real text —
+	-- `onChanged` reports it, and copy still copies it. This only changes what
+	-- is painted, which is all a password field should change.
+	--
+	-- Asterisks rather than bullets on purpose: the caret is placed by
+	-- measuring the drawn string, and a one-byte glyph keeps every index the
+	-- editor holds lined up with what the user sees.
+	obscure: boolean
+
 	fn init(
 		value: string = "",
 		placeholder: string = "",
-		onChanged: function? = nil,
 		onSubmitted: function? = nil,
+		onChanged: function? = nil,
 		style: TextStyle? = nil,
 		placeholderStyle: TextStyle? = nil,
 		background: Color? = nil,
@@ -246,6 +267,7 @@ export class TextField extends StatelessWidget
 		width: float? = nil,
 		enabled: boolean = true,
 		autofocus: boolean = false,
+		obscure: boolean = false,
 		key: string? = nil
 	)
 		self.super(key)
@@ -265,6 +287,7 @@ export class TextField extends StatelessWidget
 		self.width = width
 		self.enabled = enabled
 		self.autofocus = autofocus
+		self.obscure = obscure
 	end
 
 	fn tick(el: Element, dt: float) -> nil
@@ -277,7 +300,7 @@ export class TextField extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local data: ElementData = context.data()
 		local scratch: table = data.scratch
 
@@ -298,11 +321,20 @@ export class TextField extends StatelessWidget
 		local focused: boolean = data.focused
 		local style: TextStyle = self.style ?? TextStyle()
 
-		local editor: TextEditor = TextEditor(scratch, context, self.onChanged)
+		-- Everything below works on `shown`: the caret is placed by measuring
+		-- the string that is actually on screen, so hit testing has to agree
+		-- with painting or clicks land on the wrong character.
+		local shown: string = text
 
-		local body: Widget = Container(
+		if self.obscure then
+			shown = String.rep("*", String.len(text))
+		end
+
+		local editor: TextEngine = TextEngine(scratch, context, self.onChanged)
+
+		local inner: View = Box(
 			child: EditableText(
-				text: text,
+				text: shown,
 				caret: caret,
 				anchor: anchor,
 				caretVisible: focused,
@@ -321,32 +353,29 @@ export class TextField extends StatelessWidget
 		)
 
 		if not self.enabled then
-			return body
+			return inner
 		end
 
-		-- The click coordinate is local to the `GestureDetector`, which wraps
+		-- The click coordinate is local to the `GestureArea`, which wraps
 		-- the padded box, so the text starts one padding-left in.
 		local inset: float = (self.padding ?? EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0)).left
 
 		return Focus(
-			child: MouseRegion(
-				cursor: "ibeam",
-				child: GestureDetector(
-				child: body,
+			child: GestureArea(
+				child: inner,
 				onTapDown: fn()
 					node.requestFocus()
 				end,
 				onTapAt: fn(x: float, y: float)
-					editor.placeCaret(style.indexAt(text, x - inset), false)
+					editor.placeCaret(style.indexAt(shown, x - inset), false)
 				end,
 				onDoubleTapAt: fn(x: float, y: float)
-					editor.selectWord(style.indexAt(text, x - inset))
+					editor.selectWord(style.indexAt(shown, x - inset))
 				end,
 				onDragTo: fn(x: float, y: float)
-					editor.placeCaret(style.indexAt(text, x - inset), true)
+					editor.placeCaret(style.indexAt(shown, x - inset), true)
 				end
-				)
-			),
+			).cursor("ibeam"),
 			node: node,
 			autofocus: self.autofocus,
 			wantsText: true,
@@ -367,7 +396,7 @@ export class TextField extends StatelessWidget
 
 	-- One editing key. Returns true when the key belonged to the field, so
 	-- everything else — Tab, shortcuts — keeps bubbling.
-	local fn edit(event: KeyEvent, editor: TextEditor) -> boolean
+	local fn edit(event: KeyEvent, editor: TextEngine) -> boolean
 		local key: string = event.key
 
 		if event.ctrl then
@@ -469,10 +498,10 @@ end
 
 -- The editing operations, over the text and selection held in element scratch.
 --
--- Pulling them out of `build` keeps the widget readable and puts every mutation
+-- Pulling them out of `inner` keeps the view readable and puts every mutation
 -- in one place: each one writes the scratch, reports the change, and asks for a
 -- rebuild.
-export class TextEditor
+export class TextEngine
 	local scratch: table
 	local context: BuildContext
 	local onChanged: function?

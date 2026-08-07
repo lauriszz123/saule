@@ -83,9 +83,9 @@ end
 
 -- One icon, sized and coloured.
 --
--- It measures the real glyph, so a `Row` of icons and text lines up the way it
--- would with any other widget.
-export class Icon extends Widget
+-- It measures the real glyph, so an `HStack` of icons and text lines up the way it
+-- would with any other view.
+export class Icon extends View
 	codepoint: integer
 	size: float
 	color: Color?
@@ -98,7 +98,7 @@ export class Icon extends Widget
 		self.color = color
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		-- Material icons are drawn on a square em box, so the advance width is
 		-- the size. Reserving the square keeps rows from shifting when an icon
 		-- fails to load.
@@ -126,7 +126,7 @@ export class Icon extends Widget
 		local width: float = Graphics.getTextWidth(glyph) / scale
 		local height: float = Graphics.getFontHeight() / scale
 
-		-- Centre the glyph in the square this widget reserved, then draw it in
+		-- Centre the glyph in the square this view reserved, then draw it in
 		-- device space so the physical-size atlas is not magnified again.
 		local left: float = x + (el.size.width - width) / 2.0
 		local top: float = y + (el.size.height - height) / 2.0
@@ -149,7 +149,7 @@ export class Icon extends Widget
 end
 
 -- A tappable icon: the button shape, without a label.
-export class IconButton extends StatelessWidget
+export class IconButton extends View
 	icon: integer
 	onPressed: function?
 	size: float
@@ -179,7 +179,7 @@ export class IconButton extends StatelessWidget
 		self.autofocus = autofocus
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
@@ -202,7 +202,7 @@ export class IconButton extends StatelessWidget
 			edge = theme.primary
 		end
 
-		local body: Widget = Container(
+		local inner: View = Box(
 			color: fill,
 			border: edge,
 			radius: theme.radius,
@@ -211,23 +211,20 @@ export class IconButton extends StatelessWidget
 		)
 
 		if not self.enabled then
-			return body
+			return inner
 		end
 
-		local tappable: Widget = Focus(
-			child: MouseRegion(
-				cursor: "hand",
-				child: GestureDetector(
-					child: body,
-					onTap: self.onPressed,
-					onTapDown: fn()
-						node.requestFocus()
-					end,
-					onHover: fn(inside: boolean)
-						scratch.hovered = inside
-						context.markNeedsBuild()
-					end
-				)
+		local tappable: View = Focus(
+			child: GestureArea(
+				child: inner,
+				onTap: self.onPressed,
+				onTapDown: fn()
+					node.requestFocus()
+				end,
+				onHover: fn(inside: boolean)
+					scratch.hovered = inside
+					context.markNeedsBuild()
+				end
 			),
 			node: node,
 			autofocus: self.autofocus,
@@ -253,7 +250,7 @@ export class IconButton extends StatelessWidget
 			return tappable
 		end
 
-		return Tooltip(message: self.tooltip, child: tappable)
+		return tappable.help(self.tooltip)
 	end
 end
 

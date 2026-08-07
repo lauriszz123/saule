@@ -2,7 +2,7 @@
 --
 -- Everything in this file is an immutable value type: methods return new
 -- instances instead of mutating, which is what makes it safe for a parent to
--- hand the same `EdgeInsets` or `BoxConstraints` to several children.
+-- hand the same `EdgeInsets` or `Constraints` to several children.
 --
 -- Constants are exposed as static *methods* (`Alignment.center()`) rather than
 -- static fields: a static field initializer runs while its own class is still
@@ -223,7 +223,7 @@ end
 -- The immutable "how big are you allowed to be" message a parent sends down.
 -- An unbounded axis carries `Math.huge` as its maximum, exactly like Flutter's
 -- `double.infinity`.
-export class BoxConstraints
+export class Constraints
   minWidth: float
   maxWidth: float
   minHeight: float
@@ -241,17 +241,17 @@ export class BoxConstraints
   end
 
   -- No constraint at all: any size is legal.
-  static fn unbounded() -> BoxConstraints
-    return BoxConstraints(0.0, Math.huge, 0.0, Math.huge)
+  static fn unbounded() -> Constraints
+    return Constraints(0.0, Math.huge, 0.0, Math.huge)
   end
 
   -- Exactly this size, nothing else.
-  static fn tight(size: Size) -> BoxConstraints
-    return BoxConstraints(size.width, size.width, size.height, size.height)
+  static fn tight(size: Size) -> Constraints
+    return Constraints(size.width, size.width, size.height, size.height)
   end
 
   -- Tight on the axes that were given, unbounded on the rest.
-  static fn tightFor(width: float? = nil, height: float? = nil) -> BoxConstraints
+  static fn tightFor(width: float? = nil, height: float? = nil) -> Constraints
     local minW: float = 0.0
     local maxW: float = Math.huge
     local minH: float = 0.0
@@ -267,12 +267,12 @@ export class BoxConstraints
       maxH = height
     end
 
-    return BoxConstraints(minW, maxW, minH, maxH)
+    return Constraints(minW, maxW, minH, maxH)
   end
 
   -- At most this size, but smaller is fine.
-  static fn loose(size: Size) -> BoxConstraints
-    return BoxConstraints(0.0, size.width, 0.0, size.height)
+  static fn loose(size: Size) -> Constraints
+    return Constraints(0.0, size.width, 0.0, size.height)
   end
 
   fn hasBoundedWidth() -> boolean
@@ -342,12 +342,12 @@ export class BoxConstraints
 
   -- Same maximums, no minimums — what a parent passes to a child it intends
   -- to position rather than stretch.
-  fn loosen() -> BoxConstraints
-    return BoxConstraints(0.0, self.maxWidth, 0.0, self.maxHeight)
+  fn loosen() -> Constraints
+    return Constraints(0.0, self.maxWidth, 0.0, self.maxHeight)
   end
 
   -- Shrink by `insets` on every edge, clamping at zero.
-  fn deflate(insets: EdgeInsets) -> BoxConstraints
+  fn deflate(insets: EdgeInsets) -> Constraints
     local h: float = insets.horizontal()
     local v: float = insets.vertical()
 
@@ -364,31 +364,31 @@ export class BoxConstraints
       maxH = atLeast(maxH - v, minH)
     end
 
-    return BoxConstraints(minW, maxW, minH, maxH)
+    return Constraints(minW, maxW, minH, maxH)
   end
 
-  fn withTightWidth(width: float) -> BoxConstraints
+  fn withTightWidth(width: float) -> Constraints
     local w: float = self.constrainWidth(width)
 
-    return BoxConstraints(w, w, self.minHeight, self.maxHeight)
+    return Constraints(w, w, self.minHeight, self.maxHeight)
   end
 
-  fn withTightHeight(height: float) -> BoxConstraints
+  fn withTightHeight(height: float) -> Constraints
     local h: float = self.constrainHeight(height)
 
-    return BoxConstraints(self.minWidth, self.maxWidth, h, h)
+    return Constraints(self.minWidth, self.maxWidth, h, h)
   end
 
   -- Whether two constraints are the same box. The relayout cache compares
   -- with this: identical constraints plus an unchanged subtree means last
   -- frame's size is still correct.
-  fn sameAs(other: BoxConstraints) -> boolean
+  fn sameAs(other: Constraints) -> boolean
     return self.minWidth == other.minWidth and self.maxWidth == other.maxWidth and self.minHeight == other.minHeight and self.maxHeight == other.maxHeight
   end
 
   fn describe() -> string
     return String.format(
-      "BoxConstraints(w %.1f..%.1f, h %.1f..%.1f)",
+      "Constraints(w %.1f..%.1f, h %.1f..%.1f)",
       self.minWidth,
       self.maxWidth,
       self.minHeight,
