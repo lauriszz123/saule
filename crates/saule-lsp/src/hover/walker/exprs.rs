@@ -51,11 +51,11 @@ impl<'a> Cx<'a> {
                 // Slot assignment follows the same rule the typechecker and
                 // interpreter use, so a trailing block after a named argument
                 // is read against the parameter it actually binds to.
-                let names: Vec<&str> = sig
+                let param_slots = sig
                     .as_ref()
-                    .map(|s| s.params.iter().map(|p| p.name.as_str()).collect())
+                    .map(|s| saule_ast::param_slots(&s.params))
                     .unwrap_or_default();
-                let slots = saule_ast::resolve_arg_slots(args, &names);
+                let slots = saule_ast::resolve_arg_slots(args, &param_slots);
                 for (a, slot) in args.iter().zip(slots.iter()) {
                     let want = slot.and_then(|i| expected.get(i).cloned().flatten());
                     self.visit_call_arg_with_params(a, sig.as_ref(), want.as_ref());

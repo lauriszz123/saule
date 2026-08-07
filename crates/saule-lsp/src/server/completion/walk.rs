@@ -453,14 +453,14 @@ impl Walk {
 
     /// [`Self::args`], but a lambda argument is walked against the parameter
     /// type of the slot it fills — including a trailing block, which takes the
-    /// first slot no other argument claimed.
+    /// callback slot no other argument claimed.
     fn call_args(&mut self, callee: &Expr, args: &[CallArg]) {
         let Some(params) = self.callee_params(callee) else {
             self.args(args);
             return;
         };
-        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-        let slots = saule_ast::resolve_arg_slots(args, &names);
+        let param_slots = saule_ast::param_slots(&params);
+        let slots = saule_ast::resolve_arg_slots(args, &param_slots);
         for (a, slot) in args.iter().zip(slots.iter()) {
             let (CallArg::Positional(e) | CallArg::Named { value: e, .. }) = a;
             let want = slot.and_then(|i| params.get(i)).map(|p| &p.ty);

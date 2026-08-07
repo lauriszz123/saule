@@ -185,16 +185,116 @@ impl CallArg {
     }
 }
 
+/// One of the callee's parameters, in the shape slot resolution needs: the
+/// name a named argument matches on, and whether the declared type can hold
+/// a function — which is what the trailing-block rule targets.
+#[derive(Debug, Clone, Copy)]
+pub struct ParamSlot<'a> {
+    pub name: &'a str,
+    pub takes_function: bool,
+}
+
+impl<'a> ParamSlot<'a> {
+    pub fn new(name: &'a str, ty: &Type) -> Self {
+        Self {
+            name,
+            takes_function: type_holds_function(ty),
+        }
+    }
+
+    /// A parameter whose declared type isn't available — native signatures
+    /// record names without types. Falls back to "last parameter".
+    pub fn untyped(name: &'a str) -> Self {
+        Self {
+            name,
+            takes_function: false,
+        }
+    }
+}
+
+/// The slots of a declared parameter list, in declaration order.
+pub fn param_slots(params: &[Param]) -> Vec<ParamSlot<'_>> {
+    params
+        .iter()
+        .map(|p| ParamSlot::new(&p.name, &p.ty))
+        .collect()
+}
+
+/// Whether a declared type can hold a function value: `fn(…) -> R`, the bare
+/// `function` name, or either of those made nullable.
+///
+/// `any` is deliberately excluded. It holds a function too, but it holds
+/// everything else as well, so treating it as a callback slot would make the
+/// trailing block land somewhere the author never pointed it.
+pub fn type_holds_function(ty: &Type) -> bool {
+    match ty {
+        Type::Function { .. } => true,
+        Type::Named(n) => n == "function",
+        Type::Nullable(inner) => type_holds_function(inner),
+        _ => false,
+    }
+}
+
+/// The parameter a trailing block binds to: the **last function-typed
+/// parameter no other argument claimed**, falling back to the last parameter.
+///
+/// `claimed` reports whether the argument list already filled slot `i` by
+/// position or by name.
+///
+/// Targeting the last *function-typed* free slot rather than the last slot
+/// outright is what makes the form work when a non-callback parameter trails
+/// the callback:
+///
+/// ```text
+/// fn init(label: string = "", onSelected: fn() -> nil = () => nil, enabled: boolean = true)
+///
+/// MenuItem("Open") do … end     -- block → `onSelected`, `enabled` defaults
+/// ```
+///
+/// Binding to `enabled` there puts a function in a `boolean` and leaves the
+/// callback at its default — the call reads as a type mismatch and, worse,
+/// silently does nothing at runtime.
+///
+/// The "no other argument claimed" half keeps a fully-supplied call honest:
+/// in `MenuItem("Open", true) do … end` the positional `true` already owns
+/// `onSelected`, so the block falls through to the last parameter and the
+/// mismatch is reported rather than papered over. The same fallback is what
+/// makes `view(body: f) do … end` a reportable duplicate.
+pub fn trailing_block_slot(
+    params: &[ParamSlot<'_>],
+    claimed: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    slot_for_trailing_block(params.len(), |i| params[i].takes_function && !claimed(i))
+}
+
+/// [`trailing_block_slot`] against a declared parameter list, without building
+/// the intermediate [`ParamSlot`] vector — the interpreter binds arguments on
+/// every call.
+pub fn trailing_block_param(params: &[Param], claimed: impl Fn(usize) -> bool) -> Option<usize> {
+    slot_for_trailing_block(params.len(), |i| {
+        type_holds_function(&params[i].ty) && !claimed(i)
+    })
+}
+
+/// The trailing-block rule itself, stated once: last free function-typed
+/// slot, else last slot.
+fn slot_for_trailing_block(len: usize, is_target: impl Fn(usize) -> bool) -> Option<usize> {
+    (0..len)
+        .rev()
+        .find(|&i| is_target(i))
+        .or_else(|| len.checked_sub(1))
+}
+
 /// Resolve which parameter slot each call argument fills.
 ///
 /// Positional arguments consume slots left to right; a named argument targets
 /// the slot carrying its name. The one exception is a **trailing block** — the
 /// final argument when it is a positional block-bodied lambda, which is what
-/// `f(x) do … end` produces. It binds to the callee's **last parameter**,
-/// wherever the arguments before it landed, and it is the only positional
-/// argument allowed to follow named ones.
+/// `f(x) do … end` produces. It binds to the slot [`trailing_block_slot`]
+/// picks, wherever the arguments before it landed, and it is the only
+/// positional argument allowed to follow named ones.
 ///
-/// Binding to the last parameter rather than to the next free slot is what
+/// Binding to the callback slot rather than to the next free slot is what
 /// makes the form work with defaults in between:
 ///
 /// ```text
@@ -207,30 +307,38 @@ impl CallArg {
 /// Filling the next free slot would put the block in `spacing` and report
 /// `body` as missing. Swift and Kotlin resolve trailing closures the same way.
 ///
-/// `param_names` is the callee's parameter list in declaration order. A slot
+/// `params` is the callee's parameter list in declaration order. A slot
 /// past its end, or a name matching no parameter, yields `None` — reporting
 /// arity, duplicate and unknown-name errors is the caller's job. In particular
 /// a trailing block can land on a slot a named argument already claimed
 /// (`view(body: f) do … end`), which is a duplicate for the caller to report.
-pub fn resolve_arg_slots(args: &[CallArg], param_names: &[&str]) -> Vec<Option<usize>> {
+pub fn resolve_arg_slots(args: &[CallArg], params: &[ParamSlot<'_>]) -> Vec<Option<usize>> {
     let trailing = args
         .len()
         .checked_sub(1)
         .filter(|&i| args[i].is_trailing_block());
 
+    // First pass: everything but the trailing block, which needs to know
+    // which slots the rest of the call already claimed.
     let mut next = 0usize;
-    args.iter()
+    let mut slots: Vec<Option<usize>> = args
+        .iter()
         .enumerate()
         .map(|(idx, a)| match a {
-            CallArg::Named { name, .. } => param_names.iter().position(|n| n == name),
-            CallArg::Positional(_) if Some(idx) == trailing => param_names.len().checked_sub(1),
+            _ if Some(idx) == trailing => None,
+            CallArg::Named { name, .. } => params.iter().position(|p| p.name == name.as_str()),
             CallArg::Positional(_) => {
                 let i = next;
                 next += 1;
-                (i < param_names.len()).then_some(i)
+                (i < params.len()).then_some(i)
             }
         })
-        .collect()
+        .collect();
+
+    if let Some(idx) = trailing {
+        slots[idx] = trailing_block_slot(params, |i| slots.contains(&Some(i)));
+    }
+    slots
 }
 
 /// One entry inside a `{ ... }` table literal.

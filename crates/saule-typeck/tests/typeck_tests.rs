@@ -1335,6 +1335,85 @@ end
     );
 }
 
+/// A trailing block binds to the callee's last **function-typed** parameter,
+/// not to the last parameter outright. `MenuItem`'s callback is followed by a
+/// `boolean`, and binding the block there reported the block as a `boolean`
+/// mismatch — for a call that is perfectly well-formed.
+#[test]
+fn accepts_a_trailing_block_when_a_non_callback_parameter_follows_it() {
+    accepts(
+        "\
+class MenuItem
+  label: string
+  onSelected: fn() -> nil
+  enabled: boolean
+
+  fn init(label: string = \"\", onSelected: fn() -> nil = () => nil, enabled: boolean = true)
+    self.label = label
+    self.onSelected = onSelected
+    self.enabled = enabled
+  end
+end
+
+fn t() -> nothing
+  local a: MenuItem = MenuItem(\"Open\") do
+    print(\"open\")
+  end
+  return
+end
+",
+    );
+}
+
+/// Same call written with the lambda inside the parentheses — the same tree,
+/// so it must resolve to the same slot.
+#[test]
+fn accepts_a_paren_form_callback_when_a_non_callback_parameter_follows_it() {
+    accepts(
+        "\
+class MenuItem
+  onSelected: fn() -> nil
+  enabled: boolean
+
+  fn init(label: string = \"\", onSelected: fn() -> nil = () => nil, enabled: boolean = true)
+    self.onSelected = onSelected
+    self.enabled = enabled
+  end
+end
+
+fn t() -> nothing
+  local a: MenuItem = MenuItem(label: \"Open\", fn()
+    print(\"open\")
+  end)
+  return
+end
+",
+    );
+}
+
+/// The callback slot has to be *free*. Here a positional argument already
+/// filled it, so the block falls through to the last parameter and the
+/// mismatch is reported rather than silently absorbed.
+#[test]
+fn rejects_a_trailing_block_when_the_callback_slot_is_already_taken() {
+    rejects(
+        "\
+class MenuItem
+  fn init(label: string = \"\", onSelected: fn() -> nil = () => nil, enabled: boolean = true)
+  end
+end
+
+fn t() -> nothing
+  local a: MenuItem = MenuItem(\"Open\", () => nil) do
+    print(\"open\")
+  end
+  return
+end
+",
+        "boolean",
+    );
+}
+
 /// An expression-bodied lambda was always checked against the return type its
 /// target supplies; guard against a regression from the block-body fix.
 #[test]

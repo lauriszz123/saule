@@ -73,15 +73,22 @@ impl<'a> Printer<'a> {
                 self.write("]");
             }
             Expr::Call { callee, args } => {
-                // A final block-bodied lambda argument prints as a trailing
-                // block — `f(a, fn() … end)` and `f(a) do … end` are the same
-                // tree, and the trailing form is the one worth normalising to.
+                // A trailing block prints back as one — but only when that is
+                // how it was written. `f(a, fn() … end)` and `f(a) do … end`
+                // parse to the same tree, so moving the lambda out of the
+                // parentheses is a rewrite, not a reformat: it changes which
+                // parameter the argument visibly targets, and the author may
+                // have put the lambda inside the parens precisely because a
+                // later parameter follows it. Which form was written is
+                // recovered from the lambda's own span — see
+                // [`Self::is_written_as_do_block`].
+                //
                 // Suppressed under `force_inline`, where the caller is
                 // measuring a single-line rendering and a block can't fit.
                 let trailing = if self.force_inline {
                     None
                 } else {
-                    trailing_block_arg(args)
+                    trailing_block_arg(args).filter(|t| self.is_written_as_do_block(t))
                 };
                 self.expr(callee, MAX_PREC);
                 self.write("(");
@@ -481,6 +488,31 @@ impl<'a> Printer<'a> {
         (c == '"' || c == '\'').then_some(c)
     }
 
+    /// Whether the author wrote this lambda as a `do … end` block after the
+    /// closing paren, rather than as a lambda inside the argument list.
+    ///
+    /// The parser spans a trailing block from its `do` keyword, while a lambda
+    /// written in the argument list starts at `fn` or `(`. Once parsed the two
+    /// are the same tree, so that first byte is the only surviving record of
+    /// which one the author chose — the same trick [`Self::float_lit`] uses to
+    /// keep `1f` from being reprinted as `1.0`.
+    ///
+    /// Preserving the choice matters beyond taste: the trailing form binds to
+    /// the callee's last free function-typed parameter, so moving a lambda out
+    /// of the parentheses is only a no-op when nothing else could claim that
+    /// slot. The formatter has no signatures to check that against.
+    ///
+    /// With no source to consult (`format_module`) the trailing form is used —
+    /// there is no authored spelling to preserve.
+    fn is_written_as_do_block(&self, t: &TrailingBlock<'_>) -> bool {
+        if self.source.is_empty() {
+            return true;
+        }
+        self.source
+            .get(t.span.clone())
+            .is_some_and(|s| s.starts_with("do"))
+    }
+
     /// The quote character immediately before `end`, if it is one.
     ///
     /// For `import x from "a/b"` the path has no span of its own — the only
@@ -501,13 +533,17 @@ pub(crate) struct TrailingBlock<'t> {
     params: &'t [saule_ast::Param],
     return_ty: Option<&'t saule_ast::Type>,
     body: &'t [Spanned<saule_ast::Stmt>],
+    /// The lambda's own span, which is what tells the two source forms apart —
+    /// see [`Printer::is_written_as_do_block`].
+    span: &'t Range<usize>,
 }
 
 /// Recognises `f(…, fn(p) … end)` — a call whose last argument is a positional
-/// block-bodied lambda — so it can be printed as `f(…) do (p) … end`.
+/// block-bodied lambda — as a *candidate* for printing as `f(…) do (p) … end`.
 ///
 /// Named arguments may precede it (`View(spacing: 10) do … end`); only the
-/// final argument's shape matters.
+/// final argument's shape matters. Whether the trailing form is actually the
+/// one to print is [`Printer::is_written_as_do_block`]'s call.
 fn trailing_block_arg(args: &[CallArg]) -> Option<TrailingBlock<'_>> {
     let (last, leading) = args.split_last()?;
     let CallArg::Positional(e) = last else {
@@ -526,5 +562,6 @@ fn trailing_block_arg(args: &[CallArg]) -> Option<TrailingBlock<'_>> {
         params,
         return_ty: return_ty.as_ref(),
         body: stmts,
+        span: &e.span,
     })
 }

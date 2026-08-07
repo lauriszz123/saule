@@ -258,11 +258,13 @@ pub(crate) fn bind_params(
                 assigned[next_positional] = Some(value.clone());
                 next_positional += 1;
             }
-            // See `saule_ast::resolve_arg_slots`: a trailing block binds to
-            // the callee's last parameter, so `panel(title: "Stats") do … end`
-            // reaches `body` even when a defaulted `spacing` sits in between.
+            // See `saule_ast::trailing_block_param`: a trailing block binds to
+            // the callee's last function-typed parameter, so
+            // `panel(title: "Stats") do … end` reaches `body` even when a
+            // defaulted `spacing` sits in between — or after it.
             EvaluatedArg::TrailingBlock(value) => {
-                let Some(idx) = params.len().checked_sub(1) else {
+                let Some(idx) = saule_ast::trailing_block_param(params, |i| assigned[i].is_some())
+                else {
                     return Err(RuntimeError::TypeError {
                         message:
                             "this function takes no parameters, so it cannot take a trailing block"
@@ -273,7 +275,7 @@ pub(crate) fn bind_params(
                 if assigned[idx].is_some() {
                     return Err(RuntimeError::TypeError {
                         message: format!(
-                            "duplicate argument for parameter `{}` — a trailing block binds to the last parameter, which was already supplied",
+                            "duplicate argument for parameter `{}` — a trailing block binds to that parameter, which was already supplied",
                             params[idx].name
                         ),
                         span: span.clone(),

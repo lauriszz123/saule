@@ -98,9 +98,20 @@ pub(crate) fn expected_arg_types(
     };
     // Which slot each argument fills: positional arguments consume slots
     // left to right, a named argument targets the slot with its name, and a
-    // trailing block takes the first slot nothing else claimed.
-    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let slots = saule_ast::resolve_arg_slots(args, &name_refs);
+    // trailing block takes the callback slot nothing else claimed.
+    //
+    // Keyed off `names`, which native signatures leave empty — they record no
+    // parameter names, so nothing here can be matched up and every slot comes
+    // back `None`, as before.
+    let param_slots: Vec<saule_ast::ParamSlot<'_>> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| match params.get(i) {
+            Some(ty) => saule_ast::ParamSlot::new(n, ty),
+            None => saule_ast::ParamSlot::untyped(n),
+        })
+        .collect();
+    let slots = saule_ast::resolve_arg_slots(args, &param_slots);
 
     let mut found: Vec<Option<Type>> = vec![None; params.len()];
     for (arg, slot) in args.iter().zip(slots.iter()) {
@@ -278,9 +289,9 @@ pub(crate) fn check_user_method_args(
     // A required slot counts as filled either by its position or by a named
     // argument carrying its name — `Box(w: 5, h: 6)` fills both of
     // `fn init(w, h = 2)` even though it passes nothing positionally. A
-    // trailing block fills the first slot nothing else claimed.
-    let param_names: Vec<&str> = sig.params.iter().map(|p| p.name.as_str()).collect();
-    let slots = saule_ast::resolve_arg_slots(args, &param_names);
+    // trailing block fills the callback slot nothing else claimed.
+    let param_slots = saule_ast::param_slots(&sig.params);
+    let slots = saule_ast::resolve_arg_slots(args, &param_slots);
     let filled: usize = (0..required).filter(|i| slots.contains(&Some(*i))).count();
     if filled < required {
         errors.push(TypeCheckError::NativeArity {
@@ -785,14 +796,26 @@ pub(crate) fn report_if_user_function_arity(
     let type_params = &fresh.params;
     let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
 
-    for (i, arg) in args.iter().enumerate() {
-        let Some(p) = info.params.get(i).or_else(|| {
-            if info.variadic {
-                info.params.last()
-            } else {
-                None
-            }
-        }) else {
+    // Which parameter each argument fills. Positional arguments still line up
+    // by index — the rule only differs for a trailing block, which targets the
+    // callback slot rather than its own position. Checking `f("x") do … end`
+    // at index 1 when the block actually binds to the `fn` slot at index 2
+    // reported a mismatch against the wrong parameter entirely.
+    let param_slots = saule_ast::param_slots(&info.params);
+    let slots = saule_ast::resolve_arg_slots(args, &param_slots);
+
+    for (arg, slot) in args.iter().zip(slots.iter()) {
+        let Some((p, i)) = slot
+            .and_then(|s| info.params.get(s).map(|p| (p, s)))
+            .or_else(|| {
+                if info.variadic {
+                    let last = info.params.len().checked_sub(1)?;
+                    Some((&info.params[last], last))
+                } else {
+                    None
+                }
+            })
+        else {
             break;
         };
         if p.variadic {

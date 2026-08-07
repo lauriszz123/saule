@@ -24,6 +24,8 @@ class SauleSettings : PersistentStateComponent<SauleSettings.State> {
         @JvmField var saulePath: String = ""
         /** Explicit path to `saule-lsp` (wins over [toolchainDir]). */
         @JvmField var sauleLspPath: String = ""
+        /** Reformat `.sau` files with `saule fmt` when they are saved. */
+        @JvmField var formatOnSave: Boolean = true
     }
 
     private var myState = State()
@@ -42,6 +44,11 @@ class SauleSettings : PersistentStateComponent<SauleSettings.State> {
     var sauleLspPath: String
         get() = myState.sauleLspPath
         set(value) { myState.sauleLspPath = value }
+
+    /** See [com.saule.lang.format.SauleFormatOnSave]. On by default. */
+    var formatOnSave: Boolean
+        get() = myState.formatOnSave
+        set(value) { myState.formatOnSave = value }
 
     /** Explicit override configured for [base] (`"saule"` / `"saule-lsp"`), or "". */
     fun explicitPathFor(base: String): String = when (base) {

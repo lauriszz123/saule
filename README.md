@@ -886,9 +886,10 @@ else is a compile error.
 
 #### Which Parameter It Fills
 
-A trailing block binds to the callee's **last** parameter, wherever the
-arguments before it landed. This is also what lets it follow named arguments,
-even though a normal positional argument cannot:
+A trailing block binds to the callee's **last function-typed parameter that no
+other argument claimed**, wherever the arguments before it landed. This is also
+what lets it follow named arguments, even though a normal positional argument
+cannot:
 
 ```saule
 view(spacing: 10) do    -- `spacing` is named, so the block fills `body`
@@ -896,7 +897,7 @@ view(spacing: 10) do    -- `spacing` is named, so the block fills `body`
 end
 ```
 
-Binding to the last parameter — rather than to the next unfilled one — is what
+Binding to the callback slot — rather than to the next unfilled one — is what
 makes the form work with defaults in between:
 
 ```saule
@@ -913,9 +914,31 @@ panel("Stats", 2) do        -- block still fills `body`; `spacing` is 2
 end
 ```
 
-Put the function parameter last, and everything before it can be positional,
-named, or defaulted. Supplying that last parameter *and* a trailing block is a
-duplicate-argument error.
+The callback does not have to come last. A parameter that cannot hold a
+function is skipped over, so a trailing `enabled: boolean` doesn't get in the
+way:
+
+```saule
+fn menuItem(label: string, onSelected: fn() -> nil, enabled: boolean = true) -> nil
+    onSelected()
+end
+
+menuItem("Open") do         -- block fills `onSelected`; `enabled` defaults
+    showToast("Open")
+end
+```
+
+Only *free* slots are candidates. If something else already filled the callback
+parameter, the block falls through to the last parameter and you get the type
+error you asked for rather than a silently misplaced argument — which is also
+how supplying the callback *and* a trailing block reads as a duplicate-argument
+error:
+
+```saule
+menuItem("Open", () => nil) do    -- error: a function where `enabled` wants a boolean
+    showToast("Open")
+end
+```
 
 #### Blocks and Loop Headers
 

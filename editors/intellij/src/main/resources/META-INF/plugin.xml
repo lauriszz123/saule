@@ -51,6 +51,15 @@
         <langCodeStyleSettingsProvider
             implementation="com.saule.lang.SauleCodeStyleSettingsProvider"/>
 
+        <!-- Format on save (on by default). The platform's own "Reformat code"
+             on-save action can't do this for us: it kicks off LSP4IJ's *async*
+             formatting service and the file is written before the edits land.
+             SauleFormatOnSave runs the same request synchronously instead. -->
+        <actionOnSave
+            implementation="com.saule.lang.format.SauleFormatOnSave"/>
+        <actionOnSaveInfoProvider
+            implementation="com.saule.lang.format.SauleFormatOnSaveInfoProvider"/>
+
         <!-- Indentation while typing. `saule-lsp` formats on demand but is not
              in the loop per keystroke, so the indent of a new line is computed
              here — in the code style's tabs/spaces, not the platform default of
