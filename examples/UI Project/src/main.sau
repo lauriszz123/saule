@@ -2,24 +2,24 @@ import * from UIKit
 import * from Test
 
 class Main
-	static fn main()
-		-- Everything below the `Theme` reads its palette through
-		-- `Theme.of(context)` — swap it for `ThemeData.light()` to see it.
-		runApp(
-			Theme(
-				data: ThemeData.dark(),
-				child: Scaffold(
-					appBar: AppBar(title: "Saule UIKit"),
-					body: PanelView(),
-					footer: Padding(
-						EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-						Text("Tab to move, Enter to press, Ctrl+S to save")
-					)
-				)
-			),
-			width: 900,
-			height: 700,
-			title: "Saule UIKit"
-		)
-	end
+  static fn main()
+    -- Everything below the `Theme` reads its palette through
+    -- `Theme.of(context)` — swap it for `ThemeData.light()` to see it.
+    runApp(
+      Theme(
+        data: ThemeData.dark(),
+        child: Scaffold(
+          appBar: AppBar(title: "Saule UIKit"),
+          body: PanelView(),
+          footer: Padding(
+            EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            Text("Tab to move, Enter to press, Ctrl+S to save")
+          )
+        )
+      ),
+      width: 900,
+      height: 700,
+      title: "Saule UIKit"
+    )
+  end
 end
