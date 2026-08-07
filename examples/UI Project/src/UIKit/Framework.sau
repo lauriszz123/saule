@@ -1,0 +1,2144 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from ThemeData
+import * from Events
+
+-- ============================================================================
+-- The widget framework
+-- ============================================================================
+--
+-- Two trees, the same way Flutter does it:
+--
+--   Widget   immutable description of what the UI should look like. Cheap to
+--            throw away and rebuild on every frame.
+--   Element  the persistent instance of a widget at one position in the tree.
+--            It owns everything mutable: the child list, the laid-out size and
+--            offset, any `State`, and a scratch table for the widget's own
+--            per-instance bookkeeping.
+--
+-- Flutter has a third tree (`RenderObject`) that owns layout and painting.
+-- Saule has no downcasts, so a `PaddingRenderObject` could never read the
+-- `Padding` that configured it — every render class would be stuck with a
+-- `Widget`-typed field it cannot inspect. Instead the *behaviour* lives on the
+-- widget as `layout` / `paint` / `handleEvent` methods that take the `Element`
+-- holding the mutable state. Widgets stay immutable, elements stay generic,
+-- and no cast is ever needed.
+--
+-- Everything mutually recursive lives in this one file because Saule forbids
+-- circular imports.
+
+-- ----------------------------------------------------------------------------
+-- Pointer input
+-- ----------------------------------------------------------------------------
+
+export enum PointerKind
+	Down,
+	Up,
+	Move,
+
+	-- The wheel turned. Routed like a press — to the front-most widget under
+	-- the cursor, which lets nested scroll views work — and `scrollX` /
+	-- `scrollY` carry the movement.
+	Scroll
+end
+
+-- Which cursor the pointer should show this frame.
+--
+-- Widgets ask rather than set, because several of them are under the pointer at
+-- once and only the innermost should win. Move events are dispatched
+-- depth-first with the front-most sibling first, so the *first* request in a
+-- frame is the innermost topmost one — which is why this keeps the first and
+-- ignores the rest.
+export class Cursors
+	static local requested: string = ""
+	static local applied: string = ""
+
+	static fn request(cursor: string) -> nil
+		if #Cursors.requested == 0 then
+			Cursors.requested = cursor
+		end
+	end
+
+	-- What was requested this frame, for tests and diagnostics.
+	static fn wanted() -> string
+		if #Cursors.requested == 0 then
+			return "arrow"
+		end
+
+		return Cursors.requested
+	end
+
+	-- Called by the frame loop before routing the pointer.
+	static fn beginFrame() -> nil
+		Cursors.requested = ""
+	end
+
+	-- Called after routing. The engine call only happens on a change: setting
+	-- the same cursor sixty times a second is a syscall per frame for nothing.
+	static fn apply() -> nil
+		local wanted: string = Cursors.requested
+
+		if #wanted == 0 then
+			wanted = "arrow"
+		end
+
+		if wanted != Cursors.applied then
+			Cursors.applied = wanted
+			Mouse.setCursor(wanted)
+		end
+	end
+end
+
+-- A repaint that no rebuild asks for.
+--
+-- The frame loop only repaints when something is dirty, which covers every
+-- change that goes through `setState`. A few things animate inside `paint`
+-- itself off the wall clock — a blinking caret, an indeterminate progress bar —
+-- and nothing marks those dirty. They call `request` while painting, and that
+-- is what brings the next frame around.
+export class Repaint
+	static local requested: boolean = false
+	static local deadline: float = -1.0
+
+	-- Repaint on the very next frame. For something that moves continuously,
+	-- like an indeterminate progress bar.
+	static fn request() -> nil
+		Repaint.requested = true
+	end
+
+	-- Repaint once the clock reaches `at`, whenever that is. Several callers
+	-- can ask and the earliest wins.
+	--
+	-- This is what a slow, stepped animation wants. A caret blinking twice a
+	-- second only looks different on the two flips; asking for a frame at the
+	-- next flip costs two repaints a second instead of sixty that draw the
+	-- identical caret.
+	static fn requestAt(at: float) -> nil
+		if Repaint.deadline < 0.0 or at < Repaint.deadline then
+			Repaint.deadline = at
+		end
+	end
+
+	-- Consume whatever is due; the frame loop calls this once per frame.
+	static fn take() -> boolean
+		local wanted: boolean = Repaint.requested
+		Repaint.requested = false
+
+		local at: float = Repaint.deadline
+
+		if at >= 0.0 and Timer.getTime() >= at then
+			Repaint.deadline = -1.0
+			wanted = true
+		end
+
+		return wanted
+	end
+end
+
+-- How much work the last layout pass actually did.
+--
+-- `ran` counts elements that re-ran their layout; `skipped` counts those that
+-- reused a cached size. On a settled screen almost everything should be
+-- skipped — if `ran` stays high frame after frame, something is marking itself
+-- dirty every frame.
+export class LayoutStats
+	static ran: integer = 0
+	static skipped: integer = 0
+
+	static fn reset() -> nil
+		LayoutStats.ran = 0
+		LayoutStats.skipped = 0
+	end
+
+	static fn describe() -> string
+		return String.format("layout: %d ran, %d skipped", LayoutStats.ran, LayoutStats.skipped)
+	end
+end
+
+-- Identity search over an element list. Instances compare by reference, which
+-- is what makes an element usable as a stable key across frames.
+local fn contains(list: table<Element>, element: Element) -> boolean
+	for candidate: Element in list do
+		if candidate == element then
+			return true
+		end
+	end
+
+	return false
+end
+
+export class PointerEvent
+	kind: PointerKind
+
+	-- Window coordinates. Each element converts these to its own local space
+	-- before handing them to the widget.
+	x: float
+	y: float
+
+	-- Wheel movement for a `Scroll` event, zero otherwise. Positive `scrollY`
+	-- is a scroll up, away from the user.
+	scrollX: float
+	scrollY: float
+
+	-- Which button a `Down` or `Up` belongs to: 1 left, 2 right, 3 middle.
+	-- `Move` and `Scroll` carry 0 — they belong to no button.
+	button: integer
+
+	fn init(
+		kind: PointerKind,
+		x: float,
+		y: float,
+		scrollX: float = 0.0,
+		scrollY: float = 0.0,
+		button: integer = 1
+	)
+		self.kind = kind
+		self.x = x
+		self.y = y
+		self.scrollX = scrollX
+		self.scrollY = scrollY
+		self.button = button
+	end
+
+	-- The two the UI cares about. Middle-click is delivered but unnamed.
+	fn isPrimary() -> boolean
+		return self.button == 1
+	end
+
+	fn isSecondary() -> boolean
+		return self.button == 2
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Keyboard input
+-- ----------------------------------------------------------------------------
+
+export enum KeyEventKind
+
+	-- A key went down. Repeats arrive as further `Down` events while the key
+	-- is held, provided `runApp` enabled key repeat.
+	Down,
+	Up,
+
+	-- Text was typed. This is layout- and modifier-aware, so shift+a arrives
+	-- as "A" — never assemble text out of `Down` events.
+	Text
+end
+
+export class KeyEvent
+	kind: KeyEventKind
+
+	-- Engine key name ("a", "backspace", "left", …). Empty for `Text`.
+	key: string
+
+	-- The characters typed. Empty for `Down` and `Up`.
+	text: string
+
+	shift: boolean
+	ctrl: boolean
+	alt: boolean
+
+	fn init(
+		kind: KeyEventKind,
+		key: string = "",
+		text: string = "",
+		shift: boolean = false,
+		ctrl: boolean = false,
+		alt: boolean = false
+	)
+		self.kind = kind
+		self.key = key
+		self.text = text
+		self.shift = shift
+		self.ctrl = ctrl
+		self.alt = alt
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Focus
+-- ----------------------------------------------------------------------------
+
+-- A handle on one focusable position in the tree, so code that is nowhere near
+-- that position can still move focus to it:
+--
+--     local field: FocusNode = FocusNode()
+--     ...
+--     Focus(node: field, child: ...)
+--     Button(label: "Edit", onPressed: fn() field.requestFocus() end)
+--
+-- Create it once and keep it — a node built fresh on every rebuild works, but
+-- only for the rebuild it came from. Stash it in element scratch or a `State`.
+export class FocusNode
+	local manager: FocusManager?
+	local element: Element?
+
+	fn init()
+		self.manager = nil
+		self.element = nil
+	end
+
+	-- Called by the focus manager once per frame for every mounted node.
+	fn bind(manager: FocusManager, element: Element) -> nil
+		self.manager = manager
+		self.element = element
+	end
+
+	fn hasFocus() -> boolean
+		local manager: FocusManager? = self.manager
+		local element: Element? = self.element
+
+		if manager == nil or element == nil then
+			return false
+		end
+
+		return manager!.isFocused(element!)
+	end
+
+	fn requestFocus() -> nil
+		local manager: FocusManager? = self.manager
+		local element: Element? = self.element
+
+		if manager != nil and element != nil then
+			manager!.setFocus(element)
+		end
+	end
+
+	fn unfocus() -> nil
+		if self.hasFocus() then
+			local manager: FocusManager? = self.manager
+			if manager != nil then
+				manager!.setFocus(nil)
+			end
+		end
+	end
+end
+
+-- What a widget returns from `focusData()` to say "I can hold focus".
+-- Returning nil means the widget is skipped by focus and keyboard routing —
+-- that is also how a disabled control opts out.
+export class FocusData
+	-- Optional handle for programmatic focus. Focus tracking itself uses the
+	-- element, which is stable across rebuilds, so a node is never required.
+	node: FocusNode?
+
+	-- Take focus when nothing else holds it.
+	autofocus: boolean
+
+	-- Turn on text input while focused. Only a text editor wants this.
+	wantsText: boolean
+
+	-- Also receive keys that the focus chain ignored — including when nothing
+	-- is focused at all. This is what makes a screen-level shortcut handler
+	-- work without it having to own focus.
+	global: boolean
+
+	-- Whether Tab can land here. A pure listener sets this false so traversal
+	-- doesn't park focus somewhere invisible.
+	tabStop: boolean
+
+	-- Confine focus to this subtree while it is mounted. A dialog sets this so
+	-- Tab can't walk into the screen behind it.
+	modal: boolean
+
+	fn init(
+		node: FocusNode? = nil,
+		autofocus: boolean = false,
+		wantsText: boolean = false,
+		global: boolean = false,
+		tabStop: boolean = true,
+		modal: boolean = false
+	)
+		self.node = node
+		self.autofocus = autofocus
+		self.wantsText = wantsText
+		self.global = global
+		self.tabStop = tabStop
+		self.modal = modal
+	end
+end
+
+-- Tracks which element holds focus and routes key events to it.
+--
+-- Unlike pointer events, which go wherever the cursor is, key events go to the
+-- focused element and then bubble up through its ancestors — so a shortcut
+-- handler wrapped around a subtree sees whatever the focused control ignored.
+export class FocusManager
+	local focused: Element?
+
+	-- Focusable elements in tree order, rebuilt once per frame. Tab traversal
+	-- and focus validation both read it.
+	local order: table<Element>
+
+	-- `scopes[i]` is the innermost modal ancestor of `order[i]`, or nil when it
+	-- isn't inside one. While any modal is mounted, everything outside the
+	-- topmost one is off limits — that is what stops Tab walking out of a dialog
+	-- into the screen behind it.
+	local scopes: table<Element?>
+	local activeScope: Element?
+
+	fn init()
+		self.focused = nil
+		self.order = {}
+		self.scopes = {}
+		self.activeScope = nil
+	end
+
+	fn focusedElement() -> Element?
+		return self.focused
+	end
+
+	fn isFocused(element: Element) -> boolean
+		return self.focused == element
+	end
+
+	-- Re-derive the traversal order from the live tree. Run this after builds
+	-- have settled and before routing keys: it binds every mounted node, drops
+	-- focus that was rebuilt away, and applies `autofocus`.
+	fn refresh(root: Element) -> nil
+		self.order = {}
+		self.scopes = {}
+		self.collect(root, nil)
+
+		-- The topmost modal wins: the last one collected is the one on top,
+		-- because entries are collected in paint order.
+		self.activeScope = nil
+
+		local i: integer = 1
+
+		while i <= #self.order do
+			local data: FocusData? = self.order[i].widget.focusData()
+
+			if data != nil then
+				if data!.modal then
+					self.activeScope = self.order[i]
+				end
+
+				local node: FocusNode? = data!.node
+
+				if node != nil then
+					node!.bind(self, self.order[i])
+				end
+			end
+
+			i = i + 1
+		end
+
+		local current: Element? = self.focused
+
+		if current != nil and not self.inScope(current!) then
+			self.setFocus(nil)
+		end
+
+		if self.focused == nil then
+			self.applyAutofocus()
+		end
+	end
+
+	-- Whether `element` is reachable given the modal in force, and still
+	-- mounted at all.
+	local fn inScope(element: Element) -> boolean
+		local i: integer = 1
+
+		while i <= #self.order do
+			if self.order[i] == element then
+				if self.activeScope == nil then
+					return true
+				end
+
+				-- Inside the modal itself, or anywhere beneath it.
+				return self.scopes[i] == self.activeScope or element == self.activeScope!
+			end
+
+			i = i + 1
+		end
+
+		return false
+	end
+
+	fn setFocus(element: Element?) -> nil
+		local previous: Element? = self.focused
+
+		if previous == element then
+			return
+		end
+
+		self.focused = element
+
+		if previous != nil then
+			previous!.widget.focusChanged(previous!, false)
+		end
+
+		if element != nil then
+			element!.widget.focusChanged(element!, true)
+		end
+
+		-- Text input is only worth capturing while an editor holds focus.
+		Keyboard.setTextInput(self.wantsText())
+	end
+
+	fn unfocus() -> nil
+		self.setFocus(nil)
+	end
+
+	-- Tab / shift-Tab traversal, wrapping at both ends.
+	fn focusNext() -> nil
+		self.move(1)
+	end
+
+	fn focusPrevious() -> nil
+		self.move(-1)
+	end
+
+	-- True when the focused element wants typed text delivered.
+	fn wantsText() -> boolean
+		local element: Element? = self.focused
+
+		if element == nil then
+			return false
+		end
+
+		local data: FocusData? = element!.widget.focusData()
+
+		if data == nil then
+			return false
+		end
+
+		return data!.wantsText
+	end
+
+	-- Deliver `event` to the focused element, then to each ancestor in turn,
+	-- then to any global listener the walk didn't already cover.
+	--
+	-- The second pass is what keeps a screen-level shortcut alive when focus is
+	-- elsewhere — or nowhere, which is the state right after an `unfocus()`.
+	fn dispatchKey(root: Element, event: KeyEvent) -> boolean
+		local chain: table<Element> = {}
+
+		-- With nothing focused, keys go to the innermost modal if there is one,
+		-- and to the root otherwise. Without the modal step a dialog whose
+		-- content holds no focus — a menu, an alert with no buttons — could not
+		-- even see its own Escape key.
+		local current: Element? = self.focused ?? (self.activeScope ?? root)
+		local walking: boolean = true
+
+		-- Walk focused → root. The nil check is on a copy of `current`: a
+		-- `while current != nil` guard narrows the binding, and then the
+		-- reassignment at the bottom of the loop no longer typechecks.
+		while walking do
+			local target: Element? = current
+
+			if target == nil then
+				walking = false
+			else
+				chain[#chain + 1] = target!
+
+				if target!.widget.handleKey(target!, event) then
+					return true
+				end
+
+				current = target!.parent
+			end
+		end
+
+		local i: integer = 1
+
+		while i <= #self.order do
+			local element: Element = self.order[i]
+			local data: FocusData? = element.widget.focusData()
+
+			-- A global listener behind a modal is out of reach too, or Escape
+			-- would close the screen under the dialog.
+			if data != nil and data!.global and self.reachable(i) and not contains(chain, element) then
+				if element.widget.handleKey(element, event) then
+					return true
+				end
+			end
+
+			i = i + 1
+		end
+
+		return false
+	end
+
+	local fn collect(element: Element, scope: Element?) -> nil
+		local data: FocusData? = element.widget.focusData()
+		local inner: Element? = scope
+
+		if data != nil then
+			self.order[#self.order + 1] = element
+			self.scopes[#self.order] = scope
+
+			-- A modal becomes the scope for everything inside it, but is itself
+			-- recorded against the scope it sits in.
+			if data!.modal then
+				inner = element
+			end
+		end
+
+		local i: integer = 1
+
+		while i <= element.childCount() do
+			local child: Element? = element.childAt(i)
+
+			if child != nil then
+				self.collect(child!, inner)
+			end
+
+			i = i + 1
+		end
+	end
+
+	-- Whether `order[index]` may take focus or receive keys right now.
+	local fn reachable(index: integer) -> boolean
+		if self.activeScope == nil then
+			return true
+		end
+
+		return self.scopes[index] == self.activeScope or self.order[index] == self.activeScope!
+	end
+
+	local fn move(step: integer) -> nil
+		-- Traversal only visits tab stops; a global listener is reachable by
+		-- keys but not by Tab.
+		local stops: table<Element> = {}
+		local i: integer = 1
+
+		while i <= #self.order do
+			local element: Element = self.order[i]
+			local data: FocusData? = element.widget.focusData()
+
+			if data != nil and data!.tabStop and self.reachable(i) then
+				stops[#stops + 1] = element
+			end
+
+			i = i + 1
+		end
+
+		if #stops == 0 then
+			return
+		end
+
+		-- Index 0 means "nothing focused", so stepping forward lands on the
+		-- first entry and stepping back lands on the last.
+		local index: integer = 0
+		i = 1
+
+		while i <= #stops do
+			if stops[i] == self.focused then
+				index = i
+			end
+
+			i = i + 1
+		end
+
+		local target: integer = index + step
+
+		if target < 1 then
+			target = #stops
+		end
+
+		if target > #stops then
+			target = 1
+		end
+
+		self.setFocus(stops[target])
+	end
+
+	local fn applyAutofocus() -> nil
+		local i: integer = 1
+
+		while i <= #self.order do
+			local data: FocusData? = self.order[i].widget.focusData()
+
+			if data != nil and data!.autofocus and self.reachable(i) then
+				self.setFocus(self.order[i])
+
+				return
+			end
+
+			i = i + 1
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Parent data
+-- ----------------------------------------------------------------------------
+
+-- What a `Positioned` tells its enclosing `Stack`. This is Flutter's
+-- `ParentData`, narrowed to the one case that needs it. It lives here rather
+-- than next to `Stack` so the base `Widget` can declare the hook that returns
+-- it without importing the layout widgets back.
+export class StackData
+	left: float?
+	top: float?
+	right: float?
+	bottom: float?
+	width: float?
+	height: float?
+
+	fn init(
+		left: float? = nil,
+		top: float? = nil,
+		right: float? = nil,
+		bottom: float? = nil,
+		width: float? = nil,
+		height: float? = nil
+	)
+		self.left = left
+		self.top = top
+		self.right = right
+		self.bottom = bottom
+		self.width = width
+		self.height = height
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Widget
+-- ----------------------------------------------------------------------------
+
+-- The base class of everything you can put on screen.
+--
+-- A widget is a *description*, not a live object: build one, hand it over, and
+-- forget about it. Never store mutable state on a widget — put it in a `State`
+-- or in the element scratch (`context.data()`).
+--
+-- Subclasses override two groups of hooks:
+--
+--   composition   `build` (one subtree) or `childWidgets` (a fixed list)
+--   rendering     `layout`, `paint`, `handleEvent`
+--
+-- The defaults implement "I am a transparent wrapper around a single child",
+-- which is exactly what a `StatelessWidget` needs, so composite widgets only
+-- ever override `build`.
+export class Widget
+	-- Identity across rebuilds. Two widgets reconcile onto the same element
+	-- only when their class *and* key match.
+	key: string?
+
+	fn init(key: string? = nil)
+		self.key = key
+	end
+
+	-- Composite widgets describe themselves in terms of other widgets.
+	-- Returning nil means "I am a render widget, ask `childWidgets` instead".
+	fn build(context: BuildContext) -> Widget?
+		return nil
+	end
+
+	-- Children of a render widget, in paint order: first is painted first and
+	-- therefore sits at the back.
+	fn childWidgets() -> table<Widget>
+		return {}
+	end
+
+	-- Stateful widgets return a fresh state object here.
+	fn createState() -> State?
+		return nil
+	end
+
+	-- --- layout ------------------------------------------------------------
+	--
+	-- Measure this widget under `constraints`, lay out its children, give each
+	-- child an `offset` relative to this widget's top-left corner, and return
+	-- the size chosen. A child's own size is whatever its `layout` returned.
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			return constraints.constrain(Size.zero())
+		else
+			local size: Size = child.layout(constraints)
+			child.offset = Offset.zero()
+
+			return size
+		end
+	end
+
+	-- --- paint ---------------------------------------------------------------
+	--
+	-- `x` / `y` are this widget's absolute top-left in window coordinates; its
+	-- size is `el.size`. Draw yourself, then paint your children.
+	fn paint(el: Element, x: float, y: float) -> nil
+		el.paintChildren(x, y)
+	end
+
+	-- --- input ---------------------------------------------------------------
+	--
+	-- `x` / `y` are local to this widget (negative or past `el.size` when the
+	-- pointer is outside, which is what `inside` reports). Return true from a
+	-- `Down` to claim the event and stop it reaching widgets behind you.
+	--
+	-- `Move` and `Up` are broadcast to the whole tree regardless of position,
+	-- so a widget can also notice that the pointer *left* it.
+	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
+		return false
+	end
+
+	-- --- frame clock ---------------------------------------------------------
+
+	-- Called once per frame with the elapsed seconds, before layout.
+	--
+	-- This is how a *stateless* widget animates: advance whatever you own and
+	-- call `el.markNeedsBuild()` on the frames where something actually changed.
+	-- A `State` has its own `tick` for the same purpose.
+	fn tick(el: Element, dt: float) -> nil
+	end
+
+	-- --- focus and keyboard --------------------------------------------------
+
+	-- Non-nil makes this widget focusable. Key events go to the focused
+	-- element first and bubble up from there, so `handleKey` also fires on
+	-- ancestors of whatever holds focus.
+	fn focusData() -> FocusData?
+		return nil
+	end
+
+	-- Return true to claim the event and stop it bubbling further up.
+	fn handleKey(el: Element, event: KeyEvent) -> boolean
+		return false
+	end
+
+	-- Focus arrived or left. Repaint-worthy state belongs in `el.data`.
+	fn focusChanged(el: Element, focused: boolean) -> nil
+	end
+
+	-- --- parent data ---------------------------------------------------------
+
+	-- Non-zero makes an enclosing `Row` / `Column` share its free space with
+	-- this child instead of asking for the child's natural size.
+	fn flexFactor() -> integer
+		return 0
+	end
+
+	-- Non-nil makes an enclosing `Stack` place this child explicitly.
+	fn stackData() -> StackData?
+		return nil
+	end
+end
+
+-- Base for the many render widgets that wrap exactly one optional child. It
+-- only exists to spare every one of them the same `childWidgets` boilerplate.
+export class SingleChildWidget extends Widget
+	child: Widget?
+
+	fn init(child: Widget? = nil, key: string? = nil)
+		self.super(key)
+
+		self.child = child
+	end
+
+	fn childWidgets() -> table<Widget>
+		local child: Widget? = self.child
+
+		if child == nil then
+			return {}
+		else
+			return {child}
+		end
+	end
+end
+
+-- A widget with no state of its own: it is a pure function from configuration
+-- to a subtree. Override `build`.
+export class StatelessWidget extends Widget
+	fn init(key: string? = nil)
+		self.super(key)
+	end
+end
+
+-- A widget whose subtree depends on state that outlives a rebuild. Override
+-- `createState`; the returned `State` object survives as long as the element.
+export class StatefulWidget extends Widget
+	fn init(key: string? = nil)
+		self.super(key)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- State
+-- ----------------------------------------------------------------------------
+
+-- The mutable half of a `StatefulWidget`, kept alive by the element across
+-- rebuilds. Change fields inside `setState` so the framework knows to rebuild.
+--
+-- Note on configuration: `widget` is typed `Widget` and Saule cannot downcast,
+-- so a state cannot read its own widget's fields through it. Pass whatever the
+-- state needs into the constructor from `createState()` instead:
+--
+--     fn createState() -> State?
+--         return CounterState(self.start)
+--     end
+--
+-- For small interaction state (hover, pressed) prefer the element scratch on
+-- `BuildContext.data()` — see `Button`.
+export class State
+	-- The configuration currently driving this state.
+	widget: Widget?
+
+	local element: Element?
+
+	fn init()
+		self.widget = nil
+		self.element = nil
+	end
+
+	-- Called once by the framework right after the state is created, before
+	-- the first build.
+	fn attach(element: Element, widget: Widget) -> nil
+		self.element = element
+		self.widget = widget
+	end
+
+	fn updateConfig(widget: Widget) -> nil
+		self.widget = widget
+	end
+
+	-- --- lifecycle hooks -----------------------------------------------------
+
+	fn initState() -> nil
+	end
+
+	fn didUpdateWidget(oldWidget: Widget) -> nil
+	end
+
+	fn dispose() -> nil
+	end
+
+	-- Called once per frame with the elapsed seconds. Drive animations from
+	-- here and call `setState` when a value changes.
+	fn tick(dt: float) -> nil
+	end
+
+	fn build(context: BuildContext) -> Widget
+		throw "State.build must be overridden"
+	end
+
+	-- --- framework interface -------------------------------------------------
+
+	-- Run `update`, then mark this state's element for rebuild.
+	fn setState(update: function) -> nil
+		update()
+
+		local el: Element? = self.element
+		if el != nil then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn context() -> BuildContext?
+		local el: Element? = self.element
+
+		if el == nil then
+			return nil
+		else
+			return el.context()
+		end
+	end
+
+	fn isMounted() -> boolean
+		local el: Element? = self.element
+
+		if el == nil then
+			return false
+		else
+			return el.isMounted()
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Element data
+-- ----------------------------------------------------------------------------
+
+-- The per-element state the framework itself owns.
+--
+-- These used to be string keys in an untyped `table`. That cost more than it
+-- looked like: every read came back `any`, so `hovered` had to be compared
+-- against `true` to become a boolean again; `data.hoverd` was as legal as
+-- `data.hovered` and failed by silently never highlighting; and the editor
+-- could not complete or document either one, because there was nothing to
+-- complete — a `table` has no members to know about.
+--
+-- They are the same handful of flags in every control — `hovered` alone is
+-- read in twenty-nine places — so they are declared once, here, and typed.
+--
+-- Widget-specific state does *not* belong here. Give the widget a `State`
+-- subclass (`Counter` / `CounterState` is the worked example) and keep it
+-- there, where it gets the same typing and the same documentation.
+export class ElementData
+	-- The pointer is inside this element's box, tracked by `GestureDetector`.
+	hovered: boolean
+
+	-- The pointer is inside, tracked by `MouseRegion`. Deliberately separate
+	-- from `hovered`: the two nest, and each needs its own edge detection, so
+	-- a region's `onExit` must not be cancelled by a detector beneath it that
+	-- is still reporting a hover.
+	over: boolean
+
+	-- A press started here and has not been released or cancelled.
+	pressed: boolean
+
+	-- A drag started here. Sliders and scrollbars keep following the pointer
+	-- after it leaves their box, which is what separates this from `pressed`.
+	dragging: boolean
+
+	-- This position holds focus. Written by `Focus`, read by whatever paints
+	-- the focus ring.
+	focused: boolean
+
+	-- The focus node for this position, created on demand by `nodeFor`. Nil
+	-- until something focusable is built here.
+	node: FocusNode?
+
+	-- Double-tap detection: when the last tap landed, and where. `tapTime` is
+	-- nil when there is no tap to pair with — either none yet, or the last one
+	-- already completed a double.
+	tapTime: float?
+	tapX: float
+	tapY: float
+
+	-- The theme a `Theme` widget installed at this position, which
+	-- `Theme.of` finds by walking up from a context. Nil at every position
+	-- that isn't a `Theme`.
+	theme: ThemeData?
+
+	-- Everything a widget keeps that the framework knows nothing about:
+	-- `TextField`'s caret, `Paint`'s cached canvas, `Scroll`'s controller.
+	--
+	-- Untyped, so a read is `any` and needs `as` to become anything else —
+	-- which is the point. This is the pile that has not been given a `State`
+	-- class yet, and it is meant to shrink to nothing rather than grow.
+	scratch: table
+
+	fn init()
+		self.hovered = false
+		self.over = false
+		self.pressed = false
+		self.dragging = false
+		self.focused = false
+		self.node = nil
+		self.tapTime = nil
+		self.tapX = 0.0
+		self.tapY = 0.0
+		self.theme = nil
+		self.scratch = {}
+	end
+end
+
+-- Shared scaffolding: every control needs the same focus node kept on the
+-- element and the same "Space or Enter activates" rule, so that lives here
+-- rather than being restated six times below. Exported because anything else
+-- writing a focusable control wants exactly this.
+export fn nodeFor(data: ElementData) -> FocusNode
+	local existing: FocusNode? = data.node
+
+	if existing != nil then
+		return existing!
+	end
+
+	local new: FocusNode = FocusNode()
+	data.node = new
+	return new
+end
+
+export fn isActivator(event: KeyEvent) -> boolean
+	return event.key == "return" or event.key == "space"
+end
+
+-- ----------------------------------------------------------------------------
+-- Overlay
+-- ----------------------------------------------------------------------------
+
+-- One layer floating above the app.
+--
+-- Everything a widget cannot do inside its own box — dialogs, dropdowns,
+-- tooltips, toasts, drag ghosts — is done by putting an entry in the overlay.
+-- Entries live at the root of the tree, so they paint above everything and are
+-- hit-tested before it, no matter how deep the widget that opened them sits.
+--
+-- The content is a `builder` (`fn() -> Widget`) rather than a fixed widget, so
+-- an entry re-reads whatever it closes over each time it rebuilds.
+export class OverlayEntry
+	builder: function
+
+	-- Identity for reconciliation. Entries come and go from the middle of the
+	-- list, and without a key the element for entry 2 would be handed entry 3's
+	-- widget when 2 is removed — quietly wrecking the state inside it.
+	local id: string
+
+	static local nextId: integer = 1
+
+	fn init(builder: function)
+		self.builder = builder
+		self.id = "overlay#" .. OverlayEntry.nextId
+
+		OverlayEntry.nextId = OverlayEntry.nextId + 1
+	end
+
+	fn key() -> string
+		return self.id
+	end
+
+	fn content() -> Widget
+		return self.builder()
+	end
+end
+
+-- Wraps each entry so the entry's key rides on a widget the framework controls.
+-- The built content belongs to the caller and may be any widget at all, so its
+-- key is not ours to set.
+export class OverlaySlot extends SingleChildWidget
+	fn init(child: Widget? = nil, key: string? = nil)
+		self.super(child, key)
+	end
+end
+
+-- The overlay's entry list, owned by [`BuildOwner`].
+--
+--     local entry: OverlayEntry = OverlayEntry(fn()
+--         return Center(child: myDialog)
+--     end)
+--     owner.overlay().insert(entry)
+--     ...
+--     owner.overlay().remove(entry)
+--
+-- Reach it from a widget with `context.owner()?.overlay()`.
+export class OverlayManager
+	local entries: table<OverlayEntry>
+	local host: Element?
+	local dirty: boolean
+
+	fn init()
+		self.entries = {}
+		self.host = nil
+		self.dirty = false
+	end
+
+	-- The host element registers itself every frame. Knowing it lets a change
+	-- mark the overlay dirty *immediately*, so a layer opened or closed midway
+	-- through a frame is on screen at the end of that same frame rather than
+	-- the next one.
+	fn attachHost(element: Element) -> nil
+		self.host = element
+
+		if self.dirty then
+			self.dirty = false
+			element.markNeedsBuild()
+		end
+	end
+
+	-- Add an entry on top of the others. Returns it, so the caller can hold on
+	-- to it for removal.
+	fn insert(entry: OverlayEntry) -> OverlayEntry
+		if self.indexOf(entry) == 0 then
+			self.entries[#self.entries + 1] = entry
+			self.notify()
+		end
+
+		return entry
+	end
+
+	fn remove(entry: OverlayEntry) -> nil
+		local at: integer = self.indexOf(entry)
+
+		if at == 0 then
+			return
+		end
+
+		Table.remove(self.entries, at)
+		self.notify()
+	end
+
+	-- Mark the host for rebuild, or remember to do it once the host appears —
+	-- an entry can be inserted before the first frame has run.
+	local fn notify() -> nil
+		local host: Element? = self.host
+
+		if host == nil then
+			self.dirty = true
+		else
+			host!.markNeedsBuild()
+		end
+	end
+
+	fn contains(entry: OverlayEntry) -> boolean
+		return self.indexOf(entry) != 0
+	end
+
+	fn clear() -> nil
+		if #self.entries == 0 then
+			return
+		end
+
+		self.entries = {}
+		self.notify()
+	end
+
+	fn count() -> integer
+		return #self.entries
+	end
+
+	fn entryAt(index: integer) -> OverlayEntry?
+		if index < 1 or index > #self.entries then
+			return nil
+		end
+
+		return self.entries[index]
+	end
+
+	-- The topmost entry, or nil when the overlay is empty.
+	fn top() -> OverlayEntry?
+		return self.entryAt(#self.entries)
+	end
+
+	-- Force the overlay to rebuild — call it when an entry's *content* changed
+	-- without the entry list changing.
+	fn markDirty() -> nil
+		self.notify()
+	end
+
+	local fn indexOf(entry: OverlayEntry) -> integer
+		local i: integer = 1
+
+		while i <= #self.entries do
+			if self.entries[i] == entry then
+				return i
+			end
+
+			i = i + 1
+		end
+
+		return 0
+	end
+end
+
+-- The root wrapper `runApp` installs: the app, then every overlay entry.
+--
+-- Order does all the work. Entries are laid out after the app, so they paint
+-- over it; `Element.dispatch` walks children back to front, so they are also
+-- hit-tested first. Nothing about painting or input needed special cases.
+export class OverlayHost extends Widget
+	root: Widget
+	overlay: OverlayManager
+
+	fn init(root: Widget, overlay: OverlayManager, key: string? = nil)
+		self.super(key)
+
+		self.root = root
+		self.overlay = overlay
+	end
+
+	fn childWidgets() -> table<Widget>
+		local out: table<Widget> = {self.root}
+		local i: integer = 1
+
+		while i <= self.overlay.count() do
+			local entry: OverlayEntry? = self.overlay.entryAt(i)
+
+			if entry != nil then
+				out[#out + 1] = OverlaySlot(entry!.content(), entry!.key())
+			end
+
+			i = i + 1
+		end
+
+		return out
+	end
+
+	-- Re-register every frame: the element is recreated whenever the host is
+	-- rebuilt, and the manager needs the live one to mark it dirty.
+	fn tick(el: Element, dt: float) -> nil
+		self.overlay.attachHost(el)
+	end
+
+	-- Every layer gets the full window, so an entry positions its content with
+	-- `Center`, `Align`, or a `Stack` of `Positioned` children.
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local size: Size = constraints.biggest()
+		local layer: BoxConstraints = BoxConstraints.tight(size)
+		local i: integer = 1
+
+		while i <= el.childCount() do
+			local child: Element? = el.childAt(i)
+
+			if child != nil then
+				child!.layout(layer)
+				child!.offset = Offset.zero()
+			end
+
+			i = i + 1
+		end
+
+		return size
+	end
+end
+
+-- A stack of full-screen routes, built on the overlay.
+--
+--     owner.navigator().push(fn()
+--         return SettingsScreen()
+--     end)
+--     owner.navigator().pop()
+--
+-- A route is just an overlay entry that covers the window, so give it an opaque
+-- background unless you want the screen below showing through.
+export class Navigator
+	local overlay: OverlayManager
+	local routes: table<OverlayEntry>
+
+	fn init(overlay: OverlayManager)
+		self.overlay = overlay
+		self.routes = {}
+	end
+
+	fn push(builder: function) -> OverlayEntry
+		local entry: OverlayEntry = OverlayEntry(builder)
+		self.routes[#self.routes + 1] = entry
+		self.overlay.insert(entry)
+
+		return entry
+	end
+
+	fn pop() -> nil
+		if #self.routes == 0 then
+			return
+		end
+
+		local top: OverlayEntry = self.routes[#self.routes]
+		Table.remove(self.routes, #self.routes)
+		self.overlay.remove(top)
+	end
+
+	-- Swap the top route without growing the stack.
+	fn replace(builder: function) -> OverlayEntry
+		self.pop()
+
+		return self.push(builder)
+	end
+
+	fn popToRoot() -> nil
+		while #self.routes > 0 do
+			self.pop()
+		end
+	end
+
+	fn depth() -> integer
+		return #self.routes
+	end
+
+	fn canPop() -> boolean
+		return #self.routes > 0
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- BuildContext
+-- ----------------------------------------------------------------------------
+
+-- A handle to the element currently being built. Handed to every `build`.
+export class BuildContext
+	local node: Element
+
+	fn init(element: Element)
+		self.node = element
+	end
+
+	-- Size assigned by the last layout pass. Zero before the first frame.
+	fn size() -> Size
+		return self.node.size
+	end
+
+	-- State that belongs to this position in the tree and survives rebuilds.
+	--
+	-- The framework's own flags (`hovered`, `pressed`, `focused`, …) are typed
+	-- fields on it; anything the widget itself keeps goes in `.scratch` until
+	-- it earns a `State` class. Reach for a `StatefulWidget` once that state is
+	-- more than a couple of booleans.
+	fn data() -> ElementData
+		return self.node.data
+	end
+
+	-- Rebuild the subtree rooted here before the next frame is painted.
+	fn markNeedsBuild() -> nil
+		self.node.markNeedsBuild()
+	end
+
+	fn owner() -> BuildOwner?
+		return self.node.owner
+	end
+
+	-- The element this context speaks for.
+	--
+	-- The escape hatch for *inherited values*: walk up `parent`, reading each
+	-- element's `data`, and you have an ambient value visible to a whole
+	-- subtree without threading it through constructors. `Theme` is built this
+	-- way, and anything else that wants the same shape can copy it — Saule
+	-- can't downcast, so a generic `InheritedWidget<T>` is out of reach, but a
+	-- concrete one costs a dozen lines.
+	fn element() -> Element
+		return self.node
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Element
+-- ----------------------------------------------------------------------------
+
+-- One live position in the tree. Elements are created by the framework, never
+-- by user code; widgets receive theirs as the first argument to `layout`,
+-- `paint` and `handleEvent`.
+export class Element
+	-- The widget currently describing this position. Swapped on every
+	-- reconcile, so never cache it across frames.
+	widget: Widget
+
+	parent: Element?
+	owner: BuildOwner?
+
+	-- Written by the parent during layout. `offset` is relative to the
+	-- parent's top-left corner.
+	size: Size
+	offset: Offset
+
+	-- Per-element state: the framework's own typed flags, plus the untyped
+	-- `scratch` for whatever the widget here keeps. See `BuildContext.data()`.
+	data: ElementData
+
+	local kids: table<Element>
+	local state: State?
+	local ctx: BuildContext?
+	local dirty: boolean
+	local mounted: boolean
+
+	-- Relayout boundary: the constraints this element was last laid out under,
+	-- and whether anything since then could have changed the result.
+	local lastConstraints: BoxConstraints?
+	local staleLayout: boolean
+
+	fn init(widget: Widget)
+		self.widget = widget
+		self.parent = nil
+		self.owner = nil
+		self.size = Size.zero()
+		self.offset = Offset.zero()
+		self.data = ElementData()
+		self.kids = {}
+		self.state = nil
+		self.ctx = nil
+		self.dirty = true
+		self.mounted = false
+		self.lastConstraints = nil
+		self.staleLayout = true
+	end
+
+	-- --- lifecycle -----------------------------------------------------------
+
+	fn mount(parent: Element?, owner: BuildOwner?) -> nil
+		self.parent = parent
+		self.owner = owner
+		self.mounted = true
+
+		local created: State? = self.widget.createState()
+		if created != nil then
+			self.state = created
+			created.attach(self, self.widget)
+			created.initState()
+		end
+
+		self.rebuild()
+	end
+
+	fn unmount() -> nil
+		for child: Element in self.kids do
+			child.unmount()
+		end
+
+		self.kids = {}
+
+		local s: State? = self.state
+		if s != nil then
+			s.dispose()
+		end
+
+		self.state = nil
+		self.mounted = false
+	end
+
+	-- Adopt a new configuration of the same widget class.
+	fn update(newWidget: Widget) -> nil
+		local old: Widget = self.widget
+		self.widget = newWidget
+
+		local s: State? = self.state
+		if s != nil then
+			s.updateConfig(newWidget)
+			s.didUpdateWidget(old)
+		end
+
+		-- A new configuration can lay out differently, even when the tree shape
+		-- is identical.
+		self.markNeedsLayout()
+		self.rebuild()
+	end
+
+	fn markNeedsBuild() -> nil
+		-- A rebuild can change sizes, so it invalidates layout too. Doing this
+		-- unconditionally — even when already dirty — keeps the two flags from
+		-- drifting apart if layout ran in between.
+		self.markNeedsLayout()
+
+		if self.dirty then
+			return
+		end
+
+		self.dirty = true
+
+		local o: BuildOwner? = self.owner
+		if o != nil then
+			o.scheduleBuild(self)
+		end
+	end
+
+	-- Invalidate this element's cached layout, and every ancestor's — a child
+	-- that changes size changes its parent's, all the way up.
+	--
+	-- The walk stops at the first element already marked, so a busy subtree
+	-- costs one short hop rather than a full climb per change.
+	fn markNeedsLayout() -> nil
+		local node: Element? = self
+		local walking: boolean = true
+
+		while walking do
+			local current: Element? = node
+
+			if current == nil then
+				walking = false
+			elseif current!.staleLayout then
+				walking = false
+			else
+				current!.staleLayout = true
+				node = current!.parent
+			end
+		end
+	end
+
+	fn needsBuild() -> boolean
+		return self.dirty
+	end
+
+	fn isMounted() -> boolean
+		return self.mounted
+	end
+
+	fn context() -> BuildContext
+		local existing: BuildContext? = self.ctx
+
+		if existing != nil then
+			return existing!
+		end
+
+		local created: BuildContext = BuildContext(self)
+		self.ctx = created
+
+		return created
+	end
+
+	-- --- build ---------------------------------------------------------------
+
+	-- Re-describe this position and reconcile the child elements against it.
+	fn rebuild() -> nil
+		self.dirty = false
+		self.kids = Element.reconcile(self, self.kids, self.describeChildren(), self.owner)
+	end
+
+	local fn describeChildren() -> table<Widget>
+		local s: State? = self.state
+
+		if s != nil then
+			return {s.build(self.context())}
+		end
+
+		local built: Widget? = self.widget.build(self.context())
+
+		if built != nil then
+			return {built}
+		end
+
+		return self.widget.childWidgets()
+	end
+
+	-- Two widgets describe the same position — and therefore keep the same
+	-- element, its state and its scratch — when their class and key agree.
+	static fn canUpdate(a: Widget, b: Widget) -> boolean
+		return type(a) == type(b) and a.key == b.key
+	end
+
+	-- Match `news` against `olds`, reusing an element where `canUpdate` allows,
+	-- mounting a fresh one where it doesn't, and unmounting whatever is left
+	-- over.
+	--
+	-- A *keyed* widget is matched against its key anywhere in the old list, so
+	-- reordering a list carries each child's element — and therefore its state,
+	-- scratch and scroll position — along with it. Unkeyed widgets are matched
+	-- by position, which is what makes a plain list of children cheap.
+	static fn reconcile(parent: Element, olds: table<Element>, news: table<Widget>, owner: BuildOwner?) -> table<Element>
+		local out: table<Element> = {}
+
+		-- Old elements still available for reuse; a slot is cleared as soon as
+		-- something claims it.
+		local pool: table<Element?> = {}
+		local i: integer = 1
+
+		while i <= #olds do
+			pool[i] = olds[i]
+			i = i + 1
+		end
+
+		i = 1
+
+		while i <= #news do
+			local widget: Widget = news[i]
+			local slot: integer = Element.claimSlot(pool, #olds, widget, i)
+			local reused: Element? = nil
+
+			if slot > 0 then
+				local old: Element? = pool[slot]
+
+				if old != nil then
+					pool[slot] = nil
+					old!.update(widget)
+					reused = old
+				end
+			end
+
+			if reused == nil then
+				local fresh: Element = Element(widget)
+				fresh.mount(parent, owner)
+				out[#out + 1] = fresh
+			else
+				out[#out + 1] = reused!
+			end
+
+			i = i + 1
+		end
+
+		-- Anything the new list didn't claim is gone.
+		local j: integer = 1
+
+		while j <= #olds do
+			local leftover: Element? = pool[j]
+
+			if leftover != nil then
+				leftover!.unmount()
+			end
+
+			j = j + 1
+		end
+
+		return out
+	end
+
+	-- Which pool slot `widget` should reuse, or 0 for "none — build fresh".
+	--
+	-- Keyed widgets search the whole pool; unkeyed ones only consider the slot
+	-- they sit in, and only if that slot's old widget is unkeyed too. Without
+	-- that second condition an unkeyed widget could steal a keyed element and
+	-- undo the reordering the key exists to express.
+	-- `count` is passed explicitly because clearing a claimed slot leaves a nil
+	-- hole, and `#` over a table with holes is not something to lean on.
+	static local fn claimSlot(pool: table<Element?>, count: integer, widget: Widget, index: integer) -> integer
+		if widget.key != nil then
+			local i: integer = 1
+
+			while i <= count do
+				local candidate: Element? = pool[i]
+
+				if candidate != nil and Element.canUpdate(candidate!.widget, widget) then
+					return i
+				end
+
+				i = i + 1
+			end
+
+			return 0
+		end
+
+		local atIndex: Element? = pool[index]
+
+		if atIndex != nil and Element.canUpdate(atIndex!.widget, widget) then
+			return index
+		end
+
+		return 0
+	end
+
+	-- --- children ------------------------------------------------------------
+
+	fn childCount() -> integer
+		return #self.kids
+	end
+
+	fn childAt(index: integer) -> Element?
+		if index < 1 or index > #self.kids then
+			return nil
+		end
+
+		return self.kids[index]
+	end
+
+	-- --- frame ---------------------------------------------------------------
+
+	-- Lay this element out, or reuse last frame's result.
+	--
+	-- The cache hits when the constraints are identical *and* nothing in this
+	-- subtree has been marked dirty since — which is the relayout boundary. A
+	-- static screen lays out once and then costs a comparison per frame; a
+	-- change re-runs only the chain from the changed element to the root, and
+	-- its untouched siblings hit the cache in turn.
+	--
+	-- The contract this depends on: anything that can change layout must mark
+	-- some element dirty. Rebuilds do it automatically; a render widget that
+	-- mutates its own scratch (a scroll offset, a drag) has to call
+	-- `el.markNeedsLayout()` itself.
+	fn layout(constraints: BoxConstraints) -> Size
+		local cached: BoxConstraints? = self.lastConstraints
+
+		if not self.staleLayout and cached != nil and cached!.sameAs(constraints) then
+			LayoutStats.skipped = LayoutStats.skipped + 1
+
+			return self.size
+		end
+
+		LayoutStats.ran = LayoutStats.ran + 1
+
+		self.size = self.widget.layout(self, constraints)
+		self.lastConstraints = constraints
+		self.staleLayout = false
+
+		return self.size
+	end
+
+	-- Force the next layout to run even if the constraints match. Render widgets
+	-- that keep layout-affecting state in `el.data` call this when it changes.
+	fn invalidateLayout() -> nil
+		self.markNeedsLayout()
+	end
+
+	-- `x` / `y` are the *parent's* absolute origin; this element's own origin
+	-- adds its offset on top.
+	fn paint(x: float, y: float) -> nil
+		self.widget.paint(self, x + self.offset.dx, y + self.offset.dy)
+	end
+
+	fn paintChildren(x: float, y: float) -> nil
+		for child: Element in self.kids do
+			child.paint(x, y)
+		end
+	end
+
+	fn tick(dt: float) -> nil
+		self.widget.tick(self, dt)
+
+		local s: State? = self.state
+		if s != nil then
+			s.tick(dt)
+		end
+
+		for child: Element in self.kids do
+			child.tick(dt)
+		end
+	end
+
+	-- Route a pointer event. `x` / `y` are the parent's absolute origin.
+	-- Returns true when the event was claimed.
+	fn dispatch(event: PointerEvent, x: float, y: float) -> boolean
+		local ax: float = x + self.offset.dx
+		local ay: float = y + self.offset.dy
+		local lx: float = event.x - ax
+		local ly: float = event.y - ay
+		local inside: boolean = lx >= 0.0 and ly >= 0.0 and lx < self.size.width and ly < self.size.height
+
+		if event.kind == PointerKind.Down or event.kind == PointerKind.Scroll then
+			-- A press or a wheel turn is a real hit test: outside means not for
+			-- us, and the front-most child that claims it ends the walk. That
+			-- ordering is what makes an inner scroll view consume the wheel
+			-- before the page behind it sees it.
+			if not inside then
+				return false
+			end
+
+			local i: integer = #self.kids
+			while i >= 1 do
+				if self.kids[i].dispatch(event, ax, ay) then
+					return true
+				end
+
+				i = i - 1
+			end
+
+			return self.widget.handleEvent(self, event, lx, ly, true)
+		end
+
+		-- Move and Up reach everyone: that is how a widget learns the pointer
+		-- left it, or that a press it was tracking ended somewhere else.
+		local i: integer = #self.kids
+		while i >= 1 do
+			self.kids[i].dispatch(event, ax, ay)
+			i = i - 1
+		end
+
+		self.widget.handleEvent(self, event, lx, ly, inside)
+
+		return false
+	end
+
+	-- --- debugging -----------------------------------------------------------
+
+	fn debugDump(depth: integer) -> nil
+		println(
+			String.rep("  ", depth) .. String.format(
+				"%s  size=%.0fx%.0f offset=%.0f,%.0f",
+				type(self.widget),
+				self.size.width,
+				self.size.height,
+				self.offset.dx,
+				self.offset.dy
+			)
+		)
+
+		for child: Element in self.kids do
+			child.debugDump(depth + 1)
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- BuildOwner
+-- ----------------------------------------------------------------------------
+
+-- Owns the root element and the list of elements waiting to rebuild.
+export class BuildOwner
+	local dirty: table<Element>
+	local root: Element?
+	local focusManager: FocusManager
+	local overlayManager: OverlayManager
+	local navigatorInstance: Navigator
+
+	fn init()
+		self.dirty = {}
+		self.root = nil
+		self.focusManager = FocusManager()
+		self.overlayManager = OverlayManager()
+		self.navigatorInstance = Navigator(self.overlayManager)
+	end
+
+	fn focus() -> FocusManager
+		return self.focusManager
+	end
+
+	-- Layers above the app: dialogs, menus, tooltips.
+	fn overlay() -> OverlayManager
+		return self.overlayManager
+	end
+
+	-- Full-screen routes, stacked on the same overlay.
+	fn navigator() -> Navigator
+		return self.navigatorInstance
+	end
+
+	fn attachRoot(widget: Widget) -> Element
+		local element: Element = Element(widget)
+		self.root = element
+		element.mount(nil, self)
+
+		return element
+	end
+
+	fn rootElement() -> Element?
+		return self.root
+	end
+
+	fn scheduleBuild(element: Element) -> nil
+		self.dirty[#self.dirty + 1] = element
+	end
+
+	-- Whether anything is waiting to rebuild. Every visual change routes
+	-- through `markNeedsBuild`, so this is the frame loop's signal that the
+	-- screen is out of date and has to be painted again.
+	fn hasPendingWork() -> boolean
+		return #self.dirty > 0
+	end
+
+	-- Rebuild everything that asked for it. A build may itself call
+	-- `setState`, so drain repeatedly — with a cap, because a state that
+	-- always dirties itself would otherwise spin forever.
+	fn flush() -> nil
+		local passes: integer = 0
+
+		while #self.dirty > 0 and passes < 32 do
+			local batch: table<Element> = self.dirty
+			self.dirty = {}
+
+			for element: Element in batch do
+				if element.isMounted() and element.needsBuild() then
+					element.rebuild()
+				end
+			end
+
+			passes = passes + 1
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Running an app
+-- ----------------------------------------------------------------------------
+
+-- Route one event into the tree.
+--
+-- Pointer motion is deliberately absent: the frame loop resolves hover once per
+-- frame from the latest position, because a widget wants to know where the
+-- pointer ended up, not every step it took getting there.
+--
+-- Tab is handled last, and only if nothing claimed it: a widget that wants
+-- literal tabs just returns true from `handleKey`.
+local fn dispatchEvent(focus: FocusManager, root: Element, event: Event) -> nil
+	match event
+		case Event.MousePressed(x, y, button) then
+			root.dispatch(
+				PointerEvent(
+					PointerKind.Down,
+					Display.toLogical(x),
+					Display.toLogical(y),
+					0.0,
+					0.0,
+					button
+				),
+				0.0,
+				0.0
+			)
+
+		case Event.MouseReleased(x, y, button) then
+			root.dispatch(
+				PointerEvent(
+					PointerKind.Up,
+					Display.toLogical(x),
+					Display.toLogical(y),
+					0.0,
+					0.0,
+					button
+				),
+				0.0,
+				0.0
+			)
+
+		case Event.WheelMoved(dx, dy) then
+			-- The wheel carries no position of its own, so it is routed to
+			-- whatever is under the pointer right now — which is what makes
+			-- nested scroll views work.
+			local rawX: float, rawY: float = Mouse.getPos()
+
+			root.dispatch(
+				PointerEvent(
+					PointerKind.Scroll,
+					Display.toLogical(rawX),
+					Display.toLogical(rawY),
+					dx,
+					dy
+				),
+				0.0,
+				0.0
+			)
+
+		case Event.KeyPressed(key, shift, ctrl, alt) then
+			local handled: boolean =
+				focus.dispatchKey(root, KeyEvent(KeyEventKind.Down, key, "", shift, ctrl, alt))
+
+			if not handled and key == "tab" then
+				if shift then
+					focus.focusPrevious()
+				else
+					focus.focusNext()
+				end
+			end
+
+		case Event.KeyReleased(key, shift, ctrl, alt) then
+			focus.dispatchKey(root, KeyEvent(KeyEventKind.Up, key, "", shift, ctrl, alt))
+
+		-- Typed text is separate from key presses: it is already modifier- and
+		-- layout-corrected, and one keypress can produce several characters.
+		-- The event carries no modifiers of its own, so they are read at level
+		-- — which is what a handler wants anyway ("was ctrl held as I typed").
+		case Event.TextInput(typed) then
+			focus.dispatchKey(
+				root,
+				KeyEvent(
+					KeyEventKind.Text,
+					"",
+					typed,
+					Keyboard.isAnyDown({"lshift", "rshift"}),
+					Keyboard.isAnyDown({"lctrl", "rctrl"}),
+					Keyboard.isAnyDown({"lalt", "ralt"})
+				)
+			)
+
+		case _ then nil
+	end
+end
+
+-- Open a window and drive `root` until it closes.
+--
+--     runApp(MyApp(), width: 900, height: 600, title: "Demo")
+--
+-- One frame is: tick animations, flush pending rebuilds, lay the tree out
+-- against the window size, refresh focus, route the mouse and the keyboard,
+-- flush again (a handler may have called `setState`), then paint.
+--
+-- `keyRepeat` is on by default because it is what editing keys want: hold
+-- backspace and it keeps deleting. Turn it off for a game-style app that reads
+-- held keys itself.
+export fn runApp(
+	root: Widget,
+	width: integer = 800,
+	height: integer = 600,
+	title: string = "Saule",
+	background: Color? = nil,
+	keyRepeat: boolean = true
+) -> nil
+	Window.create(width, height, title)
+	Keyboard.setKeyRepeat(keyRepeat)
+	Keyboard.setTextInput(false)
+
+	local owner: BuildOwner = BuildOwner()
+	local focus: FocusManager = owner.focus()
+
+	-- Everything runs under the overlay host, so a dialog opened from anywhere
+	-- in the tree has somewhere to go.
+	local rootElement: Element = owner.attachRoot(OverlayHost(root, owner.overlay()))
+	local clear: Color = background ?? Colors.surface
+
+	-- Repainting is the expensive half of a frame, and most frames change
+	-- nothing: the pointer sits still, no animation is running, and the tree
+	-- would be redrawn pixel for pixel identically. `needsPaint` gates that
+	-- work. It starts true so the first frame always draws.
+	local needsPaint: boolean = true
+
+	while Window.isOpen() do
+		local events: table<Event> = pollEvents()
+
+		-- Both of these can change while running: the window is resizable, and
+		-- moving it to another monitor can change the density.
+		Display.setScale(Window.getScale())
+
+		rootElement.tick(Timer.getDelta())
+
+		-- An animation ticking marks its element dirty, so asking before the
+		-- flush is what catches it — afterwards the list is empty again.
+		if owner.hasPendingWork() then
+			needsPaint = true
+		end
+
+		owner.flush()
+
+		-- A resize hands back a fresh, blank framebuffer, so there is nothing
+		-- left to keep and the frame has to be redrawn.
+		for event: Event in events do
+			match event
+				case Event.Resized(_, _) then needsPaint = true
+
+				case _ then nil
+			end
+		end
+
+		local windowWidth: integer, windowHeight: integer = Window.getSize()
+		local logical: Size = Size(
+			Display.toLogical(float(windowWidth)),
+			Display.toLogical(float(windowHeight))
+		)
+
+		rootElement.offset = Offset.zero()
+		rootElement.layout(BoxConstraints.tight(logical))
+
+		-- Nothing arrived and nothing was already dirty, so no hit test can have
+		-- changed its answer and no handler has anything to run. Skipping the
+		-- focus walk and the hover pass is most of what an idle frame saves.
+		if #events > 0 or needsPaint then
+			-- Focus order follows the tree, so it has to be re-derived after the
+			-- rebuilds above and before anything is routed.
+			focus.refresh(rootElement)
+
+			-- Hover is resolved once, from where the pointer is now. It runs
+			-- even on a frame with no motion, because a scrolled list or a
+			-- panel that grew moves widgets under a stationary pointer.
+			--
+			-- Pointer coordinates arrive in physical pixels; the tree is laid
+			-- out in logical ones, so they have to be converted or every hit
+			-- test is off by the scale factor.
+			local rawX: float, rawY: float = Mouse.getPos()
+
+			-- Cursor requests are gathered during the move pass and applied
+			-- after, so the innermost widget under the pointer wins.
+			Cursors.beginFrame()
+			rootElement.dispatch(
+				PointerEvent(PointerKind.Move, Display.toLogical(rawX), Display.toLogical(rawY)),
+				0.0,
+				0.0
+			)
+			Cursors.apply()
+
+			-- Then everything else, in the order it actually happened. Buttons,
+			-- wheel and keys are interleaved exactly as the OS delivered them,
+			-- which the old per-frame edge queries could not express.
+			for event: Event in events do
+				dispatchEvent(focus, rootElement, event)
+			end
+		end
+
+		-- A handler may have called `setState`; rebuild before painting so the
+		-- click is visible on this frame rather than the next one.
+		if owner.hasPendingWork() then
+			needsPaint = true
+		end
+
+		owner.flush()
+
+		-- Then lay out *again*, because that rebuild can have replaced whole
+		-- subtrees — a hover that gives a widget a background changes its child's
+		-- class, and the fresh elements have no size yet. Painting them
+		-- unmeasured drew their contents at the parent's origin for one frame,
+		-- which looked like the text jittering to the top-left before settling.
+		--
+		-- Relayout boundaries make this nearly free: with nothing dirty it is one
+		-- comparison at the root.
+		rootElement.layout(BoxConstraints.tight(logical))
+
+		-- A caret or an indeterminate bar animates inside `paint` off the
+		-- clock, with no rebuild behind it. The previous frame's paint is what
+		-- asks for this one.
+		if Repaint.take() then
+			needsPaint = true
+		end
+
+		if needsPaint then
+			Graphics.clear(clear.r, clear.g, clear.b)
+
+			-- One transform turns the whole logical tree into physical pixels.
+			Graphics.push()
+			Graphics.scale(Display.scale(), Display.scale())
+			rootElement.paint(0.0, 0.0)
+			Graphics.pop()
+
+			needsPaint = false
+		end
+
+		-- Always present, even on a skipped frame: the framebuffer still holds
+		-- the last one, and this is the loop's only pacing point — without it
+		-- an idle app would spin as fast as the CPU allows.
+		Graphics.present()
+	end
+end

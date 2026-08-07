@@ -1,0 +1,342 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from Overlay
+import * from ThemeData
+import * from Theme
+
+-- ============================================================================
+-- Icons
+-- ============================================================================
+--
+-- Icons are glyphs from Google's Material Icons font (Apache 2.0, vendored in
+-- `assets/`). A font was the right shape for this: one file, any size without
+-- blurring, and recolouring is just `setColor` — where PNG sprites would need a
+-- sheet per size and vector paths would need every icon hand-written.
+--
+--     Icon(Icons.search)
+--     Icon(Icons.delete, size: 32.0, color: Colors.danger)
+--
+-- The constants below are codepoints. Any of the ~2200 icons in the font works
+-- even if it is not named here — pass the codepoint straight through, looking it
+-- up in `assets/MaterialIcons-Regular.codepoints`:
+--
+--     Icon(0xE5CD)
+
+-- Where the icon font lives, and the handles loaded from it.
+--
+-- The path is relative to the working directory the app runs from. Point it
+-- somewhere else with `setFontPath` before the first icon is drawn.
+export class IconFont
+	static local path: string = "assets/MaterialIcons-Regular.ttf"
+	static local handles: table = {}
+	static local missing: boolean = false
+
+	static fn setFontPath(path: string) -> nil
+		IconFont.path = path
+		IconFont.handles = {}
+		IconFont.missing = false
+	end
+
+	-- A font handle for this size, or nil when the file cannot be read.
+	--
+	-- Sizes are cached because a handle is a rasterized atlas: asking for one
+	-- per frame would rebuild it per frame.
+	static fn handleFor(size: float) -> integer?
+		if IconFont.missing then
+			return nil
+		end
+
+		-- Physical size, like `TextStyle`: an icon magnified by the root
+		-- transform would be as soft as magnified type.
+		local key: string = String.format("%.1f", size * Display.scale())
+		local cached = handles[key]
+
+		if cached != nil then
+			return cached
+		end
+
+		-- A native error is fatal in Saule, so check the file exists rather
+		-- than trying and catching.
+		local probe: File? = Io.open(IconFont.path, IoMode.Read)
+
+		if probe == nil then
+			IconFont.missing = true
+			println("IconFont: cannot open " .. IconFont.path .. " — icons will not draw")
+
+			return nil
+		end
+
+		probe!.close()
+
+		local created: integer = Graphics.newFont(size * Display.scale(), IconFont.path)
+		handles[key] = created
+
+		return created
+	end
+end
+
+-- One icon, sized and coloured.
+--
+-- It measures the real glyph, so a `Row` of icons and text lines up the way it
+-- would with any other widget.
+export class Icon extends Widget
+	codepoint: integer
+	size: float
+	color: Color?
+
+	fn init(codepoint: integer = 0, size: float = 20.0, color: Color? = nil, key: string? = nil)
+		self.super(key)
+
+		self.codepoint = codepoint
+		self.size = size
+		self.color = color
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		-- Material icons are drawn on a square em box, so the advance width is
+		-- the size. Reserving the square keeps rows from shifting when an icon
+		-- fails to load.
+		return constraints.constrain(Size(self.size, self.size))
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local handle: integer? = IconFont.handleFor(self.size)
+
+		if handle == nil or self.codepoint == 0 then
+			return
+		end
+
+		-- Fonts are global state, so the icon face has to be put back when we
+		-- are done with it. Otherwise the next thing to draw text without
+		-- binding its own font renders in icon glyphs.
+		local previous: integer = Graphics.getFont()
+		Graphics.setFont(handle!)
+
+		local tint: Color = self.color ?? Colors.text
+		tint.apply()
+
+		local scale: float = Display.scale()
+		local glyph: string = String.char(self.codepoint)
+		local width: float = Graphics.getTextWidth(glyph) / scale
+		local height: float = Graphics.getFontHeight() / scale
+
+		-- Centre the glyph in the square this widget reserved, then draw it in
+		-- device space so the physical-size atlas is not magnified again.
+		local left: float = x + (el.size.width - width) / 2.0
+		local top: float = y + (el.size.height - height) / 2.0
+
+		if scale == 1.0 then
+			Graphics.print(glyph, left, top)
+			Graphics.setFont(previous)
+
+			return
+		end
+
+		local px: float, py: float = Graphics.transformPoint(left, top)
+
+		Graphics.push()
+		Graphics.origin()
+		Graphics.print(glyph, px, py)
+		Graphics.pop()
+		Graphics.setFont(previous)
+	end
+end
+
+-- A tappable icon: the button shape, without a label.
+export class IconButton extends StatelessWidget
+	icon: integer
+	onPressed: function?
+	size: float
+	color: Color?
+	tooltip: string
+	enabled: boolean
+	autofocus: boolean
+
+	fn init(
+		icon: integer = 0,
+		onPressed: function? = nil,
+		size: float = 20.0,
+		color: Color? = nil,
+		tooltip: string = "",
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.icon = icon
+		self.onPressed = onPressed
+		self.size = size
+		self.color = color
+		self.tooltip = tooltip
+		self.enabled = enabled
+		self.autofocus = autofocus
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local node: FocusNode = nodeFor(scratch)
+		local hovered: boolean = scratch.hovered == true
+		local focused: boolean = scratch.focused == true
+
+		local ink: Color = self.color ?? theme.textMuted
+		local fill: Color? = nil
+
+		if not self.enabled then
+			ink = theme.textMuted.withAlpha(0.4)
+		elseif hovered then
+			ink = self.color ?? theme.text
+			fill = theme.surfaceLight
+		end
+
+		local edge: Color? = nil
+
+		if focused then
+			edge = theme.primary
+		end
+
+		local body: Widget = Container(
+			color: fill,
+			border: edge,
+			radius: theme.radius,
+			padding: EdgeInsets.all(6.0),
+			child: Icon(self.icon, self.size, ink)
+		)
+
+		if not self.enabled then
+			return body
+		end
+
+		local tappable: Widget = Focus(
+			child: MouseRegion(
+				cursor: "hand",
+				child: GestureDetector(
+					child: body,
+					onTap: self.onPressed,
+					onTapDown: fn()
+						node.requestFocus()
+					end,
+					onHover: fn(inside: boolean)
+						scratch.hovered = inside
+						context.markNeedsBuild()
+					end
+				)
+			),
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				if not isActivator(event) then
+					return false
+				end
+
+				local callback: function? = self.onPressed
+				if callback != nil then
+					callback()
+				end
+
+				return true
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+
+		if #self.tooltip == 0 then
+			return tappable
+		end
+
+		return Tooltip(message: self.tooltip, child: tappable)
+	end
+end
+
+-- Codepoints for the icons an app usually reaches for. The full set lives in
+-- `assets/MaterialIcons-Regular.codepoints`.
+export class Icons
+	-- --- Navigation --------------------------------------------------
+
+	static menu: integer = 58834
+	static close: integer = 58829
+	static arrowBack: integer = 58820
+	static arrowForward: integer = 58824
+	static arrowUpward: integer = 58840
+	static arrowDownward: integer = 58843
+	static chevronLeft: integer = 58827
+	static chevronRight: integer = 58828
+	static expandMore: integer = 58831
+	static expandLess: integer = 58830
+	static moreVert: integer = 58836
+	static moreHoriz: integer = 58835
+	static home: integer = 59530
+
+	-- --- Actions -----------------------------------------------------
+
+	static add: integer = 57669
+	static remove: integer = 57691
+	static edit: integer = 58313
+	static delete: integer = 59506
+	static save: integer = 57697
+	static search: integer = 59574
+	static refresh: integer = 58837
+	static settings: integer = 59576
+	static check: integer = 58826
+	static clear: integer = 57676
+	static done: integer = 59510
+	static undo: integer = 57702
+	static redo: integer = 57690
+	static contentCopy: integer = 57677
+	static contentCut: integer = 57678
+	static contentPaste: integer = 57679
+	static download: integer = 61584
+	static upload: integer = 61595
+	static share: integer = 59405
+	static filter: integer = 57682
+	static sort: integer = 57700
+	static openInNew: integer = 59550
+	static link: integer = 57687
+
+	-- --- Status ------------------------------------------------------
+
+	static info: integer = 59534
+	static warning: integer = 57346
+	static error: integer = 57344
+	static help: integer = 59527
+	static checkCircle: integer = 59500
+	static cancel: integer = 58825
+	static visibility: integer = 59636
+	static visibilityOff: integer = 59637
+	static lock: integer = 59543
+	static lockOpen: integer = 59544
+	static star: integer = 59448
+	static starBorder: integer = 59450
+	static favorite: integer = 59517
+	static favoriteBorder: integer = 59518
+
+	-- --- Content -----------------------------------------------------
+
+	static folder: integer = 58055
+	static folderOpen: integer = 58056
+	static insertDriveFile: integer = 57933
+	static image: integer = 58356
+	static calendarToday: integer = 59701
+	static schedule: integer = 59573
+	static person: integer = 59389
+	static group: integer = 59375
+	static mail: integer = 57688
+	static notifications: integer = 59380
+	static list: integer = 59542
+	static gridView: integer = 59824
+	static dashboard: integer = 59505
+	static playArrow: integer = 57399
+	static pause: integer = 57396
+	static stop: integer = 57415
+	static volumeUp: integer = 57424
+	static volumeOff: integer = 57423
+end

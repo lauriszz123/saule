@@ -1,0 +1,1049 @@
+import * from engine
+import * from Geometry
+import * from Framework
+
+-- ============================================================================
+-- Layout widgets
+-- ============================================================================
+--
+-- The primitives every other widget is composed from. Each one implements the
+-- same contract: measure the children under constraints you derive, give each
+-- child an `offset` relative to your own top-left, and return your own size.
+
+-- Axis helpers. `main` is the direction a flex advances in, `cross` the
+-- perpendicular one; keeping the swap in one place is what lets `Flex` be
+-- written once for both directions.
+local fn mainOf(horizontal: boolean, size: Size) -> float
+	if horizontal then
+		return size.width
+	end
+
+	return size.height
+end
+
+local fn crossOf(horizontal: boolean, size: Size) -> float
+	if horizontal then
+		return size.height
+	end
+
+	return size.width
+end
+
+local fn flexChildConstraints(
+	horizontal: boolean,
+	mainMin: float,
+	mainMax: float,
+	crossMin: float,
+	crossMax: float
+) -> BoxConstraints
+	if horizontal then
+		return BoxConstraints(mainMin, mainMax, crossMin, crossMax)
+	end
+
+	return BoxConstraints(crossMin, crossMax, mainMin, mainMax)
+end
+
+-- ----------------------------------------------------------------------------
+-- SizedBox
+-- ----------------------------------------------------------------------------
+
+-- Force a size on the child (or reserve empty space when there is none).
+-- An axis left nil is passed through untouched.
+--
+--     SizedBox(height: 12.0)                 -- a vertical gap
+--     SizedBox(width: 200.0, child: panel)   -- a fixed-width column
+export class SizedBox extends SingleChildWidget
+	width: float?
+	height: float?
+
+	fn init(width: float? = nil, height: float? = nil, child: Widget? = nil, key: string? = nil)
+		self.super(child, key)
+
+		self.width = width
+		self.height = height
+	end
+
+	static fn square(side: float, child: Widget? = nil) -> SizedBox
+		return SizedBox(side, side, child)
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local inner: BoxConstraints = constraints
+		local width: float? = self.width
+		local height: float? = self.height
+
+		if width != nil then
+			inner = inner.withTightWidth(width)
+		end
+
+		if height != nil then
+			inner = inner.withTightHeight(height)
+		end
+
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			return inner.constrain(Size(width ?? 0.0, height ?? 0.0))
+		else
+			local size: Size = child.layout(inner)
+			child.offset = Offset.zero()
+
+			return size
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Padding
+-- ----------------------------------------------------------------------------
+
+-- Inset the child by `padding` on each edge.
+export class Padding extends SingleChildWidget
+	padding: EdgeInsets
+
+	fn init(padding: EdgeInsets? = nil, child: Widget? = nil, key: string? = nil)
+		self.super(child, key)
+
+		self.padding = padding ?? EdgeInsets.zero()
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local pad: EdgeInsets = self.padding
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			return constraints.constrain(Size(pad.horizontal(), pad.vertical()))
+		else
+			local inner: Size = child.layout(constraints.deflate(pad))
+			child.offset = Offset(pad.left, pad.top)
+
+			return constraints.constrain(
+				Size(inner.width + pad.horizontal(), inner.height + pad.vertical())
+			)
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Align / Center
+-- ----------------------------------------------------------------------------
+
+-- Position the child within the space this widget is given. Fills every
+-- bounded axis and shrink-wraps the unbounded ones, like Flutter's `Align`.
+export class Align extends SingleChildWidget
+	alignment: Alignment
+
+	fn init(alignment: Alignment? = nil, child: Widget? = nil, key: string? = nil)
+		self.super(child, key)
+
+		self.alignment = alignment ?? Alignment.center()
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			return constraints.biggest()
+		else
+			local inner: Size = child.layout(constraints.loosen())
+
+			local width: float = inner.width
+			local height: float = inner.height
+
+			if constraints.hasBoundedWidth() then
+				width = constraints.maxWidth
+			end
+
+			if constraints.hasBoundedHeight() then
+				height = constraints.maxHeight
+			end
+
+			local size: Size = constraints.constrain(Size(width, height))
+			child.offset = self.alignment.inscribe(inner, size)
+
+			return size
+		end
+	end
+end
+
+-- `Align` with the alignment already chosen.
+export class Center extends Align
+	fn init(child: Widget? = nil, key: string? = nil)
+		self.super(Alignment.center(), child, key)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- ClipRect
+-- ----------------------------------------------------------------------------
+
+-- Clip everything the child paints to this widget's own rectangle.
+export class ClipRect extends SingleChildWidget
+	fn init(child: Widget? = nil, key: string? = nil)
+		self.super(child, key)
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		-- Save the current clip so nesting restores correctly; with clipping
+		-- off the engine reports the whole render target, so this is safe.
+		local sx: float, sy: float, sw: float, sh: float = Graphics.getScissor()
+
+		Graphics.intersectScissor(x, y, el.size.width, el.size.height)
+		el.paintChildren(x, y)
+		Graphics.setScissor(sx, sy, sw, sh)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Flex: Row and Column
+-- ----------------------------------------------------------------------------
+
+export enum Axis
+	Horizontal,
+	Vertical
+end
+
+export enum MainAxisAlignment
+	Start,
+	End,
+	Center,
+	SpaceBetween,
+	SpaceAround,
+	SpaceEvenly
+end
+
+export enum CrossAxisAlignment
+	Start,
+	End,
+	Center,
+	Stretch
+end
+
+export enum MainAxisSize
+	-- Shrink-wrap the children.
+	Min,
+	-- Take everything the parent allows.
+	Max
+end
+
+-- Wrap a child so its `Row` / `Column` gives it a share of the leftover space
+-- instead of its natural size. Two `Expanded`s with `flex: 1` and `flex: 2`
+-- split the remainder one-third / two-thirds.
+export class Expanded extends SingleChildWidget
+	flex: integer
+
+	fn init(child: Widget? = nil, flex: integer = 1, key: string? = nil)
+		self.super(child, key)
+
+		self.flex = flex
+	end
+
+	fn flexFactor() -> integer
+		return self.flex
+	end
+end
+
+-- Flexible empty space — an `Expanded` with nothing in it.
+export class Spacer extends Widget
+	flex: integer
+
+	fn init(flex: integer = 1, key: string? = nil)
+		self.super(key)
+
+		self.flex = flex
+	end
+
+	fn flexFactor() -> integer
+		return self.flex
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		return constraints.smallest()
+	end
+end
+
+-- Lay children out along one axis. `Row` and `Column` are the two directions;
+-- use those rather than `Flex` directly.
+export class Flex extends Widget
+	direction: Axis
+	children: table<Widget>
+	mainAxisAlignment: MainAxisAlignment
+	crossAxisAlignment: CrossAxisAlignment
+	mainAxisSize: MainAxisSize
+
+	-- Gap inserted between adjacent children, on top of any alignment spacing.
+	spacing: float
+
+	fn init(
+		direction: Axis,
+		children: table<Widget> = {},
+		mainAxisAlignment: MainAxisAlignment = MainAxisAlignment.Start,
+		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Start,
+		mainAxisSize: MainAxisSize = MainAxisSize.Max,
+		spacing: float = 0.0,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.direction = direction
+		self.children = children
+		self.mainAxisAlignment = mainAxisAlignment
+		self.crossAxisAlignment = crossAxisAlignment
+		self.mainAxisSize = mainAxisSize
+		self.spacing = spacing
+	end
+
+	fn childWidgets() -> table<Widget>
+		return self.children
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local horizontal: boolean = self.direction == Axis.Horizontal
+		local count: integer = el.childCount()
+
+		-- Cross-axis constraint every child sees. `Stretch` turns it tight, so
+		-- children fill the perpendicular axis instead of shrink-wrapping.
+		local crossMax: float = constraints.maxHeight
+		local mainMax: float = constraints.maxWidth
+
+		if not horizontal then
+			crossMax = constraints.maxWidth
+			mainMax = constraints.maxHeight
+		end
+
+		local crossMin: float = 0.0
+		if self.crossAxisAlignment == CrossAxisAlignment.Stretch and crossMax < Math.huge then
+			crossMin = crossMax
+		end
+
+		local totalFlex: integer = 0
+		local usedMain: float = 0.0
+		local maxCross: float = 0.0
+
+		-- Pass 1: inflexible children take their natural size on the main axis.
+		for i: integer = 1, count do
+			local child: Element? = el.childAt(i)
+
+			if child != nil then
+				local flex: integer = child.widget.flexFactor()
+
+				if flex > 0 then
+					totalFlex = totalFlex + flex
+				else
+					local size: Size = child.layout(
+						flexChildConstraints(horizontal, 0.0, Math.huge, crossMin, crossMax)
+					)
+
+					usedMain = usedMain + mainOf(horizontal, size)
+					maxCross = atLeast(maxCross, crossOf(horizontal, size))
+				end
+			end
+		end
+
+		if count > 1 then
+			usedMain = usedMain + self.spacing * float(count - 1)
+		end
+
+		-- Pass 2: split whatever is left between the flexible children.
+		if totalFlex > 0 then
+			local free: float = 0.0
+
+			if mainMax < Math.huge then
+				free = atLeastZero(mainMax - usedMain)
+			end
+
+			for i: integer = 1, count do
+				local child: Element? = el.childAt(i)
+
+				if child != nil then
+					local flex: integer = child.widget.flexFactor()
+
+					if flex > 0 then
+						local share: float = free * float(flex) / float(totalFlex)
+						local size: Size = child.layout(
+							flexChildConstraints(horizontal, share, share, crossMin, crossMax)
+						)
+
+						usedMain = usedMain + mainOf(horizontal, size)
+						maxCross = atLeast(maxCross, crossOf(horizontal, size))
+					end
+				end
+			end
+		end
+
+		-- Own size.
+		local mainExtent: float = usedMain
+
+		if self.mainAxisSize == MainAxisSize.Max and mainMax < Math.huge then
+			mainExtent = mainMax
+		end
+
+		local size: Size = constraints.constrain(Size(maxCross, mainExtent))
+
+		if horizontal then
+			size = constraints.constrain(Size(mainExtent, maxCross))
+		end
+
+		local finalMain: float = mainOf(horizontal, size)
+		local finalCross: float = crossOf(horizontal, size)
+
+		-- Distribute the slack according to the main-axis alignment.
+		local free: float = atLeastZero(finalMain - usedMain)
+		local leading: float = 0.0
+		local between: float = self.spacing
+
+		if self.mainAxisAlignment == MainAxisAlignment.End then
+			leading = free
+		elseif self.mainAxisAlignment == MainAxisAlignment.Center then
+			leading = free / 2.0
+		elseif self.mainAxisAlignment == MainAxisAlignment.SpaceBetween then
+			if count > 1 then
+				between = between + free / float(count - 1)
+			end
+		elseif self.mainAxisAlignment == MainAxisAlignment.SpaceAround then
+			if count > 0 then
+				local unit: float = free / float(count)
+				leading = unit / 2.0
+				between = between + unit
+			end
+		elseif self.mainAxisAlignment == MainAxisAlignment.SpaceEvenly then
+			local unit: float = free / float(count + 1)
+			leading = unit
+			between = between + unit
+		end
+
+		local cursor: float = leading
+
+		for i: integer = 1, count do
+			local child: Element? = el.childAt(i)
+
+			if child != nil then
+				local childMain: float = mainOf(horizontal, child.size)
+				local childCross: float = crossOf(horizontal, child.size)
+				local crossPos: float = 0.0
+
+				if self.crossAxisAlignment == CrossAxisAlignment.End then
+					crossPos = finalCross - childCross
+				elseif self.crossAxisAlignment == CrossAxisAlignment.Center then
+					crossPos = (finalCross - childCross) / 2.0
+				end
+
+				if horizontal then
+					child.offset = Offset(cursor, crossPos)
+				else
+					child.offset = Offset(crossPos, cursor)
+				end
+
+				cursor = cursor + childMain + between
+			end
+		end
+
+		return size
+	end
+end
+
+-- Children left to right.
+export class Row extends Flex
+	fn init(
+		children: table<Widget> = {},
+		mainAxisAlignment: MainAxisAlignment = MainAxisAlignment.Start,
+		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Center,
+		mainAxisSize: MainAxisSize = MainAxisSize.Max,
+		spacing: float = 0.0,
+		key: string? = nil
+	)
+		self.super(
+			Axis.Horizontal,
+			children,
+			mainAxisAlignment,
+			crossAxisAlignment,
+			mainAxisSize,
+			spacing,
+			key
+		)
+	end
+end
+
+-- Children top to bottom.
+export class Column extends Flex
+	fn init(
+		children: table<Widget> = {},
+		mainAxisAlignment: MainAxisAlignment = MainAxisAlignment.Start,
+		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Start,
+		mainAxisSize: MainAxisSize = MainAxisSize.Max,
+		spacing: float = 0.0,
+		key: string? = nil
+	)
+		self.super(
+			Axis.Vertical,
+			children,
+			mainAxisAlignment,
+			crossAxisAlignment,
+			mainAxisSize,
+			spacing,
+			key
+		)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Stack / Positioned
+-- ----------------------------------------------------------------------------
+
+-- Overlap children. Later children paint on top of earlier ones.
+--
+-- A child wrapped in `Positioned` is placed explicitly; everything else is
+-- sized loosely and placed by `alignment`. The stack takes the size of its
+-- largest non-positioned child, or fills its constraints when it has none.
+export class Stack extends Widget
+	children: table<Widget>
+	alignment: Alignment
+
+	fn init(children: table<Widget> = {}, alignment: Alignment? = nil, key: string? = nil)
+		self.super(key)
+
+		self.children = children
+		self.alignment = alignment ?? Alignment.topLeft()
+	end
+
+	fn childWidgets() -> table<Widget>
+		return self.children
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local count: integer = el.childCount()
+		local loose: BoxConstraints = constraints.loosen()
+		local hasFlow: boolean = false
+		local width: float = 0.0
+		local height: float = 0.0
+
+		-- Pass 1: the non-positioned children decide how big the stack is.
+		for i: integer = 1, count do
+			local child: Element? = el.childAt(i)
+
+			if child != nil then
+				local placement: StackData? = child.widget.stackData()
+
+				if placement == nil then
+					local size: Size = child.layout(loose)
+					hasFlow = true
+					width = atLeast(width, size.width)
+					height = atLeast(height, size.height)
+				end
+			end
+		end
+
+		local size: Size = constraints.biggest()
+
+		if hasFlow then
+			size = constraints.constrain(Size(width, height))
+		end
+
+		-- Pass 2: place everything now that the stack's own size is known.
+		for i: integer = 1, count do
+			local child: Element? = el.childAt(i)
+
+			if child != nil then
+				local placement: StackData? = child.widget.stackData()
+
+				if placement == nil then
+					child.offset = self.alignment.inscribe(child.size, size)
+				else
+					child.offset = self.place(child, placement, size)
+				end
+			end
+		end
+
+		return size
+	end
+
+	-- Resolve one `Positioned` child against the stack's box.
+	local fn place(child: Element, placement: StackData, size: Size) -> Offset
+		local left: float? = placement.left
+		local top: float? = placement.top
+		local right: float? = placement.right
+		local bottom: float? = placement.bottom
+
+		-- An explicit width, or the gap between opposing edges.
+		local width: float? = placement.width
+		if left != nil and right != nil then
+			width = atLeastZero(size.width - left - right)
+		end
+
+		local height: float? = placement.height
+		if top != nil and bottom != nil then
+			height = atLeastZero(size.height - top - bottom)
+		end
+
+		local childSize: Size = child.layout(
+			BoxConstraints(
+				width ?? 0.0,
+				width ?? size.width,
+				height ?? 0.0,
+				height ?? size.height
+			)
+		)
+
+		local x: float = 0.0
+		if left != nil then
+			x = left
+		elseif right != nil then
+			x = size.width - right - childSize.width
+		else
+			x = self.alignment.inscribe(childSize, size).dx
+		end
+
+		local y: float = 0.0
+		if top != nil then
+			y = top
+		elseif bottom != nil then
+			y = size.height - bottom - childSize.height
+		else
+			y = self.alignment.inscribe(childSize, size).dy
+		end
+
+		return Offset(x, y)
+	end
+end
+
+-- Place a child at explicit coordinates inside a `Stack`. Giving both edges of
+-- an axis (`left` and `right`) stretches the child between them.
+export class Positioned extends SingleChildWidget
+	left: float?
+	top: float?
+	right: float?
+	bottom: float?
+	width: float?
+	height: float?
+
+	fn init(
+		child: Widget? = nil,
+		left: float? = nil,
+		top: float? = nil,
+		right: float? = nil,
+		bottom: float? = nil,
+		width: float? = nil,
+		height: float? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.left = left
+		self.top = top
+		self.right = right
+		self.bottom = bottom
+		self.width = width
+		self.height = height
+	end
+
+	static fn fill(child: Widget? = nil) -> Positioned
+		return Positioned(child, 0.0, 0.0, 0.0, 0.0)
+	end
+
+	fn stackData() -> StackData?
+		return StackData(self.left, self.top, self.right, self.bottom, self.width, self.height)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Constraint boxes
+-- ----------------------------------------------------------------------------
+
+-- Impose extra bounds on the child without forcing a size.
+--
+--     ConstrainedBox(maxWidth: 400.0, child: paragraph)
+--
+-- `SizedBox` makes an axis *tight*; this narrows the range instead, which is
+-- what "at most 400 wide" needs.
+export class ConstrainedBox extends SingleChildWidget
+	minWidth: float?
+	maxWidth: float?
+	minHeight: float?
+	maxHeight: float?
+
+	fn init(
+		child: Widget? = nil,
+		minWidth: float? = nil,
+		maxWidth: float? = nil,
+		minHeight: float? = nil,
+		maxHeight: float? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.minWidth = minWidth
+		self.maxWidth = maxWidth
+		self.minHeight = minHeight
+		self.maxHeight = maxHeight
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		-- Intersect rather than replace: the parent's limits still win, so this
+		-- can never hand a child more room than the parent allowed.
+		local minW: float = atLeast(constraints.minWidth, self.minWidth ?? 0.0)
+		local maxW: float = atMost(constraints.maxWidth, self.maxWidth ?? Math.huge)
+		local minH: float = atLeast(constraints.minHeight, self.minHeight ?? 0.0)
+		local maxH: float = atMost(constraints.maxHeight, self.maxHeight ?? Math.huge)
+
+		local inner: BoxConstraints = BoxConstraints(
+			atMost(minW, maxW),
+			maxW,
+			atMost(minH, maxH),
+			maxH
+		)
+
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			return inner.constrain(Size.zero())
+		end
+
+		local size: Size = child!.layout(inner)
+		child!.offset = Offset.zero()
+
+		return size
+	end
+end
+
+-- Size the child to a width:height ratio, as large as the constraints allow.
+--
+--     AspectRatio(ratio: 16.0 / 9.0, child: preview)
+export class AspectRatio extends SingleChildWidget
+	ratio: float
+
+	fn init(ratio: float = 1.0, child: Widget? = nil, key: string? = nil)
+		self.super(child, key)
+
+		self.ratio = ratio
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		if self.ratio <= 0.0 then
+			return constraints.smallest()
+		end
+
+		-- Start from whichever axis is actually bounded; if both are, take the
+		-- width and let the height follow unless that overflows.
+		local width: float = constraints.maxWidth
+		local height: float = constraints.maxHeight
+
+		if constraints.hasBoundedWidth() then
+			height = width / self.ratio
+
+			if constraints.hasBoundedHeight() and height > constraints.maxHeight then
+				height = constraints.maxHeight
+				width = height * self.ratio
+			end
+		elseif constraints.hasBoundedHeight() then
+			width = height * self.ratio
+		else
+			return constraints.smallest()
+		end
+
+		local size: Size = constraints.constrain(Size(width, height))
+		local child: Element? = el.childAt(1)
+
+		if child != nil then
+			child!.layout(BoxConstraints.tight(size))
+			child!.offset = Offset.zero()
+		end
+
+		return size
+	end
+end
+
+-- Size the child to a fraction of what this widget is given, then place it.
+--
+--     FractionallySizedBox(widthFactor: 0.5, child: bar)
+export class FractionallySizedBox extends SingleChildWidget
+	widthFactor: float?
+	heightFactor: float?
+	alignment: Alignment
+
+	fn init(
+		child: Widget? = nil,
+		widthFactor: float? = nil,
+		heightFactor: float? = nil,
+		alignment: Alignment? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.widthFactor = widthFactor
+		self.heightFactor = heightFactor
+		self.alignment = alignment ?? Alignment.center()
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local available: Size = constraints.biggest()
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			return available
+		end
+
+		-- An axis with no factor is passed through loose, so the child keeps
+		-- its natural size there.
+		local inner: BoxConstraints = constraints.loosen()
+		local width: float? = self.widthFactor
+		local height: float? = self.heightFactor
+
+		if width != nil then
+			inner = inner.withTightWidth(available.width * width!)
+		end
+
+		if height != nil then
+			inner = inner.withTightHeight(available.height * height!)
+		end
+
+		local occupied: Size = child!.layout(inner)
+
+		-- Fill the axes that are bounded and shrink-wrap the ones that are not.
+		-- Filling an unbounded axis would mean `biggest()`'s zero fallback, and
+		-- the widget would vanish inside a `Column`.
+		local ownWidth: float = occupied.width
+		local ownHeight: float = occupied.height
+
+		if constraints.hasBoundedWidth() then
+			ownWidth = available.width
+		end
+
+		if constraints.hasBoundedHeight() then
+			ownHeight = available.height
+		end
+
+		local size: Size = constraints.constrain(Size(ownWidth, ownHeight))
+		child!.offset = self.alignment.inscribe(occupied, size)
+
+		return size
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Wrap
+-- ----------------------------------------------------------------------------
+
+-- A row that starts a new line when it runs out of width — tag lists, chips,
+-- toolbars, anything whose item count is not known in advance.
+--
+--     Wrap(spacing: 8.0, runSpacing: 8.0, children: tags)
+--
+-- Unlike `Row`, nothing here flexes: every child takes its natural size, and the
+-- layout decides where the breaks go.
+export class Wrap extends Widget
+	children: table<Widget>
+	direction: Axis
+
+	-- Gap between children within a run, and between the runs themselves.
+	spacing: float
+	runSpacing: float
+
+	-- How a run's leftover space is distributed, and how children thinner than
+	-- their run are aligned across it.
+	alignment: MainAxisAlignment
+	crossAxisAlignment: CrossAxisAlignment
+
+	fn init(
+		children: table<Widget> = {},
+		direction: Axis = Axis.Horizontal,
+		spacing: float = 0.0,
+		runSpacing: float = 0.0,
+		alignment: MainAxisAlignment = MainAxisAlignment.Start,
+		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Start,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.children = children
+		self.direction = direction
+		self.spacing = spacing
+		self.runSpacing = runSpacing
+		self.alignment = alignment
+		self.crossAxisAlignment = crossAxisAlignment
+	end
+
+	fn childWidgets() -> table<Widget>
+		return self.children
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local horizontal: boolean = self.direction == Axis.Horizontal
+		local count: integer = el.childCount()
+		local mainLimit: float = constraints.maxHeight
+
+		if horizontal then
+			mainLimit = constraints.maxWidth
+		end
+
+		-- Measure everything first: a child's size decides which run it lands
+		-- in, so nothing can be positioned until all of them are known.
+		local loose: BoxConstraints = constraints.loosen()
+		local i: integer = 1
+
+		while i <= count do
+			local child: Element? = el.childAt(i)
+
+			if child != nil then
+				child!.layout(loose)
+			end
+
+			i = i + 1
+		end
+
+		-- Assign runs. Each entry describes one line: where it starts, how many
+		-- children it holds, and how far it reaches on each axis.
+		local runStart: table<integer> = {}
+		local runCount: table<integer> = {}
+		local runMain: table<float> = {}
+		local runCross: table<float> = {}
+
+		local currentMain: float = 0.0
+		local currentCross: float = 0.0
+		local currentCount: integer = 0
+		local currentStart: integer = 1
+		local widest: float = 0.0
+
+		i = 1
+
+		while i <= count do
+			local child: Element? = el.childAt(i)
+
+			if child != nil then
+				local main: float = mainOf(horizontal, child!.size)
+				local cross: float = crossOf(horizontal, child!.size)
+				local candidate: float = main
+
+				if currentCount > 0 then
+					candidate = currentMain + self.spacing + main
+				end
+
+				if currentCount > 0 and candidate > mainLimit then
+					-- Close the run and start a new one with this child.
+					runStart[#runStart + 1] = currentStart
+					runCount[#runCount + 1] = currentCount
+					runMain[#runMain + 1] = currentMain
+					runCross[#runCross + 1] = currentCross
+
+					widest = atLeast(widest, currentMain)
+					currentStart = i
+					currentCount = 1
+					currentMain = main
+					currentCross = cross
+				else
+					currentCount = currentCount + 1
+					currentMain = candidate
+					currentCross = atLeast(currentCross, cross)
+				end
+			end
+
+			i = i + 1
+		end
+
+		if currentCount > 0 then
+			runStart[#runStart + 1] = currentStart
+			runCount[#runCount + 1] = currentCount
+			runMain[#runMain + 1] = currentMain
+			runCross[#runCross + 1] = currentCross
+			widest = atLeast(widest, currentMain)
+		end
+
+		-- Own size: as long as the longest run, as thick as the runs stacked up.
+		local totalCross: float = 0.0
+		local r: integer = 1
+
+		while r <= #runCross do
+			totalCross = totalCross + runCross[r]
+
+			if r > 1 then
+				totalCross = totalCross + self.runSpacing
+			end
+
+			r = r + 1
+		end
+
+		local size: Size = constraints.constrain(Size(totalCross, widest))
+
+		if horizontal then
+			size = constraints.constrain(Size(widest, totalCross))
+		end
+
+		self.place(el, horizontal, size, runStart, runCount, runMain, runCross)
+
+		return size
+	end
+
+	-- Second pass: walk the runs and give every child its offset.
+	local fn place(
+		el: Element,
+		horizontal: boolean,
+		size: Size,
+		runStart: table<integer>,
+		runCount: table<integer>,
+		runMain: table<float>,
+		runCross: table<float>
+	) -> nil
+		local finalMain: float = mainOf(horizontal, size)
+		local crossCursor: float = 0.0
+		local r: integer = 1
+
+		while r <= #runStart do
+			local free: float = atLeastZero(finalMain - runMain[r])
+			local leading: float = 0.0
+			local between: float = self.spacing
+			local count: integer = runCount[r]
+
+			if self.alignment == MainAxisAlignment.End then
+				leading = free
+			elseif self.alignment == MainAxisAlignment.Center then
+				leading = free / 2.0
+			elseif self.alignment == MainAxisAlignment.SpaceBetween then
+				if count > 1 then
+					between = between + free / float(count - 1)
+				end
+			elseif self.alignment == MainAxisAlignment.SpaceAround then
+				if count > 0 then
+					local unit: float = free / float(count)
+					leading = unit / 2.0
+					between = between + unit
+				end
+			elseif self.alignment == MainAxisAlignment.SpaceEvenly then
+				local unit: float = free / float(count + 1)
+				leading = unit
+				between = between + unit
+			end
+
+			local mainCursor: float = leading
+			local i: integer = runStart[r]
+			local last: integer = runStart[r] + count - 1
+
+			while i <= last do
+				local child: Element? = el.childAt(i)
+
+				if child != nil then
+					local childMain: float = mainOf(horizontal, child!.size)
+					local childCross: float = crossOf(horizontal, child!.size)
+					local crossPos: float = crossCursor
+
+					if self.crossAxisAlignment == CrossAxisAlignment.End then
+						crossPos = crossCursor + runCross[r] - childCross
+					elseif self.crossAxisAlignment == CrossAxisAlignment.Center then
+						crossPos = crossCursor + (runCross[r] - childCross) / 2.0
+					end
+
+					if horizontal then
+						child!.offset = Offset(mainCursor, crossPos)
+					else
+						child!.offset = Offset(crossPos, mainCursor)
+					end
+
+					mainCursor = mainCursor + childMain + between
+				end
+
+				i = i + 1
+			end
+
+			crossCursor = crossCursor + runCross[r] + self.runSpacing
+			r = r + 1
+		end
+	end
+end

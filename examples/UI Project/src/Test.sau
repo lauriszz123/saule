@@ -1,0 +1,498 @@
+import * from engine
+import * from UIKit
+import * from Counter
+
+-- The panel itself: pure description, rebuilt whenever something above it
+-- changes, and free of any layout arithmetic.
+export class PanelView extends StatelessWidget
+	fn init(key: string? = nil)
+		self.super(key)
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local scratch: table = context.data().scratch
+
+		if scratch.name == nil then
+			scratch.name = ""
+		end
+
+		local name: string = scratch.name as string ?? ""
+		local greeting: string = "Hello, stranger."
+
+		if #name > 0 then
+			greeting = "Hello, " .. name .. "."
+		end
+
+		-- Wrapping the panel means this listener sees every key the focused
+		-- control ignored — that is all a screen-level shortcut needs.
+		return KeyboardListener(
+			onKeyDown: fn(event: KeyEvent)
+				return self.shortcut(context, event)
+			end,
+			child: Container(
+				margin: EdgeInsets.all(24.0),
+				padding: EdgeInsets.all(20.0),
+				color: Colors.surfaceLight,
+				border: Colors.border,
+				radius: 10.0,
+				child: Column(
+					crossAxisAlignment: CrossAxisAlignment.Stretch,
+					spacing: 14.0,
+					children: {
+						Text("Saule UIKit", style: TextStyle(color: Colors.text, size: 24.0)),
+						Text(
+							"Tab moves focus and Enter presses. Ctrl+S saves, Esc unfocuses. " .. "In the field: shift+arrows select, Ctrl+A/C/X/V work, and " .. "clicking or dragging moves the caret. This paragraph wraps " .. "itself to whatever width the panel happens to be.",
+							style: TextStyle(color: Colors.textMuted)
+						),
+						TextField(
+							placeholder: "Your name",
+							autofocus: true,
+							onChanged: fn(text: string)
+								scratch.name = text
+								context.markNeedsBuild()
+							end,
+							onSubmitted: fn(text: string)
+								println("submitted: " .. text)
+							end
+						),
+						Text(greeting, style: TextStyle(color: Colors.text, size: 18f)),
+						Counter(label: "Taps", start: 3),
+						self.settings(context, scratch),
+						Expanded(child: self.canvas(context, scratch)),
+						self.actions(context),
+					}
+				)
+			)
+		)
+	end
+
+	-- Screen-level keys. Returning false lets anything else keep bubbling.
+	local fn shortcut(context: BuildContext, event: KeyEvent) -> boolean
+		if event.key == "escape" then
+			local owner: BuildOwner? = context.owner()
+
+			if owner != nil then
+				owner!.focus().unfocus()
+			end
+
+			return true
+		end
+
+		if event.ctrl and event.key == "s" then
+			showToast(context, "Saved")
+
+			return true
+		end
+
+		return false
+	end
+
+	-- The standard controls, all reading the ambient theme and all keyboard
+	-- operable. Their values live in the panel's element scratch, which is what
+	-- lets this stay a `StatelessWidget`.
+	-- A chip per tag. `Wrap` breaks them onto a new line as the panel narrows,
+	-- which a `Row` cannot do.
+	local fn tags(theme: ThemeData) -> table<Widget>
+		local names: table<string> = {
+			"design",
+			"layout",
+			"keyboard",
+			"overlay",
+			"scrolling",
+			"animation",
+			"theming",
+		}
+		local chips: table<Widget> = {}
+
+		for name: string in names do
+			chips[#chips + 1] = Container(
+				color: theme.surface,
+				border: theme.border,
+				radius: 10.0,
+				padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 3.0),
+				child: Text(name, style: theme.caption)
+			)
+		end
+
+		return chips
+	end
+
+	local fn settings(context: BuildContext, scratch: table) -> Widget
+		local theme: ThemeData = Theme.of(context)
+
+		if scratch.notify == nil then
+			scratch.notify = true
+			scratch.sound = false
+			scratch.volume = 0.6
+			scratch.region = "Lithuania"
+			scratch.due = Date.today()
+		end
+
+		-- The scratch is an untyped bag, so each setting is recovered once here
+		-- and read from a typed local below. The fallbacks repeat the seeds above
+		-- so a slot holding something unexpected reverts rather than crashes.
+		local notify: boolean = scratch.notify as boolean ?? true
+		local sound: boolean = scratch.sound as boolean ?? false
+		local volume: float = scratch.volume as float ?? 0.6
+		local region: string = scratch.region as string ?? "Lithuania"
+		local due: Date = scratch.due as Date ?? Date.today()
+
+		local rebuild: function = fn()
+			context.markNeedsBuild()
+		end
+
+		return Column(
+			crossAxisAlignment: CrossAxisAlignment.Stretch,
+			spacing: 10.0,
+			children: {
+				Row(
+					spacing: 18.0,
+					children: {
+						Checkbox(
+							value: notify,
+							label: "Notify me",
+							onChanged: fn(next: boolean)
+								scratch.notify = next
+								rebuild()
+							end
+						),
+						Switch(
+							value: sound,
+							label: "Sound",
+							onChanged: fn(next: boolean)
+								scratch.sound = next
+								rebuild()
+							end
+						),
+						Spacer(),
+						DateField(
+							value: due,
+							width: 190.0,
+							onChanged: fn(picked: Date)
+								scratch.due = picked
+								rebuild()
+							end
+						),
+						Dropdown(
+							value: region,
+							options: {"Lithuania", "Latvia", "Estonia", "Poland"},
+							width: 160.0,
+							onChanged: fn(next: string)
+								scratch.region = next
+								rebuild()
+							end
+						),
+					}
+				),
+				Wrap(spacing: 6.0, runSpacing: 6.0, children: self.tags(theme)),
+				Divider(),
+				Row(
+					spacing: 12.0,
+					children: {
+						Expanded(
+							child: Slider(
+								value: volume,
+								onChanged: fn(next: float)
+									scratch.volume = next
+									rebuild()
+								end
+							)
+						),
+						SizedBox(
+							width: 120.0,
+							child: Align(alignment: Alignment.centerLeft(), child: ProgressBar(value: volume))
+						),
+					}
+				),
+			}
+		)
+	end
+
+	-- Three panes behind a tab strip: a scrollable list, a live CustomPaint
+	-- surface, and the multi-line editor. Only the selected one is built.
+	local fn canvas(context: BuildContext, scratch: table) -> Widget
+		if scratch.tab == nil then
+			scratch.tab = 1
+			scratch.notes = "Type here.\nEnter makes a new line, Ctrl+Z undoes, " .. "Ctrl+arrows move by word, and a double-click selects one."
+		end
+
+		-- Recovered from the untyped scratch once, as with the settings above.
+		local tab: integer = scratch.tab as integer ?? 1
+		local notes: string = scratch.notes as string ?? ""
+
+		return Tabs(
+			tabs: {"List", "Canvas", "Notes"},
+			index: tab,
+			onChanged: fn(next: integer)
+				scratch.tab = next
+				context.markNeedsBuild()
+			end,
+			children: {
+				Padding(EdgeInsets.only(top: 10.0), self.rows(context)),
+				Padding(
+					EdgeInsets.only(top: 10.0),
+					Container(color: Colors.surface, radius: 8.0, clip: true, child: BouncingBall())
+				),
+				Padding(
+					EdgeInsets.only(top: 10.0),
+					TextArea(
+						value: notes,
+						placeholder: "Notes",
+						minLines: 5,
+						onChanged: fn(text: string)
+							scratch.notes = text
+						end
+					)
+				),
+			}
+		)
+	end
+
+	-- Twenty rows in a box that fits about six: scroll it with the wheel. Each
+	-- row is keyed, so reordering the list would carry the elements with it.
+	local fn rows(context: BuildContext) -> Widget
+		local items: table<Widget> = {}
+
+		for i: integer = 1, 20 do
+			local shade: Color = Colors.surface
+
+			if i % 2 == 0 then
+				shade = Colors.surfaceLight
+			end
+
+			items[#items + 1] = Container(
+				key: "row" .. i,
+				color: shade,
+				padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
+				child: Text("item " .. i, style: TextStyle(color: Colors.textMuted))
+			)
+		end
+
+		return GestureDetector(
+			child: Container(
+				color: Colors.surface,
+				radius: 8.0,
+				clip: true,
+				child: ListView(children: items, spacing: 2.0)
+			),
+			onSecondaryTap: fn()
+				-- At the pointer, which is where a context menu belongs.
+				--
+				-- The tap coordinates `onSecondaryTapAt` reports are local to
+				-- the detector that received them, and turning those into
+				-- window coordinates needs *that* element — not this build
+				-- context, which belongs to the whole panel several levels up.
+				-- Adding the panel's origin to a list-local point put the menu
+				-- near the top of the panel instead of under the cursor.
+				local at: Offset = pointerPosition()
+
+				showMenu(
+					context,
+					at.dx,
+					at.dy,
+					items: {
+						MenuItem("Open", fn()
+							showToast(context, "Open")
+						end),
+						MenuItem("Rename", enabled: true) do
+							showToast(context, "Rename")
+						end,
+						MenuItem("Delete") do
+							showToast(context, "Delete")
+						end,
+					}
+				)
+			end
+		)
+	end
+
+	-- `Spacer` eats the slack, so the two buttons after it sit on the right.
+	-- The last three open things that live *above* the panel: a menu, a modal
+	-- dialog, and a tooltip.
+	local fn actions(context: BuildContext) -> Widget
+		return Row(
+			spacing: 10.0,
+			children: {
+				IconButton(
+					icon: Icons.moreVert,
+					tooltip: "Menu",
+					onPressed: fn()
+						self.openMenu(context)
+					end
+				),
+				Text("right-click the list too", style: TextStyle(color: Colors.textMuted)),
+				Spacer(),
+				Button(
+					label: "Delete",
+					color: Colors.danger,
+					onPressed: fn()
+						self.confirmDelete(context)
+					end
+				),
+				Tooltip(
+					message: "Ctrl+S also saves",
+					child: Button(label: "Save", color: Colors.success) do
+						showToast(context, "Saved")
+					end
+				),
+			}
+		)
+	end
+
+	-- A menu at the cursor. `showMenu` keeps it on screen near the edges.
+	local fn openMenu(context: BuildContext) -> nil
+		-- `Mouse.getPos` alone is physical pixels, so this drifted from the
+		-- cursor on a scaled display; `pointerPosition` converts.
+		local at: Offset = pointerPosition()
+
+		showMenu(
+			context,
+			at.dx,
+			at.dy,
+			items: {
+				MenuItem("Duplicate") do
+					println("duplicate")
+				end,
+				MenuItem("Export") do
+					println("export")
+				end,
+				MenuItem("Unavailable", enabled: false),
+			}
+		)
+	end
+
+	-- A modal: focus moves inside it, Tab cannot leave, Esc or the barrier
+	-- closes it.
+	local fn confirmDelete(context: BuildContext) -> nil
+		local handle: OverlayHandle? = nil
+
+		handle = showDialog(
+			context,
+			builder: fn()
+				return Column(
+					crossAxisAlignment: CrossAxisAlignment.Stretch,
+					mainAxisSize: MainAxisSize.Min,
+					spacing: 14.0,
+					children: {
+						Text("Delete this panel?", style: TextStyle(color: Colors.text, size: 18.0)),
+						Text(
+							"Nothing is actually deleted — this is here to show a modal " .. "trapping focus and swallowing clicks behind it.",
+							style: TextStyle(color: Colors.textMuted)
+						),
+						Row(
+							spacing: 10.0,
+							children: {
+								Spacer(),
+								Button(
+									label: "Cancel",
+									color: Colors.surface,
+									onPressed: fn()
+										handle?.dismiss()
+									end
+								),
+								Button(
+									label: "Delete",
+									color: Colors.danger,
+									autofocus: true,
+									onPressed: fn()
+										println("deleted")
+										handle?.dismiss()
+									end
+								),
+							}
+						),
+					}
+				)
+			end
+		)
+	end
+end
+
+-- A tiny simulation, drawn with `CustomPaint`'s sibling: a render widget that
+-- owns per-frame state.
+--
+-- This is the games pattern. `tick` advances the ball and `paint` draws it, both
+-- once per frame — and neither touches the build system, so there is no rebuild
+-- at all. Simulation state lives in element scratch, which survives rebuilds of
+-- everything around it.
+export class BouncingBall extends Widget
+	radius: float
+	color: Color?
+
+	fn init(radius: float = 12.0, color: Color? = nil, key: string? = nil)
+		self.super(key)
+
+		self.radius = radius
+		self.color = color
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		return constraints.biggest()
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		local scratch: table = el.data.scratch
+
+		if scratch.x == nil then
+			scratch.x = self.radius
+			scratch.y = self.radius
+			scratch.dx = 190.0
+			scratch.dy = 145.0
+		end
+
+		-- Nothing to bounce off until the first layout has run.
+		if el.size.width <= 0.0 or el.size.height <= 0.0 then
+			return
+		end
+
+		local dx: float = scratch.dx as float ?? 0.0
+		local dy: float = scratch.dy as float ?? 0.0
+		local x: float = (scratch.x as float ?? 0.0) + dx * dt
+		local y: float = (scratch.y as float ?? 0.0) + dy * dt
+
+		if x < self.radius then
+			x = self.radius
+			dx = -dx
+		elseif x > el.size.width - self.radius then
+			x = el.size.width - self.radius
+			dx = -dx
+		end
+
+		if y < self.radius then
+			y = self.radius
+			dy = -dy
+		elseif y > el.size.height - self.radius then
+			y = el.size.height - self.radius
+			dy = -dy
+		end
+
+		scratch.x = x
+		scratch.y = y
+		scratch.dx = dx
+		scratch.dy = dy
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local scratch: table = el.data.scratch
+
+		if scratch.x == nil then
+			return
+		end
+
+		local ballX: float = scratch.x as float ?? 0.0
+		local ballY: float = scratch.y as float ?? 0.0
+
+		-- A trail, to make it obvious this is running every frame.
+		local trail: Color = (self.color ?? Colors.warning).withAlpha(0.25)
+		trail.apply()
+		Graphics.circle("fill", x + ballX, y + ballY, self.radius * 1.8)
+
+		local fill: Color = self.color ?? Colors.warning
+		fill.apply()
+		Graphics.circle("fill", x + ballX, y + ballY, self.radius)
+
+		-- Through a style rather than `Graphics.print` directly: the style binds
+		-- a font, and drawing raw text would inherit whatever face was last set.
+		TextStyle(color: Colors.textMuted).draw("tick + paint, no rebuilds", x + 8.0, y + 8.0)
+	end
+end

@@ -1,0 +1,464 @@
+import * from Geometry
+import * from Color
+import * from Framework
+import * from Tween
+
+-- ============================================================================
+-- Animation
+-- ============================================================================
+--
+-- `Tween` already knows how to turn elapsed time into an eased 0..1 value. What
+-- was missing is the part that drives it every frame and rebuilds the widgets
+-- that depend on it — that is `AnimationController`, and `AnimatedBuilder` is
+-- the widget that listens.
+
+-- A 0..1 value that advances with the frame clock.
+--
+--     local fade: AnimationController = AnimationController(
+--         duration: 0.4,
+--         easing: EasingTypes.OutCubic
+--     )
+--     fade.forward()
+--
+-- Create it in `State.initState` (or element scratch) so it outlives rebuilds,
+-- and give it to an `AnimatedBuilder`, which advances it and rebuilds while it
+-- runs.
+export class AnimationController
+	-- Seconds for one run.
+	duration: float
+
+	-- Current position, 0 to 1, already eased.
+	value: float
+
+	-- Repeat forever, bouncing back and forth.
+	autoReverse: boolean
+	repeats: boolean
+
+	local tween: Tween
+	local running: boolean
+	local reversing: boolean
+	local elapsed: float
+
+	-- Where the current run started and where it is headed. A run is not always
+	-- 0 → 1: `animateTo` turns back from wherever the value happens to be, and
+	-- these two are what let it.
+	local origin: float
+	local goal: float
+
+	-- Seconds *this* run takes. Equal to `duration` for a full sweep, and
+	-- shorter for a partial one, so the value always moves at the same speed.
+	local runtime: float
+
+	fn init(
+		duration: float = 0.3,
+		easing: EasingTypes = EasingTypes.OutQuad,
+		value: float = 0.0,
+		repeats: boolean = false,
+		autoReverse: boolean = false
+	)
+		self.duration = duration
+		self.value = value
+		self.repeats = repeats
+		self.autoReverse = autoReverse
+		self.tween = Tween(easing)
+		self.running = false
+		self.reversing = false
+		self.elapsed = 0.0
+
+		-- Settled on the seed value: a control built in its "on" state should
+		-- render that way rather than animating into it on the first frame.
+		self.origin = value
+		self.goal = value
+		self.runtime = duration
+	end
+
+	fn setEasing(easing: EasingTypes) -> nil
+		self.tween.setEasingType(easing)
+	end
+
+	fn isRunning() -> boolean
+		return self.running
+	end
+
+	-- Run 0 → 1 from the start.
+	fn forward() -> nil
+		self.start(false)
+	end
+
+	-- Run 1 → 0 from the start.
+	fn reverse() -> nil
+		self.start(true)
+	end
+
+	-- Reverse whichever way it is currently pointing — what a toggle wants.
+	fn toggle() -> nil
+		self.animateTo(1.0 - self.goal)
+	end
+
+	-- Head for `target` *from wherever the value is now*, rather than from the
+	-- far end. This is the one to call for anything driven by a changing state:
+	-- a pointer entering and leaving a button faster than the fade can finish
+	-- would otherwise snap back to the start on every crossing, which is the
+	-- flicker that makes hand-rolled hover animations look broken.
+	--
+	-- The run is shortened in proportion to the distance left, so turning back
+	-- half way costs half the time and the value keeps a constant speed.
+	-- Re-aiming at the target it is already heading for does nothing, so this
+	-- is safe to call every frame — and that is how the widgets here use it.
+	fn animateTo(target: float) -> nil
+		local aim: float = atLeastZero(atMost(target, 1.0))
+
+		if self.running and self.goal == aim then
+			return
+		end
+
+		if self.value == aim then
+			self.goal = aim
+			self.origin = aim
+			self.running = false
+
+			return
+		end
+
+		local distance: float = aim - self.value
+
+		if distance < 0.0 then
+			distance = -distance
+		end
+
+		self.reversing = aim < self.value
+		self.run(self.value, aim, self.duration * distance)
+	end
+
+	-- `animateTo` for the boolean case, which is most of them.
+	fn animate(on: boolean) -> nil
+		if on then
+			self.animateTo(1.0)
+		else
+			self.animateTo(0.0)
+		end
+	end
+
+	fn stop() -> nil
+		self.running = false
+	end
+
+	fn reset() -> nil
+		self.running = false
+		self.elapsed = 0.0
+		self.reversing = false
+		self.value = 0.0
+		self.origin = 0.0
+		self.goal = 0.0
+	end
+
+	-- A full sweep from one end to the other, discarding wherever the value
+	-- was. `repeats` and `autoReverse` restart through here, which is why each
+	-- cycle begins at the end it should rather than mid-flight.
+	local fn start(reversing: boolean) -> nil
+		self.reversing = reversing
+
+		if reversing then
+			self.run(1.0, 0.0, self.duration)
+		else
+			self.run(0.0, 1.0, self.duration)
+		end
+	end
+
+	local fn run(origin: float, goal: float, seconds: float) -> nil
+		self.origin = origin
+		self.goal = goal
+		self.runtime = seconds
+		self.value = origin
+		self.elapsed = 0.0
+		self.running = true
+		self.tween.start(seconds)
+	end
+
+	-- Advance by `dt` seconds. Returns true if the value changed, which is the
+	-- signal `AnimatedBuilder` uses to decide whether a rebuild is needed.
+	fn step(dt: float) -> boolean
+		if not self.running then
+			return false
+		end
+
+		if self.runtime <= 0.0 then
+			self.value = self.goal
+			self.running = false
+
+			return true
+		end
+
+		self.elapsed = self.elapsed + dt
+
+		-- The tween eases 0 → 1 over the run; the endpoints turn that into a
+		-- value. A reversed run is `origin` 1 and `goal` 0, so it needs no
+		-- special case here.
+		local eased: float = self.tween.step(dt)
+		local finished: boolean = self.elapsed >= self.runtime
+
+		if finished then
+			eased = 1.0
+		end
+
+		local before: float = self.value
+
+		self.value = self.origin + (self.goal - self.origin) * eased
+
+		if finished then
+			self.finish()
+		end
+
+		return self.value != before or finished
+	end
+
+	local fn finish() -> nil
+		if self.autoReverse then
+			self.start(not self.reversing)
+
+			return
+		end
+
+		if self.repeats then
+			self.start(self.reversing)
+
+			return
+		end
+
+		self.running = false
+	end
+
+	-- --- reading the value ---------------------------------------------------
+
+	-- Interpolate between two numbers at the current position. (`from` is a
+	-- keyword, so the endpoints are `start` and `target`.)
+	fn lerp(start: float, target: float) -> float
+		return start + (target - start) * self.value
+	end
+
+	fn lerpColor(start: Color, target: Color) -> Color
+		return start.lerp(target, self.value)
+	end
+
+	fn lerpOffset(start: Offset, target: Offset) -> Offset
+		return Offset(self.lerp(start.dx, target.dx), self.lerp(start.dy, target.dy))
+	end
+
+	fn lerpSize(start: Size, target: Size) -> Size
+		return Size(self.lerp(start.width, target.width), self.lerp(start.height, target.height))
+	end
+
+	fn lerpInsets(start: EdgeInsets, target: EdgeInsets) -> EdgeInsets
+		return EdgeInsets(
+			self.lerp(start.left, target.left),
+			self.lerp(start.top, target.top),
+			self.lerp(start.right, target.right),
+			self.lerp(start.bottom, target.bottom)
+		)
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Owning a controller without a State
+-- ----------------------------------------------------------------------------
+--
+-- A controller has to outlive the rebuilds it causes, so it cannot be built in
+-- `build` — but the widgets here are stateless, keeping their interaction flags
+-- in element scratch. These put the controller in the same place, created the
+-- first time it is asked for and found again on every frame after.
+--
+-- `duration` and `easing` are only read when the controller is created; a later
+-- call with different ones finds the original.
+
+-- The controller stored under `name`, created on first use.
+export fn motionIn(
+	scratch: table,
+	name: string,
+	duration: float = 0.16,
+	easing: EasingTypes = EasingTypes.OutQuad,
+	value: float = 0.0
+) -> AnimationController
+	local existing = scratch[name] as AnimationController
+
+	if existing != nil then
+		return existing!
+	end
+
+	local made: AnimationController = AnimationController(
+		duration: duration,
+		easing: easing,
+		value: value
+	)
+
+	scratch[name] = made
+
+	return made
+end
+
+-- The same, for a controller that tracks a boolean — the shape almost every
+-- control here wants:
+--
+--     fn tick(el: Element, dt: float) -> nil
+--         local knob: AnimationController = motionOn(el.data.scratch, "knob", self.on)
+--
+--         if knob.step(dt) then
+--             Repaint.request()
+--         end
+--     end
+--
+-- It seeds itself to match `on` the first time, so a switch built already-on
+-- draws that way instead of sliding in, and re-aims at `on` on every call after.
+export fn motionOn(
+	scratch: table,
+	name: string,
+	on: boolean,
+	duration: float = 0.16,
+	easing: EasingTypes = EasingTypes.OutQuad
+) -> AnimationController
+	local existing = scratch[name] as AnimationController
+
+	if existing != nil then
+		existing!.animate(on)
+
+		return existing!
+	end
+
+	local seed: float = 0.0
+
+	if on then
+		seed = 1.0
+	end
+
+	local made: AnimationController = AnimationController(
+		duration: duration,
+		easing: easing,
+		value: seed
+	)
+
+	scratch[name] = made
+
+	return made
+end
+
+-- Follows a number that keeps moving, which a 0..1 controller cannot do on its
+-- own: a progress bar is handed a new value while the last change is still
+-- easing, and it has to bend towards the new one from wherever it got to.
+--
+-- `current` is the value to draw. `target` re-aims it, and `step` advances it.
+export class Tracker
+	current: float
+
+	local origin: float
+	local goal: float
+	local motion: AnimationController
+
+	fn init(
+		value: float = 0.0,
+		duration: float = 0.22,
+		easing: EasingTypes = EasingTypes.OutCubic
+	)
+		self.current = value
+		self.origin = value
+		self.goal = value
+		self.motion = AnimationController(duration: duration, easing: easing)
+	end
+
+	-- Safe to call every frame: aiming at the target it already has is free.
+	fn target(to: float) -> nil
+		if to == self.goal then
+			return
+		end
+
+		self.origin = self.current
+		self.goal = to
+		self.motion.forward()
+	end
+
+	-- Jump straight there, cancelling whatever run was going. For a value the
+	-- user is dragging: easing towards the pointer is indistinguishable from
+	-- lag, and a slider that trails the mouse feels broken.
+	fn snap(to: float) -> nil
+		self.current = to
+		self.origin = to
+		self.goal = to
+		self.motion.stop()
+	end
+
+	fn step(dt: float) -> boolean
+		if not self.motion.isRunning() then
+			return false
+		end
+
+		self.motion.step(dt)
+
+		local before: float = self.current
+
+		self.current = self.origin + (self.goal - self.origin) * self.motion.value
+
+		return self.current != before
+	end
+end
+
+-- The `Tracker` stored under `name`, created on first use and seeded to `value`
+-- so the first frame draws where it already is.
+export fn trackerIn(
+	scratch: table,
+	name: string,
+	value: float,
+	duration: float = 0.22,
+	easing: EasingTypes = EasingTypes.OutCubic
+) -> Tracker
+	local existing = scratch[name] as Tracker
+
+	if existing != nil then
+		existing!.target(value)
+
+		return existing!
+	end
+
+	local made: Tracker = Tracker(value: value, duration: duration, easing: easing)
+
+	scratch[name] = made
+
+	return made
+end
+
+-- Rebuilds its subtree while a controller runs.
+--
+--     AnimatedBuilder(
+--         controller: fade,
+--         builder: fn(value: float)
+--             return Container(color: Colors.primary.withAlpha(value), ...)
+--         end
+--     )
+--
+-- The builder is `fn(value: float) -> Widget`. This is the only widget that
+-- advances a controller, and it only marks itself dirty on a frame where the
+-- value actually moved — so a finished animation costs one comparison per
+-- frame, not a rebuild.
+--
+-- It is stateless on purpose: the controller is the state, and it lives with
+-- whoever created it. That also means the builder closure is always the fresh
+-- one from the last rebuild, so an animation can safely close over values that
+-- change underneath it.
+export class AnimatedBuilder extends StatelessWidget
+	controller: AnimationController
+	builder: function
+
+	fn init(controller: AnimationController, builder: function, key: string? = nil)
+		self.super(key)
+
+		self.controller = controller
+		self.builder = builder
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		if self.controller.step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget?
+		return self.builder(self.controller.value)
+	end
+end

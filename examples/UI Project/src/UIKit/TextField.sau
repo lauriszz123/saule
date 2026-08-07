@@ -1,0 +1,938 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from Tween
+import * from Animation
+
+-- ============================================================================
+-- Text editing
+-- ============================================================================
+
+-- Half a second on, half a second off, straight off the clock — no rebuild and
+-- no per-frame state. Shared with `TextArea`.
+export fn blinkOn() -> boolean
+	local now: float = Timer.getTime()
+	local second: float = float(int(now))
+	local phase: float = now - second
+
+	-- Reached only from `paint`, and only while a caret is actually on screen.
+	-- Nothing marks a blink dirty, so the frame loop has to be asked back or
+	-- the caret would freeze on whatever phase it stopped at. Asking for the
+	-- next flip rather than the next frame is what keeps an idle text field
+	-- from costing a full repaint sixty times a second.
+	if phase < 0.5 then
+		Repaint.requestAt(second + 0.5)
+
+		return true
+	end
+
+	Repaint.requestAt(second + 1.0)
+
+	return false
+end
+
+-- Whether the character at 1-based position `at` counts as part of a word.
+--
+-- Letters, digits and underscore, plus everything non-ASCII: treating accented
+-- and non-Latin text as word characters is far more often right than wrong, and
+-- the alternative is a Unicode table.
+local fn isWordAt(text: string, at: integer) -> boolean
+	local code: integer? = String.byte(text, at)
+
+	if code == nil then
+		return false
+	end
+
+	local c: integer = code!
+
+	return (c >= 48 and c <= 57)
+		or (c >= 65 and c <= 90)
+		or (c >= 97 and c <= 122)
+		or c == 95
+		or c >= 128
+end
+
+local fn lower(value: integer, other: integer) -> integer
+	if value < other then
+		return value
+	end
+
+	return other
+end
+
+local fn higher(value: integer, other: integer) -> integer
+	if value > other then
+		return value
+	end
+
+	return other
+end
+
+-- Draws a string, a selection highlight, and a caret.
+--
+-- The caret blinks off the wall clock inside `paint` rather than off a rebuild,
+-- so an idle field costs nothing.
+export class EditableText extends Widget
+	text: string
+
+	-- Characters to the left of the caret.
+	caret: integer
+
+	-- The other end of the selection. Equal to `caret` means no selection.
+	anchor: integer
+
+	-- Whether the caret is drawn at all — that is, whether the field has focus.
+	caretVisible: boolean
+
+	style: TextStyle?
+	placeholder: string
+	placeholderStyle: TextStyle?
+	selectionColor: Color?
+
+	fn init(
+		text: string = "",
+		caret: integer = 0,
+		anchor: integer = 0,
+		caretVisible: boolean = false,
+		style: TextStyle? = nil,
+		placeholder: string = "",
+		placeholderStyle: TextStyle? = nil,
+		selectionColor: Color? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.text = text
+		self.caret = caret
+		self.anchor = anchor
+		self.caretVisible = caretVisible
+		self.style = style
+		self.placeholder = placeholder
+		self.placeholderStyle = placeholderStyle
+		self.selectionColor = selectionColor
+	end
+
+	local fn resolved() -> TextStyle
+		return self.style ?? TextStyle()
+	end
+
+	-- Clamp an index into the string — a stale one from a shorter rebuild must
+	-- not slice past the end.
+	local fn clamp(index: integer) -> integer
+		local length: integer = String.len(self.text)
+
+		if index < 0 then
+			return 0
+		end
+
+		if index > length then
+			return length
+		end
+
+		return index
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local style: TextStyle = self.resolved()
+		local shown: string = self.text
+
+		if #shown == 0 then
+			shown = self.placeholder
+		end
+
+		-- The height comes from the font, so an empty field still reserves a
+		-- full line.
+		return constraints.constrain(style.measure(shown))
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local style: TextStyle = self.resolved()
+		local caret: integer = self.clamp(self.caret)
+		local anchor: integer = self.clamp(self.anchor)
+
+		-- Selection sits behind the glyphs.
+		if caret != anchor then
+			local first: integer = lower(caret, anchor)
+			local last: integer = higher(caret, anchor)
+			local left: float = style.measure(String.sub(self.text, 1, first)).width
+			local right: float = style.measure(String.sub(self.text, 1, last)).width
+
+			local wash: Color = self.selectionColor ?? Colors.primary.withAlpha(0.35)
+			wash.apply()
+			Graphics.rectangle("fill", x + left, y, right - left, el.size.height)
+		end
+
+		if #self.text == 0 and #self.placeholder > 0 then
+			local hint: TextStyle = self.placeholderStyle ?? style
+			hint.draw(self.placeholder, x, y)
+		else
+			style.draw(self.text, x, y)
+		end
+
+		-- A visible selection replaces the caret, the way every editor does it.
+		if self.caretVisible and caret == anchor and blinkOn() then
+			-- Measuring rebinds the font, so re-apply the style before drawing.
+			local prefix: float = style.measure(String.sub(self.text, 1, caret)).width
+
+			style.apply()
+			Graphics.setLineWidth(1.0)
+			Graphics.line(x + prefix, y + 1.0, x + prefix, y + el.size.height - 1.0)
+		end
+	end
+end
+
+-- A single-line text input.
+--
+--     TextField(
+--         placeholder: "Your name",
+--         onChanged: fn(text: string)
+--             println(text)
+--         end
+--     )
+--
+-- Callback shapes:
+--
+--     onChanged / onSubmitted   fn(text: string)
+--
+-- `value` seeds the initial contents; after that the field owns its text and
+-- reports edits through `onChanged`. Like `Button` it is stateless, keeping the
+-- text, caret and selection in element scratch, so it always reads fresh config
+-- from its parent while surviving rebuilds.
+--
+-- Editing: typing, backspace, delete, left/right, home/end, and return to
+-- submit. Shift with any movement key extends the selection; Ctrl+A selects
+-- all; Ctrl+C, Ctrl+X and Ctrl+V use the system clipboard. Click to place the
+-- caret, drag to select, and Tab is deliberately left alone so it still moves
+-- focus.
+--
+-- It fills the width it is given. Inside a `Row`, wrap it in `Expanded` or a
+-- `SizedBox` — a row's main axis is unbounded.
+export class TextField extends StatelessWidget
+	value: string
+	placeholder: string
+	onChanged: function?
+	onSubmitted: function?
+
+	style: TextStyle?
+	placeholderStyle: TextStyle?
+	background: Color?
+	border: Color?
+	focusBorder: Color?
+	selectionColor: Color?
+	padding: EdgeInsets?
+	radius: float
+	width: float?
+	enabled: boolean
+	autofocus: boolean
+
+	fn init(
+		value: string = "",
+		placeholder: string = "",
+		onChanged: function? = nil,
+		onSubmitted: function? = nil,
+		style: TextStyle? = nil,
+		placeholderStyle: TextStyle? = nil,
+		background: Color? = nil,
+		border: Color? = nil,
+		focusBorder: Color? = nil,
+		selectionColor: Color? = nil,
+		padding: EdgeInsets? = nil,
+		radius: float = 6.0,
+		width: float? = nil,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.placeholder = placeholder
+		self.onChanged = onChanged
+		self.onSubmitted = onSubmitted
+		self.style = style
+		self.placeholderStyle = placeholderStyle
+		self.background = background
+		self.border = border
+		self.focusBorder = focusBorder
+		self.selectionColor = selectionColor
+		self.padding = padding
+		self.radius = radius
+		self.width = width
+		self.enabled = enabled
+		self.autofocus = autofocus
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		if not self.enabled then
+			return
+		end
+
+		if motionOn(el.data.scratch, "focus", el.data.focused, 0.15).step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local data: ElementData = context.data()
+		local scratch: table = data.scratch
+
+		-- First build at this position: seed from `value`, caret at the end.
+		if scratch.text == nil then
+			scratch.text = self.value
+			scratch.caret = String.len(self.value)
+			scratch.anchor = scratch.caret
+		end
+
+		-- The node has to outlive the rebuild that every keystroke causes, so
+		-- the element owns it. `focused` is the framework's own flag, so it is
+		-- read straight off `data` rather than out of the bag.
+		local node: FocusNode = nodeFor(data)
+		local text: string = (scratch.text as string) ?? ""
+		local caret: integer = (scratch.caret as integer) ?? 0
+		local anchor: integer = (scratch.anchor as integer) ?? 0
+		local focused: boolean = data.focused
+		local style: TextStyle = self.style ?? TextStyle()
+
+		local editor: TextEditor = TextEditor(scratch, context, self.onChanged)
+
+		local body: Widget = Container(
+			child: EditableText(
+				text: text,
+				caret: caret,
+				anchor: anchor,
+				caretVisible: focused,
+				style: self.style,
+				placeholder: self.placeholder,
+				placeholderStyle: self.placeholderStyle ?? TextStyle(color: Colors.textMuted),
+				selectionColor: self.selectionColor
+			),
+			width: self.width,
+			color: self.background ?? Colors.surface,
+			radius: self.radius,
+			border: self.borderColor(focused, data),
+			padding: self.padding ?? EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
+			alignment: Alignment.centerLeft(),
+			clip: true
+		)
+
+		if not self.enabled then
+			return body
+		end
+
+		-- The click coordinate is local to the `GestureDetector`, which wraps
+		-- the padded box, so the text starts one padding-left in.
+		local inset: float = (self.padding ?? EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0)).left
+
+		return Focus(
+			child: MouseRegion(
+				cursor: "ibeam",
+				child: GestureDetector(
+				child: body,
+				onTapDown: fn()
+					node.requestFocus()
+				end,
+				onTapAt: fn(x: float, y: float)
+					editor.placeCaret(style.indexAt(text, x - inset), false)
+				end,
+				onDoubleTapAt: fn(x: float, y: float)
+					editor.selectWord(style.indexAt(text, x - inset))
+				end,
+				onDragTo: fn(x: float, y: float)
+					editor.placeCaret(style.indexAt(text, x - inset), true)
+				end
+				)
+			),
+			node: node,
+			autofocus: self.autofocus,
+			wantsText: true,
+			onText: fn(typed: string)
+				editor.insert(typed)
+
+				return true
+			end,
+			onKeyDown: fn(event: KeyEvent)
+				return self.edit(event, editor)
+			end,
+			onFocusChange: fn(gained: boolean)
+				data.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+
+	-- One editing key. Returns true when the key belonged to the field, so
+	-- everything else — Tab, shortcuts — keeps bubbling.
+	local fn edit(event: KeyEvent, editor: TextEditor) -> boolean
+		local key: string = event.key
+
+		if event.ctrl then
+			if key == "a" then
+				editor.selectAll()
+
+				return true
+			elseif key == "c" then
+				editor.copy()
+
+				return true
+			elseif key == "x" then
+				editor.cut()
+
+				return true
+			elseif key == "v" then
+				editor.paste()
+
+				return true
+			elseif key == "z" then
+				-- Ctrl+Shift+Z is the other redo, for muscle memory that came
+				-- from a different editor.
+				if event.shift then
+					editor.redo()
+				else
+					editor.undo()
+				end
+
+				return true
+			elseif key == "y" then
+				editor.redo()
+
+				return true
+			elseif key == "left" then
+				editor.moveWord(-1, event.shift)
+
+				return true
+			elseif key == "right" then
+				editor.moveWord(1, event.shift)
+
+				return true
+			elseif key == "backspace" then
+				editor.deleteWordBack()
+
+				return true
+			elseif key == "delete" then
+				editor.deleteWordForward()
+
+				return true
+			end
+
+			return false
+		end
+
+		if key == "backspace" then
+			editor.backspace()
+
+			return true
+		elseif key == "delete" then
+			editor.forwardDelete()
+
+			return true
+		elseif key == "left" then
+			editor.move(-1, event.shift)
+
+			return true
+		elseif key == "right" then
+			editor.move(1, event.shift)
+
+			return true
+		elseif key == "home" then
+			editor.placeCaret(0, event.shift)
+
+			return true
+		elseif key == "end" then
+			editor.placeCaret(String.len(editor.text()), event.shift)
+
+			return true
+		elseif key == "return" then
+			local submitted: function? = self.onSubmitted
+			if submitted != nil then
+				submitted(editor.text())
+			end
+
+			return true
+		end
+
+		return false
+	end
+
+	-- Blended rather than switched, so selecting a field is a border easing to
+	-- the accent colour instead of a hard outline appearing around it.
+	local fn borderColor(focused: boolean, data: ElementData) -> Color?
+		local at: float = motionOn(data.scratch, "focus", focused, 0.15).value
+
+		return (self.border ?? Colors.border).lerp(self.focusBorder ?? Colors.primary, at)
+	end
+end
+
+-- The editing operations, over the text and selection held in element scratch.
+--
+-- Pulling them out of `build` keeps the widget readable and puts every mutation
+-- in one place: each one writes the scratch, reports the change, and asks for a
+-- rebuild.
+export class TextEditor
+	local scratch: table
+	local context: BuildContext
+	local onChanged: function?
+
+	fn init(scratch: table, context: BuildContext, onChanged: function? = nil)
+		self.scratch = scratch
+		self.context = context
+		self.onChanged = onChanged
+	end
+
+	-- The scratch is an untyped bag, so these three are the only places that
+	-- recover a type out of it — everything below goes through them rather
+	-- than reading the slots again. An empty field and a caret at the origin
+	-- are the right answers for a slot that was never written.
+	fn text() -> string
+		return (self.scratch.text as string) ?? ""
+	end
+
+	fn caret() -> integer
+		return (self.scratch.caret as integer) ?? 0
+	end
+
+	fn anchor() -> integer
+		return (self.scratch.anchor as integer) ?? 0
+	end
+
+	fn hasSelection() -> boolean
+		return self.caret() != self.anchor()
+	end
+
+	fn selectionStart() -> integer
+		return lower(self.caret(), self.anchor())
+	end
+
+	fn selectionEnd() -> integer
+		return higher(self.caret(), self.anchor())
+	end
+
+	fn selectedText() -> string
+		if not self.hasSelection() then
+			return ""
+		end
+
+		return String.sub(self.text(), self.selectionStart() + 1, self.selectionEnd())
+	end
+
+	-- --- movement ------------------------------------------------------------
+
+	-- Put the caret at `index`. `extend` keeps the anchor, growing a selection;
+	-- otherwise the selection collapses, which is what a plain arrow or a click
+	-- does.
+	fn placeCaret(index: integer, extend: boolean) -> nil
+		local target: integer = self.clamp(index)
+		self.scratch.caret = target
+
+		if not extend then
+			self.scratch.anchor = target
+		end
+
+		self.context.markNeedsBuild()
+	end
+
+	-- Arrow movement. With a selection and no shift, the arrows jump to its
+	-- edges rather than moving one character from the caret.
+	fn move(delta: integer, extend: boolean) -> nil
+		if self.hasSelection() and not extend then
+			if delta < 0 then
+				self.placeCaret(self.selectionStart(), false)
+			else
+				self.placeCaret(self.selectionEnd(), false)
+			end
+
+			return
+		end
+
+		self.placeCaret(self.caret() + delta, extend)
+	end
+
+	fn selectAll() -> nil
+		self.scratch.anchor = 0
+		self.scratch.caret = String.len(self.text())
+		self.context.markNeedsBuild()
+	end
+
+	-- --- editing -------------------------------------------------------------
+
+	fn insert(typed: string) -> nil
+		local first: integer = self.selectionStart()
+		local last: integer = self.selectionEnd()
+		local current: string = self.text()
+
+		-- Typing runs collapse into one undo step, but a space or a newline
+		-- ends the run: undo should go back a word at a time, not a letter.
+		local kind: string = "insert"
+
+		if self.hasSelection() or #typed != 1 or typed == " " or typed == "
+" then
+			kind = "other"
+		end
+
+		self.commit(
+			String.sub(current, 1, first) .. typed .. String.sub(current, last + 1),
+			first + String.len(typed),
+			kind
+		)
+	end
+
+	fn backspace() -> nil
+		if self.hasSelection() then
+			self.deleteSelection()
+
+			return
+		end
+
+		local caret: integer = self.caret()
+
+		if caret == 0 then
+			return
+		end
+
+		local current: string = self.text()
+
+		self.commit(
+			String.sub(current, 1, caret - 1) .. String.sub(current, caret + 1),
+			caret - 1,
+			"delete"
+		)
+	end
+
+	fn forwardDelete() -> nil
+		if self.hasSelection() then
+			self.deleteSelection()
+
+			return
+		end
+
+		local caret: integer = self.caret()
+		local current: string = self.text()
+
+		if caret >= String.len(current) then
+			return
+		end
+
+		self.commit(
+			String.sub(current, 1, caret) .. String.sub(current, caret + 2),
+			caret,
+			"delete"
+		)
+	end
+
+	fn deleteSelection() -> nil
+		if not self.hasSelection() then
+			return
+		end
+
+		local first: integer = self.selectionStart()
+		local current: string = self.text()
+
+		self.commit(
+			String.sub(current, 1, first) .. String.sub(current, self.selectionEnd() + 1),
+			first
+		)
+	end
+
+	-- --- clipboard -----------------------------------------------------------
+
+	fn copy() -> nil
+		if self.hasSelection() then
+			Clipboard.set(self.selectedText())
+		end
+	end
+
+	fn cut() -> nil
+		if self.hasSelection() then
+			Clipboard.set(self.selectedText())
+			self.deleteSelection()
+		end
+	end
+
+	-- Paste, flattening newlines: a single-line field cannot render them, so
+	-- pasting a paragraph into one would otherwise produce text it can't show.
+	fn paste() -> nil
+		local pasted: string = Clipboard.get()
+
+		if #pasted > 0 then
+			self.insert(Table.concat(splitOn(pasted, "\n"), " "))
+		end
+	end
+
+	-- Paste verbatim, newlines and all — what a multi-line editor wants.
+	fn pasteRaw() -> nil
+		local pasted: string = Clipboard.get()
+
+		if #pasted > 0 then
+			self.insert(pasted)
+		end
+	end
+
+	-- --- internals -----------------------------------------------------------
+
+	local fn commit(updated: string, caret: integer, kind: string = "other") -> nil
+		self.record(kind)
+
+		self.scratch.text = updated
+		self.scratch.caret = caret
+		self.scratch.anchor = caret
+		self.context.markNeedsBuild()
+
+		local changed: function? = self.onChanged
+		if changed != nil then
+			changed(updated)
+		end
+	end
+
+	-- --- history -------------------------------------------------------------
+	--
+	-- Undo stores whole snapshots rather than diffs. The text in a field is
+	-- small, and a snapshot cannot drift out of sync with the document the way
+	-- a replayed diff can.
+
+	-- The two history stacks, recovered from the untyped scratch and created
+	-- on first use. Same shape as `text()` / `caret()` above: one `as` per
+	-- slot, here rather than at each of the six call sites.
+	local fn undoStack() -> table<table>
+		local existing: table<table>? = self.scratch.undo as table<table>
+
+		if existing != nil then
+			return existing!
+		end
+
+		local made: table<table> = {}
+		self.scratch.undo = made
+		self.scratch.undoKind = "other"
+
+		return made
+	end
+
+	local fn redoStack() -> table<table>
+		local existing: table<table>? = self.scratch.redo as table<table>
+
+		if existing != nil then
+			return existing!
+		end
+
+		local made: table<table> = {}
+		self.scratch.redo = made
+
+		return made
+	end
+
+	local fn snapshot() -> table
+		return {text: self.text(), caret: self.caret(), anchor: self.anchor()}
+	end
+
+	-- Push the state *before* an edit. Consecutive edits of the same kind keep
+	-- the earlier snapshot, so one undo reverts the whole run.
+	local fn record(kind: string) -> nil
+		local undo: table<table> = self.undoStack()
+
+		if kind != "other" and self.scratch.undoKind == kind and #undo > 0 then
+			self.scratch.redo = {}
+
+			return
+		end
+
+		undo[#undo + 1] = self.snapshot()
+
+		-- Bound the history so a long editing session can't grow without limit.
+		if #undo > 100 then
+			Table.remove(undo, 1)
+		end
+
+		self.scratch.undoKind = kind
+		self.scratch.redo = {}
+	end
+
+	fn canUndo() -> boolean
+		return #self.undoStack() > 0
+	end
+
+	fn canRedo() -> boolean
+		return #self.redoStack() > 0
+	end
+
+	fn undo() -> nil
+		local undo: table<table> = self.undoStack()
+
+		if #undo == 0 then
+			return
+		end
+
+		local entry: table = undo[#undo]
+		Table.remove(undo, #undo)
+
+		local redo: table<table> = self.redoStack()
+		redo[#redo + 1] = self.snapshot()
+
+		self.restore(entry)
+	end
+
+	fn redo() -> nil
+		local redo: table<table> = self.redoStack()
+
+		if #redo == 0 then
+			return
+		end
+
+		local entry: table = redo[#redo]
+		Table.remove(redo, #redo)
+
+		local undo: table<table> = self.undoStack()
+		undo[#undo + 1] = self.snapshot()
+
+		self.restore(entry)
+	end
+
+	local fn restore(entry: table) -> nil
+		self.scratch.text = entry.text
+		self.scratch.caret = entry.caret
+		self.scratch.anchor = entry.anchor
+		-- The next edit starts a fresh run rather than merging into whatever
+		-- was being typed before the undo.
+		self.scratch.undoKind = "other"
+		self.context.markNeedsBuild()
+
+		local changed: function? = self.onChanged
+		if changed != nil then
+			changed(entry.text)
+		end
+	end
+
+	-- --- words ---------------------------------------------------------------
+
+	-- Move by word. Skips any run of separators, then the word itself, which is
+	-- what Ctrl+arrow does everywhere else.
+	fn moveWord(direction: integer, extend: boolean) -> nil
+		if direction < 0 then
+			self.placeCaret(self.wordStart(self.caret()), extend)
+		else
+			self.placeCaret(self.wordEnd(self.caret()), extend)
+		end
+	end
+
+	-- Start of the word at or before `index`.
+	fn wordStart(index: integer) -> integer
+		local at: integer = index
+
+		while at > 0 and not isWordAt(self.text(), at) do
+			at = at - 1
+		end
+
+		while at > 0 and isWordAt(self.text(), at) do
+			at = at - 1
+		end
+
+		return at
+	end
+
+	-- End of the word at or after `index`.
+	fn wordEnd(index: integer) -> integer
+		local length: integer = String.len(self.text())
+		local at: integer = index
+
+		while at < length and not isWordAt(self.text(), at + 1) do
+			at = at + 1
+		end
+
+		while at < length and isWordAt(self.text(), at + 1) do
+			at = at + 1
+		end
+
+		return at
+	end
+
+	-- Select the word under `index` — what a double-click does. On a run of
+	-- separators it selects that run instead, so double-clicking a gap still
+	-- selects something.
+	fn selectWord(index: integer) -> nil
+		local text: string = self.text()
+		local length: integer = String.len(text)
+		local at: integer = index
+
+		if at >= length then
+			at = length
+		end
+
+		local wordy: boolean = isWordAt(text, at + 1)
+
+		if at > 0 and not wordy then
+			wordy = isWordAt(text, at)
+		end
+
+		local first: integer = at
+		local last: integer = at
+
+		while first > 0 and isWordAt(text, first) == wordy do
+			first = first - 1
+		end
+
+		while last < length and isWordAt(text, last + 1) == wordy do
+			last = last + 1
+		end
+
+		self.scratch.anchor = first
+		self.scratch.caret = last
+		self.context.markNeedsBuild()
+	end
+
+	fn deleteWordBack() -> nil
+		if self.hasSelection() then
+			self.deleteSelection()
+
+			return
+		end
+
+		local caret: integer = self.caret()
+		local start: integer = self.wordStart(caret)
+
+		if start == caret then
+			return
+		end
+
+		local current: string = self.text()
+
+		self.commit(
+			String.sub(current, 1, start) .. String.sub(current, caret + 1),
+			start
+		)
+	end
+
+	fn deleteWordForward() -> nil
+		if self.hasSelection() then
+			self.deleteSelection()
+
+			return
+		end
+
+		local caret: integer = self.caret()
+		local stop: integer = self.wordEnd(caret)
+
+		if stop == caret then
+			return
+		end
+
+		local current: string = self.text()
+
+		self.commit(String.sub(current, 1, caret) .. String.sub(current, stop + 1), caret)
+	end
+
+	local fn clamp(index: integer) -> integer
+		local length: integer = String.len(self.text())
+
+		if index < 0 then
+			return 0
+		end
+
+		if index > length then
+			return length
+		end
+
+		return index
+	end
+end

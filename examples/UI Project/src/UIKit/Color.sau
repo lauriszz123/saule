@@ -1,0 +1,76 @@
+import * from engine
+
+export class Color
+	r: float
+	g: float
+	b: float
+	a: float
+
+	fn init(r: float, g: float, b: float, a: float = 1.0)
+		self.r = r
+		self.g = g
+		self.b = b
+		self.a = a
+	end
+
+	-- Make this the active draw colour.
+	fn apply() -> nil
+		Graphics.setColor(self.r, self.g, self.b, self.a)
+	end
+
+	fn withAlpha(a: float) -> Color
+		return Color(self.r, self.g, self.b, a)
+	end
+
+	-- Blend towards `other`; `t` runs 0 (self) to 1 (other).
+	fn lerp(other: Color, t: float) -> Color
+		return Color(
+			self.r + (other.r - self.r) * t,
+			self.g + (other.g - self.g) * t,
+			self.b + (other.b - self.b) * t,
+			self.a + (other.a - self.a) * t
+		)
+	end
+
+	-- Multiply every channel — `scale(1.15)` lightens, `scale(0.85)` darkens.
+	fn scale(factor: float) -> Color
+		return Color(self.r * factor, self.g * factor, self.b * factor, self.a)
+	end
+
+	static fn rgb(r: integer, g: integer, b: integer) -> Color
+		return Color(float(r) / 255.0, float(g) / 255.0, float(b) / 255.0, 1.0)
+	end
+
+	static fn rgba(r: integer, g: integer, b: integer, a: float) -> Color
+		return Color(float(r) / 255.0, float(g) / 255.0, float(b) / 255.0, a)
+	end
+
+	-- 0xRRGGBB, the way you'd copy it out of a design tool.
+	static fn hex(value: integer) -> Color
+		local r: integer = (value / 65536) % 256
+		local g: integer = (value / 256) % 256
+		local b: integer = value % 256
+
+		return Color.rgb(r, g, b)
+	end
+end
+
+-- A small palette. It lives on its own class because a static field cannot
+-- reference the class it is declared in.
+export class Colors
+	static transparent: Color = Color(0.0, 0.0, 0.0, 0.0)
+	static black: Color = Color(0.0, 0.0, 0.0)
+	static white: Color = Color(1.0, 1.0, 1.0)
+
+	static surface: Color = Color.rgb(24, 26, 31)
+	static surfaceLight: Color = Color.rgb(38, 41, 48)
+	static border: Color = Color.rgb(58, 63, 74)
+
+	static text: Color = Color.rgb(236, 238, 244)
+	static textMuted: Color = Color.rgb(150, 157, 173)
+
+	static primary: Color = Color.rgb(96, 132, 220)
+	static success: Color = Color.rgb(86, 176, 118)
+	static warning: Color = Color.rgb(216, 168, 84)
+	static danger: Color = Color.rgb(212, 92, 92)
+end

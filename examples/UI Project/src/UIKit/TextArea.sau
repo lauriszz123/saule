@@ -1,0 +1,628 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from ThemeData
+import * from Theme
+import * from TextField
+import * from Tween
+import * from Animation
+
+-- ============================================================================
+-- Multi-line editing
+-- ============================================================================
+--
+-- `TextField` edits one line; this edits many. The string operations are the
+-- same — `TextEditor` already does them — so everything here is about the
+-- second dimension: which visual line a caret index falls on, and which index a
+-- point on screen corresponds to.
+
+-- The line structure of a piece of text at a given width.
+--
+-- Built from `TextStyle.wrapIndices`, which returns *start indices*, so every
+-- mapping below is exact even when a break swallowed a space or the text
+-- contains runs of them.
+export class LineMap
+	local text: string
+	local starts: table<integer>
+	local style: TextStyle
+
+	fn init(text: string, style: TextStyle, maxWidth: float, softWrap: boolean = true)
+		self.text = text
+		self.style = style
+		self.starts = style.wrapIndices(text, maxWidth, softWrap)
+	end
+
+	fn count() -> integer
+		return #self.starts
+	end
+
+	-- 1-based index of the first character on `line`.
+	fn startOf(line: integer) -> integer
+		local clamped: integer = self.clampLine(line)
+
+		return self.starts[clamped]
+	end
+
+	-- Index one past the last character on `line`, not counting the newline.
+	fn endOf(line: integer) -> integer
+		local clamped: integer = self.clampLine(line)
+
+		if clamped >= #self.starts then
+			return String.len(self.text) + 1
+		end
+
+		local next: integer = self.starts[clamped + 1]
+
+		-- A hard break leaves the newline itself at the end of the line.
+		if String.sub(self.text, next - 1, next - 1) == "\n" then
+			return next - 1
+		end
+
+		return next
+	end
+
+	fn textOf(line: integer) -> string
+		return String.sub(self.text, self.startOf(line), self.endOf(line) - 1)
+	end
+
+	-- Which line a caret index sits on.
+	--
+	-- `starts` holds *character* positions while a caret index counts the
+	-- characters to its left, so the caret at the start of line `n` is
+	-- `starts[n] - 1`. Getting that boundary wrong puts the caret at the end of
+	-- the previous line the moment you press Enter.
+	fn lineAt(index: integer) -> integer
+		local line: integer = 1
+		local i: integer = 1
+
+		while i <= #self.starts do
+			if self.starts[i] - 1 <= index then
+				line = i
+			end
+
+			i = i + 1
+		end
+
+		return line
+	end
+
+	-- Characters from the start of the line to `index`.
+	fn columnAt(index: integer) -> integer
+		return index - self.startOf(self.lineAt(index)) + 1
+	end
+
+	-- The index at `column` on `line`, clamped to that line's length.
+	fn indexOf(line: integer, column: integer) -> integer
+		local start: integer = self.startOf(line)
+		local stop: integer = self.endOf(line)
+		local target: integer = start + column - 1
+
+		if target < start then
+			return start - 1
+		end
+
+		if target > stop - 1 then
+			return stop - 1
+		end
+
+		return target
+	end
+
+	-- Caret index for a point in the text's own coordinate space.
+	fn indexAtPoint(x: float, y: float) -> integer
+		local height: float = self.style.lineHeight()
+		local line: integer = self.clampLine(int(y / height) + 1)
+		local within: integer = self.style.indexAt(self.textOf(line), x)
+
+		return self.startOf(line) + within - 1
+	end
+
+	-- Where the caret sits on screen, relative to the text's top-left.
+	fn pointAt(index: integer) -> Offset
+		local line: integer = self.lineAt(index)
+		local prefix: string = String.sub(self.text, self.startOf(line), index)
+
+		return Offset(self.style.measure(prefix).width, self.style.lineHeight() * float(line - 1))
+	end
+
+	local fn clampLine(line: integer) -> integer
+		if line < 1 then
+			return 1
+		end
+
+		if line > #self.starts then
+			return #self.starts
+		end
+
+		return line
+	end
+end
+
+-- Draws multi-line text, a selection that spans lines, and a caret.
+export class EditableParagraph extends Widget
+	text: string
+	caret: integer
+	anchor: integer
+	caretVisible: boolean
+	style: TextStyle?
+	placeholder: string
+	placeholderStyle: TextStyle?
+	selectionColor: Color?
+	softWrap: boolean
+
+	fn init(
+		text: string = "",
+		caret: integer = 0,
+		anchor: integer = 0,
+		caretVisible: boolean = false,
+		style: TextStyle? = nil,
+		placeholder: string = "",
+		placeholderStyle: TextStyle? = nil,
+		selectionColor: Color? = nil,
+		softWrap: boolean = true,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.text = text
+		self.caret = caret
+		self.anchor = anchor
+		self.caretVisible = caretVisible
+		self.style = style
+		self.placeholder = placeholder
+		self.placeholderStyle = placeholderStyle
+		self.selectionColor = selectionColor
+		self.softWrap = softWrap
+	end
+
+	fn resolved() -> TextStyle
+		return self.style ?? TextStyle()
+	end
+
+	-- The map is rebuilt only when the text or the width changes; a caret move
+	-- is far more common than an edit, and it doesn't affect line structure.
+	fn mapFor(el: Element, maxWidth: float) -> LineMap
+		local signature: string = String.format("%s|%.1f", self.text, maxWidth)
+		local cached: LineMap? = el.data.scratch.map as LineMap
+
+		if el.data.scratch.mapKey != signature or cached == nil then
+			local made: LineMap = LineMap(self.text, self.resolved(), maxWidth, self.softWrap)
+
+			el.data.scratch.mapKey = signature
+			el.data.scratch.map = made
+			return made
+		end
+
+		return cached!
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local style: TextStyle = self.resolved()
+		local map: LineMap = self.mapFor(el, constraints.maxWidth)
+		local widest: float = 0.0
+		local i: integer = 1
+
+		while i <= map.count() do
+			widest = atLeast(widest, style.measure(map.textOf(i)).width)
+			i = i + 1
+		end
+
+		if #self.text == 0 and #self.placeholder > 0 then
+			widest = atLeast(widest, style.measure(self.placeholder).width)
+		end
+
+		return constraints.constrain(Size(widest, style.lineHeight() * float(map.count())))
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local style: TextStyle = self.resolved()
+		local map: LineMap = self.mapFor(el, el.size.width)
+		local height: float = style.lineHeight()
+
+		if #self.text == 0 and #self.placeholder > 0 then
+			local hint: TextStyle = self.placeholderStyle ?? style
+			hint.draw(self.placeholder, x, y)
+		end
+
+		-- Selection first, so the glyphs land on top of it.
+		if self.caret != self.anchor then
+			self.paintSelection(map, style, x, y, height)
+		end
+
+		local i: integer = 1
+
+		while i <= map.count() do
+			style.draw(map.textOf(i), x, y + height * float(i - 1))
+			i = i + 1
+		end
+
+		if self.caretVisible and self.caret == self.anchor and blinkOn() then
+			local at: Offset = map.pointAt(self.caret)
+
+			style.apply()
+			Graphics.setLineWidth(1.0)
+			Graphics.line(x + at.dx, y + at.dy + 1.0, x + at.dx, y + at.dy + height - 1.0)
+		end
+	end
+
+	-- One rectangle per line the selection touches: full width in the middle,
+	-- partial at the two ends.
+	local fn paintSelection(
+		map: LineMap,
+		style: TextStyle,
+		x: float,
+		y: float,
+		height: float
+	) -> nil
+		local first: integer = self.caret
+		local last: integer = self.anchor
+
+		if first > last then
+			first = self.anchor
+			last = self.caret
+		end
+
+		local firstLine: integer = map.lineAt(first)
+		local lastLine: integer = map.lineAt(last)
+		local wash: Color = self.selectionColor ?? Colors.primary.withAlpha(0.35)
+
+		local line: integer = firstLine
+
+		while line <= lastLine do
+			local start: integer = map.startOf(line)
+			local stop: integer = map.endOf(line)
+			local runStart: integer = start - 1
+			local runEnd: integer = stop - 1
+
+			if line == firstLine then
+				runStart = first
+			end
+
+			if line == lastLine then
+				runEnd = last
+			end
+
+			local left: float = style.measure(String.sub(map.textOf(line), 1, runStart - start + 1)).width
+			local right: float = style.measure(String.sub(map.textOf(line), 1, runEnd - start + 1)).width
+
+			wash.apply()
+			Graphics.rectangle("fill", x + left, y + height * float(line - 1), right - left, height)
+
+			line = line + 1
+		end
+	end
+end
+
+-- A multi-line text editor.
+--
+--     TextArea(
+--         value: notes,
+--         minLines: 4,
+--         onChanged: fn(text: string)
+--             notes = text
+--         end
+--     )
+--
+-- Everything `TextField` does, plus: Enter inserts a newline instead of
+-- submitting, up and down move between lines keeping the column, Home and End
+-- work on the current line, and the selection spans lines. Text wraps to the
+-- width it is given.
+--
+-- Give it a bounded height — an `Expanded`, a `SizedBox`, or `minLines` — and
+-- wrap it in a `SingleChildScrollView` if the content can outgrow that.
+export class TextArea extends StatelessWidget
+	value: string
+	placeholder: string
+	onChanged: function?
+
+	style: TextStyle?
+	placeholderStyle: TextStyle?
+	background: Color?
+	border: Color?
+	focusBorder: Color?
+	selectionColor: Color?
+	padding: EdgeInsets?
+	radius: float
+	width: float?
+
+	-- Height floor, in lines. The box never shrinks below this.
+	minLines: integer
+
+	enabled: boolean
+	autofocus: boolean
+	softWrap: boolean
+
+	fn init(
+		value: string = "",
+		placeholder: string = "",
+		onChanged: function? = nil,
+		style: TextStyle? = nil,
+		placeholderStyle: TextStyle? = nil,
+		background: Color? = nil,
+		border: Color? = nil,
+		focusBorder: Color? = nil,
+		selectionColor: Color? = nil,
+		padding: EdgeInsets? = nil,
+		radius: float = 6.0,
+		width: float? = nil,
+		minLines: integer = 3,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		softWrap: boolean = true,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.value = value
+		self.placeholder = placeholder
+		self.onChanged = onChanged
+		self.style = style
+		self.placeholderStyle = placeholderStyle
+		self.background = background
+		self.border = border
+		self.focusBorder = focusBorder
+		self.selectionColor = selectionColor
+		self.padding = padding
+		self.radius = radius
+		self.width = width
+		self.minLines = minLines
+		self.enabled = enabled
+		self.autofocus = autofocus
+		self.softWrap = softWrap
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		if not self.enabled then
+			return
+		end
+
+		if motionOn(el.data.scratch, "focus", el.data.focused, 0.15).step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local data: ElementData = context.data()
+		local scratch: table = data.scratch
+
+		if scratch.text == nil then
+			scratch.text = self.value
+			scratch.caret = String.len(self.value)
+			scratch.anchor = scratch.caret
+		end
+
+		local node: FocusNode = nodeFor(data)
+		local focused: boolean = data.focused
+		local style: TextStyle = self.style ?? theme.body
+		local editor: TextEditor = TextEditor(scratch, context, self.onChanged)
+		local padding: EdgeInsets = self.padding ?? EdgeInsets.all(10.0)
+
+		local paragraph: EditableParagraph = EditableParagraph(
+			text: editor.text(),
+			caret: editor.caret(),
+			anchor: editor.anchor(),
+			caretVisible: focused,
+			style: style,
+			placeholder: self.placeholder,
+			placeholderStyle: self.placeholderStyle ?? theme.caption,
+			selectionColor: self.selectionColor ?? theme.selection,
+			softWrap: self.softWrap
+		)
+
+		local edge: Color = (self.border ?? theme.border).lerp(
+			self.focusBorder ?? theme.primary,
+			motionOn(scratch, "focus", focused, 0.15).value
+		)
+
+		local body: Widget = Container(
+			child: SizedBox(
+				height: style.lineHeight() * float(self.minLines),
+				child: Align(alignment: Alignment.topLeft(), child: paragraph)
+			),
+			width: self.width,
+			color: self.background ?? theme.surface,
+			radius: self.radius,
+			border: edge,
+			padding: padding,
+			clip: true
+		)
+
+		if not self.enabled then
+			return body
+		end
+
+		-- Clicks arrive in the padded box's space; the text starts one padding
+		-- in from its top-left.
+		local seek: function = fn(x: float, y: float, extend: boolean)
+			local map: LineMap = LineMap(
+				editor.text(),
+				style,
+				self.textWidth(context, padding),
+				self.softWrap
+			)
+
+			editor.placeCaret(map.indexAtPoint(x - padding.left, y - padding.top), extend)
+		end
+
+		return Focus(
+			child: MouseRegion(
+				cursor: "ibeam",
+				child: GestureDetector(
+				child: body,
+				onTapDown: fn()
+					node.requestFocus()
+				end,
+				onTapAt: fn(x: float, y: float)
+					seek(x, y, false)
+				end,
+				onDoubleTapAt: fn(x: float, y: float)
+					local map: LineMap = LineMap(
+						editor.text(),
+						style,
+						self.textWidth(context, padding),
+						self.softWrap
+					)
+
+					editor.selectWord(map.indexAtPoint(x - padding.left, y - padding.top))
+				end,
+				onDragTo: fn(x: float, y: float)
+					seek(x, y, true)
+				end
+				)
+			),
+			node: node,
+			autofocus: self.autofocus,
+			wantsText: true,
+			onText: fn(typed: string)
+				editor.insert(typed)
+
+				return true
+			end,
+			onKeyDown: fn(event: KeyEvent)
+				return self.edit(event, editor, style, self.textWidth(context, padding))
+			end,
+			onFocusChange: fn(gained: boolean)
+				data.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+
+	-- Width available to the text itself, once the box's padding is removed.
+	local fn textWidth(context: BuildContext, padding: EdgeInsets) -> float
+		local outer: float = context.size().width
+
+		if outer <= 0.0 then
+			return Math.huge
+		end
+
+		return atLeastZero(outer - padding.horizontal())
+	end
+
+	-- Multi-line keys. Anything not handled here falls through to `TextField`'s
+	-- shared behaviour, so the two stay consistent.
+	local fn edit(
+		event: KeyEvent,
+		editor: TextEditor,
+		style: TextStyle,
+		width: float
+	) -> boolean
+		local key: string = event.key
+
+		if event.ctrl then
+			if key == "a" then
+				editor.selectAll()
+
+				return true
+			elseif key == "c" then
+				editor.copy()
+
+				return true
+			elseif key == "x" then
+				editor.cut()
+
+				return true
+			elseif key == "v" then
+				editor.pasteRaw()
+
+				return true
+			elseif key == "z" then
+				if event.shift then
+					editor.redo()
+				else
+					editor.undo()
+				end
+
+				return true
+			elseif key == "y" then
+				editor.redo()
+
+				return true
+			elseif key == "left" then
+				editor.moveWord(-1, event.shift)
+
+				return true
+			elseif key == "right" then
+				editor.moveWord(1, event.shift)
+
+				return true
+			elseif key == "backspace" then
+				editor.deleteWordBack()
+
+				return true
+			elseif key == "delete" then
+				editor.deleteWordForward()
+
+				return true
+			end
+
+			return false
+		end
+
+		-- Enter is a newline here, not a submit.
+		if key == "return" then
+			editor.insert("\n")
+
+			return true
+		end
+
+		if key == "up" or key == "down" or key == "home" or key == "end" then
+			local map: LineMap = LineMap(editor.text(), style, width, self.softWrap)
+			local caret: integer = editor.caret()
+			local line: integer = map.lineAt(caret)
+
+			if key == "home" then
+				editor.placeCaret(map.startOf(line) - 1, event.shift)
+
+				return true
+			end
+
+			if key == "end" then
+				editor.placeCaret(map.endOf(line) - 1, event.shift)
+
+				return true
+			end
+
+			local column: integer = map.columnAt(caret)
+			local target: integer = line - 1
+
+			if key == "down" then
+				target = line + 1
+			end
+
+			if target < 1 or target > map.count() then
+				return true
+			end
+
+			editor.placeCaret(map.indexOf(target, column), event.shift)
+
+			return true
+		end
+
+		if key == "backspace" then
+			editor.backspace()
+
+			return true
+		elseif key == "delete" then
+			editor.forwardDelete()
+
+			return true
+		elseif key == "left" then
+			editor.move(-1, event.shift)
+
+			return true
+		elseif key == "right" then
+			editor.move(1, event.shift)
+
+			return true
+		end
+
+		return false
+	end
+end

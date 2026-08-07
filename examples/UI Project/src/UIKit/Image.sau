@@ -1,0 +1,227 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from Framework
+
+-- ============================================================================
+-- Images and sprites
+-- ============================================================================
+
+-- Loads PNGs once and hands back engine handles.
+--
+-- Decoding is not cheap and a widget's `layout` runs every frame, so the cache
+-- is what makes `Image(path: "icon.png")` safe to write inside a `build`.
+-- Handles are process-wide, matching the engine's own registry.
+export class Images
+	static local handles: table = {}
+	static local failed: table = {}
+
+	-- The handle for `path`, or nil if it could not be loaded. A failed path is
+	-- remembered so a missing file doesn't retry the decode 60 times a second.
+	--
+	-- A missing file is checked for rather than caught: an error raised inside a
+	-- native call is fatal in Saule, not catchable by `try`. That covers the
+	-- case that actually happens — a typo'd or not-yet-copied asset. A file that
+	-- exists but isn't a valid PNG is still a hard error, and should be: that is
+	-- a broken build, not a missing one.
+	static fn load(path: string) -> integer?
+		local cached = handles[path]
+
+		if cached != nil then
+			return cached
+		end
+
+		if failed[path] == true then
+			return nil
+		end
+
+		local probe: File? = Io.open(path, IoMode.Read)
+
+		if probe == nil then
+			failed[path] = true
+			println("Images.load: cannot open " .. path)
+
+			return nil
+		end
+
+		probe!.close()
+
+		local handle: integer = Graphics.newImage(path)
+		handles[path] = handle
+
+		return handle
+	end
+
+	static fn size(path: string) -> Size
+		local handle: integer? = Images.load(path)
+
+		if handle == nil then
+			return Size.zero()
+		end
+
+		local width: integer, height: integer = Graphics.imageSize(handle!)
+
+		return Size(float(width), float(height))
+	end
+
+	-- Drop the cache: call it if assets changed on disk and you want a reload.
+	static fn clear() -> nil
+		Images.handles = {}
+		Images.failed = {}
+	end
+end
+
+-- How an image fills a box that isn't its natural shape.
+export enum BoxFit
+	-- Natural size, no scaling.
+	None,
+	-- Stretch to the box, ignoring the aspect ratio.
+	Fill,
+	-- Scale down to fit inside, keeping the aspect ratio. Leaves empty space.
+	Contain,
+	-- Scale up to cover the box, keeping the aspect ratio. Crops the overflow.
+	Cover
+end
+
+-- Draw a PNG.
+--
+--     Image(path: "assets/logo.png", height: 64.0, fit: BoxFit.Contain)
+--
+-- With no `width` / `height` it takes the image's natural size. `frame`
+-- selects a cell out of a spritesheet, in image pixels.
+export class Image extends Widget
+	path: string
+	fit: BoxFit
+	width: float?
+	height: float?
+
+	-- Source rectangle for a spritesheet cell. Nil draws the whole image.
+	frame: Rect?
+
+	-- Tints the image; the engine multiplies it into every pixel.
+	color: Color?
+
+	fn init(
+		path: string = "",
+		fit: BoxFit = BoxFit.Contain,
+		width: float? = nil,
+		height: float? = nil,
+		frame: Rect? = nil,
+		color: Color? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.path = path
+		self.fit = fit
+		self.width = width
+		self.height = height
+		self.frame = frame
+		self.color = color
+	end
+
+	-- The pixel size of what will be drawn: the frame if there is one, else the
+	-- whole image.
+	local fn source() -> Size
+		local frame: Rect? = self.frame
+
+		if frame != nil then
+			return Size(frame!.width, frame!.height)
+		end
+
+		return Images.size(self.path)
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local natural: Size = self.source()
+		local width: float? = self.width
+		local height: float? = self.height
+
+		local target: Size = natural
+
+		if width != nil and height != nil then
+			target = Size(width!, height!)
+		elseif width != nil then
+			-- One axis given: keep the aspect ratio unless told to Fill.
+			target = Size(width!, self.scaleHeight(natural, width!))
+		elseif height != nil then
+			target = Size(self.scaleWidth(natural, height!), height!)
+		end
+
+		return constraints.constrain(target)
+	end
+
+	local fn scaleHeight(natural: Size, width: float) -> float
+		if natural.width <= 0.0 then
+			return 0.0
+		end
+
+		return natural.height * width / natural.width
+	end
+
+	local fn scaleWidth(natural: Size, height: float) -> float
+		if natural.height <= 0.0 then
+			return 0.0
+		end
+
+		return natural.width * height / natural.height
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local handle: integer? = Images.load(self.path)
+
+		if handle == nil then
+			return
+		end
+
+		local natural: Size = self.source()
+
+		if natural.width <= 0.0 or natural.height <= 0.0 then
+			return
+		end
+
+		local scaleX: float = el.size.width / natural.width
+		local scaleY: float = el.size.height / natural.height
+
+		-- Aspect-preserving fits use one scale for both axes; `None` uses none.
+		if self.fit == BoxFit.None then
+			scaleX = 1.0
+			scaleY = 1.0
+		elseif self.fit == BoxFit.Contain then
+			local uniform: float = atMost(scaleX, scaleY)
+			scaleX = uniform
+			scaleY = uniform
+		elseif self.fit == BoxFit.Cover then
+			local uniform: float = atLeast(scaleX, scaleY)
+			scaleX = uniform
+			scaleY = uniform
+		end
+
+		-- Centre whatever the scale produced inside the box.
+		local drawn: Size = Size(natural.width * scaleX, natural.height * scaleY)
+		local left: float = x + (el.size.width - drawn.width) / 2.0
+		local top: float = y + (el.size.height - drawn.height) / 2.0
+
+		local tint: Color = self.color ?? Colors.white
+		tint.apply()
+
+		local frame: Rect? = self.frame
+
+		if frame == nil then
+			Graphics.draw(handle!, left, top, 0.0, scaleX, scaleY)
+		else
+			Graphics.drawFrame(
+				handle!,
+				frame!.x,
+				frame!.y,
+				frame!.width,
+				frame!.height,
+				left,
+				top,
+				0.0,
+				scaleX,
+				scaleY
+			)
+		end
+	end
+end

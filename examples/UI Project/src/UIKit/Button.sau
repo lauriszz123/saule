@@ -1,0 +1,191 @@
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from Tween
+import * from Animation
+
+-- A labelled, clickable box.
+--
+--     Button(label: "Save", onPressed: fn() save() end)
+--
+-- Interesting bit: `Button` is *stateless*, yet it reacts to hover, press and
+-- focus. Those flags live in `context.data()` — scratch storage that belongs to
+-- the element rather than the widget, so it survives the rebuild each hover
+-- transition triggers. Reach for `StatefulWidget` when the state grows past
+-- this; a few interaction booleans don't need a `State` object.
+--
+-- It is keyboard-operable: Tab moves focus to it, Enter or Space presses it,
+-- and a focus ring is drawn while it holds focus.
+export class Button extends StatelessWidget
+	label: string
+	onPressed: function?
+
+	color: Color?
+	textColor: Color?
+	textSize: float?
+	padding: EdgeInsets?
+	radius: float
+	enabled: boolean
+	autofocus: boolean
+
+	fn init(
+		label: string = "",
+		onPressed: function? = nil,
+		color: Color? = nil,
+		textColor: Color? = nil,
+		textSize: float? = nil,
+		padding: EdgeInsets? = nil,
+		radius: float = 6.0,
+		enabled: boolean = true,
+		autofocus: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.label = label
+		self.onPressed = onPressed
+		self.color = color
+		self.textColor = textColor
+		self.textSize = textSize
+		self.padding = padding
+		self.radius = radius
+		self.enabled = enabled
+		self.autofocus = autofocus
+	end
+
+	-- Hover, press and focus each fade rather than switch. The controllers live
+	-- in element scratch beside the flags they follow, and `motionOn` re-aims
+	-- them at the current flag every frame — so a pointer crossing the button
+	-- faster than the fade turns back from where it got to instead of snapping.
+	--
+	-- The rebuild only happens on frames where a value actually moved, which is
+	-- roughly a tenth of a second per interaction and nothing at rest.
+	fn tick(el: Element, dt: float) -> nil
+		if not self.enabled then
+			return
+		end
+
+		local bag: table = el.data.scratch
+		local hover: AnimationController = motionOn(bag, "hover", el.data.hovered == true, 0.14)
+		local press: AnimationController = motionOn(bag, "press", el.data.pressed == true, 0.09)
+		local ring: AnimationController = motionOn(bag, "ring", el.data.focused == true, 0.12)
+
+		-- Each has to be stepped, so the results are collected rather than
+		-- being `or`-ed inline, which would skip the later ones.
+		local moved: boolean = hover.step(dt)
+
+		if press.step(dt) then
+			moved = true
+		end
+
+		if ring.step(dt) then
+			moved = true
+		end
+
+		if moved then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local scratch: ElementData = context.data()
+		local hovered: boolean = scratch.hovered == true
+		local pressed: boolean = scratch.pressed == true
+		local focused: boolean = scratch.focused == true
+
+		-- The node has to survive the rebuild that every hover or focus change
+		-- causes, so it lives in the element scratch rather than the widget.
+		local node: FocusNode = nodeFor(scratch)
+
+		local bag: table = scratch.scratch
+		local hoverAt: float = motionOn(bag, "hover", hovered, 0.14).value
+		local pressAt: float = motionOn(bag, "press", pressed, 0.09).value
+		local ringAt: float = motionOn(bag, "ring", focused, 0.12).value
+
+		local base: Color = self.color ?? Colors.primary
+		local fill: Color = base
+
+		if not self.enabled then
+			fill = base.scale(0.45)
+		else
+			-- Lighten towards hover, then darken towards press. Composing them
+			-- this way means releasing a button the pointer is still over lands
+			-- on the hover tint rather than the resting one.
+			fill = base.lerp(base.scale(1.18), hoverAt).lerp(base.scale(0.8), pressAt)
+		end
+
+		local ring: Color? = nil
+		if ringAt > 0.0 then
+			ring = Colors.text.withAlpha(ringAt)
+		end
+
+		local body: Widget = Container(
+			child: Text(
+				self.label,
+				style: TextStyle(color: self.textColor ?? Colors.text, size: self.textSize)
+			),
+			color: fill,
+			radius: self.radius,
+			border: ring,
+			padding: self.padding ?? EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+			alignment: Alignment.center()
+		)
+
+		-- A disabled button is not focusable either — returning the bare body
+		-- keeps it out of the Tab order.
+		if not self.enabled then
+			return body
+		end
+
+		return Focus(
+			child: MouseRegion(
+				cursor: "hand",
+				child: GestureDetector(
+					child: body,
+					onTap: self.onPressed,
+					onTapDown: fn()
+						scratch.pressed = true
+						-- Clicking a control should also focus it.
+						node.requestFocus()
+						context.markNeedsBuild()
+					end,
+					onTapUp: fn()
+						scratch.pressed = false
+						context.markNeedsBuild()
+					end,
+					onHover: fn(inside: boolean)
+						scratch.hovered = inside
+						context.markNeedsBuild()
+					end
+				)
+			),
+			node: node,
+			autofocus: self.autofocus,
+			onKeyDown: fn(event: KeyEvent)
+				return self.activate(event)
+			end,
+			onFocusChange: fn(gained: boolean)
+				scratch.focused = gained
+				context.markNeedsBuild()
+			end
+		)
+	end
+
+	-- Enter and Space are the two keys a focused button answers to.
+	local fn activate(event: KeyEvent) -> boolean
+		if event.key != "return" and event.key != "space" then
+			return false
+		end
+
+		local callback: function? = self.onPressed
+		if callback != nil then
+			callback()
+		end
+
+		return true
+	end
+end

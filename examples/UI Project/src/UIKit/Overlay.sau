@@ -1,0 +1,727 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+import * from Paint
+import * from Gesture
+import * from ThemeData
+import * from Theme
+import * from Tween
+import * from Animation
+
+-- ============================================================================
+-- Things that float above the app
+-- ============================================================================
+--
+-- The framework provides the overlay itself (`OverlayManager`, `OverlayEntry`);
+-- this file is what you actually put in it — a barrier, and the three shapes
+-- that cover most of what an app needs: a dialog, a menu, and a tooltip.
+
+-- A full-window layer that swallows input.
+--
+-- Put one under a dialog and clicks can't reach the screen behind. `onDismiss`
+-- makes clicking outside close it, which is what a menu wants and a confirm
+-- dialog usually doesn't.
+export class ModalBarrier extends SingleChildWidget
+	color: Color?
+	onDismiss: function?
+
+	fn init(child: Widget? = nil, color: Color? = nil, onDismiss: function? = nil, key: string? = nil)
+		self.super(child, key)
+
+		self.color = color
+		self.onDismiss = onDismiss
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local size: Size = constraints.biggest()
+		local child: Element? = el.childAt(1)
+
+		if child != nil then
+			child!.layout(BoxConstraints.tight(size))
+			child!.offset = Offset.zero()
+		end
+
+		return size
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local wash: Color? = self.color
+
+		if wash != nil then
+			wash!.apply()
+			Graphics.rectangle("fill", x, y, el.size.width, el.size.height)
+		end
+
+		el.paintChildren(x, y)
+	end
+
+	-- The barrier is behind the dialog in paint order, so the dialog's own
+	-- widgets get the press first; anything that reaches here landed outside.
+	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
+		if not inside then
+			return false
+		end
+
+		if event.kind == PointerKind.Down then
+			local dismiss: function? = self.onDismiss
+
+			if dismiss != nil then
+				dismiss()
+			end
+
+			return true
+		end
+
+		-- Swallow the wheel too: scrolling the page under a modal is wrong.
+		return event.kind == PointerKind.Scroll
+	end
+end
+
+-- Everything below is built on this: insert an entry, get back a handle that
+-- closes it.
+--
+-- The handle is deliberately a plain class rather than a callback, so the code
+-- that opened a layer can close it from anywhere — a button inside it, a key
+-- handler outside it, or a timer.
+export class OverlayHandle
+	local overlay: OverlayManager
+	local entry: OverlayEntry
+	local closing: boolean
+	local motion: AnimationController
+
+	fn init(overlay: OverlayManager, entry: OverlayEntry)
+		self.overlay = overlay
+		self.entry = entry
+		self.closing = false
+		self.motion = AnimationController(duration: 0.16, easing: EasingTypes.OutCubic)
+	end
+
+	-- Remove the layer *now*, with no animation.
+	fn close() -> nil
+		self.overlay.remove(self.entry)
+	end
+
+	-- Ask the layer to animate out and take itself away once it has.
+	--
+	-- This is what a dismissal should call. `close` cannot animate anything,
+	-- because removing the entry destroys the very widgets that would have to
+	-- draw the exit — so the removal is deferred to `settle` instead, and until
+	-- then the layer is still mounted and still being ticked.
+	fn dismiss() -> nil
+		self.closing = true
+	end
+
+	fn isClosing() -> boolean
+		return self.closing
+	end
+
+	fn isOpen() -> boolean
+		return self.overlay.contains(self.entry)
+	end
+
+	-- How far open the layer is, 0 to 1. Everything in the layer reads its
+	-- opacity and its offset off this, including the barrier behind it.
+	fn progress() -> float
+		return self.motion.value
+	end
+
+	-- Advance the open/close animation by one frame, returning true when
+	-- something moved. `OverlayMotion` drives this; nothing else should.
+	fn settle(dt: float) -> boolean
+		self.motion.animate(not self.closing)
+
+		local moved: boolean = self.motion.step(dt)
+
+		-- Faded all the way out: now the entry can actually go.
+		if self.closing and not self.motion.isRunning() and self.motion.value <= 0.0 then
+			self.close()
+		end
+
+		return moved
+	end
+
+	-- Rebuild the layer's contents — call it after changing something the
+	-- builder closes over.
+	fn refresh() -> nil
+		self.overlay.markDirty()
+	end
+end
+
+-- Fades and lifts a layer in as it opens, and back out as it is dismissed.
+--
+--     OverlayMotion(handle: handle, rise: 14.0, child: dialogBox)
+--
+-- Every layer that wants an entrance puts one of these around its contents. It
+-- is also what drives the handle's clock, so a layer built without one will
+-- never finish a `dismiss` — put it inside the entry builder, always.
+--
+-- The `Padding` and `Opacity` are kept in the tree even when fully open, rather
+-- than being dropped once they stop doing anything: removing them would change
+-- the shape of the subtree and rebuild everything below, and a dialog holding a
+-- text field would lose its caret and its contents the moment it finished
+-- opening. `Opacity` already short-circuits at 1, so the cost of leaving it
+-- there is one comparison.
+export class OverlayMotion extends StatelessWidget
+	handle: OverlayHandle
+	child: Widget?
+	rise: float
+
+	fn init(handle: OverlayHandle, child: Widget? = nil, rise: float = 10.0, key: string? = nil)
+		self.super(key)
+
+		self.handle = handle
+		self.child = child
+		self.rise = rise
+	end
+
+	-- The whole entry is rebuilt rather than just this element, because the
+	-- barrier's dim is decided above here and has to fade with everything else.
+	fn tick(el: Element, dt: float) -> nil
+		if self.handle.settle(dt) then
+			self.handle.refresh()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local shown: float = self.handle.progress()
+
+		return Padding(
+			EdgeInsets.only(top: self.rise * (1.0 - shown)),
+			Opacity(opacity: shown, child: self.child ?? SizedBox())
+		)
+	end
+end
+
+-- Show a modal dialog, centred, over a dimmed screen.
+--
+--     local handle: OverlayHandle? = showDialog(
+--         context,
+--         builder: fn()
+--             return Column(children: {Text("Delete this?"), ...})
+--         end
+--     )
+--     ...
+--     handle?.close()
+--
+-- The `builder` supplies the dialog's *contents*; the frame, padding and
+-- background come from here. Focus is confined to the dialog while it is open,
+-- so Tab can't wander into the screen behind it.
+--
+-- Returns nil only if the context has no owner, which means the widget calling
+-- it was never mounted.
+export fn showDialog(
+	context: BuildContext,
+	builder: function,
+	width: float? = nil,
+	dismissible: boolean = true,
+	barrierColor: Color? = nil,
+	background: Color? = nil
+) -> OverlayHandle?
+	local owner: BuildOwner? = context.owner()
+
+	if owner == nil then
+		return nil
+	end
+
+	local overlay: OverlayManager = owner!.overlay()
+	local entry: OverlayEntry = OverlayEntry() do
+		return SizedBox()
+	end
+
+	local handle: OverlayHandle = OverlayHandle(overlay, entry)
+
+	-- The real builder needs the handle so the dialog can close itself, and the
+	-- handle needs the entry — hence the placeholder above, replaced here.
+	entry.builder = fn()
+		local dismiss: function? = nil
+
+		if dismissible then
+			dismiss = fn()
+				handle.dismiss()
+			end
+		end
+
+		-- The dim comes up with the dialog: a barrier that snaps to full black
+		-- and then waits for the box to fade in reads as two separate events.
+		local dim: Color = barrierColor ?? Colors.black.withAlpha(0.45)
+
+		return ModalBarrier(
+			color: dim.withAlpha(dim.a * handle.progress()),
+			onDismiss: dismiss,
+			child: Focus(
+				modal: true,
+				tabStop: false,
+				onKeyDown: fn(event: KeyEvent)
+					if dismissible and event.key == "escape" then
+						handle.dismiss()
+
+						return true
+					end
+
+					return false
+				end,
+				child: Center(
+					child: OverlayMotion(
+						handle: handle,
+						rise: 14.0,
+						child: Container(
+							width: width ?? 360.0,
+							color: background ?? Colors.surfaceLight,
+							border: Colors.border,
+							radius: 10.0,
+							padding: EdgeInsets.all(20.0),
+							child: builder()
+						)
+					)
+				)
+			)
+		)
+	end
+
+	overlay.insert(entry)
+
+	return handle
+end
+
+-- Show a menu anchored at a point in window coordinates — what a dropdown or a
+-- right-click menu wants.
+--
+--     showMenu(context, x, y, items: {
+--         MenuItem("Copy", fn() copy() end),
+--         MenuItem("Paste", fn() paste() end)
+--     })
+--
+-- Clicking anywhere outside closes it. The menu is nudged back inside the
+-- window if it would run off the right or bottom edge.
+export fn showMenu(
+	context: BuildContext,
+	x: float,
+	y: float,
+	items: table<MenuItem> = {},
+	width: float = 180.0
+) -> OverlayHandle?
+	local owner: BuildOwner? = context.owner()
+
+	if owner == nil then
+		return nil
+	end
+
+	local overlay: OverlayManager = owner!.overlay()
+	local entry: OverlayEntry = OverlayEntry() do
+		return SizedBox()
+	end
+
+	local handle: OverlayHandle = OverlayHandle(overlay, entry)
+
+	entry.builder = fn()
+		local rows: table<Widget> = {}
+
+		for item: MenuItem in items do
+			rows[#rows + 1] = MenuRow(item, handle)
+		end
+
+		-- Rough height: enough to keep the menu on screen without measuring it.
+		local height: float = float(#rows) * 30.0 + 12.0
+		local windowWidth: integer, windowHeight: integer = Window.getSize()
+		local left: float = atMost(x, float(windowWidth) - width - 8.0)
+		local top: float = atMost(y, float(windowHeight) - height - 8.0)
+
+		return ModalBarrier(
+			onDismiss: fn()
+				handle.dismiss()
+			end,
+			child: Focus(
+				modal: true,
+				tabStop: false,
+				onKeyDown: fn(event: KeyEvent)
+					if event.key == "escape" then
+						handle.dismiss()
+
+						return true
+					end
+
+					return false
+				end,
+				child: Stack(
+					children: {
+						Positioned(
+							left: atLeastZero(left),
+							top: atLeastZero(top),
+							width: width,
+							child: OverlayMotion(
+								handle: handle,
+								rise: 8.0,
+								child: Container(
+									color: Colors.surfaceLight,
+									border: Colors.border,
+									radius: 8.0,
+									padding: EdgeInsets.all(6.0),
+									child: Column(
+										crossAxisAlignment: CrossAxisAlignment.Stretch,
+										mainAxisSize: MainAxisSize.Min,
+										children: rows
+									)
+								)
+							)
+						),
+					}
+				)
+			)
+		)
+	end
+
+	overlay.insert(entry)
+
+	return handle
+end
+
+-- One entry in a menu.
+export class MenuItem
+	label: string
+	onSelected: fn() -> nil
+	enabled: boolean
+
+	fn init(label: string = "", onSelected: fn() -> nil = () => nil, enabled: boolean = true)
+		self.label = label
+		self.onSelected = onSelected
+		self.enabled = enabled
+	end
+end
+
+-- A menu row: highlights on hover, closes the menu when chosen.
+export class MenuRow extends StatelessWidget
+	item: MenuItem
+	handle: OverlayHandle
+
+	fn init(item: MenuItem, handle: OverlayHandle, key: string? = nil)
+		self.super(key)
+
+		self.item = item
+		self.handle = handle
+	end
+
+	fn tick(el: Element, dt: float) -> nil
+		if not self.item.enabled then
+			return
+		end
+
+		if motionOn(el.data.scratch, "hover", el.data.hovered, 0.11).step(dt) then
+			el.markNeedsBuild()
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local data: ElementData = context.data()
+		local hovered: boolean = data.hovered
+
+		local label: Color = Colors.text
+
+		if not self.item.enabled then
+			label = Colors.textMuted
+		end
+
+		-- Always a colour, never nil: a row whose highlight came and went by
+		-- adding and removing the box would have nothing to fade.
+		local lit: float = motionOn(data.scratch, "hover", hovered, 0.11).value
+		local fill: Color = Colors.primary.withAlpha(lit)
+
+		local row: Widget = Container(
+			color: fill,
+			radius: 4.0,
+			padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
+			alignment: Alignment.centerLeft(),
+			child: Text(self.item.label, style: TextStyle(color: label))
+		)
+
+		if not self.item.enabled then
+			return row
+		end
+
+		return GestureDetector(
+			child: row,
+			onTap: fn()
+				self.handle.dismiss()
+
+				local selected: function? = self.item.onSelected
+				if selected != nil then
+					selected()
+				end
+			end,
+			onHover: fn(inside: boolean)
+				data.hovered = inside
+				context.markNeedsBuild()
+			end
+		)
+	end
+end
+
+-- A label that follows the pointer, shown while hovering the child.
+--
+--     Tooltip(message: "Delete", child: iconButton)
+--
+-- It is an overlay entry rather than a `Stack` sibling, so it is never clipped
+-- by a scroll view or covered by a later widget.
+export class Tooltip extends SingleChildWidget
+	message: string
+
+	-- Seconds of hovering before it appears.
+	delay: float
+
+	fn init(child: Widget? = nil, message: string = "", delay: float = 0.4, key: string? = nil)
+		self.super(child, key)
+
+		self.message = message
+		self.delay = delay
+	end
+
+	-- Hover and pointer position come straight off the broadcast Move events;
+	-- no `GestureDetector` in between.
+	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
+		if event.kind != PointerKind.Move then
+			return false
+		end
+
+		el.data.hovered = inside
+		el.data.scratch.pointerX = event.x
+		el.data.scratch.pointerY = event.y
+
+		return false
+	end
+
+	-- The timing lives here rather than in a rebuild: showing a tooltip should
+	-- not cost the surrounding tree anything until it actually appears.
+	fn tick(el: Element, dt: float) -> nil
+		local hovered: boolean = el.data.hovered
+
+		-- Recovered once, up front: the handle is Tooltip's own state and so
+		-- lives in the untyped scratch, which means "is a tooltip open" and
+		-- "here is the handle to close it" have to be the same question
+		-- rather than two independent reads of the same slot.
+		local open: OverlayHandle? = el.data.scratch.handle as OverlayHandle
+		local shown: boolean = open != nil
+
+		if not hovered then
+			el.data.scratch.waited = 0.0
+
+			if shown then
+				-- Let it fade; the layer removes itself once it has. The slot is
+				-- cleared straight away so hovering back sooner than the fade
+				-- takes builds a fresh tooltip rather than waiting on this one.
+				open!.dismiss()
+				el.data.scratch.handle = nil
+			end
+
+			return
+		end
+
+		if shown then
+			return
+		end
+
+		local waited: float = el.data.scratch.waited as float ?? 0.0
+
+		waited = waited + dt
+		el.data.scratch.waited = waited
+
+		if waited < self.delay then
+			return
+		end
+
+		local owner: BuildOwner? = el.owner
+
+		if owner == nil or #self.message == 0 then
+			return
+		end
+
+		el.data.scratch.handle = self.show(owner!, el)
+	end
+
+	local fn show(owner: BuildOwner, el: Element) -> OverlayHandle
+		local overlay: OverlayManager = owner.overlay()
+		local message: string = self.message
+		local pointerX: float = el.data.scratch.pointerX as float ?? 0.0
+		local pointerY: float = el.data.scratch.pointerY as float ?? 0.0
+
+		-- Placeholder first, so the builder below can close over the handle it
+		-- needs for the fade — the same knot `showDialog` and `showMenu` untie.
+		local entry: OverlayEntry = OverlayEntry() do
+			return SizedBox()
+		end
+
+		local handle: OverlayHandle = OverlayHandle(overlay, entry)
+
+		entry.builder = fn()
+			local windowWidth: integer, windowHeight: integer = Window.getSize()
+
+			-- Offset from the cursor, then nudged back on screen. The width is
+			-- estimated from the message rather than measured — a tooltip is
+			-- never load-bearing enough to justify a layout pass to place it.
+			local estimated: float = float(#message) * 7.0 + 20.0
+			local left: float = atMost(pointerX + 14.0, float(windowWidth) - estimated - 8.0)
+			local top: float = atMost(pointerY + 20.0, float(windowHeight) - 34.0)
+
+			return Stack(
+				children: {
+					Positioned(
+						left: atLeastZero(left),
+						top: atLeastZero(top),
+						child: OverlayMotion(
+							handle: handle,
+							rise: 5.0,
+							child: Container(
+								color: Colors.black.withAlpha(0.85),
+								radius: 4.0,
+								padding: EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+								child: Text(message, style: TextStyle(color: Colors.white))
+							)
+						)
+					),
+				}
+			)
+		end
+
+		overlay.insert(entry)
+
+		return handle
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Toasts
+-- ----------------------------------------------------------------------------
+
+-- A short message that appears near the bottom of the window and takes itself
+-- away.
+--
+--     showToast(context, "Saved")
+--
+-- It takes no input at all — no barrier, nothing focusable — so whatever the
+-- user was doing carries on underneath it.
+export fn showToast(
+	context: BuildContext,
+	message: string = "",
+	duration: float = 2.5,
+	color: Color? = nil
+) -> OverlayHandle?
+	local owner: BuildOwner? = context.owner()
+
+	if owner == nil then
+		return nil
+	end
+
+	local overlay: OverlayManager = owner!.overlay()
+	local entry: OverlayEntry = OverlayEntry() do
+		return SizedBox()
+	end
+
+	local handle: OverlayHandle = OverlayHandle(overlay, entry)
+
+	entry.builder = fn()
+		return ToastLayer(
+			message: message,
+			duration: duration,
+			color: color,
+			onDone: fn()
+				handle.close()
+			end
+		)
+	end
+
+	overlay.insert(entry)
+
+	return handle
+end
+
+-- The layer itself. It owns the countdown, using the per-frame `tick` hook —
+-- no `State`, and no rebuild until the moment it disappears.
+export class ToastLayer extends StatelessWidget
+	message: string
+	duration: float
+	color: Color?
+	onDone: function?
+
+	fn init(
+		message: string = "",
+		duration: float = 2.5,
+		color: Color? = nil,
+		onDone: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.message = message
+		self.duration = duration
+		self.color = color
+		self.onDone = onDone
+	end
+
+	-- How long the toast takes to arrive and to leave.
+	static local fadeTime: float = 0.22
+
+	fn tick(el: Element, dt: float) -> nil
+		local elapsed: float = el.data.scratch.elapsed as float ?? 0.0
+
+		elapsed = elapsed + dt
+		el.data.scratch.elapsed = elapsed
+
+		-- In on arrival, back out over the last moments of the countdown. The
+		-- controller is aimed at 1 or 0 depending on which side of that line
+		-- the clock is on, and turns itself around.
+		local leaving: boolean = elapsed >= self.duration - ToastLayer.fadeTime
+		local fade: AnimationController = motionIn(
+			el.data.scratch,
+			"fade",
+			ToastLayer.fadeTime,
+			EasingTypes.OutCubic
+		)
+
+		fade.animate(not leaving)
+
+		if fade.step(dt) then
+			el.markNeedsBuild()
+		end
+
+		if elapsed >= self.duration and el.data.scratch.done != true then
+			-- Guard against firing twice: closing removes the entry, but this
+			-- frame's tick has already been scheduled.
+			el.data.scratch.done = true
+
+			local done: function? = self.onDone
+			if done != nil then
+				done()
+			end
+		end
+	end
+
+	fn build(context: BuildContext) -> Widget
+		local theme: ThemeData = Theme.of(context)
+		local shown: float = motionIn(
+			context.data().scratch,
+			"fade",
+			ToastLayer.fadeTime,
+			EasingTypes.OutCubic
+		).value
+
+		-- `Opacity` wraps the box rather than the `Align`, so the canvas it
+		-- allocates is the size of the toast instead of the whole window.
+		return Align(
+			alignment: Alignment.bottomCenter(),
+			child: Padding(
+				EdgeInsets.only(bottom: 16.0 + 12.0 * shown),
+				Opacity(
+					opacity: shown,
+					child: Container(
+						color: self.color ?? theme.surfaceLight,
+						border: theme.border,
+						radius: 6.0,
+						padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+						child: Text(self.message, style: theme.body, softWrap: false, maxLines: 1)
+					)
+				)
+			)
+		)
+	end
+end

@@ -1,0 +1,27 @@
+-- Barrel: everything listed here becomes the public surface of `UIKit`.
+-- Order follows the dependency chain — values, then the framework, then the
+-- widgets built on top of it.
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from ThemeData
+import * from Events
+import * from Framework
+import * from Layout
+import * from Theme
+import * from Paint
+import * from Gesture
+import * from Tween
+import * from Animation
+import * from Overlay
+import * from Icon
+import * from Scroll
+import * from CustomPaint
+import * from Image
+import * from Button
+import * from Controls
+import * from Date
+import * from Shell
+import * from Data
+import * from TextField
+import * from TextArea

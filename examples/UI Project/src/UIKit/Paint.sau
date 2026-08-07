@@ -1,0 +1,393 @@
+import * from engine
+import * from Geometry
+import * from Color
+import * from TextStyle
+import * from Framework
+import * from Layout
+
+-- ============================================================================
+-- Painted widgets
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- DecoratedBox
+-- ----------------------------------------------------------------------------
+
+-- Fill, rounded corners and an outline, drawn behind and around the child.
+-- Sizing is entirely the child's business — wrap it in a `SizedBox` or give it
+-- padding if you want more than the child's natural size.
+export class DecoratedBox extends SingleChildWidget
+	color: Color?
+	radius: float
+	border: Color?
+	borderWidth: float
+
+	fn init(
+		color: Color? = nil,
+		radius: float = 0.0,
+		border: Color? = nil,
+		borderWidth: float = 1.0,
+		child: Widget? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.color = color
+		self.radius = radius
+		self.border = border
+		self.borderWidth = borderWidth
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local child: Element? = el.childAt(1)
+
+		if child == nil then
+			-- Nothing inside: fill whatever we are allowed to.
+			return constraints.biggest()
+		else
+			local size: Size = child.layout(constraints)
+			child.offset = Offset.zero()
+
+			return size
+		end
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local fill: Color? = self.color
+
+		if fill != nil then
+			fill.apply()
+			Graphics.rectangle("fill", x, y, el.size.width, el.size.height, self.radius, self.radius)
+		end
+
+		el.paintChildren(x, y)
+
+		local outline: Color? = self.border
+
+		if outline != nil then
+			outline.apply()
+			Graphics.setLineWidth(self.borderWidth)
+			Graphics.rectangle("line", x, y, el.size.width, el.size.height, self.radius, self.radius)
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Container
+-- ----------------------------------------------------------------------------
+
+-- The convenience box: margin, decoration, padding, a fixed size and an
+-- alignment, in whatever combination you need. Exactly like Flutter's, it owns
+-- no layout logic of its own — it composes the primitives above, and every
+-- argument you leave out disappears from the tree entirely.
+export class Container extends StatelessWidget
+	width: float?
+	height: float?
+	color: Color?
+	radius: float
+	border: Color?
+	borderWidth: float
+	padding: EdgeInsets?
+	margin: EdgeInsets?
+	alignment: Alignment?
+	clip: boolean
+	child: Widget?
+
+	fn init(
+		child: Widget? = nil,
+		width: float? = nil,
+		height: float? = nil,
+		color: Color? = nil,
+		radius: float = 0.0,
+		border: Color? = nil,
+		borderWidth: float = 1.0,
+		padding: EdgeInsets? = nil,
+		margin: EdgeInsets? = nil,
+		alignment: Alignment? = nil,
+		clip: boolean = false,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.child = child
+		self.width = width
+		self.height = height
+		self.color = color
+		self.radius = radius
+		self.border = border
+		self.borderWidth = borderWidth
+		self.padding = padding
+		self.margin = margin
+		self.alignment = alignment
+		self.clip = clip
+	end
+
+	fn build(context: BuildContext) -> Widget
+		-- Built inside-out, so the reader sees the same nesting the tree gets.
+		local current: Widget? = self.child
+
+		local alignment: Alignment? = self.alignment
+		if alignment != nil then
+			current = Align(alignment, current)
+		end
+
+		local padding: EdgeInsets? = self.padding
+		if padding != nil then
+			current = Padding(padding, current)
+		end
+
+		if self.clip then
+			current = ClipRect(current)
+		end
+
+		if self.color != nil or self.border != nil then
+			current = DecoratedBox(
+				self.color,
+				self.radius,
+				self.border,
+				self.borderWidth,
+				current
+			)
+		end
+
+		if self.width != nil or self.height != nil then
+			current = SizedBox(self.width, self.height, current)
+		end
+
+		local margin: EdgeInsets? = self.margin
+		if margin != nil then
+			current = Padding(margin, current)
+		end
+
+		if current == nil then
+			return SizedBox()
+		end
+
+		return current!
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Text
+-- ----------------------------------------------------------------------------
+
+export enum TextAlign
+	Left,
+	Center,
+	Right
+end
+
+-- A run of text, wrapped to the width it is given.
+--
+-- Measuring is real: the size it reports comes from the font atlas, so a
+-- surrounding `Column` or `Container` sizes to the glyphs rather than a guess.
+--
+-- Wrapping is on by default, and only does anything when the incoming
+-- constraint has a bounded width — inside a `Row` the main axis is unbounded,
+-- so text there stays on one line unless you give it a width.
+export class Text extends Widget
+	data: string
+	style: TextStyle?
+
+	-- Break long text across lines. Explicit newlines always break.
+	softWrap: boolean
+
+	-- Cap the number of lines; the last one gets an ellipsis when text is cut.
+	maxLines: integer?
+
+	align: TextAlign
+
+	fn init(
+		data: string = "",
+		style: TextStyle? = nil,
+		softWrap: boolean = true,
+		maxLines: integer? = nil,
+		align: TextAlign = TextAlign.Left,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.data = data
+		self.style = style
+		self.softWrap = softWrap
+		self.maxLines = maxLines
+		self.align = align
+	end
+
+	local fn resolved() -> TextStyle
+		return self.style ?? TextStyle()
+	end
+
+	-- Wrapping costs a measurement per word, so the result is cached on the
+	-- element and only recomputed when the text or the available width changes.
+	local fn lines(el: Element, maxWidth: float) -> table<string>
+		local signature: string = String.format("%s|%.1f|%d", self.data, maxWidth, #self.data)
+
+		-- The scratch is untyped, so the cached value has to be recovered
+		-- rather than assumed. A miss re-wraps, which is also what happens
+		-- when the key matches but the slot holds something else.
+		local cached: table<string>? = el.data.scratch.textLines as table<string>
+
+		if el.data.scratch.textKey == signature and cached != nil then
+			return cached!
+		end
+
+		local style: TextStyle = self.resolved()
+		local out: table<string> = {}
+
+		if self.softWrap and maxWidth < Math.huge then
+			out = style.wrap(self.data, maxWidth)
+		else
+			out = splitOn(self.data, "\n")
+		end
+
+		local limit: integer? = self.maxLines
+
+		if limit != nil and #out > limit! then
+			local capped: table<string> = {}
+			local i: integer = 1
+
+			while i <= limit! do
+				capped[i] = out[i]
+				i = i + 1
+			end
+
+			capped[limit!] = capped[limit!] .. "…"
+			out = capped
+		end
+
+		el.data.scratch.textKey = signature
+		el.data.scratch.textLines = out
+
+		return out
+	end
+
+	fn layout(el: Element, constraints: BoxConstraints) -> Size
+		local style: TextStyle = self.resolved()
+		local rows: table<string> = self.lines(el, constraints.maxWidth)
+		local widest: float = 0.0
+
+		for row: string in rows do
+			widest = atLeast(widest, style.measure(row).width)
+		end
+
+		return constraints.constrain(Size(widest, style.lineHeight() * float(#rows)))
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		local style: TextStyle = self.resolved()
+		local rows: table<string> = self.lines(el, el.size.width)
+
+		local height: float = style.lineHeight()
+		local i: integer = 1
+
+		while i <= #rows do
+			local row: string = rows[i]
+			local offset: float = 0.0
+
+			if self.align != TextAlign.Left then
+				local slack: float = el.size.width - style.measure(row).width
+
+				if self.align == TextAlign.Center then
+					offset = slack / 2.0
+				else
+					offset = slack
+				end
+
+				-- Measuring rebinds the font but not the colour.
+				style.apply()
+			end
+
+			style.draw(row, x + offset, y + height * float(i - 1))
+
+			i = i + 1
+		end
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Opacity
+-- ----------------------------------------------------------------------------
+
+-- Fade a whole subtree.
+--
+--     Opacity(opacity: fade.value, child: panel)
+--
+-- Per-colour alpha only fades widgets that happen to take a colour, and it
+-- double-darkens where they overlap. This renders the subtree to an offscreen
+-- canvas and composites that once, so a group fades as one image — which is
+-- what a transition needs.
+--
+-- The canvas is kept on the element and reused; it is only reallocated when the
+-- size changes. That costs one full-size buffer per faded subtree, so fade
+-- groups rather than individual leaves.
+export class Opacity extends SingleChildWidget
+	opacity: float
+
+	fn init(opacity: float = 1.0, child: Widget? = nil, key: string? = nil)
+		self.super(child, key)
+
+		self.opacity = opacity
+	end
+
+	fn paint(el: Element, x: float, y: float) -> nil
+		if self.opacity >= 1.0 then
+			el.paintChildren(x, y)
+
+			return
+		end
+
+		if self.opacity <= 0.0 then
+			return
+		end
+
+		local width: integer = int(el.size.width)
+		local height: integer = int(el.size.height)
+
+		if width <= 0 or height <= 0 then
+			return
+		end
+
+		local canvas: integer = self.canvasFor(el, width, height)
+
+		-- Render the subtree into the canvas at its origin: the children paint
+		-- in window coordinates, so the transform shifts them back to 0,0.
+		local sx: float, sy: float, sw: float, sh: float = Graphics.getScissor()
+
+		Graphics.setCanvas(canvas)
+		Graphics.setScissor(0.0, 0.0, float(width), float(height))
+		Graphics.clear(0.0, 0.0, 0.0, 0.0)
+
+		Graphics.push()
+		Graphics.origin()
+		Graphics.translate(-x, -y)
+		el.paintChildren(x, y)
+		Graphics.pop()
+
+		Graphics.setCanvas()
+		Graphics.setScissor(sx, sy, sw, sh)
+
+		-- `draw` tints by the current colour, so the alpha *is* the opacity.
+		Graphics.setColor(1.0, 1.0, 1.0, self.opacity)
+		Graphics.draw(canvas, x, y)
+		Graphics.setColor(1.0, 1.0, 1.0, 1.0)
+	end
+
+	-- One canvas per element, reallocated only when the size changes. The engine
+	-- has no way to free a canvas, so resizing a faded subtree leaks the old
+	-- one — fine for a fade, not for something that resizes every frame.
+	local fn canvasFor(el: Element, width: integer, height: integer) -> integer
+		local signature: string = width .. "x" .. height
+		local cached: integer? = el.data.scratch.canvas as integer
+
+		if el.data.scratch.canvasKey != signature or cached == nil then
+			local made: integer = Graphics.newCanvas(width, height)
+
+			el.data.scratch.canvasKey = signature
+			el.data.scratch.canvas = made
+			return made
+		end
+
+		return cached!
+	end
+end

@@ -1,0 +1,477 @@
+import * from engine
+import * from Geometry
+import * from Framework
+
+-- ============================================================================
+-- Input
+-- ============================================================================
+--
+-- Two routing models live here. Pointer events go wherever the cursor is;
+-- key events go to whatever holds focus and bubble up from there.
+
+-- Where the pointer is, in the logical window coordinates the tree is laid out
+-- in — which is the space `showMenu` and `showDatePicker` place things in.
+--
+-- `Mouse.getPos` reports *physical* pixels. On a display with any scaling those
+-- are not the coordinates anything in the tree sits at, so the conversion is
+-- not optional: skip it and a menu opens further down and right the higher the
+-- scale factor is.
+export fn pointerPosition() -> Offset
+	local x: float, y: float = Mouse.getPos()
+
+	return Offset(Display.toLogical(x), Display.toLogical(y))
+end
+
+-- Turn pointer traffic into taps and hover transitions for whatever it wraps.
+-- It draws nothing and takes the size of its child.
+--
+--     GestureDetector(
+--         onTap: fn() println("clicked") end,
+--         child: someBox
+--     )
+--
+-- Callbacks are plain `function` values because Saule rejects `fn() -> nil` in
+-- a binding annotation. `onHover` receives one boolean; the rest take none.
+--
+-- The pressed / hovered flags live in the element scratch rather than on the
+-- widget: the widget is thrown away and rebuilt constantly, the element is not.
+export class GestureDetector extends SingleChildWidget
+	onTap: function?
+	onTapDown: function?
+	onTapUp: function?
+	onHover: function?
+
+	-- `fn(x: float, y: float)` — where the tap landed, local to this widget.
+	-- Separate from `onTap` because Saule checks lambda arity: handing extra
+	-- arguments to an existing zero-parameter `onTap` would be a compile error.
+	onTapAt: function?
+
+	-- `fn(dx: float, dy: float) -> boolean` — wheel movement. Return true to
+	-- claim it so an enclosing scroll view doesn't also scroll.
+	onScroll: function?
+
+	-- `fn(x: float, y: float)` — the pointer moved while held down after
+	-- pressing here. Drag-select, sliders, anything that tracks the cursor.
+	onDragTo: function?
+
+	-- `fn(x: float, y: float)` — a second press in the same spot, soon enough
+	-- after the first. Fires *in addition to* the ordinary tap callbacks: a
+	-- double-click is also a click, and editors treat it that way.
+	onDoubleTapAt: function?
+
+	-- Right-click. `onSecondaryTapAt` is `fn(x: float, y: float)`, which is what
+	-- a context menu needs to know where to open.
+	onSecondaryTap: function?
+	onSecondaryTapAt: function?
+
+	fn init(
+		child: Widget? = nil,
+		onTap: function? = nil,
+		onTapDown: function? = nil,
+		onTapUp: function? = nil,
+		onHover: function? = nil,
+		onTapAt: function? = nil,
+		onScroll: function? = nil,
+		onDragTo: function? = nil,
+		onDoubleTapAt: function? = nil,
+		onSecondaryTap: function? = nil,
+		onSecondaryTapAt: function? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.onTap = onTap
+		self.onTapDown = onTapDown
+		self.onTapUp = onTapUp
+		self.onHover = onHover
+		self.onTapAt = onTapAt
+		self.onScroll = onScroll
+		self.onDragTo = onDragTo
+		self.onDoubleTapAt = onDoubleTapAt
+		self.onSecondaryTap = onSecondaryTap
+		self.onSecondaryTapAt = onSecondaryTapAt
+	end
+
+	-- A second press counts as a double-tap when it lands close enough to the
+	-- first, soon enough after it. Both bounds matter: without the distance
+	-- check, two fast clicks at opposite ends of a text field would select a
+	-- word neither of them touched.
+	local fn checkDoubleTap(el: Element, x: float, y: float) -> nil
+		local callback: function? = self.onDoubleTapAt
+
+		if callback == nil then
+			return
+		end
+
+		local now: float = Timer.getTime()
+		local doubled: boolean = false
+
+		if el.data.tapTime != nil then
+			local elapsed: float = now - el.data.tapTime
+			local dx: float = x - el.data.tapX
+			local dy: float = y - el.data.tapY
+
+			if elapsed < 0.4 and dx * dx + dy * dy < 36.0 then
+				doubled = true
+			end
+		end
+
+		el.data.tapX = x
+		el.data.tapY = y
+
+		if doubled then
+			-- Clear the timestamp so a third click starts a fresh pair rather
+			-- than firing again.
+			el.data.tapTime = nil
+			callback!(x, y)
+		else
+			el.data.tapTime = now
+		end
+	end
+
+	fn isPressed(el: Element) -> boolean
+		return el.data.pressed == true
+	end
+
+	fn isHovered(el: Element) -> boolean
+		return el.data.hovered == true
+	end
+
+	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
+		if event.kind == PointerKind.Move then
+			local was: boolean = el.data.hovered == true
+
+			if was != inside then
+				el.data.hovered = inside
+
+				local callback: function? = self.onHover
+				if callback != nil then
+					callback(inside)
+				end
+			end
+
+			-- A drag keeps reporting once the press started here, even after the
+			-- pointer leaves — that is what makes drag-select past the edge work.
+			if el.data.pressed == true then
+				local drag: function? = self.onDragTo
+				if drag != nil then
+					drag!(x, y)
+				end
+			end
+
+			return false
+		end
+
+		if event.kind == PointerKind.Scroll then
+			local callback: function? = self.onScroll
+
+			if callback == nil or not inside then
+				return false
+			end
+
+			local handled = callback!(event.scrollX, event.scrollY)
+
+			return handled == true
+		end
+
+		if event.kind == PointerKind.Down then
+			if not inside then
+				return false
+			end
+
+			if event.isSecondary() then
+				local secondary: function? = self.onSecondaryTap
+				local secondaryAt: function? = self.onSecondaryTapAt
+
+				if secondary == nil and secondaryAt == nil then
+					return false
+				end
+
+				if secondary != nil then
+					secondary()
+				end
+
+				if secondaryAt != nil then
+					secondaryAt!(x, y)
+				end
+
+				return true
+			end
+
+			if not event.isPrimary() then
+				return false
+			end
+
+			el.data.pressed = true
+
+			local callback: function? = self.onTapDown
+			if callback != nil then
+				callback()
+			end
+
+			local at: function? = self.onTapAt
+			if at != nil then
+				at!(x, y)
+			end
+
+			self.checkDoubleTap(el, x, y)
+
+			-- Claim the press so widgets underneath don't also react.
+			return true
+		end
+
+		-- Up. A tap only counts when the press started here and the pointer is
+		-- still inside; either way the pressed flag clears.
+		if not event.isPrimary() then
+			return false
+		end
+
+		local pressed: boolean = el.data.pressed == true
+		el.data.pressed = false
+
+		if not pressed then
+			return false
+		end
+
+		local up: function? = self.onTapUp
+		if up != nil then
+			up()
+		end
+
+		if inside then
+			local tap: function? = self.onTap
+			if tap != nil then
+				tap()
+			end
+
+			return true
+		end
+
+		return false
+	end
+end
+
+-- Change the cursor while the pointer is over this subtree, and optionally
+-- react to it entering and leaving.
+--
+--     MouseRegion(cursor: "ibeam", child: myField)
+--
+-- Cursor names are the engine's: "arrow", "ibeam", "crosshair", "hand", "grab",
+-- "resizeleftright", "resizeupdown", "resizeall".
+--
+-- Nesting works the way you would expect — the innermost region under the
+-- pointer wins, even though several are hit at once.
+export class MouseRegion extends SingleChildWidget
+	cursor: string?
+
+	-- `fn()` — the pointer arrived or left.
+	onEnter: function?
+	onExit: function?
+
+	fn init(
+		child: Widget? = nil,
+		cursor: string? = nil,
+		onEnter: function? = nil,
+		onExit: function? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.cursor = cursor
+		self.onEnter = onEnter
+		self.onExit = onExit
+	end
+
+	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
+		if event.kind != PointerKind.Move then
+			return false
+		end
+
+		if inside then
+			local cursor: string? = self.cursor
+
+			if cursor != nil then
+				Cursors.request(cursor!)
+			end
+		end
+
+		local was: boolean = el.data.over == true
+
+		if was != inside then
+			el.data.over = inside
+
+			local callback: function? = self.onExit
+
+			if inside then
+				callback = self.onEnter
+			end
+
+			if callback != nil then
+				callback()
+			end
+		end
+
+		return false
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- Focus
+-- ----------------------------------------------------------------------------
+
+-- Make a subtree focusable, and receive the keys that reach it.
+--
+--     Focus(
+--         autofocus: true,
+--         onKeyDown: fn(event: KeyEvent)
+--             if event.key == "escape" then
+--                 close()
+--                 return true
+--             end
+--             return false
+--         end,
+--         child: panel
+--     )
+--
+-- Callback shapes (arity is checked, so these are exact):
+--
+--     onKeyDown / onKeyUp   fn(event: KeyEvent) -> boolean
+--     onText                fn(text: string) -> boolean
+--     onFocusChange         fn(focused: boolean)
+--
+-- Returning true from a key callback claims the event; anything else lets it
+-- carry on up to the ancestors. Because delivery bubbles, a `Focus` wrapped
+-- around a whole screen sees every key its children ignored — that is how you
+-- write shortcuts without stealing focus from the controls inside.
+export class Focus extends SingleChildWidget
+	node: FocusNode?
+	autofocus: boolean
+	enabled: boolean
+	wantsText: boolean
+
+	-- Receive keys the focus chain ignored, even with nothing focused.
+	global: boolean
+
+	-- Whether Tab can land here.
+	tabStop: boolean
+
+	-- Trap focus inside this subtree — what a dialog wants, so Tab and
+	-- shortcuts can't reach the screen behind it.
+	modal: boolean
+
+	onKeyDown: function?
+	onKeyUp: function?
+	onText: function?
+	onFocusChange: function?
+
+	fn init(
+		child: Widget? = nil,
+		node: FocusNode? = nil,
+		autofocus: boolean = false,
+		enabled: boolean = true,
+		wantsText: boolean = false,
+		global: boolean = false,
+		tabStop: boolean = true,
+		modal: boolean = false,
+		onKeyDown: function? = nil,
+		onKeyUp: function? = nil,
+		onText: function? = nil,
+		onFocusChange: function? = nil,
+		key: string? = nil
+	)
+		self.super(child, key)
+
+		self.node = node
+		self.autofocus = autofocus
+		self.enabled = enabled
+		self.wantsText = wantsText
+		self.global = global
+		self.tabStop = tabStop
+		self.modal = modal
+		self.onKeyDown = onKeyDown
+		self.onKeyUp = onKeyUp
+		self.onText = onText
+		self.onFocusChange = onFocusChange
+	end
+
+	-- Returning nil is what takes a disabled control out of focus and keyboard
+	-- routing entirely.
+	fn focusData() -> FocusData?
+		if not self.enabled then
+			return nil
+		end
+
+		return FocusData(
+			self.node,
+			self.autofocus,
+			self.wantsText,
+			self.global,
+			self.tabStop,
+			self.modal
+		)
+	end
+
+	fn handleKey(el: Element, event: KeyEvent) -> boolean
+		if event.kind == KeyEventKind.Text then
+			return self.invoke(self.onText, event.text)
+		end
+
+		if event.kind == KeyEventKind.Down then
+			return self.invoke(self.onKeyDown, event)
+		end
+
+		return self.invoke(self.onKeyUp, event)
+	end
+
+	fn focusChanged(el: Element, focused: boolean) -> nil
+		local callback: function? = self.onFocusChange
+
+		if callback != nil then
+			callback(focused)
+		end
+	end
+
+	-- A missing callback never claims the event, and neither does one that
+	-- returns nothing — only an explicit `true` stops the bubble.
+	local fn invoke(callback: function?, argument: any) -> boolean
+		if callback == nil then
+			return false
+		end
+
+		local handled = callback!(argument)
+
+		return handled == true
+	end
+end
+
+-- A `Focus` that exists purely to listen — no text input, and no focus of its
+-- own: Tab skips it, and it still receives every key the focused control
+-- ignored, including while nothing is focused at all.
+--
+-- Wrap it around a screen for shortcuts.
+export class KeyboardListener extends Focus
+	fn init(
+		child: Widget? = nil,
+		onKeyDown: function? = nil,
+		onKeyUp: function? = nil,
+		node: FocusNode? = nil,
+		key: string? = nil
+	)
+		self.super(
+			child,
+			node,
+			false,
+			true,
+			false,
+			-- global, and never a tab stop; never modal either.
+			true,
+			false,
+			false,
+			onKeyDown,
+			onKeyUp,
+			nil,
+			nil,
+			key
+		)
+	end
+end
