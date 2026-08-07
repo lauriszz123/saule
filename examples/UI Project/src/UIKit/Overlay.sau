@@ -489,6 +489,23 @@ export class Tooltip extends SingleChildView
 		return false
 	end
 
+	-- The tooltip is a layer at the root, so it does not go away with the view
+	-- it belongs to — and `tick`, which is what normally dismisses it, stops
+	-- being called the moment this element is unmounted. Without this a tooltip
+	-- left open when its owner disappears stays on screen for the life of the
+	-- program, with nothing able to close it.
+	--
+	-- `close`, not `dismiss`: the fade is an animation, and the thing it would
+	-- be fading away from is already gone.
+	fn unmounted(el: Element) -> nil
+		local open: OverlayHandle? = el.data.scratch.handle as OverlayHandle
+
+		if open != nil then
+			open!.close()
+			el.data.scratch.handle = nil
+		end
+	end
+
 	-- The timing lives here rather than in a rebuild: showing a tooltip should
 	-- not cost the surrounding tree anything until it actually appears.
 	fn tick(el: Element, dt: float) -> nil

@@ -213,7 +213,20 @@ end
 -- It fills the width it is given. Inside an `HStack`, wrap it in `Expand` or a
 -- `Frame` — a row's main axis is unbounded.
 export class TextField extends View
-	value: string
+	-- The text the owner wants shown, or nil to let the field keep its own.
+	--
+	-- This is the controlled / uncontrolled distinction, and it has to be a
+	-- real nil rather than an empty string. A field given a `value` is
+	-- controlled: when its owner rebuilds and hands down text the field is not
+	-- showing, the field takes it — that is what makes clearing a composer
+	-- after send, or resetting a form, actually clear the box. A field given
+	-- nothing is uncontrolled and owns its text outright.
+	--
+	-- Defaulting to `""` instead would make those two cases identical, and an
+	-- uncontrolled field whose owner rebuilds — a panel calling
+	-- `markNeedsBuild` from `onChanged`, say — would be handed a default empty
+	-- string and wipe itself on every keystroke.
+	value: string?
 	placeholder: string
 	-- `onSubmitted` is declared *before* `onChanged` on purpose. A trailing
 	-- block binds to the last function-typed parameter nothing else claimed, so
@@ -252,7 +265,7 @@ export class TextField extends View
 	obscure: boolean
 
 	fn init(
-		value: string = "",
+		value: string? = nil,
 		placeholder: string = "",
 		onSubmitted: function? = nil,
 		onChanged: function? = nil,
@@ -304,12 +317,33 @@ export class TextField extends View
 		local data: ElementData = context.data()
 		local scratch: table = data.scratch
 
-		-- First build at this position: seed from `value`, caret at the end.
+		-- Seed on the first build here, and re-seed only when a *controlled*
+		-- field's owner rebuilds it with text it is not showing.
+		--
+		-- The owner-rebuilt test matters because two very different things both
+		-- arrive here as "a build": the field rebuilding itself after a
+		-- keystroke, where `value` is whatever the owner last passed and is
+		-- stale the moment it stops rebuilding per keystroke; and the owner
+		-- rebuilding, handing down a new view object whose `value` is
+		-- authoritative. Only the second may touch the text, and a stale `""`
+		-- and a deliberate `""` are the same string — so the discriminator is
+		-- the view's identity, not its value.
+		local previous: View? = scratch.owner as View
+		local byOwner: boolean = previous == nil or previous! != self
+		local wanted: string? = self.value
+
 		if scratch.text == nil then
-			scratch.text = self.value
-			scratch.caret = String.len(self.value)
+			scratch.text = wanted ?? ""
+			scratch.caret = String.len(wanted ?? "")
+			scratch.anchor = scratch.caret
+		elseif byOwner and wanted != nil and wanted! != ((scratch.text as string) ?? "") then
+			scratch.text = wanted!
+			scratch.caret = String.len(wanted!)
 			scratch.anchor = scratch.caret
 		end
+
+		scratch.owner = self
+
 
 		-- The node has to outlive the rebuild that every keystroke causes, so
 		-- the element owns it. `focused` is the framework's own flag, so it is
@@ -399,7 +433,9 @@ export class TextField extends View
 	local fn edit(event: KeyEvent, editor: TextEngine) -> boolean
 		local key: string = event.key
 
-		if event.ctrl then
+		-- `command()`, not `ctrl`: on macOS the shortcut modifier is Command,
+		-- and the engine reports that separately from Control.
+		if event.command() then
 			if key == "a" then
 				editor.selectAll()
 
@@ -417,8 +453,8 @@ export class TextField extends View
 
 				return true
 			elseif key == "z" then
-				-- Ctrl+Shift+Z is the other redo, for muscle memory that came
-				-- from a different editor.
+				-- Shift+Z is the other redo, for muscle memory that came from a
+				-- different editor.
 				if event.shift then
 					editor.redo()
 				else
@@ -710,9 +746,15 @@ export class TextEngine
 		self.scratch.anchor = caret
 		self.context.markNeedsBuild()
 
+		self.report(updated)
+	end
+
+	-- One place the owner is told about a change, rather than two.
+	local fn report(text: string) -> nil
 		local changed: function? = self.onChanged
+
 		if changed != nil then
-			changed(updated)
+			changed(text)
 		end
 	end
 
@@ -827,10 +869,8 @@ export class TextEngine
 		self.scratch.undoKind = "other"
 		self.context.markNeedsBuild()
 
-		local changed: function? = self.onChanged
-		if changed != nil then
-			changed(entry.text)
-		end
+		-- The snapshot is an untyped bag, as everywhere else in the scratch.
+		self.report((entry.text as string) ?? "")
 	end
 
 	-- --- words ---------------------------------------------------------------

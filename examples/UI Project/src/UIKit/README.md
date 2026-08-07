@@ -473,6 +473,22 @@ Override `didUpdateView` if you need to react to a rebuild.
 Lifecycle hooks: `initState`, `didUpdateView(old)`, `tick(dt)`, `dispose`.
 `tick` runs once per frame — that is where animations belong.
 
+### unmounted
+
+A plain view gets one hook of its own: `unmounted(el)`, called when its position
+in the tree goes away.
+
+**Anything a view opened that outlives its own subtree has to be closed there.**
+An overlay layer is the case that matters. Layers are held at the *root*, not
+under the view that opened them, so unmounting the opener leaves the layer on
+screen — and if the view dismissed it from `tick`, as `Tooltip` does, the tick
+that would have cleaned up never comes. The result is a tooltip stuck over a
+button that no longer exists, with nothing able to close it.
+
+`Tooltip`, `Picker` and `DateField` all close their layer here. A view of your
+own that calls `showMenu` or `showDialog` should keep the handle and do the
+same.
+
 ### Element scratch
 
 For a couple of interaction booleans, a whole `State` object is overkill.
@@ -664,19 +680,43 @@ the first form would quietly fill `onSubmitted` and the field would look like it
 was ignoring every keystroke. `KeyboardListener` orders `onKeyUp` before
 `onKeyDown` for the same reason.
 
-`value` seeds the initial contents; after that the field owns its text and
+**`value` is nullable, and that is the controlled / uncontrolled switch.**
+
+Pass one and the field is *controlled*: when its owner rebuilds and hands down
+text the field is not showing, the field takes it. That is what makes clearing
+`draft` after a send, or resetting a form between sign-in and sign-up, actually
+clear the box.
+
+Pass nothing and the field is *uncontrolled* and owns its text outright. Its
+owner may rebuild as often as it likes — including from `onChanged`, which some
+panels do — without disturbing what you are typing.
+
+Defaulting `value` to `""` would collapse those two into one, and an
+uncontrolled field whose owner rebuilds would be handed an empty string and
+wipe itself on every keystroke. Which is a real bug this kit shipped.
+
+Re-seeding also keys on the *identity* of the view, not just its value. A
+keystroke rebuilds the field itself with a stale `value`; only a new view object
+from the owner is authoritative. A stale `""` and a deliberate `""` are the same
+string, so value alone cannot tell them apart.  after that the field owns its text and
 reports edits through `onChanged`. It fills the width it is given — inside an
 `HStack`, chain `.expanded()` or `.frame(width: …)`, because a row's main axis
 is unbounded.
 
+Shortcuts use **Command on macOS and Control everywhere else**. The engine's key
+events carry shift, ctrl and alt but not Command, so `KeyEvent` polls it and
+exposes `event.command()` — every editing shortcut asks that rather than `ctrl`,
+and both modifiers are accepted. Asking `ctrl` directly is why copy and paste
+did not exist on a Mac at all.
+
 Selection works the way it should: shift with any movement key extends it,
-Ctrl+A selects all, Ctrl+C / Ctrl+X / Ctrl+V use the **system clipboard**, and
+Cmd/Ctrl+A selects all, Cmd/Ctrl+C / X / V use the **system clipboard**, and
 typing or deleting replaces the selected run. Click to place the caret,
 double-click to select a word, drag to select. A plain left or right arrow
 collapses a selection to its edge rather than moving a character.
 
-Ctrl+arrow moves by word and Ctrl+backspace / Ctrl+delete remove one. **Ctrl+Z
-undoes, Ctrl+Y or Ctrl+Shift+Z redoes** — and a run of typing collapses into a
+Cmd/Ctrl+arrow moves by word and Cmd/Ctrl+backspace / delete remove one.
+**Cmd/Ctrl+Z undoes, Cmd/Ctrl+Y or +Shift+Z redoes** — and a run of typing collapses into a
 single undo step, broken at spaces, so undo goes back a word at a time rather
 than a letter. History is whole snapshots rather than diffs: the text in a field
 is small, and a snapshot can't drift out of sync with the document the way a

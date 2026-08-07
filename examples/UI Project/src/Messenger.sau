@@ -227,7 +227,11 @@ class MessengerState extends State
 	local fn switchTo(session: Session) -> nil
 		self.setState() do
 			self.session = session
-			self.error = ""
+
+			-- Cleared, not carried over. The two forms ask for different
+			-- things, and half-finished sign-in details showing up prefilled
+			-- in a sign-up form reads like the app knows something it does not.
+			self.clearForm()
 		end
 	end
 
@@ -278,6 +282,19 @@ class MessengerState extends State
 			chat.messages[#chat.messages + 1] = Message(me, text, "now", true)
 			self.draft = ""
 		end
+	end
+
+	-- Availability has a colour, and it is the same colour everywhere it shows.
+	local fn statusColor(theme: ThemeData) -> Color
+		if self.status == "Away" then
+			return theme.warning
+		end
+
+		if self.status == "Do not disturb" then
+			return theme.danger
+		end
+
+		return theme.success
 	end
 
 	-- --- view ----------------------------------------------------------------
@@ -534,7 +551,7 @@ class MessengerState extends State
 
 			VStack(alignment: StackAlignment.Leading, sizing: StackSize.Fit) do
 				Text(chat.name).font(14.0).foregroundStyle(theme.text)
-				Text(self.status).font(11.0).foregroundStyle(theme.success)
+				Text(self.status).font(11.0).foregroundStyle(self.statusColor(theme))
 			end.expanded()
 
 			IconButton(icon: Icons.info, tooltip: "Details", size: 16.0)
@@ -610,8 +627,8 @@ class MessengerState extends State
 
 						Chip(
 							label: self.status,
-							color: theme.success.withAlpha(0.18),
-							textColor: theme.success
+							color: self.statusColor(theme).withAlpha(0.18),
+							textColor: self.statusColor(theme)
 						)
 					end
 				end

@@ -240,13 +240,17 @@ export class KeyEvent
 	ctrl: boolean
 	alt: boolean
 
+	-- The Command / Windows / Super key.
+	meta: boolean
+
 	fn init(
 		kind: KeyEventKind,
 		key: string = "",
 		text: string = "",
 		shift: boolean = false,
 		ctrl: boolean = false,
-		alt: boolean = false
+		alt: boolean = false,
+		meta: boolean = false
 	)
 		self.kind = kind
 		self.key = key
@@ -254,6 +258,19 @@ export class KeyEvent
 		self.shift = shift
 		self.ctrl = ctrl
 		self.alt = alt
+		self.meta = meta
+	end
+
+	-- "The shortcut modifier", whichever one this platform uses: Command on
+	-- macOS, Control everywhere else.
+	--
+	-- Every editing shortcut asks this rather than `ctrl`, because asking
+	-- `ctrl` directly means copy and paste do not exist on a Mac: Cmd+C never
+	-- sets `ctrl`, and Ctrl+C is not what anyone presses there. Both are
+	-- accepted — a shortcut that still works when you guess wrong is not a bug
+	-- worth fixing.
+	fn command() -> boolean
+		return self.ctrl or self.meta
 	end
 end
 
@@ -781,6 +798,20 @@ export class View
 	-- so a view can also notice that the pointer *left* it.
 	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
 		return false
+	end
+
+	-- --- lifetime ------------------------------------------------------------
+
+	-- This view's position is going away: the element is being unmounted and
+	-- will never tick, build or paint again.
+	--
+	-- Anything a view opened that outlives its own subtree has to be closed
+	-- here. An overlay layer is the case that matters — a tooltip, a dropdown,
+	-- a picker — because those are held at the *root*, not under the view that
+	-- opened them, so unmounting the opener leaves the layer on screen with
+	-- nothing left to close it. `State` has `dispose` for the same job; this is
+	-- the half a plain view was missing.
+	fn unmounted(el: Element) -> nil
 	end
 
 	-- --- frame clock ---------------------------------------------------------
@@ -1340,8 +1371,28 @@ export class State
 		update()
 
 		local el: Element? = self.element
-		if el != nil then
-			el.markNeedsBuild()
+
+		if el == nil then
+			return
+		end
+
+		el.markNeedsBuild()
+
+		-- And every overlay layer, because a layer's builder is an arbitrary
+		-- closure that can read this state — a settings *route* showing these
+		-- very fields, say. Routes and dialogs hang off the root as siblings of
+		-- the tree, not as descendants, so marking this element does not reach
+		-- them: the toggle you just flipped would keep drawing its old value
+		-- until something else happened to rebuild the overlay.
+		--
+		-- Rebuilding all of them is blunt. There is no dependency tracking to
+		-- be more precise with, and a layer's build is cheap next to being
+		-- wrong; `AnimatedBuilder` and the scroll views already rebuild on
+		-- their own clocks anyway.
+		local owner: BuildOwner? = el.owner
+
+		if owner != nil then
+			owner!.overlay().markDirty()
 		end
 	end
 
@@ -2005,6 +2056,10 @@ export class Element
 
 		self.kids = {}
 
+		-- Children first, then this one: a view cleaning up after itself should
+		-- be able to assume its subtree is already gone.
+		self.view.unmounted(self)
+
 		local s: State? = self.state
 		if s != nil then
 			s.dispose()
@@ -2457,6 +2512,14 @@ end
 --
 -- Tab is handled last, and only if nothing claimed it: a view that wants
 -- literal tabs just returns true from `handleKey`.
+-- Is Command (macOS) / Windows / Super held?
+--
+-- Polled rather than taken off the event: the engine's key events carry shift,
+-- ctrl and alt only, so this is the one modifier that has to be read at level.
+local fn metaDown() -> boolean
+	return Keyboard.isAnyDown({"lgui", "rgui"})
+end
+
 local fn dispatchEvent(focus: FocusManager, root: Element, event: Event) -> nil
 	match event
 		case Event.MousePressed(x, y, button) then
@@ -2507,7 +2570,10 @@ local fn dispatchEvent(focus: FocusManager, root: Element, event: Event) -> nil
 
 		case Event.KeyPressed(key, shift, ctrl, alt) then
 			local handled: boolean =
-				focus.dispatchKey(root, KeyEvent(KeyEventKind.Down, key, "", shift, ctrl, alt))
+				focus.dispatchKey(
+					root,
+					KeyEvent(KeyEventKind.Down, key, "", shift, ctrl, alt, metaDown())
+				)
 
 			if not handled and key == "tab" then
 				if shift then
@@ -2518,7 +2584,7 @@ local fn dispatchEvent(focus: FocusManager, root: Element, event: Event) -> nil
 			end
 
 		case Event.KeyReleased(key, shift, ctrl, alt) then
-			focus.dispatchKey(root, KeyEvent(KeyEventKind.Up, key, "", shift, ctrl, alt))
+			focus.dispatchKey(root, KeyEvent(KeyEventKind.Up, key, "", shift, ctrl, alt, metaDown()))
 
 		-- Typed text is separate from key presses: it is already modifier- and
 		-- layout-corrected, and one keypress can produce several characters.
@@ -2533,7 +2599,8 @@ local fn dispatchEvent(focus: FocusManager, root: Element, event: Event) -> nil
 					typed,
 					Keyboard.isAnyDown({"lshift", "rshift"}),
 					Keyboard.isAnyDown({"lctrl", "rctrl"}),
-					Keyboard.isAnyDown({"lalt", "ralt"})
+					Keyboard.isAnyDown({"lalt", "ralt"}),
+					metaDown()
 				)
 			)
 
