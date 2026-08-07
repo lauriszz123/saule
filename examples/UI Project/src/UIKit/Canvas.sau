@@ -6,9 +6,9 @@ import * from Framework
 -- Drawing your own pixels
 -- ============================================================================
 
--- Hand a widget a box and draw into it yourself.
+-- Hand a view a box and draw into it yourself.
 --
---     CustomPaint(
+--     Canvas(
 --         height: 200.0,
 --         painter: fn(x: float, y: float, width: float, height: float)
 --             Colors.primary.apply()
@@ -17,19 +17,19 @@ import * from Framework
 --     )
 --
 -- The painter is `fn(x: float, y: float, width: float, height: float)`, called
--- every frame with this widget's absolute position and size. Draw with the raw
--- `Graphics` API — this is the escape hatch out of the widget system, for game
+-- every frame with this view's absolute position and size. Draw with the raw
+-- `Graphics` API — this is the escape hatch out of the view system, for game
 -- worlds, charts, and anything else where a tree of boxes is the wrong shape.
 --
--- The painter runs inside the widget tree's paint pass, so it inherits the
+-- The painter runs inside the view tree's paint pass, so it inherits the
 -- current clip: content is confined to the surrounding scroll view or
--- `ClipRect` without any work on your part. Set `clip: true` to also confine it
--- to this widget's own box.
+-- `Clip` without any work on your part. Set `clip: true` to also confine it
+-- to this view's own box.
 --
--- Sizing works like `SizedBox`: give `width` / `height` to fix an axis, leave
+-- Sizing works like `Frame`: give `width` / `height` to fix an axis, leave
 -- them out to fill whatever the parent allows. A `child` is painted *after* the
 -- painter, so it layers UI on top of your drawing.
-export class CustomPaint extends SingleChildWidget
+export class Canvas extends SingleChildView
 	painter: function?
 	width: float?
 	height: float?
@@ -39,7 +39,7 @@ export class CustomPaint extends SingleChildWidget
 		painter: function? = nil,
 		width: float? = nil,
 		height: float? = nil,
-		child: Widget? = nil,
+		child: View? = nil,
 		clip: boolean = false,
 		key: string? = nil
 	)
@@ -51,8 +51,8 @@ export class CustomPaint extends SingleChildWidget
 		self.clip = clip
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
-		local inner: BoxConstraints = constraints
+	fn layout(el: Element, constraints: Constraints) -> Size
+		local inner: Constraints = constraints
 		local width: float? = self.width
 		local height: float? = self.height
 
@@ -64,13 +64,13 @@ export class CustomPaint extends SingleChildWidget
 			inner = inner.withTightHeight(height!)
 		end
 
-		-- Fill the box unless an axis was pinned, so a bare CustomPaint behaves
+		-- Fill the box unless an axis was pinned, so a bare Canvas behaves
 		-- like a canvas rather than collapsing to nothing.
 		local size: Size = inner.biggest()
 		local child: Element? = el.childAt(1)
 
 		if child != nil then
-			child!.layout(BoxConstraints.tight(size))
+			child!.layout(Constraints.tight(size))
 			child!.offset = Offset.zero()
 		end
 

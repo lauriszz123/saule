@@ -21,7 +21,7 @@ import * from Theme
 --
 -- `indent` and `endIndent` inset the line without moving the space it occupies,
 -- which is how a divider lines up with text rather than the container's edge.
-export class Divider extends StatelessWidget
+export class Divider extends View
 	thickness: float
 	color: Color?
 	indent: float
@@ -42,18 +42,17 @@ export class Divider extends StatelessWidget
 		self.endIndent = endIndent
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 
-		return Padding(
-			EdgeInsets.only(left: self.indent, right: self.endIndent),
-			Container(height: self.thickness, color: self.color ?? theme.border)
+		return Box(height: self.thickness, color: self.color ?? theme.border).padding(
+			insets: EdgeInsets.only(left: self.indent, right: self.endIndent)
 		)
 	end
 end
 
 -- The same, turned ninety degrees — a separator between columns.
-export class VerticalDivider extends StatelessWidget
+export class VerticalDivider extends View
 	thickness: float
 	color: Color?
 	indent: float
@@ -74,30 +73,29 @@ export class VerticalDivider extends StatelessWidget
 		self.endIndent = endIndent
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 
-		return Padding(
-			EdgeInsets.only(top: self.indent, bottom: self.endIndent),
-			Container(width: self.thickness, color: self.color ?? theme.border)
+		return Box(width: self.thickness, color: self.color ?? theme.border).padding(
+			insets: EdgeInsets.only(top: self.indent, bottom: self.endIndent)
 		)
 	end
 end
 
--- A title bar: an optional leading widget, a title, and trailing actions.
+-- A title bar: an optional leading view, a title, and trailing actions.
 --
---     AppBar(title: "Inbox", actions: {refreshButton, menuButton})
-export class AppBar extends StatelessWidget
+--     Toolbar(title: "Inbox", actions: {refreshButton, menuButton})
+export class Toolbar extends View
 	title: string
-	leading: Widget?
-	actions: table<Widget>
+	leading: View?
+	actions: table<View>
 	height: float
 	background: Color?
 
 	fn init(
 		title: string = "",
-		leading: Widget? = nil,
-		actions: table<Widget> = {},
+		leading: View? = nil,
+		actions: table<View> = {},
 		height: float = 52.0,
 		background: Color? = nil,
 		key: string? = nil
@@ -105,112 +103,107 @@ export class AppBar extends StatelessWidget
 		self.super(key)
 
 		self.title = title
-		self.leading = leading
-		self.actions = actions
+		self.leading = claimed(leading)
+		self.actions = claimedAll(actions)
 		self.height = height
 		self.background = background
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
-		local row: table<Widget> = {}
+		local row: table<View> = {}
 
-		local leading: Widget? = self.leading
+		local leading: View? = self.leading
 
 		if leading != nil then
 			row[#row + 1] = leading!
-			row[#row + 1] = SizedBox(width: 10.0)
+			row[#row + 1] = Frame(width: 10.0)
 		end
 
-		row[#row + 1] = Expanded(
-			child: Align(
-				alignment: Alignment.centerLeft(),
-				child: Text(self.title, style: theme.title, softWrap: false, maxLines: 1)
-			)
-		)
+		row[#row + 1] = Text(self.title, style: theme.title, softWrap: false, maxLines: 1)
+			.aligned(Alignment.centerLeft())
+			.expanded()
 
-		for action: Widget in self.actions do
+		for action: View in self.actions do
 			row[#row + 1] = action
 		end
 
-		return Column(
-			crossAxisAlignment: CrossAxisAlignment.Stretch,
-			mainAxisSize: MainAxisSize.Min,
-			children: {
-				Container(
-					height: self.height,
-					color: self.background ?? theme.surfaceLight,
-					padding: EdgeInsets.symmetric(horizontal: 16.0),
-					child: Row(spacing: 8.0, children: row)
-				),
-				Divider()
-			}
-		)
+		return VStack(alignment: StackAlignment.Fill, sizing: StackSize.Fit) do
+			HStack(spacing: 8.0, children: row)
+				.padding(insets: EdgeInsets.symmetric(horizontal: 16.0))
+				.background(self.background ?? theme.surfaceLight)
+				.frame(height: self.height)
+
+			Divider()
+		end
 	end
 end
 
--- The page frame: bar, body, optional footer, on a themed background.
+-- The page frame: toolbar, content, optional footer, on a themed background.
 --
---     Scaffold(
---         appBar: AppBar(title: "Inbox"),
---         body: messageList,
---         footer: statusStrip
---     )
+--     Screen(toolbar: Toolbar(title: "Inbox"), footer: statusStrip) do
+--         messageList
+--     end
 --
--- The body gets whatever height is left, so it is the thing that scrolls.
-export class Scaffold extends StatelessWidget
-	appBar: Widget?
-	body: Widget?
-	footer: Widget?
+-- The content gets whatever height is left, so it is the thing that scrolls.
+--
+-- The block fills `content`; the bar and the strip stay named, because a block
+-- can only mean one of the three. The slot is `content` rather than `body`
+-- because `body` is the method every view overrides to describe itself, and a
+-- field of that name would sit right next to the method that reads it.
+export class Screen extends View
+	toolbar: View?
+	content: View?
+	footer: View?
 	background: Color?
 	padding: EdgeInsets?
 
 	fn init(
-		body: Widget? = nil,
-		appBar: Widget? = nil,
-		footer: Widget? = nil,
+		content: View? = nil,
+		toolbar: View? = nil,
+		footer: View? = nil,
 		background: Color? = nil,
 		padding: EdgeInsets? = nil,
-		key: string? = nil
+		key: string? = nil,
+		builder: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
-		self.body = body
-		self.appBar = appBar
-		self.footer = footer
+		self.content = childOf(content, builder)
+		self.toolbar = claimed(toolbar)
+		self.footer = claimed(footer)
 		self.background = background
 		self.padding = padding
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
-		local rows: table<Widget> = {}
+		local rows: table<View> = {}
 
-		local bar: Widget? = self.appBar
+		local bar: View? = self.toolbar
 
 		if bar != nil then
 			rows[#rows + 1] = bar!
 		end
 
-		local body: Widget = self.body ?? SizedBox()
+		local middle: View = self.content ?? Frame()
 		local padding: EdgeInsets? = self.padding
 
 		if padding != nil then
-			body = Padding(padding, body)
+			middle = middle.padding(insets: padding)
 		end
 
-		rows[#rows + 1] = Expanded(child: body)
+		rows[#rows + 1] = middle.expanded()
 
-		local footer: Widget? = self.footer
+		local footer: View? = self.footer
 
 		if footer != nil then
 			rows[#rows + 1] = Divider()
 			rows[#rows + 1] = footer!
 		end
 
-		return Container(
-			color: self.background ?? theme.background,
-			child: Column(crossAxisAlignment: CrossAxisAlignment.Stretch, children: rows)
+		return VStack(alignment: StackAlignment.Fill, children: rows).background(
+			self.background ?? theme.background
 		)
 	end
 end

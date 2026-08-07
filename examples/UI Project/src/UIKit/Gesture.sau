@@ -25,7 +25,7 @@ end
 -- Turn pointer traffic into taps and hover transitions for whatever it wraps.
 -- It draws nothing and takes the size of its child.
 --
---     GestureDetector(
+--     GestureArea(
 --         onTap: fn() println("clicked") end,
 --         child: someBox
 --     )
@@ -34,14 +34,14 @@ end
 -- a binding annotation. `onHover` receives one boolean; the rest take none.
 --
 -- The pressed / hovered flags live in the element scratch rather than on the
--- widget: the widget is thrown away and rebuilt constantly, the element is not.
-export class GestureDetector extends SingleChildWidget
+-- view: the view is thrown away and rebuilt constantly, the element is not.
+export class GestureArea extends SingleChildView
 	onTap: function?
 	onTapDown: function?
 	onTapUp: function?
 	onHover: function?
 
-	-- `fn(x: float, y: float)` — where the tap landed, local to this widget.
+	-- `fn(x: float, y: float)` — where the tap landed, local to this view.
 	-- Separate from `onTap` because Saule checks lambda arity: handing extra
 	-- arguments to an existing zero-parameter `onTap` would be a compile error.
 	onTapAt: function?
@@ -65,7 +65,7 @@ export class GestureDetector extends SingleChildWidget
 	onSecondaryTapAt: function?
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		onTap: function? = nil,
 		onTapDown: function? = nil,
 		onTapUp: function? = nil,
@@ -127,6 +127,21 @@ export class GestureDetector extends SingleChildWidget
 		else
 			el.data.tapTime = now
 		end
+	end
+
+	-- Does a press mean anything here?
+	--
+	-- A detector with only `onHover` must not swallow the `Down`. Modifiers
+	-- each wrap in their own `GestureArea`, so `.onHover().onTapGesture()`
+	-- nests two of them — and the inner, hover-only one is hit first. Claiming
+	-- there would eat every click before the tap handler ever saw it.
+	local fn wantsPress() -> boolean
+		return self.onTap != nil
+			or self.onTapDown != nil
+			or self.onTapUp != nil
+			or self.onTapAt != nil
+			or self.onDoubleTapAt != nil
+			or self.onDragTo != nil
 	end
 
 	fn isPressed(el: Element) -> boolean
@@ -202,6 +217,10 @@ export class GestureDetector extends SingleChildWidget
 				return false
 			end
 
+			if not self.wantsPress() then
+				return false
+			end
+
 			el.data.pressed = true
 
 			local callback: function? = self.onTapDown
@@ -216,7 +235,7 @@ export class GestureDetector extends SingleChildWidget
 
 			self.checkDoubleTap(el, x, y)
 
-			-- Claim the press so widgets underneath don't also react.
+			-- Claim the press so views underneath don't also react.
 			return true
 		end
 
@@ -254,14 +273,20 @@ end
 -- Change the cursor while the pointer is over this subtree, and optionally
 -- react to it entering and leaving.
 --
---     MouseRegion(cursor: "ibeam", child: myField)
+--     CursorArea(cursor: "ibeam", child: myField)
 --
 -- Cursor names are the engine's: "arrow", "ibeam", "crosshair", "hand", "grab",
 -- "resizeleftright", "resizeupdown", "resizeall".
 --
+-- There is no pointing-finger cursor. The window backend's macOS set has only
+-- `openHandCursor` and `closedHandCursor`, so `"hand"` is the *drag* hand —
+-- right for something you can pick up, wrong for a button. Nothing clickable in
+-- this kit asks for one; macOS shows the plain arrow over a button, and so do
+-- we.
+--
 -- Nesting works the way you would expect — the innermost region under the
 -- pointer wins, even though several are hit at once.
-export class MouseRegion extends SingleChildWidget
+export class CursorArea extends SingleChildView
 	cursor: string?
 
 	-- `fn()` — the pointer arrived or left.
@@ -269,7 +294,7 @@ export class MouseRegion extends SingleChildWidget
 	onExit: function?
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		cursor: string? = nil,
 		onEnter: function? = nil,
 		onExit: function? = nil,
@@ -343,7 +368,7 @@ end
 -- carry on up to the ancestors. Because delivery bubbles, a `Focus` wrapped
 -- around a whole screen sees every key its children ignored — that is how you
 -- write shortcuts without stealing focus from the controls inside.
-export class Focus extends SingleChildWidget
+export class Focus extends SingleChildView
 	node: FocusNode?
 	autofocus: boolean
 	enabled: boolean
@@ -365,7 +390,7 @@ export class Focus extends SingleChildWidget
 	onFocusChange: function?
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		node: FocusNode? = nil,
 		autofocus: boolean = false,
 		enabled: boolean = true,
@@ -450,13 +475,25 @@ end
 --
 -- Wrap it around a screen for shortcuts.
 export class KeyboardListener extends Focus
+	-- `onKeyUp` comes first so `onKeyDown` is the last function-typed
+	-- parameter, and a trailing block therefore fills it:
+	--
+	--     KeyboardListener(child: screen) do (event: KeyEvent)
+	--         return handle(event)
+	--     end
 	fn init(
-		child: Widget? = nil,
-		onKeyDown: function? = nil,
+		child: View? = nil,
 		onKeyUp: function? = nil,
 		node: FocusNode? = nil,
-		key: string? = nil
+		key: string? = nil,
+		onKeyDown: function? = nil
 	)
+		-- Positional, because `super(...)` takes no named arguments. `Focus`
+		-- has thirteen parameters and four interchangeable `function?`s among
+		-- them, so this list has to stay in step with its declaration by hand:
+		--
+		--   child, node, autofocus, enabled, wantsText, global, tabStop,
+		--   modal, onKeyDown, onKeyUp, onText, onFocusChange, key
 		self.super(
 			child,
 			node,

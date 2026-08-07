@@ -1,0 +1,675 @@
+import * from UIKit
+import * from Shared
+
+-- A small messenger: sign in, sign up, a conversation list, a thread, and a
+-- settings page. All of it in-memory — there is no network here, and the
+-- "accounts" are a table that starts with one demo login in it.
+
+export class Account
+	name: string
+	email: string
+	password: string
+
+	fn init(name: string = "", email: string = "", password: string = "")
+		self.name = name
+		self.email = email
+		self.password = password
+	end
+end
+
+export class Message
+	author: string
+	text: string
+	stamp: string
+
+	-- True for the signed-in user's own messages, which is the only thing that
+	-- decides which side of the thread a bubble sits on.
+	mine: boolean
+
+	fn init(author: string = "", text: string = "", stamp: string = "", mine: boolean = false)
+		self.author = author
+		self.text = text
+		self.stamp = stamp
+		self.mine = mine
+	end
+end
+
+export class Conversation
+	name: string
+	messages: table<Message>
+	unread: integer
+
+	fn init(name: string = "", messages: table<Message> = {}, unread: integer = 0)
+		self.name = name
+		self.messages = messages
+		self.unread = unread
+	end
+
+	fn preview() -> string
+		if #self.messages == 0 then
+			return "No messages yet"
+		end
+
+		return self.messages[#self.messages].text
+	end
+end
+
+-- Which of the three screens the app is showing. The signed-out pair are modes
+-- of the same view rather than routes: "create an account instead" is not
+-- somewhere you navigate *back* from, it is the same screen asking for
+-- different fields.
+export enum Session
+	SignedOut,
+	Registering,
+	SignedIn
+end
+
+export class MessengerScreen extends StatefulView
+	fn init(key: string? = nil)
+		self.super(key)
+	end
+
+	fn createState() -> State?
+		return MessengerState()
+	end
+end
+
+class MessengerState extends State
+	local accounts: table<Account>
+	local session: Session
+	local user: Account?
+
+	-- Sign-in / sign-up form.
+	local formName: string
+	local formEmail: string
+	local formPassword: string
+	local formConfirm: string
+	local error: string
+
+	-- The signed-in app.
+	local chats: table<Conversation>
+	local active: integer
+	local draft: string
+
+	-- Settings.
+	local notifications: boolean
+	local sounds: boolean
+	local readReceipts: boolean
+	local status: string
+
+	fn init()
+		self.super()
+
+		self.accounts = {Account("Ada Lovelace", "ada@analytical.dev", "enigma")}
+		self.session = Session.SignedOut
+		self.user = nil
+		self.formName = ""
+		self.formEmail = ""
+		self.formPassword = ""
+		self.formConfirm = ""
+		self.error = ""
+		self.chats = {}
+		self.active = 1
+		self.draft = ""
+		self.notifications = true
+		self.sounds = false
+		self.readReceipts = true
+		self.status = "Active"
+	end
+
+	-- --- accounts ------------------------------------------------------------
+
+	local fn findAccount(email: string) -> Account?
+		local wanted: string = String.lower(trimmed(email))
+
+		for account: Account in self.accounts do
+			if String.lower(account.email) == wanted then
+				return account
+			end
+		end
+
+		return nil
+	end
+
+	local fn signIn() -> nil
+		local account: Account? = self.findAccount(self.formEmail)
+
+		if account == nil then
+			self.fail("No account with that email. Try creating one.")
+
+			return
+		end
+
+		if account!.password != self.formPassword then
+			self.fail("Wrong password.")
+
+			return
+		end
+
+		self.setState() do
+			self.user = account
+			self.session = Session.SignedIn
+			self.chats = MessengerState.seedChats(account!.name)
+			self.active = 1
+			self.clearForm()
+		end
+	end
+
+	local fn register() -> nil
+		local name: string = trimmed(self.formName)
+		local email: string = trimmed(self.formEmail)
+
+		if String.len(name) == 0 then
+			self.fail("What should we call you?")
+
+			return
+		end
+
+		if not contains(email, "@") then
+			self.fail("That does not look like an email address.")
+
+			return
+		end
+
+		if self.findAccount(email) != nil then
+			self.fail("That email already has an account.")
+
+			return
+		end
+
+		if String.len(self.formPassword) < 6 then
+			self.fail("Passwords need at least six characters.")
+
+			return
+		end
+
+		if self.formPassword != self.formConfirm then
+			self.fail("The two passwords do not match.")
+
+			return
+		end
+
+		local account: Account = Account(name, email, self.formPassword)
+
+		self.setState() do
+			self.accounts[#self.accounts + 1] = account
+			self.user = account
+			self.session = Session.SignedIn
+			self.chats = MessengerState.seedChats(name)
+			self.active = 1
+			self.clearForm()
+		end
+	end
+
+	local fn signOut() -> nil
+		self.setState() do
+			self.user = nil
+			self.session = Session.SignedOut
+			self.chats = {}
+			self.clearForm()
+		end
+	end
+
+	local fn fail(message: string) -> nil
+		self.setState() do
+			self.error = message
+		end
+	end
+
+	local fn clearForm() -> nil
+		self.formName = ""
+		self.formEmail = ""
+		self.formPassword = ""
+		self.formConfirm = ""
+		self.error = ""
+	end
+
+	local fn switchTo(session: Session) -> nil
+		self.setState() do
+			self.session = session
+			self.error = ""
+		end
+	end
+
+	-- A fresh inbox on every sign-in, so the demo never starts empty and never
+	-- leaks one account's thread into the next.
+	static fn seedChats(me: string) -> table<Conversation>
+		return {
+			Conversation("Grace Hopper", {
+				Message("Grace Hopper", "The compiler is passing its own tests now.", "09:12", false),
+				Message(me, "That is the whole battle. Ship it.", "09:14", true),
+				Message("Grace Hopper", "Shipping. I owe you a nanosecond.", "09:15", false),
+			}, 1),
+			Conversation("Design", {
+				Message("Katherine", "New spacing scale is in the theme.", "Yesterday", false),
+				Message(me, "The 8pt grid finally lines up. Thank you.", "Yesterday", true),
+			}),
+			Conversation("Alan Turing", {
+				Message("Alan Turing", "Lunch?", "Mon", false),
+			}, 2),
+		}
+	end
+
+	-- --- messages ------------------------------------------------------------
+
+	local fn openChat(at: integer) -> nil
+		self.setState() do
+			self.active = at
+			self.chats[at].unread = 0
+		end
+	end
+
+	local fn send() -> nil
+		local text: string = trimmed(self.draft)
+
+		if String.len(text) == 0 or #self.chats == 0 then
+			return
+		end
+
+		local me: string = "You"
+		local user: Account? = self.user
+
+		if user != nil then
+			me = user!.name
+		end
+
+		self.setState() do
+			local chat: Conversation = self.chats[self.active]
+			chat.messages[#chat.messages + 1] = Message(me, text, "now", true)
+			self.draft = ""
+		end
+	end
+
+	-- --- view ----------------------------------------------------------------
+
+	fn body(context: BuildContext) -> View
+		if self.session == Session.SignedIn then
+			return self.home(context)
+		end
+
+		return self.gate(context)
+	end
+
+	-- The signed-out screen: a brand mark, then whichever form the mode asks
+	-- for. Both live in one card, so switching between them does not move the
+	-- panel around under the cursor.
+	local fn gate(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+		local registering: boolean = self.session == Session.Registering
+
+		local title: string = "Sign in"
+		local hint: string = "Use ada@analytical.dev / enigma, or create an account."
+
+		if registering then
+			title = "Create your account"
+			hint = "Six characters or more, and an email you will remember."
+		end
+
+		local card: View = Card(padding: 28.0) do
+			VStack(alignment: StackAlignment.Fill, spacing: 14.0) do
+				Text(title).font(21.0).foregroundStyle(theme.text)
+				Text(hint).font(12.0).foregroundStyle(theme.textMuted)
+
+				Frame(height: 4.0)
+
+				if registering then
+					TextField(value: self.formName, placeholder: "Your name") do (text: string)
+						self.formName = text
+					end
+				end
+
+				TextField(value: self.formEmail, placeholder: "Email") do (text: string)
+					self.formEmail = text
+				end
+
+				TextField(
+					value: self.formPassword,
+					placeholder: "Password",
+					obscure: true,
+					onChanged: fn(text: string)
+						self.formPassword = text
+					end
+				) do (text: string)
+					self.submitGate(registering)
+				end
+
+				if registering then
+					TextField(
+						value: self.formConfirm,
+						placeholder: "Confirm password",
+						obscure: true,
+						onChanged: fn(text: string)
+							self.formConfirm = text
+						end
+					) do (text: string)
+						self.submitGate(registering)
+					end
+				end
+
+				if String.len(self.error) > 0 then
+					HStack(sizing: StackSize.Fit, spacing: 6.0) do
+						Icon(Icons.error, 14.0, theme.danger)
+						Text(self.error).font(12.0).foregroundStyle(theme.danger)
+					end
+				end
+
+				Frame(height: 2.0)
+
+				self.gateActions(theme, registering)
+			end
+		end
+
+		-- A `RouteScreen` like every other screen here, not a bare stack: it is
+		-- what paints the opaque background (a route covers the window, and
+		-- without one the screen you pushed from shows through) and what puts
+		-- the back arrow there, so "I opened this by mistake" has an answer
+		-- before you have an account.
+		return RouteScreen(title: "Messenger") do
+			VStack(sizing: StackSize.Fit, alignment: StackAlignment.Center, spacing: 18.0) do
+				self.brand(theme)
+				card.frame(width: 380.0)
+			end.centered()
+		end
+	end
+
+	local fn submitGate(registering: boolean) -> nil
+		if registering then
+			self.register()
+		else
+			self.signIn()
+		end
+	end
+
+	local fn brand(theme: ThemeData) -> View
+		return VStack(sizing: StackSize.Fit, alignment: StackAlignment.Center, spacing: 10.0) do
+			Icon(Icons.mail, 30.0, Colors.white)
+				.centered()
+				.frame(width: 62.0, height: 62.0)
+				.background(theme.primary, radius: 31.0)
+
+			Text("Saule Messenger").font(24.0).foregroundStyle(theme.text)
+		end
+	end
+
+	local fn gateActions(theme: ThemeData, registering: boolean) -> View
+		local primary: string = "Sign in"
+		local secondary: string = "Create an account"
+
+		if registering then
+			primary = "Create account"
+			secondary = "I already have an account"
+		end
+
+		return VStack(alignment: StackAlignment.Fill, spacing: 10.0) do
+			Button(label: primary, color: theme.primary) do
+				self.submitGate(registering)
+			end
+
+			-- A link, not a second button: two filled buttons side by side
+			-- would read as an equal choice, and it is not one.
+			Text(secondary)
+				.font(12.0)
+				.foregroundStyle(theme.primary)
+				.centered()
+				.padding(6.0)
+				.onTapGesture() do
+					if registering then
+						self.switchTo(Session.SignedOut)
+					else
+						self.switchTo(Session.Registering)
+					end
+				end
+		end
+	end
+
+	-- The signed-in screen: conversation list on the left, thread on the right.
+	local fn home(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+		local me: string = "You"
+		local user: Account? = self.user
+
+		if user != nil then
+			me = user!.name
+		end
+
+		local settings: View = IconButton(icon: Icons.settings, tooltip: "Settings") do
+			context.navigator()?.push() do
+				return self.settings(context, theme, me)
+			end
+		end
+
+		return RouteScreen(title: "Messenger", actions: {settings}) do
+			HStack(alignment: StackAlignment.Fill, spacing: 0.0) do
+				self.chatList(theme).frame(width: 260.0)
+				VerticalDivider()
+				self.thread(theme).expanded()
+			end
+		end
+	end
+
+	local fn chatList(theme: ThemeData) -> View
+		local rows: table<View> = {}
+		local i: integer = 1
+
+		while i <= #self.chats do
+			local at: integer = i
+			rows[#rows + 1] = self.chatRow(theme, self.chats[i], at, at == self.active)
+			i = i + 1
+		end
+
+		return VStack(alignment: StackAlignment.Fill) do
+			Text("Chats")
+				.font(12.0)
+				.foregroundStyle(theme.textMuted)
+				.padding(insets: EdgeInsets.only(left: 14.0, top: 12.0, bottom: 6.0))
+
+			List(children: rows, spacing: 2.0).expanded()
+		end.background(theme.background)
+	end
+
+	local fn chatRow(theme: ThemeData, chat: Conversation, at: integer, selected: boolean) -> View
+		local fill: Color = theme.background
+
+		if selected then
+			fill = theme.surfaceLight
+		end
+
+		local row: View = HStack(spacing: 10.0) do
+			Avatar(name: chat.name, size: 38.0)
+
+			VStack(alignment: StackAlignment.Leading, sizing: StackSize.Fit, spacing: 2.0) do
+				Text(chat.name).font(13.0).foregroundStyle(theme.text).lineLimit(1)
+				Text(chat.preview()).font(11.0).foregroundStyle(theme.textMuted).lineLimit(1)
+			end.expanded()
+
+			if chat.unread > 0 then
+				Text("" .. chat.unread)
+					.font(10.0)
+					.foregroundStyle(Colors.white)
+					.centered()
+					.frame(width: 18.0, height: 18.0)
+					.background(theme.primary, radius: 9.0)
+			end
+		end
+
+		return row
+			.padding(insets: EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0))
+			.background(fill, radius: 8.0)
+			.onTapGesture() do
+				self.openChat(at)
+			end
+			.padding(insets: EdgeInsets.symmetric(horizontal: 6.0))
+	end
+
+	local fn thread(theme: ThemeData) -> View
+		if #self.chats == 0 or self.active > #self.chats then
+			return EmptyState(
+				icon: Icons.mail,
+				title: "No conversation selected",
+				detail: "Pick someone from the list."
+			)
+		end
+
+		local chat: Conversation = self.chats[self.active]
+		local bubbles: table<View> = {}
+		local i: integer = 1
+
+		while i <= #chat.messages do
+			bubbles[#bubbles + 1] = self.bubble(theme, chat.messages[i], "m" .. self.active .. "-" .. i)
+			i = i + 1
+		end
+
+		return VStack(alignment: StackAlignment.Fill) do
+			self.threadHeader(theme, chat)
+			Divider()
+			List(children: bubbles, spacing: 8.0, padding: EdgeInsets.all(16.0)).expanded()
+			Divider()
+			self.composer(theme, chat)
+		end
+	end
+
+	local fn threadHeader(theme: ThemeData, chat: Conversation) -> View
+		return HStack(spacing: 10.0) do
+			Avatar(name: chat.name, size: 32.0)
+
+			VStack(alignment: StackAlignment.Leading, sizing: StackSize.Fit) do
+				Text(chat.name).font(14.0).foregroundStyle(theme.text)
+				Text(self.status).font(11.0).foregroundStyle(theme.success)
+			end.expanded()
+
+			IconButton(icon: Icons.info, tooltip: "Details", size: 16.0)
+		end.padding(insets: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0))
+	end
+
+	-- One bubble. Mine sit right and take the accent; everyone else's sit left
+	-- on the surface colour — which is the whole visual grammar of a thread.
+	local fn bubble(theme: ThemeData, message: Message, key: string) -> View
+		local fill: Color = theme.surfaceLight
+		local ink: Color = theme.text
+		local side: Alignment = Alignment.centerLeft()
+
+		if message.mine then
+			fill = theme.primary
+			ink = Colors.white
+			side = Alignment.centerRight()
+		end
+
+		local stack: View = VStack(sizing: StackSize.Fit, alignment: StackAlignment.Leading, spacing: 3.0) do
+			Text(message.text).font(13.0).foregroundStyle(ink)
+			Text(message.stamp).font(10.0).foregroundStyle(ink.withAlpha(0.65))
+		end
+
+		-- `maxWidth`, not `width`: a bubble shrink-wraps its text and only stops
+		-- growing at 380. Pinning the width would give "ok" the same box as a
+		-- paragraph, which is the one thing a thread must not do.
+		return stack
+			.padding(insets: EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0))
+			.background(fill, radius: 12.0)
+			.frame(maxWidth: 380.0)
+			.aligned(side)
+	end
+
+	local fn composer(theme: ThemeData, chat: Conversation) -> View
+		return HStack(spacing: 10.0) do
+			TextField(
+				value: self.draft,
+				placeholder: "Message " .. chat.name,
+				onChanged: fn(text: string)
+					self.draft = text
+				end
+			) do (text: string)
+				self.send()
+			end.expanded()
+
+			IconButton(icon: Icons.arrowForward, tooltip: "Send") do
+				self.send()
+			end
+		end.padding(insets: EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0))
+	end
+
+	-- Pushed as its own route, so the back arrow works the way it does
+	-- everywhere else and the thread stays mounted underneath.
+	local fn settings(context: BuildContext, theme: ThemeData, me: string) -> View
+		local email: string = ""
+		local user: Account? = self.user
+
+		if user != nil then
+			email = user!.email
+		end
+
+		return RouteScreen(title: "Settings") do
+			VStack(alignment: StackAlignment.Fill, spacing: 16.0) do
+				Card() do
+					HStack(spacing: 14.0) do
+						Avatar(name: me, size: 54.0)
+
+						VStack(alignment: StackAlignment.Leading, sizing: StackSize.Fit, spacing: 3.0) do
+							Text(me).font(17.0).foregroundStyle(theme.text)
+							Text(email).font(12.0).foregroundStyle(theme.textMuted)
+						end.expanded()
+
+						Chip(
+							label: self.status,
+							color: theme.success.withAlpha(0.18),
+							textColor: theme.success
+						)
+					end
+				end
+
+				Card() do
+					VStack(alignment: StackAlignment.Fill, spacing: 12.0) do
+						Text("Notifications").font(15.0).foregroundStyle(theme.text)
+
+						Toggle(value: self.notifications, label: "Push notifications") do (on: boolean)
+							self.setState() do
+								self.notifications = on
+							end
+						end
+
+						Toggle(value: self.sounds, label: "Message sounds") do (on: boolean)
+							self.setState() do
+								self.sounds = on
+							end
+						end
+
+						Divider()
+
+						Text("Privacy").font(15.0).foregroundStyle(theme.text)
+
+						Checkbox(value: self.readReceipts, label: "Send read receipts") do (on: boolean)
+							self.setState() do
+								self.readReceipts = on
+							end
+						end
+
+						HStack(spacing: 12.0) do
+							Text("Status").font(13.0).foregroundStyle(theme.textMuted)
+
+							Picker(
+								value: self.status,
+								options: {"Active", "Away", "Do not disturb"},
+								width: 200.0
+							) do (next: string)
+								self.setState() do
+									self.status = next
+								end
+							end
+
+							Spacer()
+						end
+					end
+				end
+
+				Spacer()
+
+				Button(label: "Sign out", color: theme.danger) do
+					-- Pop the settings route first: signing out swaps the
+					-- screen underneath for the login form, and a route left
+					-- on the stack would still be covering it.
+					context.navigator()?.pop()
+					self.signOut()
+				end
+			end.padding(20.0)
+		end
+	end
+end

@@ -9,18 +9,18 @@ import * from Layout
 -- Theme
 -- ============================================================================
 --
--- An ambient bundle of colours, text styles and metrics that every widget below
+-- An ambient bundle of colours, text styles and metrics that every view below
 -- a `Theme` can read without being handed it.
 --
 -- Flutter does this with a generic `InheritedWidget`, and `Theme.of(context)`
 -- is a typed lookup by runtime type. Saule has no downcasts, so a *generic*
--- version is out of reach — but a concrete one is not. The `Theme` widget
+-- version is out of reach — but a concrete one is not. The `Theme` view
 -- stores its data in element scratch on the way down, and `of` walks up the
 -- element chain reading it. Copy the pattern for any other ambient value your
 -- app needs; it is about twenty lines.
 
 -- One shared default, so an unthemed app doesn't allocate a `ThemeData` per
--- lookup. `Theme.of` is called from every themed widget's build.
+-- lookup. `Theme.of` is called from every themed view's build.
 local defaults: table = {}
 
 local fn fallback() -> ThemeData
@@ -36,20 +36,25 @@ end
 --     runApp(Theme(data: ThemeData.light(), child: MyApp()))
 --
 -- Themes nest: an inner one shadows the outer for its own subtree, which is how
--- a single panel gets a different accent without a separate widget tree.
-export class Theme extends StatelessWidget
+-- a single panel gets a different accent without a separate view tree.
+export class Theme extends View
 	data: ThemeData
-	child: Widget?
+	child: View?
 
-	fn init(data: ThemeData? = nil, child: Widget? = nil, key: string? = nil)
+	fn init(
+		data: ThemeData? = nil,
+		child: View? = nil,
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
+	)
 		self.super(key)
 
 		self.data = data ?? ThemeData()
-		self.child = child
+		self.child = childOf(child, content)
 	end
 
 	-- The nearest theme above `context`, or the default when there is none, so
-	-- a widget used outside any `Theme` still renders.
+	-- a view used outside any `Theme` still renders.
 	static fn of(context: BuildContext) -> ThemeData
 		local node: Element? = context.element()
 		local walking: boolean = true
@@ -73,12 +78,12 @@ export class Theme extends StatelessWidget
 		return fallback()
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		-- Written before the child is built, which is the whole trick: this
 		-- element's scratch is already populated by the time anything below it
 		-- calls `Theme.of`.
 		context.data().theme = self.data
 
-		return self.child ?? SizedBox()
+		return self.child ?? Frame()
 	end
 end

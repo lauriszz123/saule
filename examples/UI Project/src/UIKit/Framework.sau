@@ -5,24 +5,24 @@ import * from ThemeData
 import * from Events
 
 -- ============================================================================
--- The widget framework
+-- The view framework
 -- ============================================================================
 --
 -- Two trees, the same way Flutter does it:
 --
---   Widget   immutable description of what the UI should look like. Cheap to
+--   View   immutable description of what the UI should look like. Cheap to
 --            throw away and rebuild on every frame.
---   Element  the persistent instance of a widget at one position in the tree.
+--   Element  the persistent instance of a view at one position in the tree.
 --            It owns everything mutable: the child list, the laid-out size and
---            offset, any `State`, and a scratch table for the widget's own
+--            offset, any `State`, and a scratch table for the view's own
 --            per-instance bookkeeping.
 --
 -- Flutter has a third tree (`RenderObject`) that owns layout and painting.
 -- Saule has no downcasts, so a `PaddingRenderObject` could never read the
 -- `Padding` that configured it — every render class would be stuck with a
--- `Widget`-typed field it cannot inspect. Instead the *behaviour* lives on the
--- widget as `layout` / `paint` / `handleEvent` methods that take the `Element`
--- holding the mutable state. Widgets stay immutable, elements stay generic,
+-- `View`-typed field it cannot inspect. Instead the *behaviour* lives on the
+-- view as `layout` / `paint` / `handleEvent` methods that take the `Element`
+-- holding the mutable state. Views stay immutable, elements stay generic,
 -- and no cast is ever needed.
 --
 -- Everything mutually recursive lives in this one file because Saule forbids
@@ -37,7 +37,7 @@ export enum PointerKind
 	Up,
 	Move,
 
-	-- The wheel turned. Routed like a press — to the front-most widget under
+	-- The wheel turned. Routed like a press — to the front-most view under
 	-- the cursor, which lets nested scroll views work — and `scrollX` /
 	-- `scrollY` carry the movement.
 	Scroll
@@ -45,7 +45,7 @@ end
 
 -- Which cursor the pointer should show this frame.
 --
--- Widgets ask rather than set, because several of them are under the pointer at
+-- Views ask rather than set, because several of them are under the pointer at
 -- once and only the innermost should win. Move events are dispatched
 -- depth-first with the front-most sibling first, so the *first* request in a
 -- frame is the innermost topmost one — which is why this keeps the first and
@@ -172,7 +172,7 @@ export class PointerEvent
 	kind: PointerKind
 
 	-- Window coordinates. Each element converts these to its own local space
-	-- before handing them to the widget.
+	-- before handing them to the view.
 	x: float
 	y: float
 
@@ -316,8 +316,8 @@ export class FocusNode
 	end
 end
 
--- What a widget returns from `focusData()` to say "I can hold focus".
--- Returning nil means the widget is skipped by focus and keyboard routing —
+-- What a view returns from `focusData()` to say "I can hold focus".
+-- Returning nil means the view is skipped by focus and keyboard routing —
 -- that is also how a disabled control opts out.
 export class FocusData
 	-- Optional handle for programmatic focus. Focus tracking itself uses the
@@ -409,7 +409,7 @@ export class FocusManager
 		local i: integer = 1
 
 		while i <= #self.order do
-			local data: FocusData? = self.order[i].widget.focusData()
+			local data: FocusData? = self.order[i].view.focusData()
 
 			if data != nil then
 				if data!.modal then
@@ -468,11 +468,11 @@ export class FocusManager
 		self.focused = element
 
 		if previous != nil then
-			previous!.widget.focusChanged(previous!, false)
+			previous!.view.focusChanged(previous!, false)
 		end
 
 		if element != nil then
-			element!.widget.focusChanged(element!, true)
+			element!.view.focusChanged(element!, true)
 		end
 
 		-- Text input is only worth capturing while an editor holds focus.
@@ -500,7 +500,7 @@ export class FocusManager
 			return false
 		end
 
-		local data: FocusData? = element!.widget.focusData()
+		local data: FocusData? = element!.view.focusData()
 
 		if data == nil then
 			return false
@@ -535,7 +535,7 @@ export class FocusManager
 			else
 				chain[#chain + 1] = target!
 
-				if target!.widget.handleKey(target!, event) then
+				if target!.view.handleKey(target!, event) then
 					return true
 				end
 
@@ -547,12 +547,12 @@ export class FocusManager
 
 		while i <= #self.order do
 			local element: Element = self.order[i]
-			local data: FocusData? = element.widget.focusData()
+			local data: FocusData? = element.view.focusData()
 
 			-- A global listener behind a modal is out of reach too, or Escape
 			-- would close the screen under the dialog.
 			if data != nil and data!.global and self.reachable(i) and not contains(chain, element) then
-				if element.widget.handleKey(element, event) then
+				if element.view.handleKey(element, event) then
 					return true
 				end
 			end
@@ -564,7 +564,7 @@ export class FocusManager
 	end
 
 	local fn collect(element: Element, scope: Element?) -> nil
-		local data: FocusData? = element.widget.focusData()
+		local data: FocusData? = element.view.focusData()
 		local inner: Element? = scope
 
 		if data != nil then
@@ -608,7 +608,7 @@ export class FocusManager
 
 		while i <= #self.order do
 			local element: Element = self.order[i]
-			local data: FocusData? = element.widget.focusData()
+			local data: FocusData? = element.view.focusData()
 
 			if data != nil and data!.tabStop and self.reachable(i) then
 				stops[#stops + 1] = element
@@ -651,7 +651,7 @@ export class FocusManager
 		local i: integer = 1
 
 		while i <= #self.order do
-			local data: FocusData? = self.order[i].widget.focusData()
+			local data: FocusData? = self.order[i].view.focusData()
 
 			if data != nil and data!.autofocus and self.reachable(i) then
 				self.setFocus(self.order[i])
@@ -668,11 +668,11 @@ end
 -- Parent data
 -- ----------------------------------------------------------------------------
 
--- What a `Positioned` tells its enclosing `Stack`. This is Flutter's
+-- What a `Positioned` tells its enclosing `ZStack`. This is Flutter's
 -- `ParentData`, narrowed to the one case that needs it. It lives here rather
--- than next to `Stack` so the base `Widget` can declare the hook that returns
--- it without importing the layout widgets back.
-export class StackData
+-- than next to `ZStack` so the base `View` can declare the hook that returns
+-- it without importing the layout views back.
+export class ZStackData
 	left: float?
 	top: float?
 	right: float?
@@ -698,55 +698,59 @@ export class StackData
 end
 
 -- ----------------------------------------------------------------------------
--- Widget
+-- View
 -- ----------------------------------------------------------------------------
 
 -- The base class of everything you can put on screen.
 --
--- A widget is a *description*, not a live object: build one, hand it over, and
--- forget about it. Never store mutable state on a widget — put it in a `State`
+-- A view is a *description*, not a live object: build one, hand it over, and
+-- forget about it. Never store mutable state on a view — put it in a `State`
 -- or in the element scratch (`context.data()`).
 --
 -- Subclasses override two groups of hooks:
 --
---   composition   `build` (one subtree) or `childWidgets` (a fixed list)
+--   composition   `body` (one subtree) or `childViews` (a fixed list)
 --   rendering     `layout`, `paint`, `handleEvent`
 --
 -- The defaults implement "I am a transparent wrapper around a single child",
--- which is exactly what a `StatelessWidget` needs, so composite widgets only
--- ever override `build`.
-export class Widget
-	-- Identity across rebuilds. Two widgets reconcile onto the same element
+-- which is exactly what a `View` needs, so composite views only
+-- ever override `body`.
+export class View
+	-- Identity across rebuilds. Two views reconcile onto the same element
 	-- only when their class *and* key match.
 	key: string?
 
 	fn init(key: string? = nil)
 		self.key = key
+
+		-- Announce itself to whichever content block is open, if any. This is
+		-- what lets children be written as bare statements — see `ViewBuilder`.
+		ViewBuilder.emit(self)
 	end
 
-	-- Composite widgets describe themselves in terms of other widgets.
-	-- Returning nil means "I am a render widget, ask `childWidgets` instead".
-	fn build(context: BuildContext) -> Widget?
+	-- Composite views describe themselves in terms of other views.
+	-- Returning nil means "I am a render view, ask `childViews` instead".
+	fn body(context: BuildContext) -> View?
 		return nil
 	end
 
-	-- Children of a render widget, in paint order: first is painted first and
+	-- Children of a render view, in paint order: first is painted first and
 	-- therefore sits at the back.
-	fn childWidgets() -> table<Widget>
+	fn childViews() -> table<View>
 		return {}
 	end
 
-	-- Stateful widgets return a fresh state object here.
+	-- Stateful views return a fresh state object here.
 	fn createState() -> State?
 		return nil
 	end
 
 	-- --- layout ------------------------------------------------------------
 	--
-	-- Measure this widget under `constraints`, lay out its children, give each
-	-- child an `offset` relative to this widget's top-left corner, and return
+	-- Measure this view under `constraints`, lay out its children, give each
+	-- child an `offset` relative to this view's top-left corner, and return
 	-- the size chosen. A child's own size is whatever its `layout` returned.
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local child: Element? = el.childAt(1)
 
 		if child == nil then
@@ -761,7 +765,7 @@ export class Widget
 
 	-- --- paint ---------------------------------------------------------------
 	--
-	-- `x` / `y` are this widget's absolute top-left in window coordinates; its
+	-- `x` / `y` are this view's absolute top-left in window coordinates; its
 	-- size is `el.size`. Draw yourself, then paint your children.
 	fn paint(el: Element, x: float, y: float) -> nil
 		el.paintChildren(x, y)
@@ -769,12 +773,12 @@ export class Widget
 
 	-- --- input ---------------------------------------------------------------
 	--
-	-- `x` / `y` are local to this widget (negative or past `el.size` when the
+	-- `x` / `y` are local to this view (negative or past `el.size` when the
 	-- pointer is outside, which is what `inside` reports). Return true from a
-	-- `Down` to claim the event and stop it reaching widgets behind you.
+	-- `Down` to claim the event and stop it reaching views behind you.
 	--
 	-- `Move` and `Up` are broadcast to the whole tree regardless of position,
-	-- so a widget can also notice that the pointer *left* it.
+	-- so a view can also notice that the pointer *left* it.
 	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
 		return false
 	end
@@ -783,7 +787,7 @@ export class Widget
 
 	-- Called once per frame with the elapsed seconds, before layout.
 	--
-	-- This is how a *stateless* widget animates: advance whatever you own and
+	-- This is how a *stateless* view animates: advance whatever you own and
 	-- call `el.markNeedsBuild()` on the frames where something actually changed.
 	-- A `State` has its own `tick` for the same purpose.
 	fn tick(el: Element, dt: float) -> nil
@@ -791,7 +795,7 @@ export class Widget
 
 	-- --- focus and keyboard --------------------------------------------------
 
-	-- Non-nil makes this widget focusable. Key events go to the focused
+	-- Non-nil makes this view focusable. Key events go to the focused
 	-- element first and bubble up from there, so `handleKey` also fires on
 	-- ancestors of whatever holds focus.
 	fn focusData() -> FocusData?
@@ -809,31 +813,450 @@ export class Widget
 
 	-- --- parent data ---------------------------------------------------------
 
-	-- Non-zero makes an enclosing `Row` / `Column` share its free space with
+	-- Non-zero makes an enclosing `HStack` / `VStack` share its free space with
 	-- this child instead of asking for the child's natural size.
 	fn flexFactor() -> integer
 		return 0
 	end
 
-	-- Non-nil makes an enclosing `Stack` place this child explicitly.
-	fn stackData() -> StackData?
+	-- Non-nil makes an enclosing `ZStack` place this child explicitly.
+	fn zStackData() -> ZStackData?
 		return nil
+	end
+
+	-- --- modifiers -----------------------------------------------------------
+	--
+	-- Each of these returns *a new view wrapping this one*, so they chain:
+	--
+	--     Text("Saved")
+	--         .padding(10.0)
+	--         .background(Colors.success, radius: 6.0)
+	--         .onTapGesture() do
+	--             dismiss()
+	--         end
+	--
+	-- Written as nesting, that same tree reads inside-out — the `Text` you care
+	-- about is buried four constructors deep. Reading order and paint order
+	-- disagree, and the closing parentheses pile up at the bottom.
+	--
+	-- Every one of them goes through `ViewModifiers` rather than naming
+	-- `Padding` / `Box` / `GestureArea` directly. Those live in files that
+	-- import *this* one, and Saule forbids circular imports, so the wrappers
+	-- arrive as an installed implementation instead. See `Modifiers.sau`.
+
+	-- Inset on every edge by `amount`, or by `insets` when the edges differ.
+	fn padding(amount: float = 8.0, insets: EdgeInsets? = nil) -> View
+		return Modifiers.get().padding(self, insets ?? EdgeInsets.all(amount))
+	end
+
+	-- Paint a filled, optionally rounded and outlined rectangle behind this
+	-- view. The size is unchanged: a background wraps, it does not pad.
+	fn background(
+		color: Color? = nil,
+		radius: float = 0.0,
+		border: Color? = nil,
+		borderWidth: float = 1.0
+	) -> View
+		return Modifiers.get().background(self, color, radius, border, borderWidth)
+	end
+
+	-- Just the outline, for when the fill would come from somewhere else.
+	fn border(color: Color, width: float = 1.0, radius: float = 0.0) -> View
+		return Modifiers.get().background(self, nil, radius, color, width)
+	end
+
+	-- Pin or bound an axis. An argument left nil is passed through untouched.
+	--
+	--     .frame(width: 120.0)          -- exactly this wide
+	--     .frame(maxWidth: 380.0)       -- this wide at most, shrink-wrap below
+	--
+	-- Both groups at once nests the two, tight inside bounded, which is the
+	-- order that leaves the bound able to win.
+	fn frame(
+		width: float? = nil,
+		height: float? = nil,
+		minWidth: float? = nil,
+		maxWidth: float? = nil,
+		minHeight: float? = nil,
+		maxHeight: float? = nil
+	) -> View
+		local bounded: boolean = minWidth != nil
+			or maxWidth != nil
+			or minHeight != nil
+			or maxHeight != nil
+
+		-- Every branch ends in a `return`. A call on an interface-typed
+		-- receiver types in return position but not as the right-hand side of
+		-- an assignment, so the two cases are spelled out rather than composed
+		-- through a mutable local.
+		if not bounded then
+			return Modifiers.get().frame(self, width, height)
+		end
+
+		if width == nil and height == nil then
+			return Modifiers.get().limits(self, minWidth, maxWidth, minHeight, maxHeight)
+		end
+
+		-- Both: tight inside bounded, which is the order that leaves the bound
+		-- able to win.
+		return Modifiers.get().limits(
+			Modifiers.get().frame(self, width, height),
+			minWidth,
+			maxWidth,
+			minHeight,
+			maxHeight
+		)
+	end
+
+	-- Take a share of the leftover space in the enclosing stack instead of the
+	-- natural size. Two siblings with weights 1 and 2 split it one-third /
+	-- two-thirds.
+	fn expanded(weight: integer = 1) -> View
+		return Modifiers.get().expand(self, weight)
+	end
+
+	-- Place this view inside whatever space it is given.
+	fn aligned(alignment: Alignment) -> View
+		return Modifiers.get().align(self, alignment)
+	end
+
+	fn centered() -> View
+		return Modifiers.get().align(self, Alignment.center())
+	end
+
+	-- Confine everything this subtree paints to its own rectangle.
+	fn clipped() -> View
+		return Modifiers.get().clip(self)
+	end
+
+	-- Fade the subtree as one image. Costs an offscreen buffer — fade groups,
+	-- not leaves.
+	fn opacity(value: float) -> View
+		return Modifiers.get().opacity(self, value)
+	end
+
+	-- `fn()`. Left button.
+	fn onTapGesture(action: function) -> View
+		return Modifiers.get().onTap(self, action, false)
+	end
+
+	-- `fn()`. Right button — pair it with `showMenu`.
+	fn onSecondaryTapGesture(action: function) -> View
+		return Modifiers.get().onTap(self, action, true)
+	end
+
+	-- `fn(inside: boolean)`, on entry and on exit.
+	fn onHover(action: function) -> View
+		return Modifiers.get().onHover(self, action)
+	end
+
+	-- A label after a hover delay. SwiftUI spells this one `help`, and so do we.
+	fn help(message: string) -> View
+		return Modifiers.get().tooltip(self, message)
+	end
+
+	-- Ask for a cursor while the pointer is over this subtree. The innermost
+	-- request in a frame wins.
+	fn cursor(name: string) -> View
+		return Modifiers.get().cursor(self, name)
 	end
 end
 
--- Base for the many render widgets that wrap exactly one optional child. It
--- only exists to spare every one of them the same `childWidgets` boilerplate.
-export class SingleChildWidget extends Widget
-	child: Widget?
+-- ----------------------------------------------------------------------------
+-- The modifier registry
+-- ----------------------------------------------------------------------------
 
-	fn init(child: Widget? = nil, key: string? = nil)
-		self.super(key)
+-- What `View`'s modifiers are implemented in terms of.
+--
+-- This exists purely to break an import cycle. `View.padding` wants to build a
+-- `Padding`, but `Padding` is declared in `Layout.sau`, which imports this
+-- file — and Saule rejects circular imports outright rather than resolving
+-- them lazily. So the direction is inverted: this file declares the *shape* of
+-- the wrappers, and `Modifiers.sau` — which sits above every widget file and
+-- can therefore name all of them — supplies the implementation.
+--
+-- Every method takes the view being wrapped as its first argument and returns
+-- the wrapper, which keeps the whole interface free of any state.
+export interface ViewModifiers
+	fn padding(child: View, insets: EdgeInsets) -> View
+	fn background(
+		child: View,
+		color: Color?,
+		radius: float,
+		border: Color?,
+		borderWidth: float
+	) -> View
+	fn frame(child: View, width: float?, height: float?) -> View
+	fn limits(
+		child: View,
+		minWidth: float?,
+		maxWidth: float?,
+		minHeight: float?,
+		maxHeight: float?
+	) -> View
+	fn expand(child: View, weight: integer) -> View
+	fn align(child: View, alignment: Alignment) -> View
+	fn clip(child: View) -> View
+	fn opacity(child: View, value: float) -> View
+	fn onTap(child: View, action: function, secondary: boolean) -> View
+	fn onHover(child: View, action: function) -> View
+	fn tooltip(child: View, message: string) -> View
+	fn cursor(child: View, name: string) -> View
 
-		self.child = child
+	-- What a single-child block wraps several collected views in.
+	fn stack(children: table<View>) -> View
+end
+
+-- Holds the one installed implementation.
+--
+-- `Modifiers.sau` installs itself with a top-level call, which runs when the
+-- module is imported — and `UIKit/init.sau` imports it last. So anything that
+-- reached a `View` at all went through the barrel, and the implementation is
+-- in place long before the first frame.
+export class Modifiers
+	static local impl: ViewModifiers? = nil
+
+	static fn install(modifiers: ViewModifiers) -> nil
+		Modifiers.impl = modifiers
 	end
 
-	fn childWidgets() -> table<Widget>
-		local child: Widget? = self.child
+	static fn get() -> ViewModifiers
+		local impl: ViewModifiers? = Modifiers.impl
+
+		if impl == nil then
+			throw "view modifiers are not installed — import UIKit, not Framework on its own"
+		end
+
+		return impl!
+	end
+end
+
+-- ----------------------------------------------------------------------------
+-- ViewBuilder
+-- ----------------------------------------------------------------------------
+--
+-- Children are written as plain statements inside a trailing block:
+--
+--     VStack(spacing: 8.0) do
+--         Text("one")
+--         Text("two").padding(4.0)
+--     end
+--
+-- No table, no `return`, no commas — which is the whole point. SwiftUI gets
+-- this from a result builder, a compiler feature that rewrites the block into
+-- nested calls. Saule has no such thing, so this does the same job at runtime.
+--
+-- Three rules:
+--
+--   1. `View.init` **emits** every view it constructs into the innermost open
+--      frame. A statement like `Text("one")` therefore records itself even
+--      though its value is discarded.
+--   2. Anything that takes a view as a child **claims** it back out of that
+--      frame — it is somebody's child now, not a sibling. Every modifier wraps
+--      in a `SingleChildView`, so `Text("x").padding(4.0)` emits twice and
+--      claims once, leaving just the `Padding`.
+--   3. A container **opens** a frame, runs the block, and **closes** it. What
+--      the frame collected, in statement order, is its children.
+--
+-- The invariant rule 2 rests on: a view that ends up inside another view must
+-- be claimed, or it shows up twice — once as a child and once as a sibling.
+-- That is why every `View`-typed field in this kit is assigned through
+-- `claimed` / `claimedAll` rather than directly.
+--
+-- The costs, stated plainly:
+--
+--   * It is dynamic, so a block that constructs a view and never uses it still
+--     adds it. Every builder DSL of this shape behaves that way.
+--   * A `throw` out of the middle of a block leaves its frame open, so the
+--     build phase resets the stack before each rebuild.
+export class ViewBuilder
+	static local frames: table<table<View>> = {}
+
+	-- Start collecting. Always paired with `close`.
+	static fn open() -> nil
+		ViewBuilder.frames[#ViewBuilder.frames + 1] = {}
+	end
+
+	-- Finish collecting and hand back what the block produced, in order.
+	static fn close() -> table<View>
+		local depth: integer = #ViewBuilder.frames
+
+		if depth == 0 then
+			return {}
+		end
+
+		local frame: table<View> = ViewBuilder.frames[depth]
+		Table.remove(ViewBuilder.frames, depth)
+
+		return frame
+	end
+
+	-- Called by `View.init` for every view ever constructed. Outside a block
+	-- there is no open frame and this does nothing, which is what lets views
+	-- built in a helper or held in a local behave like ordinary values.
+	static fn emit(view: View) -> nil
+		local depth: integer = #ViewBuilder.frames
+
+		if depth == 0 then
+			return
+		end
+
+		local frame: table<View> = ViewBuilder.frames[depth]
+		frame[#frame + 1] = view
+	end
+
+	-- The other half: this view is now a child, so it stops being a sibling.
+	--
+	-- Every open frame is searched, innermost first — not just the top one.
+	-- A helper called from inside a block builds its views while *that* block
+	-- is open, but the container consuming them is often opened afterwards:
+	--
+	--     HStack() do              -- frame A opens
+	--         self.chatList()      -- rows are built here, into frame A
+	--     end                      -- …but the List that takes them opens
+	--                              --   frame B first, and claiming only B
+	--                              --   would leave every row in A as well
+	--
+	-- That is exactly how a list ends up drawn twice, once properly and once
+	-- as loose siblings of whatever contains it.
+	--
+	-- Each frame is scanned from the end, because the nearest match is the one
+	-- just wrapped, and views compare by identity — two `Text("hi")`s are
+	-- different views, and claiming one must not remove the other.
+	static fn claim(view: View?) -> nil
+		local depth: integer = #ViewBuilder.frames
+
+		if view == nil then
+			return
+		end
+
+		while depth >= 1 do
+			local frame: table<View> = ViewBuilder.frames[depth]
+			local i: integer = #frame
+
+			while i >= 1 do
+				if frame[i] == view! then
+					Table.remove(frame, i)
+
+					return
+				end
+
+				i = i - 1
+			end
+
+			depth = depth - 1
+		end
+	end
+
+	-- Abandon every open frame, so a block that threw cannot leak into the
+	-- next rebuild.
+	static fn reset() -> nil
+		ViewBuilder.frames = {}
+	end
+end
+
+-- Put an already-built view into the block you are inside.
+--
+--     local grid: View = TableView(columns: cols, rows: rows)
+--
+--     ScrollView() do
+--         show(grid)
+--     end
+--
+-- A block collects views *constructed inside it*, because that is the only
+-- moment there is to notice them. A bare `grid` on its own line is not even a
+-- statement, and a view built earlier never announced itself here — so without
+-- this it would sit outside the block instead of in it, and the mistake would
+-- be silent. `show` is the call that says "this one, here".
+--
+-- It claims first, so passing a view that *was* built in this block moves it to
+-- this position rather than listing it twice.
+export fn show(view: View) -> View
+	ViewBuilder.claim(view)
+	ViewBuilder.emit(view)
+
+	return view
+end
+
+-- Take a view as a child: claim it, then hand it straight back.
+--
+--     self.child = claimed(child)
+export fn claimed(child: View?) -> View?
+	ViewBuilder.claim(child)
+
+	return child
+end
+
+-- The same for a list of children.
+export fn claimedAll(children: table<View>) -> table<View>
+	for child: View in children do
+		ViewBuilder.claim(child)
+	end
+
+	return children
+end
+
+-- The children a container was given, whichever way they arrived.
+--
+-- `children:` is still there for the case a block cannot express — a list
+-- assembled in a loop, or one that came from somewhere else. The block wins if
+-- somebody passes both.
+export fn childrenOf(children: table<View>, content: (fn() -> nil)?) -> table<View>
+	if content == nil then
+		return claimedAll(children)
+	end
+
+	-- Bound to a typed local first: calling through the nullable directly
+	-- leaves the result untyped, and Saule checks every position.
+	local build: fn() -> nil = content!
+
+	ViewBuilder.open()
+	build()
+
+	return ViewBuilder.close()
+end
+
+-- The same, for the wrappers that hold a single child.
+--
+-- A block that produced several views gets a `VStack` around them, the way
+-- `ScrollView { … }` does in SwiftUI. The stack comes from the modifier
+-- registry, because `VStack` lives in a file that imports this one.
+export fn childOf(child: View?, content: (fn() -> nil)?) -> View?
+	if content == nil then
+		return claimed(child)
+	end
+
+	local collected: table<View> = childrenOf({}, content)
+
+	if #collected == 0 then
+		return nil
+	end
+
+	if #collected == 1 then
+		return collected[1]
+	end
+
+	-- The stack is built *after* the frame closed, so it lands in the enclosing
+	-- frame like any other view and has to be claimed straight back out.
+	return claimed(Modifiers.get().stack(collected))
+end
+
+-- Base for the many render views that wrap exactly one optional child. It
+-- only exists to spare every one of them the same `childViews` boilerplate.
+export class SingleChildView extends View
+	child: View?
+
+	fn init(child: View? = nil, key: string? = nil)
+		self.super(key)
+
+		-- Every modifier wraps in one of these, so this single `claimed` is
+		-- what keeps `Text("x").padding(4.0)` from leaving the `Text` behind
+		-- as a sibling of its own `Padding`.
+		self.child = claimed(child)
+	end
+
+	fn childViews() -> table<View>
+		local child: View? = self.child
 
 		if child == nil then
 			return {}
@@ -843,17 +1266,9 @@ export class SingleChildWidget extends Widget
 	end
 end
 
--- A widget with no state of its own: it is a pure function from configuration
--- to a subtree. Override `build`.
-export class StatelessWidget extends Widget
-	fn init(key: string? = nil)
-		self.super(key)
-	end
-end
-
--- A widget whose subtree depends on state that outlives a rebuild. Override
+-- A view whose subtree depends on state that outlives a rebuild. Override
 -- `createState`; the returned `State` object survives as long as the element.
-export class StatefulWidget extends Widget
+export class StatefulView extends View
 	fn init(key: string? = nil)
 		self.super(key)
 	end
@@ -863,11 +1278,11 @@ end
 -- State
 -- ----------------------------------------------------------------------------
 
--- The mutable half of a `StatefulWidget`, kept alive by the element across
+-- The mutable half of a `StatefulView`, kept alive by the element across
 -- rebuilds. Change fields inside `setState` so the framework knows to rebuild.
 --
--- Note on configuration: `widget` is typed `Widget` and Saule cannot downcast,
--- so a state cannot read its own widget's fields through it. Pass whatever the
+-- Note on configuration: `view` is typed `View` and Saule cannot downcast,
+-- so a state cannot read its own view's fields through it. Pass whatever the
 -- state needs into the constructor from `createState()` instead:
 --
 --     fn createState() -> State?
@@ -878,24 +1293,24 @@ end
 -- `BuildContext.data()` — see `Button`.
 export class State
 	-- The configuration currently driving this state.
-	widget: Widget?
+	view: View?
 
 	local element: Element?
 
 	fn init()
-		self.widget = nil
+		self.view = nil
 		self.element = nil
 	end
 
 	-- Called once by the framework right after the state is created, before
 	-- the first build.
-	fn attach(element: Element, widget: Widget) -> nil
+	fn attach(element: Element, view: View) -> nil
 		self.element = element
-		self.widget = widget
+		self.view = view
 	end
 
-	fn updateConfig(widget: Widget) -> nil
-		self.widget = widget
+	fn updateConfig(view: View) -> nil
+		self.view = view
 	end
 
 	-- --- lifecycle hooks -----------------------------------------------------
@@ -903,7 +1318,7 @@ export class State
 	fn initState() -> nil
 	end
 
-	fn didUpdateWidget(oldWidget: Widget) -> nil
+	fn didUpdateView(oldWidget: View) -> nil
 	end
 
 	fn dispose() -> nil
@@ -914,8 +1329,8 @@ export class State
 	fn tick(dt: float) -> nil
 	end
 
-	fn build(context: BuildContext) -> Widget
-		throw "State.build must be overridden"
+	fn body(context: BuildContext) -> View
+		throw "State.body must be overridden"
 	end
 
 	-- --- framework interface -------------------------------------------------
@@ -967,14 +1382,14 @@ end
 -- They are the same handful of flags in every control — `hovered` alone is
 -- read in twenty-nine places — so they are declared once, here, and typed.
 --
--- Widget-specific state does *not* belong here. Give the widget a `State`
+-- View-specific state does *not* belong here. Give the view a `State`
 -- subclass (`Counter` / `CounterState` is the worked example) and keep it
 -- there, where it gets the same typing and the same documentation.
 export class ElementData
-	-- The pointer is inside this element's box, tracked by `GestureDetector`.
+	-- The pointer is inside this element's box, tracked by `GestureArea`.
 	hovered: boolean
 
-	-- The pointer is inside, tracked by `MouseRegion`. Deliberately separate
+	-- The pointer is inside, tracked by `CursorArea`. Deliberately separate
 	-- from `hovered`: the two nest, and each needs its own edge detection, so
 	-- a region's `onExit` must not be cancelled by a detector beneath it that
 	-- is still reporting a hover.
@@ -1002,12 +1417,12 @@ export class ElementData
 	tapX: float
 	tapY: float
 
-	-- The theme a `Theme` widget installed at this position, which
+	-- The theme a `Theme` view installed at this position, which
 	-- `Theme.of` finds by walking up from a context. Nil at every position
 	-- that isn't a `Theme`.
 	theme: ThemeData?
 
-	-- Everything a widget keeps that the framework knows nothing about:
+	-- Everything a view keeps that the framework knows nothing about:
 	-- `TextField`'s caret, `Paint`'s cached canvas, `Scroll`'s controller.
 	--
 	-- Untyped, so a read is `any` and needs `as` to become anything else —
@@ -1056,25 +1471,37 @@ end
 
 -- One layer floating above the app.
 --
--- Everything a widget cannot do inside its own box — dialogs, dropdowns,
+-- Everything a view cannot do inside its own box — dialogs, dropdowns,
 -- tooltips, toasts, drag ghosts — is done by putting an entry in the overlay.
 -- Entries live at the root of the tree, so they paint above everything and are
--- hit-tested before it, no matter how deep the widget that opened them sits.
+-- hit-tested before it, no matter how deep the view that opened them sits.
 --
--- The content is a `builder` (`fn() -> Widget`) rather than a fixed widget, so
+-- The content is a `builder` (`fn() -> View`) rather than a fixed view, so
 -- an entry re-reads whatever it closes over each time it rebuilds.
 export class OverlayEntry
 	builder: function
 
+	-- Whether this layer is opaque to input: it swallows presses and the wheel
+	-- that its own content did not claim, and confines focus to itself.
+	--
+	-- Off by default, because most layers should *not* do that. A toast has to
+	-- let you carry on working underneath it, and a dialog or a menu brings its
+	-- own `ModalBarrier` — which also decides what clicking outside means.
+	-- A full-window route has neither, and covering the screen visually is not
+	-- the same as covering it for the pointer: without this, a click on a blank
+	-- part of a route lands on whatever the screen below happens to have there.
+	opaque: boolean
+
 	-- Identity for reconciliation. Entries come and go from the middle of the
 	-- list, and without a key the element for entry 2 would be handed entry 3's
-	-- widget when 2 is removed — quietly wrecking the state inside it.
+	-- view when 2 is removed — quietly wrecking the state inside it.
 	local id: string
 
 	static local nextId: integer = 1
 
-	fn init(builder: function)
+	fn init(builder: function, opaque: boolean = false)
 		self.builder = builder
+		self.opaque = opaque
 		self.id = "overlay#" .. OverlayEntry.nextId
 
 		OverlayEntry.nextId = OverlayEntry.nextId + 1
@@ -1084,17 +1511,49 @@ export class OverlayEntry
 		return self.id
 	end
 
-	fn content() -> Widget
+	fn content() -> View
 		return self.builder()
 	end
 end
 
--- Wraps each entry so the entry's key rides on a widget the framework controls.
--- The built content belongs to the caller and may be any widget at all, so its
+-- Wraps each entry so the entry's key rides on a view the framework controls.
+-- The built content belongs to the caller and may be any view at all, so its
 -- key is not ours to set.
-export class OverlaySlot extends SingleChildWidget
-	fn init(child: Widget? = nil, key: string? = nil)
+export class OverlaySlot extends SingleChildView
+	-- See `OverlayEntry.opaque`.
+	opaque: boolean
+
+	fn init(child: View? = nil, key: string? = nil, opaque: boolean = false)
 		self.super(child, key)
+
+		self.opaque = opaque
+	end
+
+	-- Focus is confined to an opaque layer, so Tab cannot walk into the screen
+	-- behind it. Not a tab stop itself — it is a container, and traversal
+	-- parking on it would land focus on nothing visible.
+	fn focusData() -> FocusData?
+		if not self.opaque then
+			return nil
+		end
+
+		return FocusData(nil, false, false, false, false, true)
+	end
+
+	-- The layer's own views are dispatched first, so anything arriving here
+	-- landed on a blank part of *this* layer. Absorb it rather than letting it
+	-- fall through to the screen below.
+	--
+	-- `Move` and `Up` deliberately pass through: both are broadcast to the
+	-- whole tree, and that broadcast is how a view under here learns the
+	-- pointer left it. Swallowing them would strand it mid-hover. This is the
+	-- same split `ModalBarrier` makes.
+	fn handleEvent(el: Element, event: PointerEvent, x: float, y: float, inside: boolean) -> boolean
+		if not self.opaque or not inside then
+			return false
+		end
+
+		return event.kind == PointerKind.Down or event.kind == PointerKind.Scroll
 	end
 end
 
@@ -1107,7 +1566,7 @@ end
 --     ...
 --     owner.overlay().remove(entry)
 --
--- Reach it from a widget with `context.owner()?.overlay()`.
+-- Reach it from a view with `context.owner()?.overlay()`.
 export class OverlayManager
 	local entries: table<OverlayEntry>
 	local host: Element?
@@ -1222,26 +1681,26 @@ end
 -- Order does all the work. Entries are laid out after the app, so they paint
 -- over it; `Element.dispatch` walks children back to front, so they are also
 -- hit-tested first. Nothing about painting or input needed special cases.
-export class OverlayHost extends Widget
-	root: Widget
+export class OverlayHost extends View
+	root: View
 	overlay: OverlayManager
 
-	fn init(root: Widget, overlay: OverlayManager, key: string? = nil)
+	fn init(root: View, overlay: OverlayManager, key: string? = nil)
 		self.super(key)
 
 		self.root = root
 		self.overlay = overlay
 	end
 
-	fn childWidgets() -> table<Widget>
-		local out: table<Widget> = {self.root}
+	fn childViews() -> table<View>
+		local out: table<View> = {self.root}
 		local i: integer = 1
 
 		while i <= self.overlay.count() do
 			local entry: OverlayEntry? = self.overlay.entryAt(i)
 
 			if entry != nil then
-				out[#out + 1] = OverlaySlot(entry!.content(), entry!.key())
+				out[#out + 1] = OverlaySlot(entry!.content(), entry!.key(), entry!.opaque)
 			end
 
 			i = i + 1
@@ -1257,10 +1716,10 @@ export class OverlayHost extends Widget
 	end
 
 	-- Every layer gets the full window, so an entry positions its content with
-	-- `Center`, `Align`, or a `Stack` of `Positioned` children.
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	-- `Center`, `Align`, or a `ZStack` of `Positioned` children.
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local size: Size = constraints.biggest()
-		local layer: BoxConstraints = BoxConstraints.tight(size)
+		local layer: Constraints = Constraints.tight(size)
 		local i: integer = 1
 
 		while i <= el.childCount() do
@@ -1297,7 +1756,9 @@ export class Navigator
 	end
 
 	fn push(builder: function) -> OverlayEntry
-		local entry: OverlayEntry = OverlayEntry(builder)
+		-- Opaque: a route covers the window, so it has to cover it for the
+		-- pointer and for focus too, not merely for paint.
+		local entry: OverlayEntry = OverlayEntry(builder, true)
 		self.routes[#self.routes + 1] = entry
 		self.overlay.insert(entry)
 
@@ -1340,7 +1801,7 @@ end
 -- BuildContext
 -- ----------------------------------------------------------------------------
 
--- A handle to the element currently being built. Handed to every `build`.
+-- A handle to the element currently being built. Handed to every `body`.
 export class BuildContext
 	local node: Element
 
@@ -1356,8 +1817,8 @@ export class BuildContext
 	-- State that belongs to this position in the tree and survives rebuilds.
 	--
 	-- The framework's own flags (`hovered`, `pressed`, `focused`, …) are typed
-	-- fields on it; anything the widget itself keeps goes in `.scratch` until
-	-- it earns a `State` class. Reach for a `StatefulWidget` once that state is
+	-- fields on it; anything the view itself keeps goes in `.scratch` until
+	-- it earns a `State` class. Reach for a `StatefulView` once that state is
 	-- more than a couple of booleans.
 	fn data() -> ElementData
 		return self.node.data
@@ -1366,6 +1827,44 @@ export class BuildContext
 	-- Rebuild the subtree rooted here before the next frame is painted.
 	fn markNeedsBuild() -> nil
 		self.node.markNeedsBuild()
+	end
+
+	-- `@State`, as close as Saule gets.
+	--
+	--     local count: Binding = context.state("count", 0)
+	--     ...
+	--     Button(label: "+") do count.set(count.int() + 1) end
+	--
+	-- The value lives in the element's scratch, so it survives every rebuild at
+	-- this position, and `set` marks the element dirty — which is the half a
+	-- plain scratch write always forgets. SwiftUI gets the same effect from a
+	-- property wrapper plus a dependency graph; this is the honest version for
+	-- a language with neither.
+	--
+	-- Reach for a `StatefulView` and a `State` subclass instead when the state
+	-- needs lifecycle hooks (`initState`, `dispose`, `tick`) or when there is
+	-- enough of it to deserve typed fields.
+	fn state(name: string, initial: any) -> Binding
+		local bag: table = self.data().scratch
+
+		if bag[name] == nil then
+			bag[name] = initial
+		end
+
+		return Binding(bag, name, self)
+	end
+
+	-- The route stack, when this view is mounted under one. Every screen needs
+	-- it to push and pop, and reaching it through `owner()` at each call site
+	-- meant the same three-line nil dance everywhere.
+	fn navigator() -> Navigator?
+		local owner: BuildOwner? = self.owner()
+
+		if owner == nil then
+			return nil
+		end
+
+		return owner!.navigator()
 	end
 
 	fn owner() -> BuildOwner?
@@ -1385,17 +1884,63 @@ export class BuildContext
 	end
 end
 
+-- One named slot of a view's own state, and the rebuild that writing it needs.
+--
+-- Handed out by `BuildContext.state`. The typed readers are what a language
+-- without generics can offer over an untyped bag: each one recovers the value
+-- and falls back if the slot somehow holds something else, so a bad write
+-- reverts rather than crashing a frame.
+export class Binding
+	local bag: table
+	local name: string
+	local context: BuildContext
+
+	fn init(bag: table, name: string, context: BuildContext)
+		self.bag = bag
+		self.name = name
+		self.context = context
+	end
+
+	fn int(fallback: integer = 0) -> integer
+		return self.bag[self.name] as integer ?? fallback
+	end
+
+	fn number(fallback: float = 0.0) -> float
+		return self.bag[self.name] as float ?? fallback
+	end
+
+	fn text(fallback: string = "") -> string
+		return self.bag[self.name] as string ?? fallback
+	end
+
+	fn flag(fallback: boolean = false) -> boolean
+		return self.bag[self.name] as boolean ?? fallback
+	end
+
+	-- The untyped slot, for values with no reader of their own (a `Date`, an
+	-- enum). Cast it at the call site.
+	fn value() -> any
+		return self.bag[self.name]
+	end
+
+	-- Write, and schedule the rebuild that makes the write visible.
+	fn set(next: any) -> nil
+		self.bag[self.name] = next
+		self.context.markNeedsBuild()
+	end
+end
+
 -- ----------------------------------------------------------------------------
 -- Element
 -- ----------------------------------------------------------------------------
 
 -- One live position in the tree. Elements are created by the framework, never
--- by user code; widgets receive theirs as the first argument to `layout`,
+-- by user code; views receive theirs as the first argument to `layout`,
 -- `paint` and `handleEvent`.
 export class Element
-	-- The widget currently describing this position. Swapped on every
+	-- The view currently describing this position. Swapped on every
 	-- reconcile, so never cache it across frames.
-	widget: Widget
+	view: View
 
 	parent: Element?
 	owner: BuildOwner?
@@ -1406,7 +1951,7 @@ export class Element
 	offset: Offset
 
 	-- Per-element state: the framework's own typed flags, plus the untyped
-	-- `scratch` for whatever the widget here keeps. See `BuildContext.data()`.
+	-- `scratch` for whatever the view here keeps. See `BuildContext.data()`.
 	data: ElementData
 
 	local kids: table<Element>
@@ -1417,11 +1962,11 @@ export class Element
 
 	-- Relayout boundary: the constraints this element was last laid out under,
 	-- and whether anything since then could have changed the result.
-	local lastConstraints: BoxConstraints?
+	local lastConstraints: Constraints?
 	local staleLayout: boolean
 
-	fn init(widget: Widget)
-		self.widget = widget
+	fn init(view: View)
+		self.view = view
 		self.parent = nil
 		self.owner = nil
 		self.size = Size.zero()
@@ -1443,10 +1988,10 @@ export class Element
 		self.owner = owner
 		self.mounted = true
 
-		local created: State? = self.widget.createState()
+		local created: State? = self.view.createState()
 		if created != nil then
 			self.state = created
-			created.attach(self, self.widget)
+			created.attach(self, self.view)
 			created.initState()
 		end
 
@@ -1469,15 +2014,15 @@ export class Element
 		self.mounted = false
 	end
 
-	-- Adopt a new configuration of the same widget class.
-	fn update(newWidget: Widget) -> nil
-		local old: Widget = self.widget
-		self.widget = newWidget
+	-- Adopt a new configuration of the same view class.
+	fn update(newWidget: View) -> nil
+		local old: View = self.view
+		self.view = newWidget
 
 		local s: State? = self.state
 		if s != nil then
 			s.updateConfig(newWidget)
-			s.didUpdateWidget(old)
+			s.didUpdateView(old)
 		end
 
 		-- A new configuration can lay out differently, even when the tree shape
@@ -1552,29 +2097,34 @@ export class Element
 
 	-- Re-describe this position and reconcile the child elements against it.
 	fn rebuild() -> nil
+		-- A `throw` out of the middle of a content block leaves its frame open.
+		-- Nothing is collecting between rebuilds, so dropping the stack here
+		-- costs nothing and keeps one failed build from corrupting the next.
+		ViewBuilder.reset()
+
 		self.dirty = false
 		self.kids = Element.reconcile(self, self.kids, self.describeChildren(), self.owner)
 	end
 
-	local fn describeChildren() -> table<Widget>
+	local fn describeChildren() -> table<View>
 		local s: State? = self.state
 
 		if s != nil then
-			return {s.build(self.context())}
+			return {s.body(self.context())}
 		end
 
-		local built: Widget? = self.widget.build(self.context())
+		local built: View? = self.view.body(self.context())
 
 		if built != nil then
 			return {built}
 		end
 
-		return self.widget.childWidgets()
+		return self.view.childViews()
 	end
 
-	-- Two widgets describe the same position — and therefore keep the same
+	-- Two views describe the same position — and therefore keep the same
 	-- element, its state and its scratch — when their class and key agree.
-	static fn canUpdate(a: Widget, b: Widget) -> boolean
+	static fn canUpdate(a: View, b: View) -> boolean
 		return type(a) == type(b) and a.key == b.key
 	end
 
@@ -1582,11 +2132,11 @@ export class Element
 	-- mounting a fresh one where it doesn't, and unmounting whatever is left
 	-- over.
 	--
-	-- A *keyed* widget is matched against its key anywhere in the old list, so
+	-- A *keyed* view is matched against its key anywhere in the old list, so
 	-- reordering a list carries each child's element — and therefore its state,
-	-- scratch and scroll position — along with it. Unkeyed widgets are matched
+	-- scratch and scroll position — along with it. Unkeyed views are matched
 	-- by position, which is what makes a plain list of children cheap.
-	static fn reconcile(parent: Element, olds: table<Element>, news: table<Widget>, owner: BuildOwner?) -> table<Element>
+	static fn reconcile(parent: Element, olds: table<Element>, news: table<View>, owner: BuildOwner?) -> table<Element>
 		local out: table<Element> = {}
 
 		-- Old elements still available for reuse; a slot is cleared as soon as
@@ -1602,8 +2152,8 @@ export class Element
 		i = 1
 
 		while i <= #news do
-			local widget: Widget = news[i]
-			local slot: integer = Element.claimSlot(pool, #olds, widget, i)
+			local view: View = news[i]
+			local slot: integer = Element.claimSlot(pool, #olds, view, i)
 			local reused: Element? = nil
 
 			if slot > 0 then
@@ -1611,13 +2161,13 @@ export class Element
 
 				if old != nil then
 					pool[slot] = nil
-					old!.update(widget)
+					old!.update(view)
 					reused = old
 				end
 			end
 
 			if reused == nil then
-				local fresh: Element = Element(widget)
+				local fresh: Element = Element(view)
 				fresh.mount(parent, owner)
 				out[#out + 1] = fresh
 			else
@@ -1643,22 +2193,22 @@ export class Element
 		return out
 	end
 
-	-- Which pool slot `widget` should reuse, or 0 for "none — build fresh".
+	-- Which pool slot `view` should reuse, or 0 for "none — build fresh".
 	--
-	-- Keyed widgets search the whole pool; unkeyed ones only consider the slot
-	-- they sit in, and only if that slot's old widget is unkeyed too. Without
-	-- that second condition an unkeyed widget could steal a keyed element and
+	-- Keyed views search the whole pool; unkeyed ones only consider the slot
+	-- they sit in, and only if that slot's old view is unkeyed too. Without
+	-- that second condition an unkeyed view could steal a keyed element and
 	-- undo the reordering the key exists to express.
 	-- `count` is passed explicitly because clearing a claimed slot leaves a nil
 	-- hole, and `#` over a table with holes is not something to lean on.
-	static local fn claimSlot(pool: table<Element?>, count: integer, widget: Widget, index: integer) -> integer
-		if widget.key != nil then
+	static local fn claimSlot(pool: table<Element?>, count: integer, view: View, index: integer) -> integer
+		if view.key != nil then
 			local i: integer = 1
 
 			while i <= count do
 				local candidate: Element? = pool[i]
 
-				if candidate != nil and Element.canUpdate(candidate!.widget, widget) then
+				if candidate != nil and Element.canUpdate(candidate!.view, view) then
 					return i
 				end
 
@@ -1670,7 +2220,7 @@ export class Element
 
 		local atIndex: Element? = pool[index]
 
-		if atIndex != nil and Element.canUpdate(atIndex!.widget, widget) then
+		if atIndex != nil and Element.canUpdate(atIndex!.view, view) then
 			return index
 		end
 
@@ -1702,11 +2252,11 @@ export class Element
 	-- its untouched siblings hit the cache in turn.
 	--
 	-- The contract this depends on: anything that can change layout must mark
-	-- some element dirty. Rebuilds do it automatically; a render widget that
+	-- some element dirty. Rebuilds do it automatically; a render view that
 	-- mutates its own scratch (a scroll offset, a drag) has to call
 	-- `el.markNeedsLayout()` itself.
-	fn layout(constraints: BoxConstraints) -> Size
-		local cached: BoxConstraints? = self.lastConstraints
+	fn layout(constraints: Constraints) -> Size
+		local cached: Constraints? = self.lastConstraints
 
 		if not self.staleLayout and cached != nil and cached!.sameAs(constraints) then
 			LayoutStats.skipped = LayoutStats.skipped + 1
@@ -1716,14 +2266,14 @@ export class Element
 
 		LayoutStats.ran = LayoutStats.ran + 1
 
-		self.size = self.widget.layout(self, constraints)
+		self.size = self.view.layout(self, constraints)
 		self.lastConstraints = constraints
 		self.staleLayout = false
 
 		return self.size
 	end
 
-	-- Force the next layout to run even if the constraints match. Render widgets
+	-- Force the next layout to run even if the constraints match. Render views
 	-- that keep layout-affecting state in `el.data` call this when it changes.
 	fn invalidateLayout() -> nil
 		self.markNeedsLayout()
@@ -1732,7 +2282,7 @@ export class Element
 	-- `x` / `y` are the *parent's* absolute origin; this element's own origin
 	-- adds its offset on top.
 	fn paint(x: float, y: float) -> nil
-		self.widget.paint(self, x + self.offset.dx, y + self.offset.dy)
+		self.view.paint(self, x + self.offset.dx, y + self.offset.dy)
 	end
 
 	fn paintChildren(x: float, y: float) -> nil
@@ -1742,7 +2292,7 @@ export class Element
 	end
 
 	fn tick(dt: float) -> nil
-		self.widget.tick(self, dt)
+		self.view.tick(self, dt)
 
 		local s: State? = self.state
 		if s != nil then
@@ -1781,10 +2331,10 @@ export class Element
 				i = i - 1
 			end
 
-			return self.widget.handleEvent(self, event, lx, ly, true)
+			return self.view.handleEvent(self, event, lx, ly, true)
 		end
 
-		-- Move and Up reach everyone: that is how a widget learns the pointer
+		-- Move and Up reach everyone: that is how a view learns the pointer
 		-- left it, or that a press it was tracking ended somewhere else.
 		local i: integer = #self.kids
 		while i >= 1 do
@@ -1792,7 +2342,7 @@ export class Element
 			i = i - 1
 		end
 
-		self.widget.handleEvent(self, event, lx, ly, inside)
+		self.view.handleEvent(self, event, lx, ly, inside)
 
 		return false
 	end
@@ -1803,7 +2353,7 @@ export class Element
 		println(
 			String.rep("  ", depth) .. String.format(
 				"%s  size=%.0fx%.0f offset=%.0f,%.0f",
-				type(self.widget),
+				type(self.view),
 				self.size.width,
 				self.size.height,
 				self.offset.dx,
@@ -1851,8 +2401,8 @@ export class BuildOwner
 		return self.navigatorInstance
 	end
 
-	fn attachRoot(widget: Widget) -> Element
-		local element: Element = Element(widget)
+	fn attachRoot(view: View) -> Element
+		local element: Element = Element(view)
 		self.root = element
 		element.mount(nil, self)
 
@@ -1902,10 +2452,10 @@ end
 -- Route one event into the tree.
 --
 -- Pointer motion is deliberately absent: the frame loop resolves hover once per
--- frame from the latest position, because a widget wants to know where the
+-- frame from the latest position, because a view wants to know where the
 -- pointer ended up, not every step it took getting there.
 --
--- Tab is handled last, and only if nothing claimed it: a widget that wants
+-- Tab is handled last, and only if nothing claimed it: a view that wants
 -- literal tabs just returns true from `handleKey`.
 local fn dispatchEvent(focus: FocusManager, root: Element, event: Event) -> nil
 	match event
@@ -2003,7 +2553,7 @@ end
 -- backspace and it keeps deleting. Turn it off for a game-style app that reads
 -- held keys itself.
 export fn runApp(
-	root: Widget,
+	root: View,
 	width: integer = 800,
 	height: integer = 600,
 	title: string = "Saule",
@@ -2062,7 +2612,7 @@ export fn runApp(
 		)
 
 		rootElement.offset = Offset.zero()
-		rootElement.layout(BoxConstraints.tight(logical))
+		rootElement.layout(Constraints.tight(logical))
 
 		-- Nothing arrived and nothing was already dirty, so no hit test can have
 		-- changed its answer and no handler has anything to run. Skipping the
@@ -2074,7 +2624,7 @@ export fn runApp(
 
 			-- Hover is resolved once, from where the pointer is now. It runs
 			-- even on a frame with no motion, because a scrolled list or a
-			-- panel that grew moves widgets under a stationary pointer.
+			-- panel that grew moves views under a stationary pointer.
 			--
 			-- Pointer coordinates arrive in physical pixels; the tree is laid
 			-- out in logical ones, so they have to be converted or every hit
@@ -2082,7 +2632,7 @@ export fn runApp(
 			local rawX: float, rawY: float = Mouse.getPos()
 
 			-- Cursor requests are gathered during the move pass and applied
-			-- after, so the innermost widget under the pointer wins.
+			-- after, so the innermost view under the pointer wins.
 			Cursors.beginFrame()
 			rootElement.dispatch(
 				PointerEvent(PointerKind.Move, Display.toLogical(rawX), Display.toLogical(rawY)),
@@ -2108,14 +2658,14 @@ export fn runApp(
 		owner.flush()
 
 		-- Then lay out *again*, because that rebuild can have replaced whole
-		-- subtrees — a hover that gives a widget a background changes its child's
+		-- subtrees — a hover that gives a view a background changes its child's
 		-- class, and the fresh elements have no size yet. Painting them
 		-- unmeasured drew their contents at the parent's origin for one frame,
 		-- which looked like the text jittering to the top-left before settling.
 		--
 		-- Relayout boundaries make this nearly free: with nothing dirty it is one
 		-- comparison at the root.
-		rootElement.layout(BoxConstraints.tight(logical))
+		rootElement.layout(Constraints.tight(logical))
 
 		-- A caret or an indeterminate bar animates inside `paint` off the
 		-- clock, with no rebuild behind it. The previous frame's paint is what

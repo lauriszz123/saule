@@ -14,14 +14,14 @@ import * from Icon
 -- Grids and tables
 -- ============================================================================
 --
--- Both are composed out of `Row`, `Column`, `SizedBox` and `Expanded` rather
--- than written as render widgets. That is not laziness: columns line up across
+-- Both are composed out of `HStack`, `VStack`, `Frame` and `Expand` rather
+-- than written as render views. That is not laziness: columns line up across
 -- rows *because* every row is built from the same width rules, so alignment is
 -- structural rather than something the layout has to keep in sync.
 
 -- A fixed-column grid.
 --
---     GridView(columns: 3, spacing: 8.0, runSpacing: 8.0, children: cards)
+--     Grid(columns: 3, spacing: 8.0, runSpacing: 8.0, children: cards)
 --
 -- Every cell gets an equal share of the width. `aspectRatio` fixes the cell
 -- height as a multiple of that width; leave it out and each row is as tall as
@@ -29,77 +29,78 @@ import * from Icon
 --
 -- Every child is built up front — for a long grid, put it in a scroll view and
 -- keep the count in the hundreds.
-export class GridView extends StatelessWidget
-	children: table<Widget>
+export class Grid extends View
+	children: table<View>
 	columns: integer
 	spacing: float
 	runSpacing: float
 	aspectRatio: float?
 
 	fn init(
-		children: table<Widget> = {},
+		children: table<View> = {},
 		columns: integer = 2,
 		spacing: float = 8.0,
 		runSpacing: float = 8.0,
 		aspectRatio: float? = nil,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
-		self.children = children
+		self.children = childrenOf(children, content)
 		self.columns = columns
 		self.spacing = spacing
 		self.runSpacing = runSpacing
 		self.aspectRatio = aspectRatio
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local perRow: integer = self.columns
 
 		if perRow < 1 then
 			perRow = 1
 		end
 
-		local rows: table<Widget> = {}
+		local rows: table<View> = {}
 		local index: integer = 1
 
 		while index <= #self.children do
-			local cells: table<Widget> = {}
+			local cells: table<View> = {}
 			local column: integer = 1
 
 			while column <= perRow do
-				local cell: Widget = SizedBox()
+				local cell: View = Frame()
 
 				if index <= #self.children then
 					cell = self.children[index]
 				end
 
-				local sized: Widget = cell
+				local sized: View = cell
 				local ratio: float? = self.aspectRatio
 
 				if ratio != nil then
 					sized = AspectRatio(ratio!, cell)
 				end
 
-				-- The trailing cells of a short last row are empty `Expanded`s,
+				-- The trailing cells of a short last row are empty `Expand`s,
 				-- so the real ones keep their column width instead of stretching
 				-- to fill the gap.
-				cells[#cells + 1] = Expanded(child: sized)
+				cells[#cells + 1] = sized.expanded()
 
 				index = index + 1
 				column = column + 1
 			end
 
-			rows[#rows + 1] = Row(
-				crossAxisAlignment: CrossAxisAlignment.Stretch,
+			rows[#rows + 1] = HStack(
+				alignment: StackAlignment.Fill,
 				spacing: self.spacing,
 				children: cells
 			)
 		end
 
-		return Column(
-			crossAxisAlignment: CrossAxisAlignment.Stretch,
-			mainAxisSize: MainAxisSize.Min,
+		return VStack(
+			alignment: StackAlignment.Fill,
+			sizing: StackSize.Fit,
 			spacing: self.runSpacing,
 			children: rows
 		)
@@ -147,12 +148,12 @@ end
 -- it is what carries a row's element — and any state inside it — when the order
 -- changes.
 export class TableRow
-	cells: table<Widget>
+	cells: table<View>
 	key: string?
 	onTap: function?
 
-	fn init(cells: table<Widget> = {}, key: string? = nil, onTap: function? = nil)
-		self.cells = cells
+	fn init(cells: table<View> = {}, key: string? = nil, onTap: function? = nil)
+		self.cells = claimedAll(cells)
 		self.key = key
 		self.onTap = onTap
 	end
@@ -160,7 +161,7 @@ end
 
 -- A table with aligned columns, a sortable header and striped rows.
 --
---     DataTable(
+--     TableView(
 --         columns: {
 --             TableColumn("Name", sortable: true),
 --             TableColumn("Size", width: 90.0, align: Alignment.centerRight())
@@ -173,7 +174,7 @@ end
 --
 -- Sorting is *reported*, not performed: the table draws the order you give it
 -- and tells you which header was clicked, so the data stays yours.
-export class DataTable extends StatelessWidget
+export class TableView extends View
 	columns: table<TableColumn>
 	rows: table<TableRow>
 
@@ -206,31 +207,31 @@ export class DataTable extends StatelessWidget
 	end
 
 	-- Wrap one cell in the width rule its column declares. Both branches produce
-	-- a widget the flex layout sizes, which is what keeps the columns aligned.
-	local fn sized(column: TableColumn, child: Widget) -> Widget
+	-- a view the flex layout sizes, which is what keeps the columns aligned.
+	local fn sized(column: TableColumn, child: View) -> View
 		local width: float? = column.width
 
 		if width != nil then
-			return SizedBox(width: width!, child: child)
+			return Frame(width: width!, child: child)
 		end
 
-		return Expanded(flex: column.flex, child: child)
+		return child.expanded(column.flex)
 	end
 
-	local fn padding() -> EdgeInsets
+	local fn cellInsets() -> EdgeInsets
 		return self.rowPadding ?? EdgeInsets.symmetric(horizontal: 10.0, vertical: 7.0)
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
-		local out: table<Widget> = {self.header(context, theme)}
+		local out: table<View> = {self.header(context, theme)}
 		local i: integer = 1
 
 		while i <= #self.rows do
 			out[#out + 1] = TableRowView(
 				row: self.rows[i],
 				columns: self.columns,
-				padding: self.padding(),
+				padding: self.cellInsets(),
 				striped: self.striped and i % 2 == 0,
 				key: self.rows[i].key
 			)
@@ -238,15 +239,15 @@ export class DataTable extends StatelessWidget
 			i = i + 1
 		end
 
-		return Column(
-			crossAxisAlignment: CrossAxisAlignment.Stretch,
-			mainAxisSize: MainAxisSize.Min,
+		return VStack(
+			alignment: StackAlignment.Fill,
+			sizing: StackSize.Fit,
 			children: out
 		)
 	end
 
-	local fn header(context: BuildContext, theme: ThemeData) -> Widget
-		local cells: table<Widget> = {}
+	local fn header(context: BuildContext, theme: ThemeData) -> View
+		local cells: table<View> = {}
 		local i: integer = 1
 
 		while i <= #self.columns do
@@ -268,16 +269,16 @@ export class DataTable extends StatelessWidget
 			i = i + 1
 		end
 
-		return Column(
-			crossAxisAlignment: CrossAxisAlignment.Stretch,
-			mainAxisSize: MainAxisSize.Min,
+		return VStack(
+			alignment: StackAlignment.Fill,
+			sizing: StackSize.Fit,
 			children: {
-				Container(
+				Box(
 					color: theme.surfaceLight,
-					padding: self.padding(),
-					child: Row(crossAxisAlignment: CrossAxisAlignment.Center, children: cells)
+					padding: self.cellInsets(),
+					child: HStack(alignment: StackAlignment.Center, children: cells)
 				),
-				Container(height: 1.0, color: theme.border),
+				Box(height: 1.0, color: theme.border),
 			}
 		)
 	end
@@ -313,7 +314,7 @@ export class DataTable extends StatelessWidget
 end
 
 -- A header cell: the title, plus an arrow when it is the sorted column.
-export class TableHeaderCell extends StatelessWidget
+export class TableHeaderCell extends View
 	column: TableColumn
 	order: SortOrder
 	theme: ThemeData
@@ -334,7 +335,7 @@ export class TableHeaderCell extends StatelessWidget
 		self.onTap = onTap
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local scratch: ElementData = context.data()
 		local hovered: boolean = scratch.hovered == true
 
@@ -344,7 +345,7 @@ export class TableHeaderCell extends StatelessWidget
 			ink = self.theme.text
 		end
 
-		local label: Widget = Text(
+		local label: View = Text(
 			self.column.title,
 			style: TextStyle(color: ink),
 			softWrap: false,
@@ -358,35 +359,32 @@ export class TableHeaderCell extends StatelessWidget
 				arrow = Icons.arrowDownward
 			end
 
-			label = Row(
-				mainAxisSize: MainAxisSize.Min,
+			label = HStack(
+				sizing: StackSize.Fit,
 				spacing: 4.0,
 				children: {label, Icon(arrow, 14.0, ink)}
 			)
 		end
 
-		local cell: Widget = Align(alignment: self.column.align, child: label)
+		local cell: View = label.aligned(self.column.align)
 
 		if not self.column.sortable then
 			return cell
 		end
 
-		return MouseRegion(
-			cursor: "hand",
-			child: GestureDetector(
-				child: cell,
-				onTap: self.onTap,
-				onHover: fn(inside: boolean)
-					scratch.hovered = inside
-					context.markNeedsBuild()
-				end
-			)
+		return GestureArea(
+			child: cell,
+			onTap: self.onTap,
+			onHover: fn(inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
 		)
 	end
 end
 
 -- One data row: striped, hover-highlighted, and tappable when the row says so.
-export class TableRowView extends StatelessWidget
+export class TableRowView extends View
 	row: TableRow
 	columns: table<TableColumn>
 	padding: EdgeInsets
@@ -407,7 +405,7 @@ export class TableRowView extends StatelessWidget
 		self.striped = striped
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local hovered: boolean = scratch.hovered == true
@@ -422,41 +420,41 @@ export class TableRowView extends StatelessWidget
 			fill = theme.surfaceLight
 		end
 
-		local cells: table<Widget> = {}
+		local cells: table<View> = {}
 		local i: integer = 1
 
 		while i <= #self.columns do
 			local column: TableColumn = self.columns[i]
-			local content: Widget = SizedBox()
+			local content: View = Frame()
 
 			if i <= #self.row.cells then
 				content = self.row.cells[i]
 			end
 
-			local aligned: Widget = Align(alignment: column.align, child: content)
+			local aligned: View = content.aligned(column.align)
 			local width: float? = column.width
 
 			if width != nil then
-				cells[#cells + 1] = SizedBox(width: width!, child: aligned)
+				cells[#cells + 1] = aligned.frame(width: width!)
 			else
-				cells[#cells + 1] = Expanded(flex: column.flex, child: aligned)
+				cells[#cells + 1] = aligned.expanded(column.flex)
 			end
 
 			i = i + 1
 		end
 
-		local body: Widget = Container(
+		local inner: View = Box(
 			color: fill,
 			padding: self.padding,
-			child: Row(crossAxisAlignment: CrossAxisAlignment.Center, children: cells)
+			child: HStack(alignment: StackAlignment.Center, children: cells)
 		)
 
 		if self.row.onTap == nil then
-			return body
+			return inner
 		end
 
-		return GestureDetector(
-			child: body,
+		return GestureArea(
+			child: inner,
 			onTap: self.row.onTap,
 			onHover: fn(inside: boolean)
 				scratch.hovered = inside

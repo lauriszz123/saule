@@ -6,17 +6,17 @@ import * from Framework
 import * from Layout
 
 -- ============================================================================
--- Painted widgets
+-- Painted views
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- DecoratedBox
+-- Surface
 -- ----------------------------------------------------------------------------
 
 -- Fill, rounded corners and an outline, drawn behind and around the child.
--- Sizing is entirely the child's business — wrap it in a `SizedBox` or give it
+-- Sizing is entirely the child's business — wrap it in a `Frame` or give it
 -- padding if you want more than the child's natural size.
-export class DecoratedBox extends SingleChildWidget
+export class Surface extends SingleChildView
 	color: Color?
 	radius: float
 	border: Color?
@@ -27,7 +27,7 @@ export class DecoratedBox extends SingleChildWidget
 		radius: float = 0.0,
 		border: Color? = nil,
 		borderWidth: float = 1.0,
-		child: Widget? = nil,
+		child: View? = nil,
 		key: string? = nil
 	)
 		self.super(child, key)
@@ -38,7 +38,7 @@ export class DecoratedBox extends SingleChildWidget
 		self.borderWidth = borderWidth
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local child: Element? = el.childAt(1)
 
 		if child == nil then
@@ -73,14 +73,14 @@ export class DecoratedBox extends SingleChildWidget
 end
 
 -- ----------------------------------------------------------------------------
--- Container
+-- Box
 -- ----------------------------------------------------------------------------
 
 -- The convenience box: margin, decoration, padding, a fixed size and an
 -- alignment, in whatever combination you need. Exactly like Flutter's, it owns
 -- no layout logic of its own — it composes the primitives above, and every
 -- argument you leave out disappears from the tree entirely.
-export class Container extends StatelessWidget
+export class Box extends View
 	width: float?
 	height: float?
 	color: Color?
@@ -91,10 +91,10 @@ export class Container extends StatelessWidget
 	margin: EdgeInsets?
 	alignment: Alignment?
 	clip: boolean
-	child: Widget?
+	child: View?
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		width: float? = nil,
 		height: float? = nil,
 		color: Color? = nil,
@@ -105,11 +105,12 @@ export class Container extends StatelessWidget
 		margin: EdgeInsets? = nil,
 		alignment: Alignment? = nil,
 		clip: boolean = false,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
-		self.child = child
+		self.child = childOf(child, content)
 		self.width = width
 		self.height = height
 		self.color = color
@@ -122,9 +123,9 @@ export class Container extends StatelessWidget
 		self.clip = clip
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		-- Built inside-out, so the reader sees the same nesting the tree gets.
-		local current: Widget? = self.child
+		local current: View? = self.child
 
 		local alignment: Alignment? = self.alignment
 		if alignment != nil then
@@ -137,11 +138,11 @@ export class Container extends StatelessWidget
 		end
 
 		if self.clip then
-			current = ClipRect(current)
+			current = Clip(current)
 		end
 
 		if self.color != nil or self.border != nil then
-			current = DecoratedBox(
+			current = Surface(
 				self.color,
 				self.radius,
 				self.border,
@@ -151,7 +152,7 @@ export class Container extends StatelessWidget
 		end
 
 		if self.width != nil or self.height != nil then
-			current = SizedBox(self.width, self.height, current)
+			current = Frame(self.width, self.height, current)
 		end
 
 		local margin: EdgeInsets? = self.margin
@@ -160,7 +161,7 @@ export class Container extends StatelessWidget
 		end
 
 		if current == nil then
-			return SizedBox()
+			return Frame()
 		end
 
 		return current!
@@ -180,12 +181,12 @@ end
 -- A run of text, wrapped to the width it is given.
 --
 -- Measuring is real: the size it reports comes from the font atlas, so a
--- surrounding `Column` or `Container` sizes to the glyphs rather than a guess.
+-- surrounding `VStack` or `Box` sizes to the glyphs rather than a guess.
 --
 -- Wrapping is on by default, and only does anything when the incoming
--- constraint has a bounded width — inside a `Row` the main axis is unbounded,
+-- constraint has a bounded width — inside an `HStack` the main axis is unbounded,
 -- so text there stays on one line unless you give it a width.
-export class Text extends Widget
+export class Text extends View
 	data: string
 	style: TextStyle?
 
@@ -212,6 +213,52 @@ export class Text extends Widget
 		self.softWrap = softWrap
 		self.maxLines = maxLines
 		self.align = align
+	end
+
+	-- --- text modifiers ------------------------------------------------------
+	--
+	-- These return `Text`, not `View`, so they chain with each other *and* the
+	-- generic modifiers still work afterwards — `Text` is a `View`. The order
+	-- that does not work is the other way round: `.padding()` returns a `View`,
+	-- and a `View` has no `.font`. Style the text first, then wrap it.
+
+	-- Point size. `Text("Title").font(24.0)`
+	fn font(size: float) -> Text
+		return self.restyled((self.style ?? TextStyle()).withSize(size))
+	end
+
+	-- Ink colour, spelled the way SwiftUI spells it.
+	fn foregroundStyle(color: Color) -> Text
+		return self.restyled((self.style ?? TextStyle()).withColor(color))
+	end
+
+	-- Cap the line count, with an ellipsis on the last one.
+	fn lineLimit(lines: integer) -> Text
+		return self.respun(self.style, self.softWrap, lines, self.align)
+	end
+
+	fn multilineTextAlignment(align: TextAlign) -> Text
+		return self.respun(self.style, self.softWrap, self.maxLines, align)
+	end
+
+	local fn restyled(style: TextStyle) -> Text
+		return self.respun(style, self.softWrap, self.maxLines, self.align)
+	end
+
+	-- Every text modifier is a fresh `Text` around the same string, so the one
+	-- it replaced has to come back out of the open content block. Routed
+	-- through here rather than each modifier building its own, because two of
+	-- them once forgot the `claim` and every label rendered twice.
+	local fn respun(
+		style: TextStyle?,
+		softWrap: boolean,
+		maxLines: integer?,
+		align: TextAlign
+	) -> Text
+		local next: Text = Text(self.data, style, softWrap, maxLines, align, self.key)
+		ViewBuilder.claim(self)
+
+		return next
 	end
 
 	local fn resolved() -> TextStyle
@@ -262,7 +309,7 @@ export class Text extends Widget
 		return out
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local style: TextStyle = self.resolved()
 		local rows: table<string> = self.lines(el, constraints.maxWidth)
 		local widest: float = 0.0
@@ -313,7 +360,7 @@ end
 --
 --     Opacity(opacity: fade.value, child: panel)
 --
--- Per-colour alpha only fades widgets that happen to take a colour, and it
+-- Per-colour alpha only fades views that happen to take a colour, and it
 -- double-darkens where they overlap. This renders the subtree to an offscreen
 -- canvas and composites that once, so a group fades as one image — which is
 -- what a transition needs.
@@ -321,10 +368,10 @@ end
 -- The canvas is kept on the element and reused; it is only reallocated when the
 -- size changes. That costs one full-size buffer per faded subtree, so fade
 -- groups rather than individual leaves.
-export class Opacity extends SingleChildWidget
+export class Opacity extends SingleChildView
 	opacity: float
 
-	fn init(opacity: float = 1.0, child: Widget? = nil, key: string? = nil)
+	fn init(opacity: float = 1.0, child: View? = nil, key: string? = nil)
 		self.super(child, key)
 
 		self.opacity = opacity

@@ -1,11 +1,14 @@
 import * from UIKit
 
--- A stateful counter.
+-- A counter, written the way SwiftUI writes one.
 --
--- Saule has no downcasts, so a `State` cannot read fields off `self.widget`
--- (it is typed `Widget`). Hand the state whatever configuration it needs from
--- `createState()` instead — explicit, and it type-checks.
-export class Counter extends StatefulWidget
+-- `context.state` is this kit's `@State`: a named slot in the element's own
+-- scratch that survives every rebuild at this position, and a `set` that marks
+-- the element dirty so the write actually shows. No `StatefulView`, no `State`
+-- subclass, no `createState` — for a single integer, none of that earns its
+-- keep. Reach for `StatefulView` when the state needs `initState`, `tick` or
+-- `dispose`, or when there is enough of it to deserve typed fields.
+export class Counter extends View
 	label: string
 	start: integer
 
@@ -16,45 +19,22 @@ export class Counter extends StatefulWidget
 		self.start = start
 	end
 
-	fn createState() -> State?
-		return CounterState(self.label, self.start)
-	end
-end
+	fn body(context: BuildContext) -> View
+		local count: Binding = context.state("count", self.start)
 
-class CounterState extends State
-	local label: string
-	local count: integer
+		return HStack(sizing: StackSize.Fit, spacing: 8.0) do
+			Button(label: "-") do
+				count.set(count.int() - 1)
+			end
 
-	fn init(label: string, start: integer)
-		self.super()
+			Text(self.label .. ": " .. count.int())
+				.foregroundStyle(Colors.text)
+				.centered()
+				.frame(width: 120.0)
 
-		self.label = label
-		self.count = start
-	end
-
-	local fn bump(by: integer) -> nil
-		self.setState(fn()
-			self.count = self.count + by
-		end)
-	end
-
-	fn build(context: BuildContext) -> Widget
-		return Row(
-			children: {
-				Button(label: "-", onPressed: fn()
-					self.bump(-1)
-				end),
-				Container(
-					width: 120.0,
-					alignment: Alignment.center(),
-					child: Text(self.label .. ": " .. self.count, style: TextStyle(color: Colors.text))
-				),
-				Button(label: "+", onPressed: fn()
-					self.bump(1)
-				end),
-			},
-			mainAxisSize: MainAxisSize.Min,
-			spacing: 8.0
-		)
+			Button(label: "+") do
+				count.set(count.int() + 1)
+			end
+		end
 	end
 end

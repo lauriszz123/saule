@@ -14,13 +14,13 @@ import * from Animation
 --
 -- Interesting bit: `Button` is *stateless*, yet it reacts to hover, press and
 -- focus. Those flags live in `context.data()` — scratch storage that belongs to
--- the element rather than the widget, so it survives the rebuild each hover
--- transition triggers. Reach for `StatefulWidget` when the state grows past
+-- the element rather than the view, so it survives the rebuild each hover
+-- transition triggers. Reach for `StatefulView` when the state grows past
 -- this; a few interaction booleans don't need a `State` object.
 --
 -- It is keyboard-operable: Tab moves focus to it, Enter or Space presses it,
 -- and a focus ring is drawn while it holds focus.
-export class Button extends StatelessWidget
+export class Button extends View
 	label: string
 	onPressed: function?
 
@@ -91,14 +91,14 @@ export class Button extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local scratch: ElementData = context.data()
 		local hovered: boolean = scratch.hovered == true
 		local pressed: boolean = scratch.pressed == true
 		local focused: boolean = scratch.focused == true
 
 		-- The node has to survive the rebuild that every hover or focus change
-		-- causes, so it lives in the element scratch rather than the widget.
+		-- causes, so it lives in the element scratch rather than the view.
 		local node: FocusNode = nodeFor(scratch)
 
 		local bag: table = scratch.scratch
@@ -123,46 +123,44 @@ export class Button extends StatelessWidget
 			ring = Colors.text.withAlpha(ringAt)
 		end
 
-		local body: Widget = Container(
-			child: Text(
-				self.label,
-				style: TextStyle(color: self.textColor ?? Colors.text, size: self.textSize)
-			),
-			color: fill,
-			radius: self.radius,
-			border: ring,
-			padding: self.padding ?? EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
-			alignment: Alignment.center()
+		local inner: View = Text(
+			self.label,
+			style: TextStyle(color: self.textColor ?? Colors.text, size: self.textSize)
 		)
+			.aligned(Alignment.center())
+			.padding(insets: self.padding ?? EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0))
+			.background(fill, radius: self.radius, border: ring)
 
-		-- A disabled button is not focusable either — returning the bare body
+		-- A disabled button is not focusable either — returning the bare inner
 		-- keeps it out of the Tab order.
 		if not self.enabled then
-			return body
+			return inner
 		end
 
+		-- The four pointer callbacks are one coordinated unit, so this stays a
+		-- `GestureArea` rather than four separate `.onXxx` wrappers around each
+		-- other — which would also nest four detectors deep for no reason.
+		local interactive: View = GestureArea(
+			child: inner,
+			onTap: self.onPressed,
+			onTapDown: fn()
+				scratch.pressed = true
+				-- Clicking a control should also focus it.
+				node.requestFocus()
+				context.markNeedsBuild()
+			end,
+			onTapUp: fn()
+				scratch.pressed = false
+				context.markNeedsBuild()
+			end,
+			onHover: fn(inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
+		)
+
 		return Focus(
-			child: MouseRegion(
-				cursor: "hand",
-				child: GestureDetector(
-					child: body,
-					onTap: self.onPressed,
-					onTapDown: fn()
-						scratch.pressed = true
-						-- Clicking a control should also focus it.
-						node.requestFocus()
-						context.markNeedsBuild()
-					end,
-					onTapUp: fn()
-						scratch.pressed = false
-						context.markNeedsBuild()
-					end,
-					onHover: fn(inside: boolean)
-						scratch.hovered = inside
-						context.markNeedsBuild()
-					end
-				)
-			),
+			child: interactive,
 			node: node,
 			autofocus: self.autofocus,
 			onKeyDown: fn(event: KeyEvent)

@@ -25,7 +25,7 @@ end
 -- Where a scroll view is scrolled to, and the only mutable part of scrolling.
 --
 -- Hold one yourself when you need to read or drive the position (jump to top,
--- sync two views); otherwise let `SingleChildScrollView` keep its own in
+-- sync two views); otherwise let `ScrollView` keep its own in
 -- element scratch.
 export class ScrollController
 	-- Pixels scrolled from the start. Always in `0 .. maxOffset`.
@@ -156,7 +156,7 @@ end
 
 -- The controller a scroll view keeps on its element, mirroring `nodeFor`.
 --
--- A controller is this widget's own state rather than anything the framework
+-- A controller is this view's own state rather than anything the framework
 -- knows about, so it lives in the untyped `scratch` — which means the one `as`
 -- that recovers it belongs here, not at each of the call sites. A slot holding
 -- anything else is replaced rather than crashed on.
@@ -174,14 +174,14 @@ export fn controllerFor(data: ElementData) -> ScrollController
 end
 
 -- The viewport: clips to its own box and draws the child shifted by the
--- controller's offset. `SinrleChildScrollView` wraps this with the wheel
+-- controller's offset. `ScrollView` wraps this with the wheel
 -- handling; use it directly only if you are routing scrolling yourself.
-export class Viewport extends SingleChildWidget
+export class Viewport extends SingleChildView
 	axis: ScrollAxis
 	controller: ScrollController
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		axis: ScrollAxis = ScrollAxis.Vertical,
 		controller: ScrollController? = nil,
 		key: string? = nil
@@ -192,7 +192,7 @@ export class Viewport extends SingleChildWidget
 		self.controller = controller ?? ScrollController()
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local vertical: boolean = self.axis == ScrollAxis.Vertical
 		local child: Element? = el.childAt(1)
 
@@ -207,7 +207,7 @@ export class Viewport extends SingleChildWidget
 
 		-- Unbound the scroll axis so the child reports its natural extent, and
 		-- keep the cross axis tight so content still fills the width.
-		local inner: BoxConstraints = BoxConstraints(
+		local inner: Constraints = Constraints(
 			constraints.minWidth,
 			constraints.maxWidth,
 			0.0,
@@ -215,7 +215,7 @@ export class Viewport extends SingleChildWidget
 		)
 
 		if not vertical then
-			inner = BoxConstraints(0.0, Math.huge, constraints.minHeight, constraints.maxHeight)
+			inner = Constraints(0.0, Math.huge, constraints.minHeight, constraints.maxHeight)
 		end
 
 		local content: Size = child!.layout(inner)
@@ -243,7 +243,7 @@ end
 
 -- A scrollable region.
 --
---     SingleChildScrollView(child: Column(children: manyRows))
+--     ScrollView(child: VStack(children: manyRows))
 --
 -- The wheel scrolls it while the pointer is inside, and it only claims the
 -- wheel when it can actually move — so a list nested inside another one hands
@@ -251,8 +251,8 @@ end
 --
 -- Nothing about it is stateful from the outside: the offset lives in element
 -- scratch, so it survives rebuilds without a `State` object.
-export class SingleChildScrollView extends StatelessWidget
-	child: Widget?
+export class ScrollView extends View
+	child: View?
 	axis: ScrollAxis
 	controller: ScrollController?
 
@@ -264,17 +264,18 @@ export class SingleChildScrollView extends StatelessWidget
 	barColor: Color?
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		axis: ScrollAxis = ScrollAxis.Vertical,
 		controller: ScrollController? = nil,
 		step: float = 48.0,
 		showBar: boolean = true,
 		barColor: Color? = nil,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
-		self.child = child
+		self.child = childOf(child, content)
 		self.axis = axis
 		self.controller = controller
 		self.step = step
@@ -310,7 +311,7 @@ export class SingleChildScrollView extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local data: ElementData = context.data()
 
 		-- An explicit controller wins; otherwise keep one per element so the
@@ -325,10 +326,10 @@ export class SingleChildScrollView extends StatelessWidget
 
 		local vertical: boolean = self.axis == ScrollAxis.Vertical
 
-		local viewport: Widget = Viewport(child: self.child, axis: self.axis, controller: controller)
+		local viewport: View = Viewport(child: self.child, axis: self.axis, controller: controller)
 
 		if self.showBar then
-			viewport = Stack(
+			viewport = ZStack(
 				children: {
 					viewport,
 					ScrollBar(controller: controller, axis: self.axis, thumbColor: self.barColor),
@@ -336,7 +337,7 @@ export class SingleChildScrollView extends StatelessWidget
 			)
 		end
 
-		return GestureDetector(
+		return GestureArea(
 			child: viewport,
 			onScroll: fn(dx: float, dy: float)
 				-- Wheel up is positive, and scrolling up means a smaller offset.
@@ -379,7 +380,7 @@ end
 -- It covers the whole viewport so it can sit on top of the content, but only
 -- *claims* presses inside the bar strip along the edge — otherwise it would eat
 -- every click meant for the list underneath.
-export class ScrollBar extends Widget
+export class ScrollBar extends View
 	controller: ScrollController
 	axis: ScrollAxis
 	color: Color?
@@ -408,7 +409,7 @@ export class ScrollBar extends Widget
 		self.grabWidth = grabWidth
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		return constraints.biggest()
 	end
 
@@ -631,12 +632,12 @@ export class ScrollBar extends Widget
 	end
 end
 
--- A scrolling list of children — `SingleChildScrollView` wrapped around a
--- `Column` (or `Row`), which is the shape almost every list wants.
+-- A scrolling list of children — `ScrollView` wrapped around a
+-- `VStack` (or `HStack`), which is the shape almost every list wants.
 --
 -- Every child is built up front, so this is for tens of rows, not thousands.
-export class ListView extends StatelessWidget
-	children: table<Widget>
+export class List extends View
+	children: table<View>
 	axis: ScrollAxis
 	controller: ScrollController?
 	spacing: float
@@ -645,18 +646,19 @@ export class ListView extends StatelessWidget
 	showBar: boolean
 
 	fn init(
-		children: table<Widget> = {},
+		children: table<View> = {},
 		axis: ScrollAxis = ScrollAxis.Vertical,
 		controller: ScrollController? = nil,
 		spacing: float = 0.0,
 		padding: EdgeInsets? = nil,
 		step: float = 48.0,
 		showBar: boolean = true,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
-		self.children = children
+		self.children = childrenOf(children, content)
 		self.axis = axis
 		self.controller = controller
 		self.spacing = spacing
@@ -665,19 +667,19 @@ export class ListView extends StatelessWidget
 		self.showBar = showBar
 	end
 
-	fn build(context: BuildContext) -> Widget
-		local content: Widget = Column(
+	fn body(context: BuildContext) -> View
+		local content: View = VStack(
 			children: self.children,
-			crossAxisAlignment: CrossAxisAlignment.Stretch,
-			mainAxisSize: MainAxisSize.Min,
+			alignment: StackAlignment.Fill,
+			sizing: StackSize.Fit,
 			spacing: self.spacing
 		)
 
 		if self.axis == ScrollAxis.Horizontal then
-			content = Row(
+			content = HStack(
 				children: self.children,
-				crossAxisAlignment: CrossAxisAlignment.Center,
-				mainAxisSize: MainAxisSize.Min,
+				alignment: StackAlignment.Center,
+				sizing: StackSize.Fit,
 				spacing: self.spacing
 			)
 		end
@@ -685,10 +687,10 @@ export class ListView extends StatelessWidget
 		local padding: EdgeInsets? = self.padding
 
 		if padding != nil then
-			content = Padding(padding, content)
+			content = content.padding(insets: padding)
 		end
 
-		return SingleChildScrollView(
+		return ScrollView(
 			child: content,
 			axis: self.axis,
 			controller: self.controller,

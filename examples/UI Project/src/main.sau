@@ -1,25 +1,24 @@
 import * from UIKit
-import * from Test
+import * from Home
 
+-- The app itself: what window it opens, and what goes in it.
+--
+-- Everything below the `Theme` reads its palette through `Theme.of(context)` —
+-- swap it for `ThemeData.light()` to see it.
+export class DemoApp extends App
+	fn body() -> Scene
+		return WindowGroup(title: "Saule UIKit", width: 900, height: 700) do
+			Theme(data: ThemeData.dark()) do
+				HomeScreen()
+			end
+		end
+	end
+end
+
+-- `Main.main` is the entry Saule calls; everything about the app is declared
+-- on `DemoApp`, not spelled out here.
 class Main
-  static fn main()
-    -- Everything below the `Theme` reads its palette through
-    -- `Theme.of(context)` — swap it for `ThemeData.light()` to see it.
-    runApp(
-      Theme(
-        data: ThemeData.dark(),
-        child: Scaffold(
-          appBar: AppBar(title: "Saule UIKit"),
-          body: PanelView(),
-          footer: Padding(
-            EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            Text("Tab to move, Enter to press, Ctrl+S to save")
-          )
-        )
-      ),
-      width: 900,
-      height: 700,
-      title: "Saule UIKit"
-    )
-  end
+	static fn main()
+		DemoApp().run()
+	end
 end

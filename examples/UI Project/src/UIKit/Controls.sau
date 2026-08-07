@@ -21,7 +21,7 @@ import * from Animation
 -- and themed — so a control dropped into an app inherits its palette without
 -- being told about it.
 --
--- They follow `Button`'s shape: stateless widgets keeping hover, press and
+-- They follow `Button`'s shape: stateless views keeping hover, press and
 -- focus flags in element scratch, which survives the rebuild each interaction
 -- triggers.
 
@@ -51,12 +51,12 @@ export fn absoluteOf(element: Element) -> Offset
 end
 
 -- ----------------------------------------------------------------------------
--- Checkbox, Radio, Switch
+-- Checkbox, Radio, Toggle
 -- ----------------------------------------------------------------------------
 
 -- The box itself, without the label. Drawn rather than composed because a tick
 -- is two lines and a rounded square.
-export class CheckMark extends Widget
+export class CheckMark extends View
 	checked: boolean
 	enabled: boolean
 	hovered: boolean
@@ -83,11 +83,11 @@ export class CheckMark extends Widget
 		self.side = side
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		return constraints.constrain(Size(self.side, self.side))
 	end
 
-	-- This is the cheap half of the two animation shapes: a render widget owns
+	-- This is the cheap half of the two animation shapes: a render view owns
 	-- its controllers, advances them here, and asks for the next frame with
 	-- `Repaint.request()`. Nothing rebuilds and nothing is laid out again — the
 	-- box is simply drawn differently, so a tick sweeping on costs a repaint
@@ -191,9 +191,9 @@ end
 --         end
 --     )
 --
--- `onChanged` is `fn(value: boolean)`. The widget does not keep the value —
+-- `onChanged` is `fn(value: boolean)`. The view does not keep the value —
 -- hand it back the one it gave you, the way every other controlled input works.
-export class Checkbox extends StatelessWidget
+export class Checkbox extends View
 	value: boolean
 	label: string
 	onChanged: function?
@@ -225,12 +225,12 @@ export class Checkbox extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
 
-		local mark: Widget = CheckMark(
+		local mark: View = CheckMark(
 			checked: self.value,
 			enabled: self.enabled,
 			hovered: scratch.hovered == true,
@@ -238,7 +238,7 @@ export class Checkbox extends StatelessWidget
 			theme: theme
 		)
 
-		local row: Widget = mark
+		local row: View = mark
 
 		if #self.label > 0 then
 			local label: TextStyle = theme.body
@@ -247,8 +247,8 @@ export class Checkbox extends StatelessWidget
 				label = theme.caption
 			end
 
-			row = Row(
-				mainAxisSize: MainAxisSize.Min,
+			row = HStack(
+				sizing: StackSize.Fit,
 				spacing: 8.0,
 				children: {mark, Text(self.label, style: label)}
 			)
@@ -259,7 +259,7 @@ export class Checkbox extends StatelessWidget
 		end
 
 		return Focus(
-			child: GestureDetector(
+			child: GestureArea(
 				child: row,
 				onTap: fn()
 					self.toggle()
@@ -294,7 +294,7 @@ end
 -- One option out of several. `Radio` compares `value` with `groupValue`; the
 -- one that matches is the selected one, and `onChanged` reports the value that
 -- was picked.
-export class Radio extends StatelessWidget
+export class Radio extends View
 	value: string
 	groupValue: string
 	label: string
@@ -329,12 +329,12 @@ export class Radio extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
 
-		local dot: Widget = RadioDot(
+		local dot: View = RadioDot(
 			selected: self.value == self.groupValue,
 			enabled: self.enabled,
 			hovered: scratch.hovered == true,
@@ -342,7 +342,7 @@ export class Radio extends StatelessWidget
 			theme: theme
 		)
 
-		local row: Widget = dot
+		local row: View = dot
 
 		if #self.label > 0 then
 			local label: TextStyle = theme.body
@@ -351,8 +351,8 @@ export class Radio extends StatelessWidget
 				label = theme.caption
 			end
 
-			row = Row(
-				mainAxisSize: MainAxisSize.Min,
+			row = HStack(
+				sizing: StackSize.Fit,
 				spacing: 8.0,
 				children: {dot, Text(self.label, style: label)}
 			)
@@ -363,7 +363,7 @@ export class Radio extends StatelessWidget
 		end
 
 		return Focus(
-			child: GestureDetector(
+			child: GestureArea(
 				child: row,
 				onTap: fn()
 					self.select()
@@ -395,7 +395,7 @@ export class Radio extends StatelessWidget
 	end
 end
 
-export class RadioDot extends Widget
+export class RadioDot extends View
 	selected: boolean
 	enabled: boolean
 	hovered: boolean
@@ -422,7 +422,7 @@ export class RadioDot extends Widget
 		self.side = side
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		return constraints.constrain(Size(self.side, self.side))
 	end
 
@@ -484,7 +484,7 @@ export class RadioDot extends Widget
 end
 
 -- A sliding on/off switch. Same contract as `Checkbox`, different shape.
-export class Switch extends StatelessWidget
+export class Toggle extends View
 	value: boolean
 	label: string
 	onChanged: function?
@@ -516,23 +516,23 @@ export class Switch extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
 
-		local track: Widget = SwitchTrack(
+		local track: View = ToggleTrack(
 			on: self.value,
 			enabled: self.enabled,
 			focused: scratch.focused == true,
 			theme: theme
 		)
 
-		local row: Widget = track
+		local row: View = track
 
 		if #self.label > 0 then
-			row = Row(
-				mainAxisSize: MainAxisSize.Min,
+			row = HStack(
+				sizing: StackSize.Fit,
 				spacing: 8.0,
 				children: {track, Text(self.label, style: theme.body)}
 			)
@@ -543,7 +543,7 @@ export class Switch extends StatelessWidget
 		end
 
 		return Focus(
-			child: GestureDetector(
+			child: GestureArea(
 				child: row,
 				onTap: fn()
 					self.toggle()
@@ -571,7 +571,7 @@ export class Switch extends StatelessWidget
 	end
 end
 
-export class SwitchTrack extends Widget
+export class ToggleTrack extends View
 	on: boolean
 	enabled: boolean
 	focused: boolean
@@ -592,7 +592,7 @@ export class SwitchTrack extends Widget
 		self.theme = theme ?? ThemeData()
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		return constraints.constrain(Size(38.0, 20.0))
 	end
 
@@ -670,7 +670,7 @@ end
 --
 -- `onChanged` is `fn(value: float)`. `step` snaps the value; leave it at 0 for
 -- continuous. Arrow keys move by `step` when set, or a hundredth of the range.
-export class Slider extends StatelessWidget
+export class Slider extends View
 	value: float
 	min: float
 	max: float
@@ -731,7 +731,7 @@ export class Slider extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
@@ -742,7 +742,7 @@ export class Slider extends StatelessWidget
 			fraction = atLeastZero(atMost((self.value - self.min) / span, 1.0))
 		end
 
-		local track: Widget = SliderTrack(
+		local track: View = SliderTrack(
 			fraction: fraction,
 			enabled: self.enabled,
 			focused: scratch.focused == true,
@@ -750,7 +750,7 @@ export class Slider extends StatelessWidget
 			theme: theme,
 			onSeek: fn(at: float)
 				-- The track reports where it was grabbed, in its own 0..1 space; the
-				-- widget owns the arithmetic that turns that into a value.
+				-- view owns the arithmetic that turns that into a value.
 
 				self.emit(self.min + at * span)
 			end,
@@ -759,10 +759,10 @@ export class Slider extends StatelessWidget
 			end
 		)
 
-		local sized: Widget = track
+		local sized: View = track
 
 		if self.width != nil then
-			sized = SizedBox(width: self.width, child: track)
+			sized = Frame(width: self.width, child: track)
 		end
 
 		if not self.enabled then
@@ -809,9 +809,9 @@ export class Slider extends StatelessWidget
 end
 
 -- The track and thumb. It handles its own pointer input rather than sitting in
--- a `GestureDetector`, because turning a click into a value needs the width —
--- and only the render widget knows that.
-export class SliderTrack extends Widget
+-- a `GestureArea`, because turning a click into a value needs the width —
+-- and only the render view knows that.
+export class SliderTrack extends View
 	fraction: float
 	enabled: boolean
 	focused: boolean
@@ -820,7 +820,7 @@ export class SliderTrack extends Widget
 	onSeek: function?
 
 	-- The track consumes the press itself, so focusing on click has to happen
-	-- here rather than in an enclosing `GestureDetector` that never sees it.
+	-- here rather than in an enclosing `GestureArea` that never sees it.
 	onPress: function?
 
 	fn init(
@@ -844,7 +844,7 @@ export class SliderTrack extends Widget
 		self.onPress = onPress
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local width: float = 160.0
 
 		if constraints.hasBoundedWidth() then
@@ -985,12 +985,12 @@ export class SliderTrack extends Widget
 end
 
 -- ----------------------------------------------------------------------------
--- ProgressBar
+-- ProgressView
 -- ----------------------------------------------------------------------------
 
 -- A read-only bar. `value` runs 0..1; pass nil for an indeterminate one, which
 -- animates off the clock rather than off a rebuild.
-export class ProgressBar extends StatelessWidget
+export class ProgressView extends View
 	value: float?
 	height: float
 	color: Color?
@@ -1003,7 +1003,7 @@ export class ProgressBar extends StatelessWidget
 		self.color = color
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 
 		return ProgressTrack(
@@ -1015,9 +1015,9 @@ export class ProgressBar extends StatelessWidget
 	end
 end
 
--- The bar itself. Split out because a render widget has no `BuildContext` to
+-- The bar itself. Split out because a render view has no `BuildContext` to
 -- read the theme from.
-export class ProgressTrack extends Widget
+export class ProgressTrack extends View
 	value: float?
 	height: float
 	color: Color
@@ -1038,7 +1038,7 @@ export class ProgressTrack extends Widget
 		self.track = track ?? Colors.border
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local width: float = 160.0
 
 		if constraints.hasBoundedWidth() then
@@ -1107,13 +1107,13 @@ export class ProgressTrack extends Widget
 end
 
 -- ----------------------------------------------------------------------------
--- Dropdown
+-- Picker
 -- ----------------------------------------------------------------------------
 
 -- A closed box that opens a menu of options — the control the overlay makes
 -- possible.
 --
---     Dropdown(
+--     Picker(
 --         value: country,
 --         options: {"Lithuania", "Latvia", "Estonia"},
 --         onChanged: fn(next: string)
@@ -1123,7 +1123,7 @@ end
 --
 -- `onChanged` is `fn(value: string)`. The menu is an overlay entry, so it
 -- escapes any scroll view or panel the dropdown happens to sit in.
-export class Dropdown extends StatelessWidget
+export class Picker extends View
 	value: string
 	options: table<string>
 	placeholder: string
@@ -1188,7 +1188,7 @@ export class Dropdown extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
@@ -1207,18 +1207,16 @@ export class Dropdown extends StatelessWidget
 			motionOn(scratch.scratch, "focus", focused, 0.14).value
 		)
 
-		local box: Widget = Container(
+		local box: View = Box(
 			width: self.width,
 			color: theme.surface,
 			border: edge,
 			radius: theme.radius,
 			padding: EdgeInsets.symmetric(horizontal: 10.0, vertical: 8.0),
-			child: Row(
-				children: {
-					Expanded(child: Text(label, style: style, softWrap: false, maxLines: 1)),
-					Icon(Icons.expandMore, 18.0, theme.textMuted),
-				}
-			)
+			child: HStack() do
+				Text(label, style: style, softWrap: false, maxLines: 1).expanded()
+				Icon(Icons.expandMore, 18.0, theme.textMuted)
+			end
 		)
 
 		if not self.enabled then
@@ -1226,7 +1224,7 @@ export class Dropdown extends StatelessWidget
 		end
 
 		return Focus(
-			child: GestureDetector(
+			child: GestureArea(
 				child: box,
 				onTap: fn()
 					self.open(context)
@@ -1255,13 +1253,13 @@ export class Dropdown extends StatelessWidget
 end
 
 -- ----------------------------------------------------------------------------
--- Tabs
+-- TabView
 -- ----------------------------------------------------------------------------
 
 -- The strip of labels. One focus stop for the whole bar, with the arrows moving
 -- between tabs — which is how a tab strip is meant to behave, and why each tab
 -- is not separately focusable.
-export class TabBar extends StatelessWidget
+export class TabBar extends View
 	tabs: table<string>
 	index: integer
 	onChanged: function?
@@ -1308,13 +1306,13 @@ export class TabBar extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 		local scratch: ElementData = context.data()
 		local node: FocusNode = nodeFor(scratch)
 		local focused: boolean = scratch.focused == true
 
-		local labels: table<Widget> = {}
+		local labels: table<View> = {}
 		local i: integer = 1
 
 		while i <= #self.tabs do
@@ -1335,7 +1333,7 @@ export class TabBar extends StatelessWidget
 			i = i + 1
 		end
 
-		local strip: Widget = Row(mainAxisSize: MainAxisSize.Min, children: labels)
+		local strip: View = HStack(sizing: StackSize.Fit, children: labels)
 
 		if not self.enabled then
 			return strip
@@ -1375,13 +1373,13 @@ export class TabBar extends StatelessWidget
 end
 
 -- The bar under the selected tab. It wraps the label rather than sitting under
--- it in a `Column`, because it has to be exactly as wide as the label — and a
--- childless box in a `Column` lays out at zero width, which is why this used to
+-- it in a `VStack`, because it has to be exactly as wide as the label — and a
+-- childless box in a `VStack` lays out at zero width, which is why this used to
 -- draw nothing at all.
 --
 -- It animates itself: `tick` advances the controller and asks for a repaint, so
 -- moving the selection redraws two tabs and rebuilds neither.
-export class TabIndicator extends SingleChildWidget
+export class TabIndicator extends SingleChildView
 	active: boolean
 	color: Color
 	thickness: float
@@ -1390,7 +1388,7 @@ export class TabIndicator extends SingleChildWidget
 		active: boolean = false,
 		color: Color? = nil,
 		thickness: float = 2.0,
-		child: Widget? = nil,
+		child: View? = nil,
 		key: string? = nil
 	)
 		self.super(child, key)
@@ -1400,7 +1398,7 @@ export class TabIndicator extends SingleChildWidget
 		self.thickness = thickness
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local child: Element? = el.childAt(1)
 
 		if child == nil then
@@ -1453,7 +1451,7 @@ export class TabIndicator extends SingleChildWidget
 end
 
 -- One tab: a label with an indicator under it.
-export class TabLabel extends StatelessWidget
+export class TabLabel extends View
 	label: string
 	selected: boolean
 	focused: boolean
@@ -1487,7 +1485,7 @@ export class TabLabel extends StatelessWidget
 		end
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local scratch: ElementData = context.data()
 		local hovered: boolean = scratch.hovered == true
 
@@ -1500,16 +1498,15 @@ export class TabLabel extends StatelessWidget
 			bar = self.theme.text
 		end
 
-		local content: Widget = TabIndicator(
+		local content: View = TabIndicator(
 			active: self.selected or self.focused,
 			color: bar,
-			child: Padding(
-				EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
-				Text(self.label, style: TextStyle(color: ink))
+			child: Text(self.label, style: TextStyle(color: ink)).padding(
+				insets: EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0)
 			)
 		)
 
-		return GestureDetector(
+		return GestureArea(
 			child: content,
 			onTap: self.onSelected,
 			onHover: fn(inside: boolean)
@@ -1522,7 +1519,7 @@ end
 
 -- A tab strip with the matching panel under it.
 --
---     Tabs(
+--     TabView(
 --         tabs: {"Details", "History"},
 --         index: current,
 --         children: {detailsPane, historyPane},
@@ -1534,45 +1531,43 @@ end
 -- Controlled, like every other control here: it renders the index you give it
 -- and reports the one that was picked. Only the selected child is built, so an
 -- expensive pane costs nothing until you switch to it.
-export class Tabs extends StatelessWidget
+export class TabView extends View
 	tabs: table<string>
-	children: table<Widget>
+	children: table<View>
 	index: integer
 	onChanged: function?
 	autofocus: boolean
 
 	fn init(
 		tabs: table<string> = {},
-		children: table<Widget> = {},
+		children: table<View> = {},
 		index: integer = 1,
 		onChanged: function? = nil,
 		autofocus: boolean = false,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
 		self.tabs = tabs
-		self.children = children
+		self.children = childrenOf(children, content)
 		self.index = index
 		self.onChanged = onChanged
 		self.autofocus = autofocus
 	end
 
-	fn build(context: BuildContext) -> Widget
+	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
-		local selected: Widget = SizedBox()
+		local selected: View = Frame()
 
 		if self.index >= 1 and self.index <= #self.children then
 			selected = self.children[self.index]
 		end
 
-		return Column(
-			crossAxisAlignment: CrossAxisAlignment.Stretch,
-			children: {
-				TabBar(tabs: self.tabs, index: self.index, onChanged: self.onChanged, autofocus: self.autofocus),
-				Container(height: 1.0, color: theme.border),
-				Expanded(child: selected),
-			}
-		)
+		return VStack(alignment: StackAlignment.Fill) do
+			TabBar(tabs: self.tabs, index: self.index, onChanged: self.onChanged, autofocus: self.autofocus)
+			Box(height: 1.0, color: theme.border)
+			selected.expanded()
+		end
 	end
 end

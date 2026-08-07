@@ -1,0 +1,152 @@
+import * from UIKit
+import * from Shared
+import * from Contacts
+import * from Messenger
+import * from Test
+
+-- The launcher. Three cards, each pushing a full-window route; every route
+-- brings its own back arrow, so this screen never has to know what it opened.
+export class HomeScreen extends View
+	fn init(key: string? = nil)
+		self.super(key)
+	end
+
+	fn body(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+
+		local probe: ElementData = context.data()
+
+		if probe.scratch.pushed == nil then
+			probe.scratch.pushed = true
+			context.navigator()?.push() do
+				return GalleryScreen()
+			end
+		end
+
+		local cards: table<View> = {
+			DemoCard(
+				icon: Icons.list,
+				title: "Contacts",
+				detail: "A form that files what you type into a sortable table, with tags and per-row delete.",
+				accent: theme.success
+			) do
+				context.navigator()?.push() do
+					return ContactsScreen()
+				end
+			end,
+			DemoCard(
+				icon: Icons.mail,
+				title: "Messenger",
+				detail: "Sign in or sign up, then a conversation list, a live thread and a settings page.",
+				accent: theme.primary
+			) do
+				context.navigator()?.push() do
+					return MessengerScreen()
+				end
+			end,
+			DemoCard(
+				icon: Icons.dashboard,
+				title: "Widget gallery",
+				detail: "Every control the kit ships, plus overlays, scrolling and a per-frame canvas.",
+				accent: theme.warning
+			) do
+				context.navigator()?.push() do
+					return GalleryScreen()
+				end
+			end,
+		}
+
+		return Screen(toolbar: Toolbar(title: "Saule UIKit")) do
+			VStack(alignment: StackAlignment.Fill, sizing: StackSize.Fit, spacing: 22.0) do
+				VStack(alignment: StackAlignment.Center, sizing: StackSize.Fit, spacing: 6.0) do
+					Text("Three screens").font(28.0).foregroundStyle(theme.text)
+
+					Text("Each one opens as a route. Escape or the back arrow returns here.")
+						.font(13.0)
+						.foregroundStyle(theme.textMuted)
+				end
+
+				Grid(columns: 3, spacing: 16.0, children: cards)
+			end
+				.padding(28.0)
+				.frame(width: 940.0)
+				.centered()
+		end
+	end
+end
+
+-- One launcher tile: an icon in its accent, a title, a line of prose, and a
+-- hover lift. The whole card is the target, not just the label.
+export class DemoCard extends View
+	icon: integer
+	title: string
+	detail: string
+	accent: Color?
+	onOpen: function?
+
+	fn init(
+		icon: integer = 0,
+		title: string = "",
+		detail: string = "",
+		accent: Color? = nil,
+		onOpen: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.icon = icon
+		self.title = title
+		self.detail = detail
+		self.accent = accent
+		self.onOpen = onOpen
+	end
+
+	fn body(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+		local scratch: ElementData = context.data()
+		local hovered: boolean = scratch.hovered == true
+		local accent: Color = self.accent ?? theme.primary
+
+		-- Hover shifts the surface and the border towards the accent. Element
+		-- scratch rather than a `State`: it is one boolean, and it does not
+		-- need to outlive the element.
+		local fill: Color = theme.surface
+		local edge: Color = theme.border
+
+		if hovered then
+			fill = theme.surfaceLight
+			edge = accent.withAlpha(0.55)
+		end
+
+		local card: View = VStack(alignment: StackAlignment.Leading, spacing: 10.0) do
+			Icon(self.icon, 22.0, accent)
+				.centered()
+				.frame(width: 44.0, height: 44.0)
+				.background(accent.withAlpha(0.16), radius: 12.0)
+
+			Text(self.title).font(17.0).foregroundStyle(theme.text)
+			Text(self.detail).font(12.0).foregroundStyle(theme.textMuted)
+
+			Spacer()
+
+			HStack(sizing: StackSize.Fit, spacing: 5.0) do
+				Text("Open").font(12.0).foregroundStyle(accent)
+				Icon(Icons.arrowForward, 13.0, accent)
+			end
+		end
+
+		return card
+			.padding(18.0)
+			.background(fill, radius: 12.0, border: edge)
+			.frame(height: 210.0)
+			.onHover() do (inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
+			.onTapGesture() do
+				if self.onOpen != nil then
+					self.onOpen!()
+				end
+			end
+	end
+end

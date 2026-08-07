@@ -1,0 +1,255 @@
+import * from UIKit
+
+-- Pieces both screens use. Nothing here knows what a contact or a message is —
+-- it is all shape.
+
+-- Strip leading and trailing spaces. Saule's `String` has no `trim`, and every
+-- form in here needs one before it can decide whether a field is empty.
+export fn trimmed(text: string) -> string
+	local first: integer = 1
+	local last: integer = String.len(text)
+
+	while first <= last and String.sub(text, first, first) == " " do
+		first = first + 1
+	end
+
+	while last >= first and String.sub(text, last, last) == " " do
+		last = last - 1
+	end
+
+	if first > last then
+		return ""
+	end
+
+	return String.sub(text, first, last)
+end
+
+-- Does `text` contain `needle`? `String.find` returns nil or a pair, and every
+-- caller here only wants the yes/no.
+export fn contains(text: string, needle: string) -> boolean
+	-- `String.find` returns a *pair* — start and end — or nil. Destructured
+	-- because a single binding cannot hold the two-value form.
+	local at: integer?, stop: integer? = String.find(text, needle)
+
+	return at != nil
+end
+
+-- A screen pushed onto the navigator: same as `Screen`, plus the back arrow
+-- that pops it.
+--
+--     RouteScreen(title: "Contacts", actions: {addButton}) do
+--         body
+--     end
+--
+-- Escape pops it too. A route that swallowed the key would be a route you
+-- could only leave with the mouse.
+export class RouteScreen extends View
+	title: string
+	actions: table<View>
+	content: View?
+	footer: View?
+
+	fn init(
+		title: string = "",
+		actions: table<View> = {},
+		footer: View? = nil,
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
+	)
+		self.super(key)
+
+		self.title = title
+		self.actions = claimedAll(actions)
+		self.footer = claimed(footer)
+		self.content = childOf(nil, content)
+	end
+
+	fn body(context: BuildContext) -> View
+		local back: View = IconButton(icon: Icons.arrowBack, tooltip: "Back") do
+			context.navigator()?.pop()
+		end
+
+		return KeyboardListener(
+			onKeyDown: fn(event: KeyEvent)
+				if event.key == "escape" then
+					context.navigator()?.pop()
+
+					return true
+				end
+
+				return false
+			end,
+			child: Screen(
+				toolbar: Toolbar(title: self.title, leading: back, actions: self.actions),
+				content: self.content,
+				footer: self.footer
+			)
+		)
+	end
+end
+
+-- A rounded panel on the theme's surface. Every card in both screens is one of
+-- these, so the radius and the border are decided once.
+export class Card extends View
+	padding: float
+	color: Color?
+	content: View?
+
+	fn init(
+		padding: float = 16.0,
+		color: Color? = nil,
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
+	)
+		self.super(key)
+
+		self.padding = padding
+		self.color = color
+		self.content = childOf(nil, content)
+	end
+
+	fn body(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+
+		return (self.content ?? Frame())
+			.padding(self.padding)
+			.background(self.color ?? theme.surface, radius: 10.0, border: theme.border)
+	end
+end
+
+-- A small rounded label. Used for tags on one screen and unread counts on the
+-- other, which is why the colour is a parameter rather than the theme's accent.
+export class Chip extends View
+	label: string
+	color: Color?
+	textColor: Color?
+	onRemove: function?
+
+	fn init(
+		label: string = "",
+		color: Color? = nil,
+		textColor: Color? = nil,
+		onRemove: function? = nil,
+		key: string? = nil
+	)
+		self.super(key)
+
+		self.label = label
+		self.color = color
+		self.textColor = textColor
+		self.onRemove = onRemove
+	end
+
+	fn body(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+		local ink: Color = self.textColor ?? theme.text
+		local fill: Color = self.color ?? theme.surfaceLight
+
+		local row: View = HStack(sizing: StackSize.Fit, spacing: 5.0) do
+			Text(self.label).font(12.0).foregroundStyle(ink)
+
+			-- The × only exists on a removable chip, so a read-only one is a
+			-- single `Text` rather than a row with an invisible button in it.
+			if self.onRemove != nil then
+				Icon(Icons.close, 12.0, ink.withAlpha(0.7))
+					.onTapGesture(self.onRemove!)
+			end
+		end
+
+		return row
+			.padding(insets: EdgeInsets.symmetric(horizontal: 9.0, vertical: 4.0))
+			.background(fill, radius: 9.0, border: theme.border)
+	end
+end
+
+-- A circular monogram. Two letters out of a name, on a colour derived from it,
+-- so the same person is the same colour every time without storing one.
+export class Avatar extends View
+	name: string
+	size: float
+
+	fn init(name: string = "", size: float = 38.0, key: string? = nil)
+		self.super(key)
+
+		self.name = name
+		self.size = size
+	end
+
+	-- Hashed to one of six hues. A sum of bytes is a poor hash in general and
+	-- a fine one here: the only requirement is that it never changes.
+	static fn colorFor(name: string) -> Color
+		local palette: table<Color> = {
+			Color.rgb(96, 132, 220),
+			Color.rgb(86, 176, 118),
+			Color.rgb(216, 168, 84),
+			Color.rgb(198, 106, 178),
+			Color.rgb(96, 186, 200),
+			Color.rgb(212, 122, 92),
+		}
+		local sum: integer = 0
+		local i: integer = 1
+
+		while i <= String.len(name) do
+			sum = sum + String.byte(String.sub(name, i, i))
+			i = i + 1
+		end
+
+		return palette[sum % #palette + 1]
+	end
+
+	static fn initialsOf(name: string) -> string
+		local out: string = ""
+
+		for word: string in splitOn(name, " ") do
+			if String.len(word) > 0 and String.len(out) < 2 then
+				out = out .. String.upper(String.sub(word, 1, 1))
+			end
+		end
+
+		if String.len(out) == 0 then
+			return "?"
+		end
+
+		return out
+	end
+
+	fn body(context: BuildContext) -> View
+		return Text(Avatar.initialsOf(self.name))
+			.font(self.size * 0.38)
+			.foregroundStyle(Colors.white)
+			.centered()
+			.frame(width: self.size, height: self.size)
+			.background(Avatar.colorFor(self.name), radius: self.size / 2.0)
+	end
+end
+
+-- A line of muted text in the middle of an otherwise empty panel.
+export class EmptyState extends View
+	icon: integer
+	title: string
+	detail: string
+
+	fn init(icon: integer = 0, title: string = "", detail: string = "", key: string? = nil)
+		self.super(key)
+
+		self.icon = icon
+		self.title = title
+		self.detail = detail
+	end
+
+	fn body(context: BuildContext) -> View
+		local theme: ThemeData = Theme.of(context)
+
+		return VStack(sizing: StackSize.Fit, alignment: StackAlignment.Center, spacing: 8.0) do
+			Icon(self.icon, 34.0, theme.textMuted.withAlpha(0.6))
+			Text(self.title).font(15.0).foregroundStyle(theme.textMuted)
+
+			if String.len(self.detail) > 0 then
+				Text(self.detail)
+					.font(12.0)
+					.foregroundStyle(theme.textMuted.withAlpha(0.7))
+					.multilineTextAlignment(TextAlign.Center)
+			end
+		end.centered()
+	end
+end

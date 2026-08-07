@@ -3,15 +3,15 @@ import * from Geometry
 import * from Framework
 
 -- ============================================================================
--- Layout widgets
+-- Layout views
 -- ============================================================================
 --
--- The primitives every other widget is composed from. Each one implements the
+-- The primitives every other view is composed from. Each one implements the
 -- same contract: measure the children under constraints you derive, give each
 -- child an `offset` relative to your own top-left, and return your own size.
 
 -- Axis helpers. `main` is the direction a flex advances in, `cross` the
--- perpendicular one; keeping the swap in one place is what lets `Flex` be
+-- perpendicular one; keeping the swap in one place is what lets `AxisStack` be
 -- written once for both directions.
 local fn mainOf(horizontal: boolean, size: Size) -> float
 	if horizontal then
@@ -35,40 +35,40 @@ local fn flexChildConstraints(
 	mainMax: float,
 	crossMin: float,
 	crossMax: float
-) -> BoxConstraints
+) -> Constraints
 	if horizontal then
-		return BoxConstraints(mainMin, mainMax, crossMin, crossMax)
+		return Constraints(mainMin, mainMax, crossMin, crossMax)
 	end
 
-	return BoxConstraints(crossMin, crossMax, mainMin, mainMax)
+	return Constraints(crossMin, crossMax, mainMin, mainMax)
 end
 
 -- ----------------------------------------------------------------------------
--- SizedBox
+-- Frame
 -- ----------------------------------------------------------------------------
 
 -- Force a size on the child (or reserve empty space when there is none).
 -- An axis left nil is passed through untouched.
 --
---     SizedBox(height: 12.0)                 -- a vertical gap
---     SizedBox(width: 200.0, child: panel)   -- a fixed-width column
-export class SizedBox extends SingleChildWidget
+--     Frame(height: 12.0)                 -- a vertical gap
+--     Frame(width: 200.0, child: panel)   -- a fixed-width column
+export class Frame extends SingleChildView
 	width: float?
 	height: float?
 
-	fn init(width: float? = nil, height: float? = nil, child: Widget? = nil, key: string? = nil)
+	fn init(width: float? = nil, height: float? = nil, child: View? = nil, key: string? = nil)
 		self.super(child, key)
 
 		self.width = width
 		self.height = height
 	end
 
-	static fn square(side: float, child: Widget? = nil) -> SizedBox
-		return SizedBox(side, side, child)
+	static fn square(side: float, child: View? = nil) -> Frame
+		return Frame(side, side, child)
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
-		local inner: BoxConstraints = constraints
+	fn layout(el: Element, constraints: Constraints) -> Size
+		local inner: Constraints = constraints
 		local width: float? = self.width
 		local height: float? = self.height
 
@@ -98,16 +98,16 @@ end
 -- ----------------------------------------------------------------------------
 
 -- Inset the child by `padding` on each edge.
-export class Padding extends SingleChildWidget
+export class Padding extends SingleChildView
 	padding: EdgeInsets
 
-	fn init(padding: EdgeInsets? = nil, child: Widget? = nil, key: string? = nil)
+	fn init(padding: EdgeInsets? = nil, child: View? = nil, key: string? = nil)
 		self.super(child, key)
 
 		self.padding = padding ?? EdgeInsets.zero()
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local pad: EdgeInsets = self.padding
 		local child: Element? = el.childAt(1)
 
@@ -128,18 +128,18 @@ end
 -- Align / Center
 -- ----------------------------------------------------------------------------
 
--- Position the child within the space this widget is given. Fills every
--- bounded axis and shrink-wraps the unbounded ones, like Flutter's `Align`.
-export class Align extends SingleChildWidget
+-- Position the child within the space this view is given. Fills every
+-- bounded axis and shrink-wraps the unbounded ones.
+export class Align extends SingleChildView
 	alignment: Alignment
 
-	fn init(alignment: Alignment? = nil, child: Widget? = nil, key: string? = nil)
+	fn init(alignment: Alignment? = nil, child: View? = nil, key: string? = nil)
 		self.super(child, key)
 
 		self.alignment = alignment ?? Alignment.center()
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local child: Element? = el.childAt(1)
 
 		if child == nil then
@@ -168,18 +168,18 @@ end
 
 -- `Align` with the alignment already chosen.
 export class Center extends Align
-	fn init(child: Widget? = nil, key: string? = nil)
+	fn init(child: View? = nil, key: string? = nil)
 		self.super(Alignment.center(), child, key)
 	end
 end
 
 -- ----------------------------------------------------------------------------
--- ClipRect
+-- Clip
 -- ----------------------------------------------------------------------------
 
--- Clip everything the child paints to this widget's own rectangle.
-export class ClipRect extends SingleChildWidget
-	fn init(child: Widget? = nil, key: string? = nil)
+-- Clip everything the child paints to this view's own rectangle.
+export class Clip extends SingleChildView
+	fn init(child: View? = nil, key: string? = nil)
 		self.super(child, key)
 	end
 
@@ -195,7 +195,7 @@ export class ClipRect extends SingleChildWidget
 end
 
 -- ----------------------------------------------------------------------------
--- Flex: Row and Column
+-- AxisStack: HStack and VStack
 -- ----------------------------------------------------------------------------
 
 export enum Axis
@@ -203,7 +203,8 @@ export enum Axis
 	Vertical
 end
 
-export enum MainAxisAlignment
+-- How the slack along the stack's own axis is shared out.
+export enum Distribution
 	Start,
 	End,
 	Center,
@@ -212,27 +213,33 @@ export enum MainAxisAlignment
 	SpaceEvenly
 end
 
-export enum CrossAxisAlignment
-	Start,
-	End,
+-- Where a child sits on the *other* axis. `Leading` is the left edge of a
+-- `VStack` and the top edge of an `HStack`, which is why these are named for
+-- the reading direction rather than for a compass point.
+export enum StackAlignment
+	Leading,
+	Trailing,
 	Center,
-	Stretch
+
+	-- Stretch every child across the cross axis. Needs a bounded one; on an
+	-- unbounded axis this behaves like `Leading`.
+	Fill
 end
 
-export enum MainAxisSize
+export enum StackSize
 	-- Shrink-wrap the children.
-	Min,
+	Fit,
 	-- Take everything the parent allows.
-	Max
+	Fill
 end
 
--- Wrap a child so its `Row` / `Column` gives it a share of the leftover space
--- instead of its natural size. Two `Expanded`s with `flex: 1` and `flex: 2`
+-- Wrap a child so its `HStack` / `VStack` gives it a share of the leftover space
+-- instead of its natural size. Two `Expand`s with `flex: 1` and `flex: 2`
 -- split the remainder one-third / two-thirds.
-export class Expanded extends SingleChildWidget
+export class Expand extends SingleChildView
 	flex: integer
 
-	fn init(child: Widget? = nil, flex: integer = 1, key: string? = nil)
+	fn init(child: View? = nil, flex: integer = 1, key: string? = nil)
 		self.super(child, key)
 
 		self.flex = flex
@@ -243,8 +250,8 @@ export class Expanded extends SingleChildWidget
 	end
 end
 
--- Flexible empty space — an `Expanded` with nothing in it.
-export class Spacer extends Widget
+-- Flexible empty space — an `Expand` with nothing in it.
+export class Spacer extends View
 	flex: integer
 
 	fn init(flex: integer = 1, key: string? = nil)
@@ -257,47 +264,48 @@ export class Spacer extends Widget
 		return self.flex
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		return constraints.smallest()
 	end
 end
 
--- Lay children out along one axis. `Row` and `Column` are the two directions;
--- use those rather than `Flex` directly.
-export class Flex extends Widget
+-- Lay children out along one axis. `HStack` and `VStack` are the two directions;
+-- use those rather than `AxisStack` directly.
+export class AxisStack extends View
 	direction: Axis
-	children: table<Widget>
-	mainAxisAlignment: MainAxisAlignment
-	crossAxisAlignment: CrossAxisAlignment
-	mainAxisSize: MainAxisSize
+	children: table<View>
+	distribution: Distribution
+	alignment: StackAlignment
+	sizing: StackSize
 
 	-- Gap inserted between adjacent children, on top of any alignment spacing.
 	spacing: float
 
 	fn init(
 		direction: Axis,
-		children: table<Widget> = {},
-		mainAxisAlignment: MainAxisAlignment = MainAxisAlignment.Start,
-		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Start,
-		mainAxisSize: MainAxisSize = MainAxisSize.Max,
+		children: table<View> = {},
+		distribution: Distribution = Distribution.Start,
+		alignment: StackAlignment = StackAlignment.Leading,
+		sizing: StackSize = StackSize.Fill,
 		spacing: float = 0.0,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
 		self.direction = direction
-		self.children = children
-		self.mainAxisAlignment = mainAxisAlignment
-		self.crossAxisAlignment = crossAxisAlignment
-		self.mainAxisSize = mainAxisSize
+		self.children = childrenOf(children, content)
+		self.distribution = distribution
+		self.alignment = alignment
+		self.sizing = sizing
 		self.spacing = spacing
 	end
 
-	fn childWidgets() -> table<Widget>
+	fn childViews() -> table<View>
 		return self.children
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local horizontal: boolean = self.direction == Axis.Horizontal
 		local count: integer = el.childCount()
 
@@ -312,7 +320,7 @@ export class Flex extends Widget
 		end
 
 		local crossMin: float = 0.0
-		if self.crossAxisAlignment == CrossAxisAlignment.Stretch and crossMax < Math.huge then
+		if self.alignment == StackAlignment.Fill and crossMax < Math.huge then
 			crossMin = crossMax
 		end
 
@@ -325,7 +333,7 @@ export class Flex extends Widget
 			local child: Element? = el.childAt(i)
 
 			if child != nil then
-				local flex: integer = child.widget.flexFactor()
+				local flex: integer = child.view.flexFactor()
 
 				if flex > 0 then
 					totalFlex = totalFlex + flex
@@ -356,7 +364,7 @@ export class Flex extends Widget
 				local child: Element? = el.childAt(i)
 
 				if child != nil then
-					local flex: integer = child.widget.flexFactor()
+					local flex: integer = child.view.flexFactor()
 
 					if flex > 0 then
 						local share: float = free * float(flex) / float(totalFlex)
@@ -374,7 +382,7 @@ export class Flex extends Widget
 		-- Own size.
 		local mainExtent: float = usedMain
 
-		if self.mainAxisSize == MainAxisSize.Max and mainMax < Math.huge then
+		if self.sizing == StackSize.Fill and mainMax < Math.huge then
 			mainExtent = mainMax
 		end
 
@@ -392,21 +400,21 @@ export class Flex extends Widget
 		local leading: float = 0.0
 		local between: float = self.spacing
 
-		if self.mainAxisAlignment == MainAxisAlignment.End then
+		if self.distribution == Distribution.End then
 			leading = free
-		elseif self.mainAxisAlignment == MainAxisAlignment.Center then
+		elseif self.distribution == Distribution.Center then
 			leading = free / 2.0
-		elseif self.mainAxisAlignment == MainAxisAlignment.SpaceBetween then
+		elseif self.distribution == Distribution.SpaceBetween then
 			if count > 1 then
 				between = between + free / float(count - 1)
 			end
-		elseif self.mainAxisAlignment == MainAxisAlignment.SpaceAround then
+		elseif self.distribution == Distribution.SpaceAround then
 			if count > 0 then
 				local unit: float = free / float(count)
 				leading = unit / 2.0
 				between = between + unit
 			end
-		elseif self.mainAxisAlignment == MainAxisAlignment.SpaceEvenly then
+		elseif self.distribution == Distribution.SpaceEvenly then
 			local unit: float = free / float(count + 1)
 			leading = unit
 			between = between + unit
@@ -422,9 +430,9 @@ export class Flex extends Widget
 				local childCross: float = crossOf(horizontal, child.size)
 				local crossPos: float = 0.0
 
-				if self.crossAxisAlignment == CrossAxisAlignment.End then
+				if self.alignment == StackAlignment.Trailing then
 					crossPos = finalCross - childCross
-				elseif self.crossAxisAlignment == CrossAxisAlignment.Center then
+				elseif self.alignment == StackAlignment.Center then
 					crossPos = (finalCross - childCross) / 2.0
 				end
 
@@ -443,51 +451,63 @@ export class Flex extends Widget
 end
 
 -- Children left to right.
-export class Row extends Flex
+--
+--     HStack(spacing: 8.0) do
+--         return {Text("Volume"), Slider(value: level).expanded()}
+--     end
+export class HStack extends AxisStack
 	fn init(
-		children: table<Widget> = {},
-		mainAxisAlignment: MainAxisAlignment = MainAxisAlignment.Start,
-		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Center,
-		mainAxisSize: MainAxisSize = MainAxisSize.Max,
+		children: table<View> = {},
+		distribution: Distribution = Distribution.Start,
+		alignment: StackAlignment = StackAlignment.Center,
+		sizing: StackSize = StackSize.Fill,
 		spacing: float = 0.0,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(
 			Axis.Horizontal,
 			children,
-			mainAxisAlignment,
-			crossAxisAlignment,
-			mainAxisSize,
+			distribution,
+			alignment,
+			sizing,
 			spacing,
-			key
+			key,
+			content
 		)
 	end
 end
 
 -- Children top to bottom.
-export class Column extends Flex
+--
+--     VStack(alignment: StackAlignment.Fill, spacing: 14.0) do
+--         return {header, list, footer}
+--     end
+export class VStack extends AxisStack
 	fn init(
-		children: table<Widget> = {},
-		mainAxisAlignment: MainAxisAlignment = MainAxisAlignment.Start,
-		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Start,
-		mainAxisSize: MainAxisSize = MainAxisSize.Max,
+		children: table<View> = {},
+		distribution: Distribution = Distribution.Start,
+		alignment: StackAlignment = StackAlignment.Leading,
+		sizing: StackSize = StackSize.Fill,
 		spacing: float = 0.0,
-		key: string? = nil
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(
 			Axis.Vertical,
 			children,
-			mainAxisAlignment,
-			crossAxisAlignment,
-			mainAxisSize,
+			distribution,
+			alignment,
+			sizing,
 			spacing,
-			key
+			key,
+			content
 		)
 	end
 end
 
 -- ----------------------------------------------------------------------------
--- Stack / Positioned
+-- ZStack / Positioned
 -- ----------------------------------------------------------------------------
 
 -- Overlap children. Later children paint on top of earlier ones.
@@ -495,24 +515,29 @@ end
 -- A child wrapped in `Positioned` is placed explicitly; everything else is
 -- sized loosely and placed by `alignment`. The stack takes the size of its
 -- largest non-positioned child, or fills its constraints when it has none.
-export class Stack extends Widget
-	children: table<Widget>
+export class ZStack extends View
+	children: table<View>
 	alignment: Alignment
 
-	fn init(children: table<Widget> = {}, alignment: Alignment? = nil, key: string? = nil)
+	fn init(
+		children: table<View> = {},
+		alignment: Alignment? = nil,
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
+	)
 		self.super(key)
 
-		self.children = children
+		self.children = childrenOf(children, content)
 		self.alignment = alignment ?? Alignment.topLeft()
 	end
 
-	fn childWidgets() -> table<Widget>
+	fn childViews() -> table<View>
 		return self.children
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local count: integer = el.childCount()
-		local loose: BoxConstraints = constraints.loosen()
+		local loose: Constraints = constraints.loosen()
 		local hasFlow: boolean = false
 		local width: float = 0.0
 		local height: float = 0.0
@@ -522,7 +547,7 @@ export class Stack extends Widget
 			local child: Element? = el.childAt(i)
 
 			if child != nil then
-				local placement: StackData? = child.widget.stackData()
+				local placement: ZStackData? = child.view.zStackData()
 
 				if placement == nil then
 					local size: Size = child.layout(loose)
@@ -544,7 +569,7 @@ export class Stack extends Widget
 			local child: Element? = el.childAt(i)
 
 			if child != nil then
-				local placement: StackData? = child.widget.stackData()
+				local placement: ZStackData? = child.view.zStackData()
 
 				if placement == nil then
 					child.offset = self.alignment.inscribe(child.size, size)
@@ -558,7 +583,7 @@ export class Stack extends Widget
 	end
 
 	-- Resolve one `Positioned` child against the stack's box.
-	local fn place(child: Element, placement: StackData, size: Size) -> Offset
+	local fn place(child: Element, placement: ZStackData, size: Size) -> Offset
 		local left: float? = placement.left
 		local top: float? = placement.top
 		local right: float? = placement.right
@@ -576,7 +601,7 @@ export class Stack extends Widget
 		end
 
 		local childSize: Size = child.layout(
-			BoxConstraints(
+			Constraints(
 				width ?? 0.0,
 				width ?? size.width,
 				height ?? 0.0,
@@ -606,9 +631,9 @@ export class Stack extends Widget
 	end
 end
 
--- Place a child at explicit coordinates inside a `Stack`. Giving both edges of
+-- Place a child at explicit coordinates inside a `ZStack`. Giving both edges of
 -- an axis (`left` and `right`) stretches the child between them.
-export class Positioned extends SingleChildWidget
+export class Positioned extends SingleChildView
 	left: float?
 	top: float?
 	right: float?
@@ -617,7 +642,7 @@ export class Positioned extends SingleChildWidget
 	height: float?
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		left: float? = nil,
 		top: float? = nil,
 		right: float? = nil,
@@ -636,12 +661,12 @@ export class Positioned extends SingleChildWidget
 		self.height = height
 	end
 
-	static fn fill(child: Widget? = nil) -> Positioned
+	static fn fill(child: View? = nil) -> Positioned
 		return Positioned(child, 0.0, 0.0, 0.0, 0.0)
 	end
 
-	fn stackData() -> StackData?
-		return StackData(self.left, self.top, self.right, self.bottom, self.width, self.height)
+	fn zStackData() -> ZStackData?
+		return ZStackData(self.left, self.top, self.right, self.bottom, self.width, self.height)
 	end
 end
 
@@ -651,18 +676,18 @@ end
 
 -- Impose extra bounds on the child without forcing a size.
 --
---     ConstrainedBox(maxWidth: 400.0, child: paragraph)
+--     FrameLimits(maxWidth: 400.0, child: paragraph)
 --
--- `SizedBox` makes an axis *tight*; this narrows the range instead, which is
+-- `Frame` makes an axis *tight*; this narrows the range instead, which is
 -- what "at most 400 wide" needs.
-export class ConstrainedBox extends SingleChildWidget
+export class FrameLimits extends SingleChildView
 	minWidth: float?
 	maxWidth: float?
 	minHeight: float?
 	maxHeight: float?
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		minWidth: float? = nil,
 		maxWidth: float? = nil,
 		minHeight: float? = nil,
@@ -677,7 +702,7 @@ export class ConstrainedBox extends SingleChildWidget
 		self.maxHeight = maxHeight
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		-- Intersect rather than replace: the parent's limits still win, so this
 		-- can never hand a child more room than the parent allowed.
 		local minW: float = atLeast(constraints.minWidth, self.minWidth ?? 0.0)
@@ -685,7 +710,7 @@ export class ConstrainedBox extends SingleChildWidget
 		local minH: float = atLeast(constraints.minHeight, self.minHeight ?? 0.0)
 		local maxH: float = atMost(constraints.maxHeight, self.maxHeight ?? Math.huge)
 
-		local inner: BoxConstraints = BoxConstraints(
+		local inner: Constraints = Constraints(
 			atMost(minW, maxW),
 			maxW,
 			atMost(minH, maxH),
@@ -708,16 +733,16 @@ end
 -- Size the child to a width:height ratio, as large as the constraints allow.
 --
 --     AspectRatio(ratio: 16.0 / 9.0, child: preview)
-export class AspectRatio extends SingleChildWidget
+export class AspectRatio extends SingleChildView
 	ratio: float
 
-	fn init(ratio: float = 1.0, child: Widget? = nil, key: string? = nil)
+	fn init(ratio: float = 1.0, child: View? = nil, key: string? = nil)
 		self.super(child, key)
 
 		self.ratio = ratio
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		if self.ratio <= 0.0 then
 			return constraints.smallest()
 		end
@@ -744,7 +769,7 @@ export class AspectRatio extends SingleChildWidget
 		local child: Element? = el.childAt(1)
 
 		if child != nil then
-			child!.layout(BoxConstraints.tight(size))
+			child!.layout(Constraints.tight(size))
 			child!.offset = Offset.zero()
 		end
 
@@ -752,16 +777,16 @@ export class AspectRatio extends SingleChildWidget
 	end
 end
 
--- Size the child to a fraction of what this widget is given, then place it.
+-- Size the child to a fraction of what this view is given, then place it.
 --
---     FractionallySizedBox(widthFactor: 0.5, child: bar)
-export class FractionallySizedBox extends SingleChildWidget
+--     RelativeFrame(widthFactor: 0.5, child: bar)
+export class RelativeFrame extends SingleChildView
 	widthFactor: float?
 	heightFactor: float?
 	alignment: Alignment
 
 	fn init(
-		child: Widget? = nil,
+		child: View? = nil,
 		widthFactor: float? = nil,
 		heightFactor: float? = nil,
 		alignment: Alignment? = nil,
@@ -774,7 +799,7 @@ export class FractionallySizedBox extends SingleChildWidget
 		self.alignment = alignment ?? Alignment.center()
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local available: Size = constraints.biggest()
 		local child: Element? = el.childAt(1)
 
@@ -784,7 +809,7 @@ export class FractionallySizedBox extends SingleChildWidget
 
 		-- An axis with no factor is passed through loose, so the child keeps
 		-- its natural size there.
-		local inner: BoxConstraints = constraints.loosen()
+		local inner: Constraints = constraints.loosen()
 		local width: float? = self.widthFactor
 		local height: float? = self.heightFactor
 
@@ -800,7 +825,7 @@ export class FractionallySizedBox extends SingleChildWidget
 
 		-- Fill the axes that are bounded and shrink-wrap the ones that are not.
 		-- Filling an unbounded axis would mean `biggest()`'s zero fallback, and
-		-- the widget would vanish inside a `Column`.
+		-- the view would vanish inside a `VStack`.
 		local ownWidth: float = occupied.width
 		local ownHeight: float = occupied.height
 
@@ -820,18 +845,18 @@ export class FractionallySizedBox extends SingleChildWidget
 end
 
 -- ----------------------------------------------------------------------------
--- Wrap
+-- FlowStack
 -- ----------------------------------------------------------------------------
 
 -- A row that starts a new line when it runs out of width — tag lists, chips,
 -- toolbars, anything whose item count is not known in advance.
 --
---     Wrap(spacing: 8.0, runSpacing: 8.0, children: tags)
+--     FlowStack(spacing: 8.0, runSpacing: 8.0, children: tags)
 --
--- Unlike `Row`, nothing here flexes: every child takes its natural size, and the
+-- Unlike `HStack`, nothing here flexes: every child takes its natural size, and the
 -- layout decides where the breaks go.
-export class Wrap extends Widget
-	children: table<Widget>
+export class FlowStack extends View
+	children: table<View>
 	direction: Axis
 
 	-- Gap between children within a run, and between the runs themselves.
@@ -840,33 +865,34 @@ export class Wrap extends Widget
 
 	-- How a run's leftover space is distributed, and how children thinner than
 	-- their run are aligned across it.
-	alignment: MainAxisAlignment
-	crossAxisAlignment: CrossAxisAlignment
+	distribution: Distribution
+	alignment: StackAlignment
 
 	fn init(
-		children: table<Widget> = {},
+		children: table<View> = {},
 		direction: Axis = Axis.Horizontal,
 		spacing: float = 0.0,
 		runSpacing: float = 0.0,
-		alignment: MainAxisAlignment = MainAxisAlignment.Start,
-		crossAxisAlignment: CrossAxisAlignment = CrossAxisAlignment.Start,
-		key: string? = nil
+		distribution: Distribution = Distribution.Start,
+		alignment: StackAlignment = StackAlignment.Leading,
+		key: string? = nil,
+		content: (fn() -> nil)? = nil
 	)
 		self.super(key)
 
-		self.children = children
+		self.children = childrenOf(children, content)
 		self.direction = direction
 		self.spacing = spacing
 		self.runSpacing = runSpacing
+		self.distribution = distribution
 		self.alignment = alignment
-		self.crossAxisAlignment = crossAxisAlignment
 	end
 
-	fn childWidgets() -> table<Widget>
+	fn childViews() -> table<View>
 		return self.children
 	end
 
-	fn layout(el: Element, constraints: BoxConstraints) -> Size
+	fn layout(el: Element, constraints: Constraints) -> Size
 		local horizontal: boolean = self.direction == Axis.Horizontal
 		local count: integer = el.childCount()
 		local mainLimit: float = constraints.maxHeight
@@ -877,7 +903,7 @@ export class Wrap extends Widget
 
 		-- Measure everything first: a child's size decides which run it lands
 		-- in, so nothing can be positioned until all of them are known.
-		local loose: BoxConstraints = constraints.loosen()
+		local loose: Constraints = constraints.loosen()
 		local i: integer = 1
 
 		while i <= count do
@@ -992,21 +1018,21 @@ export class Wrap extends Widget
 			local between: float = self.spacing
 			local count: integer = runCount[r]
 
-			if self.alignment == MainAxisAlignment.End then
+			if self.distribution == Distribution.End then
 				leading = free
-			elseif self.alignment == MainAxisAlignment.Center then
+			elseif self.distribution == Distribution.Center then
 				leading = free / 2.0
-			elseif self.alignment == MainAxisAlignment.SpaceBetween then
+			elseif self.distribution == Distribution.SpaceBetween then
 				if count > 1 then
 					between = between + free / float(count - 1)
 				end
-			elseif self.alignment == MainAxisAlignment.SpaceAround then
+			elseif self.distribution == Distribution.SpaceAround then
 				if count > 0 then
 					local unit: float = free / float(count)
 					leading = unit / 2.0
 					between = between + unit
 				end
-			elseif self.alignment == MainAxisAlignment.SpaceEvenly then
+			elseif self.distribution == Distribution.SpaceEvenly then
 				local unit: float = free / float(count + 1)
 				leading = unit
 				between = between + unit
@@ -1024,9 +1050,9 @@ export class Wrap extends Widget
 					local childCross: float = crossOf(horizontal, child!.size)
 					local crossPos: float = crossCursor
 
-					if self.crossAxisAlignment == CrossAxisAlignment.End then
+					if self.alignment == StackAlignment.Trailing then
 						crossPos = crossCursor + runCross[r] - childCross
-					elseif self.crossAxisAlignment == CrossAxisAlignment.Center then
+					elseif self.alignment == StackAlignment.Center then
 						crossPos = crossCursor + (runCross[r] - childCross) / 2.0
 					end
 
