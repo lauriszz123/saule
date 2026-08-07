@@ -391,11 +391,24 @@ export class TextEditor extends View
 		local data: ElementData = context.data()
 		local scratch: table = data.scratch
 
+		-- Re-seeded only when a *controlled* editor's owner rebuilds it with
+		-- text it is not showing; see the guard in `TextField` for why view
+		-- identity is the discriminator and why `value` is nullable.
+		local previous: View? = scratch.owner as View
+		local byOwner: boolean = previous == nil or previous! != self
+		local wanted: string? = self.value
+
 		if scratch.text == nil then
-			scratch.text = self.value
-			scratch.caret = String.len(self.value)
+			scratch.text = wanted ?? ""
+			scratch.caret = String.len(wanted ?? "")
+			scratch.anchor = scratch.caret
+		elseif byOwner and wanted != nil and wanted! != ((scratch.text as string) ?? "") then
+			scratch.text = wanted!
+			scratch.caret = String.len(wanted!)
 			scratch.anchor = scratch.caret
 		end
+
+		scratch.owner = self
 
 		local node: FocusNode = nodeFor(data)
 		local focused: boolean = data.focused
@@ -511,7 +524,9 @@ export class TextEditor extends View
 	) -> boolean
 		local key: string = event.key
 
-		if event.ctrl then
+		-- `command()`, not `ctrl`: on macOS the shortcut modifier is Command,
+		-- and the engine reports that separately from Control.
+		if event.command() then
 			if key == "a" then
 				editor.selectAll()
 

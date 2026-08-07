@@ -88,13 +88,13 @@ class ContactsState extends State
 
 	-- --- mutations -----------------------------------------------------------
 
-	local fn add(contact: Contact) -> nil
+	local fn add(contact: Contact)
 		contact.id = self.nextId
 		self.nextId = self.nextId + 1
 		self.contacts[#self.contacts + 1] = contact
 	end
 
-	local fn submit() -> nil
+	local fn submit()
 		local name: string = trimmed(self.name)
 		local email: string = trimmed(self.email)
 
@@ -128,7 +128,7 @@ class ContactsState extends State
 		end
 	end
 
-	local fn reset() -> nil
+	local fn reset()
 		self.name = ""
 		self.email = ""
 		self.role = "Engineering"

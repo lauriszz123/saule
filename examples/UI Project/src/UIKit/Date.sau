@@ -656,7 +656,8 @@ export class DateField extends View
 	local fn open(context: BuildContext) -> nil
 		local origin: Offset = absoluteOf(context.element())
 
-		showDatePicker(
+		-- Kept, so `unmounted` can close it.
+		context.data().scratch.menu = showDatePicker(
 			context,
 			origin.dx,
 			origin.dy + context.size().height + 4.0,
@@ -669,6 +670,17 @@ export class DateField extends View
 				end
 			end
 		)
+	end
+
+	-- The calendar is a layer at the root, not a child of this view, so it
+	-- survives this element being unmounted and nothing else would close it.
+	fn unmounted(el: Element) -> nil
+		local open: OverlayHandle? = el.data.scratch.menu as OverlayHandle
+
+		if open != nil then
+			open!.close()
+			el.data.scratch.menu = nil
+		end
 	end
 
 	fn tick(el: Element, dt: float) -> nil
