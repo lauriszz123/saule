@@ -566,3 +566,40 @@ end
         "{hints:?}"
     );
 }
+
+/// Argument-name hints keep working past the first link of a chain.
+///
+/// The receiver of a second `.method` is a call whose callee is a
+/// member — a shape `receiver_class` didn't match — so the callee never
+/// resolved and the slot went unlabelled. In the UIKit sample that read
+/// as `.font( size: 28.0)` being annotated while
+/// `.foregroundStyle(theme.text)` right beside it was not.
+#[test]
+fn parameter_hints_survive_a_method_chain() {
+    let src = "\
+class Color
+end
+
+class Text
+  fn font(size: float) -> Text
+return self
+  end
+  fn foregroundStyle(color: Color) -> Text
+return self
+  end
+end
+
+fn build(c: Color)
+  local t = Text().font(28.0).foregroundStyle(c)
+end
+";
+    let hints = raw_hints(src);
+    for expected in ["size:", "color:"] {
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::PARAMETER && l == expected),
+            "missing {expected:?} in {hints:?}"
+        );
+    }
+}

@@ -225,10 +225,10 @@ end
     assert!(!md.contains("_hidden"), "got: {md}");
 }
 
-/// The constructor reads as the class's own parameter list rather than
-/// as an `init` method buried alphabetically among the others.
+/// The constructor reads as a labelled `Params` list rather than as an
+/// `init` method buried alphabetically among the others.
 #[test]
-fn class_hover_hoists_the_constructor_onto_the_heading() {
+fn class_hover_lists_the_constructor_under_params() {
     let src = "\
 class Entry
   local todo: string
@@ -244,18 +244,224 @@ end
 ";
     let md = hover(src, "Entry").unwrap();
     assert!(
-        md.contains("class Entry(todo: string, dueDate: integer?)"),
+        md.contains("-- Params\n  todo: string\n  dueDate: integer?"),
         "got: {md}"
     );
-    // The body must not repeat what the heading already says.
+    // `init` is the Params section; listing it again as a function
+    // would be the same information twice under a worse name.
     assert!(!md.contains("fn init"), "got: {md}");
-    assert!(md.contains("fn getTodo() -> string"), "got: {md}");
+    assert!(md.contains("  fn getTodo() -> string"), "got: {md}");
 }
 
-/// A class with no constructor keeps a bare heading — an empty `()`
+/// Every section, in order, for a class that has all three. Pins the
+/// exact whitespace: one fence around the lot (so the editor's syntax
+/// highlighter colours the entries, which it only does inside a fence),
+/// a blank line *between* sections, and none between a label and its
+/// own entries.
+#[test]
+fn class_hover_renders_labelled_sections() {
+    let src = "\
+class WindowGroup extends Scene
+  title: string
+  width: integer
+  content: (fn() -> nil)?
+  fn init(title: string = \"Saule\", width: integer = 900, content: (fn() -> nil)? = nil)
+  end
+  fn present()
+  end
+  fn resize(w: integer) -> boolean
+return true
+  end
+end
+";
+    let md = hover(src, "WindowGroup").unwrap();
+    assert_eq!(
+        md,
+        "```saule\n\
+         class WindowGroup extends Scene\n\
+         \n\
+         -- Params\n\
+         \x20 title: string = \"Saule\"\n\
+         \x20 width: integer = 900\n\
+         \x20 content: (fn() -> nil)? = nil\n\
+         \n\
+         -- Fields\n\
+         \x20 content: (fn() -> nil)?\n\
+         \x20 title: string\n\
+         \x20 width: integer\n\
+         \n\
+         -- Functions\n\
+         \x20 fn present()\n\
+         \x20 fn resize(w: integer) -> boolean\n\
+         ```",
+        "got: {md}"
+    );
+}
+
+/// Constructor parameters are positional at the call site, so they keep
+/// their declared order while the member sections sort.
+#[test]
+fn class_hover_keeps_params_in_declaration_order() {
+    let src = "\
+class Account
+  owner: string
+  balance: integer
+  fn init(owner: string, balance: integer)
+self.owner = owner
+self.balance = balance
+  end
+  fn withdraw(amount: integer)
+  end
+  fn deposit(amount: integer)
+  end
+end
+";
+    let md = hover(src, "Account").unwrap();
+    assert!(
+        md.contains("-- Params\n  owner: string\n  balance: integer"),
+        "got: {md}"
+    );
+    assert!(
+        md.contains("-- Fields\n  balance: integer\n  owner: string"),
+        "got: {md}"
+    );
+    assert!(
+        md.contains("-- Functions\n  fn deposit(amount: integer)\n  fn withdraw(amount: integer)"),
+        "got: {md}"
+    );
+}
+
+/// A signature too wide for the popup breaks to one parameter per line
+/// instead of soft-wrapping to column 0, where the continuation lines
+/// end up further left than the `fn` they belong to and nothing marks
+/// where one member ends and the next begins.
+#[test]
+fn class_hover_wraps_a_wide_method_signature() {
+    let src = "\
+class ThemeData
+  fn copyWith(background: Color? = nil, surface: Color? = nil, border: Color? = nil, text: Color? = nil, primary: Color? = nil) -> ThemeData
+return self
+  end
+  static fn dark() -> ThemeData
+return ThemeData()
+  end
+end
+";
+    let md = hover(src, "ThemeData").unwrap();
+    assert!(
+        md.contains(
+            "  fn copyWith(\n\
+             \x20   background: Color? = nil,\n\
+             \x20   surface: Color? = nil,\n\
+             \x20   border: Color? = nil,\n\
+             \x20   text: Color? = nil,\n\
+             \x20   primary: Color? = nil,\n\
+             \x20 ) -> ThemeData\n"
+        ),
+        "got: {md}"
+    );
+    // A signature that fits is left alone.
+    assert!(md.contains("  static fn dark() -> ThemeData"), "got: {md}");
+}
+
+/// The same break applies to a standalone `fn` hover, which overflows
+/// for exactly the same reason.
+#[test]
+fn function_hover_wraps_a_wide_signature() {
+    let src = "\
+fn configure(host: string, port: integer, retries: integer, timeoutMs: integer, verbose: boolean) -> boolean
+return true
+end
+";
+    let md = hover(src, "configure").unwrap();
+    assert_eq!(
+        md,
+        "```saule\n\
+         fn configure(\n\
+         \x20 host: string,\n\
+         \x20 port: integer,\n\
+         \x20 retries: integer,\n\
+         \x20 timeoutMs: integer,\n\
+         \x20 verbose: boolean,\n\
+         ) -> boolean\n\
+         ```",
+        "got: {md}"
+    );
+}
+
+/// `-> nil` is the language's way of spelling "returns nothing", so it
+/// is left off. Any other return type stays.
+#[test]
+fn class_hover_omits_a_nil_return() {
+    let src = "\
+class Logger
+  fn flush() -> nil
+return nil
+  end
+  fn count() -> integer
+return 0
+  end
+end
+";
+    let md = hover(src, "Logger").unwrap();
+    assert!(md.contains("  fn flush()\n"), "got: {md}");
+    assert!(!md.contains("-> nil"), "got: {md}");
+    assert!(md.contains("  fn count() -> integer"), "got: {md}");
+}
+
+/// An empty section is a line spent saying there is nothing to say.
+#[test]
+fn class_hover_drops_empty_sections() {
+    let src = "\
+class Marker
+end
+";
+    let md = hover(src, "Marker").unwrap();
+    assert_eq!(md, "```saule\nclass Marker\n```", "got: {md}");
+}
+
+/// A defaulted parameter shows the value when it's a simple constant —
+/// `= …` says only "optional", which the reader already knew.
+#[test]
+fn simple_parameter_defaults_render_their_value() {
+    let src = "\
+class Box
+  fn init(pad: integer = 4, label: string = \"none\", tint: Color? = nil, scale: float = 1.5, rows: integer = -2, computed: integer = 1 + 1)
+  end
+end
+";
+    let md = hover(src, "Box").unwrap();
+    for expected in [
+        "pad: integer = 4",
+        "label: string = \"none\"",
+        "tint: Color? = nil",
+        "scale: float = 1.5",
+        "rows: integer = -2",
+        // Anything with sub-expressions has no length bound, so it elides.
+        "computed: integer = …",
+    ] {
+        assert!(md.contains(expected), "missing `{expected}` in:\n{md}");
+    }
+}
+
+/// `fn() -> nil?` would read as a function returning `nil?`. The `?`
+/// belongs to the function type, so it needs parens.
+#[test]
+fn nullable_function_types_are_parenthesised() {
+    let src = "\
+class Widget
+  fn init(content: (fn() -> nil)?)
+  end
+end
+";
+    let md = hover(src, "Widget").unwrap();
+    assert!(md.contains("content: (fn() -> nil)?"), "got: {md}");
+}
+
+/// A class with no constructor has no `Params` section — an empty one
 /// would imply a zero-arg constructor the class doesn't declare.
 #[test]
-fn class_hover_omits_parens_when_there_is_no_constructor() {
+fn class_hover_omits_params_when_there_is_no_constructor() {
     let src = "\
 class Point
   x: integer = 0
@@ -263,7 +469,8 @@ end
 ";
     let md = hover(src, "Point").unwrap();
     assert!(md.contains("class Point"), "got: {md}");
-    assert!(!md.contains("class Point("), "got: {md}");
+    assert!(!md.contains("Params"), "got: {md}");
+    assert!(md.contains("-- Fields\n  x: integer"), "got: {md}");
 }
 
 /// A `local fn init` can't be called from outside, so advertising a
@@ -282,9 +489,9 @@ return self.seed
 end
 ";
     let md = hover(src, "Secret").unwrap();
-    assert!(!md.contains("class Secret("), "got: {md}");
+    assert!(!md.contains("Params"), "got: {md}");
     assert!(!md.contains("init"), "got: {md}");
-    assert!(md.contains("fn get() -> integer"), "got: {md}");
+    assert!(md.contains("  fn get() -> integer"), "got: {md}");
 }
 
 #[test]
@@ -708,7 +915,7 @@ end
     let md = hover_src_at(src, "count: 3", 1).expect("hover");
     // A named-argument key renders as the parameter it is, qualified by
     // the callee so the reader can tell which `count:` this is.
-    assert_eq!(md, "```saule\n(parameter) Main.put.count: integer = …\n```");
+    assert_eq!(md, "```saule\n(parameter) Main.put.count: integer = 1\n```");
 }
 
 #[test]
@@ -1374,7 +1581,7 @@ end
     );
     // Defaults are marked the same way the declaration site marks them.
     let pad = hover_src_at(src, "pad: 2", 1).expect("hover on pad key");
-    assert!(pad.contains("Box.pad: integer = …"), "got: {pad}");
+    assert!(pad.contains("Box.pad: integer = 0"), "got: {pad}");
 }
 
 /// A key the callee has no parameter for names the miss rather than
@@ -1493,7 +1700,7 @@ end
         .map(|(m, _)| m)
         .expect("hover on key");
     assert_eq!(
-        md, "```saule\n(parameter) showToast.message: string = …\n```",
+        md, "```saule\n(parameter) showToast.message: string = \"\"\n```",
         "got: {md}"
     );
 
@@ -2655,5 +2862,37 @@ end
     assert_eq!(
         hover(src, "retries").as_deref(),
         Some("```saule\n(export) retries: integer\n```")
+    );
+}
+
+/// Hover resolves every link of a modifier chain, not just the first.
+///
+/// The receiver of a second `.method` is a call whose callee is a
+/// member — a shape `receiver_class` didn't match, so it answered
+/// `None` and the hover fell through to whatever wider node was still
+/// in scope.
+#[test]
+fn hover_resolves_every_link_of_a_method_chain() {
+    let src = "\
+class Color
+end
+
+class Text
+  fn font(size: float) -> Text
+return self
+  end
+  fn foregroundStyle(color: Color) -> Text
+return self
+  end
+end
+
+fn build(c: Color)
+  local t = Text().font(28.0).foregroundStyle(c)
+end
+";
+    let md = hover_src_at(src, "foregroundStyle(c)", 1).expect("hover");
+    assert!(
+        md.contains("fn Text.foregroundStyle(color: Color) -> Text"),
+        "got: {md}"
     );
 }

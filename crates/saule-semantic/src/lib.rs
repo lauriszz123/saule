@@ -61,7 +61,10 @@ pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
 /// Locally-declared symbols always win on a name collision: if a module
 /// declares `class Json` *and* imports a `Json` from elsewhere, the
 /// imported entry is ignored.
-#[derive(Default, Debug)]
+/// `Clone` so embedders can memoise a seed across requests: building one
+/// means reading and parsing every reachable module, which the language
+/// server was doing on every keystroke.
+#[derive(Default, Debug, Clone)]
 pub struct ModuleSeed {
     pub classes: ClassRegistry,
     pub interfaces: InterfaceRegistry,

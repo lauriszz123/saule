@@ -17,6 +17,13 @@ impl Backend {
     pub(super) async fn update(&self, uri: Url, source: String, version: i32) {
         self.docs
             .insert(uri.to_string(), Document { source, version });
+        // This file's new text is an input to every *other* file's
+        // import seed. Drop the seeds that read it; leave this file's
+        // own entry alone, since its text only reaches its seed through
+        // its `import` lines and those are re-compared on lookup.
+        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
+            self.seed_cache.invalidate_dependents_of(&abs);
+        }
         self.refresh(uri).await;
     }
 
@@ -155,11 +162,7 @@ impl Backend {
         // interfaces / enums from sibling files so cross-file lookups
         // (e.g. `Json.decode(...)` from `import "json"`) resolve.
         let seed = match &module_dir {
-            Some(d) => saule_interpreter::module::collect_import_seed_with(
-                &module,
-                d,
-                &self.source_overlay(),
-            ),
+            Some(d) => self.import_seed_at(abs_path, &module, d),
             None => saule_semantic::ModuleSeed::default(),
         };
         for e in saule_semantic::analyze_with_seed(&module, seed) {

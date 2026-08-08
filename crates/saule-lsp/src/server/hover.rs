@@ -47,11 +47,7 @@ impl Backend {
         }
 
         let seed = match &module_dir {
-            Some(d) => saule_interpreter::module::collect_import_seed_with(
-                &module,
-                d,
-                &self.source_overlay(),
-            ),
+            Some(d) => self.import_seed(uri, &module, d),
             None => saule_semantic::ModuleSeed::default(),
         };
         // Diagnostics are discarded: hover should still work on a file

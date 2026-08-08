@@ -61,16 +61,13 @@ export class HomeScreen extends View
 				VStack(alignment: StackAlignment.Center, sizing: StackSize.Fit, spacing: 6.0) do
 					Text("Three screens").font(28.0).foregroundStyle(theme.text)
 
-					Text("Each one opens as a route. Escape or the back arrow returns here.")
-						.font(13.0)
-						.foregroundStyle(theme.textMuted)
+					Text("Each one opens as a route. Escape or the back arrow returns here.").font(13.0).foregroundStyle(
+						theme.textMuted
+					)
 				end
 
 				Grid(columns: 3, spacing: 16.0, children: cards)
-			end
-				.padding(28.0)
-				.frame(width: 940.0)
-				.centered()
+			end.padding(28.0).frame(width: 940.0).centered()
 		end
 	end
 end
@@ -78,19 +75,19 @@ end
 -- One launcher tile: an icon in its accent, a title, a line of prose, and a
 -- hover lift. The whole card is the target, not just the label.
 export class DemoCard extends View
-	icon: integer
-	title: string
-	detail: string
-	accent: Color?
-	onOpen: function?
+	local icon: integer
+	local title: string
+	local detail: string
+	local accent: Color?
+	local onOpen: function?
 
 	fn init(
-		icon: integer = 0,
-		title: string = "",
-		detail: string = "",
-		accent: Color? = nil,
-		onOpen: function? = nil,
-		key: string? = nil
+		icon: integer,
+		title: string,
+		detail: string,
+		accent: Color?,
+		onOpen: function?,
+		key: string?
 	)
 		self.super(key)
 
@@ -119,10 +116,10 @@ export class DemoCard extends View
 		end
 
 		local card: View = VStack(alignment: StackAlignment.Leading, spacing: 10.0) do
-			Icon(self.icon, 22.0, accent)
-				.centered()
-				.frame(width: 44.0, height: 44.0)
-				.background(accent.withAlpha(0.16), radius: 12.0)
+			Icon(self.icon, 22.0, accent).centered().frame(width: 44.0, height: 44.0).background(
+				accent.withAlpha(0.16),
+				12.0
+			)
 
 			Text(self.title).font(17.0).foregroundStyle(theme.text)
 			Text(self.detail).font(12.0).foregroundStyle(theme.textMuted)
@@ -135,18 +132,15 @@ export class DemoCard extends View
 			end
 		end
 
-		return card
-			.padding(18.0)
-			.background(fill, radius: 12.0, border: edge)
-			.frame(height: 210.0)
-			.onHover() do (inside: boolean)
-				scratch.hovered = inside
-				context.markNeedsBuild()
+		return card.padding(18.0).background(fill, radius: 12.0, border: edge).frame(height: 210.0).onHover() do (
+			inside: boolean
+		)
+			scratch.hovered = inside
+			context.markNeedsBuild()
+		end.onTapGesture() do
+			if self.onOpen != nil then
+				self.onOpen!()
 			end
-			.onTapGesture() do
-				if self.onOpen != nil then
-					self.onOpen!()
-				end
-			end
+		end
 	end
 end

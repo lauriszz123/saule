@@ -45,6 +45,14 @@ pub(crate) struct Found {
     pub(crate) ctx: Ctx,
     pub(crate) scope: Vec<Visible>,
     pub(crate) class: Option<String>,
+    /// Parameters of the call the caret sits directly inside, minus the
+    /// ones already supplied — offered as `name: ` so writing an
+    /// argument can complete the keyword rather than only the value.
+    ///
+    /// Empty unless the caret is a *positional* argument: inside
+    /// `f(child: ca…)` the caret is past a `name:` and is typing a
+    /// value, where parameter names are the wrong suggestion.
+    pub(crate) named_params: Vec<Param>,
 }
 
 /// Descends the tree to the sentinel, maintaining the scope stack.
@@ -57,6 +65,11 @@ pub(crate) struct Walk {
     /// and the callee is the only place the real type comes from — without
     /// this, `each(items) do (item)` offers `item: any`.
     user_fns: std::collections::HashMap<String, (Vec<Param>, Option<Type>)>,
+    /// Unfilled parameters of the call currently being descended into.
+    /// Saved and restored around each argument list, so a nested call
+    /// shadows its parent — in `outer(a, inner(b…))` the caret is
+    /// offered `inner`'s parameters, not `outer`'s.
+    named_params: Vec<Param>,
 }
 
 impl Walk {
@@ -66,6 +79,7 @@ impl Walk {
             class: None,
             found: None,
             user_fns: crate::server::sighelp::walk::collect_user_fns(module),
+            named_params: Vec::new(),
         };
         w.block(&module.stmts);
         w.found
@@ -86,6 +100,7 @@ impl Walk {
                     })
                     .collect(),
                 class: self.class.clone(),
+                named_params: std::mem::take(&mut self.named_params),
             });
         }
     }
@@ -461,6 +476,27 @@ impl Walk {
         };
         let param_slots = saule_ast::param_slots(&params);
         let slots = saule_ast::resolve_arg_slots(args, &param_slots);
+
+        // Which parameters are still unspoken for. `resolve_arg_slots`
+        // has already assigned every argument — positional by position,
+        // named by name — so "unfilled" is just the complement, and it
+        // stays right for the mixed forms (`Widget(x, key: k, ba…)`).
+        // The caret's own argument doesn't count as filling anything.
+        let sentinel_arg = args.iter().position(is_sentinel_positional);
+        let filled: Vec<usize> = slots
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != sentinel_arg)
+            .filter_map(|(_, s)| *s)
+            .collect();
+        let unfilled: Vec<Param> = params
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !filled.contains(i))
+            .map(|(_, p)| p.clone())
+            .collect();
+
+        let outer = std::mem::replace(&mut self.named_params, unfilled);
         for (a, slot) in args.iter().zip(slots.iter()) {
             let (CallArg::Positional(e) | CallArg::Named { value: e, .. }) = a;
             let want = slot.and_then(|i| params.get(i)).map(|p| &p.ty);
@@ -468,9 +504,18 @@ impl Walk {
                 (Expr::Lambda { params, body, .. }, Some(Type::Function { params: want, .. })) => {
                     self.lambda(params, body, Some(want))
                 }
+                // A named argument's value is a value position — the
+                // keyword is already written, so parameter names are
+                // not what the caret wants next.
+                _ if matches!(a, CallArg::Named { .. }) => {
+                    let inner = std::mem::take(&mut self.named_params);
+                    self.expr(e);
+                    self.named_params = inner;
+                }
                 _ => self.expr(e),
             }
         }
+        self.named_params = outer;
     }
 
     /// The callee's declared parameters, for the callee shapes a lambda
@@ -489,6 +534,50 @@ impl Walk {
                 }
                 self.user_fns.get(name).map(|(ps, _)| ps.clone())
             }
+            // `recv.method(`, `Theme.of(` — resolve the receiver, then
+            // the method on it. `lookup_method` walks the parent chain,
+            // so an inherited modifier answers too.
+            Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
+                let class = self.receiver_class(&obj.value)?;
+                saule_semantic::lookup_method(&class, name).map(|s| s.params)
+            }
+            _ => None,
+        }
+    }
+
+    /// Which class a call's receiver denotes, for the shapes that turn
+    /// up in a chain: `self`, a local, a bare class name, a constructor
+    /// call, and — so chains resolve past their first link — a method
+    /// call, whose class is that method's declared return type.
+    fn receiver_class(&self, obj: &Expr) -> Option<String> {
+        match obj {
+            Expr::Self_ => self.class.clone(),
+            Expr::Ident(name) => {
+                if let Some(v) = self.scope.iter().rev().find(|v| v.name == *name)
+                    && let Some(Type::Named(n)) = &v.ty
+                {
+                    return Some(n.clone());
+                }
+                saule_semantic::with_classes(|r| r.contains_key(name)).then(|| name.clone())
+            }
+            Expr::ForceUnwrap(inner) => self.receiver_class(&inner.value),
+            Expr::Call { callee, .. } => match &callee.value {
+                Expr::Ident(n) if saule_semantic::with_classes(|r| r.contains_key(n)) => {
+                    Some(n.clone())
+                }
+                Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
+                    let recv = self.receiver_class(&obj.value)?;
+                    match saule_semantic::lookup_method(&recv, name)?.return_ty? {
+                        Type::Named(n) => Some(n),
+                        Type::Nullable(inner) => match *inner {
+                            Type::Named(n) => Some(n),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -531,4 +620,10 @@ pub(crate) fn bind_pattern(w: &mut Walk, p: &saule_ast::Pattern) {
         }
         _ => {}
     }
+}
+
+/// A positional argument that is nothing but the caret — the shape that
+/// means "the author is starting a fresh argument here".
+fn is_sentinel_positional(arg: &CallArg) -> bool {
+    matches!(arg, CallArg::Positional(e) if matches!(&e.value, Expr::Ident(n) if n == SENTINEL))
 }
