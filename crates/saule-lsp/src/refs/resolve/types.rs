@@ -137,7 +137,7 @@ impl<'a> ResolveCx<'a> {
                 {
                     return Some(n.clone());
                 }
-                None
+                crate::refs::util::method_call_class(&callee.value, |e| self.receiver_class(e))
             }
             _ => None,
         }

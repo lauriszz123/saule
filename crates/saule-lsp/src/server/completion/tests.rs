@@ -352,3 +352,140 @@ end
         "detail={detail:?}"
     );
 }
+
+/// Typing an argument offers the callee's parameter names, so
+/// `Widget(back…)` completes to the `background:` keyword rather than
+/// only to whatever locals happen to share the prefix.
+#[test]
+fn an_argument_position_offers_parameter_keywords() {
+    let src = "\
+class Color
+end
+
+class Widget
+  fn init(background: Color?, keyRepeat: boolean, title: string)
+  end
+end
+
+fn build()
+  local w = Widget(@)
+end
+";
+    let items = complete(src);
+    for want in ["background:", "keyRepeat:", "title:"] {
+        assert!(
+            items.iter().any(|i| i == want),
+            "missing {want:?}: {items:?}"
+        );
+    }
+}
+
+/// A parameter already supplied by name drops off the list — offering
+/// it again would produce a duplicate keyword the parser rejects.
+#[test]
+fn parameters_already_named_are_not_offered_again() {
+    let src = "\
+class Widget
+  fn init(alpha: integer, beta: integer, gamma: integer)
+  end
+end
+
+fn build()
+  local w = Widget(beta: 1, @)
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "alpha:"), "{items:?}");
+    assert!(items.iter().any(|i| i == "gamma:"), "{items:?}");
+    assert!(!items.iter().any(|i| i == "beta:"), "{items:?}");
+}
+
+/// Positional arguments consume their slots too, so only what's left
+/// is offered.
+#[test]
+fn positional_arguments_consume_their_slots() {
+    let src = "\
+class Widget
+  fn init(alpha: integer, beta: integer, gamma: integer)
+  end
+end
+
+fn build()
+  local w = Widget(1, @)
+end
+";
+    let items = complete(src);
+    assert!(!items.iter().any(|i| i == "alpha:"), "{items:?}");
+    assert!(items.iter().any(|i| i == "beta:"), "{items:?}");
+    assert!(items.iter().any(|i| i == "gamma:"), "{items:?}");
+}
+
+/// Past a `name:` the caret is writing a *value*, and parameter
+/// keywords are the wrong suggestion there.
+#[test]
+fn a_named_arguments_value_is_not_a_keyword_position() {
+    let src = "\
+class Widget
+  fn init(alpha: integer, beta: integer)
+  end
+end
+
+fn build()
+  local alphabet = 1
+  local w = Widget(beta: al@)
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "alphabet"), "{items:?}");
+    assert!(!items.iter().any(|i| i == "alpha:"), "{items:?}");
+}
+
+/// The innermost call wins — a nested call's parameters, not the
+/// enclosing one's.
+#[test]
+fn a_nested_call_offers_its_own_parameters() {
+    let src = "\
+class Inner
+  fn init(innerOne: integer)
+  end
+end
+
+class Outer
+  fn init(outerOne: integer)
+  end
+end
+
+fn build()
+  local w = Outer(Inner(@))
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "innerOne:"), "{items:?}");
+    assert!(!items.iter().any(|i| i == "outerOne:"), "{items:?}");
+}
+
+/// Method calls get keywords too, including further down a chain —
+/// `receiver_class` resolves `.font(28.0)` to `Text` so the next link
+/// knows its parameters.
+#[test]
+fn a_method_call_in_a_chain_offers_parameter_keywords() {
+    let src = "\
+class Color
+end
+
+class Text
+  fn font(size: float) -> Text
+return self
+  end
+  fn foregroundStyle(color: Color) -> Text
+return self
+  end
+end
+
+fn build()
+  local t = Text().font(28.0).foregroundStyle(@)
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "color:"), "{items:?}");
+}

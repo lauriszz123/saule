@@ -308,6 +308,26 @@ impl<'a> Cx<'a> {
                 {
                     return Some(n.clone());
                 }
+                // A link past the first in a chain has a member callee,
+                // and its class is that method's declared return type.
+                // Without this the argument-name hints stopped after the
+                // first modifier: `.font( size: 28.0)` was labelled and
+                // `.foregroundStyle(theme.text)` right after it was not.
+                if let Expr::Member { obj: inner, name } | Expr::SafeMember { obj: inner, name } =
+                    &callee.value
+                {
+                    let inner_class = self.receiver_class(&inner.value)?;
+                    return match lookup_method(&inner_class, name)?.return_ty? {
+                        Type::Named(n) => Some(n),
+                        // `-> Text?` still names `Text`; the nullability
+                        // is the caller's problem, not the lookup's.
+                        Type::Nullable(inner) => match *inner {
+                            Type::Named(n) => Some(n),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                }
                 None
             }
             _ => None,

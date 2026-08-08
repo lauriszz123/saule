@@ -239,8 +239,8 @@ impl<'a> Cx<'a> {
     /// The hover for a named argument's key.
     ///
     /// A named-argument key *is* the callee's parameter, so it renders
-    /// as one — same `(parameter)` label, same `= …` default marker as
-    /// the declaration site, and qualified by the callee's name.
+    /// as one — same `(parameter)` label, same rendering of a default
+    /// as the declaration site, and qualified by the callee's name.
     ///
     /// The qualifier is what makes this readable in Flutter-shaped code.
     /// A single build method here holds eight `child:` keys belonging to
@@ -273,9 +273,7 @@ impl<'a> Cx<'a> {
         s.push_str(&p.name);
         s.push_str(": ");
         s.push_str(&render_type(&p.ty));
-        if p.default.is_some() {
-            s.push_str(" = …");
-        }
+        s.push_str(&crate::hover::render::render_default_suffix(p));
         s.push_str("\n```");
         with_param_doc(s, c.doc.as_ref(), name)
     }

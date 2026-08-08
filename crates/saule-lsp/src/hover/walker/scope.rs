@@ -387,7 +387,19 @@ impl<'a> Cx<'a> {
                 {
                     return Some(name.clone());
                 }
-                None
+                // Any other call — a method call on something else, or a
+                // free function returning a class. `infer_init_type`
+                // already chases a method's registered return type (and
+                // instantiates its type parameters); asking it here is
+                // what makes a chain resolve past its first link.
+                //
+                // Without this, `Text(…).font(28.0).foregroundStyle(…)`
+                // resolved `.font` — whose receiver is a constructor call
+                // — and then gave up, because the receiver of
+                // `.foregroundStyle` is a *call whose callee is a
+                // member*, which the arm above doesn't match. Every
+                // modifier after the first reported nothing.
+                named_type(&self.infer_init_type(obj)?)
             }
             Expr::Index { obj: inner, .. } => {
                 // `tbl[i].foo` — the receiver's class is the element

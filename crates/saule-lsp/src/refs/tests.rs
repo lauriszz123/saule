@@ -1419,3 +1419,75 @@ end
     let sym = try_resolve_ident(src, "repeated", 0).expect("symbol on the declaration");
     assert_eq!(ref_count(src, &sym), 2, "both call sites");
 }
+
+/// A modifier chain resolves past its first link.
+///
+/// `Text(…).font(28.0)` was fine — its receiver is a constructor call,
+/// the one call shape `receiver_class` knew. `.foregroundStyle(…)` after
+/// it was not: its receiver is a call whose *callee is a member*, which
+/// fell straight through to `None`, so IntelliJ answered "cannot find
+/// declaration to go to" for every modifier but the first.
+#[test]
+fn goto_resolves_every_link_of_a_method_chain() {
+    let src = "\
+class Color
+end
+
+class Text
+  fn font(size: float) -> Text
+return self
+  end
+  fn foregroundStyle(color: Color) -> Text
+return self
+  end
+  fn lineLimit(lines: integer) -> Text
+return self
+  end
+end
+
+fn build(c: Color)
+  local t = Text().font(28.0).foregroundStyle(c).lineLimit(2)
+end
+";
+    for (needle, n) in [("font", 1), ("foregroundStyle", 1), ("lineLimit", 1)] {
+        assert_eq!(
+            resolve_ident(src, needle, n),
+            Symbol::Method {
+                class: "Text".into(),
+                name: needle.into(),
+            },
+            "link {needle:?} did not resolve"
+        );
+    }
+}
+
+/// The chain still resolves when a link is inherited rather than
+/// declared on the receiver's own class — `lookup_method` walks the
+/// parent chain, and the returned `Text` is what the next link needs.
+#[test]
+fn goto_resolves_a_chain_through_an_inherited_modifier() {
+    let src = "\
+class View
+  fn padding(amount: float) -> View
+return self
+  end
+end
+
+class Text extends View
+  fn font(size: float) -> Text
+return self
+  end
+end
+
+fn build()
+  local t = Text().font(28.0).padding(4.0)
+end
+";
+    assert_eq!(
+        resolve_ident(src, "padding", 1),
+        Symbol::Method {
+            class: "View".into(),
+            name: "padding".into(),
+        }
+    );
+}

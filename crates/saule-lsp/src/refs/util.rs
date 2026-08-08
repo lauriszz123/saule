@@ -348,3 +348,34 @@ pub(super) fn locate_string_literal(
     }
     None
 }
+
+/// The class a `recv.method(...)` call evaluates to, given a way to
+/// resolve `recv` itself.
+///
+/// Both walkers resolve a receiver one link at a time, and both handled
+/// only `Class(args).foo` — a call whose *callee is an identifier*. The
+/// second link of a chain isn't that shape: in
+/// `Text(…).font(28.0).foregroundStyle(…)` the receiver of
+/// `.foregroundStyle` is a call whose callee is a `Member`, so both
+/// walkers gave up and every modifier after the first reported "cannot
+/// find declaration".
+///
+/// `lookup_method` walks the parent chain, so a modifier inherited from
+/// a base class resolves too. Falls back to the native-signature
+/// registry for stdlib receivers, whose methods aren't in the class
+/// registry at all.
+pub(super) fn method_call_class(
+    callee: &Expr,
+    receiver_class: impl Fn(&Expr) -> Option<String>,
+) -> Option<String> {
+    let (obj, name) = match callee {
+        Expr::Member { obj, name } | Expr::SafeMember { obj, name } => (obj, name),
+        _ => return None,
+    };
+    let recv = receiver_class(&obj.value)?;
+    if let Some(sig) = saule_semantic::lookup_method(&recv, name) {
+        return sig.return_ty.as_ref().and_then(named_type);
+    }
+    let sig = saule_typeck::sigs::lookup(&format!("{recv}.{name}"))?;
+    sig.returns.first().and_then(named_type)
+}

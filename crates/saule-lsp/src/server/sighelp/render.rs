@@ -62,56 +62,30 @@ pub(crate) fn build_help_native(
     multiline: bool,
 ) -> Option<SignatureHelp> {
     let names = crate::server::native_names::param_names(qname, sig);
-    let mut label = String::new();
-    label.push_str(display);
-    label.push('(');
-    let mut param_ranges: Vec<(u32, u32)> = Vec::new();
     let positional_n = sig.params.len();
-    // Same separator rule as `render_signature_label`: the comma stays
-    // on the line it ends, the next parameter starts the following one.
-    let sep = |label: &mut String, first: bool| {
-        if !first {
-            label.push(',');
-        }
-        if multiline {
-            label.push_str("\n  ");
-        } else if !first {
-            label.push(' ');
-        }
-    };
-    for (i, ty) in sig.params.iter().enumerate() {
-        sep(&mut label, i == 0);
-        let start = utf16_len(&label);
-        let pname = names.get(i).map(|s| s.as_str()).unwrap_or("value");
-        label.push_str(pname);
-        label.push_str(": ");
-        label.push_str(&render_type(ty));
-        let end = utf16_len(&label);
-        param_ranges.push((start, end));
-    }
+    let mut texts: Vec<String> = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let pname = names.get(i).map(|s| s.as_str()).unwrap_or("value");
+            format!("{pname}: {}", render_type(ty))
+        })
+        .collect();
     if let Some(var_ty) = &sig.variadic {
-        sep(&mut label, positional_n == 0);
-        let start = utf16_len(&label);
         let vname = names
             .get(positional_n)
             .map(|s| s.as_str())
             .unwrap_or("rest");
-        label.push_str("...");
-        label.push_str(vname);
-        label.push_str(": ");
-        label.push_str(&render_type(var_ty));
-        let end = utf16_len(&label);
-        param_ranges.push((start, end));
+        texts.push(format!("...{vname}: {}", render_type(var_ty)));
     }
-    if multiline && !param_ranges.is_empty() {
-        label.push('\n');
-    }
-    label.push(')');
-    if !sig.returns.is_empty() {
-        label.push_str(" -> ");
+    let suffix = if sig.returns.is_empty() {
+        String::new()
+    } else {
         let parts: Vec<String> = sig.returns.iter().map(render_type).collect();
-        label.push_str(&parts.join(", "));
-    }
+        format!(" -> {}", parts.join(", "))
+    };
+    let (label, param_ranges) = assemble_label(display, &texts, &suffix, multiline);
 
     let arity_with_var = param_ranges.len();
     let active = active_parameter(args, offset, arity_with_var);
@@ -172,10 +146,51 @@ pub(crate) fn render_signature_label(
     return_ty: Option<&Type>,
     multiline: bool,
 ) -> (String, Vec<(u32, u32)>) {
+    // Same renderer the hover popup uses, so one parameter reads
+    // identically in both — including its default value.
+    let texts: Vec<String> = params
+        .iter()
+        .map(crate::hover::render::render_param_inline)
+        .collect();
+    let suffix = match return_ty {
+        Some(rt) => format!(" -> {}", render_type(rt)),
+        None => String::new(),
+    };
+    assemble_label(name, &texts, &suffix, multiline)
+}
+
+/// Lay a signature label out and measure each parameter's UTF-16 span
+/// within it.
+///
+/// `multiline` is a floor, not the whole decision: the caller sets it
+/// when the *call* spans lines, but a one-line call to a wide signature
+/// overflows just as badly — a sixteen-parameter `copyWith` invoked as
+/// `copyWith(x)` produced a label that ran off the popup and wrapped to
+/// column 0. Anything past [`SIGNATURE_WIDTH_BUDGET`] breaks itself.
+fn assemble_label(
+    name: &str,
+    params: &[String],
+    suffix: &str,
+    multiline: bool,
+) -> (String, Vec<(u32, u32)>) {
+    let width = |s: &str| s.chars().count();
+    // name + "(" + params joined by ", " + ")" + suffix
+    let inline = width(name)
+        + 2
+        + params
+            .iter()
+            .map(|p| width(p) + 2)
+            .sum::<usize>()
+            .saturating_sub(2)
+        + width(suffix);
+    let multiline = multiline || inline > crate::hover::render::SIGNATURE_WIDTH_BUDGET;
+
     let mut label = String::from(name);
     label.push('(');
     let mut ranges: Vec<(u32, u32)> = Vec::new();
     for (i, p) in params.iter().enumerate() {
+        // The comma stays on the line it ends; the next parameter
+        // starts the following one.
         if i > 0 {
             label.push(',');
         }
@@ -185,25 +200,14 @@ pub(crate) fn render_signature_label(
             label.push(' ');
         }
         let start = utf16_len(&label);
-        label.push_str(&p.name);
-        label.push_str(": ");
-        label.push_str(&render_type(&p.ty));
-        if p.variadic {
-            label.push_str("...");
-        }
-        if p.default.is_some() {
-            label.push_str(" = …");
-        }
+        label.push_str(p);
         ranges.push((start, utf16_len(&label)));
     }
     if multiline && !params.is_empty() {
         label.push('\n');
     }
     label.push(')');
-    if let Some(rt) = return_ty {
-        label.push_str(" -> ");
-        label.push_str(&render_type(rt));
-    }
+    label.push_str(suffix);
     (label, ranges)
 }
 
@@ -283,27 +287,16 @@ pub(crate) fn utf16_len(s: &str) -> u32 {
     s.encode_utf16().count() as u32
 }
 
+/// The hover pretty-printer, reused verbatim.
+///
+/// This was a byte-for-byte copy until the two drifted: hover learned to
+/// parenthesise a function under `?` (`(fn() -> nil)?`, not the
+/// `fn() -> nil?` that reads as returning `nil?`) and this copy did not,
+/// so the same parameter described itself two different ways depending
+/// on which popup you were looking at. Delegating is what keeps them
+/// honest.
 pub(crate) fn render_type(ty: &Type) -> String {
-    match ty {
-        Type::Named(n) => n.clone(),
-        Type::Nullable(inner) => format!("{}?", render_type(inner)),
-        Type::Function { params, ret } => {
-            let ps = params
-                .iter()
-                .map(render_type)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("fn({ps}) -> {}", render_type(ret))
-        }
-        Type::Table { key, value } => match key {
-            Some(k) => format!("table<{}, {}>", render_type(k), render_type(value)),
-            None => format!("table<{}>", render_type(value)),
-        },
-        Type::Tuple(parts) => format!(
-            "({})",
-            parts.iter().map(render_type).collect::<Vec<_>>().join(", ")
-        ),
-    }
+    crate::hover::render::render_type(ty)
 }
 
 // ──────────────────────────────────────────────────────────────────────

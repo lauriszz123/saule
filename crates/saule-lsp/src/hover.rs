@@ -20,7 +20,9 @@
 //! the `Hover.range` field so editors can highlight the exact node.
 
 mod imports;
-mod render;
+/// `pub(crate)` for `server::sighelp`, which renders the same
+/// parameters into a different popup and must not drift from these.
+pub(crate) mod render;
 #[cfg(test)]
 mod tests;
 mod util;

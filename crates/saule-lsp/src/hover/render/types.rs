@@ -28,96 +28,165 @@ pub(crate) fn render_class_head(
     s
 }
 
-/// Render a class with its full public surface — heading, then a body
-/// listing every non-private field and method in alphabetical order.
-/// This is the same format used for `Ident` hover on a class name and
-/// for hover on a `class` declaration head, so the two views agree.
+/// Render a class with its full public surface. This is the same format
+/// used for `Ident` hover on a class name and for hover on a `class`
+/// declaration head, so the two views agree.
 ///
-/// The constructor is hoisted onto the heading as the class's own
-/// parameter list — `class Entry(todo: string, …)` mirrors the call the
-/// reader actually writes (`Entry("buy milk", nil)`), which `fn init(…)`
-/// buried alphabetically among the methods does not. It is therefore
-/// omitted from the body rather than listed twice.
+/// The layout is a one-line head followed by labelled sections:
+///
+/// ```text
+/// class WindowGroup extends Scene
+///
+/// -- Params
+///   title: string = "Saule"
+///   width: integer = 900
+///
+/// -- Fields
+///   background: Color?
+///
+/// -- Functions
+///   fn present()
+/// ```
+///
+/// Sections beat the class-shaped body this replaced for one reason:
+/// the reader is asking a specific question — "how do I build one?",
+/// "what can I read off it?", "what can I call?" — and a label answers
+/// it without them having to infer the answer from punctuation. The old
+/// form hoisted the constructor onto the head as `class C(a, b, …)`,
+/// which soft-wrapped at whatever column the popup happened to be and
+/// stranded `extends Scene` mid-parameter-list, then ran fields and
+/// methods together in one alphabetical column.
+///
+/// **The whole blurb is one `saule` fence, deliberately.** An editor
+/// syntax-highlights a fenced block and nothing else — Markdown carries
+/// no language on inline code — so rendering the entries as real
+/// Markdown bullets costs every entry its colours, which on a wide
+/// signature is most of what makes the type scannable. Keeping one
+/// fence also puts the blank lines under our control instead of the
+/// renderer's paragraph margins, which is what lets each label sit
+/// directly on top of its list.
 pub(crate) fn render_class_full(name: &str, info: &ClassInfo) -> String {
-    let mut s = format!("```saule\nclass {name}");
-    // A private `init` stays off the heading: the class can't be
-    // constructed from outside, so advertising a call shape would lie.
-    if let Some(ctor) = info.methods.get("init").filter(|sig| !sig.is_private) {
-        s.push('(');
-        s.push_str(
-            &ctor
-                .params
-                .iter()
-                .map(render_param_inline)
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        s.push(')');
-    }
+    let mut head = format!("```saule\nclass {name}");
     if let Some(p) = &info.parent {
-        s.push_str(" extends ");
-        s.push_str(p);
+        head.push_str(" extends ");
+        head.push_str(p);
     }
     if !info.implements.is_empty() {
-        s.push_str(" implements ");
-        s.push_str(&info.implements.join(", "));
+        head.push_str(" implements ");
+        head.push_str(&info.implements.join(", "));
     }
 
-    // Public surface — `info.members` is the canonical visibility map.
-    // Sort lexicographically so the same class always renders the same
-    // way regardless of HashMap iteration order.
-    let mut public: Vec<&String> = info
-        .members
-        .iter()
-        .filter_map(|(n, priv_)| if *priv_ || n == "init" { None } else { Some(n) })
-        .collect();
-    public.sort();
+    // Constructor parameters. A private `init` contributes nothing: the
+    // class can't be built from outside, so advertising a call shape
+    // would lie. Deliberately *not* sorted — these are positional at the
+    // call site, and any order but the declared one is a wrong answer to
+    // "how do I build one?".
+    let params: Vec<String> = info
+        .methods
+        .get("init")
+        .filter(|sig| !sig.is_private)
+        .map(|ctor| ctor.params.iter().map(render_param_inline).collect())
+        .unwrap_or_default();
 
-    if !public.is_empty() {
-        s.push_str(" {\n");
-        for member in public {
-            if let Some(sig) = info.methods.get(member) {
-                s.push_str("  ");
-                if sig.is_static {
-                    s.push_str("static ");
-                }
-                s.push_str("fn ");
-                s.push_str(member);
-                if !sig.type_params.is_empty() {
-                    s.push('<');
-                    s.push_str(&sig.type_params.join(", "));
-                    s.push('>');
-                }
-                s.push('(');
-                s.push_str(
-                    &sig.params
-                        .iter()
-                        .map(render_param_inline)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                s.push(')');
-                if let Some(rt) = &sig.return_ty {
-                    s.push_str(" -> ");
-                    s.push_str(&render_type(rt));
-                }
-            } else if let Some(ty) = info.field_types.get(member) {
-                s.push_str("  ");
-                s.push_str(member);
-                s.push_str(": ");
-                s.push_str(&render_type(ty));
-            } else {
-                // Inherited or otherwise unsourced — still surface the
-                // name so the hover doesn't lie about the API.
-                s.push_str("  ");
-                s.push_str(member);
-            }
-            s.push('\n');
+    // Public surface — `info.members` is the canonical visibility map,
+    // and `info.methods` is what tells a callable member from a field.
+    // Sorted so the same class always renders the same way regardless of
+    // HashMap iteration order.
+    let (mut field_names, mut method_names): (Vec<&String>, Vec<&String>) =
+        (Vec::new(), Vec::new());
+    for (member, is_private) in &info.members {
+        if *is_private || member == "init" {
+            continue;
         }
-        s.push('}');
+        if info.methods.contains_key(member) {
+            method_names.push(member);
+        } else {
+            field_names.push(member);
+        }
     }
+    field_names.sort();
+    method_names.sort();
+
+    let fields: Vec<String> = field_names
+        .iter()
+        .map(|f| match info.field_types.get(*f) {
+            Some(ty) => format!("{f}: {}", render_type(ty)),
+            // No recorded type — inherited or otherwise unsourced. Still
+            // surface the name so the hover doesn't lie about the API.
+            None => (*f).clone(),
+        })
+        .collect();
+
+    let methods: Vec<String> = method_names
+        .iter()
+        .filter_map(|m| info.methods.get(*m).map(|sig| render_member_method(m, sig)))
+        .collect();
+
+    let mut s = head;
+    push_section(&mut s, "Params", &params);
+    push_section(&mut s, "Fields", &fields);
+    push_section(&mut s, "Functions", &methods);
     s.push_str("\n```");
     s
+}
+
+/// Append a labelled section to a class blurb, or nothing at all when
+/// the list is empty — an empty "Fields" heading is a line spent saying
+/// there is nothing to say.
+///
+/// A blank line separates one section from the last, but never the label
+/// from its own entries: the gap belongs *between* the groups, and the
+/// label reads as belonging to the list it sits on.
+///
+/// The label is written as a `--` comment so it renders muted instead of
+/// coloured. Everything in the blurb is inside one `saule` fence, so the
+/// editor's lexer has an opinion about every word in it — and the
+/// highlighters map PascalCase to a type reference, which painted
+/// `Params` / `Fields` / `Functions` the same colour as `Scene` and
+/// `Color`. A label that reads as a class name is worse than no colour
+/// at all; comment is the one token class that recedes.
+fn push_section(s: &mut String, label: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    s.push_str("\n\n-- ");
+    s.push_str(label);
+    for item in items {
+        s.push_str("\n  ");
+        s.push_str(item);
+    }
+}
+
+/// One entry in a class's `Functions:` list.
+///
+/// `-> nil` is omitted: the README defines it as the conventional way to
+/// spell "this function returns nothing", so printing it adds a column
+/// of noise to exactly the methods that have the least to say. Every
+/// other return type is shown.
+fn render_member_method(name: &str, sig: &MethodSig) -> String {
+    let mut prefix = String::new();
+    if sig.is_static {
+        prefix.push_str("static ");
+    }
+    prefix.push_str("fn ");
+    prefix.push_str(name);
+    if !sig.type_params.is_empty() {
+        prefix.push('<');
+        prefix.push_str(&sig.type_params.join(", "));
+        prefix.push('>');
+    }
+
+    let suffix = match &sig.return_ty {
+        Some(rt) if !matches!(rt, Type::Named(n) if n == "nil") => {
+            format!(" -> {}", render_type(rt))
+        }
+        _ => String::new(),
+    };
+
+    let params: Vec<String> = sig.params.iter().map(render_param_inline).collect();
+    // Members sit two columns in, which is where the wrapped form has to
+    // hang its continuation lines from.
+    render_call_shape(&prefix, &params, &suffix, 2)
 }
 
 /// Hover for a stdlib static-class identifier (`Math`, `String`, …) or
@@ -164,21 +233,18 @@ pub(crate) fn render_interface_head(
     if !methods.is_empty() {
         s.push_str(" {\n");
         for m in methods {
-            s.push_str("  fn ");
-            s.push_str(&m.name);
-            s.push('(');
-            s.push_str(
-                &m.params
-                    .iter()
-                    .map(render_param_inline)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            s.push(')');
-            if let Some(rt) = &m.return_ty {
-                s.push_str(" -> ");
-                s.push_str(&render_type(rt));
-            }
+            let suffix = match &m.return_ty {
+                Some(rt) => format!(" -> {}", render_type(rt)),
+                None => String::new(),
+            };
+            let params: Vec<String> = m.params.iter().map(render_param_inline).collect();
+            s.push_str("  ");
+            s.push_str(&render_call_shape(
+                &format!("fn {}", m.name),
+                &params,
+                &suffix,
+                2,
+            ));
             s.push('\n');
         }
         s.push('}');
@@ -286,7 +352,13 @@ pub(crate) fn render_enum_variant_decl(owner: &str, v: &EnumVariant) -> String {
 pub(crate) fn render_type(ty: &Type) -> String {
     match ty {
         Type::Named(n) => n.clone(),
-        Type::Nullable(inner) => format!("{}?", render_type(inner)),
+        // A function under `?` needs parens: `fn() -> nil?` reads as a
+        // function returning `nil?`, which is a different type from the
+        // nullable function the annotation actually declares.
+        Type::Nullable(inner) => match &**inner {
+            Type::Function { .. } => format!("({})?", render_type(inner)),
+            _ => format!("{}?", render_type(inner)),
+        },
         Type::Table { key: None, value } => format!("table<{}>", render_type(value)),
         Type::Table {
             key: Some(k),

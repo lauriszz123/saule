@@ -6,19 +6,19 @@ import * from Home
 -- Everything below the `Theme` reads its palette through `Theme.of(context)` —
 -- swap it for `ThemeData.light()` to see it.
 export class DemoApp extends App
-	fn body() -> Scene
-		return WindowGroup(title: "Saule UIKit", width: 900, height: 700) do
-			Theme(data: ThemeData.dark()) do
-				HomeScreen()
-			end
-		end
-	end
+  fn body() -> Scene
+    return WindowGroup(title: "Saule UIKit", width: 900, height: 700) do
+      Theme(data: ThemeData.dark()) do
+        HomeScreen()
+      end
+    end
+  end
 end
 
 -- `Main.main` is the entry Saule calls; everything about the app is declared
 -- on `DemoApp`, not spelled out here.
 class Main
-	static fn main()
-		DemoApp().run()
-	end
+  static fn main()
+    DemoApp().run()
+  end
 end

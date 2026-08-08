@@ -118,6 +118,21 @@ pub(crate) fn type_items() -> Vec<CompletionItem> {
 pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> Vec<CompletionItem> {
     let mut items = Vec::new();
 
+    // Argument keywords for the call the caret is inside, ahead of
+    // everything else — at `Widget(back…)` the author is far more likely
+    // to be naming the `background:` parameter than reaching for a local
+    // that happens to start the same way.
+    for p in &found.named_params {
+        items.push(sorted(
+            item(
+                format!("{}:", p.name),
+                CompletionItemKind::FIELD,
+                Some(format!("parameter: {}", render_type(&p.ty))),
+            ),
+            "!",
+        ));
+    }
+
     // Innermost bindings win, so walk the stack in reverse and skip shadowed
     // names.
     let mut seen: Vec<String> = Vec::new();

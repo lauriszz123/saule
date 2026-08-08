@@ -25,6 +25,7 @@ mod hover;
 mod inlay;
 mod native_names;
 mod nav;
+mod seed_cache;
 mod sighelp;
 mod symbols;
 
@@ -81,6 +82,10 @@ pub struct Backend {
     /// thread-local registries those passes use are global per thread,
     /// so concurrent runs would race even on different files.
     pub(crate) analysis_lock: Mutex<()>,
+    /// Memoised import seeds. Rebuilding one costs ~27ms against the
+    /// `UI Project` sample and every request begins with it, so without
+    /// this the editor lags a keystroke behind. See [`seed_cache`].
+    pub(crate) seed_cache: seed_cache::SeedCache,
 }
 
 impl Backend {
@@ -117,6 +122,42 @@ impl Backend {
         }
     }
 
+    /// The import seed for `module`, memoised.
+    ///
+    /// Every feature handler needs this and each was calling
+    /// `collect_import_seed_with` directly — the single most expensive
+    /// step in a request by two orders of magnitude. Route them all
+    /// through here so one cache serves the lot.
+    ///
+    /// `uri` identifies the importing document; `dir` is the directory
+    /// import paths resolve against.
+    pub(crate) fn import_seed(
+        &self,
+        uri: &Url,
+        module: &saule_ast::Module,
+        dir: &Path,
+    ) -> saule_semantic::ModuleSeed {
+        let doc_path = uri.to_file_path().ok();
+        self.import_seed_at(doc_path.as_deref(), module, dir)
+    }
+
+    /// [`Backend::import_seed`] for callers that already hold the
+    /// document's path rather than its URI.
+    ///
+    /// The path is canonicalised here so both entry points agree on the
+    /// cache key — otherwise the same file gets two entries and neither
+    /// sees the other's invalidation.
+    pub(crate) fn import_seed_at(
+        &self,
+        doc_path: Option<&Path>,
+        module: &saule_ast::Module,
+        dir: &Path,
+    ) -> saule_semantic::ModuleSeed {
+        let key = doc_path.map(|p| canonical(p).unwrap_or_else(|| p.to_path_buf()));
+        self.seed_cache
+            .seed_for(key.as_deref(), module, dir, self.source_overlay())
+    }
+
     pub fn new(client: Client) -> Self {
         Self {
             client,
@@ -126,6 +167,7 @@ impl Backend {
             workspace_roots: Mutex::new(Vec::new()),
             project_info: Mutex::new(None),
             analysis_lock: Mutex::new(()),
+            seed_cache: seed_cache::SeedCache::default(),
         }
     }
 }
@@ -230,6 +272,12 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
+        // A file appearing can make a previously-unresolvable `import`
+        // resolve. The seed walk never read the missing file, so no read
+        // set mentions it and targeted invalidation can't see the
+        // change — drop everything. Opening a file is rare enough that
+        // paying one rebuild for it is free.
+        self.seed_cache.clear();
         self.update(uri, params.text_document.text, params.text_document.version)
             .await;
     }
@@ -256,6 +304,11 @@ impl LanguageServer for Backend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.docs.remove(uri.as_str());
+        // The overlay stops answering for this path, so importers now
+        // see the on-disk text instead of the buffer — a different seed.
+        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
+            self.seed_cache.invalidate_dependents_of(&abs);
+        }
         // Don't clear diagnostics — the file is still part of the
         // workspace. Re-analyse from disk so the Problems pane keeps
         // showing any errors that were live when the user closed it.

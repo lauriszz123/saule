@@ -630,14 +630,17 @@ fn signature_help_survives_unclosed_call_mid_file() {
 
 /// Every parameter range must be a valid slice of the label
 /// measured in UTF-16 code units — that's what the client indexes
-/// with. A defaulted parameter renders `" = …"`, whose `…` is three
-/// bytes but one code unit, so byte offsets would run past the end
-/// of the label and the client would slice out of bounds.
+/// with. A default too complex to print renders `" = …"`, whose `…` is
+/// three bytes but one code unit, so byte offsets would run past the
+/// end of the label and the client would slice out of bounds.
 #[test]
 fn parameter_offsets_are_utf16_code_units() {
     init_stdlib();
+    // `1.0 / 2.0` is deliberately an expression: simple literals now
+    // print their value, and only an elided default puts the non-ASCII
+    // `…` into the label that this test exists to measure.
     let src = "class Color
-  fn init(r: float = 1.0, g: float = 1.0, b: float = 1.0)
+  fn init(r: float = 1.0 / 2.0, g: float = 1.0 / 2.0, b: float = 1.0 / 2.0)
   end
 end
 
@@ -1138,14 +1141,42 @@ end
     let at = src.find("children: nil,\n").expect("multi-line call") + 2;
     assert_eq!(
         label_at(src, at),
-        "Column(\n  children: table<Widget>? = \u{2026},\n  spacing: float = \u{2026}\n)"
+        "Column(\n  children: table<Widget>? = nil,\n  spacing: float = 0.0\n)"
     );
 
-    // The same call on one line stays on one line.
+    // The same call on one line stays on one line — it fits.
     let at = src.find("Column(children: nil").expect("single-line call") + "Column(".len();
     assert_eq!(
         label_at(src, at),
-        "Column(children: table<Widget>? = \u{2026}, spacing: float = \u{2026})"
+        "Column(children: table<Widget>? = nil, spacing: float = 0.0)"
+    );
+}
+
+/// A signature wider than the popup breaks itself even when the call is
+/// on one line. Mirroring the call's own layout is the right default,
+/// but it can't be the whole rule: `Card(data: x)` fits on one line
+/// while its signature does not, and the label then wrapped to column 0
+/// as an unreadable run-on.
+#[test]
+fn a_wide_signature_breaks_even_for_a_one_line_call() {
+    let src = "class Card
+  fn init(data: ThemeData? = nil, child: View? = nil, key: string? = nil, content: (fn() -> nil)? = nil)
+  end
+end
+
+fn build()
+  local c = Card(data: nil)
+end
+";
+    let at = src.find("Card(data: nil").expect("call") + "Card(".len();
+    assert_eq!(
+        label_at(src, at),
+        "Card(\n  \
+           data: ThemeData? = nil,\n  \
+           child: View? = nil,\n  \
+           key: string? = nil,\n  \
+           content: (fn() -> nil)? = nil\n\
+         )"
     );
 }
 
@@ -1161,7 +1192,7 @@ fn a_freshly_opened_call_is_not_multiline() {
     let h = help_mid_keystroke(src, at).expect("help");
     assert_eq!(
         h.signatures[0].label,
-        "note(message: string, level: integer = \u{2026})"
+        "note(message: string, level: integer = 0)"
     );
 }
 
