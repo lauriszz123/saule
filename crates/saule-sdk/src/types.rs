@@ -18,11 +18,13 @@
 //! | Type         | Saule kind | Helpers                                   |
 //! |--------------|------------|-------------------------------------------|
 //! | [`STable`]   | `table`    | `new`, `len`, `get`, `set`, `push`, `remove`, `keys`, `to_vec` |
-//! | [`SFunction`]| `function` | `call`                                    |
+//! | [`SFunction`]| `fn(…) -> T` | `call`                                  |
 //!
 //! All of these implement [`FromSaule`](crate::convert::FromSaule) and
 //! [`IntoSaule`](crate::convert::IntoSaule), so a `#[saule_export]` function
-//! can take and return them directly and the macro infers the Saule type.
+//! can take and return them directly and the macro infers the Saule type —
+//! except [`SFunction`], whose signature the macro cannot see and which must
+//! therefore be declared with `sig(<param> = "fn(…) -> T")`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
@@ -476,9 +478,11 @@ impl<T> Default for STable<T> {
 /// `STable<T>` → `table<T>` and `SElem<T>` → `T`. The type checker treats
 /// these as type variables: it binds them from the call's actual arguments
 /// and substitutes them into later parameters and the return type. So
-/// `fn find(t: STable<T>, f: SFunction) -> Option<SElem<T>>` checks as
-/// `fn<T>(t: table<T>, f: function) -> T?` and a call on a `table<integer>`
-/// yields an `integer?`.
+/// `fn find(t: STable<T>, f: SFunction) -> Option<SElem<T>>` declared with
+/// `sig(f = "fn(T) -> boolean")` checks as
+/// `fn<T>(t: table<T>, f: fn(T) -> boolean) -> T?` and a call on a
+/// `table<integer>` yields an `integer?`. A `T` named only inside a
+/// `sig(...)` string counts too.
 ///
 /// They carry no data and are never constructed.
 #[derive(Clone, Copy, Debug)]
@@ -550,6 +554,11 @@ impl<M> IntoSaule for SElem<M> {
 
 /// A host-owned Saule callable (function / closure / native), invoked through
 /// the [`host`] callbacks. Same call-scoped handle lifetime as [`STable`].
+///
+/// The handle is opaque: it carries neither arity nor parameter types, and
+/// Saule has no bare `function` type to erase them into. So `#[saule_export]`
+/// requires the signature to be spelled out — `sig(f = "fn(T) -> boolean")` —
+/// and refuses to compile a callback parameter without one.
 #[derive(Clone, Copy, Debug)]
 pub struct SFunction {
     pub(crate) handle: Handle,

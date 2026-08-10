@@ -79,14 +79,14 @@ export class DemoCard extends View
 	local title: string
 	local detail: string
 	local accent: Color?
-	local onOpen: function?
+	local onOpen: (fn() -> nil)?
 
 	fn init(
 		icon: integer,
 		title: string,
 		detail: string,
 		accent: Color?,
-		onOpen: function?,
+		onOpen: (fn() -> nil)?,
 		key: string?
 	)
 		self.super(key)
@@ -132,12 +132,12 @@ export class DemoCard extends View
 			end
 		end
 
-		return card.padding(18.0).background(fill, radius: 12.0, border: edge).frame(height: 210.0).onHover() do (
-			inside: boolean
-		)
-			scratch.hovered = inside
-			context.markNeedsBuild()
-		end.onTapGesture() do
+		return card.padding(18.0).background(fill, radius: 12.0, border: edge).frame(height: 210.0).onHover(
+			fn(inside: boolean)
+				scratch.hovered = inside
+				context.markNeedsBuild()
+			end
+		).onTapGesture() do
 			if self.onOpen != nil then
 				self.onOpen!()
 			end

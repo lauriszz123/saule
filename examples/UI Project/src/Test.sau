@@ -7,15 +7,15 @@ import * from Counter
 -- route gets. `PanelView` itself stays route-agnostic, so it is still usable
 -- as a plain view.
 export class GalleryScreen extends View
-	fn init(key: string? = nil)
-		self.super(key)
-	end
+  fn init(key: string? = nil)
+    self.super(key)
+  end
 
-	fn body(context: BuildContext) -> View
-		return RouteScreen(title: "Widget gallery") do
-			PanelView()
-		end
-	end
+  fn body(context: BuildContext) -> View
+    return RouteScreen(title: "Widget gallery") do
+      PanelView()
+    end
+  end
 end
 
 -- The panel itself: pure description, rebuilt whenever something above it
@@ -78,10 +78,11 @@ export class PanelView extends View
       onKeyDown: fn(event: KeyEvent)
         return self.shortcut(context, event)
       end,
-      child: panel
-        .padding(20.0)
-        .background(Colors.surfaceLight, radius: 10.0, border: Colors.border)
-        .padding(24.0)
+      child: panel.padding(20.0).background(
+        Colors.surfaceLight,
+        radius: 10.0,
+        border: Colors.border
+      ).padding(24.0)
     )
   end
 
@@ -124,9 +125,9 @@ export class PanelView extends View
     local chips: table<View> = {}
 
     for name: string in names do
-      chips[#chips + 1] = Text(name, style: theme.caption)
-        .padding(insets: EdgeInsets.symmetric(horizontal: 10.0, vertical: 3.0))
-        .background(theme.surface, radius: 10.0, border: theme.border)
+      chips[#chips + 1] = Text(name, style: theme.caption).padding(
+        insets: EdgeInsets.symmetric(horizontal: 10.0, vertical: 3.0)
+      ).background(theme.surface, radius: 10.0, border: theme.border)
     end
 
     return chips
@@ -152,7 +153,7 @@ export class PanelView extends View
     local region: string = scratch.region as string ?? "Lithuania"
     local due: Date = scratch.due as Date ?? Date.today()
 
-    local rebuild: function = fn()
+    local rebuild: fn() -> nil = fn()
       context.markNeedsBuild()
     end
 
@@ -175,11 +176,9 @@ export class PanelView extends View
           rebuild()
         end
 
-        Picker(
-          value: region,
-          options: {"Lithuania", "Latvia", "Estonia", "Poland"},
-          width: 160.0
-        ) do (next: string)
+        Picker(value: region, options: {"Lithuania", "Latvia", "Estonia", "Poland"}, width: 160.0) do (
+          next: string
+        )
           scratch.region = next
           rebuild()
         end
@@ -207,7 +206,7 @@ export class PanelView extends View
   local fn canvas(context: BuildContext, scratch: table) -> View
     if scratch.tab == nil then
       scratch.tab = 1
-      scratch.notes = "Type here.\nEnter makes a new line, Ctrl+Z undoes, " .. "Ctrl+arrows move by word, and a double-click selects one."
+      scratch.notes = "Type here.\nEnter makes a new line, Ctrl+Z undoes, Ctrl+arrows move by word, and a double-click selects one."
     end
 
     -- Recovered from the untyped scratch once, as with the settings above.
@@ -228,10 +227,7 @@ export class PanelView extends View
     ) do
       self.rows(context).padding(insets: gap)
 
-      BouncingBall()
-        .clipped()
-        .background(Colors.surface, radius: 8.0)
-        .padding(insets: gap)
+      BouncingBall().clipped().background(Colors.surface, radius: 8.0).padding(insets: gap)
 
       TextEditor(value: notes, placeholder: "Notes", minLines: 5) do (text: string)
         scratch.notes = text
@@ -262,9 +258,7 @@ export class PanelView extends View
     end
 
     return GestureArea(
-      child: List(children: items, spacing: 2.0)
-        .clipped()
-        .background(Colors.surface, radius: 8.0),
+      child: List(children: items, spacing: 2.0).clipped().background(Colors.surface, radius: 8.0),
       onSecondaryTap: fn()
         -- At the pointer, which is where a context menu belongs.
         --

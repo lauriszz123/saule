@@ -25,3 +25,4 @@ clone and run.
 - [`examples/json`](https://github.com/lauriszz123/saule/tree/main/examples/json)
 - [`examples/json_usage`](https://github.com/lauriszz123/saule/tree/main/examples/json_usage)
 - [`examples/native-package`](https://github.com/lauriszz123/saule/tree/main/examples/native-package)
+- [`examples/UI Project`](https://github.com/lauriszz123/saule/tree/main/examples/UI%20Project)

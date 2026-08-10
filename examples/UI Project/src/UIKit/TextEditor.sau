@@ -318,7 +318,7 @@ end
 export class TextEditor extends View
 	value: string
 	placeholder: string
-	onChanged: function?
+	onChanged: (fn(string) -> nil)?
 
 	style: TextStyle?
 	placeholderStyle: TextStyle?
@@ -340,7 +340,7 @@ export class TextEditor extends View
 	fn init(
 		value: string = "",
 		placeholder: string = "",
-		onChanged: function? = nil,
+		onChanged: (fn(string) -> nil)? = nil,
 		style: TextStyle? = nil,
 		placeholderStyle: TextStyle? = nil,
 		background: Color? = nil,
@@ -451,7 +451,7 @@ export class TextEditor extends View
 
 		-- Clicks arrive in the padded box's space; the text starts one padding
 		-- in from its top-left.
-		local seek: function = fn(x: float, y: float, extend: boolean)
+		local seek: fn(float, float, boolean) -> nil = fn(x: float, y: float, extend: boolean)
 			local map: LineMap = LineMap(
 				editor.text(),
 				style,

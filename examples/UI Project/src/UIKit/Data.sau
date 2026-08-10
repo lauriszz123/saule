@@ -150,9 +150,9 @@ end
 export class TableRow
 	cells: table<View>
 	key: string?
-	onTap: function?
+	onTap: (fn() -> nil)?
 
-	fn init(cells: table<View> = {}, key: string? = nil, onTap: function? = nil)
+	fn init(cells: table<View> = {}, key: string? = nil, onTap: (fn() -> nil)? = nil)
 		self.cells = claimedAll(cells)
 		self.key = key
 		self.onTap = onTap
@@ -180,7 +180,7 @@ export class TableView extends View
 
 	sortColumn: integer
 	sortOrder: SortOrder
-	onSort: function?
+	onSort: (fn(integer, SortOrder) -> nil)?
 
 	striped: boolean
 	rowPadding: EdgeInsets?
@@ -190,7 +190,7 @@ export class TableView extends View
 		rows: table<TableRow> = {},
 		sortColumn: integer = 0,
 		sortOrder: SortOrder = SortOrder.None,
-		onSort: function? = nil,
+		onSort: (fn(integer, SortOrder) -> nil)? = nil,
 		striped: boolean = true,
 		rowPadding: EdgeInsets? = nil,
 		key: string? = nil
@@ -293,7 +293,7 @@ export class TableView extends View
 
 	-- Clicking the sorted column flips it; clicking another starts ascending.
 	local fn sortBy(column: integer) -> nil
-		local callback: function? = self.onSort
+		local callback: (fn(integer, SortOrder) -> nil)? = self.onSort
 
 		if callback == nil or column < 1 or column > #self.columns then
 			return
@@ -318,13 +318,13 @@ export class TableHeaderCell extends View
 	column: TableColumn
 	order: SortOrder
 	theme: ThemeData
-	onTap: function?
+	onTap: (fn() -> nil)?
 
 	fn init(
 		column: TableColumn,
 		order: SortOrder = SortOrder.None,
 		theme: ThemeData? = nil,
-		onTap: function? = nil,
+		onTap: (fn() -> nil)? = nil,
 		key: string? = nil
 	)
 		self.super(key)

@@ -1044,7 +1044,7 @@ fn help_mid_keystroke(src: &str, offset: usize) -> Option<SignatureHelp> {
 #[test]
 fn a_callback_body_ends_the_enclosing_calls_popup() {
     let src = "class TextField
-  fn init(placeholder: string = \"\", onChanged: function? = nil)
+  fn init(placeholder: string = \"\", onChanged: (fn(string) -> nil)? = nil)
   end
 end
 
@@ -1090,7 +1090,7 @@ end
 #[test]
 fn the_fallback_does_not_resurrect_a_suppressed_call() {
     let src = "class Switch
-  fn init(value: boolean = false, label: string = \"\", onChanged: function? = nil)
+  fn init(value: boolean = false, label: string = \"\", onChanged: (fn(boolean) -> nil)? = nil)
   end
 end
 
@@ -1348,7 +1348,7 @@ fn an_imported_free_function_reports_its_signature() {
 #[test]
 fn suppression_starts_at_the_lambda_not_at_its_body() {
     let src = "class TextField
-  fn init(placeholder: string = \"\", onChanged: function? = nil)
+  fn init(placeholder: string = \"\", onChanged: (fn(string) -> nil)? = nil)
   end
 end
 
@@ -1385,7 +1385,7 @@ end
 #[test]
 fn an_empty_callback_body_also_ends_it() {
     let src = "class Button
-  fn init(label: string = \"\", onPressed: function? = nil)
+  fn init(label: string = \"\", onPressed: (fn() -> nil)? = nil)
   end
 end
 
@@ -1404,7 +1404,7 @@ end
 #[test]
 fn a_call_inside_the_body_still_reports() {
     let src = "class Button
-  fn init(label: string = \"\", onPressed: function? = nil)
+  fn init(label: string = \"\", onPressed: (fn() -> nil)? = nil)
   end
 end
 
@@ -1449,7 +1449,7 @@ end
 #[test]
 fn the_innermost_body_wins() {
     let src = "class Button
-  fn init(label: string = \"\", onPressed: function? = nil)
+  fn init(label: string = \"\", onPressed: (fn() -> nil)? = nil)
   end
 end
 

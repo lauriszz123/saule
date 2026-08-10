@@ -1207,10 +1207,11 @@ tree and the next one settles back to zero.
   `EdgeInsets.all(8.0)`, `Size.zero()`): a static field initializer runs while
   its own class is still being declared, so it cannot reference that class.
   `Colors.primary` is a plain field because `Colors` is a separate class.
-- Callbacks are typed `function`, not `fn() -> nil` — Saule rejects `-> nil`
-  inside a binding annotation. The `content` blocks are the exception: they are
-  declared `(fn() -> table<View>)?`, which parses, and the parentheses matter —
-  without them the `?` would attach to the return type instead.
+- Callbacks carry their full signature — `onChanged: (fn(boolean) -> nil)?`,
+  not a bare `function`, which the language no longer has. The parentheses
+  matter: without them the `?` attaches to the return type, so
+  `fn(boolean) -> nil?` is a callback that is always present and returns a
+  nullable nothing, which is not what any of these slots mean.
 - A modifier and a field can share a name. `Box` has a `padding` field *and*
   the inherited `.padding()` method; Saule keeps fields and methods in separate
   namespaces, so `self.padding` reads the field and `box.padding(4.0)` calls the

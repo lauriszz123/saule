@@ -1191,6 +1191,7 @@ dependencies = [
  "saule-semantic",
  "saule-typeck",
  "saule-version",
+ "serde_json",
  "tokio",
  "tower-lsp",
 ]

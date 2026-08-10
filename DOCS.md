@@ -8,7 +8,8 @@ For language syntax see [README.md](./README.md). For the runtime side of
 errors / pattern matching / generics see the corresponding README sections.
 
 > All function and method signatures are written in Saule's own type notation.
-> `T?` is nullable, `(A, B)` is a multi-return tuple, `...T` is variadic.
+> `T?` is nullable, `(A, B)` is a multi-return tuple, `...T` is variadic, and
+> `fn(A) -> R` is a callback slot — there is no bare `function` type.
 
 ---
 
@@ -34,7 +35,7 @@ These names are bound at the top of every module — no import required.
 | `println(...any) -> nil` | Same as `print`, with a trailing newline. |
 | `printf(fmt: string, ...any) -> nil` | Format like `String.format` and write to stdout (no newline). |
 | `tostring(v: any) -> string` | Human-readable rendering of any value. For a class instance implementing `OpToString`, calls its `toString()`; `print` / `println` / `..` render the same way. |
-| `type(v: any) -> string` | Returns the runtime type name: `"integer"`, `"float"`, `"string"`, `"boolean"`, `"nil"`, `"function"`, `"table"`, or the class name for instances. |
+| `type(v: any) -> string` | Returns the runtime type name: `"integer"`, `"float"`, `"string"`, `"boolean"`, `"nil"`, `"function"`, `"table"`, or the class name for instances. `"function"` is a runtime tag covering every callable — it is not a type you can write, since a function's type is its signature (`fn(A) -> R`). |
 | `int(n: integer \| float) -> integer` | Truncating conversion (`int(3.9) == 3`). |
 | `float(n: integer \| float) -> float` | Lossless widening (`float(3) == 3.0`). |
 | `assert<T>(v: T?, msg: string?) -> T` | If `v` is truthy, returns it with its nullability stripped; otherwise throws `msg` (default `"assertion failed"`). |

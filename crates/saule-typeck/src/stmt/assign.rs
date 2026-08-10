@@ -9,6 +9,48 @@ use crate::expr::{infer, is_any, is_nullable, strip_nullable, type_to_string, ty
 use crate::state::{Scope, with_classes};
 use crate::to_source_span;
 
+/// Validate a type written in a binding position: a `local`, a parameter, a
+/// field, a loop variable, a `catch` type. Two spellings are rejected —
+/// see [`reject_nil_in_binding_type`] and [`reject_bare_function_type`].
+pub(crate) fn check_binding_type(
+    ty: &Type,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    reject_nil_in_binding_type(ty, span.clone(), errors);
+    reject_bare_function_type(ty, span, errors);
+}
+
+/// Reject the bare name `function` used as a type. A function value's type
+/// is its *signature*, so a slot that holds one has to say which calls are
+/// legal against it: `fn(string) -> nil`, not `function`. The bare name
+/// carried no arity and no parameter types, which meant every lambda
+/// assigned to such a slot type-checked and the mistake surfaced at the
+/// call — or, for a callback stored and invoked elsewhere, not at all.
+///
+/// Applies in every type position, return slots included: `-> function`
+/// is as unhelpful to a caller as `f: function` is to a call site.
+pub(crate) fn reject_bare_function_type(
+    ty: &Type,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    fn walk(ty: &Type) -> bool {
+        match ty {
+            Type::Named(n) => n == "function",
+            Type::Nullable(inner) => walk(inner),
+            Type::Table { key, value } => key.as_deref().map(walk).unwrap_or(false) || walk(value),
+            Type::Tuple(items) => items.iter().any(walk),
+            Type::Function { params, ret } => params.iter().any(walk) || walk(ret),
+        }
+    }
+    if walk(ty) {
+        errors.push(TypeCheckError::BareFunctionType {
+            span: to_source_span(span),
+        });
+    }
+}
+
 /// Reject `nil` used as a binding type. `nil` is a value (the inhabitant
 /// of the unit type), and nullability is expressed with `T?` — so any
 /// occurrence of `nil` inside a binding/parameter/field type is a
@@ -46,10 +88,10 @@ pub(crate) fn reject_nil_in_binding_type(
     }
 }
 
-/// Run [`reject_nil_in_binding_type`] over every parameter's declared type.
-pub(crate) fn reject_nil_in_params(params: &[Param], errors: &mut Vec<TypeCheckError>) {
+/// Run [`check_binding_type`] over every parameter's declared type.
+pub(crate) fn check_param_types(params: &[Param], errors: &mut Vec<TypeCheckError>) {
     for p in params {
-        reject_nil_in_binding_type(&p.ty, p.span.clone(), errors);
+        check_binding_type(&p.ty, p.span.clone(), errors);
     }
 }
 
@@ -97,12 +139,13 @@ pub(crate) fn check_type_assignment_compat(
 
 /// Refine a bare structural annotation against the value's inferred shape.
 ///
-/// `local x: table = expr` and `local x: function = expr` only carry the
-/// kind tag — no element type, no parameter / return types. If `expr`
-/// infers to a concrete `Type::Table { .. }` / `Type::Function { .. }`
-/// of the matching kind, use that richer type for the binding so later
-/// reads and writes get the full generic check. Otherwise fall back to
-/// the declared bare type.
+/// `local x: table = expr` only carries the kind tag — no key type, no
+/// element type. If `expr` infers to a concrete `Type::Table { .. }`, use
+/// that richer type for the binding so later reads and writes get the full
+/// generic check. Otherwise fall back to the declared bare type.
+///
+/// `function` had the same shape and the same treatment until it was
+/// removed: there is no bare spelling of a function type left to refine.
 ///
 /// Nullable wrappers are unwrapped on the declaration side and re-wrapped
 /// around the refined type — `local x: table? = maybe()` widens to
@@ -124,10 +167,7 @@ pub(crate) fn refine_bare_binding(decl_ty: &Type, value: &Spanned<Expr>, scope: 
         Type::Nullable(inner) => inner.as_ref().clone(),
         other => other.clone(),
     };
-    let matches_kind = matches!(
-        (name.as_str(), &value_inner),
-        ("table", Type::Table { .. }) | ("function", Type::Function { .. })
-    );
+    let matches_kind = matches!((name.as_str(), &value_inner), ("table", Type::Table { .. }));
     if !matches_kind {
         return decl_ty.clone();
     }
@@ -213,7 +253,7 @@ pub(crate) fn check_member_assign_receiver(
     let bad = match &stripped {
         Type::Named(n) => matches!(
             n.as_str(),
-            "integer" | "float" | "number" | "boolean" | "string" | "function"
+            "integer" | "float" | "number" | "boolean" | "string"
         ),
         Type::Tuple(_) | Type::Function { .. } => true,
         _ => false,

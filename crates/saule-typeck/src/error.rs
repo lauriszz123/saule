@@ -475,6 +475,15 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`function` is not a type — write the signature the value must have")]
+    #[diagnostic(help(
+        "use the `fn(...) -> T` form, e.g. `fn(string) -> nil` for a callback taking a string and returning nothing; an optional callback is `(fn(string) -> nil)?`"
+    ))]
+    BareFunctionType {
+        #[label("a function type needs its parameter and return types")]
+        span: miette::SourceSpan,
+    },
+
     #[error("pipeline stage `{stage}` expects `{expected}` as first argument, got `{found}`")]
     #[diagnostic(help(
         "the value flowing through `when(...):{stage}(...)` must match the function's first parameter — adjust the upstream stage or call `{stage}` directly"

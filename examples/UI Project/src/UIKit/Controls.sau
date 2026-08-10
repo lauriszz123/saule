@@ -196,14 +196,14 @@ end
 export class Checkbox extends View
 	value: boolean
 	label: string
-	onChanged: function?
+	onChanged: (fn(boolean) -> nil)?
 	enabled: boolean
 	autofocus: boolean
 
 	fn init(
 		value: boolean = false,
 		label: string = "",
-		onChanged: function? = nil,
+		onChanged: (fn(boolean) -> nil)? = nil,
 		enabled: boolean = true,
 		autofocus: boolean = false,
 		key: string? = nil
@@ -218,7 +218,7 @@ export class Checkbox extends View
 	end
 
 	local fn toggle() -> nil
-		local changed: function? = self.onChanged
+		local changed: (fn(boolean) -> nil)? = self.onChanged
 
 		if changed != nil and self.enabled then
 			changed(not self.value)
@@ -298,7 +298,7 @@ export class Radio extends View
 	value: string
 	groupValue: string
 	label: string
-	onChanged: function?
+	onChanged: (fn(string) -> nil)?
 	enabled: boolean
 	autofocus: boolean
 
@@ -306,7 +306,7 @@ export class Radio extends View
 		value: string = "",
 		groupValue: string = "",
 		label: string = "",
-		onChanged: function? = nil,
+		onChanged: (fn(string) -> nil)? = nil,
 		enabled: boolean = true,
 		autofocus: boolean = false,
 		key: string? = nil
@@ -322,7 +322,7 @@ export class Radio extends View
 	end
 
 	local fn select() -> nil
-		local changed: function? = self.onChanged
+		local changed: (fn(string) -> nil)? = self.onChanged
 
 		if changed != nil and self.enabled then
 			changed(self.value)
@@ -487,14 +487,14 @@ end
 export class Toggle extends View
 	value: boolean
 	label: string
-	onChanged: function?
+	onChanged: (fn(boolean) -> nil)?
 	enabled: boolean
 	autofocus: boolean
 
 	fn init(
 		value: boolean = false,
 		label: string = "",
-		onChanged: function? = nil,
+		onChanged: (fn(boolean) -> nil)? = nil,
 		enabled: boolean = true,
 		autofocus: boolean = false,
 		key: string? = nil
@@ -509,7 +509,7 @@ export class Toggle extends View
 	end
 
 	local fn toggle() -> nil
-		local changed: function? = self.onChanged
+		local changed: (fn(boolean) -> nil)? = self.onChanged
 
 		if changed != nil and self.enabled then
 			changed(not self.value)
@@ -675,7 +675,7 @@ export class Slider extends View
 	min: float
 	max: float
 	step: float
-	onChanged: function?
+	onChanged: (fn(float) -> nil)?
 	enabled: boolean
 	autofocus: boolean
 	width: float?
@@ -685,7 +685,7 @@ export class Slider extends View
 		min: float = 0.0,
 		max: float = 1.0,
 		step: float = 0.0,
-		onChanged: function? = nil,
+		onChanged: (fn(float) -> nil)? = nil,
 		enabled: boolean = true,
 		autofocus: boolean = false,
 		width: float? = nil,
@@ -705,7 +705,7 @@ export class Slider extends View
 
 	-- Snap and clamp, then report — the one place a new value is produced.
 	local fn emit(raw: float) -> nil
-		local changed: function? = self.onChanged
+		local changed: (fn(float) -> nil)? = self.onChanged
 
 		if changed == nil or not self.enabled then
 			return
@@ -817,11 +817,11 @@ export class SliderTrack extends View
 	focused: boolean
 	hovered: boolean
 	theme: ThemeData
-	onSeek: function?
+	onSeek: (fn(float) -> nil)?
 
 	-- The track consumes the press itself, so focusing on click has to happen
 	-- here rather than in an enclosing `GestureArea` that never sees it.
-	onPress: function?
+	onPress: (fn() -> nil)?
 
 	fn init(
 		fraction: float = 0.0,
@@ -829,8 +829,8 @@ export class SliderTrack extends View
 		focused: boolean = false,
 		hovered: boolean = false,
 		theme: ThemeData? = nil,
-		onSeek: function? = nil,
-		onPress: function? = nil,
+		onSeek: (fn(float) -> nil)? = nil,
+		onPress: (fn() -> nil)? = nil,
 		key: string? = nil
 	)
 		self.super(key)
@@ -861,7 +861,7 @@ export class SliderTrack extends View
 			return
 		end
 
-		local callback: function? = self.onSeek
+		local callback: (fn(float) -> nil)? = self.onSeek
 
 		if callback != nil then
 			callback!(atLeastZero(atMost((x - 8.0) / usable, 1.0)))
@@ -880,7 +880,7 @@ export class SliderTrack extends View
 
 			el.data.dragging = true
 
-			local press: function? = self.onPress
+			local press: (fn() -> nil)? = self.onPress
 			if press != nil then
 				press()
 			end
@@ -1127,7 +1127,7 @@ export class Picker extends View
 	value: string
 	options: table<string>
 	placeholder: string
-	onChanged: function?
+	onChanged: (fn(string) -> nil)?
 	enabled: boolean
 	autofocus: boolean
 	width: float?
@@ -1136,7 +1136,7 @@ export class Picker extends View
 		value: string = "",
 		options: table<string> = {},
 		placeholder: string = "Select…",
-		onChanged: function? = nil,
+		onChanged: (fn(string) -> nil)? = nil,
 		enabled: boolean = true,
 		autofocus: boolean = false,
 		width: float? = nil,
@@ -1163,7 +1163,7 @@ export class Picker extends View
 			items[#items + 1] = MenuItem(
 				option,
 				fn()
-					local changed: function? = self.onChanged
+					local changed: (fn(string) -> nil)? = self.onChanged
 
 					if changed != nil then
 						changed(picked)
@@ -1281,14 +1281,14 @@ end
 export class TabBar extends View
 	tabs: table<string>
 	index: integer
-	onChanged: function?
+	onChanged: (fn(integer) -> nil)?
 	enabled: boolean
 	autofocus: boolean
 
 	fn init(
 		tabs: table<string> = {},
 		index: integer = 1,
-		onChanged: function? = nil,
+		onChanged: (fn(integer) -> nil)? = nil,
 		enabled: boolean = true,
 		autofocus: boolean = false,
 		key: string? = nil
@@ -1304,7 +1304,7 @@ export class TabBar extends View
 
 	-- Clamp and report. Every path into a new tab goes through here.
 	local fn select(next: integer) -> nil
-		local changed: function? = self.onChanged
+		local changed: (fn(integer) -> nil)? = self.onChanged
 
 		if changed == nil or not self.enabled or #self.tabs == 0 then
 			return
@@ -1475,14 +1475,14 @@ export class TabLabel extends View
 	selected: boolean
 	focused: boolean
 	theme: ThemeData
-	onSelected: function?
+	onSelected: (fn() -> nil)?
 
 	fn init(
 		label: string = "",
 		selected: boolean = false,
 		focused: boolean = false,
 		theme: ThemeData? = nil,
-		onSelected: function? = nil,
+		onSelected: (fn() -> nil)? = nil,
 		key: string? = nil
 	)
 		self.super(key)
@@ -1554,14 +1554,14 @@ export class TabView extends View
 	tabs: table<string>
 	children: table<View>
 	index: integer
-	onChanged: function?
+	onChanged: (fn(integer) -> nil)?
 	autofocus: boolean
 
 	fn init(
 		tabs: table<string> = {},
 		children: table<View> = {},
 		index: integer = 1,
-		onChanged: function? = nil,
+		onChanged: (fn(integer) -> nil)? = nil,
 		autofocus: boolean = false,
 		key: string? = nil,
 		content: (fn() -> nil)? = nil

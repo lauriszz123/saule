@@ -107,9 +107,10 @@ pub(crate) fn dedup(mut items: Vec<CompletionItem>) -> Vec<CompletionItem> {
     items
 }
 
+/// The type names that stand on their own. `function` is deliberately absent:
+/// a function's type is its signature, written `fn(...) -> T`.
 pub(crate) const PRIMITIVES: &[&str] = &[
-    "integer", "float", "string", "boolean", "table", "function", "userdata", "thread", "any",
-    "nil",
+    "integer", "float", "string", "boolean", "table", "userdata", "thread", "any", "nil",
 ];
 
 /// Keywords that can begin a statement.

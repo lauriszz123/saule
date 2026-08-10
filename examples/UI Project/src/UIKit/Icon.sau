@@ -151,7 +151,7 @@ end
 -- A tappable icon: the button shape, without a label.
 export class IconButton extends View
 	icon: integer
-	onPressed: function?
+	onPressed: (fn() -> nil)?
 	size: float
 	color: Color?
 	tooltip: string
@@ -160,7 +160,7 @@ export class IconButton extends View
 
 	fn init(
 		icon: integer = 0,
-		onPressed: function? = nil,
+		onPressed: (fn() -> nil)? = nil,
 		size: float = 20.0,
 		color: Color? = nil,
 		tooltip: string = "",
@@ -233,7 +233,7 @@ export class IconButton extends View
 					return false
 				end
 
-				local callback: function? = self.onPressed
+				local callback: (fn() -> nil)? = self.onPressed
 				if callback != nil then
 					callback()
 				end

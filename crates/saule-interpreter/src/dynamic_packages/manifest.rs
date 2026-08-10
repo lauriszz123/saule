@@ -233,9 +233,47 @@ pub(crate) fn parse_return(ret: &str) -> Vec<Type> {
 
 /// Parse a single type token: a trailing `?` makes it nullable; a
 /// `table<...>` token becomes a typed array (`table<T>`) or map
-/// (`table<K, V>`).
+/// (`table<K, V>`); `fn(A, B) -> R` becomes a function type, and a
+/// parenthesised token is either grouping or a tuple.
 pub(crate) fn parse_type(tok: &str) -> Type {
     let t = tok.trim();
+    // `fn(A, B) -> R` comes first, before the nullable suffix: a trailing `?`
+    // on one of these belongs to the *return* type, and making a function
+    // itself nullable needs the parenthesised `(fn() -> nil)?` below.
+    //
+    // Native signatures grew function types once `SFunction` had to declare
+    // what it accepts; before that a callback erased to a bare name and this
+    // arm was never reached.
+    if let Some(rest) = t.strip_prefix("fn") {
+        let rest = rest.trim_start();
+        if let Some(inner) = balanced_inner(rest) {
+            let params = split_top_level(inner)
+                .iter()
+                .map(|p| parse_type(p))
+                .collect();
+            // Everything past the parameter list's `)`. The arrow is optional
+            // so a malformed entry degrades to `-> nil` rather than to a named
+            // type spelled `fn(...)`.
+            let after = rest[inner.len() + 2..].trim();
+            let ret = after.strip_prefix("->").map(str::trim).unwrap_or("");
+            let ret = if ret.is_empty() {
+                saule_typeck::sigs::t_named("nil")
+            } else {
+                parse_type(ret)
+            };
+            return saule_typeck::sigs::t_function(params, ret);
+        }
+    }
+    // A fully parenthesised token: grouping when it holds one type — which is
+    // what `(fn() -> nil)?` uses to put the `?` on the function rather than on
+    // its return — and a tuple when it holds several.
+    if let Some(inner) = balanced_inner(t).filter(|i| i.len() + 2 == t.len()) {
+        let parts = split_top_level(inner);
+        return match parts.as_slice() {
+            [one] => parse_type(one),
+            many => Type::Tuple(many.iter().map(|p| parse_type(p)).collect()),
+        };
+    }
     if let Some(base) = t.strip_suffix('?') {
         return saule_typeck::sigs::t_nullable(parse_type(base));
     }
@@ -252,18 +290,46 @@ pub(crate) fn parse_type(tok: &str) -> Type {
     saule_typeck::sigs::t_named(t)
 }
 
+/// The contents of the `(...)` starting at `s`'s first character, or `None`
+/// when `s` doesn't begin with `(` or the parentheses don't balance.
+fn balanced_inner(s: &str) -> Option<&str> {
+    if !s.starts_with('(') {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[1..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Split on commas that are not nested inside `<...>` or `(...)`. Empty
 /// segments (e.g. an empty parameter list) are dropped.
+///
+/// The `>` of an `->` is not a closing bracket. Counting it as one drove the
+/// depth negative, and then every later comma looked nested — which merged
+/// `f: fn(U, T) -> U, init: U` into a single parameter.
 pub(crate) fn split_top_level(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0i32;
     let mut cur = String::new();
+    let mut prev = '\0';
     for ch in s.chars() {
         match ch {
             '<' | '(' => {
                 depth += 1;
                 cur.push(ch);
             }
+            '>' if prev == '-' => cur.push(ch),
             '>' | ')' => {
                 depth -= 1;
                 cur.push(ch);
@@ -277,6 +343,7 @@ pub(crate) fn split_top_level(s: &str) -> Vec<String> {
             }
             _ => cur.push(ch),
         }
+        prev = ch;
     }
     let t = cur.trim();
     if !t.is_empty() {

@@ -86,7 +86,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.saule",
-          "match": "\\b(integer|float|string|boolean|any|nil|function|table|userdata|thread|number)\\b"
+          "match": "\\b(integer|float|string|boolean|any|nil|table|userdata|thread|number)\\b"
         },
         {
           "comment": "PascalCase identifiers treated as type/class names",

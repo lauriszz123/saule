@@ -30,52 +30,52 @@ end
 --         child: someBox
 --     )
 --
--- Callbacks are plain `function` values because Saule rejects `fn() -> nil` in
--- a binding annotation. `onHover` receives one boolean; the rest take none.
+-- Every callback slot carries its own signature, so a lambda handed to one is
+-- checked against it. `onHover` receives one boolean; the rest take none.
 --
 -- The pressed / hovered flags live in the element scratch rather than on the
 -- view: the view is thrown away and rebuilt constantly, the element is not.
 export class GestureArea extends SingleChildView
-	onTap: function?
-	onTapDown: function?
-	onTapUp: function?
-	onHover: function?
+	onTap: (fn() -> nil)?
+	onTapDown: (fn() -> nil)?
+	onTapUp: (fn() -> nil)?
+	onHover: (fn(boolean) -> nil)?
 
 	-- `fn(x: float, y: float)` — where the tap landed, local to this view.
 	-- Separate from `onTap` because Saule checks lambda arity: handing extra
 	-- arguments to an existing zero-parameter `onTap` would be a compile error.
-	onTapAt: function?
+	onTapAt: (fn(float, float) -> nil)?
 
 	-- `fn(dx: float, dy: float) -> boolean` — wheel movement. Return true to
 	-- claim it so an enclosing scroll view doesn't also scroll.
-	onScroll: function?
+	onScroll: (fn(float, float) -> boolean)?
 
 	-- `fn(x: float, y: float)` — the pointer moved while held down after
 	-- pressing here. Drag-select, sliders, anything that tracks the cursor.
-	onDragTo: function?
+	onDragTo: (fn(float, float) -> nil)?
 
 	-- `fn(x: float, y: float)` — a second press in the same spot, soon enough
 	-- after the first. Fires *in addition to* the ordinary tap callbacks: a
 	-- double-click is also a click, and editors treat it that way.
-	onDoubleTapAt: function?
+	onDoubleTapAt: (fn(float, float) -> nil)?
 
 	-- Right-click. `onSecondaryTapAt` is `fn(x: float, y: float)`, which is what
 	-- a context menu needs to know where to open.
-	onSecondaryTap: function?
-	onSecondaryTapAt: function?
+	onSecondaryTap: (fn() -> nil)?
+	onSecondaryTapAt: (fn(float, float) -> nil)?
 
 	fn init(
 		child: View? = nil,
-		onTap: function? = nil,
-		onTapDown: function? = nil,
-		onTapUp: function? = nil,
-		onHover: function? = nil,
-		onTapAt: function? = nil,
-		onScroll: function? = nil,
-		onDragTo: function? = nil,
-		onDoubleTapAt: function? = nil,
-		onSecondaryTap: function? = nil,
-		onSecondaryTapAt: function? = nil,
+		onTap: (fn() -> nil)? = nil,
+		onTapDown: (fn() -> nil)? = nil,
+		onTapUp: (fn() -> nil)? = nil,
+		onHover: (fn(boolean) -> nil)? = nil,
+		onTapAt: (fn(float, float) -> nil)? = nil,
+		onScroll: (fn(float, float) -> boolean)? = nil,
+		onDragTo: (fn(float, float) -> nil)? = nil,
+		onDoubleTapAt: (fn(float, float) -> nil)? = nil,
+		onSecondaryTap: (fn() -> nil)? = nil,
+		onSecondaryTapAt: (fn(float, float) -> nil)? = nil,
 		key: string? = nil
 	)
 		self.super(child, key)
@@ -97,7 +97,7 @@ export class GestureArea extends SingleChildView
 	-- check, two fast clicks at opposite ends of a text field would select a
 	-- word neither of them touched.
 	local fn checkDoubleTap(el: Element, x: float, y: float) -> nil
-		local callback: function? = self.onDoubleTapAt
+		local callback: (fn(float, float) -> nil)? = self.onDoubleTapAt
 
 		if callback == nil then
 			return
@@ -159,7 +159,7 @@ export class GestureArea extends SingleChildView
 			if was != inside then
 				el.data.hovered = inside
 
-				local callback: function? = self.onHover
+				local callback: (fn(boolean) -> nil)? = self.onHover
 				if callback != nil then
 					callback(inside)
 				end
@@ -168,7 +168,7 @@ export class GestureArea extends SingleChildView
 			-- A drag keeps reporting once the press started here, even after the
 			-- pointer leaves — that is what makes drag-select past the edge work.
 			if el.data.pressed == true then
-				local drag: function? = self.onDragTo
+				local drag: (fn(float, float) -> nil)? = self.onDragTo
 				if drag != nil then
 					drag!(x, y)
 				end
@@ -178,7 +178,7 @@ export class GestureArea extends SingleChildView
 		end
 
 		if event.kind == PointerKind.Scroll then
-			local callback: function? = self.onScroll
+			local callback: (fn(float, float) -> boolean)? = self.onScroll
 
 			if callback == nil or not inside then
 				return false
@@ -195,8 +195,8 @@ export class GestureArea extends SingleChildView
 			end
 
 			if event.isSecondary() then
-				local secondary: function? = self.onSecondaryTap
-				local secondaryAt: function? = self.onSecondaryTapAt
+				local secondary: (fn() -> nil)? = self.onSecondaryTap
+				local secondaryAt: (fn(float, float) -> nil)? = self.onSecondaryTapAt
 
 				if secondary == nil and secondaryAt == nil then
 					return false
@@ -223,12 +223,12 @@ export class GestureArea extends SingleChildView
 
 			el.data.pressed = true
 
-			local callback: function? = self.onTapDown
+			local callback: (fn() -> nil)? = self.onTapDown
 			if callback != nil then
 				callback()
 			end
 
-			local at: function? = self.onTapAt
+			local at: (fn(float, float) -> nil)? = self.onTapAt
 			if at != nil then
 				at!(x, y)
 			end
@@ -252,13 +252,13 @@ export class GestureArea extends SingleChildView
 			return false
 		end
 
-		local up: function? = self.onTapUp
+		local up: (fn() -> nil)? = self.onTapUp
 		if up != nil then
 			up()
 		end
 
 		if inside then
-			local tap: function? = self.onTap
+			local tap: (fn() -> nil)? = self.onTap
 			if tap != nil then
 				tap()
 			end
@@ -290,14 +290,14 @@ export class CursorArea extends SingleChildView
 	cursor: string?
 
 	-- `fn()` — the pointer arrived or left.
-	onEnter: function?
-	onExit: function?
+	onEnter: (fn() -> nil)?
+	onExit: (fn() -> nil)?
 
 	fn init(
 		child: View? = nil,
 		cursor: string? = nil,
-		onEnter: function? = nil,
-		onExit: function? = nil,
+		onEnter: (fn() -> nil)? = nil,
+		onExit: (fn() -> nil)? = nil,
 		key: string? = nil
 	)
 		self.super(child, key)
@@ -325,7 +325,7 @@ export class CursorArea extends SingleChildView
 		if was != inside then
 			el.data.over = inside
 
-			local callback: function? = self.onExit
+			local callback: (fn() -> nil)? = self.onExit
 
 			if inside then
 				callback = self.onEnter
@@ -384,10 +384,10 @@ export class Focus extends SingleChildView
 	-- shortcuts can't reach the screen behind it.
 	modal: boolean
 
-	onKeyDown: function?
-	onKeyUp: function?
-	onText: function?
-	onFocusChange: function?
+	onKeyDown: (fn(KeyEvent) -> boolean)?
+	onKeyUp: (fn(KeyEvent) -> boolean)?
+	onText: (fn(string) -> boolean)?
+	onFocusChange: (fn(boolean) -> nil)?
 
 	fn init(
 		child: View? = nil,
@@ -398,10 +398,10 @@ export class Focus extends SingleChildView
 		global: boolean = false,
 		tabStop: boolean = true,
 		modal: boolean = false,
-		onKeyDown: function? = nil,
-		onKeyUp: function? = nil,
-		onText: function? = nil,
-		onFocusChange: function? = nil,
+		onKeyDown: (fn(KeyEvent) -> boolean)? = nil,
+		onKeyUp: (fn(KeyEvent) -> boolean)? = nil,
+		onText: (fn(string) -> boolean)? = nil,
+		onFocusChange: (fn(boolean) -> nil)? = nil,
 		key: string? = nil
 	)
 		self.super(child, key)
@@ -449,7 +449,7 @@ export class Focus extends SingleChildView
 	end
 
 	fn focusChanged(el: Element, focused: boolean) -> nil
-		local callback: function? = self.onFocusChange
+		local callback: (fn(boolean) -> nil)? = self.onFocusChange
 
 		if callback != nil then
 			callback(focused)
@@ -458,7 +458,7 @@ export class Focus extends SingleChildView
 
 	-- A missing callback never claims the event, and neither does one that
 	-- returns nothing — only an explicit `true` stops the bubble.
-	local fn invoke(callback: function?, argument: any) -> boolean
+	local fn invoke(callback: (fn(any) -> boolean)?, argument: any) -> boolean
 		if callback == nil then
 			return false
 		end
@@ -483,13 +483,13 @@ export class KeyboardListener extends Focus
 	--     end
 	fn init(
 		child: View? = nil,
-		onKeyUp: function? = nil,
+		onKeyUp: (fn(KeyEvent) -> boolean)? = nil,
 		node: FocusNode? = nil,
 		key: string? = nil,
-		onKeyDown: function? = nil
+		onKeyDown: (fn(KeyEvent) -> boolean)? = nil
 	)
 		-- Positional, because `super(...)` takes no named arguments. `Focus`
-		-- has thirteen parameters and four interchangeable `function?`s among
+		-- has thirteen parameters and four callback slots among
 		-- them, so this list has to stay in step with its declaration by hand:
 		--
 		--   child, node, autofocus, enabled, wantsText, global, tabStop,

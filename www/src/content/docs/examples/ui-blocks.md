@@ -282,6 +282,8 @@ class Main
     for _, score in Main.scores do
       sum = sum + score
     end
+
+
     return sum
   end
 end

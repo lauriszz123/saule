@@ -60,7 +60,17 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             body,
             ..
         } => {
-            reject_nil_in_params(params, errors);
+            check_param_types(params, errors);
+            // `Decl::Function` carries no span of its own, so a bad return
+            // type is pointed at the nearest node that does.
+            if let Some(rt) = return_ty {
+                let span = params
+                    .first()
+                    .map(|p| p.span.clone())
+                    .or_else(|| body.first().map(|s| s.span.clone()))
+                    .unwrap_or(0..0);
+                reject_bare_function_type(rt, span, errors);
+            }
             let prev_generics = push_generics(type_params);
             let mut scope = Scope::default();
             check_default_params(params, &scope, errors);
@@ -87,7 +97,7 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             // module level, where no local is in scope yet.
             let scope = Scope::default();
             if let Some(t) = ty {
-                reject_nil_in_binding_type(t, name_span.clone(), errors);
+                check_binding_type(t, name_span.clone(), errors);
             }
             match (ty, value) {
                 (Some(t), Some(v)) => {
@@ -109,13 +119,16 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
         }
         Decl::Interface { methods, .. } => {
             for sig in methods {
-                reject_nil_in_params(&sig.params, errors);
+                check_param_types(&sig.params, errors);
+                if let Some(rt) = &sig.return_ty {
+                    reject_bare_function_type(rt, sig.span.clone(), errors);
+                }
             }
         }
         Decl::Enum { variants, .. } => {
             for v in variants {
                 if let saule_ast::EnumVariant::Tuple { fields, .. } = &v.value {
-                    reject_nil_in_params(fields, errors);
+                    check_param_types(fields, errors);
                 }
             }
         }
@@ -307,7 +320,7 @@ pub(crate) fn check_class(
     // assignment of constructor-set fields lives in `saule-semantic`.)
     for m in members {
         if let ClassMember::Field { ty, default, .. } = &m.value {
-            reject_nil_in_binding_type(ty, m.span.clone(), errors);
+            check_binding_type(ty, m.span.clone(), errors);
             if let Some(default_expr) = default {
                 let scope = Scope::default();
                 check_assignment_compat(ty, default_expr, &scope, errors);
@@ -321,7 +334,10 @@ pub(crate) fn check_class(
     let prev = set_current_class(Some(class_name.to_string()));
     for m in members {
         if let ClassMember::Method(meth) = &m.value {
-            reject_nil_in_params(&meth.params, errors);
+            check_param_types(&meth.params, errors);
+            if let Some(rt) = &meth.return_ty {
+                reject_bare_function_type(rt, meth.span.clone(), errors);
+            }
             let prev_generics = push_generics(&meth.type_params);
             let mut scope = Scope::default();
             // `self` resolves to the class itself in `static fn` and to an

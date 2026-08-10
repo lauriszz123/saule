@@ -659,8 +659,6 @@ pub(crate) fn report_if_enum_variant_arity(
 ///
 /// * Only the `Expr::Ident` callee shape. `obj.field(...)` parses as a
 ///   member call and is handled by the class-method paths above.
-/// * A bare `function` annotation (as opposed to `fn(...) -> ...`)
-///   carries no parameter list, so there is nothing to check.
 /// * Named arguments are skipped — a function *type* records no
 ///   parameter names, so a named argument can't be matched to a slot.
 ///   The runtime still rejects it.

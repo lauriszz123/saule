@@ -167,8 +167,12 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
         //
         // On an already-typed value the cast is noise at best and a false
         // sense of safety at worst, so say so rather than allow it.
-        Expr::Cast { value, .. } => {
+        Expr::Cast { value, ty } => {
             check_expr(value, scope, errors);
+            // `x as function` used to be a bare callability test. The target
+            // of a cast is a type like any other, so it has to name the
+            // signature the value is being narrowed to.
+            super::stmt::reject_bare_function_type(ty, expr.span.clone(), errors);
             if let Some(vt) = infer(value, scope) {
                 let base = strip_nullable(vt.clone());
                 let narrowable =
@@ -199,7 +203,10 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             params,
             body,
             return_ty,
-        } => check_lambda_body(params, body, return_ty.as_ref(), scope, errors),
+        } => {
+            check_lambda_return_ty(return_ty.as_ref(), expr.span.clone(), errors);
+            check_lambda_body(params, body, return_ty.as_ref(), scope, errors)
+        }
         Expr::Match { scrutinee, arms } => {
             check_match(expr, scrutinee, arms, scope, errors);
         }
@@ -216,6 +223,18 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
 /// produce: its own `-> T` annotation when it has one, otherwise the return
 /// type of whatever target it is being checked against. `None` means neither
 /// exists and the body's returns are unconstrained.
+/// A lambda's own `-> T` annotation is a type ascription like any other, so
+/// it goes through the same rejection as a declaration's.
+fn check_lambda_return_ty(
+    return_ty: Option<&Type>,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    if let Some(rt) = return_ty {
+        super::stmt::reject_bare_function_type(rt, span, errors);
+    }
+}
+
 fn check_lambda_body(
     params: &[Param],
     body: &LambdaBody,
@@ -224,7 +243,7 @@ fn check_lambda_body(
     errors: &mut Vec<TypeCheckError>,
 ) {
     for p in params {
-        super::stmt::reject_nil_in_binding_type(&p.ty, p.span.clone(), errors);
+        super::stmt::check_binding_type(&p.ty, p.span.clone(), errors);
     }
     let mut lscope = scope.clone();
     seed_params(&mut lscope, params);
@@ -274,6 +293,7 @@ pub(super) fn check_expr_expecting(
             ret: want_ret,
         }) = expected
     {
+        check_lambda_return_ty(return_ty.as_ref(), expr.span.clone(), errors);
         let refined: Vec<Param> = params
             .iter()
             .enumerate()
@@ -328,7 +348,14 @@ pub(super) fn type_to_string(ty: &Type) -> String {
         // the caller's; undo that here so a diagnostic quotes `T`, not
         // the internal `T$`.
         Type::Named(n) => unfreshen_name(n).to_string(),
-        Type::Nullable(inner) => format!("{}?", type_to_string(inner)),
+        // A function under `?` needs parens: `fn() -> nil?` reads as a
+        // function returning `nil?`, which is not the nullable function the
+        // annotation declares — and a diagnostic has to quote a type the
+        // reader can paste back into the source.
+        Type::Nullable(inner) => match &**inner {
+            Type::Function { .. } => format!("({})?", type_to_string(inner)),
+            _ => format!("{}?", type_to_string(inner)),
+        },
         Type::Table { key: None, value } => format!("table<{}>", type_to_string(value)),
         Type::Table {
             key: Some(k),
@@ -340,7 +367,10 @@ pub(super) fn type_to_string(ty: &Type) -> String {
         }
         Type::Function { params, ret } => {
             let parts: Vec<String> = params.iter().map(type_to_string).collect();
-            format!("fn({}): {}", parts.join(", "), type_to_string(ret))
+            // `->`, not the legacy `: R` — the parser stopped accepting that
+            // spelling, so quoting it handed the reader a type they could not
+            // write down.
+            format!("fn({}) -> {}", parts.join(", "), type_to_string(ret))
         }
     }
 }

@@ -30,13 +30,13 @@ import * from Framework
 -- them out to fill whatever the parent allows. A `child` is painted *after* the
 -- painter, so it layers UI on top of your drawing.
 export class Canvas extends SingleChildView
-	painter: function?
+	painter: (fn(float, float, float, float) -> nil)?
 	width: float?
 	height: float?
 	clip: boolean
 
 	fn init(
-		painter: function? = nil,
+		painter: (fn(float, float, float, float) -> nil)? = nil,
 		width: float? = nil,
 		height: float? = nil,
 		child: View? = nil,
@@ -78,7 +78,7 @@ export class Canvas extends SingleChildView
 	end
 
 	fn paint(el: Element, x: float, y: float) -> nil
-		local painter: function? = self.painter
+		local painter: (fn(float, float, float, float) -> nil)? = self.painter
 
 		if painter == nil then
 			el.paintChildren(x, y)
