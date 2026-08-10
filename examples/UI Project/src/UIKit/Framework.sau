@@ -967,17 +967,17 @@ export class View
 	end
 
 	-- `fn()`. Left button.
-	fn onTapGesture(action: function) -> View
+	fn onTapGesture(action: fn() -> nil) -> View
 		return Modifiers.get().onTap(self, action, false)
 	end
 
 	-- `fn()`. Right button — pair it with `showMenu`.
-	fn onSecondaryTapGesture(action: function) -> View
+	fn onSecondaryTapGesture(action: fn() -> nil) -> View
 		return Modifiers.get().onTap(self, action, true)
 	end
 
 	-- `fn(inside: boolean)`, on entry and on exit.
-	fn onHover(action: function) -> View
+	fn onHover(action: fn(boolean) -> nil) -> View
 		return Modifiers.get().onHover(self, action)
 	end
 
@@ -1029,8 +1029,8 @@ export interface ViewModifiers
 	fn align(child: View, alignment: Alignment) -> View
 	fn clip(child: View) -> View
 	fn opacity(child: View, value: float) -> View
-	fn onTap(child: View, action: function, secondary: boolean) -> View
-	fn onHover(child: View, action: function) -> View
+	fn onTap(child: View, action: fn() -> nil, secondary: boolean) -> View
+	fn onHover(child: View, action: fn(boolean) -> nil) -> View
 	fn tooltip(child: View, message: string) -> View
 	fn cursor(child: View, name: string) -> View
 
@@ -1367,7 +1367,7 @@ export class State
 	-- --- framework interface -------------------------------------------------
 
 	-- Run `update`, then mark this state's element for rebuild.
-	fn setState(update: function) -> nil
+	fn setState(update: fn() -> nil) -> nil
 		update()
 
 		local el: Element? = self.element
@@ -1530,7 +1530,7 @@ end
 -- The content is a `builder` (`fn() -> View`) rather than a fixed view, so
 -- an entry re-reads whatever it closes over each time it rebuilds.
 export class OverlayEntry
-	builder: function
+	builder: fn() -> View
 
 	-- Whether this layer is opaque to input: it swallows presses and the wheel
 	-- that its own content did not claim, and confines focus to itself.
@@ -1550,7 +1550,7 @@ export class OverlayEntry
 
 	static local nextId: integer = 1
 
-	fn init(builder: function, opaque: boolean = false)
+	fn init(builder: fn() -> View, opaque: boolean = false)
 		self.builder = builder
 		self.opaque = opaque
 		self.id = "overlay#" .. OverlayEntry.nextId
@@ -1806,7 +1806,7 @@ export class Navigator
 		self.routes = {}
 	end
 
-	fn push(builder: function) -> OverlayEntry
+	fn push(builder: fn() -> View) -> OverlayEntry
 		-- Opaque: a route covers the window, so it has to cover it for the
 		-- pointer and for focus too, not merely for paint.
 		local entry: OverlayEntry = OverlayEntry(builder, true)
@@ -1827,7 +1827,7 @@ export class Navigator
 	end
 
 	-- Swap the top route without growing the stack.
-	fn replace(builder: function) -> OverlayEntry
+	fn replace(builder: fn() -> View) -> OverlayEntry
 		self.pop()
 
 		return self.push(builder)

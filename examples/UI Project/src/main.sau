@@ -7,8 +7,9 @@ import * from Home
 -- swap it for `ThemeData.light()` to see it.
 export class DemoApp extends App
   fn body() -> Scene
+    local theme = ThemeData.dark()
     return WindowGroup(title: "Saule UIKit", width: 900, height: 700) do
-      Theme(data: ThemeData.dark()) do
+      Theme(data: theme) do
         HomeScreen()
       end
     end

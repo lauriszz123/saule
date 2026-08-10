@@ -66,8 +66,8 @@ impl<'a> Cx<'a> {
                 ..
             } => {
                 let resolved_ty = match ty.clone() {
-                    // A bare structural annotation (`table` / `function`) is
-                    // refined against the initializer so generic natives can
+                    // The bare structural annotation `table` is refined
+                    // against the initializer so generic natives can
                     // bind the element type (`local nums: table = {1, 2}` ->
                     // `table<integer>`).
                     Some(t) => Some(self.refine_bare_annotation(

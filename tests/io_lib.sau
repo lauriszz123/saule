@@ -1,7 +1,10 @@
 -- Io / File round-trip — write, read whole, iterate lines.
 class Main
 	static fn main()
-		local path: string = "/tmp/saule_io_test.txt"
+		-- `Os.tmpname` rather than a hardcoded `/tmp/...`: this fixture runs
+		-- on Windows too, where that directory does not exist and every
+		-- `Io.open` below came back `nil`.
+		local path: string = Os.tmpname()
 
 		-- Write
 
@@ -50,5 +53,7 @@ class Main
 
 		Io.stdout.write("via-stdout\n")
 		Io.write("via-io-write\n")
+
+		Os.remove(path)
 	end
 end

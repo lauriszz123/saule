@@ -123,13 +123,13 @@ export class Chip extends View
 	label: string
 	color: Color?
 	textColor: Color?
-	onRemove: function?
+	onRemove: (fn() -> nil)?
 
 	fn init(
 		label: string = "",
 		color: Color? = nil,
 		textColor: Color? = nil,
-		onRemove: function? = nil,
+		onRemove: (fn() -> nil)? = nil,
 		key: string? = nil
 	)
 		self.super(key)

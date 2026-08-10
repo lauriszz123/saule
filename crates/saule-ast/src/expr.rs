@@ -220,8 +220,8 @@ pub fn param_slots(params: &[Param]) -> Vec<ParamSlot<'_>> {
         .collect()
 }
 
-/// Whether a declared type can hold a function value: `fn(…) -> R`, the bare
-/// `function` name, or either of those made nullable.
+/// Whether a declared type can hold a function value: `fn(…) -> R`, or that
+/// made nullable.
 ///
 /// `any` is deliberately excluded. It holds a function too, but it holds
 /// everything else as well, so treating it as a callback slot would make the
@@ -229,7 +229,6 @@ pub fn param_slots(params: &[Param]) -> Vec<ParamSlot<'_>> {
 pub fn type_holds_function(ty: &Type) -> bool {
     match ty {
         Type::Function { .. } => true,
-        Type::Named(n) => n == "function",
         Type::Nullable(inner) => type_holds_function(inner),
         _ => false,
     }

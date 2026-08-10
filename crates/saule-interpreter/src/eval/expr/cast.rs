@@ -96,7 +96,8 @@ fn matches_named(value: &Value, name: &str) -> bool {
         "boolean" => matches!(value, Value::Bool(_)),
         "nil" => matches!(value, Value::Nil),
         "table" => matches!(value, Value::Table(_)),
-        "function" => is_callable(value),
+        // No `"function"` arm: the bare name is not a type. A callable is
+        // narrowed with the `fn(...) -> T` form, handled above.
         // A user-declared type: an instance of that class (or of any
         // subclass — a `Dog` is an `Animal`), or a variant of that enum.
         other => match value {

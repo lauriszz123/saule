@@ -670,3 +670,50 @@ fn both_trailing_block_spellings_are_idempotent() {
         assert_eq!(once, twice, "not idempotent: {src}");
     }
 }
+
+// ── Nullable function types ─────────────────────────────────────────────────
+//
+// `?` binds to the return type inside a function type, so a nullable callback
+// has to keep its parentheses. Printing the inner type bare rewrote
+// `(fn() -> nil)?` — an optional callback — into `fn() -> nil?`, a callback
+// that is always present and returns a nullable nothing. Both spellings parse
+// and both are idempotent, so nothing here caught it until the type itself was
+// compared.
+
+#[test]
+fn a_nullable_function_type_keeps_its_parentheses() {
+    for src in [
+        "local f: (fn() -> nil)? = nil",
+        "local g: (fn(string) -> boolean)? = nil",
+        "class C\n  onTap: (fn(float, float) -> nil)?\nend",
+        "fn take(cb: (fn() -> nil)? = nil) -> nil\nend",
+        "local h: table<(fn() -> nil)?> = {}",
+    ] {
+        assert_eq!(format_str(src).unwrap().trim(), src);
+    }
+}
+
+/// The parentheses are not cosmetic: without them the formatted source
+/// parses to a *different* type. Compare the trees, not the text.
+#[test]
+fn formatting_a_nullable_function_type_preserves_the_type() {
+    let src = "local f: (fn(string) -> nil)? = nil";
+    let before = saule_parser::parse(saule_lexer::Lexer::new(src).tokenize().unwrap()).unwrap();
+    let formatted = format_str(src).unwrap();
+    let after =
+        saule_parser::parse(saule_lexer::Lexer::new(&formatted).tokenize().unwrap()).unwrap();
+    assert_eq!(before, after, "formatted to a different type: {formatted}");
+}
+
+/// A `?` that really does belong to the return type must not gain parentheses
+/// it never had — the fix is a parenthesise-when-nullable rule, not a
+/// parenthesise-every-function one.
+#[test]
+fn a_function_returning_a_nullable_is_left_alone() {
+    for src in [
+        "local f: fn() -> integer? = nil",
+        "local g: fn(string) -> table<integer>? = nil",
+    ] {
+        assert_eq!(format_str(src).unwrap().trim(), src);
+    }
+}

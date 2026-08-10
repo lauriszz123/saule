@@ -50,11 +50,7 @@ local fn isWordAt(text: string, at: integer) -> boolean
 
 	local c: integer = code!
 
-	return (c >= 48 and c <= 57)
-		or (c >= 65 and c <= 90)
-		or (c >= 97 and c <= 122)
-		or c == 95
-		or c >= 128
+	return c >= 48 and c <= 57 or c >= 65 and c <= 90 or c >= 97 and c <= 122 or c == 95 or c >= 128
 end
 
 local fn lower(value: integer, other: integer) -> integer
@@ -229,7 +225,7 @@ export class TextField extends View
 	value: string?
 	placeholder: string
 	-- `onSubmitted` is declared *before* `onChanged` on purpose. A trailing
-	-- block binds to the last function-typed parameter nothing else claimed, so
+	-- block binds to the last callback parameter nothing else claimed, so
 	-- this order makes the two natural spellings mean what they look like:
 	--
 	--     TextField(value: name) do (text) name = text end     -- onChanged
@@ -240,8 +236,8 @@ export class TextField extends View
 	--
 	-- Declared the other way round, the first form would silently fill
 	-- `onSubmitted` and the field would appear to ignore every keystroke.
-	onSubmitted: function?
-	onChanged: function?
+	onSubmitted: (fn(string) -> nil)?
+	onChanged: (fn(string) -> nil)?
 
 	style: TextStyle?
 	placeholderStyle: TextStyle?
@@ -267,8 +263,8 @@ export class TextField extends View
 	fn init(
 		value: string? = nil,
 		placeholder: string = "",
-		onSubmitted: function? = nil,
-		onChanged: function? = nil,
+		onSubmitted: (fn(string) -> nil)? = nil,
+		onChanged: (fn(string) -> nil)? = nil,
 		style: TextStyle? = nil,
 		placeholderStyle: TextStyle? = nil,
 		background: Color? = nil,
@@ -336,7 +332,7 @@ export class TextField extends View
 			scratch.text = wanted ?? ""
 			scratch.caret = String.len(wanted ?? "")
 			scratch.anchor = scratch.caret
-		elseif byOwner and wanted != nil and wanted! != ((scratch.text as string) ?? "") then
+		elseif byOwner and wanted != nil and wanted! != (scratch.text as string ?? "") then
 			scratch.text = wanted!
 			scratch.caret = String.len(wanted!)
 			scratch.anchor = scratch.caret
@@ -344,14 +340,13 @@ export class TextField extends View
 
 		scratch.owner = self
 
-
 		-- The node has to outlive the rebuild that every keystroke causes, so
 		-- the element owns it. `focused` is the framework's own flag, so it is
 		-- read straight off `data` rather than out of the bag.
 		local node: FocusNode = nodeFor(data)
-		local text: string = (scratch.text as string) ?? ""
-		local caret: integer = (scratch.caret as integer) ?? 0
-		local anchor: integer = (scratch.anchor as integer) ?? 0
+		local text: string = scratch.text as string ?? ""
+		local caret: integer = scratch.caret as integer ?? 0
+		local anchor: integer = scratch.anchor as integer ?? 0
 		local focused: boolean = data.focused
 		local style: TextStyle = self.style ?? TextStyle()
 
@@ -512,7 +507,7 @@ export class TextField extends View
 
 			return true
 		elseif key == "return" then
-			local submitted: function? = self.onSubmitted
+			local submitted: (fn(string) -> nil)? = self.onSubmitted
 			if submitted != nil then
 				submitted(editor.text())
 			end
@@ -540,9 +535,9 @@ end
 export class TextEngine
 	local scratch: table
 	local context: BuildContext
-	local onChanged: function?
+	local onChanged: (fn(string) -> nil)?
 
-	fn init(scratch: table, context: BuildContext, onChanged: function? = nil)
+	fn init(scratch: table, context: BuildContext, onChanged: (fn(string) -> nil)? = nil)
 		self.scratch = scratch
 		self.context = context
 		self.onChanged = onChanged
@@ -553,15 +548,15 @@ export class TextEngine
 	-- than reading the slots again. An empty field and a caret at the origin
 	-- are the right answers for a slot that was never written.
 	fn text() -> string
-		return (self.scratch.text as string) ?? ""
+		return self.scratch.text as string ?? ""
 	end
 
 	fn caret() -> integer
-		return (self.scratch.caret as integer) ?? 0
+		return self.scratch.caret as integer ?? 0
 	end
 
 	fn anchor() -> integer
-		return (self.scratch.anchor as integer) ?? 0
+		return self.scratch.anchor as integer ?? 0
 	end
 
 	fn hasSelection() -> boolean
@@ -633,8 +628,7 @@ export class TextEngine
 		-- ends the run: undo should go back a word at a time, not a letter.
 		local kind: string = "insert"
 
-		if self.hasSelection() or #typed != 1 or typed == " " or typed == "
-" then
+		if self.hasSelection() or #typed != 1 or typed == " " or typed == "\n" then
 			kind = "other"
 		end
 
@@ -681,11 +675,7 @@ export class TextEngine
 			return
 		end
 
-		self.commit(
-			String.sub(current, 1, caret) .. String.sub(current, caret + 2),
-			caret,
-			"delete"
-		)
+		self.commit(String.sub(current, 1, caret) .. String.sub(current, caret + 2), caret, "delete")
 	end
 
 	fn deleteSelection() -> nil
@@ -696,10 +686,7 @@ export class TextEngine
 		local first: integer = self.selectionStart()
 		local current: string = self.text()
 
-		self.commit(
-			String.sub(current, 1, first) .. String.sub(current, self.selectionEnd() + 1),
-			first
-		)
+		self.commit(String.sub(current, 1, first) .. String.sub(current, self.selectionEnd() + 1), first)
 	end
 
 	-- --- clipboard -----------------------------------------------------------
@@ -751,7 +738,7 @@ export class TextEngine
 
 	-- One place the owner is told about a change, rather than two.
 	local fn report(text: string) -> nil
-		local changed: function? = self.onChanged
+		local changed: (fn(string) -> nil)? = self.onChanged
 
 		if changed != nil then
 			changed(text)
@@ -870,7 +857,7 @@ export class TextEngine
 		self.context.markNeedsBuild()
 
 		-- The snapshot is an untyped bag, as everywhere else in the scratch.
-		self.report((entry.text as string) ?? "")
+		self.report(entry.text as string ?? "")
 	end
 
 	-- --- words ---------------------------------------------------------------
@@ -966,10 +953,7 @@ export class TextEngine
 
 		local current: string = self.text()
 
-		self.commit(
-			String.sub(current, 1, start) .. String.sub(current, caret + 1),
-			start
-		)
+		self.commit(String.sub(current, 1, start) .. String.sub(current, caret + 1), start)
 	end
 
 	fn deleteWordForward() -> nil

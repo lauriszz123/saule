@@ -1751,7 +1751,7 @@ fn a_lambda_body_sees_the_enclosing_scope() {
     let src = "\
 class Panel
   fn build(scratch: table) -> nothing
-    local rebuild: function = fn()
+    local rebuild: fn() -> nil = fn()
       print(1)
     end
     local count: integer = 0
@@ -1761,7 +1761,7 @@ class Panel
       print(count)
     end)
   end
-  fn each(f: function) -> nothing
+  fn each(f: fn(boolean) -> nil) -> nothing
   end
 end
 ";
@@ -1772,7 +1772,7 @@ end
     );
     assert_eq!(
         hover_src_at(src, "rebuild()\n", 1).as_deref(),
-        Some("```saule\n(local) rebuild: fn() -> any\n```")
+        Some("```saule\n(local) rebuild: fn() -> nil\n```")
     );
     assert_eq!(
         hover_src_at(src, "print(count)", "print(".len()).as_deref(),

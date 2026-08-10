@@ -80,7 +80,7 @@ export class UIKitModifiers implements ViewModifiers
 
 	-- One entry point for both buttons: the pointer system routes them the
 	-- same way, and only the callback slot differs.
-	fn onTap(child: View, action: function, secondary: boolean) -> View
+	fn onTap(child: View, action: fn() -> nil, secondary: boolean) -> View
 		if secondary then
 			return GestureArea(child: child, onSecondaryTap: action)
 		end
@@ -88,7 +88,7 @@ export class UIKitModifiers implements ViewModifiers
 		return GestureArea(child: child, onTap: action)
 	end
 
-	fn onHover(child: View, action: function) -> View
+	fn onHover(child: View, action: fn(boolean) -> nil) -> View
 		return GestureArea(child: child, onHover: action)
 	end
 

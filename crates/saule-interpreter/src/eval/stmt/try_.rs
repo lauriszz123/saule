@@ -68,10 +68,8 @@ fn runtime_matches_type(value: &Value, ty: &Type) -> bool {
             "number" => matches!(value, Value::Int(_) | Value::Float(_)),
             "string" => matches!(value, Value::Str(_)),
             "table" => matches!(value, Value::Table(_)),
-            "function" => matches!(
-                value,
-                Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)
-            ),
+            // No `"function"` arm: the bare name is not a type. A callable
+            // `catch` type is written `fn(...) -> T`, handled above.
             other => match value {
                 Value::Instance(inst) => {
                     let inst_ref = inst.borrow();

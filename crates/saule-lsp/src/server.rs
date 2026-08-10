@@ -32,19 +32,22 @@ mod symbols;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::workspace;
+
 use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, DocumentFormattingParams, DocumentHighlight,
-    DocumentHighlightParams, DocumentRangeFormattingParams, DocumentSymbolParams,
-    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, InlayHint,
-    InlayHintParams, Location, MessageType, OneOf, ReferenceParams, SaveOptions,
-    ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, TextEdit, Url,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentFormattingParams,
+    DocumentHighlight, DocumentHighlightParams, DocumentRangeFormattingParams,
+    DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileSystemWatcher, GlobPattern,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+    InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location,
+    MessageType, OneOf, ReferenceParams, Registration, SaveOptions, ServerCapabilities, ServerInfo,
+    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
 };
 use tower_lsp::{Client, LanguageServer};
 
@@ -86,6 +89,12 @@ pub struct Backend {
     /// `UI Project` sample and every request begins with it, so without
     /// this the editor lags a keystroke behind. See [`seed_cache`].
     pub(crate) seed_cache: seed_cache::SeedCache,
+    /// Whether the client accepts a runtime `workspace/didChangeWatchedFiles`
+    /// registration, captured from its `initialize` capabilities. There is
+    /// no static server capability for file watching — the only way to ask
+    /// for it is `client/registerCapability`, and sending that to a client
+    /// that didn't advertise support is a protocol error.
+    pub(crate) watched_files_dynamic: Mutex<bool>,
 }
 
 impl Backend {
@@ -158,6 +167,79 @@ impl Backend {
             .seed_for(key.as_deref(), module, dir, self.source_overlay())
     }
 
+    /// Ask the client to watch every `.sau` file and `saule.config` in
+    /// the workspace and report changes made outside the editor.
+    ///
+    /// Best-effort by design: a client that never advertised dynamic
+    /// registration is skipped, and a client that rejects the request is
+    /// logged rather than treated as fatal. Everything degrades to the
+    /// pre-watcher behaviour — stale until the file is opened — which is
+    /// where the server was before this existed.
+    async fn register_file_watchers(&self) {
+        if !*self.watched_files_dynamic.lock().await {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    "client does not support file watching; \
+                     changes made outside the editor need a reopen to be seen",
+                )
+                .await;
+            return;
+        }
+
+        let watchers = ["**/*.sau", "**/saule.config"]
+            .into_iter()
+            .map(|glob| FileSystemWatcher {
+                glob_pattern: GlobPattern::String(glob.to_string()),
+                // `None` means create + change + delete; all three matter
+                // here, and for different reasons. See
+                // `did_change_watched_files`.
+                kind: None,
+            })
+            .collect();
+
+        let options = DidChangeWatchedFilesRegistrationOptions { watchers };
+        let Ok(register_options) = serde_json::to_value(options) else {
+            return;
+        };
+
+        if let Err(e) = self
+            .client
+            .register_capability(vec![Registration {
+                id: "saule-watched-files".to_string(),
+                method: "workspace/didChangeWatchedFiles".to_string(),
+                register_options: Some(register_options),
+            }])
+            .await
+        {
+            self.client
+                .log_message(
+                    MessageType::WARNING,
+                    format!("file watch registration: {e}"),
+                )
+                .await;
+        }
+    }
+
+    /// Re-read `saule.config` from the workspace roots.
+    ///
+    /// The config names the source directories imports resolve against,
+    /// so a stale copy silently misroutes every cross-file lookup.
+    async fn reload_project_info(&self) {
+        let roots: Vec<PathBuf> = self.workspace_roots.lock().await.clone();
+        for root in &roots {
+            if let Some(project_root) = workspace::find_project_root(root)
+                && let Some(info) = workspace::load_project(&project_root)
+            {
+                *self.project_info.lock().await = Some(info);
+                return;
+            }
+        }
+        // Config removed — drop what we had rather than keep resolving
+        // against directories that are no longer declared.
+        *self.project_info.lock().await = None;
+    }
+
     pub fn new(client: Client) -> Self {
         Self {
             client,
@@ -168,6 +250,7 @@ impl Backend {
             project_info: Mutex::new(None),
             analysis_lock: Mutex::new(()),
             seed_cache: seed_cache::SeedCache::default(),
+            watched_files_dynamic: Mutex::new(false),
         }
     }
 }
@@ -194,6 +277,17 @@ impl LanguageServer for Backend {
             roots.push(p);
         }
         *self.workspace_roots.lock().await = roots;
+
+        // File watching has no static capability — it is requested at
+        // runtime from `initialized`, and only from clients that said
+        // they'd accept the registration.
+        *self.watched_files_dynamic.lock().await = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.did_change_watched_files.as_ref())
+            .and_then(|f| f.dynamic_registration)
+            .unwrap_or(false);
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -267,7 +361,81 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "saule-lsp ready")
             .await;
+        self.register_file_watchers().await;
         self.initial_workspace_scan().await;
+    }
+
+    /// Files changed on disk by something other than the editor — a
+    /// `git checkout`, a generator, a rename in a file tree.
+    ///
+    /// Two things go stale that no document notification would catch.
+    /// The import seed cache keys off the files a module's import walk
+    /// read, so a *newly created* file is invisible to it: the walk
+    /// never read the missing file, no read set mentions it, and a
+    /// previously-unresolvable `import` would keep resolving to nothing.
+    /// And `workspace_files` — which decides whether a closed file still
+    /// gets diagnostics — was only ever filled by the one scan at
+    /// startup.
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let mut structural = false;
+        let mut touched: Vec<(PathBuf, Url)> = Vec::new();
+
+        for event in &params.changes {
+            // `saule.config` decides how imports resolve at all, so a
+            // change to it invalidates every cached seed and the project
+            // info the resolver reads.
+            if event.uri.path().ends_with("saule.config") {
+                self.reload_project_info().await;
+                structural = true;
+                continue;
+            }
+            let Some(abs) = event.uri.to_file_path().ok().and_then(|p| canonical(&p)) else {
+                // A deleted path can't be canonicalised — it's gone. Fall
+                // back to the raw path so removal still finds its entry.
+                if let Ok(raw) = event.uri.to_file_path() {
+                    self.workspace_files.remove(&raw);
+                    self.seed_cache.invalidate_dependents_of(&raw);
+                    structural = true;
+                }
+                continue;
+            };
+
+            match event.typ {
+                FileChangeType::CREATED => {
+                    self.workspace_files.insert(abs.clone(), ());
+                    structural = true;
+                }
+                FileChangeType::DELETED => {
+                    self.workspace_files.remove(&abs);
+                    self.rev_imports.remove(&abs);
+                    // The file's own diagnostics would otherwise linger
+                    // in the editor forever, pointing at nothing.
+                    self.client
+                        .publish_diagnostics(event.uri.clone(), Vec::new(), None)
+                        .await;
+                    structural = true;
+                }
+                // Content changed underneath us. Anything whose seed read
+                // this file is stale; the file itself is re-analysed
+                // below. An *open* buffer is unaffected either way — the
+                // overlay serves the editor's text, not the disk's.
+                _ => self.seed_cache.invalidate_dependents_of(&abs),
+            }
+            if event.typ != FileChangeType::DELETED {
+                touched.push((abs, event.uri.clone()));
+            }
+        }
+
+        // A file appearing or vanishing changes which imports resolve,
+        // and that is not expressible as "these files were read" — drop
+        // the lot rather than guess.
+        if structural {
+            self.seed_cache.clear();
+        }
+
+        for (abs, uri) in touched {
+            self.refresh_path(&abs, uri).await;
+        }
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {

@@ -440,9 +440,9 @@ end
 -- change underneath it.
 export class AnimatedBuilder extends View
 	controller: AnimationController
-	content: function
+	content: fn(float) -> View
 
-	fn init(controller: AnimationController, content: function, key: string? = nil)
+	fn init(controller: AnimationController, content: fn(float) -> View, key: string? = nil)
 		self.super(key)
 
 		self.controller = controller

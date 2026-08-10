@@ -145,3 +145,140 @@ fn import_key(module: &Module) -> Vec<String> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A throwaway workspace: `lib.sau` plus a `main.sau` that imports it.
+    struct Fixture {
+        dir: PathBuf,
+        main: PathBuf,
+        lib: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(tag: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("saule-seed-cache-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            let main = dir.join("main.sau");
+            let lib = dir.join("lib.sau");
+            std::fs::write(&main, "import * from \"lib\"\n").expect("write main");
+            std::fs::write(&lib, "export class Alpha\nend\n").expect("write lib");
+            // The handlers all derive the module dir by canonicalising the
+            // document path — mirror that exactly, since the whole question
+            // is whether the recorded read paths and the invalidation key
+            // are spelled the same way.
+            let dir = std::fs::canonicalize(&dir).expect("canonicalize");
+            Self {
+                main: dir.join("main.sau"),
+                lib: dir.join("lib.sau"),
+                dir,
+            }
+        }
+
+        fn seed(&self, cache: &SeedCache) -> saule_semantic::ModuleSeed {
+            let source = std::fs::read_to_string(&self.main).expect("read main");
+            let tokens = saule_lexer::Lexer::new(&source).tokenize().expect("lex");
+            let module = saule_parser::parse(tokens).expect("parse");
+            cache.seed_for(Some(&self.main), &module, &self.dir, |_| None)
+        }
+
+        fn write_lib(&self, text: &str) {
+            std::fs::write(&self.lib, text).expect("write lib");
+        }
+
+        fn write_main(&self, text: &str) {
+            std::fs::write(&self.main, text).expect("write main");
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// The point of the cache: a second lookup does not re-read the
+    /// import graph. Proven by changing the imported file behind its
+    /// back — a cache miss would pick the change up.
+    #[test]
+    fn a_second_lookup_reuses_the_cached_seed() {
+        let fx = Fixture::new("reuse");
+        let cache = SeedCache::default();
+        assert!(fx.seed(&cache).classes.contains_key("Alpha"));
+
+        fx.write_lib("export class Beta\nend\n");
+        let again = fx.seed(&cache);
+        assert!(again.classes.contains_key("Alpha"), "expected a cache hit");
+        assert!(!again.classes.contains_key("Beta"));
+    }
+
+    /// Invalidating by the changed file's path drops the entry.
+    ///
+    /// This is the assertion that matters most, and it is deliberately
+    /// end-to-end on a real filesystem: the read set is recorded from
+    /// paths the *resolver* builds by joining onto the module dir, while
+    /// invalidation keys off a path the *server* canonicalises. Nothing
+    /// guarantees those two spellings agree — on Windows canonicalising
+    /// yields a `\?\` verbatim prefix — and if they diverge the cache
+    /// silently never invalidates.
+    #[test]
+    fn changing_an_imported_file_invalidates_the_seed() {
+        let fx = Fixture::new("invalidate");
+        let cache = SeedCache::default();
+        assert!(fx.seed(&cache).classes.contains_key("Alpha"));
+
+        fx.write_lib("export class Beta\nend\n");
+        cache.invalidate_dependents_of(&fx.lib);
+
+        let after = fx.seed(&cache);
+        assert!(
+            after.classes.contains_key("Beta"),
+            "invalidation did not take: read set and invalidation key disagree"
+        );
+        assert!(!after.classes.contains_key("Alpha"));
+    }
+
+    /// Editing the importer's own text keeps its seed — that is what
+    /// makes typing cheap — but editing an `import` line does not.
+    #[test]
+    fn the_importers_own_edits_only_matter_at_the_import_lines() {
+        let fx = Fixture::new("imports");
+        let cache = SeedCache::default();
+        assert!(fx.seed(&cache).classes.contains_key("Alpha"));
+
+        // Body edit: same imports, so the cached seed still stands even
+        // though `lib.sau` has changed underneath.
+        fx.write_lib("export class Beta\nend\n");
+        fx.write_main("import * from \"lib\"\n\nlocal x = 1\n");
+        assert!(fx.seed(&cache).classes.contains_key("Alpha"));
+
+        // Import edit: a different graph, so the entry cannot be reused.
+        std::fs::write(fx.dir.join("other.sau"), "export class Gamma\nend\n").expect("write");
+        fx.write_main("import * from \"lib\"\nimport * from \"other\"\n");
+        let after = fx.seed(&cache);
+        assert!(after.classes.contains_key("Gamma"), "import change ignored");
+        assert!(after.classes.contains_key("Beta"));
+    }
+
+    /// A file with no path on disk is still answerable — it just isn't
+    /// cached, rather than panicking or caching under a bogus key.
+    #[test]
+    fn an_unsaved_buffer_is_served_without_caching() {
+        let fx = Fixture::new("unsaved");
+        let cache = SeedCache::default();
+        let source = std::fs::read_to_string(&fx.main).expect("read");
+        let tokens = saule_lexer::Lexer::new(&source).tokenize().expect("lex");
+        let module = saule_parser::parse(tokens).expect("parse");
+
+        let seed = cache.seed_for(None, &module, &fx.dir, |_| None);
+        assert!(seed.classes.contains_key("Alpha"));
+        assert!(
+            cache.entries.is_empty(),
+            "unkeyed seed should not be cached"
+        );
+    }
+}

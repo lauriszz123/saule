@@ -22,7 +22,7 @@ import * from Animation
 -- and a focus ring is drawn while it holds focus.
 export class Button extends View
 	label: string
-	onPressed: function?
+	onPressed: (fn() -> nil)?
 
 	color: Color?
 	textColor: Color?
@@ -34,7 +34,7 @@ export class Button extends View
 
 	fn init(
 		label: string = "",
-		onPressed: function? = nil,
+		onPressed: (fn() -> nil)? = nil,
 		color: Color? = nil,
 		textColor: Color? = nil,
 		textSize: float? = nil,
@@ -179,7 +179,7 @@ export class Button extends View
 			return false
 		end
 
-		local callback: function? = self.onPressed
+		local callback: (fn() -> nil)? = self.onPressed
 		if callback != nil then
 			callback()
 		end

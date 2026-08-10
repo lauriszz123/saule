@@ -100,6 +100,29 @@ function yamlString(value) {
 }
 
 /**
+ * A `tree/main/...` URL into the repository, with each path segment percent-
+ * encoded. The "Also in the repository" list is built from `readdirSync`, so
+ * the segments are whatever the directories are actually called — and
+ * `examples/UI Project` produced a link with a raw space in it, which stops
+ * being a link at all once a Markdown parser reaches the space.
+ *
+ * Separators are preserved: only the segments between them are encoded.
+ */
+function repoUrl(path) {
+	const encoded = path.split('/').map(encodeURIComponent).join('/');
+	return `${repo}/tree/main/${encoded}`;
+}
+
+/**
+ * A path as it should appear inside a `sh` code block. Anything the shell
+ * would split on gets single-quoted, so the `cd` line in "Run it" still works
+ * when copied verbatim.
+ */
+function shellPath(path) {
+	return /^[A-Za-z0-9._\-/]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
  * Pull the first real prose paragraph out of a section body, for use as the
  * page description (feeds `<meta name="description">` and search results).
  */
@@ -388,7 +411,7 @@ function writeExamples() {
 			'',
 			example.blurb,
 			'',
-			`[Browse this example on GitHub](${repo}/tree/main/examples/${example.dir})`,
+			`[Browse this example on GitHub](${repoUrl(`examples/${example.dir}`)})`,
 			'',
 		];
 
@@ -401,7 +424,7 @@ function writeExamples() {
 			'',
 			'```sh',
 			`git clone ${repo}.git`,
-			`cd saule/examples/${example.dir}`,
+			`cd ${shellPath(`saule/examples/${example.dir}`)}`,
 			example.run,
 			'```',
 			''
@@ -467,7 +490,7 @@ function writeExamples() {
 		index.push(
 			'## Also in the repository',
 			'',
-			...extras.map((name) => `- [\`examples/${name}\`](${repo}/tree/main/examples/${name})`),
+			...extras.map((name) => `- [\`examples/${name}\`](${repoUrl(`examples/${name}`)})`),
 			''
 		);
 	}

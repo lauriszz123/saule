@@ -377,13 +377,12 @@ pub(crate) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         // Expected `any` / `table` / `nil` named slot, value is a table —
         // accept (we widen to the named slot).
         (Type::Named(n), Type::Table { .. }) if n == "table" || n == "any" => true,
-        // Bare `function` (or `any` / `nil`) named slot vs an actual function
-        // value — mirrors the `table` arms. Native sigs erase the precise
-        // shape (e.g. an `SFunction` parameter renders as `function`).
-        (Type::Function { .. }, Type::Named(n)) if n == "function" || n == "any" || n == "nil" => {
-            true
-        }
-        (Type::Named(n), Type::Function { .. }) if n == "function" || n == "any" => true,
+        // `any` / `nil` named slot vs an actual function value — mirrors the
+        // `table` arms. There is deliberately no bare `function` counterpart:
+        // a function's type *is* its signature, so the only way to describe
+        // one is `fn(...) -> T` and the only way to erase it is `any`.
+        (Type::Function { .. }, Type::Named(n)) if n == "any" || n == "nil" => true,
+        (Type::Named(n), Type::Function { .. }) if n == "any" => true,
         (Type::Nullable(a), b) => types_compatible(a, b),
         (a, Type::Nullable(b)) => types_compatible(a, b),
         // Function shapes. Parameters are **contravariant** — the value has

@@ -326,8 +326,19 @@ impl<'a> Printer<'a> {
     pub(crate) fn ty(&mut self, t: &Type) {
         match t {
             Type::Named(n) => self.write(n),
+            // A function under `?` needs parentheses. `fn() -> nil?` parses as
+            // a function *returning* `nil?`, so printing the inner type bare
+            // turned `(fn() -> nil)?` into a different type on every format —
+            // and the round-trip was silent, because both spellings parse.
             Type::Nullable(inner) => {
+                let parens = matches!(**inner, Type::Function { .. });
+                if parens {
+                    self.write("(");
+                }
                 self.ty(inner);
+                if parens {
+                    self.write(")");
+                }
                 self.write("?");
             }
             Type::Table { key, value } => match key {

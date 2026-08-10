@@ -65,8 +65,10 @@ object SauleTokenTypes {
     val OPERATOR_KEYWORDS = setOf("and", "or", "not")
     val SELF_KEYWORDS = setOf("self", "super")
     val CONSTANT_KEYWORDS = setOf("true", "false", "nil")
+    // No `function`: a function's type is its signature, written `fn(...) -> T`,
+    // and `fn` is already highlighted as a declaration keyword.
     val PRIMITIVE_TYPES = setOf(
-        "integer", "float", "string", "boolean", "any", "function",
+        "integer", "float", "string", "boolean", "any",
         "table", "userdata", "thread", "number",
     )
 }

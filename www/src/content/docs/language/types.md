@@ -16,11 +16,50 @@ Saule has 8 primitive types, inherited from Lua's type system but statically dec
 | `string` | Immutable sequences of characters |
 | `boolean` | `true` or `false` |
 | `nil` | Absence of value |
-| `function` | First-class function values |
+| `fn(A, B) -> R` | First-class function values, typed by [signature](/saule/language/types/#function-types) |
 | `table<T>` | The only data structure, typed generically |
 | `any` | A value of unknown type. Anything may be assigned **to** an `any`; getting a value back **out** requires a checked [`as` cast](/saule/language/types/#escaping-any-with-as) |
 
 Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what you wrote. A variable cannot be `nil` unless its type is marked nullable with `?`.
+
+### Function types
+
+A function value's type is its **signature**: the types it is called with and the type it hands back. There is no bare `function` type — a slot that holds a callable has to say which calls are legal against it.
+
+```saule
+local onTick: fn(float) -> nil = fn(dt: float)
+  advance(dt)
+end
+
+local compare: fn(integer, integer) -> boolean = (a, b) => a < b
+```
+
+The parts are the same ones a declaration writes: a parenthesised parameter-type list, then `->` and the return type. `-> nil` is the "returns nothing" spelling. Nullability wraps the whole type, so an optional callback needs parentheses — `(fn(string) -> nil)?`, not `fn(string) -> nil?`, which is a callback returning a nullable `nil`.
+
+```saule
+class TextField
+  -- Optional callbacks: absent until the caller supplies one.
+  onSubmitted: (fn(string) -> nil)?
+  onChanged: (fn(string) -> nil)?
+end
+```
+
+The payoff is that anonymous functions assigned into such a slot are checked against it — arity, parameter types, and return type — instead of being accepted on the grounds that they are *some* function:
+
+```saule
+local field = TextField()
+field.onChanged = fn(count: integer)   -- error: expected fn(string) -> nil
+  print(count)
+end
+```
+
+It also means the parameters of a lambda written into a typed slot don't need annotations. The signature supplies them, and the body is checked with the real types:
+
+```saule
+field.onChanged = text => print(text:upper())   -- `text` is a `string`
+```
+
+An earlier version of the language accepted a bare `function` annotation. It carried no arity and no parameter types, so every lambda fit every slot and the mistake surfaced at the call — or, for a callback stored now and invoked later, not at all. Widen deliberately with `any` if a slot really does accept anything.
 
 ### Reserved: `userdata` and `thread`
 

@@ -1071,15 +1071,39 @@ fn a_function_value_call_yields_its_declared_return_type() {
 }
 
 #[test]
-fn a_bare_function_annotation_is_still_unchecked() {
-    // `function` carries no parameter list, so there is nothing to check
-    // against — this must not start erroring.
-    accepts(
+fn a_bare_function_annotation_is_rejected() {
+    // `function` carried no parameter list, so there was nothing to check
+    // against and `f(1, 2, 3)` went through unexamined. The spelling is gone:
+    // a slot holding a callable has to name the signature it accepts.
+    rejects(
         "fn apply(f: function) -> integer\n\
         \x20 f(1, 2, 3)\n\
         \x20 return 1\n\
         end\n",
+        "`function` is not a type",
     );
+}
+
+#[test]
+fn a_bare_function_annotation_is_rejected_in_every_position() {
+    for src in [
+        "local f: function = fn() -> nil end\n",
+        "local g: function? = nil\n",
+        "export h: function? = nil\n",
+        "fn make() -> function\n\x20 return fn() -> nil end\n end\n",
+        "fn take(f: (function)?) -> nil\n end\n",
+        "fn nested(fs: table<function>) -> nil\n end\n",
+        "fn inner(f: fn(function) -> nil) -> nil\n end\n",
+        "class C\n\x20 cb: function?\n end\n",
+        "interface I\n\x20 fn cb() -> function\n end\n",
+        "enum E\n\x20 Handler(f: function)\n end\n",
+        "fn cast(v: any) -> nil\n\x20 local f = v as function\n end\n",
+        "fn caught() -> nil\n\x20 try\n\x20 catch e: function\n\x20 end\n end\n",
+        "fn iter(xs: table<any>) -> nil\n\x20 for x: function in xs do\n\x20 end\n end\n",
+        "fn lam() -> nil\n\x20 local f = fn() -> function\n\x20   return fn() -> nil end\n\x20 end\n end\n",
+    ] {
+        rejects(src, "`function` is not a type");
+    }
 }
 
 #[test]
@@ -1237,6 +1261,43 @@ fn an_unbound_stage_type_param_does_not_leak_into_the_next_check() {
 }
 
 // ─── a lambda's declared return type binds its body ──────────────────────
+
+/// The point of removing the bare `function` type: a lambda stored in a
+/// declared callback slot is checked against that slot's signature. Under
+/// `function` all four of these were accepted, and the mismatch surfaced at
+/// the call — or, for a callback invoked from somewhere else entirely, never.
+#[test]
+fn rejects_a_lambda_that_does_not_match_the_declared_callback() {
+    let field = "\
+class Field
+  onChanged: (fn(string) -> nil)?
+
+  fn init()
+    self.onChanged = nil
+  end
+end
+";
+    // Wrong parameter type.
+    rejects(
+        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(n: integer)\n    print(n)\n  end\n  return\nend\n"),
+        "(fn(string) -> nil)?",
+    );
+    // Wrong arity.
+    rejects(
+        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(a: string, b: string)\n    print(a)\n  end\n  return\nend\n"),
+        "(fn(string) -> nil)?",
+    );
+    // Wrong return type.
+    rejects(
+        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(s: string) -> integer\n    return 1\n  end\n  return\nend\n"),
+        "(fn(string) -> nil)?",
+    );
+    // And the matching one still passes, with the parameter type supplied by
+    // the slot rather than written out.
+    accepts(
+        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = s => print(s)\n  return\nend\n"),
+    );
+}
 
 /// A lambda that declares `-> T` must actually return a `T`. The declaration
 /// used to be checked against the target's signature but never against the

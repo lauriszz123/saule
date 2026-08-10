@@ -32,12 +32,12 @@ pub(super) fn check_stmt(
             name, ty, value, ..
         } => {
             if let Some(t) = ty {
-                reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+                check_binding_type(t, stmt.span.clone(), errors);
             }
             if let (Some(ty), Some(v)) = (ty, value) {
                 check_expr_expecting(v, Some(ty), scope, errors);
                 check_assignment_compat(ty, v, scope, errors);
-                // Refine a bare structural annotation (`table`, `function`)
+                // Refine the bare structural annotation `table`
                 // to the value's concrete shape — e.g.
                 // `local args: table = Os.args()` widens to `table<string>`
                 // so `args[i] = 10` then errors. Without this, the bare
@@ -67,7 +67,7 @@ pub(super) fn check_stmt(
         Stmt::LocalMulti { names, values } => {
             for (_, _, ty_opt) in names {
                 if let Some(t) = ty_opt {
-                    reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+                    check_binding_type(t, stmt.span.clone(), errors);
                 }
             }
             for v in values {
@@ -291,7 +291,7 @@ pub(super) fn check_stmt(
             body,
         } => {
             if let Some(t) = var_ty {
-                reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+                check_binding_type(t, stmt.span.clone(), errors);
             }
             check_expr(from, scope, errors);
             check_expr(to, scope, errors);
@@ -309,7 +309,7 @@ pub(super) fn check_stmt(
         Stmt::ForIn { vars, iter, body } => {
             for (_, ty_opt) in vars {
                 if let Some(t) = ty_opt {
-                    reject_nil_in_binding_type(t, stmt.span.clone(), errors);
+                    check_binding_type(t, stmt.span.clone(), errors);
                 }
             }
             check_expr(iter, scope, errors);
@@ -432,7 +432,7 @@ pub(super) fn check_stmt(
             catch_ty,
             catch_body,
         } => {
-            reject_nil_in_binding_type(catch_ty, stmt.span.clone(), errors);
+            check_binding_type(catch_ty, stmt.span.clone(), errors);
             let mut body_scope = scope.clone();
             for s in body {
                 check_stmt(s, &mut body_scope, errors);

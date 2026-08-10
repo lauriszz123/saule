@@ -251,7 +251,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// Refine a bare structural annotation (`table` / `function`) against the
+    /// Refine the bare structural annotation `table` against the
     /// initializer's inferred shape: `local nums: table = {1, 2}` becomes
     /// `table<integer>`. Leaves the declared type untouched on a mismatch.
     pub(crate) fn refine_bare_annotation(&self, decl: Type, value: Option<Type>) -> Type {
@@ -265,10 +265,7 @@ impl<'a> Cx<'a> {
             Type::Nullable(i) => (**i).clone(),
             other => other.clone(),
         };
-        let matches_kind = matches!(
-            (name.as_str(), &inner),
-            ("table", Type::Table { .. }) | ("function", Type::Function { .. })
-        );
+        let matches_kind = matches!((name.as_str(), &inner), ("table", Type::Table { .. }));
         if matches_kind { inner } else { decl }
     }
 

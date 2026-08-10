@@ -438,14 +438,20 @@ mod tests {
 
     #[test]
     fn instantiate_returns_binds_table_element() {
-        // fn<T>(t: table<T>, f: function) -> table<T>
+        // fn<T>(t: table<T>, f: fn(T) -> T) -> table<T>
         let sig = NativeSig {
             type_params: vec!["T".into()],
-            params: vec![t_table(t_named("T")), t_named("function")],
+            params: vec![
+                t_table(t_named("T")),
+                t_function(vec![t_named("T")], t_named("T")),
+            ],
             variadic: None,
             returns: vec![t_table(t_named("T"))],
         };
-        let args = [Some(t_table(t_named("integer"))), Some(t_named("function"))];
+        let args = [
+            Some(t_table(t_named("integer"))),
+            Some(t_function(vec![t_named("integer")], t_named("integer"))),
+        ];
         assert_eq!(
             instantiate_returns(&sig, &args),
             vec![t_table(t_named("integer"))]
@@ -454,16 +460,23 @@ mod tests {
 
     #[test]
     fn instantiate_returns_binds_accumulator_param() {
-        // fn<T, U>(t: table<T>, f: function, init: U) -> U
+        // fn<T, U>(t: table<T>, f: fn(U, T) -> U, init: U) -> U
         let sig = NativeSig {
             type_params: vec!["T".into(), "U".into()],
-            params: vec![t_table(t_named("T")), t_named("function"), t_named("U")],
+            params: vec![
+                t_table(t_named("T")),
+                t_function(vec![t_named("U"), t_named("T")], t_named("U")),
+                t_named("U"),
+            ],
             variadic: None,
             returns: vec![t_named("U")],
         };
         let args = [
             Some(t_table(t_named("integer"))),
-            Some(t_named("function")),
+            Some(t_function(
+                vec![t_named("integer"), t_named("integer")],
+                t_named("integer"),
+            )),
             Some(t_named("integer")),
         ];
         assert_eq!(instantiate_returns(&sig, &args), vec![t_named("integer")]);
@@ -485,18 +498,21 @@ mod tests {
 
     #[test]
     fn instantiate_method_return_substitutes_nullable() {
-        // find<T>(t: table<T>, f: function) -> T?
+        // find<T>(t: table<T>, f: fn(T) -> boolean) -> T?
         let sig = saule_semantic::MethodSig {
             is_static: true,
             is_private: false,
             type_params: vec!["T".into()],
             params: vec![
                 param("t", t_table(t_named("T"))),
-                param("f", t_named("function")),
+                param("f", t_function(vec![t_named("T")], t_named("boolean"))),
             ],
             return_ty: Some(t_nullable(t_named("T"))),
         };
-        let args = [Some(t_table(t_named("integer"))), Some(t_named("function"))];
+        let args = [
+            Some(t_table(t_named("integer"))),
+            Some(t_function(vec![t_named("integer")], t_named("boolean"))),
+        ];
         assert_eq!(
             instantiate_method_return(&sig, &args),
             Some(t_nullable(t_named("integer")))

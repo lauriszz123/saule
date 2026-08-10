@@ -32,8 +32,8 @@ fn util_keys(t: STable<T>) -> Result<STable<SInteger>, String> {
 
 /// `Util.map(t, f)` — apply `f` to every array element, collecting the
 /// results into a fresh table. Threads the element type through:
-/// `map(table<T>, function) -> table<T>`.
-#[saule_export(class = "Util", name = "map")]
+/// `map(table<T>, fn(T) -> T) -> table<T>`.
+#[saule_export(class = "Util", name = "map", sig(f = "fn(T) -> T"))]
 fn util_map(t: STable<T>, f: SFunction) -> Result<STable<T>, String> {
     let out = STable::new();
     for v in t.to_vec()? {
@@ -66,8 +66,8 @@ fn util_divmod(a: i64, b: i64) -> Result<(i64, i64), String> {
 }
 
 /// `Util.filter(t, f)` — keep array elements for which `f(element)` is truthy.
-/// Generic in the element type: `filter(table<T>, function) -> table<T>`.
-#[saule_export(class = "Util", name = "filter")]
+/// Generic in the element type: `filter(table<T>, fn(T) -> boolean) -> table<T>`.
+#[saule_export(class = "Util", name = "filter", sig(f = "fn(T) -> boolean"))]
 fn util_filter(t: STable<T>, f: SFunction) -> Result<STable<T>, String> {
     let out = STable::new();
     for v in t.to_vec()? {
@@ -80,8 +80,9 @@ fn util_filter(t: STable<T>, f: SFunction) -> Result<STable<T>, String> {
 
 /// `Util.reduce(t, f, init)` — left-fold the array part: `acc = f(acc, element)`
 /// starting from `init`, returning the final accumulator. The accumulator type
-/// `U` is threaded from `init` to the result: `reduce(table<T>, function, U) -> U`.
-#[saule_export(class = "Util", name = "reduce")]
+/// `U` is threaded from `init` to the result:
+/// `reduce(table<T>, fn(U, T) -> U, U) -> U`.
+#[saule_export(class = "Util", name = "reduce", sig(f = "fn(U, T) -> U"))]
 fn util_reduce(t: STable<T>, f: SFunction, init: SElem<U>) -> Result<SElem<U>, String> {
     let mut acc = init.into_value();
     for v in t.to_vec()? {
@@ -92,8 +93,8 @@ fn util_reduce(t: STable<T>, f: SFunction, init: SElem<U>) -> Result<SElem<U>, S
 
 /// `Util.find(t, f)` — the first array element for which `f(element)` is
 /// truthy, or `nil` if none match. Returns the element type:
-/// `find(table<T>, function) -> T?`.
-#[saule_export(class = "Util", name = "find")]
+/// `find(table<T>, fn(T) -> boolean) -> T?`.
+#[saule_export(class = "Util", name = "find", sig(f = "fn(T) -> boolean"))]
 fn util_find(t: STable<T>, f: SFunction) -> Result<Option<SElem<T>>, String> {
     for v in t.to_vec()? {
         if is_truthy(&f.call(std::slice::from_ref(&v))?) {
@@ -104,8 +105,9 @@ fn util_find(t: STable<T>, f: SFunction) -> Result<Option<SElem<T>>, String> {
 }
 
 /// `Util.forEach(t, f)` — call `f(element)` for every array element, ignoring
-/// the results. Returns `nil`.
-#[saule_export(class = "Util", name = "forEach")]
+/// the results. Returns `nil`. The table is untyped here, so the callback
+/// takes the element as `any`.
+#[saule_export(class = "Util", name = "forEach", sig(f = "fn(any) -> nil"))]
 fn util_for_each(t: STable, f: SFunction) -> Result<(), String> {
     for v in t.to_vec()? {
         f.call(&[v])?;
@@ -114,7 +116,8 @@ fn util_for_each(t: STable, f: SFunction) -> Result<(), String> {
 }
 
 /// `Util.count(t, f)` — how many array elements satisfy the predicate `f`.
-#[saule_export(class = "Util", name = "count")]
+/// The table is untyped here, so the predicate takes the element as `any`.
+#[saule_export(class = "Util", name = "count", sig(f = "fn(any) -> boolean"))]
 fn util_count(t: STable, f: SFunction) -> Result<SInteger, String> {
     let mut n = 0i64;
     for v in t.to_vec()? {
