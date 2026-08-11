@@ -43,6 +43,8 @@ impl<'a> Cx<'a> {
 
     pub(crate) fn infer_type(&self, e: &Expr) -> Option<Type> {
         match e {
+            // A recovery hole gives no type, so no hint is rendered.
+            Expr::Error => None,
             Expr::Int(_) => Some(Type::Named("integer".into())),
             Expr::Float(_) => Some(Type::Named("float".into())),
             Expr::Bool(_) => Some(Type::Named("boolean".into())),
@@ -210,7 +212,7 @@ impl<'a> Cx<'a> {
 
     /// Infer a `table<V>` (array literal) or `table<K, V>` (map literal)
     /// from a table constructor's entries so generic natives like
-    /// `Util.map(table<T>, …)` bind their element type. Falls back to a bare
+    /// `Table.sort(table<V>, …)` bind their element type. Falls back to a bare
     /// `table` when entries are empty or their types disagree.
     pub(crate) fn infer_table_literal(&self, entries: &[TableEntry]) -> Type {
         let mut value_ty: Option<Type> = None;

@@ -91,11 +91,19 @@ impl Backend {
                 Answer::Suppressed => return None,
                 Answer::Unresolved => {}
             }
-        } else if let Some(module) = repair_parse(&source, offset) {
+        } else {
             // Mid-keystroke (`w.moveTo(`, `add(1, `): close the call the
             // user is typing and re-run the real walker. Everything is
             // appended at the end, so byte offsets up to the cursor —
             // and therefore the cursor itself — are unaffected.
+            //
+            // Failing that, the recovering parse: it always yields a tree,
+            // and the call being typed survives in it as a `Call` whose
+            // argument span ends at the cursor, which is the shape the
+            // walker below is looking for. It comes second because the
+            // repair, when it works, produces a *closed* call rather than a
+            // recovered one — fewer holes for the resolver to fall into.
+            let module = repair_parse(&source, offset).unwrap_or_else(|| self.syntax(uri, &source));
             let seed = match &module_dir {
                 Some(d) => self.import_seed(uri, &module, d),
                 None => saule_semantic::ModuleSeed::default(),
@@ -109,9 +117,10 @@ impl Backend {
             }
         }
 
-        // Last resort: the repair didn't parse either (unbalanced
-        // brackets elsewhere, a broken string, ...). Scan the raw source
-        // for the innermost unmatched `(` and resolve the call by name.
+        // Last resort: there was a tree, but no call in it that contains the
+        // cursor — recovery put the hole somewhere the walker can't read as
+        // an argument list. Scan the raw source for the innermost unmatched
+        // `(` and resolve the call by name.
         textual_fallback(&source, offset).and_then(drop_parameterless)
     }
 }

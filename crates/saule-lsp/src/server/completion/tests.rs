@@ -6,7 +6,7 @@ fn complete(marked: &str) -> Vec<String> {
     let offset = marked.find('@').expect("no `@` caret marker");
     let src = marked.replace('@', "");
     let (patched, prefix) = splice_sentinel(&src, offset).expect("splice");
-    let Some(module) = parse_tolerant(&patched) else {
+    let Some(module) = parse_tolerant(&patched, None) else {
         return Vec::new();
     };
     let _ = saule_semantic::analyze(&module);
@@ -32,7 +32,7 @@ fn complete_detailed(marked: &str) -> Vec<(String, Option<String>)> {
     let offset = marked.find('@').expect("no `@` caret marker");
     let src = marked.replace('@', "");
     let (patched, prefix) = splice_sentinel(&src, offset).expect("splice");
-    let Some(module) = parse_tolerant(&patched) else {
+    let Some(module) = parse_tolerant(&patched, None) else {
         return Vec::new();
     };
     let _ = saule_semantic::analyze(&module);
@@ -488,4 +488,105 @@ end
 ";
     let items = complete(src);
     assert!(items.iter().any(|i| i == "color:"), "{items:?}");
+}
+
+// ─── Completion survives a broken file ───────────────────────────────────────
+//
+// Before parser error recovery, every test below returned an empty list: one
+// bad line anywhere in the buffer meant no tree, and no tree meant no
+// suggestions. That is the state a file spends most of its editing life in,
+// which is what made this the gap between "the plugin exists" and "the editor
+// feels good".
+
+/// A mistake *above* the caret used to take the whole file with it.
+#[test]
+fn a_broken_line_earlier_in_the_file_does_not_silence_completion() {
+    let src = "\
+fn setup()
+  local half =
+end
+
+fn build()
+  local speed = 10
+  local total = spe@
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "speed"), "{items:?}");
+}
+
+/// …and so did one below it.
+#[test]
+fn a_broken_line_later_in_the_file_does_not_silence_completion() {
+    let src = "\
+fn build()
+  local speed = 10
+  local total = spe@
+end
+
+fn teardown()
+  ) ] } =
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "speed"), "{items:?}");
+}
+
+/// The binding on the broken line itself stays in scope — that's what the
+/// `Expr::Error` hole buys over dropping the statement.
+#[test]
+fn a_binding_whose_value_is_missing_is_still_offered() {
+    let src = "\
+fn build()
+  local velocity =
+  local n = velo@
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "velocity"), "{items:?}");
+}
+
+/// A class whose members are being typed still contributes to type contexts.
+#[test]
+fn a_class_with_one_broken_member_still_completes() {
+    let src = "\
+class Sprite
+  fn = = =
+  fn update(self) -> nil
+  end
+end
+
+class Player extends Spr@
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "Sprite"), "{items:?}");
+}
+
+/// A lexical error is now survivable too: an unclosed quote costs its own
+/// line and nothing else, where before it cost the whole file.
+#[test]
+fn an_unterminated_string_does_not_silence_completion() {
+    let src = "\
+fn build()
+  local label = \"Play
+  local speed = 10
+  local total = spe@
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "speed"), "{items:?}");
+}
+
+/// And a stray character is simply not there. (`$` is the junk; `@` is this
+/// harness's caret marker.)
+#[test]
+fn an_unexpected_character_does_not_silence_completion() {
+    let src = "\
+fn build()
+  local speed = 10 $$
+  local total = spe@
+end
+";
+    let items = complete(src);
+    assert!(items.iter().any(|i| i == "speed"), "{items:?}");
 }

@@ -197,7 +197,36 @@ pub(crate) fn parse_sig(sig: &str) -> Result<ParsedSig, String> {
     let ret_str = rest.strip_prefix("->").map(str::trim).unwrap_or("");
     let returns = parse_return(ret_str);
 
+    if let Some(i) = params.iter().chain(returns.iter()).position(names_function) {
+        return Err(format!(
+            "`function` is not a type (slot {i}); a callback declares the calls \
+             it accepts, e.g. `fn(T) -> T`"
+        ));
+    }
+
     Ok((type_params, param_names, params, returns))
+}
+
+/// Whether a parsed type mentions the bare name `function` anywhere.
+///
+/// A callback's type is its signature — `fn(T) -> T` — and `parse_type` builds
+/// exactly that from an `fn(...)` token. Nothing constructs the bare name, so
+/// reaching it means the manifest spells one out, which is a manifest written
+/// against a language that no longer exists: it predates `SFunction` having to
+/// declare what it accepts. Registering it would put a type that unifies with
+/// no lambda in front of every call into the package, so the manifest is
+/// rejected instead — the package fails to load with a message that says what
+/// to write, rather than type-checking wrongly forever.
+fn names_function(ty: &Type) -> bool {
+    match ty {
+        Type::Named(n) => n == "function",
+        Type::Nullable(inner) => names_function(inner),
+        Type::Table { key, value } => {
+            key.as_deref().is_some_and(names_function) || names_function(value)
+        }
+        Type::Tuple(items) => items.iter().any(names_function),
+        Type::Function { params, ret } => params.iter().any(names_function) || names_function(ret),
+    }
 }
 
 /// Extract `(name, type)` from a signature parameter token.

@@ -211,6 +211,8 @@ impl<'a> Cx<'a> {
 
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
+            // A recovery hole has no children to walk.
+            Stmt::Error => {}
             Stmt::Decl(d) => self.visit_decl(d),
             Stmt::Local {
                 name,

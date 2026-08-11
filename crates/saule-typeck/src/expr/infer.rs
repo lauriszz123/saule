@@ -13,6 +13,11 @@ use super::*;
 
 pub(crate) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
     match &expr.value {
+        // A recovery hole: the text that would have given this expression a
+        // type didn't parse. "Don't know" is already this function's answer
+        // for anything it can't see through, and it keeps the hole from
+        // provoking a second diagnostic on top of the parse error.
+        Expr::Error => None,
         Expr::Nil => Some(Type::Named("nil".into())),
         Expr::Int(_) => Some(Type::Named("integer".into())),
         Expr::Float(_) => Some(Type::Named("float".into())),

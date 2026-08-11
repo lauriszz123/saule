@@ -89,7 +89,7 @@ fn parses_generic_prefix() {
 /// A callback parameter's signature has to survive the manifest round-trip.
 /// It used to fall through to `Type::Named("fn(T) -> boolean")` — a name no
 /// substitution could reach — so `T` stayed unbound and every lambda passed
-/// to `Util.filter` was reported as the wrong type.
+/// to such a parameter was reported as the wrong type.
 #[test]
 fn parses_a_function_typed_parameter() {
     let (generics, names, params, _r) =
@@ -124,13 +124,34 @@ fn a_comma_in_a_callback_does_not_swallow_the_next_parameter() {
     assert_eq!(params[2], Type::Named("U".into()));
 }
 
+/// `function` is not a type — a callback names the calls it accepts. A
+/// manifest generated before that rule still spells one out, and parsing it
+/// into a named type would hand the checker something no lambda unifies with,
+/// so every call into the package would be reported as an argument-type error
+/// with nothing in the user's own source to fix. The manifest is rejected at
+/// load instead, in every position it can appear in.
+#[test]
+fn a_bare_function_type_is_rejected() {
+    for sig in [
+        "fn<T>(t: table<T>, f: function) -> table<T>",
+        "fn(f: function?) -> nil",
+        "fn(fs: table<function>) -> nil",
+        "fn(f: fn(function) -> nil) -> nil",
+        "fn() -> function",
+        "fn() -> (integer, function)",
+    ] {
+        let err = parse_sig(sig).expect_err(&format!("`{sig}` must not parse"));
+        assert!(err.contains("`function` is not a type"), "got: {err}");
+    }
+}
+
 /// `?` binds to the return type inside a function type, so a *nullable
 /// callback* has to be parenthesised — and the parenthesised form has to
 /// come back as a nullable function, not as its own return type.
 #[test]
 fn parses_nullable_and_returning_nullable_callbacks() {
-    let (_g, _n, params, _r) = parse_sig("fn(a: (fn(string) -> nil)?, b: fn() -> integer?) -> nil")
-        .unwrap();
+    let (_g, _n, params, _r) =
+        parse_sig("fn(a: (fn(string) -> nil)?, b: fn() -> integer?) -> nil").unwrap();
     assert_eq!(
         params[0],
         Type::Nullable(Box::new(Type::Function {

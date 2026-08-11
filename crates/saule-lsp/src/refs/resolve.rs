@@ -48,6 +48,8 @@ impl<'a> ResolveCx<'a> {
             return;
         }
         match &s.value {
+            // A recovery hole has no children to walk.
+            Stmt::Error => {}
             Stmt::Decl(d) => self.visit_decl(d),
             Stmt::Local {
                 name, ty, value, ..

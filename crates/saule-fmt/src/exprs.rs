@@ -27,6 +27,12 @@ impl<'a> Printer<'a> {
             Expr::Ident(n) => self.write(n),
             Expr::Self_ => self.write("self"),
 
+            // Recovery holes never reach the formatter: every entry point
+            // parses strictly and declines to format a file that didn't.
+            // Printing nothing is the one choice that can't invent source
+            // text if that ever stops being true.
+            Expr::Error => {}
+
             Expr::Unary { op, rhs } => {
                 let (sym, space) = match op {
                     UnaryOp::Neg => ("-", false),

@@ -27,10 +27,30 @@ what their Saule signatures are. There is **no** `get_package()` entry point to
 implement — just plain `extern "C"` functions.
 
 The manifest itself is **generated from the code**: each exported function
-carries a `#[saule_export(class = ..., name = ..., sig = ...)]` attribute, and a
-small `gen-manifest` binary (built alongside the library) walks those
-declarations to emit `engine.toml`. There is no hand-maintained manifest to
-keep in sync.
+carries a `#[saule_export(class = ..., name = ...)]` attribute, and a small
+`gen-manifest` binary (built alongside the library) walks those declarations to
+emit `engine.toml`. There is no hand-maintained manifest to keep in sync.
+
+### Callback parameters
+
+Saule has no bare `function` type — every function type spells out its
+parameters and return, so a callback a package accepts has to say what it will
+be called with. An `SFunction` parameter is only a handle, so the signature is
+declared in the attribute, keyed by the Rust parameter's name:
+
+```rust
+#[saule_export(class = "Signal", name = "onEach", sig(f = "fn(T) -> nil"))]
+fn signal_on_each(t: STable<T>, f: SFunction) -> Result<(), String> { /* ... */ }
+```
+
+That renders as `fn<T>(t: table<T>, f: fn(T) -> nil) -> nil` in the manifest,
+which is what the type checker and the LSP check call sites against — so
+`Signal.onEach(nums, x => println(x))` type-checks and the lambda's parameter
+is inferred. Omitting `sig(...)` for an `SFunction` is a compile error rather
+than a silently untyped parameter. `sig(return = "...")` types an `SFunction`
+in return position, and `Option<SFunction>` parenthesises its declared
+signature — `(fn(T) -> nil)?` — because `?` would otherwise bind to the return
+type.
 
 ## Build & install
 

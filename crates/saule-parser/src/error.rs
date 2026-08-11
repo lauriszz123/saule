@@ -1,6 +1,23 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+impl ParseError {
+    /// The byte range this error points at.
+    ///
+    /// Every variant carries exactly one span, so this is total. Callers that
+    /// render many errors at once — the language server publishing a whole
+    /// file's worth from [`crate::parse_recover`] — want the range directly
+    /// rather than through `miette`'s label iterator.
+    pub fn span(&self) -> &std::ops::Range<usize> {
+        match self {
+            ParseError::Unexpected { span }
+            | ParseError::Expected { span, .. }
+            | ParseError::Eof { span }
+            | ParseError::TooDeep { span, .. } => span,
+        }
+    }
+}
+
 #[derive(Debug, Error, Diagnostic)]
 pub enum ParseError {
     #[error("unexpected token")]

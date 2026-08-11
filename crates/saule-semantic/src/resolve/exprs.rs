@@ -11,6 +11,9 @@ impl Resolver {
     pub(crate) fn expr(&mut self, expr: &Spanned<Expr>) {
         let span = expr.span.clone();
         match &expr.value {
+            // Nothing to resolve inside a hole, and nothing to report about
+            // it: the parse error that produced it is the diagnostic.
+            Expr::Error => {}
             Expr::Ident(name) => {
                 if !self.resolved(name) {
                     self.errors.push(SemanticError::UndefinedName {

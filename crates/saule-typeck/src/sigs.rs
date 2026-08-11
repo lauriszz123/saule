@@ -87,6 +87,7 @@ thread_local! {
 /// as a known field even when the sig is consulted via different code paths.
 pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
     record_member(name);
+    debug_assert_no_bare_function(name, params.iter().chain(returns.iter()));
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
@@ -107,6 +108,7 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
 /// etc.
 pub fn register_g(name: &str, type_params: Vec<&str>, params: Vec<Type>, returns: Vec<Type>) {
     record_member(name);
+    debug_assert_no_bare_function(name, params.iter().chain(returns.iter()));
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
@@ -124,6 +126,10 @@ pub fn register_g(name: &str, type_params: Vec<&str>, params: Vec<Type>, returns
 /// `variadic`. Use for `printf(fmt, ...)`, `String.char(...integer)`, etc.
 pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Type>) {
     record_member(name);
+    debug_assert_no_bare_function(
+        name,
+        params.iter().chain(returns.iter()).chain(Some(&variadic)),
+    );
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
@@ -159,6 +165,7 @@ pub fn register_member(qname: &str) {
 /// call the signature invites blows up at runtime on a non-callable value.
 pub fn register_const(qname: &str, ty: Type) {
     record_member(qname);
+    debug_assert_no_bare_function(qname, Some(&ty));
     CONSTS.with(|c| {
         c.borrow_mut().insert(qname.to_string(), ty);
     });
@@ -177,6 +184,41 @@ pub fn register_module(name: &str) {
     VALUE_TYPES.with(|v| {
         v.borrow_mut().insert(name.to_string());
     });
+}
+
+/// Panic in debug builds if a registered signature spells a callback with the
+/// bare name `function`.
+///
+/// User-written source is already guarded — `reject_bare_function_type` in the
+/// assignment checker rejects `f: function` wherever it is typed by hand. The
+/// natives registered here never pass through that check, so the same mistake
+/// in a stdlib or prelude signature used to reach call sites intact, where a
+/// `Type::Named("function")` parameter matches no lambda and every call is
+/// reported as an argument-type error. A callback's type is its signature:
+/// `fn(T) -> T`, built with [`t_function`].
+///
+/// Debug-only, so it costs release builds nothing and fires during the test
+/// run instead: the registrations are static, so any signature that would
+/// break at runtime breaks the first `cargo test` that installs it.
+fn debug_assert_no_bare_function<'a>(name: &str, types: impl IntoIterator<Item = &'a Type>) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    fn walk(ty: &Type) -> bool {
+        match ty {
+            Type::Named(n) => n == "function",
+            Type::Nullable(inner) => walk(inner),
+            Type::Table { key, value } => key.as_deref().is_some_and(walk) || walk(value),
+            Type::Tuple(items) => items.iter().any(walk),
+            Type::Function { params, ret } => params.iter().any(walk) || walk(ret),
+        }
+    }
+    assert!(
+        !types.into_iter().any(walk),
+        "native signature `{name}` uses the bare name `function` as a type; \
+         a callback declares the calls it accepts (e.g. `t_function(vec![t_named(\"T\")], \
+         t_named(\"T\"))` for `fn(T) -> T`)",
+    );
 }
 
 fn record_member(qname: &str) {
@@ -223,8 +265,8 @@ pub fn lookup_const(qname: &str) -> Option<Type> {
 /// `sig.returns` unchanged.
 ///
 /// Lets tools like the LSP surface the concrete inferred type
-/// (`Util.filter(table<integer>) -> table<integer>`) instead of the raw
-/// type parameter (`table<T>`).
+/// (`Table.remove(table<integer>) -> integer?`) instead of the raw
+/// type parameter (`V?`).
 pub fn instantiate_returns(sig: &NativeSig, arg_types: &[Option<Type>]) -> Vec<Type> {
     if sig.type_params.is_empty() {
         return sig.returns.clone();

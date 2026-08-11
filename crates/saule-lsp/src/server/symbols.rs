@@ -24,8 +24,7 @@ impl Backend {
         let source = entry.source.clone();
         drop(entry);
 
-        let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
-        let module = saule_parser::parse(tokens).ok()?;
+        let module = self.syntax(uri, &source);
         let line_index = LineIndex::new(&source);
         Some(build(&module, &source, &line_index))
     }
@@ -294,6 +293,22 @@ mod tests {
 
     use super::*;
 
+    /// The outline the editor would show for a *broken* buffer, given what
+    /// the file looked like the last time it parsed cleanly. `None` for
+    /// `prior_src` is a file the editor has never seen in a valid state.
+    fn outline_broken(prior_src: Option<&str>, src: &str) -> Vec<String> {
+        let prior = prior_src.map(|s| {
+            let tokens = saule_lexer::Lexer::new(s).tokenize().expect("lex");
+            let module = saule_parser::parse(tokens).expect("prior must parse");
+            saule_parser::PriorShape::of(&module)
+        });
+        let (module, _) = crate::syntax::analyze(src, prior.as_ref());
+        build(&module, src, &LineIndex::new(src))
+            .iter()
+            .map(|s| s.name.clone())
+            .collect()
+    }
+
     fn outline(src: &str) -> Vec<DocumentSymbol> {
         let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
         let module = saule_parser::parse(tokens).expect("parse");
@@ -363,5 +378,36 @@ mod tests {
         let syms = outline(src);
         assert_eq!(syms.len(), 1);
         assert_eq!(syms[0].name, "main");
+    }
+
+    // ─── The forgotten `end`, end to end ─────────────────────────────────────
+    //
+    // The outline is the clearest place to see what recovery buys, because it
+    // is a direct rendering of tree shape: a declaration parsed one scope too
+    // deep isn't shown nested, it vanishes — `build` doesn't descend into
+    // function bodies looking for functions.
+
+    const GOOD: &str = "fn before()\nlocal a = 1\nend\n\nfn after()\nlocal b = 2\nend\n";
+    const BROKEN: &str = "fn before()\nlocal a = 1\n\nfn after()\nlocal b = 2\nend\n";
+
+    /// Indentation is the only evidence inside the file, and an unindented
+    /// file has none — so without history `after` drops out of the outline.
+    #[test]
+    fn an_unindented_file_alone_loses_the_declaration() {
+        assert_eq!(outline_broken(None, BROKEN), ["before"]);
+    }
+
+    /// With the shape from the last clean parse of the same document, it
+    /// stays. This is the whole point of remembering.
+    #[test]
+    fn history_keeps_it() {
+        assert_eq!(outline_broken(Some(GOOD), BROKEN), ["before", "after"]);
+    }
+
+    /// An indented file never needed the history.
+    #[test]
+    fn indentation_alone_still_works() {
+        let broken = "fn before()\n    local a = 1\n\nfn after()\n    local b = 2\nend\n";
+        assert_eq!(outline_broken(None, broken), ["before", "after"]);
     }
 }

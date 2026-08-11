@@ -86,8 +86,7 @@ impl Backend {
         let source = entry.source.clone();
         drop(entry);
 
-        let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
-        let module = saule_parser::parse(tokens).ok()?;
+        let module = self.syntax(uri, &source);
         let line_index = LineIndex::new(&source);
         let offset = line_index.offset(&source, pos);
         let module_dir = uri
@@ -136,12 +135,7 @@ impl Backend {
         let Some(source) = source else {
             return Vec::new();
         };
-        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
-            return Vec::new();
-        };
-        let Ok(module) = saule_parser::parse(tokens) else {
-            return Vec::new();
-        };
+        let module = self.syntax(uri, &source);
         let line_index = LineIndex::new(&source);
         refs::collect_in_module(&module, &source, symbol)
             .into_iter()
@@ -185,12 +179,7 @@ impl Backend {
                 .map(|e| e.source.clone())
                 .or_else(|| std::fs::read_to_string(&abs).ok());
             let Some(source) = source else { continue };
-            let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
-                continue;
-            };
-            let Ok(module) = saule_parser::parse(tokens) else {
-                continue;
-            };
+            let module = self.syntax(&uri, &source);
 
             // Reseed registries from this file's own imports so
             // receiver-class resolution sees imported classes.

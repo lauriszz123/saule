@@ -113,23 +113,26 @@ fn check_file(path: &Path) -> FileReport {
         .unwrap_or_else(|| path.display().to_string());
     let make_src = || NamedSource::new(&name, source.clone());
 
-    // Lex and parse are hard stops: without an AST there is nothing for the
-    // later passes to say anything about, and reporting "undefined name" for
-    // every identifier in a file with one stray bracket is noise, not help.
-    let tokens = match saule_lexer::Lexer::new(&source).tokenize() {
-        Ok(t) => t,
-        Err(e) => {
+    // Both stages recover, so every syntax error in the file is reported in
+    // one go — the same reasoning the semantic and type passes below already
+    // follow, applied earlier in the pipeline. Lexical errors come first
+    // because they change what the tokens are, so the parse errors under them
+    // are downstream of them and are best fixed in that order.
+    //
+    // It is still a hard stop: the recovered tree has holes in it, and a hole
+    // makes the later passes report on the repair rather than on the code.
+    let lexed = saule_lexer::Lexer::new(&source).tokenize_recover();
+    let parsed = saule_parser::parse_recover(lexed.tokens, &source);
+    if !lexed.errors.is_empty() || !parsed.errors.is_empty() {
+        for e in lexed.errors {
             diagnostics.push(Report::new(e).with_source_code(make_src()));
-            return FileReport { diagnostics };
         }
-    };
-    let module = match saule_parser::parse(tokens) {
-        Ok(m) => m,
-        Err(e) => {
+        for e in parsed.errors {
             diagnostics.push(Report::new(e).with_source_code(make_src()));
-            return FileReport { diagnostics };
         }
-    };
+        return FileReport { diagnostics };
+    }
+    let module = parsed.module;
 
     let module_dir = path
         .canonicalize()

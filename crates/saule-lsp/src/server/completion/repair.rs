@@ -5,6 +5,7 @@
 //! a real AST and strips the sentinel back out.
 
 use saule_ast::{Module, Type};
+use saule_parser::PriorShape;
 
 /// Identifier spliced in at the caret. Deliberately unlikely to collide with
 /// real user code.
@@ -16,33 +17,39 @@ pub(crate) fn is_ident_segment(seg: &str) -> bool {
     !seg.is_empty() && seg.chars().all(|c| c == '_' || c.is_alphanumeric())
 }
 
-pub(crate) fn parse(src: &str) -> Option<Module> {
-    saule_lexer::Lexer::new(src)
-        .tokenize()
-        .ok()
-        .and_then(|t| saule_parser::parse(t).ok())
-}
-
 /// How many blocks we're willing to close for the author.
 pub(crate) const MAX_REPAIR: usize = 8;
 
-/// Code is written top-down, so the `end` closing the declaration the caret
-/// sits in usually hasn't been typed yet — a plain parse of a class being
-/// written fails, and completion would have nothing to work with. Close the
-/// open blocks artificially and retry. Only reached when the source doesn't
-/// parse as-is, so this can add suggestions but never change existing ones.
-pub(crate) fn parse_tolerant(src: &str) -> Option<Module> {
-    if let Some(m) = parse(src) {
+/// A tree for the buffer, however far from valid it currently is.
+///
+/// Three tiers, best-shaped tree first:
+///
+/// 1. **As written.** Nothing to repair.
+/// 2. **With the missing `end`s appended.** Code is written top-down, so the
+///    `end` closing the declaration the caret sits in usually hasn't been
+///    typed yet. Adding them back yields a tree that is *correct*, not merely
+///    recovered — worth trying before anything guesses.
+/// 3. **Recovered.** `parse_recover` always produces a tree, holes and all,
+///    which covers the cases appending `end`s cannot: a broken line above the
+///    caret, a stray token, a half-written type.
+///
+/// Only tier 1 can fire on valid input, so this can add suggestions but never
+/// change existing ones.
+///
+/// `prior` is the document's last clean shape, which tier 3 uses to untangle
+/// a forgotten `end`; `None` falls back to indentation alone.
+pub(crate) fn parse_tolerant(src: &str, prior: Option<&PriorShape>) -> Option<Module> {
+    if let Some(m) = crate::syntax::strict(src) {
         return Some(m);
     }
     let mut patched = src.to_string();
     for _ in 0..MAX_REPAIR {
         patched.push_str("\nend");
-        if let Some(m) = parse(&patched) {
+        if let Some(m) = crate::syntax::strict(&patched) {
             return Some(m);
         }
     }
-    None
+    Some(crate::syntax::analyze(src, prior).0)
 }
 
 /// Replace the partial identifier under the caret with [`SENTINEL`],

@@ -8,6 +8,7 @@ mod hover;
 mod line_index;
 mod refs;
 mod server;
+mod syntax;
 mod workspace;
 
 use server::Backend;

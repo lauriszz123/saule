@@ -24,7 +24,6 @@ declarations.
 | `Mouse`    | position, buttons, per-frame edges, wheel, cursor — see below |
 | `Timer`    | `getTime`, `getDelta`                                     |
 | `Clipboard`| `get`, `set`, `hasText`                                   |
-| `Util`     | table/function bridge demo helpers                        |
 
 Windowing uses `minifb` (X11-only on Linux, to stay compatible with WSLg).
 Everything is drawn by a software rasterizer in `raster.rs` — there is no GPU

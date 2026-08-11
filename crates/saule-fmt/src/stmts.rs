@@ -50,6 +50,10 @@ impl<'a> Printer<'a> {
 
     pub(crate) fn stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
+            // See the `Expr::Error` arm in `exprs.rs`: unreachable through
+            // the strict parse every formatting entry point uses, and silent
+            // rather than inventive if it ever isn't.
+            Stmt::Error => {}
             Stmt::Local {
                 name, ty, value, ..
             } => {

@@ -80,12 +80,11 @@ impl Parser {
         }
 
         let kw = self.advance(); // `local`
-        let (first_name, first_span) = self.expect_ident("variable name after `local`")?;
+        let (first_name, first_span) = self.expect_ident_recover("variable name after `local`")?;
         let (first_ty, first_ty_span) = if self.eat(&Token::Colon) {
             let start = self.peek().span.start;
             let t = self.parse_type()?;
-            let end = self.last_consumed_end();
-            (Some(t), Some(start..end))
+            (Some(t), Some(self.span_to_here(start)))
         } else {
             (None, None)
         };
@@ -94,7 +93,7 @@ impl Parser {
         if self.check(&Token::Comma) {
             let mut names = vec![(first_name, first_span.clone(), first_ty)];
             while self.eat(&Token::Comma) {
-                let (n, n_span) = self.expect_ident("variable name in `local` list")?;
+                let (n, n_span) = self.expect_ident_recover("variable name in `local` list")?;
                 let t = if self.eat(&Token::Colon) {
                     Some(self.parse_type()?)
                 } else {
@@ -139,7 +138,7 @@ impl Parser {
     pub(crate) fn parse_if(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let kw = self.advance(); // `if`
         let cond = self.parse_expression()?;
-        self.expect(&Token::Then, "`then` after `if` condition")?;
+        self.expect_recover(&Token::Then, "`then` after `if` condition")?;
         let then_block = self.parse_block_until(&[Token::Else, Token::Elseif, Token::End])?;
 
         let mut elseifs = Vec::new();
@@ -148,7 +147,7 @@ impl Parser {
         loop {
             if self.eat(&Token::Elseif) {
                 let ec = self.parse_expression()?;
-                self.expect(&Token::Then, "`then` after `elseif` condition")?;
+                self.expect_recover(&Token::Then, "`then` after `elseif` condition")?;
                 let eb = self.parse_block_until(&[Token::Else, Token::Elseif, Token::End])?;
                 elseifs.push((ec, eb));
                 continue;
@@ -159,7 +158,7 @@ impl Parser {
             break;
         }
 
-        let end = self.expect(&Token::End, "`end` to close `if`")?;
+        let end = self.expect_close(&Token::End, "`end` to close `if`")?;
         Ok(Spanned::new(
             Stmt::If {
                 cond,
@@ -167,31 +166,31 @@ impl Parser {
                 elseifs,
                 else_block,
             },
-            kw.span.start..end.span.end,
+            kw.span.start..end.max(kw.span.end),
         ))
     }
 
     pub(crate) fn parse_while(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let kw = self.advance(); // `while`
         let cond = self.without_trailing_block(|p| p.parse_expression())?;
-        self.expect(&Token::Do, "`do` after `while` condition")?;
+        self.expect_recover(&Token::Do, "`do` after `while` condition")?;
         let body = self.parse_block_until(&[Token::End])?;
-        let end = self.expect(&Token::End, "`end` to close `while`")?;
+        let end = self.expect_close(&Token::End, "`end` to close `while`")?;
         Ok(Spanned::new(
             Stmt::While { cond, body },
-            kw.span.start..end.span.end,
+            kw.span.start..end.max(kw.span.end),
         ))
     }
 
     pub(crate) fn parse_repeat(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let kw = self.advance(); // `repeat`
         let body = self.parse_block_until(&[Token::Until])?;
-        self.expect(&Token::Until, "`until` after `repeat` body")?;
+        self.expect_recover(&Token::Until, "`until` after `repeat` body")?;
         let cond = self.parse_expression()?;
         let end_pos = cond.span.end;
         Ok(Spanned::new(
             Stmt::Repeat { body, cond },
-            kw.span.start..end_pos,
+            kw.span.start..end_pos.max(kw.span.end),
         ))
     }
 
@@ -207,16 +206,16 @@ impl Parser {
         // Lua-style numeric for loop: `for i = from, to [, step] do ... end`
         if self.eat(&Token::Assign) {
             let from = self.without_trailing_block(|p| p.parse_expression())?;
-            self.expect(&Token::Comma, "`,` after start value in numeric `for`")?;
+            self.expect_recover(&Token::Comma, "`,` after start value in numeric `for`")?;
             let to = self.without_trailing_block(|p| p.parse_expression())?;
             let step = if self.eat(&Token::Comma) {
                 Some(self.without_trailing_block(|p| p.parse_expression())?)
             } else {
                 None
             };
-            self.expect(&Token::Do, "`do` in numeric `for`")?;
+            self.expect_recover(&Token::Do, "`do` in numeric `for`")?;
             let body = self.parse_block_until(&[Token::End])?;
-            let end = self.expect(&Token::End, "`end` to close `for`")?;
+            let end = self.expect_close(&Token::End, "`end` to close `for`")?;
             return Ok(Spanned::new(
                 Stmt::ForNumeric {
                     var: first_name,
@@ -226,14 +225,14 @@ impl Parser {
                     step,
                     body,
                 },
-                kw.span.start..end.span.end,
+                kw.span.start..end.max(kw.span.end),
             ));
         }
 
         // For-in: `for v[, v]* in iter do ... end`
         let mut vars = vec![(first_name, first_ty)];
         while self.eat(&Token::Comma) {
-            let (n, _) = self.expect_ident("loop variable name")?;
+            let (n, _) = self.expect_ident_recover("loop variable name")?;
             let t = if self.eat(&Token::Colon) {
                 Some(self.parse_type()?)
             } else {
@@ -241,26 +240,26 @@ impl Parser {
             };
             vars.push((n, t));
         }
-        self.expect(&Token::In, "`in` or `=` in `for`")?;
+        self.expect_recover(&Token::In, "`in` or `=` in `for`")?;
         let iter = self.without_trailing_block(|p| p.parse_expression())?;
-        self.expect(&Token::Do, "`do` in for-in")?;
+        self.expect_recover(&Token::Do, "`do` in for-in")?;
         let body = self.parse_block_until(&[Token::End])?;
-        let end = self.expect(&Token::End, "`end` to close `for`")?;
+        let end = self.expect_close(&Token::End, "`end` to close `for`")?;
         Ok(Spanned::new(
             Stmt::ForIn { vars, iter, body },
-            kw.span.start..end.span.end,
+            kw.span.start..end.max(kw.span.end),
         ))
     }
 
     pub(crate) fn parse_try(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let kw = self.advance(); // `try`
         let body = self.parse_block_until(&[Token::Catch])?;
-        self.expect(&Token::Catch, "`catch` after `try` body")?;
-        let (catch_var, _) = self.expect_ident("error binding name in `catch`")?;
-        self.expect(&Token::Colon, "`:` and error type in `catch`")?;
+        self.expect_recover(&Token::Catch, "`catch` after `try` body")?;
+        let (catch_var, _) = self.expect_ident_recover("error binding name in `catch`")?;
+        self.expect_recover(&Token::Colon, "`:` and error type in `catch`")?;
         let catch_ty = self.parse_type()?;
         let catch_body = self.parse_block_until(&[Token::End])?;
-        let end = self.expect(&Token::End, "`end` to close `try`")?;
+        let end = self.expect_close(&Token::End, "`end` to close `try`")?;
         Ok(Spanned::new(
             Stmt::Try {
                 body,
@@ -268,7 +267,7 @@ impl Parser {
                 catch_ty,
                 catch_body,
             },
-            kw.span.start..end.span.end,
+            kw.span.start..end.max(kw.span.end),
         ))
     }
 
@@ -302,7 +301,7 @@ impl Parser {
             while self.eat(&Token::Comma) {
                 targets.push(self.parse_expression()?);
             }
-            self.expect(&Token::Assign, "`=` after assignment targets")?;
+            self.expect_recover(&Token::Assign, "`=` after assignment targets")?;
             let mut values = vec![self.parse_expression()?];
             while self.eat(&Token::Comma) {
                 values.push(self.parse_expression()?);
@@ -356,25 +355,64 @@ impl Parser {
     /// Separators are skipped before each terminator test, so a block may end
     /// with one: `local a = 1;` directly before `end` is a block of a single
     /// statement, not a statement followed by an empty one.
+    ///
+    /// The loop also stops at *any* block-closing keyword, not only the ones
+    /// this block was expecting. A closer that belongs to an enclosing
+    /// construct means something inside was left unterminated; leaving it
+    /// where it is lets the enclosing rule close on it, which keeps one
+    /// missing `end` from consuming the rest of the file.
     pub(crate) fn parse_block_until(
         &mut self,
         terminators: &[Token],
     ) -> Result<Vec<Spanned<Stmt>>, ParseError> {
         let mut stmts = Vec::new();
+        // The column this block's statements sit at, learned from the first
+        // one that begins a line. Drives the forgotten-`end` repair below.
+        let mut body_col = None;
+        self.block_depth += 1;
         loop {
             self.skip_semicolons();
-            if self.is_eof() || terminators.iter().any(|t| self.check(t)) {
+            if self.is_eof()
+                || self.at_block_terminator()
+                || terminators.iter().any(|t| self.check(t))
+            {
                 break;
             }
-            stmts.push(self.parse_statement()?);
+            // A declaration that has left this block — outdented past its
+            // body, or shallower here than it was at the last clean parse.
+            // The `end` that should have come first was never written, so
+            // the block ends here rather than adopting everything below it.
+            if self.block_ends_here(body_col) {
+                break;
+            }
+            let began_line = self.at_line_start();
+            let col = self.line_col();
+            // A block inside a speculative probe (a lambda body in a
+            // parameter default, say) must be free to fail — see
+            // `Parser::speculate`.
+            if self.recovering() {
+                stmts.push(self.parse_statement_recovering());
+            } else {
+                stmts.push(self.parse_statement()?);
+            }
+            if began_line && body_col.is_none() {
+                body_col = col;
+            }
         }
+        self.block_depth -= 1;
         Ok(stmts)
     }
 
+    /// Whether the next token closes a block rather than starting a statement.
+    ///
+    /// `elseif` and `case` are here for the same reason as the rest: they can
+    /// only ever follow a completed block. Without them `if a then return
+    /// elseif b then … end` reads the `elseif` as the start of `return`'s
+    /// value and fails on valid code.
     pub(crate) fn at_block_terminator(&self) -> bool {
         matches!(
             self.peek().value,
-            Token::End | Token::Else | Token::Until | Token::Catch
+            Token::End | Token::Else | Token::Elseif | Token::Until | Token::Catch | Token::Case
         )
     }
 

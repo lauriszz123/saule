@@ -22,6 +22,8 @@ impl<'a> Cx<'a> {
             self.record(e.span.clone(), md);
         }
         match &e.value {
+            // A recovery hole has no children and resolves to nothing.
+            Expr::Error => {}
             // Recurse into the operand so the cast is transparent for
             // hover; the target type's own idents are handled below.
             Expr::Cast { value, ty } => {

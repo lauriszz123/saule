@@ -16,8 +16,8 @@ impl Parser {
         let params = self.parse_param_list_typed(ParamTypes::Optional)?;
         let return_ty = self.parse_return_type_opt()?;
         let body = self.parse_block_until(&[Token::End])?;
-        let end = self.expect(&Token::End, "`end` to close `fn(...)` lambda")?;
-        let span = fn_tok.span.start..end.span.end;
+        let end = self.expect_close(&Token::End, "`end` to close `fn(...)` lambda")?;
+        let span = fn_tok.span.start..end.max(fn_tok.span.end);
         Ok(Spanned::new(
             Expr::Lambda {
                 params,
@@ -51,14 +51,14 @@ impl Parser {
         // A trailing block's body is a fresh statement context: a `do` inside it
         // belongs to whatever call it follows, not to an enclosing loop header.
         let body = self.with_trailing_block(|p| p.parse_block_until(&[Token::End]))?;
-        let end = self.expect(&Token::End, "`end` to close trailing block")?;
+        let end = self.expect_close(&Token::End, "`end` to close trailing block")?;
         Ok(Spanned::new(
             Expr::Lambda {
                 params,
                 return_ty,
                 body: LambdaBody::Block(body.into()),
             },
-            do_tok.span.start..end.span.end,
+            do_tok.span.start..end.max(do_tok.span.end),
         ))
     }
 
@@ -71,13 +71,19 @@ impl Parser {
     /// `=>` by hand would mean a second copy of that grammar to keep in sync.
     /// Parsing it with [`Self::parse_type`] cannot drift.
     ///
-    /// Nothing is committed: parameter parsing has no side effects beyond the
-    /// cursor, and errors are returned rather than recorded, so a failed
-    /// attempt simply means "not a lambda" and the caller falls through to the
-    /// parenthesised-expression path.
+    /// Nothing is committed: the attempt runs inside [`Self::speculate`], so
+    /// the cursor is rewound, no diagnostic is recorded, and — crucially —
+    /// error recovery is switched off for the duration. A probe that
+    /// recovered its way to success would read `(1 + 2)` as a lambda header
+    /// with a patched-over parameter name.
     pub(crate) fn looks_like_arrow_lambda(&mut self) -> bool {
         let start = self.pos;
-        let ok = self.try_arrow_lambda_header();
+        let ok = self
+            .speculate(|p| p.try_arrow_lambda_header().then_some(()))
+            .is_some();
+        // This only answers a question — the caller re-parses from `start`
+        // either way — so the cursor is restored on both paths, not just the
+        // failing one `speculate` handles.
         self.pos = start;
         ok
     }
@@ -103,9 +109,9 @@ impl Parser {
     pub(crate) fn parse_arrow_lambda(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let open = self.expect(&Token::LParen, "`(`")?;
         let params = self.parse_param_list_inner(ParamTypes::Optional)?;
-        self.expect(&Token::RParen, "`)` after lambda parameters")?;
+        self.expect_close(&Token::RParen, "`)` after lambda parameters")?;
         let return_ty = self.parse_return_type_opt()?;
-        self.expect(&Token::FatArrow, "`=>` in lambda")?;
+        self.expect_recover(&Token::FatArrow, "`=>` in lambda")?;
         let body_expr = self.parse_expression()?;
         let span = open.span.start..body_expr.span.end;
         Ok(Spanned::new(
@@ -135,9 +141,18 @@ impl Parser {
         &mut self,
         types: ParamTypes,
     ) -> Result<Vec<Param>, ParseError> {
-        self.expect(&Token::LParen, "`(` to begin parameter list")?;
+        if self
+            .expect_recover(&Token::LParen, "`(` to begin parameter list")?
+            .is_none()
+        {
+            // A signature still being typed — `fn draw` with the `(` not yet
+            // written. Assuming an empty list keeps the declaration *and its
+            // body*; parsing on would read the next line as parameters and
+            // lose both.
+            return Ok(Vec::new());
+        }
         let params = self.parse_param_list_inner(types)?;
-        self.expect(&Token::RParen, "`)` to close parameter list")?;
+        self.expect_close(&Token::RParen, "`)` to close parameter list")?;
         Ok(params)
     }
 
@@ -174,7 +189,7 @@ impl Parser {
             self.advance();
             "self".to_string()
         } else {
-            self.expect_ident("parameter name")?.0
+            self.expect_ident_recover("parameter name")?.0
         };
         // Implicit `self` parameter in method signatures: typed as the
         // enclosing class. We don't know that here, so use a placeholder.
@@ -185,23 +200,19 @@ impl Parser {
         } else if types == ParamTypes::Optional {
             Type::Named("any".to_string())
         } else {
-            return Err(ParseError::Expected {
-                expected: "`:` and parameter type",
-                span: self.peek().span.clone(),
-            });
+            self.error_type("`:` and parameter type")?
         };
         let default = if self.eat(&Token::Assign) {
             Some(self.parse_expression()?)
         } else {
             None
         };
-        let end = self.last_consumed_end();
         Ok(Param {
             name,
             ty,
             default,
             variadic,
-            span: start..end,
+            span: self.span_to_here(start),
         })
     }
 }

@@ -26,6 +26,8 @@ pub(super) fn check_stmt(
     errors: &mut Vec<TypeCheckError>,
 ) {
     match &stmt.value {
+        Stmt::Error => {}
+
         Stmt::Decl(decl) => check_decl(&decl.value, errors),
 
         Stmt::Local {

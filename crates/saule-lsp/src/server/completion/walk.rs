@@ -165,6 +165,9 @@ impl Walk {
 
     fn stmt(&mut self, s: &Stmt) {
         match s {
+            // A recovery hole has no children to walk — but the statements
+            // around it still do, which is the point of recovering at all.
+            Stmt::Error => {}
             Stmt::Local { ty, value, .. } => {
                 self.ty(ty.as_ref());
                 self.opt_expr(value.as_ref());

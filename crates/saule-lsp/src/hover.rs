@@ -184,12 +184,7 @@ pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -
                 .push((d.span.clone(), render_unresolved_import(path)));
             continue;
         };
-        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
-            continue;
-        };
-        let Ok(imported) = saule_parser::parse(tokens) else {
-            continue;
-        };
+        let imported = crate::syntax::tolerant(&source);
 
         // Harvest the target's doc comments while its source is in hand
         // — the registries the walker consults keep types but drop the

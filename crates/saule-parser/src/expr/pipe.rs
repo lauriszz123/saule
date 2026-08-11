@@ -10,21 +10,28 @@ impl Parser {
         let kw = self.advance(); // `when`
         self.expect(&Token::LParen, "`(` after `when` to wrap the source value")?;
         let source = self.parse_expression()?;
-        let close = self.expect(&Token::RParen, "`)` to close `when(...)`")?;
+        let close = self.expect_close(&Token::RParen, "`)` to close `when(...)`")?;
 
         let mut stages: Vec<PipeStage> = Vec::new();
         while self.check(&Token::Colon) {
             stages.push(self.parse_pipe_stage()?);
         }
         if stages.is_empty() {
-            return Err(ParseError::Expected {
+            let err = ParseError::Expected {
                 expected: "`:name(args)` after `when(...)` — a pipeline needs at least one stage",
                 span: self.peek().span.clone(),
-            });
+            };
+            if !self.recovering() {
+                return Err(err);
+            }
+            // `when(x)` with the first `:stage()` not yet typed. A stageless
+            // pipe is still the right node: it carries the source expression,
+            // which is what hover and signature help read.
+            self.record(err);
         }
 
-        let span_end = stages.last().map(|s| s.span.end).unwrap_or(close.span.end);
-        let span = kw.span.start..span_end;
+        let span_end = stages.last().map(|s| s.span.end).unwrap_or(close);
+        let span = kw.span.start..span_end.max(kw.span.end);
         Ok(Spanned::new(
             Expr::Pipe {
                 source: Box::new(source),
@@ -39,12 +46,12 @@ impl Parser {
     /// peek for it.
     pub(crate) fn parse_pipe_stage(&mut self) -> Result<PipeStage, ParseError> {
         let colon = self.expect(&Token::Colon, "`:` to begin a pipeline stage")?;
-        let (name, _) = self.expect_ident("function name after `:` in pipeline")?;
+        let (name, _) = self.expect_ident_recover("function name after `:` in pipeline")?;
         let (args, close_span) = self.parse_call_args()?;
         Ok(PipeStage {
             name,
             args,
-            span: colon.span.start..close_span.end,
+            span: colon.span.start..close_span.end.max(colon.span.end),
         })
     }
 }

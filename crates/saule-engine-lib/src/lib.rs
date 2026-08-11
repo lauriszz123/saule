@@ -33,7 +33,6 @@ mod mouse;
 mod raster;
 mod state;
 mod timer;
-mod util;
 mod window;
 
 saule_sdk::saule_package! {
@@ -51,7 +50,6 @@ saule_sdk::saule_package! {
         Window = "Window management.",
         Timer = "Timing helpers.",
         Clipboard = "System clipboard: copy and paste plain text.",
-        Util = "Table / function bridge demo helpers.",
     }
 }
 
@@ -169,23 +167,6 @@ pub fn anchor() {
     // Timer exports
     black_box(timer::saule_export_Timer_getTime as *const ());
     black_box(timer::saule_export_Timer_getDelta as *const ());
-
-    // Util exports
-    black_box(util::saule_export_Util_sum as *const ());
-    black_box(util::saule_export_Util_keys as *const ());
-    black_box(util::saule_export_Util_map as *const ());
-    black_box(util::saule_export_Util_range as *const ());
-    black_box(util::saule_export_Util_divmod as *const ());
-    black_box(util::saule_export_Util_filter as *const ());
-    black_box(util::saule_export_Util_reduce as *const ());
-    black_box(util::saule_export_Util_find as *const ());
-    black_box(util::saule_export_Util_forEach as *const ());
-    black_box(util::saule_export_Util_count as *const ());
-    black_box(util::saule_export_Util_reverse as *const ());
-    black_box(util::saule_export_Util_concat as *const ());
-    black_box(util::saule_export_Util_slice as *const ());
-    black_box(util::saule_export_Util_contains as *const ());
-    black_box(util::saule_export_Util_indexOf as *const ());
 }
 
 #[cfg(test)]
