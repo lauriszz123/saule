@@ -197,20 +197,49 @@ fn git_watch_paths() -> Vec<String> {
     let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") else {
         return Vec::new();
     };
-    let Some(root) = git(&["rev-parse", "--git-dir"]) else {
+    let Some(git_dir) = resolve_git_dir(&dir, "--git-dir") else {
         return Vec::new();
     };
-    // `--git-dir` is relative to the crate directory when it resolves inside
-    // the same worktree, absolute otherwise.
-    let git_dir = if std::path::Path::new(&root).is_absolute() {
-        std::path::PathBuf::from(root)
-    } else {
-        std::path::PathBuf::from(&dir).join(root)
-    };
-    ["HEAD", "packed-refs", "refs/tags"]
-        .iter()
-        .map(|p| git_dir.join(p))
+    // Everything except `HEAD` lives in the *common* directory. Inside a
+    // linked worktree `--git-dir` is `.git/worktrees/<name>`, which has that
+    // worktree's own `HEAD` but none of the refs; anywhere else the two are
+    // the same directory.
+    let common = resolve_git_dir(&dir, "--git-common-dir").unwrap_or_else(|| git_dir.clone());
+
+    let mut paths = vec![
+        git_dir.join("HEAD"),
+        common.join("packed-refs"),
+        common.join("refs/tags"),
+    ];
+
+    // `HEAD` is a symref: its contents are the literal text
+    // `ref: refs/heads/main`, which does *not* change when a commit lands on
+    // that branch. Watching it alone leaves the baked-in commit hash stale
+    // until something unrelated forces a rebuild. The file that does move is
+    // the branch tip, so watch that as well. `symbolic-ref` fails on a
+    // detached HEAD — there `HEAD` holds the hash itself and is sufficient.
+    // A packed branch ref has no file to watch, but `packed-refs` above is
+    // what changes in that case.
+    if let Some(head_ref) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        paths.push(common.join(head_ref));
+    }
+
+    paths
+        .into_iter()
         .filter(|p| p.exists())
         .map(|p| p.display().to_string())
         .collect()
+}
+
+/// Resolve one of git's directory-reporting flags to a usable path. They come
+/// back relative to the crate directory when they resolve inside the same
+/// worktree, absolute otherwise.
+fn resolve_git_dir(manifest_dir: &str, flag: &str) -> Option<std::path::PathBuf> {
+    let raw = git(&["rev-parse", flag])?;
+    let path = std::path::PathBuf::from(raw);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        std::path::PathBuf::from(manifest_dir).join(path)
+    })
 }
