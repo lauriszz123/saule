@@ -65,7 +65,10 @@ impl Backend {
             saule_interpreter::project::set(info);
         }
 
-        let module = parse_tolerant(&patched)?;
+        // The sentinel only renames an identifier, so the document's
+        // remembered shape still describes this text.
+        let prior = self.shapes.get(uri.as_str()).map(|e| e.clone());
+        let module = parse_tolerant(&patched, prior.as_ref())?;
 
         // Populate the class / enum / interface registries with this module's
         // declarations *and* everything it imports, so member lookups and type

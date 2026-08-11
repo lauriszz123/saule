@@ -32,6 +32,7 @@ mod symbols;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::syntax;
 use crate::workspace;
 
 use dashmap::DashMap;
@@ -95,6 +96,47 @@ pub struct Backend {
     /// for it is `client/registerCapability`, and sending that to a client
     /// that didn't advertise support is a protocol error.
     pub(crate) watched_files_dynamic: Mutex<bool>,
+    /// Where each file's declarations lived the last time it parsed cleanly,
+    /// keyed by URI string like [`Self::docs`]. See [`Self::syntax`].
+    pub(crate) shapes: DashMap<String, saule_parser::PriorShape>,
+}
+
+impl Backend {
+    /// The recovered tree for `source`, using what a previous clean parse of
+    /// the same document knew about it — and refreshing that knowledge when
+    /// this parse is itself clean.
+    ///
+    /// This is what closes the gap indentation can't. A file with no
+    /// indentation offers no evidence of where a forgotten `end` belonged, so
+    /// every declaration below it is parsed one scope too deep and drops out
+    /// of the outline. Editing history says what whitespace can't: `after`
+    /// was a top-level function a keystroke ago, so the edit that buried it
+    /// was a deleted `end`, not a restructuring.
+    ///
+    /// Only a clean parse updates the shape. Learning from a recovered tree
+    /// would feed the repair's own guesses back into it, and a wrong guess
+    /// would then reinforce itself for the rest of the session.
+    pub(crate) fn syntax(&self, uri: &Url, source: &str) -> saule_ast::Module {
+        self.syntax_full(uri, source).0
+    }
+
+    /// [`Self::syntax`], keeping the diagnostics as well as the tree.
+    pub(crate) fn syntax_full(
+        &self,
+        uri: &Url,
+        source: &str,
+    ) -> (saule_ast::Module, syntax::SyntaxErrors) {
+        let key = uri.as_str();
+        // Cloned rather than borrowed: the insert below would deadlock
+        // against a live read guard on the same shard.
+        let prior = self.shapes.get(key).map(|e| e.clone());
+        let (module, errors) = syntax::analyze(source, prior.as_ref());
+        if errors.is_empty() {
+            self.shapes
+                .insert(key.to_string(), saule_parser::PriorShape::of(&module));
+        }
+        (module, errors)
+    }
 }
 
 impl Backend {
@@ -251,6 +293,7 @@ impl Backend {
             analysis_lock: Mutex::new(()),
             seed_cache: seed_cache::SeedCache::default(),
             watched_files_dynamic: Mutex::new(false),
+            shapes: DashMap::new(),
         }
     }
 }
@@ -472,6 +515,9 @@ impl LanguageServer for Backend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.docs.remove(uri.as_str());
+        // The remembered shape describes an unsaved buffer that no longer
+        // exists. Re-analysis from disk below rebuilds it from the file.
+        self.shapes.remove(uri.as_str());
         // The overlay stops answering for this path, so importers now
         // see the on-disk text instead of the buffer — a different seed.
         if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {

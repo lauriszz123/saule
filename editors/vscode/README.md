@@ -12,7 +12,7 @@ Powered by the `saule-lsp` server (`crates/saule-lsp`):
   edit.
 - **Hover** — types and signatures for locals, functions, methods,
   classes, enums, and stdlib/native members (with generic substitution,
-  so `Util.filter(table<integer>)` shows `table<integer>`).
+  so `Table.remove(table<integer>)` shows `integer?`).
 - **Go-to-definition** and **find-all-references**.
 - **Document highlights** and **document symbols** (outline / breadcrumbs).
 - **Inlay hints** — inferred local types and parameter-name labels.

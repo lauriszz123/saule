@@ -22,7 +22,7 @@ impl Parser {
                         let t = self.advance();
                         ("super".to_string(), t.span)
                     } else {
-                        self.expect_ident("field name after `.`")?
+                        self.expect_ident_recover("field name after `.`")?
                     };
                     let span = expr.span.start..name_span.end;
                     expr = Spanned::new(
@@ -35,7 +35,7 @@ impl Parser {
                 }
                 Token::QuestionDot => {
                     self.advance();
-                    let (name, name_span) = self.expect_ident("field name after `?.`")?;
+                    let (name, name_span) = self.expect_ident_recover("field name after `?.`")?;
                     let span = expr.span.start..name_span.end;
                     expr = Spanned::new(
                         Expr::SafeMember {
@@ -48,8 +48,8 @@ impl Parser {
                 Token::LBracket => {
                     self.advance();
                     let index = self.with_trailing_block(|p| p.parse_expression())?;
-                    let close = self.expect(&Token::RBracket, "`]` after index")?;
-                    let span = expr.span.start..close.span.end;
+                    let close = self.expect_close(&Token::RBracket, "`]` after index")?;
+                    let span = expr.span.start..close.max(expr.span.end);
                     expr = Spanned::new(
                         Expr::Index {
                             obj: Box::new(expr),
@@ -121,8 +121,12 @@ impl Parser {
                 args.push(self.parse_call_arg()?);
             }
         }
-        let close = self.expect(&Token::RParen, "`)` to close arguments")?;
-        Ok((args, close.span))
+        let close_start = self.peek().span.start;
+        let close_end = self.expect_close(&Token::RParen, "`)` to close arguments")?;
+        // The span the caller uses for the whole call. When the `)` was never
+        // written it collapses to a point at the cursor, which is exactly
+        // where signature help wants to believe the argument list still is.
+        Ok((args, close_start.min(close_end)..close_end))
     }
 
     pub(crate) fn parse_call_arg(&mut self) -> Result<CallArg, ParseError> {

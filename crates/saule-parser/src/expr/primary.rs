@@ -73,14 +73,11 @@ impl Parser {
                     // Parenthesised expression.
                     self.advance();
                     let inner = self.with_trailing_block(|p| p.parse_expression())?;
-                    self.expect(&Token::RParen, "`)`")?;
+                    self.expect_recover(&Token::RParen, "`)`")?;
                     Ok(inner)
                 }
             }
-            _ => Err(ParseError::Expected {
-                expected: "an expression",
-                span: tok.span,
-            }),
+            _ => self.error_expr(),
         }
     }
 
@@ -99,8 +96,8 @@ impl Parser {
             }
             Ok(())
         })?;
-        let close = self.expect(&Token::RBrace, "`}` to close table literal")?;
-        let span = open.span.start..close.span.end;
+        let close = self.expect_close(&Token::RBrace, "`}` to close table literal")?;
+        let span = open.span.start..close.max(open.span.end);
         Ok(Spanned::new(Expr::Table(items), span))
     }
 

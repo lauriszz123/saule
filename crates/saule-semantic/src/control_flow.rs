@@ -53,6 +53,10 @@ fn check_block(block: &[Spanned<Stmt>], ctx: Ctx, errors: &mut Vec<SemanticError
 
 fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
     match &stmt.value {
+        // A recovery hole (see `Stmt::Error`) says only that the text here
+        // didn't parse, which the parse diagnostic already reports. Nothing
+        // about the enclosing control flow can be concluded from it.
+        Stmt::Error => {}
         Stmt::Break => {
             if !ctx.in_loop {
                 errors.push(SemanticError::LoopControlOutsideLoop {
@@ -212,6 +216,7 @@ fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
 
 fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
     match &expr.value {
+        Expr::Error => {}
         Expr::Unary { rhs, .. } => check_expr(rhs, ctx, errors),
         Expr::Binary { lhs, rhs, .. } => {
             check_expr(lhs, ctx, errors);

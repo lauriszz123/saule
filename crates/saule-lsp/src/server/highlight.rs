@@ -25,12 +25,7 @@ impl Backend {
         let source = entry.source.clone();
         drop(entry);
 
-        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
-            return Vec::new();
-        };
-        let Ok(module) = saule_parser::parse(tokens) else {
-            return Vec::new();
-        };
+        let module = self.syntax(uri, &source);
         let line_index = LineIndex::new(&source);
         let offset = line_index.offset(&source, pos);
 

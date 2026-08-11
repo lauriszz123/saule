@@ -57,7 +57,7 @@ impl Backend {
             let source = entry.source.clone();
             let version = entry.version;
             drop(entry);
-            let diagnostics = self.collect_diagnostics(&source, None, None).await;
+            let diagnostics = self.collect_diagnostics(&uri, &source, None, None).await;
             self.client
                 .publish_diagnostics(uri, diagnostics, Some(version))
                 .await;
@@ -80,7 +80,7 @@ impl Backend {
         };
         let module_dir = abs.parent().map(|d| d.to_path_buf());
         let diagnostics = self
-            .collect_diagnostics(&source, module_dir, Some(abs))
+            .collect_diagnostics(&uri, &source, module_dir, Some(abs))
             .await;
         self.client
             .publish_diagnostics(uri, diagnostics, version)
@@ -89,6 +89,7 @@ impl Backend {
 
     async fn collect_diagnostics(
         &self,
+        uri: &Url,
         source: &str,
         module_dir: Option<PathBuf>,
         abs_path: Option<&Path>,
@@ -96,23 +97,30 @@ impl Backend {
         let line_index = LineIndex::new(source);
         let mut out = Vec::new();
 
-        // ---- lex ----------------------------------------------------------
-        let tokens = match saule_lexer::Lexer::new(source).tokenize() {
-            Ok(t) => t,
-            Err(err) => {
-                out.push(diag_from(&err, source, &line_index));
-                return out;
-            }
-        };
-
-        // ---- parse --------------------------------------------------------
-        let module = match saule_parser::parse(tokens) {
-            Ok(m) => m,
-            Err(err) => {
-                out.push(diag_from(&err, source, &line_index));
-                return out;
-            }
-        };
+        // ---- lex + parse --------------------------------------------------
+        // Recovering rather than strict, so a file with a syntax error near
+        // the top still reports the errors further down instead of hiding
+        // behind the first one. Everything after this point is skipped when
+        // any of them fired: the recovered tree has holes in it by
+        // construction, and "undefined name" against a hole is a diagnostic
+        // about our repair, not about the user's code.
+        //
+        // Through `syntax_full` rather than the free function, so this file's
+        // remembered shape is both consulted and — when the parse comes back
+        // clean — refreshed. This pipeline runs on every keystroke and on
+        // every file the startup scan touches, which makes it the one that
+        // keeps every other feature's shape warm.
+        let (module, syntax) = self.syntax_full(uri, source);
+        if !syntax.is_empty() {
+            out.extend(syntax.lex.iter().map(|e| diag_from(e, source, &line_index)));
+            out.extend(
+                syntax
+                    .parse
+                    .iter()
+                    .map(|e| diag_from(e, source, &line_index)),
+            );
+            return out;
+        }
 
         // ---- doc comments -------------------------------------------------
         // Pure source + AST, so this runs before we contend for the

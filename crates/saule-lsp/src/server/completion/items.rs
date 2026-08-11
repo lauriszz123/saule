@@ -198,7 +198,9 @@ pub(crate) fn collect_exports(
     let Ok(src) = std::fs::read_to_string(abs) else {
         return;
     };
-    let Some(module) = parse(&src) else { return };
+    // Tolerant: a sibling module with a syntax error somewhere should still
+    // offer the exports it does have.
+    let module = crate::syntax::tolerant(&src);
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };

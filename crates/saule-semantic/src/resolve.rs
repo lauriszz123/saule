@@ -135,6 +135,7 @@ impl Resolver {
 
     fn stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.value {
+            Stmt::Error => {}
             Stmt::Local { name, value, .. } => {
                 if let Some(v) = value {
                     self.expr(v);

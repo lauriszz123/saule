@@ -44,7 +44,7 @@ impl Parser {
                         items.push(self.parse_type()?);
                     }
                 }
-                self.expect(&Token::RParen, "`)` to close tuple type")?;
+                self.expect_close(&Token::RParen, "`)` to close tuple type")?;
                 if items.len() == 1 {
                     Ok(items.into_iter().next().expect("one tuple item"))
                 } else {
@@ -65,7 +65,7 @@ impl Parser {
                     } else {
                         (None, Box::new(first))
                     };
-                    self.expect(&Token::Gt, "`>` to close `table<...>`")?;
+                    self.expect_close(&Token::Gt, "`>` to close `table<...>`")?;
                     return Ok(Type::Table { key, value });
                 }
                 // Drop any generic argument list `<T, U>` — generics aren't
@@ -91,23 +91,15 @@ impl Parser {
                         params.push(self.parse_type()?);
                     }
                 }
-                self.expect(&Token::RParen, "`)` in function type")?;
-                if !self.eat(&Token::Arrow) {
-                    return Err(ParseError::Expected {
-                        expected: "`->` before return type",
-                        span: self.peek().span.clone(),
-                    });
-                }
+                self.expect_close(&Token::RParen, "`)` in function type")?;
+                self.expect_recover(&Token::Arrow, "`->` before return type")?;
                 let ret = self.parse_type()?;
                 Ok(Type::Function {
                     params,
                     ret: Box::new(ret),
                 })
             }
-            _ => Err(ParseError::Expected {
-                expected: "a type",
-                span: tok.span,
-            }),
+            _ => self.error_type("a type"),
         }
     }
 
@@ -119,7 +111,7 @@ impl Parser {
         while self.eat(&Token::Comma) {
             let _ = self.parse_type()?;
         }
-        self.expect(&Token::Gt, "`>` to close generic arguments")?;
+        self.expect_close(&Token::Gt, "`>` to close generic arguments")?;
         Ok(())
     }
 
@@ -129,13 +121,13 @@ impl Parser {
     pub(crate) fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
         self.expect(&Token::Lt, "`<`")?;
         let mut params = Vec::new();
-        let (first, _) = self.expect_ident("generic parameter name")?;
+        let (first, _) = self.expect_ident_recover("generic parameter name")?;
         params.push(first);
         while self.eat(&Token::Comma) {
-            let (n, _) = self.expect_ident("generic parameter name")?;
+            let (n, _) = self.expect_ident_recover("generic parameter name")?;
             params.push(n);
         }
-        self.expect(&Token::Gt, "`>` to close generic parameters")?;
+        self.expect_close(&Token::Gt, "`>` to close generic parameters")?;
         Ok(params)
     }
 
@@ -144,32 +136,27 @@ impl Parser {
     /// the cursor and returns `false` otherwise (so the `<` can be parsed as
     /// a less-than operator instead). Used at call sites like
     /// `filter<integer>(nums, ...)`.
+    /// Runs inside [`Parser::speculate`], which rewinds the cursor and — the
+    /// part that matters here — disables error recovery, so `parse_type`
+    /// still *reports* a non-type instead of patching an `any` over it and
+    /// letting `a < b` masquerade as an instantiation.
     pub(crate) fn try_eat_generic_call_args(&mut self) -> bool {
-        let saved = self.pos;
         if !self.check(&Token::Lt) {
             return false;
         }
-        // Try to consume a `<` ... `>` window where every entry parses as a
-        // type. If the window doesn't end in `>(`, restore.
-        self.advance(); // `<`
-        if self.parse_type().is_err() {
-            self.pos = saved;
-            return false;
-        }
-        while self.eat(&Token::Comma) {
-            if self.parse_type().is_err() {
-                self.pos = saved;
-                return false;
+        self.speculate(|p| {
+            // Consume a `<` ... `>` window where every entry parses as a
+            // type. If the window doesn't end in `>(`, this isn't one.
+            p.advance(); // `<`
+            p.parse_type().ok()?;
+            while p.eat(&Token::Comma) {
+                p.parse_type().ok()?;
             }
-        }
-        if !self.eat(&Token::Gt) {
-            self.pos = saved;
-            return false;
-        }
-        if !self.check(&Token::LParen) {
-            self.pos = saved;
-            return false;
-        }
-        true
+            if !p.eat(&Token::Gt) {
+                return None;
+            }
+            p.check(&Token::LParen).then_some(())
+        })
+        .is_some()
     }
 }

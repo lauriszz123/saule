@@ -58,6 +58,10 @@ impl<'a> Cx<'a> {
     /// Anything else returns `None`; the caller falls back to `any`.
     pub(crate) fn infer_init_type(&self, init: &Expr) -> Option<Type> {
         match init {
+            // Recovery hole — the initializer didn't parse, so there is
+            // nothing to infer from. Falls back to `any` like any other
+            // unknown, which is what keeps the binding usable.
+            Expr::Error => None,
             // `x as T` is always `T?` — the cast can fail, and the
             // nullable result is what forces the caller to handle it.
             Expr::Cast { ty, .. } => Some(Type::Nullable(Box::new(ty.clone()))),
@@ -237,7 +241,7 @@ impl<'a> Cx<'a> {
 
     /// Infer a `table<V>` (array literal) or `table<K, V>` (map literal)
     /// from a table-constructor's entries, so generic natives like
-    /// `Util.map(table<T>, …)` can bind their element type. Falls back to a
+    /// `Table.sort(table<V>, …)` can bind their element type. Falls back to a
     /// bare `table` when the entries are empty or their types disagree.
     pub(crate) fn infer_table_literal(&self, entries: &[saule_ast::TableEntry]) -> Type {
         use saule_ast::TableEntry;

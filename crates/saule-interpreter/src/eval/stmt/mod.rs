@@ -139,6 +139,14 @@ pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow
 fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow, RuntimeError> {
     let span = stmt.span.clone();
     match &stmt.value {
+        // See the `Expr::Error` arm in `eval/expr/mod.rs` — a recovery hole
+        // cannot reach the interpreter, and errors rather than panics if it
+        // somehow does.
+        Stmt::Error => Err(RuntimeError::TypeError {
+            message: "executed a statement that failed to parse".into(),
+            span,
+        }),
+
         Stmt::Local { name, value, .. } => {
             let v = match value {
                 Some(e) => expr::eval(e, env)?,

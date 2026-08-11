@@ -55,6 +55,15 @@ pub(crate) enum EvaluatedArg {
 pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Value, RuntimeError> {
     let span = expr.span.clone();
     match &expr.value {
+        // Unreachable through any entry point that runs code: `Expr::Error`
+        // only exists in a tree from `saule_parser::parse_recover`, which
+        // the language server uses and the interpreter never calls. An
+        // error beats a panic in the one case where that stops holding.
+        Expr::Error => Err(RuntimeError::TypeError {
+            message: "evaluated an expression that failed to parse".into(),
+            span,
+        }),
+
         Expr::Int(n) => Ok(Value::Int(*n)),
         Expr::Float(f) => Ok(Value::Float(*f)),
         Expr::Bool(b) => Ok(Value::Bool(*b)),

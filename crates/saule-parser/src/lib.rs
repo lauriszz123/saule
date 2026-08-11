@@ -34,23 +34,195 @@
 //! | [`expr`]  | Expression precedence ladder, primaries, lambdas, params |
 //! | [`stmt`]  | Statements, control flow, block helpers |
 //! | [`decl`]  | Top-level declarations (`fn`, `class`, `interface`, `enum`, `import`) |
+//!
+//! ## Error recovery
+//!
+//! The parser does not stop at the first error. It records the diagnostic,
+//! repairs or skips the smallest construct it can, and carries on, so a file
+//! that is being typed still yields a tree for everything the author has
+//! already written. The strategy has three layers, cheapest first:
+//!
+//! 1. **Missing closers are assumed present.** `end`, `)`, `then`, `do` and
+//!    friends go through [`Parser::expect_close`], which records "expected
+//!    `end`" and continues as if it had been there. This covers the dominant
+//!    mid-typing state — a block whose closing keyword hasn't been written
+//!    yet — without discarding anything inside it.
+//! 2. **Missing operands become holes.** Where an expression or a type is
+//!    required and the tokens can't start one, the parser emits
+//!    [`Expr::Error`] / `any` rather than unwinding, so `local pos = ` still
+//!    declares `pos` and completion on the next line still sees it.
+//! 3. **Everything else resynchronises.** A statement or class member that
+//!    fails outright is replaced by a [`Stmt::Error`] hole spanning the
+//!    tokens skipped to reach the next statement keyword or block closer.
+//!
+//! On top of those, one repair operates on the file rather than on a
+//! construct. When layer 1 has had to assume an `end`, every declaration
+//! below the unterminated block has been parsed *into* it, one scope too
+//! deep. [`parse_recover`] then re-reads the file, closing the block where
+//! the author evidently meant it to close, on either of two pieces of
+//! evidence — see [`Parser::block_ends_here`]:
+//!
+//! * **Indentation**, an offside rule over declarations. Free, and works on
+//!   code no tool has ever seen in a valid state.
+//! * **History** — a [`PriorShape`] from this file's last clean parse, passed
+//!   in by [`parse_recover_with_prior`]. This is what covers the file that
+//!   isn't indented, where there is nothing to be left of.
+//!
+//! Neither is part of the grammar, so both are gated the same way: the pass
+//! runs only on a file an ordinary parse already found a missing `end` in,
+//! and its result is kept only if it strands no `end`. A guess can improve a
+//! broken file and can never change how valid code parses.
+//!
+//! Two entry points expose the result. [`parse`] is strict — it hands back
+//! the first error and no tree, which is what the interpreter, the CLI and
+//! the formatter want, since none of them may act on a guess.
+//! [`parse_recover`] hands back both the partial tree and every error, which
+//! is what the language server wants, since a diagnostic and a working
+//! completion list are not alternatives.
+//!
+//! The recovery nodes therefore only ever exist in a tree from
+//! [`parse_recover`]: `parse` returns `Err` for exactly the inputs that
+//! produce them.
 
 mod decl;
 mod error;
 mod expr;
+mod recover;
 mod stmt;
 mod types;
 
 pub use error::ParseError;
+pub use recover::{MAX_ERRORS, PriorShape};
 
 use saule_ast::{BinOp, Decl, Expr, Module, Spanned, Stmt};
 use saule_lexer::Token;
 use std::ops::Range;
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
+// ─── Entry points ────────────────────────────────────────────────────────────
 
+/// A recovered parse: whatever tree could be built, plus everything that went
+/// wrong building it. `errors` is empty exactly when the input was valid.
+///
+/// Ordered by position, at most one error per token (see
+/// [`Parser::record`]) and capped at [`MAX_ERRORS`].
+#[derive(Debug)]
+pub struct Parsed {
+    pub module: Module,
+    pub errors: Vec<ParseError>,
+    /// Whether a block ran out of input without its `end`. Drives the repair
+    /// pass in [`parse_recover`]; not part of the diagnostic surface.
+    saw_missing_end: bool,
+    /// How many `end` tokens closed nothing. How [`parse_recover`] judges the
+    /// repair pass; not part of the diagnostic surface.
+    stray_ends: usize,
+}
+
+impl Parsed {
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+/// Parse strictly: the first error, or a tree with no holes in it.
+///
+/// The entry point for every consumer that executes, checks or rewrites the
+/// code — a partially-guessed tree is worse than no tree when the output is
+/// a program's behaviour or the user's file on disk.
 pub fn parse(tokens: Vec<Spanned<Token>>) -> Result<Module, ParseError> {
+    let parsed = run(tokens);
+    match parsed.errors.into_iter().next() {
+        // Recovery only begins *after* the first error is recorded, so this
+        // is the same error, at the same span, that bailing out would have
+        // produced. Callers see no behaviour change.
+        Some(first) => Err(first),
+        None => Ok(parsed.module),
+    }
+}
+
+/// Parse tolerantly: always a tree, plus every error found building it.
+///
+/// The tree may contain [`Expr::Error`] / [`Stmt::Error`] holes wherever the
+/// input could not be understood; see the module docs for the recovery rules.
+/// Intended for interactive tooling, which has to answer questions about a
+/// buffer that is, most of the time, halfway through an edit.
+///
+/// `source` is the text `tokens` were lexed from, and is used for one thing:
+/// working out, when an `end` turns out to be missing, which of the
+/// declarations below it were meant to be inside the block and which were
+/// stranded there. Passing the wrong text costs accuracy on broken files and
+/// nothing else.
+///
+/// Indentation is the only evidence this form has, and an unindented file has
+/// none. [`parse_recover_with_prior`] adds the other half.
+pub fn parse_recover(tokens: Vec<Spanned<Token>>, source: &str) -> Parsed {
+    parse_recover_with_prior(tokens, source, None)
+}
+
+/// [`parse_recover`], told where this file's declarations lived the last time
+/// it parsed cleanly.
+///
+/// Indentation cannot tell a forgotten `end` from a deliberately nested
+/// declaration in a file that isn't indented — there is nothing to be left
+/// of. Editing history can: a declaration that has sunk into a block it was
+/// never in was sunk by a deleted `end`, whatever the whitespace says. Build
+/// `prior` with [`PriorShape::of`] from a parse that reported **no errors**;
+/// a shape learned from a recovered tree feeds this pass's guesses back into
+/// itself.
+///
+/// A missing, empty or stale shape costs accuracy on broken files and nothing
+/// else — it is one of two pieces of evidence, and both are gated behind the
+/// same acceptance test.
+pub fn parse_recover_with_prior(
+    tokens: Vec<Spanned<Token>>,
+    source: &str,
+    prior: Option<&PriorShape>,
+) -> Parsed {
+    // The ordinary reading first. If nothing was left unterminated, it is the
+    // only reading there is, and the repair pass below has nothing to fix.
+    let plain = run(tokens.clone());
+    if !plain.saw_missing_end {
+        return plain;
+    }
+
+    // Something was unterminated, so the declarations after it may have been
+    // absorbed into a block they were never meant to be in. Re-read using
+    // indentation to close the block early — see
+    // [`Parser::block_ends_here`].
+    //
+    // The test for keeping that reading is **stray `end`s**, not error count.
+    // Getting it right usually *raises* the error count, because a run of
+    // declarations that each forgot an `end` is reported as several mistakes
+    // rather than hidden inside one enormous body. What a wrong guess leaves
+    // behind is different and unambiguous: a block closed too early strands
+    // the `end` that was meant for it, and an `end` that closes nothing is
+    // something a correct reading never produces.
+    let repaired = run_repair(tokens, recover::Layout::new(source), prior);
+    if repaired.stray_ends <= plain.stray_ends {
+        repaired
+    } else {
+        plain
+    }
+}
+
+/// One ordinary pass over the tokens, knowing nothing about layout or history.
+fn run(tokens: Vec<Spanned<Token>>) -> Parsed {
+    finish(Parser::new(tokens))
+}
+
+/// One repair pass, with both pieces of evidence available to
+/// [`Parser::block_ends_here`].
+fn run_repair(
+    tokens: Vec<Spanned<Token>>,
+    layout: recover::Layout,
+    prior: Option<&PriorShape>,
+) -> Parsed {
     let mut p = Parser::new(tokens);
+    p.layout = Some(layout);
+    p.prior = prior.cloned();
+    finish(p)
+}
+
+fn finish(mut p: Parser) -> Parsed {
     let mut stmts = Vec::new();
     loop {
         // Semicolons are separators, not statements, so they have to be
@@ -62,9 +234,14 @@ pub fn parse(tokens: Vec<Spanned<Token>>) -> Result<Module, ParseError> {
         if p.is_eof() {
             break;
         }
-        stmts.push(p.parse_statement()?);
+        stmts.push(p.parse_statement_recovering());
     }
-    Ok(Module { stmts })
+    Parsed {
+        module: Module { stmts },
+        errors: p.errors,
+        saw_missing_end: p.saw_missing_end,
+        stray_ends: p.stray_ends,
+    }
 }
 
 // ─── Parser state ────────────────────────────────────────────────────────────
@@ -92,6 +269,31 @@ pub struct Parser {
     /// [`Parser::nested`]. Parser state rather than a thread-local because
     /// there is already a `&mut self` threaded through every rule.
     depth: u32,
+    /// Errors recorded so far, in source order. See [`Parser::record`].
+    errors: Vec<ParseError>,
+    /// Start offset of the most recently recorded error, used to suppress
+    /// the cascade of follow-on complaints a single mistake provokes.
+    last_error_pos: Option<usize>,
+    /// Depth of speculative parsing — see [`Parser::speculate`]. Nonzero
+    /// means "this parse is a probe": recovery is switched off so the probe
+    /// can fail, and nothing is recorded.
+    speculating: u32,
+    /// Line offsets, present only on the repair pass — see
+    /// [`Parser::block_ends_here`].
+    pub(crate) layout: Option<recover::Layout>,
+    /// Where this file's declarations lived at the last clean parse, present
+    /// only on the repair pass — see [`Parser::block_ends_here`].
+    pub(crate) prior: Option<PriorShape>,
+    /// How many blocks enclose the cursor. Compared against [`Self::prior`]
+    /// to notice a declaration that has sunk into a block it never used to
+    /// be in. Distinct from `depth`, which counts grammatical nesting of
+    /// every kind so it can bound recursion.
+    pub(crate) block_depth: usize,
+    /// Set when a block ran out of input without its `end`. The signal that a
+    /// repair pass is worth running; see [`parse_recover`].
+    pub(crate) saw_missing_end: bool,
+    /// Count of `end` tokens that closed nothing — see [`Parser::skip_one`].
+    pub(crate) stray_ends: usize,
 }
 
 impl Parser {
@@ -101,6 +303,14 @@ impl Parser {
             pos: 0,
             no_trailing_block: false,
             depth: 0,
+            errors: Vec::new(),
+            last_error_pos: None,
+            speculating: 0,
+            layout: None,
+            prior: None,
+            block_depth: 0,
+            saw_missing_end: false,
+            stray_ends: 0,
         }
     }
 

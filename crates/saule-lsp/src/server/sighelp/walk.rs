@@ -166,6 +166,8 @@ impl Cx<'_> {
 
     fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
+            // A recovery hole has no children to walk.
+            Stmt::Error => {}
             Stmt::Local {
                 name, ty, value, ..
             } => {
@@ -343,6 +345,8 @@ impl Cx<'_> {
 
     fn visit_expr(&mut self, e: &Spanned<Expr>) {
         match &e.value {
+            // A recovery hole has no children to walk.
+            Expr::Error => {}
             Expr::Cast { value, .. } => self.visit_expr(value),
             Expr::Call { callee, args } => {
                 self.visit_expr(callee);

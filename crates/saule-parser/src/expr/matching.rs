@@ -23,13 +23,21 @@ impl Parser {
             // the leading keyword. A bare "expected `end`" message in
             // that situation is confusing; point at the arm-start
             // explicitly.
-            return Err(ParseError::Expected {
+            let err = ParseError::Expected {
                 expected: "`case` to start a match arm, or `end` to close `match`",
                 span: self.peek().span.clone(),
-            });
+            };
+            if !self.recovering() {
+                return Err(err);
+            }
+            // Stop rather than skip: the arms parsed so far are the useful
+            // part, and the enclosing statement loop resynchronises on what
+            // is left.
+            self.record(err);
+            break;
         }
-        let end = self.expect(&Token::End, "`end` to close `match`")?;
-        let span = kw.span.start..end.span.end;
+        let end = self.expect_close(&Token::End, "`end` to close `match`")?;
+        let span = kw.span.start..end.max(kw.span.end);
         Ok(Spanned::new(
             Expr::Match {
                 scrutinee: Box::new(scrutinee),
@@ -60,7 +68,7 @@ impl Parser {
         } else {
             None
         };
-        self.expect(&Token::Then, "`then` to start arm body")?;
+        self.expect_recover(&Token::Then, "`then` to start arm body")?;
 
         // The body runs until the next `case` or the closing `end`.
         // Single-expression arms like `case x then 42` parse as one
@@ -82,10 +90,19 @@ impl Parser {
                 (MatchBody::Expr(e.clone()), end)
             }
             (0, _) => {
-                return Err(ParseError::Expected {
+                let err = ParseError::Expected {
                     expected: "an expression or statement after `then`",
                     span: self.peek().span.clone(),
-                });
+                };
+                if !self.recovering() {
+                    return Err(err);
+                }
+                // `case Foo.Bar then ` with the body not yet typed. Keeping
+                // the arm keeps its *pattern*, which is what completion in
+                // the body position needs to know the scrutinee's shape.
+                self.record(err);
+                let at = self.last_consumed_end();
+                (MatchBody::Expr(Spanned::new(Expr::Error, at..at)), at)
             }
             _ => {
                 let end = stmts
@@ -162,8 +179,8 @@ impl Parser {
                         elems.push(self.parse_pattern()?);
                     }
                 }
-                let close = self.expect(&Token::RParen, "`)` to close tuple pattern")?;
-                let span = tok.span.start..close.span.end;
+                let close = self.expect_close(&Token::RParen, "`)` to close tuple pattern")?;
+                let span = tok.span.start..close.max(tok.span.end);
                 Ok(Spanned::new(Pattern::Tuple(elems), span))
             }
             // Identifier: wildcard `_`, binding `name`, or enum-variant
@@ -175,7 +192,7 @@ impl Parser {
                 }
                 // `Name.Variant[(p1, p2, ...)]` — qualified variant pattern.
                 if self.eat(&Token::Dot) {
-                    let (variant, vspan) = self.expect_ident("variant name after `.`")?;
+                    let (variant, vspan) = self.expect_ident_recover("variant name after `.`")?;
                     let mut fields = Vec::new();
                     let mut end = vspan.end;
                     if self.eat(&Token::LParen) {
@@ -185,9 +202,9 @@ impl Parser {
                                 fields.push(self.parse_pattern()?);
                             }
                         }
-                        let close =
-                            self.expect(&Token::RParen, "`)` to close variant pattern payload")?;
-                        end = close.span.end;
+                        end = self
+                            .expect_close(&Token::RParen, "`)` to close variant pattern payload")?
+                            .max(end);
                     }
                     let span = tok.span.start..end;
                     return Ok(Spanned::new(
@@ -201,10 +218,25 @@ impl Parser {
                 }
                 Ok(Spanned::new(Pattern::Bind(name), tok.span))
             }
-            _ => Err(ParseError::Expected {
-                expected: "a pattern (literal, identifier, `_`, `(...)`, or `Enum.Variant`)",
-                span: tok.span,
-            }),
+            _ => {
+                let err = ParseError::Expected {
+                    expected: "a pattern (literal, identifier, `_`, `(...)`, or `Enum.Variant`)",
+                    span: tok.span.clone(),
+                };
+                if !self.recovering() {
+                    return Err(err);
+                }
+                // A wildcard is the pattern that assumes least about what the
+                // author meant. It reads as exhaustive, which would matter if
+                // anything downstream ran exhaustiveness checking on this
+                // tree — nothing does: a file with parse errors gets its
+                // parse errors and no further analysis.
+                self.record(err);
+                Ok(Spanned::new(
+                    Pattern::Wildcard,
+                    tok.span.start..tok.span.start,
+                ))
+            }
         }
     }
 

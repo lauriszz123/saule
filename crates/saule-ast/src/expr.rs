@@ -101,6 +101,19 @@ pub enum Expr {
         source: Box<Spanned<Expr>>,
         stages: Vec<PipeStage>,
     },
+
+    /// A hole where an expression was expected but could not be parsed.
+    ///
+    /// Only ever produced by [`saule_parser::parse_recover`], the error-
+    /// recovering entry point the language server uses; the strict `parse`
+    /// still returns `Err` for the same input, so no tree that reaches the
+    /// typechecker or the interpreter contains one. Downstream passes treat
+    /// it as "unknown" and stay silent — the parse error itself is already
+    /// reported, and a second diagnostic on the same broken text is noise.
+    ///
+    /// Keeping the hole rather than dropping the enclosing statement is what
+    /// lets `local pos = ` still bind `pos` for completion on the next line.
+    Error,
 }
 
 /// One `:name(args)` step inside an [`Expr::Pipe`] chain.

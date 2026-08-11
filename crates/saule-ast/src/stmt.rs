@@ -101,4 +101,11 @@ pub enum Stmt {
 
     /// Nested declaration (function / class / interface / enum / import).
     Decl(Spanned<Decl>),
+
+    /// A run of tokens that could not be parsed as a statement.
+    ///
+    /// The recovery counterpart of [`Expr::Error`] — see its documentation
+    /// for the invariant. Its span covers the skipped tokens, so tooling can
+    /// still tell "there is *something* here" apart from "the file ends".
+    Error,
 }
