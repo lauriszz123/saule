@@ -26,6 +26,14 @@
 //! pushes its own frame so a `local` declared in a then-branch doesn't
 //! leak to the else-branch (Lua-style block scoping).
 //!
+//! A `local` binds *after* its initializer is walked, so `local x = x + 1`
+//! reports an undefined name rather than resolving to the half-built `x`.
+//! The one exception is a lambda initializer, which binds *before*: that is
+//! what lets a local function call itself
+//! (`local fact = fn(n) … fact(n-1) … end`). Keeping the exception to that
+//! shape is deliberate — it is the only one where the name genuinely cannot
+//! be in scope yet at the point it is used.
+//!
 //! Functions, methods, and lambdas push a frame and reset the
 //! enclosing-class / `in_init` flags appropriately. Module-level
 //! declarations are pre-collected before the walk so forward references
@@ -137,10 +145,23 @@ impl Resolver {
         match &stmt.value {
             Stmt::Error => {}
             Stmt::Local { name, value, .. } => {
+                // A lambda initializer sees the name being bound, so a local
+                // function can call itself: `local fact = fn(n) … fact(n-1) …`.
+                // Declaring first is scoped to that one shape deliberately —
+                // doing it for every initializer would make `local x = x + 1`
+                // resolve to the half-built `x` instead of reporting an
+                // undefined (or shadowed-outer) name.
+                let recursive =
+                    matches!(value.as_ref().map(|v| &v.value), Some(Expr::Lambda { .. }));
+                if recursive {
+                    self.declare(name);
+                }
                 if let Some(v) = value {
                     self.expr(v);
                 }
-                self.declare(name);
+                if !recursive {
+                    self.declare(name);
+                }
             }
             Stmt::LocalMulti { names, values } => {
                 for v in values {

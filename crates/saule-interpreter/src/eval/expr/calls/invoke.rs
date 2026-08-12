@@ -161,7 +161,7 @@ pub(crate) fn source_text(src: &miette::NamedSource<String>) -> String {
 /// body in a fresh scope parented to the function's closure, and converts
 /// the resulting [`Flow`] into a return value.
 pub(crate) fn call_function(
-    f: &FunctionObject,
+    f: &Rc<FunctionObject>,
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
@@ -169,13 +169,21 @@ pub(crate) fn call_function(
 }
 
 pub(crate) fn call_function_multi(
-    f: &FunctionObject,
+    f: &Rc<FunctionObject>,
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Vec<Value>, RuntimeError> {
     let scope = Environment::with_parent(f.closure.clone());
     if let Some(class) = f.resolved_owner() {
         inject_class_statics(&scope, &class);
+    }
+    // A self-recursive local closure reaches itself through the call scope
+    // rather than through a captured binding, so the function and its captured
+    // scope never point at each other. See `FunctionObject::self_name`.
+    if let Some(name) = f.self_name.borrow().clone() {
+        scope
+            .borrow_mut()
+            .define(name, Value::Function(Rc::clone(f)));
     }
     bind_params(&scope, &f.params, &f.param_keys, args, &span)?;
     let result = run_function_body_multi(f, &scope, span);

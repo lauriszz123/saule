@@ -216,6 +216,16 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
         }
 
         Expr::Lambda { params, body, .. } => {
+            // Capture the names the body mentions rather than the scope
+            // itself: holding the scope is a reference cycle the moment the
+            // lambda is stored back into it. See `Environment::capture_flat`.
+            let closure = match crate::capture::captured_names(body) {
+                Some(names) => Environment::capture_flat(env, &names),
+                // The body holds something the capture analysis does not
+                // model, so fall back to the old whole-scope capture —
+                // correct, just not collectable.
+                None => env.clone(),
+            };
             let body = match body {
                 LambdaBody::Expr(e) => FunctionBody::Expr(e.clone()),
                 LambdaBody::Block(stmts) => FunctionBody::Block(stmts.clone()),
@@ -225,8 +235,9 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
                 param_keys: FunctionObject::intern_params(params),
                 params: params.clone(),
                 body,
-                closure: env.clone(),
+                closure,
                 owner_class: std::cell::RefCell::new(None),
+                self_name: std::cell::RefCell::new(None),
                 source: crate::module::active_module_source(),
             })))
         }

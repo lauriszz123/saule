@@ -79,6 +79,17 @@ pub struct FunctionObject {
     /// `None` for functions defined in the entry file (the CLI attaches
     /// the entry file's source to top-level errors already).
     pub source: Option<Rc<miette::NamedSource<String>>>,
+    /// `Some(name)` when this is a self-recursive local closure — the shape
+    /// `local fact = fn(n) … fact(n-1) … end`. Set after construction via
+    /// [`set_self_name`](Self::set_self_name).
+    ///
+    /// The recursive call resolves through a binding the *call scope* makes to
+    /// this very function, not through a captured variable. Capturing it would
+    /// close a cycle — the binding's cell would hold the function and the
+    /// function's captured scope would hold the cell — which is precisely the
+    /// leak flat capture exists to prevent. Binding per call costs one map
+    /// insert on a scope that is released when the call returns.
+    pub self_name: RefCell<Option<Rc<str>>>,
 }
 
 impl FunctionObject {
@@ -108,6 +119,12 @@ impl FunctionObject {
         if slot.is_none() {
             *slot = Some(Rc::downgrade(class));
         }
+    }
+
+    /// Mark this function as reachable under `name` from inside its own body.
+    /// See [`self_name`](Self::self_name).
+    pub fn set_self_name(&self, name: impl Into<Rc<str>>) {
+        *self.self_name.borrow_mut() = Some(name.into());
     }
 
     /// Resolve the owning class, if any. Returns `None` once the class has

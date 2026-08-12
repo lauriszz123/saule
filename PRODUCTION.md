@@ -5,9 +5,19 @@ ordinary people use for real work, how you would *know* it is stable, how hard
 it is to embed in another project, how hard it is to write a native library for
 it, and how the code should be split across crates and repositories.
 
-Everything below is measured against the working tree at `46e810e` (main,
-2026-08-10). Numbers were produced by running the suites and benchmarks on this
-machine (macOS 25.6, arm64), not estimated.
+Everything below was originally measured against the working tree at `46e810e`
+(main, 2026-08-10). Numbers were produced by running the suites and benchmarks
+on this machine (macOS 25.6, arm64), not estimated.
+
+> **Revised 2026-08-12 against `197ef4f`.** Parser error recovery — ranked as the
+> single highest-leverage gap in the original draft — has since landed, and the
+> sections that turned on it are rewritten below. The memory-model section
+> ([§3.2](#32-memory-model)) is substantially rewritten twice over: the cycle
+> leak turned out to be materially broader than the original draft described,
+> and the dominant case — every closure stored in a local — has since been
+> fixed. Both the problem and the fix are backed by measurement rather than by
+> reading the types. Crate LOC counts and the language benchmark table predate
+> `197ef4f` and have not been re-run.
 
 > **Scope note.** This document does not repeat [RELEASE_PLAN.md](RELEASE_PLAN.md),
 > which already sequences distribution and the package manager in detail and is
@@ -62,7 +72,7 @@ uniformly:
 | How do I add a library? | You cannot. `dependencies:` accepts local relative paths only. |
 | How do I write a test? | There is no test runner. Write a `.sau` file and check the output by eye. |
 | Where did my error come from? | The line it failed on. There is no call stack. |
-| Is my editor going to work? | Until you type a syntax error, at which point every feature stops. |
+| Is my editor going to work? | Yes — the parser recovers, so features survive half-typed code. |
 | How fast is it? | 5–11× slower than PUC Lua, 30–90× slower than LuaJIT. |
 | Is it stable? | Nothing states what "stable" means, and nothing enforces it. |
 
@@ -71,14 +81,10 @@ matters more than the total volume — see [§10](#10-sequenced-roadmap).
 
 The three things that most change Saule's trajectory, in order:
 
-1. **Parser error recovery.** Right now `saule_parser::parse` returns
-   `Result<Module, ParseError>` and bails on the first error
-   ([lib.rs:52](crates/saule-parser/src/lib.rs:52)). A half-typed file produces
-   one diagnostic and no AST, so the LSP loses completion, hover, and signature
-   help exactly when the user needs them. This is the single largest gap between
-   "an editor plugin exists" and "the editor feels good", and everything in the
-   LSP crate — 20,754 lines, the largest crate in the workspace — is built on
-   top of an input that vanishes under normal typing.
+1. **Shipping a release at all.** The release workflow builds six triples and has
+   never published; one tag exists. Every other item on this list is invisible
+   until someone who is not the author can install `saule`. This is now the
+   binding constraint, and it is process, not engineering.
 2. **Publishing `saule-native-abi` / `saule-sdk` / `saule-export-macro` to
    crates.io.** Today they are path dependencies inside this workspace, so
    "write a native library for Saule" means "clone the compiler." That is a hard
@@ -86,6 +92,21 @@ The three things that most change Saule's trajectory, in order:
 3. **A stability contract.** Not a version number — a written statement of what
    may change and what may not, with tests that fail when it does. §6 proposes
    one.
+
+> **Done since the original draft.** Parser error recovery was the first item on
+> this list and has landed. `saule_parser` now exposes `parse_recover` and
+> `parse_recover_with_prior` alongside the strict `parse`
+> ([lib.rs:157](crates/saule-parser/src/lib.rs:157)), built on a 575-line
+> [recover.rs](crates/saule-parser/src/recover.rs) and covered by 33 tests in
+> [recovery_tests.rs](crates/saule-parser/tests/recovery_tests.rs). The LSP
+> consumes it through [syntax.rs:56](crates/saule-lsp/src/syntax.rs:56), and
+> carries the good idea of seeding recovery from the last *clean* parse of the
+> file ([server.rs:105](crates/saule-lsp/src/server.rs:105)) so the recovered
+> tree has fewer holes. Completion additionally tries a repair pass before
+> falling back to the recovered tree
+> ([completion/repair.rs](crates/saule-lsp/src/server/completion/repair.rs)).
+> This removes the largest single gap between "an editor plugin exists" and
+> "the editor feels good".
 
 ---
 
@@ -100,6 +121,7 @@ The three things that most change Saule's trajectory, in order:
 | Test density | `grep -rn '#\[test\]' crates` | **919** test functions |
 | Debt markers | `grep -rn 'TODO\|FIXME\|HACK'` | **0** genuine markers in `crates/*/src` |
 | Release history | `git tag` | **1 tag** (`v26.1`, 2026-07-30), 131 commits |
+| Memory behaviour | peak RSS over 3M closure allocations | **7.6 MB, level with the control** (was 2,468.7 MB) — see [Appendix A](#appendix-a--raw-measurements) |
 
 The `.sau` fixture suite is worth calling out specifically: `tests/*.sau` must
 run and exit 0, and `tests/ui/*.sau` must *fail*, each one pinning a specific
@@ -188,22 +210,112 @@ Doubly-linked lists, parent↔child trees, observer registrations, and any graph
 with a back-edge leak for the process lifetime. Lua does not have this problem
 because it has a tracing GC; a user coming from Lua will assume Saule does too.
 
-This is a real fork in the road, and it should be an explicit decision rather
-than an inherited default:
+**The data-structure case above was the mild one.** The load-bearing cycle was
+in closures, and it fired on code nobody would look at twice:
 
-- **Accept it, document it, provide the tools.** Add a `weak` reference type to
-  the language, document the leak, and ship a way to observe it (a
+```saule
+local big: table<integer> = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+local f: fn() -> integer = fn()
+  return big[1]
+end                     -- this scope could never be freed
+```
+
+A `FunctionObject` captured its defining scope by strong reference
+(`closure: Rc<RefCell<Environment>>`), and `Environment` holds its bindings as
+`Value`s. So the moment a function value was stored into the same scope that
+created it, the graph closed:
+
+```
+Environment ──vars──▶ Value::Function ──closure──▶ Environment
+```
+
+Nothing in that cycle was weak. **Storing a lambda in a local is the single most
+common way to write a helper function, and it leaked its entire enclosing scope
+every time it executed** — per-execution, so a loop or a hot function
+accumulated it without bound.
+
+> **Fixed.** A lambda now captures the *names its body mentions* rather than the
+> frame it was written in. The captured bindings move behind shared cells into
+> one flat scope parented straight to the module root
+> ([`Environment::capture_flat`](crates/saule-interpreter/src/env.rs)), so
+> nothing the closure holds points back at the scope that created it and the
+> cycle cannot form. Live-binding semantics are preserved: the closure and the
+> original scope still read and write one location, which is what keeps
+> `counter()`-style closures and per-iteration loop capture working. The capture
+> set is computed once per lambda body and cached
+> ([capture.rs](crates/saule-interpreter/src/capture.rs)).
+>
+> Measured on this machine (`target/release/saule.exe`, Windows, peak working
+> set sampled during the run; all loops allocate the same 10-element table per
+> iteration and differ only in what they do with a closure):
+>
+> | Variant | Iterations | Before | After |
+> |---|---:|---:|---:|
+> | No closure at all (control) | 3,000,000 | 7.5 MB | **7.5 MB** |
+> | Lambda passed as an argument, never stored back | 3,000,000 | 7.6 MB | **7.6 MB** |
+> | Lambda stored into the scope it captured | 3,000,000 | **2,468.7 MB** | **7.6 MB** |
+> | The `Node` back-edge example above | 1,000,000 pairs | 1,282.8 MB | **1,282.8 MB** |
+>
+> The closure case now sits exactly on the control. The `Node` row is unchanged
+> and is *supposed* to be: that is a user-authored back-edge, which is what the
+> rest of this section is about.
+>
+> Cost: roughly 1–3% across the benchmark suite, up to ~6% on closure-heavy
+> code, against a measured run-to-run noise floor of 2–3%. An earlier version
+> that wrapped every binding in a `Direct | Cell` enum cost 3–8%; keeping
+> captured bindings in a separate, almost-always-empty map leaves the hot
+> lookup path byte-identical and gave most of that back.
+
+Two things already narrowed the blast radius, and both are worth stating because
+they also bound what is left:
+
+- **Named `fn` declarations are top-level only** — the resolver rejects a nested
+  one (*"undefined name `helper`"*), so the identical store-back in
+  [stmt/mod.rs:328](crates/saule-interpreter/src/eval/stmt/mod.rs:328) only ever
+  targets a module scope, which lives for the process anyway.
+- **Self-recursive local closures do not capture their own name.** A lambda
+  bound by `local fact = fn(n) … fact(n-1) … end` reaches itself through a
+  binding the *call scope* makes to the function
+  (`FunctionObject::self_name`), not through a captured cell — capturing it
+  would close a fresh cycle, cell → function → captured scope → cell. Measured:
+  3,355 MB over 3M iterations with the capture in place, **7.7 MB** with the
+  call-scope binding.
+
+  This shape used to be rejected outright (a `local` was not in scope inside
+  its own initializer), and an earlier draft of this document treated that as
+  a useful accident. It was not: the same cycle was already reachable by
+  writing the recursion through any other in-scope local, e.g. a one-element
+  table, which compiled and leaked. The rule bought nothing and cost a
+  language feature.
+
+What remains is the user-authored case, and it is still a real fork in the road:
+
+- ~~**Fix the closure edge specifically.**~~ **Done** — see above. Captures now
+  resolve to a flat set of shared bindings at definition time instead of
+  retaining the scope chain. This is also the half that pays off in an eventual
+  bytecode VM, since upvalue resolution is something that design needs anyway.
+- **Accept the rest, document it, provide the tools.** Add a `weak` reference
+  type to the language, document the leak, and ship a way to observe it (a
   `--stats` flag reporting live `Rc` counts at exit). This is the Swift/ObjC
-  answer. Cheapest, and honest.
+  answer. Cheapest, and honest. **Note that `weak` addresses only the
+  user-visible data-structure case** — it cannot reach the closure cycle, which
+  is internal to the interpreter's scope representation and not something a user
+  can annotate their way out of. Shipping `weak` alone would leave the larger
+  leak in place while appearing to solve it.
 - **Add a cycle collector.** A trial-deletion collector over `Rc` (the
   Bacon–Rajan algorithm) is the standard retrofit and does not require rewriting
-  every value. Substantial work, contained blast radius.
+  every value. Substantial work, contained blast radius. This is the only option
+  that covers both cases without asking users to think about it.
 - **Move to a tracing GC.** Correct in the long run, and effectively a rewrite of
   the value layer plus every native boundary.
 
 There is also an environment recycling pool ([env.rs:44](crates/saule-interpreter/src/env.rs:44),
 [recycle.rs](crates/saule-interpreter/src/recycle.rs)) — a nice optimisation, and
 independent of the above.
+
+Whichever option is taken, the §6.2 item 7 memory-behaviour test should land with
+it: this class of bug was invisible for the life of the project precisely because
+nothing measures it.
 
 ### 3.3 Execution model
 
@@ -319,9 +431,9 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Type system completeness | Strong core, deliberately partial checker, no unions/aliases | **B** |
 | Formatter | Dedicated crate, config-driven, corpus tests, round-trips | **A−** |
 | LSP feature breadth | Hover, goto, refs, symbols, inlay, sighelp, completion, format | **A−** |
-| LSP robustness | Dies on any syntax error — no recovery | **D** |
+| LSP robustness | Error recovery + prior-parse seeding + completion repair | **B+** |
 | Runtime performance | 5–11× PUC Lua, 30–90× LuaJIT | **C** |
-| Memory management | Refcount, cycles leak, no tooling to see it | **C−** |
+| Memory management | Refcount; closure capture fixed; user-authored cycles still leak, no tooling to see them | **C** |
 | Runtime diagnostics | No stack traces, boolean FS errors | **C−** |
 | Concurrency | Absent | **D** |
 | Standard library | Solid core; no regex, JSON, net, structured errors | **C** |
@@ -352,12 +464,12 @@ part (a coherent, working implementation) is done.
 2. **No package manager.** `dependencies:` takes local paths. RELEASE_PLAN steps
    5–8 cover this and the design (no index, git-hosted, exact pins, SHA lock) is
    sound.
-3. **Parser gives up on the first error.** No recovery, no partial AST, one
-   diagnostic per compile. In the LSP this means every feature — completion,
-   hover, signature help, symbols — goes dark the moment a character is
-   half-typed, which is most of the time while writing code.
-   [diagnostics.rs:100](crates/saule-lsp/src/server/diagnostics.rs:100) shows the
-   early return. *Fixing this is the highest-leverage change in the repo.*
+3. ~~**Parser gives up on the first error.**~~ **Done** — see the note in
+   [§1](#1-the-verdict-in-one-page). `parse_recover` always produces a tree, and
+   the LSP builds on it. The follow-on question is no longer *whether* the editor
+   survives a syntax error but how good the recovered tree is; the 33 recovery
+   tests are the place to grow that, and §6.2's diagnostic snapshots would make
+   regressions in it reviewable.
 4. **Editor plugins are unpublished.** All three exist and work; none are on a
    marketplace. A language you must sideload editor support for is a language
    people bounce off.
@@ -369,8 +481,12 @@ part (a coherent, working implementation) is done.
    code in a language they cannot test. This is cheap to build relative to its
    impact.
 6. **No stack traces on runtime errors.** See §3.4.
-7. **Reference cycles leak.** See §3.2. At minimum: document it, add `weak`, and
-   ship a way to see it.
+7. **User-authored reference cycles leak.** See §3.2. The closure case — which
+   was the severe one, firing on ordinary `local f = fn() … end` and costing
+   2.5 GB against a 7.5 MB control — is fixed. What is left is the case a
+   programmer can see and reason about: a back-edge between values, like the
+   `Node` pair. It still leaks for the process lifetime, there is still no way
+   to observe it, and `weak` plus a cycle report is still the answer.
 8. **No debugger.** No DAP implementation. Print debugging only.
 9. **Performance.** Acceptable for scripting; disqualifying for compute. Decide
    the target workload, then decide whether a bytecode VM is on the roadmap.
@@ -671,7 +787,7 @@ people mention when they recommend Saule.
 |---|---:|---|---|
 | `saule-ast` | 865 | Shared AST | Correct. Foundation for everything. |
 | `saule-lexer` | 1,103 | Tokeniser | Correct. |
-| `saule-parser` | 2,995 | Recursive descent | Correct crate; needs recovery (§5.3). |
+| `saule-parser` | 2,995 | Recursive descent + error recovery | Correct. Recovery landed in `197ef4f`; LOC is now higher than shown. |
 | `saule-semantic` | 2,565 | Resolution, registries, flow, field-init | Correct. |
 | `saule-typeck` | 8,043 | Types, nullability, generics, exhaustiveness | Correct. |
 | `saule-interpreter` | 15,046 | Tree-walker, stdlib, modules, native hosting | **Too broad — see 9.2.** |
@@ -733,10 +849,15 @@ get the same answers, and would delete both the ad-hoc seed cache and the ~800
 lines of LSP-local inference. **This is the largest single architectural
 improvement available**, and it should be a deliberate project, not a drive-by.
 
-**`saule-syntax` — only if the parser gets recovery.**
-An error-tolerant, lossless CST (rowan-style) is a different data structure from
-the current `Module`, and if it lands it should be its own crate rather than
-bolted onto `saule-parser`. Consider this the concrete plan for §5.3.
+**`saule-syntax` — reconsider, now that recovery exists.**
+The original rationale was that recovery would need an error-tolerant, lossless
+CST (rowan-style), which is a different data structure from the current `Module`
+and would deserve its own crate. Recovery instead landed inside `saule-parser` as
+[recover.rs](crates/saule-parser/src/recover.rs), producing a `Parsed` tree with
+holes rather than a full CST — a smaller change that has so far been enough. Do
+not extract this crate on the old reasoning. Revisit only if a concrete need for
+losslessness appears (whitespace-preserving refactors, or a formatter that wants
+to round-trip broken input), and treat that as a fresh decision.
 
 ### 9.3 Crates to split
 
@@ -834,10 +955,16 @@ installer, publish the three editor plugins. **Nothing else matters until someon
 who is not you can run `saule`.**
 
 ### Phase 2 — Make it usable
-- Parser error recovery + partial AST. The highest-leverage change in the repo.
+- ~~Parser error recovery + partial AST.~~ **Done** (`197ef4f`).
+- ~~Fix the closure/scope cycle (§3.2).~~ **Done** — lambdas capture names, not
+  frames. Regression-guarded by unit tests asserting the defining scope is not
+  retained, plus a `tests/closure_capture.sau` fixture pinning the semantics.
+- Build the cycle-report tool (§6.2 item 7). Now the highest-value memory work:
+  the closure leak went unnoticed for the life of the project because nothing
+  measures this, and the remaining user-authored cycles have the same problem.
 - `saule test`.
 - Runtime stack traces.
-- Document the cycle-leak behaviour; add `weak`.
+- Document the remaining data-structure cycle behaviour; add `weak`.
 
 ### Phase 3 — Make it extensible
 - Publish `saule-native-abi`, `saule-export-macro`, `saule-sdk` with semver.
@@ -890,6 +1017,58 @@ Reading: the recursive-call path (`fib`, 10.9×) and raw arithmetic loops
 predicts — every operation pays AST dispatch. `map` at 1.2× shows the table
 implementation is competitive when hashing dominates. **`startup` level with Lua
 is a real achievement** and means the front end costs the user nothing.
+
+### Memory behaviour
+
+Peak working set, sampled every 20 ms while the process ran;
+`target/release/saule.exe` on Windows 11, `saule run <file>`. Every variant
+allocates one 10-element `table<integer>` per iteration and differs only in how
+it treats a closure. Sources are reproduced in §3.2.
+
+| Variant | Iterations | Before | After |
+|---|---:|---:|---:|
+| Control — no closure | 3,000,000 | 7.5 MB | 7.5 MB |
+| Lambda passed as an argument, not stored back | 3,000,000 | 7.6 MB | 7.6 MB |
+| Lambda stored into the scope it captured | 3,000,000 | 2,468.7 MB (~860 B/iter) | **7.6 MB** |
+| `Node` back-edge pair (`a.next = b; b.next = a`) | 1,000,000 | 1,282.8 MB (~1.3 KB/iter) | 1,282.8 MB |
+
+The second row is the control that isolated the cause: closures were never the
+problem, storing one into its own defining scope was. The third row is the fix
+(§3.2); the fourth is the user-authored cycle that remains.
+
+A fifth variant, a self-recursive local closure, is measured separately because
+it was a language change as well as a memory one:
+
+| Variant | Iterations | Capturing the self-name | Binding it per call |
+|---|---:|---:|---:|
+| `local down = fn(n) … down(n-1) … end` | 3,000,000 | 3,355.2 MB | **7.7 MB** |
+
+A *named* nested `fn` declaration still cannot be measured: the resolver rejects
+it (`undefined name`), because named functions are top-level only in Saule.
+
+### Interpreter throughput, before vs after the capture change
+
+`REPS=7 python benchmarks/bench.py`, release build, same machine. The rightmost
+column is the honest read: a second run of the *unchanged* binary against itself
+moved individual benchmarks by up to 3%, so anything at or under that is noise.
+
+| bench | after | before | delta | noise floor (old vs old) |
+|---|---:|---:|---:|---:|
+| loop_arith | 0.603 | 0.593 | +1.7% | 1.8% |
+| fib | 0.317 | 0.315 | +0.6% | 3.1% |
+| array | 0.354 | 0.341 | +3.8% | 0.3% |
+| map | 0.395 | 0.396 | −0.3% | 2.2% |
+| oop | 0.452 | 0.438 | +3.2% | 0.2% |
+| mandel | 0.436 | 0.433 | +0.7% | 0.4% |
+| strings | 0.154 | 0.153 | +0.7% | 2.5% |
+| closure | 0.251 | 0.237 | +5.9% | 0.4% |
+| sort | 0.760 | 0.753 | +0.9% | 2.3% |
+| startup | 0.027 | 0.027 | 0% | 0% |
+
+`closure` is the one clearly outside the noise, which is what the design
+predicts: creating a closure now walks its capture set and builds a flat scope
+instead of cloning one `Rc`. Reading a variable — the far hotter operation — is
+unchanged, which is why the rest sits in the noise.
 
 ### Crate sizes
 

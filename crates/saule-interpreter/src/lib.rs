@@ -34,6 +34,7 @@ use std::rc::Rc;
 
 use saule_ast::Module;
 
+pub(crate) mod capture;
 pub mod dynamic_packages;
 pub mod env;
 pub mod error;

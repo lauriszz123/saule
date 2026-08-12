@@ -1279,24 +1279,30 @@ end
 ";
     // Wrong parameter type.
     rejects(
-        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(n: integer)\n    print(n)\n  end\n  return\nend\n"),
+        &format!(
+            "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(n: integer)\n    print(n)\n  end\n  return\nend\n"
+        ),
         "(fn(string) -> nil)?",
     );
     // Wrong arity.
     rejects(
-        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(a: string, b: string)\n    print(a)\n  end\n  return\nend\n"),
+        &format!(
+            "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(a: string, b: string)\n    print(a)\n  end\n  return\nend\n"
+        ),
         "(fn(string) -> nil)?",
     );
     // Wrong return type.
     rejects(
-        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(s: string) -> integer\n    return 1\n  end\n  return\nend\n"),
+        &format!(
+            "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(s: string) -> integer\n    return 1\n  end\n  return\nend\n"
+        ),
         "(fn(string) -> nil)?",
     );
     // And the matching one still passes, with the parameter type supplied by
     // the slot rather than written out.
-    accepts(
-        &format!("{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = s => print(s)\n  return\nend\n"),
-    );
+    accepts(&format!(
+        "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = s => print(s)\n  return\nend\n"
+    ));
 }
 
 /// A lambda that declares `-> T` must actually return a `T`. The declaration

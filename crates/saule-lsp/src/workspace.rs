@@ -181,7 +181,10 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let mut path = std::env::temp_dir();
-            path.push(format!("saule-lsp-scan-{tag}-{}-{nanos}", std::process::id()));
+            path.push(format!(
+                "saule-lsp-scan-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
             fs::create_dir_all(&path).expect("create scratch dir");
             Scratch(path)
         }

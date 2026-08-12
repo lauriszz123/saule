@@ -1,0 +1,9 @@
+-- A non-lambda initializer must NOT see the name being bound: `local x = x + 1`
+-- is a typo, not a definition. The name is pre-declared only for the lambda
+-- shape that makes a local function recursive.
+class Main
+	static fn main()
+		local x: integer = x + 1
+		println(x)
+	end
+end
