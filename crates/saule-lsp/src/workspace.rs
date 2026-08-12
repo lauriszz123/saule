@@ -165,3 +165,113 @@ fn parse_list(raw: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scratch directory tree. `tempfile` is not a dependency of this crate
+    /// and a walker test needs real directory entries to walk.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let mut path = std::env::temp_dir();
+            path.push(format!("saule-lsp-scan-{tag}-{}-{nanos}", std::process::id()));
+            fs::create_dir_all(&path).expect("create scratch dir");
+            Scratch(path)
+        }
+
+        /// Create `rel` (and its parents) with enough content to be a real file.
+        fn file(&self, rel: &str) {
+            let path = self.0.join(rel);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent");
+            }
+            fs::write(&path, "class Main\nend\n").expect("write file");
+        }
+
+        fn scan_file_names(&self) -> Vec<String> {
+            let mut names: Vec<String> = scan_saule_files(&self.0)
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|s| s.to_str()))
+                .map(str::to_string)
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The one that matters in practice: a Claude Code worktree under
+    /// `.claude/` is a complete second copy of the repository. Walking into it
+    /// would analyse — and publish diagnostics for — every file twice, against
+    /// stale duplicates the user is not editing.
+    #[test]
+    fn skips_dot_directories() {
+        let s = Scratch::new("dotdirs");
+        s.file("src/real.sau");
+        s.file(".claude/worktrees/adoring-cerf/tests/ui/duplicate.sau");
+        s.file(".git/hooks/hook.sau");
+        s.file(".idea/scratch.sau");
+
+        assert_eq!(s.scan_file_names(), vec!["real.sau"]);
+    }
+
+    #[test]
+    fn skips_build_output_directories() {
+        let s = Scratch::new("buildout");
+        s.file("src/real.sau");
+        s.file("target/release/generated.sau");
+        s.file("node_modules/some-pkg/bundled.sau");
+
+        assert_eq!(s.scan_file_names(), vec!["real.sau"]);
+    }
+
+    #[test]
+    fn finds_nested_files_and_both_extensions() {
+        let s = Scratch::new("nested");
+        s.file("top.sau");
+        s.file("a/b/c/deep.saule");
+
+        assert_eq!(s.scan_file_names(), vec!["deep.saule", "top.sau"]);
+    }
+
+    #[test]
+    fn ignores_files_that_are_not_saule_sources() {
+        let s = Scratch::new("exts");
+        s.file("keep.sau");
+        s.file("README.md");
+        s.file("build.rs");
+        s.file("saule.config");
+
+        assert_eq!(s.scan_file_names(), vec!["keep.sau"]);
+    }
+
+    /// A dot-directory nested deeper than the root must be skipped too — the
+    /// check is per directory component, not just the top level.
+    #[test]
+    fn skips_dot_directories_below_the_root() {
+        let s = Scratch::new("deepdot");
+        s.file("packages/app/src/real.sau");
+        s.file("packages/app/.claude/worktrees/copy/duplicate.sau");
+
+        assert_eq!(s.scan_file_names(), vec!["real.sau"]);
+    }
+
+    #[test]
+    fn missing_root_yields_nothing_rather_than_panicking() {
+        let s = Scratch::new("missing");
+        let gone = s.0.join("does-not-exist");
+        assert!(scan_saule_files(&gone).is_empty());
+    }
+}

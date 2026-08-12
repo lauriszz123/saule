@@ -8,10 +8,10 @@ class Main
 
 		println("a         = " .. a)
 		println("b         = " .. b)
-		println("a + b     = " .. (a + b))
-		println("b - a     = " .. (b - a))
-		println("a * b     = " .. (a * b))
-		println("-a        = " .. (-a))
+		println("a + b     = " .. a + b)
+		println("b - a     = " .. b - a)
+		println("a * b     = " .. a * b)
+		println("-a        = " .. -a)
 
 		-- `==` runs Vec2.equals, so an independently built vector matches.
 		println("a == (1,2)? " .. tostring(a == Vec2(1.0, 2.0)))
@@ -30,7 +30,7 @@ class Main
 		local gravity: Vec2 = Vec2(0.0, -9.81)
 		local position: Vec2 = Vec2(0.0, 100.0)
 		local velocity: Vec2 = Vec2(12.0, 0.0)
-		local dt: float = 0.5
+		local dt: float = .5
 
 		for step = 1, 4 do
 			velocity = velocity + gravity.scale(dt)
@@ -45,8 +45,8 @@ class Main
 		println("")
 		println("-- paths --")
 
-		local first: Path = Path({ Vec2(0.0, 0.0), Vec2(3.0, 4.0) })
-		local second: Path = Path({ Vec2(3.0, 8.0), Vec2(0.0, 8.0) })
+		local first: Path = Path({Vec2(0.0, 0.0), Vec2(3.0, 4.0)})
+		local second: Path = Path({Vec2(3.0, 8.0), Vec2(0.0, 8.0)})
 
 		-- `..` builds a Path here, not a string — that is OpConcat.
 		local whole: Path = first .. second
