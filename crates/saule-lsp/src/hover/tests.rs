@@ -1,7 +1,9 @@
 //! Hover walker integration tests. Pulled into a sibling file so the
 //! main walker stays focused on production code.
-
-#![cfg(test)]
+//!
+//! The `#[cfg(test)]` gate lives on the `mod tests;` declaration in
+//! `hover.rs`; repeating it here as an inner attribute is what
+//! `clippy::duplicated_attributes` flags.
 
 use super::*;
 use std::sync::Once;

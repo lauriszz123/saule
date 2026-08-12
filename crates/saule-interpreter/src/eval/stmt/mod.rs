@@ -148,11 +148,32 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
         }),
 
         Stmt::Local { name, value, .. } => {
+            // A lambda initializer may call the name being bound. The binding
+            // has to exist *before* the lambda is built so the capture walk
+            // has something to promote; the real function is then written
+            // through that same shared cell, which is what the closure sees.
+            // `saule_semantic` scopes the name's visibility to this exact
+            // shape, so nothing else can observe the placeholder.
+            let recursive = matches!(value.as_ref().map(|e| &e.value), Some(Expr::Lambda { .. }));
+            if recursive {
+                env.borrow_mut().define(name.clone(), Value::Nil);
+            }
             let v = match value {
                 Some(e) => expr::eval(e, env)?,
                 None => Value::Nil,
             };
-            env.borrow_mut().define(name.clone(), v);
+            if recursive {
+                // The lambda captured its own name along with everything else
+                // it mentions. Left in place that is a cycle, so hand the
+                // recursion to the call scope instead and drop the capture.
+                if let Value::Function(f) = &v {
+                    f.set_self_name(name.as_str());
+                    f.closure.borrow_mut().drop_capture(name);
+                }
+                env.borrow_mut().assign(name, v);
+            } else {
+                env.borrow_mut().define(name.clone(), v);
+            }
             Ok(Flow::nil())
         }
 
@@ -327,6 +348,7 @@ fn exec_decl(decl: &Spanned<Decl>, env: &Rc<RefCell<Environment>>) -> Result<Flo
                 body: FunctionBody::Block(body.as_slice().into()),
                 closure: env.clone(),
                 owner_class: std::cell::RefCell::new(None),
+                self_name: std::cell::RefCell::new(None),
                 source: crate::module::active_module_source(),
             };
             env.borrow_mut()
@@ -370,6 +392,7 @@ pub(super) fn make_function(
         body: FunctionBody::Block(body.into()),
         closure: closure.clone(),
         owner_class: std::cell::RefCell::new(None),
+        self_name: std::cell::RefCell::new(None),
         source: crate::module::active_module_source(),
     }
 }

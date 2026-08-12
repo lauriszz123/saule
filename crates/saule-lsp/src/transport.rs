@@ -255,7 +255,10 @@ mod tests {
         input.extend(frame(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown"}"#));
         let out = run(input).await;
         assert!(!out.contains("not json"), "malformed body was forwarded");
-        assert!(out.contains(r#""method":"shutdown""#), "good frame was lost");
+        assert!(
+            out.contains(r#""method":"shutdown""#),
+            "good frame was lost"
+        );
     }
 
     #[tokio::test]

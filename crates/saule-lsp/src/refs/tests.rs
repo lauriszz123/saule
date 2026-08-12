@@ -1,6 +1,8 @@
 //! Resolver and collector integration tests.
-
-#![cfg(test)]
+//!
+//! The `#[cfg(test)]` gate lives on the `mod tests;` declaration in `refs.rs`;
+//! repeating it here as an inner attribute is what
+//! `clippy::duplicated_attributes` flags.
 
 use super::*;
 use std::ops::Range;

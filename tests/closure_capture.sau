@@ -1,0 +1,144 @@
+-- A lambda captures the names its body mentions, not the scope it was
+-- written in — holding the scope is a reference cycle as soon as the lambda
+-- is stored back into it. These are the semantics that flat capture has to
+-- preserve while it breaks that cycle.
+
+-- A captured local outlives the call that created it, and stays live: the
+-- closure's writes are visible on the next call.
+fn counter(stop: integer) -> fn() -> integer?
+	local i: integer = 0
+	return fn()
+		i = i + 1
+		if i > stop then
+			return nil
+		end
+		return i
+	end
+end
+
+-- Two closures over one variable must share it, not get a copy each.
+fn make_pair() -> table<fn() -> integer>
+	local n: integer = 0
+	local bump: fn() -> integer = fn()
+		n = n + 1
+		return n
+	end
+	local read: fn() -> integer = fn()
+		return n
+	end
+	bump()
+	bump()
+	return {bump, read}
+end
+
+-- A lambda inside a lambda reaches a binding two levels up.
+fn nested() -> fn() -> integer
+	local outer: integer = 10
+	return fn()
+		local inner: fn() -> integer = fn()
+			return outer + 5
+		end
+		return inner()
+	end
+end
+
+-- The capture set over-approximates (it is every name the body mentions), so
+-- a parameter of the same name must still shadow what was captured.
+fn shadowed(x: integer) -> integer
+	local f: fn(integer) -> integer = fn(x: integer)
+		return x * 100
+	end
+	return f(2) + x
+end
+
+-- A write through the original binding after the capture is visible.
+fn mutate_after_capture() -> integer
+	local v: integer = 1
+	local get: fn() -> integer = fn()
+		return v
+	end
+	v = 42
+	return get()
+end
+
+-- A local closure can call itself. The recursive name resolves to the
+-- function through the call scope, not through a captured binding — capturing
+-- it would close a cycle (cell -> function -> captured scope -> cell).
+fn fact(n: integer) -> integer
+	local go: fn(integer) -> integer = fn(k: integer)
+		if k <= 1 then
+			return 1
+		end
+		return k * go(k - 1)
+	end
+	return go(n)
+end
+
+-- ...and it keeps working after outliving the scope that built it.
+fn make_countdown() -> fn(integer) -> integer
+	local base: integer = 100
+	local down: fn(integer) -> integer = fn(n: integer)
+		if n <= 0 then
+			return base
+		end
+		return down(n - 1)
+	end
+	return down
+end
+
+class Widget
+	static count: integer = 0
+	label: string
+
+	fn init(label: string)
+		self.label = label
+	end
+
+	-- A lambda written in a method body keeps `self` and bare-name access
+	-- to the class's statics.
+	fn describe() -> string
+		local f: fn() -> string = fn()
+			count = count + 1
+			return self.label
+		end
+		return f()
+	end
+end
+
+class Main
+	static fn main()
+		local seen: integer = 0
+		for n in counter(3) do
+			seen = seen + n
+		end
+		assert(seen == 6)
+
+		local pair: table<fn() -> integer> = make_pair()
+		assert(pair[2]() == 2)
+
+		assert(nested()() == 15)
+		assert(shadowed(7) == 207)
+		assert(mutate_after_capture() == 42)
+
+		local w: Widget = Widget("hello")
+		assert(w.describe() == "hello")
+		assert(Widget.count == 1)
+
+		-- Each iteration's closure keeps that iteration's binding.
+		local fs: table<fn() -> integer> = {}
+		for i: integer = 1, 3 do
+			local k: integer = i * 10
+			fs[i] = fn()
+				return k
+			end
+		end
+		assert(fs[1]() == 10)
+		assert(fs[2]() == 20)
+		assert(fs[3]() == 30)
+
+		assert(fact(5) == 120)
+		assert(make_countdown()(5) == 100)
+
+		println("closure capture ok")
+	end
+end

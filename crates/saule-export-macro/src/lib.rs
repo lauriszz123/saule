@@ -274,9 +274,8 @@ fn parse_attr(attr: TokenStream) -> Result<(String, String, SigOverrides), syn::
         // `sig(f = "fn(T) -> T", g = "...")` — one entry per callback slot.
         if key == "sig" {
             let list = meta.require_list()?;
-            let entries = list.parse_args_with(
-                Punctuated::<MetaNameValue, Token![,]>::parse_terminated,
-            )?;
+            let entries =
+                list.parse_args_with(Punctuated::<MetaNameValue, Token![,]>::parse_terminated)?;
             for nv in entries {
                 let slot = nv
                     .path
