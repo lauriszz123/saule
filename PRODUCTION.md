@@ -19,6 +19,13 @@ on this machine (macOS 25.6, arm64), not estimated.
 > reading the types. Crate LOC counts and the language benchmark table predate
 > `197ef4f` and have not been re-run.
 
+> **Revised 2026-08-13.** Two items from §9.2 have landed and their sections are
+> rewritten: `saule-project` now owns `saule.config` for all three consumers, and
+> `saule-db` is the incremental query layer for parse / imports / seed. Both
+> sections correct a claim the earlier drafts made without checking — see the end
+> of each. Crate LOC counts and the language benchmark table still predate
+> `197ef4f`.
+
 > **Scope note.** This document does not repeat [RELEASE_PLAN.md](RELEASE_PLAN.md),
 > which already sequences distribution and the package manager in detail and is
 > largely correct. This is the layer above that plan: what the plan does *not*
@@ -43,6 +50,7 @@ on this machine (macOS 25.6, arm64), not estimated.
 - [7. Is it easy to embed?](#7-is-it-easy-to-embed)
 - [8. Is it easy to write a native library?](#8-is-it-easy-to-write-a-native-library)
 - [9. Crate and repository topology](#9-crate-and-repository-topology)
+  - [9.2.1 What blocks the rest of the query layer](#921-what-blocks-the-rest-of-the-query-layer)
 - [10. Sequenced roadmap](#10-sequenced-roadmap)
 - [Appendix A — raw measurements](#appendix-a--raw-measurements)
 
@@ -390,18 +398,20 @@ Behaviour worth knowing:
   so transitive imports hit the same cache.
 - **Cross-module typechecking works through an "import seed"** — the checker
   walks the import graph, reads and parses every reachable module, and seeds the
-  registries. This is correct but expensive: the LSP's own comment measures
-  **~27 ms in the seed versus ~0.4 ms for lex + parse + all analysis combined**
-  on `examples/UI Project` ([seed_cache.rs](crates/saule-lsp/src/server/seed_cache.rs)).
-  A memo cache was added to make the editor usable. That ratio — 98% of a request
-  spent re-deriving what did not change — is the signature of a compiler that
-  wants to be query-based, and it will get worse with project size.
-- **`saule.config` is parsed twice**, once in
-  [saule-cli/src/project.rs](crates/saule-cli/src/project.rs) and once in
-  [saule-lsp/src/workspace.rs](crates/saule-lsp/src/workspace.rs), the second
-  with a comment explaining that the duplication was chosen over inverting the
-  dependency direction. Correct diagnosis, wrong fix — the answer is a shared
-  crate ([§9](#9-crate-and-repository-topology)).
+  registries. This was correct but redundant: the walk starts afresh from every
+  file, so a project's shared modules were re-parsed once per importer. Both the
+  CLI and the LSP now drive it through [saule-db](crates/saule-db/src/lib.rs),
+  which memoises the walk and hands it trees it has already parsed —
+  `saule check` on `examples/UI Project` went from 0.24 s to 0.07 s. See
+  [§9.2](#92-new-crates-to-extract), including a correction to the ~27 ms figure
+  this document previously quoted.
+- ~~**`saule.config` is parsed twice**~~ — **fixed.** The format, project
+  discovery, dependency resolution and source scanning now live in
+  [saule-project](crates/saule-project/src/lib.rs), which `saule-cli`,
+  `saule-lsp` and `saule-interpreter` all read. The two parsers had already
+  drifted: the LSP's understood four of the seven keys, and the CLI's file
+  walker knew about only one of the two source extensions, so `saule check`
+  silently skipped every `.saule` file. Both are gone with the duplication.
 
 ### 3.6 Concurrency model
 
@@ -528,7 +538,9 @@ part (a coherent, working implementation) is done.
     platform-conditional, that is a real risk.
 18. **`saule-engine-lib` is excluded from clippy and from release builds.** It is
     6.5k lines of unlinted code sitting in the toolchain workspace.
-19. **The LSP re-derives types.** `exprty.rs` was written specifically to
+19. **The LSP re-derives types.** *(Unchanged by the query-layer pass, and now
+    with a named blocker — see [§9.2.1](#921-what-blocks-the-rest-of-the-query-layer).)*
+    `exprty.rs` was written specifically to
     consolidate two drifting copies of expression typing, and its module doc lists
     four concrete bugs the drift caused (`??` nullability, `or` result type,
     unary minus, operator overloads). It fixed the symptom; the cause is that the
@@ -795,9 +807,11 @@ people mention when they recommend Saule.
 | `saule-docs` | 1,015 | `---` doc-comment extraction | Correct; under-used (§5.13). |
 | `saule-cli` | 1,514 | `saule` binary | Correct. |
 | `saule-lsp` | 20,754 | Language server | **Largest crate; see 9.3.** |
+| `saule-db` | 938 | Incremental query layer | New in this pass — see 9.2. |
 | `saule-native-abi` | 314 | Frozen C ABI | Correct. **Must be published.** |
 | `saule-sdk` | 1,268 | Package-authoring SDK | Correct. **Must be published.** |
 | `saule-export-macro` | 502 | `#[saule_export]` | Correct. **Must be published.** |
+| `saule-project` | 813 | `saule.config`, discovery, deps, `ProjectInfo` | New in this pass — see 9.2. |
 | `saule-version` | 417 | Build-time version resolution | Correct, clever, self-contained. |
 | `saule-wasm` | 446 | Playground bindings | Correct. Candidate for its own repo. |
 | `saule-engine-lib` | 6,583 | Graphics engine example | **Does not belong here — see 9.5.** |
@@ -808,18 +822,29 @@ follows are the changes worth making.
 
 ### 9.2 New crates to extract
 
-**`saule-project` — extract now, highest value.**
+**~~`saule-project` — extract now, highest value.~~ Done.**
 Owns `saule.config` parsing, project discovery, `src_dirs`/`dependencies`
-resolution, and `ProjectInfo`. Today this logic is **implemented twice** — in
-[saule-cli/src/project.rs](crates/saule-cli/src/project.rs) and in
-[saule-lsp/src/workspace.rs](crates/saule-lsp/src/workspace.rs) — and the LSP's
-copy carries a comment explaining that duplication was chosen because the CLI's
-parser is private and depending on the CLI would invert the dependency direction.
-That reasoning is right and the conclusion is wrong: the answer is a third crate
-both depend on. Bonus: `saule-lsp` currently depends on the entire
-`saule-interpreter` *just* to reach `project::ProjectInfo`. Extracting removes
-that edge. Two config parsers that must agree and are separately maintained is a
-bug waiting for its moment.
+resolution, source scanning, and `ProjectInfo`. This logic used to be
+implemented twice, in `saule-cli/src/project.rs` and `saule-lsp/src/workspace.rs`,
+the second carrying a comment explaining that duplication was chosen because the
+CLI's parser is private and depending on the CLI would invert the dependency
+direction. That reasoning was right and the conclusion was wrong; the answer was
+a third crate both depend on, and it is now
+[crates/saule-project](crates/saule-project/src/lib.rs). `saule-interpreter`
+re-exports it as `project`, so `saule_interpreter::project::…` still resolves.
+
+Two config parsers that must agree and are separately maintained is a bug
+waiting for its moment, and the wait was over before the extraction started —
+see [§3.5](#35-module-and-project-model) for the two divergences found on the
+way out.
+
+One claim in the original draft was wrong and is worth correcting rather than
+quietly deleting: extracting this crate does **not** remove `saule-lsp`'s
+dependency on `saule-interpreter`. The server reaches into the interpreter for
+`module::collect_import_seed`, `module::resolve_import_path`,
+`native_packages`, `dynamic_packages`, `stdlib::all_prelude_names` and `init()`.
+`ProjectInfo` was the smallest of those edges, not the load-bearing one. What
+severs the rest is the query layer below.
 
 **`saule` — the facade, extract before publishing anything.**
 One crate an embedder depends on. Re-exports `Value`, `RuntimeError`,
@@ -839,15 +864,72 @@ The `saule test` runner (§5.5). Test discovery, assertions, reporting, exit cod
 Needs its own crate because the CLI, CI, and eventually the LSP (run-test
 codelenses) all consume it.
 
-**`saule-db` / query layer — the strategic one.**
+**`saule-db` / query layer — the strategic one. Half done.**
 The 27 ms-vs-0.4 ms seed measurement (§3.5) and the LSP's duplicated inference
 (§5.19) are the same problem from two directions: there is no incremental,
-memoised layer between "files on disk" and "answers about the code". A
-`salsa`-style query crate — parse, resolve, typecheck as memoised queries keyed
-on file revision — would let both the CLI and the LSP ask the same questions and
-get the same answers, and would delete both the ad-hoc seed cache and the ~800
-lines of LSP-local inference. **This is the largest single architectural
-improvement available**, and it should be a deliberate project, not a drive-by.
+memoised layer between "files on disk" and "answers about the code".
+
+[crates/saule-db](crates/saule-db/src/lib.rs) is now that layer, for the front
+half of the pipeline. It is a small `salsa`-shaped engine — one global revision
+counter, dependency edges recorded as queries run, and **early cutoff** on
+recomputed values — carrying three queries: `parsed`, `imports`, and `seed`.
+The engine is ~150 lines
+([engine.rs](crates/saule-db/src/engine.rs)); writing it rather than taking
+`salsa` was a judgement call about a four-node graph, and is worth revisiting if
+the query set grows.
+
+Early cutoff is the whole design and it is worth being precise about why. `seed`
+depends on `imports`, never on the file's text directly. Typing in a function
+body invalidates the text and the parse tree, so `imports` is recomputed — and
+comes out *equal*, which stops the invalidation there. The seed is not rebuilt.
+That is the property the hand-rolled cache was approximating with a bespoke rule,
+and it is now a consequence of the graph rather than a thing to remember.
+
+What it bought, measured:
+
+| | before | after |
+|---|---:|---:|
+| `saule check "examples/UI Project"` (34 files, warm, release) | 0.24 s | **0.07 s** |
+
+The speedup is not from caching the seed — each file has its own — but from the
+walk no longer re-parsing. `collect_import_seed` starts from every file in turn,
+so the modules near the root of the import graph were lexed and parsed dozens of
+times per run. The walk now accepts trees from whoever is driving it
+(`module::SeedIo`), and the database hands over the ones it already has.
+
+Two corrections to the original draft, both from measuring rather than reading:
+
+- **The ~27 ms figure does not reproduce.** In a release `saule check`, the whole
+  pipeline costs ~7 ms per file for this project, seed included. The measurement
+  in [seed_cache.rs](crates/saule-lsp/src/server/seed_cache.rs)'s comment was
+  never re-taken after the parser work landed, and this document repeated it. The
+  *shape* of the claim held — the walk dominated, and it was duplicated work —
+  but the number did not.
+- **Caching the file text changed nothing at all.** The reads were already free
+  against the OS page cache; the cost was entirely lexing and parsing. The text
+  cache stayed because it is still the right structure, not because it showed up.
+
+What remains is the other direction: the ~800 lines of LSP-local inference, which
+needs a `check` query returning a span→type map. That one is blocked on something
+this pass surfaced and nobody had written down — see
+[§9.2.1](#921-what-blocks-the-rest-of-the-query-layer).
+
+#### 9.2.1 What blocks the rest of the query layer
+
+`saule-semantic` and `saule-typeck` communicate through **thread-local
+registries**: `analyze_with_seed` installs the class / interface / enum tables
+and `check` reads them. Callers depend on that side effect — completion runs
+`analyze_with_seed` purely for it and throws the diagnostics away.
+
+A memoised `analysis(file)` query cannot preserve that. Returning cached
+diagnostics on a hit would skip the registry installation every downstream
+caller is silently relying on, and hover would start answering against whatever
+the last analysed file happened to leave behind. So the query layer stops
+cleanly at the seed, and **the prerequisite for going further is making the
+registries a value that a query can return** rather than a thread-local a pass
+installs. That is the same refactor §7 asks for on the embedding side, where the
+22 `thread_local!` blocks are what stop two interpreters coexisting on one
+thread. One change, two payoffs — and it should be sequenced before either.
 
 **`saule-syntax` — reconsider, now that recovery exists.**
 The original rationale was that recovery would need an error-tolerant, lossless
@@ -861,7 +943,7 @@ to round-trip broken input), and treat that as a fresh decision.
 
 ### 9.3 Crates to split
 
-**`saule-lsp` (20,754 LOC) is doing three jobs**: protocol plumbing
+**`saule-lsp` is doing three jobs**: protocol plumbing
 (`tower-lsp`, dispatch, document cache), semantic analysis for editors
 (hover walkers, inference, references, symbols), and feature handlers. The
 analysis half is the valuable, reusable part and is currently welded to a
@@ -926,10 +1008,10 @@ and a single `cargo test` covering them is worth more than tidiness.
 ```
 saule-lang/saule                 ← toolchain: 15 crates, tests, benchmarks, examples
 ├── crates/saule                 ← NEW  facade, the embedder's single dependency  [publish]
-├── crates/saule-project         ← NEW  saule.config, shared by CLI + LSP
+├── crates/saule-project         ← DONE saule.config, shared by CLI + LSP
 ├── crates/saule-test            ← NEW  the `saule test` runner
 ├── crates/saule-stdlib          ← LATER, split from saule-interpreter
-├── crates/saule-db              ← LATER, incremental query layer
+├── crates/saule-db              ← DONE parse/imports/seed; typeck query blocked (9.2.1)
 ├── crates/saule-native-abi                                                       [publish]
 ├── crates/saule-sdk                                                              [publish]
 ├── crates/saule-export-macro                                                     [publish]
@@ -969,7 +1051,7 @@ who is not you can run `saule`.**
 ### Phase 3 — Make it extensible
 - Publish `saule-native-abi`, `saule-export-macro`, `saule-sdk` with semver.
 - Add `abi_version` to the manifest **and** a load-time check.
-- Extract `saule-project`; delete the duplicate config parser.
+- ~~Extract `saule-project`; delete the duplicate config parser.~~ **Done.**
 - Split `saule-engine-lib` into its own repo and rebuild it against the published
   SDK — the acid test that the path works for outsiders.
 - Ship `saule-package-template`.

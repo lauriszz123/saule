@@ -302,7 +302,7 @@ mod tests {
             let module = saule_parser::parse(tokens).expect("prior must parse");
             saule_parser::PriorShape::of(&module)
         });
-        let (module, _) = crate::syntax::analyze(src, prior.as_ref());
+        let module = crate::syntax::tolerant_with_prior(src, prior.as_ref());
         build(&module, src, &LineIndex::new(src))
             .iter()
             .map(|s| s.name.clone())

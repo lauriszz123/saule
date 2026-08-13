@@ -65,6 +65,40 @@ pub fn collect_import_seed(module: &Module, dir: &Path) -> saule_semantic::Modul
 /// importer's errors fail to update was the visible symptom.
 pub type SourceOverlay<'a> = &'a dyn Fn(&Path) -> Option<String>;
 
+/// Where an imported module's parse *tree* comes from.
+///
+/// Returning `Some(tree)` skips reading and parsing that file entirely;
+/// `None` means "do it yourself".
+///
+/// This exists because the walk is the same walk for every file in a
+/// project, and the modules near the root of the import graph are therefore
+/// parsed once per importer. A caller that already keeps parse trees — the
+/// language server, `saule check` — hands them over instead, and the
+/// duplicated work disappears. Only a *clean* tree may be supplied: the
+/// walk's own parse is strict and skips a module it cannot parse, and a
+/// recovered tree would smuggle declarations out of a file that does not
+/// compile.
+pub type ModuleSource<'a> = &'a dyn Fn(&Path) -> Option<std::sync::Arc<Module>>;
+
+/// Where the walk gets what it needs to read a module.
+#[derive(Clone, Copy)]
+pub struct SeedIo<'a> {
+    /// Consulted before the filesystem for a module's text.
+    pub overlay: SourceOverlay<'a>,
+    /// Consulted before either, for a module's tree.
+    pub modules: Option<ModuleSource<'a>>,
+}
+
+impl<'a> SeedIo<'a> {
+    /// Text from `overlay` or the filesystem; nothing pre-parsed.
+    pub fn from_overlay(overlay: SourceOverlay<'a>) -> SeedIo<'a> {
+        SeedIo {
+            overlay,
+            modules: None,
+        }
+    }
+}
+
 /// [`collect_import_seed`], but consulting `overlay` before the filesystem for
 /// every module it reads — transitively, including through barrel modules.
 pub fn collect_import_seed_with(
@@ -72,18 +106,36 @@ pub fn collect_import_seed_with(
     dir: &Path,
     overlay: SourceOverlay<'_>,
 ) -> saule_semantic::ModuleSeed {
+    collect_import_seed_io(module, dir, SeedIo::from_overlay(overlay))
+}
+
+/// [`collect_import_seed_with`], with the option of being handed trees the
+/// caller has already parsed. See [`ModuleSource`].
+pub fn collect_import_seed_io(
+    module: &Module,
+    dir: &Path,
+    io: SeedIo<'_>,
+) -> saule_semantic::ModuleSeed {
     let mut visited = HashSet::new();
-    let mut seed = collect_import_seed_inner(module, dir, &mut visited, 0, overlay);
-    seed.wildcard_names = collect_wildcard_names(module, dir, overlay);
+    let mut seed = collect_import_seed_inner(module, dir, &mut visited, 0, io);
+    seed.wildcard_names = collect_wildcard_names(module, dir, io);
     seed
 }
 
-/// Read a module's source, preferring `overlay` over the filesystem.
-fn read_module_source(abs: &Path, overlay: SourceOverlay<'_>) -> Option<String> {
-    match overlay(abs) {
-        Some(text) => Some(text),
-        None => std::fs::read_to_string(abs).ok(),
+/// A module's tree: from the caller's cache if it has one, otherwise read
+/// (through the overlay) and parsed here.
+fn parsed_module(abs: &Path, io: SeedIo<'_>) -> Option<std::sync::Arc<Module>> {
+    if let Some(provider) = io.modules
+        && let Some(tree) = provider(abs)
+    {
+        return Some(tree);
     }
+    let source = match (io.overlay)(abs) {
+        Some(text) => text,
+        None => std::fs::read_to_string(abs).ok()?,
+    };
+    let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
+    saule_parser::parse(tokens).ok().map(std::sync::Arc::new)
 }
 
 /// Union of the local names every `import * from "..."` in `module` binds.
@@ -95,7 +147,7 @@ fn read_module_source(abs: &Path, overlay: SourceOverlay<'_>) -> Option<String> 
 pub(crate) fn collect_wildcard_names(
     module: &Module,
     dir: &Path,
-    overlay: SourceOverlay<'_>,
+    io: SeedIo<'_>,
 ) -> Option<HashSet<String>> {
     let mut out = HashSet::new();
     for stmt in &module.stmts {
@@ -108,7 +160,7 @@ pub(crate) fn collect_wildcard_names(
         else {
             continue;
         };
-        out.extend(static_import_names(dir, path, names, 0, overlay)?);
+        out.extend(static_import_names(dir, path, names, 0, io)?);
     }
     Some(out)
 }
@@ -125,7 +177,7 @@ pub(crate) fn static_import_names(
     path: &str,
     names: &ImportNames,
     depth: usize,
-    overlay: SourceOverlay<'_>,
+    io: SeedIo<'_>,
 ) -> Option<Vec<String>> {
     // A name list is its own answer — no need to look at the target.
     if let ImportNames::List(items) = names {
@@ -148,9 +200,7 @@ pub(crate) fn static_import_names(
 
     // Glob over a file module: its `export`ed top-level declarations.
     let abs = resolve_import_path(dir, path)?;
-    let source = read_module_source(&abs, overlay)?;
-    let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
-    let imported = saule_parser::parse(tokens).ok()?;
+    let imported = parsed_module(&abs, io)?;
 
     let mut out: Vec<String> = imported
         .stmts
@@ -178,13 +228,7 @@ pub(crate) fn static_import_names(
             let Decl::Import { names, path, .. } = &d.value else {
                 continue;
             };
-            out.extend(static_import_names(
-                &sub_dir,
-                path,
-                names,
-                depth + 1,
-                overlay,
-            )?);
+            out.extend(static_import_names(&sub_dir, path, names, depth + 1, io)?);
         }
     }
 
@@ -201,7 +245,7 @@ pub(crate) fn collect_import_seed_inner(
     dir: &Path,
     visited: &mut HashSet<PathBuf>,
     depth: usize,
-    overlay: SourceOverlay<'_>,
+    io: SeedIo<'_>,
 ) -> saule_semantic::ModuleSeed {
     let mut seed = saule_semantic::ModuleSeed::default();
 
@@ -246,13 +290,7 @@ pub(crate) fn collect_import_seed_inner(
         let Some(abs) = resolve_import_path(dir, path) else {
             continue;
         };
-        let Some(source) = read_module_source(&abs, overlay) else {
-            continue;
-        };
-        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
-            continue;
-        };
-        let Ok(imported) = saule_parser::parse(tokens) else {
+        let Some(imported) = parsed_module(&abs, io) else {
             continue;
         };
 
@@ -292,7 +330,7 @@ pub(crate) fn collect_import_seed_inner(
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let sub = collect_import_seed_inner(&imported, &sub_dir, visited, depth + 1, overlay);
+            let sub = collect_import_seed_inner(&imported, &sub_dir, visited, depth + 1, io);
             merge_barrel_seed(&mut seed, sub, names);
         }
     }

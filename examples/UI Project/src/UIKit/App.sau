@@ -40,7 +40,7 @@ export class Scene
 	end
 
 	-- Open whatever this scene describes and drive it until it closes.
-	fn present() -> nil
+	fn present()
 	end
 end
 

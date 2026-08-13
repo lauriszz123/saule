@@ -1,0 +1,13 @@
+[package]
+name = "saule-db"
+version.workspace = true
+edition.workspace = true
+description = "Saule — incremental, memoised analysis queries over a set of source files."
+license.workspace = true
+
+[dependencies]
+saule-ast = { path = "../saule-ast" }
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }
+saule-semantic = { path = "../saule-semantic" }
+saule-interpreter = { path = "../saule-interpreter" }

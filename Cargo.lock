@@ -1103,12 +1103,25 @@ dependencies = [
  "clap",
  "miette",
  "saule-ast",
+ "saule-db",
  "saule-fmt",
  "saule-interpreter",
  "saule-lexer",
  "saule-parser",
+ "saule-project",
  "saule-semantic",
  "saule-version",
+]
+
+[[package]]
+name = "saule-db"
+version = "26.0.0"
+dependencies = [
+ "saule-ast",
+ "saule-interpreter",
+ "saule-lexer",
+ "saule-parser",
+ "saule-semantic",
 ]
 
 [[package]]
@@ -1160,6 +1173,7 @@ dependencies = [
  "saule-lexer",
  "saule-native-abi",
  "saule-parser",
+ "saule-project",
  "saule-semantic",
  "saule-typeck",
  "saule-version",
@@ -1183,11 +1197,13 @@ dependencies = [
  "dashmap 6.2.1",
  "miette",
  "saule-ast",
+ "saule-db",
  "saule-docs",
  "saule-fmt",
  "saule-interpreter",
  "saule-lexer",
  "saule-parser",
+ "saule-project",
  "saule-semantic",
  "saule-typeck",
  "saule-version",
@@ -1209,6 +1225,10 @@ dependencies = [
  "saule-lexer",
  "thiserror",
 ]
+
+[[package]]
+name = "saule-project"
+version = "26.0.0"
 
 [[package]]
 name = "saule-sdk"

@@ -49,7 +49,6 @@ mod native_host;
 pub mod native_packages;
 pub mod output;
 pub mod platform;
-pub mod project;
 pub(crate) mod recycle;
 pub mod stdlib;
 pub mod value;
@@ -57,6 +56,13 @@ pub mod value;
 /// Re-export of the standalone `saule-typeck` crate so existing call sites
 /// (`saule_interpreter::typeck::check`) keep working after the extraction.
 pub use saule_typeck as typeck;
+
+/// Re-export of `saule-project`, which owns `saule.config` and the
+/// [`project::ProjectInfo`] import resolution consults. The interpreter does
+/// not read the config itself — it is handed the resolved project by whoever
+/// is driving it — but it does define the shape of the answer, so the type
+/// travels with the pipeline rather than with the CLI.
+pub use saule_project as project;
 
 /// Re-export of the `saule-semantic` crate. The standard pipeline runs
 /// `semantic::analyze` before `typeck::check`, and both are then followed

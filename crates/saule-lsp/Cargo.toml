@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 saule-ast = { path = "../saule-ast" }
+saule-db = { path = "../saule-db" }
+saule-project = { path = "../saule-project" }
 saule-version = { path = "../saule-version" }
 saule-docs = { path = "../saule-docs" }
 saule-lexer = { path = "../saule-lexer" }

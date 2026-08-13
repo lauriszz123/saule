@@ -49,7 +49,7 @@ pub(crate) fn parse_tolerant(src: &str, prior: Option<&PriorShape>) -> Option<Mo
             return Some(m);
         }
     }
-    Some(crate::syntax::analyze(src, prior).0)
+    Some(crate::syntax::tolerant_with_prior(src, prior))
 }
 
 /// Replace the partial identifier under the caret with [`SENTINEL`],

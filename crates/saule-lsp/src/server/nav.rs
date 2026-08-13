@@ -97,7 +97,7 @@ impl Backend {
 
         let _guard = self.analysis_lock.lock().await;
         if let Some(info) = self.project_info.lock().await.clone() {
-            saule_interpreter::project::set(info);
+            saule_project::set(info);
         }
         let seed = match &module_dir {
             Some(d) => self.import_seed(uri, &module, d),
@@ -159,7 +159,7 @@ impl Backend {
     async fn collect_in_workspace(&self, ctx: &ResolvedCtx, defs_only: bool) -> Vec<Location> {
         let _guard = self.analysis_lock.lock().await;
         if let Some(info) = self.project_info.lock().await.clone() {
-            saule_interpreter::project::set(info);
+            saule_project::set(info);
         }
 
         let files: Vec<PathBuf> = self
