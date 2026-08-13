@@ -1,0 +1,59 @@
+import * from engine
+
+-- ============================================================================
+-- Asset paths
+-- ============================================================================
+--
+-- Every engine loader — `Graphics.newImage`, `Graphics.newFont` — takes a path
+-- and resolves it against the *process working directory*. That is not where
+-- the project is: `saule run examples/UI\ Project` leaves the shell's directory
+-- untouched, so a bare `"assets/logo.png"` finds nothing unless the app happens
+-- to have been launched from inside its own folder. The same app runs or
+-- doesn't depending on where it was started from, which is the kind of bug that
+-- only shows up on someone else's machine.
+--
+-- `Project.root` is the fix: the interpreter knows the project's absolute root
+-- because it read `saule.config` to find the entry point. Asset paths are
+-- written relative to *that*, and the working directory stops mattering.
+--
+--     Assets.resolve("assets/logo.png")
+--     --> "/Users/me/UI Project/assets/logo.png"
+export class Assets
+	-- `path`, made absolute against the project root.
+	--
+	-- Absolute paths are returned untouched, and so is anything that isn't
+	-- under the root — a single-file script has no project and no root, and a
+	-- relative path is all it ever had. The working-directory reading is kept
+	-- as the fallback rather than dropped, so a path that already worked keeps
+	-- working.
+	static fn resolve(path: string) -> string
+		if #path == 0 or Assets.isAbsolute(path) then
+			return path
+		end
+
+		local root: string = Project.root
+
+		if #root == 0 then
+			return path
+		end
+
+		local joined: string = root .. "/" .. path
+
+		if Os.exists(joined) then
+			return joined
+		end
+
+		return path
+	end
+
+	-- Absolute in the POSIX sense, or a Windows drive letter / UNC path.
+	static fn isAbsolute(path: string) -> boolean
+		local head: string = String.sub(path, 1, 1)
+
+		if head == "/" or head == "\\" then
+			return true
+		end
+
+		return String.sub(path, 2, 2) == ":"
+	end
+end
