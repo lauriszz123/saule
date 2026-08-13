@@ -25,15 +25,11 @@ mod hover;
 mod inlay;
 mod native_names;
 mod nav;
-mod seed_cache;
 mod sighelp;
 mod symbols;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-
-use crate::syntax;
-use crate::workspace;
 
 use dashmap::DashMap;
 use tokio::sync::Mutex;
@@ -80,25 +76,27 @@ pub struct Backend {
     pub(crate) workspace_roots: Mutex<Vec<PathBuf>>,
     /// Cached project info (from `saule.config`) so we can re-install
     /// it on whatever tokio worker happens to be running each analysis
-    /// — `saule_interpreter::project` uses thread-local state.
-    pub(crate) project_info: Mutex<Option<saule_interpreter::project::ProjectInfo>>,
+    /// — `saule_project` keeps the current project in thread-local state.
+    pub(crate) project_info: Mutex<Option<saule_project::ProjectInfo>>,
     /// Serialises the analyze→typeck phase across all documents — the
     /// thread-local registries those passes use are global per thread,
     /// so concurrent runs would race even on different files.
     pub(crate) analysis_lock: Mutex<()>,
-    /// Memoised import seeds. Rebuilding one costs ~27ms against the
-    /// `UI Project` sample and every request begins with it, so without
-    /// this the editor lags a keystroke behind. See [`seed_cache`].
-    pub(crate) seed_cache: seed_cache::SeedCache,
+    /// Parse trees, import lists and import seeds, memoised against the
+    /// files they were derived from.
+    ///
+    /// Rebuilding a seed costs ~27ms against the `UI Project` sample and
+    /// every request begins with one, so without this the editor lags a
+    /// keystroke behind. A `std::sync::Mutex` rather than a tokio one
+    /// because no query awaits: the lock is taken and dropped inside a
+    /// single synchronous call. See [`saule_db`].
+    pub(crate) db: std::sync::Mutex<saule_db::Db>,
     /// Whether the client accepts a runtime `workspace/didChangeWatchedFiles`
     /// registration, captured from its `initialize` capabilities. There is
     /// no static server capability for file watching — the only way to ask
     /// for it is `client/registerCapability`, and sending that to a client
     /// that didn't advertise support is a protocol error.
     pub(crate) watched_files_dynamic: Mutex<bool>,
-    /// Where each file's declarations lived the last time it parsed cleanly,
-    /// keyed by URI string like [`Self::docs`]. See [`Self::syntax`].
-    pub(crate) shapes: DashMap<String, saule_parser::PriorShape>,
 }
 
 impl Backend {
@@ -117,68 +115,50 @@ impl Backend {
     /// would feed the repair's own guesses back into it, and a wrong guess
     /// would then reinforce itself for the rest of the session.
     pub(crate) fn syntax(&self, uri: &Url, source: &str) -> saule_ast::Module {
-        self.syntax_full(uri, source).0
+        self.parsed(uri, source).module.clone()
     }
 
     /// [`Self::syntax`], keeping the diagnostics as well as the tree.
-    pub(crate) fn syntax_full(
-        &self,
-        uri: &Url,
-        source: &str,
-    ) -> (saule_ast::Module, syntax::SyntaxErrors) {
-        let key = uri.as_str();
-        // Cloned rather than borrowed: the insert below would deadlock
-        // against a live read guard on the same shard.
-        let prior = self.shapes.get(key).map(|e| e.clone());
-        let (module, errors) = syntax::analyze(source, prior.as_ref());
-        if errors.is_empty() {
-            self.shapes
-                .insert(key.to_string(), saule_parser::PriorShape::of(&module));
+    ///
+    /// Both the tree and the shape memory live in [`saule_db::Db`], so a
+    /// handler that asks twice on one keystroke — Neovim fires `didChange`,
+    /// completion, signature help and inlay hints together — parses once.
+    pub(crate) fn parsed(&self, uri: &Url, source: &str) -> std::sync::Arc<saule_db::Parsed> {
+        match uri.to_file_path().ok().and_then(|p| canonical(&p)) {
+            Some(abs) => self.with_db(|db| {
+                // The buffer the request carries is the authority; teach it
+                // to the database before asking, so every other query in
+                // this request sees the same text.
+                db.set_overlay(&abs, source.to_string());
+                db.parsed(&abs)
+            }),
+            // An `untitled:` buffer has no path to key on. Parsed every
+            // time, which is the right trade for a file with no identity.
+            None => std::sync::Arc::new(self.with_db(|db| db.parse_anonymous(source))),
         }
-        (module, errors)
+    }
+
+    /// Run `f` against the analysis database.
+    ///
+    /// The lock is held for the duration of one query and never across an
+    /// `await`. Serialising here costs nothing that was not already
+    /// serialised: `saule-semantic` and `saule-typeck` keep their registries
+    /// in thread-local storage, so the analysis these queries feed has
+    /// always run one at a time.
+    pub(crate) fn with_db<R>(&self, f: impl FnOnce(&mut saule_db::Db) -> R) -> R {
+        let mut db = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        f(&mut db)
     }
 }
 
 impl Backend {
-    /// A [`saule_interpreter::module::SourceOverlay`] backed by the open-document
-    /// cache, for the import walk to consult ahead of the filesystem.
+    /// The import seed for `module`: what its imports bring into scope.
     ///
-    /// Without it every cross-file lookup — diagnostics, hover, completion,
-    /// signature help, inlay hints, goto-definition — read imported modules
-    /// straight off disk, so an *unsaved* edit in an imported file was
-    /// invisible to its importers. Change a method's signature in `storage.sau`
-    /// and `main.sau` would keep reporting against the version last written to
-    /// disk until you saved.
-    ///
-    /// `docs` is keyed by the URI string the client sent, which is not
-    /// guaranteed to be the canonical spelling the import resolver produces
-    /// (symlinked roots, `..` segments). The exact-URI hit is the fast path;
-    /// the scan below is the correctness path, and it is bounded by the number
-    /// of *open* editor buffers, not by workspace size.
-    pub(crate) fn source_overlay(&self) -> impl Fn(&Path) -> Option<String> + '_ {
-        move |path: &Path| {
-            let want = canonical(path).unwrap_or_else(|| path.to_path_buf());
-            if let Some(uri) = path_to_uri(&want)
-                && let Some(doc) = self.docs.get(uri.as_str())
-            {
-                return Some(doc.source.clone());
-            }
-            self.docs.iter().find_map(|entry| {
-                let doc_path = Url::parse(entry.key())
-                    .ok()
-                    .and_then(|u| u.to_file_path().ok())?;
-                let doc_path = canonical(&doc_path).unwrap_or(doc_path);
-                (doc_path == want).then(|| entry.source.clone())
-            })
-        }
-    }
-
-    /// The import seed for `module`, memoised.
-    ///
-    /// Every feature handler needs this and each was calling
-    /// `collect_import_seed_with` directly — the single most expensive
-    /// step in a request by two orders of magnitude. Route them all
-    /// through here so one cache serves the lot.
+    /// Every feature handler needs this before it can answer anything, and
+    /// it is the single most expensive step in a request by two orders of
+    /// magnitude. [`saule_db::Db::seed`] is what makes paying for it once
+    /// per *import graph change* rather than once per keystroke correct
+    /// rather than hopeful.
     ///
     /// `uri` identifies the importing document; `dir` is the directory
     /// import paths resolve against.
@@ -195,18 +175,22 @@ impl Backend {
     /// [`Backend::import_seed`] for callers that already hold the
     /// document's path rather than its URI.
     ///
-    /// The path is canonicalised here so both entry points agree on the
-    /// cache key — otherwise the same file gets two entries and neither
-    /// sees the other's invalidation.
+    /// The path is canonicalised here so every entry point agrees on the
+    /// key — otherwise the same file gets two entries and neither sees the
+    /// other's invalidation.
     pub(crate) fn import_seed_at(
         &self,
         doc_path: Option<&Path>,
         module: &saule_ast::Module,
         dir: &Path,
     ) -> saule_semantic::ModuleSeed {
-        let key = doc_path.map(|p| canonical(p).unwrap_or_else(|| p.to_path_buf()));
-        self.seed_cache
-            .seed_for(key.as_deref(), module, dir, self.source_overlay())
+        match doc_path.map(|p| canonical(p).unwrap_or_else(|| p.to_path_buf())) {
+            Some(abs) => (*self.with_db(|db| db.seed(&abs))).clone(),
+            // No path to key on (an unsaved buffer with no file URI), so
+            // there is nothing to cache under. Walked fresh, which is rare
+            // enough to be free.
+            None => self.with_db(|db| db.seed_of(module, dir)),
+        }
     }
 
     /// Ask the client to watch every `.sau` file and `saule.config` in
@@ -270,8 +254,8 @@ impl Backend {
     async fn reload_project_info(&self) {
         let roots: Vec<PathBuf> = self.workspace_roots.lock().await.clone();
         for root in &roots {
-            if let Some(project_root) = workspace::find_project_root(root)
-                && let Some(info) = workspace::load_project(&project_root)
+            if let Some(project_root) = saule_project::find_root(root)
+                && let Some(info) = saule_project::load(&project_root)
             {
                 *self.project_info.lock().await = Some(info);
                 return;
@@ -291,9 +275,8 @@ impl Backend {
             workspace_roots: Mutex::new(Vec::new()),
             project_info: Mutex::new(None),
             analysis_lock: Mutex::new(()),
-            seed_cache: seed_cache::SeedCache::default(),
+            db: std::sync::Mutex::new(saule_db::Db::new()),
             watched_files_dynamic: Mutex::new(false),
-            shapes: DashMap::new(),
         }
     }
 }
@@ -437,7 +420,7 @@ impl LanguageServer for Backend {
                 // back to the raw path so removal still finds its entry.
                 if let Ok(raw) = event.uri.to_file_path() {
                     self.workspace_files.remove(&raw);
-                    self.seed_cache.invalidate_dependents_of(&raw);
+                    self.with_db(|db| db.file_changed(&raw));
                     structural = true;
                 }
                 continue;
@@ -458,22 +441,23 @@ impl LanguageServer for Backend {
                         .await;
                     structural = true;
                 }
-                // Content changed underneath us. Anything whose seed read
-                // this file is stale; the file itself is re-analysed
-                // below. An *open* buffer is unaffected either way — the
-                // overlay serves the editor's text, not the disk's.
-                _ => self.seed_cache.invalidate_dependents_of(&abs),
+                // Content changed underneath us. Anything derived from this
+                // file is stale; the file itself is re-analysed below. An
+                // *open* buffer is unaffected either way — the overlay
+                // serves the editor's text, not the disk's.
+                _ => self.with_db(|db| db.file_changed(&abs)),
             }
             if event.typ != FileChangeType::DELETED {
                 touched.push((abs, event.uri.clone()));
             }
         }
 
-        // A file appearing or vanishing changes which imports resolve,
-        // and that is not expressible as "these files were read" — drop
-        // the lot rather than guess.
+        // A file appearing or vanishing changes which imports *resolve*,
+        // and resolution probes the filesystem without going through the
+        // database — so no dependency edge records it. Drop the lot rather
+        // than guess.
         if structural {
-            self.seed_cache.clear();
+            self.with_db(|db| db.invalidate_all());
         }
 
         for (abs, uri) in touched {
@@ -484,11 +468,11 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         // A file appearing can make a previously-unresolvable `import`
-        // resolve. The seed walk never read the missing file, so no read
-        // set mentions it and targeted invalidation can't see the
-        // change — drop everything. Opening a file is rare enough that
-        // paying one rebuild for it is free.
-        self.seed_cache.clear();
+        // resolve, and resolution leaves no dependency edge behind, so
+        // targeted invalidation can't see the change — drop everything.
+        // Opening a file is rare enough that paying one rebuild for it is
+        // free.
+        self.with_db(|db| db.invalidate_all());
         self.update(uri, params.text_document.text, params.text_document.version)
             .await;
     }
@@ -515,13 +499,10 @@ impl LanguageServer for Backend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.docs.remove(uri.as_str());
-        // The remembered shape describes an unsaved buffer that no longer
-        // exists. Re-analysis from disk below rebuilds it from the file.
-        self.shapes.remove(uri.as_str());
         // The overlay stops answering for this path, so importers now
         // see the on-disk text instead of the buffer — a different seed.
         if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
-            self.seed_cache.invalidate_dependents_of(&abs);
+            self.with_db(|db| db.clear_overlay(&abs));
         }
         // Don't clear diagnostics — the file is still part of the
         // workspace. Re-analyse from disk so the Problems pane keeps

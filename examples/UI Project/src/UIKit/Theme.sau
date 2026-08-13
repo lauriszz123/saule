@@ -71,7 +71,7 @@ export class Theme extends View
 					return found
 				end
 
-				node = current!.parent
+				node = current.parent
 			end
 		end
 

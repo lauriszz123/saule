@@ -18,7 +18,7 @@ impl ParseError {
     }
 }
 
-#[derive(Debug, Error, Diagnostic)]
+#[derive(Debug, Clone, Error, Diagnostic)]
 pub enum ParseError {
     #[error("unexpected token")]
     Unexpected {

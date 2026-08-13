@@ -62,12 +62,18 @@ impl Backend {
         // The semantic passes write thread-local registries; serialise them.
         let _guard = self.analysis_lock.lock().await;
         if let Some(info) = self.project_info.lock().await.clone() {
-            saule_interpreter::project::set(info);
+            saule_project::set(info);
         }
 
         // The sentinel only renames an identifier, so the document's
-        // remembered shape still describes this text.
-        let prior = self.shapes.get(uri.as_str()).map(|e| e.clone());
+        // remembered shape still describes this text. Asked of the database
+        // rather than parsed here, because the patched buffer is not the
+        // document and must never be what the shape is learned from.
+        let prior = uri
+            .to_file_path()
+            .ok()
+            .and_then(|p| canonical(&p))
+            .and_then(|abs| self.with_db(|db| db.prior_shape(&abs)));
         let module = parse_tolerant(&patched, prior.as_ref())?;
 
         // Populate the class / enum / interface registries with this module's
@@ -138,7 +144,7 @@ impl Backend {
         // `src_dirs`, so the workspace scan below never reaches them — without
         // this, a dependency you can import is a dependency you get no
         // suggestion for.
-        for dep in saule_interpreter::project::get()
+        for dep in saule_project::get()
             .map(|p| p.dependencies)
             .unwrap_or_default()
         {
@@ -163,7 +169,7 @@ impl Backend {
             // …and every module inside it, as `<dep>/<path>`. A barrel stands
             // for its folder, matching how the workspace scan below treats one.
             for src_dir in &dep.src_dirs {
-                for file in crate::workspace::scan_saule_files(src_dir) {
+                for file in saule_project::scan_sources(src_dir) {
                     let is_barrel = file.file_stem().and_then(|s| s.to_str()) == Some("init");
                     let target = if is_barrel {
                         match file.parent() {
@@ -199,7 +205,7 @@ impl Backend {
         // Workspace files, relative to this file's folder first, then to the
         // project's `src_dirs`. A folder holding `init.sau` is offered as the
         // folder itself, since that is what you import.
-        let src_dirs: Vec<std::path::PathBuf> = saule_interpreter::project::get()
+        let src_dirs: Vec<std::path::PathBuf> = saule_project::get()
             .map(|p| p.src_dirs.clone())
             .unwrap_or_default();
 

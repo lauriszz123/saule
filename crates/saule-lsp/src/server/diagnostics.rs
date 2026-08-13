@@ -8,22 +8,21 @@ use saule_ast::{Decl, Module, Stmt};
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Url};
 
 use crate::line_index::LineIndex;
-use crate::workspace;
 
 use super::{Backend, Document, canonical, path_to_uri};
 
 impl Backend {
     /// so stale results from an older revision can be discarded.
     pub(super) async fn update(&self, uri: Url, source: String, version: i32) {
+        // Into the database first: this file's new text is an input to
+        // every answer derived from it, including every *other* file's
+        // import seed. What survives the edit is decided by the dependency
+        // graph, not here.
+        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
+            self.with_db(|db| db.set_overlay(&abs, source.clone()));
+        }
         self.docs
             .insert(uri.to_string(), Document { source, version });
-        // This file's new text is an input to every *other* file's
-        // import seed. Drop the seeds that read it; leave this file's
-        // own entry alone, since its text only reaches its seed through
-        // its `import` lines and those are re-compared on lookup.
-        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
-            self.seed_cache.invalidate_dependents_of(&abs);
-        }
         self.refresh(uri).await;
     }
 
@@ -105,28 +104,30 @@ impl Backend {
         // construction, and "undefined name" against a hole is a diagnostic
         // about our repair, not about the user's code.
         //
-        // Through `syntax_full` rather than the free function, so this file's
-        // remembered shape is both consulted and — when the parse comes back
-        // clean — refreshed. This pipeline runs on every keystroke and on
-        // every file the startup scan touches, which makes it the one that
-        // keeps every other feature's shape warm.
-        let (module, syntax) = self.syntax_full(uri, source);
-        if !syntax.is_empty() {
-            out.extend(syntax.lex.iter().map(|e| diag_from(e, source, &line_index)));
+        // Through the database, so this file's remembered shape is both
+        // consulted and — when the parse comes back clean — refreshed, and
+        // so the other handlers firing on this same keystroke get the tree
+        // rather than parse it again. This pipeline runs on every keystroke
+        // and on every file the startup scan touches, which makes it the one
+        // that keeps every other feature warm.
+        let parsed = self.parsed(uri, source);
+        if !parsed.is_clean() {
+            out.extend(parsed.lex.iter().map(|e| diag_from(e, source, &line_index)));
             out.extend(
-                syntax
+                parsed
                     .parse
                     .iter()
                     .map(|e| diag_from(e, source, &line_index)),
             );
             return out;
         }
+        let module = &parsed.module;
 
         // ---- doc comments -------------------------------------------------
         // Pure source + AST, so this runs before we contend for the
         // analysis lock. Warnings only: a stale `@param` is worth
         // flagging but never blocks anything downstream.
-        for w in saule_docs::validate(&module, source) {
+        for w in saule_docs::validate(module, source) {
             out.push(doc_warning_diag(&w, source, &line_index));
         }
 
@@ -138,13 +139,13 @@ impl Backend {
         // on — `project::set` is thread-local and the multi-thread
         // runtime can dispatch us anywhere. Cheap clone, idempotent.
         if let Some(info) = self.project_info.lock().await.clone() {
-            saule_interpreter::project::set(info);
+            saule_project::set(info);
         }
 
         // Refresh the reverse-import graph so future edits to imported
         // modules know to re-check this file.
         if let (Some(abs), Some(dir)) = (abs_path, module_dir.as_deref()) {
-            self.update_rev_imports(abs, dir, &module);
+            self.update_rev_imports(abs, dir, module);
         }
 
         // ---- import resolution -------------------------------------------
@@ -170,17 +171,17 @@ impl Backend {
         // interfaces / enums from sibling files so cross-file lookups
         // (e.g. `Json.decode(...)` from `import "json"`) resolve.
         let seed = match &module_dir {
-            Some(d) => self.import_seed_at(abs_path, &module, d),
+            Some(d) => self.import_seed_at(abs_path, module, d),
             None => saule_semantic::ModuleSeed::default(),
         };
-        for e in saule_semantic::analyze_with_seed(&module, seed) {
+        for e in saule_semantic::analyze_with_seed(module, seed) {
             out.push(diag_from(&e, source, &line_index));
         }
         // Run typeck unconditionally — even if semantic flagged issues, the
         // type errors are usually still informative. Typeck reads the
         // registries that `analyze_with_seed` just installed, so the order
         // matters.
-        for e in saule_typeck::check(&module) {
+        for e in saule_typeck::check(module) {
             out.push(diag_from(&e, source, &line_index));
         }
         out
@@ -222,8 +223,8 @@ impl Backend {
         // projects aren't supported (the interpreter holds a single
         // `ProjectInfo` slot).
         for root in &roots {
-            if let Some(project_root) = workspace::find_project_root(root)
-                && let Some(info) = workspace::load_project(&project_root)
+            if let Some(project_root) = saule_project::find_root(root)
+                && let Some(info) = saule_project::load(&project_root)
             {
                 *self.project_info.lock().await = Some(info);
                 break;
@@ -231,7 +232,7 @@ impl Backend {
         }
 
         for root in &roots {
-            for file in workspace::scan_saule_files(root) {
+            for file in saule_project::scan_sources(root) {
                 let canon = canonical(&file).unwrap_or(file);
                 self.workspace_files.insert(canon.clone(), ());
                 if let Some(uri) = path_to_uri(&canon) {

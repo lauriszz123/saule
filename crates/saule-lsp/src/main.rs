@@ -10,7 +10,6 @@ mod refs;
 mod server;
 mod syntax;
 mod transport;
-mod workspace;
 
 use server::Backend;
 use tower_lsp::{LspService, Server};

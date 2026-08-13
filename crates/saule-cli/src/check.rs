@@ -15,7 +15,6 @@
 //!     before you import it.
 
 use std::{
-    fs,
     path::{Path, PathBuf},
     process,
 };
@@ -33,15 +32,25 @@ struct FileReport {
 /// `saule check [TARGET]` — dispatch on whether `TARGET` is a directory,
 /// exactly as `run` does, so the two commands agree about what a "project" is.
 pub(crate) fn cmd_check(target: Option<PathBuf>) {
+    // Wire the stdlib's native signatures into `saule-typeck`. Idempotent,
+    // but it has to have happened before typeck runs on the first file.
+    saule_interpreter::init();
+
+    // One database for the whole run. Every file in a project imports some
+    // of the same modules, and without this each one walks the shared part
+    // of the import graph again from scratch — the cost that dominates a
+    // check of anything larger than a handful of files.
+    let mut db = saule_db::Db::new();
+
     let reports = match target {
-        None => check_project(Path::new(".")),
-        Some(t) if t.is_dir() => check_project(&t),
+        None => check_project(&mut db, Path::new(".")),
+        Some(t) if t.is_dir() => check_project(&mut db, &t),
         Some(t) => {
             if !t.exists() {
                 eprintln!("error: file '{}' does not exist", t.display());
                 process::exit(1);
             }
-            vec![check_file(&t)]
+            vec![check_file(&mut db, &t)]
         }
     };
 
@@ -74,7 +83,7 @@ pub(crate) fn cmd_check(target: Option<PathBuf>) {
 
 /// Configure the project (so `src_dirs` and dependencies resolve), then check
 /// every `.sau` file it owns.
-fn check_project(dir: &Path) -> Vec<FileReport> {
+fn check_project(db: &mut saule_db::Db, dir: &Path) -> Vec<FileReport> {
     let project = crate::project::configure_project(dir, /* require_entry */ false);
     let files = project.source_files();
     if files.is_empty() {
@@ -88,30 +97,28 @@ fn check_project(dir: &Path) -> Vec<FileReport> {
                 .join(", ")
         );
     }
-    files.iter().map(|f| check_file(f)).collect()
+    files.iter().map(|f| check_file(db, f)).collect()
 }
 
 /// Run the front-end over one file and collect everything it complains about.
-fn check_file(path: &Path) -> FileReport {
+fn check_file(db: &mut saule_db::Db, path: &Path) -> FileReport {
     let mut diagnostics = Vec::new();
 
-    let source = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(err) => {
-            eprintln!("error reading file '{}': {}", path.display(), err);
-            process::exit(1);
-        }
-    };
+    // Canonicalised so this file is keyed the same way the import walk keys
+    // it when some *other* file imports it — otherwise the two spellings
+    // are two entries and neither reuses the other's work.
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
-    // Wire the stdlib's native signatures into `saule-typeck`. Idempotent, but
-    // it has to have happened before typeck runs on the first file.
-    saule_interpreter::init();
+    let Some(source) = db.text(&abs) else {
+        eprintln!("error reading file '{}'", path.display());
+        process::exit(1);
+    };
 
     let name = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
-    let make_src = || NamedSource::new(&name, source.clone());
+    let make_src = || NamedSource::new(&name, source.to_string());
 
     // Both stages recover, so every syntax error in the file is reported in
     // one go — the same reasoning the semantic and type passes below already
@@ -121,38 +128,27 @@ fn check_file(path: &Path) -> FileReport {
     //
     // It is still a hard stop: the recovered tree has holes in it, and a hole
     // makes the later passes report on the repair rather than on the code.
-    let lexed = saule_lexer::Lexer::new(&source).tokenize_recover();
-    let parsed = saule_parser::parse_recover(lexed.tokens, &source);
-    if !lexed.errors.is_empty() || !parsed.errors.is_empty() {
-        for e in lexed.errors {
-            diagnostics.push(Report::new(e).with_source_code(make_src()));
+    let parsed = db.parsed(&abs);
+    if !parsed.is_clean() {
+        for e in &parsed.lex {
+            diagnostics.push(Report::new(e.clone()).with_source_code(make_src()));
         }
-        for e in parsed.errors {
-            diagnostics.push(Report::new(e).with_source_code(make_src()));
+        for e in &parsed.parse {
+            diagnostics.push(Report::new(e.clone()).with_source_code(make_src()));
         }
         return FileReport { diagnostics };
     }
-    let module = parsed.module;
 
-    let module_dir = path
-        .canonicalize()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .or_else(|| path.parent().map(Path::to_path_buf));
-
-    let seed = match &module_dir {
-        Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
-        None => saule_semantic::ModuleSeed::default(),
-    };
+    let seed = (*db.seed(&abs)).clone();
 
     // Semantic first — typeck reads the registries it installs. Unlike `run`,
     // both passes report their full error list, and typeck runs even when
     // semantic found something: the two families rarely mask each other and a
     // developer would rather see both in one go.
-    for e in saule_interpreter::semantic::analyze_with_seed(&module, seed) {
+    for e in saule_interpreter::semantic::analyze_with_seed(&parsed.module, seed) {
         diagnostics.push(Report::new(e).with_source_code(make_src()));
     }
-    for e in saule_interpreter::typeck::check(&module) {
+    for e in saule_interpreter::typeck::check(&parsed.module) {
         diagnostics.push(Report::new(e).with_source_code(make_src()));
     }
 

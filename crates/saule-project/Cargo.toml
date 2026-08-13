@@ -1,0 +1,8 @@
+[package]
+name = "saule-project"
+version.workspace = true
+edition.workspace = true
+description = "Saule — `saule.config` parsing, project discovery and dependency resolution."
+license.workspace = true
+
+[dependencies]

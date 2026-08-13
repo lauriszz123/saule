@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 saule-ast = { path = "../saule-ast" }
+saule-project = { path = "../saule-project" }
 saule-version = { path = "../saule-version" }
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }

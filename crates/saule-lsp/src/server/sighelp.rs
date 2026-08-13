@@ -71,7 +71,7 @@ impl Backend {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
         let _guard = self.analysis_lock.lock().await;
         if let Some(info) = self.project_info.lock().await.clone() {
-            saule_interpreter::project::set(info);
+            saule_project::set(info);
         }
 
         let parsed = saule_lexer::Lexer::new(&source)

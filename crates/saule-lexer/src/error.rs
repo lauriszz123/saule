@@ -1,7 +1,7 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
-#[derive(Debug, Error, Diagnostic)]
+#[derive(Debug, Clone, Error, Diagnostic)]
 pub enum LexerError {
     #[error("unexpected character")]
     Unexpected(#[label("here")] std::ops::Range<usize>),

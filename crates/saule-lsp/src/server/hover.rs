@@ -43,7 +43,7 @@ impl Backend {
         let _guard = self.analysis_lock.lock().await;
 
         if let Some(info) = self.project_info.lock().await.clone() {
-            saule_interpreter::project::set(info);
+            saule_project::set(info);
         }
 
         let seed = match &module_dir {

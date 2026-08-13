@@ -41,18 +41,16 @@ impl<'a> CollectCx<'a> {
                 Symbol::Method {
                     class: tc,
                     name: tn,
-                } => {
-                    if name == tn
-                        && self.lookup_local(name).is_none()
-                        && self
-                            .enclosing_class
-                            .as_deref()
-                            .and_then(|c| static_method_owner(c, name))
-                            .as_deref()
-                            == Some(tc.as_str())
-                    {
-                        self.push(e.span.clone(), false);
-                    }
+                } if name == tn
+                    && self.lookup_local(name).is_none()
+                    && self
+                        .enclosing_class
+                        .as_deref()
+                        .and_then(|c| static_method_owner(c, name))
+                        .as_deref()
+                        == Some(tc.as_str()) =>
+                {
+                    self.push(e.span.clone(), false);
                 }
                 _ => {}
             },
