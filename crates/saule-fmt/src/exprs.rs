@@ -39,17 +39,34 @@ impl<'a> Printer<'a> {
                     UnaryOp::Not => ("not", true),
                     UnaryOp::Len => ("#", false),
                 };
+                // A unary is not the tightest thing in the grammar: `^` and
+                // `as` both bind above it. So it needs the same treatment as
+                // a binary — parenthesise where the context binds tighter, and
+                // where the author asked for it.
+                let parens = UNARY_PREC < parent_prec || self.was_grouped(parent_prec, &e.span);
+                if parens {
+                    self.write("(");
+                }
                 self.write(sym);
                 if space {
                     self.write(" ");
                 }
-                // Unary binds tighter than any binary, so wrap operands of
-                // strictly lower precedence than `MAX_PREC`.
+                // The operand keeps `MAX_PREC`: `-a ^ b` already means
+                // `-(a ^ b)`, so printing the inner `^` bare would be correct
+                // but relies on the reader knowing that. Parenthesising it is
+                // the same call as everywhere else in this file.
                 self.expr(rhs, MAX_PREC);
+                if parens {
+                    self.write(")");
+                }
             }
             Expr::Binary { op, lhs, rhs } => {
                 let (p, right_assoc) = bin_prec(*op);
-                if p < parent_prec {
+                // Two reasons to parenthesise: precedence demands it, or the
+                // author wrote parentheses here and precedence alone is not a
+                // good enough reason to take them away.
+                let parens = p < parent_prec || self.was_grouped(parent_prec, &e.span);
+                if parens {
                     self.write("(");
                 }
                 let left_min = if right_assoc { p + 1 } else { p };
@@ -57,7 +74,7 @@ impl<'a> Printer<'a> {
                 self.expr(lhs, left_min);
                 self.writef(format_args!(" {} ", bin_sym(*op)));
                 self.expr(rhs, right_min);
-                if p < parent_prec {
+                if parens {
                     self.write(")");
                 }
             }
@@ -130,7 +147,7 @@ impl<'a> Printer<'a> {
                 // its parens (dropping them yields `x as integer!`, which
                 // doesn't parse), while `x as integer != nil` is already
                 // unambiguous.
-                let parens = CAST_PREC < parent_prec;
+                let parens = CAST_PREC < parent_prec || self.was_grouped(parent_prec, &e.span);
                 if parens {
                     self.write("(");
                 }
@@ -492,6 +509,48 @@ impl<'a> Printer<'a> {
     fn source_quote(&self, span: &Range<usize>) -> Option<char> {
         let c = self.source.get(span.start..)?.chars().next()?;
         (c == '"' || c == '\'').then_some(c)
+    }
+
+    /// Whether the author parenthesised the operand at `span`.
+    ///
+    /// The parser discards grouping — `(a + b)` and `a + b` produce the same
+    /// node with the same span — so precedence was the only thing left to
+    /// decide parentheses by, and it decided badly. `"n = " .. (a + b)` came
+    /// back as `"n = " .. a + b`: correct, because `..` is looser than `+`,
+    /// and worse, because almost nobody has that rung of the ladder memorised.
+    /// A formatter may normalise layout; it should not quietly overrule the
+    /// author on what needs spelling out.
+    ///
+    /// So read it back out of the source, the same trick [`Self::str_lit`]
+    /// uses for quote style. `parent_prec` gates it: this is only consulted
+    /// for an *operand* of an operator (`0` means a call argument, an index,
+    /// a statement's right-hand side — contexts where the surrounding
+    /// construct brings its own brackets and the author's parentheses really
+    /// are noise).
+    ///
+    /// Within an operand position the test is exact, not a guess. An operand
+    /// has its operator on one side of it: a left operand is followed by
+    /// ` op`, a right operand is preceded by `op `. So a `(` immediately
+    /// before *and* a `)` immediately after cannot be the enclosing
+    /// construct's — only a grouping pair around this operand can be both.
+    ///
+    /// Returns `false` when there is no source to read (`format_module`),
+    /// which is the behaviour that entry point has always had.
+    fn was_grouped(&self, parent_prec: u8, span: &Range<usize>) -> bool {
+        if parent_prec == 0 {
+            return false;
+        }
+        let before = self
+            .source
+            .get(..span.start)
+            .map(str::trim_end)
+            .and_then(|s| s.chars().next_back());
+        let after = self
+            .source
+            .get(span.end..)
+            .map(str::trim_start)
+            .and_then(|s| s.chars().next());
+        before == Some('(') && after == Some(')')
     }
 
     /// Whether the author wrote this lambda as a `do … end` block after the

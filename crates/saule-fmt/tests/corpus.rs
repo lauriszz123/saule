@@ -717,3 +717,165 @@ fn a_function_returning_a_nullable_is_left_alone() {
         assert_eq!(format_str(src).unwrap().trim(), src);
     }
 }
+
+// ── Operator parentheses ────────────────────────────────────────────────────
+//
+// The parser discards grouping, so `(a + b)` and `a + b` reach the printer as
+// the same node. That left precedence as the only thing deciding parentheses,
+// and it decided two ways badly: it dropped parentheses the author wrote, and
+// — where the printer's table disagreed with the parser's ladder — it dropped
+// ones the meaning depended on.
+
+/// Re-parsing the formatter's output must give back the same tree. This is the
+/// property that matters; the text is secondary.
+fn assert_tree_preserved(src: &str) {
+    let before = saule_parser::parse(saule_lexer::Lexer::new(src).tokenize().unwrap()).unwrap();
+    let formatted = format_with_source(src);
+    let after =
+        saule_parser::parse(saule_lexer::Lexer::new(&formatted).tokenize().unwrap()).unwrap();
+    assert_eq!(
+        before, after,
+        "`{src}` formatted to a different tree:\n{formatted}"
+    );
+}
+
+/// `??` binds tighter than every comparison and is right-associative. The
+/// printer had it at `or`'s strength and left-associative, so `(a == b) ?? c`
+/// lost its parentheses and came back as `a == (b ?? c)` — a different
+/// program, and one that no longer type-checks.
+#[test]
+fn coalesce_keeps_the_grouping_its_precedence_requires() {
+    for src in [
+        "local x = (a == b) ?? c",
+        "local x = (a < b) ?? c",
+        "local x = (a ?? b) ?? c",
+        "local x = (a ?? b) + c",
+        "local x = (a ?? b) .. c",
+        "local x = (a or b) ?? c",
+        "local x = (a and b) ?? c",
+    ] {
+        assert_tree_preserved(src);
+    }
+}
+
+/// Every operator pairing, both nestings, against the parser itself. A future
+/// edit to either precedence table that forgets the other fails here.
+#[test]
+fn no_operator_pairing_survives_a_format_with_a_different_meaning() {
+    let ops = [
+        "or", "and", "==", "!=", "<", "<=", ">", ">=", "??", "..", "+", "-", "*", "/", "%", "^",
+    ];
+    for outer in ops {
+        for inner in ops {
+            assert_tree_preserved(&format!("local x = (a {inner} b) {outer} c"));
+            assert_tree_preserved(&format!("local x = a {outer} (b {inner} c)"));
+        }
+    }
+}
+
+/// Parentheses the author wrote around an operand stay, even where precedence
+/// makes them redundant. `"n = " .. (a + b)` reads the way it was written; the
+/// reader should not have to know that `..` is looser than `+` to be sure.
+#[test]
+fn an_operands_parentheses_are_the_authors_to_keep() {
+    for src in [
+        r#"local s = "n = " .. (a + b)"#,
+        "local x = (a > b) == c",
+        "local x = (a + b) - c",
+        "local x = a + (b * c)",
+        "local x = (a * b) + c",
+        "local x = -(a + b)",
+    ] {
+        assert_eq!(
+            format_with_source(src).trim(),
+            src,
+            "the author's parentheses were dropped"
+        );
+    }
+}
+
+/// The other half of that rule: where the surrounding construct already
+/// brackets the expression, the parentheses really are noise and go.
+#[test]
+fn redundant_parentheses_outside_an_operand_still_go() {
+    for (src, want) in [
+        ("local x = (a + b)", "local x = a + b"),
+        ("local x = ((a))", "local x = a"),
+        ("f((a + b))", "f(a + b)"),
+        ("local x = t[(a + b)]", "local x = t[a + b]"),
+    ] {
+        assert_eq!(format_with_source(src).trim(), want);
+    }
+}
+
+/// Preserving the author's parentheses must not cost idempotency: the second
+/// format sees them in its own output and has to make the same decision.
+#[test]
+fn keeping_parentheses_is_idempotent() {
+    for src in [
+        r#"local s = "n = " .. (a + b)"#,
+        "local x = (a == b) ?? c",
+        "local x = ((a + b)) * c",
+    ] {
+        let once = format_with_source(src);
+        let twice = format_with_source(&once);
+        assert_eq!(once, twice, "second format differed for `{src}`");
+    }
+}
+
+/// A unary is not the tightest thing in the grammar — `^` and `as` bind above
+/// it — but the printer treated it as if nothing could out-bind it and never
+/// parenthesised one. `(-a) ^ 2` came back as `-a ^ 2`, which is `-(a ^ 2)`:
+/// `print((-a) ^ 2)` went from printing `4` to printing `-4`.
+#[test]
+fn a_unary_keeps_the_grouping_its_precedence_requires() {
+    for src in [
+        "local x = (-a) ^ b",
+        "local x = (not a) ^ b",
+        "local x = (#t) ^ b",
+        "local x = (-a) as integer",
+        "local x = (-a).field",
+        "local x = (-a)!",
+        "local x = (-a)[0]",
+    ] {
+        assert_tree_preserved(src);
+    }
+}
+
+/// Every unary against every binary, both nestings, and against `as`. The
+/// pairing that mattered (`-` under `^`) is one cell of this grid; the grid is
+/// what keeps the next precedence edit from reopening a different cell.
+#[test]
+fn no_unary_pairing_survives_a_format_with_a_different_meaning() {
+    let ops = [
+        "or", "and", "==", "!=", "<", "<=", ">", ">=", "??", "..", "+", "-", "*", "/", "%", "^",
+    ];
+    for un in ["-", "not ", "#"] {
+        for op in ops {
+            assert_tree_preserved(&format!("local x = ({un}a) {op} b"));
+            assert_tree_preserved(&format!("local x = a {op} ({un}b)"));
+            assert_tree_preserved(&format!("local x = {un}(a {op} b)"));
+        }
+        assert_tree_preserved(&format!("local x = ({un}a) as integer"));
+        assert_tree_preserved(&format!("local x = ({un}a).field"));
+    }
+}
+
+/// Parentheses around a unary or a cast are the author's too, on the same
+/// terms as a binary's.
+#[test]
+fn a_unary_or_casts_parentheses_are_the_authors_to_keep() {
+    for src in [
+        "local x = (-a) * b",
+        "local x = a * (-b)",
+        "local x = (#t) + a",
+        "local x = (not a) == b",
+        "local x = (a as integer) + b",
+    ] {
+        assert_eq!(
+            format_with_source(src).trim(),
+            src,
+            "the author's parentheses were dropped"
+        );
+    }
+}
