@@ -8,10 +8,10 @@ class Main
 
 		println("a         = " .. a)
 		println("b         = " .. b)
-		println("a + b     = " .. a + b)
-		println("b - a     = " .. b - a)
-		println("a * b     = " .. a * b)
-		println("-a        = " .. -a)
+		println("a + b     = " .. (a + b))
+		println("b - a     = " .. (b - a))
+		println("a * b     = " .. (a * b))
+		println("-a        = " .. (-a))
 
 		-- `==` runs Vec2.equals, so an independently built vector matches.
 		println("a == (1,2)? " .. tostring(a == Vec2(1.0, 2.0)))
