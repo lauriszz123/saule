@@ -1,6 +1,7 @@
 -- Barrel: everything listed here becomes the public surface of `UIKit`.
 -- Order follows the dependency chain — values, then the framework, then the
 -- views built on top of it.
+import * from Assets
 import * from Geometry
 import * from Color
 import * from TextStyle

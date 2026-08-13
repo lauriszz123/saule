@@ -1,4 +1,5 @@
 import * from engine
+import * from Assets
 import * from Geometry
 import * from Color
 import * from Framework
@@ -19,6 +20,10 @@ export class Images
 	-- The handle for `path`, or nil if it could not be loaded. A failed path is
 	-- remembered so a missing file doesn't retry the decode 60 times a second.
 	--
+	-- Relative paths are read against the project root, not the working
+	-- directory — see `Assets.resolve` for why. Caching is keyed on the path as
+	-- written, since that is what a caller repeats.
+	--
 	-- A missing file is checked for rather than caught: an error raised inside a
 	-- native call is fatal in Saule, not catchable by `try`. That covers the
 	-- case that actually happens — a typo'd or not-yet-copied asset. A file that
@@ -35,18 +40,19 @@ export class Images
 			return nil
 		end
 
-		local probe: File? = Io.open(path, IoMode.Read)
+		local resolved: string = Assets.resolve(path)
+		local probe: File? = Io.open(resolved, IoMode.Read)
 
 		if probe == nil then
 			failed[path] = true
-			println("Images.load: cannot open " .. path)
+			println("Images.load: cannot open " .. resolved)
 
 			return nil
 		end
 
 		probe!.close()
 
-		local handle: integer = Graphics.newImage(path)
+		local handle: integer = Graphics.newImage(resolved)
 		handles[path] = handle
 
 		return handle

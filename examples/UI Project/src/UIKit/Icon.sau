@@ -1,4 +1,5 @@
 import * from engine
+import * from Assets
 import * from Geometry
 import * from Color
 import * from TextStyle
@@ -30,8 +31,10 @@ import * from Theme
 
 -- Where the icon font lives, and the handles loaded from it.
 --
--- The path is relative to the working directory the app runs from. Point it
--- somewhere else with `setFontPath` before the first icon is drawn.
+-- The path is relative to the project root — `Assets.resolve` makes it
+-- absolute — so icons draw the same whether the app was launched from inside
+-- its own folder or from anywhere else. Point it somewhere else with
+-- `setFontPath` before the first icon is drawn.
 export class IconFont
 	static local path: string = "assets/MaterialIcons-Regular.ttf"
 	static local handles: table = {}
@@ -63,18 +66,19 @@ export class IconFont
 
 		-- A native error is fatal in Saule, so check the file exists rather
 		-- than trying and catching.
-		local probe: File? = Io.open(IconFont.path, IoMode.Read)
+		local resolved: string = Assets.resolve(IconFont.path)
+		local probe: File? = Io.open(resolved, IoMode.Read)
 
 		if probe == nil then
 			IconFont.missing = true
-			println("IconFont: cannot open " .. IconFont.path .. " — icons will not draw")
+			println("IconFont: cannot open " .. resolved .. " — icons will not draw")
 
 			return nil
 		end
 
 		probe!.close()
 
-		local created: integer = Graphics.newFont(size * Display.scale(), IconFont.path)
+		local created: integer = Graphics.newFont(size * Display.scale(), resolved)
 		handles[key] = created
 
 		return created

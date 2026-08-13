@@ -797,7 +797,9 @@ Icon(0xE5CD)
 ```
 
 `IconFont.setFontPath(path)` moves the font if your assets live elsewhere; a
-missing file logs once and draws nothing rather than taking the frame down.
+missing file logs once and draws nothing rather than taking the frame down. The
+path is read relative to the project root, not the working directory — see
+[Asset paths](#asset-paths).
 
 ## Data: grids and tables
 
@@ -1071,6 +1073,25 @@ Decoding is cached by path in `Images`, so writing `Image(path: …)` inside a
 frame down; a file that exists but isn't a valid PNG is a hard error, because an
 error inside a native call cannot be caught in Saule.
 
+### Asset paths
+
+```saule
+Assets.resolve("assets/logo.png")  --> "/Users/me/UI Project/assets/logo.png"
+```
+
+The engine's loaders resolve a path against the **working directory**, which is
+wherever the shell happened to be — `saule run` does not move it. So a bare
+`"assets/logo.png"` only finds the file when the app was launched from inside
+its own folder, and the same project silently loses its icons when run as
+`saule run path/to/project`.
+
+`Icon` and `Image` therefore put every relative path through `Assets.resolve`,
+which joins it onto `Project.root` — the absolute root the interpreter already
+knows, having read `saule.config` to find the entry point. Absolute paths pass
+through untouched, and so does anything that isn't under the root: a single-file
+script has no project, and there the working-directory reading is all there is.
+Use it for your own assets too.
+
 ## Animation
 
 `AnimationController` turns the frame clock into an eased 0..1 value over the
@@ -1112,7 +1133,7 @@ animation costs one comparison per frame, not a rebuild. `lerp`, `lerpColor`,
 
 **Scrolling** — `ScrollView`, `List`, `Viewport`, `ScrollBar`, `ScrollController`
 
-**Painting** — `Box`, `Surface`, `Text`, `Canvas`, `Image`, `Opacity`
+**Painting** — `Box`, `Surface`, `Text`, `Canvas`, `Image`, `Opacity`, `Assets`
 
 **Controls** — `Button`, `Checkbox`, `Radio`, `Toggle`, `Slider`,
 `ProgressView`, `Picker`, `TabView`, `TabBar`, `DateField`
