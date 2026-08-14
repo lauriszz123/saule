@@ -33,6 +33,29 @@ pub(crate) fn check_assignment_compat(
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
 ) {
+    check_assignment_compat_inner(decl_ty, value, scope, errors, false)
+}
+
+/// [`check_assignment_compat`] at a site where `Assignable` conversion applies.
+///
+/// Used only where `saule_interpreter::eval::coerce` actually converts —
+/// see [`crate::coerce_sites`] for why the two lists must match exactly.
+pub(crate) fn check_assignment_compat_coercing(
+    decl_ty: &Type,
+    value: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    check_assignment_compat_inner(decl_ty, value, scope, errors, true)
+}
+
+fn check_assignment_compat_inner(
+    decl_ty: &Type,
+    value: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+    coercing: bool,
+) {
     // When the value is `lhs ?? rhs`, the declared type tells us what the
     // whole expression is supposed to produce — use its stripped base as
     // the expected type for the fallback. This catches mismatches even
@@ -66,9 +89,20 @@ pub(crate) fn check_assignment_compat(
         // where `some_entry: Entry?`. Only `nil` stays permissive; an
         // `any` value is a downcast and must go through `as`, even into a
         // nullable slot (`local x: string? = a as string`).
+        // A nullable slot names the same conversion target for a non-nil
+        // value (`local s: Str? = "x"` builds the `Str`), so a coercing
+        // site relaxes here too — matching `eval::coerce`, which strips the
+        // `?` before looking for `Assignable`.
+        let ok = |vt: &Type| {
+            if coercing {
+                crate::coerce_sites::accepts(decl_ty, vt)
+            } else {
+                types_compatible(decl_ty, vt)
+            }
+        };
         if let Some(value_ty) = infer(value, scope)
             && !matches!(&value_ty, Type::Named(n) if n == "nil")
-            && !types_compatible(decl_ty, &value_ty)
+            && !ok(&value_ty)
         {
             errors.push(TypeCheckError::AssignmentTypeMismatch {
                 expected: type_to_string(decl_ty),
@@ -113,10 +147,12 @@ pub(crate) fn check_assignment_compat(
     // from `Os.args()`). `nil` stays permissive, and so does an `any`
     // *slot* — widening into `any` is always safe. An `any` *value* is
     // not: that is the downcast direction, and it now requires `as`.
-    if !matches!(&value_ty, Type::Named(n) if n == "nil")
-        && !is_any(decl_ty)
-        && !types_compatible(decl_ty, &value_ty)
-    {
+    let compatible = if coercing {
+        crate::coerce_sites::accepts(decl_ty, &value_ty)
+    } else {
+        types_compatible(decl_ty, &value_ty)
+    };
+    if !matches!(&value_ty, Type::Named(n) if n == "nil") && !is_any(decl_ty) && !compatible {
         errors.push(TypeCheckError::AssignmentTypeMismatch {
             expected: type_to_string(decl_ty),
             found: type_to_string(&value_ty),

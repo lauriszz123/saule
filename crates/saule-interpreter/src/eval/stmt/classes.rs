@@ -121,7 +121,14 @@ pub(super) fn exec_class_decl(
         match env.borrow().get(interface_name) {
             Some(Value::Interface(iface)) => {
                 for required_method in &iface.methods {
-                    if !methods.contains_key(required_method.0) {
+                    // `Assignable` requires a **static** `from`, the only
+                    // contract whose method is not an instance method, so
+                    // both tables have to be consulted. Checking each
+                    // interface against only one of them would reject a
+                    // correct class.
+                    if !methods.contains_key(required_method.0)
+                        && !static_methods.contains_key(required_method.0)
+                    {
                         missing_methods.push((interface_name.clone(), required_method.0.clone()));
                     }
                 }

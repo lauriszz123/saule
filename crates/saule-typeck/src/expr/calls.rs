@@ -400,7 +400,12 @@ pub(crate) fn check_user_method_args(
         {
             continue;
         }
-        if !compatible_under_sig_params(&expected, &found_ty, type_params) {
+        // A user function's parameters are a coercing site — the
+        // interpreter builds the declared class through `Assignable` when it
+        // binds them, so accept a value the target converts from.
+        if !compatible_under_sig_params(&expected, &found_ty, type_params)
+            && !crate::coerce_sites::accepts(&expected, &found_ty)
+        {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
                 callee: callee_display.to_string(),
                 arg: i + 1,
@@ -858,7 +863,11 @@ pub(crate) fn report_if_user_function_arity(
             });
             continue;
         }
-        if !compatible_under_sig_params(&expected, &found_ty, type_params) {
+        // A top-level `fn`'s parameters are a coercing site too — same
+        // rule, same reason, as the method path above.
+        if !compatible_under_sig_params(&expected, &found_ty, type_params)
+            && !crate::coerce_sites::accepts(&expected, &found_ty)
+        {
             errors.push(TypeCheckError::NativeArgTypeMismatch {
                 callee: name.clone(),
                 arg: i + 1,

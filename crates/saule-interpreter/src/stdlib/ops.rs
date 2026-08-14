@@ -40,6 +40,15 @@
 //! | `OpCompare<T>`   | `<` `<=` `>` `>=` | `fn compare(other: T) -> integer` |
 //! | `OpToString`     | `tostring(a)`   | `fn toString() -> string`       |
 //!
+//! Three more are **behaviour** contracts rather than operators — no symbol
+//! triggers them:
+//!
+//! | Interface          | Fires on            | Method                              |
+//! |--------------------|---------------------|-------------------------------------|
+//! | `OpIndex<K, V>`    | `a[k]`              | `fn index(key: K) -> V`             |
+//! | `OpNewIndex<K, V>` | `a[k] = v`          | `fn newIndex(key: K, value: V) -> nil` |
+//! | `Assignable<T>`    | `local a: C = t`    | `static fn of(value: T) -> C`       |
+//!
 //! The interfaces carry no behaviour of their own — the dispatch lives in
 //! [`crate::eval::ops`], which looks the contract method up on the
 //! instance's class chain. What the `implements` clause buys is the static
@@ -60,7 +69,7 @@ use crate::value::{InterfaceObject, Value};
 ///
 /// `exports` has to be a literal `&'static [&'static str]`, so it spells
 /// the names out rather than deriving them from
-/// [`saule_ast::ops::OPERATOR_CONTRACTS`]. `exports_match_contracts` below
+/// [`saule_ast::ops::ALL_CONTRACTS`]. `exports_match_contracts` below
 /// keeps the two in step.
 pub static OPS_PACKAGE: NativePackage = NativePackage {
     name: "ops",
@@ -85,6 +94,9 @@ pub static OPS_PACKAGE: NativePackage = NativePackage {
         "OpEq",
         "OpCompare",
         "OpToString",
+        "OpIndex",
+        "OpNewIndex",
+        "Assignable",
     ],
     register_sigs,
     builtins: empty_builtins,
@@ -96,7 +108,7 @@ fn empty_builtins() -> saule_semantic::builtins::Builtins {
 }
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
-    for contract in saule_ast::ops::OPERATOR_CONTRACTS {
+    for contract in saule_ast::ops::ALL_CONTRACTS {
         let mut methods = fxmap();
         methods.insert(contract.method.to_string(), (contract.params, true));
         env.borrow_mut().define(
@@ -126,7 +138,7 @@ mod tests {
     /// `implements OpX` would fail as an undefined name.
     #[test]
     fn exports_match_contracts() {
-        let declared: Vec<&str> = saule_ast::ops::OPERATOR_CONTRACTS
+        let declared: Vec<&str> = saule_ast::ops::ALL_CONTRACTS
             .iter()
             .map(|c| c.interface)
             .collect();

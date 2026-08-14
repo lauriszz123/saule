@@ -1,0 +1,12 @@
+-- ERROR: `obj[key]` on a class needs `OpIndex`. Without it there is nothing
+-- to index — an instance has no key space of its own.
+class Plain
+	local n: integer
+	fn init() self.n = 1 end
+end
+class Main
+	static fn main()
+		local p: Plain = Plain()
+		println(p["anything"])
+	end
+end

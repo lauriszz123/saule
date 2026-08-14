@@ -1,0 +1,48 @@
+-- Full control of reading and writing, through `OpIndex` / `OpNewIndex`.
+--
+-- These are Saule's `__index` / `__newindex`, with one deliberate difference
+-- from Lua's: they are not miss handlers over a stored key space. A class
+-- instance has no keys of its own, so the method *is* the lookup and runs on
+-- every `s[key]` and every `s[key] = value`.
+--
+-- That is what makes the normalising below reliable — there is no "already
+-- present" path that would skip it.
+--
+-- Note also what is *not* routed here: `s.name`. Field and method names are
+-- resolved statically, and sending their misses to a hook would give up
+-- "unknown member" diagnostics for the whole class. Dynamic access is
+-- `s[key]`; a fixed surface is declared as ordinary methods.
+
+export class Settings implements OpIndex<string, string>, OpNewIndex<string, string>
+	local data: table<string, string>
+	local defaults: table<string, string>
+	local writes: integer
+
+	fn init(defaults: table<string, string>)
+		self.data = {}
+		self.defaults = defaults
+		self.writes = 0
+	end
+
+	-- Every read lands here, so a default costs no stored entry and no
+	-- caller ever has to remember the fallback.
+	fn index(key: string) -> string
+		return self.data[key] ?? self.defaults[key] ?? ""
+	end
+
+	-- Every write lands here, so normalising and auditing happen in one
+	-- place rather than at each call site.
+	fn newIndex(key: string, value: string) -> nil
+		self.writes = self.writes + 1
+		self.data[key] = String.lower(value)
+	end
+
+	fn writeCount() -> integer
+		return self.writes
+	end
+
+	-- Was this key ever explicitly set, as opposed to answered by a default?
+	fn isExplicit(key: string) -> boolean
+		return self.data[key] != nil
+	end
+end

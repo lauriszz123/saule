@@ -26,13 +26,34 @@ pub(crate) fn read_index(
 ) -> Result<Value, RuntimeError> {
     match receiver {
         Value::Table(items) => Ok(items.borrow().get(&index)),
+        // `obj[key]` on a class instance is `OpIndex` — Saule's `__index`.
+        // Unlike Lua's, it is not a miss handler over stored keys: an
+        // instance has no key space of its own, so the method *is* the
+        // lookup and it runs on every read.
+        Value::Instance(_) if has_index_overload(receiver, saule_ast::ops::OP_INDEX.method) => {
+            crate::eval::index_hooks::call_index(receiver, index, span)
+        }
         other => Err(RuntimeError::TypeError {
             message: format!(
-                "cannot index a `{}` — only tables support `[index]` access",
+                "cannot index a `{}` — only tables and classes implementing `OpIndex` \
+                 support `[index]` access",
                 other.type_name()
             ),
             span,
         }),
+    }
+}
+
+/// Does `v` carry `method` on its class chain? Mirrors `eval::ops`'
+/// duck-typed dispatch: the `implements` clause is the static opt-in, and by
+/// the time a value reaches here the checker has already had its say.
+pub(crate) fn has_index_overload(v: &Value, method: &str) -> bool {
+    match v {
+        Value::Instance(inst) => {
+            let class = inst.borrow().class.clone();
+            class.lookup_method(method).is_some()
+        }
+        _ => false,
     }
 }
 

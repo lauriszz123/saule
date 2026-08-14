@@ -2109,10 +2109,165 @@ mod bitwise_overloading {
         );
     }
 
+    /// The other operand does not have to be the class itself — `shl` can
+    /// declare any parameter type, which is what makes `mask << 4` (the
+    /// natural shape for a shift) expressible rather than forcing a `Mask`
+    /// to stand in for the shift count.
+    #[test]
+    fn an_overloads_other_operand_can_be_any_declared_type() {
+        assert_int(
+            r#"
+            class Bits implements OpShl<integer, Bits>
+                local bits: integer
+                fn init(b: integer)
+                    self.bits = b
+                end
+                fn get() -> integer return self.bits end
+                fn shl(other: integer) -> Bits return Bits(self.bits << other) end
+            end
+            (Bits(1) << 4).get()
+            "#,
+            16,
+        );
+    }
+
     #[test]
     fn a_shift_dispatches_on_its_left_operand() {
         // Asymmetric like arithmetic: `2 << mask` must not quietly become
         // `mask << 2`.
         assert!(eval(&with_mask("2 << Mask(1)")).is_err());
+    }
+}
+
+// ── OpIndex / OpNewIndex, Assignable<T> ───────────────────────────────────────
+
+mod behaviour_contracts {
+    use super::*;
+
+    // ── OpIndex / OpNewIndex ──────────────────────────────────────────────
+
+    fn with_cfg(expr: &str) -> String {
+        format!(
+            r#"
+            class Cfg implements OpIndex<string, string>, OpNewIndex<string, string>
+                local data: table<string, string>
+                local reads: integer
+                fn init()
+                    self.data = {{}}
+                    self.reads = 0
+                end
+                fn index(key: string) -> string
+                    self.reads = self.reads + 1
+                    return self.data[key] ?? "(unset)"
+                end
+                fn newIndex(key: string, value: string) -> nil
+                    self.data[key] = String.lower(value)
+                end
+                fn reads() -> integer return self.reads end
+            end
+            {expr}
+        "#
+        )
+    }
+
+    #[test]
+    fn index_and_new_index_dispatch_to_their_methods() {
+        assert_str(
+            &with_cfg("local c: Cfg = Cfg()\nc[\"h\"] = \"LOUD\"\nc[\"h\"]"),
+            "loud",
+        );
+    }
+
+    #[test]
+    fn index_runs_on_every_read_not_only_on_a_miss() {
+        // The difference from Lua's `__index`: an instance has no stored key
+        // space, so the method *is* the lookup.
+        assert_int(
+            &with_cfg(
+                "local c: Cfg = Cfg()\nc[\"a\"] = \"x\"\nlocal p: string = c[\"a\"]\n\
+                 local q: string = c[\"a\"]\nc.reads()",
+            ),
+            2,
+        );
+    }
+
+    #[test]
+    fn a_key_that_was_never_written_still_answers() {
+        assert_str(&with_cfg("Cfg()[\"nothing\"]"), "(unset)");
+    }
+
+    #[test]
+    fn compound_assignment_runs_both_hooks() {
+        // `c[k] ..= v` reads through `index` and writes through `newIndex`.
+        assert_str(
+            &with_cfg("local c: Cfg = Cfg()\nc[\"a\"] = \"AB\"\nc[\"a\"] ..= \"CD\"\nc[\"a\"]"),
+            "abcd",
+        );
+    }
+
+    #[test]
+    fn a_hook_that_indexes_self_is_reported_rather_than_hanging() {
+        assert!(
+            eval(
+                r#"
+                class Loop implements OpIndex<string, string>
+                    fn index(key: string) -> string return self[key] end
+                end
+                Loop()["x"]
+                "#
+            )
+            .is_err()
+        );
+    }
+
+    // ── Assignable ────────────────────────────────────────────────────────────
+
+    /// A `Text` wrapping a `string`. Every method it exposes it declares
+    /// itself, calling the `String` class explicitly — nothing is injected,
+    /// and `string` has no members of its own.
+    fn with_text(expr: &str) -> String {
+        format!(
+            r#"
+            class Text implements Assignable<string>, OpToString
+                local raw: string
+                fn init(raw: string)
+                    self.raw = raw
+                end
+                static fn of(s: string) -> Text return Text(s) end
+                fn upper() -> string return String.upper(self.raw) end
+                fn toString() -> string return self.raw end
+            end
+            {expr}
+        "#
+        )
+    }
+
+    #[test]
+    fn assignable_builds_the_class_at_an_annotated_binding() {
+        assert_str(&with_text("local t: Text = \"hello\"\nt.upper()"), "HELLO");
+    }
+
+    #[test]
+    fn assignable_builds_the_class_at_a_parameter() {
+        assert_str(
+            &with_text(
+                "fn take(t: Text) -> string return t.upper() end\nlocal out: string = take(\"hi\")\nout",
+            ),
+            "HI",
+        );
+    }
+
+    #[test]
+    fn assignable_leaves_a_value_of_the_target_class_alone() {
+        // Already a `Text` — no second conversion, and no `from` call.
+        assert_str(
+            &with_text("local t: Text = Text(\"kept\")\nt.upper()"),
+            "KEPT",
+        );
+    }
+
+    #[test]
+    fn assignable_leaves_nil_alone_in_a_nullable_slot() {
+        assert_bool(&with_text("local t: Text? = nil\nt == nil"), true);
     }
 }

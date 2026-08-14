@@ -1664,3 +1664,142 @@ fn a_class_without_the_contract_cannot_be_shifted() {
         "`<<`",
     );
 }
+
+// ── OpIndex / OpNewIndex / Assignable ─────────────────────────────────────────
+
+/// A `Str` wrapping a `string`, exposing only what it declares itself.
+///
+/// `string` is a type and has no members; `String` is a separate class of
+/// static functions. A wrapper writes the methods it wants to expose.
+fn with_str(body: &str) -> String {
+    format!(
+        r#"
+        class Str implements Assignable<string>
+            str: string
+            fn init(str: string)
+                self.str = str
+            end
+            static fn of(s: string) -> Str return Str(s) end
+            fn value() -> string return self.str end
+        end
+        {body}
+        "#
+    )
+}
+
+#[test]
+fn op_index_types_the_element_from_its_own_method() {
+    accepts(
+        r#"
+        class Cfg implements OpIndex<string, integer>
+            fn index(key: string) -> integer return 1 end
+        end
+        local c: Cfg = Cfg()
+        local n: integer = c["a"]
+        "#,
+    );
+    rejects(
+        r#"
+        class Cfg implements OpIndex<string, integer>
+            fn index(key: string) -> integer return 1 end
+        end
+        local c: Cfg = Cfg()
+        local s: string = c["a"]
+        "#,
+        "integer",
+    );
+}
+
+#[test]
+fn op_index_checks_the_key_type() {
+    rejects(
+        r#"
+        class Cfg implements OpIndex<string, integer>
+            fn index(key: string) -> integer return 1 end
+        end
+        local c: Cfg = Cfg()
+        local n: integer = c[42]
+        "#,
+        "Cfg.index",
+    );
+}
+
+#[test]
+fn indexing_a_class_without_op_index_is_rejected() {
+    rejects(
+        r#"
+        class Plain
+            n: integer
+            fn init()
+                self.n = 1
+            end
+        end
+        local p: Plain = Plain()
+        local x: any = p["k"]
+        "#,
+        "`[]`",
+    );
+}
+
+#[test]
+fn assignable_applies_at_an_annotated_binding() {
+    accepts(&with_str("local s: Str = \"hello\""));
+    // …and to a nullable slot, which names the same target for a non-nil
+    // value.
+    accepts(&with_str("local s: Str? = \"hello\""));
+}
+
+#[test]
+fn assignable_applies_to_a_function_parameter() {
+    accepts(&with_str(
+        "fn take(s: Str) -> string return s.value() end\nlocal out: string = take(\"hi\")",
+    ));
+}
+
+#[test]
+fn assignable_does_not_leak_to_sites_that_never_convert() {
+    // The soundness boundary. The interpreter converts only at annotated
+    // bindings and parameters, so relaxing anywhere else would typecheck a
+    // value that is never built — leaving a raw `string` where a `Str` is
+    // expected. Each of these must stay rejected.
+    rejects(&with_str("local all: table<Str> = {\"a\"}"), "Str");
+    rejects(&with_str("local s: Str = \"a\"\ns = \"b\""), "Str");
+    rejects(
+        r#"
+        class Str implements Assignable<string>
+            str: string
+            fn init(str: string)
+                self.str = str
+            end
+            static fn of(s: string) -> Str return Str(s) end
+        end
+        class Box
+            held: Str
+            fn init()
+                self.held = Str("x")
+            end
+            fn set() self.held = "raw" end
+        end
+        "#,
+        "Str",
+    );
+}
+
+#[test]
+fn assignable_needs_a_static_method() {
+    // An *instance* `of` is a different thing and must not silently
+    // become a conversion — the contract is explicitly static.
+    rejects(
+        r#"
+        class Str implements Assignable<string>
+            str: string
+            fn init(str: string)
+                self.str = str
+            end
+            fn of(s: string) -> Str return Str(s) end
+        end
+        local s: Str = "hello"
+        "#,
+        "Str",
+    );
+}

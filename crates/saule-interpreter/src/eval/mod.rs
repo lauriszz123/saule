@@ -10,7 +10,9 @@
 
 use crate::value::Value;
 
+pub mod coerce;
 pub mod expr;
+pub mod index_hooks;
 pub mod ops;
 pub mod stmt;
 

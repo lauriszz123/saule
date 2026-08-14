@@ -1,0 +1,16 @@
+-- ERROR: only the *declaration* converts. A later assignment carries no
+-- declared type at runtime, so relaxing it statically would promise a
+-- conversion that never happens.
+class Str implements Assignable<string>
+	local str: string
+	fn init(str: string) self.str = str end
+	static fn of(s: string) -> Str return Str(s) end
+end
+
+class Main
+	static fn main()
+		local s: Str = "first"
+		s = "second"
+		println(s)
+	end
+end

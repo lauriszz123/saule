@@ -60,8 +60,29 @@ pub const OP_EQ: OperatorContract = contract!("OpEq", "equals", 1, "==");
 pub const OP_COMPARE: OperatorContract = contract!("OpCompare", "compare", 1, "<");
 pub const OP_TO_STRING: OperatorContract = contract!("OpToString", "toString", 0, "tostring");
 
-/// Every operator contract, in declaration order. Used to seed the
-/// interface registries.
+// ── Behaviour contracts ──────────────────────────────────────────────────────
+//
+// Not operators: no source symbol triggers them, so `binary_contract` and
+// `unary_contract` never return one. They share [`OperatorContract`] because
+// what the registries need — an interface name, a method, an arity — is
+// identical, and every registration site iterates [`ALL_CONTRACTS`].
+
+/// `obj[key]` on a class instance. Saule's `__index`.
+pub const OP_INDEX: OperatorContract = contract!("OpIndex", "index", 1, "[]");
+/// `obj[key] = value` on a class instance. Saule's `__newindex`.
+pub const OP_NEW_INDEX: OperatorContract = contract!("OpNewIndex", "newIndex", 2, "[]=");
+/// `Class.of(value)` — and the same call applied *implicitly* wherever a
+/// declared type asks for the class and a bare value is supplied.
+///
+/// The method is **static**, unlike every other contract here: there is no
+/// instance yet to call it on.
+pub const ASSIGNABLE: OperatorContract = contract!("Assignable", "of", 1, "of");
+
+/// Every operator contract, in declaration order.
+///
+/// Operators only: this is what [`binary_contract`] / [`unary_contract`] map
+/// into, so a class listing one of these is opting into a *symbol*. The
+/// behaviour contracts live in [`ALL_CONTRACTS`] alongside them.
 pub const OPERATOR_CONTRACTS: &[OperatorContract] = &[
     OP_ADD,
     OP_SUB,
@@ -81,6 +102,39 @@ pub const OPERATOR_CONTRACTS: &[OperatorContract] = &[
     OP_EQ,
     OP_COMPARE,
     OP_TO_STRING,
+];
+
+/// The behaviour contracts — everything in [`ALL_CONTRACTS`] that no operator
+/// symbol maps to.
+pub const BEHAVIOUR_CONTRACTS: &[OperatorContract] = &[OP_INDEX, OP_NEW_INDEX, ASSIGNABLE];
+
+/// Every built-in contract a class can implement, operators first.
+///
+/// This is what the registries seed from: `saule-semantic` pre-registers the
+/// names so `implements Assignable<…>` resolves without an import, and
+/// `saule-interpreter`'s `ops` package installs one interface value per entry.
+pub const ALL_CONTRACTS: &[OperatorContract] = &[
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+    OP_MOD,
+    OP_POW,
+    OP_BAND,
+    OP_BOR,
+    OP_BXOR,
+    OP_SHL,
+    OP_SHR,
+    OP_NEG,
+    OP_BNOT,
+    OP_LEN,
+    OP_CONCAT,
+    OP_EQ,
+    OP_COMPARE,
+    OP_TO_STRING,
+    OP_INDEX,
+    OP_NEW_INDEX,
+    ASSIGNABLE,
 ];
 
 /// The contract a class must satisfy to overload `op`.
@@ -123,9 +177,9 @@ pub fn unary_contract(op: UnaryOp) -> Option<OperatorContract> {
     }
 }
 
-/// Is `name` one of the built-in operator interfaces?
+/// Is `name` one of the built-in interfaces — operator or behaviour?
 pub fn is_operator_interface(name: &str) -> bool {
-    OPERATOR_CONTRACTS.iter().any(|c| c.interface == name)
+    ALL_CONTRACTS.iter().any(|c| c.interface == name)
 }
 
 /// The operator as written in source. Unlike [`OperatorContract::symbol`]

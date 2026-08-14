@@ -65,6 +65,9 @@ contract the language itself looks for.
 | `OpEq<T>` | `a == b` and `a != b` — `fn equals(other: T) -> boolean`. |
 | `OpCompare<T>` | `<` `<=` `>` `>=` — `fn compare(other: T) -> integer`, negative / zero / positive. |
 | `OpToString` | `tostring(a)`, `print(a)`, and `..` — `fn toString() -> string`. |
+| `OpIndex<K, V>` | `a[k]` — `fn index(key: K) -> V`. Saule's `__index`. |
+| `OpNewIndex<K, V>` | `a[k] = v` — `fn newIndex(key: K, value: V) -> nil`. Saule's `__newindex`. |
+| `Assignable<T>` | `local a: C = t` — `static fn of(value: T) -> C`. A bare `T` may fill a `C` slot; `C.of` builds it. |
 
 See [Custom Iterable](./README.md#custom-iterable) and
 [Operator Overloading](./README.md#operator-overloading) for the rules and

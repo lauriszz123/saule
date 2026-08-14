@@ -355,6 +355,17 @@ const EXAMPLES = [
 		run: 'saule run',
 		files: ['src/permissions.sau', 'src/color.sau', 'src/main.sau'],
 	},
+	{
+		dir: 'wrapper-types',
+		title: 'Wrapper Types',
+		// No literal `|` in this blurb — the index renders it inside a
+		// markdown table cell with backticks stripped, where a pipe would
+		// start a new column.
+		blurb:
+			'A `Text` built straight from a string literal and a `Settings` with full control of every read and write. Shows `Assignable<T>` target-typed construction and `OpIndex` / `OpNewIndex` as Saule\'s `__index` / `__newindex` — with nothing injected: a wrapper declares every method it exposes, calling the `String` class explicitly.',
+		run: 'saule run',
+		files: ['src/text.sau', 'src/settings.sau', 'src/main.sau'],
+	},
 	// `json_usage` is deliberately absent: as of this writing it does not
 	// typecheck (`Json.decode` returns `any?`, which the example assigns
 	// straight to a `table?`). It stays linked under "Also in the repository"

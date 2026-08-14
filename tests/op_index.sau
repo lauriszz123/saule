@@ -1,0 +1,65 @@
+-- `OpIndex` / `OpNewIndex` — Saule's `__index` / `__newindex`.
+--
+-- Unlike Lua's, these are not miss handlers over a stored key space: a class
+-- instance has no keys of its own, so the method *is* the lookup and runs on
+-- every `obj[key]` and every `obj[key] = value`.
+--
+-- `obj.name` is deliberately not routed here. Field and method names are
+-- resolved statically, and sending their misses to a hook would give up
+-- "unknown member" diagnostics for the whole class. Use `obj[key]` for
+-- dynamic access; a fixed surface is declared as ordinary methods.
+class Config implements OpIndex<string, string>, OpNewIndex<string, string>
+	local data: table<string, string>
+	local reads: integer
+	local writes: integer
+
+	fn init()
+		self.data = {}
+		self.reads = 0
+		self.writes = 0
+	end
+
+	-- Every read goes through here, so a default costs no stored entry.
+	fn index(key: string) -> string
+		self.reads = self.reads + 1
+		return self.data[key] ?? "(unset)"
+	end
+
+	-- Every write goes through here, so normalising is a single place.
+	fn newIndex(key: string, value: string) -> nil
+		self.writes = self.writes + 1
+		self.data[key] = String.lower(value)
+	end
+
+	fn reads() -> integer return self.reads end
+	fn writes() -> integer return self.writes end
+end
+
+class Main
+	static fn main()
+		local c: Config = Config()
+
+		c["host"] = "LocalHost"
+		c["port"] = "8080"
+
+		-- Values come back normalised by `newIndex`.
+		println(c["host"])        -- localhost
+		println(c["port"])        -- 8080
+
+		-- A key that was never written still answers, through `index`.
+		println(c["missing"])     -- (unset)
+
+		-- Both hooks really did run on every access.
+		println(c.writes())       -- 2
+		println(c.reads())        -- 3 — host, port, missing
+
+		-- The element type comes from `index`'s own return type, so a
+		-- forwarded read fills a typed slot with no cast.
+		local host: string = c["host"]
+		println(host)             -- localhost
+
+		-- Compound assignment reads and then writes, so it runs both hooks.
+		c["port"] ..= "0"
+		println(c["port"])        -- 80800
+	end
+end

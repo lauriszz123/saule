@@ -188,6 +188,14 @@ The loop also accepts raw step closures and plain `table` values directly — `I
 | `OpCompare<T>` | `<`, `<=`, `>`, `>=` | `fn compare(other: T) -> integer` |
 | `OpToString` | `tostring(a)`, `print(a)` | `fn toString() -> string` |
 
+Four more are **behaviour** contracts rather than operators — no symbol triggers them:
+
+| Interface | Fires on | Method |
+|---|---|---|
+| `OpIndex<K, V>` | `a[k]` | `fn index(key: K) -> V` |
+| `OpNewIndex<K, V>` | `a[k] = v` | `fn newIndex(key: K, value: V) -> nil` |
+| `Assignable<T>` | `local a: C = t` | `static fn of(value: T) -> C` |
+
 They are always in scope — no import needed, like `Iterable`.
 
 ```saule
@@ -270,5 +278,95 @@ print(new >= old)    -- true
 **`OpConcat` takes `..` over completely.** Because `..` is right-associative and dispatches left, writing `"path = " .. somePath` puts the class on the left of a string and calls its `concat`, which is a type error when `concat` expects its own type. Reach for `tostring(somePath)` in that case. This only affects classes that implement `OpConcat` — one with just `OpToString` interpolates the way you'd expect.
 
 **Overloads are inherited.** A subclass gets its parent's operators, and can override any of them by redefining the method.
+
+
+### Wrapper Types
+
+Two more contracts cover what Lua does with `__index` and `__newindex`, plus
+one for building an object straight from a value — all in a form the
+typechecker can still see through.
+
+#### `OpIndex` / `OpNewIndex` — full control of get and set
+
+Saule's `__index` / `__newindex`, with one deliberate difference from Lua's:
+they are **not** miss handlers over a stored key space. A class instance has
+no keys of its own, so the method *is* the lookup and runs on every access.
+
+```saule
+class Settings implements OpIndex<string, string>, OpNewIndex<string, string>
+    local data: table<string, string>
+    fn init() self.data = {} end
+    fn index(key: string) -> string
+        return self.data[key] ?? "(unset)"
+    end
+    fn newIndex(key: string, value: string) -> nil
+        self.data[key] = String.lower(value)   -- normalise on every write
+    end
+end
+
+local s: Settings = Settings()
+s["theme"] = "SOLARIZED"
+println(s["theme"])       -- solarized
+println(s["missing"])     -- (unset)
+```
+
+The element type comes from `index`'s own return type, and the key is checked
+against its parameter — so `s[42]` is a compile error.
+
+**`obj.name` is deliberately not routed here.** Field and method names are
+resolved statically, and sending their misses to a hook would give up
+"unknown member" diagnostics for the whole class. Dynamic access is
+`obj[key]`; a fixed surface is declared as ordinary methods.
+
+A hook that indexes `self` re-enters itself. Lua answers that with `rawget` /
+`rawset`; Saule caps the depth and reports it, so the mistake is a diagnostic
+naming the class rather than a hang.
+
+#### `Assignable<T>` — build from an assigned value
+
+```saule
+class Text implements Assignable<string>, OpToString
+    local raw: string
+    fn init(raw: string)  self.raw = raw end
+
+    static fn of(s: string) -> Text return Text(s) end
+
+    -- Everything this type exposes, it declares. `string` has no methods,
+    -- so each one calls the `String` class explicitly.
+    fn upper() -> string  return String.upper(self.raw) end
+    fn length() -> integer return String.len(self.raw) end
+    fn toString() -> string return self.raw end
+end
+
+local greeting: Text = "hello, world"   -- runs Text.from
+println(greeting)                        -- hello, world  (OpToString)
+println(greeting.upper())                -- HELLO, WORLD
+```
+
+The method is **static** — there is no instance yet to call it on — and
+`from` is usable as a name here even though it opens an `import` tail
+elsewhere, because after `fn` and after `.` an import cannot start.
+
+The annotation picks the target, so this is *target-typed*: there is never a
+question of which class a bare value should become, only whether the one
+asked for accepts it.
+
+**Conversion applies at exactly two kinds of site**: an annotated `local` or
+module variable, and a user function's or method's parameters. Everywhere
+else the ordinary rule stands:
+
+```saule
+local all: table<Text> = {"a"}   -- ERROR: table elements do not convert
+local t: Text = "a"
+t = "b"                           -- ERROR: only the declaration converts
+```
+
+That boundary is soundness rather than an unfinished edge. The interpreter
+converts at those sites and only those, so relaxing the checker anywhere else
+would typecheck a value that never gets built — leaving a raw `string` inside
+a `table<Text>` for the first `Text` member call to trip over.
+
+See [`examples/wrapper-types`](./examples/wrapper-types) for all three
+working together.
 
 ---

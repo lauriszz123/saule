@@ -2,7 +2,7 @@
 title: "Declarative UI"
 description: "A miniature SwiftUI-shaped toolkit drawn to the terminal: every widget is a class, constructing one draws it, and containers take their children as a trailing block (Panel(title: \"…\") do … end). Shows an immediate-mode layout engine that builds no widget tree, and why a block beats a table of children — if and for work inside one."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 <!-- Generated from examples/ui-blocks by `npm run sync-docs`. Edit the example, not this file. -->

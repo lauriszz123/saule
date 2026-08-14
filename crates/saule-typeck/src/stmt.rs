@@ -13,9 +13,9 @@ use saule_ast::{Expr, Spanned, Stmt, Type};
 
 use super::TypeCheckError;
 use super::expr::{
-    check_assignment_compat, check_boolean_cond, check_element_compat, check_expr,
-    check_expr_expecting, check_table_key_compat, infer, is_nullable, narrow_falsy, narrow_truthy,
-    type_to_string,
+    check_assignment_compat, check_assignment_compat_coercing, check_boolean_cond,
+    check_element_compat, check_expr, check_expr_expecting, check_table_key_compat, infer,
+    is_nullable, narrow_falsy, narrow_truthy, type_to_string,
 };
 use super::state::{Scope, class_implements_iterable, current_return_ty, with_classes};
 use super::to_source_span;
@@ -38,7 +38,9 @@ pub(super) fn check_stmt(
             }
             if let (Some(ty), Some(v)) = (ty, value) {
                 check_expr_expecting(v, Some(ty), scope, errors);
-                check_assignment_compat(ty, v, scope, errors);
+                // An annotated `local` is one of the sites the interpreter
+                // converts at, so `Assignable` may apply here.
+                check_assignment_compat_coercing(ty, v, scope, errors);
                 // Refine the bare structural annotation `table`
                 // to the value's concrete shape — e.g.
                 // `local args: table = Os.args()` widens to `table<string>`

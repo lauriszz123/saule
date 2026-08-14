@@ -191,9 +191,22 @@ fn assign_index(
                 })?;
             Ok(Flow::nil())
         }
+        // `obj[key] = v` on a class instance is `OpNewIndex` — Saule's
+        // `__newindex`. As with `OpIndex`, it runs on every write rather
+        // than only on a miss: an instance has no key space to miss in.
+        Value::Instance(_)
+            if super::super::expr::members::has_index_overload(
+                receiver,
+                saule_ast::ops::OP_NEW_INDEX.method,
+            ) =>
+        {
+            crate::eval::index_hooks::call_new_index(receiver, index, value, span)?;
+            Ok(Flow::nil())
+        }
         other => Err(RuntimeError::TypeError {
             message: format!(
-                "cannot assign through `[index]` on a `{}` — only tables support indexed assignment",
+                "cannot assign through `[index]` on a `{}` — only tables and classes \
+                 implementing `OpNewIndex` support indexed assignment",
                 other.type_name()
             ),
             span,
