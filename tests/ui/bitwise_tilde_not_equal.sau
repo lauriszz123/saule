@@ -1,0 +1,15 @@
+-- ERROR: `~=` is not an operator in Saule.
+--
+-- Lua spells inequality `~=`; Saule spells it `!=` and gives `~` to bitwise
+-- xor. `~=` is deliberately left unlexed rather than made xor-assignment,
+-- because a Lua reflex typing `if a ~= b then` must fail loudly instead of
+-- quietly becoming `a = a ~ b`.
+class Main
+	static fn main()
+		local a: integer = 1
+		local b: integer = 2
+		if a ~= b then
+			println("different")
+		end
+	end
+end

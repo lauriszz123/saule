@@ -220,6 +220,66 @@ local half: float = 2.0 ^ -1.0      -- 0.5
 local bad: integer = 2 ^ -1         -- ERROR: negative exponent on integers
 ```
 
+### Bitwise Operators
+
+Six operators work on the bits of an `integer`, spelled as in Lua 5.3:
+
+| Operator | Meaning |
+|---|---|
+| `a & b` | and |
+| `a \| b` | or |
+| `a ~ b` | xor |
+| `~a` | complement (one's complement) |
+| `a << b` | left shift |
+| `a >> b` | right shift |
+
+`~` carries xor because `^` is already exponentiation — the same trade Lua 5.3 made. It is unary complement in prefix position and binary xor in infix position, told apart by where it appears, exactly as `-` already is.
+
+```saule
+local flags: integer = 0b1100 | 0b0011   -- 15
+local common: integer = 0b1100 & 0b1010  -- 8
+local toggled: integer = 0b1100 ~ 0b1010 -- 6
+local inverted: integer = ~0             -- -1
+local doubled: integer = 1 << 4          -- 16
+local halved: integer = 255 >> 4         -- 15
+```
+
+**Integers only.** Unlike Lua 5.3, a `float` is rejected rather than converted when it happens to have no fractional part — Saule never mixes the two numeric kinds implicitly, and this is not the place to start:
+
+```saule
+local f: float = 6.0
+local bad: integer = f & 1               -- ERROR: `&` expects `integer`
+local ok: integer = int(f) & 1           -- 0
+```
+
+**Shifts fill with zeros in both directions**, which is Lua's rule and means `>>` is a *logical* shift, not an arithmetic one — the sign bit is not replicated. A negative shift count shifts the other way, and shifting by 64 or more shifts every bit out:
+
+```saule
+local logical: integer = -1 >> 63        -- 1, not -1
+local flipped: integer = 16 >> -2        -- 64 — negative count reverses
+local gone: integer = 1 << 64            -- 0
+```
+
+**Precedence follows Lua**: `|` is loosest, then `~`, then `&`, then the shifts, and all of them bind looser than `..`, `+` and `*` but tighter than any comparison. So the mask-test idiom needs no parentheses:
+
+```saule
+if flags & 0b0100 != 0 then              -- (flags & 0b0100) != 0
+    println("bit set")
+end
+```
+
+**Compound assignment** exists for four of the five: `&=`, `|=`, `<<=`, `>>=`.
+
+```saule
+local bits: integer = 0b0001
+bits |= 0b0100                           -- 5
+bits <<= 2                               -- 20
+```
+
+There is deliberately no `~=`. That spelling is how Lua writes "not equal", which Saule spells `!=`; reading it as xor-assignment would turn a habitual `if a ~= b then` into a silent mutation, so `~=` is left as a syntax error instead. Write `a = a ~ b`.
+
+Classes can overload all six through `OpBAnd`, `OpBOr`, `OpBXor`, `OpShl`, `OpShr` and `OpBNot` — see [Operator Overloading](/saule/language/interfaces/#operator-overloading).
+
 ### `nil` Is a Value, Not a Binding Type
 
 `nil` exists only as the **value** that inhabits a nullable slot. Writing `: nil` as a binding type is rejected so the meaning of the type system stays "every variable has a real type, and `?` says whether it can be empty":

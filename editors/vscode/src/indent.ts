@@ -382,9 +382,16 @@ function* tokens(text: string, limit: number): Generator<Token> {
   }
 }
 
-const THREE_CHAR_OPS = new Set(["...", "..="]);
+const THREE_CHAR_OPS = new Set(["...", "..=", "<<=", ">>="]);
+// `<<` and `>>` have to be here, not just for tidiness: `<` is a
+// TYPE_POSITION token, so a shift tokenized as two `<`s would read as an open
+// generic argument list and indent the next line as a type.
 const TWO_CHAR_OPS = new Set([
   "..",
+  "<<",
+  ">>",
+  "&=",
+  "|=",
   "+=",
   "-=",
   "*=",

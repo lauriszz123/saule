@@ -344,6 +344,17 @@ const EXAMPLES = [
 		run: 'saule run',
 		files: ['src/vec2.sau', 'src/path.sau', 'src/main.sau'],
 	},
+	{
+		dir: 'bitwise-flags',
+		title: 'Bitwise Operators',
+		// No literal `|` in this blurb: the index page renders it inside a
+		// markdown table cell with backticks stripped, where a pipe would
+		// start a new column.
+		blurb:
+			'A `Permissions` flag set that unions, intersects and flips with the bitwise operators and prints like `rwx`, plus an RGBA colour packed into one `integer` with shifts and masks. Shows the Lua 5.3 spellings (`~` is xor, because `^` is already exponentiation), the precedence that makes `bits & flag != 0` need no parentheses, and the `Op*` interfaces that put all six operators on a class.',
+		run: 'saule run',
+		files: ['src/permissions.sau', 'src/color.sau', 'src/main.sau'],
+	},
 	// `json_usage` is deliberately absent: as of this writing it does not
 	// typecheck (`Json.decode` returns `any?`, which the example assigns
 	// straight to a `table?`). It stays linked under "Also in the repository"

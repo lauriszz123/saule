@@ -1,13 +1,37 @@
 //! Type parsing: nullable suffix, table<T>/table<K,V>, generic param/arg
 //! lists, function types.
 
-use saule_ast::Type;
+use saule_ast::{Spanned, Type};
 use saule_lexer::Token;
 
 use crate::Parser;
 use crate::error::ParseError;
 
 impl Parser {
+    /// Re-split a `>>` sitting where a type-argument list wants to close.
+    ///
+    /// `table<table<integer>>` ends in two closers the lexer has no way to
+    /// tell from a right shift, so it always produces [`Token::Shr`] and
+    /// leaves the ambiguity to the one caller that can resolve it: a parser
+    /// that is *already inside* `<…>` and needs a `>`. Every site expecting
+    /// that closer calls this first; it rewrites the token stream in place
+    /// into the two `Gt`s the grammar wanted, so the outer list finds its own
+    /// closer waiting.
+    ///
+    /// A no-op on every other token, so calling it costs one discriminant
+    /// test on the overwhelmingly common single-`>` close.
+    fn split_closing_shr(&mut self) {
+        if !self.check(&Token::Shr) {
+            return;
+        }
+        let span = self.peek().span.clone();
+        let mid = span.start + 1;
+        self.replace_current(
+            Spanned::new(Token::Gt, span.start..mid),
+            Spanned::new(Token::Gt, mid..span.end),
+        );
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Types
     // ─────────────────────────────────────────────────────────────────────────
@@ -65,6 +89,7 @@ impl Parser {
                     } else {
                         (None, Box::new(first))
                     };
+                    self.split_closing_shr();
                     self.expect_close(&Token::Gt, "`>` to close `table<...>`")?;
                     return Ok(Type::Table { key, value });
                 }
@@ -111,6 +136,7 @@ impl Parser {
         while self.eat(&Token::Comma) {
             let _ = self.parse_type()?;
         }
+        self.split_closing_shr();
         self.expect_close(&Token::Gt, "`>` to close generic arguments")?;
         Ok(())
     }
@@ -127,6 +153,7 @@ impl Parser {
             let (n, _) = self.expect_ident_recover("generic parameter name")?;
             params.push(n);
         }
+        self.split_closing_shr();
         self.expect_close(&Token::Gt, "`>` to close generic parameters")?;
         Ok(params)
     }
@@ -140,6 +167,15 @@ impl Parser {
     /// part that matters here — disables error recovery, so `parse_type`
     /// still *reports* a non-type instead of patching an `any` over it and
     /// letting `a < b` masquerade as an instantiation.
+    ///
+    /// Deliberately does **not** call [`Self::split_closing_shr`] before its
+    /// own `>`. Splitting edits the token stream, and `speculate` rewinds only
+    /// the cursor — so a probe that split and then failed would leave a real
+    /// right shift permanently torn in two, and `a < b >> c` would stop
+    /// parsing. The split is not needed here anyway: a nested close like
+    /// `filter<table<integer>>(xs)` is already split by the *inner*
+    /// `parse_type`, which leaves a plain `>` for this `eat` to take. The
+    /// only shape that would need it is `f<T>>(…)`, which is not a call.
     pub(crate) fn try_eat_generic_call_args(&mut self) -> bool {
         if !self.check(&Token::Lt) {
             return false;

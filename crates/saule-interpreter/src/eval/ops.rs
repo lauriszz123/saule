@@ -86,6 +86,19 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
             }),
         },
         UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
+        // `~x` — one's complement. Integers only: a bit pattern is not a
+        // property a `float` has, and Saule never coerces between the two.
+        UnaryOp::BNot => match v {
+            Value::Int(n) => Ok(Value::Int(!n)),
+            other => Err(RuntimeError::TypeError {
+                message: format!(
+                    "cannot take the bitwise complement of a `{}` — `~` works on `integer`, \
+                     or a class implementing `OpBNot`",
+                    describe(&other)
+                ),
+                span,
+            }),
+        },
         UnaryOp::Len => match v {
             Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
             Value::Table(items) => Ok(Value::Int(items.borrow().array_len() as i64)),
@@ -125,6 +138,8 @@ pub fn binary(
 
     match op {
         Add | Sub | Mul | Div | Mod | Pow => arithmetic(op, l, r, span),
+
+        BAnd | BOr | BXor | Shl | Shr => bitwise(op, l, r, span),
 
         Eq => Ok(Value::Bool(values_equal(&l, &r))),
         NotEq => Ok(Value::Bool(!values_equal(&l, &r))),
@@ -342,6 +357,66 @@ fn int_op(op: BinOp, a: i64, b: i64, span: std::ops::Range<usize>) -> Result<Val
             Ok(Value::Int(a.wrapping_pow(exp)))
         }
         _ => unreachable!(),
+    }
+}
+
+/// `&` `|` `~` `<<` `>>` — integers only.
+///
+/// A `float` is rejected outright rather than accepted-when-integral (Lua
+/// 5.3's rule), because Saule already refuses to mix the two kinds anywhere
+/// else; `float(x) & 1` silently working would be the odd one out.
+fn bitwise(
+    op: BinOp,
+    l: Value,
+    r: Value,
+    span: std::ops::Range<usize>,
+) -> Result<Value, RuntimeError> {
+    use BinOp::*;
+    let (Value::Int(a), Value::Int(b)) = (&l, &r) else {
+        return Err(RuntimeError::TypeError {
+            message: format!(
+                "`{}` requires `integer` operands but got `{}` and `{}` — use int() to convert, \
+                 or implement `{}` on the class",
+                binop_symbol(op),
+                describe(&l),
+                describe(&r),
+                binary_contract(op).map_or("OpBAnd", |c| c.interface)
+            ),
+            span,
+        });
+    };
+    let (a, b) = (*a, *b);
+    Ok(Value::Int(match op {
+        BAnd => a & b,
+        BOr => a | b,
+        BXor => a ^ b,
+        Shl => shift(a, b),
+        // A right shift is a left shift by the negated count, and negating
+        // covers `i64::MIN` correctly on its own: `wrapping_neg` leaves it
+        // as `i64::MIN`, which `shift` already reads as "everything shifted
+        // out".
+        Shr => shift(a, b.wrapping_neg()),
+        _ => unreachable!(),
+    }))
+}
+
+/// Shift `a` left by `n`, following Lua 5.3 exactly:
+///
+/// * the vacated bits are filled with **zeros**, so `>>` is a *logical*
+///   shift — `-1 >> 1` is a large positive number, not `-1`. Use division
+///   when you want the sign-preserving one;
+/// * a negative `n` shifts the other way, which is what lets `>>` be
+///   expressed as a negated `<<`;
+/// * `|n| >= 64` is `0`, since every bit really has been shifted out. This
+///   is the case a bare Rust `<<` would panic on.
+fn shift(a: i64, n: i64) -> i64 {
+    if !(-63..=63).contains(&n) {
+        return 0;
+    }
+    if n >= 0 {
+        ((a as u64) << n) as i64
+    } else {
+        ((a as u64) >> -n) as i64
     }
 }
 

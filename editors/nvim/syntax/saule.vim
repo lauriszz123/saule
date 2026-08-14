@@ -24,10 +24,15 @@ syntax match  sauleCompare    "==\|!=\|<=\|>=\|[<>]"
 " Arrows are their own thing so they can be coloured distinctly from
 " comparisons (return-type `->` and lambda `=>`).
 syntax match  sauleArrow      "->\|=>"
-" Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`). Defined
-" last so it wins the tie-break against `sauleOperator` at the same start
-" column — otherwise `..=` would highlight as `..` followed by a stray `=`.
-syntax match  sauleOperator   "\.\.=\|[+\-*/%^]="
+" Bitwise operators (`&`, `|`, `~`, `<<`, `>>`). Defined after `sauleCompare`
+" so `<<` and `>>` win over the single `<` / `>` at the same start column;
+" `<=` and `>=` are unaffected because neither matches here.
+syntax match  sauleBitwise    "<<\|>>\|[&|~]"
+" Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`, `&=`, `|=`,
+" `<<=`, `>>=`). Defined last so it wins the tie-break against `sauleOperator`
+" and `sauleBitwise` at the same start column — otherwise `..=` would
+" highlight as `..` followed by a stray `=`, and `<<=` as `<<` plus one.
+syntax match  sauleOperator   "<<=\|>>=\|\.\.=\|[+\-*/%^&|]="
 
 " ── Numbers ─────────────────────────────────────────────────────────────
 " Mirrors `Lexer::number` in crates/saule-lexer: hex and binary prefixes take
@@ -107,6 +112,7 @@ highlight default link sauleType         Type
 highlight default link sauleTypeName     Type
 highlight default link sauleFunction     Function
 highlight default link sauleFuncCall     Function
+highlight default link sauleBitwise      Operator
 highlight default link sauleBracket      Delimiter
 highlight default link sauleDelimiter    Delimiter
 
@@ -120,6 +126,7 @@ highlight sauleOperator   ctermfg=14  guifg=#89ddff
 highlight sauleOperatorKW ctermfg=13  guifg=#bb9af7
 highlight sauleNullable   ctermfg=13  guifg=#bb9af7
 highlight sauleCompare    ctermfg=9   guifg=#f7768e
+highlight sauleBitwise    ctermfg=14  guifg=#89ddff
 highlight sauleArrow      ctermfg=13  guifg=#bb9af7
 
 let b:current_syntax = "saule"

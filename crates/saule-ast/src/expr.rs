@@ -382,9 +382,10 @@ pub enum LambdaBody {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
-    Neg, // `-x`
-    Not, // `not x`
-    Len, // `#x`
+    Neg,  // `-x`
+    Not,  // `not x`
+    Len,  // `#x`
+    BNot, // `~x` — bitwise complement
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,6 +397,13 @@ pub enum BinOp {
     Div,
     Mod,
     Pow,
+    // Bitwise. Integer-only, Lua 5.3 spellings — except that `^` is already
+    // exponentiation here (Lua 5.1 style), which is why `~` carries xor.
+    BAnd, // `&`
+    BOr,  // `|`
+    BXor, // `~`
+    Shl,  // `<<`
+    Shr,  // `>>`
     // Comparison
     Eq,
     NotEq,

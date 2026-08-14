@@ -1,0 +1,70 @@
+-- Packing four bytes into one integer, with nothing but `<<`, `>>` and `&`.
+--
+-- This is the case the bitwise operators exist for: a colour is four values
+-- that each fit in 8 bits, and storing them as one `integer` makes it one
+-- value to copy, compare and put in a table key.
+--
+-- Every operator here is `integer` in, `integer` out. Saule rejects a `float`
+-- operand outright rather than converting an integral one the way Lua 5.3
+-- does — a bit pattern is a property an `integer` has and a `float` does not.
+
+-- Where each channel sits in the packed word.
+local RED_SHIFT: integer = 24
+local GREEN_SHIFT: integer = 16
+local BLUE_SHIFT: integer = 8
+local ALPHA_SHIFT: integer = 0
+
+-- One byte. `(1 << 8) - 1` is the idiomatic way to write "8 bits set", and
+-- it stays readable when the width changes.
+local BYTE: integer = (1 << 8) - 1
+
+export fn pack(r: integer, g: integer, b: integer, a: integer) -> integer
+	-- Mask each channel *before* shifting so a caller passing 300 corrupts
+	-- its own channel rather than the one above it.
+	return ((r & BYTE) << RED_SHIFT)
+		| ((g & BYTE) << GREEN_SHIFT)
+		| ((b & BYTE) << BLUE_SHIFT)
+		| ((a & BYTE) << ALPHA_SHIFT)
+end
+
+-- Shift the channel down to the bottom, then mask off everything above it.
+-- The mask is what makes the order safe: without it, `red` would carry the
+-- sign bit down with it for any colour with the high bit set.
+export fn channel(rgba: integer, shift: integer) -> integer
+	return (rgba >> shift) & BYTE
+end
+
+export fn red(rgba: integer) -> integer
+	return channel(rgba, RED_SHIFT)
+end
+
+export fn green(rgba: integer) -> integer
+	return channel(rgba, GREEN_SHIFT)
+end
+
+export fn blue(rgba: integer) -> integer
+	return channel(rgba, BLUE_SHIFT)
+end
+
+export fn alpha(rgba: integer) -> integer
+	return channel(rgba, ALPHA_SHIFT)
+end
+
+export fn toHex(rgba: integer) -> string
+	return String.format(
+		"#%02X%02X%02X%02X",
+		red(rgba),
+		green(rgba),
+		blue(rgba),
+		alpha(rgba)
+	)
+end
+
+-- Swapping two channels is a xor trick that needs no temporary: xor is its
+-- own inverse, so applying the same difference to both slots exchanges them.
+export fn swapRedAndBlue(rgba: integer) -> integer
+	local r: integer = red(rgba)
+	local b: integer = blue(rgba)
+	local diff: integer = r ~ b
+	return rgba ~ ((diff << RED_SHIFT) | (diff << BLUE_SHIFT))
+end

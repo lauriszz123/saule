@@ -6,9 +6,10 @@
 //! Grammar overview (Lua-flavoured, block keywords are `then`/`do`/`end`):
 //!
 //!   * Expressions follow a standard precedence ladder, lowest at the top:
-//!     `or` → `and` → `==`/`!=` → `<`/`<=`/`>`/`>=` → `??` → `..` → `+`/`-`
-//!     → `*`/`/`/`%` → unary (`-`, `not`, `#`) → postfix (`.`, `?.`, `[]`,
-//!     `(...)`, `:method(...)`, `do … end`, `!`) → primary.
+//!     `or` → `and` → `==`/`!=` → `<`/`<=`/`>`/`>=` → `|` → `~` → `&` →
+//!     `<<`/`>>` → `??` → `..` → `+`/`-` → `*`/`/`/`%` → unary (`-`, `not`,
+//!     `#`, `~`) → postfix (`.`, `?.`, `[]`, `(...)`, `:method(...)`,
+//!     `do … end`, `!`) → primary.
 //!   * A call may carry a **trailing block** — `f(a) do (p) … end`, sugar for
 //!     passing a block-bodied lambda as the final argument. Because loop
 //!     headers also end in `do`, the form is suppressed while parsing a
@@ -389,6 +390,19 @@ impl Parser {
             self.pos += 1;
         }
         tok
+    }
+
+    /// Replace the token under the cursor with two tokens, leaving the cursor
+    /// on the first of them.
+    ///
+    /// The one caller is [`Parser::split_closing_shr`], which turns the `>>`
+    /// closing a nested generic back into the two `>`s the grammar asks for.
+    /// Rewriting the stream rather than tracking a half-consumed token keeps
+    /// every other rule — including [`Parser::speculate`], which rewinds
+    /// `pos` — reading an ordinary token sequence.
+    pub(crate) fn replace_current(&mut self, first: Spanned<Token>, second: Spanned<Token>) {
+        self.tokens[self.pos] = first;
+        self.tokens.insert(self.pos + 1, second);
     }
 
     pub(crate) fn check(&self, t: &Token) -> bool {

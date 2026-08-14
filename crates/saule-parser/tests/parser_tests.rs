@@ -718,3 +718,198 @@ fn plain_assignment_is_still_plain() {
         Stmt::Assign { .. }
     ));
 }
+
+// ── Bitwise operators ────────────────────────────────────────────────────
+
+/// The operator at the root of the expression in a single-statement module,
+/// plus its two operands, so a test can assert the *shape* of the tree the
+/// precedence ladder built.
+fn root_binary(src: &str) -> (BinOp, Spanned<Expr>, Spanned<Expr>) {
+    let m = parse_src(src);
+    let expr = match &m.stmts[0].value {
+        Stmt::Local { value: Some(e), .. } => e.clone(),
+        Stmt::Expr(e) => e.clone(),
+        other => panic!("expected an expression statement for `{src}`, got {other:?}"),
+    };
+    match expr.value {
+        Expr::Binary { op, lhs, rhs } => (op, *lhs, *rhs),
+        other => panic!("expected a binary at the root of `{src}`, got {other:?}"),
+    }
+}
+
+/// The operator at the root of `src`'s expression.
+fn root_op(src: &str) -> BinOp {
+    root_binary(src).0
+}
+
+#[test]
+fn parses_every_bitwise_operator() {
+    let cases = [
+        ("local x = a & b", BinOp::BAnd),
+        ("local x = a | b", BinOp::BOr),
+        ("local x = a ~ b", BinOp::BXor),
+        ("local x = a << b", BinOp::Shl),
+        ("local x = a >> b", BinOp::Shr),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(root_op(src), expected, "{src}");
+    }
+}
+
+#[test]
+fn unary_tilde_is_bitwise_complement() {
+    let m = parse_src("local x = ~a");
+    match &m.stmts[0].value {
+        Stmt::Local { value: Some(e), .. } => assert!(
+            matches!(
+                &e.value,
+                Expr::Unary {
+                    op: UnaryOp::BNot,
+                    ..
+                }
+            ),
+            "got {:?}",
+            e.value
+        ),
+        other => panic!("expected local, got {other:?}"),
+    }
+}
+
+#[test]
+fn bitwise_precedence_follows_lua() {
+    // Loosest to tightest: `|`, `~`, `&`, shifts. The root of each
+    // expression is therefore the *loosest* operator in it.
+    assert_eq!(root_op("local x = a | b ~ c"), BinOp::BOr);
+    assert_eq!(root_op("local x = a ~ b & c"), BinOp::BXor);
+    assert_eq!(root_op("local x = a & b << c"), BinOp::BAnd);
+
+    // Comparison is looser than all of them, so `flags & mask != 0` masks
+    // first and compares second — the reading that makes the idiom work
+    // without parentheses.
+    let (op, lhs, _) = root_binary("local x = a & b != 0");
+    assert_eq!(op, BinOp::NotEq);
+    assert!(matches!(
+        &lhs.value,
+        Expr::Binary {
+            op: BinOp::BAnd,
+            ..
+        }
+    ));
+
+    // …and `..`, additive and multiplicative all bind tighter than a shift,
+    // as they do in Lua.
+    let (op, _, rhs) = root_binary("local x = a << b + c");
+    assert_eq!(op, BinOp::Shl);
+    assert!(matches!(&rhs.value, Expr::Binary { op: BinOp::Add, .. }));
+}
+
+#[test]
+fn bitwise_operators_are_left_associative() {
+    // `a - b - c` is `(a - b) - c`, and so is `a >> b >> c`. Only `??`,
+    // `..` and `^` lean the other way.
+    let (op, lhs, _) = root_binary("local x = a >> b >> c");
+    assert_eq!(op, BinOp::Shr);
+    assert!(matches!(&lhs.value, Expr::Binary { op: BinOp::Shr, .. }));
+}
+
+#[test]
+fn unary_tilde_binds_tighter_than_binary_tilde() {
+    // `~a ~ b` is `(~a) ~ b`. The two spellings are told apart by position,
+    // exactly as `-` already is.
+    let (op, lhs, rhs) = root_binary("local x = ~a ~ b");
+    assert_eq!(op, BinOp::BXor);
+    assert!(matches!(
+        &lhs.value,
+        Expr::Unary {
+            op: UnaryOp::BNot,
+            ..
+        }
+    ));
+    assert!(matches!(&rhs.value, Expr::Ident(n) if n == "b"));
+}
+
+#[test]
+fn parses_every_bitwise_compound_assignment() {
+    let cases = [
+        ("a &= 1", BinOp::BAnd),
+        ("a |= 1", BinOp::BOr),
+        ("a <<= 1", BinOp::Shl),
+        ("a >>= 1", BinOp::Shr),
+    ];
+    for (src, expected) in cases {
+        let m = parse_src(src);
+        match &m.stmts[0].value {
+            Stmt::CompoundAssign { target, op, .. } => {
+                assert_eq!(*op, expected, "{src}");
+                assert!(matches!(&target.value, Expr::Ident(n) if n == "a"), "{src}");
+            }
+            other => panic!("expected compound assign for `{src}`, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn tilde_eq_does_not_parse() {
+    // Left deliberately meaningless so a Lua-habit `a ~= b` is reported
+    // rather than silently read as xor-assignment.
+    let tokens = Lexer::new("a ~= b").tokenize().expect("lex ok");
+    assert!(parse(tokens).is_err());
+}
+
+#[test]
+fn nested_generic_closer_is_not_a_right_shift() {
+    // `>>` is one token out of the lexer. Inside a type argument list the
+    // parser splits it back into two `>`s, so nested generics still parse.
+    let m = parse_src("local grid: table<table<integer>> = {}");
+    match &m.stmts[0].value {
+        Stmt::Local { ty: Some(ty), .. } => match ty {
+            Type::Table { key: None, value } => assert!(
+                matches!(&**value, Type::Table { key: None, .. }),
+                "expected an inner table type, got {value:?}"
+            ),
+            other => panic!("expected a table type, got {other:?}"),
+        },
+        other => panic!("expected an annotated local, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_right_shift_still_parses_next_to_a_generic() {
+    // The split is scoped to the type grammar, so an expression-position
+    // `>>` immediately after one is untouched.
+    let m = parse_src("local n: table<table<integer>> = {}\nlocal k = 8 >> 1");
+    assert_eq!(root_op("local k = 8 >> 1"), BinOp::Shr);
+    assert_eq!(m.stmts.len(), 2);
+}
+
+#[test]
+fn a_shift_after_a_comparison_is_not_torn_apart() {
+    // `a < b >> c` first probes `<…>` as a generic-call instantiation. That
+    // probe walks over the `>>`, and an earlier version split it there —
+    // permanently, because `speculate` rewinds the cursor and not the token
+    // stream. The probe then failed and the expression was left facing a
+    // lone `>`, so a comparison next to a shift stopped parsing entirely.
+    let (op, _, rhs) = root_binary("local x = a < b >> c");
+    assert_eq!(op, BinOp::Lt);
+    assert!(
+        matches!(&rhs.value, Expr::Binary { op: BinOp::Shr, .. }),
+        "expected `a < (b >> c)`, got {:?}",
+        rhs.value
+    );
+}
+
+#[test]
+fn a_generic_call_can_close_with_a_right_shift() {
+    // `first<table<integer>>(rows)` — the instantiation's own closer is the
+    // second half of a `>>`. The inner `table<…>` splits it, leaving a plain
+    // `>` for the outer list, so the probe still recognises the call.
+    let m = parse_src("local head = first<table<integer>>(rows)");
+    match &m.stmts[0].value {
+        Stmt::Local { value: Some(e), .. } => assert!(
+            matches!(&e.value, Expr::Call { .. }),
+            "expected a call, got {:?}",
+            e.value
+        ),
+        other => panic!("expected a local, got {other:?}"),
+    }
+}

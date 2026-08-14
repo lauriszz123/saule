@@ -1,0 +1,96 @@
+-- Bitwise operators, Lua 5.3 spellings. `^` is exponentiation here (Lua 5.1
+-- style), so xor is `~` — the same reason Lua 5.3 chose it.
+--
+--   &   and        |   or         ~   xor (binary) / complement (unary)
+--   <<  left shift  >>  right shift
+--
+-- All five are `integer` in, `integer` out. A `float` is rejected rather
+-- than converted, the same way it is everywhere else in Saule.
+class Main
+	static fn main()
+		-- and / or / xor
+		println(0b1100 & 0b1010)     -- 8
+		println(0b1100 | 0b1010)     -- 14
+		println(0b1100 ~ 0b1010)     -- 6
+
+		-- Unary `~` is one's complement.
+		println(~0)                  -- -1
+		println(~5)                  -- -6
+		println(~~5)                 -- 5
+
+		-- Shifts. Vacated bits are filled with zeros in both directions.
+		println(1 << 4)              -- 16
+		println(255 >> 4)            -- 15
+		println(0xFF << 8)           -- 65280
+
+		-- A negative shift count shifts the other way, and a count of 64 or
+		-- more shifts everything out — both straight from Lua 5.3.
+		println(1 << -1)             -- 0
+		println(16 >> -2)            -- 64
+		println(1 << 64)             -- 0
+		println(1 << 999)            -- 0
+
+		-- `>>` is a *logical* shift: the sign bit is not replicated, so a
+		-- negative number becomes a large positive one.
+		println(-1 >> 60)            -- 15
+		println(-1 >> 63)            -- 1
+
+		-- Precedence, loosest first: `|`, `~`, `&`, shifts. Lua's order.
+		println(1 | 2 & 3)           -- 3  — `1 | (2 & 3)`
+		println(1 ~ 3 & 1)           -- 0  — `1 ~ (3 & 1)`
+		println(1 | 1 << 3)          -- 9  — `1 | (1 << 3)`
+		println(2 & 3 << 1)          -- 2  — `2 & (3 << 1)`
+
+		-- Comparison is looser than every bitwise operator, so a mask test
+		-- needs no parentheses.
+		println(0b0110 & 0b0100 != 0)  -- true
+
+		-- Arithmetic binds tighter than the shifts, as it does in Lua.
+		println(1 << 2 + 1)          -- 8  — `1 << (2 + 1)`
+
+		-- Unary `~` binds tighter than any binary operator.
+		println(~0 & 0xFF)           -- 255 — `(~0) & 0xFF`
+
+		-- Compound assignment for the four spellings that have one. There is
+		-- deliberately no `~=`: that is how Lua writes "not equal", which
+		-- Saule spells `!=`, so reading it as xor-assignment would turn a
+		-- comparison into a mutation.
+		local flags: integer = 0b0001
+		flags |= 0b0100
+		println(flags)               -- 5
+		flags &= 0b1100
+		println(flags)               -- 4
+		flags <<= 2
+		println(flags)               -- 16
+		flags >>= 3
+		println(flags)               -- 2
+
+		-- `>>` is one token out of the lexer, which collides with the two
+		-- closers of a nested generic. The parser splits it back apart, but
+		-- only where a type argument list is actually open — so a comparison
+		-- sitting next to a shift still reads as a shift.
+		println(1 < 16 >> 2)         -- true — `1 < (16 >> 2)`
+		local rows: table<table<integer>> = {{1, 2}, {3}}
+		println(#rows)               -- 2
+
+		-- The operators are ordinary expressions: they compose with locals,
+		-- calls, and each other.
+		local mask: integer = (1 << 5) - 1
+		println(mask)                -- 31
+		println(Main.pack(3, 7))     -- 199 — (3 << 6) | 7
+		println(Main.unpackHigh(199)) -- 3
+		println(Main.unpackLow(199))  -- 7
+	end
+
+	static fn pack(high: integer, low: integer) -> integer
+		return (high << 6) | low
+	end
+
+	static fn unpackHigh(packed: integer) -> integer
+		return packed >> 6
+	end
+
+	static fn unpackLow(packed: integer) -> integer
+		return packed & 0b111111
+	end
+end

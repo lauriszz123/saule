@@ -1565,3 +1565,102 @@ fn compound_assignment_allows_operator_overloads() {
         "#,
     );
 }
+
+// ── Bitwise operators ────────────────────────────────────────────────────
+
+#[test]
+fn bitwise_operators_accept_integers() {
+    accepts(
+        r#"
+        local a: integer = 0b1100
+        local b: integer = 0b1010
+        local band: integer = a & b
+        local bor: integer = a | b
+        local bxor: integer = a ~ b
+        local shl: integer = a << 2
+        local shr: integer = a >> 2
+        local bnot: integer = ~a
+        "#,
+    );
+}
+
+#[test]
+fn bitwise_operators_reject_floats() {
+    // Stricter than Lua 5.3, which converts a float with no fractional
+    // part. Saule never mixes the two numeric kinds implicitly, and a bit
+    // pattern is a property only an `integer` has.
+    rejects("local f: float = 6.0\nlocal x: integer = f & 1", "`&`");
+    rejects("local f: float = 6.0\nlocal x: integer = f | 1", "`|`");
+    rejects("local f: float = 6.0\nlocal x: integer = f ~ 1", "`~`");
+    rejects("local f: float = 6.0\nlocal x: integer = 1 << f", "`<<`");
+    rejects("local f: float = 6.0\nlocal x: integer = 1 >> f", "`>>`");
+    // Unary `~f` is deliberately absent: the checker validates operand
+    // *kinds* for binary operators only — `-s` on a string is a runtime
+    // error too — so `~` on a float is caught by the interpreter. See
+    // `bitwise_complement_rejects_a_float` in the interpreter suite.
+}
+
+#[test]
+fn bitwise_operators_reject_strings() {
+    rejects("local s: string = \"x\"\nlocal n: integer = s & 1", "`&`");
+    rejects("local s: string = \"x\"\nlocal n: integer = 1 << s", "`<<`");
+}
+
+#[test]
+fn bitwise_result_is_an_integer_whatever_the_shift_count() {
+    // The result follows the operator, not the operands — unlike
+    // arithmetic, where `float + float` is a `float`.
+    accepts("local n: integer = 1 << 3");
+    rejects("local f: float = 1 << 3", "float");
+    rejects("local s: string = 8 >> 1", "string");
+}
+
+#[test]
+fn bitwise_compound_assignment_enforces_the_same_rules() {
+    accepts("local n: integer = 1\nn &= 3\nn |= 4\nn <<= 2\nn >>= 1");
+    rejects("local f: float = 1.0\nf &= 3", "`&`");
+    rejects("local s: string = \"a\"\ns <<= 1", "`<<`");
+}
+
+#[test]
+fn bitwise_operators_allow_operator_overloads() {
+    accepts(
+        r#"
+        class Mask implements OpBAnd<Mask, Mask>, OpBOr<Mask, Mask>, OpBNot<Mask>
+            bits: integer
+            fn init(bits: integer)
+                self.bits = bits
+            end
+            fn band(other: Mask) -> Mask
+                return Mask(self.bits & other.bits)
+            end
+            fn bor(other: Mask) -> Mask
+                return Mask(self.bits | other.bits)
+            end
+            fn bnot() -> Mask
+                return Mask(~self.bits)
+            end
+        end
+        local m: Mask = Mask(0b1100) & Mask(0b1010)
+        local n: Mask = m | Mask(1)
+        local o: Mask = ~n
+        "#,
+    );
+}
+
+#[test]
+fn a_class_without_the_contract_cannot_be_shifted() {
+    rejects(
+        r#"
+        class Mask
+            bits: integer
+            fn init(bits: integer)
+                self.bits = bits
+            end
+        end
+        local m: Mask = Mask(1)
+        local n: Mask = m << 2
+        "#,
+        "`<<`",
+    );
+}

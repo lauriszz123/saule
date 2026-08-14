@@ -1955,3 +1955,164 @@ fn compound_assignment_to_undeclared_is_rejected() {
         PipelineError::Semantic(SemanticError::AssignToUndeclared { .. })
     ));
 }
+
+// ── Bitwise operators ────────────────────────────────────────────────────
+
+#[test]
+fn bitwise_and_or_xor() {
+    assert_int("0b1100 & 0b1010", 0b1000);
+    assert_int("0b1100 | 0b1010", 0b1110);
+    assert_int("0b1100 ~ 0b1010", 0b0110);
+}
+
+#[test]
+fn bitwise_complement() {
+    assert_int("~0", -1);
+    assert_int("~5", -6);
+    assert_int("~~5", 5);
+    // `~` applies to the operand, not to the whole expression: `(~0) & 255`.
+    assert_int("~0 & 0xFF", 255);
+}
+
+#[test]
+fn shifts_fill_with_zeros() {
+    assert_int("1 << 4", 16);
+    assert_int("255 >> 4", 15);
+    // `>>` is logical, as in Lua 5.3 — the sign bit is not replicated, so a
+    // negative left operand comes back positive.
+    assert_int("-1 >> 63", 1);
+    assert_int("-1 >> 60", 15);
+}
+
+#[test]
+fn a_negative_shift_count_shifts_the_other_way() {
+    assert_int("1 << -1", 0);
+    assert_int("16 >> -2", 64);
+    assert_int("1 >> -4", 16);
+}
+
+#[test]
+fn shifting_past_the_word_size_yields_zero() {
+    // The case a bare Rust `<<` would panic on. Lua's rule: every bit
+    // really has been shifted out.
+    assert_int("1 << 64", 0);
+    assert_int("1 << 999", 0);
+    assert_int("-1 >> 64", 0);
+    assert_int("1 >> 64", 0);
+}
+
+#[test]
+fn bitwise_precedence_matches_the_parser() {
+    assert_int("1 | 2 & 3", 3); // `1 | (2 & 3)`
+    assert_int("1 ~ 3 & 1", 0); // `1 ~ (3 & 1)`
+    assert_int("1 | 1 << 3", 9); // `1 | (1 << 3)`
+    assert_int("1 << 2 + 1", 8); // `1 << (2 + 1)` — additive binds tighter
+    assert_int("8 >> 1 >> 1", 2); // left-associative
+}
+
+#[test]
+fn bitwise_comparison_needs_no_parentheses() {
+    // Comparison is looser than every bitwise operator, which is what makes
+    // the mask-test idiom read the way it looks.
+    assert_bool("0b0110 & 0b0100 != 0", true);
+    assert_bool("0b0110 & 0b0001 != 0", false);
+}
+
+#[test]
+fn bitwise_compound_assignment() {
+    assert_int("local n: integer = 0b0001\nn |= 0b0100\nn", 5);
+    assert_int("local n: integer = 0b0101\nn &= 0b1100\nn", 4);
+    assert_int("local n: integer = 1\nn <<= 5\nn", 32);
+    assert_int("local n: integer = 32\nn >>= 4\nn", 2);
+}
+
+#[test]
+fn bitwise_rejects_a_float_operand() {
+    // The typechecker catches this on annotated code; the runtime is the
+    // backstop for the unchecked `run()` entry point.
+    assert!(matches!(
+        eval("local f: float = 6.0\nf & 1").unwrap_err(),
+        PipelineError::Typeck(_)
+    ));
+}
+
+#[test]
+fn bitwise_complement_rejects_a_float() {
+    // Unary operand kinds are not a static check for any operator (`-s` on
+    // a string is the same shape), so this one lands at runtime.
+    //
+    // The `;` is load-bearing. A newline is not a statement separator, so
+    // `local f = 6.0` followed by a line starting with `~` would be read as
+    // the *binary* `6.0 ~ f` — the same ambiguity `-` has had all along.
+    assert!(matches!(
+        eval("local f: float = 6.0;\n~f").unwrap_err(),
+        PipelineError::Runtime(RuntimeError::TypeError { .. })
+    ));
+}
+
+#[test]
+fn a_leading_tilde_continues_the_previous_expression() {
+    // Pinning the ambiguity above rather than leaving it to be rediscovered:
+    // with no separator the `~` is xor, and with one it is complement.
+    // No separator: the `~` was swallowed into the initializer, so `n` holds
+    // `0b1100 ~ 0b1010`.
+    assert_int("local n: integer = 0b1100\n~0b1010\nn", 0b0110);
+    // With one, `~0b1010` is a statement of its own — the complement.
+    assert_int("local n: integer = 0b1100;\n~0b1010", -11);
+}
+
+#[test]
+fn bitwise_rejects_a_string_operand() {
+    assert!(eval("local s: string = \"x\"\ns & 1").is_err());
+}
+
+mod bitwise_overloading {
+    use super::*;
+
+    /// A class overloading all five binary bitwise operators plus `~`.
+    fn with_mask(expr: &str) -> String {
+        format!(
+            r#"
+            class Mask implements OpBAnd, OpBOr, OpBXor, OpShl, OpShr, OpBNot
+                local bits: integer
+                fn init(b: integer)
+                    self.bits = b
+                end
+                fn get() -> integer return self.bits end
+                fn band(other: Mask) -> Mask return Mask(self.bits & other.get()) end
+                fn bor(other: Mask) -> Mask return Mask(self.bits | other.get()) end
+                fn bxor(other: Mask) -> Mask return Mask(self.bits ~ other.get()) end
+                fn shl(other: Mask) -> Mask return Mask(self.bits << other.get()) end
+                fn shr(other: Mask) -> Mask return Mask(self.bits >> other.get()) end
+                fn bnot() -> Mask return Mask(~self.bits) end
+            end
+            {expr}
+        "#
+        )
+    }
+
+    #[test]
+    fn each_operator_dispatches_to_its_contract_method() {
+        assert_int(&with_mask("(Mask(0b1100) & Mask(0b1010)).get()"), 0b1000);
+        assert_int(&with_mask("(Mask(0b1100) | Mask(0b1010)).get()"), 0b1110);
+        assert_int(&with_mask("(Mask(0b1100) ~ Mask(0b1010)).get()"), 0b0110);
+        assert_int(&with_mask("(Mask(1) << Mask(4)).get()"), 16);
+        assert_int(&with_mask("(Mask(255) >> Mask(4)).get()"), 15);
+        assert_int(&with_mask("(~Mask(0)).get()"), -1);
+    }
+
+    #[test]
+    fn compound_assignment_uses_the_overload() {
+        assert_int(
+            &with_mask("local m: Mask = Mask(0b0001)\nm |= Mask(0b0100)\nm.get()"),
+            0b0101,
+        );
+    }
+
+    #[test]
+    fn a_shift_dispatches_on_its_left_operand() {
+        // Asymmetric like arithmetic: `2 << mask` must not quietly become
+        // `mask << 2`.
+        assert!(eval(&with_mask("2 << Mask(1)")).is_err());
+    }
+}

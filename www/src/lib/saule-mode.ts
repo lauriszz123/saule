@@ -143,11 +143,16 @@ const sauleStream = StreamLanguage.define<State>({
 		}
 
 		// Operators, longest match first so `..` doesn't tokenize as two `.`,
-		// `?.` doesn't tokenize as a bare `?`, and the compound-assignment
-		// forms (`+=`, `..=`, …) stay whole.
-		if (stream.match(/^(\.\.\.|\.\.=|==|!=|<=|>=|=>|->|\?\?|\?\.|\.\.|[+\-*/%^]=)/))
+		// `?.` doesn't tokenize as a bare `?`, `<<` doesn't tokenize as two
+		// `<`, and the compound-assignment forms (`+=`, `..=`, `<<=`, …) stay
+		// whole. `<=` / `>=` sit ahead of the shifts, which cannot match them.
+		if (
+			stream.match(
+				/^(\.\.\.|\.\.=|<<=|>>=|==|!=|<=|>=|=>|->|\?\?|\?\.|\.\.|<<|>>|[+\-*/%^&|]=)/,
+			)
+		)
 			return 'operator';
-		if (stream.match(/^[+\-*/%^=<>#!?]/)) return 'operator';
+		if (stream.match(/^[+\-*/%^=<>#!?&|~]/)) return 'operator';
 		if (stream.match(/^[(){}[\]]/)) return 'bracket';
 		if (stream.match(/^[,;:.]/)) return 'punctuation';
 

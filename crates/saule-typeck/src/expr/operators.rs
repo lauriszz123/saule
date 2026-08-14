@@ -54,6 +54,18 @@ pub(crate) fn is_numeric_like(ty: &Type) -> bool {
     matches!(ty, Type::Named(n) if n == "integer" || n == "float" || n == "number" || n == "any")
 }
 
+/// True for operands of the bitwise operators.
+///
+/// Stricter than [`is_numeric_like`]: a bit pattern is a property of an
+/// `integer`, and Lua's "float with no fractional part is accepted" rule
+/// has no place in a language where `integer` and `float` never mix
+/// implicitly anywhere else. `number` is the sentinel for a numeric whose
+/// kind is not pinned down and `any` is the wildcard, so both pass — same
+/// conservatism the arithmetic rules use.
+pub(crate) fn is_bitwise_like(ty: &Type) -> bool {
+    matches!(ty, Type::Named(n) if n == "integer" || n == "number" || n == "any")
+}
+
 /// True for operands of `..` (string concatenation). Saule follows Lua and
 /// coerces numbers to strings, so all numeric types are accepted too.
 pub(crate) fn is_concat_like(ty: &Type) -> bool {
@@ -103,6 +115,14 @@ pub(crate) fn check_binary_op(
                 errors,
             );
             check_numeric_kinds_match(lhs, rhs, scope, errors);
+        }
+        // `&` `|` `~` `<<` `>>` — integers on both sides, always. A shift
+        // count is an ordinary `integer` operand too, so the same check
+        // covers both sides of all five.
+        BinOp::BAnd | BinOp::BOr | BinOp::BXor | BinOp::Shl | BinOp::Shr => {
+            let name = binop_name(op);
+            check_operand_kind(name, "`integer`", is_bitwise_like, lhs, scope, errors);
+            check_operand_kind(name, "`integer`", is_bitwise_like, rhs, scope, errors);
         }
         BinOp::And | BinOp::Or => {
             // Saule follows Lua semantics for `and`/`or`: they short-circuit

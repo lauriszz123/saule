@@ -182,7 +182,7 @@ struct Printer<'a> {
 /// unary / postfix expressions so they always parenthesize inner binaries.
 const MAX_PREC: u8 = 100;
 
-/// Binding strength of `-x`, `not x` and `#x`.
+/// Binding strength of `-x`, `not x`, `#x` and `~x`.
 ///
 /// Tighter than every binary operator *except* `^`, which is the rung the
 /// parser puts above it — so `-a ^ b` is `-(a ^ b)`, and expressing the other
@@ -190,9 +190,9 @@ const MAX_PREC: u8 = 100;
 /// printer never parenthesised a unary node, whatever it was an operand of,
 /// so `(-a) ^ b` came back as `-a ^ b` and `print((-a) ^ 2)` went from
 /// printing `4` to printing `-4`.
-const UNARY_PREC: u8 = 9;
+const UNARY_PREC: u8 = 13;
 
-/// Binding strength of `x as T` — above every binary operator (max 9) and
+/// Binding strength of `x as T` — above every binary operator (max 14) and
 /// below the postfix chain, mirroring where `cast_expr` sits in the
 /// parser's precedence ladder.
 const CAST_PREC: u8 = MAX_PREC - 1;
@@ -207,25 +207,31 @@ const CAST_PREC: u8 = MAX_PREC - 1;
 /// ones it does not.
 ///
 /// The parser's order, loosest first: `or`, `and`, equality, comparison,
-/// `??`, `..`, additive, multiplicative, [unary](UNARY_PREC), `^`,
-/// [`as`](CAST_PREC).
+/// `|`, `~`, `&`, shift, `??`, `..`, additive, multiplicative,
+/// [unary](UNARY_PREC), `^`, [`as`](CAST_PREC).
 fn bin_prec(op: BinOp) -> (u8, bool) {
     match op {
         BinOp::Or => (1, false),
         BinOp::And => (2, false),
         BinOp::Eq | BinOp::NotEq => (3, false),
         BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => (4, false),
+        // The bitwise rungs, in Lua 5.3's order: `|` loosest, then `~`, then
+        // `&`, then the shifts.
+        BinOp::BOr => (5, false),
+        BinOp::BXor => (6, false),
+        BinOp::BAnd => (7, false),
+        BinOp::Shl | BinOp::Shr => (8, false),
         // `??` binds *tighter* than any comparison and is right-associative,
         // so `a == b ?? c` is `a == (b ?? c)`. Printing it at `or`'s strength
         // dropped the parentheses from `(a == b) ?? c` and silently produced
         // the other tree.
-        BinOp::Coalesce => (5, true),
-        BinOp::Concat => (6, true),
-        BinOp::Add | BinOp::Sub => (7, false),
-        BinOp::Mul | BinOp::Div | BinOp::Mod => (8, false),
+        BinOp::Coalesce => (9, true),
+        BinOp::Concat => (10, true),
+        BinOp::Add | BinOp::Sub => (11, false),
+        BinOp::Mul | BinOp::Div | BinOp::Mod => (12, false),
         // `^` binds tighter than unary minus (hence above [`UNARY_PREC`]) and
         // is right-associative.
-        BinOp::Pow => (10, true),
+        BinOp::Pow => (14, true),
     }
 }
 
@@ -237,6 +243,11 @@ fn bin_sym(op: BinOp) -> &'static str {
         BinOp::Div => "/",
         BinOp::Mod => "%",
         BinOp::Pow => "^",
+        BinOp::BAnd => "&",
+        BinOp::BOr => "|",
+        BinOp::BXor => "~",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
         BinOp::Eq => "==",
         BinOp::NotEq => "!=",
         BinOp::Lt => "<",

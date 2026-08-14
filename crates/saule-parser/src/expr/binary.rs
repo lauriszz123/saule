@@ -1,6 +1,10 @@
 //! The binary-operator precedence ladder, loosest to tightest:
-//! `or` -> `and` -> equality -> comparison -> `??` -> `..` ->
-//! additive -> multiplicative -> unary -> `^` -> `as`.
+//! `or` -> `and` -> equality -> comparison -> `|` -> `~` -> `&` ->
+//! shift -> `??` -> `..` -> additive -> multiplicative -> unary -> `^` ->
+//! `as`.
+//!
+//! The five bitwise rungs sit in Lua 5.3's order and in Lua 5.3's place —
+//! just above comparison, with `..` still binding tighter than a shift.
 
 use crate::error::ParseError;
 use crate::{Parser, mk_binary};
@@ -52,13 +56,67 @@ impl Parser {
     }
 
     pub(crate) fn comparison_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
-        let mut left = self.coalesce_expr()?;
+        let mut left = self.bor_expr()?;
         loop {
             let op = match self.peek().value {
                 Token::Lt => BinOp::Lt,
                 Token::LtEq => BinOp::LtEq,
                 Token::Gt => BinOp::Gt,
                 Token::GtEq => BinOp::GtEq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.bor_expr()?;
+            left = mk_binary(op, left, right);
+        }
+        Ok(left)
+    }
+
+    /// `a | b` — bitwise or, the loosest of the five bitwise rungs.
+    pub(crate) fn bor_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut left = self.bxor_expr()?;
+        while self.check(&Token::Pipe) {
+            self.advance();
+            let right = self.bxor_expr()?;
+            left = mk_binary(BinOp::BOr, left, right);
+        }
+        Ok(left)
+    }
+
+    /// `a ~ b` — bitwise xor. Lua spells it `~` because `^` is taken by
+    /// exponentiation, and so does Saule for exactly the same reason.
+    pub(crate) fn bxor_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut left = self.band_expr()?;
+        while self.check(&Token::Tilde) {
+            self.advance();
+            let right = self.band_expr()?;
+            left = mk_binary(BinOp::BXor, left, right);
+        }
+        Ok(left)
+    }
+
+    /// `a & b` — bitwise and, the tightest of the three logical bitwise ops.
+    pub(crate) fn band_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut left = self.shift_expr()?;
+        while self.check(&Token::Amp) {
+            self.advance();
+            let right = self.shift_expr()?;
+            left = mk_binary(BinOp::BAnd, left, right);
+        }
+        Ok(left)
+    }
+
+    /// `a << b`, `a >> b` — shifts, left-associative as everywhere else.
+    ///
+    /// The lexer hands over `>>` whole; the only place a `>>` means two
+    /// closers instead is inside a type argument list, which
+    /// [`Parser::parse_type`] has already claimed by the time this rung runs.
+    pub(crate) fn shift_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut left = self.coalesce_expr()?;
+        loop {
+            let op = match self.peek().value {
+                Token::Shl => BinOp::Shl,
+                Token::Shr => BinOp::Shr,
                 _ => break,
             };
             self.advance();
@@ -127,6 +185,10 @@ impl Parser {
             Token::Minus => Some(UnaryOp::Neg),
             Token::Not => Some(UnaryOp::Not),
             Token::Hash => Some(UnaryOp::Len),
+            // `~x` — bitwise complement. Prefix `~` and infix `~` (xor) are
+            // told apart by position, exactly as `-` already is: the binary
+            // rung only looks for `~` after it has an operand in hand.
+            Token::Tilde => Some(UnaryOp::BNot),
             _ => None,
         };
         if let Some(op) = op {
