@@ -36,10 +36,13 @@ fn empty_builtins() -> saule_semantic::builtins::Builtins {
 pub fn install(env: &Rc<RefCell<Environment>>) {
     let info = crate::project::get().unwrap_or_default();
 
+    // `user_path` rather than `display`: these are the only project paths user
+    // code ever sees, and the language has no way to join one except string
+    // concatenation. A Windows verbatim root would make every such join miss.
     let src_dirs: Vec<Value> = info
         .src_dirs
         .iter()
-        .map(|p| Value::Str(Rc::new(p.display().to_string())))
+        .map(|p| Value::Str(Rc::new(crate::project::user_path(p))))
         .collect();
 
     let mut static_fields = fxmap();
@@ -50,7 +53,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     );
     static_fields.insert(
         "root".to_string(),
-        Value::Str(Rc::new(info.root.display().to_string())),
+        Value::Str(Rc::new(crate::project::user_path(&info.root))),
     );
     static_fields.insert(
         "srcDirs".to_string(),
