@@ -32,7 +32,7 @@ pub use config::{Config, Kind};
 pub use deps::{
     expand_tilde, resolve_dependencies, resolve_dependencies_lenient, resolve_dependency,
 };
-pub use info::{Dependency, ProjectInfo, clear, get, pretty_path, set};
+pub use info::{Dependency, ProjectInfo, clear, get, pretty_path, set, user_path};
 pub use scan::{SOURCE_EXTENSIONS, find_root, is_source_file, scan_all, scan_sources};
 
 /// The one filename this crate is about.
@@ -213,5 +213,39 @@ pub(crate) mod tests {
         let outside = s.root().parent().expect("parent").join("elsewhere.sau");
         assert_eq!(pretty_path(&outside), outside.display().to_string());
         clear();
+    }
+
+    /// The bug this exists for: user code builds subpaths by concatenation,
+    /// and a verbatim root turns `root .. "/" .. rel` into a path Windows
+    /// resolves literally — the `/` never becomes a separator, so the file is
+    /// simply not found. `\\?\` is a Windows spelling, but the function is
+    /// pure string work, so the assertions hold on every platform.
+    #[test]
+    fn user_path_strips_the_verbatim_prefix() {
+        assert_eq!(user_path(Path::new(r"\\?\C:\proj")), r"C:\proj");
+        assert_eq!(user_path(Path::new(r"\\?\UNC\srv\share")), r"\\srv\share");
+    }
+
+    /// Nothing outside the prefix is touched — a plain path is already what
+    /// user code should see, on Windows and off it.
+    #[test]
+    fn user_path_leaves_ordinary_paths_alone() {
+        assert_eq!(user_path(Path::new(r"C:\proj")), r"C:\proj");
+        assert_eq!(user_path(Path::new("/home/me/proj")), "/home/me/proj");
+        assert_eq!(user_path(Path::new("")), "");
+    }
+
+    /// Where the prefix is load-bearing it stays. Stripping it from a path
+    /// that needs it would trade a failed join for a file that cannot be
+    /// opened by any means, which is strictly worse.
+    #[test]
+    fn user_path_keeps_the_prefix_where_it_is_needed() {
+        // Past MAX_PATH the prefix is the only way to address the file.
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(user_path(Path::new(&long)), long);
+
+        // A volume GUID has no prefix-free spelling at all.
+        let volume = r"\\?\Volume{b75e2c83-0000-0000-0000-602f00000000}\x";
+        assert_eq!(user_path(Path::new(volume)), volume);
     }
 }

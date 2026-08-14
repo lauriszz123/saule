@@ -70,6 +70,56 @@ pub fn clear() {
     PROJECT.with(|p| *p.borrow_mut() = None);
 }
 
+/// `abs_path` spelled the way user code can use it.
+///
+/// Paths reaching Saule code are canonical, and on Windows canonicalising
+/// yields a verbatim path — `\\?\C:\proj`. That prefix is what lets a path
+/// exceed 260 characters, but it also switches off the normalisation that
+/// would otherwise accept `/` as a separator. Saule has no path type, so the
+/// only way user code can build a subpath is string concatenation, and
+/// `Project.root .. "/" .. "assets/icon.ttf"` under a verbatim root names a
+/// file that does not exist — silently, since it looks absolute and correct.
+///
+/// Stripping the prefix is only safe where the shorter spelling reaches the
+/// same file, so it is limited to drive-letter and UNC-share paths that fit
+/// inside `MAX_PATH`. A long path or a device path (`\\?\Volume{..}`) keeps
+/// the prefix: there the prefix is load-bearing, and a broken join is better
+/// than a path that cannot be opened at all.
+///
+/// The internal spelling is deliberately left alone — `canonical` feeds
+/// `src_dirs` comparisons and the database's read set, which only agree as
+/// long as every side canonicalises identically.
+pub fn user_path(abs_path: &Path) -> String {
+    strip_verbatim(&abs_path.display().to_string())
+}
+
+/// The string half of [`user_path`], split out so it is testable off Windows.
+fn strip_verbatim(path: &str) -> String {
+    /// Windows' classic path limit. The prefix is only redundant below it.
+    const MAX_PATH: usize = 260;
+
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        let share = format!(r"\\{rest}");
+        if share.len() < MAX_PATH {
+            return share;
+        }
+        return path.to_string();
+    }
+
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        // `C:\..` only. Anything else behind the prefix — a volume GUID, a
+        // device name — has no prefix-free spelling to fall back to.
+        let bytes = rest.as_bytes();
+        let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+
+        if drive && rest.len() < MAX_PATH {
+            return rest.to_string();
+        }
+    }
+
+    path.to_string()
+}
+
 /// Render `abs_path` as `<project_name>/<relative>` when it lives under the
 /// project root and the project has a non-empty name; otherwise return the
 /// absolute path unchanged.
