@@ -1,0 +1,86 @@
+-- `Assignable<T>` — a bare value assigned into a typed slot.
+--
+-- A class declaring `implements Assignable<T>` and defining
+-- `static fn of(value: T) -> Self` may be built from a bare `T` wherever
+-- the declared type asks for the class. The interface is named for when it
+-- fires — a `T` is *assignable* to the class — and the method for what it
+-- does: `Text.of("x")` builds one, explicitly or implicitly. The annotation picks the target, so this is
+-- *target-typed*: there is never a question of which class a bare value
+-- should become, only whether the one asked for accepts it.
+--
+-- ## Where it applies
+--
+-- Conversion happens exactly where the interpreter can see a declared type:
+--
+--   * an annotated `local` or module variable, and
+--   * a user function's or method's parameters.
+--
+-- Everywhere else the ordinary rule stands, and that boundary is deliberate
+-- rather than unfinished: the typechecker relaxes at exactly these sites, so
+-- a value that type-checks always gets built. See `tests/ui/assignable_*.sau` for
+-- the sites that stay strict.
+--
+-- Note what this class does *not* get for free: `string` has no methods, so
+-- everything `Text` exposes it declares itself, calling the `String` class's
+-- functions explicitly. Nothing is injected.
+class Text implements Assignable<string>, OpToString
+	local raw: string
+
+	fn init(raw: string)
+		self.raw = raw
+	end
+
+	-- Static: there is no instance yet to call it on. `of` is an ordinary
+	-- name, so nothing in the parser has to make room for it.
+	static fn of(s: string) -> Text
+		return Text(s)
+	end
+
+	fn value() -> string
+		return self.raw
+	end
+
+	fn upper() -> string
+		return String.upper(self.raw)
+	end
+
+	fn length() -> integer
+		return String.len(self.raw)
+	end
+
+	fn toString() -> string
+		return self.raw
+	end
+end
+
+fn shout(t: Text) -> string
+	return t.upper() .. "!"
+end
+
+class Main
+	static fn main()
+		-- The shape this exists for: a `string` literal becomes a `Text`.
+		local greeting: Text = "Hello, world"
+		println(greeting)             -- Hello, world
+		println(greeting.upper())     -- HELLO, WORLD
+		println(greeting.length())    -- 12
+
+		-- Function parameters convert too.
+		println(shout("quiet"))       -- QUIET!
+
+		-- An explicit construction is of course still fine, and is what the
+		-- conversion is doing under the hood.
+		local explicit: Text = Text("explicit")
+		println(explicit)             -- explicit
+
+		-- Calling the contract method directly works like any static.
+		println(Text.of("direct"))  -- direct
+
+		-- A nullable slot names the same target for a non-nil value, and
+		-- leaves `nil` alone.
+		local maybe: Text? = "present"
+		println(maybe!)               -- present
+		local empty: Text? = nil
+		println(empty == nil)         -- true
+	end
+end

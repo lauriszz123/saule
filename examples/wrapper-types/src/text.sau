@@ -1,0 +1,71 @@
+-- A `Text` built straight from a `string` literal, through `Assignable<string>`.
+--
+-- Note what this class does **not** get for free. `string` is a type and has
+-- no members; `String` is a separate class holding static functions, and
+-- `String.upper(s)` is a call on it. So every method `Text` exposes it
+-- declares itself and implements by calling `String` explicitly. Nothing is
+-- injected, and there is no mapping from the `string` type to the `String`
+-- class anywhere in the language.
+--
+-- That is the whole point of a wrapper: you choose the surface. `Text` has
+-- `words()`, which `String` does not, and deliberately does not expose
+-- `String.rep` or `String.byte`.
+
+export class Text implements Assignable<string>, OpToString
+	local raw: string
+
+	fn init(raw: string)
+		self.raw = raw
+	end
+
+	-- `local t: Text = "hello"` runs this. Static, unlike the operator
+	-- contracts: there is no instance yet to call it on.
+	--
+	-- `from` is a keyword elsewhere (`import … from …`) but reads as an
+	-- ordinary name after `fn`, where an import cannot start.
+	static fn of(s: string) -> Text
+		return Text(s)
+	end
+
+	-- Printing. Without this a wrapper prints as `<instance of Text>`.
+	fn toString() -> string
+		return self.raw
+	end
+
+	fn value() -> string
+		return self.raw
+	end
+
+	-- The surface this type chooses to expose, each one an explicit call.
+	fn length() -> integer
+		return String.len(self.raw)
+	end
+
+	fn upper() -> string
+		return String.upper(self.raw)
+	end
+
+	fn slice(start: integer, stop: integer) -> string
+		return String.sub(self.raw, start, stop)
+	end
+
+	fn startsWith(prefix: string) -> boolean
+		return String.starts(self.raw, prefix)
+	end
+
+	-- …plus members that are about *this* type rather than about strings.
+	fn words() -> integer
+		local count: integer = 0
+		local inWord: boolean = false
+		for i = 1, String.len(self.raw) do
+			local ch: string = String.sub(self.raw, i, i)
+			if ch == " " then
+				inWord = false
+			elseif not inWord then
+				inWord = true
+				count = count + 1
+			end
+		end
+		return count
+	end
+end

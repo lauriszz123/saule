@@ -145,9 +145,13 @@ pub(crate) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             let ty = infer(obj, scope)?;
             match strip_nullable(ty) {
                 Type::Table { value, .. } => Some(*value),
-                // Indexing a string or an `any` yields something the
-                // declaration cannot pin down. `any` says that explicitly.
-                _ => Some(Type::Named("any".into())),
+                // A class indexes through `OpIndex`, whose own `index`
+                // method names the element type — the same way every other
+                // contract reads its result off the implementing class.
+                other => crate::ops::index_result(&other)
+                    // Indexing a string or an `any` yields something the
+                    // declaration cannot pin down. `any` says that explicitly.
+                    .or_else(|| Some(Type::Named("any".into()))),
             }
         }
         Expr::ForceUnwrap(inner) => match infer(inner, scope)? {

@@ -147,7 +147,9 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
             span,
         }),
 
-        Stmt::Local { name, value, .. } => {
+        Stmt::Local {
+            name, value, ty, ..
+        } => {
             // A lambda initializer may call the name being bound. The binding
             // has to exist *before* the lambda is built so the capture walk
             // has something to promote; the real function is then written
@@ -159,7 +161,13 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
                 env.borrow_mut().define(name.clone(), Value::Nil);
             }
             let v = match value {
-                Some(e) => expr::eval(e, env)?,
+                Some(e) => {
+                    let raw = expr::eval(e, env)?;
+                    // `local x: Str = "…"` builds the `Str` here, through
+                    // `Assignable`. The annotation is what picks the target, so
+                    // an un-annotated `local` never converts.
+                    crate::eval::coerce::to_declared(raw, ty.as_ref(), env, &e.span)?
+                }
                 None => Value::Nil,
             };
             if recursive {

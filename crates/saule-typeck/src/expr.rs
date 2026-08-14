@@ -145,6 +145,7 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
         Expr::Index { obj, index } => {
             check_expr(obj, scope, errors);
             check_expr(index, scope, errors);
+            super::ops::check_index_receiver(obj, index, scope, errors);
         }
         Expr::Unary { op, rhs } => {
             check_expr(rhs, scope, errors);

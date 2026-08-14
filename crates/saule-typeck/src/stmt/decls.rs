@@ -4,7 +4,10 @@
 use saule_ast::{ClassMember, Decl, Expr, Param, Spanned, Type};
 
 use crate::TypeCheckError;
-use crate::expr::{check_assignment_compat, infer, is_any, type_to_string, types_compatible};
+use crate::expr::{
+    check_assignment_compat, check_assignment_compat_coercing, infer, is_any, type_to_string,
+    types_compatible,
+};
 use crate::state::{
     Scope, is_interface, pop_generics, push_generics, set_current_class, set_return_ty,
     with_classes,
@@ -102,7 +105,9 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             match (ty, value) {
                 (Some(t), Some(v)) => {
                     check_expr_expecting(v, Some(t), &scope, errors);
-                    check_assignment_compat(t, v, &scope, errors);
+                    // Annotated module variable — a coercing site, like the
+                    // annotated `local` it mirrors.
+                    check_assignment_compat_coercing(t, v, &scope, errors);
                 }
                 (None, Some(v)) => check_expr(v, &scope, errors),
                 (Some(t), None) => {

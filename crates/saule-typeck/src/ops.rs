@@ -102,7 +102,6 @@ pub(super) fn check_binary(
     if left.is_none() && right.is_none() {
         return false;
     }
-
     match op {
         // Two instances compare by identity when neither side overloads
         // `==`, so a missing `OpEq` is not an error — hand the expression
@@ -286,6 +285,78 @@ pub fn overload_binary_result(op: BinOp, lhs_ty: &Type) -> Option<Type> {
     }
     let class = class_of(lhs_ty)?;
     honours(&class, &contract).then(|| result_ty(&class, &contract))?
+}
+
+/// Check `obj[key]` where `obj` is a class instance.
+///
+/// Two things can be wrong: the class may support no indexing at all, and
+/// the key may not be the type `index` declared.
+pub(super) fn check_index_receiver(
+    obj: &Spanned<Expr>,
+    index: &Spanned<Expr>,
+    scope: &Scope,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let Some(obj_ty) = infer(obj, scope) else {
+        return;
+    };
+    let base = strip_nullable(obj_ty);
+    let Some(class) = class_of(&base) else {
+        return;
+    };
+    if !honours(&class, &saule_ast::ops::OP_INDEX) {
+        errors.push(not_implemented(
+            &saule_ast::ops::OP_INDEX,
+            class,
+            obj.span.clone(),
+        ));
+        return;
+    }
+    // The key has to be what `index` declared it takes.
+    if let Some(sig) = saule_semantic::lookup_method(&class, saule_ast::ops::OP_INDEX.method)
+        && let Some(expected) = sig.params.first().map(|p| p.ty.clone())
+        && let Some(found) = infer(index, scope)
+    {
+        let found_base = strip_nullable(found.clone());
+        if !is_any(&expected)
+            && !is_any(&found_base)
+            && !matches!(&found_base, Type::Named(n) if n == "nil")
+            && !types_compatible(&expected, &found)
+        {
+            errors.push(TypeCheckError::OperatorOperandTypeMismatch {
+                op: saule_ast::ops::OP_INDEX.symbol,
+                class,
+                method: saule_ast::ops::OP_INDEX.method,
+                expected: type_to_string(&expected),
+                found: type_to_string(&found),
+                span: to_source_span(index.span.clone()),
+            });
+        }
+    }
+}
+
+/// Element type of `obj[key]` when `obj`'s type is a class implementing
+/// `OpIndex` — the declared return type of its `index` method.
+///
+/// `None` for anything else, including a class that declares the interface
+/// without defining the method, since [`honours`] wants both.
+pub fn index_result(obj_ty: &Type) -> Option<Type> {
+    let class = class_of(obj_ty)?;
+    honours(&class, &saule_ast::ops::OP_INDEX)
+        .then(|| result_ty(&class, &saule_ast::ops::OP_INDEX))?
+}
+
+/// Declared key and value types of `obj[key] = value` — the two parameters
+/// of `OpNewIndex`'s `newIndex` method.
+pub fn new_index_operands(obj_ty: &Type) -> Option<(Type, Type)> {
+    let class = class_of(obj_ty)?;
+    if !honours(&class, &saule_ast::ops::OP_NEW_INDEX) {
+        return None;
+    }
+    let sig = saule_semantic::lookup_method(&class, saule_ast::ops::OP_NEW_INDEX.method)?;
+    let key = sig.params.first()?.ty.clone();
+    let value = sig.params.get(1)?.ty.clone();
+    Some((key, value))
 }
 
 /// Result type of `op rhs` when `rhs`'s **type** resolves to a class that

@@ -34,6 +34,7 @@
 use saule_ast::Module;
 pub(crate) use saule_ast::to_source_span;
 
+mod coerce_sites;
 mod error;
 mod expr;
 mod funcs;

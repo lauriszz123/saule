@@ -1,0 +1,10 @@
+-- ERROR: the key must be the type `index` declared it takes.
+class Config implements OpIndex<string, string>
+	fn index(key: string) -> string return key end
+end
+class Main
+	static fn main()
+		local c: Config = Config()
+		println(c[42])
+	end
+end

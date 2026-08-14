@@ -913,3 +913,52 @@ fn a_generic_call_can_close_with_a_right_shift() {
         other => panic!("expected a local, got {other:?}"),
     }
 }
+
+// ── `from` stays a keyword ───────────────────────────────────────────────
+
+#[test]
+fn from_is_reserved_everywhere() {
+    // `from` opens an import tail and is a keyword in every position. It
+    // briefly had a contextual exemption after `fn` and `.`, so that the
+    // conversion contract could spell its method `from`; renaming that
+    // method to `of` let the exemption go, and with it the half-permitted
+    // state where `from` worked in two places and failed in the rest.
+    for src in [
+        "class C\n\tstatic fn from(s: string) -> C\n\t\treturn C()\n\tend\nend",
+        "local v = C.from(\"x\")",
+        "local from = 1",
+        "fn slice(from: integer) -> integer\n\treturn from\nend",
+    ] {
+        let tokens = Lexer::new(src).tokenize().expect("lex ok");
+        assert!(
+            parse(tokens).is_err(),
+            "`from` should be reserved in: {src}"
+        );
+    }
+}
+
+#[test]
+fn from_still_opens_an_import_tail() {
+    let m = parse_src("import A, B from \"mod\"");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Import { path, .. } => assert_eq!(path, "mod"),
+            other => panic!("expected an import, got {other:?}"),
+        },
+        other => panic!("expected a decl, got {other:?}"),
+    }
+}
+
+#[test]
+fn of_is_an_ordinary_name() {
+    // The conversion contract's method. Not a keyword, so it needs no
+    // special case anywhere.
+    let m = parse_src("class C\n\tstatic fn of(s: string) -> C\n\t\treturn C()\n\tend\nend");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Class { members, .. } => assert_eq!(members.len(), 1),
+            other => panic!("expected a class, got {other:?}"),
+        },
+        other => panic!("expected a decl, got {other:?}"),
+    }
+}

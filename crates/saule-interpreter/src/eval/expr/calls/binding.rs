@@ -215,6 +215,7 @@ pub(crate) fn bind_params(
                     }
                 },
             };
+            let value = coerce_param(value, param, scope, span)?;
             scope.borrow_mut().define(Rc::clone(&keys[i]), value);
         }
         return Ok(());
@@ -343,9 +344,32 @@ pub(crate) fn bind_params(
                 span,
             ));
         };
+        let value = coerce_param(value, param, scope, span)?;
         scope.borrow_mut().define(Rc::clone(&keys[i]), value);
     }
     Ok(())
+}
+
+/// Build the parameter's declared class from a plain value, when it opts in
+/// with `Assignable`.
+///
+/// A user function's parameters are one of the sites `saule-typeck` relaxes
+/// its assignment rule for (see `saule_typeck::coerce_sites`), so the
+/// conversion has to happen here or the checker would be promising something
+/// the runtime never delivers.
+///
+/// Variadic slots are excluded: the value bound there is the collected
+/// table, not an element, so converting it would target the wrong thing.
+fn coerce_param(
+    value: Value,
+    param: &saule_ast::Param,
+    scope: &Rc<RefCell<Environment>>,
+    span: &std::ops::Range<usize>,
+) -> Result<Value, RuntimeError> {
+    if param.variadic {
+        return Ok(value);
+    }
+    crate::eval::coerce::to_declared(value, Some(&param.ty), scope, span)
 }
 
 /// Build the "missing required argument" diagnostic.

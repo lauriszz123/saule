@@ -1,0 +1,16 @@
+-- ERROR: `Assignable` applies only where the interpreter converts — an
+-- annotated binding or a function parameter. A table element is not one of
+-- those sites, and accepting it here would leave a raw `string` inside a
+-- `table<Str>` for the first `Str` member call to trip over.
+class Str implements Assignable<string>
+	local str: string
+	fn init(str: string) self.str = str end
+	static fn of(s: string) -> Str return Str(s) end
+end
+
+class Main
+	static fn main()
+		local all: table<Str> = {"a", "b"}
+		println(#all)
+	end
+end
