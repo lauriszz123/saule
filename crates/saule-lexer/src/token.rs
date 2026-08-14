@@ -57,6 +57,11 @@ pub enum Token {
     Slash,
     Percent,
     Caret, // `^` exponentiation
+    Amp,   // `&` bitwise and
+    Pipe,  // `|` bitwise or
+    Tilde, // `~` bitwise xor (binary) / complement (unary)
+    Shl,   // `<<`
+    Shr,   // `>>`
     EqEq,
     NotEq,
     Lt,
@@ -93,6 +98,16 @@ pub enum Token {
     PercentEq, // `%=`
     CaretEq,   // `^=`
     DotDotEq,  // `..=`
+    AmpEq,     // `&=`
+    PipeEq,    // `|=`
+    ShlEq,     // `<<=`
+    ShrEq,     // `>>=`
+    //
+    // There is deliberately no `~=`. In Lua that spelling means "not equal",
+    // which Saule writes `!=`; lexing it as xor-assignment would silently
+    // turn a habitual `if a ~= b` into an assignment statement. Left
+    // unlexed, `a ~= b` is a parse error, which is what a Lua reflex
+    // deserves here.
 
     // Trivia
     //

@@ -60,9 +60,10 @@ fn named(n: &str) -> Option<Type> {
 
 /// Type of `op rhs`.
 ///
-/// An `OpNeg` / `OpLen` overload names its own result and wins; otherwise
-/// `-x` keeps the operand's type (with any nullability stripped, as the
-/// checker does), `#x` counts, and `not x` is a boolean.
+/// An `OpNeg` / `OpLen` / `OpBNot` overload names its own result and wins;
+/// otherwise `-x` keeps the operand's type (with any nullability stripped,
+/// as the checker does), `#x` counts, `~x` is an integer bit pattern, and
+/// `not x` is a boolean.
 pub(crate) fn unary_type<S: TypeSource + ?Sized>(cx: &S, op: UnaryOp, rhs: &Expr) -> Option<Type> {
     if let Some(ty) = cx
         .type_of(rhs)
@@ -72,7 +73,7 @@ pub(crate) fn unary_type<S: TypeSource + ?Sized>(cx: &S, op: UnaryOp, rhs: &Expr
     }
     match op {
         UnaryOp::Neg => cx.type_of(rhs).map(strip_nullable),
-        UnaryOp::Len => named("integer"),
+        UnaryOp::Len | UnaryOp::BNot => named("integer"),
         UnaryOp::Not => named("boolean"),
     }
 }
@@ -129,6 +130,12 @@ pub(crate) fn binary_type<S: TypeSource + ?Sized>(
             overload(cx, op, lhs)
                 .or_else(|| cx.type_of(lhs))
                 .or_else(|| cx.type_of(rhs))
+        }
+
+        // Bitwise operands and results are both `integer`, so unlike
+        // arithmetic there is no operand kind to follow.
+        BinOp::BAnd | BinOp::BOr | BinOp::BXor | BinOp::Shl | BinOp::Shr => {
+            overload(cx, op, lhs).or_else(|| named("integer"))
         }
     }
 }

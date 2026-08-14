@@ -1,0 +1,109 @@
+-- A flag set that behaves like an integer, via the bitwise `Op*` interfaces.
+--
+-- The same six operators the built-in `integer` has can be taken over by a
+-- class, one interface per operator, exactly as `+` and `..` can. What that
+-- buys over passing a raw `integer` around is a type: `Permissions` cannot be
+-- accidentally added to a file size, and `has` reads better than `& 4 != 0`.
+
+export class Permissions implements OpBAnd<Permissions, Permissions>,
+	OpBOr<Permissions, Permissions>, OpBXor<Permissions, Permissions>,
+	OpBNot<Permissions>, OpEq<Permissions>, OpToString
+
+	local bits: integer
+
+	fn init(bits: integer)
+		self.bits = bits
+	end
+
+	fn raw() -> integer
+		return self.bits
+	end
+
+	-- `a & b` — the flags present in both.
+	fn band(other: Permissions) -> Permissions
+		return Permissions(self.bits & other.raw())
+	end
+
+	-- `a | b` — the flags present in either. The usual way to combine.
+	fn bor(other: Permissions) -> Permissions
+		return Permissions(self.bits | other.raw())
+	end
+
+	-- `a ~ b` — the flags present in exactly one. `~` carries xor because
+	-- `^` is already exponentiation in Saule, the same trade Lua 5.3 made.
+	fn bxor(other: Permissions) -> Permissions
+		return Permissions(self.bits ~ other.raw())
+	end
+
+	-- `~a` — every flag this one does not have. Prefix `~` is complement and
+	-- infix `~` is xor; position is what tells them apart, as it already does
+	-- for `-`.
+	fn bnot() -> Permissions
+		return Permissions(~self.bits & Permissions.ALL_BITS)
+	end
+
+	-- Without `OpEq`, `==` compares identity, so two separately built sets
+	-- holding the same flags would be unequal.
+	fn equals(other: Permissions) -> boolean
+		return self.bits == other.raw()
+	end
+
+	fn toString() -> string
+		if self.bits == 0 then
+			return "---"
+		end
+
+		local out: string = ""
+		out ..= Permissions.letter(self.bits, Permissions.READ_BIT, "r")
+		out ..= Permissions.letter(self.bits, Permissions.WRITE_BIT, "w")
+		out ..= Permissions.letter(self.bits, Permissions.EXEC_BIT, "x")
+		return out
+	end
+
+	-- `bits & flag != 0` is the mask test, and it needs no parentheses:
+	-- every bitwise operator binds tighter than every comparison.
+	static fn letter(bits: integer, flag: integer, name: string) -> string
+		if bits & flag != 0 then
+			return name
+		end
+		return "-"
+	end
+
+	-- Does this set contain every flag in `other`? Masking and comparing to
+	-- the mask is the standard subset test — and note it needs no
+	-- parentheses, because `&` binds tighter than `==`.
+	fn has(other: Permissions) -> boolean
+		return self.bits & other.raw() == other.raw()
+	end
+
+	-- Turn flags off: mask against the complement of what to remove.
+	fn without(other: Permissions) -> Permissions
+		return Permissions(self.bits & ~other.raw())
+	end
+
+	static local READ_BIT: integer = 1 << 2
+	static local WRITE_BIT: integer = 1 << 1
+	static local EXEC_BIT: integer = 1 << 0
+	static local ALL_BITS: integer = (1 << 3) - 1
+
+	static fn none() -> Permissions
+		return Permissions(0)
+	end
+
+	static fn read() -> Permissions
+		return Permissions(Permissions.READ_BIT)
+	end
+
+	static fn write() -> Permissions
+		return Permissions(Permissions.WRITE_BIT)
+	end
+
+	static fn exec() -> Permissions
+		return Permissions(Permissions.EXEC_BIT)
+	end
+
+	-- The classic octal spelling: three bits per role, owner highest.
+	static fn fromOctal(mode: integer) -> Permissions
+		return Permissions(mode & Permissions.ALL_BITS)
+	end
+end

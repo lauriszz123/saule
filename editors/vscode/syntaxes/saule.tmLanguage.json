@@ -117,9 +117,14 @@
     "operators": {
       "patterns": [
         {
-          "comment": "Compound assignment first, so `..=` is one token rather than `..` plus a stray `=`.",
+          "comment": "Compound assignment first, so `..=` is one token rather than `..` plus a stray `=`, and `<<=` / `>>=` beat both the shifts and `<=` / `>=`.",
           "name": "keyword.operator.assignment.saule",
-          "match": "(\\.\\.=|[+\\-*/%^]=)"
+          "match": "(<<=|>>=|\\.\\.=|[+\\-*/%^&|]=)"
+        },
+        {
+          "comment": "Before the comparison rule: otherwise `<<` matches `<` and a shift highlights as two comparisons. `<=` / `>=` cannot match here, so nothing is stolen the other way.",
+          "name": "keyword.operator.bitwise.saule",
+          "match": "(<<|>>|[&|~])"
         },
         {
           "name": "keyword.operator.comparison.saule",

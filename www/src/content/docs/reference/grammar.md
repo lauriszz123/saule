@@ -126,12 +126,16 @@ exp        ::= orExp
 orExp      ::= andExp {'or' andExp}
 andExp     ::= eqExp {'and' eqExp}
 eqExp      ::= cmpExp {('==' | '!=') cmpExp}
-cmpExp     ::= coalesce {('<' | '<=' | '>' | '>=') coalesce}
+cmpExp     ::= borExp {('<' | '<=' | '>' | '>=') borExp}
+borExp     ::= bxorExp {'|' bxorExp}
+bxorExp    ::= bandExp {'~' bandExp}
+bandExp    ::= shiftExp {'&' shiftExp}
+shiftExp   ::= coalesce {('<<' | '>>') coalesce}
 coalesce   ::= concat ['??' coalesce]                    (* right *)
 concat     ::= additive ['..' concat]                    (* right *)
 additive   ::= multiply {('+' | '-') multiply}
 multiply   ::= unary {('*' | '/' | '%') unary}
-unary      ::= ('-' | 'not' | '#') unary | power
+unary      ::= ('-' | 'not' | '#' | '~') unary | power
 power      ::= cast ['^' unary]                          (* right *)
 cast       ::= postfix {'as' type}
 postfix    ::= primary {suffix}
@@ -173,10 +177,14 @@ pipeline ::= 'when' '(' exp ')' stage {stage}
 stage    ::= ':' Name args
 ```
 
-Three parts of this need a word of explanation.
+Four parts of this need a word of explanation.
 
 **`^` binds tighter than unary minus**, as in Lua: `-2 ^ 2` is `-(2 ^ 2)`, and
 because the right operand is itself `unary`, `2 ^ -1` parses.
+
+**The bitwise rungs sit where Lua 5.3 puts them** — just above comparison, in
+the order `|`, `~`, `&`, shifts — so `flags & mask != 0` masks before it
+compares, and `..`, `+` and `*` all bind tighter than a shift.
 
 **`as` binds tighter than every binary operator but looser than the postfix
 chain.** So `y as integer ?? 0` casts before it coalesces, and

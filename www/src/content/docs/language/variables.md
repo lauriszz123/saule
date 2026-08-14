@@ -111,7 +111,8 @@ local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
 ### Compound Assignment
 
 `target op= value` reads the target, applies `op`, and writes the result back.
-There is one form per arithmetic operator, plus `..=` for concatenation:
+There is one form per arithmetic operator, plus `..=` for concatenation and
+`&=` `|=` `<<=` `>>=` for the bitwise ones:
 
 ```saule
 local hp: integer = 100
@@ -127,7 +128,15 @@ label ..= "3"                   -- "level 3"
 
 local charge: integer = 2
 charge ^= 10                    -- 1024
+
+local flags: integer = 0b0001
+flags |= 0b0100                 -- 5
+flags <<= 2                     -- 20
 ```
+
+Bitwise xor is the one operator with no compound form: `~=` is how Lua spells
+"not equal", so reading it as `a = a ~ b` would turn a habitual comparison into
+a silent mutation. It is a syntax error instead — write `a = a ~ b`.
 
 The right-hand side is a **full expression**, so it is combined before the
 operator applies — `p *= 3 + 4` multiplies by 7, not by 3:

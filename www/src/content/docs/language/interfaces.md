@@ -175,7 +175,13 @@ The loop also accepts raw step closures and plain `table` values directly — `I
 | `OpDiv<T, R>` | `a / b` | `fn div(other: T) -> R` |
 | `OpMod<T, R>` | `a % b` | `fn mod(other: T) -> R` |
 | `OpPow<T, R>` | `a ^ b` | `fn pow(other: T) -> R` |
+| `OpBAnd<T, R>` | `a & b` | `fn band(other: T) -> R` |
+| `OpBOr<T, R>` | `a \| b` | `fn bor(other: T) -> R` |
+| `OpBXor<T, R>` | `a ~ b` | `fn bxor(other: T) -> R` |
+| `OpShl<T, R>` | `a << b` | `fn shl(other: T) -> R` |
+| `OpShr<T, R>` | `a >> b` | `fn shr(other: T) -> R` |
 | `OpNeg<R>` | `-a` | `fn neg() -> R` |
+| `OpBNot<R>` | `~a` | `fn bnot() -> R` |
 | `OpLen` | `#a` | `fn len() -> integer` |
 | `OpConcat<T, R>` | `a .. b` | `fn concat(other: T) -> R` |
 | `OpEq<T>` | `a == b`, `a != b` | `fn equals(other: T) -> boolean` |

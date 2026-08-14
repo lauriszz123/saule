@@ -14,6 +14,14 @@ use crate::{Parser, stmt_decl};
 /// already a valid expression, so `a <== b` would be ambiguous, and `and=` /
 /// `or=` would have to answer whether the RHS is evaluated when the operator
 /// short-circuits.
+///
+/// Bitwise xor has none either, and for a sharper reason than ambiguity:
+/// `~=` is how Lua spells "not equal". A Saule file written by a Lua hand
+/// will contain `if a ~= b then` sooner or later, and reading that as
+/// `a = a ~ b` turns a comparison into a mutation without a diagnostic. The
+/// token is left unlexed instead, so the line fails to parse — see
+/// `saule_lexer::Token::AmpEq`. The other four (`&=`, `|=`, `<<=`, `>>=`)
+/// carry no such reflex and are here.
 fn compound_assign_op(tok: &Token) -> Option<BinOp> {
     Some(match tok {
         Token::PlusEq => BinOp::Add,
@@ -23,6 +31,10 @@ fn compound_assign_op(tok: &Token) -> Option<BinOp> {
         Token::PercentEq => BinOp::Mod,
         Token::CaretEq => BinOp::Pow,
         Token::DotDotEq => BinOp::Concat,
+        Token::AmpEq => BinOp::BAnd,
+        Token::PipeEq => BinOp::BOr,
+        Token::ShlEq => BinOp::Shl,
+        Token::ShrEq => BinOp::Shr,
         _ => return None,
     })
 }

@@ -47,7 +47,13 @@ pub const OP_MUL: OperatorContract = contract!("OpMul", "mul", 1, "*");
 pub const OP_DIV: OperatorContract = contract!("OpDiv", "div", 1, "/");
 pub const OP_MOD: OperatorContract = contract!("OpMod", "mod", 1, "%");
 pub const OP_POW: OperatorContract = contract!("OpPow", "pow", 1, "^");
+pub const OP_BAND: OperatorContract = contract!("OpBAnd", "band", 1, "&");
+pub const OP_BOR: OperatorContract = contract!("OpBOr", "bor", 1, "|");
+pub const OP_BXOR: OperatorContract = contract!("OpBXor", "bxor", 1, "~");
+pub const OP_SHL: OperatorContract = contract!("OpShl", "shl", 1, "<<");
+pub const OP_SHR: OperatorContract = contract!("OpShr", "shr", 1, ">>");
 pub const OP_NEG: OperatorContract = contract!("OpNeg", "neg", 0, "-");
+pub const OP_BNOT: OperatorContract = contract!("OpBNot", "bnot", 0, "~");
 pub const OP_LEN: OperatorContract = contract!("OpLen", "len", 0, "#");
 pub const OP_CONCAT: OperatorContract = contract!("OpConcat", "concat", 1, "..");
 pub const OP_EQ: OperatorContract = contract!("OpEq", "equals", 1, "==");
@@ -63,7 +69,13 @@ pub const OPERATOR_CONTRACTS: &[OperatorContract] = &[
     OP_DIV,
     OP_MOD,
     OP_POW,
+    OP_BAND,
+    OP_BOR,
+    OP_BXOR,
+    OP_SHL,
+    OP_SHR,
     OP_NEG,
+    OP_BNOT,
     OP_LEN,
     OP_CONCAT,
     OP_EQ,
@@ -84,6 +96,11 @@ pub fn binary_contract(op: BinOp) -> Option<OperatorContract> {
         Div => OP_DIV,
         Mod => OP_MOD,
         Pow => OP_POW,
+        BAnd => OP_BAND,
+        BOr => OP_BOR,
+        BXor => OP_BXOR,
+        Shl => OP_SHL,
+        Shr => OP_SHR,
         Concat => OP_CONCAT,
         // `!=` is `==` negated rather than its own contract, mirroring Lua.
         Eq | NotEq => OP_EQ,
@@ -100,6 +117,7 @@ pub fn binary_contract(op: BinOp) -> Option<OperatorContract> {
 pub fn unary_contract(op: UnaryOp) -> Option<OperatorContract> {
     match op {
         UnaryOp::Neg => Some(OP_NEG),
+        UnaryOp::BNot => Some(OP_BNOT),
         UnaryOp::Len => Some(OP_LEN),
         UnaryOp::Not => None,
     }
@@ -121,6 +139,11 @@ pub fn binop_symbol(op: BinOp) -> &'static str {
         Div => "/",
         Mod => "%",
         Pow => "^",
+        BAnd => "&",
+        BOr => "|",
+        BXor => "~",
+        Shl => "<<",
+        Shr => ">>",
         Eq => "==",
         NotEq => "!=",
         Lt => "<",

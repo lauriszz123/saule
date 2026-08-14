@@ -498,12 +498,37 @@ impl<'src> Lexer<'src> {
                     self.chars.next();
                     (Token::LtEq, 2)
                 }
+                Some(&(_, '<')) => {
+                    self.chars.next();
+                    match self.chars.peek() {
+                        Some(&(_, '=')) => {
+                            self.chars.next();
+                            (Token::ShlEq, 3)
+                        }
+                        _ => (Token::Shl, 2),
+                    }
+                }
                 _ => (Token::Lt, 1),
             },
+            // `>>` is one token here, which collides with the closing `>` of a
+            // nested generic (`table<table<integer>>`). The parser splits it
+            // back into two `Gt`s at exactly the four places a type argument
+            // list closes — see `Parser::split_closing_shr` — because that is
+            // the side that knows it is reading a type.
             '>' => match self.chars.peek() {
                 Some(&(_, '=')) => {
                     self.chars.next();
                     (Token::GtEq, 2)
+                }
+                Some(&(_, '>')) => {
+                    self.chars.next();
+                    match self.chars.peek() {
+                        Some(&(_, '=')) => {
+                            self.chars.next();
+                            (Token::ShrEq, 3)
+                        }
+                        _ => (Token::Shr, 2),
+                    }
                 }
                 _ => (Token::Gt, 1),
             },
@@ -571,6 +596,23 @@ impl<'src> Lexer<'src> {
                 }
                 _ => (Token::Caret, 1),
             },
+            '&' => match self.chars.peek() {
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::AmpEq, 2)
+                }
+                _ => (Token::Amp, 1),
+            },
+            '|' => match self.chars.peek() {
+                Some(&(_, '=')) => {
+                    self.chars.next();
+                    (Token::PipeEq, 2)
+                }
+                _ => (Token::Pipe, 1),
+            },
+            // No `~=` — see `Token::AmpEq` and friends for why that spelling
+            // is left to fail rather than mean xor-assignment.
+            '~' => (Token::Tilde, 1),
             '#' => (Token::Hash, 1),
             _ => {
                 // The character was already consumed above, so dropping it is

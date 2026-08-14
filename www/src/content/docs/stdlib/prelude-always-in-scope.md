@@ -37,7 +37,9 @@ contract the language itself looks for.
 | `Iterable<T>` | `for v in instance do` — `fn iter() -> fn() -> T?` returns the step closure. |
 | `Iterable2<K, V>` | `for k, v in instance do` — the step closure returns two values. |
 | `OpAdd<T, R>` `OpSub<T, R>` `OpMul<T, R>` `OpDiv<T, R>` `OpMod<T, R>` `OpPow<T, R>` | `+` `-` `*` `/` `%` `^` — `fn add(other: T) -> R`, and so on. |
+| `OpBAnd<T, R>` `OpBOr<T, R>` `OpBXor<T, R>` `OpShl<T, R>` `OpShr<T, R>` | `&` `\|` `~` `<<` `>>` — `fn band(other: T) -> R`, and so on. |
 | `OpNeg<R>` | `-a` — `fn neg() -> R`. |
+| `OpBNot<R>` | `~a` — `fn bnot() -> R`. |
 | `OpLen` | `#a` — `fn len() -> integer`. |
 | `OpConcat<T, R>` | `a .. b` — `fn concat(other: T) -> R`. |
 | `OpEq<T>` | `a == b` and `a != b` — `fn equals(other: T) -> boolean`. |

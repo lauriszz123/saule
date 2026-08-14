@@ -243,6 +243,66 @@ local half: float = 2.0 ^ -1.0      -- 0.5
 local bad: integer = 2 ^ -1         -- ERROR: negative exponent on integers
 ```
 
+### Bitwise Operators
+
+Six operators work on the bits of an `integer`, spelled as in Lua 5.3:
+
+| Operator | Meaning |
+|---|---|
+| `a & b` | and |
+| `a \| b` | or |
+| `a ~ b` | xor |
+| `~a` | complement (one's complement) |
+| `a << b` | left shift |
+| `a >> b` | right shift |
+
+`~` carries xor because `^` is already exponentiation — the same trade Lua 5.3 made. It is unary complement in prefix position and binary xor in infix position, told apart by where it appears, exactly as `-` already is.
+
+```saule
+local flags: integer = 0b1100 | 0b0011   -- 15
+local common: integer = 0b1100 & 0b1010  -- 8
+local toggled: integer = 0b1100 ~ 0b1010 -- 6
+local inverted: integer = ~0             -- -1
+local doubled: integer = 1 << 4          -- 16
+local halved: integer = 255 >> 4         -- 15
+```
+
+**Integers only.** Unlike Lua 5.3, a `float` is rejected rather than converted when it happens to have no fractional part — Saule never mixes the two numeric kinds implicitly, and this is not the place to start:
+
+```saule
+local f: float = 6.0
+local bad: integer = f & 1               -- ERROR: `&` expects `integer`
+local ok: integer = int(f) & 1           -- 0
+```
+
+**Shifts fill with zeros in both directions**, which is Lua's rule and means `>>` is a *logical* shift, not an arithmetic one — the sign bit is not replicated. A negative shift count shifts the other way, and shifting by 64 or more shifts every bit out:
+
+```saule
+local logical: integer = -1 >> 63        -- 1, not -1
+local flipped: integer = 16 >> -2        -- 64 — negative count reverses
+local gone: integer = 1 << 64            -- 0
+```
+
+**Precedence follows Lua**: `|` is loosest, then `~`, then `&`, then the shifts, and all of them bind looser than `..`, `+` and `*` but tighter than any comparison. So the mask-test idiom needs no parentheses:
+
+```saule
+if flags & 0b0100 != 0 then              -- (flags & 0b0100) != 0
+    println("bit set")
+end
+```
+
+**Compound assignment** exists for four of the five: `&=`, `|=`, `<<=`, `>>=`.
+
+```saule
+local bits: integer = 0b0001
+bits |= 0b0100                           -- 5
+bits <<= 2                               -- 20
+```
+
+There is deliberately no `~=`. That spelling is how Lua writes "not equal", which Saule spells `!=`; reading it as xor-assignment would turn a habitual `if a ~= b then` into a silent mutation, so `~=` is left as a syntax error instead. Write `a = a ~ b`.
+
+Classes can overload all six through `OpBAnd`, `OpBOr`, `OpBXor`, `OpShl`, `OpShr` and `OpBNot` — see [Operator Overloading](#operator-overloading).
+
 ### `nil` Is a Value, Not a Binding Type
 
 `nil` exists only as the **value** that inhabits a nullable slot. Writing `: nil` as a binding type is rejected so the meaning of the type system stays "every variable has a real type, and `?` says whether it can be empty":
@@ -421,7 +481,8 @@ local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
 ### Compound Assignment
 
 `target op= value` reads the target, applies `op`, and writes the result back.
-There is one form per arithmetic operator, plus `..=` for concatenation:
+There is one form per arithmetic operator, plus `..=` for concatenation and
+`&=` `|=` `<<=` `>>=` for the bitwise ones:
 
 ```saule
 local hp: integer = 100
@@ -437,7 +498,15 @@ label ..= "3"                   -- "level 3"
 
 local charge: integer = 2
 charge ^= 10                    -- 1024
+
+local flags: integer = 0b0001
+flags |= 0b0100                 -- 5
+flags <<= 2                     -- 20
 ```
+
+Bitwise xor is the one operator with no compound form: `~=` is how Lua spells
+"not equal", so reading it as `a = a ~ b` would turn a habitual comparison into
+a silent mutation. It is a syntax error instead — write `a = a ~ b`.
 
 The right-hand side is a **full expression**, so it is combined before the
 operator applies — `p *= 3 + 4` multiplies by 7, not by 3:
@@ -1416,7 +1485,13 @@ The loop also accepts raw step closures and plain `table` values directly — `I
 | `OpDiv<T, R>` | `a / b` | `fn div(other: T) -> R` |
 | `OpMod<T, R>` | `a % b` | `fn mod(other: T) -> R` |
 | `OpPow<T, R>` | `a ^ b` | `fn pow(other: T) -> R` |
+| `OpBAnd<T, R>` | `a & b` | `fn band(other: T) -> R` |
+| `OpBOr<T, R>` | `a \| b` | `fn bor(other: T) -> R` |
+| `OpBXor<T, R>` | `a ~ b` | `fn bxor(other: T) -> R` |
+| `OpShl<T, R>` | `a << b` | `fn shl(other: T) -> R` |
+| `OpShr<T, R>` | `a >> b` | `fn shr(other: T) -> R` |
 | `OpNeg<R>` | `-a` | `fn neg() -> R` |
+| `OpBNot<R>` | `~a` | `fn bnot() -> R` |
 | `OpLen` | `#a` | `fn len() -> integer` |
 | `OpConcat<T, R>` | `a .. b` | `fn concat(other: T) -> R` |
 | `OpEq<T>` | `a == b`, `a != b` | `fn equals(other: T) -> boolean` |
@@ -2212,7 +2287,9 @@ of every construct, see the [Grammar](#grammar).
 | `and`, `or`, `not` | Boolean logic |
 | `+`, `-`, `*`, `/`, `%` | Arithmetic (`/` on two `integer`s truncates) |
 | `^` | Exponentiation (right-associative, binds tighter than unary `-`) |
-| `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=` | Compound assignment |
+| `&`, `\|`, `~`, `<<`, `>>` | Bitwise and / or / xor / shifts — `integer` only |
+| `~a` | Bitwise complement (prefix `~`; infix `~` is xor) |
+| `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`, `&=`, `\|=`, `<<=`, `>>=` | Compound assignment (no `~=` — that is Lua's `!=`) |
 | `:` | Pipeline stage call inside `when(...)` |
 | `int()` | Cast float to integer, truncates toward zero |
 | `float()` | Cast integer to float, always safe |
@@ -2340,12 +2417,16 @@ exp        ::= orExp
 orExp      ::= andExp {'or' andExp}
 andExp     ::= eqExp {'and' eqExp}
 eqExp      ::= cmpExp {('==' | '!=') cmpExp}
-cmpExp     ::= coalesce {('<' | '<=' | '>' | '>=') coalesce}
+cmpExp     ::= borExp {('<' | '<=' | '>' | '>=') borExp}
+borExp     ::= bxorExp {'|' bxorExp}
+bxorExp    ::= bandExp {'~' bandExp}
+bandExp    ::= shiftExp {'&' shiftExp}
+shiftExp   ::= coalesce {('<<' | '>>') coalesce}
 coalesce   ::= concat ['??' coalesce]                    (* right *)
 concat     ::= additive ['..' concat]                    (* right *)
 additive   ::= multiply {('+' | '-') multiply}
 multiply   ::= unary {('*' | '/' | '%') unary}
-unary      ::= ('-' | 'not' | '#') unary | power
+unary      ::= ('-' | 'not' | '#' | '~') unary | power
 power      ::= cast ['^' unary]                          (* right *)
 cast       ::= postfix {'as' type}
 postfix    ::= primary {suffix}
@@ -2387,10 +2468,14 @@ pipeline ::= 'when' '(' exp ')' stage {stage}
 stage    ::= ':' Name args
 ```
 
-Three parts of this need a word of explanation.
+Four parts of this need a word of explanation.
 
 **`^` binds tighter than unary minus**, as in Lua: `-2 ^ 2` is `-(2 ^ 2)`, and
 because the right operand is itself `unary`, `2 ^ -1` parses.
+
+**The bitwise rungs sit where Lua 5.3 puts them** — just above comparison, in
+the order `|`, `~`, `&`, shifts — so `flags & mask != 0` masks before it
+compares, and `..`, `+` and `*` all bind tighter than a shift.
 
 **`as` binds tighter than every binary operator but looser than the postfix
 chain.** So `y as integer ?? 0` casts before it coalesces, and

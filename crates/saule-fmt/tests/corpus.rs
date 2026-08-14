@@ -763,7 +763,8 @@ fn coalesce_keeps_the_grouping_its_precedence_requires() {
 #[test]
 fn no_operator_pairing_survives_a_format_with_a_different_meaning() {
     let ops = [
-        "or", "and", "==", "!=", "<", "<=", ">", ">=", "??", "..", "+", "-", "*", "/", "%", "^",
+        "or", "and", "==", "!=", "<", "<=", ">", ">=", "|", "~", "&", "<<", ">>", "??", "..", "+",
+        "-", "*", "/", "%", "^",
     ];
     for outer in ops {
         for inner in ops {
@@ -848,9 +849,10 @@ fn a_unary_keeps_the_grouping_its_precedence_requires() {
 #[test]
 fn no_unary_pairing_survives_a_format_with_a_different_meaning() {
     let ops = [
-        "or", "and", "==", "!=", "<", "<=", ">", ">=", "??", "..", "+", "-", "*", "/", "%", "^",
+        "or", "and", "==", "!=", "<", "<=", ">", ">=", "|", "~", "&", "<<", ">>", "??", "..", "+",
+        "-", "*", "/", "%", "^",
     ];
-    for un in ["-", "not ", "#"] {
+    for un in ["-", "not ", "#", "~"] {
         for op in ops {
             assert_tree_preserved(&format!("local x = ({un}a) {op} b"));
             assert_tree_preserved(&format!("local x = a {op} ({un}b)"));

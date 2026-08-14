@@ -82,9 +82,13 @@ local CLOSE_BRACKETS = set({ ")", "]", "}" })
 --- it really is a block.
 local TYPE_POSITION = set({ ":", "->", "<", "as" })
 
-local THREE_CHAR_OPS = set({ "...", "..=" })
+local THREE_CHAR_OPS = set({ "...", "..=", "<<=", ">>=" })
+-- `<<` and `>>` have to be here, not just for tidiness: `<` is a
+-- TYPE_POSITION token, so a shift tokenized as two `<`s would read as an
+-- open generic argument list and indent the next line as a type.
 local TWO_CHAR_OPS = set({
-  "..", "+=", "-=", "*=", "/=", "%=", "^=",
+  "..", "+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=",
+  "<<", ">>",
   "?.", "??", "==", "!=", "<=", ">=", "->", "=>",
 })
 

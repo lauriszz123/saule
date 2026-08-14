@@ -204,6 +204,13 @@ pub(crate) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                     .or_else(|| infer(lhs, scope))
                     .or_else(|| infer(rhs, scope))
             }
+            // Bitwise operands are integers and so is the result — no need
+            // to consult either side, unlike arithmetic where the operand
+            // kind (`integer` vs `float`) is what the result follows.
+            BinOp::BAnd | BinOp::BOr | BinOp::BXor | BinOp::Shl | BinOp::Shr => {
+                crate::ops::infer_binary(*op, lhs, scope)
+                    .or_else(|| Some(Type::Named("integer".into())))
+            }
         },
         // `Foo(args)` where `Foo` is a known class → produces a `Foo`.
         // Otherwise, look up the qualified callee name in:
@@ -391,11 +398,12 @@ pub(crate) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         // last stage's own parameter name.
         Expr::Pipe { source, stages } => infer_pipe(source, stages, scope),
         // `-x` keeps the operand's numeric type, `#x` is always an integer
-        // count, `not x` is always a boolean — unless the operand is a
-        // class overloading `OpNeg` / `OpLen`, which names its own result.
+        // count, `~x` is always an integer bit pattern, `not x` is always a
+        // boolean — unless the operand is a class overloading `OpNeg` /
+        // `OpLen` / `OpBNot`, which names its own result.
         Expr::Unary { op, rhs } => crate::ops::infer_unary(*op, rhs, scope).or_else(|| match op {
             UnaryOp::Neg => infer(rhs, scope).map(strip_nullable),
-            UnaryOp::Len => Some(Type::Named("integer".into())),
+            UnaryOp::Len | UnaryOp::BNot => Some(Type::Named("integer".into())),
             UnaryOp::Not => Some(Type::Named("boolean".into())),
         }),
         // A lambda is a function value. Parameters carry their declared

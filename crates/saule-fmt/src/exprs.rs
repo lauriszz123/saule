@@ -38,6 +38,7 @@ impl<'a> Printer<'a> {
                     UnaryOp::Neg => ("-", false),
                     UnaryOp::Not => ("not", true),
                     UnaryOp::Len => ("#", false),
+                    UnaryOp::BNot => ("~", false),
                 };
                 // A unary is not the tightest thing in the grammar: `^` and
                 // `as` both bind above it. So it needs the same treatment as

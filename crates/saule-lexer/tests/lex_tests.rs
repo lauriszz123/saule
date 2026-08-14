@@ -461,3 +461,113 @@ fn compound_assignment_spans_cover_the_whole_operator() {
     assert_eq!(toks[1].value, Token::DotDotEq);
     assert_eq!(toks[1].span, 2..5);
 }
+
+// ── Bitwise operators ────────────────────────────────────────────────────
+
+#[test]
+fn bitwise_operators() {
+    assert_eq!(
+        lex("a & b | c ~ d << e >> f"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::Amp,
+            Token::Identifier("b".into()),
+            Token::Pipe,
+            Token::Identifier("c".into()),
+            Token::Tilde,
+            Token::Identifier("d".into()),
+            Token::Shl,
+            Token::Identifier("e".into()),
+            Token::Shr,
+            Token::Identifier("f".into()),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn bitwise_compound_assignment() {
+    assert_eq!(
+        lex("a &= b |= c <<= d >>= e"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::AmpEq,
+            Token::Identifier("b".into()),
+            Token::PipeEq,
+            Token::Identifier("c".into()),
+            Token::ShlEq,
+            Token::Identifier("d".into()),
+            Token::ShrEq,
+            Token::Identifier("e".into()),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn shifts_do_not_swallow_comparison_operators() {
+    // `<=` and `>=` are checked before the doubled forms, so a comparison
+    // never turns into a shift.
+    assert_eq!(
+        lex("a <= b >= c < d > e"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::LtEq,
+            Token::Identifier("b".into()),
+            Token::GtEq,
+            Token::Identifier("c".into()),
+            Token::Lt,
+            Token::Identifier("d".into()),
+            Token::Gt,
+            Token::Identifier("e".into()),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn tilde_eq_is_not_one_token() {
+    // Lua's inequality spelling gets no meaning here: `~` then `=`, which
+    // fails in the parser rather than becoming xor-assignment. See
+    // `Token::AmpEq`'s note.
+    assert_eq!(
+        lex("a ~= b"),
+        vec![
+            Token::Identifier("a".into()),
+            Token::Tilde,
+            Token::Assign,
+            Token::Identifier("b".into()),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn nested_generics_lex_as_one_shift() {
+    // The lexer cannot tell the two closers of `table<table<integer>>` from
+    // a right shift, so it always produces `Shr`; splitting it back is the
+    // parser's job, and only where a type argument list is open.
+    assert_eq!(
+        lex("table<table<integer>>"),
+        vec![
+            Token::Identifier("table".into()),
+            Token::Lt,
+            Token::Identifier("table".into()),
+            Token::Lt,
+            Token::Identifier("integer".into()),
+            Token::Shr,
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn bitwise_operator_spans_cover_the_whole_operator() {
+    let toks = Lexer::new("a >>= b").tokenize().unwrap();
+    assert_eq!(toks[1].value, Token::ShrEq);
+    assert_eq!(toks[1].span, 2..5);
+
+    let toks = Lexer::new("a << b").tokenize().unwrap();
+    assert_eq!(toks[1].value, Token::Shl);
+    assert_eq!(toks[1].span, 2..4);
+}
