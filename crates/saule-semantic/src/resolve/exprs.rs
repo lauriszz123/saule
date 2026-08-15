@@ -15,7 +15,7 @@ impl Resolver {
             // it: the parse error that produced it is the diagnostic.
             Expr::Error => {}
             Expr::Ident(name) => {
-                if !self.resolved(name) {
+                if !self.resolve_at(expr.id, name) {
                     self.errors.push(SemanticError::UndefinedName {
                         name: name.clone(),
                         span: to_source_span(span),
@@ -23,6 +23,8 @@ impl Resolver {
                 }
             }
             Expr::Self_ => {
+                self.record(expr.id, crate::binding::Binding::SelfRef);
+                self.note_self();
                 if !self.in_method {
                     self.errors.push(SemanticError::SelfOutsideClass {
                         span: to_source_span(span),
@@ -75,15 +77,20 @@ impl Resolver {
                         self.expr(d);
                     }
                 }
-                self.push_scope();
+                // A lambda is a *function* boundary, not just a block: names
+                // it reaches past its own frame are upvalues, and that
+                // distinction is the whole point of the table. Keyed on this
+                // expression's node so the compiler can find the upvalue
+                // list when it compiles the `CLOSURE`.
+                self.push_function(expr.id);
                 for p in params {
-                    self.declare(&p.name);
+                    self.declare_param(&p.name);
                 }
                 match body {
                     LambdaBody::Expr(e) => self.expr(e),
                     LambdaBody::Block(b) => self.block(b),
                 }
-                self.pop_scope();
+                self.pop_function();
             }
             Expr::Match { scrutinee, arms } => {
                 self.expr(scrutinee);

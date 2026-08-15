@@ -8,7 +8,7 @@ use saule_ast::{ClassMember, Decl, Spanned};
 
 use crate::env::Environment;
 use crate::error::RuntimeError;
-use crate::value::{ClassObject, FieldDef, FunctionObject, InterfaceObject, Value};
+use crate::value::{ClassObject, FieldDef, FieldLayout, FunctionObject, InterfaceObject, Value};
 
 use super::super::{Flow, expr};
 use super::make_function;
@@ -172,10 +172,37 @@ pub(super) fn exec_class_decl(
         });
     }
 
+    // Everything above this line — including the interface check — sees only
+    // the methods this class declares itself, which is the behaviour that
+    // existed before flattening. Flattening happens after, so it cannot
+    // quietly change which classes satisfy an interface.
+    let own_method_names: Vec<String> = methods.keys().cloned().collect();
+    let own_static_names: Vec<String> = static_methods.keys().cloned().collect();
+
+    // Flatten the parent's tables in underneath this class's own entries, so
+    // a lookup never walks the chain (`VM_DESIGN.md` §8.3). `entry` keeps
+    // the child's version when both declare a name — that is the override.
+    if let Some(p) = &parent {
+        for (k, v) in &p.methods {
+            methods.entry(k.clone()).or_insert_with(|| Rc::clone(v));
+        }
+        for (k, v) in &p.static_methods {
+            static_methods.entry(k.clone()).or_insert_with(|| Rc::clone(v));
+        }
+    }
+
+    // Parent fields first — the prefix invariant every slot-based read
+    // depends on.
+    let layout = Rc::new(FieldLayout::build(
+        parent.as_ref().map(|p| p.layout.as_ref()),
+        &field_defs,
+    ));
+
     let class = Rc::new(ClassObject {
         name: name.clone(),
         parent,
         field_defs,
+        layout,
         methods,
         static_fields: RefCell::new(static_fields),
         static_methods,
@@ -184,11 +211,20 @@ pub(super) fn exec_class_decl(
 
     // Back-link every method to its owning class so calls to a method via a
     // bare `Value::Function` still see the class's statics.
-    for f in class.methods.values() {
-        f.set_owner_class(&class);
+    //
+    // **Own methods only.** An inherited entry is the very same
+    // `Rc<FunctionObject>` the parent holds, so re-pointing its owner here
+    // would rewrite the parent's method to think it belongs to the subclass —
+    // and the last subclass declared would win for every sibling.
+    for n in &own_method_names {
+        if let Some(f) = class.methods.get(n) {
+            f.set_owner_class(&class);
+        }
     }
-    for f in class.static_methods.values() {
-        f.set_owner_class(&class);
+    for n in &own_static_names {
+        if let Some(f) = class.static_methods.get(n) {
+            f.set_owner_class(&class);
+        }
     }
     if let Some(c) = class.constructor.as_ref() {
         c.set_owner_class(&class);

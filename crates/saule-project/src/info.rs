@@ -123,12 +123,26 @@ fn strip_verbatim(path: &str) -> String {
 /// Render `abs_path` as `<project_name>/<relative>` when it lives under the
 /// project root and the project has a non-empty name; otherwise return the
 /// absolute path unchanged.
+///
+/// The relative half is joined with `/` on **every** platform. This is a
+/// display-only module label — the one consumer puts it in a diagnostic
+/// header (`module.rs`) and nothing ever opens it or parses it back — and
+/// the project half was already `/`-joined, so deferring to the platform
+/// separator for the rest produced `demo/src\main.sau` on Windows: neither
+/// convention, and different error text on different machines.
+///
+/// The path *outside* the project is left alone, because that branch really
+/// is a filesystem path the reader may want to paste into a shell.
 pub fn pretty_path(abs_path: &Path) -> String {
     if let Some(info) = get()
         && !info.name.is_empty()
         && let Ok(rel) = abs_path.strip_prefix(&info.root)
     {
-        return format!("{}/{}", info.name, rel.display());
+        let rel: Vec<std::borrow::Cow<'_, str>> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect();
+        return format!("{}/{}", info.name, rel.join("/"));
     }
     abs_path.display().to_string()
 }

@@ -76,7 +76,7 @@ pub(crate) fn read_member(
     match receiver {
         Value::Instance(inst) => {
             let inst_ref = inst.borrow();
-            if let Some(v) = inst_ref.fields.get(name) {
+            if let Some(v) = inst_ref.field(name) {
                 return Ok(v.clone());
             }
             if let Some(m) = inst_ref.class.lookup_method(name) {

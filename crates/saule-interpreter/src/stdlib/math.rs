@@ -68,6 +68,8 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
         name: "Math".to_string(),
         parent: None,
         field_defs: Vec::new(),
+        // Statics only — a stdlib namespace class is never instantiated.
+        layout: Default::default(),
         methods: Default::default(),
         static_fields: RefCell::new(static_fields),
         static_methods: Default::default(),

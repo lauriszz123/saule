@@ -2,6 +2,7 @@
 
 use saule_ast::{Decl, ImportNames, Module, Stmt};
 use std::collections::HashSet;
+use std::rc::Rc;
 
 pub(crate) fn module_has_wildcard_import(module: &Module) -> bool {
     module.stmts.iter().any(|s| {
@@ -14,16 +15,27 @@ pub(crate) fn module_has_wildcard_import(module: &Module) -> bool {
 
 /// Pre-collect every name visible at module scope so forward references
 /// (e.g. `fn a() b() end` then `fn b() end`) resolve cleanly.
-pub(crate) fn collect_module_scope(module: &Module) -> HashSet<String> {
-    let mut scope: HashSet<String> = HashSet::new();
+///
+/// Returns them **in declaration order**, because the index is the module
+/// slot the compiler will emit `GETMOD`/`SETMOD` against. A `HashSet` would
+/// have done for the "is this name defined?" question this used to answer
+/// alone, but its iteration order varies with the hash seed, and slot
+/// numbers that move between runs would break a bytecode cache and make
+/// every disassembly diff.
+pub(crate) fn collect_module_scope(module: &Module) -> Vec<Rc<str>> {
+    let mut order: Vec<Rc<str>> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut push = |name: &str, order: &mut Vec<Rc<str>>| {
+        if seen.insert(name.to_string()) {
+            order.push(Rc::from(name));
+        }
+    };
     for s in &module.stmts {
         match &s.value {
-            Stmt::Local { name, .. } => {
-                scope.insert(name.clone());
-            }
+            Stmt::Local { name, .. } => push(name, &mut order),
             Stmt::LocalMulti { names, .. } => {
                 for (n, _, _) in names {
-                    scope.insert(n.clone());
+                    push(n, &mut order);
                 }
             }
             Stmt::Decl(d) => match &d.value {
@@ -31,14 +43,12 @@ pub(crate) fn collect_module_scope(module: &Module) -> HashSet<String> {
                 | Decl::Class { name, .. }
                 | Decl::Interface { name, .. }
                 | Decl::Enum { name, .. }
-                | Decl::Variable { name, .. } => {
-                    scope.insert(name.clone());
-                }
+                | Decl::Variable { name, .. } => push(name, &mut order),
                 Decl::Import { names, .. } => match names {
                     ImportNames::All => {}
                     ImportNames::List(items) => {
                         for (orig, alias) in items {
-                            scope.insert(alias.clone().unwrap_or_else(|| orig.clone()));
+                            push(alias.as_deref().unwrap_or(orig), &mut order);
                         }
                     }
                 },
@@ -46,5 +56,5 @@ pub(crate) fn collect_module_scope(module: &Module) -> HashSet<String> {
             _ => {}
         }
     }
-    scope
+    order
 }

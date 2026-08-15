@@ -239,6 +239,9 @@ pub(crate) fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassO
         name: spec.name.clone(),
         parent: None,
         field_defs: Vec::new(),
+        // A native package exposes statics only — it is never instantiated,
+        // so there are no instance slots to lay out.
+        layout: Default::default(),
         methods: Default::default(),
         static_fields: RefCell::new(static_fields),
         static_methods: Default::default(),

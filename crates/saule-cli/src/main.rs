@@ -12,6 +12,7 @@ use clap::{CommandFactory, Parser};
 use cli::{Cli, Command, RunArgs};
 
 mod check;
+mod disasm;
 mod cli;
 mod fmt;
 mod init;
@@ -100,9 +101,10 @@ fn real_main() {
 
     match command {
         Command::Run(args) => cmd_run(args),
-        Command::Check(args) => check::cmd_check(args.target),
+        Command::Check(args) => check::cmd_check(args.target, args.dump_type_coverage),
         Command::Fmt(args) => fmt::cmd_fmt(&args),
         Command::Init(args) => init::cmd_init(&args.name, args.lib),
+        Command::Disasm(args) => disasm::cmd_disasm(&args.file),
     }
 }
 
@@ -113,6 +115,9 @@ fn real_main() {
 /// the user's intent — script arguments have their own place, after `--`,
 /// so there is nothing left to disambiguate.
 fn cmd_run(args: RunArgs) {
+    if args.vm {
+        run::request_vm();
+    }
     saule_interpreter::stdlib::os::set_script_args(args.args);
 
     match args.target {

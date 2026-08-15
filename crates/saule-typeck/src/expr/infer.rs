@@ -11,7 +11,24 @@ use crate::state::{Scope, current_class, with_classes, with_enums};
 
 use super::*;
 
+/// Infer `expr`'s type, recording the answer in the type table when one is
+/// being collected (see [`crate::table`]).
+///
+/// The recording lives in this wrapper rather than in the body so it happens
+/// once per node no matter which of the ~25 arms produced the answer, and so
+/// it cannot be forgotten when a new arm is added.
 pub(crate) fn infer(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
+    let ty = infer_uncollected(expr, scope);
+    if let Some(t) = &ty {
+        // One thread-local access, and the `Type` is cloned only if a table
+        // is actually being collected — `check` runs on every language-server
+        // keystroke and must not pay for a table nobody asked for.
+        crate::table::record(expr.id, t);
+    }
+    ty
+}
+
+fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
     match &expr.value {
         // A recovery hole: the text that would have given this expression a
         // type didn't parse. "Don't know" is already this function's answer

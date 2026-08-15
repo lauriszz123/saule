@@ -27,11 +27,15 @@ use miette::{NamedSource, Report};
 struct FileReport {
     /// Rendered diagnostics, in the order the pipeline produced them.
     diagnostics: Vec<Report>,
+    /// Display name, only needed when reporting per-file coverage.
+    name: String,
+    /// `Some` only under `--dump-type-coverage`.
+    coverage: Option<saule_interpreter::typeck::Coverage>,
 }
 
 /// `saule check [TARGET]` — dispatch on whether `TARGET` is a directory,
 /// exactly as `run` does, so the two commands agree about what a "project" is.
-pub(crate) fn cmd_check(target: Option<PathBuf>) {
+pub(crate) fn cmd_check(target: Option<PathBuf>, dump_type_coverage: bool) {
     // Wire the stdlib's native signatures into `saule-typeck`. Idempotent,
     // but it has to have happened before typeck runs on the first file.
     saule_interpreter::init();
@@ -43,16 +47,20 @@ pub(crate) fn cmd_check(target: Option<PathBuf>) {
     let mut db = saule_db::Db::new();
 
     let reports = match target {
-        None => check_project(&mut db, Path::new(".")),
-        Some(t) if t.is_dir() => check_project(&mut db, &t),
+        None => check_project(&mut db, Path::new("."), dump_type_coverage),
+        Some(t) if t.is_dir() => check_project(&mut db, &t, dump_type_coverage),
         Some(t) => {
             if !t.exists() {
                 eprintln!("error: file '{}' does not exist", t.display());
                 process::exit(1);
             }
-            vec![check_file(&mut db, &t)]
+            vec![check_file(&mut db, &t, dump_type_coverage)]
         }
     };
+
+    if dump_type_coverage {
+        report_coverage(&reports);
+    }
 
     let files = reports.len();
     let total: usize = reports.iter().map(|r| r.diagnostics.len()).sum();
@@ -83,7 +91,11 @@ pub(crate) fn cmd_check(target: Option<PathBuf>) {
 
 /// Configure the project (so `src_dirs` and dependencies resolve), then check
 /// every `.sau` file it owns.
-fn check_project(db: &mut saule_db::Db, dir: &Path) -> Vec<FileReport> {
+fn check_project(
+    db: &mut saule_db::Db,
+    dir: &Path,
+    dump_type_coverage: bool,
+) -> Vec<FileReport> {
     let project = crate::project::configure_project(dir, /* require_entry */ false);
     let files = project.source_files();
     if files.is_empty() {
@@ -97,11 +109,14 @@ fn check_project(db: &mut saule_db::Db, dir: &Path) -> Vec<FileReport> {
                 .join(", ")
         );
     }
-    files.iter().map(|f| check_file(db, f)).collect()
+    files
+        .iter()
+        .map(|f| check_file(db, f, dump_type_coverage))
+        .collect()
 }
 
 /// Run the front-end over one file and collect everything it complains about.
-fn check_file(db: &mut saule_db::Db, path: &Path) -> FileReport {
+fn check_file(db: &mut saule_db::Db, path: &Path, dump_type_coverage: bool) -> FileReport {
     let mut diagnostics = Vec::new();
 
     // Canonicalised so this file is keyed the same way the import walk keys
@@ -136,7 +151,11 @@ fn check_file(db: &mut saule_db::Db, path: &Path) -> FileReport {
         for e in &parsed.parse {
             diagnostics.push(Report::new(e.clone()).with_source_code(make_src()));
         }
-        return FileReport { diagnostics };
+        return FileReport {
+            diagnostics,
+            name,
+            coverage: None,
+        };
     }
 
     let seed = (*db.seed(&abs)).clone();
@@ -148,9 +167,46 @@ fn check_file(db: &mut saule_db::Db, path: &Path) -> FileReport {
     for e in saule_interpreter::semantic::analyze_with_seed(&parsed.module, seed) {
         diagnostics.push(Report::new(e).with_source_code(make_src()));
     }
-    for e in saule_interpreter::typeck::check(&parsed.module) {
-        diagnostics.push(Report::new(e).with_source_code(make_src()));
-    }
+    // Same walk either way — `check_with_types` is `check` plus a sink, so
+    // asking for coverage cannot change which diagnostics are produced.
+    let coverage = if dump_type_coverage {
+        let (errors, table) = saule_interpreter::typeck::check_with_types(&parsed.module);
+        for e in errors {
+            diagnostics.push(Report::new(e).with_source_code(make_src()));
+        }
+        Some(saule_interpreter::typeck::coverage::measure(
+            &parsed.module,
+            &table,
+        ))
+    } else {
+        for e in saule_interpreter::typeck::check(&parsed.module) {
+            diagnostics.push(Report::new(e).with_source_code(make_src()));
+        }
+        None
+    };
 
-    FileReport { diagnostics }
+    FileReport {
+        diagnostics,
+        name,
+        coverage,
+    }
+}
+
+/// Print per-file and total type coverage.
+///
+/// The number that matters is the last one: the bytecode compiler emits a
+/// typed arithmetic opcode only where both operands are concretely `integer`
+/// or `float`, so that percentage is what `VM_DESIGN.md` §24.1 sets its ~90%
+/// bar against. Everything else is context.
+fn report_coverage(reports: &[FileReport]) {
+    let mut total = saule_interpreter::typeck::Coverage::default();
+    println!("type coverage:");
+    for r in reports {
+        let Some(c) = &r.coverage else { continue };
+        total.merge(c);
+        if c.exprs > 0 {
+            println!("  {:<28} {}", r.name, c.summary());
+        }
+    }
+    println!("  {:<28} {}", "TOTAL", total.summary());
 }

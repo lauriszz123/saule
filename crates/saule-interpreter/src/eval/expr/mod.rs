@@ -11,7 +11,11 @@
 //! | [`members`]   | `obj.field` and `obj[index]` reads                    |
 
 mod calls;
-mod cast;
+// Public because `saule-vm`'s `CASTCHK` calls straight into it. `x as T` is
+// a *deep* test — `table<integer>` walks every element — so a second
+// implementation in the VM would be a second set of answers to diverge.
+// Same reasoning as `ARITHX` reusing `ops::binary` (§15.6).
+pub mod cast;
 mod construct;
 mod match_;
 pub(crate) mod members;
@@ -220,10 +224,11 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             // Capture the names the body mentions rather than the scope
             // itself: holding the scope is a reference cycle the moment the
             // lambda is stored back into it. See `Environment::capture_flat`.
-            let closure = match crate::capture::captured_names(body) {
-                Some(names) => Environment::capture_flat(env, &names),
-                // The body holds something the capture analysis does not
-                // model, so fall back to the old whole-scope capture —
+            let closure = match crate::capture::lookup(body) {
+                Some(c) => Environment::capture_flat(env, &c.names),
+                // This module was never analysed — the raw `run` / `run_in`
+                // entry points allow that. Fall back to whole-scope capture,
+                // which is what every lambda did before the analysis existed:
                 // correct, just not collectable.
                 None => env.clone(),
             };

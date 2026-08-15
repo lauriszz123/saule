@@ -1,0 +1,1326 @@
+//! Expression codegen (`VM_DESIGN.md` §17 Pass 2).
+//!
+//! Every expression compiles *into a destination register*. That shape —
+//! rather than "returns a register" — is what lets a local's initializer be
+//! evaluated directly into the local's own slot, and an argument directly
+//! into the callee's future frame (§6.2), instead of being computed
+//! somewhere and moved.
+//!
+//! ## Opcode selection
+//!
+//! This is where Phase 0.5 pays for itself. `a + b` becomes `ADDI` when the
+//! typechecker proved both operands are `integer`, `ADDF` when both are
+//! `float`, and otherwise falls back — today to a `CompileError`, in Phase 3
+//! to `ARITHX`, which reproduces `ops::binary` exactly.
+//!
+//! **A missing type is never a wrong opcode.** `ty_name` returning `None`
+//! means "not proved", and every path treats that as the dynamic case. That
+//! is what makes it safe for the type table to be incomplete (§21.1 0.5).
+
+use std::ops::Range;
+
+use saule_ast::{BinOp, Expr, Spanned, UnaryOp};
+use saule_interpreter::Value;
+use saule_semantic::Binding;
+
+use super::CompileError;
+use super::ctx::{Compiler, Num, num_of};
+use crate::op::{Instruction, Op};
+
+impl Compiler<'_> {
+    /// Compile `e`, leaving its value in register `dst`.
+    pub fn expr_to(&mut self, e: &Spanned<Expr>, dst: u16) -> Result<(), CompileError> {
+        let span = &e.span;
+        let a = self.reg8(dst, span)?;
+
+        match &e.value {
+            Expr::Nil => self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span),
+            Expr::Bool(b) => self.emit(Instruction::abc(Op::LOADBOOL, a, *b as u8, 0), span),
+
+            // Small integers ride in the instruction word; anything larger
+            // goes through the constant pool. `try_asbx` is the seam: it
+            // answers "does this fit?" without panicking, which is exactly
+            // the check whose absence silently truncated a literal in
+            // Phase 1.
+            Expr::Int(n) => {
+                match i32::try_from(*n).ok().and_then(|small| {
+                    Instruction::try_asbx(Op::LOADI, a, small)
+                }) {
+                    Some(ins) => self.emit(ins, span),
+                    None => {
+                        let k = self.constant(Value::Int(*n), span)?;
+                        self.emit(Instruction::abx(Op::LOADK, a, k), span);
+                    }
+                }
+            }
+            Expr::Float(f) => {
+                let k = self.constant(Value::Float(*f), span)?;
+                self.emit(Instruction::abx(Op::LOADK, a, k), span);
+            }
+            Expr::Str(s) => {
+                let k = self.constant(Value::Str(std::rc::Rc::new(s.clone())), span)?;
+                self.emit(Instruction::abx(Op::LOADK, a, k), span);
+            }
+
+            Expr::Ident(name) => self.ident_to(e, name, dst)?,
+
+            Expr::Unary { op, rhs } => self.unary_to(e, *op, rhs, dst)?,
+
+            // Short-circuiting operators are control flow, not arithmetic:
+            // the right operand must not be evaluated at all when the left
+            // one decides the answer. They are handled before `binary_to`
+            // for that reason.
+            Expr::Binary {
+                op: op @ (BinOp::And | BinOp::Or | BinOp::Coalesce),
+                lhs,
+                rhs,
+            } => self.short_circuit_to(*op, lhs, rhs, dst)?,
+
+            Expr::Binary { op, lhs, rhs } => self.binary_to(e, *op, lhs, rhs, dst)?,
+
+            Expr::Call { callee, args } => self.call_to(e, callee, args, dst)?,
+
+            Expr::Self_ => {
+                if !self.f.in_method {
+                    return Err(CompileError::unsupported("`self` outside a method", span.clone()));
+                }
+                // `self` is parameter 0, so it is already in register 0.
+                if a != 0 {
+                    self.emit(Instruction::abc(Op::MOVE, a, 0, 0), span);
+                }
+            }
+
+            Expr::Member { obj, name } => self.member_to(e, obj, name, dst)?,
+
+            Expr::SafeMember { obj, name } => self.safe_member_to(e, obj, name, dst)?,
+
+            // `x!` — the value, or `ForceUnwrapNil` at this span.
+            Expr::ForceUnwrap(inner) => {
+                let m = self.mark();
+                let r = self.expr_tmp(inner)?;
+                let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+                self.emit(Instruction::abc(Op::UNWRAPNIL, a, b, 0), span);
+                self.free_to(m);
+            }
+
+            // `x as T`. The type travels as an index into the chunk's cast
+            // table rather than as a `TypeDesc`, because the test is deep —
+            // see `Chunk::cast_types`.
+            Expr::Cast { value, ty } => {
+                let k = self.chunk.add_cast_type(ty);
+                let Ok(k) = u8::try_from(k) else {
+                    return Err(CompileError::unsupported(
+                        "a module casting to more than 256 distinct types",
+                        span.clone(),
+                    ));
+                };
+                let m = self.mark();
+                let r = self.expr_tmp(value)?;
+                let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+                self.emit(Instruction::abc(Op::CASTCHK, a, b, k), span);
+                self.free_to(m);
+            }
+
+            Expr::Match { scrutinee, arms } => self.match_to(e, scrutinee, arms, dst)?,
+
+            Expr::Lambda { params, body, .. } => self.lambda_to(e, params, body, dst)?,
+
+            Expr::Table(entries) => self.table_to(e, entries, dst)?,
+
+            Expr::Index { obj, index } => self.index_to(e, obj, index, dst)?,
+
+            other => {
+                return Err(CompileError::unsupported(expr_label(other), span.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile `e` into a freshly allocated register.
+    ///
+    /// The caller owns the register and must release it with a mark; see
+    /// [`Compiler::mark`].
+    pub fn expr_tmp(&mut self, e: &Spanned<Expr>) -> Result<u16, CompileError> {
+        let r = self.alloc(&e.span)?;
+        self.expr_to(e, r)?;
+        Ok(r)
+    }
+
+    fn ident_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        name: &str,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+        let a = self.reg8(dst, span)?;
+        // The resolver already decided what this name is; the compiler only
+        // decides which register holds it (see `ctx`'s module docs).
+        match self.binding(e.id) {
+            Some(Binding::Local { .. }) => {
+                let src = self.f.lookup(name).ok_or_else(|| CompileError::Unsupported {
+                    thing: "a local the compiler has not seen declared",
+                    span: span.clone(),
+                })?;
+                let b = self.reg8(src, span)?;
+                if a != b {
+                    self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
+                }
+                Ok(())
+            }
+            Some(Binding::Module { slot }) => {
+                let slot = *slot;
+                // A top-level `local` inside a block is an ordinary local of
+                // the module body, and the resolver says so — but a name it
+                // classified as a module slot may still be one this function
+                // holds in a register, when we *are* the module body.
+                match self.f.lookup(name) {
+                    Some(src) => {
+                        let b = self.reg8(src, span)?;
+                        if a != b {
+                            self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
+                        }
+                    }
+                    None => self.emit(Instruction::abx(Op::GETMOD, a, slot), span),
+                }
+                Ok(())
+            }
+            Some(Binding::Prelude { .. }) => Err(CompileError::unsupported(
+                "a prelude name outside a call",
+                span.clone(),
+            )),
+            Some(Binding::Upvalue { .. }) => {
+                // The resolver proved this crosses a function boundary; the
+                // index is ours to assign, and asking for it builds the
+                // capture chain lazily.
+                let idx = self.capture_upvalue(name).ok_or_else(|| CompileError::Unsupported {
+                    thing: "a captured variable the compiler could not locate",
+                    span: span.clone(),
+                })?;
+                let b = self.reg8(idx, span)?;
+                self.emit(Instruction::abc(Op::GETUPVAL, a, b, 0), span);
+                Ok(())
+            }
+            Some(Binding::ClassStatic { .. }) => {
+                Err(CompileError::unsupported("a class static", span.clone()))
+            }
+            Some(Binding::SelfRef) => {
+                Err(CompileError::unsupported("`self`", span.clone()))
+            }
+            Some(Binding::WildcardImport) | None => Err(CompileError::unsupported(
+                "a name the resolver could not classify",
+                span.clone(),
+            )),
+        }
+    }
+
+    fn unary_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        op: UnaryOp,
+        rhs: &Spanned<Expr>,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+
+        // An `Op*` overload on the operand's class, resolved here rather
+        // than at run time — the same reason `binary_to` must do it (§8.7).
+        // A bytecode method is a proto, not a `FunctionObject`, so the
+        // runtime `ClassObject` the VM builds has an empty method map and
+        // `ops::unary`'s overload lookup finds nothing: `-money` reported
+        // "cannot negate a `Money`" where the tree-walker called `OpNeg`.
+        if let Some(contract) = saule_ast::ops::unary_contract(op)
+            && let Some(class) = self.class_of_expr(rhs)
+            && let Some(&slot) = self.chunk.classes[class as usize]
+                .vindex
+                .get(contract.method)
+        {
+            let m = self.mark();
+            // The receiver is the window's only register: an overload takes
+            // no arguments beyond `self`.
+            let base = self.alloc(span)?;
+            self.expr_to(rhs, base)?;
+            let a = self.reg8(base, span)?;
+            self.emit(Instruction::abc(Op::CALLM, a, 1, slot as u8), span);
+            self.move_result(base, dst, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        let m = self.mark();
+        let r = self.expr_tmp(rhs)?;
+        let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+
+        let ins = match op {
+            UnaryOp::Not => Instruction::abc(Op::NOT, a, b, 0),
+            UnaryOp::Neg => match self.num_of_node(rhs) {
+                Some(Num::Int) => Instruction::abc(Op::NEGI, a, b, 0),
+                Some(Num::Float) => Instruction::abc(Op::NEGF, a, b, 0),
+                None => {
+                    // Dynamic negation: `-x` where nothing was proved.
+                    // `ops::unary` reproduces the tree-walker exactly for
+                    // every non-instance operand.
+                    self.emit(Instruction::abc(Op::UNARYX, a, b, 0), span);
+                    self.emit(
+                        Instruction::ax_of(
+                            Op::EXTRAARG,
+                            crate::op::dynop::encode_unary(UnaryOp::Neg),
+                        ),
+                        span,
+                    );
+                    self.free_to(m);
+                    return Ok(());
+                }
+            },
+            UnaryOp::BNot => Instruction::abc(Op::BNOT, a, b, 0),
+            UnaryOp::Len => Instruction::abc(Op::LEN, a, b, 0),
+        };
+        self.emit(ins, span);
+        self.free_to(m);
+        Ok(())
+    }
+
+    fn binary_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        op: BinOp,
+        lhs: &Spanned<Expr>,
+        rhs: &Spanned<Expr>,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+
+        // Both operands must agree on a numeric kind for a typed opcode.
+        // Disagreement is not a compiler bug — `saule-typeck` rejects mixing
+        // `integer` and `float` — so it can only mean one side went
+        // uninferred, which is the dynamic case.
+        let kind = match (self.num_of_node(lhs), self.num_of_node(rhs)) {
+            (Some(l), Some(r)) if l == r => Some(l),
+            _ => None,
+        };
+
+        // An `Op*` overload, resolved here rather than at run time (§8.7).
+        //
+        // It *must* be resolved here: a bytecode method is a proto, not a
+        // `FunctionObject`, so the runtime `ClassObject` the VM builds has an
+        // empty method map and `ops::binary`'s overload lookup would find
+        // nothing. The dispatch-on-left-operand rule moves into the compiler,
+        // where it costs nothing at run time.
+        if let Some(contract) = saule_ast::ops::binary_contract(op)
+            && let Some(class) = self.class_of_expr(lhs)
+            && let Some(&slot) = self.chunk.classes[class as usize]
+                .vindex
+                .get(contract.method)
+        {
+            let m = self.mark();
+            let base = self.alloc_n(2, span)?;
+            self.expr_to(lhs, base)?;
+            self.expr_to(rhs, base + 1)?;
+            let a = self.reg8(base, span)?;
+            self.emit(Instruction::abc(Op::CALLM, a, 2, slot as u8), span);
+
+            // Two contracts do not return the operator's answer directly,
+            // and `ops::binary` post-processes both. Doing the same here is
+            // what keeps the engines identical: without it `b < a` yielded
+            // `compare`'s raw `-180` instead of `true`.
+            //
+            // * `equals` returns a value read for truthiness, which `!=`
+            //   then negates.
+            // * `compare` returns a negative / zero / positive integer, and
+            //   all four ordering operators read it against zero — which is
+            //   why one method covers them.
+            use BinOp::*;
+            match op {
+                Eq | NotEq => {
+                    self.move_result(base, dst, span)?;
+                    let d = self.reg8(dst, span)?;
+                    // `NOT` is the only truthiness-to-`Bool` opcode, so two
+                    // of them normalise the way `is_truthy()` does.
+                    self.emit(Instruction::abc(Op::NOT, d, d, 0), span);
+                    if op == Eq {
+                        self.emit(Instruction::abc(Op::NOT, d, d, 0), span);
+                    }
+                }
+                Lt | LtEq | Gt | GtEq => {
+                    let z = self.alloc(span)?;
+                    let zr = self.reg8(z, span)?;
+                    self.emit(Instruction::asbx(Op::LOADI, zr, 0), span);
+                    let d = self.reg8(dst, span)?;
+                    // Operands swapped rather than a `GT` opcode, the same
+                    // trick `binary_opcode` uses.
+                    let (o, lo, hi) = match op {
+                        Lt => (Op::LTI, a, zr),
+                        LtEq => (Op::LEI, a, zr),
+                        Gt => (Op::LTI, zr, a),
+                        _ => (Op::LEI, zr, a),
+                    };
+                    self.emit(Instruction::abc(o, d, lo, hi), span);
+                }
+                _ => self.move_result(base, dst, span)?,
+            }
+            self.free_to(m);
+            return Ok(());
+        }
+
+        let m = self.mark();
+        let lr = self.expr_tmp(lhs)?;
+        let rr = self.expr_tmp(rhs)?;
+        let (a, b, c) = (
+            self.reg8(dst, span)?,
+            self.reg8(lr, span)?,
+            self.reg8(rr, span)?,
+        );
+
+        let result = self.binary_opcode(op, kind, a, b, c, span);
+        self.free_to(m);
+        result
+    }
+
+    fn binary_opcode(
+        &mut self,
+        op: BinOp,
+        kind: Option<Num>,
+        a: u8,
+        b: u8,
+        c: u8,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        use BinOp::*;
+
+        // Arithmetic: one opcode per (operator, numeric kind).
+        let arith = match (op, kind) {
+            (Add, Some(Num::Int)) => Some(Op::ADDI),
+            (Sub, Some(Num::Int)) => Some(Op::SUBI),
+            (Mul, Some(Num::Int)) => Some(Op::MULI),
+            (Div, Some(Num::Int)) => Some(Op::DIVI),
+            (Mod, Some(Num::Int)) => Some(Op::MODI),
+            (Pow, Some(Num::Int)) => Some(Op::POWI),
+            (Add, Some(Num::Float)) => Some(Op::ADDF),
+            (Sub, Some(Num::Float)) => Some(Op::SUBF),
+            (Mul, Some(Num::Float)) => Some(Op::MULF),
+            (Div, Some(Num::Float)) => Some(Op::DIVF),
+            (Mod, Some(Num::Float)) => Some(Op::MODF),
+            (Pow, Some(Num::Float)) => Some(Op::POWF),
+            _ => None,
+        };
+        if let Some(o) = arith {
+            self.emit(Instruction::abc(o, a, b, c), span);
+            return Ok(());
+        }
+
+        // Bitwise is integer-only by the language's rules, so the typed form
+        // is the only form.
+        let bitwise = match op {
+            BAnd => Some(Op::BAND),
+            BOr => Some(Op::BOR),
+            BXor => Some(Op::BXOR),
+            Shl => Some(Op::SHL),
+            Shr => Some(Op::SHR),
+            _ => None,
+        };
+        if let Some(o) = bitwise {
+            if kind == Some(Num::Int) {
+                self.emit(Instruction::abc(o, a, b, c), span);
+                return Ok(());
+            }
+            // Untyped operands: `ops::bitwise` rejects a non-integer with
+            // the message the tree-walker gives, which is better than a
+            // compile-time refusal of a program that might be fine.
+        }
+
+        // Comparisons produce a boolean here. The *fused* branch forms
+        // (§15.7) are used where the value feeds an `if`, which
+        // `stmt::cond_jump` handles; this is the materialising case.
+        match op {
+            Lt | LtEq | Gt | GtEq if kind.is_some() => {
+                let k = kind.expect("guarded by the arm");
+                // `x > y` is `y < x`. Swapping operands is why there is no
+                // `GT` opcode: the instruction set stays half the size and
+                // the compiler does the work once.
+                let (o, lo, hi) = match (op, k) {
+                    (Lt, Num::Int) => (Op::LTI, b, c),
+                    (LtEq, Num::Int) => (Op::LEI, b, c),
+                    (Gt, Num::Int) => (Op::LTI, c, b),
+                    (GtEq, Num::Int) => (Op::LEI, c, b),
+                    (Lt, Num::Float) => (Op::LTF, b, c),
+                    (LtEq, Num::Float) => (Op::LEF, b, c),
+                    (Gt, Num::Float) => (Op::LTF, c, b),
+                    (GtEq, Num::Float) => (Op::LEF, c, b),
+                    _ => unreachable!("guarded by the outer match"),
+                };
+                self.emit(Instruction::abc(o, a, lo, hi), span);
+                Ok(())
+            }
+            Eq | NotEq => {
+                let o = match kind {
+                    Some(Num::Int) => Op::EQI,
+                    Some(Num::Float) => Op::EQF,
+                    // `EQV` is the general form and is always correct — it
+                    // is `values_equal`, including `Rc::ptr_eq` identity for
+                    // reference types.
+                    None => Op::EQV,
+                };
+                self.emit(Instruction::abc(o, a, b, c), span);
+                if op == NotEq {
+                    self.emit(Instruction::abc(Op::NOT, a, a, 0), span);
+                }
+                Ok(())
+            }
+            Concat => {
+                // `CONCAT` is n-ary over a *register range*, which is what
+                // makes `a .. b .. c` one allocation instead of two. Both
+                // operands are already adjacent because they were compiled
+                // into consecutive temporaries.
+                debug_assert_eq!(c, b + 1, "CONCAT operands must be adjacent");
+                self.emit(Instruction::abc(Op::CONCAT, a, b, c), span);
+                Ok(())
+            }
+            And | Or | Coalesce => Err(CompileError::unsupported(
+                "a short-circuiting operator",
+                span.clone(),
+            )),
+            // Nothing was proved about the operands, so fall back to the
+            // fully dynamic form rather than refusing. A missing type costs
+            // a slower opcode, never a wrong answer (§15.6).
+            other => {
+                let Some(encoded) = crate::op::dynop::encode_binary(other) else {
+                    return Err(CompileError::unsupported("this operator", span.clone()));
+                };
+                self.emit(Instruction::abc(Op::ARITHX, a, b, c), span);
+                self.emit(Instruction::ax_of(Op::EXTRAARG, encoded), span);
+                Ok(())
+            }
+        }
+    }
+
+    /// `a and b`, `a or b`, `a ?? b`.
+    ///
+    /// All three are "evaluate the left; decide whether the right is even
+    /// needed", so all three share one shape: compute the left into the
+    /// destination, test it, and either keep it or overwrite it with the
+    /// right. The test opcode is the only difference.
+    fn short_circuit_to(
+        &mut self,
+        op: BinOp,
+        lhs: &Spanned<Expr>,
+        rhs: &Spanned<Expr>,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &lhs.span;
+        self.expr_to(lhs, dst)?;
+        let a = self.reg8(dst, span)?;
+
+        // Each test *skips the following jump* in the case where the right
+        // operand is needed, so the jump is taken exactly when the left
+        // operand is the answer.
+        let test = match op {
+            // `and`: keep a falsy left. `C = 0` skips when truthy.
+            BinOp::And => Instruction::abc(Op::TEST, a, 0, 0),
+            // `or`: keep a truthy left. `C = 1` skips when falsy.
+            BinOp::Or => Instruction::abc(Op::TEST, a, 0, 1),
+            // `??`: keep a non-nil left. `JNIL` skips when nil.
+            BinOp::Coalesce => Instruction::abc(Op::JNIL, a, 0, 0),
+            _ => unreachable!("only the short-circuiting operators reach here"),
+        };
+        self.emit(test, span);
+        let keep_left = self.emit_jump(Op::JMP, 0, span);
+        self.expr_to(rhs, dst)?;
+        self.patch_here(keep_left)?;
+        Ok(())
+    }
+
+    /// A call.
+    ///
+    /// Two forms are emitted today, both of which skip work the tree-walker
+    /// does on every call (§19):
+    ///
+    /// * `CALLNAT` for a prelude function. The callee is resolved to its
+    ///   actual `NativeFn` **at compile time** and stored as a constant, so
+    ///   nothing looks up `print` at run time.
+    /// * `CALLK` for a top-level `fn`. The proto is known statically, so the
+    ///   callee load, the callability test and the arity check all disappear.
+    ///
+    /// Arguments are evaluated directly into the callee's future frame, so a
+    /// call copies nothing (§6.2).
+    fn call_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        callee: &Spanned<Expr>,
+        args: &[saule_ast::CallArg],
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+        // Only a bare name can be a `CALLNAT`/`CALLK` target; anything else
+        // is a value and falls through to the generic `CALL` below.
+        let name = match &callee.value {
+            Expr::Ident(n) => n.as_str(),
+            _ => "",
+        };
+        // Named and trailing-block arguments are §19's compile-time binding
+        // work, which is a slice of its own.
+        let mut positional = Vec::with_capacity(args.len());
+        for a in args {
+            match a {
+                saule_ast::CallArg::Positional(v) => positional.push(v),
+                saule_ast::CallArg::Named { .. } => {
+                    return Err(CompileError::unsupported("a named argument", span.clone()));
+                }
+            }
+        }
+
+        // `obj.method(args)` and `Class.method(args)`.
+        if let Expr::Member { obj, name } = &callee.value {
+            return self.method_call_to(e, obj, name, &positional, dst);
+        }
+        // `obj?.method(args)` — the nil check has to wrap the *call*, not
+        // just the callee lookup, or `p?.foo()` on a nil `p` would end up
+        // calling nil rather than producing nil.
+        if let Expr::SafeMember { obj, name } = &callee.value {
+            return self.safe_method_call_to(e, obj, name, &positional, dst);
+        }
+        // `ClassName(args)` — a constructor, not a function call.
+        if let Some(class) = self.layouts.get(name)
+            && self.f.lookup(name).is_none()
+        {
+            return self.construct_to(class, &positional, dst, span);
+        }
+
+        match self.binding(callee.id) {
+            Some(Binding::Prelude { .. }) => {
+                let Some(v) = self.prelude_value(name) else {
+                    return Err(CompileError::unsupported(
+                        "a prelude name with no runtime value",
+                        span.clone(),
+                    ));
+                };
+                self.refuse_closure_to_native(&positional, span)?;
+                let k = self.constant(v, span)?;
+                let m = self.mark();
+                // `CALLNAT` reads its arguments from `A+1..`, mirroring
+                // `CALL`, so the window has room for the callee slot even
+                // though the callee itself is a constant.
+                let base = self.alloc_n(positional.len() as u16 + 1, span)?;
+                for (i, arg) in positional.iter().enumerate() {
+                    self.expr_to(arg, base + 1 + i as u16)?;
+                }
+                let a = self.reg8(base, span)?;
+                self.emit(
+                    Instruction::abc(Op::CALLNAT, a, positional.len() as u8 + 1, 2),
+                    span,
+                );
+                self.emit(Instruction::ax_of(Op::EXTRAARG, k as u32), span);
+                self.move_result(base, dst, span)?;
+                self.free_to(m);
+                Ok(())
+            }
+            Some(Binding::Module { .. }) if self.fn_protos.contains_key(name) => {
+                let proto = self.fn_protos[name];
+                let m = self.mark();
+                // `CALLK`'s window starts at the *arguments*: there is no
+                // callee register, because the callee is the operand.
+                let n = positional.len().max(1) as u16;
+                let base = self.alloc_n(n, span)?;
+                for (i, arg) in positional.iter().enumerate() {
+                    self.expr_to(arg, base + i as u16)?;
+                }
+                let a = self.reg8(base, span)?;
+                self.emit(
+                    Instruction::abc(Op::CALLK, a, positional.len() as u8 + 1, 2),
+                    span,
+                );
+                self.emit(Instruction::ax_of(Op::EXTRAARG, proto), span);
+                self.move_result(base, dst, span)?;
+                self.free_to(m);
+                Ok(())
+            }
+            // Anything else callable is a *value* — a local holding a
+            // lambda, a captured one, a module slot bound to a function.
+            // `CALL` loads the callee into the window's first register and
+            // dispatches on what it finds, which is the general form the
+            // typed ones above are specialisations of.
+            _ => {
+                let m = self.mark();
+                let base = self.alloc_n(positional.len() as u16 + 1, span)?;
+                self.expr_to(callee, base)?;
+                for (i, arg) in positional.iter().enumerate() {
+                    self.expr_to(arg, base + 1 + i as u16)?;
+                }
+                let a = self.reg8(base, span)?;
+                self.emit(
+                    Instruction::abc(Op::CALL, a, positional.len() as u8 + 1, 2),
+                    span,
+                );
+                self.move_result(base, dst, span)?;
+                self.free_to(m);
+                Ok(())
+            }
+        }
+    }
+
+    /// Refuse handing a bytecode closure to a native.
+    ///
+    /// `Value::VmFunction` is opaque to the tree-walker on purpose (§22.1):
+    /// `call_value_multi` has no arm for it, so a native that *invokes* its
+    /// argument reports "value of type `function` is not callable" — which
+    /// is what `Table.sort`'s comparator does. Calling back into the VM from
+    /// a native needs a re-entrant `Vm` and is its own slice; until then a
+    /// function-valued argument to a native is refused, so the program falls
+    /// back instead of failing at run time.
+    ///
+    /// Over-broad by design: a native that merely *stores* a closure would
+    /// be fine. A needless fallback costs speed; guessing wrong costs a
+    /// wrong answer.
+    fn refuse_closure_to_native(
+        &self,
+        args: &[&Spanned<Expr>],
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        let is_fn = |a: &&Spanned<Expr>| {
+            matches!(a.value, Expr::Lambda { .. })
+                || matches!(self.types.get(&a.id), Some(saule_ast::Type::Function { .. }))
+        };
+        if args.iter().any(is_fn) {
+            return Err(CompileError::unsupported(
+                "a function value passed to a built-in",
+                span.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// `obj.method(args)` or `Class.method(args)`.
+    fn method_call_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        obj: &Spanned<Expr>,
+        name: &str,
+        args: &[&Spanned<Expr>],
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+
+        // `Event.Click(x, y)` — a tuple-variant constructor, not a call.
+        if let Expr::Ident(en) = &obj.value
+            && self.f.lookup(en).is_none()
+            && let Some(e_idx) = self.layouts.enum_of(en)
+            && let Some(&tag) = self.chunk.enums[e_idx as usize].by_name.get(name)
+        {
+            return self.variant_ctor_to(e_idx, tag, args, dst, span);
+        }
+
+        // `self.super(args)` — the parent's `init`, dispatched **statically**.
+        //
+        // It cannot go through the vtable: the child overrode that slot, so
+        // a virtual call would re-enter the child's own constructor and
+        // recurse forever. The parent's proto is known at compile time, so
+        // `CALLK` is both correct and cheaper.
+        if name == "super" && matches!(obj.value, Expr::Self_) {
+            let Some(class) = self.f.current_class else {
+                return Err(CompileError::unsupported("`self.super` outside a method", span.clone()));
+            };
+            let parent = self.chunk.classes[class as usize].parent.and_then(|p| {
+                let pc = &self.chunk.classes[p as usize];
+                pc.init.and_then(|slot| pc.vtable.get(slot as usize).copied())
+            });
+            let Some(target) = parent.filter(|t| *t != u32::MAX) else {
+                return Err(CompileError::unsupported(
+                    "`self.super` on a class whose parent has no constructor",
+                    span.clone(),
+                ));
+            };
+            let m = self.mark();
+            let base = self.alloc_n(args.len() as u16 + 1, span)?;
+            let a = self.reg8(base, span)?;
+            self.emit(Instruction::abc(Op::MOVE, a, 0, 0), span);
+            for (i, arg) in args.iter().enumerate() {
+                self.expr_to(arg, base + 1 + i as u16)?;
+            }
+            self.emit(Instruction::abc(Op::CALLK, a, args.len() as u8 + 2, 1), span);
+            self.emit(Instruction::ax_of(Op::EXTRAARG, target), span);
+            self.free_to(m);
+            // `self.super()` is a statement, not a value.
+            let d = self.reg8(dst, span)?;
+            self.emit(Instruction::abc(Op::LOADNIL, d, 0, 0), span);
+            return Ok(());
+        }
+
+        // A static method: the receiver is a class name, so the target is
+        // known outright and no dispatch happens at all.
+        if let Some(class) = self.class_named_by(obj)
+            && let Some(&slot) = self.chunk.classes[class as usize].smindex.get(name)
+        {
+            let m = self.mark();
+            let base = self.alloc_n(args.len().max(1) as u16, span)?;
+            for (i, arg) in args.iter().enumerate() {
+                self.expr_to(arg, base + i as u16)?;
+            }
+            let a = self.reg8(base, span)?;
+            self.emit(
+                Instruction::abc(Op::CALLSTAT, a, args.len() as u8 + 1, 2),
+                span,
+            );
+            let packed = ((class as u32) << 16) | slot as u32;
+            self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
+            self.move_result(base, dst, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        // `String.len(s)`, `Table.insert(t, v)` — a static on a *stdlib*
+        // class. The prelude is fixed before a program runs, so the native
+        // is resolved to a constant here and nothing looks it up at run
+        // time. This is the same `CALLNAT` a bare `print` compiles to; the
+        // only difference is where the value was found.
+        if let Expr::Ident(recv) = &obj.value
+            && self.f.lookup(recv).is_none()
+            && self.layouts.get(recv).is_none()
+            && let Some(Value::Class(cls)) = self.prelude_value(recv)
+            && let Some(v) = cls
+                .lookup_static_field(name)
+                .or_else(|| cls.lookup_static_method(name).map(Value::Function))
+            && matches!(v, Value::Native(_) | Value::NativeClosure(_))
+        {
+            self.refuse_closure_to_native(args, span)?;
+            let k = self.constant(v, span)?;
+            let m = self.mark();
+            let base = self.alloc_n(args.len() as u16 + 1, span)?;
+            for (i, arg) in args.iter().enumerate() {
+                self.expr_to(arg, base + 1 + i as u16)?;
+            }
+            let a = self.reg8(base, span)?;
+            self.emit(
+                Instruction::abc(Op::CALLNAT, a, args.len() as u8 + 1, 2),
+                span,
+            );
+            self.emit(Instruction::ax_of(Op::EXTRAARG, k as u32), span);
+            self.move_result(base, dst, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        // An interface-typed receiver: the concrete class is not known, but
+        // the *interface's* method numbering is, so the call names a slot
+        // and the itable translates it at run time (§8.4).
+        if let Some(iface) = self
+            .ty_name(obj.id)
+            .and_then(|t| self.layouts.interface_of(t))
+            && let Some(&slot) = self.chunk.interfaces[iface as usize].index.get(name)
+        {
+            let m = self.mark();
+            let base = self.alloc_n(args.len() as u16 + 1, span)?;
+            self.expr_to(obj, base)?;
+            for (i, arg) in args.iter().enumerate() {
+                self.expr_to(arg, base + 1 + i as u16)?;
+            }
+            let a = self.reg8(base, span)?;
+            self.emit(
+                Instruction::abc(Op::CALLIF, a, args.len() as u8 + 1, slot as u8),
+                span,
+            );
+            self.emit(Instruction::ax_of(Op::EXTRAARG, iface), span);
+            self.move_result(base, dst, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        // An instance method: one indexed load out of the vtable, and the
+        // slot stays correct for a subclass receiver because a subclass's
+        // vtable extends its parent's (§8.3).
+        let Some(class) = self.class_of_expr(obj) else {
+            return Err(CompileError::unsupported(
+                "a method call on a receiver with no proved class",
+                span.clone(),
+            ));
+        };
+        let Some(&slot) = self.chunk.classes[class as usize].vindex.get(name) else {
+            return Err(CompileError::unsupported(
+                "a method the class does not declare",
+                span.clone(),
+            ));
+        };
+
+        let m = self.mark();
+        // The receiver occupies the window's first register and becomes the
+        // callee's `R[0]`, so `self` costs no copy.
+        let base = self.alloc_n(args.len() as u16 + 1, span)?;
+        self.expr_to(obj, base)?;
+        for (i, arg) in args.iter().enumerate() {
+            self.expr_to(arg, base + 1 + i as u16)?;
+        }
+        let a = self.reg8(base, span)?;
+        self.emit(
+            Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
+            span,
+        );
+        self.move_result(base, dst, span)?;
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// A call leaves its single result in the first register of its window;
+    /// move it where the caller wanted it.
+    pub(crate) fn move_result(
+        &mut self,
+        from: u16,
+        dst: u16,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        if from == dst {
+            return Ok(());
+        }
+        let (a, b) = (self.reg8(dst, span)?, self.reg8(from, span)?);
+        self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
+        Ok(())
+    }
+
+    /// `obj.name` — a field read, or a static read off a class name.
+    fn member_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        obj: &Spanned<Expr>,
+        name: &str,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+        let a = self.reg8(dst, span)?;
+
+        // `Status.Alive` — a singleton variant reference.
+        if let Expr::Ident(en) = &obj.value
+            && self.f.lookup(en).is_none()
+            && let Some(e_idx) = self.layouts.enum_of(en)
+            && let Some(&tag) = self.chunk.enums[e_idx as usize].by_name.get(name)
+        {
+            return self.variant_ref_to(e_idx, tag, dst, span);
+        }
+
+        // `Counter.total` — the receiver is a type name, not a value. No
+        // subclass ambiguity here: the class is named outright.
+        if let Some(class) = self.class_named_by(obj)
+            && let Some(&s) = self.chunk.classes[class as usize].sindex.get(name)
+        {
+            self.emit(
+                Instruction::abc(Op::GETSTAT, a, s.class as u8, s.slot as u8),
+                span,
+            );
+            return Ok(());
+        }
+
+        // `variant.value` — the payload a valued variant carries. Not a
+        // field: an enum variant has no layout, so this is `UNWRAP`.
+        if name == "value"
+            && self
+                .ty_name(obj.id)
+                .is_some_and(|t| self.layouts.enum_of(t).is_some())
+        {
+            let m = self.mark();
+            let r = self.expr_tmp(obj)?;
+            let b = self.reg8(r, span)?;
+            self.emit(Instruction::abc(Op::UNWRAP, a, b, 0), span);
+            self.free_to(m);
+            return Ok(());
+        }
+
+        // `p.health` where the front end proved `p`'s class: one indexed
+        // load. Without a proved class there is no safe slot to use — a
+        // wrong one reads a different field silently — so it is refused
+        // rather than guessed.
+        let Some(class) = self.class_of_expr(obj) else {
+            return Err(CompileError::unsupported(
+                "a member read on a receiver with no proved class",
+                span.clone(),
+            ));
+        };
+        let Some(access) = self.member_access(class, name) else {
+            return Err(CompileError::unsupported(
+                "a member that is neither an instance field nor a static",
+                span.clone(),
+            ));
+        };
+        // The receiver is evaluated even when the answer is a static: the
+        // tree-walker evaluates it too, and it may have side effects.
+        let m = self.mark();
+        let r = self.expr_tmp(obj)?;
+        let b = self.reg8(r, span)?;
+        self.emit(self.member_load(access, a, b), span);
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// How `obj.name` resolves against a class the front end proved.
+    ///
+    /// `None` means "refuse", never "guess" — including the one case where
+    /// the static answer would depend on the receiver's *runtime* class
+    /// rather than its declared one.
+    pub(crate) fn member_access(
+        &self,
+        class: crate::chunk::ClassIdx,
+        name: &str,
+    ) -> Option<MemberAccess> {
+        let proto = &self.chunk.classes[class as usize];
+        if let Some(slot) = proto.layout.slot(name) {
+            return Some(MemberAccess::Field(slot));
+        }
+        let s = *proto.sindex.get(name)?;
+        // A class-level default with no `init` is a *static*, so `b.label`
+        // is a legitimate static read through an instance. The slot is
+        // resolved against the receiver's declared class — which is the
+        // right cell unless some subclass redeclares the name, since then
+        // the answer depends on what the receiver actually is at run time.
+        if self.a_subclass_shadows_static(class, name, s) {
+            return None;
+        }
+        Some(MemberAccess::Static(s))
+    }
+
+    /// Whether any descendant of `class` declares its own `name`, making a
+    /// statically resolved static read ambiguous.
+    fn a_subclass_shadows_static(
+        &self,
+        class: crate::chunk::ClassIdx,
+        name: &str,
+        resolved: crate::chunk::StaticSlot,
+    ) -> bool {
+        self.chunk.classes.iter().enumerate().any(|(i, c)| {
+            i as u32 != class
+                && c.sindex.get(name).is_some_and(|s| *s != resolved)
+                && self.descends_from(i as u32, class)
+        })
+    }
+
+    fn descends_from(&self, mut who: crate::chunk::ClassIdx, ancestor: crate::chunk::ClassIdx) -> bool {
+        while let Some(p) = self.chunk.classes[who as usize].parent {
+            if p == ancestor {
+                return true;
+            }
+            who = p;
+        }
+        false
+    }
+
+    /// The instruction that loads a resolved member into `a` from a
+    /// receiver in `b`.
+    fn member_load(&self, access: MemberAccess, a: u8, b: u8) -> Instruction {
+        match access {
+            MemberAccess::Field(slot) => Instruction::abc(Op::GETF, a, b, slot as u8),
+            MemberAccess::Static(s) => {
+                Instruction::abc(Op::GETSTAT, a, s.class as u8, s.slot as u8)
+            }
+        }
+    }
+
+    /// `obj[index]`.
+    ///
+    /// `GETIDX` is a *table* read despite §15.9 calling it the dynamic form,
+    /// so an instance receiver needs its `OpIndex` overload resolved here —
+    /// for the same reason the arithmetic overloads are (§8.7): a bytecode
+    /// method never reaches the runtime `ClassObject`'s method map, so no
+    /// run-time lookup could find it.
+    fn index_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        obj: &Spanned<Expr>,
+        index: &Spanned<Expr>,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+
+        if let Some(class) = self.class_of_expr(obj) {
+            let contract = saule_ast::ops::OP_INDEX;
+            let Some(&slot) = self.chunk.classes[class as usize]
+                .vindex
+                .get(contract.method)
+            else {
+                // A class receiver with no `index` method: `GETIDX` would
+                // report "expected `table`", blaming the compiler for a
+                // program error. The tree-walker has the right message.
+                return Err(CompileError::unsupported(
+                    "an index read on a class with no `OpIndex` overload",
+                    span.clone(),
+                ));
+            };
+            let m = self.mark();
+            let base = self.alloc_n(2, span)?;
+            self.expr_to(obj, base)?;
+            self.expr_to(index, base + 1)?;
+            let a = self.reg8(base, span)?;
+            self.emit(Instruction::abc(Op::CALLM, a, 2, slot as u8), span);
+            self.move_result(base, dst, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        let m = self.mark();
+        let o = self.expr_tmp(obj)?;
+        let i = self.expr_tmp(index)?;
+        let (a, b, c) = (
+            self.reg8(dst, span)?,
+            self.reg8(o, span)?,
+            self.reg8(i, span)?,
+        );
+        self.emit(Instruction::abc(Op::GETIDX, a, b, c), span);
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// `obj?.name` — a member read that yields `nil` when the receiver is
+    /// nil instead of faulting on it.
+    fn safe_member_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        obj: &Spanned<Expr>,
+        name: &str,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+
+        // Resolve the slot *before* emitting anything. A refusal has to
+        // leave the code array untouched, because `Unsupported` falls back
+        // to the tree-walker and half-written code cannot be taken back.
+        let Some(class) = self.class_of_nullable_expr(obj) else {
+            return Err(CompileError::unsupported(
+                "a safe member access on a receiver with no proved class",
+                span.clone(),
+            ));
+        };
+        let Some(access) = self.member_access(class, name) else {
+            return Err(CompileError::unsupported(
+                "a safe member access on a member that is neither an instance field nor a static",
+                span.clone(),
+            ));
+        };
+
+        let m = self.mark();
+        let r = self.expr_tmp(obj)?;
+        let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+        // `JNOTNIL` skips the jump when the receiver is present, so the
+        // jump is taken exactly on the nil path.
+        self.emit(Instruction::abc(Op::JNOTNIL, b, 0, 0), span);
+        let to_nil = self.emit_jump(Op::JMP, 0, span);
+        self.emit(self.member_load(access, a, b), span);
+        let done = self.emit_jump(Op::JMP, 0, span);
+        self.patch_here(to_nil)?;
+        self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
+        self.patch_here(done)?;
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// `obj?.method(args)`.
+    ///
+    /// The nil check guards the **whole call**, arguments included. That is
+    /// not an optimisation: the tree-walker returns before it evaluates them
+    /// (`eval/expr/mod.rs`), so evaluating them here would run side effects
+    /// it does not.
+    fn safe_method_call_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        obj: &Spanned<Expr>,
+        name: &str,
+        args: &[&Spanned<Expr>],
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+
+        let Some(class) = self.class_of_nullable_expr(obj) else {
+            return Err(CompileError::unsupported(
+                "a safe method call on a receiver with no proved class",
+                span.clone(),
+            ));
+        };
+        let Some(&slot) = self.chunk.classes[class as usize].vindex.get(name) else {
+            return Err(CompileError::unsupported(
+                "a safe method call on a method the class does not declare",
+                span.clone(),
+            ));
+        };
+
+        let m = self.mark();
+        let base = self.alloc_n(args.len() as u16 + 1, span)?;
+        self.expr_to(obj, base)?;
+        let rb = self.reg8(base, span)?;
+        self.emit(Instruction::abc(Op::JNOTNIL, rb, 0, 0), span);
+        let to_nil = self.emit_jump(Op::JMP, 0, span);
+        for (i, arg) in args.iter().enumerate() {
+            self.expr_to(arg, base + 1 + i as u16)?;
+        }
+        self.emit(
+            Instruction::abc(Op::CALLM, rb, args.len() as u8 + 1, slot as u8),
+            span,
+        );
+        self.move_result(base, dst, span)?;
+        let done = self.emit_jump(Op::JMP, 0, span);
+        self.patch_here(to_nil)?;
+        let d = self.reg8(dst, span)?;
+        self.emit(Instruction::abc(Op::LOADNIL, d, 0, 0), span);
+        self.patch_here(done)?;
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// A lambda.
+    ///
+    /// Compiles the body into a nested proto, then emits `CLOSURE`, which
+    /// binds the upvalues at run time from the descriptors the body's
+    /// compilation produced. The descriptors are built by `capture_upvalue`
+    /// as the body refers to names, so the list is exactly the free-variable
+    /// set `saule-semantic` proved — no over-approximation.
+    fn lambda_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        params: &[saule_ast::Param],
+        body: &saule_ast::LambdaBody,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+        if params.iter().any(|p| p.variadic || p.default.is_some()) {
+            return Err(CompileError::unsupported(
+                "a lambda with a variadic or defaulted parameter",
+                span.clone(),
+            ));
+        }
+        if params.len() > u8::MAX as usize {
+            return Err(CompileError::unsupported(
+                "a lambda with over 255 parameters",
+                span.clone(),
+            ));
+        }
+
+        self.push_function(None);
+        let outcome = (|| -> Result<(), CompileError> {
+            let label = self.func_label();
+            self.f
+                .regs
+                .reserve_params(params.len() as u16)
+                .map_err(|o| o.at(&label, span.clone()))?;
+            self.f.n_params = params.len() as u8;
+            for (i, p) in params.iter().enumerate() {
+                self.f.declare(&p.name, i as u16);
+            }
+            match body {
+                saule_ast::LambdaBody::Expr(inner) => {
+                    // An expression-bodied lambda returns its expression.
+                    let m = self.mark();
+                    let r = self.expr_tmp(inner)?;
+                    let a = self.reg8(r, span)?;
+                    self.emit(Instruction::abc(Op::RET1, a, 0, 0), span);
+                    self.free_to(m);
+                }
+                saule_ast::LambdaBody::Block(stmts) => {
+                    for st in stmts.iter() {
+                        self.stmt(st)?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+
+        // Popped unconditionally: leaving the compiler inside a half-built
+        // function after an error would corrupt every later diagnostic.
+        let proto = self.pop_function(span);
+        outcome?;
+        let idx = self.chunk.add_proto(proto);
+        let nested = self.f.nested_index(idx);
+        let a = self.reg8(dst, span)?;
+        self.emit(Instruction::abx(Op::CLOSURE, a, nested), span);
+        Ok(())
+    }
+
+    /// A table literal.
+    ///
+    /// `NEWT` takes size hints straight from the literal, so the array and
+    /// the map are allocated once at the right capacity rather than grown;
+    /// `SETLIST` then moves a whole register range into the array part in
+    /// one go, replacing the per-entry push the tree-walker does (§10).
+    fn table_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        entries: &[saule_ast::TableEntry],
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        use saule_ast::TableEntry;
+        let span = &e.span;
+
+        let n_array = entries
+            .iter()
+            .filter(|x| matches!(x, TableEntry::Positional(_)))
+            .count();
+        let n_map = entries.len() - n_array;
+        if n_array > u8::MAX as usize || n_map > u8::MAX as usize {
+            return Err(CompileError::unsupported(
+                "a table literal with more than 255 entries of one kind",
+                span.clone(),
+            ));
+        }
+
+        // Built in a scratch register and moved at the end, so a literal
+        // that mentions `dst` in one of its own entries still reads the old
+        // value — `t = {t}` must not see the half-built table.
+        let m = self.mark();
+        let t = self.alloc(span)?;
+        let ta = self.reg8(t, span)?;
+        self.emit(
+            Instruction::abc(Op::NEWT, ta, n_array as u8, n_map as u8),
+            span,
+        );
+
+        // Positional entries go in as one contiguous run.
+        if n_array > 0 {
+            let run = self.alloc_n(n_array as u16, span)?;
+            let mut i = 0u16;
+            for entry in entries {
+                if let TableEntry::Positional(v) = entry {
+                    self.expr_to(v, run + i)?;
+                    i += 1;
+                }
+            }
+            // `SETLIST` reads `R[A+1]..R[A+B]`, so the run has to sit
+            // directly above the table register.
+            debug_assert_eq!(run, t + 1, "SETLIST needs its values above the table");
+            self.emit(
+                Instruction::abc(Op::SETLIST, ta, n_array as u8, 0),
+                span,
+            );
+        }
+
+        for entry in entries {
+            if let TableEntry::Field { key, value } = entry {
+                let em = self.mark();
+                let k = self.expr_tmp(key)?;
+                let v = self.expr_tmp(value)?;
+                let (kb, vc) = (self.reg8(k, span)?, self.reg8(v, span)?);
+                self.emit(Instruction::abc(Op::SETIDX, ta, kb, vc), span);
+                self.free_to(em);
+            }
+        }
+
+        self.move_result(t, dst, span)?;
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// The numeric kind the typechecker proved for a node, if any.
+    pub fn num_of_node(&self, e: &Spanned<Expr>) -> Option<Num> {
+        self.ty_name(e.id).and_then(num_of)
+    }
+}
+
+/// What `obj.name` turned out to be, once resolved against a proved class.
+///
+/// A class-level field with a default and no `init` is promoted to a static
+/// by both engines, so "member read" covers both shapes and the difference
+/// is which opcode loads it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MemberAccess {
+    Field(u16),
+    Static(crate::chunk::StaticSlot),
+}
+
+/// A human-readable name for an unsupported construct, so the diagnostic
+/// says what is missing rather than just "expression".
+fn expr_label(e: &Expr) -> &'static str {
+    match e {
+        Expr::Pipe { .. } => "a pipe",
+        Expr::Error => "an unparsable expression",
+        _ => "this expression",
+    }
+}

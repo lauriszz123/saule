@@ -13,6 +13,62 @@ use crate::env::Environment;
 use super::Value;
 use super::class::ClassObject;
 
+/// A function that has been compiled to bytecode, held opaquely.
+///
+/// `saule-vm` depends on `saule-interpreter` and never the reverse
+/// (`VM_DESIGN.md` §22.1) — the tree-walker has to stay buildable with the
+/// VM crate deleted from the workspace. So [`Value`] cannot name the VM's
+/// `Closure` type directly; it names this trait, which the VM implements.
+///
+/// The tree-walker only ever carries such a value around and reports it as
+/// a `function`. Nothing in this crate calls one: a bytecode closure is
+/// callable only from inside the VM, which downcasts through [`Self::as_any`].
+pub trait VmFunction: fmt::Debug {
+    /// `Some(name)` for a named declaration, `None` for a lambda.
+    fn vm_name(&self) -> Option<&str>;
+    /// Downcast hook — the VM recovers its own closure type through this.
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// A [`VmFunction`] held behind a **thin** pointer.
+///
+/// This box exists for one reason, and it is a load-bearing one. `Rc<dyn
+/// Trait>` is a *fat* pointer: two words, data plus vtable. Putting one
+/// directly in [`Value`] pushes the whole enum from 16 bytes to 24 — a 50%
+/// inflation of every local, every table slot, every argument and every
+/// register in the language, to carry a vtable pointer that is identical for
+/// every value of the variant.
+///
+/// `VM_DESIGN.md` §4.1 measures `Value` at 16 bytes and argues *from that
+/// number* that NaN-boxing is not worth doing. Silently invalidating the
+/// premise while adding a variant would have been a poor trade.
+///
+/// Boxing moves the vtable pointer into the heap allocation, where it is paid
+/// for once per closure instead of once per copy. The extra indirection costs
+/// nothing measurable: the VM calls a closure through its own frame
+/// machinery, never through this pointer.
+pub struct VmFunctionRef(Box<dyn VmFunction>);
+
+impl VmFunctionRef {
+    pub fn new(f: impl VmFunction + 'static) -> std::rc::Rc<VmFunctionRef> {
+        std::rc::Rc::new(VmFunctionRef(Box::new(f)))
+    }
+}
+
+impl std::ops::Deref for VmFunctionRef {
+    type Target = dyn VmFunction + 'static;
+
+    fn deref(&self) -> &(dyn VmFunction + 'static) {
+        &*self.0
+    }
+}
+
+impl fmt::Debug for VmFunctionRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
 /// Rust-implemented function exposed to Saule.
 ///
 /// The function returns `Result<Value, String>` where the error string is

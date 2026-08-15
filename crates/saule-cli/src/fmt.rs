@@ -198,6 +198,7 @@ fn format_source(name: &str, source: &str, options: FmtOptions) -> Result<String
             other => tokens.push(saule_ast::Spanned {
                 value: other,
                 span: tok.span,
+                id: saule_ast::NodeId::NONE,
             }),
         }
     }

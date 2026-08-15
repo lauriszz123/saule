@@ -49,6 +49,7 @@ fn format_with_comments(src: &str) -> Result<String, String> {
             other => tokens.push(saule_ast::Spanned {
                 value: other,
                 span: tok.span,
+                id: saule_ast::NodeId::NONE,
             }),
         }
     }
@@ -497,6 +498,7 @@ fn format_with_options(src: &str, options: saule_fmt::FmtOptions) -> Result<Stri
             other => tokens.push(saule_ast::Spanned {
                 value: other,
                 span: tok.span,
+                id: saule_ast::NodeId::NONE,
             }),
         }
     }

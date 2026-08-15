@@ -180,6 +180,25 @@ pub fn run(module: &Module) -> Result<Value, RuntimeError> {
 /// This is the entry point most embedders should use; the CLI's
 /// `run_source` does the same thing but also carries `NamedSource` so
 /// miette can render snippets.
+/// Run `saule_semantic`'s analysis and publish what it learned about closure
+/// capture, so lambdas in `module` capture exactly the bindings their bodies
+/// refer to.
+///
+/// **Any embedder that analyses a module and then executes it should call
+/// this rather than `semantic::analyze_with_seed`.** Skipping it is safe —
+/// lambdas fall back to capturing their whole defining scope, which is what
+/// they did before the analysis existed — but that fallback is the leak
+/// described in `crate::capture`.
+pub fn analyze_and_prepare(
+    module: &Module,
+    seed: semantic::ModuleSeed,
+) -> Vec<semantic::SemanticError> {
+    init();
+    let (errors, bindings) = semantic::analyze_with_bindings(module, seed);
+    capture::register(module, &bindings);
+    errors
+}
+
 pub fn check_and_run(module: &Module) -> Result<Value, PipelineError> {
     check_and_run_in(module, None)
 }
@@ -196,7 +215,7 @@ pub fn check_and_run_in(
         Some(d) => module::collect_import_seed(module, d),
         None => saule_semantic::ModuleSeed::default(),
     };
-    if let Some(first) = semantic::analyze_with_seed(module, seed).into_iter().next() {
+    if let Some(first) = analyze_and_prepare(module, seed).into_iter().next() {
         return Err(PipelineError::Semantic(first));
     }
     if let Some(first) = typeck::check(module).into_iter().next() {

@@ -10,6 +10,25 @@ use std::{
 use miette::{NamedSource, Report};
 use saule_interpreter::{Environment, Value, module::ModuleLoader};
 
+/// Whether to use the bytecode VM: the `--vm` flag or `SAULE_ENGINE=vm`.
+///
+/// The env var exists so a whole test run or benchmark sweep can switch
+/// engines without touching call sites — which is how the differential
+/// harness will drive `run_tests.sh` in Phase 3.
+fn use_vm() -> bool {
+    VM_REQUESTED.with(|v| v.get())
+        || std::env::var("SAULE_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("vm"))
+}
+
+thread_local! {
+    static VM_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Record that `--vm` was passed, before any running happens.
+pub(crate) fn request_vm() {
+    VM_REQUESTED.with(|v| v.set(true));
+}
+
 pub(crate) fn run_file(path: PathBuf, require_main: bool) {
     if !path.exists() {
         eprintln!("error: file '{}' does not exist", path.display());
@@ -75,7 +94,7 @@ fn run_source(
     //
     // Semantic runs first because the type pass assumes a structurally
     // valid module and reads the class/interface/enum registry it installs.
-    let sem_errors = saule_interpreter::semantic::analyze_with_seed(&module, seed);
+    let sem_errors = saule_interpreter::analyze_and_prepare(&module, seed);
     if let Some(first) = sem_errors.into_iter().next() {
         return Err(Report::new(first).with_source_code(make_src()));
     }
@@ -83,6 +102,36 @@ fn run_source(
     let errors = saule_interpreter::typeck::check(&module);
     if let Some(first) = errors.into_iter().next() {
         return Err(Report::new(first).with_source_code(make_src()));
+    }
+
+    // Bytecode engine, when asked for and when the compiler can handle the
+    // whole module.
+    //
+    // The fall-back is the point (§21.3): `CompileError::Unsupported` means
+    // "not written yet", not "your program is wrong", so `--vm` is usable
+    // long before the compiler is complete. Anything *else* the compiler
+    // reports is a real problem and is surfaced.
+    if use_vm() {
+        match saule_vm::compile(&module, name, &source) {
+            Ok(chunk) => {
+                let had_main = saule_vm::run_chunk_entry(std::rc::Rc::new(chunk))
+                    .map_err(|e| Report::new(e).with_source_code(make_src()))?;
+                if !had_main && require_main {
+                    eprintln!(
+                        "error: `{name}` must declare `class Main` with a `static fn main()` entry point"
+                    );
+                    process::exit(1);
+                }
+                return Ok(());
+            }
+            Err(saule_vm::CompileError::Unsupported { thing, .. }) => {
+                eprintln!(
+                    "note: the bytecode compiler does not handle `{thing}` yet — \
+                     running on the tree-walking interpreter"
+                );
+            }
+            Err(e) => return Err(Report::new(e).with_source_code(make_src())),
+        }
     }
 
     // Execute the file's top-level statements so declarations register.

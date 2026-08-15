@@ -124,6 +124,8 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "Os".to_string(),
         parent: None,
         field_defs: Vec::<FieldDef>::new(),
+        // Statics only — a stdlib namespace class is never instantiated.
+        layout: Default::default(),
         methods: Default::default(),
         static_fields: RefCell::new(static_fields),
         static_methods: Default::default(),
@@ -202,29 +204,53 @@ pub fn register_sigs() {
 
 // ─── enum ──────────────────────────────────────────────────────────────────
 
+/// `OsPlatform`'s variants in declaration order. **The index is the tag**, so
+/// this list is the single source of truth for both the enum installed into
+/// the prelude and the variants `Os.platform()` builds on the fly.
+const OS_PLATFORM_VARIANTS: [(&str, &str); 4] = [
+    ("Linux", "linux"),
+    ("Macos", "macos"),
+    ("Windows", "windows"),
+    ("Other", "other"),
+];
+
+/// `FsKind`'s variants in declaration order. See [`OS_PLATFORM_VARIANTS`].
+const FS_KIND_VARIANTS: [(&str, &str); 4] = [
+    ("File", "file"),
+    ("Dir", "dir"),
+    ("Symlink", "symlink"),
+    ("Other", "other"),
+];
+
+/// Tag of `name` within a declaration-ordered variant list.
+fn tag_in(variants: &[(&str, &str)], name: &str) -> u32 {
+    variants.iter().position(|(v, _)| *v == name).unwrap_or(0) as u32
+}
+
 fn install_platform_enum(env: &Rc<RefCell<Environment>>) {
-    let variants = &[
-        ("Linux", "linux"),
-        ("Macos", "macos"),
-        ("Windows", "windows"),
-        ("Other", "other"),
-    ];
+    let variants = &OS_PLATFORM_VARIANTS;
     let name = "OsPlatform";
     let mut variant_dict = fxmap();
-    for (vname, vvalue) in variants {
-        variant_dict.insert(
-            (*vname).to_string(),
-            Rc::new(EnumVariantObject {
-                enum_name: name.to_string(),
-                variant_name: (*vname).to_string(),
-                value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
-                enum_obj: RefCell::new(None),
-            }),
-        );
+    let mut by_tag = Vec::with_capacity(variants.len());
+    let mut tags = fxmap();
+    // Declaration order is the slice order, so the index is the tag.
+    for (tag, (vname, vvalue)) in variants.iter().enumerate() {
+        let variant = Rc::new(EnumVariantObject {
+            enum_name: name.to_string(),
+            variant_name: (*vname).to_string(),
+            tag: tag as u32,
+            value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
+            enum_obj: RefCell::new(None),
+        });
+        variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
+        by_tag.push(Some(variant));
+        tags.insert((*vname).to_string(), tag as u32);
     }
     let final_enum = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
+        by_tag,
+        tags,
         tuple_variants: Default::default(),
         methods: Default::default(),
     });
@@ -561,6 +587,7 @@ fn os_platform(_args: &[Value]) -> Result<Vec<Value>, String> {
     let variant = EnumVariantObject {
         enum_name: "OsPlatform".to_string(),
         variant_name: variant_name.to_string(),
+        tag: tag_in(&OS_PLATFORM_VARIANTS, variant_name),
         value: Some(str_value(platform_str().to_string())),
         enum_obj: RefCell::new(None),
     };
@@ -781,28 +808,29 @@ fn os_parsedate(args: &[Value]) -> Result<Vec<Value>, String> {
 // ─── FsInfo / FsKind ───────────────────────────────────────────────────────
 
 fn install_fskind_enum(env: &Rc<RefCell<Environment>>) {
-    let variants = &[
-        ("File", "file"),
-        ("Dir", "dir"),
-        ("Symlink", "symlink"),
-        ("Other", "other"),
-    ];
+    let variants = &FS_KIND_VARIANTS;
     let name = "FsKind";
     let mut variant_dict = fxmap();
-    for (vname, vvalue) in variants {
-        variant_dict.insert(
-            (*vname).to_string(),
-            Rc::new(EnumVariantObject {
-                enum_name: name.to_string(),
-                variant_name: (*vname).to_string(),
-                value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
-                enum_obj: RefCell::new(None),
-            }),
-        );
+    let mut by_tag = Vec::with_capacity(variants.len());
+    let mut tags = fxmap();
+    // Declaration order is the slice order, so the index is the tag.
+    for (tag, (vname, vvalue)) in variants.iter().enumerate() {
+        let variant = Rc::new(EnumVariantObject {
+            enum_name: name.to_string(),
+            variant_name: (*vname).to_string(),
+            tag: tag as u32,
+            value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
+            enum_obj: RefCell::new(None),
+        });
+        variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
+        by_tag.push(Some(variant));
+        tags.insert((*vname).to_string(), tag as u32);
     }
     let final_enum = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
+        by_tag,
+        tags,
         tuple_variants: Default::default(),
         methods: Default::default(),
     });
@@ -813,15 +841,31 @@ fn install_fskind_enum(env: &Rc<RefCell<Environment>>) {
         .define(name.to_string(), Value::Enum(final_enum));
 }
 
+/// The fields `Os.fsInfo` fills, in slot order.
+///
+/// This list *is* the class's shape: instances are slot-based, so the
+/// declaration and the code that populates it have to agree. Keeping them
+/// next to each other is what makes that checkable at a glance.
+const FSINFO_FIELDS: [&str; 5] = ["path", "kind", "size", "modifiedAt", "readOnly"];
+
 /// Phantom `FsInfo` class — only used so `Value::Instance(...)` prints
 /// "<instance of FsInfo>" and so the semantic registry's class name
-/// lookup resolves. Has no user-callable methods of its own; field
-/// access goes straight to the underlying `InstanceObject.fields` map.
+/// lookup resolves. Has no user-callable methods of its own; field access
+/// goes through the class's [`FieldLayout`] like any other instance.
 fn install_fsinfo_class(env: &Rc<RefCell<Environment>>) {
+    let field_defs: Vec<FieldDef> = FSINFO_FIELDS
+        .iter()
+        .map(|n| FieldDef {
+            name: (*n).to_string(),
+            default: None,
+        })
+        .collect();
+    let layout = Rc::new(crate::value::FieldLayout::build(None, &field_defs));
     let class = Rc::new(ClassObject {
         name: "FsInfo".to_string(),
         parent: None,
-        field_defs: Vec::<FieldDef>::new(),
+        field_defs,
+        layout,
         methods: Default::default(),
         static_fields: RefCell::new(Default::default()),
         static_methods: Default::default(),
@@ -841,6 +885,7 @@ fn fskind_variant(kind: &str) -> Value {
     Value::EnumVariant(Rc::new(EnumVariantObject {
         enum_name: "FsKind".to_string(),
         variant_name: kind.to_string(),
+        tag: tag_in(&FS_KIND_VARIANTS, kind),
         value: Some(Value::Str(Rc::new(kind.to_ascii_lowercase()))),
         enum_obj: RefCell::new(None),
     }))
@@ -893,23 +938,21 @@ fn os_fs_info(args: &[Value]) -> Result<Vec<Value>, String> {
         .map(|d| Value::Int(d.as_secs() as i64))
         .unwrap_or(Value::Nil);
 
-    let mut fields = fxmap();
-    fields.insert("path".to_string(), Value::Str(Rc::new(path)));
-    fields.insert("kind".to_string(), fskind_variant(kind_str));
-    fields.insert("size".to_string(), Value::Int(meta.len() as i64));
-    fields.insert("modifiedAt".to_string(), modified_at);
-    fields.insert(
-        "readOnly".to_string(),
-        Value::Bool(meta.permissions().readonly()),
-    );
-
     let class = FSINFO_CLASS
         .with(|slot| slot.borrow().clone())
         .ok_or_else(|| "Os.fsInfo: FsInfo class not installed".to_string())?;
 
-    Ok(vec![Value::Instance(Rc::new(RefCell::new(
-        InstanceObject { class, fields },
-    )))])
+    let mut inst = InstanceObject::new(class);
+    inst.set_field("path", Value::Str(Rc::new(path)));
+    inst.set_field("kind", fskind_variant(kind_str));
+    inst.set_field("size", Value::Int(meta.len() as i64));
+    inst.set_field("modifiedAt", modified_at);
+    inst.set_field(
+        "readOnly",
+        Value::Bool(meta.permissions().readonly()),
+    );
+
+    Ok(vec![Value::Instance(Rc::new(RefCell::new(inst)))])
 }
 
 // ─── builtin registries (consumed by saule-semantic) ───────────────────────
