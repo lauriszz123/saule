@@ -35,6 +35,7 @@ use saule_ast::Module;
 pub(crate) use saule_ast::to_source_span;
 
 mod coerce_sites;
+pub mod coverage;
 mod error;
 mod expr;
 mod funcs;
@@ -43,9 +44,12 @@ pub mod ops;
 pub mod sigs;
 mod state;
 mod stmt;
+mod table;
 mod vars;
 
+pub use coverage::Coverage;
 pub use error::TypeCheckError;
+pub use table::TypeTable;
 
 /// Run the static type checks on a parsed module. Returns *all* errors
 /// found so the user sees everything in one pass.
@@ -55,6 +59,30 @@ pub use error::TypeCheckError;
 /// them through `saule-semantic`'s thread-local accessors. The standard
 /// pipeline (`saule_interpreter::pipeline` or the CLI) guarantees this.
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
+    check_inner(module)
+}
+
+/// [`check`], but also hands back the types it proved along the way.
+///
+/// The checker already computes a type for most expressions and currently
+/// discards it. The bytecode compiler needs precisely that: choosing `ADDI`
+/// over the dynamic `ARITHX` *is* the question "did the checker prove both
+/// operands are integers?" (`VM_DESIGN.md` §2, §21.1 item 0.5).
+///
+/// **Precondition**: `module` has been through
+/// [`saule_ast::assign_ids`](saule_ast::assign_ids) — the table is keyed by
+/// `NodeId`, and an unnumbered tree yields an empty one. Every module the
+/// parser produces satisfies this.
+///
+/// Coverage is partial on purpose; see [`coverage`] for measuring it, and
+/// [`TypeTable`] for why a missing entry is always safe.
+pub fn check_with_types(module: &Module) -> (Vec<TypeCheckError>, TypeTable) {
+    let previous = table::begin();
+    let errors = check_inner(module);
+    (errors, table::end(previous))
+}
+
+fn check_inner(module: &Module) -> Vec<TypeCheckError> {
     let _restore = state::set_current_class(None);
     funcs::install(module);
     vars::install(module);
@@ -68,4 +96,11 @@ pub fn check(module: &Module) -> Vec<TypeCheckError> {
     funcs::clear();
     vars::clear();
     errors
+}
+
+/// Type-check `module` and report how much of it the resulting table covers.
+/// Backs the CLI's `--dump-type-coverage`.
+pub fn type_coverage(module: &Module) -> Coverage {
+    let (_, table) = check_with_types(module);
+    coverage::measure(module, &table)
 }

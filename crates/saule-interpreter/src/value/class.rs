@@ -22,12 +22,26 @@ pub struct ClassObject {
     pub parent: Option<Rc<ClassObject>>,
     /// Instance-field templates evaluated on construction.
     pub field_defs: Vec<FieldDef>,
+    /// Slot assignment for instance fields, shared by every instance of this
+    /// class. See [`FieldLayout`].
+    pub layout: Rc<FieldLayout>,
     /// Instance methods, keyed by name. First parameter is the user-written
     /// `self`, so calling `obj.method(a)` is the same as `method(obj, a)`.
+    ///
+    /// **Flattened**: this map starts as a copy of the parent's and has
+    /// overrides written into it, so a lookup is one probe regardless of how
+    /// deep the hierarchy is. Inherited entries are the same `Rc` the parent
+    /// holds, so flattening costs one map slot per inherited method, not a
+    /// second copy of the function.
     pub methods: HashMap<String, Rc<FunctionObject>>,
     /// Static fields. Mutable through `ClassName.field = …`.
+    ///
+    /// Deliberately *not* flattened: a static is a single mutable slot shared
+    /// by the whole chain, and copying it into each subclass would give each
+    /// one its own. Writes have to find the declaring class — see
+    /// [`ClassObject::declaring_static_field`].
     pub static_fields: RefCell<HashMap<String, Value>>,
-    /// Static methods (no implicit `self`).
+    /// Static methods (no implicit `self`). Flattened, like `methods`.
     pub static_methods: HashMap<String, Rc<FunctionObject>>,
     /// `init(args) … end`. None means the class has no explicit
     /// constructor — calling the class still produces a valid instance.
@@ -41,29 +55,137 @@ pub struct FieldDef {
     pub default: Option<Spanned<Expr>>,
 }
 
+/// Where each instance field lives, computed once per class and shared by
+/// every instance of it.
+///
+/// The point is that an instance is a `Vec<Value>`, not a hash map: reading
+/// `p.health` is one probe of a **per-class** map for the slot, then an
+/// indexed load — instead of a probe of a **per-instance** map whose
+/// `String` keys were cloned when the object was built.
+///
+/// **Parent fields occupy the low slots.** A subclass's layout is therefore
+/// a prefix-extension of its parent's, never a reordering. That is what
+/// makes a slot resolved against a static type still correct when the value
+/// turns out to be a subclass — and it is the invariant the bytecode
+/// compiler's `GETF` will depend on (`VM_DESIGN.md` §8.2).
+#[derive(Debug, Default)]
+pub struct FieldLayout {
+    index: HashMap<Rc<str>, u16>,
+    names: Vec<Rc<str>>,
+}
+
+impl FieldLayout {
+    /// Extend `parent`'s layout with this class's own fields.
+    ///
+    /// A field redeclared in a subclass keeps the parent's slot rather than
+    /// taking a new one, so the prefix invariant survives shadowing.
+    pub fn build(parent: Option<&FieldLayout>, own: &[FieldDef]) -> FieldLayout {
+        let mut layout = match parent {
+            Some(p) => FieldLayout {
+                index: p.index.clone(),
+                names: p.names.clone(),
+            },
+            None => FieldLayout::default(),
+        };
+        for def in own {
+            if layout.index.contains_key(def.name.as_str()) {
+                continue;
+            }
+            let name: Rc<str> = Rc::from(def.name.as_str());
+            let slot = layout.names.len() as u16;
+            layout.names.push(Rc::clone(&name));
+            layout.index.insert(name, slot);
+        }
+        layout
+    }
+
+    /// Build a layout from an already-computed slot assignment.
+    ///
+    /// Exists for the bytecode compiler's Pass 1, which computes the layout
+    /// before any runtime class object exists. The two then **share** the
+    /// resulting `Rc` rather than each computing their own — see
+    /// `VM_DESIGN.md` §24.2, where a compiler and a runtime disagreeing
+    /// about field slots is named as the worst bug the project could ship.
+    pub fn from_parts(index: HashMap<Rc<str>, u16>, names: Vec<Rc<str>>) -> FieldLayout {
+        debug_assert_eq!(index.len(), names.len(), "slot map and name list disagree");
+        FieldLayout { index, names }
+    }
+
+    #[inline]
+    pub fn slot(&self, name: &str) -> Option<u16> {
+        self.index.get(name).copied()
+    }
+
+    /// slot -> name, for diagnostics and display.
+    pub fn names(&self) -> &[Rc<str>] {
+        &self.names
+    }
+
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+}
+
 #[derive(Debug)]
 pub struct InstanceObject {
     pub class: Rc<ClassObject>,
-    pub fields: HashMap<String, Value>,
+    /// One `Value` per slot in `class.layout`, positionally.
+    pub fields: Vec<Value>,
+}
+
+impl InstanceObject {
+    /// A fresh instance with every field slot at `nil`.
+    pub fn new(class: Rc<ClassObject>) -> InstanceObject {
+        let n = class.layout.len();
+        InstanceObject {
+            class,
+            fields: vec![Value::Nil; n],
+        }
+    }
+
+    #[inline]
+    pub fn field(&self, name: &str) -> Option<&Value> {
+        let slot = self.class.layout.slot(name)?;
+        self.fields.get(slot as usize)
+    }
+
+    /// Write a declared field. Returns `false` when the class declares no
+    /// such field — instances have a fixed shape, so there is no slot to
+    /// create. The typechecker already rejects this (`unknown_field.sau`);
+    /// the runtime check only catches unchecked `run()` callers.
+    #[inline]
+    pub fn set_field(&mut self, name: &str, value: Value) -> bool {
+        match self.class.layout.slot(name) {
+            Some(slot) => {
+                self.fields[slot as usize] = value;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `(name, value)` pairs in slot order, for diagnostics and display.
+    pub fn iter_fields(&self) -> impl Iterator<Item = (&Rc<str>, &Value)> {
+        self.class.layout.names().iter().zip(self.fields.iter())
+    }
 }
 
 impl ClassObject {
-    /// Walk the inheritance chain for a method.
+    /// Look up an instance method.
+    ///
+    /// One probe: `methods` is flattened at class-construction time, so this
+    /// no longer walks the parent chain hashing the name once per level.
     pub fn lookup_method(self: &Rc<Self>, name: &str) -> Option<Rc<FunctionObject>> {
-        if let Some(m) = self.methods.get(name) {
-            return Some(m.clone());
-        }
-        self.parent.as_ref().and_then(|p| p.lookup_method(name))
+        self.methods.get(name).cloned()
     }
 
-    /// Walk the inheritance chain for a static method.
+    /// Look up a static method. Flattened, like [`Self::lookup_method`].
     pub fn lookup_static_method(self: &Rc<Self>, name: &str) -> Option<Rc<FunctionObject>> {
-        if let Some(m) = self.static_methods.get(name) {
-            return Some(m.clone());
-        }
-        self.parent
-            .as_ref()
-            .and_then(|p| p.lookup_static_method(name))
+        self.static_methods.get(name).cloned()
     }
 
     /// Walk the inheritance chain for a static field.

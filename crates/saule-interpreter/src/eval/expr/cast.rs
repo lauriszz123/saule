@@ -27,7 +27,7 @@ use saule_ast::Type;
 
 /// Perform `value as ty`, yielding `Some(value)` on a match and `None`
 /// otherwise. The caller turns `None` into [`Value::Nil`].
-pub(crate) fn cast(value: &Value, ty: &Type) -> bool {
+pub fn cast(value: &Value, ty: &Type) -> bool {
     matches_type(value, ty)
 }
 

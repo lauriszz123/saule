@@ -1,0 +1,22 @@
+[package]
+name = "saule-vm"
+version.workspace = true
+edition.workspace = true
+description = "Saule — register-based bytecode compiler and virtual machine."
+license.workspace = true
+
+# Dependency direction is load-bearing (VM_DESIGN.md §22.1): `saule-vm`
+# depends on `saule-interpreter`, never the reverse. The tree-walker must
+# stay buildable — and testable — with this crate deleted from the
+# workspace, because it is the differential oracle for every VM bug.
+[dependencies]
+saule-ast = { path = "../saule-ast" }
+saule-interpreter = { path = "../saule-interpreter" }
+saule-semantic = { path = "../saule-semantic" }
+saule-typeck = { path = "../saule-typeck" }
+miette = "7.6.0"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }

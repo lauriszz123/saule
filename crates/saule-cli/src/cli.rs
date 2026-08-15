@@ -34,6 +34,29 @@ pub(crate) enum Command {
     Check(CheckArgs),
     Fmt(FmtArgs),
     Init(InitArgs),
+    Disasm(DisasmArgs),
+}
+
+/// `saule disasm <file.sau>`
+#[derive(Debug, Args)]
+#[command(
+    about = "Compile a source file to bytecode and print the disassembly",
+    long_about = "Compile a source file to bytecode and print the disassembly.
+
+  saule disasm <file.sau>
+
+A debugging aid for the bytecode compiler, not a user-facing format: the
+listing shows one line per instruction with registers, constants and
+resolved jump targets.
+
+The compiler is under construction. Anything it cannot compile yet is
+reported by name rather than silently omitted, so the output is either a
+complete chunk or an explicit gap."
+)]
+pub(crate) struct DisasmArgs {
+    /// The `.sau` file to compile.
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
 }
 
 /// `saule check [TARGET]`
@@ -60,6 +83,14 @@ pub(crate) struct CheckArgs {
     /// Project directory or `.sau` file. Defaults to the current directory.
     #[arg(value_name = "TARGET")]
     pub target: Option<PathBuf>,
+
+    /// Report how much of each file the type checker proved a type for.
+    ///
+    /// The bytecode compiler picks a typed opcode only where a type is
+    /// known, so this is the measurement `VM_DESIGN.md` §24.1 asks for
+    /// before that work is depended on. Diagnostics are unaffected.
+    #[arg(long)]
+    pub dump_type_coverage: bool,
 }
 
 /// `saule run [TARGET] [-- ARGS...]`
@@ -93,6 +124,14 @@ pub(crate) struct RunArgs {
     /// Arguments forwarded to the script's `Os.args()`.
     #[arg(last = true, allow_hyphen_values = true, value_name = "ARGS")]
     pub args: Vec<String>,
+
+    /// Execute with the bytecode VM instead of the tree-walking interpreter.
+    ///
+    /// The VM is under construction: anything it cannot compile yet falls
+    /// back to the interpreter, so this is always safe to pass. Also
+    /// enabled by `SAULE_ENGINE=vm`.
+    #[arg(long)]
+    pub vm: bool,
 }
 
 /// `saule init <name>`

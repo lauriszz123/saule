@@ -26,10 +26,12 @@ pub mod table;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-pub use class::{ClassObject, FieldDef, InstanceObject};
+pub use class::{ClassObject, FieldDef, FieldLayout, InstanceObject};
 pub use enum_::{EnumObject, EnumVariantObject};
 pub use file::FileHandle;
-pub use function::{FunctionBody, FunctionObject, NativeClosure, NativeFn};
+pub use function::{
+    FunctionBody, FunctionObject, NativeClosure, NativeFn, VmFunction, VmFunctionRef,
+};
 pub use interface::InterfaceObject;
 pub use table::{TableKey, TableObject};
 
@@ -55,6 +57,11 @@ pub enum Value {
     /// User-defined function or lambda. The `Rc` makes cloning cheap and
     /// gives recursive closures something stable to point at.
     Function(Rc<FunctionObject>),
+    /// A user-defined function that was compiled to bytecode instead of
+    /// being kept as an AST. Opaque here — only `saule-vm` can call one; see
+    /// [`VmFunction`]. The tree-walker never constructs this variant, so a
+    /// program run under the tree-walker will never observe it.
+    VmFunction(Rc<VmFunctionRef>),
     /// A class declaration — carries its statics, instance template, and
     /// optional parent. Compared by identity.
     Class(Rc<ClassObject>),
@@ -87,7 +94,10 @@ impl Value {
             Value::Float(_) => "float",
             Value::Str(_) => "string",
             Value::Table(_) => "table",
-            Value::Native(_) | Value::NativeClosure(_) | Value::Function(_) => "function",
+            Value::Native(_)
+            | Value::NativeClosure(_)
+            | Value::Function(_)
+            | Value::VmFunction(_) => "function",
             Value::Class(_) => "class",
             Value::Instance(_) => "instance",
             Value::EnumVariant(_) => "enum",
@@ -139,6 +149,10 @@ impl Value {
                 Some(n) => format!("<fn {n}>"),
                 None => "<lambda>".into(),
             },
+            Value::VmFunction(f) => match f.vm_name() {
+                Some(n) => format!("<fn {n}>"),
+                None => "<lambda>".into(),
+            },
             Value::Class(c) => format!("<class {}>", c.name),
             Value::Instance(i) => format!("<instance of {}>", i.borrow().class.name),
             Value::File(h) => format!("{:?}", h.borrow()),
@@ -160,6 +174,12 @@ impl PartialEq for Value {
             (Value::Native(a), Value::Native(b)) => Rc::ptr_eq(a, b),
             (Value::NativeClosure(a), Value::NativeClosure(b)) => Rc::ptr_eq(a, b),
             (Value::Function(a), Value::Function(b)) => Rc::ptr_eq(a, b),
+            // Compare the data pointers rather than the fat pointers: two
+            // `Rc<dyn VmFunction>` to the same closure can carry vtable
+            // pointers that a linker was free to duplicate.
+            (Value::VmFunction(a), Value::VmFunction(b)) => {
+                std::ptr::eq(Rc::as_ptr(a) as *const (), Rc::as_ptr(b) as *const ())
+            }
             (Value::Class(a), Value::Class(b)) => Rc::ptr_eq(a, b),
             (Value::Instance(a), Value::Instance(b)) => Rc::ptr_eq(a, b),
             (Value::EnumVariant(a), Value::EnumVariant(b)) => Rc::ptr_eq(a, b),

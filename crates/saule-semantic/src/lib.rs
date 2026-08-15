@@ -27,6 +27,7 @@ use std::ops::Range;
 use saule_ast::{Decl, Module, Stmt};
 
 pub mod builtins;
+pub mod binding;
 mod control_flow;
 mod error;
 mod field_init;
@@ -35,6 +36,7 @@ pub mod registry;
 mod resolve;
 mod return_check;
 
+pub use binding::{Binding, Bindings, FunctionInfo, FunctionTable, ResolveTable, UpvalRef};
 pub use error::SemanticError;
 pub use registry::{
     ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, FunctionRegistry, FunctionSig,
@@ -97,6 +99,32 @@ pub fn analyze(module: &Module) -> Vec<SemanticError> {
 /// (but does not override) the metadata extracted from the current
 /// module's own declarations.
 pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError> {
+    analyze_inner(module, seed, false).0
+}
+
+/// [`analyze_with_seed`], but also hands back what the resolver learned:
+/// where every identifier binds, the slot each local occupies, and the exact
+/// upvalue list of every closure.
+///
+/// The resolver already decides all of this in order to report
+/// `UndefinedName`; it simply discarded the answer. Recovering it is what
+/// lets the bytecode compiler turn a name into a register index, and what
+/// lets closure capture be *exact* rather than the over-approximation
+/// `saule-interpreter`'s `capture.rs` performs
+/// (`VM_DESIGN.md` §7.1, §21.1 item 0.6).
+///
+/// **Precondition**: `module` has been through `saule_ast::assign_ids`.
+/// Every module the parser produces has.
+pub fn analyze_with_bindings(module: &Module, seed: ModuleSeed) -> (Vec<SemanticError>, Bindings) {
+    let (errors, bindings) = analyze_inner(module, seed, true);
+    (errors, bindings.unwrap_or_default())
+}
+
+fn analyze_inner(
+    module: &Module,
+    seed: ModuleSeed,
+    collect_bindings: bool,
+) -> (Vec<SemanticError>, Option<Bindings>) {
     let wildcard_names = seed.wildcard_names;
     let (mut reg, mut ifaces, mut enums) = build_registry(module);
     for (name, info) in seed.classes {
@@ -154,7 +182,12 @@ pub fn analyze_with_seed(module: &Module, seed: ModuleSeed) -> Vec<SemanticError
     // Name resolution + a bundle of structural checks
     // (self/super placement, variadic param shape, arg ordering, for-in
     // arity). Walks the AST once, sharing scope state across the checks.
-    resolve::check(module, wildcard_names.as_ref(), &mut errors);
+    let bindings = resolve::check(
+        module,
+        wildcard_names.as_ref(),
+        &mut errors,
+        collect_bindings,
+    );
 
-    errors
+    (errors, bindings)
 }

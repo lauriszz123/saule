@@ -84,6 +84,7 @@ impl Parser {
                 Some(Spanned {
                     value: Stmt::Expr(e),
                     span,
+                    ..
                 }),
             ) => {
                 let end = span.end;

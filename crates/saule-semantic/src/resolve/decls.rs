@@ -3,16 +3,16 @@
 
 use crate::error::SemanticError;
 use crate::to_source_span;
-use saule_ast::{ClassMember, Decl, Method, Param, Spanned, Stmt};
+use saule_ast::{ClassMember, Decl, Method, NodeId, Param, Spanned, Stmt};
 
 use super::*;
 
 impl Resolver {
-    pub(crate) fn decl(&mut self, decl: &Decl) {
-        match decl {
+    pub(crate) fn decl(&mut self, decl: &Spanned<Decl>) {
+        match &decl.value {
             Decl::Function { params, body, .. } => {
                 self.check_variadic_shape(params);
-                self.enter_function(params, body);
+                self.enter_function(params, body, decl.id);
             }
             Decl::Class { name, members, .. } => {
                 let prev_class = self.in_class.replace(name.clone());
@@ -37,7 +37,7 @@ impl Resolver {
                 for m in members {
                     match &m.value {
                         ClassMember::Method(meth) => {
-                            self.method(name, meth, &static_names);
+                            self.method(name, meth, &static_names, m.id);
                         }
                         ClassMember::Field {
                             default: Some(d), ..
@@ -51,7 +51,13 @@ impl Resolver {
                 for meth in methods {
                     self.check_variadic_shape(&meth.params);
                     let prev_method = std::mem::replace(&mut self.in_method, true);
-                    self.enter_function(&meth.params, &meth.body);
+                    // `Vec<Method>`, not `Vec<Spanned<Method>>`: an enum
+                    // method has no node of its own to key a function-table
+                    // entry on. Resolution and diagnostics are unaffected —
+                    // only the compiler's lookup is, and it can fall back to
+                    // computing the frame itself until the AST grows a span
+                    // here.
+                    self.enter_function(&meth.params, &meth.body, NodeId::NONE);
                     self.in_method = prev_method;
                 }
             }
@@ -69,7 +75,13 @@ impl Resolver {
         }
     }
 
-    pub(crate) fn method(&mut self, class_name: &str, meth: &Method, static_names: &[String]) {
+    pub(crate) fn method(
+        &mut self,
+        class_name: &str,
+        meth: &Method,
+        static_names: &[String],
+        node: NodeId,
+    ) {
         self.check_variadic_shape(&meth.params);
         let prev_method = std::mem::replace(&mut self.in_method, true);
         let prev_init =
@@ -84,16 +96,19 @@ impl Resolver {
         }
 
         let prev_class = self.in_class.replace(class_name.to_string());
-        self.push_scope();
-        // Make the class's static members visible by bare name.
+        self.push_function(node);
+        self.set_current_class(class_name);
+        // Make the class's static members visible by bare name. They are
+        // *not* frame slots — a static lives on the class — so they go into
+        // their own set rather than consuming a register.
         for n in static_names {
-            self.declare(n);
+            self.declare_static(n);
         }
         for p in &meth.params {
-            self.declare(&p.name);
+            self.declare_param(&p.name);
         }
         self.block(&meth.body);
-        self.pop_scope();
+        self.pop_function();
         self.in_class = prev_class;
 
         self.in_init = prev_init;
@@ -102,7 +117,12 @@ impl Resolver {
 
     /// Push a fresh function-body scope, declare every param, walk the
     /// body, pop. Used for top-level `Decl::Function` and enum methods.
-    pub(crate) fn enter_function(&mut self, params: &[Param], body: &[Spanned<Stmt>]) {
+    pub(crate) fn enter_function(
+        &mut self,
+        params: &[Param],
+        body: &[Spanned<Stmt>],
+        node: NodeId,
+    ) {
         // Default-value expressions are evaluated in the *outer* scope, so
         // walk them before pushing the body frame.
         for p in params {
@@ -110,12 +130,12 @@ impl Resolver {
                 self.expr(d);
             }
         }
-        self.push_scope();
+        self.push_function(node);
         for p in params {
-            self.declare(&p.name);
+            self.declare_param(&p.name);
         }
         self.block(body);
-        self.pop_scope();
+        self.pop_function();
     }
 
     pub(crate) fn check_variadic_shape(&mut self, params: &[Param]) {

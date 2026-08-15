@@ -147,10 +147,11 @@ pub fn run(source: &str) -> RunResult {
 
     // No import seed: resolving imports needs a filesystem, and there isn't
     // one. A program that imports gets a normal diagnostic from the loader.
-    let semantic: Vec<Diagnostic> = saule_semantic::analyze(&module)
-        .iter()
-        .map(|e| to_diagnostic(e, Phase::Semantic))
-        .collect();
+    let semantic: Vec<Diagnostic> =
+        saule_interpreter::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default())
+            .iter()
+            .map(|e| to_diagnostic(e, Phase::Semantic))
+            .collect();
     if !semantic.is_empty() {
         return failed(semantic, Vec::new());
     }

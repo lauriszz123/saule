@@ -113,6 +113,7 @@ fn format_source(source: &str, options: FmtOptions) -> Option<String> {
             other => tokens.push(saule_ast::Spanned {
                 value: other,
                 span: tok.span,
+                id: saule_ast::NodeId::NONE,
             }),
         }
     }

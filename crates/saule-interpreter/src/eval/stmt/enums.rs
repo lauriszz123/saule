@@ -35,29 +35,39 @@ pub(super) fn exec_enum_decl(
     }
 
     // Create all variants (without enum references initially).
-    for variant in variants {
+    //
+    // Tags are the loop index, so they are dense and follow declaration
+    // order — the property the bytecode compiler's jump tables rely on
+    // (`VM_DESIGN.md` §9.1). Tuple variants get a tag too, even though they
+    // have no singleton to hold it: `by_tag` records `None` for them and
+    // `tags` still maps the name, so `Event.Click(1, 2)` can stamp the right
+    // tag onto each fresh object it builds.
+    let mut by_tag: Vec<Option<Rc<value::EnumVariantObject>>> = Vec::with_capacity(variants.len());
+    let mut tags: HashMap<String, u32> = HashMap::default();
+
+    for (tag, variant) in variants.iter().enumerate() {
+        let tag = tag as u32;
         match &variant.value {
-            EnumVariant::Bare(name) => {
+            EnumVariant::Bare(name) | EnumVariant::Valued(name, _) => {
+                let val = match &variant.value {
+                    EnumVariant::Valued(_, expr_node) => Some(expr::eval(expr_node, env)?),
+                    _ => None,
+                };
                 let variant_obj = Rc::new(value::EnumVariantObject {
                     enum_name: enum_name.to_string(),
                     variant_name: name.clone(),
-                    value: None,
+                    tag,
+                    value: val,
                     enum_obj: RefCell::new(None),
                 });
-                variant_dict.insert(name.clone(), variant_obj);
-            }
-            EnumVariant::Valued(name, expr_node) => {
-                let val = expr::eval(expr_node, env)?;
-                let variant_obj = Rc::new(value::EnumVariantObject {
-                    enum_name: enum_name.to_string(),
-                    variant_name: name.clone(),
-                    value: Some(val),
-                    enum_obj: RefCell::new(None),
-                });
-                variant_dict.insert(name.clone(), variant_obj);
+                variant_dict.insert(name.clone(), Rc::clone(&variant_obj));
+                by_tag.push(Some(variant_obj));
+                tags.insert(name.clone(), tag);
             }
             EnumVariant::Tuple { name, fields } => {
                 tuple_variants.insert(name.clone(), fields.len());
+                by_tag.push(None);
+                tags.insert(name.clone(), tag);
             }
         }
     }
@@ -65,6 +75,8 @@ pub(super) fn exec_enum_decl(
     let final_enum = Rc::new(value::EnumObject {
         name: enum_name.to_string(),
         variants: variant_dict.clone(),
+        by_tag,
+        tags,
         tuple_variants,
         methods: enum_methods,
     });

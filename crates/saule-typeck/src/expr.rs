@@ -115,6 +115,17 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                     expr.span.clone(),
                 );
             }
+            // `obj?.method(args)`. The `Expr::Call` arm dispatches on the
+            // *shape* of the callee rather than walking into it, so a safe
+            // method call is the one receiver position nothing infers — and
+            // an uninferred node has no `TypeTable` entry, which leaves the
+            // bytecode compiler unable to resolve the method's vtable slot
+            // (§21.1 0.5). Inferring it here records the type; no diagnostic
+            // is produced, so `check` and `check_with_types` still agree
+            // byte for byte.
+            if let Expr::SafeMember { obj, .. } = &callee.value {
+                let _ = infer(obj, scope);
+            }
             // User-defined class methods: `Class.method(args)` (static) or
             // `instance.method(args)` (instance). The native-sig path above
             // never matches these because they aren't registered as natives.

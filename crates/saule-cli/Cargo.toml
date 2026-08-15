@@ -18,6 +18,9 @@ saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
 saule-interpreter = { path = "../saule-interpreter" }
+# The CLI is where the engine is selected (VM_DESIGN.md 22.4), so it is
+# the one binary that depends on both.
+saule-vm = { path = "../saule-vm" }
 saule-fmt = { path = "../saule-fmt" }
 miette = { version = "7.6.0", features = ["fancy"] }
 clap = { version = "4.6.4", features = ["derive"] }

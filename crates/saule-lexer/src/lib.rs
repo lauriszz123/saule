@@ -168,6 +168,7 @@ impl<'src> Lexer<'src> {
                         out.push(Spanned {
                             value: Token::BlockComment(text),
                             span: start..span_end,
+            id: saule_ast::NodeId::NONE,
                         });
                     } else {
                         // Line comment: until end of line (or EOF).
@@ -184,6 +185,7 @@ impl<'src> Lexer<'src> {
                         out.push(Spanned {
                             value: Token::LineComment(text),
                             span: start..end,
+            id: saule_ast::NodeId::NONE,
                         });
                     }
                     continue;
@@ -219,6 +221,7 @@ impl<'src> Lexer<'src> {
         out.push(Spanned {
             value: Token::Eof,
             span: end..end,
+            id: saule_ast::NodeId::NONE,
         });
 
         Lexed {
@@ -284,6 +287,7 @@ impl<'src> Lexer<'src> {
         Spanned {
             value: tok,
             span: start..end,
+            id: saule_ast::NodeId::NONE,
         }
     }
 
@@ -398,6 +402,7 @@ impl<'src> Lexer<'src> {
         Spanned {
             value: tok,
             span: start..end,
+            id: saule_ast::NodeId::NONE,
         }
     }
 
@@ -449,6 +454,7 @@ impl<'src> Lexer<'src> {
         Spanned {
             value: Token::Int(value),
             span: start..end,
+            id: saule_ast::NodeId::NONE,
         }
     }
 
@@ -626,6 +632,7 @@ impl<'src> Lexer<'src> {
         Some(Spanned {
             value: tok,
             span: start..start + len,
+            id: saule_ast::NodeId::NONE,
         })
     }
 
@@ -708,6 +715,7 @@ impl<'src> Lexer<'src> {
         Spanned {
             value: Token::String(s),
             span: start..end,
+            id: saule_ast::NodeId::NONE,
         }
     }
 

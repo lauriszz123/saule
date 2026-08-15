@@ -205,9 +205,14 @@ pub(crate) mod tests {
         s.write("src/main.sau", "");
 
         set(load(&s.root()).expect("load"));
+        // Spelled literally, and with `/` on every platform. Building the
+        // expectation from a `Path` looked platform-aware but was not —
+        // `Path::display` echoes the separators it was given rather than
+        // rewriting them, so it asserted the same string either way while
+        // reading as though it adapted.
         assert_eq!(
             pretty_path(&s.canonical("src/main.sau")),
-            format!("demo/{}", Path::new("src/main.sau").display())
+            "demo/src/main.sau"
         );
 
         let outside = s.root().parent().expect("parent").join("elsewhere.sau");

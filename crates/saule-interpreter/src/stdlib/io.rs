@@ -78,6 +78,8 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "File".to_string(),
         parent: None,
         field_defs: Vec::<FieldDef>::new(),
+        // Statics only — a stdlib namespace class is never instantiated.
+        layout: Default::default(),
         methods: Default::default(),
         static_fields: RefCell::new(Default::default()),
         static_methods: Default::default(),
@@ -111,6 +113,8 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
         name: "Io".to_string(),
         parent: None,
         field_defs: Vec::new(),
+        // Statics only — a stdlib namespace class is never instantiated.
+        layout: Default::default(),
         methods: Default::default(),
         static_fields: RefCell::new(static_fields),
         static_methods: Default::default(),
@@ -180,20 +184,26 @@ pub fn register_sigs() {
 
 fn install_enum(env: &Rc<RefCell<Environment>>, name: &str, variants: &[(&str, &str)]) {
     let mut variant_dict = fxmap();
-    for (vname, vvalue) in variants {
-        variant_dict.insert(
-            (*vname).to_string(),
-            Rc::new(EnumVariantObject {
-                enum_name: name.to_string(),
-                variant_name: (*vname).to_string(),
-                value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
-                enum_obj: RefCell::new(None),
-            }),
-        );
+    let mut by_tag = Vec::with_capacity(variants.len());
+    let mut tags = fxmap();
+    // Declaration order is the slice order, so the index is the tag.
+    for (tag, (vname, vvalue)) in variants.iter().enumerate() {
+        let variant = Rc::new(EnumVariantObject {
+            enum_name: name.to_string(),
+            variant_name: (*vname).to_string(),
+            tag: tag as u32,
+            value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
+            enum_obj: RefCell::new(None),
+        });
+        variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
+        by_tag.push(Some(variant));
+        tags.insert((*vname).to_string(), tag as u32);
     }
     let final_enum = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
+        by_tag,
+        tags,
         tuple_variants: Default::default(),
         methods: Default::default(),
     });

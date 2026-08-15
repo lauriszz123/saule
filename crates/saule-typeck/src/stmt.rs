@@ -302,6 +302,22 @@ pub(super) fn check_stmt(
             if let Some(s) = step {
                 check_expr(s, scope, errors);
             }
+            // Record the bounds' types.
+            //
+            // `check_expr` walks them for diagnostics but never asks what
+            // they *are*, so without this they are absent from the type
+            // table — and a bytecode compiler that cannot tell an integer
+            // loop from a float one has to refuse the loop entirely
+            // (`VM_DESIGN.md` §11.1: `FORPREP_I` and `FORPREP_F` are
+            // separate opcodes precisely so the check happens once, here,
+            // rather than per iteration).
+            //
+            // Also improves hover and inlay hints on loop bounds.
+            let _ = crate::expr::infer(from, scope);
+            let _ = crate::expr::infer(to, scope);
+            if let Some(s) = step {
+                let _ = crate::expr::infer(s, scope);
+            }
             let mut body_scope = scope.clone();
             let ty = var_ty.clone().unwrap_or(Type::Named("integer".into()));
             body_scope.bind(var.clone(), ty);

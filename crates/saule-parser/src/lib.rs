@@ -237,8 +237,23 @@ fn finish(mut p: Parser) -> Parsed {
         }
         stmts.push(p.parse_statement_recovering());
     }
+    // Number the tree here rather than asking each caller to do it after
+    // parsing. `finish` is the single funnel every parse path goes through —
+    // `parse`, `parse_recover`, and both readings inside
+    // `parse_recover_with_prior` — so doing it here makes one invariant
+    // unconditional: **any `Module` produced by this crate has ids.**
+    //
+    // Downstream passes publish side tables keyed on `NodeId`
+    // (`saule_typeck::TypeTable`, `saule_semantic::ResolveTable`), and a
+    // caller that forgot to number its tree would not fail loudly — it would
+    // get a table full of `NodeId::NONE` collisions and quietly wrong
+    // answers. Invisible to the parser's own tests, since `Spanned`'s
+    // equality ignores `id`.
+    let mut module = Module { stmts };
+    saule_ast::assign_ids(&mut module);
+
     Parsed {
-        module: Module { stmts },
+        module,
         errors: p.errors,
         saw_missing_end: p.saw_missing_end,
         stray_ends: p.stray_ends,

@@ -1111,6 +1111,7 @@ dependencies = [
  "saule-project",
  "saule-semantic",
  "saule-version",
+ "saule-vm",
 ]
 
 [[package]]
@@ -1265,6 +1266,20 @@ dependencies = [
 [[package]]
 name = "saule-version"
 version = "26.0.0"
+
+[[package]]
+name = "saule-vm"
+version = "26.0.0"
+dependencies = [
+ "miette",
+ "saule-ast",
+ "saule-interpreter",
+ "saule-lexer",
+ "saule-parser",
+ "saule-semantic",
+ "saule-typeck",
+ "thiserror",
+]
 
 [[package]]
 name = "saule-wasm"

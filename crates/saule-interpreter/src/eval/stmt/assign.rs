@@ -125,8 +125,29 @@ fn assign_member(
 ) -> Result<Flow, RuntimeError> {
     match receiver {
         Value::Instance(inst) => {
-            inst.borrow_mut().fields.insert(name.to_string(), value);
-            Ok(Flow::nil())
+            // Instances have a fixed shape now, so there is no slot to
+            // conjure for a name the class never declared. The typechecker
+            // already rejects that (`tests/ui/unknown_field.sau`); this only
+            // fires for a caller that skipped it via the raw `run()` entry
+            // point, where silently creating an invisible field would be a
+            // worse answer than saying so.
+            if inst.borrow_mut().set_field(name, value) {
+                Ok(Flow::nil())
+            } else {
+                let class = inst.borrow().class.name.clone();
+                let known = inst.borrow().class.layout.names().join("`, `");
+                Err(RuntimeError::TypeError {
+                    message: if known.is_empty() {
+                        format!("class `{class}` declares no instance field `{name}`")
+                    } else {
+                        format!(
+                            "class `{class}` declares no instance field `{name}` — \
+                             it has `{known}`"
+                        )
+                    },
+                    span,
+                })
+            }
         }
         Value::Class(class) => {
             // Walk the chain — `Child.staticField = …` should update the

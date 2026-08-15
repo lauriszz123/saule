@@ -108,7 +108,7 @@ pub(crate) fn dispatch_member_call_multi(
             if let Some(m) = class.lookup_static_method(name) {
                 return call_static_method_multi(&m, &class, args, span);
             }
-            if let Some(v) = inst.borrow().fields.get(name).cloned() {
+            if let Some(v) = inst.borrow().field(name).cloned() {
                 return call_value_multi(v, args, span);
             }
             Err(RuntimeError::TypeError {
