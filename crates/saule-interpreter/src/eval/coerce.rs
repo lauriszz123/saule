@@ -69,11 +69,21 @@ pub fn to_declared(
     let Some(from) = class.lookup_static_method(saule_ast::ops::ASSIGNABLE.method) else {
         return Ok(value);
     };
-    let out = crate::eval::expr::call_function_multi(
-        &from,
-        &[crate::eval::expr::EvaluatedArg::Positional(value)],
-        span.clone(),
-    )?;
+    let args = [crate::eval::expr::EvaluatedArg::Positional(value)];
+    // `from` is a static reached as a plain function, so the tree-walker's
+    // arm keeps using `call_function_multi` — statics come through
+    // `resolved_owner`, and rerouting it would newly bind `self`.
+    let out = match &from {
+        crate::value::MethodRef::Tree(f) => {
+            crate::eval::expr::call_function_multi(f, &args, span.clone())?
+        }
+        crate::value::MethodRef::Vm(f) => {
+            let [crate::eval::expr::EvaluatedArg::Positional(v)] = &args else {
+                unreachable!("built one positional argument just above")
+            };
+            f.invoke(std::slice::from_ref(v), span.clone())?
+        }
+    };
     Ok(out.into_iter().next().unwrap_or(Value::Nil))
 }
 

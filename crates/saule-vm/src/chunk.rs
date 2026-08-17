@@ -44,9 +44,25 @@ pub struct Chunk {
     /// Every function, method, and lambda in the module. `Rc` because a
     /// runtime [`Closure`](crate::vm::Closure) holds one and frames are hot.
     pub protos: Vec<Rc<Proto>>,
-    pub classes: Vec<ClassProto>,
-    pub enums: Vec<EnumProto>,
-    pub interfaces: Vec<InterfaceProto>,
+    /// The program's classes, enums and interfaces — **shared by every
+    /// module of a program**, not owned by this chunk (`VM_DESIGN.md` §14,
+    /// §24.2).
+    ///
+    /// A subclass in one module extending a parent in another needs the
+    /// parent's real field slots and vtable numbering; computing them twice
+    /// is exactly the divergence §24.2 names as the worst bug this project
+    /// could ship. So `ClassIdx` is program-global and every module's chunk
+    /// points at the same table.
+    ///
+    /// `Rc<Vec<_>>` rather than a plain `Vec` so the sharing costs one
+    /// refcount per module instead of a deep copy of every layout. While a
+    /// module is being compiled the driver holds the table with a refcount
+    /// of exactly one and mutates it through [`Chunk::classes_mut`]; the
+    /// `Rc`s are handed to the chunks only once compilation is finished, so
+    /// nothing mutates a table anyone else can see.
+    pub classes: Rc<Vec<ClassProto>>,
+    pub enums: Rc<Vec<EnumProto>>,
+    pub interfaces: Rc<Vec<InterfaceProto>>,
     /// Module-wide constant pool, deduplicated by the compiler.
     pub constants: Vec<Value>,
     /// Runtime type descriptors for `CHKTY` and `catch` clauses.
@@ -69,8 +85,22 @@ pub struct Chunk {
     /// enums *and* 256 variants each. A table costs one load and has no
     /// limit worth stating.
     pub variant_refs: Vec<(EnumIdx, u32)>,
-    /// Number of top-level bindings; module slots are flat and unhashed.
+    /// Number of top-level bindings this module owns.
     pub module_slots: usize,
+    /// Where this module's slots start in the **program's** flat slot space.
+    ///
+    /// One vector holds every module's top-level bindings, and each module's
+    /// slot numbers are rebased onto it at compile time. That is what makes
+    /// an import need no new opcode: the importing module's slot and the
+    /// exporting module's slot are both indices into the same vector, so
+    /// copying one to the other is an ordinary `GETMOD` + `SETMOD`.
+    ///
+    /// Zero for a single-module compile, where the two spaces coincide.
+    pub module_slot_base: usize,
+    /// This module's position in its program, and so the row of the VM's
+    /// per-module closure cache it owns. Proto indices are per chunk, so one
+    /// flat cache would have index 5 mean two different functions.
+    pub module_index: usize,
     /// The module body.
     pub main: ProtoIdx,
     pub source: Rc<miette::NamedSource<String>>,
@@ -82,15 +112,17 @@ impl Chunk {
     pub fn empty(name: &str) -> Chunk {
         Chunk {
             protos: Vec::new(),
-            classes: Vec::new(),
-            enums: Vec::new(),
-            interfaces: Vec::new(),
+            classes: Rc::new(Vec::new()),
+            enums: Rc::new(Vec::new()),
+            interfaces: Rc::new(Vec::new()),
             constants: Vec::new(),
             type_descs: Vec::new(),
             cast_types: Vec::new(),
             jump_tables: Vec::new(),
             variant_refs: Vec::new(),
             module_slots: 0,
+            module_slot_base: 0,
+            module_index: 0,
             main: 0,
             source: Rc::new(miette::NamedSource::new(name, String::new())),
         }
@@ -117,6 +149,27 @@ impl Chunk {
 
     pub fn proto(&self, idx: ProtoIdx) -> &Rc<Proto> {
         &self.protos[idx as usize]
+    }
+
+    /// Mutable access to the shared class table, during compilation.
+    ///
+    /// Deliberately `get_mut` and not `make_mut`: `make_mut` would silently
+    /// *clone* the table if anyone else already held it, leaving the
+    /// compiler writing vtable slots into a copy that the VM never sees —
+    /// a wrong answer with no symptom, which is the failure mode §24.2 is
+    /// about. Panicking says the driver shared the tables too early, which
+    /// is a compiler bug and cannot be reached from user input.
+    pub fn classes_mut(&mut self) -> &mut Vec<ClassProto> {
+        Rc::get_mut(&mut self.classes).expect("class table shared before compilation finished")
+    }
+
+    pub fn enums_mut(&mut self) -> &mut Vec<EnumProto> {
+        Rc::get_mut(&mut self.enums).expect("enum table shared before compilation finished")
+    }
+
+    pub fn interfaces_mut(&mut self) -> &mut Vec<InterfaceProto> {
+        Rc::get_mut(&mut self.interfaces)
+            .expect("interface table shared before compilation finished")
     }
 
     /// Intern a `CASTCHK` type, reusing an equal existing entry.
@@ -274,6 +327,13 @@ pub enum InlineCache {
 #[derive(Debug)]
 pub struct ClassProto {
     pub name: Rc<str>,
+    /// Which module declared this class.
+    ///
+    /// The class table is program-global, but `vtable` and `static_methods`
+    /// hold **proto** indices and those are per chunk. Without this a
+    /// `CALLM` on a class from another module would load proto 7 of the
+    /// *calling* module — a different function, silently.
+    pub module: usize,
     pub parent: Option<ClassIdx>,
     pub layout: Rc<FieldLayout>,
     /// Constant indices for each field slot, present when every default is a
@@ -302,7 +362,15 @@ pub struct ClassProto {
     /// the class is created.
     pub statics_init: Option<ProtoIdx>,
     pub static_methods: Vec<ProtoIdx>,
-    pub smindex: HashMap<Rc<str>, u16>,
+    /// name -> the class that *declares* the static method, and its slot
+    /// there.
+    ///
+    /// Flattened like `vindex`, and for the same reason: a subclass must
+    /// find an inherited `static fn` in one probe. The declaring class is
+    /// carried because `static_methods` is one vector per class index — an
+    /// inherited name resolved against the *subclass* would index its own
+    /// (empty) vector. The same rule `sindex` follows for static fields.
+    pub smindex: HashMap<Rc<str>, StaticSlot>,
     /// interface -> (interface method slot -> this class's vtable slot).
     pub itables: HashMap<InterfaceIdx, Vec<u16>>,
     /// Vtable slot of `init`, resolved through the inheritance chain.
@@ -338,6 +406,9 @@ pub struct InterfaceProto {
 #[derive(Debug)]
 pub struct EnumProto {
     pub name: Rc<str>,
+    /// Which module declared this enum — a variant's value is an index into
+    /// that module's constant pool.
+    pub module: usize,
     pub variants: Vec<VariantProto>,
     pub by_name: HashMap<Rc<str>, u32>,
 }

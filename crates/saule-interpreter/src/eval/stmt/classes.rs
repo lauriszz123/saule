@@ -8,7 +8,9 @@ use saule_ast::{ClassMember, Decl, Spanned};
 
 use crate::env::Environment;
 use crate::error::RuntimeError;
-use crate::value::{ClassObject, FieldDef, FieldLayout, FunctionObject, InterfaceObject, Value};
+use crate::value::{
+    ClassObject, FieldDef, FieldLayout, FunctionObject, InterfaceObject, MethodRef, Value,
+};
 
 use super::super::{Flow, expr};
 use super::make_function;
@@ -182,11 +184,19 @@ pub(super) fn exec_class_decl(
     // Flatten the parent's tables in underneath this class's own entries, so
     // a lookup never walks the chain (`VM_DESIGN.md` §8.3). `entry` keeps
     // the child's version when both declare a name — that is the override.
+    // A parent built by the tree-walker holds tree-walker methods, so the
+    // `as_tree` here never drops one. It cannot be reached at all with a
+    // VM-built parent: the two engines never share a class hierarchy —
+    // `exec_class_decl` only ever extends a class it declared itself.
     if let Some(p) = &parent {
-        for (k, v) in &p.methods {
+        for (k, v) in p.methods.iter().filter_map(|(k, v)| Some((k, v.as_tree()?))) {
             methods.entry(k.clone()).or_insert_with(|| Rc::clone(v));
         }
-        for (k, v) in &p.static_methods {
+        for (k, v) in p
+            .static_methods
+            .iter()
+            .filter_map(|(k, v)| Some((k, v.as_tree()?)))
+        {
             static_methods.entry(k.clone()).or_insert_with(|| Rc::clone(v));
         }
     }
@@ -203,9 +213,15 @@ pub(super) fn exec_class_decl(
         parent,
         field_defs,
         layout,
-        methods,
+        methods: methods
+            .into_iter()
+            .map(|(k, v)| (k, MethodRef::Tree(v)))
+            .collect(),
         static_fields: RefCell::new(static_fields),
-        static_methods,
+        static_methods: static_methods
+            .into_iter()
+            .map(|(k, v)| (k, MethodRef::Tree(v)))
+            .collect(),
         constructor,
     });
 
@@ -217,12 +233,12 @@ pub(super) fn exec_class_decl(
     // would rewrite the parent's method to think it belongs to the subclass —
     // and the last subclass declared would win for every sibling.
     for n in &own_method_names {
-        if let Some(f) = class.methods.get(n) {
+        if let Some(f) = class.methods.get(n).and_then(MethodRef::as_tree) {
             f.set_owner_class(&class);
         }
     }
     for n in &own_static_names {
-        if let Some(f) = class.static_methods.get(n) {
+        if let Some(f) = class.static_methods.get(n).and_then(MethodRef::as_tree) {
             f.set_owner_class(&class);
         }
     }

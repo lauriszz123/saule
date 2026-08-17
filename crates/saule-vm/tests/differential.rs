@@ -293,18 +293,49 @@ fn unsupported_constructs_report_rather_than_miscompile() {
     // The contract that makes `--vm` usable before it is finished: anything
     // codegen cannot do yet is refused by name, never guessed at.
     //
-    // An `import` is the construct standing in for that here — repoint this
-    // at another unsupported one when imports land, the same way the
-    // `unimplemented_opcodes_report_rather_than_panic` canary is repointed.
+    // A **tuple pattern** is the construct standing in for that here —
+    // repoint this at another unsupported one when they land, the same way
+    // the `unimplemented_opcodes_report_rather_than_panic` canary is.
+    // It has already moved twice, from `import` and then from `a pipe`, as
+    // each of those landed.
     // The assertion is about the *shape* of the refusal: it names the
     // construct and carries a span, so the CLI can fall back and say why.
-    let src = "import Json from \"json\"
-1";
+    //
+    // It used to point at `import`, which no longer refuses when a program
+    // driver resolved it (`saule_vm::program::compile`). A lone `import`
+    // compiled through this single-module path still does — see
+    // `an_import_without_a_program_driver_still_refuses` below, which pins
+    // that separately because it is a correctness rule rather than a
+    // stand-in.
+    let src = "fn divmod(a: integer, b: integer) -> (integer, integer)\n\
+               \x20 return a / b, a % b\n\
+               end\n\
+               local r: string = match divmod(7, 2)\n\
+               \x20 case (q, 0) then \"clean\"\n\
+               \x20 case _ then \"rem\"\n\
+               end\nr";
     let module = front_end(src);
     match saule_vm::compile(&module, "x.sau", src) {
         Err(saule_vm::CompileError::Unsupported { thing, span }) => {
-            assert_eq!(thing, "an import declaration");
+            assert_eq!(thing, "a tuple pattern");
             assert!(span.start < span.end, "the refusal must point somewhere");
+        }
+        other => panic!("expected a clean Unsupported, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_import_without_a_program_driver_still_refuses() {
+    // Compiling one module on its own cannot bind an imported name: the
+    // resolver gives it a module slot, and nothing would ever write to that
+    // slot. Emitting a `GETMOD` against it would read `nil` — a wrong
+    // answer with no symptom. Only `program::compile`, which resolves the
+    // whole import graph first, may compile an `import` to nothing.
+    let src = "import Json from \"json\"\n1";
+    let module = front_end(src);
+    match saule_vm::compile(&module, "x.sau", src) {
+        Err(saule_vm::CompileError::Unsupported { thing, .. }) => {
+            assert_eq!(thing, "an import declaration");
         }
         other => panic!("expected a clean Unsupported, got {other:?}"),
     }
@@ -1254,5 +1285,831 @@ fn index_overloads_read_and_write() {
          c[\"host\"] = \"localhost\"\n\
          local r: string = c[\"host\"] .. \"/\" .. c[\"missing\"]\n\
          r",
+    );
+}
+
+// ── stdlib constants and table dot access ─────────────────────────────────
+
+#[test]
+fn a_stdlib_constant_folds_to_the_same_value() {
+    // `Math.ceil` already resolved to its native at compile time; these are
+    // the members that hold a *value* rather than a function.
+    must_agree("local r: float = Math.pi\nr");
+    must_agree("local r: float = Math.e\nr");
+    must_agree("local r: float = Math.sin(Math.pi / 2.0)\nr");
+    must_agree("local r: string = Os.sep\nr");
+}
+
+#[test]
+fn a_stdlib_enum_variant_folds() {
+    // Unannotated: `local m: IoMode = ...` is `UndeterminedType` today —
+    // the typechecker does not infer a stdlib enum's type from its variant.
+    must_agree("local r: string = tostring(IoMode.Write)\nr");
+}
+
+#[test]
+fn a_reassigned_stdlib_constant_is_not_folded() {
+    // `Math.pi = 3.0` is accepted — the typechecker does not reject it — so
+    // folding the read would freeze a value the program then changes.
+    //
+    // Today the *write* is itself unsupported, so the module falls back and
+    // the no-fold guard never fires. That makes this a canary rather than a
+    // behavioural test: when writes through a prelude receiver start
+    // compiling, this fails, and at that point the guard is what keeps the
+    // read honest.
+    assert!(
+        !agree("Math.pi = 3.0\nlocal r: float = Math.pi\nr"),
+        "the write compiles now — check that the constant fold still declines \
+         for a receiver this module assigns through"
+    );
+}
+
+#[test]
+fn a_top_level_local_shadowing_a_stdlib_name_wins() {
+    // A module-level `local` becomes a module *slot*, not a frame local, so
+    // `FuncCtx::lookup` cannot see it. Resolving these names on that lookup
+    // alone read the stdlib's `pi` and called the stdlib's `String.len`
+    // where the program meant its own table.
+    must_agree(
+        "local Math: table<string, float> = {pi: 3.0}\n\
+         local r: float = Math.pi\nr",
+    );
+    must_agree(
+        "local String: table<string, integer> = {len: 42}\n\
+         local r: integer = String.len\nr",
+    );
+}
+
+#[test]
+fn a_top_level_local_shadowing_a_class_name_wins() {
+    // Same failure, reached through the class-static path rather than the
+    // prelude one.
+    must_agree(
+        "class Foo\n  static tag: integer = 1\nend\n\
+         local Foo: table<string, integer> = {tag: 99}\n\
+         local r: integer = Foo.tag\nr",
+    );
+}
+
+#[test]
+fn table_dot_access_reads_and_writes() {
+    // `t.foo` is `t["foo"]`, and a miss is `nil` rather than an error.
+    must_agree(
+        "local t: table<string, string> = {}\n\
+         t.name = \"alice\"\n\
+         local r: string = t.name\nr",
+    );
+    must_agree(
+        "local t: table<string, string> = {name: \"bob\"}\n\
+         local r: string = t.name\nr",
+    );
+    must_agree(
+        "local t: table<string, string> = {}\n\
+         local r: string? = t.missing\n\
+         local s: string = r ?? \"(nil)\"\ns",
+    );
+    // The dotted and bracketed spellings must agree with each other too.
+    must_agree(
+        "local t: table<string, integer> = {}\n\
+         t.a = 1\n\
+         t[\"b\"] = 2\n\
+         local r: integer = t.a + t[\"b\"] + t[\"a\"] + t.b\nr",
+    );
+}
+
+#[test]
+fn table_dot_access_past_the_eight_bit_constant_window() {
+    // `GETMAPK`/`SETMAPK` hold the key's constant index in an 8-bit operand.
+    // Past 255 the compiler materialises the key and uses `GETIDX`/`SETIDX`
+    // instead — the alternative would be capping a module at 256 constants
+    // on an operation as ordinary as `t.name`.
+    let mut src = String::from("local t: table<string, integer> = {}\nlocal pad: integer = 0\n");
+    for i in 0..300 {
+        src.push_str(&format!("pad = pad + {}\n", 1000 + i));
+    }
+    src.push_str("t.late = 7\nlocal r: integer = t.late\nr");
+    must_agree(&src);
+}
+
+// ── Re-entrancy: the tree-walker calling into bytecode ───────────────────
+//
+// One root cause with several symptoms. `Value::VmFunction` used to be
+// uncallable from `saule-interpreter` and a VM-built `ClassObject` used to
+// carry an empty method map, so every path where the tree-walker's *own*
+// code has to call a user function on a value hit a wall. Each test below
+// is one of those paths. All of them were guarded by a compile-time refusal
+// before; a refusal makes the engines agree by not running the VM at all,
+// which is why `must_agree` — which fails if the compiler declines — is the
+// right assertion here rather than `agree`.
+
+#[test]
+fn a_native_invokes_a_bytecode_comparator() {
+    // `Table.sort`'s comparator, the case that kept `sort.sau` on the
+    // tree-walker. The native calls `call_value_multi`, which now has an
+    // arm that runs a fresh `Vm` over the caller's shared state.
+    must_agree(
+        "local t: table<integer, integer> = {5, 3, 9, 1}\n\
+         Table.sort(t, (a: integer, b: integer) => a < b)\n\
+         local r: string = t[1] .. \",\" .. t[2] .. \",\" .. t[3] .. \",\" .. t[4]\nr",
+    );
+    // Descending, so a comparator that is actually consulted is the only
+    // way to pass: a no-op callback would leave the ascending order above.
+    must_agree(
+        "local t: table<integer, integer> = {5, 3, 9, 1}\n\
+         Table.sort(t, (a: integer, b: integer) => a > b)\n\
+         local r: string = t[1] .. \",\" .. t[2] .. \",\" .. t[3] .. \",\" .. t[4]\nr",
+    );
+}
+
+#[test]
+fn a_comparator_closure_captures_its_environment() {
+    // The callback runs on a *fresh* register file but over the same shared
+    // half, and it reaches its captured `flip` through an upvalue cell that
+    // outlived the frame that created it.
+    must_agree(
+        "local flip: boolean = true\n\
+         local cmp = fn(a: integer, b: integer) -> boolean\n\
+         \x20 if flip then\n\
+         \x20   return a > b\n\
+         \x20 end\n\
+         \x20 return a < b\n\
+         end\n\
+         local t: table<integer, integer> = {2, 8, 4}\n\
+         Table.sort(t, cmp)\n\
+         local r: string = t[1] .. \",\" .. t[2] .. \",\" .. t[3]\nr",
+    );
+}
+
+#[test]
+fn a_tostring_overload_is_honoured_by_concatenation() {
+    // The worst failure this project could ship, and the one that was live:
+    // `display_value` asked the class for a `toString`, a VM-built class
+    // answered no, and `..` printed `<instance of Money>` — **with no
+    // error**. Caught by `SAULE_DIFF=1`, not by any exit status.
+    let money = "class Money implements OpToString\n\
+                 \x20 local amount: integer\n\
+                 \x20 fn init(a: integer)\n\
+                 \x20   self.amount = a\n\
+                 \x20 end\n\
+                 \x20 fn toString() -> string\n\
+                 \x20   return \"$\" .. self.amount\n\
+                 \x20 end\n\
+                 end\n";
+    must_agree(&format!(
+        "{money}local m: Money = Money(7)\nlocal r: string = \"cost: \" .. m\nr"
+    ));
+    must_agree(&format!(
+        "{money}local m: Money = Money(7)\nlocal r: string = tostring(m)\nr"
+    ));
+    // Nested in a table, the *structural* rendering wins — `display_value`
+    // applies to the value itself, not to values inside a table. The two
+    // engines have to agree about that boundary too.
+    must_agree(&format!(
+        "{money}local t: table<integer, Money> = {{Money(1)}}\n\
+         local r: string = \"\" .. t[1]\nr"
+    ));
+}
+
+#[test]
+fn a_tostring_overload_runs_exactly_once_per_operand() {
+    // `CONCAT` used to render each operand twice — once to measure the
+    // result's length, once to build it. Harmless while rendering was pure;
+    // an overload is user code, so a second pass would run its side effects
+    // twice. Counted rather than inferred.
+    must_agree(
+        "class Loud implements OpToString\n\
+         \x20 static calls: integer = 0\n\
+         \x20 fn toString() -> string\n\
+         \x20   Loud.calls = Loud.calls + 1\n\
+         \x20   return \"x\"\n\
+         \x20 end\n\
+         end\n\
+         local a: Loud = Loud()\n\
+         local b: Loud = Loud()\n\
+         local s: string = a .. \"-\" .. b\n\
+         local r: integer = Loud.calls\nr",
+    );
+}
+
+#[test]
+fn an_operator_overload_resolves_on_an_unproved_receiver() {
+    // When the front end proved the operand's class the compiler picks the
+    // overload itself. When it did not — a call result, here — `ARITHX`
+    // falls through to `ops::binary`, which looks the overload up on the
+    // runtime class. That lookup is the one that used to find an empty map.
+    must_agree(
+        "class Money implements OpAdd<Money, Money>, OpToString\n\
+         \x20 local amount: integer\n\
+         \x20 fn init(a: integer)\n\
+         \x20   self.amount = a\n\
+         \x20 end\n\
+         \x20 fn add(other: Money) -> Money\n\
+         \x20   return Money(self.amount + other.amount)\n\
+         \x20 end\n\
+         \x20 fn toString() -> string\n\
+         \x20   return \"$\" .. self.amount\n\
+         \x20 end\n\
+         end\n\
+         fn make(n: integer) -> Money\n\
+         \x20 return Money(n)\n\
+         end\n\
+         local r: string = \"\" .. (make(2) + make(40))\nr",
+    );
+}
+
+#[test]
+fn an_inherited_method_is_reachable_through_the_runtime_class() {
+    // The method map the VM builds comes from `vindex` and `vtable`, both
+    // of which are prefix-extensions of the parent's — so an inherited,
+    // non-overridden `toString` is one probe away, exactly as it is on a
+    // tree-walker class. Copying only a class's *own* methods would leave
+    // this one unreachable and silently fall back to `<instance of Dog>`.
+    must_agree(
+        "class Animal implements OpToString\n\
+         \x20 fn toString() -> string\n\
+         \x20   return \"an animal\"\n\
+         \x20 end\n\
+         end\n\
+         class Dog extends Animal\n\
+         end\n\
+         local d: Dog = Dog()\n\
+         local r: string = \"\" .. d\nr",
+    );
+}
+
+#[test]
+fn a_callback_can_itself_reach_back_into_the_vm() {
+    // Two levels of re-entrancy: the outer comparator is called from a
+    // native, and *it* calls a native that calls another comparator. Each
+    // level is a fresh `Vm` over the same shared half, so this is where a
+    // per-invocation piece wrongly left in `VmShared` — the register file,
+    // the frame list, the open upvalues — would corrupt the level below it
+    // rather than merely be slow.
+    must_agree(
+        "local inner: table<integer, integer> = {3, 1, 2}\n\
+         fn outer(a: integer, b: integer) -> boolean\n\
+         \x20 Table.sort(inner, (x: integer, y: integer) => x < y)\n\
+         \x20 return a < b\n\
+         end\n\
+         local t: table<integer, integer> = {9, 4, 6}\n\
+         Table.sort(t, outer)\n\
+         local r: string = t[1] .. \",\" .. t[2] .. \",\" .. t[3] .. \"|\" ..\n\
+         \x20 inner[1] .. \",\" .. inner[2] .. \",\" .. inner[3]\nr",
+    );
+}
+
+#[test]
+fn the_recursion_guard_still_unwinds_after_re_entrant_calls() {
+    // A guard that leaked a level per callback would shrink every later
+    // program's budget — and because the counter is per *thread*, the
+    // symptom would surface as an unrelated test failing later in this
+    // binary. Sorting drives many comparator calls, so a drift of one per
+    // call would be obvious immediately after.
+    //
+    // The unbounded case — a comparator that sorts with itself forever —
+    // is pinned by `tests/ui/stack_overflow_reentrant.sau` instead. It
+    // needs `MAX_EVAL_DEPTH` native frames of real stack, which is more
+    // than libtest's 2 MiB test thread has; that fixture runs `saule` as a
+    // process, on a main thread, which is the configuration users get.
+    must_agree(
+        "local t: table<integer, integer> = {5, 2, 9, 1, 7, 3}\n\
+         Table.sort(t, (a: integer, b: integer) => a < b)\n\
+         fn depth(n: integer) -> integer\n\
+         \x20 if n <= 0 then\n\
+         \x20   return 0\n\
+         \x20 end\n\
+         \x20 return 1 + depth(n - 1)\n\
+         end\n\
+         depth(60)",
+    );
+}
+
+
+// ── `match` guards ────────────────────────────────────────────────────────
+//
+// Two bugs lived here, and only one of them announced itself. The compiler
+// emitted an arm's guard *before* entering the arm's scope, so a binding
+// pattern's name was not in a register yet — `case x when x < 0` refused
+// with "a local the compiler has not seen declared", which at least fell
+// back safely. The second was silent: the pattern's failure jump was patched
+// to just past the guard's jump, which is where the arm **body** starts, so
+// a pattern that did not match ran the arm anyway.
+
+#[test]
+fn a_guard_can_read_the_binding_its_own_pattern_introduces() {
+    // The refusal. `x` is bound by the pattern and read by the guard, and
+    // the resolver binds both the same way — it was only the compiler that
+    // had not put `x` in a register yet.
+    must_agree(
+        "fn classify(n: integer) -> string\n\
+         \x20 return match n\n\
+         \x20   case x when x < 0 then \"negative \" .. x\n\
+         \x20   case 0 then \"zero\"\n\
+         \x20   case x when x < 10 then \"small \" .. x\n\
+         \x20   case x then \"big \" .. x\n\
+         \x20 end\n\
+         end\n\
+         local r: string = classify(-5) .. \"|\" .. classify(0) .. \"|\"\n\
+         \x20 .. classify(3) .. \"|\" .. classify(999)\nr",
+    );
+}
+
+#[test]
+fn a_failing_pattern_with_a_guard_does_not_fall_into_the_arm() {
+    // The silent one. `0` does not match `5`, so the guard should never be
+    // reached and the arm never taken — but the pattern's failure jump
+    // landed at the top of the body, and the VM answered "zero".
+    //
+    // A wrong value, exit status 0, and no fixture had a literal pattern
+    // with a guard, so nothing in the suite could see it.
+    must_agree(
+        "local n: integer = 5\n\
+         local r: string = match n\n\
+         \x20 case 0 when true then \"zero\"\n\
+         \x20 case _ then \"other\"\n\
+         end\nr",
+    );
+    // The same shape with the guard *false* on a pattern that does match,
+    // so the arm is skipped for the other reason.
+    must_agree(
+        "local n: integer = 0\n\
+         local r: string = match n\n\
+         \x20 case 0 when false then \"zero\"\n\
+         \x20 case _ then \"other\"\n\
+         end\nr",
+    );
+    // And both failure paths in one match, so a mis-patched jump from
+    // either arm shows up.
+    must_agree(
+        "fn pick(n: integer) -> string\n\
+         \x20 return match n\n\
+         \x20   case 1 when false then \"one-guarded\"\n\
+         \x20   case 2 when true then \"two\"\n\
+         \x20   case x when x > 10 then \"big\"\n\
+         \x20   case _ then \"rest\"\n\
+         \x20 end\n\
+         end\n\
+         local r: string = pick(1) .. \"|\" .. pick(2) .. \"|\" .. pick(11) .. \"|\" .. pick(3)\nr",
+    );
+}
+
+#[test]
+fn a_guard_can_read_a_variant_payload_binding() {
+    // The same ordering rule for a destructured payload: `x` comes out of
+    // the variant, and the guard must see it.
+    must_agree(
+        "enum Event\n\
+         \x20 Click(x: integer, y: integer),\n\
+         \x20 Key(code: string)\n\
+         end\n\
+         fn describe(e: Event) -> string\n\
+         \x20 return match e\n\
+         \x20   case Event.Click(x, y) when x > 0 then \"right \" .. x .. \",\" .. y\n\
+         \x20   case Event.Click(x, y) then \"left \" .. x .. \",\" .. y\n\
+         \x20   case Event.Key(c) then \"key \" .. c\n\
+         \x20 end\n\
+         end\n\
+         local r: string = describe(Event.Click(-3, 7)) .. \"|\"\n\
+         \x20 .. describe(Event.Click(4, 2)) .. \"|\" .. describe(Event.Key(\"a\"))\nr",
+    );
+}
+
+// ── `for … in` over a closure driver (§15.8) ──────────────────────────────
+//
+// Lowered to an ordinary `CALL` in a `while` shape rather than taught to
+// `ITERNEXT`: `CALL` already dispatches on whatever it finds — a bytecode
+// closure, a native, a native closure — so the driver can be any of them
+// with no new opcode. The result count is fixed at `nvars`, which is what
+// makes "extras → nil, surplus dropped" fall out of `pop_frame` instead of
+// needing its own rule.
+
+#[test]
+fn a_closure_drives_a_for_in_loop() {
+    must_agree(
+        "fn counter(stop: integer) -> fn() -> integer?\n\
+         \x20 local i: integer = 0\n\
+         \x20 return fn()\n\
+         \x20   i = i + 1\n\
+         \x20   if i > stop then return nil end\n\
+         \x20   return i\n\
+         \x20 end\n\
+         end\n\
+         local sum: integer = 0\n\
+         for n in counter(4) do\n\
+         \x20 sum = sum + n\n\
+         end\n\
+         sum",
+    );
+}
+
+#[test]
+fn a_driver_that_yields_nothing_runs_no_iterations() {
+    // The case that decided the calling convention. Asking for *all*
+    // results would leave the callee register holding the driver itself
+    // when a step returned nothing — a function, not nil — and the loop
+    // would never end. A fixed result count pads with nil instead.
+    must_agree(
+        "fn empty() -> fn() -> integer?\n\
+         \x20 return fn()\n\
+         \x20   return nil\n\
+         \x20 end\n\
+         end\n\
+         local n: integer = 0\n\
+         for x in empty() do\n\
+         \x20 n = n + 1\n\
+         end\n\
+         n",
+    );
+}
+
+#[test]
+fn break_and_continue_work_inside_a_driver_loop() {
+    // `continue` re-enters at the *call* — the next step is what advances
+    // this loop, so there is no separate increment to jump to.
+    must_agree(
+        "fn counter(stop: integer) -> fn() -> integer?\n\
+         \x20 local i: integer = 0\n\
+         \x20 return fn()\n\
+         \x20   i = i + 1\n\
+         \x20   if i > stop then return nil end\n\
+         \x20   return i\n\
+         \x20 end\n\
+         end\n\
+         local sum: integer = 0\n\
+         for n in counter(10) do\n\
+         \x20 if n == 3 then continue end\n\
+         \x20 if n == 6 then break end\n\
+         \x20 sum = sum + n\n\
+         end\n\
+         sum",
+    );
+}
+
+#[test]
+fn driver_loops_nest() {
+    // Each loop holds its driver in a register of its own; sharing one
+    // would make the inner loop exhaust the outer one's.
+    must_agree(
+        "fn counter(stop: integer) -> fn() -> integer?\n\
+         \x20 local i: integer = 0\n\
+         \x20 return fn()\n\
+         \x20   i = i + 1\n\
+         \x20   if i > stop then return nil end\n\
+         \x20   return i\n\
+         \x20 end\n\
+         end\n\
+         local out: string = \"\"\n\
+         for a in counter(2) do\n\
+         \x20 for b in counter(2) do\n\
+         \x20   out = out .. a .. b .. \" \"\n\
+         \x20 end\n\
+         end\n\
+         out",
+    );
+}
+
+// ── pipes ─────────────────────────────────────────────────────────────────
+//
+// `when(source):a(x):b(y)` lowers to a chain of ordinary calls, each
+// threading the upstream value in as argument 0 — what `eval`'s `Expr::Pipe`
+// arm does. The value lives in one register for the whole chain.
+//
+// The callee is resolved **by name**: a `PipeStage` holds a `String` and has
+// no `NodeId`, so the binding table has nothing keyed on it and the lookup
+// order is written out by hand. These pin that the hand-written order agrees
+// with the resolver's.
+
+#[test]
+fn a_pipeline_threads_its_value_through_each_stage() {
+    must_agree(
+        "fn double(n: integer) -> integer\n  return n * 2\nend\n\
+         local r: integer = when(4):double()\nr",
+    );
+    // Chained, so a stage reading a stale register would show up.
+    must_agree(
+        "fn double(n: integer) -> integer\n  return n * 2\nend\n\
+         local r: integer = when(3):double():double():double()\nr",
+    );
+}
+
+#[test]
+fn a_pipeline_stage_takes_extra_arguments_after_the_piped_value() {
+    // The piped value is argument 0 and the written ones follow, so an
+    // off-by-one in the window would swap `a` and `b` here — and `add` is
+    // commutative on purpose *not* chosen: `sub` would hide nothing.
+    must_agree(
+        "fn sub(a: integer, b: integer) -> integer\n  return a - b\nend\n\
+         local r: integer = when(10):sub(3)\nr",
+    );
+    must_agree(
+        "fn sub(a: integer, b: integer) -> integer\n  return a - b\nend\n\
+         fn double(n: integer) -> integer\n  return n * 2\nend\n\
+         local r: integer = when(10):sub(3):double():sub(1)\nr",
+    );
+}
+
+// **Not** covered here, deliberately:
+//
+// * a *prelude* name as a stage — `saule-typeck` rejects
+//   `when(x):tostring()` with `UnknownPipeStage`, so it never reaches a
+//   valid program and the compiler has no branch for it;
+// * a stage naming a `fn` declared *below* the pipeline at module level.
+//   The two engines genuinely disagree there — and they disagree about a
+//   plain `later(5)` written the same way, with no pipe involved, so it
+//   predates this work. Written up in VM_TASKS.md rather than papered over
+//   with a skipped test.
+
+#[test]
+fn a_pipeline_over_a_table_matches() {
+    must_agree(
+        "fn total(xs: table<integer>) -> integer\n\
+         \x20 local s: integer = 0\n\
+         \x20 for v in xs do\n\
+         \x20   s = s + v\n\
+         \x20 end\n\
+         \x20 return s\n\
+         end\n\
+         local t: table<integer> = {5, 1, 4}\n\
+         local r: integer = when(t):total()\nr",
+    );
+}
+
+
+// ── class statics by bare name ────────────────────────────────────────────
+//
+// `Binding::ClassStatic` carries the *class name*, not a slot, because the
+// answer has to survive a lambda nested inside the method — a different
+// `FuncCtx` with no `current_class` of its own. Everything below turns on
+// one rule: an inherited static lives in the cell its **declaring** class
+// owns, so every reader and writer must address that one cell.
+
+#[test]
+fn a_static_is_read_and_written_by_its_bare_name_inside_a_method() {
+    must_agree(
+        "class Counter\n\
+         \x20 static count: integer = 0\n\
+         \x20 static fn bump()\n\
+         \x20   count = count + 1\n\
+         \x20 end\n\
+         \x20 static fn get() -> integer\n\
+         \x20   return count\n\
+         \x20 end\n\
+         end\n\
+         Counter.bump()\n\
+         Counter.bump()\n\
+         local r: integer = Counter.get()\nr",
+    );
+}
+
+#[test]
+fn self_inside_a_static_method_reaches_the_class_statics() {
+    // In a `static fn`, `self` is the class — `call_static_method_multi`
+    // binds it to `Value::Class`. Resolved at compile time to a static
+    // access, which is why the VM never needs a class in a register.
+    must_agree(
+        "class Counter\n\
+         \x20 static count: integer = 0\n\
+         \x20 static label: string = \"c\"\n\
+         \x20 static fn bump()\n\
+         \x20   self.count = self.count + 1\n\
+         \x20 end\n\
+         \x20 static fn describe() -> string\n\
+         \x20   return self.label .. \"=\" .. self.count\n\
+         \x20 end\n\
+         end\n\
+         Counter.bump()\n\
+         Counter.bump()\n\
+         local r: string = Counter.describe()\nr",
+    );
+}
+
+#[test]
+fn an_inherited_static_addresses_the_declaring_classes_cell() {
+    // The §24.2 shape. `sindex` and `smindex` are both flattened and both
+    // name the declaring class, so a subclass reading, writing, or calling
+    // an inherited static reaches the parent's one cell — not a second,
+    // never-initialised one of its own. Getting this wrong reads `nil`.
+    must_agree(
+        "class Entity\n\
+         \x20 static maxHealth: integer = 100\n\
+         \x20 static fn describe() -> string\n\
+         \x20   return \"capped at \" .. self.maxHealth\n\
+         \x20 end\n\
+         end\n\
+         class Player extends Entity\n\
+         end\n\
+         local r: string = Player.maxHealth .. \"|\" .. Player.describe()\nr",
+    );
+    // And a write through the subclass name is seen through the parent's.
+    must_agree(
+        "class Entity\n\
+         \x20 static total: integer = 0\n\
+         end\n\
+         class Player extends Entity\n\
+         end\n\
+         Player.total = 7\n\
+         local r: string = Entity.total .. \"|\" .. Player.total\nr",
+    );
+}
+
+#[test]
+fn a_private_static_fn_is_callable_by_bare_name_from_a_sibling() {
+    // `static local fn` — a *method*, so it lives in `smindex` and not in
+    // the `sindex` a bare-name static *read* consults. Without its own
+    // arm it fell through to the generic call and asked for a static field
+    // that does not exist.
+    must_agree(
+        "class Bank\n\
+         \x20 static local secret: integer = 42\n\
+         \x20 static local fn check(n: integer) -> boolean\n\
+         \x20   return n == secret\n\
+         \x20 end\n\
+         \x20 static fn unlock(code: integer) -> string\n\
+         \x20   if check(code) then\n\
+         \x20     return \"opened\"\n\
+         \x20   end\n\
+         \x20   return \"denied\"\n\
+         \x20 end\n\
+         end\n\
+         local r: string = Bank.unlock(42) .. \"|\" .. Bank.unlock(13)\nr",
+    );
+}
+
+// ── §19 compile-time argument binding ─────────────────────────────────────
+//
+// Defaults become per-arity **entry stubs** in the callee, so a call that
+// omits one just reports a shorter arity and `entry_for` lands on the stub
+// that fills it. Named arguments are reordered at compile time; the runtime
+// never sees a name.
+
+#[test]
+fn a_defaulted_parameter_is_filled_by_the_callee() {
+    must_agree(
+        "fn greet(intro: string, name: string = \"Unnamed\") -> string\n\
+         \x20 return intro .. \" \" .. name\n\
+         end\n\
+         local r: string = greet(\"hi\") .. \"|\" .. greet(\"hi\", \"Lyra\")\nr",
+    );
+}
+
+#[test]
+fn a_default_is_evaluated_in_the_callees_frame() {
+    // §19 calls this the one genuine correctness trap. Entry stubs get it
+    // right by construction: `b`'s default compiles into the callee's
+    // register for `b`, so `a` resolves to the callee's parameter — not to
+    // whatever `a` happens to mean at the call site.
+    must_agree(
+        "local a: integer = 100\n\
+         fn f(a: integer, b: integer = a * 2) -> integer\n\
+         \x20 return b\n\
+         end\n\
+         local r: integer = f(3)\nr",
+    );
+}
+
+#[test]
+fn defaults_on_a_method_account_for_self() {
+    // A method's parameters start at register 1, and its `self` counts as an
+    // argument — so the entry table is indexed by *arity including self*.
+    // Off by one here and a one-argument call would run the wrong stub.
+    must_agree(
+        "class Greeter\n\
+         \x20 fn hello(name: string = \"world\") -> string\n\
+         \x20   return \"hello \" .. name\n\
+         \x20 end\n\
+         end\n\
+         local g: Greeter = Greeter()\n\
+         local r: string = g.hello() .. \"|\" .. g.hello(\"you\")\nr",
+    );
+}
+
+#[test]
+fn named_arguments_are_reordered_at_compile_time() {
+    must_agree(
+        "fn sub(a: integer, b: integer) -> integer\n  return a - b\nend\n\
+         local r: integer = sub(b: 3, a: 10)\nr",
+    );
+}
+
+#[test]
+fn a_named_argument_may_skip_a_nullable_parameter() {
+    // The gap case: nothing fills slot 0, so the call passes an explicit
+    // `nil` — which is what the callee would have left there anyway. A
+    // skipped parameter with a *default* is refused instead, because the
+    // default has to run in the callee and the stubs only fill a suffix.
+    must_agree(
+        "fn show(first: string?, second: string) -> string\n\
+         \x20 return (first ?? \"-\") .. \"/\" .. second\n\
+         end\n\
+         local r: string = show(second: \"b\")\nr",
+    );
+}
+
+#[test]
+fn a_constructor_takes_named_arguments() {
+    must_agree(
+        "class Point\n\
+         \x20 x: integer\n\
+         \x20 y: integer\n\
+         \x20 fn init(x: integer, y: integer)\n\
+         \x20   self.x = x\n\
+         \x20   self.y = y\n\
+         \x20 end\n\
+         end\n\
+         local p: Point = Point(y: 2, x: 1)\n\
+         local r: string = p.x .. \",\" .. p.y\nr",
+    );
+}
+
+#[test]
+fn a_variadic_parameter_gathers_the_surplus_arguments() {
+    // Gathered by the **callee**, via `VARARG` as its first instruction —
+    // not packed into a table at the call site. Packing at the call site
+    // would have needed no new opcode, but only works where the caller can
+    // *see* that the callee is variadic: not through a function value, and
+    // not across a module boundary.
+    let sum = "fn total(...values: integer) -> integer\n\
+               \x20 local s: integer = 0\n\
+               \x20 for v in values do\n\
+               \x20   s = s + v\n\
+               \x20 end\n\
+               \x20 return s\n\
+               end\n";
+    must_agree(&format!("{sum}local r: integer = total(1, 2, 3, 4)\nr"));
+    // No surplus at all: the parameter must still be an empty *table*, not
+    // nil, or `#values` and `for … in` would both fault.
+    must_agree(&format!("{sum}local r: integer = total()\nr"));
+    must_agree(&format!("{sum}local r: integer = total(7)\nr"));
+}
+
+#[test]
+fn a_variadic_parameter_follows_fixed_ones() {
+    must_agree(
+        "fn tag(label: string, ...rest: integer) -> string\n\
+         \x20 local s: integer = 0\n\
+         \x20 for v in rest do\n\
+         \x20   s = s + v\n\
+         \x20 end\n\
+         \x20 return label .. \"=\" .. s\n\
+         end\n\
+         local r: string = tag(\"a\", 1, 2) .. \"|\" .. tag(\"b\")\nr",
+    );
+}
+
+// ── §8.5 dynamic member dispatch ──────────────────────────────────────────
+//
+// `GETFX` and `CALLMX` are the escape hatch for a receiver whose class the
+// front end did not prove. Both defer to the tree-walker's own member logic
+// — the same reuse rule `ARITHX` follows — so every receiver kind behaves
+// identically without the compiler learning each one.
+
+#[test]
+fn a_member_read_on_an_unproved_receiver_matches() {
+    must_agree(
+        "class Box\n  v: integer\n  fn init(v: integer)\n    self.v = v\n  end\nend\n\
+         local b: any = Box(7)\n\
+         local r: any = b.v\nr",
+    );
+}
+
+#[test]
+fn a_method_call_on_an_unproved_receiver_matches() {
+    must_agree(
+        "class Box\n\
+         \x20 v: integer\n\
+         \x20 fn init(v: integer)\n    self.v = v\n  end\n\
+         \x20 fn doubled() -> integer\n    return self.v * 2\n  end\n\
+         end\n\
+         local b: any = Box(7)\n\
+         b.doubled()",
+    );
+}
+
+#[test]
+fn a_missing_member_on_an_unproved_receiver_fails_the_same_way() {
+    // The error text has to match too, which is the whole reason this
+    // defers to `read_member` rather than reimplementing the lookup.
+    must_agree(
+        "class Box\n  v: integer\n  fn init(v: integer)\n    self.v = v\n  end\nend\n\
+         local b: any = Box(1)\n\
+         local r: any = b.nope\nr",
+    );
+}
+
+#[test]
+fn an_enum_variants_value_falls_back_to_its_name() {
+    // A variant with no declared value answers `.value` with its own name,
+    // not nil. `UNWRAP` returned nil until `GETFX` let `enums.sau` compile
+    // and `SAULE_DIFF=1` put the two engines side by side.
+    must_agree(
+        "enum Direction\n  North,\n  South\nend\n\
+         local d: Direction = Direction.North\n\
+         local r: string = d.value .. \"/\" .. d.name\nr",
+    );
+    // And a variant that *does* declare one still answers with it.
+    must_agree(
+        "enum Status\n  Alive = \"alive\",\n  Dead = \"dead\"\nend\n\
+         local s: Status = Status.Alive\n\
+         local r: string = s.value .. \"/\" .. s.name\nr",
     );
 }

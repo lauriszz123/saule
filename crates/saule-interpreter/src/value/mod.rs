@@ -26,7 +26,7 @@ pub mod table;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-pub use class::{ClassObject, FieldDef, FieldLayout, InstanceObject};
+pub use class::{ClassObject, FieldDef, FieldLayout, InstanceObject, MethodRef};
 pub use enum_::{EnumObject, EnumVariantObject};
 pub use file::FileHandle;
 pub use function::{

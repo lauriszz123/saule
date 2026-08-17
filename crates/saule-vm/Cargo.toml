@@ -12,11 +12,13 @@ license.workspace = true
 [dependencies]
 saule-ast = { path = "../saule-ast" }
 saule-interpreter = { path = "../saule-interpreter" }
+# The front end, for `program.rs`: compiling a program means resolving the
+# import graph here rather than at run time, so this crate reads and parses
+# the imported files itself. Both sit *below* `saule-interpreter` in the
+# graph, so §22.1's one-way arrow is untouched.
+saule-lexer = { path = "../saule-lexer" }
+saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
 saule-typeck = { path = "../saule-typeck" }
 miette = "7.6.0"
 thiserror = "2.0.18"
-
-[dev-dependencies]
-saule-lexer = { path = "../saule-lexer" }
-saule-parser = { path = "../saule-parser" }

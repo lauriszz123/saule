@@ -5,7 +5,7 @@ use crate::env::Environment;
 use crate::error::RuntimeError;
 use crate::eval::expr::members::read_member;
 use crate::eval::expr::{EvaluatedArg, SUPER_OWNER_BINDING, eval, first_or_nil};
-use crate::value::{ClassObject, FunctionObject, Value};
+use crate::value::{ClassObject, FunctionObject, MethodRef, Value};
 use saule_ast::{CallArg, Expr, Spanned};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -29,18 +29,49 @@ pub(crate) fn call_instance_method_multi(
     result
 }
 
-/// Invoke a static method with `self` bound to the class itself.
-pub(crate) fn call_static_method(
-    f: &FunctionObject,
+/// Invoke an instance method that may have come from either engine.
+///
+/// The bytecode arm is where the tree-walker calls into the VM: a compiled
+/// method takes `self` as parameter 0 (`VM_DESIGN.md` §6.2), so binding the
+/// receiver is simply prepending it to the argument list — no scope, no
+/// `self` definition, no statics injection, because a compiled body reaches
+/// all three through slots the compiler already resolved.
+pub(crate) fn call_method_ref_multi(
+    m: &MethodRef,
+    receiver: Value,
+    args: &[EvaluatedArg],
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
+    match m {
+        MethodRef::Tree(f) => call_instance_method_multi(f, receiver, args, span),
+        MethodRef::Vm(f) => {
+            let positional = vm_positional_args(f, args, &span)?;
+            let mut all = Vec::with_capacity(positional.len() + 1);
+            all.push(receiver);
+            all.extend(positional);
+            f.invoke(&all, span)
+        }
+    }
+}
+
+/// [`call_method_ref_multi`] for a static, which takes no receiver at all —
+/// `CALLSTAT` starts its frame at the arguments.
+pub(crate) fn call_static_method_ref_multi(
+    m: &MethodRef,
     class: &Rc<ClassObject>,
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
-) -> Result<Value, RuntimeError> {
-    Ok(first_or_nil(call_static_method_multi(
-        f, class, args, span,
-    )?))
+) -> Result<Vec<Value>, RuntimeError> {
+    match m {
+        MethodRef::Tree(f) => call_static_method_multi(f, class, args, span),
+        MethodRef::Vm(f) => {
+            let positional = vm_positional_args(f, args, &span)?;
+            f.invoke(&positional, span)
+        }
+    }
 }
 
+/// Invoke a static method with `self` bound to the class itself.
 pub(crate) fn call_static_method_multi(
     f: &FunctionObject,
     class: &Rc<ClassObject>,
@@ -70,16 +101,6 @@ pub(crate) fn inject_class_statics(scope: &Rc<RefCell<Environment>>, class: &Rc<
     scope.borrow_mut().set_statics_owner(class.clone());
 }
 
-/// Public re-export of [`call_static_method`] for embedders.
-pub(crate) fn call_static_method_public(
-    f: &FunctionObject,
-    class: &Rc<ClassObject>,
-    args: &[EvaluatedArg],
-    span: std::ops::Range<usize>,
-) -> Result<Value, RuntimeError> {
-    call_static_method(f, class, args, span)
-}
-
 /// Resolve `obj.name(args)` where the lookup intent is to *invoke* the
 /// result.
 pub(crate) fn dispatch_member_call(
@@ -103,10 +124,10 @@ pub(crate) fn dispatch_member_call_multi(
         Value::Instance(inst) => {
             let class = inst.borrow().class.clone();
             if let Some(m) = class.lookup_method(name) {
-                return call_instance_method_multi(&m, receiver.clone(), args, span);
+                return call_method_ref_multi(&m, receiver.clone(), args, span);
             }
             if let Some(m) = class.lookup_static_method(name) {
-                return call_static_method_multi(&m, &class, args, span);
+                return call_static_method_ref_multi(&m, &class, args, span);
             }
             if let Some(v) = inst.borrow().field(name).cloned() {
                 return call_value_multi(v, args, span);
@@ -121,7 +142,7 @@ pub(crate) fn dispatch_member_call_multi(
         }
         Value::Class(class) => {
             if let Some(m) = class.lookup_static_method(name) {
-                return call_static_method_multi(&m, class, args, span);
+                return call_static_method_ref_multi(&m, class, args, span);
             }
             if let Some(v) = class.lookup_static_field(name) {
                 return call_value_multi(v, args, span);

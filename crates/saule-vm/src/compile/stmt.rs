@@ -237,12 +237,27 @@ impl Compiler<'_> {
         ) {
             return Ok(());
         }
+        // An `import` a program driver already resolved emits nothing: the
+        // names it binds are types, and a type is a compile-time index
+        // (§14). Without a driver the name has a module slot nothing writes,
+        // so compiling on would read `nil`.
+        if matches!(&d.value, saule_ast::Decl::Import { .. }) {
+            return if self.imports_bound {
+                Ok(())
+            } else {
+                Err(CompileError::unsupported(
+                    "an import declaration",
+                    span.clone(),
+                ))
+            };
+        }
+
         let saule_ast::Decl::Function {
             name, params, body, ..
         } = &d.value
         else {
             return Err(CompileError::unsupported(
-                "an import declaration",
+                "a declaration the compiler does not handle",
                 span.clone(),
             ));
         };
@@ -256,12 +271,6 @@ impl Compiler<'_> {
 
         // Compile-time argument binding is §19's own slice of work; until it
         // lands, refuse the shapes that need it rather than mis-bind them.
-        if params.iter().any(|p| p.variadic || p.default.is_some()) {
-            return Err(CompileError::unsupported(
-                "a variadic or defaulted parameter",
-                span.clone(),
-            ));
-        }
         if params.len() > u8::MAX as usize {
             return Err(CompileError::unsupported("a function with over 255 parameters", span.clone()));
         }
@@ -281,6 +290,7 @@ impl Compiler<'_> {
             for (i, p) in params.iter().enumerate() {
                 self.f.declare(&p.name, i as u16);
             }
+            self.f.entries = self.param_entries(params, 0, span)?;
             for st in body {
                 self.stmt(st)?;
             }
@@ -306,7 +316,8 @@ impl Compiler<'_> {
             let a = self.reg8(r, span)?;
             let nested = self.f.nested_index(idx);
             self.emit(Instruction::abx(Op::CLOSURE, a, nested), span);
-            self.emit(Instruction::abx(Op::SETMOD, a, slot as u16), span);
+            let g = self.mod_slot(slot as u16, span)?;
+            self.emit(Instruction::abx(Op::SETMOD, a, g), span);
             self.free_to(m);
         }
         Ok(())
@@ -383,7 +394,8 @@ impl Compiler<'_> {
                 }
             };
             let a = self.reg8(r, span)?;
-            self.emit(Instruction::abx(Op::SETMOD, a, slot), span);
+            let g = self.mod_slot(slot, span)?;
+            self.emit(Instruction::abx(Op::SETMOD, a, g), span);
             self.free_to(m);
             return Ok(());
         }
@@ -471,6 +483,40 @@ impl Compiler<'_> {
                 self.free_to(m);
                 return Ok(());
             }
+            // `t.name = v` on a table is `t["name"] = v`, the write half of
+            // the Lua-style sugar `member_to` reads.
+            if matches!(self.types.get(&obj.id), Some(saule_ast::Type::Table { .. })) {
+                let m = self.mark();
+                let o = self.expr_tmp(obj)?;
+                let key = self.constant(
+                    saule_interpreter::Value::Str(std::rc::Rc::new(name.clone())),
+                    span,
+                )?;
+                let v = self.expr_tmp(value)?;
+                self.map_key_write(o, key, v, span)?;
+                self.free_to(m);
+                return Ok(());
+            }
+
+            // `self.count = …` inside a `static fn`: `self` is the class, so
+            // this writes a static, not an instance field. The read side is
+            // in `member_to`.
+            if matches!(obj.value, Expr::Self_)
+                && !self.f.in_method
+                && let Some(class) = self.f.current_class
+                && let Some(&s) = self.chunk.classes[class as usize].sindex.get(name.as_str())
+            {
+                let m = self.mark();
+                let r = self.expr_tmp(value)?;
+                let a = self.reg8(r, span)?;
+                self.emit(
+                    Instruction::abc(Op::SETSTAT, a, s.class as u8, s.slot as u8),
+                    span,
+                );
+                self.free_to(m);
+                return Ok(());
+            }
+
             let Some(class) = self.class_of_expr(obj) else {
                 return Err(CompileError::unsupported(
                     "an assignment to a member of a receiver with no proved class",
@@ -509,7 +555,8 @@ impl Compiler<'_> {
                         let m = self.mark();
                         let r = self.expr_tmp(value)?;
                         let a = self.reg8(r, span)?;
-                        self.emit(Instruction::abx(Op::SETMOD, a, slot), span);
+                        let g = self.mod_slot(slot, span)?;
+            self.emit(Instruction::abx(Op::SETMOD, a, g), span);
                         self.free_to(m);
                         Ok(())
                     }
@@ -533,6 +580,28 @@ impl Compiler<'_> {
                 })?;
                 let (a, b) = (self.reg8(r, span)?, self.reg8(idx, span)?);
                 self.emit(Instruction::abc(Op::SETUPVAL, a, b, 0), span);
+                self.free_to(m);
+                Ok(())
+            }
+            // Writing a static of the enclosing class by its bare name.
+            // Mirrors the read in `ident_to`: `s.class` is the *declaring*
+            // class, so a subclass assigning an inherited static updates the
+            // one cell every sibling reads.
+            Some(Binding::ClassStatic { class, name: field }) => {
+                let (class, field) = (class.clone(), field.clone());
+                let Some(s) = self.static_slot_of(&class, &field) else {
+                    return Err(CompileError::unsupported(
+                        "an assignment to a class static the compiler could not resolve",
+                        span.clone(),
+                    ));
+                };
+                let m = self.mark();
+                let r = self.expr_tmp(value)?;
+                let a = self.reg8(r, span)?;
+                self.emit(
+                    Instruction::abc(Op::SETSTAT, a, s.class as u8, s.slot as u8),
+                    span,
+                );
                 self.free_to(m);
                 Ok(())
             }
@@ -794,21 +863,44 @@ impl Compiler<'_> {
             ));
         }
 
-        // Only the **table** path exists. `for n in counter(3)` drives a
-        // closure and `for n in Range(1, 4)` calls `iter()` on an instance
-        // (§15.8) — both still to be written — and `ITERPREP` on either
-        // reports "cannot iterate a `function`" rather than falling back.
-        // So the source has to be a proved table, or this refuses.
+        // Three sources, and the front end has to have told us which:
         //
-        // A table the front end did not prove is refused too, which costs a
-        // needless fallback. That is the right side to err on: the
-        // alternative is emitting a table iteration over something that is
-        // not one.
-        if !matches!(self.types.get(&iter.id), Some(saule_ast::Type::Table { .. })) {
-            return Err(CompileError::unsupported(
-                "a `for … in` over a source that is not a proved table",
-                span.clone(),
-            ));
+        //   * a **table** — the snapshot path below;
+        //   * a **function** — the §15.8 closure driver;
+        //   * an **instance** — `iter()` returns the closure, then as above.
+        //
+        // Anything unproved is refused. The three lower to completely
+        // different code, and guessing wrong would iterate a function as a
+        // table (or call a table) rather than fail cleanly.
+        // A variadic parameter is always bound to a table by `VARARG`, but
+        // the front end types it as the *element* type — `...values: integer`
+        // makes `values` an `integer` in the `TypeTable` — so the type alone
+        // never proves it. The compiler knows, because it emitted the
+        // `VARARG` itself.
+        let is_varargs = matches!(&iter.value, Expr::Ident(n)
+            if self.f.variadic_param.as_deref() == Some(n.as_str()));
+
+        match self.types.get(&iter.id) {
+            _ if is_varargs => {}
+            Some(saule_ast::Type::Table { .. }) => {}
+            Some(saule_ast::Type::Function { .. }) => {
+                return self.for_in_driver(vars, iter, body, None, span);
+            }
+            // A class receiver: `iter()` yields the driver. Its vtable slot
+            // has to be resolvable, which needs the class proved — an
+            // interface-typed receiver would want `CALLIF` and is not
+            // handled here.
+            _ => {
+                if let Some(class) = self.class_of_expr(iter)
+                    && let Some(&slot) = self.chunk.classes[class as usize].vindex.get("iter")
+                {
+                    return self.for_in_driver(vars, iter, body, Some(slot), span);
+                }
+                return Err(CompileError::unsupported(
+                    "a `for … in` over a source that is not a proved table, function or iterable",
+                    span.clone(),
+                ));
+            }
         }
 
         self.f.enter_scope();
@@ -845,6 +937,82 @@ impl Compiler<'_> {
             self.patch_here(b)?;
         }
         let _ = top;
+        self.f.leave_scope();
+        Ok(())
+    }
+
+    /// `for … in` over a **closure driver** (§15.8).
+    ///
+    /// The driver is called with no arguments and yields the next iteration's
+    /// values; the loop stops when the first of them is `nil` — Lua's
+    /// nil-terminator, and what `exec_for_in` does. `iter_slot` is `Some`
+    /// when the source is an instance, whose `iter()` produces the driver.
+    ///
+    /// Lowered to an ordinary `CALL` in a `while` shape rather than taught to
+    /// `ITERNEXT`, for one reason: `CALL` already dispatches on what it finds
+    /// — a bytecode closure, a native, a native closure — so the driver can
+    /// be any of them without a single new opcode or VM path. Making
+    /// `ITERNEXT` call would have meant pushing a frame from inside an opcode
+    /// and resuming into it, which is the dispatch loop's hardest corner for
+    /// no gain.
+    ///
+    /// **The result count is fixed, not variadic.** `C = nvars + 1` asks for
+    /// exactly as many values as there are loop variables, so `pop_frame`
+    /// pads the short cases with `nil` and drops the surplus — which is
+    /// precisely the tree-walker's "extras → nil, surplus dropped". Asking
+    /// for *all* results would leave the callee register holding the driver
+    /// itself when a step returned nothing, and the nil test would then read
+    /// a function and loop forever.
+    fn for_in_driver(
+        &mut self,
+        vars: &[(String, Option<saule_ast::Type>)],
+        iter: &Spanned<Expr>,
+        body: &[Spanned<Stmt>],
+        iter_slot: Option<u16>,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        self.f.enter_scope();
+        // `d` holds the driver for the whole loop; the call window starts at
+        // `c` because `CALL` overwrites its callee register with the results.
+        let nvars = vars.len() as u16;
+        let base = self.alloc_n(1 + nvars, span)?;
+        let (d, c) = (base, base + 1);
+
+        self.expr_to(iter, d)?;
+        if let Some(slot) = iter_slot {
+            // `CALLM` takes the receiver in `A` and writes its result there,
+            // so the instance is replaced by the driver it returned.
+            let da = self.reg8(d, span)?;
+            self.emit(Instruction::abc(Op::CALLM, da, 1, slot as u8), span);
+        }
+
+        let top = self.f.label_here();
+        let (da, ca) = (self.reg8(d, span)?, self.reg8(c, span)?);
+        self.emit(Instruction::abc(Op::MOVE, ca, da, 0), span);
+        self.emit(Instruction::abc(Op::CALL, ca, 1, nvars as u8 + 1), span);
+        // Skips the following jump when the step produced a value, so the
+        // jump is taken exactly when the driver said stop.
+        self.emit(Instruction::abc(Op::JNOTNIL, ca, 0, 0), span);
+        let exit = self.emit_jump(Op::JMP, 0, span);
+
+        // The results *are* the loop variables — no moves.
+        for (i, (name, _)) in vars.iter().enumerate() {
+            self.f.declare(name, c + i as u16);
+        }
+
+        self.loops.push(Default::default());
+        self.block(body)?;
+        let l = self.loops.pop().expect("pushed above");
+        // `continue` re-enters at the call: the next step is what advances
+        // this loop, there is no separate increment.
+        for k in l.continues {
+            self.patch_to(k, top)?;
+        }
+        self.emit_jump_back(Op::JMP, 0, top, span)?;
+        self.patch_here(exit)?;
+        for b in l.breaks {
+            self.patch_here(b)?;
+        }
         self.f.leave_scope();
         Ok(())
     }

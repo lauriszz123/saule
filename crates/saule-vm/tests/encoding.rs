@@ -181,8 +181,8 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::EXTRAARG as u8, 6);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::CHKTY),
-        "a new opcode was appended after CHKTY — extend this assertion rather than \
+        Some(Op::CALLMX),
+        "a new opcode was appended after CALLMX — extend this assertion rather than \
          inserting one in the middle"
     );
 }

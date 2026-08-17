@@ -113,9 +113,17 @@ fn init_fields(
     };
     let scope = if let Some(ctor) = &class.constructor {
         Environment::with_parent(ctor.closure.clone())
-    } else if let Some(m) = class.methods.values().find(|m| owned(m)) {
+    // `as_tree` filters out bytecode methods, which have no `Environment` to
+    // borrow — a VM-built class never reaches here anyway, since the VM
+    // constructs its instances itself.
+    } else if let Some(m) = class.methods.values().filter_map(|m| m.as_tree()).find(|m| owned(m)) {
         Environment::with_parent(m.closure.clone())
-    } else if let Some(m) = class.static_methods.values().find(|m| owned(m)) {
+    } else if let Some(m) = class
+        .static_methods
+        .values()
+        .filter_map(|m| m.as_tree())
+        .find(|m| owned(m))
+    {
         Environment::with_parent(m.closure.clone())
     } else {
         Environment::new()

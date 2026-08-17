@@ -114,19 +114,37 @@ fn method_tables_are_flattened_and_overrides_win() {
 
     // Two levels down, the nearest override wins.
     assert!(Rc::ptr_eq(
-        &leaf.lookup_method("describe").unwrap(),
-        &mid.lookup_method("describe").unwrap()
+        &tree_method(&leaf, "describe"),
+        &tree_method(&mid, "describe")
     ));
     assert!(!Rc::ptr_eq(
-        &leaf.lookup_method("describe").unwrap(),
-        &base.lookup_method("describe").unwrap()
+        &tree_method(&leaf, "describe"),
+        &tree_method(&base, "describe")
     ));
 
     // Inherited entries are shared, not copied.
     assert!(Rc::ptr_eq(
-        &leaf.lookup_method("shared").unwrap(),
-        &base.lookup_method("shared").unwrap()
+        &tree_method(&leaf, "shared"),
+        &tree_method(&base, "shared")
     ));
+}
+
+/// The `FunctionObject` behind a method of a tree-walker-built class.
+///
+/// `lookup_method` returns a `MethodRef` because a class the *bytecode*
+/// engine built holds compiled closures instead. These classes come from
+/// `exec_class_decl`, so the `Tree` arm always fires.
+fn tree_method(
+    class: &Rc<saule_interpreter::value::ClassObject>,
+    name: &str,
+) -> Rc<saule_interpreter::value::FunctionObject> {
+    Rc::clone(
+        class
+            .lookup_method(name)
+            .expect("method present")
+            .as_tree()
+            .expect("declared by the tree-walker"),
+    )
 }
 
 #[test]
@@ -136,9 +154,7 @@ fn flattening_does_not_steal_the_parents_owner_class() {
     // would rewrite the parent's method to belong to the subclass.
     let env = run_and_env(HIERARCHY);
     let base = class_named(&env, "Base");
-    let owner = base
-        .lookup_method("shared")
-        .unwrap()
+    let owner = tree_method(&base, "shared")
         .resolved_owner()
         .expect("owner set");
     assert!(

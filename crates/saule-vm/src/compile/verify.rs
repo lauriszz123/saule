@@ -98,7 +98,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
         }
         expect_extra = matches!(
             op,
-            Op::CALLK | Op::CALLNAT | Op::CALLM_MR | Op::CALLIF | Op::CALLSTAT | Op::NEWVAR | Op::ARITHX | Op::UNARYX
+            Op::CALLK | Op::CALLNAT | Op::CALLM_MR | Op::CALLMX | Op::CALLIF | Op::CALLSTAT | Op::NEWVAR | Op::ARITHX | Op::UNARYX
         );
 
         // Register operands. `A` is a register for every format that has
@@ -121,7 +121,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
                 let limit = match op {
                     Op::LOADK | Op::GETMAPK | Op::SETMAPK => chunk.constants.len(),
                     Op::CLOSURE => proto.protos.len(),
-                    Op::GETMOD | Op::SETMOD => chunk.module_slots,
+                    Op::GETMOD | Op::SETMOD => chunk.module_slot_base + chunk.module_slots,
                     Op::NEW => chunk.classes.len(),
                     Op::VARIANT => chunk.variant_refs.len(),
                     Op::SWITCH => chunk.jump_tables.len(),

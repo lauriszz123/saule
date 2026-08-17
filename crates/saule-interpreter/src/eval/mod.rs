@@ -59,10 +59,25 @@ pub fn depth_limit() -> u32 {
     })
 }
 
+/// Enter one call level against the shared recursion counter, returning a
+/// guard that releases it on drop.
+///
+/// Public because `saule-vm` needs the *same* counter. A re-entrant VM call
+/// — a native invoking a bytecode comparator, an operator overload — is one
+/// native stack frame per level, and the VM's own `max_frames` counts frames
+/// inside a single `Vm`, so it cannot see that nesting at all. Sharing this
+/// counter is also what bounds a program bouncing between the two engines
+/// once rather than twice.
+pub fn enter_call_depth(
+    span: &std::ops::Range<usize>,
+) -> Result<DepthGuard, crate::error::RuntimeError> {
+    DepthGuard::enter(span)
+}
+
 /// RAII depth counter. Decrements on every exit path — including the `?`
 /// early-returns that are how errors leave the evaluator — so the count can
 /// never drift upward across a caught `throw`.
-pub(crate) struct DepthGuard;
+pub struct DepthGuard;
 
 impl DepthGuard {
     /// Enter one call level, or fail if that would exceed the limit.

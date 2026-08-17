@@ -132,6 +132,24 @@ pub fn compile(module: &Module, name: &str, source: &str) -> Result<Chunk, Compi
     compile_with(module, name, source, &bindings, &types)
 }
 
+/// Collects the receiver names a module assigns through — the `X` of any
+/// `X.field = value`.
+///
+/// Position is why this needs the visitor rather than `visit_exprs`: a
+/// flattened expression walk cannot tell `Math.pi` being read from
+/// `Math.pi` being written.
+struct MutatedReceivers(std::collections::HashSet<String>);
+
+impl saule_ast::Visitor for MutatedReceivers {
+    fn assign_target(&mut self, e: &saule_ast::Spanned<saule_ast::Expr>) {
+        if let saule_ast::Expr::Member { obj, .. } = &e.value
+            && let saule_ast::Expr::Ident(n) = &obj.value
+        {
+            self.0.insert(n.clone());
+        }
+    }
+}
+
 /// Compile against side tables the caller already has, so a driver that ran
 /// the front end does not pay for it twice.
 pub fn compile_with(
@@ -141,16 +159,135 @@ pub fn compile_with(
     bindings: &saule_semantic::Bindings,
     types: &saule_typeck::TypeTable,
 ) -> Result<Chunk, CompileError> {
+    let mut tables = Tables::default();
+    let (mut chunk, _) = compile_into(
+        module,
+        name,
+        source,
+        bindings,
+        types,
+        &Default::default(),
+        &mut tables,
+        false,
+        Vec::new(),
+        0,
+        Default::default(),
+    )?;
+    // A one-module program: the type world is this chunk's, so hand back
+    // what `compile_into` took for the driver's benefit.
+    *chunk.classes_mut() = tables.classes;
+    *chunk.interfaces_mut() = tables.interfaces;
+    *chunk.enums_mut() = tables.enums;
+    Ok(chunk)
+}
+
+/// The program's shared type world, accumulated across modules.
+///
+/// Held by the driver rather than by any one chunk, and *moved* into the
+/// chunk being compiled so the thousand `self.chunk.classes[…]` reads in
+/// codegen keep working unchanged. Moving rather than sharing is what keeps
+/// the refcount at one, so [`Chunk::classes_mut`]'s `Rc::get_mut` never
+/// fails and no table is ever mutated while someone else can see it.
+#[derive(Default)]
+pub struct Tables {
+    pub classes: Vec<crate::chunk::ClassProto>,
+    pub interfaces: Vec<crate::chunk::InterfaceProto>,
+    pub enums: Vec<crate::chunk::EnumProto>,
+    /// Running total of module slots claimed so far — the next module's
+    /// base in the program's flat slot space.
+    pub module_slots: usize,
+}
+
+/// Compile one module of a program, appending its types to `tables`.
+///
+/// `imported` is what this module's `import` statements bring into scope,
+/// already resolved to program-global indices — see `program::compile`.
+/// Returns the chunk and the module's own view of the type world, which the
+/// driver reads to work out what this module *exports*.
+pub(crate) fn compile_into(
+    module: &Module,
+    name: &str,
+    source: &str,
+    bindings: &saule_semantic::Bindings,
+    types: &saule_typeck::TypeTable,
+    imported: &layout::Layouts,
+    tables: &mut Tables,
+    // Whether a program driver bound this module's imports already; see
+    // `Compiler::imports_bound`.
+    imports_bound: bool,
+    // Imported values to copy in before the body runs.
+    import_bindings: Vec<ctx::ImportBinding>,
+    // This module's position in its program.
+    module_index: usize,
+    // Names bound to a native package's exports, folded at compile time.
+    native_imports: std::collections::HashMap<String, saule_interpreter::Value>,
+) -> Result<(Chunk, layout::Layouts), CompileError> {
     let mut c = ctx::Compiler::new(name, source, bindings, types);
+    c.imports_bound = imports_bound;
+    c.import_bindings = import_bindings;
+    c.native_imports = native_imports;
+    c.module_slot_base = tables.module_slots;
+    c.chunk.module_slot_base = tables.module_slots;
+    c.chunk.module_index = module_index;
+    let c_module_index = module_index;
+
+    // Which receivers this module writes through, so the stdlib-constant
+    // fold below knows what it must not freeze. One walk, before anything
+    // is emitted, because a write can appear after the read it invalidates.
+    let mut mutated = MutatedReceivers(Default::default());
+    saule_ast::visit(module, &mut mutated);
+    c.mutated_receivers = mutated.0;
+
+    // Top-level `local`s, which become module slots rather than frame
+    // locals — see `Compiler::shadowed_names`. Only the top level needs
+    // collecting; a `local` in any inner block is a real frame local and
+    // `FuncCtx::lookup` finds it.
+    for s in &module.stmts {
+        match &s.value {
+            saule_ast::Stmt::Local { name, .. } => {
+                c.shadowed_names.insert(name.clone());
+            }
+            saule_ast::Stmt::LocalMulti { names, .. } => {
+                c.shadowed_names.extend(names.iter().map(|(n, _, _)| n.clone()));
+            }
+            saule_ast::Stmt::Decl(d) => {
+                if let saule_ast::Decl::Variable { name, .. } = &d.value {
+                    c.shadowed_names.insert(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
 
     // Pass 1: class layouts. Runs before anything is compiled so a method
     // can reference a class declared further down the file, and so a
     // constructor call knows the slot its `init` occupies.
-    let (classes, mut layouts) = layout::build(module)?;
-    c.chunk.interfaces = layout::build_interfaces(module).0;
-    c.chunk.classes = classes;
+    // The class table arrives holding every module compiled before this one,
+    // so the indices this pass assigns continue theirs — which is what makes
+    // `ClassIdx` mean the same thing in every chunk of the program.
+    let first_new_class = tables.classes.len();
+    let mut layouts = layout::build(
+        module,
+        &mut tables.classes,
+        &mut tables.interfaces,
+        imported,
+    )?;
+    // Stamp this module on the classes it just declared. `vtable` and
+    // `static_methods` hold proto indices, and those are per chunk — without
+    // this a `CALLM` on a class from another module would load the running
+    // module's proto of the same number.
+    for c in &mut tables.classes[first_new_class..] {
+        c.module = c_module_index;
+    }
+    // Moved in, not cloned: codegen reads the tables off the chunk, and the
+    // driver takes them back at the end.
+    *c.chunk.interfaces_mut() = std::mem::take(&mut tables.interfaces);
+    *c.chunk.classes_mut() = std::mem::take(&mut tables.classes);
+    *c.chunk.enums_mut() = std::mem::take(&mut tables.enums);
+    // `build_enums` numbers from `chunk.enums.len()`, which is already the
+    // program-global count — so enum indices become global for free.
     layout::build_enums(module, &mut c.chunk, &mut layouts)?;
-    c.layouts = layouts;
+    c.layouts = layouts.clone();
     c.check_interface_conformance(module)?;
 
     // Pass 1a: reserve a proto index for every top-level `fn` before any
@@ -164,6 +301,31 @@ pub fn compile_with(
             let placeholder = Proto::new(Some(name), 0, 1, vec![Instruction::abc(Op::RET0, 0, 0, 0)]);
             let idx = c.chunk.add_proto(placeholder);
             c.fn_protos.insert(name.clone(), idx);
+        }
+    }
+
+    // Pass 1b: every callee's declared parameters, for §19's call-site
+    // argument binding. One pass before any body, because a method may call
+    // another declared further down the file.
+    for s in &module.stmts {
+        let saule_ast::Stmt::Decl(d) = &s.value else { continue };
+        match &d.value {
+            saule_ast::Decl::Function { name, params, .. } => {
+                c.callee_params
+                    .insert(ctx::CalleeKey::Function(name.clone()), params.clone());
+            }
+            saule_ast::Decl::Class { name, members, .. } => {
+                let Some(idx) = c.layouts.get(name) else { continue };
+                for m in members {
+                    if let saule_ast::ClassMember::Method(me) = &m.value {
+                        c.callee_params.insert(
+                            ctx::CalleeKey::Method(idx, me.name.clone()),
+                            me.params.clone(),
+                        );
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -190,7 +352,11 @@ pub fn compile_with(
     // Resolved here rather than by making Pass 1 order-dependent on codegen:
     // one forward sweep, parents before children, which `order_by_depth`
     // already guarantees `chunk.classes` is in.
-    for i in 0..c.chunk.classes.len() {
+    // Only this module's classes: an earlier module's were swept when it was
+    // compiled and are already filled. A child here whose parent is over
+    // there still resolves — the sweep *reads* the whole table, it just does
+    // not need to revisit rows another module already finished.
+    for i in first_new_class..c.chunk.classes.len() {
         let Some(parent) = c.chunk.classes[i].parent else {
             continue;
         };
@@ -203,9 +369,25 @@ pub fn compile_with(
                 continue;
             }
             if let Some(&inherited) = c.chunk.classes[parent as usize].vtable.get(slot) {
-                c.chunk.classes[i].vtable[slot] = inherited;
+                c.chunk.classes_mut()[i].vtable[slot] = inherited;
             }
         }
+    }
+
+    // Import prologue: copy each imported *value* out of the exporting
+    // module's slot and into this module's. Emitted before the body rather
+    // than at each `import` statement because both slots are indices into
+    // one flat vector, and post-order guarantees the exporting module has
+    // already run — so there is nothing to sequence against.
+    let prologue_span = 0..0;
+    for b in std::mem::take(&mut c.import_bindings) {
+        let m = c.mark();
+        let r = c.alloc(&prologue_span)?;
+        let a = c.reg8(r, &prologue_span)?;
+        let dst = c.mod_slot(b.local, &prologue_span)?;
+        c.emit(Instruction::abx(Op::GETMOD, a, b.from), &prologue_span);
+        c.emit(Instruction::abx(Op::SETMOD, a, dst), &prologue_span);
+        c.free_to(m);
     }
 
     // The module body's value is the last expression statement's — the same
@@ -217,12 +399,14 @@ pub fn compile_with(
     }
 
     let span = module.stmts.last().map(|s| s.span.clone()).unwrap_or(0..0);
-    let chunk = c.finish(last, &span)?;
+    let mut chunk = c.finish(last, &span)?;
 
     // Pass 4. Debug builds only: this catches *compiler* bugs, and in a
     // release build of a chunk this compiler just produced there is nothing
     // new to learn. A chunk read back from a cache would be another matter —
     // that one is untrusted and must always be verified (§17).
+    // Verified *before* the tables are taken back, since the verifier checks
+    // class and enum indices against them.
     #[cfg(debug_assertions)]
     if let Err(e) = verify::verify(&chunk) {
         return Err(CompileError::MalformedChunk {
@@ -231,5 +415,13 @@ pub fn compile_with(
         });
     }
 
-    Ok(chunk)
+    // Hand the type world back to the driver for the next module. The chunk
+    // is left with empty tables; the driver fills every chunk with the final
+    // shared `Rc` once the last module is compiled.
+    tables.classes = std::mem::take(chunk.classes_mut());
+    tables.interfaces = std::mem::take(chunk.interfaces_mut());
+    tables.enums = std::mem::take(chunk.enums_mut());
+    tables.module_slots += chunk.module_slots;
+
+    Ok((chunk, layouts))
 }

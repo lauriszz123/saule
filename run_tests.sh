@@ -44,6 +44,11 @@ diff_exempt() {
     # the limit named in the message differs by design. Both still report a
     # stack overflow, which is the behaviour this fixture pins.
     tests/ui/stack_overflow_recursion.sau) return 0 ;;
+    # Same rule, reached through the re-entrancy path: a comparator that
+    # sorts with itself. Each level crosses the engine boundary, so the VM
+    # bounds it with the interpreter's shared depth guard rather than with
+    # `max_frames` — and the limit each engine names still differs by design.
+    tests/ui/stack_overflow_reentrant.sau) return 0 ;;
     *) return 1 ;;
   esac
 }

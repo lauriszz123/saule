@@ -59,6 +59,15 @@ pub(crate) fn call_value_multi(
             (nc.func)(&positional).map_err(|message| RuntimeError::TypeError { message, span })
         }
         Value::Class(c) => construct(c, args, span).map(crate::recycle::values_of),
+        // A function the *other* engine compiled. Reached whenever the
+        // tree-walker's own code has to call a value the VM produced: a
+        // native invoking its callable argument, an operator overload, a
+        // `toString`. The VM runs it on a fresh register file over its
+        // existing shared state (`VM_DESIGN.md` §22.1).
+        Value::VmFunction(f) => {
+            let positional = vm_positional_args(&f, args, &span)?;
+            f.invoke(&positional, span)
+        }
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "value of type `{}` is not callable — only functions, classes, and methods can be called",
@@ -67,6 +76,37 @@ pub(crate) fn call_value_multi(
             span,
         }),
     }
+}
+
+/// Flatten arguments for a bytecode callee.
+///
+/// A `Proto` carries parameter *slots*, not names — §19's named-argument
+/// binding is compiled into the callee's prologue, and the compiler refuses
+/// a named argument outright today. So a named argument reaching a bytecode
+/// function is refused here rather than silently bound positionally, which
+/// would pass the right count of arguments in the wrong order.
+pub(crate) fn vm_positional_args(
+    f: &Rc<crate::value::VmFunctionRef>,
+    args: &[EvaluatedArg],
+    span: &std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
+    let mut out = Vec::with_capacity(args.len());
+    for arg in args {
+        match arg {
+            EvaluatedArg::Positional(v) | EvaluatedArg::TrailingBlock(v) => out.push(v.clone()),
+            EvaluatedArg::Named { name, .. } => {
+                return Err(RuntimeError::TypeError {
+                    message: format!(
+                        "named argument `{name}` is not supported when calling `{}` \
+                         through a built-in — use positional arguments instead",
+                        f.vm_name().unwrap_or("<lambda>")
+                    ),
+                    span: span.clone(),
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn run_function_body(

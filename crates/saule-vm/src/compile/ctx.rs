@@ -36,6 +36,25 @@ use crate::compile::CompileError;
 use crate::compile::regalloc::{Mark, RegAlloc};
 use crate::op::{Instruction, Op};
 
+/// One imported value: where it lives now, and which slot it must land in.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportBinding {
+    /// Slot in *this* module, as the resolver numbered it — rebased when
+    /// emitted.
+    pub local: u16,
+    /// Slot in the exporting module, already program-global.
+    pub from: u16,
+}
+
+/// How a callee is named, for [`Compiler::callee_params`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CalleeKey {
+    /// A top-level `fn` of this module.
+    Function(String),
+    /// A method or `init` of a class, by class index and method name.
+    Method(crate::chunk::ClassIdx, String),
+}
+
 /// A patch site: an emitted jump whose target is not known yet.
 #[must_use = "an unpatched jump goes to the wrong place"]
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +124,17 @@ pub struct FuncCtx {
     pub current_class: Option<crate::chunk::ClassIdx>,
     /// Whether `self` is bound (register 0). False in a static method.
     pub in_method: bool,
+    /// Per-arity entry points for defaulted parameters (§19), built by
+    /// [`Compiler::param_entries`] before the body is compiled.
+    pub entries: Vec<u32>,
+    /// The variadic parameter's name, when this function has one.
+    ///
+    /// `VARARG` binds it to a table, but the front end types it as the
+    /// *element* type — `...values: integer` makes `values` an `integer` as
+    /// far as the `TypeTable` is concerned. So `for v in values` cannot be
+    /// proved a table from the type alone, and this records what the
+    /// compiler already knows.
+    pub variadic_param: Option<Rc<str>>,
     /// Lexical scopes, innermost last: `name -> register`. The compiler's
     /// own map, authoritative for register numbers.
     scopes: Vec<Vec<(Rc<str>, u16)>>,
@@ -123,6 +153,8 @@ impl FuncCtx {
             upvals: Vec::new(),
             current_class: None,
             in_method: false,
+            entries: Vec::new(),
+            variadic_param: None,
             scopes: vec![Vec::new()],
         }
     }
@@ -220,6 +252,60 @@ pub struct Compiler<'a> {
     pub loops: Vec<LoopCtx>,
     /// Class name -> index, from Pass 1.
     pub layouts: crate::compile::layout::Layouts,
+    /// Receiver names that appear on the **left** of an assignment.
+    ///
+    /// A stdlib value like `Math.pi` is resolved at compile time and frozen
+    /// into the constant pool. That is only sound if nothing writes to it —
+    /// and `Math.pi = 3.0` is accepted today, the typechecker does not
+    /// reject it. So the compiler asks first, and declines to freeze a
+    /// receiver this module assigns through.
+    pub mutated_receivers: std::collections::HashSet<String>,
+    /// Top-level names bound by a `local` — i.e. holding a *value*.
+    ///
+    /// A module-level `local` becomes a module **slot**, not a frame local,
+    /// so `FuncCtx::lookup` cannot see it. Every "is this bare name really
+    /// the class / enum / stdlib entity it looks like?" test used that
+    /// lookup, and so answered yes for `local Foo = {...}` shadowing a class
+    /// `Foo` — reading the class's static where the program meant its table.
+    /// Nested locals are still `FuncCtx::lookup`'s job; this covers the one
+    /// case it structurally cannot.
+    pub shadowed_names: std::collections::HashSet<String>,
+    /// Whether a program driver already resolved this module's imports.
+    ///
+    /// When it has, an `import` of a **type** emits nothing at all: the
+    /// driver bound the name to a program-global `ClassIdx` before codegen
+    /// started, so `Button(...)` is already a plain `NEW` and there is no
+    /// runtime work left to do. When it has not — a single file compiled on
+    /// its own — an `import` must still be refused, because the name has a
+    /// module slot that nothing would ever write.
+    pub imports_bound: bool,
+    /// Where this module's slots start in the program's flat slot space.
+    /// Added to every module-slot operand by [`Compiler::mod_slot`].
+    pub module_slot_base: usize,
+    /// Imported **values** to copy in before the module body runs.
+    ///
+    /// A type needs nothing here — it is a compile-time index. A `fn` or a
+    /// module variable is a runtime value living in the exporting module's
+    /// slot, and post-order guarantees that module has already run by the
+    /// time this one starts.
+    pub import_bindings: Vec<ImportBinding>,
+    /// Names an `import` bound to a **native package's** exports.
+    ///
+    /// A native package is a bag of Rust-built values, not a Saule module:
+    /// there is nothing to compile and nothing to run, and the export is
+    /// fixed before the program starts. So it resolves at compile time,
+    /// exactly like a prelude name — the same fold `print` and `Math.pi`
+    /// already get.
+    pub native_imports: HashMap<String, Value>,
+    /// Declared parameters of every callee this module can name, for §19's
+    /// compile-time argument binding.
+    ///
+    /// A `Proto` deliberately does not carry parameter *names* or defaults —
+    /// those are compile-time facts and the runtime never needs them — so
+    /// the call site reads them from here instead. Collected in one pre-pass
+    /// before any body is compiled, because a method may call another
+    /// declared further down the file.
+    pub callee_params: HashMap<CalleeKey, Vec<saule_ast::Param>>,
     /// A prelude scope, consulted at *compile* time to turn `print` into the
     /// actual `NativeFn` value a `CALLNAT` constant points at.
     prelude: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<saule_interpreter::Environment>>>>,
@@ -239,6 +325,13 @@ impl<'a> Compiler<'a> {
             fn_protos: HashMap::new(),
             loops: Vec::new(),
             layouts: Default::default(),
+            mutated_receivers: Default::default(),
+            shadowed_names: Default::default(),
+            imports_bound: false,
+            module_slot_base: 0,
+            import_bindings: Vec::new(),
+            native_imports: HashMap::new(),
+            callee_params: HashMap::new(),
             prelude: std::cell::RefCell::new(None),
         }
     }
@@ -268,6 +361,7 @@ impl<'a> Compiler<'a> {
         proto.handlers = std::mem::take(&mut self.f.handlers);
         proto.protos = std::mem::take(&mut self.f.nested);
         proto.upvals = std::mem::take(&mut self.f.upvals);
+        proto.entries = std::mem::take(&mut self.f.entries);
         proto.source = Some(Rc::clone(&self.chunk.source));
         self.f = self.enclosing.pop().expect("push_function/pop_function pair");
         proto
@@ -295,6 +389,34 @@ impl<'a> Compiler<'a> {
         found
     }
 
+    /// A stdlib *value* member — `Math.pi`, `Os.sep`, `IoMode.Write`.
+    ///
+    /// The same compile-time resolution `CALLNAT` does for `String.len`,
+    /// applied to members that hold a value rather than a function. The
+    /// prelude is fixed before a program runs, so the read becomes a
+    /// `LOADK` and nothing looks anything up at run time.
+    ///
+    /// Only value-shaped results are returned. A `Table` or a `File` is a
+    /// mutable handle and freezing one into the constant pool would make
+    /// every read share a snapshot the tree-walker does not; those fall
+    /// back instead.
+    pub fn prelude_member(&self, id: NodeId, recv: &str, name: &str) -> Option<Value> {
+        let v = match self.static_value(id, recv)? {
+            Value::Class(cls) => cls.lookup_static_field(name)?,
+            Value::Enum(e) => Value::EnumVariant(std::rc::Rc::clone(e.variants.get(name)?)),
+            _ => return None,
+        };
+        matches!(
+            v,
+            Value::Int(_)
+                | Value::Float(_)
+                | Value::Str(_)
+                | Value::Bool(_)
+                | Value::EnumVariant(_)
+        )
+        .then_some(v)
+    }
+
     /// The runtime value a prelude name is bound to, for `CALLNAT`.
     ///
     /// Resolved at compile time: the prelude is fixed before a program runs,
@@ -309,6 +431,28 @@ impl<'a> Compiler<'a> {
         let env = slot.as_ref().expect("just installed");
         let v = env.borrow().get(name);
         v
+    }
+
+    /// The value a bare name denotes at **compile** time, if any.
+    ///
+    /// Two sources, and they behave identically once resolved: the prelude,
+    /// and a name an `import` bound to a native package's export. Both are
+    /// fixed before a program runs, which is what makes folding them sound.
+    ///
+    /// Declines when the module shadows the name — a top-level
+    /// `local String = {…}` must not resolve to the stdlib's, which is a bug
+    /// this compiler has shipped once already.
+    pub fn static_value(&self, id: NodeId, name: &str) -> Option<Value> {
+        if !self.not_shadowed(name) {
+            return None;
+        }
+        if let Some(v) = self.native_imports.get(name) {
+            return Some(v.clone());
+        }
+        if matches!(self.binding(id), Some(Binding::Prelude { .. })) {
+            return self.prelude_value(name);
+        }
+        None
     }
 
     // ---- emission ------------------------------------------------------
@@ -461,6 +605,186 @@ impl<'a> Compiler<'a> {
             name: self.func_label(),
             needed: r as usize + 1,
             span: span.clone(),
+        })
+    }
+
+    /// A `CALLK` target: the proto index packed with its module.
+    ///
+    /// A proto index only means something inside its own chunk, and
+    /// `self.super()` on a parent from another module is a `CALLK` across
+    /// that boundary — without the module it loaded the *running* module's
+    /// proto of the same number, which for a subclass's `init` was the
+    /// subclass's own `init`. Unbounded recursion, and only because the two
+    /// happened to be numbered alike.
+    ///
+    /// `EXTRAARG` carries 24 bits, split 8/16: 256 modules and 65 536 protos
+    /// each, both refused cleanly rather than wrapped.
+    pub fn call_target(
+        &self,
+        module: usize,
+        proto: u32,
+        span: &Range<usize>,
+    ) -> Result<u32, CompileError> {
+        if module > 0xFF {
+            return Err(CompileError::unsupported("a program with over 256 modules", span.clone()));
+        }
+        if proto > 0xFFFF {
+            return Err(CompileError::unsupported(
+                "a module with over 65536 functions",
+                span.clone(),
+            ));
+        }
+        Ok(((module as u32) << 16) | proto)
+    }
+
+    /// [`Self::call_target`] for a proto of the module being compiled.
+    pub fn own_call_target(&self, proto: u32, span: &Range<usize>) -> Result<u32, CompileError> {
+        self.call_target(self.chunk.module_index, proto, span)
+    }
+
+    /// Emit per-arity entry stubs for a callee's defaulted parameters
+    /// (§19), and hand back the `entries` table.
+    ///
+    /// Call sites do nothing for a default: `CALLK` pushes a frame and jumps
+    /// to `proto.entry_for(n_args)`, and the stub the arity lands on fills in
+    /// what was not passed. Zero cost when every argument was supplied,
+    /// because that entry point *is* the body.
+    ///
+    /// **Defaults are evaluated in the callee's frame**, which §19 calls the
+    /// one genuine correctness trap here. Stubs get that right by
+    /// construction: parameter `k`'s default compiles into register `k` of
+    /// the callee, so a default that mentions an earlier parameter —
+    /// `fn f(a: integer, b: integer = a * 2)` — reads the register holding
+    /// `a`, exactly as `bind_params` reads the callee's scope. Compiling the
+    /// default at the *call site* instead would have resolved `a` against
+    /// the caller.
+    ///
+    /// The stubs fall through into one another, so entering at arity `k`
+    /// fills `k`, `k+1`, … and then runs the body — one instruction stream,
+    /// no jumps.
+    /// `base` is the register (and argument index) the *first* written
+    /// parameter occupies: 1 for an instance method, whose register 0 is
+    /// `self` and whose `self` counts as an argument, and 0 otherwise.
+    pub fn param_entries(
+        &mut self,
+        params: &[saule_ast::Param],
+        base: u16,
+        span: &Range<usize>,
+    ) -> Result<Vec<u32>, CompileError> {
+        // A variadic parameter gathers the surplus arguments into a table,
+        // and it has to happen however the frame was entered — so it is the
+        // proto's *first* instruction, before any default stub.
+        if let Some(i) = params.iter().position(|p| p.variadic) {
+            // `bind_params` rejects both of these at run time; refusing here
+            // keeps the compiler from emitting code for a signature the
+            // other engine would not accept.
+            if i + 1 != params.len() || params.iter().filter(|p| p.variadic).count() > 1 {
+                return Err(CompileError::unsupported(
+                    "a variadic parameter that is not the last one",
+                    span.clone(),
+                ));
+            }
+            // Mixing the two would need an entry stub per arity that also
+            // re-gathers, and nothing in the corpus does it.
+            if params.iter().any(|p| p.default.is_some()) {
+                return Err(CompileError::unsupported(
+                    "a signature with both a default and a variadic parameter",
+                    span.clone(),
+                ));
+            }
+            let a = self.reg8(base + i as u16, span)?;
+            self.emit(Instruction::abc(Op::VARARG, a, 0, 0), span);
+            self.f.variadic_param = Some(Rc::from(params[i].name.as_str()));
+            // No defaults, so every arity enters at 0 — which is the
+            // `VARARG` just emitted.
+            return Ok(Vec::new());
+        }
+        let Some(first_default) = params.iter().position(|p| p.default.is_some()) else {
+            // Nothing defaulted: `entry_for` falls back to 0 for every
+            // arity, which is the body.
+            return Ok(Vec::new());
+        };
+        let base = base as usize;
+        let mut entries = vec![0u32; base + params.len() + 1];
+        for (k, p) in params.iter().enumerate().skip(first_default) {
+            entries[base + k] = self.f.label_here() as u32;
+            // A parameter after the first defaulted one with no default of
+            // its own keeps whatever `push_frame` left — `nil` — which is
+            // what a nullable parameter should get anyway (§19 step 5).
+            if let Some(d) = &p.default {
+                self.expr_to(d, (base + k) as u16)?;
+            }
+        }
+        // Every arity at or below the first default enters the same place:
+        // a call missing a *required* argument is a typecheck error, so this
+        // only decides what an unchecked caller sees, and "fill every
+        // default" is the sane answer.
+        let first_pc = entries[base + first_default];
+        for e in entries.iter_mut().take(base + first_default) {
+            *e = first_pc;
+        }
+        // Full arity: straight to the body.
+        entries[base + params.len()] = self.f.label_here() as u32;
+        let _ = span;
+        Ok(entries)
+    }
+
+    /// The static `field` as seen from inside class `class`, by name.
+    ///
+    /// `sindex` is flattened and each entry names its **declaring** class,
+    /// so an inherited static resolves to the parent's cell rather than to a
+    /// second, never-initialised one in the subclass — the bug §24.2 warns
+    /// about, expressed as data.
+    pub fn static_slot_of(&self, class: &str, field: &str) -> Option<crate::chunk::StaticSlot> {
+        let idx = self
+            .layouts
+            .get(class)
+            // The resolver leaves the class name empty for a static reached
+            // from somewhere it could not attribute; fall back to the class
+            // whose body we are compiling.
+            .or(self.f.current_class)?;
+        self.chunk.classes[idx as usize].sindex.get(field).copied()
+    }
+
+    /// The `static fn` `method` on class `class`, as `(class index, slot)`.
+    ///
+    /// The companion to [`Self::static_slot_of`] for the *method* half:
+    /// `smindex` and `sindex` are separate tables, and a bare name inside a
+    /// class body may be either.
+    pub fn static_method_of(&self, class: &str, method: &str) -> Option<(u32, u16)> {
+        let idx = self.layouts.get(class).or(self.f.current_class)?;
+        let s = *self.chunk.classes[idx as usize].smindex.get(method)?;
+        // `s.class`, not `idx`: an inherited `static fn` lives in the proto
+        // vector of the class that declared it.
+        Some((s.class, s.slot))
+    }
+
+    /// This module's slot for `name`, by name.
+    ///
+    /// For the places that have a name but no `NodeId` to ask the binding
+    /// table with — a pipeline stage, for one, whose `PipeStage` holds a
+    /// bare `String`.
+    pub fn module_slot_of(&self, name: &str) -> Option<u16> {
+        self.bindings
+            .module_slots
+            .iter()
+            .position(|s| s.as_ref() == name)
+            .and_then(|i| u16::try_from(i).ok())
+    }
+
+    /// A module slot as the **program** numbers it.
+    ///
+    /// The resolver numbers each module's slots from zero; the program lays
+    /// those spaces end to end. Rebasing here rather than at run time is
+    /// what lets an import be an ordinary `GETMOD` from the exporter's slot
+    /// followed by a `SETMOD` into the importer's — two indices into one
+    /// vector, no new opcode and no name lookup.
+    pub fn mod_slot(&self, slot: u16, span: &Range<usize>) -> Result<u16, CompileError> {
+        u16::try_from(self.module_slot_base + slot as usize).map_err(|_| {
+            // `Bx` is 16 bits. A program with more than 65 536 top-level
+            // bindings across all its modules is refused rather than
+            // silently wrapped into another module's slot.
+            CompileError::unsupported("a program with over 65536 top-level names", span.clone())
         })
     }
 

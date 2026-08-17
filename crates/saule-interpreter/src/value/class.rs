@@ -7,7 +7,61 @@ use std::rc::Rc;
 use saule_ast::{Expr, Spanned};
 
 use super::Value;
-use super::function::FunctionObject;
+use super::function::{FunctionObject, VmFunctionRef};
+
+/// A method body, whichever engine compiled it.
+///
+/// A `ClassObject` is built by exactly one engine — the tree-walker's
+/// `exec_class_decl` or the VM's start-up pass — so in any given class every
+/// entry is the same arm. The enum exists so a *reader* cannot forget the
+/// other one: before it, `methods` was `Rc<FunctionObject>` and a VM-built
+/// class simply had an empty map, which made `lookup_method` answer "no
+/// `toString`" and `display_value` print `<instance of Money>` with no error
+/// at all. Making the two shapes representable in one type turns that silent
+/// wrong answer into a `match` the compiler demands.
+#[derive(Debug, Clone)]
+pub enum MethodRef {
+    /// A tree-walker [`FunctionObject`], closing over its defining scope.
+    Tree(Rc<FunctionObject>),
+    /// A bytecode closure, opaque behind [`VmFunctionRef`].
+    Vm(Rc<VmFunctionRef>),
+}
+
+impl MethodRef {
+    /// The `FunctionObject` behind a tree-walker method.
+    ///
+    /// `None` for a bytecode method — which is the right answer for the
+    /// sites that need one: they want a *defining environment* (field
+    /// defaults, `owner_class` back-links), and a bytecode method has no
+    /// `Environment` at all.
+    pub fn as_tree(&self) -> Option<&Rc<FunctionObject>> {
+        match self {
+            MethodRef::Tree(f) => Some(f),
+            MethodRef::Vm(_) => None,
+        }
+    }
+
+    /// This method as a first-class value — what `local f = obj.method`
+    /// binds.
+    pub fn to_value(&self) -> Value {
+        match self {
+            MethodRef::Tree(f) => Value::Function(Rc::clone(f)),
+            MethodRef::Vm(f) => Value::VmFunction(Rc::clone(f)),
+        }
+    }
+}
+
+impl From<Rc<FunctionObject>> for MethodRef {
+    fn from(f: Rc<FunctionObject>) -> MethodRef {
+        MethodRef::Tree(f)
+    }
+}
+
+impl From<Rc<VmFunctionRef>> for MethodRef {
+    fn from(f: Rc<VmFunctionRef>) -> MethodRef {
+        MethodRef::Vm(f)
+    }
+}
 
 /// Runtime representation of a `class` declaration.
 ///
@@ -33,7 +87,7 @@ pub struct ClassObject {
     /// deep the hierarchy is. Inherited entries are the same `Rc` the parent
     /// holds, so flattening costs one map slot per inherited method, not a
     /// second copy of the function.
-    pub methods: HashMap<String, Rc<FunctionObject>>,
+    pub methods: HashMap<String, MethodRef>,
     /// Static fields. Mutable through `ClassName.field = …`.
     ///
     /// Deliberately *not* flattened: a static is a single mutable slot shared
@@ -42,7 +96,7 @@ pub struct ClassObject {
     /// [`ClassObject::declaring_static_field`].
     pub static_fields: RefCell<HashMap<String, Value>>,
     /// Static methods (no implicit `self`). Flattened, like `methods`.
-    pub static_methods: HashMap<String, Rc<FunctionObject>>,
+    pub static_methods: HashMap<String, MethodRef>,
     /// `init(args) … end`. None means the class has no explicit
     /// constructor — calling the class still produces a valid instance.
     pub constructor: Option<Rc<FunctionObject>>,
@@ -179,12 +233,12 @@ impl ClassObject {
     ///
     /// One probe: `methods` is flattened at class-construction time, so this
     /// no longer walks the parent chain hashing the name once per level.
-    pub fn lookup_method(self: &Rc<Self>, name: &str) -> Option<Rc<FunctionObject>> {
+    pub fn lookup_method(self: &Rc<Self>, name: &str) -> Option<MethodRef> {
         self.methods.get(name).cloned()
     }
 
     /// Look up a static method. Flattened, like [`Self::lookup_method`].
-    pub fn lookup_static_method(self: &Rc<Self>, name: &str) -> Option<Rc<FunctionObject>> {
+    pub fn lookup_static_method(self: &Rc<Self>, name: &str) -> Option<MethodRef> {
         self.static_methods.get(name).cloned()
     }
 

@@ -8,11 +8,23 @@ use saule_lexer::Lexer;
 use saule_parser::parse;
 use saule_vm::compile::layout;
 
+/// Lay out a single module against empty program tables — the shape a
+/// one-file compile uses. `build` appends into the program's class table, so
+/// starting from empty makes the returned indices module-local again.
 fn build(src: &str) -> (Vec<saule_vm::chunk::ClassProto>, layout::Layouts) {
+    try_build(src).expect("layout")
+}
+
+fn try_build(
+    src: &str,
+) -> Result<(Vec<saule_vm::chunk::ClassProto>, layout::Layouts), saule_vm::CompileError> {
     saule_interpreter::init();
     let toks = Lexer::new(src).tokenize().expect("lex");
     let module = parse(toks).expect("parse");
-    layout::build(&module).expect("layout")
+    let mut classes = Vec::new();
+    let mut interfaces = Vec::new();
+    let layouts = layout::build(&module, &mut classes, &mut interfaces, &Default::default())?;
+    Ok((classes, layouts))
 }
 
 const HIERARCHY: &str = r#"
@@ -145,17 +157,53 @@ fn static_methods_are_indexed_separately_from_instance_methods() {
 }
 
 #[test]
-fn a_class_from_another_module_is_refused_rather_than_guessed() {
-    // Guessing a parent's layout is precisely the §24.2 failure. Refusing is
-    // the only safe answer until cross-module layouts land.
-    saule_interpreter::init();
+fn a_parent_the_compiler_cannot_see_is_refused_rather_than_guessed() {
+    // Guessing a parent's layout is precisely the §24.2 failure. A parent in
+    // *another module* now resolves — the program driver seeds `imported`
+    // with the indices that module's own layout pass assigned. A parent that
+    // is nowhere at all still has to be refused, because every slot in the
+    // subclass would otherwise be invented.
     let src = "class Child extends Missing\n  fn init()\n    self.x = 1\n  end\n  x: integer\nend";
-    let toks = Lexer::new(src).tokenize().expect("lex");
-    let module = parse(toks).expect("parse");
-    match layout::build(&module) {
+    match try_build(src) {
         Err(saule_vm::CompileError::Unsupported { thing, .. }) => {
-            assert!(thing.contains("another module"), "{thing}");
+            assert!(thing.contains("cannot see"), "{thing}");
         }
-        other => panic!("expected a refusal, got {other:?}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|(c, _)| c.len())),
     }
+}
+
+#[test]
+fn an_imported_parent_resolves_to_the_index_its_own_module_assigned() {
+    // The cross-module case, in miniature: lay out the parent's module
+    // first, then hand its index to the child's module as an import. The
+    // child's field slots must extend the parent's *real* ones — the whole
+    // point of a program-global class table.
+    saule_interpreter::init();
+    let mut classes = Vec::new();
+    let mut interfaces = Vec::new();
+
+    let parent_src = "class Base\n  fn init()\n    self.a = 1\n  end\n  a: integer\nend";
+    let toks = Lexer::new(parent_src).tokenize().expect("lex");
+    let parent_mod = parse(toks).expect("parse");
+    let parent_layouts =
+        layout::build(&parent_mod, &mut classes, &mut interfaces, &Default::default())
+            .expect("parent layout");
+    let base_idx = parent_layouts.get("Base").expect("Base laid out");
+
+    let child_src =
+        "class Derived extends Base\n  fn init()\n    self.b = 2\n  end\n  b: integer\nend";
+    let toks = Lexer::new(child_src).tokenize().expect("lex");
+    let child_mod = parse(toks).expect("parse");
+    let child_layouts = layout::build(&child_mod, &mut classes, &mut interfaces, &parent_layouts)
+        .expect("child layout despite a parent from another module");
+
+    let derived = child_layouts.get("Derived").expect("Derived laid out");
+    assert_eq!(
+        classes[derived as usize].parent,
+        Some(base_idx),
+        "the child must point at the parent's program-global index"
+    );
+    // The prefix invariant, across a module boundary: `a` keeps slot 0.
+    assert_eq!(classes[derived as usize].layout.slot("a"), Some(0));
+    assert_eq!(classes[derived as usize].layout.slot("b"), Some(1));
 }

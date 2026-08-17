@@ -50,7 +50,7 @@ pub(crate) fn run_file(path: PathBuf, require_main: bool) {
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .or_else(|| path.parent().map(Path::to_path_buf));
 
-    if let Err(report) = run_source(&name, source, require_main, module_dir) {
+    if let Err(report) = run_source(&name, source, require_main, module_dir, Some(&path)) {
         eprintln!("{report:?}");
         process::exit(1);
     }
@@ -61,6 +61,9 @@ fn run_source(
     source: String,
     require_main: bool,
     module_dir: Option<PathBuf>,
+    // The file this source came from, when it has one. The program driver
+    // needs a path to resolve imports against.
+    entry_path: Option<&Path>,
 ) -> Result<(), Report> {
     // Wire the stdlib's native signatures into `saule-typeck` before the
     // static check runs. Idempotent.
@@ -112,9 +115,28 @@ fn run_source(
     // long before the compiler is complete. Anything *else* the compiler
     // reports is a real problem and is surfaced.
     if use_vm() {
-        match saule_vm::compile(&module, name, &source) {
-            Ok(chunk) => {
-                let had_main = saule_vm::run_chunk_entry(std::rc::Rc::new(chunk))
+        // A program, not a chunk: imports are resolved at *compile* time so
+        // a class declared in one module and extended in another has one
+        // layout (§14, §24.2). `entry_path` is `None` only for sources with
+        // no file behind them, which cannot have imports anyway.
+        let compiled = match entry_path {
+            Some(p) => saule_vm::program::compile(p).map(Some),
+            None => Ok(None),
+        };
+        let compiled = match compiled {
+            Ok(Some(p)) => Ok(p),
+            // No path: fall back to the single-module route.
+            Ok(None) => saule_vm::compile(&module, name, &source)
+                .map(|c| saule_vm::program::Program {
+                    modules: vec![std::rc::Rc::new(c)],
+                    entry: 0,
+                })
+                .map_err(saule_vm::program::ProgramError::from),
+            Err(e) => Err(e),
+        };
+        match compiled {
+            Ok(program) => {
+                let had_main = saule_vm::run_program(program)
                     .map_err(|e| Report::new(e).with_source_code(make_src()))?;
                 if !had_main && require_main {
                     eprintln!(
@@ -124,9 +146,22 @@ fn run_source(
                 }
                 return Ok(());
             }
-            Err(saule_vm::CompileError::Unsupported { thing, .. }) => {
+            Err(saule_vm::program::ProgramError::Compile(
+                saule_vm::CompileError::Unsupported { thing, .. },
+            )) => {
                 eprintln!(
                     "note: the bytecode compiler does not handle `{thing}` yet — \
+                     running on the tree-walking interpreter"
+                );
+            }
+            // A module this driver could not read, resolve or order. The
+            // tree-walker resolves imports its own way and may well manage
+            // where this did not, so it falls back and lets the oracle
+            // produce any user-facing diagnostic — the two engines must
+            // never disagree about whether a program is valid.
+            Err(e) if e.is_fallback() => {
+                eprintln!(
+                    "note: the bytecode compiler could not build a program ({e}) — \
                      running on the tree-walking interpreter"
                 );
             }

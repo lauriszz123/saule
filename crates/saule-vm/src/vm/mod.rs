@@ -48,20 +48,27 @@ pub use upval::Upvalue;
 /// magnitude higher (§6.4).
 pub const DEFAULT_MAX_FRAMES: usize = 1_000_000;
 
-/// The register machine.
-pub struct Vm {
-    chunk: Rc<Chunk>,
-    /// One contiguous register file. Grown, never shrunk.
-    stack: Vec<Value>,
-    frames: Vec<Frame>,
-    /// Open upvalues, sorted ascending by the stack index they point at, so
-    /// `CLOSEUP` can pop from the back.
-    open_upvals: Vec<Rc<RefCell<Upvalue>>>,
-    /// Flat module slots — top-level bindings, no hashing.
-    modules: Vec<Value>,
+/// Everything about a running program that is **not** per-invocation: the
+/// code, the module slots, the statics, the classes and the enums (§5.1).
+///
+/// Split out from [`Vm`] so a callback can re-enter. A native that invokes
+/// its argument — `Table.sort`'s comparator, an `OpAdd` overload, a
+/// `toString` — is reached from inside the dispatch loop, which holds
+/// `&mut self` across the `CALLNAT`. That borrow is what made a bytecode
+/// closure uncallable from the tree-walker. Behind an `Rc`, a second `Vm`
+/// can run over the same state with a register file of its own, and the
+/// borrow never has to be handed out.
+pub struct VmShared {
+    /// Every module of the program, in post-order. Index 0 exists for a
+    /// single-module compile too, so nothing has to special-case it.
+    chunks: Vec<Rc<Chunk>>,
+    /// Flat module slots — top-level bindings, no hashing. Behind a
+    /// `RefCell` because a re-entrant call can both read and write them.
+    modules: RefCell<Vec<Value>>,
     /// Lazily-built closures for protos that capture nothing, so `CALLK`
-    /// does not allocate one per call.
-    closure_cache: Vec<Option<Rc<VmFunctionRef>>>,
+    /// does not allocate one per call. Indexed `[module][proto]`, because a
+    /// proto index only means something within its own chunk.
+    closure_cache: RefCell<Vec<Vec<Option<Rc<VmFunctionRef>>>>>,
     /// One runtime class per `ClassProto`, built once at start-up.
     classes: Vec<Rc<saule_interpreter::value::ClassObject>>,
     /// Class identity -> index, so `CALLM` can find a receiver's vtable.
@@ -77,74 +84,243 @@ pub struct Vm {
     /// One runtime enum per `EnumProto`, built once at start-up.
     enums: Vec<Rc<saule_interpreter::value::EnumObject>>,
     max_frames: usize,
+    /// Register files parked for reuse by the next re-entrant call.
+    ///
+    /// A callback needs a `Vm` of its own, and building one means two heap
+    /// allocations — a 256-register stack and a frame list. On a sort
+    /// comparator that is per *comparison*, which measured as `sort.sau`
+    /// running slower under this engine than under the tree-walker even
+    /// though the comparator body itself is faster.
+    ///
+    /// Nesting is a stack discipline, so a free list is all this needs: a
+    /// `Vm` in use is simply not in the pool. Only a cleanly-returned `Vm`
+    /// goes back — one unwound by an error still has frames and possibly
+    /// open upvalues, and sorting that out is not worth an allocation.
+    reentry_pool: RefCell<Vec<Vm>>,
+}
+
+impl std::fmt::Debug for VmShared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The chunk alone is enormous and a `Closure`'s `Debug` prints this
+        // field; name it rather than dump it.
+        f.debug_struct("VmShared")
+            .field("modules", &self.chunks.len())
+            .field("classes", &self.classes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The register machine: one invocation's stack and frames over an
+/// [`Rc<VmShared>`](VmShared).
+pub struct Vm {
+    shared: Rc<VmShared>,
+    /// One contiguous register file. Grown, never shrunk.
+    stack: Vec<Value>,
+    frames: Vec<Frame>,
+    /// Open upvalues, sorted ascending by the stack index they point at, so
+    /// `CLOSEUP` can pop from the back.
+    open_upvals: Vec<Rc<RefCell<Upvalue>>>,
 }
 
 impl Vm {
     pub fn new(chunk: Rc<Chunk>) -> Vm {
-        let n_protos = chunk.protos.len();
-        let module_slots = chunk.module_slots;
-        let mut vm = Vm {
-            chunk,
+        Vm::for_chunks(vec![chunk])
+    }
+
+    /// A VM over a whole program's modules, in post-order.
+    ///
+    /// One `VmShared` for the program rather than one per module, because
+    /// the classes, the statics and the module slots are all program-wide:
+    /// building them per module would give each module its *own*
+    /// `Rc<ClassObject>` for the same class, and `class_of` — which maps
+    /// class identity to a vtable — would then answer differently depending
+    /// on which module asked.
+    ///
+    /// Every chunk shares the same class/enum tables, so reading them
+    /// through `chunks[0]` is not a choice of module; it is the one table.
+    pub fn for_chunks(chunks: Vec<Rc<Chunk>>) -> Vm {
+        // One flat slot vector for the program: each module's slots were
+        // rebased onto it at compile time, which is what lets an import be a
+        // plain `GETMOD` + `SETMOD` with no cross-module opcode.
+        let module_slots = chunks
+            .iter()
+            .map(|c| c.module_slot_base + c.module_slots)
+            .max()
+            .unwrap_or(0);
+        let cache = chunks.iter().map(|c| vec![None; c.protos.len()]).collect();
+        // `new_cyclic` because the classes built here carry method closures,
+        // and a closure needs a `Weak<VmShared>` to be able to run itself —
+        // which does not exist until the `Rc` does.
+        let shared = Rc::new_cyclic(|weak: &std::rc::Weak<VmShared>| {
+            let (classes, class_of, statics) = build_classes(&chunks, weak);
+            VmShared {
+                enums: build_enums(&chunks),
+                modules: RefCell::new(vec![Value::Nil; module_slots]),
+                closure_cache: RefCell::new(cache),
+                chunks,
+                classes,
+                class_of,
+                statics,
+                max_frames: max_frames_from_env(),
+                reentry_pool: RefCell::new(Vec::new()),
+            }
+        });
+        Vm::from_shared(shared)
+    }
+
+    /// A fresh register file over already-built engine state — the
+    /// re-entrant entry point.
+    pub fn from_shared(shared: Rc<VmShared>) -> Vm {
+        Vm {
+            shared,
             stack: Vec::with_capacity(256),
             frames: Vec::with_capacity(32),
             open_upvals: Vec::new(),
-            modules: vec![Value::Nil; module_slots],
-            closure_cache: vec![None; n_protos],
-            classes: Vec::new(),
-            class_of: std::collections::HashMap::new(),
-            statics: Vec::new(),
-            enums: Vec::new(),
-            max_frames: max_frames_from_env(),
-        };
-        vm.build_classes();
-        vm.build_enums();
-        vm
+        }
     }
+}
 
-    /// Materialise one runtime `ClassObject` per `ClassProto`.
-    ///
-    /// The layout `Rc` is **shared**, not rebuilt: the class the VM hands to
-    /// an instance and the layout the compiler resolved `GETF` against are
-    /// the same allocation, so they cannot disagree about which slot a field
-    /// occupies (§24.2).
-    ///
-    /// Protos are ordered parents-first by Pass 1, so a parent is always
-    /// available when its child is built.
-    fn build_classes(&mut self) {
-        use saule_interpreter::value::ClassObject;
-        let chunk = Rc::clone(&self.chunk);
-        for proto in &chunk.classes {
-            let parent = proto.parent.map(|p| Rc::clone(&self.classes[p as usize]));
-            let class = Rc::new(ClassObject {
-                name: proto.name.to_string(),
-                parent,
-                field_defs: Vec::new(),
-                layout: Rc::clone(&proto.layout),
-                // Method dispatch goes through the chunk's vtable, not this
-                // map: a bytecode method is a proto, not a `FunctionObject`.
-                methods: Default::default(),
-                static_fields: RefCell::new(Default::default()),
-                static_methods: Default::default(),
-                constructor: None,
-            });
-            self.class_of
-                .insert(Rc::as_ptr(&class) as usize, self.classes.len() as u32);
-            self.classes.push(class);
-            self.statics
-                .push(RefCell::new(vec![Value::Nil; proto.n_statics as usize]));
+impl VmShared {
+    /// A `Vm` for a re-entrant call — recycled if one is parked.
+    fn take_vm(self: &Rc<Self>) -> Vm {
+        match self.reentry_pool.borrow_mut().pop() {
+            Some(vm) => vm,
+            None => Vm::from_shared(Rc::clone(self)),
         }
     }
 
-    /// Materialise one runtime enum per `EnumProto`.
+    /// Park a `Vm` whose call returned cleanly.
     ///
-    /// Bare and valued variants are **singletons**, so `Status.Alive` is the
-    /// same `Rc` every time it is mentioned and identity comparison works
-    /// (§9.1). A tuple variant has no singleton: each call constructs a
-    /// fresh object carrying its own payload, stamped with the same tag.
-    fn build_enums(&mut self) {
-        use saule_interpreter::value::{EnumObject, EnumVariantObject};
-        let chunk = Rc::clone(&self.chunk);
-        for proto in &chunk.enums {
+    /// The stack is cleared rather than left as it was: a stale register
+    /// would keep every value the last callback touched alive for as long
+    /// as the program runs. `clear` drops the values and keeps the
+    /// capacity, which is the whole point of the pool.
+    fn give_vm(&self, mut vm: Vm) {
+        debug_assert!(vm.frames.is_empty(), "a clean return pops every frame");
+        debug_assert!(
+            vm.open_upvals.is_empty(),
+            "popping the outermost frame closes every upvalue"
+        );
+        vm.stack.clear();
+        // Bounded so a deeply nested program does not park a register file
+        // per level for the rest of the run.
+        if self.reentry_pool.borrow().len() < 8 {
+            self.reentry_pool.borrow_mut().push(vm);
+        }
+    }
+}
+
+/// Materialise one runtime `ClassObject` per `ClassProto`.
+///
+/// The layout `Rc` is **shared**, not rebuilt: the class the VM hands to an
+/// instance and the layout the compiler resolved `GETF` against are the same
+/// allocation, so they cannot disagree about which slot a field occupies
+/// (§24.2).
+///
+/// The method maps are filled here too, from the chunk's flattened `vindex`
+/// and `vtable`. They used to be left empty, on the reasoning that dispatch
+/// goes through the vtable rather than the map — true for `CALLM`, and false
+/// for everything that asks a *class* a question from outside the VM.
+/// `display_value` asking "do you have a `toString`?" got `no` and printed
+/// `<instance of Money>` with no error at all.
+///
+/// Protos are ordered parents-first by Pass 1, so a parent is always
+/// available when its child is built.
+#[allow(clippy::type_complexity)]
+fn build_classes(
+    chunks: &[Rc<Chunk>],
+    weak: &std::rc::Weak<VmShared>,
+) -> (
+    Vec<Rc<saule_interpreter::value::ClassObject>>,
+    std::collections::HashMap<usize, u32>,
+    Vec<RefCell<Vec<Value>>>,
+) {
+    use saule_interpreter::value::{ClassObject, MethodRef};
+
+    // Every chunk of a program shares one class table, so reading it through
+    // the first is not a choice of module.
+    let table = Rc::clone(&chunks[0].classes);
+    let mut classes: Vec<Rc<ClassObject>> = Vec::with_capacity(table.len());
+    let mut class_of = std::collections::HashMap::new();
+    let mut statics = Vec::with_capacity(table.len());
+
+    // A method proto captures nothing — it reaches module slots through
+    // `GETMOD` and statics through `GETSTAT` — so an upvalue-free closure is
+    // the whole of it, and one per method is enough.
+    //
+    // Loaded from the chunk of the module that **declared** the class: a
+    // proto index only means something within its own chunk.
+    let bind = |module: usize, target: u32| -> Option<Rc<VmFunctionRef>> {
+        let chunk = chunks.get(module)?;
+        (target != u32::MAX).then(|| {
+            VmFunctionRef::new(Closure {
+                proto: Rc::clone(chunk.proto(target)),
+                chunk: Rc::clone(chunk),
+                upvals: Vec::new(),
+                shared: weak.clone(),
+            })
+        })
+    };
+
+    for proto in table.iter() {
+        let parent = proto.parent.map(|p| Rc::clone(&classes[p as usize]));
+
+        // `vindex` and `vtable` are both prefix-extensions of the parent's,
+        // so this map is already flattened in the sense `lookup_method`
+        // requires: one probe finds an inherited method too.
+        let methods = proto
+            .vindex
+            .iter()
+            .filter_map(|(name, &slot)| {
+                let target = proto.vtable.get(slot as usize).copied()?;
+                Some((name.to_string(), MethodRef::Vm(bind(proto.module, target)?)))
+            })
+            .collect();
+        let static_methods = proto
+            .smindex
+            .iter()
+            // `smindex` is flattened, so an entry may name a parent — and
+            // both the proto vector and the module it belongs to are the
+            // *declaring* class's, not this one's.
+            .filter_map(|(name, &s)| {
+                let owner = &table[s.class as usize];
+                let target = owner.static_methods.get(s.slot as usize).copied()?;
+                Some((name.to_string(), MethodRef::Vm(bind(owner.module, target)?)))
+            })
+            .collect();
+
+        let class = Rc::new(ClassObject {
+            name: proto.name.to_string(),
+            parent,
+            field_defs: Vec::new(),
+            layout: Rc::clone(&proto.layout),
+            methods,
+            static_fields: RefCell::new(Default::default()),
+            static_methods,
+            constructor: None,
+        });
+        class_of.insert(Rc::as_ptr(&class) as usize, classes.len() as u32);
+        classes.push(class);
+        statics.push(RefCell::new(vec![Value::Nil; proto.n_statics as usize]));
+    }
+
+    (classes, class_of, statics)
+}
+
+/// Materialise one runtime enum per `EnumProto`.
+///
+/// Bare and valued variants are **singletons**, so `Status.Alive` is the
+/// same `Rc` every time it is mentioned and identity comparison works
+/// (§9.1). A tuple variant has no singleton: each call constructs a
+/// fresh object carrying its own payload, stamped with the same tag.
+fn build_enums(chunks: &[Rc<Chunk>]) -> Vec<Rc<saule_interpreter::value::EnumObject>> {
+    use saule_interpreter::value::{EnumObject, EnumVariantObject};
+    let table = Rc::clone(&chunks[0].enums);
+    let mut enums = Vec::with_capacity(table.len());
+    {
+        for proto in table.iter() {
+            // A variant's value indexes the *declaring* module's pool.
+            let chunk = &chunks[proto.module];
             let mut variants = saule_interpreter::fxhash::FxHashMap::default();
             let mut by_tag = Vec::with_capacity(proto.variants.len());
             let mut tags = saule_interpreter::fxhash::FxHashMap::default();
@@ -179,15 +355,36 @@ impl Vm {
             for v in variants.values() {
                 *v.enum_obj.borrow_mut() = Some(Rc::clone(&e));
             }
-            self.enums.push(e);
+            enums.push(e);
         }
     }
+    enums
+}
 
-    /// Execute the chunk's `main` proto and return whatever it returns.
+impl Vm {
+    /// Execute the entry module's `main` proto.
     pub fn run(&mut self) -> Result<Vec<Value>, RuntimeError> {
-        let main = Rc::clone(self.chunk.proto(self.chunk.main));
-        let handle = self.closure_for(self.chunk.main, main);
-        self.push_frame(handle, 0, 0, 0, ALL_RESULTS, 0..0)?;
+        let last = self.shared.chunks.len() - 1;
+        self.run_module(last)
+    }
+
+    /// Execute one module's top level.
+    ///
+    /// A program runs these in post-order — every module after the ones it
+    /// imports — which is both what compilation requires and what the
+    /// tree-walker does, since it runs an imported module's top level on
+    /// first import. A module that prints at the top level makes that
+    /// ordering observable, so the two engines have to agree about it.
+    pub fn run_module(&mut self, module: usize) -> Result<Vec<Value>, RuntimeError> {
+        let chunk = Rc::clone(&self.shared.chunks[module]);
+        let main_idx = chunk.main;
+        let main = Rc::clone(chunk.proto(main_idx));
+        let handle = self.closure_for(&chunk, main_idx, main);
+        // Start above whatever an earlier module left behind: module slots
+        // are shared, but registers are not, and a later module must not
+        // scribble on a frame an earlier one is still described by.
+        let base = self.stack.len() as u32;
+        self.push_frame(handle, base, 0, base, ALL_RESULTS, 0..0)?;
         self.execute()
     }
 
@@ -204,12 +401,41 @@ impl Vm {
                 span: 0..0,
             });
         };
+        self.invoke(&handle, args, 0..0)
+    }
+
+    /// Run `handle` over `args` on this VM's own register file.
+    ///
+    /// The body of both [`Vm::call`] and the re-entrant
+    /// [`VmFunction::call`](saule_interpreter::value::VmFunction::call).
+    ///
+    /// **Guarded by the tree-walker's depth counter, not `max_frames`.**
+    /// Each re-entrant call is a fresh `Vm` with `frames` of its own, so
+    /// `max_frames` — which counts frames within *one* `Vm` — cannot see the
+    /// nesting. What nesting actually consumes is the native stack, one Rust
+    /// frame per level, which is exactly what `DepthGuard` bounds and what
+    /// the tree-walker already counts. Sharing the counter also means a
+    /// program bouncing between engines is bounded once rather than twice.
+    pub(crate) fn invoke(
+        &mut self,
+        handle: &Rc<VmFunctionRef>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Vec<Value>, RuntimeError> {
+        let _depth = saule_interpreter::enter_call_depth(&span)?;
         let base = self.stack.len() as u32;
         self.ensure_stack(base as usize + args.len());
         for (i, a) in args.iter().enumerate() {
             self.stack[base as usize + i] = a.clone();
         }
-        self.push_frame(handle, base, args.len(), base, ALL_RESULTS, 0..0)?;
+        self.push_frame(
+            Rc::clone(handle),
+            base,
+            args.len(),
+            base,
+            ALL_RESULTS,
+            span,
+        )?;
         self.execute()
     }
 
@@ -229,18 +455,27 @@ impl Vm {
         class: &str,
         method: &str,
     ) -> Option<Result<Vec<Value>, RuntimeError>> {
-        let chunk = Rc::clone(&self.chunk);
-        let proto_idx = chunk.classes.iter().find_map(|c| {
+        // The class table is program-wide, so the entry point is found by
+        // name wherever it was declared — and loaded from *that* module's
+        // chunk, since a proto index only means something within one.
+        let table = Rc::clone(&self.shared.chunks[0].classes);
+        let (module, proto_idx) = table.iter().find_map(|c| {
+            // `s.class`, not `c`: `smindex` is flattened, so an entry may
+            // name a parent — and `static_methods` is one vector per class.
             (c.name.as_ref() == class)
-                .then(|| c.smindex.get(method).and_then(|s| c.static_methods.get(*s as usize)))
+                .then(|| c.smindex.get(method))
                 .flatten()
-                .copied()
+                .and_then(|s| {
+                    let owner = &table[s.class as usize];
+                    Some((owner.module, *owner.static_methods.get(s.slot as usize)?))
+                })
         })?;
         if proto_idx == u32::MAX {
             return None;
         }
+        let chunk = Rc::clone(&self.shared.chunks[module]);
         let p = Rc::clone(chunk.proto(proto_idx));
-        let handle = self.closure_for(proto_idx, p);
+        let handle = self.closure_for(&chunk, proto_idx, p);
         // Start above whatever the module body left behind, so its module
         // slots and any live registers are untouched.
         let base = self.stack.len() as u32;
@@ -262,6 +497,10 @@ impl Vm {
             let func = Rc::clone(&self.frames.last().expect("frame").func);
             let closure = Closure::from_handle(&func).expect("VM frame holds a Closure");
             let proto = Rc::clone(&closure.proto);
+            // Constants, protos, jump tables and cast types are per chunk, so
+            // they follow the frame: a closure built in one module and called
+            // from another must read its own module's pools.
+            let chunk = Rc::clone(&closure.chunk);
             let base = self.frames.last().expect("frame").base as usize;
             let mut pc = self.frames.last().expect("frame").pc as usize;
             let code: &[Instruction] = &proto.code;
@@ -295,7 +534,7 @@ impl Vm {
                         self.stack[base + a] = self.stack[base + ins.b() as usize].clone();
                     }
                     Op::LOADK => {
-                        self.stack[base + a] = self.chunk.constants[ins.bx() as usize].clone();
+                        self.stack[base + a] = chunk.constants[ins.bx() as usize].clone();
                     }
                     Op::LOADI => self.stack[base + a] = Value::Int(ins.sbx() as i64),
                     Op::LOADF => self.stack[base + a] = Value::Float(ins.sbx() as f64),
@@ -331,13 +570,17 @@ impl Vm {
                         }
                     }
                     Op::CLOSEUP => self.close_upvalues((base + a) as u32),
-                    Op::GETMOD => self.stack[base + a] = self.modules[ins.bx() as usize].clone(),
+                    Op::GETMOD => {
+                        let v = self.shared.modules.borrow()[ins.bx() as usize].clone();
+                        self.stack[base + a] = v;
+                    }
                     Op::SETMOD => {
-                        self.modules[ins.bx() as usize] = self.stack[base + a].clone();
+                        self.shared.modules.borrow_mut()[ins.bx() as usize] =
+                            self.stack[base + a].clone();
                     }
                     Op::CLOSURE => {
                         let child_idx = proto.protos[ins.bx() as usize];
-                        let child = Rc::clone(self.chunk.proto(child_idx));
+                        let child = Rc::clone(chunk.proto(child_idx));
                         let mut upvals = Vec::with_capacity(child.upvals.len());
                         for desc in &child.upvals {
                             upvals.push(if desc.from_parent_stack {
@@ -346,7 +589,10 @@ impl Vm {
                                 Rc::clone(&closure.upvals[desc.index as usize])
                             });
                         }
-                        let cl = VmFunctionRef::new(Closure { proto: child, upvals });
+                        // Bound to the engine state, so a closure handed to a
+                        // native — a sort comparator, an iterator step — can
+                        // run itself when the native calls it back.
+                        let cl = VmFunctionRef::new(Closure::bound(child, Rc::clone(&chunk), upvals, &self.shared));
                         self.stack[base + a] = Value::VmFunction(cl);
                     }
 
@@ -527,7 +773,7 @@ impl Vm {
                         }
                     }
                     Op::JEQK => {
-                        let eq = self.stack[base + a] == self.chunk.constants[ins.c() as usize];
+                        let eq = self.stack[base + a] == chunk.constants[ins.c() as usize];
                         if eq {
                             pc += 1;
                         }
@@ -731,7 +977,7 @@ impl Vm {
                     Op::GETMAP | Op::GETMAPK | Op::GETIDX => {
                         let t = self.table_at(base + ins.b() as usize, &proto, here)?;
                         let key = if op == Op::GETMAPK {
-                            self.chunk.constants[ins.c() as usize].clone()
+                            chunk.constants[ins.c() as usize].clone()
                         } else {
                             self.stack[base + ins.c() as usize].clone()
                         };
@@ -741,7 +987,7 @@ impl Vm {
                     Op::SETMAP | Op::SETMAPK | Op::SETIDX => {
                         let t = self.table_at(base + a, &proto, here)?;
                         let key = if op == Op::SETMAPK {
-                            self.chunk.constants[ins.b() as usize].clone()
+                            chunk.constants[ins.b() as usize].clone()
                         } else {
                             self.stack[base + ins.b() as usize].clone()
                         };
@@ -776,21 +1022,46 @@ impl Vm {
 
                     // ---- §15.14 strings -----------------------------------
                     Op::CONCAT => {
-                        // n-ary and single-allocation: `a .. b .. c` costs one
-                        // `String`, where the tree-walker's left-folded `..`
-                        // costs n-1.
+                        // n-ary: the result costs one `String`, where the
+                        // tree-walker's left-folded `..` costs n-1.
+                        //
+                        // Rendering goes through `display_value`, not
+                        // `to_display_string`, because a class may overload
+                        // `OpToString` and `..` has to honour it (§8.7) —
+                        // the same reuse-rather-than-reimplement rule
+                        // `ARITHX` follows. Reading the value directly is
+                        // what made `"cost: " .. money` print
+                        // `<instance of Money>` under this engine and `300c`
+                        // under the other, which `SAULE_DIFF=1` caught the
+                        // moment the compile-time refusal was lifted.
+                        //
+                        // Each operand is rendered **exactly once**: an
+                        // overload is user code, so the second pass this
+                        // used to make to measure the length would run its
+                        // side effects twice.
                         let (from, to) = (base + ins.b() as usize, base + ins.c() as usize);
-                        let len: usize = (from..=to)
-                            .map(|i| self.stack[i].to_display_string().len())
-                            .sum();
-                        let mut s = String::with_capacity(len);
+                        let span = proto.span_at(here);
+                        let mut parts: Vec<String> = Vec::with_capacity(to + 1 - from);
+                        let mut len = 0usize;
                         for i in from..=to {
-                            s.push_str(&self.stack[i].to_display_string());
+                            let part = saule_interpreter::eval::ops::display_value(
+                                &self.stack[i],
+                                span.clone(),
+                            )?;
+                            len += part.len();
+                            parts.push(part);
+                        }
+                        let mut s = String::with_capacity(len);
+                        for p in &parts {
+                            s.push_str(p);
                         }
                         self.stack[base + a] = Value::Str(Rc::new(s));
                     }
                     Op::TOSTR => {
-                        let s = self.stack[base + ins.b() as usize].to_display_string();
+                        let s = saule_interpreter::eval::ops::display_value(
+                            &self.stack[base + ins.b() as usize],
+                            proto.span_at(here),
+                        )?;
                         self.stack[base + a] = Value::Str(Rc::new(s));
                     }
 
@@ -816,8 +1087,7 @@ impl Vm {
                     // type is `T?`, so the caller already has to handle it.
                     Op::CASTCHK => {
                         let v = self.stack[base + ins.b() as usize].clone();
-                        let ok = self
-                            .chunk
+                        let ok = chunk
                             .cast_types
                             .get(ins.c() as usize)
                             .is_some_and(|t| {
@@ -837,11 +1107,17 @@ impl Vm {
                         }
                     }
                     Op::CALLK => {
-                        let target = self.extra_arg(code, &mut pc, &proto, here)?;
+                        // Packed 8/16: the module, then the proto. A proto
+                        // index means nothing outside its own chunk, and
+                        // `self.super()` on a parent from another module is
+                        // exactly this call crossing that boundary.
+                        let packed = self.extra_arg(code, &mut pc, &proto, here)?;
+                        let (tm, target) = ((packed >> 16) as usize, packed & 0xFFFF);
                         let n_args = self.arg_count(ins.b(), base + a);
                         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
-                        let p = Rc::clone(self.chunk.proto(target));
-                        let handle = self.closure_for(target, p);
+                        let tc = Rc::clone(&self.shared.chunks[tm]);
+                        let p = Rc::clone(tc.proto(target));
+                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         let dst = (base + a) as u32;
                         self.push_frame(handle, dst, n_args, dst, n_ret, proto.span_at(here))?;
@@ -849,7 +1125,7 @@ impl Vm {
                     }
                     Op::CALLNAT => {
                         let k = self.extra_arg(code, &mut pc, &proto, here)?;
-                        let callee = self.chunk.constants[k as usize].clone();
+                        let callee = chunk.constants[k as usize].clone();
                         let n_args = self.arg_count(ins.b(), base + a + 1);
                         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
                         let span = proto.span_at(here);
@@ -887,7 +1163,7 @@ impl Vm {
                     // ---- §15.10 classes and instances --------------------
                     Op::NEW => {
                         let idx = ins.bx() as usize;
-                        let Some(class) = self.classes.get(idx) else {
+                        let Some(class) = self.shared.classes.get(idx) else {
                             return Err(RuntimeError::TypeError {
                                 message: format!("internal: no class {idx} in this chunk"),
                                 span: proto.span_at(here),
@@ -945,7 +1221,7 @@ impl Vm {
                     Op::GETSTAT => {
                         let (cls, slot) = (ins.b() as usize, ins.c() as usize);
                         let v = self
-                            .statics
+                            .shared.statics
                             .get(cls)
                             .and_then(|s| s.borrow().get(slot).cloned());
                         match v {
@@ -961,7 +1237,7 @@ impl Vm {
                     Op::SETSTAT => {
                         let (cls, slot) = (ins.b() as usize, ins.c() as usize);
                         let v = self.stack[base + a].clone();
-                        match self.statics.get(cls).map(|s| {
+                        match self.shared.statics.get(cls).map(|s| {
                             let mut s = s.borrow_mut();
                             match s.get_mut(slot) {
                                 Some(d) => {
@@ -987,9 +1263,10 @@ impl Vm {
                         let recv = base + a;
                         let slot = ins.c() as usize;
                         let n_args = (ins.b() as usize).saturating_sub(1);
-                        let target = self.vtable_lookup(recv, slot, &proto, here)?;
-                        let p = Rc::clone(self.chunk.proto(target));
-                        let handle = self.closure_for(target, p);
+                        let (tm, target) = self.vtable_lookup(recv, slot, &proto, here)?;
+                        let tc = Rc::clone(&self.shared.chunks[tm]);
+                        let p = Rc::clone(tc.proto(target));
+                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         // `self` counts as an argument: the frame starts at
                         // the receiver, not past it.
@@ -1012,9 +1289,10 @@ impl Vm {
                         let recv = base + a;
                         let slot = ins.c() as usize;
                         let n_args = (ins.b() as usize).saturating_sub(1);
-                        let target = self.itable_lookup(recv, iface, slot, &proto, here)?;
-                        let p = Rc::clone(self.chunk.proto(target));
-                        let handle = self.closure_for(target, p);
+                        let (tm, target) = self.itable_lookup(recv, iface, slot, &proto, here)?;
+                        let tc = Rc::clone(&self.shared.chunks[tm]);
+                        let p = Rc::clone(tc.proto(target));
+                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         self.push_frame(
                             handle,
@@ -1029,13 +1307,14 @@ impl Vm {
                     Op::CALLSTAT => {
                         let packed = self.extra_arg(code, &mut pc, &proto, here)?;
                         let (cls, slot) = ((packed >> 16) as usize, (packed & 0xffff) as usize);
-                        let target = match self
-                            .chunk
+                        // Resolved against the program-global class table, and
+                        // loaded from the module that declared the class.
+                        let (tm, target) = match self.shared.chunks[0]
                             .classes
                             .get(cls)
-                            .and_then(|c| c.static_methods.get(slot))
+                            .and_then(|c| c.static_methods.get(slot).map(|t| (c.module, *t)))
                         {
-                            Some(t) => *t,
+                            Some(t) => t,
                             None => {
                                 return Err(RuntimeError::TypeError {
                                     message: format!(
@@ -1046,8 +1325,9 @@ impl Vm {
                             }
                         };
                         let n_args = (ins.b() as usize).saturating_sub(1);
-                        let p = Rc::clone(self.chunk.proto(target));
-                        let handle = self.closure_for(target, p);
+                        let tc = Rc::clone(&self.shared.chunks[tm]);
+                        let p = Rc::clone(tc.proto(target));
+                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         let dst = (base + a) as u32;
                         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
@@ -1057,9 +1337,9 @@ impl Vm {
 
                     // ---- §15.11 enums and `match` ------------------------
                     Op::VARIANT => {
-                        let (e_idx, tag) = self.chunk.variant_refs[ins.bx() as usize];
+                        let (e_idx, tag) = chunk.variant_refs[ins.bx() as usize];
                         let v = self
-                            .enums
+                            .shared.enums
                             .get(e_idx as usize)
                             .and_then(|e| e.variant_by_tag(tag).cloned());
                         match v {
@@ -1087,13 +1367,13 @@ impl Vm {
                         let payload = Value::Table(Rc::new(RefCell::new(
                             TableObject::from_array(items),
                         )));
-                        let Some(e) = self.enums.get(e_idx) else {
+                        let Some(e) = self.shared.enums.get(e_idx) else {
                             return Err(RuntimeError::TypeError {
                                 message: format!("internal: no enum {e_idx}"),
                                 span: proto.span_at(here),
                             });
                         };
-                        let name = self.chunk.enums[e_idx].variants[tag as usize]
+                        let name = chunk.enums[e_idx].variants[tag as usize]
                             .name
                             .to_string();
                         let v = saule_interpreter::value::EnumVariantObject {
@@ -1113,7 +1393,7 @@ impl Vm {
                         self.stack[base + a] = Value::Int(t);
                     }
                     Op::SWITCH => {
-                        let table = &self.chunk.jump_tables[ins.bx() as usize];
+                        let table = &chunk.jump_tables[ins.bx() as usize];
                         let tag = match &self.stack[base + a] {
                             Value::Int(n) => *n,
                             other => return Err(operand_err(other, "integer", &proto, here)),
@@ -1137,7 +1417,15 @@ impl Vm {
                     }
                     Op::UNWRAP => {
                         let v = match &self.stack[base + ins.b() as usize] {
-                            Value::EnumVariant(v) => v.value.clone().unwrap_or(Value::Nil),
+                            // A variant with no declared value answers with
+                            // its own **name**, not nil — `read_member`'s
+                            // rule for `.value`, and the reason
+                            // `Direction.North.value` is `"North"`. This
+                            // read nil until `GETFX` let `enums.sau` compile
+                            // and `SAULE_DIFF=1` put the two side by side.
+                            Value::EnumVariant(v) => v.value.clone().unwrap_or_else(|| {
+                                Value::Str(Rc::new(v.variant_name.clone()))
+                            }),
                             other => return Err(operand_err(other, "enum", &proto, here)),
                         };
                         self.stack[base + a] = v;
@@ -1153,8 +1441,79 @@ impl Vm {
                             () => continue 'reentry,
                         }
                     }
+                    // ---- §8.5 dynamic member dispatch --------------------
+                    //
+                    // The escape hatch that makes an unproved receiver safe.
+                    // Both defer to the tree-walker's own member logic —
+                    // reused rather than reimplemented, the same rule
+                    // `ARITHX` follows with `ops::binary` — so instance
+                    // fields, methods, statics, enum variants, file handles
+                    // and every error message are identical by construction
+                    // instead of by care.
+                    //
+                    // §8.5's inline cache would collapse the common
+                    // monomorphic case to a slot load; that is Phase 5, with
+                    // a benchmark. Correct first.
+                    Op::GETFX => {
+                        let key = chunk.constants[ins.c() as usize].clone();
+                        let Value::Str(name) = &key else {
+                            return Err(RuntimeError::TypeError {
+                                message: "internal: GETFX key is not a string".into(),
+                                span: proto.span_at(here),
+                            });
+                        };
+                        let recv = self.stack[base + ins.b() as usize].clone();
+                        let v = saule_interpreter::read_member_dynamic(
+                            &recv,
+                            name,
+                            proto.span_at(here),
+                        )?;
+                        self.stack[base + a] = v;
+                    }
+                    Op::CALLMX => {
+                        let k = self.extra_arg(code, &mut pc, &proto, here)?;
+                        let key = chunk.constants[k as usize].clone();
+                        let Value::Str(name) = &key else {
+                            return Err(RuntimeError::TypeError {
+                                message: "internal: CALLMX name is not a string".into(),
+                                span: proto.span_at(here),
+                            });
+                        };
+                        // `A` holds the receiver and `A+1..` the arguments,
+                        // matching `CALLM` — so a call site can switch
+                        // between the two without moving anything.
+                        let n_args = (ins.b() as usize).saturating_sub(1);
+                        let recv = self.stack[base + a].clone();
+                        let args: Vec<Value> = (0..n_args)
+                            .map(|i| self.stack[base + a + 1 + i].clone())
+                            .collect();
+                        let vs = saule_interpreter::call_member_dynamic(
+                            &recv,
+                            name,
+                            &args,
+                            proto.span_at(here),
+                        )?;
+                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+                        self.store_results(base + a, &vs, n_ret);
+                    }
+
+                    // ---- §19 variadic parameters -------------------------
+                    Op::VARARG => {
+                        // Everything the caller passed from `A` onward
+                        // becomes an array-style table, matching what
+                        // `bind_params` collects into `variadic_values`. A
+                        // call that passed nothing extra gets an empty
+                        // table, not nil — the parameter is always a table.
+                        let n = self.frames.last().expect("frame").n_args as usize;
+                        let items: Vec<Value> = (a..n.max(a))
+                            .map(|i| self.stack[base + i].clone())
+                            .collect();
+                        self.stack[base + a] = Value::Table(Rc::new(RefCell::new(
+                            TableObject::from_array(items),
+                        )));
+                    }
                     Op::CHKTY => {
-                        let ok = self.type_matches(base + ins.b() as usize, ins.c() as u32);
+                        let ok = self.type_matches(&chunk, base + ins.b() as usize, ins.c() as u32);
                         self.stack[base + a] = Value::Bool(ok);
                     }
 
@@ -1179,13 +1538,13 @@ impl Vm {
         slot: usize,
         proto: &Proto,
         here: u32,
-    ) -> Result<u32, RuntimeError> {
+    ) -> Result<(usize, u32), RuntimeError> {
         let Value::Instance(inst) = &self.stack[recv] else {
             return Err(operand_err(&self.stack[recv], "instance", proto, here));
         };
         let class = Rc::clone(&inst.borrow().class);
         let idx = self
-            .class_of
+            .shared.class_of
             .get(&(Rc::as_ptr(&class) as usize))
             .copied()
             .ok_or_else(|| RuntimeError::TypeError {
@@ -1198,11 +1557,12 @@ impl Vm {
         // The prefix invariant at work: a slot resolved against a parent's
         // vtable indexes the subclass's override, because a subclass's
         // vtable extends its parent's rather than reordering it (§8.3).
-        self.chunk.classes[idx as usize]
-            .vtable
+        let cp = &self.shared.chunks[0].classes[idx as usize];
+        cp.vtable
             .get(slot)
             .copied()
             .filter(|t| *t != u32::MAX)
+            .map(|t| (cp.module, t))
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!(
                     "internal: `{}` has no method in vtable slot {slot}",
@@ -1226,20 +1586,20 @@ impl Vm {
         slot: usize,
         proto: &Proto,
         here: u32,
-    ) -> Result<u32, RuntimeError> {
+    ) -> Result<(usize, u32), RuntimeError> {
         let Value::Instance(inst) = &self.stack[recv] else {
             return Err(operand_err(&self.stack[recv], "instance", proto, here));
         };
         let class = Rc::clone(&inst.borrow().class);
         let idx = self
-            .class_of
+            .shared.class_of
             .get(&(Rc::as_ptr(&class) as usize))
             .copied()
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!("internal: `{}` was not built from this chunk", class.name),
                 span: proto.span_at(here),
             })?;
-        let cp = &self.chunk.classes[idx as usize];
+        let cp = &self.shared.chunks[0].classes[idx as usize];
         let vslot = cp
             .itables
             .get(&iface)
@@ -1256,6 +1616,7 @@ impl Vm {
             .get(vslot as usize)
             .copied()
             .filter(|t| *t != u32::MAX)
+            .map(|t| (cp.module, t))
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!("internal: `{}` has no method in slot {vslot}", class.name),
                 span: proto.span_at(here),
@@ -1280,6 +1641,7 @@ impl Vm {
             let func = Rc::clone(&frame.func);
             let (base, pc) = (frame.base, frame.pc);
             let closure = Closure::from_handle(&func).expect("frame holds a Closure");
+            let hchunk = Rc::clone(&closure.chunk);
             // The saved pc points *past* the throwing instruction, so the
             // range test uses the instruction itself.
             let at = pc.saturating_sub(1);
@@ -1288,7 +1650,7 @@ impl Vm {
                 .proto
                 .handlers
                 .iter()
-                .find(|h| at >= h.pc_start && at < h.pc_end && self.value_matches(&value, h.catch_ty))
+                .find(|h| at >= h.pc_start && at < h.pc_end && self.value_matches(&hchunk, &value, h.catch_ty))
                 .map(|h| (h.target, h.err_reg));
 
             if let Some((target, err_reg)) = found {
@@ -1312,15 +1674,19 @@ impl Vm {
         })
     }
 
-    fn type_matches(&self, reg: usize, ty: u32) -> bool {
+    fn type_matches(&self, chunk: &Chunk, reg: usize, ty: u32) -> bool {
         let v = &self.stack[reg];
-        self.value_matches(v, ty)
+        self.value_matches(chunk, v, ty)
     }
 
     /// Does `v` satisfy the type descriptor `ty`?
-    fn value_matches(&self, v: &Value, ty: u32) -> bool {
+    ///
+    /// `type_descs` are per chunk, so the descriptor is read from the module
+    /// whose code posed the question — the `catch` clause's own, not
+    /// whichever module happens to be running.
+    fn value_matches(&self, chunk: &Chunk, v: &Value, ty: u32) -> bool {
         use crate::chunk::TypeDesc;
-        let Some(desc) = self.chunk.type_descs.get(ty as usize) else {
+        let Some(desc) = chunk.type_descs.get(ty as usize) else {
             return true;
         };
         match desc {
@@ -1340,8 +1706,7 @@ impl Vm {
                 _ => false,
             },
             TypeDesc::Enum(idx) => match v {
-                Value::EnumVariant(ev) => self
-                    .chunk
+                Value::EnumVariant(ev) => chunk
                     .enums
                     .get(*idx as usize)
                     .is_some_and(|e| e.name.as_ref() == ev.enum_name.as_str()),
@@ -1359,7 +1724,7 @@ impl Vm {
 
     /// Whether `class` is `want` or descends from it.
     fn is_a(&self, class: &Rc<saule_interpreter::value::ClassObject>, want: u32) -> bool {
-        let Some(target) = self.classes.get(want as usize) else {
+        let Some(target) = self.shared.classes.get(want as usize) else {
             return false;
         };
         let mut cur = Some(Rc::clone(class));
@@ -1448,9 +1813,9 @@ impl Vm {
         n_ret: u8,
         span: std::ops::Range<usize>,
     ) -> Result<(), RuntimeError> {
-        if self.frames.len() >= self.max_frames {
+        if self.frames.len() >= self.shared.max_frames {
             return Err(RuntimeError::StackOverflow {
-                limit: self.max_frames as u32,
+                limit: self.shared.max_frames as u32,
                 span,
             });
         }
@@ -1471,7 +1836,15 @@ impl Vm {
             self.stack[base as usize + i] = Value::Nil;
         }
         let pc = proto.entry_for(n_args.min(u8::MAX as usize) as u8);
-        self.frames.push(Frame { func, base, ret_to, n_ret, pc, top: top as u32 });
+        self.frames.push(Frame {
+            func,
+            base,
+            ret_to,
+            n_ret,
+            pc,
+            top: top as u32,
+            n_args: n_args.min(u8::MAX as usize) as u8,
+        });
         Ok(())
     }
 
@@ -1550,12 +1923,21 @@ impl Vm {
 
     /// A cached, upvalue-free closure for a statically-resolved callee, so
     /// `CALLK` allocates nothing per call.
-    fn closure_for(&mut self, idx: u32, proto: Rc<Proto>) -> Rc<VmFunctionRef> {
-        if let Some(Some(c)) = self.closure_cache.get(idx as usize) {
+    fn closure_for(&mut self, chunk: &Rc<Chunk>, idx: u32, proto: Rc<Proto>) -> Rc<VmFunctionRef> {
+        let m = chunk.module_index;
+        // Hit path first, under a shared borrow: a `borrow_mut` here would
+        // be taken on every call, not just the first.
+        if let Some(Some(c)) = self.shared.closure_cache.borrow().get(m).and_then(|r| r.get(idx as usize)) {
             return Rc::clone(c);
         }
-        let c = VmFunctionRef::new(Closure::new(proto));
-        if let Some(slot) = self.closure_cache.get_mut(idx as usize) {
+        let c = VmFunctionRef::new(Closure::bound(proto, Rc::clone(chunk), Vec::new(), &self.shared));
+        if let Some(slot) = self
+            .shared
+            .closure_cache
+            .borrow_mut()
+            .get_mut(m)
+            .and_then(|r| r.get_mut(idx as usize))
+        {
             *slot = Some(Rc::clone(&c));
         }
         c

@@ -29,7 +29,7 @@ pub use expr::*;
 pub use ids::assign_ids;
 pub use stmt::*;
 pub use types::*;
-pub use visit::visit_exprs;
+pub use visit::{Visitor, visit, visit_exprs};
 
 /// A stable identity for an AST node, assigned by [`assign_ids`].
 ///

@@ -367,6 +367,28 @@ define_ops! {
     THROW: Abc,
     /// `R[A] := Bool(R[B] matches type descriptor C)` — used by `catch`
     CHKTY: Abc,
+
+    // ---- §19 variadic parameters -----------------------------------------
+    /// `R[A] := table of R[A] .. R[n_args)` — gather the surplus arguments
+    /// of a variadic callee.
+    ///
+    /// Emitted as the callee's **first** instruction, so it runs however the
+    /// frame was entered. Done in the callee rather than by packing a table
+    /// at the call site, which would have needed no new opcode but only
+    /// works where the caller can *see* that the callee is variadic — not
+    /// through a function value, and not across a module boundary. A callee
+    /// that gathers its own arguments is right for every call.
+    VARARG: Abc,
+
+    // ---- §8.5 dynamic member dispatch ------------------------------------
+    /// `R[A] := R[A].<K in EXTRAARG>(R[A+1] … R[A+B-1])`, `C` results.
+    ///
+    /// The dynamic counterpart to `CALLM`, for a receiver whose class the
+    /// front end did not prove. Defers to the tree-walker's own
+    /// `dispatch_member_call_multi`, so every receiver kind — instances,
+    /// classes, enums, file handles — behaves identically by construction
+    /// rather than by the compiler learning each one separately.
+    CALLMX: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.
