@@ -55,7 +55,7 @@ impl Compiler<'_> {
                 continue;
             };
             let proto = self.method_proto(name, idx, m, /* has_self */ true, span)?;
-            self.chunk.classes[idx as usize].vtable[slot as usize] = proto;
+            self.chunk.classes_mut()[idx as usize].vtable[slot as usize] = proto;
         }
 
         // Static methods have no receiver, so parameter 0 is the user's.
@@ -65,7 +65,7 @@ impl Compiler<'_> {
                 continue;
             };
             let proto = self.method_proto(name, idx, m, /* has_self */ false, span)?;
-            self.chunk.classes[idx as usize].static_methods[slot] = proto;
+            self.chunk.classes_mut()[idx as usize].static_methods[slot] = proto;
         }
 
         self.field_init_proto(idx, members, span)?;
@@ -82,13 +82,6 @@ impl Compiler<'_> {
         has_self: bool,
         span: &Range<usize>,
     ) -> Result<u32, CompileError> {
-        if m.params.iter().any(|p| p.variadic || p.default.is_some()) {
-            return Err(CompileError::unsupported(
-                "a variadic or defaulted parameter",
-                span.clone(),
-            ));
-        }
-
         self.push_function(Some(&format!("{class_name}.{}", m.name)));
         self.f.current_class = Some(class);
         self.f.in_method = has_self;
@@ -111,6 +104,7 @@ impl Compiler<'_> {
             for (i, p) in m.params.iter().enumerate() {
                 self.f.declare(&p.name, first + i as u16);
             }
+            self.f.entries = self.param_entries(&m.params, first, span)?;
             for st in &m.body {
                 self.stmt(st)?;
             }
@@ -148,9 +142,13 @@ impl Compiler<'_> {
             })
             .collect();
 
-        let parent_init = self.chunk.classes[class as usize]
-            .parent
-            .and_then(|p| self.chunk.classes[p as usize].field_init);
+        // The parent's field initializer, with the module that declared it —
+        // a proto index alone would name the wrong function once the parent
+        // lives in another module.
+        let parent_init = self.chunk.classes[class as usize].parent.and_then(|p| {
+            let pc = &self.chunk.classes[p as usize];
+            pc.field_init.map(|f| (pc.module, f))
+        });
         if defaults.is_empty() && parent_init.is_none() {
             return Ok(());
         }
@@ -167,13 +165,14 @@ impl Compiler<'_> {
             self.f.n_params = 1;
             self.f.declare("self", 0);
 
-            if let Some(parent) = parent_init {
+            if let Some((pmod, parent)) = parent_init {
                 let m = self.mark();
                 let base = self.alloc(span)?;
                 let a = self.reg8(base, span)?;
                 self.emit(Instruction::abc(Op::MOVE, a, 0, 0), span);
                 self.emit(Instruction::abc(Op::CALLK, a, 2, 1), span);
-                self.emit(Instruction::ax_of(Op::EXTRAARG, parent), span);
+                let t = self.call_target(pmod, parent, span)?;
+                self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
                 self.free_to(m);
             }
             for (slot, d) in defaults {
@@ -188,7 +187,7 @@ impl Compiler<'_> {
         let proto = self.pop_function(span);
         outcome?;
         let idx = self.chunk.add_proto(proto);
-        self.chunk.classes[class as usize].field_init = Some(idx);
+        self.chunk.classes_mut()[class as usize].field_init = Some(idx);
         Ok(())
     }
 
@@ -251,7 +250,8 @@ impl Compiler<'_> {
             let a = self.reg8(base, span)?;
             self.emit(Instruction::abc(Op::MOVE, a, ia, 0), span);
             self.emit(Instruction::abc(Op::CALLK, a, 2, 1), span);
-            self.emit(Instruction::ax_of(Op::EXTRAARG, fi), span);
+            let t = self.own_call_target(fi, span)?;
+            self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
             self.free_to(fm);
         }
 
@@ -351,6 +351,18 @@ impl Compiler<'_> {
         Ok(())
     }
 
+    /// Whether a bare name still means the class / enum / stdlib entity it
+    /// looks like, rather than a value binding that shadows it.
+    ///
+    /// Two lookups, because a `local` lands in two different places
+    /// depending on where it was written: inside a function it is a frame
+    /// local (`FuncCtx::lookup`), at the top of the module it is a module
+    /// slot (`shadowed_names`). Checking only the first read a class's
+    /// static where `local Foo = {...}` meant its own table.
+    pub fn not_shadowed(&self, name: &str) -> bool {
+        self.f.lookup(name).is_none() && !self.shadowed_names.contains(name)
+    }
+
     /// The class a receiver denotes, seeing through one layer of `?`.
     ///
     /// Separate from [`Self::class_of_expr`] on purpose. Stripping the `?`
@@ -374,7 +386,7 @@ impl Compiler<'_> {
     /// receiver is a type name rather than a value.
     pub fn class_named_by(&self, e: &Spanned<Expr>) -> Option<ClassIdx> {
         match &e.value {
-            Expr::Ident(n) if self.f.lookup(n).is_none() => self.layouts.get(n),
+            Expr::Ident(n) if self.not_shadowed(n) => self.layouts.get(n),
             _ => None,
         }
     }

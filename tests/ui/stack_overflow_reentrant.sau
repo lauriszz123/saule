@@ -1,0 +1,25 @@
+-- Re-entrant unbounded recursion: a comparator that sorts with *itself*.
+-- Each level crosses the engine boundary — bytecode calls a native, the
+-- native calls back into bytecode — so under `--vm` the nesting is a chain
+-- of fresh `Vm`s rather than frames within one. The VM's own `max_frames`
+-- counts frames inside a single `Vm` and so cannot see this at all; what it
+-- consumes is the *native* stack, one Rust frame per level, which is what
+-- `saule_interpreter`'s shared depth guard bounds. Both engines must produce
+-- a diagnostic rather than a native stack overflow.
+--
+-- Exempt from the `SAULE_DIFF=1` output comparison for the same reason
+-- `stack_overflow_recursion.sau` is: VM_DESIGN.md §6.4 gives the two engines
+-- deliberately different limits, so the number in the message differs. That
+-- both *report* is the behaviour this pins.
+local data: table<integer, integer> = {2, 1}
+
+local fn forever(a: integer, b: integer) -> boolean
+	Table.sort(data, forever)
+	return a < b
+end
+
+class Main
+	static fn main()
+		Table.sort(data, forever)
+	end
+end

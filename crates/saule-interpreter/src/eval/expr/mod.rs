@@ -21,8 +21,8 @@ mod match_;
 pub(crate) mod members;
 
 pub(crate) use calls::{
-    call_function, call_function_multi, call_static_method_public, call_value_multi, eval_values,
-    invoke_method_multi,
+    call_function, call_function_multi, call_static_method_ref_multi, call_value_multi,
+    eval_values, invoke_method_multi,
 };
 #[allow(unused_imports)]
 pub(crate) use members::table_index_to_slot;

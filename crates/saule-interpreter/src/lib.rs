@@ -71,7 +71,44 @@ pub use saule_semantic as semantic;
 
 pub use env::Environment;
 pub use error::RuntimeError;
-pub use eval::Flow;
+pub use eval::{DepthGuard, Flow, enter_call_depth};
+
+/// Read `receiver.name` with the tree-walker's own member rules.
+///
+/// The dynamic form of a member access, for the bytecode compiler's `GETFX`
+/// — the case where the front end did not prove the receiver's class and no
+/// field slot could be resolved. Reused rather than reimplemented, the same
+/// way `ARITHX` calls `ops::binary`: instance fields, methods, statics,
+/// enum variants, `.name` and `.value`, and every error message come out
+/// identical by construction.
+pub fn read_member_dynamic(
+    receiver: &Value,
+    name: &str,
+    span: std::ops::Range<usize>,
+) -> Result<Value, RuntimeError> {
+    eval::expr::members::read_member(receiver, name, span)
+}
+
+/// Call `receiver.name(args)` with the tree-walker's own dispatch.
+///
+/// The dynamic form of a method call. Covers every receiver kind in one
+/// place — user instances, classes, enums, file handles, stdlib values —
+/// which is exactly why it is worth reusing: the alternative is the
+/// compiler learning each of them separately and diverging on the ones it
+/// gets wrong.
+pub fn call_member_dynamic(
+    receiver: &Value,
+    name: &str,
+    args: &[Value],
+    span: std::ops::Range<usize>,
+) -> Result<Vec<Value>, RuntimeError> {
+    let evaled: Vec<eval::expr::EvaluatedArg> = args
+        .iter()
+        .cloned()
+        .map(eval::expr::EvaluatedArg::Positional)
+        .collect();
+    eval::expr::invoke_method_multi(receiver, name, evaled, span)
+}
 pub use value::{NativeFn, Value};
 
 /// Unified diagnostic for the full source-to-value pipeline. Each variant
@@ -157,7 +194,8 @@ pub fn call_class_static_method(
         .cloned()
         .map(eval::expr::EvaluatedArg::Positional)
         .collect();
-    eval::expr::call_static_method_public(&f, class, &evaled, 0..0)
+    eval::expr::call_static_method_ref_multi(&f, class, &evaled, 0..0)
+        .map(|vs| vs.into_iter().next().unwrap_or(Value::Nil))
 }
 
 /// Run a parsed [`Module`] in a fresh environment seeded with built-ins.

@@ -53,6 +53,7 @@ pub mod chunk;
 pub mod compile;
 pub mod disasm;
 pub mod op;
+pub mod program;
 pub mod vm;
 
 use std::rc::Rc;
@@ -109,9 +110,23 @@ pub fn run_chunk(chunk: Rc<Chunk>) -> Result<Vec<Value>, RuntimeError> {
 /// Returns whether an entry point was found, so a caller that requires one
 /// can report its absence.
 pub fn run_chunk_entry(chunk: Rc<Chunk>) -> Result<bool, RuntimeError> {
+    run_program(program::Program { modules: vec![chunk], entry: 0 })
+}
+
+/// Execute a whole program: every module's top level in post-order, then the
+/// entry point.
+///
+/// Post-order matters and is observable: the tree-walker runs an imported
+/// module's top level on first import, so a module that prints at the top
+/// level prints before the module that imported it. Running them in any
+/// other order would be a visible divergence.
+pub fn run_program(program: program::Program) -> Result<bool, RuntimeError> {
     saule_interpreter::init();
-    let mut vm = Vm::new(chunk);
-    vm.run()?;
+    let entry = program.entry;
+    let mut vm = Vm::for_chunks(program.modules);
+    for i in 0..=entry {
+        vm.run_module(i)?;
+    }
     match vm.call_static("Main", "main") {
         Some(r) => r.map(|_| true),
         None => Ok(false),

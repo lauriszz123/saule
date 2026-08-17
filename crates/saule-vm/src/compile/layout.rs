@@ -37,7 +37,7 @@ use crate::chunk::{ClassIdx, ClassProto};
 use crate::compile::CompileError;
 
 /// What Pass 1 learned, consumed by codegen.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Layouts {
     /// Class name -> index into `Chunk::classes`.
     pub index: HashMap<String, ClassIdx>,
@@ -144,9 +144,31 @@ pub fn build_enums(
 
     for st in &module.stmts {
         let Stmt::Decl(d) = &st.value else { continue };
-        let Decl::Enum { name, variants, .. } = &d.value else {
+        let Decl::Enum {
+            name,
+            variants,
+            methods,
+            ..
+        } = &d.value
+        else {
             continue;
         };
+        // An enum method is a bare `Method` with no `Spanned` wrapper, so it
+        // has no `NodeId` for the resolver to key a `FunctionInfo` on (§0.6)
+        // — the compiler cannot produce a proto for it, and the runtime
+        // `EnumObject` the VM builds therefore has an empty method map.
+        //
+        // That was harmless while every enum-method call refused on its own.
+        // `CALLMX` dispatches dynamically now, so it would reach the empty
+        // map instead and report `no property or method` — a *failure* where
+        // the tree-walker succeeds. Refusing the module keeps the two
+        // engines agreeing about which programs run.
+        if !methods.is_empty() {
+            return Err(CompileError::unsupported(
+                "an enum with methods",
+                d.span.clone(),
+            ));
+        }
 
         let mut protos = Vec::with_capacity(variants.len());
         let mut by_name = HashMap::new();
@@ -180,8 +202,10 @@ pub fn build_enums(
         layouts
             .enums
             .insert(name.clone(), chunk.enums.len() as u32);
-        chunk.enums.push(EnumProto {
+        let module = chunk.module_index;
+        chunk.enums_mut().push(EnumProto {
             name: Rc::from(name.as_str()),
+            module,
             variants: protos,
             by_name,
         });
@@ -189,12 +213,39 @@ pub fn build_enums(
     Ok(())
 }
 
-/// Collect every `class` in `module` and build its proto.
+/// Collect every `class` in `module` and append its proto to the program's
+/// shared table.
 ///
-/// Returns the protos in dependency order — a parent always precedes its
-/// children — alongside the name index.
-pub fn build(module: &Module) -> Result<(Vec<ClassProto>, Layouts), CompileError> {
-    let (ifaces, iface_index) = build_interfaces(module);
+/// `classes` and `interfaces` are the **program's** tables, not this
+/// module's: a `ClassIdx` is program-global so a subclass in one module can
+/// extend a parent in another and inherit its real field and vtable slots
+/// (§24.2). They arrive holding every module compiled before this one —
+/// `program::load_units` guarantees post-order — and this appends.
+///
+/// `imported` maps the names this module's `import` statements bring into
+/// scope to those already-assigned global indices. A single-module compile
+/// passes an empty one.
+///
+/// The returned `Layouts` is what *this* module sees: its own declarations
+/// plus its imports.
+pub fn build(
+    module: &Module,
+    classes: &mut Vec<ClassProto>,
+    interfaces: &mut Vec<crate::chunk::InterfaceProto>,
+    imported: &Layouts,
+) -> Result<Layouts, CompileError> {
+    let (mut ifaces, mut iface_index) = build_interfaces(module);
+    // Renumber this module's interfaces onto the end of the program's table,
+    // then fold in what the imports already named.
+    let base = interfaces.len() as u32;
+    for v in iface_index.values_mut() {
+        *v += base;
+    }
+    for (name, idx) in &imported.interfaces {
+        iface_index.entry(name.clone()).or_insert(*idx);
+    }
+    interfaces.append(&mut ifaces);
+    let ifaces = &*interfaces;
     // Gather declarations first so a forward `extends` resolves.
     let mut implements: HashMap<&str, &Vec<String>> = HashMap::new();
     let mut decls: Vec<(&str, Option<&str>, &[saule_ast::Spanned<ClassMember>], std::ops::Range<usize>)> =
@@ -221,25 +272,6 @@ pub fn build(module: &Module) -> Result<(Vec<ClassProto>, Layouts), CompileError
                     d.span.clone(),
                 ));
             }
-            // `OpToString`. `display_value` asks the *runtime* `ClassObject`
-            // whether it has a `toString`, and a VM-built class has an empty
-            // method map — so it answers no and falls back to
-            // `<instance of Money>` **without an error**. Every `println`,
-            // `tostring` and `..` on such an instance would be quietly
-            // wrong, which is worse than any refusal.
-            //
-            // Refused per class rather than per use site because an instance
-            // reaches a display through natives, tables and anything else
-            // holding it; there is no small set of sites to guard. The
-            // re-entrancy work removes this whole family — see VM_TASKS.md.
-            if members.iter().any(|m| {
-                matches!(&m.value, ClassMember::Method(me) if me.name == "toString" && !me.is_static)
-            }) {
-                return Err(CompileError::unsupported(
-                    "a class with a `toString` overload",
-                    d.span.clone(),
-                ));
-            }
             implements.insert(name, imps);
             decls.push((name, extends.as_deref(), members, d.span.clone()));
         }
@@ -247,20 +279,23 @@ pub fn build(module: &Module) -> Result<(Vec<ClassProto>, Layouts), CompileError
 
     let ordered = order_by_depth(&decls)?;
 
-    let mut protos: Vec<ClassProto> = Vec::new();
-    let mut index: HashMap<String, ClassIdx> = HashMap::new();
+    // Starts as what the imports brought in, so a parent declared in another
+    // module resolves to the very index that module's layout pass assigned
+    // it — which is what makes this subclass's field and vtable slots extend
+    // the parent's *real* ones rather than a second guess at them (§24.2).
+    let mut index: HashMap<String, ClassIdx> = imported.index.clone();
 
     for &i in &ordered {
         let (name, extends, members, span) = &decls[i];
         let parent_idx = match extends {
             Some(p) => match index.get(*p) {
                 Some(idx) => Some(*idx),
-                // A parent from another module. Cross-module layouts are the
-                // import slice of Phase 3; refusing is correct until then,
-                // because guessing a layout is exactly §24.2's failure.
+                // Neither declared here nor imported. Refusing is still the
+                // right answer: without the parent's layout every slot in
+                // this class would be a guess.
                 None => {
                     return Err(CompileError::unsupported(
-                        "a class extending one from another module",
+                        "a class extending one the compiler cannot see",
                         span.clone(),
                     ));
                 }
@@ -270,8 +305,8 @@ pub fn build(module: &Module) -> Result<(Vec<ClassProto>, Layouts), CompileError
 
         // Classes are appended in `ordered`, so this is the index this
         // class will have — which its own statics must be recorded against.
-        let self_idx = protos.len() as ClassIdx;
-        let mut proto = build_one(name, self_idx, parent_idx, members, &protos, span)?;
+        let self_idx = classes.len() as ClassIdx;
+        let mut proto = build_one(name, self_idx, parent_idx, members, classes, span)?;
         // An itable per implemented interface: interface slot -> this
         // class's vtable slot. Built once here, so a `CALLIF` is a small-map
         // probe and an indexed load rather than a name lookup (§8.4).
@@ -305,18 +340,15 @@ pub fn build(module: &Module) -> Result<(Vec<ClassProto>, Layouts), CompileError
             }
         }
         let proto = proto;
-        index.insert((*name).to_string(), protos.len() as ClassIdx);
-        protos.push(proto);
+        index.insert((*name).to_string(), classes.len() as ClassIdx);
+        classes.push(proto);
     }
 
-    Ok((
-        protos,
-        Layouts {
-            index,
-            enums: HashMap::new(),
-            interfaces: iface_index,
-        },
-    ))
+    Ok(Layouts {
+        index,
+        enums: imported.enums.clone(),
+        interfaces: iface_index,
+    })
 }
 
 /// Order classes so a parent is always built before its children.
@@ -450,10 +482,18 @@ fn build_one(
         ));
     }
 
-    let mut smindex: HashMap<Rc<str>, u16> = HashMap::new();
+    // Inherited entries keep naming the class that declared them, so a
+    // subclass finds a parent's `static fn` in one probe and still loads it
+    // from the parent's own proto vector.
+    let mut smindex: HashMap<Rc<str>, crate::chunk::StaticSlot> = parent_proto
+        .map(|p| p.smindex.clone())
+        .unwrap_or_default();
     let mut static_slots: Vec<usize> = Vec::new();
     for (mname, member_i) in static_methods {
-        smindex.insert(mname, static_slots.len() as u16);
+        smindex.insert(
+            mname,
+            crate::chunk::StaticSlot { class: self_idx, slot: static_slots.len() as u16 },
+        );
         static_slots.push(member_i);
     }
 
@@ -485,6 +525,8 @@ fn build_one(
 
     Ok(ClassProto {
         name: Rc::from(name),
+        // Overwritten by `compile_into`, which knows the module index.
+        module: 0,
         parent,
         layout: Rc::new(layout),
         field_template: None,

@@ -215,7 +215,20 @@ impl Compiler<'_> {
     ) -> Result<(), CompileError> {
         let mut to_end = Vec::new();
         for arm in arms {
-            let next = self.arm_test(sc, arm, span)?;
+            // Three things happen in this order, and the order is the whole
+            // of the correctness argument:
+            //
+            //   1. test the pattern — on failure jump to the next arm;
+            //   2. bind what the pattern introduces, so the guard can see it;
+            //   3. test the guard — on failure jump to the next arm too.
+            //
+            // Doing 3 before 2 is what made `case x when x < 0` refuse: the
+            // binding was not in a register yet, so the guard's `x` looked
+            // like a local the compiler had never seen. And folding 1 and 3
+            // into one step is what made a *failed* pattern land inside the
+            // arm's body, because the pattern's jump was patched to just
+            // past the guard's — which is where the body starts.
+            let pattern_failed = self.arm_test(sc, arm, span)?;
             self.f.enter_scope();
             if let Pattern::Variant { fields, .. } = &arm.pattern.value {
                 self.bind_payload(sc, fields, &arm.span)?;
@@ -226,10 +239,12 @@ impl Compiler<'_> {
                 self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
                 self.f.declare(name, r);
             }
+            let guard_failed = self.arm_guard(arm, span)?;
             self.arm_body(&arm.body, dst)?;
             self.f.leave_scope();
             to_end.push(self.emit_jump(Op::JMP, 0, span));
-            if let Some(l) = next {
+            // Both failure paths land here: the next arm.
+            for l in [pattern_failed, guard_failed].into_iter().flatten() {
                 self.patch_here(l)?;
             }
         }
@@ -288,23 +303,29 @@ impl Compiler<'_> {
             }
         };
 
-        // A guard runs only after the pattern matched, and failing it moves
-        // on to the next arm exactly as a failed pattern does.
-        if let Some(g) = &arm.guard {
-            let m = self.mark();
-            let r = self.expr_tmp(g)?;
-            let a = self.reg8(r, span)?;
-            self.emit(Instruction::abc(Op::TEST, a, 0, 0), span);
-            let l = self.emit_jump(Op::JMP, 0, span);
-            self.free_to(m);
-            // Two ways to reach the next arm; the pattern's jump is patched
-            // to the same place by the caller, so chain them.
-            if let Some(first) = jump {
-                self.patch_here(first)?;
-            }
-            return Ok(Some(l));
-        }
         Ok(jump)
+    }
+
+    /// Emit an arm's guard, if it has one.
+    ///
+    /// Called **after** the pattern's bindings are declared, because a guard
+    /// is allowed to mention them — `case x when x < 0` reads `x`, and the
+    /// resolver binds it exactly as the arm body's `x` is bound. The
+    /// returned label jumps to the next arm when the guard is false, which
+    /// is the same fate a failed pattern gets.
+    fn arm_guard(
+        &mut self,
+        arm: &MatchArm,
+        span: &Range<usize>,
+    ) -> Result<Option<super::ctx::Label>, CompileError> {
+        let Some(g) = &arm.guard else { return Ok(None) };
+        let m = self.mark();
+        let r = self.expr_tmp(g)?;
+        let a = self.reg8(r, span)?;
+        self.emit(Instruction::abc(Op::TEST, a, 0, 0), span);
+        let l = self.emit_jump(Op::JMP, 0, span);
+        self.free_to(m);
+        Ok(Some(l))
     }
 
     fn pattern_literal_to(

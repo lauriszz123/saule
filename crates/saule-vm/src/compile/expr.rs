@@ -129,6 +129,8 @@ impl Compiler<'_> {
 
             Expr::Index { obj, index } => self.index_to(e, obj, index, dst)?,
 
+            Expr::Pipe { source, stages } => self.pipe_to(source, stages, dst, span)?,
+
             other => {
                 return Err(CompileError::unsupported(expr_label(other), span.clone()));
             }
@@ -181,7 +183,10 @@ impl Compiler<'_> {
                             self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
                         }
                     }
-                    None => self.emit(Instruction::abx(Op::GETMOD, a, slot), span),
+                    None => {
+                        let g = self.mod_slot(slot, span)?;
+                        self.emit(Instruction::abx(Op::GETMOD, a, g), span)
+                    }
                 }
                 Ok(())
             }
@@ -201,8 +206,28 @@ impl Compiler<'_> {
                 self.emit(Instruction::abc(Op::GETUPVAL, a, b, 0), span);
                 Ok(())
             }
-            Some(Binding::ClassStatic { .. }) => {
-                Err(CompileError::unsupported("a class static", span.clone()))
+            // A static of the enclosing class, reached by its bare name from
+            // inside a method. The resolver carries the *class* name here
+            // rather than a slot, because the answer has to survive a lambda
+            // nested inside the method — which is a different `FuncCtx` with
+            // no `current_class` of its own.
+            Some(Binding::ClassStatic { class, name: field }) => {
+                let (class, field) = (class.clone(), field.clone());
+                let Some(s) = self.static_slot_of(&class, &field) else {
+                    return Err(CompileError::unsupported(
+                        "a class static the compiler could not resolve",
+                        span.clone(),
+                    ));
+                };
+                // `s.class`, not the class we are *in*: an inherited static
+                // lives in the cell its declaring class owns, so a sibling
+                // reading the bare name sees the same value
+                // (`declaring_static_field`).
+                self.emit(
+                    Instruction::abc(Op::GETSTAT, a, s.class as u8, s.slot as u8),
+                    span,
+                );
+                Ok(())
             }
             Some(Binding::SelfRef) => {
                 Err(CompileError::unsupported("`self`", span.clone()))
@@ -556,17 +581,49 @@ impl Compiler<'_> {
             Expr::Ident(n) => n.as_str(),
             _ => "",
         };
-        // Named and trailing-block arguments are §19's compile-time binding
-        // work, which is a slice of its own.
-        let mut positional = Vec::with_capacity(args.len());
-        for a in args {
-            match a {
-                saule_ast::CallArg::Positional(v) => positional.push(v),
-                saule_ast::CallArg::Named { .. } => {
-                    return Err(CompileError::unsupported("a named argument", span.clone()));
+        // §19: named arguments are reordered **here**, once, into plain
+        // parameter order — so every path below (`CALLK`, `CALLSTAT`,
+        // `CALLM`, the constructor, `CALLNAT`) sees an ordinary positional
+        // list and the runtime never sees a name.
+        //
+        // `gap_fill` owns the synthesized `nil`s for parameters a named call
+        // skips over; `positional` borrows from it, so it has to outlive the
+        // borrow.
+        let gap_fill;
+        let positional: Vec<&Spanned<Expr>> = if args
+            .iter()
+            .any(|a| matches!(a, saule_ast::CallArg::Named { .. }) || a.is_trailing_block())
+        {
+            let Some(params) = self.callee_param_list(callee).cloned() else {
+                return Err(CompileError::unsupported(
+                    "a named argument to a callee the compiler cannot identify",
+                    span.clone(),
+                ));
+            };
+            let (order, fill) = self.reorder_args(args, &params, span)?;
+            gap_fill = fill;
+            order
+                .into_iter()
+                .map(|slot| match slot {
+                    ArgSlot::Given(i) => match &args[i] {
+                        saule_ast::CallArg::Positional(v) => v,
+                        saule_ast::CallArg::Named { value, .. } => value,
+                    },
+                    ArgSlot::Nil(i) => &gap_fill[i],
+                })
+                .collect()
+        } else {
+            let mut positional = Vec::with_capacity(args.len());
+            for a in args {
+                match a {
+                    saule_ast::CallArg::Positional(v) => positional.push(v),
+                    saule_ast::CallArg::Named { .. } => {
+                        return Err(CompileError::unsupported("a named argument", span.clone()));
+                    }
                 }
             }
-        }
+            positional
+        };
 
         // `obj.method(args)` and `Class.method(args)`.
         if let Expr::Member { obj, name } = &callee.value {
@@ -580,20 +637,19 @@ impl Compiler<'_> {
         }
         // `ClassName(args)` — a constructor, not a function call.
         if let Some(class) = self.layouts.get(name)
-            && self.f.lookup(name).is_none()
+            && self.not_shadowed(name)
         {
             return self.construct_to(class, &positional, dst, span);
         }
 
+        // A name with a compile-time value — the prelude, or something an
+        // `import` bound to a native package. Both are fixed before the
+        // program runs, so the callee becomes a constant and this is a
+        // `CALLNAT` with nothing looked up at run time.
+        let folded = self.static_value(callee.id, name);
         match self.binding(callee.id) {
-            Some(Binding::Prelude { .. }) => {
-                let Some(v) = self.prelude_value(name) else {
-                    return Err(CompileError::unsupported(
-                        "a prelude name with no runtime value",
-                        span.clone(),
-                    ));
-                };
-                self.refuse_closure_to_native(&positional, span)?;
+            _ if folded.is_some() => {
+                let v = folded.expect("checked");
                 let k = self.constant(v, span)?;
                 let m = self.mark();
                 // `CALLNAT` reads its arguments from `A+1..`, mirroring
@@ -613,6 +669,39 @@ impl Compiler<'_> {
                 self.free_to(m);
                 Ok(())
             }
+            // A `static fn` of the enclosing class, called by its bare name
+            // — `check(code)` from a sibling static. The name is a *method*,
+            // so it lives in `smindex`, not in the `sindex` that
+            // `ident_to`'s static read consults; without this arm it fell
+            // through to the generic `CALL` and asked for a static *field*
+            // that does not exist.
+            Some(Binding::ClassStatic { class, name: m })
+                if self.static_method_of(class, m).is_some() =>
+            {
+                let (cls, slot) = self
+                    .static_method_of(&class.clone(), &m.clone())
+                    .expect("checked in the guard");
+                let mark = self.mark();
+                // `CALLSTAT`'s window starts at the arguments: a static has
+                // no receiver.
+                let n = positional.len().max(1) as u16;
+                let base = self.alloc_n(n, span)?;
+                for (i, arg) in positional.iter().enumerate() {
+                    self.expr_to(arg, base + i as u16)?;
+                }
+                let a = self.reg8(base, span)?;
+                self.emit(
+                    Instruction::abc(Op::CALLSTAT, a, positional.len() as u8 + 1, 2),
+                    span,
+                );
+                self.emit(
+                    Instruction::ax_of(Op::EXTRAARG, ((cls as u32) << 16) | slot as u32),
+                    span,
+                );
+                self.move_result(base, dst, span)?;
+                self.free_to(mark);
+                Ok(())
+            }
             Some(Binding::Module { .. }) if self.fn_protos.contains_key(name) => {
                 let proto = self.fn_protos[name];
                 let m = self.mark();
@@ -628,7 +717,8 @@ impl Compiler<'_> {
                     Instruction::abc(Op::CALLK, a, positional.len() as u8 + 1, 2),
                     span,
                 );
-                self.emit(Instruction::ax_of(Op::EXTRAARG, proto), span);
+                let t = self.own_call_target(proto, span)?;
+                self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
                 self.move_result(base, dst, span)?;
                 self.free_to(m);
                 Ok(())
@@ -657,37 +747,6 @@ impl Compiler<'_> {
         }
     }
 
-    /// Refuse handing a bytecode closure to a native.
-    ///
-    /// `Value::VmFunction` is opaque to the tree-walker on purpose (§22.1):
-    /// `call_value_multi` has no arm for it, so a native that *invokes* its
-    /// argument reports "value of type `function` is not callable" — which
-    /// is what `Table.sort`'s comparator does. Calling back into the VM from
-    /// a native needs a re-entrant `Vm` and is its own slice; until then a
-    /// function-valued argument to a native is refused, so the program falls
-    /// back instead of failing at run time.
-    ///
-    /// Over-broad by design: a native that merely *stores* a closure would
-    /// be fine. A needless fallback costs speed; guessing wrong costs a
-    /// wrong answer.
-    fn refuse_closure_to_native(
-        &self,
-        args: &[&Spanned<Expr>],
-        span: &Range<usize>,
-    ) -> Result<(), CompileError> {
-        let is_fn = |a: &&Spanned<Expr>| {
-            matches!(a.value, Expr::Lambda { .. })
-                || matches!(self.types.get(&a.id), Some(saule_ast::Type::Function { .. }))
-        };
-        if args.iter().any(is_fn) {
-            return Err(CompileError::unsupported(
-                "a function value passed to a built-in",
-                span.clone(),
-            ));
-        }
-        Ok(())
-    }
-
     /// `obj.method(args)` or `Class.method(args)`.
     fn method_call_to(
         &mut self,
@@ -701,7 +760,7 @@ impl Compiler<'_> {
 
         // `Event.Click(x, y)` — a tuple-variant constructor, not a call.
         if let Expr::Ident(en) = &obj.value
-            && self.f.lookup(en).is_none()
+            && self.not_shadowed(en)
             && let Some(e_idx) = self.layouts.enum_of(en)
             && let Some(&tag) = self.chunk.enums[e_idx as usize].by_name.get(name)
         {
@@ -720,9 +779,11 @@ impl Compiler<'_> {
             };
             let parent = self.chunk.classes[class as usize].parent.and_then(|p| {
                 let pc = &self.chunk.classes[p as usize];
-                pc.init.and_then(|slot| pc.vtable.get(slot as usize).copied())
+                pc.init
+                    .and_then(|slot| pc.vtable.get(slot as usize).copied())
+                    .map(|t| (pc.module, t))
             });
-            let Some(target) = parent.filter(|t| *t != u32::MAX) else {
+            let Some((pmod, target)) = parent.filter(|(_, t)| *t != u32::MAX) else {
                 return Err(CompileError::unsupported(
                     "`self.super` on a class whose parent has no constructor",
                     span.clone(),
@@ -736,7 +797,8 @@ impl Compiler<'_> {
                 self.expr_to(arg, base + 1 + i as u16)?;
             }
             self.emit(Instruction::abc(Op::CALLK, a, args.len() as u8 + 2, 1), span);
-            self.emit(Instruction::ax_of(Op::EXTRAARG, target), span);
+            let t = self.call_target(pmod, target, span)?;
+            self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
             self.free_to(m);
             // `self.super()` is a statement, not a value.
             let d = self.reg8(dst, span)?;
@@ -747,7 +809,7 @@ impl Compiler<'_> {
         // A static method: the receiver is a class name, so the target is
         // known outright and no dispatch happens at all.
         if let Some(class) = self.class_named_by(obj)
-            && let Some(&slot) = self.chunk.classes[class as usize].smindex.get(name)
+            && let Some(&s) = self.chunk.classes[class as usize].smindex.get(name)
         {
             let m = self.mark();
             let base = self.alloc_n(args.len().max(1) as u16, span)?;
@@ -759,7 +821,9 @@ impl Compiler<'_> {
                 Instruction::abc(Op::CALLSTAT, a, args.len() as u8 + 1, 2),
                 span,
             );
-            let packed = ((class as u32) << 16) | slot as u32;
+            // The *declaring* class, so an inherited `static fn` reached
+            // through a subclass name still loads the parent's proto.
+            let packed = ((s.class) << 16) | s.slot as u32;
             self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
             self.move_result(base, dst, span)?;
             self.free_to(m);
@@ -771,16 +835,17 @@ impl Compiler<'_> {
         // is resolved to a constant here and nothing looks it up at run
         // time. This is the same `CALLNAT` a bare `print` compiles to; the
         // only difference is where the value was found.
+        // Gated on the resolver saying `Prelude`, for the reason spelled out
+        // in `member_to`'s fold: a top-level `local String` is a module slot,
+        // which `f.lookup` does not see, and resolving to the stdlib anyway
+        // called `String.len` where the program meant its own table.
         if let Expr::Ident(recv) = &obj.value
-            && self.f.lookup(recv).is_none()
-            && self.layouts.get(recv).is_none()
-            && let Some(Value::Class(cls)) = self.prelude_value(recv)
+            && let Some(Value::Class(cls)) = self.static_value(obj.id, recv)
             && let Some(v) = cls
                 .lookup_static_field(name)
-                .or_else(|| cls.lookup_static_method(name).map(Value::Function))
+                .or_else(|| cls.lookup_static_method(name).map(|m| m.to_value()))
             && matches!(v, Value::Native(_) | Value::NativeClosure(_))
         {
-            self.refuse_closure_to_native(args, span)?;
             let k = self.constant(v, span)?;
             let m = self.mark();
             let base = self.alloc_n(args.len() as u16 + 1, span)?;
@@ -826,11 +891,29 @@ impl Compiler<'_> {
         // An instance method: one indexed load out of the vtable, and the
         // slot stays correct for a subclass receiver because a subclass's
         // vtable extends its parent's (§8.3).
+        // No proved class: `CALLMX` defers to the tree-walker's own
+        // `dispatch_member_call_multi`, which is what makes a file handle, an
+        // enum variant and a module-level variable all work here without the
+        // compiler learning each one (§8.5).
         let Some(class) = self.class_of_expr(obj) else {
-            return Err(CompileError::unsupported(
-                "a method call on a receiver with no proved class",
-                span.clone(),
-            ));
+            let m = self.mark();
+            // The receiver sits at `A` and the arguments after it, exactly
+            // as `CALLM` lays them out.
+            let base = self.alloc_n(args.len() as u16 + 1, span)?;
+            self.expr_to(obj, base)?;
+            for (i, arg) in args.iter().enumerate() {
+                self.expr_to(arg, base + 1 + i as u16)?;
+            }
+            let key = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+            let a = self.reg8(base, span)?;
+            self.emit(
+                Instruction::abc(Op::CALLMX, a, args.len() as u8 + 1, 2),
+                span,
+            );
+            self.emit(Instruction::ax_of(Op::EXTRAARG, key as u32), span);
+            self.move_result(base, dst, span)?;
+            self.free_to(m);
+            return Ok(());
         };
         let Some(&slot) = self.chunk.classes[class as usize].vindex.get(name) else {
             return Err(CompileError::unsupported(
@@ -859,6 +942,232 @@ impl Compiler<'_> {
 
     /// A call leaves its single result in the first register of its window;
     /// move it where the caller wanted it.
+    /// `when(source):a(x):b(y)` — the colon pipeline (§21.4 item 9).
+    ///
+    /// Lowered to a chain of ordinary calls, each threading the upstream
+    /// value in as argument 0, which is exactly what `eval`'s `Expr::Pipe`
+    /// arm does. The value lives in one register for the whole chain and
+    /// every stage writes its result back there.
+    fn pipe_to(
+        &mut self,
+        source: &Spanned<Expr>,
+        stages: &[saule_ast::PipeStage],
+        dst: u16,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        let m = self.mark();
+        let cur = self.alloc(span)?;
+        self.expr_to(source, cur)?;
+        for stage in stages {
+            self.pipe_stage(cur, stage)?;
+        }
+        self.move_result(cur, dst, span)?;
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// One `:name(args)` step. Reads `cur` and writes its result back there.
+    ///
+    /// The stage's callee is resolved **by name**, not through the binding
+    /// table: a `PipeStage` holds a `String` and has no `NodeId`, so there is
+    /// nothing for `Bindings` to have keyed an answer on — the same shape as
+    /// the enum-method gap in §0.6. The lookup order below is therefore
+    /// written out by hand, and it has to match the resolver's: a local
+    /// shadows a top-level `fn`, which shadows a module slot, which shadows
+    /// the prelude. Getting that order wrong is the `local String = {…}`
+    /// bug this compiler has already shipped once.
+    fn pipe_stage(
+        &mut self,
+        cur: u16,
+        stage: &saule_ast::PipeStage,
+    ) -> Result<(), CompileError> {
+        let span = &stage.span;
+        let name = stage.name.as_str();
+
+        let mut positional = Vec::with_capacity(stage.args.len());
+        for a in &stage.args {
+            match a {
+                saule_ast::CallArg::Positional(v) => positional.push(v),
+                saule_ast::CallArg::Named { .. } => {
+                    return Err(CompileError::unsupported(
+                        "a named argument in a pipeline stage",
+                        span.clone(),
+                    ));
+                }
+            }
+        }
+        // The piped value plus whatever the stage wrote.
+        let n_args = positional.len() as u16 + 1;
+
+        // A top-level `fn` of this module: the target is known outright, and
+        // `CALLK`'s window starts at the *arguments* — there is no callee
+        // register, because the callee is the operand.
+        if self.f.lookup(name).is_none()
+            && self.not_shadowed(name)
+            && let Some(&proto) = self.fn_protos.get(name)
+        {
+            let m = self.mark();
+            let base = self.alloc_n(n_args, span)?;
+            self.move_result(cur, base, span)?;
+            for (i, arg) in positional.iter().enumerate() {
+                self.expr_to(arg, base + 1 + i as u16)?;
+            }
+            let a = self.reg8(base, span)?;
+            let t = self.own_call_target(proto, span)?;
+            self.emit(Instruction::abc(Op::CALLK, a, n_args as u8 + 1, 2), span);
+            self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
+            self.move_result(base, cur, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        // A name an `import` bound to a native package's export, resolved to
+        // a constant now so nothing is looked up at run time.
+        //
+        // The *prelude* is deliberately not consulted here: `saule-typeck`
+        // rejects `when(x):tostring()` with `UnknownPipeStage`, so a stage
+        // naming a built-in never reaches a valid program, and a branch for
+        // it would be unreachable code pretending to be a feature.
+        if self.f.lookup(name).is_none()
+            && self.not_shadowed(name)
+            && self.module_slot_of(name).is_none()
+            && let Some(v) = self.native_imports.get(name).cloned()
+        {
+            let m = self.mark();
+            let k = self.constant(v, span)?;
+            // `CALLNAT` reads its arguments from `A+1`, mirroring `CALL`.
+            let base = self.alloc_n(n_args + 1, span)?;
+            self.move_result(cur, base + 1, span)?;
+            for (i, arg) in positional.iter().enumerate() {
+                self.expr_to(arg, base + 2 + i as u16)?;
+            }
+            let a = self.reg8(base, span)?;
+            self.emit(Instruction::abc(Op::CALLNAT, a, n_args as u8 + 1, 2), span);
+            self.emit(Instruction::ax_of(Op::EXTRAARG, k as u32), span);
+            self.move_result(base, cur, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        // Anything else callable is a *value*: a local holding a lambda, or
+        // a module slot — which is also where a top-level `fn` from another
+        // module ends up. `CALL` dispatches on what it finds.
+        let m = self.mark();
+        let base = self.alloc_n(n_args + 1, span)?;
+        let a = self.reg8(base, span)?;
+        if let Some(reg) = self.f.lookup(name) {
+            self.move_result(reg, base, span)?;
+        } else if let Some(slot) = self.module_slot_of(name) {
+            let g = self.mod_slot(slot, span)?;
+            self.emit(Instruction::abx(Op::GETMOD, a, g), span);
+        } else {
+            return Err(CompileError::unsupported(
+                "a pipeline stage the compiler could not resolve",
+                span.clone(),
+            ));
+        }
+        self.move_result(cur, base + 1, span)?;
+        for (i, arg) in positional.iter().enumerate() {
+            self.expr_to(arg, base + 2 + i as u16)?;
+        }
+        self.emit(Instruction::abc(Op::CALL, a, n_args as u8 + 1, 2), span);
+        self.move_result(base, cur, span)?;
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// Put a call's arguments into **parameter order** (§19).
+    ///
+    /// The slot assignment is `saule_ast::resolve_arg_slots` — the very
+    /// function the typechecker uses — so the two cannot disagree about
+    /// which parameter an argument fills, including the trailing-block rule.
+    ///
+    /// A parameter left unfilled *below* the last one supplied is a gap:
+    ///
+    /// * nullable, no default → a synthesized `nil`, which is exactly what
+    ///   the callee would have left there;
+    /// * has a **default** → refused. A default must be evaluated in the
+    ///   *callee's* frame (§19's stated trap), and the entry stubs can only
+    ///   fill a suffix — there is no entry point meaning "fill slot 1 but
+    ///   not slot 2".
+    ///
+    /// A trailing parameter that is simply not passed is not a gap: the call
+    /// reports a shorter arity and the callee's own stub fills it.
+    fn reorder_args(
+        &self,
+        args: &[saule_ast::CallArg],
+        params: &[saule_ast::Param],
+        span: &Range<usize>,
+    ) -> Result<(Vec<ArgSlot>, Vec<Spanned<Expr>>), CompileError> {
+        let slots: Vec<saule_ast::ParamSlot<'_>> = params
+            .iter()
+            .map(|p| saule_ast::ParamSlot::new(&p.name, &p.ty))
+            .collect();
+        let assigned = saule_ast::resolve_arg_slots(args, &slots);
+
+        let mut filled: Vec<Option<usize>> = vec![None; params.len()];
+        for (arg_i, slot) in assigned.iter().enumerate() {
+            // An argument the resolver could not place, or one that fills a
+            // slot twice. The typechecker reports both; refusing keeps this
+            // from inventing a position.
+            let Some(slot) = slot.filter(|s| filled[*s].is_none()) else {
+                return Err(CompileError::unsupported(
+                    "an argument that fills no parameter, or fills one twice",
+                    span.clone(),
+                ));
+            };
+            filled[slot] = Some(arg_i);
+        }
+
+        let n = filled.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
+        let mut order = Vec::with_capacity(n);
+        let mut gaps = Vec::new();
+        for (i, slot) in filled.iter().take(n).enumerate() {
+            match slot {
+                Some(a) => order.push(ArgSlot::Given(*a)),
+                None if params[i].default.is_some() => {
+                    return Err(CompileError::unsupported(
+                        "a skipped parameter whose default must run in the callee",
+                        span.clone(),
+                    ));
+                }
+                None => {
+                    order.push(ArgSlot::Nil(gaps.len()));
+                    gaps.push(Spanned::new(Expr::Nil, span.clone()));
+                }
+            }
+        }
+        Ok((order, gaps))
+    }
+
+    /// The declared parameters of whatever `callee` names, when the compiler
+    /// can identify it — a top-level `fn`, a class's constructor, a static
+    /// or instance method. `None` for a callee that is only a value, where
+    /// there is no declaration to read names from.
+    fn callee_param_list(&self, callee: &Spanned<Expr>) -> Option<&Vec<saule_ast::Param>> {
+        use super::ctx::CalleeKey;
+        match &callee.value {
+            Expr::Ident(n) => {
+                // `ClassName(args)` is a constructor, so its parameters are
+                // `init`'s.
+                if let Some(c) = self.layouts.get(n).filter(|_| self.not_shadowed(n)) {
+                    return self.callee_params.get(&CalleeKey::Method(c, "init".into()));
+                }
+                if let Some(Binding::ClassStatic { class, .. }) = self.binding(callee.id)
+                    && let Some(c) = self.layouts.get(class).or(self.f.current_class)
+                {
+                    return self.callee_params.get(&CalleeKey::Method(c, n.clone()));
+                }
+                self.callee_params.get(&CalleeKey::Function(n.clone()))
+            }
+            Expr::Member { obj, name } => {
+                let c = self.class_named_by(obj).or_else(|| self.class_of_expr(obj))?;
+                self.callee_params.get(&CalleeKey::Method(c, name.clone()))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn move_result(
         &mut self,
         from: u16,
@@ -884,9 +1193,27 @@ impl Compiler<'_> {
         let span = &e.span;
         let a = self.reg8(dst, span)?;
 
+        // `self.count` inside a `static fn`. There, `self` denotes the
+        // **class** — `call_static_method_multi` binds it to
+        // `Value::Class` — so this is a static read, resolved at compile
+        // time. Which also means the VM never needs a class in a register:
+        // `self` bare in a static method is still refused, and no fixture
+        // asks for it.
+        if matches!(obj.value, Expr::Self_)
+            && !self.f.in_method
+            && let Some(class) = self.f.current_class
+            && let Some(&s) = self.chunk.classes[class as usize].sindex.get(name)
+        {
+            self.emit(
+                Instruction::abc(Op::GETSTAT, a, s.class as u8, s.slot as u8),
+                span,
+            );
+            return Ok(());
+        }
+
         // `Status.Alive` — a singleton variant reference.
         if let Expr::Ident(en) = &obj.value
-            && self.f.lookup(en).is_none()
+            && self.not_shadowed(en)
             && let Some(e_idx) = self.layouts.enum_of(en)
             && let Some(&tag) = self.chunk.enums[e_idx as usize].by_name.get(name)
         {
@@ -902,6 +1229,27 @@ impl Compiler<'_> {
                 Instruction::abc(Op::GETSTAT, a, s.class as u8, s.slot as u8),
                 span,
             );
+            return Ok(());
+        }
+
+        // `Math.pi`, `Os.sep`, `IoMode.Write` — a stdlib member holding a
+        // value. The prelude is fixed before a program runs, so this is
+        // resolved to the value itself and the read costs one `LOADK` —
+        // the same compile-time resolution `String.len` already gets on the
+        // call path, applied to members that are not functions.
+        //
+        // Gated on the **resolver's** classification, not on a hand-rolled
+        // "is it a local, a class, an enum" check. A top-level `local Math`
+        // is a *module slot* rather than a frame local, so `f.lookup` misses
+        // it — and folding then read the stdlib's `pi` where the program
+        // meant its own table. The resolver already answers "what is this
+        // name", and `Prelude` is the only answer that may be folded.
+        if let Expr::Ident(recv) = &obj.value
+            && !self.mutated_receivers.contains(recv)
+            && let Some(v) = self.prelude_member(obj.id, recv, name)
+        {
+            let k = self.constant(v, span)?;
+            self.emit(Instruction::abx(Op::LOADK, a, k), span);
             return Ok(());
         }
 
@@ -924,11 +1272,35 @@ impl Compiler<'_> {
         // load. Without a proved class there is no safe slot to use — a
         // wrong one reads a different field silently — so it is refused
         // rather than guessed.
+        // `t.foo` on a table is `t["foo"]` — Lua-style sugar, and a miss is
+        // `nil` rather than an error, so it is a safe probe (`members.rs`).
+        // Nothing to do with field slots.
+        if matches!(self.types.get(&obj.id), Some(saule_ast::Type::Table { .. })) {
+            let m = self.mark();
+            let r = self.expr_tmp(obj)?;
+            let key = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+            self.map_key_read(dst, r, key, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
+        // No proved class: `GETFX` asks the tree-walker's own `read_member`
+        // at run time (§8.5). A missing type selects the dynamic form; it is
+        // never a wrong opcode.
         let Some(class) = self.class_of_expr(obj) else {
-            return Err(CompileError::unsupported(
-                "a member read on a receiver with no proved class",
-                span.clone(),
-            ));
+            let m = self.mark();
+            let r = self.expr_tmp(obj)?;
+            let key = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+            let Ok(kc) = u8::try_from(key) else {
+                return Err(CompileError::unsupported(
+                    "a dynamic member name past the 256-constant window",
+                    span.clone(),
+                ));
+            };
+            let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+            self.emit(Instruction::abc(Op::GETFX, a, b, kc), span);
+            self.free_to(m);
+            return Ok(());
         };
         let Some(access) = self.member_access(class, name) else {
             return Err(CompileError::unsupported(
@@ -942,6 +1314,57 @@ impl Compiler<'_> {
         let r = self.expr_tmp(obj)?;
         let b = self.reg8(r, span)?;
         self.emit(self.member_load(access, a, b), span);
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// `R[dst] := R[table][K[key]]` — a table read on a constant key.
+    ///
+    /// `GETMAPK` carries the constant index in its 8-bit `C`, so a key
+    /// interned past 255 does not fit. Rather than cap a module at 256
+    /// constants — which any real program reaches, on an operation as
+    /// ordinary as `t.name` — the key is materialised into a register and
+    /// the general `GETIDX` does the read. One extra instruction, no cliff.
+    pub(crate) fn map_key_read(
+        &mut self,
+        dst: u16,
+        table: u16,
+        key: u16,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        let (a, b) = (self.reg8(dst, span)?, self.reg8(table, span)?);
+        if let Ok(c) = u8::try_from(key) {
+            self.emit(Instruction::abc(Op::GETMAPK, a, b, c), span);
+            return Ok(());
+        }
+        let m = self.mark();
+        let k = self.alloc(span)?;
+        let kr = self.reg8(k, span)?;
+        self.emit(Instruction::abx(Op::LOADK, kr, key), span);
+        self.emit(Instruction::abc(Op::GETIDX, a, b, kr), span);
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// `R[table][K[key]] := R[value]`, with the same 8-bit escape hatch as
+    /// [`Self::map_key_read`] — `SETMAPK` holds the key index in `B`.
+    pub(crate) fn map_key_write(
+        &mut self,
+        table: u16,
+        key: u16,
+        value: u16,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        let (a, c) = (self.reg8(table, span)?, self.reg8(value, span)?);
+        if let Ok(b) = u8::try_from(key) {
+            self.emit(Instruction::abc(Op::SETMAPK, a, b, c), span);
+            return Ok(());
+        }
+        let m = self.mark();
+        let k = self.alloc(span)?;
+        let kr = self.reg8(k, span)?;
+        self.emit(Instruction::abx(Op::LOADK, kr, key), span);
+        self.emit(Instruction::abc(Op::SETIDX, a, kr, c), span);
         self.free_to(m);
         Ok(())
     }
@@ -1172,12 +1595,6 @@ impl Compiler<'_> {
         dst: u16,
     ) -> Result<(), CompileError> {
         let span = &e.span;
-        if params.iter().any(|p| p.variadic || p.default.is_some()) {
-            return Err(CompileError::unsupported(
-                "a lambda with a variadic or defaulted parameter",
-                span.clone(),
-            ));
-        }
         if params.len() > u8::MAX as usize {
             return Err(CompileError::unsupported(
                 "a lambda with over 255 parameters",
@@ -1196,6 +1613,7 @@ impl Compiler<'_> {
             for (i, p) in params.iter().enumerate() {
                 self.f.declare(&p.name, i as u16);
             }
+            self.f.entries = self.param_entries(params, 0, span)?;
             match body {
                 saule_ast::LambdaBody::Expr(inner) => {
                     // An expression-bodied lambda returns its expression.
@@ -1323,4 +1741,13 @@ fn expr_label(e: &Expr) -> &'static str {
         Expr::Error => "an unparsable expression",
         _ => "this expression",
     }
+}
+
+/// Where one argument slot's value comes from, after §19's reordering.
+enum ArgSlot {
+    /// Index into the call's own `args`.
+    Given(usize),
+    /// Index into the synthesized-`nil` list, for a parameter a named call
+    /// skipped over.
+    Nil(usize),
 }

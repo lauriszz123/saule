@@ -329,7 +329,7 @@ fn invoke_comp(comp: &Value, a: &Value, b: &Value) -> Result<bool, String> {
     use crate::eval::expr::{EvaluatedArg, call_value_multi};
     if !matches!(
         comp,
-        Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)
+        Value::Function(_) | Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
     ) {
         return Err(format!(
             "Table.sort: comparator must be a function, got `{}`",

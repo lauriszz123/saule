@@ -20,14 +20,33 @@ use super::class::ClassObject;
 /// VM crate deleted from the workspace. So [`Value`] cannot name the VM's
 /// `Closure` type directly; it names this trait, which the VM implements.
 ///
-/// The tree-walker only ever carries such a value around and reports it as
-/// a `function`. Nothing in this crate calls one: a bytecode closure is
-/// callable only from inside the VM, which downcasts through [`Self::as_any`].
+/// The tree-walker carries such a value around, reports it as a `function`,
+/// and — through [`Self::call`] — **invokes** it. That last part is what
+/// makes a native like `Table.sort` able to run a comparator the VM
+/// compiled, and what lets a VM-built class answer `toString`. It does not
+/// weaken the dependency rule: this crate still names only the trait, and
+/// the VM is the only thing that implements it.
 pub trait VmFunction: fmt::Debug {
     /// `Some(name)` for a named declaration, `None` for a lambda.
     fn vm_name(&self) -> Option<&str>;
     /// Downcast hook — the VM recovers its own closure type through this.
     fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Run this function over `args` and return everything it returned.
+    ///
+    /// `handle` is the very `Rc` this trait object lives inside. Passing it
+    /// back in looks redundant, but the VM's frames hold an
+    /// `Rc<VmFunctionRef>` and `&self` cannot be turned back into one — so
+    /// without it every callback would have to rebuild an equivalent
+    /// closure, which on a sort comparator is an allocation per comparison.
+    /// Go through [`VmFunctionRef::invoke`] rather than calling this
+    /// directly; it is what guarantees the two agree.
+    fn call(
+        &self,
+        handle: &std::rc::Rc<VmFunctionRef>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Vec<Value>, crate::error::RuntimeError>;
 }
 
 /// A [`VmFunction`] held behind a **thin** pointer.
@@ -52,6 +71,19 @@ pub struct VmFunctionRef(Box<dyn VmFunction>);
 impl VmFunctionRef {
     pub fn new(f: impl VmFunction + 'static) -> std::rc::Rc<VmFunctionRef> {
         std::rc::Rc::new(VmFunctionRef(Box::new(f)))
+    }
+
+    /// Call the bytecode function this handle wraps.
+    ///
+    /// The one entry point the tree-walker uses. Taking `self: &Rc<Self>`
+    /// is what lets the implementation hand its own handle to a VM frame
+    /// without rebuilding a closure — see [`VmFunction::call`].
+    pub fn invoke(
+        self: &std::rc::Rc<Self>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Vec<Value>, crate::error::RuntimeError> {
+        self.0.call(self, args, span)
     }
 }
 

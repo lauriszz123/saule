@@ -80,13 +80,13 @@ pub(crate) fn read_member(
                 return Ok(v.clone());
             }
             if let Some(m) = inst_ref.class.lookup_method(name) {
-                return Ok(Value::Function(m));
+                return Ok(m.to_value());
             }
             if let Some(v) = inst_ref.class.lookup_static_field(name) {
                 return Ok(v);
             }
             if let Some(m) = inst_ref.class.lookup_static_method(name) {
-                return Ok(Value::Function(m));
+                return Ok(m.to_value());
             }
             Err(RuntimeError::TypeError {
                 message: format!(
@@ -101,7 +101,7 @@ pub(crate) fn read_member(
                 return Ok(v);
             }
             if let Some(m) = class.lookup_static_method(name) {
-                return Ok(Value::Function(m));
+                return Ok(m.to_value());
             }
             Err(RuntimeError::TypeError {
                 message: format!(

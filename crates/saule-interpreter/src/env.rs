@@ -429,7 +429,7 @@ fn class_static(class: &Rc<ClassObject>, name: &str) -> Option<Value> {
     let mut cur = Some(class);
     while let Some(c) = cur {
         if let Some(m) = c.static_methods.get(name) {
-            return Some(Value::Function(m.clone()));
+            return Some(m.to_value());
         }
         if let Some(v) = c.static_fields.borrow().get(name) {
             return Some(v.clone());

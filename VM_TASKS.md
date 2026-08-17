@@ -18,6 +18,32 @@
 > The third was added late and immediately found bugs the first two had been
 > passing over for months — exit status alone cannot see a wrong value.
 
+## Verifying a change
+
+Four commands. The last two are the ones that catch VM bugs; the first two
+catch everything else.
+
+```
+cargo test --workspace                                  # fully green, nothing excluded
+SAULE_BIN=./target/debug/saule.exe bash run_tests.sh    # 236/236
+SAULE_ENGINE=vm SAULE_BIN=... bash run_tests.sh         # 236/236
+SAULE_DIFF=1  SAULE_BIN=... bash run_tests.sh           # 236/236 + engines agree on output
+```
+
+Plus two more:
+
+```
+SAULE_BIN=./target/debug/saule.exe bash run_examples_diff.sh   # 9/9 agree
+cargo run --release -p saule-vm --example compare              # agrees, then times
+```
+
+`run_examples_diff.sh` runs the *example projects* under both engines —
+multi-module, with imports and file IO — which is a different question from
+`run_tests.sh`'s single-file fixtures, and the one that has actually caught
+things.
+
+`cargo` is not on `PATH` here — use `C:\Users\lauri\.cargo\bin\cargo.exe`.
+
 ## Legend
 
 | Mark | Meaning |
@@ -28,25 +54,92 @@
 
 ## Where things stand
 
-`crates/saule-vm/` exists and runs. The instruction encoding, the chunk
-model, the disassembler, and the core of the dispatch loop are written and
-covered by tests: hand-assembled chunks compute `1 + 2`, sum `1..100` through
-a numeric `for`, recurse through `fib(20) = 6765`, capture an open upvalue,
-build and index tables, and concatenate strings.
-
 **Phases 0, 1 and 2 are complete.** The compiler turns Saule source into
-bytecode and the VM runs it, 2.5x–3.9x faster than the tree-walker, with 43
+bytecode and the VM runs it 2.2x–3.4x faster than the tree-walker, with 134
 differential tests asserting the two engines agree. `--vm` on `saule run`
 falls back to the interpreter for anything the compiler does not reach yet,
 so it is safe on any program.
 
 **Phase 3 is in progress.** Classes, interfaces, enums + `match`,
-`try`/`catch`, `for … in` (table path), operator overloading (left operand),
-the `ARITHX`/`UNARYX` dynamic fallback, and **nullability** (`?.`, `??`,
-`!`, `as`) are done. Remaining in §21.4 order: pipes, imports/modules, §19
-argument binding — plus two blockers found while landing nullability, both
-written up under Phase 3: **natives cannot call bytecode closures** (the
-actual reason `sort.sau` still falls back) and `Assignable<T>`.
+`try`/`catch`, `for … in` (table path), operator overloading (left operand,
+including unary and index), **nullability** (`?.`, `??`, `!`, `as`), stdlib
+value members, table dot access, the `ARITHX`/`UNARYX` dynamic fallback, and
+**VM re-entrancy** are done. Remaining in §21.4 order: pipes,
+imports/modules, §19 argument binding.
+
+**Coverage, measured rather than inferred.** "236/236 under
+`SAULE_ENGINE=vm`" counts a fallback as a pass, so it is not the number to
+steer by. The real one:
+
+| | Compiles fully | Falls back |
+|---|---|---|
+| `benchmarks/sau` | **10 of 10** | — |
+| `tests/*.sau` | **80 of 92** | 12 |
+
+**And the same measurement on real code, which says something different.**
+`tests/*.sau` are single files; every real Saule program is a project with
+imports, so the fixture ranking below is not the ranking that decides
+whether the VM engages on anything a user would write.
+
+| Corpus | Compiles fully |
+|---|---|
+| `examples/**/*.sau` | **7 of 61** |
+
+```
+while IFS= read -r f; do
+  ./target/debug/saule.exe disasm "$f" 2>&1 | tr '\n' ' ' \
+    | grep -o '`[^`]*` is not supported' | head -1
+done < <(find examples -name '*.sau') | sort | uniq -c | sort -rn
+```
+
+`tr '\n' ' '` is load-bearing: `miette` wraps a long message across lines, so
+a line-oriented `grep` silently scores a refused file as compiling. Doing
+that produced "50 of 61" on the first attempt — an eightfold overstatement,
+and in the direction that makes the work look done.
+
+| Cause (first refusal per file) | Files |
+|---|---|
+| a class extending one from another module | **24** |
+| a method call on a receiver with no proved class | 10 |
+| a named argument | 5 |
+| an import declaration | 3 |
+| a variadic or defaulted parameter | 3 |
+| a name the resolver could not classify | 2 |
+| a class static | 2 |
+| everything else | 5 |
+
+First-refusal-wins, so a cause that only appears late in a file is
+under-counted. The headline still holds: **27 of 54 refusals are the
+cross-module slice** (24 + 3), which the fixture table scores at *one*
+fixture. That is the gap between "236/236 with fallback" and "the VM runs
+real programs".
+
+Every remaining cause, by the fixtures it blocks. Regenerate this with:
+
+```
+for f in tests/*.sau; do SAULE_ENGINE=vm ./target/debug/saule.exe run "$f" 2>&1 \
+  | grep -o "does not handle .*yet"; done | sort | uniq -c | sort -rn
+```
+
+| Cause | Fixtures | Note |
+|---|---|---|
+| method call on a receiver with no proved class | **5** | **this** is the one that genuinely wants §8.5's `GETFX` |
+| multi-return / parallel `local a, b = f()` | 4 | needs variadic call/return through `top`, deferred out of Phase 2 |
+| `for … in` over a closure or an instance | 3 | the §15.8 closure driver |
+| assignment to this kind of binding | 2 | |
+| member read on a receiver with no proved class | 2 | same `GETFX` gap, read side |
+| imports | 1 | structurally the big one |
+| `Assignable<T>` | 1 | |
+| tuple patterns | 1 | |
+| compound assignment to a member | 1 | |
+| assignment to something that is not an instance field | 1 | |
+| `self` outside a method | 1 | |
+*Fixed since:* `case x when …` was right — it was a bug, not a gap, and it
+was hiding a second, silent one. See "Two bugs in `match` guards" below.
+
+Gone from this table since re-entrancy landed: `classes with a toString
+overload` (2), `function value passed to a built-in` (1), and `methods on a
+stdlib class instance` (2).
 
 ---
 
@@ -318,7 +411,7 @@ exists to replace.
 
 - [x] `crates/saule-vm/` created; depends on `saule-interpreter`, never the
       reverse (§22.1)
-- [x] `op.rs` — all 115 opcodes from §15, `Fmt`, `Instruction` encode/decode
+- [x] `op.rs` — all 115 opcodes from §15 (116 since §19 appended `VARARG`), `Fmt`, `Instruction` encode/decode
       for ABC / ABx / AsBx / Ax, round-trip tests over the full `sBx` range
 - [x] `chunk.rs` — `Chunk`, `Proto`, `ClassProto`, `EnumProto`,
       `FieldLayout`, `Handler`, `LineEntry`, `InlineCache`, `JumpTable`,
@@ -439,8 +532,8 @@ exists to replace.
 ### Phase 2 exit criteria
 
 - [x] Programs produce **identical results** under both engines —
-      `crates/saule-vm/tests/differential.rs`, 43 tests, comparing values
-      *and error text*
+      `crates/saule-vm/tests/differential.rs`, 43 tests at the time (99
+      now), comparing values *and error text*
 - [x] **`loop_arith` and `fib` at least 2.5x faster than the tree-walker**
 
 Measured with `cargo run --release -p saule-vm --example compare`, which
@@ -471,7 +564,7 @@ files under the VM is the first thing Phase 3 unlocks.
 
 *Estimate: 4–6 weeks. In dependency order.*
 
-1. **Classes** — §8 *(in progress)*
+1. **Classes** — §8. Done except the two items marked `[ ]` at the end.
    - [x] **Pass 1 layout** (`compile/layout.rs`): field slots, vtable slots,
          statics index and the `init` slot per class. Field slots **and**
          vtable slots extend the parent's rather than reordering them, which
@@ -509,8 +602,9 @@ files under the VM is the first thing Phase 3 unlocks.
    - [x] `saule_vm::run_chunk_entry` invokes `Main.main()` after the module
          body. Running the body only *declares* the class; without this the
          VM ran every benchmark in ~0 ms because it never started them.
-   - [x] **8 of 9 benchmark files now run under the VM**, with output
-         verified identical to the interpreter
+   - [x] **All 10 benchmark files run under the VM**, with output verified
+         identical to the interpreter. `sort.sau` was the last holdout and
+         landed with re-entrancy.
    - [ ] A class from another module is refused rather than guessed — the
          imports slice lifts that
    - [ ] `CALLM` currently costs one hash probe to map a receiver's class to
@@ -532,45 +626,65 @@ files under the VM is the first thing Phase 3 unlocks.
          **declaring** class, mirroring
          `ClassObject::declaring_static_field`. Carrying the owner in the
          index is what makes it impossible for a call site to forget.
-   - [ ] `sort.sau` still falls back — but **not** on `!`, which now
-         compiles. It falls back on `Table.sort`'s comparator: see
-         "Natives cannot call bytecode closures" below.
-   - [ ] Interfaces, and instance methods on a receiver whose class the
-         front end did not prove
+   - [x] `sort.sau` compiles. It fell back on `Table.sort`'s comparator,
+         not on `!` — see "The tree-walker can now call into bytecode".
+   - [ ] Instance methods on a receiver whose class the front end did not
+         prove — this is the one place that genuinely wants §8.5's `GETFX`
+   - [x] **Inherited vtable slots were never filled.** Pass 1 copies the
+         parent's vtable so the slot *numbering* extends it, but at that
+         point no body is compiled, so it copies a row of `u32::MAX` — and
+         `class_decl` fills only the slots a class declares itself. An
+         inherited, non-overridden method dispatched into nothing:
+         "`Circle` has no method in vtable slot 2". Fixed by Pass 2a in
+         `compile/mod.rs`, one forward sweep after codegen, parents before
+         children.
 
 #### Measured: real benchmark files, interpreter vs `--vm`
 
-Wall clock, min of 3, including ~90 ms of process start-up in both columns.
-Output was checked identical before timing.
+Release build, wall clock, min of 3, including ~90 ms of process start-up in
+both columns. Output verified identical by `SAULE_DIFF=1 ./run_tests.sh`.
+
+Re-measured after re-entrancy landed, so **all ten compile** — `sort` is a
+real engine comparison for the first time. Absolute numbers run higher than
+the previous table across the board (same machine, different load); read the
+ratios, not the milliseconds.
 
 | Benchmark | Interpreter | VM | Speedup |
 |---|---|---|---|
-| fib | 386 ms | 169 ms | 2.28x |
-| loop_arith | 682 ms | 306 ms | 2.23x |
-| mandel | 516 ms | 234 ms | 2.21x |
-| closure | 364 ms | 167 ms | 2.18x |
-| array | 404 ms | 199 ms | 2.03x |
-| oop | 510 ms | 256 ms | 1.99x |
-| strings | 302 ms | 173 ms | 1.75x |
-| map | 468 ms | 399 ms | 1.17x |
+| mandel | 583 ms | 255 ms | 2.29x |
+| closure | 395 ms | 181 ms | 2.18x |
+| loop_arith | 762 ms | 349 ms | 2.18x |
+| fib | 424 ms | 196 ms | 2.16x |
+| oop | 573 ms | 269 ms | 2.13x |
+| array | 461 ms | 227 ms | 2.03x |
+| strings | 345 ms | 187 ms | 1.84x |
+| map | 607 ms | 487 ms | 1.25x |
+| sort | 1000 ms | 881 ms | **1.14x** |
+| startup | 105 ms | 103 ms | 1.02x |
 
-Net of start-up the ratios are roughly 2.5x-3.7x. `map` barely moves, exactly
-as 20 predicts: it is dominated by hashing inside `TableObject`, which the VM
-does not change.
-   - [ ] Pass 1 layout: field slots and vtables as prefix-extensions of the
-         parent's; order classes by inheritance depth
-   - [ ] `NEW` with a constant `field_template` (one alloc + memcpy) and the
-         `field_init` proto fallback
-   - [ ] `GETF`/`SETF` static slots; `CALLM` vtable dispatch; `CALLSTAT`;
-         `GETSTAT`/`SETSTAT` including the "write targets the *declaring*
-         class" rule
-   - [ ] `SUPER`, replacing the `SUPER_OWNER_BINDING` scope hack
-   - [ ] **Single-source the layout** (§24.2): the runtime `ClassObject` is
-         built *from* the `ClassProto`, not computed independently, and in
-         debug builds `GETF` asserts the receiver's layout matches the one it
-         was compiled against. A silent wrong-field read is the worst bug
-         this project can ship.
-   - [ ] Unlocks `oop.sau`
+Net of the ~100 ms of process start-up in both columns, the ratios are
+roughly 2.2x–3.4x.
+
+Two of these are still not really engine measurements:
+
+* **`startup`** does no work; it measures process start-up, which the VM
+  neither helps nor hurts. §24.5 asks for it to be watched, and it has not
+  moved.
+* **`map`** is dominated by hashing inside `TableObject`, which the VM does
+  not change — exactly as §20 predicts.
+
+**`sort` needed a fix beyond making it compile.** On the first run it was
+*slower* than the tree-walker — 1146 ms against 1092 — even though the
+comparator body itself is faster. The comparator crosses the engine boundary
+once per comparison, and each crossing built a fresh `Vm`: two heap
+allocations, a 256-register stack and a frame list, `n log n` times. A
+bounded free list of parked register files on `VmShared` (`take_vm` /
+`give_vm`) removed them and took it to 881 ms. Only a cleanly-returned `Vm`
+is parked; one unwound by an error still has frames and is dropped.
+
+Worth remembering as a general point about re-entrancy: crossing the
+boundary is not free, and a benchmark that newly *compiles* is not
+automatically a benchmark that got *faster*.
 2. **Interfaces** — [x] itables, `CALLIF`. Per class, one table per
    implemented interface mapping the interface's method slot to that class's
    vtable slot, built once at layout time — so a call is a small-map probe
@@ -602,10 +716,42 @@ does not change.
    `thrown_slot` thread-local (§12.1).
    Unwinding closes upvalues at each frame it leaves, so a closure built
    inside the `try` cannot outlive its registers.
-5. **`for … in`** — [ ] `ITERPREP`/`ITERNEXT`, both paths: the table
-   snapshot (array then *sorted* map entries — that ordering is observable
-   behaviour and must be preserved) and the closure driver, including
-   `iter()` on instances
+5. **`for … in`** — [x] the table snapshot (array then *sorted* map entries
+   — that ordering is observable and must be preserved) via
+   `ITERPREP`/`ITERNEXT`, and [x] the §15.8 **closure driver**, including
+   `iter()` on instances.
+
+   The driver is **not** taught to `ITERNEXT`. It lowers to an ordinary
+   `CALL` in a `while` shape, because `CALL` already dispatches on whatever
+   it finds — a bytecode closure, a native, a native closure — so a driver
+   can be any of them with no new opcode and no new VM path. Teaching
+   `ITERNEXT` to call would have meant pushing a frame from inside an opcode
+   and resuming into it, which is the dispatch loop's hardest corner, for no
+   gain. An instance source gets one `CALLM` to `iter()` first.
+
+   **The result count is fixed at `nvars`, not variadic**, and that is the
+   part worth remembering. `C = nvars + 1` asks for exactly as many values
+   as there are loop variables, so `pop_frame` pads the short cases with
+   `nil` and drops the surplus — which is exactly `exec_for_in`'s "extras →
+   nil, surplus dropped", for free. Asking for *all* results instead would
+   leave the callee register holding the driver itself when a step returned
+   nothing — a function, not nil — and the loop would never terminate.
+   Pinned by `a_driver_that_yields_nothing_runs_no_iterations`.
+
+   - [ ] A source the front end **did not prove**. Still refused, and it is
+         the remaining `for … in` cause on real code: `todo-app` iterates an
+         `any` that came out of `Json.decode` behind a runtime
+         `type(data) != "table"` guard, which no static type can see through.
+
+         The obvious fix — an `ITERDRV` opcode normalising any source into a
+         driver, so one lowering serves everything — **has a trap in it**.
+         A table driver would have to signal exhaustion with `nil`, but the
+         table path does *not* use a nil terminator: it walks the whole
+         snapshot. A one-variable loop binds the **value**, so a table
+         holding a nil value would stop the loop early under the driver and
+         iterate past it under the tree-walker. Silent divergence, in the
+         shape `SAULE_DIFF=1` only catches if a fixture happens to put a nil
+         in a table. Settle that before writing the opcode.
 6. **Operator overloading** — [ ] compile-time contract resolution via
    `binary_contract`; dispatch-on-left-operand and the `==`/`compare`
    symmetry rules move into the compiler. `..` falling through to
@@ -651,13 +797,236 @@ does not change.
          typeck today. Mirroring the `Member` branch would fix it, but that
          adds diagnostics to a working language and belongs in its own
          change.
-8. **Pipes** — [ ] lower `Expr::Pipe` to chained `CALLK`s
-9. **Imports and modules** — [ ] per-module chunks, module slots,
-   cross-module class layouts from the `ModuleSeed` registry
-10. **Variadics, trailing blocks, named arguments, defaults** — [ ] §19.
-    Decide entry stubs vs. guarded prologues with a microbenchmark (§24.7 Q3);
-    stubs are the recommendation
-11. **`ARITHX`/`UNARYX`** — [x] the dynamic fallback.
+8. **Stdlib value members and table dot access** — [x]
+   - `Math.pi`, `Os.sep`, `IoMode.Write` fold to a `LOADK` at compile time.
+     The prelude is fixed before a program runs, so this is the same
+     resolution `String.len` already got on the call path, applied to
+     members that hold a value rather than a function.
+   - `t.foo` on a proved table is `t["foo"]` — `GETMAPK`/`SETMAPK`. Past a
+     constant index of 255 the key is materialised and `GETIDX`/`SETIDX`
+     does the work, because capping a module at 256 constants on an
+     operation as ordinary as `t.name` is a worse failure than one extra
+     instruction.
+   - Not folded when the module **writes** through the receiver:
+     `Math.pi = 3.0` is accepted today (the typechecker does not reject
+     it), so a fold would freeze a value the program then changes. Needed
+     `saule_ast::visit`'s new `Visitor::assign_target` — a flattened
+     expression walk cannot tell a read from a write.
+
+   **Two shadowing bugs found here, one of them pre-existing.** A
+   module-level `local` becomes a module *slot*, not a frame local, so
+   `FuncCtx::lookup` structurally cannot see it — and every "is this bare
+   name really the class / enum / stdlib entity it looks like?" test was
+   built on that lookup alone. So:
+   - `local Math = {pi: 3.0}` then `Math.pi` read **π** (my fold), and
+   - `local String = {...}` then `String.len("abc")` called the **stdlib's**
+     `String.len` (pre-existing, since the `CALLNAT` path landed), and
+   - `local Foo = {...}` shadowing a class `Foo` read the **class's** static.
+
+   All three now go through `Compiler::not_shadowed`, which checks both
+   places a `local` can land, or through the resolver's `Binding::Prelude`
+   where that is the precise question. Three differential tests pin them.
+
+9. **Pipes** — [x] `when(source):a(x):b(y)` lowers to a chain of ordinary
+   calls, each threading the upstream value in as argument 0 — what `eval`'s
+   `Expr::Pipe` arm does. The value lives in one register for the whole
+   chain and every stage writes its result back there.
+
+   **The stage callee is resolved by name, not through the binding table.**
+   A `PipeStage` holds a bare `String` and has no `NodeId`, so `Bindings`
+   has nothing keyed on it — the same shape as the enum-method gap in §0.6.
+   The lookup order is therefore written out by hand and has to match the
+   resolver's: a local shadows a top-level `fn`, which shadows a module
+   slot. Getting that order wrong is the `local String = {…}` bug this
+   compiler has already shipped once.
+
+   Two shapes deliberately have no branch, because `saule-typeck` rejects
+   them before the compiler sees them: a **prelude** name as a stage
+   (`when(x):tostring()` is `UnknownPipeStage`) and a locally-bound lambda.
+   Writing code for either would be unreachable branches pretending to be
+   features.
+10. **Imports and modules** — [~] **in progress.** Decision taken: a
+    **program-global class table** with **per-module chunks**, which
+    satisfies §14 (per-module chunks keep a bytecode cache possible) and
+    §24.2 (one layout, not two). The alternative — folding every module into
+    one chunk — is simpler but would have precluded per-module caching.
+
+    - [x] `Chunk::classes` / `enums` / `interfaces` are `Rc<Vec<_>>`, shared
+          by every module of a program. Mutated during compilation through
+          `classes_mut()`, which is `Rc::get_mut` and **not** `make_mut`:
+          `make_mut` would silently clone the table if anyone else held it,
+          leaving the compiler writing vtable slots into a copy the VM never
+          sees — §24.2's failure with no symptom.
+    - [x] `program.rs`: `load_units` walks the import graph from the entry
+          file, reading and parsing each module, and returns them in
+          **post-order** — every module after the ones it imports. Post-order
+          is not just a compile requirement (a parent must be laid out before
+          its subclass); it is observable, because the tree-walker runs an
+          imported module's top level on first import.
+    - [x] Import cycles refuse rather than loop. A native-package import
+          refuses too — there is no Saule module to compile, and *skipping*
+          it would leave the names silently bound to `nil`.
+    - [x] `layout::build` appends into the program's table and takes an
+          `imported: &Layouts`, so a parent from another module resolves to
+          the index its own module assigned. The prefix invariant holds
+          across the boundary — asserted by
+          `an_imported_parent_resolves_to_the_index_its_own_module_assigned`.
+          The `a class extending one from another module` refusal is gone;
+          what remains refuses only a parent that is *nowhere*.
+    - [x] `program::compile`: the per-module codegen loop. The front end runs
+          **per module** — `bindings` and `types` cannot be shared, because
+          `NodeId`s are per module and every module numbers from zero, so one
+          module's `TypeTable` entry would answer another module's question.
+          The type tables, by contrast, accumulate: `compile::Tables` is
+          *moved* into each chunk and back out, which keeps the refcount at
+          one so `classes_mut`'s `Rc::get_mut` never fails, and only becomes
+          a shared `Rc` after the last module. Asserted by `Rc::ptr_eq`
+          across two chunks — two equal-*looking* tables would still be
+          §24.2 waiting to happen.
+    - [x] An `import` whose names a driver already bound emits **zero
+          instructions**: a type is a compile-time index, so there is nothing
+          to do at run time. Without a driver it still refuses, because the
+          name has a module slot nothing would write. One flag,
+          `Compiler::imports_bound`, distinguishes them.
+    - [x] Pass 2a's vtable-inheritance sweep is restricted to the module
+          being compiled. It still *reads* the whole table, so a child here
+          with a parent over there resolves; it just does not revisit rows an
+          earlier module already finished.
+    - [x] Imported **values** need no new opcode. Every module's slots are
+          rebased at compile time onto one flat program-wide vector, so the
+          exporter's slot and the importer's are two indices into the same
+          array and the copy is an ordinary `GETMOD` + `SETMOD` prologue.
+          That fell out of `Bx` being 16 bits: 65 536 top-level names across
+          a program, refused cleanly past that. Imported **types** need not
+          even that — they are compile-time indices.
+    - [x] VM: `Vm::for_chunks` builds **one** `VmShared` for the program.
+          Per-module would give each module its own `Rc<ClassObject>` for
+          the same class, and `class_of` — which maps class identity to a
+          vtable — would then answer differently depending on who asked.
+    - [x] `Closure` carries its `Rc<Chunk>`. Constants, protos, jump tables
+          and cast types are indexed **per chunk**, so they follow the frame:
+          a closure built in one module and called from another must read its
+          own module's pools. Classes, enums and interfaces are the exception
+          — every chunk shares those `Rc`s, so reading them through whichever
+          chunk is running is the same table by construction.
+    - [x] `ClassProto` and `EnumProto` record their declaring module.
+          `vtable` and `static_methods` hold proto indices and a variant's
+          value is a constant index; both are per chunk.
+    - [x] **`CALLK` now carries its module**, packed 8/16 in `EXTRAARG`.
+          Found by running a real two-module program: `self.super()` on a
+          parent from another module loaded the *running* module's proto of
+          the same number — which for a subclass's `init` was its own `init`.
+          Unbounded recursion, and only because the two happened to be
+          numbered alike. Nothing in the fixture suite could have caught it;
+          it took an actual cross-module program.
+    - [x] CLI wired to `program::compile`. A module it cannot read, resolve
+          or order falls back with a note rather than failing the run — the
+          tree-walker resolves imports its own way and must stay the oracle
+          for whether a program is valid.
+    - [x] **Native-package imports fold at compile time.** A native package
+          is Rust-built values with no Saule source, so there is nothing to
+          compile and nothing to run — its exports are fixed before the
+          program starts, exactly like the prelude. `Compiler::static_value`
+          now answers for both, and the four `Binding::Prelude` gates were
+          widened to go through it.
+    - [x] A **dynamic** (manifest-described, `dlopen`-ed) package still
+          refuses. Loading one is a runtime side effect, and compiling must
+          not perform it.
+    - [x] `differential.rs`'s unsupported-construct canary re-pointed at a
+          pipe. A lone `import` compiled through the single-module path
+          still refuses, and that is now pinned by its own test
+          (`an_import_without_a_program_driver_still_refuses`) — it is a
+          correctness rule, not a stand-in.
+
+#### Measured: example projects
+
+**Correcting an earlier measurement in this file.** The "entry points" run
+recorded here previously ran `main.sau` files *directly*, which is not how a
+Saule project is invoked: `json` and friends resolve through the project's
+`src_dirs`, so a direct-file run fails on **both** engines. Running the
+projects is the honest measurement.
+
+| | Before this slice | After |
+|---|---|---|
+| `examples/*/` projects running fully on the VM | 0 of 11 | **4 of 11** |
+
+Every one previously refused at its first `import`. The eight that remain
+fail on other things, and the `match`-guard fix moved two of them onto a
+new top cause:
+
+| Cause | Projects |
+|---|---|
+| `for … in` over an **unproved** source | 2 |
+| an import of a dynamic native package | 2 |
+| a variadic or defaulted parameter | 1 |
+| a member read on a receiver with no proved class | 1 |
+| a class implementing `Assignable` | 1 |
+
+```
+while IFS= read -r cfg; do
+  timeout 8 env SAULE_ENGINE=vm ./target/debug/saule.exe run "$(dirname "$cfg")" 2>&1 \
+    | tr '\n' ' ' | grep -oE 'does not handle `[^`]*`' | head -1
+done < <(find examples -name saule.config) | sort | uniq -c | sort -rn
+```
+11. **Variadics, trailing blocks, named arguments, defaults** — [~] §19.
+    Entry stubs, as Q3 recommended — and no microbenchmark was needed to
+    choose, because the alternative is not merely slower but *wrong*: a
+    default has to be evaluated in the **callee's** frame, and a guarded
+    prologue at the call site would resolve `fn f(a, b = a * 2)`'s `a`
+    against the caller. Stubs get it right by construction.
+
+    - [x] **Defaults** → per-arity entry stubs. `entries[k]` is where filling
+          starts for arity `k`, and the stubs fall through into one another
+          and then into the body: entering at `k` fills `k`, `k+1`, … with no
+          jumps. A call passing everything enters at the body, so a default
+          costs nothing when it is not used.
+    - [x] A **method's** stubs are indexed by arity *including `self`*, and
+          its parameters start at register 1. Off by one and a one-argument
+          call runs the wrong stub — pinned by its own test.
+    - [x] **Named arguments** reordered once in `call_to`, into plain
+          parameter order, so every path below it (`CALLK`, `CALLSTAT`,
+          `CALLM`, the constructor, `CALLNAT`) sees an ordinary positional
+          list and the runtime never sees a name. The slot assignment is
+          `saule_ast::resolve_arg_slots` — the function the typechecker uses
+          — so the two cannot disagree about which parameter an argument
+          fills, trailing-block rule included.
+    - [x] A named call may **skip** a nullable parameter: the gap is filled
+          with a synthesized `nil`, which is what the callee would have left
+          there. Reading the callee's parameter *names* needs a
+          `callee_params` map collected in a pre-pass, because a `Proto`
+          deliberately carries neither names nor defaults — those are
+          compile-time facts.
+    - [ ] A skipped parameter that has a **default** is refused. The default
+          must run in the callee, and the stubs can only fill a *suffix* —
+          there is no entry point meaning "fill slot 1 but not slot 2".
+          Blocks `trailing_block_layout.sau`. Fixing it wants either a
+          per-gap-pattern stub or a sentinel the prologue tests.
+    - [x] **Variadic** parameters, via a new `VARARG` opcode — the first one
+          this project has added since the table was frozen in Phase 1, and
+          **appended**, never inserted, because the numbering is the chunk
+          ABI. `Frame` gained `n_args` to feed it.
+
+          Gathered by the **callee**, as its first instruction, so it runs
+          however the frame was entered. The tempting alternative — have the
+          *caller* pack a table, needing no new opcode at all — only works
+          where the caller can see that the callee is variadic: not through
+          a function value, and not across a module boundary, where
+          `callee_params` holds only this module's declarations. A callee
+          that gathers its own arguments is right for every call.
+
+          A call passing no surplus gets an **empty table**, not nil: the
+          parameter is always a table, or `#values` and `for … in` would
+          both fault on the zero case.
+
+          *Front-end wrinkle:* `...values: integer` types `values` as
+          `integer`, not `table<integer>`, so `for v in values` cannot be
+          proved a table from the `TypeTable`. The compiler records the
+          variadic parameter's name itself and takes the table path on it —
+          it emitted the `VARARG`, so it knows.
+    - [ ] Both a default **and** a variadic parameter in one signature is
+          refused: it would need an entry stub per arity that also
+          re-gathers. Nothing in the corpus does it.
+12. **`ARITHX`/`UNARYX`** — [x] the dynamic fallback.
     Calls `saule_interpreter::eval::ops::binary` / `unary` directly — the
     tree-walker's own operator logic, **reused rather than reimplemented**,
     so string coercion, `Op*` dispatch and every error message are identical
@@ -671,76 +1040,247 @@ does not change.
     which closed the largest remaining source of `Unsupported`: anything
     involving a *call result*. `a.area() + b.area()` now compiles.
 
-### The tree-walker cannot call into bytecode — one root cause, four symptoms
+### Class statics by bare name — done
 
-This is the single biggest thing left, and it is **not** a Phase 5
-optimisation. `Value::VmFunction` is opaque to `saule-interpreter` on
-purpose (§22.1), and a bytecode method is a `Proto`, not a
-`FunctionObject` — so the runtime `ClassObject` the VM builds has an
-**empty method map**. Every path where the tree-walker's own code needs to
-call a user-defined function on a value hits that wall:
+Five refusals that looked like five gaps were one area, and closing it took
+`tests/*.sau` from 64 to **69 of 92** — more than the six fixtures aimed at,
+because several others hit a static somewhere after their first refusal.
 
-1. **Natives invoking a callable argument.** `Table.sort`'s comparator, and
-   all of `stdlib/iter.rs`. Reports "value of type `function` is not
-   callable". *This, not `!`, is what still makes `sort.sau` fall back.*
-2. **`OpToString`.** `display_value` asks the class whether it has a
-   `toString`, gets `no`, and falls back to `<instance of Money>` — **with
-   no error at all**. Silently wrong output, the worst failure mode here.
-3. **`ops::binary` / `ops::unary` overload lookup**, whenever the operand's
-   class was not proved at compile time and the dynamic `ARITHX`/`UNARYX`
-   fallback has to find the overload itself.
-4. **A method read as a value** (`local f = obj.method`) has nothing to
-   hand back.
+- [x] `Binding::ClassStatic` in **read** and **write** position →
+      `GETSTAT` / `SETSTAT`. The resolver carries the *class name* rather
+      than a slot, because the answer has to survive a lambda nested inside
+      the method — a different `FuncCtx` with no `current_class` of its own.
+- [x] A `static local fn` called by its bare name from a sibling →
+      `CALLSTAT`. It is a *method*, so it lives in `smindex` and not in the
+      `sindex` a bare-name static read consults; without its own arm it fell
+      through to the generic call and asked for a static field that does not
+      exist.
+- [x] `self.count` inside a `static fn`. There `self` denotes the **class**
+      (`call_static_method_multi` binds it to `Value::Class`), so this is a
+      static access resolved at compile time — which is also why the VM
+      never needs a class in a register. Bare `self` in a static method is
+      still refused, and no fixture asks for it.
+- [x] **`smindex` is now flattened, carrying the declaring class.** It was
+      the odd one out: `vindex` copies the parent's entries and `sindex`
+      carries a `StaticSlot { class, slot }` for exactly this reason, but
+      `smindex` held only a class's *own* static methods. So
+      `Player.describe()` on a method inherited from `Entity` missed
+      entirely and fell back. `static_methods` is one vector per class
+      index, so a flattened entry has to name its owner or it would index
+      the subclass's own — empty — vector.
 
-Symptoms 1, 2 and 3-when-unproved are guarded by refusals today (see
-below); each guard is a fallback that costs speed and none of them is
-airtight. Fixing the root cause deletes all four guards at once.
+*Worth noting:* four different refusal messages (`a class static`,
+`assignment to this kind of binding`, `an assignment to something that is
+not an instance field`, `` `self` outside a method``) were all the same
+area. The fallback-cause histogram groups by *message*, which splits one
+cause across four rows and makes each look smaller than it is. Read it as a
+starting point, not a ranking.
 
-**Recommended shape.** Split `Vm` into an `Rc<VmShared>` — chunk, module
-slots, statics, enums, classes, closure cache — plus per-invocation state
-(stack, frames, open upvalues). Give `VmFunction` a `call` method and
-`call_value_multi` an arm for it; a callback then runs a **fresh** `Vm`
-over the same shared half, and the existing `max_frames` limit bounds
-recursion. Class method maps need to hold an erased callable rather than
-`Rc<FunctionObject>`, which is the part that touches `saule-interpreter`.
-Mechanical, but it reaches every `self.statics` / `self.module` in the
-dispatch loop. Worth doing before Phase 4.
+### §8.5 dynamic member dispatch — done, and what it exposed
 
-The guards in place until then:
+`GETFX` and a new `CALLMX` are the escape hatch for a receiver whose class
+the front end did not prove — the counterpart of what `ARITHX` did for
+operators, and the largest single cause on both corpora before this.
 
-#### Natives cannot call bytecode closures
+Both **defer to the tree-walker's own member logic**: `GETFX` calls
+`read_member`, `CALLMX` calls `dispatch_member_call_multi`. That is what
+makes a file handle, an enum variant, a class static and a module-level
+variable all work without the compiler learning each one — and what makes
+the *error text* match, which a reimplementation would have got wrong first.
+`CALLMX` lays its receiver at `A` and arguments after it, exactly as `CALLM`
+does, so a call site can pick between the two without moving anything.
 
-`Value::VmFunction` is opaque to the tree-walker on purpose (§22.1):
-`call_value_multi` has **no arm** for it. So a native that *invokes* its
-argument — `Table.sort`'s comparator, and everything in `stdlib/iter.rs` —
-reports "value of type `function` is not callable" the moment the VM hands
-it a compiled closure. Nullability was expected to unblock `sort.sau`; it
-compiles the `!` and the `as` now, and the file still falls back, on this.
+The §8.5 inline cache — collapsing the monomorphic case to a slot load — is
+still Phase 5, with a benchmark. Correct first.
 
-Guarded for now rather than left to fail at run time: a **function-valued
-argument to a native** is a clean `Unsupported`, so the program falls back.
-Deliberately over-broad — a native that merely *stores* a closure would be
-fine — because a needless fallback costs speed and a guess costs a wrong
-answer. It catches a lambda literal or an argument the typechecker proved
-is a `fn(...)`; a closure that reaches a native through an untyped local
-still slips past, which is an argument for doing the real fix rather than
-widening the guard.
+**Lifting the refusal exposed two bugs that had been hiding behind it**, and
+`SAULE_DIFF=1` found both within one run:
 
-The real fix is **VM re-entrancy**, and it is a slice of its own, not a
-patch:
+1. **`UNWRAP` returned `nil` for a bare variant's `.value`.** The
+   tree-walker answers with the variant's own *name* — `Direction.North.value`
+   is `"North"`. Pre-existing, and invisible while `enums.sau` fell back on
+   the member read that `GETFX` now compiles. A wrong value, exit status 0.
+2. **Enum methods.** An enum method has no `NodeId` (§0.6), so the compiler
+   cannot produce a proto for it and the runtime `EnumObject` has an empty
+   method map. That was harmless while every enum-method call refused on its
+   own; `CALLMX` dispatches dynamically, so it reached the empty map and
+   reported `no property or method` where the tree-walker succeeds — a
+   *failure* where the oracle works. An enum declaring any method now
+   refuses the module at layout time.
 
-- `VmFunction` needs a `call` method, and `call_value_multi` an arm for it.
-- A `Closure` today holds a proto and its upvalues — no VM. To run one it
-  needs the chunk, the module slots, the statics and the class table, and
-  `Vm::run` holds `&mut self` across the `CALLNAT` that would re-enter.
-- Recommended shape: split `Vm` into an `Rc<VmShared>` (chunk, module
-  slots, statics, enums, classes, closure cache) plus per-invocation state
-  (stack, frames, open upvalues). A callback then runs a **fresh** `Vm`
-  over the same shared half, and the existing `max_frames` limit bounds
-  recursion. Nothing else needs to change; it is mechanical but touches
-  every `self.statics` / `self.module` in the dispatch loop.
-- Worth doing before Phase 4: `stdlib/iter.rs` is unusable from the VM
-  until it lands, and that is not a corner of the language.
+The second is the more instructive one: a dynamic fallback is only as safe
+as the runtime data it falls back *onto*. Widening what compiles turned a
+documented, inert gap into a live divergence, and the note in this file that
+called it safe ("the compiler refuses an enum method call outright") became
+false the moment `CALLMX` landed.
+
+The verifier also earned its keep: `CALLMX` was missing from its
+`expect_extra` list, and four fixtures failed with `an EXTRAARG with no
+instruction before it` rather than running a mis-decoded chunk.
+
+### Open divergence: a module-level forward call
+
+**Found while adding pipes; it has nothing to do with pipes.** At module
+level, calling a top-level `fn` declared *below* the call site:
+
+```
+local r: integer = later(5)      -- tree-walker: error. VM: 105.
+fn later(n: integer) -> integer
+    return n + 100
+end
+```
+
+The tree-walker executes top-level statements in order, so `later` is not
+bound yet and it reports `identifier 'later' reached evaluation undefined`.
+The compiler reserves proto indices in a pre-pass — which is *correct* and
+necessary inside function bodies, where `fn a() b() end` above `fn b()` is
+ordinary Saule — and applies the same resolution to the module body, so
+`CALLK` happily calls it.
+
+The VM is the more permissive engine here, which is the wrong direction: the
+tree-walker is the oracle. `when(5):later()` inherits it identically, which
+is why the pipe tests do not cover that shape.
+
+**Not fixed, and it is not a one-liner.** The fix is to let `CALLK` resolve a
+top-level `fn` from the *module body* only once that `fn`'s declaration has
+been emitted, while leaving forward references inside function bodies alone
+— so the compiler needs to track which top-level `fn`s the module body has
+passed. No fixture has this shape, so `SAULE_DIFF=1` does not see it.
+
+### Two bugs in `match` guards — one silent
+
+Chasing "a local the compiler has not seen declared" found the refusal that
+was reported *and* a miscompile sitting next to it. Both came from one
+ordering mistake in `compile/match_.rs`: the guard was emitted inside
+`arm_test`, before the arm's scope was entered.
+
+1. **The refusal** (`case x when x < 0`). The pattern's binding was not in a
+   register yet when the guard compiled, so the guard's `x` looked like a
+   local the compiler had never seen. Safe — it fell back — but it also
+   refused `case Event.Click(x, y) when x > 0`, the same rule for a
+   destructured payload.
+
+2. **The miscompile.** With a guard present, `arm_test` patched the
+   *pattern's* failure jump to just past the guard's jump — which is where
+   the arm **body** starts. So a pattern that did not match ran the arm
+   anyway:
+
+   ```
+   local n: integer = 5
+   match n
+     case 0 when true then "zero"     -- VM: taken. Tree-walker: not.
+     case _ then "other"
+   end
+   ```
+
+   `zero` under the VM, `other` under the tree-walker. **Exit status 0, no
+   error, wrong value** — and `SAULE_DIFF=1` could not see it, because no
+   fixture pairs a *literal* pattern with a guard. `tests/match_guard.sau`
+   uses only binding patterns, which always match, so the mis-patched jump
+   was never taken there.
+
+The fix orders the three steps explicitly — test the pattern, bind what it
+introduces, then test the guard — with both failure jumps patched to the
+next arm by the caller rather than chained inside `arm_test`. Pinned by
+three differential tests, including the literal-pattern-with-guard shape
+that nothing covered.
+
+*Worth drawing out:* the reported symptom was a clean refusal, and the
+unreported one next to it was a wrong answer. A refusal is a signal that the
+compiler mishandles a construct — not a reason to assume the mishandling is
+confined to the part that refused.
+
+### The tree-walker can now call into bytecode — done
+
+One root cause with four symptoms. `Value::VmFunction` was opaque to
+`saule-interpreter`, and a bytecode method is a `Proto`, not a
+`FunctionObject`, so the runtime `ClassObject` the VM built had an **empty
+method map**. Every path where the tree-walker's own code needed to call a
+user function on a value hit that wall.
+
+**What was built**, in the recommended shape:
+
+- [x] `Vm` split into an `Rc<VmShared>` — chunk, module slots, statics,
+      enums, classes, closure cache — plus per-invocation state (stack,
+      frames, open upvalues). A callback runs a **fresh** `Vm` over the same
+      shared half, which is what dissolves the `&mut self` the dispatch loop
+      holds across a `CALLNAT`.
+- [x] `VmFunction` gained a `call` method; `call_value_multi` gained a
+      `Value::VmFunction` arm. `call` takes the erased `Rc<VmFunctionRef>`
+      **handle** alongside `&self`, which looks redundant and is not: a VM
+      frame holds an `Rc<VmFunctionRef>` and `&self` cannot be turned back
+      into one, so without it every callback would rebuild an equivalent
+      closure — an allocation per comparison on a sort.
+- [x] Class method maps hold `MethodRef { Tree(Rc<FunctionObject>),
+      Vm(Rc<VmFunctionRef>) }` rather than `Rc<FunctionObject>`. Built from
+      the chunk's `vindex`/`vtable`, both of which are prefix-extensions of
+      the parent's, so an inherited method is one probe away exactly as it
+      is on a tree-walker class.
+
+**`Closure` holds a `Weak<VmShared>`, not an `Rc`.** A closure very commonly
+lives in a module slot and a module slot lives in `VmShared`; a strong
+pointer would close that cycle and leak the whole program's state — the same
+shape as the capture leak `closure_semantics.rs` exists to guard against.
+The running `Vm` holds the strong reference, so the upgrade succeeds exactly
+when calling makes sense. `Rc::new_cyclic` is what lets the classes built at
+start-up carry method closures that already know their own engine.
+
+**Recursion is bounded by `saule_interpreter::enter_call_depth`, not by
+`max_frames`.** This is the one place the recommended shape was wrong.
+`max_frames` counts frames within *one* `Vm`, and each re-entrant call is a
+fresh `Vm` with frames of its own — so it cannot see the nesting at all.
+What nesting consumes is the **native** stack, one Rust frame per level,
+which is what the tree-walker's own depth guard already counts. Sharing the
+counter also bounds a program bouncing between engines once rather than
+twice. Pinned by `tests/ui/stack_overflow_reentrant.sau`.
+
+**The two guards this deleted:** `refuse_closure_to_native` in
+`compile/expr.rs`, and the `toString` refusal in `compile/layout.rs`.
+`sort.sau` compiles, taking the benchmarks to **10 of 10**.
+
+#### The bug the `toString` guard was hiding
+
+Lifting the refusal turned `SAULE_DIFF=1` red immediately, on
+`operator_overload.sau`: `"cost: " .. money` printed `300c` under the
+tree-walker and `<instance of Money>` under the VM. `Op::CONCAT` and
+`Op::TOSTR` were reading `Value::to_display_string()` directly instead of
+going through `ops::display_value`, so they never consulted the overload —
+**reuse rather than reimplement, broken in the one place it was easiest to
+miss**, and invisible to exit status. Both now call `display_value`.
+
+`CONCAT` also had to stop rendering each operand twice. It used to make one
+pass to measure the result's length and a second to build it, which is
+harmless while rendering is pure and wrong the moment an operand's
+`toString` is user code with side effects. It now renders once into a small
+`Vec<String>` — which is also *fewer* allocations than before, since
+`to_display_string` allocated on each of the two passes.
+
+**`EnumObject.methods` is still empty**, deliberately. The same trap in a
+different place, so it is worth saying why it is not one: the compiler
+refuses an enum method call outright (§0.6 — an enum method is a bare
+`Method` with no `Spanned`, so it has no `NodeId` to key a `FunctionInfo`
+on), so the module falls back before a VM enum ever reaches a method lookup.
+And the two dynamic paths that read a class's map cannot reach an enum at
+all — `has_overload` matches only `Value::Instance`. If enum methods are
+ever compiled, this map has to be filled in the same sweep.
+
+#### Still open: a method read as a value
+
+Symptom 4 is the one this did **not** close, and it should not be closed
+without deciding what `obj.method` means. The runtime half is in place —
+`read_member` hands back `MethodRef::to_value()`, so a bytecode method now
+yields a callable `Value::VmFunction` instead of nothing — but:
+
+* the compiler still refuses the member read itself (`a member that is
+  neither an instance field nor a static`), and
+* the **tree-walker's own** behaviour here is broken, and was before this
+  work: `read_member` returns the method unbound, so calling it fails with
+  `internal: `self` reached evaluation outside a method`. Verified against
+  `df8a1eb`.
+
+So there is no oracle to be differential-tested against yet. Fixing the
+tree-walker's semantics is the prerequisite, and it is a language decision
+(bound method value? explicit receiver?) rather than a VM one.
 
 ### `Assignable<T>` is refused
 
@@ -777,10 +1317,38 @@ is that they now fall back rather than compute a wrong answer.
 
 ### Phase 3 exit criteria
 
-- [ ] All 91 `tests/*.sau` and all `tests/ui/*.sau` behave identically under
-      both engines
-- [ ] All 10 benchmarks run under `--vm`
-- [ ] The differential harness is green across `examples/` and `www/`
+- [x] All `tests/*.sau` and all `tests/ui/*.sau` behave identically under
+      both engines — `SAULE_DIFF=1 ./run_tests.sh`, 235/235, output compared
+      rather than just exit status, one documented exemption.
+      **Note what this does and does not say:** it holds *including* the
+      programs that fall back, so it proves the two engines agree, not that
+      the VM compiles everything. Read it together with the coverage table
+      at the top.
+- [x] All 10 benchmarks run under `--vm` — `sort.sau` was the last, and
+      re-entrancy is what unblocked it.
+- [~] The differential harness is green across `examples/` —
+      `run_examples_diff.sh`, **9 of 11 projects compared, both engines
+      agreeing on every one**. `www/` is not covered yet.
+
+      Different from `run_tests.sh` in the way that matters: those fixtures
+      are small, single-file and side-effect-free, while these are real
+      multi-module programs with imports and file IO. Every silent
+      divergence this project has found came from code shaped like a
+      program rather than like a fixture.
+
+      Two projects are skipped, both with the same reason — `UI Project` and
+      `toying` open a window and loop until it is closed, so neither has a
+      terminating run to compare. They hang identically under *both*
+      engines, which is a property of the program, not a divergence. The
+      skip count is printed on every run so the list cannot grow unnoticed.
+
+      Projects that write files are snapshotted and restored between the two
+      runs, so the second engine starts from the state the first one saw —
+      otherwise `todo-app` reports a different second run for a reason that
+      has nothing to do with the engine.
+- [ ] Coverage: 80 of 92 `tests/*.sau` compile fully. The remaining 12 fall
+      back cleanly, which is correct-but-slow; the gaps are listed at the
+      top of this file.
 
 ---
 
@@ -824,7 +1392,26 @@ is that they now fall back rather than compute a wrong answer.
 
 - [~] **Differential testing** — `crates/saule-vm/tests/differential.rs`
       runs every program under **both** engines and compares the result,
-      error text included. **88 tests.** The nullability slice added 11:
+      error text included. **134 tests.** The `for … in` driver added 4,
+      including a driver that yields nothing (the case that decided the
+      calling convention) and nested driver loops.
+ The `match`-guard fix added 3: a
+      guard reading its own pattern's binding, a guard reading a
+      destructured variant payload, and — the one that mattered — a
+      *literal* pattern with a guard, the shape no fixture had and the
+      reason a silent miscompile survived `SAULE_DIFF=1`.
+      The re-entrancy slice added 8: a
+      native invoking a bytecode comparator (ascending *and* descending, so
+      a callback that is never consulted cannot pass), a comparator closure
+      reaching a captured upvalue, a callback that itself re-enters the VM
+      two levels deep — where a per-invocation field wrongly left in
+      `VmShared` would corrupt the level below rather than merely be slow —
+      a `toString` overload through `..` and `tostring` and *not* through a
+      table, an overload counted to fire **exactly once** per operand, an
+      overload resolved dynamically on a call result, an inherited
+      `toString` reached through the flattened method map, and the
+      recursion guard still unwinding after a sort's worth of callbacks.
+      The nullability slice added 11:
       `??` laziness (counting the fallback's side effects rather than
       inferring), `!` on a value and on nil, `as` to each primitive, `as`
       to a class through an inheritance chain, `as table<T>` checked
