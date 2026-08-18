@@ -12,7 +12,7 @@
 //! | [`loops`]   | numeric `for` and `for … in`                        |
 //! | [`try_`]    | `try … catch` with runtime type matching            |
 
-mod assign;
+pub(crate) mod assign;
 mod classes;
 mod enums;
 mod imports;
@@ -74,7 +74,7 @@ pub(super) mod pending_flow {
 
 /// Execute a sequence of statements in `env`. Stops at the first non-`Normal`
 /// outcome and propagates it.
-pub fn exec_block(
+pub(crate) fn exec_block(
     stmts: &[Spanned<Stmt>],
     env: &Rc<RefCell<Environment>>,
 ) -> Result<Flow, RuntimeError> {
@@ -125,7 +125,7 @@ fn exec_scoped_block(
 }
 
 /// Execute a single statement.
-pub fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow, RuntimeError> {
+pub(crate) fn exec(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Flow, RuntimeError> {
     match exec_inner(stmt, env) {
         // A `return`/`break`/`continue` that escaped through an expression
         // context (e.g. a `match` arm body) parks itself in `pending_flow`

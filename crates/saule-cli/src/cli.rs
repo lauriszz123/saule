@@ -8,6 +8,33 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::fmt::FmtArgs;
 
+/// Parse a path argument, undoing Windows' argument-escaping quirk.
+///
+/// `saule run ".\examples\UI Project\"` arrives at the program as
+/// `.\examples\UI Project"` — with a quote the user never typed and the
+/// directory separator gone. The shell quotes the argument because it
+/// contains a space, and the trailing `\` then escapes the closing `"` under
+/// the MSVC command-line rules Rust's argument parsing follows. Tab
+/// completion produces exactly this shape, so it is the *normal* way to name
+/// a directory whose path contains a space, not a user mistake.
+///
+/// Stripping the quote is unambiguous rather than a guess: Win32 reserves `"`
+/// along with `* : < > ? \ /`, so it cannot appear anywhere in a legal
+/// Windows path, and one that reaches here was never part of the name. Only
+/// a **trailing** quote is removed, and only on Windows — on Unix `"` is an
+/// ordinary filename character and stripping it would corrupt real paths.
+///
+/// A `value_parser` rather than a fix-up at the call sites, because there
+/// are four of them and a fifth would forget.
+pub(crate) fn path_arg(raw: &str) -> Result<PathBuf, String> {
+    let cleaned = if cfg!(windows) {
+        raw.strip_suffix('"').unwrap_or(raw)
+    } else {
+        raw
+    };
+    Ok(PathBuf::from(cleaned))
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "saule",
@@ -55,7 +82,7 @@ complete chunk or an explicit gap."
 )]
 pub(crate) struct DisasmArgs {
     /// The `.sau` file to compile.
-    #[arg(value_name = "FILE")]
+    #[arg(value_name = "FILE", value_parser = path_arg)]
     pub file: PathBuf,
 }
 
@@ -81,7 +108,7 @@ Libraries (`kind: \"library\"`) have no entry point and check normally."
 )]
 pub(crate) struct CheckArgs {
     /// Project directory or `.sau` file. Defaults to the current directory.
-    #[arg(value_name = "TARGET")]
+    #[arg(value_name = "TARGET", value_parser = path_arg)]
     pub target: Option<PathBuf>,
 
     /// Report how much of each file the type checker proved a type for.
@@ -118,20 +145,30 @@ through verbatim, and may start with `-`."
 )]
 pub(crate) struct RunArgs {
     /// Project directory or `.sau` file. Defaults to the current directory.
-    #[arg(value_name = "TARGET")]
+    #[arg(value_name = "TARGET", value_parser = path_arg)]
     pub target: Option<PathBuf>,
 
     /// Arguments forwarded to the script's `Os.args()`.
     #[arg(last = true, allow_hyphen_values = true, value_name = "ARGS")]
     pub args: Vec<String>,
 
-    /// Execute with the bytecode VM instead of the tree-walking interpreter.
+    /// Execute with the bytecode VM. This is the default; the flag remains
+    /// so a script can state the engine it means rather than rely on it.
     ///
-    /// The VM is under construction: anything it cannot compile yet falls
-    /// back to the interpreter, so this is always safe to pass. Also
-    /// enabled by `SAULE_ENGINE=vm`.
-    #[arg(long)]
+    /// Passing it also restores the `note:` line the fallback prints, which
+    /// is suppressed when the VM is merely the default.
+    #[arg(long, conflicts_with = "interp")]
     pub vm: bool,
+
+    /// Execute with the tree-walking interpreter instead of the bytecode VM.
+    ///
+    /// The escape hatch for the Phase 4 default flip: the two engines are
+    /// held to identical observable behaviour by the differential harness,
+    /// so this should never be needed — and if it ever is, that is a bug
+    /// worth reporting, with the program that needs it. Also selected by
+    /// `SAULE_ENGINE=interp`.
+    #[arg(long, conflicts_with = "vm")]
+    pub interp: bool,
 }
 
 /// `saule init <name>`

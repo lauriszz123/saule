@@ -42,7 +42,7 @@ The flags below override the config file for this run."
 )]
 pub(crate) struct FmtArgs {
     /// Files to format; at least one is required.
-    #[arg(required = true, value_name = "FILE")]
+    #[arg(required = true, value_name = "FILE", value_parser = crate::cli::path_arg)]
     paths: Vec<PathBuf>,
 
     /// Overwrite the files in place instead of printing to stdout.

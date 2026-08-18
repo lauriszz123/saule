@@ -50,6 +50,15 @@ pub fn visit(module: &Module, v: &mut impl Visitor) {
     walk_stmts(&module.stmts, v);
 }
 
+/// Walk a statement list with a full [`Visitor`].
+///
+/// The same traversal [`visit`] performs, exposed for the passes that hold a
+/// body rather than a whole module — "which top-level names does this
+/// function reach?" is asked of one `fn` at a time.
+pub fn visit_stmts(stmts: &[Spanned<Stmt>], v: &mut impl Visitor) {
+    walk_stmts(stmts, v);
+}
+
 fn walk_stmts<V: Visitor>(stmts: &[Spanned<Stmt>], v: &mut V) {
     for s in stmts {
         walk_stmt(s, v);

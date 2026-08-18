@@ -347,7 +347,19 @@ define_ops! {
     CALLK: Abc,
     /// Native call; constant index of the native in `EXTRAARG`
     CALLNAT: Abc,
-    /// Reuse the current frame; args move down to `base`
+    /// `return f(args)` in tail position: **replace** the running frame
+    /// rather than nest inside it. Callee in `R[A]`, args
+    /// `R[A+1]..R[A+B-1]`, which move down to `base`.
+    ///
+    /// The callee's results go to whoever called the frame being replaced,
+    /// so `ret_to` and `n_ret` are inherited and multi-return keeps working
+    /// through a tail chain for free.
+    ///
+    /// Dispatches like `CALL`: only a bytecode closure has a frame to
+    /// replace. A native, a constructor or anything else callable is an
+    /// ordinary call made here and returned — which is exactly the line the
+    /// tree-walker draws, since it builds `Flow::TailCall` only for a
+    /// `Value::Function`.
     TAILCALL: Abc,
     /// Return `R[A]..R[A+B-2]`; `B=0` returns to top
     RET: Abc,
@@ -412,6 +424,26 @@ define_ops! {
     /// * instance → `iter()` runs here, once per loop, and its result
     ///   replaces `R[A]`; `R[A+2]` := true
     ITERPREPX: ABx,
+
+    // ---- §6.4 tail calls, statically resolved ----------------------------
+    /// `TAILCALL` to a statically known proto; module and proto packed 8/16
+    /// in `EXTRAARG`, args at `R[A]..R[A+B-2]` — `CALLK`'s layout, since
+    /// there is no callee register when the callee is the operand.
+    ///
+    /// Its own opcode rather than a flag on `CALLK` because the frame is
+    /// *replaced* rather than pushed, which is a different thing for the
+    /// dispatch loop to do, and because a `C` operand it does not have is
+    /// where a flag would have to live.
+    TAILCALLK: Abc,
+    /// `TAILCALL` to a static method; declaring class and slot packed 8/16
+    /// in `EXTRAARG`, args at `R[A]..R[A+B-2]` — `CALLSTAT`'s layout.
+    ///
+    /// Needed as well as `TAILCALLK` because a static method's proto is
+    /// reached through the class table at run time, not named directly.
+    /// `class Main` / `static fn` is the idiomatic shape of a Saule program,
+    /// so without this the commonest tail-recursive function in the language
+    /// would still grow the frame stack.
+    TAILCALLS: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

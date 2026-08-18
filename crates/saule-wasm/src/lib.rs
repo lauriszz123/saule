@@ -1,4 +1,4 @@
-//! The Saule interpreter, compiled for the browser.
+//! The Saule language, compiled for the browser.
 //!
 //! One entry point, [`run_to_json`], which takes a program's source and
 //! returns a JSON string matching the `RunResult` shape declared in
@@ -23,6 +23,15 @@
 //! fills them with browser implementations. That is what lets the interpreter
 //! keep building for every other target unchanged, and it is why the JSON
 //! shaping below can be unit-tested natively with no browser involved.
+//!
+//! ## Which engine runs the program
+//!
+//! The bytecode VM, since Phase 4 of `VM_TASKS.md`, on the same terms as the
+//! CLI: a module the compiler has not learned yet falls back to the
+//! tree-walking interpreter, silently, because the two engines are held to
+//! identical observable behaviour by the differential harness. The
+//! playground therefore never has an engine to choose — there is no flag
+//! here and no `SAULE_ENGINE` in a browser.
 //!
 //! ## Sandbox
 //!
@@ -57,6 +66,10 @@ pub enum Phase {
     Parse,
     Semantic,
     Type,
+    /// The bytecode compiler. Only ever produced by a compiler *fault*: a
+    /// construct it has not learned yet is not an error, it is a fall-back
+    /// to the tree-walker, and never reaches a diagnostic.
+    Compile,
     Runtime,
 }
 
@@ -124,6 +137,10 @@ fn failed(diagnostics: Vec<Diagnostic>, output: Vec<OutputChunk>) -> RunResult {
 
 // ─── the pipeline ──────────────────────────────────────────────────────────
 
+/// The chunk name the playground compiles under. There is no file behind
+/// this source, but a chunk carries a name for its disassembly and errors.
+const PLAYGROUND_NAME: &str = "playground.sau";
+
 /// Compile and run `source`, returning the structured result.
 ///
 /// Unlike `saule_interpreter::check_and_run`, which stops at the first
@@ -164,9 +181,33 @@ pub fn run(source: &str) -> RunResult {
         return failed(type_errors, Vec::new());
     }
 
+    // The bytecode engine, default since Phase 4, with the same fall-back
+    // discipline as the CLI (VM_DESIGN.md §21.3): `Unsupported` means "the
+    // compiler has not learned this yet", so the tree-walker runs it and the
+    // user sees nothing. Anything else is a compiler fault and is surfaced.
+    //
+    // Compiling happens *outside* the capture: a program that emitted output
+    // and then fell back would print it twice. This is the single-module
+    // route rather than `program::compile`, because there is no filesystem
+    // here for an import graph to live in.
+    let chunk = match saule_vm::compile(&module, PLAYGROUND_NAME, source) {
+        Ok(chunk) => Some(std::rc::Rc::new(chunk)),
+        Err(saule_vm::CompileError::Unsupported { .. }) => None,
+        Err(err) => return failed(vec![to_diagnostic(&err, Phase::Compile)], Vec::new()),
+    };
+
     // Anything the program prints is captured rather than written to a stdout
     // that does not exist on this target.
-    let (sink, outcome) = output::capture(|| saule_interpreter::run(&module));
+    let (sink, outcome) = output::capture(|| match &chunk {
+        Some(chunk) => saule_vm::run_chunk(std::rc::Rc::clone(chunk)).map(|vs| {
+            vs.into_iter()
+                .next()
+                .unwrap_or(saule_interpreter::Value::Nil)
+        }),
+        // Deliberately `run`, not `check_and_run`: the phases above have
+        // already run, one at a time, so every diagnostic is reported.
+        None => saule_interpreter::run(&module),
+    });
 
     let output: Vec<OutputChunk> = sink
         .chunks()
@@ -435,6 +476,40 @@ println(area(Shape.Rect(3.0, 4.0)))
         );
         assert_eq!(v["ok"], true, "{v}");
         assert_eq!(v["output"][0]["text"], "12.0\n");
+    }
+
+    #[test]
+    fn the_playground_actually_reaches_the_vm() {
+        // Every test in this module passes either way, because the fall-back
+        // is behaviour-preserving by design - which is exactly what would let
+        // the wiring rot back to "always the tree-walker" unnoticed. So pin
+        // the compile step itself on the program above.
+        let source = r#"
+enum Shape
+    Circle(radius: float),
+    Rect(w: float, h: float)
+end
+
+fn area(s: Shape) -> float
+    return match s
+        case Shape.Circle(r) then 3.0 * r * r
+        case Shape.Rect(w, h) then w * h
+    end
+end
+
+println(area(Shape.Rect(3.0, 4.0)))
+"#;
+        saule_interpreter::init();
+        let tokens = saule_lexer::Lexer::new(source).tokenize().expect("lexes");
+        let module = saule_parser::parse(tokens).expect("parses");
+        assert!(
+            saule_interpreter::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default())
+                .is_empty()
+        );
+        assert!(
+            saule_vm::compile(&module, PLAYGROUND_NAME, source).is_ok(),
+            "the playground's own showcase program must compile to bytecode"
+        );
     }
 
     #[test]

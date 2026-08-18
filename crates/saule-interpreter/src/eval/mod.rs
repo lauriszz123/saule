@@ -122,7 +122,7 @@ pub fn reset_depth() {
 /// `Normal(v)` means execution should continue; `v` is the value of the
 /// last expression-statement (used at the REPL and in tests).
 #[derive(Debug, Clone)]
-pub enum Flow {
+pub(crate) enum Flow {
     Normal(Value),
     Break,
     Continue,
@@ -152,14 +152,5 @@ impl Flow {
     /// Convenience for the common "nothing interesting happened" case.
     pub fn nil() -> Self {
         Flow::Normal(Value::Nil)
-    }
-
-    /// Returns the inner value if this is a `Normal` outcome, else `Nil`.
-    pub fn into_value(self) -> Value {
-        match self {
-            Flow::Normal(v) => v,
-            Flow::Return(values) => values.into_iter().next().unwrap_or(Value::Nil),
-            _ => Value::Nil,
-        }
     }
 }

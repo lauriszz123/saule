@@ -52,6 +52,18 @@ pub struct ClassInfo {
 pub type ClassRegistry = HashMap<String, ClassInfo>;
 pub type InterfaceRegistry = HashMap<String, Vec<String>>;
 
+/// Interface name → method name → signature.
+///
+/// A **sibling** of [`InterfaceRegistry`] rather than a field on it, because
+/// that one's value type is `Vec<String>` and six call sites across the LSP
+/// destructure it. Nothing existing has to change to gain this.
+///
+/// Without it there was nowhere to look up what an interface method
+/// returns, so `local a: integer = s.half()` on an interface-typed `s` was
+/// `cannot determine the type of this expression` — for a single-valued
+/// method on a perfectly ordinary program.
+pub type InterfaceMethodRegistry = HashMap<String, HashMap<String, MethodSig>>;
+
 /// One variant's payload shape.
 ///
 /// Empty for `Bare` and `Valued`; for `Tuple { fields }` it is the declared
@@ -105,6 +117,7 @@ pub type VariableRegistry = HashMap<String, Type>;
 thread_local! {
     static CLASSES: RefCell<ClassRegistry> = RefCell::new(HashMap::new());
     static INTERFACES: RefCell<InterfaceRegistry> = RefCell::new(HashMap::new());
+    static INTERFACE_METHODS: RefCell<InterfaceMethodRegistry> = RefCell::new(HashMap::new());
     static ENUMS: RefCell<EnumRegistry> = RefCell::new(HashMap::new());
     static FUNCTIONS: RefCell<FunctionRegistry> = RefCell::new(HashMap::new());
     static VARIABLES: RefCell<VariableRegistry> = RefCell::new(HashMap::new());
@@ -298,10 +311,18 @@ pub fn class_implements_iterable(class: &str) -> bool {
 // Registry build / install / clear
 // ──────────────────────────────────────────────────────────────────────────────
 
-pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, EnumRegistry) {
+pub fn build_registry(
+    module: &Module,
+) -> (
+    ClassRegistry,
+    InterfaceRegistry,
+    EnumRegistry,
+    InterfaceMethodRegistry,
+) {
     let mut reg = ClassRegistry::new();
     let mut ifaces = InterfaceRegistry::new();
     let mut enums = EnumRegistry::new();
+    let mut iface_methods = InterfaceMethodRegistry::new();
     for stmt in &module.stmts {
         if let Stmt::Decl(d) = &stmt.value {
             match &d.value {
@@ -347,8 +368,32 @@ pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, Enu
                     }
                     reg.insert(name.clone(), info);
                 }
-                Decl::Interface { name, extends, .. } => {
+                Decl::Interface {
+                    name,
+                    extends,
+                    methods,
+                    ..
+                } => {
                     ifaces.insert(name.clone(), extends.clone());
+                    let sigs: HashMap<String, MethodSig> = methods
+                        .iter()
+                        .map(|m| {
+                            (
+                                m.name.clone(),
+                                MethodSig {
+                                    // An interface declares instance methods
+                                    // only, and has no bodies to hide, so
+                                    // both flags are fixed rather than read.
+                                    is_static: false,
+                                    is_private: false,
+                                    type_params: Vec::new(),
+                                    params: m.params.clone(),
+                                    return_ty: m.return_ty.clone(),
+                                },
+                            )
+                        })
+                        .collect();
+                    iface_methods.insert(name.clone(), sigs);
                 }
                 Decl::Enum { name, variants, .. } => {
                     let mut info = EnumInfo::default();
@@ -375,7 +420,7 @@ pub fn build_registry(module: &Module) -> (ClassRegistry, InterfaceRegistry, Enu
     for contract in saule_ast::ops::ALL_CONTRACTS {
         ifaces.entry(contract.interface.to_string()).or_default();
     }
-    (reg, ifaces, enums)
+    (reg, ifaces, enums, iface_methods)
 }
 
 /// Top-level `fn` signatures declared directly in `module`. Kept separate
@@ -406,10 +451,45 @@ pub fn build_function_registry(module: &Module) -> FunctionRegistry {
     out
 }
 
-pub fn install_registries(reg: ClassRegistry, ifaces: InterfaceRegistry, enums: EnumRegistry) {
+pub fn install_registries(
+    reg: ClassRegistry,
+    ifaces: InterfaceRegistry,
+    enums: EnumRegistry,
+    iface_methods: InterfaceMethodRegistry,
+) {
     CLASSES.with(|c| *c.borrow_mut() = reg);
     INTERFACES.with(|c| *c.borrow_mut() = ifaces);
     ENUMS.with(|c| *c.borrow_mut() = enums);
+    INTERFACE_METHODS.with(|c| *c.borrow_mut() = iface_methods);
+}
+
+/// The signature of `method` on `iface`, following `extends`.
+///
+/// The interface counterpart of [`lookup_method`]. An interface composes by
+/// extension rather than inheritance, so the walk is over a *list* per level
+/// rather than a single parent — and it is breadth-first for the same reason
+/// the runtime itable flattens: a method reached through two paths is one
+/// method, and which path found it must not matter.
+pub fn lookup_interface_method(iface: &str, method: &str) -> Option<MethodSig> {
+    let mut queue = vec![iface.to_string()];
+    let mut seen: Vec<String> = Vec::new();
+    while let Some(name) = queue.pop() {
+        if seen.contains(&name) {
+            continue;
+        }
+        if let Some(sig) =
+            INTERFACE_METHODS.with(|c| c.borrow().get(&name).and_then(|m| m.get(method)).cloned())
+        {
+            return Some(sig);
+        }
+        with_interfaces(|r| {
+            if let Some(ext) = r.get(&name) {
+                queue.extend(ext.iter().cloned());
+            }
+        });
+        seen.push(name);
+    }
+    None
 }
 
 pub fn install_functions(funcs: FunctionRegistry) {
@@ -440,6 +520,7 @@ pub fn build_variable_registry(module: &Module) -> VariableRegistry {
 pub fn clear_registries() {
     CLASSES.with(|c| c.borrow_mut().clear());
     INTERFACES.with(|c| c.borrow_mut().clear());
+    INTERFACE_METHODS.with(|c| c.borrow_mut().clear());
     ENUMS.with(|c| c.borrow_mut().clear());
     FUNCTIONS.with(|c| c.borrow_mut().clear());
     VARIABLES.with(|c| c.borrow_mut().clear());

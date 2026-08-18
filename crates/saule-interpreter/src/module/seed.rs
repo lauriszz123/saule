@@ -294,7 +294,7 @@ pub(crate) fn collect_import_seed_inner(
             continue;
         };
 
-        let (reg, ifaces, enums) = saule_semantic::build_registry(&imported);
+        let (reg, ifaces, enums, iface_methods) = saule_semantic::build_registry(&imported);
         let funcs = saule_semantic::build_function_registry(&imported);
         let vars = saule_semantic::build_variable_registry(&imported);
 
@@ -309,6 +309,13 @@ pub(crate) fn collect_import_seed_inner(
             }
             if let Some(ext) = ifaces.get(&orig).cloned() {
                 seed.interfaces.entry(alias.clone()).or_insert(ext);
+            }
+            // Carried beside `interfaces` so an *imported* interface's
+            // method return types are as knowable as a local one's —
+            // otherwise the fix would work only in single-file programs,
+            // which is not where interfaces are used.
+            if let Some(sigs) = iface_methods.get(&orig).cloned() {
+                seed.interface_methods.entry(alias.clone()).or_insert(sigs);
             }
             if let Some(info) = enums.get(&orig).cloned() {
                 seed.enums.entry(alias.clone()).or_insert(info);

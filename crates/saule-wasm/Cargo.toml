@@ -21,6 +21,10 @@ saule-typeck = { path = "../saule-typeck" }
 # `native-packages` off: the browser cannot dlopen a shared library, and
 # leaving it on would pull `libloading`, which does not build for wasm.
 saule-interpreter = { path = "../saule-interpreter", default-features = false }
+# The bytecode engine, default since Phase 4. `default-features = false` for
+# the same reason as the line above: the VM re-exports `native-packages`, and
+# the browser cannot dlopen.
+saule-vm = { path = "../saule-vm", default-features = false }
 # Spans and help text are read back through miette's `Diagnostic` trait rather
 # than by matching on each error enum, so every phase maps the same way and a
 # new error variant needs no work here.

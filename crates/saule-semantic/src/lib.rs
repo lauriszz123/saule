@@ -40,12 +40,13 @@ pub use binding::{Binding, Bindings, FunctionInfo, FunctionTable, ResolveTable, 
 pub use error::SemanticError;
 pub use registry::{
     ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, FunctionRegistry, FunctionSig,
-    InterfaceRegistry, MethodSig, VariableRegistry, VariantInfo, build_function_registry,
+    InterfaceMethodRegistry, InterfaceRegistry, MethodSig, VariableRegistry, VariantInfo,
+    build_function_registry,
     build_registry, build_variable_registry, class_implements, class_implements_iterable,
     clear_registries, install_functions, install_registries, install_variables, interface_extends,
-    is_interface, is_subtype_named, lookup_field_type, lookup_function, lookup_member,
-    lookup_method, super_init_target, with_classes, with_enums, with_functions, with_interfaces,
-    with_variables,
+    is_interface, is_subtype_named, lookup_field_type, lookup_function, lookup_interface_method,
+    lookup_member, lookup_method, super_init_target, with_classes, with_enums, with_functions,
+    with_interfaces, with_variables,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
@@ -70,6 +71,11 @@ pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
 pub struct ModuleSeed {
     pub classes: ClassRegistry,
     pub interfaces: InterfaceRegistry,
+    /// Method signatures of the interfaces the imports bring in, keyed by
+    /// the local name. Carried separately from `interfaces` for the same
+    /// reason the registry is: that map's value type is the `extends` list
+    /// and six LSP call sites destructure it.
+    pub interface_methods: InterfaceMethodRegistry,
     pub enums: EnumRegistry,
     /// Signatures of the top-level `fn`s the imports bring in, keyed by the
     /// name they are bound to locally.
@@ -126,12 +132,15 @@ fn analyze_inner(
     collect_bindings: bool,
 ) -> (Vec<SemanticError>, Option<Bindings>) {
     let wildcard_names = seed.wildcard_names;
-    let (mut reg, mut ifaces, mut enums) = build_registry(module);
+    let (mut reg, mut ifaces, mut enums, mut iface_methods) = build_registry(module);
     for (name, info) in seed.classes {
         reg.entry(name).or_insert(info);
     }
     for (name, ext) in seed.interfaces {
         ifaces.entry(name).or_insert(ext);
+    }
+    for (name, sigs) in seed.interface_methods {
+        iface_methods.entry(name).or_insert(sigs);
     }
     for (name, info) in seed.enums {
         enums.entry(name).or_insert(info);
@@ -156,7 +165,7 @@ fn analyze_inner(
     for (name, ty) in seed.variables {
         vars.entry(name).or_insert(ty);
     }
-    install_registries(reg, ifaces, enums);
+    install_registries(reg, ifaces, enums, iface_methods);
     install_functions(funcs);
     install_variables(vars);
 

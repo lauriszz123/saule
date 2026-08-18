@@ -10,23 +10,56 @@ use std::{
 use miette::{NamedSource, Report};
 use saule_interpreter::{Environment, Value, module::ModuleLoader};
 
-/// Whether to use the bytecode VM: the `--vm` flag or `SAULE_ENGINE=vm`.
+/// Which engine runs the program.
+///
+/// Phase 4 flipped the default: the bytecode VM runs unless the tree-walker
+/// is asked for. Nothing about the *fallback* changed — a module the
+/// compiler cannot handle still runs on the tree-walker, which is why the
+/// flip is safe ahead of complete coverage (§21.3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Engine {
+    /// The default, and what `--vm` / `SAULE_ENGINE=vm` state explicitly.
+    Vm { explicit: bool },
+    /// `--interp` or `SAULE_ENGINE=interp`. The documented escape hatch.
+    Interp,
+}
+
+/// The engine for this process: the flags recorded by [`select_engine`],
+/// then `SAULE_ENGINE`, then the default.
 ///
 /// The env var exists so a whole test run or benchmark sweep can switch
 /// engines without touching call sites — which is how the differential
-/// harness will drive `run_tests.sh` in Phase 3.
-fn use_vm() -> bool {
-    VM_REQUESTED.with(|v| v.get())
-        || std::env::var("SAULE_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("vm"))
+/// harnesses drive `run_tests.sh` and `run_examples_diff.sh`.
+fn engine() -> Engine {
+    if let Some(e) = SELECTED.with(|v| v.get()) {
+        return e;
+    }
+    match std::env::var("SAULE_ENGINE") {
+        Ok(v) if v.eq_ignore_ascii_case("vm") => Engine::Vm { explicit: true },
+        Ok(v) if v.eq_ignore_ascii_case("interp") || v.eq_ignore_ascii_case("interpreter") => {
+            Engine::Interp
+        }
+        // An unrecognised value is not worth an error — it is almost always
+        // a stale script — but it must not silently mean "the other one".
+        _ => Engine::Vm { explicit: false },
+    }
 }
 
 thread_local! {
-    static VM_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SELECTED: std::cell::Cell<Option<Engine>> = const { std::cell::Cell::new(None) };
 }
 
-/// Record that `--vm` was passed, before any running happens.
-pub(crate) fn request_vm() {
-    VM_REQUESTED.with(|v| v.set(true));
+/// Record the engine `--vm` / `--interp` asked for, before any running
+/// happens. Neither flag leaves the default in place, so `None` here means
+/// `SAULE_ENGINE` still gets its say.
+pub(crate) fn select_engine(vm: bool, interp: bool) {
+    let choice = match (vm, interp) {
+        // clap's `conflicts_with` rules out both at once.
+        (_, true) => Some(Engine::Interp),
+        (true, _) => Some(Engine::Vm { explicit: true }),
+        _ => None,
+    };
+    SELECTED.with(|v| v.set(choice));
 }
 
 pub(crate) fn run_file(path: PathBuf, require_main: bool) {
@@ -107,14 +140,19 @@ fn run_source(
         return Err(Report::new(first).with_source_code(make_src()));
     }
 
-    // Bytecode engine, when asked for and when the compiler can handle the
-    // whole module.
+    // Bytecode engine — the default since Phase 4 — when the compiler can
+    // handle the whole module.
     //
     // The fall-back is the point (§21.3): `CompileError::Unsupported` means
-    // "not written yet", not "your program is wrong", so `--vm` is usable
-    // long before the compiler is complete. Anything *else* the compiler
-    // reports is a real problem and is surfaced.
-    if use_vm() {
+    // "not written yet", not "your program is wrong", so the VM could
+    // become the default long before the compiler is complete. Anything
+    // *else* the compiler reports is a real problem and is surfaced.
+    //
+    // The note is printed only when the VM was *asked* for. Now that it is
+    // the default, a line on every run about a compiler gap the user cannot
+    // act on is noise; the differential harnesses set `SAULE_ENGINE=vm`, so
+    // they still see it and can still count fallbacks.
+    if let Engine::Vm { explicit } = engine() {
         // A program, not a chunk: imports are resolved at *compile* time so
         // a class declared in one module and extended in another has one
         // layout (§14, §24.2). `entry_path` is `None` only for sources with
@@ -149,10 +187,12 @@ fn run_source(
             Err(saule_vm::program::ProgramError::Compile(
                 saule_vm::CompileError::Unsupported { thing, .. },
             )) => {
-                eprintln!(
-                    "note: the bytecode compiler does not handle `{thing}` yet — \
-                     running on the tree-walking interpreter"
-                );
+                if explicit {
+                    eprintln!(
+                        "note: the bytecode compiler does not handle `{thing}` yet — \
+                         running on the tree-walking interpreter"
+                    );
+                }
             }
             // A module this driver could not read, resolve or order. The
             // tree-walker resolves imports its own way and may well manage
@@ -160,10 +200,12 @@ fn run_source(
             // produce any user-facing diagnostic — the two engines must
             // never disagree about whether a program is valid.
             Err(e) if e.is_fallback() => {
-                eprintln!(
-                    "note: the bytecode compiler could not build a program ({e}) — \
-                     running on the tree-walking interpreter"
-                );
+                if explicit {
+                    eprintln!(
+                        "note: the bytecode compiler could not build a program ({e}) — \
+                         running on the tree-walking interpreter"
+                    );
+                }
             }
             Err(e) => return Err(Report::new(e).with_source_code(make_src())),
         }
@@ -200,4 +242,33 @@ fn run_source(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `SELECTED` is a thread-local and libtest gives each test its own
+    // thread, so these do not interfere with one another. They also stop
+    // before `SAULE_ENGINE` is consulted, which is process-global and would.
+
+    #[test]
+    fn no_flag_leaves_the_choice_open() {
+        select_engine(false, false);
+        assert_eq!(SELECTED.with(|v| v.get()), None);
+    }
+
+    #[test]
+    fn the_vm_flag_is_an_explicit_vm() {
+        select_engine(true, false);
+        // Explicit, so the fallback note is printed: someone who names the
+        // engine is asking to hear when they did not get it.
+        assert_eq!(engine(), Engine::Vm { explicit: true });
+    }
+
+    #[test]
+    fn the_interp_flag_selects_the_tree_walker() {
+        select_engine(false, true);
+        assert_eq!(engine(), Engine::Interp);
+    }
 }

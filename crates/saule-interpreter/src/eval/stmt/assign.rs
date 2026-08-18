@@ -117,7 +117,7 @@ pub(super) fn assign_target(
     }
 }
 
-fn assign_member(
+pub(crate) fn assign_member(
     receiver: &Value,
     name: &str,
     value: Value,

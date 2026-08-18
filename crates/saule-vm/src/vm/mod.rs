@@ -1240,6 +1240,72 @@ impl Vm {
                         let span = proto.span_at(here);
                         self.call_native(&callee, base + a, n_args, n_ret, span)?;
                     }
+                    // ---- §6.4 tail calls ----------------------------
+                    Op::TAILCALL => {
+                        let callee_abs = base + a;
+                        let n_args = self.arg_count(ins.b(), callee_abs + 1);
+                        let span = proto.span_at(here);
+                        match self.stack[callee_abs].clone() {
+                            // Only a bytecode function has a frame to
+                            // replace, and it is exactly what the
+                            // tree-walker trampolines: `Flow::TailCall` is
+                            // built for `Value::Function` and nothing else.
+                            Value::VmFunction(handle) => {
+                                self.enter_tail_frame(handle, callee_abs + 1, n_args, span)?;
+                                continue 'reentry;
+                            }
+                            // A native, a constructor, anything else
+                            // callable: no Saule frame to replace, so it is
+                            // an ordinary call made right here and returned
+                            // — word for word what `Stmt::Return` does.
+                            other => {
+                                self.call_native(&other, callee_abs, n_args, ALL_RESULTS, span)?;
+                                let n = self.arg_count(0, callee_abs);
+                                if let Some(vs) = self.pop_frame(callee_abs, n)? {
+                                    return Ok(vs);
+                                }
+                                if self.frames.len() < entry_depth {
+                                    return Ok(Vec::new());
+                                }
+                                continue 'reentry;
+                            }
+                        }
+                    }
+                    Op::TAILCALLK => {
+                        let packed = self.extra_arg(code, &mut pc, &proto, here)?;
+                        let (tm, target) = ((packed >> 16) as usize, packed & 0xFFFF);
+                        let n_args = self.arg_count(ins.b(), base + a);
+                        let tc = Rc::clone(&self.shared.chunks[tm]);
+                        let p = Rc::clone(tc.proto(target));
+                        let handle = self.closure_for(&tc, target, p);
+                        self.enter_tail_frame(handle, base + a, n_args, proto.span_at(here))?;
+                        continue 'reentry;
+                    }
+                    Op::TAILCALLS => {
+                        let packed = self.extra_arg(code, &mut pc, &proto, here)?;
+                        let (cls, slot) = ((packed >> 16) as usize, (packed & 0xffff) as usize);
+                        let (tm, target) = match self.shared.chunks[0]
+                            .classes
+                            .get(cls)
+                            .and_then(|c| c.static_methods.get(slot).map(|t| (c.module, *t)))
+                        {
+                            Some(t) => t,
+                            None => {
+                                return Err(RuntimeError::TypeError {
+                                    message: format!(
+                                        "internal: no static method {slot} on class {cls}"
+                                    ),
+                                    span: proto.span_at(here),
+                                });
+                            }
+                        };
+                        let n_args = self.arg_count(ins.b(), base + a);
+                        let tc = Rc::clone(&self.shared.chunks[tm]);
+                        let p = Rc::clone(tc.proto(target));
+                        let handle = self.closure_for(&tc, target, p);
+                        self.enter_tail_frame(handle, base + a, n_args, proto.span_at(here))?;
+                        continue 'reentry;
+                    }
                     Op::RET0 => {
                         if let Some(vs) = self.pop_frame(base, 0)? {
                             return Ok(vs);
@@ -1610,6 +1676,29 @@ impl Vm {
                         )?;
                         self.stack[base + a] = v;
                     }
+                    Op::SETFX => {
+                        // The write counterpart of `GETFX`, deferring to
+                        // the tree-walker's own `assign_member` for the
+                        // same reason: an instance field, a class static
+                        // and a table key are three different writes, and
+                        // the compiler learning each one separately is how
+                        // the engines diverge.
+                        let key = chunk.constants[ins.b() as usize].clone();
+                        let Value::Str(name) = &key else {
+                            return Err(RuntimeError::TypeError {
+                                message: "internal: SETFX key is not a string".into(),
+                                span: proto.span_at(here),
+                            });
+                        };
+                        let recv = self.stack[base + a].clone();
+                        let v = self.stack[base + ins.c() as usize].clone();
+                        saule_interpreter::write_member_dynamic(
+                            &recv,
+                            name,
+                            v,
+                            proto.span_at(here),
+                        )?;
+                    }
                     Op::CALLMX => {
                         let k = self.extra_arg(code, &mut pc, &proto, here)?;
                         let key = chunk.constants[k as usize].clone();
@@ -1942,6 +2031,78 @@ impl Vm {
                 span,
             }),
         }
+    }
+
+    /// **Replace** the running frame with a call to `handle` (§6.4).
+    ///
+    /// The frame being replaced is gone: its upvalues are closed and its
+    /// registers are overwritten by the callee's arguments. What survives is
+    /// `ret_to` and `n_ret` — the callee returns to whoever called the frame
+    /// it replaced, so a tail chain costs **one** frame however long it runs,
+    /// and multi-return keeps working through it for free.
+    ///
+    /// No depth check, deliberately: not consuming depth is the entire point.
+    /// The tree-walker's trampoline is the same bargain — one `DepthGuard`
+    /// held across the whole chain.
+    fn enter_tail_frame(
+        &mut self,
+        handle: Rc<VmFunctionRef>,
+        args_from: usize,
+        n_args: usize,
+        span: std::ops::Range<usize>,
+    ) -> Result<(), RuntimeError> {
+        let proto = Rc::clone(
+            &Closure::from_handle(&handle)
+                .ok_or_else(|| RuntimeError::TypeError {
+                    message: "internal: frame handle is not a bytecode closure".into(),
+                    span: span.clone(),
+                })?
+                .proto,
+        );
+
+        let frame = self.frames.last().expect("frame");
+        let base = frame.base as usize;
+        let (ret_to, n_ret) = (frame.ret_to, frame.n_ret);
+
+        // A closure built in this frame must stop pointing at registers the
+        // callee is about to overwrite. A tail call ends the frame just as
+        // surely as a return does, so this is `pop_frame`'s rule, not an
+        // extra precaution.
+        self.close_upvalues(base as u32);
+
+        // Arguments move down to `base`, which is where the callee's `R[0]`
+        // has to be. `base <= args_from` always — the window is allocated
+        // above the frame's locals — so an ascending move cannot clobber an
+        // argument it has not read yet.
+        debug_assert!(base <= args_from);
+        if base != args_from {
+            for i in 0..n_args {
+                self.stack[base + i] =
+                    std::mem::replace(&mut self.stack[args_from + i], Value::Nil);
+            }
+        }
+
+        let top = base + proto.max_regs as usize;
+        self.ensure_stack(top);
+        // Same rule as `push_frame`: missing parameters read as nil, and
+        // registers past `n_params` are temporaries the callee writes before
+        // it reads. Here it matters more than there — the frame is *dirty*,
+        // holding the previous call's values rather than fresh stack.
+        for i in n_args..proto.n_params as usize {
+            self.stack[base + i] = Value::Nil;
+        }
+        let n_args = n_args.min(u8::MAX as usize) as u8;
+        let pc = proto.entry_for(n_args);
+        *self.frames.last_mut().expect("frame") = Frame {
+            func: handle,
+            base: base as u32,
+            ret_to,
+            n_ret,
+            pc,
+            top: top as u32,
+            n_args,
+        };
+        Ok(())
     }
 
     fn push_frame(

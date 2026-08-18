@@ -64,8 +64,34 @@ jobs:
       - name: Build the CLI for the fixtures
         run: cargo build --locked -p saule-cli
 
-      - name: Language fixtures
+      # Since Phase 4 a bare run uses the bytecode VM, so this step means
+      # something different than it used to and the other three below are no
+      # longer optional. Without them CI would gate on one engine and stop
+      # noticing the other, which is the one thing the differential design
+      # cannot survive: the tree-walker is the oracle.
+      - name: Language fixtures (default engine, the VM)
         run: ./run_tests.sh
+
+      - name: Language fixtures (tree-walker)
+        run: SAULE_ENGINE=interp ./run_tests.sh
+
+      # Not redundant with the first: a fallback is silent under the default
+      # and reported here, and this is the run whose notes the harness counts.
+      - name: Language fixtures (VM, explicitly)
+        run: SAULE_ENGINE=vm ./run_tests.sh
+
+      # The one that catches wrong *values*. Exit status cannot see a VM bug
+      # that prints the wrong thing and still exits 0.
+      - name: Engines agree on output
+        run: SAULE_DIFF=1 ./run_tests.sh
+
+      # Multi-module programs with imports and file IO, which is a different
+      # question from the single-file fixtures above and the one that has
+      # actually caught divergences.
+      # Through `bash` because this one is not chmod +x in git, unlike
+      # run_tests.sh.
+      - name: Example projects agree under both engines
+        run: bash run_examples_diff.sh
 
       - name: Version surfaces agree
         run: |

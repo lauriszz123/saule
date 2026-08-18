@@ -23,7 +23,22 @@
 # Exit status is non-zero when the engines disagree on any project.
 
 set -u
-SAULE_BIN="${SAULE_BIN:-./target/debug/saule.exe}"
+# Default to whichever of the two names exists, the way `run_tests.sh` does,
+# rather than hard-coding `.exe`. The guard below is the load-bearing half:
+# a binary that is not there fails *identically* under both engines, and this
+# harness would report that as "every project agrees" — a green run that
+# tested nothing at all.
+if [ -z "${SAULE_BIN:-}" ]; then
+  if [ -x ./target/debug/saule ]; then
+    SAULE_BIN=./target/debug/saule
+  else
+    SAULE_BIN=./target/debug/saule.exe
+  fi
+fi
+if [ ! -x "$SAULE_BIN" ]; then
+  echo "error: $SAULE_BIN not found — run 'cargo build -p saule-cli' first" >&2
+  exit 1
+fi
 TIMEOUT="${SAULE_EXAMPLE_TIMEOUT:-20}"
 
 # GNU `timeout` is not on a stock macOS, and without a shim every project
