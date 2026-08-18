@@ -41,12 +41,29 @@ use crate::op::{Instruction, Op};
 pub use frame::{ALL_RESULTS, Closure, Frame};
 pub use upval::Upvalue;
 
-/// Frame-depth limit. `MAX_EVAL_DEPTH = 10_000` in the tree-walker exists
-/// because a Saule call is a *native* stack frame there, and a native stack
-/// overflow is a `SIGSEGV` rather than a catchable error. Here a call is a
-/// `Vec` push, so the limit is pure policy and can be two orders of
-/// magnitude higher (§6.4).
-pub const DEFAULT_MAX_FRAMES: usize = 1_000_000;
+/// Frame-depth limit, deliberately **equal to the tree-walker's**
+/// `MAX_EVAL_DEPTH`.
+///
+/// §6.4 argues this can be two orders of magnitude higher, and the argument
+/// is sound: `MAX_EVAL_DEPTH = 10_000` exists because a Saule call is a
+/// *native* stack frame in the tree-walker, where an overflow is a `SIGSEGV`
+/// rather than a catchable error, while here a call is a `Vec` push and the
+/// limit is pure policy.
+///
+/// It was set to `1_000_000` on that reasoning, and that made the engines
+/// disagree: `depth(50_000)` returned `50000` under `--vm` and raised
+/// `StackOverflow` without it. While the tree-walker is the default engine
+/// and the VM is an opt-in accelerator behind a silent fallback, "works with
+/// `--vm`, crashes without it" is precisely the surprise that fallback
+/// exists to prevent — and a limit is observable behaviour, not an
+/// implementation detail.
+///
+/// *Deviation from §6.4, argued rather than accidental:* the raise is
+/// deferred to Phase 4, where flipping the default makes the VM the
+/// definition of the language and the new limit an announced improvement
+/// rather than a difference between two engines that are supposed to agree.
+/// Pinned by `deep_recursion_hits_the_same_limit_under_both_engines`.
+pub const DEFAULT_MAX_FRAMES: usize = saule_interpreter::eval::MAX_EVAL_DEPTH as usize;
 
 /// Everything about a running program that is **not** per-invocation: the
 /// code, the module slots, the statics, the classes and the enums (§5.1).
@@ -929,6 +946,98 @@ impl Vm {
                             self.stack[base + a + 3] = k;
                             self.stack[base + a + 4] = v;
                             pc = jump(pc, ins.sbx());
+                        }
+                    }
+                    Op::ITERPREPX => {
+                        // The dynamic form of `ITERPREP`, for a source the
+                        // front end could not prove. It **dispatches** on
+                        // the runtime value exactly as `exec_for_in`'s
+                        // `match` does, and writes a mode flag to `R[A+2]`
+                        // that the compiler's per-step `TEST` reads.
+                        //
+                        // Normalising both sources into one driver protocol
+                        // was the tempting design and it is wrong: a table
+                        // has no nil terminator, and Saule stores a nil
+                        // rather than deleting the key, so a table holding
+                        // one would end a single-variable loop early here
+                        // and run to completion under the tree-walker.
+                        let src = self.stack[base + a].clone();
+                        self.ensure_stack(base + a + 5);
+                        match src {
+                            Value::Table(t) => {
+                                let pairs = snapshot_pairs(&t.borrow());
+                                let empty = pairs.is_empty();
+                                self.stack[base + a] = Value::Table(Rc::new(RefCell::new(
+                                    TableObject::from_array(pairs),
+                                )));
+                                self.stack[base + a + 1] = Value::Int(0);
+                                self.stack[base + a + 2] = Value::Bool(false);
+                                if empty {
+                                    pc = jump(pc, ins.bx() as i32);
+                                }
+                            }
+                            // `VmFunction` joins the tree-walker's three
+                            // callable variants here: a compiled closure is
+                            // the *usual* driver under this engine, and
+                            // `exec_for_in` omits it only because the
+                            // tree-walker never constructs one.
+                            Value::Function(_)
+                            | Value::Native(_)
+                            | Value::NativeClosure(_)
+                            | Value::VmFunction(_) => {
+                                self.stack[base + a + 1] = Value::Nil;
+                                self.stack[base + a + 2] = Value::Bool(true);
+                            }
+                            Value::Instance(_) => {
+                                // `iter()` runs once per *loop*, not once
+                                // per step, so the re-entrant call costs
+                                // nothing measurable. Routed through the
+                                // tree-walker's own dynamic dispatcher so
+                                // an `Iterable` cannot behave differently
+                                // under the two engines.
+                                let vs = saule_interpreter::call_member_dynamic(
+                                    &src,
+                                    "iter",
+                                    &[],
+                                    proto.span_at(here),
+                                )?;
+                                let Some(driver) = vs.into_iter().next() else {
+                                    return Err(RuntimeError::TypeError {
+                                        message: format!(
+                                            "`{}.iter()` returned no value — it must return a function",
+                                            src.type_name()
+                                        ),
+                                        span: proto.span_at(here),
+                                    });
+                                };
+                                if !matches!(
+                                    driver,
+                                    Value::Function(_)
+                                        | Value::Native(_)
+                                        | Value::NativeClosure(_)
+                                        | Value::VmFunction(_)
+                                ) {
+                                    return Err(RuntimeError::TypeError {
+                                        message: format!(
+                                            "`iter()` must return a function, got `{}`",
+                                            driver.type_name()
+                                        ),
+                                        span: proto.span_at(here),
+                                    });
+                                }
+                                self.stack[base + a] = driver;
+                                self.stack[base + a + 1] = Value::Nil;
+                                self.stack[base + a + 2] = Value::Bool(true);
+                            }
+                            other => {
+                                return Err(RuntimeError::TypeError {
+                                    message: format!(
+                                        "cannot iterate over a `{}` with `for ... in` — use a table, a function, or a class that implements `Iterable`",
+                                        other.type_name()
+                                    ),
+                                    span: proto.span_at(here),
+                                });
+                            }
                         }
                     }
 

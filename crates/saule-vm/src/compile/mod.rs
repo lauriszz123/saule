@@ -393,9 +393,32 @@ pub(crate) fn compile_into(
     // The module body's value is the last expression statement's — the same
     // rule `saule_interpreter::run_in` follows, which is what lets a
     // differential test compare the two engines by value.
+    // Every distinct name the module declares at top level. The body is
+    // walked below in the same order it will *run*, so the count and the
+    // running set together say whether a call made here could still reach a
+    // name that does not exist yet.
+    for s in &module.stmts {
+        if let saule_ast::Stmt::Decl(d) = &s.value {
+            match &d.value {
+                saule_ast::Decl::Function { name, .. }
+                | saule_ast::Decl::Class { name, .. }
+                | saule_ast::Decl::Interface { name, .. }
+                | saule_ast::Decl::Enum { name, .. } => {
+                    c.module_type_decls.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
     let mut last = None;
     for s in &module.stmts {
         last = c.stmt(s)?.or(last);
+        // *After* the statement, matching straight-line execution: a
+        // declaration is not in scope until its own initialiser has run.
+        for n in top_level_declared_names(s) {
+            c.module_decls_seen.insert(n);
+        }
     }
 
     let span = module.stmts.last().map(|s| s.span.clone()).unwrap_or(0..0);
@@ -424,4 +447,43 @@ pub(crate) fn compile_into(
     tables.module_slots += chunk.module_slots;
 
     Ok((chunk, layouts))
+}
+
+/// The module-scope names one top-level statement declares.
+///
+/// Must recognise exactly the statements `saule_semantic`'s
+/// `collect_module_scope` does — it is the same question asked
+/// per-statement instead of per-module. A statement missed here would leave
+/// the module body looking permanently under-declared, which costs a
+/// fallback on every call it makes; one added here that the resolver does
+/// not treat as a module slot would do the reverse and let a forward
+/// reference through.
+fn top_level_declared_names(stmt: &saule_ast::Spanned<saule_ast::Stmt>) -> Vec<String> {
+    use saule_ast::{Decl, ImportNames, Stmt};
+    let mut out = Vec::new();
+    match &stmt.value {
+        Stmt::Local { name, .. } => out.push(name.clone()),
+        Stmt::LocalMulti { names, .. } => {
+            for (n, _, _) in names {
+                out.push(n.clone());
+            }
+        }
+        Stmt::Decl(d) => match &d.value {
+            Decl::Function { name, .. }
+            | Decl::Class { name, .. }
+            | Decl::Interface { name, .. }
+            | Decl::Enum { name, .. }
+            | Decl::Variable { name, .. } => out.push(name.clone()),
+            Decl::Import { names, .. } => match names {
+                ImportNames::All => {}
+                ImportNames::List(items) => {
+                    for (orig, alias) in items {
+                        out.push(alias.clone().unwrap_or_else(|| orig.clone()));
+                    }
+                }
+            },
+        },
+        _ => {}
+    }
+    out
 }

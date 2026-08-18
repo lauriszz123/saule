@@ -272,6 +272,13 @@ pub fn run_in(module: &Module, env: &Rc<RefCell<Environment>>) -> Result<Value, 
     match eval::stmt::exec_block(&module.stmts, env)? {
         Flow::Normal(v) => Ok(v),
         Flow::Return(values) => Ok(values.into_iter().next().unwrap_or(Value::Nil)),
+        // A tail call must never outlive the body that produced one, and a
+        // module body is not a function — there is no frame to replace. Make
+        // the call for real. Like the arms below this is only reachable
+        // through a bare `run_in` on a module `saule_semantic` never saw.
+        Flow::TailCall { callee, args, span } => Ok(eval::expr::call_function(
+            &callee, &args, span,
+        )?),
         // `break` / `continue` / loose `return` at module top level are
         // rejected by `saule_semantic`'s control-flow walker before we ever
         // get here. The standard pipeline (CLI, module loader, and

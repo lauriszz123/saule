@@ -22,7 +22,7 @@ pub(crate) mod members;
 
 pub(crate) use calls::{
     call_function, call_function_multi, call_static_method_ref_multi, call_value_multi,
-    eval_values, invoke_method_multi,
+    eval_call_args, eval_values, invoke_method_multi,
 };
 #[allow(unused_imports)]
 pub(crate) use members::table_index_to_slot;
@@ -42,7 +42,7 @@ use super::ops;
 /// "speaking for" when it calls `self.super(...)`.
 const SUPER_OWNER_BINDING: &str = "__saule_super_owner";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum EvaluatedArg {
     Positional(Value),
     Named {

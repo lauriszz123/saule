@@ -2402,3 +2402,377 @@ fn passed_through_results_may_outnumber_the_frame_that_carries_them() {
 r",
     );
 }
+
+// ── §15.8 iteration over an unproved source ───────────────────────────────
+//
+// The dynamic `for … in` path (`ITERPREPX`). Every case launders its source
+// through `any` so the front end cannot prove it — the shape real code hits,
+// where a `Json.decode` result is iterated behind a `type(x) == "table"`
+// guard that no static type can see through.
+
+/// Prefix a program with a launderer that erases its source's static type.
+fn unproved(body: &str) -> String {
+    format!("fn opaque(v: any) -> any\n  return v\nend\n{body}")
+}
+
+#[test]
+fn an_unproved_table_source_iterates() {
+    must_agree(&unproved(
+        "local t: table<any> = {10, 20, 30}
+         local n: integer = 0
+         for v in opaque(t) do
+           n = n + 1
+         end
+         n",
+    ));
+}
+
+#[test]
+fn a_table_holding_a_nil_iterates_past_it_under_an_unproved_source() {
+    // **The trap that decided `ITERPREPX`'s design.** The tempting lowering
+    // normalises every source into one nil-terminated driver, so a single
+    // opcode serves table, function and instance alike. It cannot work: a
+    // driver stops on a nil and a table snapshot has no terminator at all,
+    // and Saule's `t[i] = nil` *stores* a nil rather than deleting the key
+    // (unlike Lua), so a table really can hold one. A one-variable loop
+    // binds the **value** — so a normalising driver stops this at 1 where
+    // the tree-walker runs it to 3.
+    //
+    // Nothing about that failure is loud: right exit status, wrong number.
+    // Hence the mode flag and the two emitted steps.
+    must_agree(&unproved(
+        "local t: table<any> = {1, 2, 3}
+         t[2] = nil
+         local n: integer = 0
+         for v in opaque(t) do
+           n = n + 1
+         end
+         n",
+    ));
+}
+
+#[test]
+fn a_leading_nil_does_not_end_an_unproved_iteration() {
+    // The same trap at its starkest: a normalising driver yields *zero*
+    // iterations here, because the first value it sees is its terminator.
+    must_agree(&unproved(
+        "local t: table<any> = {1, 2, 3}
+         t[1] = nil
+         local n: integer = 0
+         for v in opaque(t) do
+           n = n + 1
+         end
+         n",
+    ));
+}
+
+#[test]
+fn an_unproved_two_variable_loop_binds_key_then_value() {
+    // Also pins the register placement: with two variables the driver's
+    // call window sits on `R[A+3]`, exactly where `ITERNEXT` writes the key.
+    must_agree(&unproved(
+        "local t: table<any> = {7, 8, 9}
+         local out: string = \"\"
+         for k, v in opaque(t) do
+           out = out .. k .. \":\" .. v .. \" \"
+         end
+         out",
+    ));
+}
+
+#[test]
+fn an_unproved_map_source_yields_sorted_entries() {
+    // The snapshot's ordering is observable, so the dynamic path has to
+    // reuse `snapshot_pairs` rather than walk the map directly.
+    must_agree(&unproved(
+        "local m: table<string, any> = {}
+         m[\"b\"] = 2
+         m[\"a\"] = 1
+         m[\"c\"] = 3
+         local out: string = \"\"
+         for k, v in opaque(m) do
+           out = out .. k .. tostring(v)
+         end
+         out",
+    ));
+}
+
+#[test]
+fn an_unproved_driver_source_iterates() {
+    // A compiled closure arrives as `Value::VmFunction`, which the
+    // tree-walker's own callable test does not list — it never constructs
+    // one. Omitting it here refused every driver under this path.
+    must_agree(&unproved(
+        "fn counter(stop: integer) -> fn() -> integer?
+           local i: integer = 0
+           return fn()
+             i = i + 1
+             if i > stop then return nil end
+             return i
+           end
+         end
+         local sum: integer = 0
+         for n in opaque(counter(4)) do
+           sum = sum + n
+         end
+         sum",
+    ));
+}
+
+#[test]
+fn an_unproved_instance_source_calls_iter() {
+    must_agree(&unproved(
+        "class Range implements Iterable
+           local lo: integer
+           local hi: integer
+           fn init(lo: integer, hi: integer)
+             self.lo = lo
+             self.hi = hi
+           end
+           fn iter() -> fn() -> integer?
+             local i: integer = self.lo - 1
+             local stop: integer = self.hi
+             return fn()
+               i = i + 1
+               if i > stop then return nil end
+               return i
+             end
+           end
+         end
+         local sum: integer = 0
+         for n in opaque(Range(1, 4)) do
+           sum = sum + n
+         end
+         sum",
+    ));
+}
+
+#[test]
+fn an_unproved_empty_table_runs_no_iterations() {
+    // `ITERPREPX`'s `Bx` jump — the only forward displacement it carries,
+    // and taken only for a table, never for a driver, which must be called
+    // at least once before it can say stop.
+    must_agree(&unproved(
+        "local t: table<any> = {}
+         local n: integer = 0
+         for v in opaque(t) do
+           n = n + 1
+         end
+         n",
+    ));
+}
+
+#[test]
+fn break_and_continue_work_in_an_unproved_for_in() {
+    // Both modes share one body, so `break` and `continue` have to land on
+    // the merged step and the merged exit rather than on either path's own.
+    must_agree(&unproved(
+        "local t: table<any> = {1, 2, 3, 4, 5}
+         local seen: integer = 0
+         local kept: integer = 0
+         for v in opaque(t) do
+           seen = seen + 1
+           if seen == 2 then continue end
+           if seen == 4 then break end
+           kept = kept + 1
+         end
+         seen * 10 + kept",
+    ));
+}
+
+#[test]
+fn a_nested_unproved_for_in_matches() {
+    // Two live control blocks at once, one of each mode.
+    must_agree(&unproved(
+        "fn twice() -> fn() -> integer?
+           local i: integer = 0
+           return fn()
+             i = i + 1
+             if i > 2 then return nil end
+             return i
+           end
+         end
+         local t: table<any> = {1, 2, 3}
+         local n: integer = 0
+         for a in opaque(t) do
+           for b in opaque(twice()) do
+             n = n + 1
+           end
+         end
+         n",
+    ));
+}
+
+#[test]
+fn a_non_iterable_unproved_source_reports_the_same_error() {
+    // The compiler can no longer refuse this, so the *runtime* message is
+    // now the contract — and it is the tree-walker's, not `ITERPREP`'s
+    // narrower "needs a table".
+    must_agree(&unproved(
+        "local n: integer = 0
+         for v in opaque(42) do
+           n = n + 1
+         end
+         n",
+    ));
+}
+
+#[test]
+fn an_unproved_iter_returning_a_non_function_reports_the_same_error() {
+    must_agree(&unproved(
+        "class BadIter
+           fn iter() -> any
+             return 5
+           end
+         end
+         local n: integer = 0
+         for v in opaque(BadIter()) do
+           n = n + 1
+         end
+         n",
+    ));
+}
+
+// ── module-body straight-line order vs. the proto pre-pass ────────────────
+
+/// Parse and analyse without asserting the module is clean.
+///
+/// `front_end` refuses to hand back a module carrying semantic errors,
+/// which is the right default. The forward-reference programs below are
+/// ones the *tree-walker* rejects at run time rather than at analysis, so
+/// they analyse clean and still need to reach the compiler.
+fn front_end_unchecked(src: &str) -> saule_ast::Module {
+    saule_interpreter::init();
+    let toks = Lexer::new(src).tokenize().expect("lex");
+    let module = parse(toks).expect("parse");
+    let _ = saule_interpreter::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default());
+    module
+}
+
+#[test]
+fn a_module_level_forward_call_is_refused_not_miscompiled() {
+    // The divergence this guard exists for. `fn_protos` is pre-collected so
+    // a forward call resolves, which is correct *inside* a function body —
+    // one cannot run before the module body finishes — and wrong for the
+    // module body, which runs top to bottom. The tree-walker finds `later`
+    // still undefined and errors; the VM used to answer 105 from the proto
+    // table. Right exit status, invented value.
+    //
+    // Refusing hands the module to the tree-walker, which is what *defines*
+    // the behaviour. Reproducing its diagnostic instead would mean keeping
+    // two error strings in step forever; falling back makes them agree by
+    // construction.
+    let src = "local r = later(5)\n\
+               println(tostring(r))\n\
+               fn later(x: integer) -> integer\n\
+               \x20 return x + 100\n\
+               end";
+    let module = front_end_unchecked(src);
+    match saule_vm::compile(&module, "x.sau", src) {
+        Err(saule_vm::CompileError::Unsupported { span, .. }) => {
+            assert!(span.start < span.end, "the refusal must point somewhere");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_forward_reference_reached_through_a_callee_still_diverges() {
+    // **A known gap, pinned deliberately so it cannot be forgotten.**
+    //
+    // The three positional guards are exact: they fire when the module body
+    // *names* something it has not declared yet. This shape hides the name
+    // one level down — `later` is referenced inside `C.go`, where a forward
+    // reference is legal, and only the **call** is early. Nothing local to
+    // the call site distinguishes a callee that reaches an undeclared name
+    // from one that does not.
+    //
+    // A conservative "refuse any module-body call while a `fn` is still
+    // ahead" guard was tried and reverted: it refused
+    // `a_module_level_parallel_local_writes_module_slots` and
+    // `the_recursion_guard_still_unwinds_after_re_entrant_calls`, both
+    // perfectly good programs, because a call in the middle of a file with
+    // any `fn` below it is an ordinary shape. Closing this needs call-graph
+    // reachability, which is real work for a program the language already
+    // rejects — the tree-walker errors on it either way.
+    //
+    // So it is asserted as *currently divergent*. If a later change fixes
+    // it, this test fails and should be turned into a `must_agree`.
+    let src = "class C\n\
+               \x20 static fn go() -> integer\n\
+               \x20   return later(1)\n\
+               \x20 end\n\
+               end\n\
+               local r: integer = C.go()\n\
+               fn later(x: integer) -> integer\n\
+               \x20 return x + 100\n\
+               end\nr";
+    let module = front_end_unchecked(src);
+    let tw = tree_walker(&module);
+    let got = vm(&module, src).expect("the compiler still handles this shape");
+    assert_ne!(
+        got, tw,
+        "this divergence was fixed — re-point this canary at `must_agree`"
+    );
+}
+
+#[test]
+fn a_module_level_call_below_the_declaration_still_compiles() {
+    // The over-refusal guard. The fix above is a *positional* test, and the
+    // failure mode of getting it wrong is silent: every ordinary top-level
+    // call would fall back and nothing would fail, only slow down.
+    must_agree(
+        "fn helper(x: integer) -> integer
+           return x + 1
+         end
+         local a: integer = helper(1)
+         a",
+    );
+}
+
+#[test]
+fn a_forward_call_inside_a_function_body_still_compiles() {
+    // `fn a() b() end` above `fn b()` is ordinary Saule and must stay a
+    // `CALLK` — the whole reason `fn_protos` is pre-collected. The guard
+    // must not reach inside a function body, where the pre-pass is right.
+    must_agree(
+        "fn a(x: integer) -> integer
+           return b(x) + 1
+         end
+         fn b(x: integer) -> integer
+           return x * 2
+         end
+         local r: integer = a(5)
+         r",
+    );
+}
+
+
+#[test]
+fn deep_recursion_hits_the_same_limit_under_both_engines() {
+    // A limit is observable behaviour, not an implementation detail.
+    //
+    // §6.4 argues the VM's frame cap can be two orders of magnitude above
+    // the tree-walker's, and the argument is sound in isolation: a call is a
+    // `Vec` push here, not a native stack frame, so `MAX_EVAL_DEPTH`'s
+    // reason for existing (a SIGSEGV that cannot be caught) does not apply.
+    // Set to 1_000_000 on that reasoning, it made `depth(50_000)` return
+    // `50000` under `--vm` and raise `StackOverflow` without it.
+    //
+    // While the tree-walker is the default and the VM is an opt-in
+    // accelerator behind a silent fallback, "works with `--vm`, crashes
+    // without it" is exactly what that fallback exists to prevent. The
+    // raise belongs with Phase 4, where flipping the default makes it an
+    // announced improvement rather than a disagreement.
+    //
+    // Asserted on the constants rather than by actually recursing: the
+    // tree-walker needs ~10_000 *native* frames to reach its limit, which
+    // is more stack than libtest's test thread has — the same reason
+    // `tests/ui/stack_overflow_reentrant.sau` runs `saule` as a process.
+    assert_eq!(
+        saule_vm::vm::DEFAULT_MAX_FRAMES,
+        saule_interpreter::eval::MAX_EVAL_DEPTH as usize,
+        "the VM's frame cap drifted from the tree-walker's depth limit — \
+         the two engines would then disagree about how deep is too deep"
+    );
+}

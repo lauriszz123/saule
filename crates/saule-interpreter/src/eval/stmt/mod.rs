@@ -253,7 +253,7 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
                 match flow {
                     Flow::Normal(_) | Flow::Continue => continue,
                     Flow::Break => break,
-                    ret @ Flow::Return(_) => return Ok(ret),
+                    ret @ (Flow::Return(_) | Flow::TailCall { .. }) => return Ok(ret),
                 }
             }
             if let Some(spent) = scope {
@@ -270,7 +270,7 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
                 match exec_block(body, &scope)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => break,
-                    ret @ Flow::Return(_) => return Ok(ret),
+                    ret @ (Flow::Return(_) | Flow::TailCall { .. }) => return Ok(ret),
                 }
                 if expr::eval(cond, &scope)?.is_truthy() {
                     break;
@@ -293,6 +293,43 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
         Stmt::ForIn { vars, iter, body } => loops::exec_for_in(vars, iter, body, env, span),
 
         Stmt::Return(exprs) => {
+            // `return f(args)` is a **tail call**: this frame has no work
+            // left, so the callee should replace it rather than nest inside
+            // it. The call is handed back unmade — see `Flow::TailCall`.
+            //
+            // Method calls are deliberately excluded. `obj.m()` resolves
+            // through `dispatch_member_call_multi`, which binds a receiver
+            // and handles natives, enum variants and file handles; routing
+            // that through the trampoline would mean reimplementing it.
+            // The VM draws the line in the same place, and the two engines
+            // must agree about *which* calls are tail calls, because the
+            // depth at which a program dies is observable.
+            if let [only] = exprs.as_slice()
+                && let Expr::Call { callee, args } = &only.value
+                && !matches!(
+                    &callee.value,
+                    Expr::Member { .. } | Expr::SafeMember { .. }
+                )
+            {
+                // The callee is evaluated exactly once whichever branch is
+                // taken: falling back to the ordinary path *after* touching
+                // it would run its side effects twice.
+                let cv = expr::eval(callee.as_ref(), env)?;
+                let vs = expr::eval_call_args(args, env)?;
+                if let Value::Function(f) = cv {
+                    return Ok(Flow::TailCall {
+                        callee: f,
+                        args: vs,
+                        span,
+                    });
+                }
+                // A native, a class constructor, anything else callable:
+                // there is no Saule frame to replace, so it is an ordinary
+                // call made right here.
+                let out = expr::call_value_multi(cv, &vs, span);
+                crate::recycle::give_args(vs);
+                return Ok(Flow::Return(out?));
+            }
             let values = if exprs.is_empty() {
                 crate::recycle::values_of(Value::Nil)
             } else {

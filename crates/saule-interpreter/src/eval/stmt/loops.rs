@@ -76,7 +76,7 @@ fn run_numeric_loop_int(
         match exec_block(body, &scope)? {
             Flow::Normal(_) | Flow::Continue => {}
             Flow::Break => return Ok(Flow::nil()),
-            ret @ Flow::Return(_) => return Ok(ret),
+            ret @ (Flow::Return(_) | Flow::TailCall { .. }) => return Ok(ret),
         }
         scope = Environment::recycle(scope, parent);
         // Detect overflow so a too-large step doesn't loop forever.
@@ -106,7 +106,7 @@ fn run_numeric_loop_float(
         match exec_block(body, &scope)? {
             Flow::Normal(_) | Flow::Continue => {}
             Flow::Break => return Ok(Flow::nil()),
-            ret @ Flow::Return(_) => return Ok(ret),
+            ret @ (Flow::Return(_) | Flow::TailCall { .. }) => return Ok(ret),
         }
         scope = Environment::recycle(scope, parent);
         i += step;
@@ -176,7 +176,7 @@ pub(super) fn exec_for_in(
                 match run_iter(&scope, Value::Int((i + 1) as i64), value)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::nil()),
-                    ret @ Flow::Return(_) => return Ok(ret),
+                    ret @ (Flow::Return(_) | Flow::TailCall { .. }) => return Ok(ret),
                 }
                 scope = Environment::recycle(scope, env);
             }
@@ -184,7 +184,7 @@ pub(super) fn exec_for_in(
                 match run_iter(&scope, k.to_value(), v)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::nil()),
-                    ret @ Flow::Return(_) => return Ok(ret),
+                    ret @ (Flow::Return(_) | Flow::TailCall { .. }) => return Ok(ret),
                 }
                 scope = Environment::recycle(scope, env);
             }
@@ -252,7 +252,7 @@ pub(super) fn exec_for_in(
                 match exec_block(body, &scope)? {
                     Flow::Normal(_) | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::nil()),
-                    ret @ Flow::Return(_) => return Ok(ret),
+                    ret @ (Flow::Return(_) | Flow::TailCall { .. }) => return Ok(ret),
                 }
                 scope = Environment::recycle(scope, env);
             }

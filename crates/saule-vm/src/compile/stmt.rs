@@ -368,6 +368,7 @@ impl Compiler<'_> {
             self.emit(Instruction::abx(Op::SETMOD, a, g), span);
             self.free_to(m);
         }
+
         Ok(())
     }
 
@@ -1118,10 +1119,9 @@ impl Compiler<'_> {
                 {
                     return self.for_in_driver(vars, iter, body, Some(slot), span);
                 }
-                return Err(CompileError::unsupported(
-                    "a `for … in` over a source that is not a proved table, function or iterable",
-                    span.clone(),
-                ));
+                // Nothing proved: decide at run time, the way the
+                // tree-walker always has.
+                return self.for_in_dynamic(vars, iter, body, span);
             }
         }
 
@@ -1232,6 +1232,102 @@ impl Compiler<'_> {
         }
         self.emit_jump_back(Op::JMP, 0, top, span)?;
         self.patch_here(exit)?;
+        for b in l.breaks {
+            self.patch_here(b)?;
+        }
+        self.f.leave_scope();
+        Ok(())
+    }
+
+    /// `for … in` over a source the front end could **not** prove.
+    ///
+    /// The two proved paths above lower to completely different code, and
+    /// the honest reason this one is harder is that the difference is
+    /// *semantic*, not just representational: a driver stops on a nil, and
+    /// a table snapshot has no terminator at all. Saule's `t[i] = nil`
+    /// stores a nil rather than deleting the key, so a table can hold one,
+    /// and a single-variable loop binds the **value** — meaning a table
+    /// normalised into a nil-terminated driver would stop early here and
+    /// run to completion under the tree-walker. Silent divergence, in
+    /// exactly the shape `SAULE_DIFF=1` only catches by luck.
+    ///
+    /// So this does not normalise. It emits **both** steps, once, behind a
+    /// mode flag that `ITERPREPX` sets from the runtime value — which is
+    /// precisely the dispatch `exec_for_in` performs with its `match`. The
+    /// loop body is emitted once and reads its variables from fixed
+    /// registers, so neither mode pays for the other beyond a single
+    /// predictable branch per step.
+    ///
+    /// The driver's call window is *placed* on the loop-variable registers
+    /// rather than moved into them: `R[A+4]` for one variable, `R[A+3]` for
+    /// two. `CALL` writes its results exactly where `ITERNEXT` writes its
+    /// key and value, so the merge costs no `MOVE`s and the nil test lands
+    /// on the first returned value, which is what the tree-walker tests.
+    fn for_in_dynamic(
+        &mut self,
+        vars: &[(String, Option<saule_ast::Type>)],
+        iter: &Spanned<Expr>,
+        body: &[Spanned<Stmt>],
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        self.f.enter_scope();
+        let nvars = vars.len() as u16;
+        // The same five-register control block as the proved table path, so
+        // `ITERNEXT` drives it unchanged.
+        let base = self.alloc_n(5, span)?;
+        self.expr_to(iter, base)?;
+
+        let a = self.reg8(base, span)?;
+        let prep = self.emit_jump_abx(Op::ITERPREPX, a, span)?;
+
+        let win = if nvars == 1 { base + 4 } else { base + 3 };
+        if nvars == 1 {
+            self.f.declare(&vars[0].0, base + 4);
+        } else {
+            self.f.declare(&vars[0].0, base + 3);
+            self.f.declare(&vars[1].0, base + 4);
+        }
+
+        // Entered through the step, like the table path: the step is what
+        // binds the variables, so it has to run before the first body pass.
+        let enter = self.emit_jump(Op::JMP, 0, span);
+        let body_start = self.f.label_here();
+        self.loops.push(Default::default());
+        self.block(body)?;
+        let l = self.loops.pop().expect("pushed above");
+
+        let step_at = self.f.label_here();
+        for c in l.continues {
+            self.patch_to(c, step_at)?;
+        }
+        self.patch_to(enter, step_at)?;
+
+        // `TEST` skips the next instruction when the flag is falsy, so the
+        // table mode falls straight through to `ITERNEXT` and only the
+        // driver mode pays for the extra jump.
+        let m = self.reg8(base + 2, span)?;
+        self.emit(Instruction::abc(Op::TEST, m, 0, 1), span);
+        let to_drv = self.emit_jump(Op::JMP, 0, span);
+        self.emit_jump_back(Op::ITERNEXT, a, body_start, span)?;
+        let table_done = self.emit_jump(Op::JMP, 0, span);
+
+        self.patch_here(to_drv)?;
+        let w = self.reg8(win, span)?;
+        // `CALL` overwrites its callee register with the results, so the
+        // driver is copied out of `R[A]` afresh each step.
+        self.emit(Instruction::abc(Op::MOVE, w, a, 0), span);
+        self.emit(Instruction::abc(Op::CALL, w, 1, nvars as u8 + 1), span);
+        // Skips the following jump when the step produced a value, so the
+        // jump is taken exactly when the driver said stop.
+        self.emit(Instruction::abc(Op::JNOTNIL, w, 0, 0), span);
+        let drv_done = self.emit_jump(Op::JMP, 0, span);
+        self.emit_jump_back(Op::JMP, 0, body_start, span)?;
+
+        // Every exit — empty table, table exhausted, driver stopped —
+        // lands here.
+        self.patch_here(prep)?;
+        self.patch_here(table_done)?;
+        self.patch_here(drv_done)?;
         for b in l.breaks {
             self.patch_here(b)?;
         }

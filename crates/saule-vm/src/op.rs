@@ -389,6 +389,29 @@ define_ops! {
     /// classes, enums, file handles — behaves identically by construction
     /// rather than by the compiler learning each one separately.
     CALLMX: Abc,
+
+    // ---- §15.8 dynamic generic iteration ---------------------------------
+    /// Resolve an **unproved** iteration source in `R[A]` into control state
+    /// `R[A]..R[A+2]`; jump `Bx` when a table source is empty.
+    ///
+    /// The dynamic counterpart to `ITERPREP`, and it **dispatches** rather
+    /// than normalises. A table and a closure driver do not share a
+    /// termination rule — the driver stops on a nil, the table snapshot has
+    /// no terminator and walks every pair — so folding both into one
+    /// protocol cannot be done without losing that distinction. Saule's
+    /// `t[i] = nil` *stores* a nil rather than deleting the key (unlike
+    /// Lua), so a table really can hold one, and a one-variable loop binds
+    /// the **value**: normalising a table into a nil-terminated driver would
+    /// stop such a loop early here and run it to completion under the
+    /// tree-walker. That is why `R[A+2]` carries a mode flag and the
+    /// compiler emits both steps behind a `TEST`, mirroring the
+    /// tree-walker's own runtime `match` on the source value.
+    ///
+    /// * table → `R[A]` := the snapshot, `R[A+1]` := 0, `R[A+2]` := false
+    /// * function → `R[A]` keeps the driver, `R[A+2]` := true
+    /// * instance → `iter()` runs here, once per loop, and its result
+    ///   replaces `R[A]`; `R[A+2]` := true
+    ITERPREPX: ABx,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

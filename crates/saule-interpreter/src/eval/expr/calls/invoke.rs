@@ -117,6 +117,29 @@ pub(crate) fn run_function_body(
     Ok(first_or_nil(run_function_body_multi(f, scope, span)?))
 }
 
+/// The scope a call to `f` runs in: parented to its closure, with the
+/// owning class's statics injected and the self-recursion name bound.
+///
+/// Extracted so the tail-call trampoline builds a callee's scope exactly
+/// the way an ordinary call does — a second, subtly different copy of this
+/// is precisely how a tail call would stop being the same call.
+pub(crate) fn scope_for(f: &Rc<FunctionObject>) -> Rc<RefCell<Environment>> {
+    let scope = Environment::with_parent(f.closure.clone());
+    if let Some(class) = f.resolved_owner() {
+        inject_class_statics(&scope, &class);
+    }
+    // A self-recursive local closure reaches itself through the call scope
+    // rather than through a captured binding, so the function and its
+    // captured scope never point at each other. See
+    // `FunctionObject::self_name`.
+    if let Some(name) = f.self_name.borrow().clone() {
+        scope
+            .borrow_mut()
+            .define(name, Value::Function(Rc::clone(f)));
+    }
+    scope
+}
+
 pub(crate) fn run_function_body_multi(
     f: &FunctionObject,
     scope: &Rc<RefCell<Environment>>,
@@ -126,26 +149,79 @@ pub(crate) fn run_function_body_multi(
     // funnels through here, which makes it the one place a recursion counter
     // has to live. Held for the duration of the body so the guard's `Drop`
     // unwinds the count on the error paths too.
+    //
+    // It is also why the **tail-call trampoline** lives here rather than in
+    // `call_function_multi`: the guard is entered once and held across the
+    // whole tail chain, so a tail-recursive loop costs one unit of depth
+    // however many times it iterates — which is the entire point. Putting
+    // the loop a level up would have left methods and constructors, which
+    // enter through the other two call sites of this function, still
+    // recursing.
     let _depth = crate::eval::DepthGuard::enter(&span)?;
-    let raw = run_function_body_multi_inner(f, scope, span);
-    match (raw, f.source.as_ref()) {
-        (Err(e), Some(src)) => Err(attach_module_source(e, src)),
-        (other, _) => other,
+
+    // `src` tracks whichever function is *currently* running, so an error
+    // raised three tail calls into a chain resolves its span against the
+    // module that function came from rather than the one that started it.
+    let mut src = f.source.clone();
+    let mut raw = run_function_body_multi_inner(f, scope, span);
+
+    loop {
+        let (callee, args, call_span) = match raw {
+            Ok(BodyOutcome::Tail { callee, args, span }) => (callee, args, span),
+            Ok(BodyOutcome::Values(v)) => return Ok(v),
+            Err(e) => {
+                return Err(match src.as_ref() {
+                    Some(s) => attach_module_source(e, s),
+                    None => e,
+                });
+            }
+        };
+
+        // The tail call *replaces* the frame that produced it: the previous
+        // scope is already released, and no native frame is added here.
+        let next = scope_for(&callee);
+        if let Err(e) = bind_params(
+            &next,
+            &callee.params,
+            &callee.param_keys,
+            &args,
+            &call_span,
+        ) {
+            Environment::release(next);
+            return Err(match callee.source.as_ref() {
+                Some(s) => attach_module_source(e, s),
+                None => e,
+            });
+        }
+        src = callee.source.clone();
+        raw = run_function_body_multi_inner(&callee, &next, call_span);
+        Environment::release(next);
     }
+}
+
+/// What a function body produced: values, or a tail call not yet made.
+pub(crate) enum BodyOutcome {
+    Values(Vec<Value>),
+    Tail {
+        callee: Rc<FunctionObject>,
+        args: Vec<crate::eval::expr::EvaluatedArg>,
+        span: std::ops::Range<usize>,
+    },
 }
 
 pub(crate) fn run_function_body_multi_inner(
     f: &FunctionObject,
     scope: &Rc<RefCell<Environment>>,
     span: std::ops::Range<usize>,
-) -> Result<Vec<Value>, RuntimeError> {
+) -> Result<BodyOutcome, RuntimeError> {
     let outcome = match &f.body {
         FunctionBody::Block(stmts) => crate::eval::stmt::exec_block(stmts, scope)?,
         FunctionBody::Expr(e) => Flow::Return(crate::recycle::values_of(eval(e, scope)?)),
     };
     match outcome {
-        Flow::Return(values) => Ok(values),
-        Flow::Normal(_) => Ok(crate::recycle::values_of(Value::Nil)),
+        Flow::Return(values) => Ok(BodyOutcome::Values(values)),
+        Flow::TailCall { callee, args, span } => Ok(BodyOutcome::Tail { callee, args, span }),
+        Flow::Normal(_) => Ok(BodyOutcome::Values(crate::recycle::values_of(Value::Nil))),
         // `break` / `continue` escaping a function body is rejected by
         // `saule_semantic`'s control-flow walker before we ever evaluate.
         // Reaching this arm means the caller skipped semantic — surface as
@@ -213,18 +289,7 @@ pub(crate) fn call_function_multi(
     args: &[EvaluatedArg],
     span: std::ops::Range<usize>,
 ) -> Result<Vec<Value>, RuntimeError> {
-    let scope = Environment::with_parent(f.closure.clone());
-    if let Some(class) = f.resolved_owner() {
-        inject_class_statics(&scope, &class);
-    }
-    // A self-recursive local closure reaches itself through the call scope
-    // rather than through a captured binding, so the function and its captured
-    // scope never point at each other. See `FunctionObject::self_name`.
-    if let Some(name) = f.self_name.borrow().clone() {
-        scope
-            .borrow_mut()
-            .define(name, Value::Function(Rc::clone(f)));
-    }
+    let scope = scope_for(f);
     bind_params(&scope, &f.params, &f.param_keys, args, &span)?;
     let result = run_function_body_multi(f, &scope, span);
     Environment::release(scope);
