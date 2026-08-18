@@ -26,6 +26,35 @@ set -u
 SAULE_BIN="${SAULE_BIN:-./target/debug/saule.exe}"
 TIMEOUT="${SAULE_EXAMPLE_TIMEOUT:-20}"
 
+# GNU `timeout` is not on a stock macOS, and without a shim every project
+# here fails identically — which this harness reports as "9 of 9 projects
+# disagreed", a divergence that is not real. Prefer coreutils when it is
+# installed, and otherwise run the command under a watchdog.
+#
+# The watchdog's output goes to /dev/null deliberately: these calls run
+# inside `$(...)`, and a background process holding the capture pipe open
+# would make every project wait the full timeout before the substitution
+# returned.
+if command -v timeout >/dev/null 2>&1; then
+  run_limited() { timeout "$@"; }
+elif command -v gtimeout >/dev/null 2>&1; then
+  run_limited() { gtimeout "$@"; }
+else
+  run_limited() {
+    local secs=$1
+    shift
+    "$@" &
+    local pid=$!
+    ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    local watcher=$!
+    wait "$pid" 2>/dev/null
+    local rc=$?
+    kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null
+    return $rc
+  }
+fi
+
 # The VM declining to compile something is a designed outcome, not a
 # behavioural difference — same rule as `run_tests.sh`.
 strip_notes() {
@@ -79,10 +108,10 @@ while IFS= read -r cfg; do
   fi
 
   snapshot "$d"
-  interp=$(timeout "$TIMEOUT" env SAULE_ENGINE=interp "$SAULE_BIN" run "$d" 2>&1)
+  interp=$(run_limited "$TIMEOUT" env SAULE_ENGINE=interp "$SAULE_BIN" run "$d" 2>&1)
   ic=$?
   restore "$d"
-  raw_vm=$(timeout "$TIMEOUT" env SAULE_ENGINE=vm "$SAULE_BIN" run "$d" 2>&1)
+  raw_vm=$(run_limited "$TIMEOUT" env SAULE_ENGINE=vm "$SAULE_BIN" run "$d" 2>&1)
   vc=$?
   restore "$d"
 

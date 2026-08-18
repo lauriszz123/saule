@@ -249,6 +249,26 @@ pub struct Compiler<'a> {
     /// reference (`fn a() b() end` above `fn b()`) resolves — which is the
     /// same reason the resolver pre-collects module scope.
     pub fn_protos: HashMap<String, u32>,
+    /// Module-scope names whose declaration the **module body** has
+    /// already passed, and how many there are in total.
+    ///
+    /// `fn_protos` above is deliberately filled before any body is
+    /// compiled, and that is right *inside* a function: by the time one
+    /// runs, every top-level `fn` exists. The module body is the exception,
+    /// because it executes straight-line — a call written above the
+    /// declaration reaches a name that does not exist yet. The resolver
+    /// agrees and leaves it unbound, so the tree-walker errors, while a
+    /// `CALLK` resolved from `fn_protos` alone would cheerfully jump to the
+    /// proto and return a value. See [`Compiler::callk_resolvable`].
+    pub module_decls_seen: std::collections::HashSet<String>,
+    /// Top-level `fn`/`class`/`interface`/`enum` names, from the pre-pass.
+    ///
+    /// Only these count toward the call guard. A module-level `local` is
+    /// deliberately excluded: `local doubled = when(...)` declares a name
+    /// *as* it makes a call, so counting locals left the module body never
+    /// "fully declared" and refused every call in a file that ends in a
+    /// declaration — which is most of them.
+    pub module_type_decls: std::collections::HashSet<String>,
     pub loops: Vec<LoopCtx>,
     /// Class name -> index, from Pass 1.
     pub layouts: crate::compile::layout::Layouts,
@@ -323,6 +343,8 @@ impl<'a> Compiler<'a> {
             f: FuncCtx::new(Some("main")),
             enclosing: Vec::new(),
             fn_protos: HashMap::new(),
+            module_decls_seen: std::collections::HashSet::new(),
+            module_type_decls: std::collections::HashSet::new(),
             loops: Vec::new(),
             layouts: Default::default(),
             mutated_receivers: Default::default(),
@@ -489,7 +511,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Emit an `ABx` instruction whose `Bx` is a forward displacement,
-    /// patched later. `ITERPREP` is the only one.
+    /// patched later. `ITERPREP` and `ITERPREPX` are the only ones.
     pub fn emit_jump_abx(
         &mut self,
         op: Op,
@@ -515,9 +537,9 @@ impl<'a> Compiler<'a> {
         let disp = target as i64 - (from as i64 + 1);
         let ins = self.f.code[from];
         let op = ins.op().expect("emitted opcode");
-        // `ITERPREP` carries an unsigned forward displacement in `Bx`; every
-        // other patch site is a signed `sBx`.
-        if op == Op::ITERPREP {
+        // `ITERPREP`/`ITERPREPX` carry an unsigned forward displacement in
+        // `Bx`; every other patch site is a signed `sBx`.
+        if op == Op::ITERPREP || op == Op::ITERPREPX {
             let d = u16::try_from(disp).map_err(|_| CompileError::JumpTooFar {
                 distance: disp,
                 span: self.span_of_pc(from),
@@ -606,6 +628,46 @@ impl<'a> Compiler<'a> {
             needed: r as usize + 1,
             span: span.clone(),
         })
+    }
+
+    /// Whether a `CALLK` to top-level `fn` `name` is sound *at this point*.
+    ///
+    /// Inside any function body the answer is always yes: the body cannot
+    /// run before the module body has finished defining every top-level
+    /// `fn`, which is exactly why `fn_protos` is pre-collected and why
+    /// `fn a() b() end` above `fn b()` is ordinary Saule.
+    ///
+    /// The module body itself is the one place that reasoning fails, and it
+    /// failed silently. `local r = later(5)` above `fn later` errors under
+    /// the tree-walker — the resolver never binds `later`, because at that
+    /// point it does not exist — and returned `105` under the VM, because
+    /// `fn_protos` knows the proto regardless of position. Right exit
+    /// status, invented value.
+    ///
+    /// Returning `false` makes the call site refuse, which hands the whole
+    /// module to the tree-walker. That is the right trade twice over: the
+    /// program is one the language rejects, so nothing correct is lost, and
+    /// the tree-walker is the engine that *defines* the diagnostic, so the
+    /// two agree by construction rather than by matching message text.
+    /// Whether every top-level `fn`/`class`/`enum` is declared by now.
+    ///
+    /// Once it is, a call the module body makes cannot reach a *callable*
+    /// that does not exist yet, and the conservative guard switches off.
+    ///
+    /// Module-level `local`s are not counted here — see `module_type_decls`
+    /// — so a callee reaching a `local` declared further down is the one
+    /// shape this does not cover. It is narrow (the callee must be invoked
+    /// from the module body *and* read a value declared below that call),
+    /// and the direct case is caught precisely by the read guard in
+    /// `ident_to`, which needs no approximation at all.
+    pub fn module_callables_declared(&self) -> bool {
+        self.module_type_decls
+            .iter()
+            .all(|n| self.module_decls_seen.contains(n))
+    }
+
+    pub fn callk_resolvable(&self, name: &str) -> bool {
+        !self.enclosing.is_empty() || self.module_decls_seen.contains(name)
     }
 
     /// A `CALLK` target: the proto index packed with its module.

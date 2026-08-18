@@ -127,6 +127,25 @@ pub enum Flow {
     Break,
     Continue,
     Return(Vec<Value>),
+    /// `return f(args)` in **tail position**: the call has not been made
+    /// yet, and the arguments are already evaluated.
+    ///
+    /// The tree-walker runs a Saule call on the *native* stack, so
+    /// `return f(...)` would otherwise nest one native frame per iteration
+    /// and a recursive-loop idiom would exhaust the depth limit. Handing
+    /// the call back to [`run_function_body_multi`] instead lets it replace
+    /// the running function rather than nest inside it, which is what makes
+    /// a tail-recursive loop run in constant stack.
+    ///
+    /// This variant must never escape a function body. Two places consume
+    /// it: the trampoline, and `exec_try` — a `try` **forces** it into a
+    /// real call, because its handler has to still be on the stack when the
+    /// callee runs, and the whole point of a tail call is that it is not.
+    TailCall {
+        callee: std::rc::Rc<crate::value::FunctionObject>,
+        args: Vec<crate::eval::expr::EvaluatedArg>,
+        span: std::ops::Range<usize>,
+    },
 }
 
 impl Flow {

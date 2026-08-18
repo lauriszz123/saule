@@ -130,7 +130,9 @@ fn annotate(c: &Chunk, p: &Proto, op: Op, ins: Instruction, pc: usize) -> Option
         // opcodes whose sBx *is* a displacement. `LOADI` shares the layout
         // and carries a literal.
         _ if op.is_jump() => Some(format!("-> {:04}", (pc as i64 + 1 + ins.sbx() as i64).max(0))),
-        Op::ITERPREP => Some(format!("-> {:04}", pc + 1 + ins.bx() as usize)),
+        Op::ITERPREP | Op::ITERPREPX => {
+            Some(format!("-> {:04}", pc + 1 + ins.bx() as usize))
+        }
         _ => None,
     }
 }

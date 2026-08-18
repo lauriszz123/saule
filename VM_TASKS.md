@@ -42,7 +42,26 @@ multi-module, with imports and file IO — which is a different question from
 `run_tests.sh`'s single-file fixtures, and the one that has actually caught
 things.
 
-`cargo` is not on `PATH` here — use `C:\Users\lauri\.cargo\bin\cargo.exe`.
+### Per-platform notes
+
+On the Windows box `cargo` is not on `PATH` — use
+`C:\Users\lauri\.cargo\bin\cargo.exe`, and the binary is `saule.exe`.
+
+On macOS the binary is `./target/debug/saule` (no `.exe`), and two things
+bite that do not on Windows:
+
+- **`cargo test --workspace` needs `RUST_MIN_STACK=16777216`.** Without it
+  `the_recursion_guard_still_unwinds_after_re_entrant_calls` overflows
+  libtest's 2 MiB test thread and aborts the whole binary — including at
+  `HEAD`, so it is a platform floor, not a regression. Its own comment
+  already says the guard needs more real stack than libtest gives; macOS is
+  simply where that bill comes due. Check `HEAD` before blaming a change.
+- **`run_examples_diff.sh` needs no GNU `timeout`.** Stock macOS has
+  neither `timeout` nor `gtimeout`, and without one every project failed
+  identically — which the harness faithfully reported as *"9 of 9 projects
+  disagreed"*. A divergence that large and that sudden is far more likely
+  to be the harness than the engine; the script now prefers coreutils and
+  falls back to a shell watchdog, so it runs the same everywhere.
 
 ## Legend
 
@@ -74,7 +93,7 @@ steer by. The real one:
 | | Compiles fully | Falls back |
 |---|---|---|
 | `benchmarks/sau` | **10 of 10** | — |
-| `tests/*.sau` | **84 of 92** | 8 |
+| `tests/*.sau` | **85 of 92** | 7 |
 
 **And the same measurement on real code, which says something different.**
 `tests/*.sau` are single files; every real Saule program is a project with
@@ -83,12 +102,12 @@ whether the VM engages on anything a user would write.
 
 | Corpus | Compiles fully |
 |---|---|
-| `examples/**/*.sau` | **7 of 61** |
+| `examples/**/*.sau` | **17 of 61** |
 
 ```
 while IFS= read -r f; do
-  ./target/debug/saule.exe disasm "$f" 2>&1 | tr '\n' ' ' \
-    | grep -o '`[^`]*` is not supported' | head -1
+  ./target/debug/saule disasm "$f" 2>&1 | tr '\n' ' ' \
+    | sed -n 's/.*× \(.*is not supported\).*/\1/p' | head -1
 done < <(find examples -name '*.sau') | sort | uniq -c | sort -rn
 ```
 
@@ -97,22 +116,27 @@ a line-oriented `grep` silently scores a refused file as compiling. Doing
 that produced "50 of 61" on the first attempt — an eightfold overstatement,
 and in the direction that makes the work look done.
 
+**Use the `sed` above, not `grep -o '`[^`]*`'`.** Several refusal messages
+*contain* backticks — `` `a class implementing `Assignable`` ``, ``
+``self` outside a method`` — and the naive `grep` truncates those to a
+fragment or to the empty string, which then sorts as its own bogus cause.
+Anchoring on miette's `×` line and taking everything up to `is not
+supported` keeps the message whole.
+
 | Cause (first refusal per file) | Files |
 |---|---|
-| a class extending one from another module | **24** |
-| a method call on a receiver with no proved class | 10 |
-| a named argument | 5 |
-| an import declaration | 3 |
-| a variadic or defaulted parameter | 3 |
-| a name the resolver could not classify | 2 |
-| a class static | 2 |
-| everything else | 5 |
+| a class extending one the compiler cannot see | **24** |
+| an import declaration | **10** |
+| a name the resolver could not classify | 8 |
+| a variant of an unknown enum | 1 |
+| a class implementing `Assignable` | 1 |
 
 First-refusal-wins, so a cause that only appears late in a file is
-under-counted. The headline still holds: **27 of 54 refusals are the
-cross-module slice** (24 + 3), which the fixture table scores at *one*
-fixture. That is the gap between "236/236 with fallback" and "the VM runs
-real programs".
+under-counted. The headline is now sharper than it was: **34 of 44
+refusals are the cross-module slice** (24 + 10), which the fixture table
+scores at *one* fixture. That is the gap between "236/236 with fallback"
+and "the VM runs real programs", and it is now the only thing of its size
+left.
 
 Every remaining cause, by the fixtures it blocks. Regenerate this with:
 
@@ -472,15 +496,31 @@ exists to replace.
 - [x] Open/closed upvalues with `CLOSEUP`, giving per-iteration capture for
       free (§7.2)
 - [x] `CONCAT` n-ary and single-allocation
-- [ ] `TAILCALL` — reuse the frame; closes the gap `PRODUCTION.md:344` names
+- [ ] `TAILCALL` — reuse the frame; closes the gap `PRODUCTION.md:344` names.
+      **Deliberately not before Phase 4.** The opcode is in the table and the
+      verifier accepts it, but nothing emits or executes it — and it must
+      stay that way while the tree-walker is the truth, because implementing
+      it would *create* a divergence rather than close one: a tail-recursive
+      loop would run unbounded under `--vm` and raise `StackOverflow`
+      without it. It is a language improvement, and it belongs in the
+      release that announces the VM as the definition of the language.
 - [x] Variadic **return** through `top` (`C = 0` on the call, `B = 0` on the
       `RET`) exercised by tests — see "Multi-return and parallel binding".
       `B = 0` on a *call* is still unused, and deliberately: Saule's
       `eval_call_args` does not expand a trailing call into several
       arguments, so `f(g())` passes exactly one. Implementing it would be
       inventing a language rule, not matching one.
-- [ ] `SAULE_MAX_DEPTH` semantics documented as "frames", raised two orders of
-      magnitude (§6.4) *(the limit is implemented; the doc change is not)*
+- [x] `SAULE_MAX_DEPTH` — the env override works in both engines, and the
+      VM's cap is now **equal to** the tree-walker's `MAX_EVAL_DEPTH`.
+      *Deviation from §6.4, argued:* it was set to `1_000_000` on that
+      section's reasoning, and the reasoning is sound in isolation — a call
+      here is a `Vec` push, not a native frame. But a limit is observable:
+      `depth(50_000)` returned `50000` under `--vm` and raised
+      `StackOverflow` without it, and "works with `--vm`, crashes without
+      it" is the exact surprise the silent fallback exists to prevent. The
+      raise and the "frames" re-documentation both move to Phase 4, where
+      they become an announced improvement instead of a disagreement.
+      Pinned by `deep_recursion_hits_the_same_limit_under_both_engines`.
 
 ### Compiler
 
@@ -534,10 +574,12 @@ exists to replace.
 ### Deferred out of Phase 2
 
 - [ ] `TAILCALL` — needs no new front-end work; closes the gap
-      `PRODUCTION.md:344` names
+      `PRODUCTION.md:344` names. Blocked on Phase 4 by choice, not by
+      effort — see the note above.
 - [x] Variadic call/return through `top` — done on the return side; the
       argument side has no language rule to implement (see above)
-- [ ] `SAULE_MAX_DEPTH` re-documented as "frames" (6.4)
+- [x] `SAULE_MAX_DEPTH` aligned with the tree-walker; the "frames"
+      re-documentation and the raise move to Phase 4 (see above)
 
 ### Phase 2 exit criteria
 
@@ -638,8 +680,11 @@ files under the VM is the first thing Phase 3 unlocks.
          index is what makes it impossible for a call site to forget.
    - [x] `sort.sau` compiles. It fell back on `Table.sort`'s comparator,
          not on `!` — see "The tree-walker can now call into bytecode".
-   - [ ] Instance methods on a receiver whose class the front end did not
-         prove — this is the one place that genuinely wants §8.5's `GETFX`
+   - [x] Instance methods on a receiver whose class the front end did not
+         prove — `CALLMX` and `GETFX` landed and this works. Verified: a
+         `Greeter()` laundered through `any` calls `hi()` identically under
+         both engines, and `a_method_call_on_an_unproved_receiver_matches`
+         pins it.
    - [x] **Inherited vtable slots were never filled.** Pass 1 copies the
          parent's vtable so the slot *numbering* extends it, but at that
          point no body is compiled, so it copies a row of `u32::MAX` — and
@@ -748,20 +793,54 @@ automatically a benchmark that got *faster*.
    nothing — a function, not nil — and the loop would never terminate.
    Pinned by `a_driver_that_yields_nothing_runs_no_iterations`.
 
-   - [ ] A source the front end **did not prove**. Still refused, and it is
-         the remaining `for … in` cause on real code: `todo-app` iterates an
-         `any` that came out of `Json.decode` behind a runtime
-         `type(data) != "table"` guard, which no static type can see through.
+   - [x] A source the front end **did not prove** — `ITERPREPX`. This is
+         the shape real code hits: `todo-app` iterates an `any` that came
+         out of `Json.decode` behind a runtime `type(data) != "table"`
+         guard, which no static type can see through.
 
-         The obvious fix — an `ITERDRV` opcode normalising any source into a
-         driver, so one lowering serves everything — **has a trap in it**.
-         A table driver would have to signal exhaustion with `nil`, but the
-         table path does *not* use a nil terminator: it walks the whole
-         snapshot. A one-variable loop binds the **value**, so a table
-         holding a nil value would stop the loop early under the driver and
-         iterate past it under the tree-walker. Silent divergence, in the
-         shape `SAULE_DIFF=1` only catches if a fixture happens to put a nil
-         in a table. Settle that before writing the opcode.
+         **The trap was settled by rejecting its premise.** The tempting
+         fix was an `ITERDRV` normalising every source into one driver, so
+         a single lowering serves everything. It cannot work, and the
+         reason is semantic rather than incidental: a driver stops on a
+         `nil` and a table snapshot has *no* terminator at all. Saule's
+         `t[i] = nil` **stores** a nil rather than deleting the key (unlike
+         Lua — see `TableObject::set`), so a table really can hold one, and
+         a one-variable loop binds the **value**. Measured, not reasoned
+         about: `{1, 2, 3}` with `t[2] = nil` iterates **3** times under
+         the tree-walker and would stop at **1** under a normalising
+         driver; with `t[1] = nil` it would stop at **0**.
+
+         So `ITERPREPX` **dispatches** instead — which is exactly what
+         `exec_for_in`'s `match` on the source value does. It writes a mode
+         flag to `R[A+2]`, and the compiler emits *both* steps behind a
+         `TEST`: table mode falls straight through to the existing
+         `ITERNEXT`, driver mode takes one jump to a `MOVE`/`CALL`/`JNOTNIL`
+         sequence. One loop body, one set of variable registers, and no new
+         VM call path — the driver step is an ordinary `CALL`, as §15.8
+         already required.
+
+         Two details worth keeping:
+         - The driver's **call window is placed on the loop-variable
+           registers** rather than moved into them — `R[A+4]` for one
+           variable, `R[A+3]` for two — so `CALL` writes its results exactly
+           where `ITERNEXT` writes its key and value. No `MOVE`s to merge
+           the paths, and the nil test lands on the first returned value,
+           which is what the tree-walker tests.
+         - An **instance** source calls `iter()` inside the opcode, via
+           `saule_interpreter::call_member_dynamic` — the same function the
+           tree-walker uses. That is a re-entrant call from inside the
+           dispatch loop, which §15.8 rejected for `ITERNEXT`, and the
+           objection does not apply here: `iter()` runs **once per loop**,
+           not once per step.
+
+         **`Value::VmFunction` is the bug this shipped with for an hour.**
+         The callable test was copied from `exec_for_in`, which lists
+         `Function`/`Native`/`NativeClosure` — and never `VmFunction`,
+         because the tree-walker cannot construct one. Under the VM a
+         compiled closure *is* a `VmFunction`, so every driver on this path
+         was refused as "cannot iterate over a `function`". A place where
+         copying the oracle verbatim is wrong precisely because the two
+         engines represent the same value differently.
 6. **Operator overloading** — [ ] compile-time contract resolution via
    `binary_contract`; dispatch-on-left-operand and the `==`/`compare`
    symmetry rules move into the compiler. `..` falling through to
@@ -1006,11 +1085,12 @@ done < <(find examples -name saule.config) | sort | uniq -c | sort -rn
           `callee_params` map collected in a pre-pass, because a `Proto`
           deliberately carries neither names nor defaults — those are
           compile-time facts.
-    - [ ] A skipped parameter that has a **default** is refused. The default
-          must run in the callee, and the stubs can only fill a *suffix* —
-          there is no entry point meaning "fill slot 1 but not slot 2".
-          Blocks `trailing_block_layout.sau`. Fixing it wants either a
-          per-gap-pattern stub or a sentinel the prologue tests.
+    - [x] A skipped parameter that has a **default**. `trailing_block_layout.sau`
+          compiles, and the default really does run *in the callee*: a
+          default of `nextId()` called twice yields `a#1`, `b#2`,
+          `calls=2` under both engines, so it is evaluated per call rather
+          than folded once at the call site. Pinned by
+          `a_default_is_evaluated_in_the_callees_frame`.
     - [x] **Variadic** parameters, via a new `VARARG` opcode — the first one
           this project has added since the table was frozen in Phase 1, and
           **appended**, never inserted, because the numbering is the chunk
@@ -1033,9 +1113,9 @@ done < <(find examples -name saule.config) | sort | uniq -c | sort -rn
           proved a table from the `TypeTable`. The compiler records the
           variadic parameter's name itself and takes the table path on it —
           it emitted the `VARARG`, so it knows.
-    - [ ] Both a default **and** a variadic parameter in one signature is
-          refused: it would need an entry stub per arity that also
-          re-gathers. Nothing in the corpus does it.
+    - [x] Both a default **and** a variadic parameter in one signature.
+          `fn tally(label: string = "n", ...nums: integer)` compiles and
+          `tally("x", 1, 2, 3)` gives `x=6` under both engines.
 12. **`ARITHX`/`UNARYX`** — [x] the dynamic fallback.
     Calls `saule_interpreter::eval::ops::binary` / `unary` directly — the
     tree-walker's own operator logic, **reused rather than reimplemented**,
@@ -1461,7 +1541,7 @@ is that they now fall back rather than compute a wrong answer.
       runs, so the second engine starts from the state the first one saw —
       otherwise `todo-app` reports a different second run for a reason that
       has nothing to do with the engine.
-- [ ] Coverage: 84 of 92 `tests/*.sau` compile fully. The remaining 8 fall
+- [ ] Coverage: 85 of 92 `tests/*.sau` compile fully. The remaining 7 fall
       back cleanly, which is correct-but-slow; the gaps are listed at the
       top of this file.
 

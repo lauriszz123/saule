@@ -28,6 +28,15 @@ pub(super) fn exec_try(
 ) -> Result<Flow, RuntimeError> {
     let body_scope = Environment::with_parent(env.clone());
     match exec_block(body, &body_scope) {
+        // A tail call is a call that has not happened yet, and letting one
+        // escape a `try` would run it with the handler already unwound —
+        // `try return f() catch ...` would stop catching what `f` throws.
+        // Forcing it here trades the frame reuse for keeping `catch`
+        // meaningful, which is the right way round: a tail call is an
+        // optimisation, a handler is semantics.
+        Ok(Flow::TailCall { callee, args, span }) => Ok(Flow::Return(
+            crate::eval::expr::call_function_multi(&callee, &args, span)?,
+        )),
         Ok(flow) => Ok(flow),
         Err(RuntimeError::Thrown { value, span }) => {
             let thrown = thrown_slot::take().unwrap_or(Value::Nil);

@@ -266,6 +266,18 @@ impl Compiler<'_> {
                         }
                     }
                     None => {
+                        // Reading a module slot the body has not reached
+                        // yet. `GETMOD` would load whatever the slot holds
+                        // — `nil`, since no `SETMOD` has run — where the
+                        // tree-walker finds the name undefined and errors.
+                        // Exact, not conservative: the declaration either
+                        // has been passed or it has not.
+                        if self.enclosing.is_empty() && !self.module_decls_seen.contains(name) {
+                            return Err(CompileError::unsupported(
+                                "a module-level read of a name declared further down",
+                                span.clone(),
+                            ));
+                        }
                         let g = self.mod_slot(slot, span)?;
                         self.emit(Instruction::abx(Op::GETMOD, a, g), span)
                     }
@@ -740,6 +752,22 @@ impl Compiler<'_> {
         if let Some(class) = self.layouts.get(name)
             && self.not_shadowed(name)
         {
+            // A class is resolved to an index at compile time, so the
+            // module body would happily construct one whose declaration it
+            // has not reached yet — where the tree-walker looks the name up
+            // in the environment and finds nothing. Exact, like the other
+            // two positional guards: the declaration is above this point or
+            // it is not. An imported class has no declaration in *this*
+            // module, so it is only checked when this module declares it.
+            if self.enclosing.is_empty()
+                && self.module_type_decls.contains(name)
+                && !self.module_decls_seen.contains(name)
+            {
+                return Err(CompileError::unsupported(
+                    "a module-level use of a class declared further down",
+                    span.clone(),
+                ));
+            }
             self.construct_to(class, &positional, dst, span)?;
             return self.one_result(dst, want, span);
         }
@@ -802,6 +830,17 @@ impl Compiler<'_> {
                 self.finish_call(base, dst, want, mark, span)
             }
             Some(Binding::Module { .. }) if self.fn_protos.contains_key(name) => {
+                // Refused rather than allowed to fall through to the value
+                // path below: that would emit a `CALL` on a module slot the
+                // `SETMOD` has not reached, which errors with *its* wording
+                // rather than the resolver's. `SAULE_DIFF` compares error
+                // text, so "also fails" is not the same as "agrees".
+                if !self.callk_resolvable(name) {
+                    return Err(CompileError::unsupported(
+                        "a module-level call to a function declared further down",
+                        span.clone(),
+                    ));
+                }
                 let proto = self.fn_protos[name];
                 let m = self.mark();
                 // `CALLK`'s window starts at the *arguments*: there is no
@@ -1120,6 +1159,14 @@ impl Compiler<'_> {
             && self.not_shadowed(name)
             && let Some(&proto) = self.fn_protos.get(name)
         {
+            // Same guard as the ordinary call path: a pipe into a `fn` the
+            // module body has not reached yet is the same forward call.
+            if !self.callk_resolvable(name) {
+                return Err(CompileError::unsupported(
+                    "a module-level call to a function declared further down",
+                    span.clone(),
+                ));
+            }
             let m = self.mark();
             let base = self.alloc_n(n_args, span)?;
             self.move_result(cur, base, span)?;
