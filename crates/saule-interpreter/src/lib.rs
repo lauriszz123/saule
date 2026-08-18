@@ -71,7 +71,14 @@ pub use saule_semantic as semantic;
 
 pub use env::Environment;
 pub use error::RuntimeError;
-pub use eval::{DepthGuard, Flow, enter_call_depth};
+pub use eval::{DepthGuard, enter_call_depth};
+// Crate-internal: `Flow` is how statement execution reports `break` /
+// `return` / a pending tail call, and one of its variants carries
+// `EvaluatedArg`, which is `pub(crate)`. Re-exporting the enum made a
+// `pub(crate)` type reachable through a `pub` field — the
+// `private_interfaces` warning — and nothing outside this crate ever used
+// it, so the honest fix is for the enum to say what it is.
+use eval::Flow;
 
 /// Read `receiver.name` with the tree-walker's own member rules.
 ///
@@ -87,6 +94,21 @@ pub fn read_member_dynamic(
     span: std::ops::Range<usize>,
 ) -> Result<Value, RuntimeError> {
     eval::expr::members::read_member(receiver, name, span)
+}
+
+/// Write `receiver.name = value` with the tree-walker's own member rules.
+///
+/// The dynamic form of a member **write**, for the bytecode compiler's
+/// `SETFX` — the read side's counterpart, and reused for the same reason.
+/// An instance field, a class static, a table key and every "no such field"
+/// message come out identical by construction rather than by care.
+pub fn write_member_dynamic(
+    receiver: &Value,
+    name: &str,
+    value: Value,
+    span: std::ops::Range<usize>,
+) -> Result<(), RuntimeError> {
+    eval::stmt::assign::assign_member(receiver, name, value, span).map(|_| ())
 }
 
 /// Call `receiver.name(args)` with the tree-walker's own dispatch.

@@ -4,28 +4,37 @@
 > this one is the *checklist*. Section references (§) point back into it.
 >
 > **Ground rule, absolute:** `./run_tests.sh` passes at every commit, and the
-> tree-walker stays the default engine until Phase 4.
+> tree-walker stays in-tree and green. It was the default engine until Phase 4
+> flipped that; it is still the differential oracle, which is the harder
+> requirement of the two.
 >
-> That means **all three modes**, because each catches what the others
+> That means **all four modes**, because each catches what the others
 > cannot:
 >
 > ```
-> ./run_tests.sh                    # the tree-walker still works
-> SAULE_ENGINE=vm ./run_tests.sh    # the VM runs or cleanly falls back
-> SAULE_DIFF=1 ./run_tests.sh       # the two agree on *output*, not just exit status
+> ./run_tests.sh                       # the default engine — the VM, since Phase 4
+> SAULE_ENGINE=interp ./run_tests.sh   # the tree-walker still works
+> SAULE_ENGINE=vm ./run_tests.sh       # the VM runs or cleanly falls back
+> SAULE_DIFF=1 ./run_tests.sh          # the two agree on *output*, not just exit status
 > ```
 >
-> The third was added late and immediately found bugs the first two had been
+> The last was added late and immediately found bugs the others had been
 > passing over for months — exit status alone cannot see a wrong value.
+>
+> The first two swapped meaning at the flip: a bare `run_tests.sh` used to be
+> the tree-walker's run and is now the VM's, so `SAULE_ENGINE=interp` is what
+> keeps the oracle covered. Losing that would not fail anything — it would
+> just quietly stop testing half of what this file is about.
 
 ## Verifying a change
 
-Four commands. The last two are the ones that catch VM bugs; the first two
+Five commands. The last three are the ones that catch VM bugs; the first two
 catch everything else.
 
 ```
 cargo test --workspace                                  # fully green, nothing excluded
-SAULE_BIN=./target/debug/saule.exe bash run_tests.sh    # 236/236
+SAULE_BIN=./target/debug/saule.exe bash run_tests.sh    # 236/236, on the VM by default
+SAULE_ENGINE=interp SAULE_BIN=... bash run_tests.sh     # 236/236, the oracle
 SAULE_ENGINE=vm SAULE_BIN=... bash run_tests.sh         # 236/236
 SAULE_DIFF=1  SAULE_BIN=... bash run_tests.sh           # 236/236 + engines agree on output
 ```
@@ -33,7 +42,7 @@ SAULE_DIFF=1  SAULE_BIN=... bash run_tests.sh           # 236/236 + engines agre
 Plus two more:
 
 ```
-SAULE_BIN=./target/debug/saule.exe bash run_examples_diff.sh   # 9/9 agree
+SAULE_BIN=./target/debug/saule.exe bash run_examples_diff.sh   # 9/9 agree, 4 fall back
 cargo run --release -p saule-vm --example compare              # agrees, then times
 ```
 
@@ -73,13 +82,21 @@ bite that do not on Windows:
 
 ## Where things stand
 
-**Phases 0, 1 and 2 are complete.** The compiler turns Saule source into
-bytecode and the VM runs it 2.2x–3.4x faster than the tree-walker, with 134
-differential tests asserting the two engines agree. `--vm` on `saule run`
-falls back to the interpreter for anything the compiler does not reach yet,
-so it is safe on any program.
+**Phases 0, 1, 2 and 4 are complete.** The compiler turns Saule source into
+bytecode and the VM runs it 2.6x–3.7x faster than the tree-walker, with 191
+differential tests asserting the two engines agree.
 
-**Phase 3 is in progress.** Classes, interfaces, enums + `match`,
+**The VM is the default engine** as of Phase 4. `saule run` uses it; `--interp`
+or `SAULE_ENGINE=interp` selects the tree-walker, which stays in-tree as the
+differential oracle. Nothing about the fallback changed — a module the
+compiler cannot reach still runs on the tree-walker, silently now rather than
+with a note, so the flip is safe on any program. `--vm` restores the note.
+
+**Phase 4 did not change coverage, and coverage is the open risk.** 4 of the 9
+comparable example projects still take the fallback, so for those the new
+default is a no-op. Read Phase 4's "What flipping the default did *not* fix".
+
+**Phase 3 is nearly complete.** Classes, interfaces, enums + `match`,
 `try`/`catch`, `for … in` (table path), operator overloading (left operand,
 including unary and index), **nullability** (`?.`, `??`, `!`, `as`), stdlib
 value members, table dot access, the `ARITHX`/`UNARYX` dynamic fallback, and
@@ -93,7 +110,11 @@ steer by. The real one:
 | | Compiles fully | Falls back |
 |---|---|---|
 | `benchmarks/sau` | **10 of 10** | — |
-| `tests/*.sau` | **85 of 92** | 7 |
+| `tests/*.sau` | **84 of 92** | 8 |
+
+(Re-measured at the Phase 4 flip. The line above said 85; `HEAD` was 84, and
+the handoff before it made the same slip in the other direction. Re-count
+before planning around either number — the census commands are below.)
 
 **And the same measurement on real code, which says something different.**
 `tests/*.sau` are single files; every real Saule program is a project with
@@ -102,34 +123,66 @@ whether the VM engages on anything a user would write.
 
 | Corpus | Compiles fully |
 |---|---|
-| `examples/**/*.sau` | **17 of 61** |
+| `examples/**/*.sau` | **10 of 61** |
+| `examples/*` projects, end to end | **5 of 9 compared** (2 interactive, skipped) |
+
+The project row is the one Phase 4 turned into a headline: it is the fraction
+of real programs for which the new default engine is the engine that actually
+runs, and `run_examples_diff.sh` prints it on every run.
+
+**Count with `disasm`'s exit status, not by parsing its message.** Every
+message-parsing form tried here has under-counted refusals, which is the
+direction that makes the work look done:
+
+```
+n=0; t=0
+while IFS= read -r f; do
+  t=$((t+1))
+  ./target/debug/saule disasm "$f" >/dev/null 2>&1 && n=$((n+1))
+done < <(find examples -name '*.sau')
+echo "$n of $t"
+```
+
+Three successive attempts got this wrong, each more subtly than the last:
+
+1. A **line-oriented `grep`** scored a refused file as compiling, because
+   `miette` wraps a long message across lines. Result: "50 of 61", a fivefold
+   overstatement. Fixed with `tr '
+' ' '`.
+2. **`grep -o '`[^`]*`'`** truncated the messages that *contain* backticks —
+   `` `a class implementing `Assignable`` ``, `` ``self` outside a method`` —
+   into fragments that then sorted as their own bogus causes.
+3. **A `sed` anchored on a trailing phrase** — `'s/.*× \(.*is not supported\).*/\1/p'`
+   — missed any message whose wrap falls *between* the closing backtick and
+   `is not supported`: after `tr`, the line reads
+   ``...callee` is not | supported by...``, and the pattern does not match.
+   Result: "17 of 61" against a true 10, with two whole causes invisible —
+   `a named argument to a callee the compiler cannot identify` (5 files) and
+   `a class implementing an interface this compiler cannot see` (2).
+
+For a **cause histogram** you still have to read the message, so squeeze the
+wrap out first and anchor on `×` alone rather than on any trailing phrase:
 
 ```
 while IFS= read -r f; do
-  ./target/debug/saule disasm "$f" 2>&1 | tr '\n' ' ' \
-    | sed -n 's/.*× \(.*is not supported\).*/\1/p' | head -1
+  ./target/debug/saule disasm "$f" 2>&1 >/dev/null \
+    | tr '\n' ' ' | tr -s ' ' \
+    | sed -n 's/.*× `\([^`]*\)`.*/\1/p' | head -1
 done < <(find examples -name '*.sau') | sort | uniq -c | sort -rn
 ```
 
-`tr '\n' ' '` is load-bearing: `miette` wraps a long message across lines, so
-a line-oriented `grep` silently scores a refused file as compiling. Doing
-that produced "50 of 61" on the first attempt — an eightfold overstatement,
-and in the direction that makes the work look done.
-
-**Use the `sed` above, not `grep -o '`[^`]*`'`.** Several refusal messages
-*contain* backticks — `` `a class implementing `Assignable`` ``, ``
-``self` outside a method`` — and the naive `grep` truncates those to a
-fragment or to the empty string, which then sorts as its own bogus cause.
-Anchoring on miette's `×` line and taking everything up to `is not
-supported` keeps the message whole.
+Cross-check its total against the exit-status count. If they disagree, trust
+the exit status — a cause you cannot parse is still a refusal.
 
 | Cause (first refusal per file) | Files |
 |---|---|
 | a class extending one the compiler cannot see | **24** |
 | an import declaration | **10** |
 | a name the resolver could not classify | 8 |
+| a named argument to a callee the compiler cannot identify | 5 |
+| a class implementing an interface this compiler cannot see | 2 |
 | a variant of an unknown enum | 1 |
-| a class implementing `Assignable` | 1 |
+| a skipped parameter whose default must run in the callee | 1 |
 
 First-refusal-wins, so a cause that only appears late in a file is
 under-counted. The headline is now sharper than it was: **34 of 44
@@ -496,14 +549,16 @@ exists to replace.
 - [x] Open/closed upvalues with `CLOSEUP`, giving per-iteration capture for
       free (§7.2)
 - [x] `CONCAT` n-ary and single-allocation
-- [ ] `TAILCALL` — reuse the frame; closes the gap `PRODUCTION.md:344` names.
-      **Deliberately not before Phase 4.** The opcode is in the table and the
-      verifier accepts it, but nothing emits or executes it — and it must
-      stay that way while the tree-walker is the truth, because implementing
-      it would *create* a divergence rather than close one: a tail-recursive
-      loop would run unbounded under `--vm` and raise `StackOverflow`
-      without it. It is a language improvement, and it belongs in the
-      release that announces the VM as the definition of the language.
+- [x] `TAILCALL` — reuse the frame; closes the gap `PRODUCTION.md:344` names.
+      **The note that used to sit here had the polarity backwards**, and it
+      is worth keeping the correction visible: it argued the VM must *not*
+      get tail calls because doing so would create a divergence. That was
+      true only while neither engine had them. The tree-walker got a
+      trampoline first, and from that moment the divergence existed the
+      other way round — `countdown(100000, 0)` returned `5000050000` under
+      the tree-walker and `stack overflow` under `--vm`, exit 1 against
+      exit 0. Implementing it **closed** a divergence. See "Tail calls"
+      below.
 - [x] Variadic **return** through `top` (`C = 0` on the call, `B = 0` on the
       `RET`) exercised by tests — see "Multi-return and parallel binding".
       `B = 0` on a *call* is still unused, and deliberately: Saule's
@@ -573,9 +628,9 @@ exists to replace.
 
 ### Deferred out of Phase 2
 
-- [ ] `TAILCALL` — needs no new front-end work; closes the gap
-      `PRODUCTION.md:344` names. Blocked on Phase 4 by choice, not by
-      effort — see the note above.
+- [x] `TAILCALL` — done, and not by choice of timing: the tree-walker
+      acquired a trampoline, which made this a live divergence rather than a
+      future feature. See "Tail calls" below.
 - [x] Variadic call/return through `top` — done on the return side; the
       argument side has no language rule to implement (see above)
 - [x] `SAULE_MAX_DEPTH` aligned with the tree-walker; the "frames"
@@ -934,7 +989,9 @@ automatically a benchmark that got *faster*.
    (`when(x):tostring()` is `UnknownPipeStage`) and a locally-bound lambda.
    Writing code for either would be unreachable branches pretending to be
    features.
-10. **Imports and modules** — [~] **in progress.** Decision taken: a
+10. **Imports and modules** — [x] **done.** (Was `[~] in progress` long
+    after the last sub-item was checked off; nothing under it is open.)
+    Decision taken: a
     **program-global class table** with **per-module chunks**, which
     satisfies §14 (per-module chunks keep a bytecode cache possible) and
     §24.2 (one layout, not two). The alternative — folding every module into
@@ -1058,6 +1115,8 @@ while IFS= read -r cfg; do
 done < <(find examples -name saule.config) | sort | uniq -c | sort -rn
 ```
 11. **Variadics, trailing blocks, named arguments, defaults** — [~] §19.
+    One sub-item open: a default skipped in the *middle* of a parameter list
+    (see below). Everything else in this item is done.
     Entry stubs, as Q3 recommended — and no microbenchmark was needed to
     choose, because the alternative is not merely slower but *wrong*: a
     default has to be evaluated in the **callee's** frame, and a guarded
@@ -1085,12 +1144,25 @@ done < <(find examples -name saule.config) | sort | uniq -c | sort -rn
           `callee_params` map collected in a pre-pass, because a `Proto`
           deliberately carries neither names nor defaults — those are
           compile-time facts.
-    - [x] A skipped parameter that has a **default**. `trailing_block_layout.sau`
-          compiles, and the default really does run *in the callee*: a
-          default of `nextId()` called twice yields `a#1`, `b#2`,
-          `calls=2` under both engines, so it is evaluated per call rather
-          than folded once at the call site. Pinned by
-          `a_default_is_evaluated_in_the_callees_frame`.
+    - [~] A skipped parameter that has a **default**. Two different cases,
+          and only one of them works:
+          * A default at the **end** of the parameter list, filled by the
+            entry stubs, does run in the callee: a default of `nextId()`
+            called twice yields `a#1`, `b#2`, `calls=2` under both engines,
+            so it is evaluated per call rather than folded once at the call
+            site. Pinned by `a_default_is_evaluated_in_the_callees_frame`.
+          * A default **skipped in the middle** still refuses, at
+            `compile/expr.rs`'s `reorder_args`, with `a skipped parameter
+            whose default must run in the callee`. Stubs fill a *suffix*;
+            there is no entry point meaning "fill slot 1 but not slot 2".
+
+          **This item was marked `[x]` and claimed `trailing_block_layout.sau`
+          compiles. It does not** — `saule disasm tests/trailing_block_layout.sau`
+          exits 1 on `Ui.panel(title: "inner") do … end`, which skips the
+          defaulted `pad` while filling the `body` that follows it. The cited
+          test passes and is real; it covers the trailing case, which is the
+          one the stubs already handled. Fixing the middle case wants either
+          a per-gap-pattern stub or a sentinel the prologue tests.
     - [x] **Variadic** parameters, via a new `VARARG` opcode — the first one
           this project has added since the table was frozen in Phase 1, and
           **appended**, never inserted, because the numbering is the chunk
@@ -1207,6 +1279,345 @@ false the moment `CALLMX` landed.
 The verifier also earned its keep: `CALLMX` was missing from its
 `expect_extra` list, and four fixtures failed with `an EXTRAARG with no
 instruction before it` rather than running a mis-decoded chunk.
+
+### `tests/ui/` is the diagnostic corpus — audited
+
+**Every file in `tests/ui/` is a deliberate error.** Each pins a specific
+message, and `run_tests.sh` requires all of them to fail. Most are
+compile-time — parser, `saule-semantic`, `saule-typeck` — but not all:
+`throw_uncaught`, `io_use_after_close`, the `force_unwrap_*` set,
+`table_insert_oob`, `pow_negative_exponent` and the two `stack_overflow_*`
+fixtures are **runtime** errors, pinned for the same reason. See
+`tests/ui/README.md`.
+
+**All 144 fail with a real diagnostic** — none exits 0, none produces an
+empty message. But the harness gates on **exit status**, and that is a
+weaker check than it looks: a fixture failing for the *wrong* reason passes.
+Reading all 144 messages against their filenames found three that were.
+
+| Fixture | What it actually did | Now |
+|---|---|---|
+| `unknown_field` | Written with `constructor(label)`, which is not Saule syntax, so it died in the **parser** with ``expected `:` and type on field`` and never reached a member check. Its comment still claimed "typeck has no class registry yet", which had long stopped being true. | Rewritten with `fn init`. Fails with ``no member `nonexistentField` on `Box` `` — the language had this right all along and nothing was testing it. |
+| `io_use_after_close` | Opened `/tmp/...`, which does not exist on Windows, so `Io.open` returned nil and the `!` killed the run on **line 4** — never reaching `close()`, let alone the use after it. | Relative path. Fails with `type error: file is closed` at the write after the close, which is the point. |
+| `match_variant_arity_mismatch` | Fails with `cannot determine the type of this expression` — the generic fallback, not an arity check. The fixture's own comment says "the typechecker should reject this"; it rejects it, but for no stated reason. | **Left as-is and recorded as a gap below.** The fixture is honest about intent; the diagnostic is what is missing. |
+
+*The general lesson, now in `tests/ui/README.md`:* a fixture whose message is
+`cannot determine the type of this expression` is a signal rather than a
+pass. It usually means the precise check the fixture is named for does not
+exist, and the generic fallback is standing in for it.
+
+### Diagnostics worth adding — found by probing, not yet implemented
+
+Constructs the language **accepts silently** or reports late and unhelpfully.
+None is a VM/tree-walker divergence; both engines behave identically. Listed
+in the order I would fix them.
+
+**Accepted with no diagnostic at all.** Each of these compiles, runs, and
+gives the last declaration silently:
+
+| Construct | Today |
+|---|---|
+| `fn f(a: integer, a: integer)` | accepted; the second `a` wins |
+| two methods of the same name in one class | accepted; the second wins |
+| two enum variants of the same name | accepted; the second gets its own dense tag, and `match` can only ever reach the first |
+
+The enum one is the most alarming of the three, because it quietly breaks an
+invariant the VM relies on: §0.4's tags are dense and assigned in declaration
+order, so a duplicate name produces two tags that `by_name` can only map one
+way. `SWITCH` then has a jump-table entry nothing can select. Both engines
+agree today — they are wrong together — so `SAULE_DIFF=1` cannot see it.
+
+**Reported, but at run time and blaming the wrong thing.** A safe method
+call's arguments are never type-checked, which `§21.4 item 7` already
+records as noticed-not-fixed. What it costs a user:
+
+```
+g?.twice("no")     -- typeck: passes.
+                   -- runtime: "arithmetic requires numbers but got
+                   --           `string` and `integer`" — blames the `*`
+                   --           inside `twice`, not the call site.
+g?.nope()          -- runtime: "no method or field `nope`"
+g?.twice(1, 2, 3)  -- runtime: "too many arguments: expected 1 but got 2"
+```
+
+All three are compile-time facts. The `Expr::Call` arm dispatches on the
+*shape* of the callee, and the `SafeMember` branch returns before checking
+arguments — the same arm that could not see through an interface receiver
+until this session.
+
+**Poor message on a construct that is rejected.** `class C extends A, B`
+fails in the parser with ``expected a class member (`[local] name: type`,
+`fn`, or `static`)`` pointing at `B`. Correct to reject; the message says
+nothing about a class having one parent, and `multiple_extends.sau`'s own
+comment ("a class can only extend one parent") is the message a user wants.
+
+**Deliberately not flagged.** `local x` twice in a scope, assigning to a
+numeric `for` variable, and dead code after `return` are all accepted, and
+all three are accepted by Lua too. They belong to a lint, not to the
+typechecker.
+
+### The open correctness items — closed
+
+Six of them, and one of the six turned out to have a front-end half that is
+still open. Grouped by what they actually were, rather than by how they were
+reported.
+
+#### The dynamic escape hatch had three holes on the nullable and write sides
+
+`GETFX`/`CALLMX` gave an ordinary member read and call a fallback for a
+receiver the front end did not prove (§8.5). Three neighbouring cases kept
+refusing, and the asymmetry was backwards: **a nullable receiver is if
+anything more likely to be unproved than a plain one**, and a write is no
+harder to defer than a read.
+
+| Was refused | Now |
+|---|---|
+| `obj?.name` with no proved class | `GETFX` behind the nil guard |
+| `obj?.m()` with no proved class | `CALLMX` behind the nil guard |
+| `obj.name = v` with no proved class | **`SETFX`** |
+
+`SETFX` had been in the opcode table since Phase 1 with no body. It calls a
+new `saule_interpreter::write_member_dynamic`, which is `assign_member` —
+the tree-walker's own member write — exposed the same way `read_member` was
+for `GETFX`. An instance field, a class static and a table key are three
+different writes, and the compiler learning each one separately is precisely
+how the engines diverge.
+
+The nil guard still wraps the **whole** call on the dynamic path, arguments
+included, because the tree-walker returns before evaluating them. Counted by
+a test rather than assumed.
+
+*Coverage:* `json_usage` was refusing on the write case and now compiles
+fully. `todo-app` moved through two refusals to a third.
+
+#### `return x?.m()` — the arms never had to merge
+
+Refused because the nil arm and the call arm produce different numbers of
+values, and only the call arm's count is knowable at run time, so there was
+no single register run for one `RET` to read.
+
+There does not need to be. **Each arm returns for itself** — the call arm
+asks for every result and returns the run `top` delimits, the nil arm returns
+a single nil — which is also exactly what the tree-walker does
+(`values_of(Value::Nil)` against `dispatch_member_call_multi`). Reported back
+through `Results::terminated`, the same contract a tail call already used for
+"control has left; emit no `RET`".
+
+#### `return a, f()` — contiguity falls out of the bump allocator
+
+Refused on the grounds that `f`'s window would have to begin exactly where
+the fixed values end, "which the allocator cannot promise while `a` is still
+live". It can, and it already did: after the first `n - 1` values are in
+place, `free` sits precisely at the landing register. Reserving that register
+and releasing it again sizes the frame for a single-valued last expression
+*and* leaves the next allocation — the call window — landing on it.
+
+**But the front end blocks it**, which the refusal was hiding: `saule-typeck`
+models a value list as one value per expression, so `return 7, pair()`
+reports `` return value of type `(integer, integer)` is incompatible with
+declared return type `integer` `` and `local a, b, c = 7, pair()` reports
+`cannot assign nil to non-nullable type integer`. Both run correctly under
+the tree-walker. That is a **third** instance of the same shape as the
+interface gap below — the typechecker not modelling something the evaluator
+does — and it is now the only thing standing between the compiler and this
+construct.
+
+#### `saule-typeck` could not see through an interface method call
+
+`local a: integer = s.half()` on an interface-typed `s` was `cannot determine
+the type of this expression`, for a **single-valued** method on an ordinary
+program. Root cause: `InterfaceRegistry` is `HashMap<String, Vec<String>>` —
+name to `extends` list. It never held signatures, so there was nothing to
+look up.
+
+Fixed with a **sibling** registry, `InterfaceMethodRegistry`, rather than by
+widening the existing one: six LSP call sites destructure that `Vec<String>`,
+and none of them had to change. `lookup_interface_method` walks `extends`
+breadth-first — an interface composes by extension rather than inheritance,
+so the walk is over a list per level, and a method reached by two paths is
+one method.
+
+Threaded through `ModuleSeed` as well, so an **imported** interface's methods
+are as knowable as a local one's. Without that the fix would have worked only
+in single-file programs, which is not where interfaces are used.
+
+*This is what makes `CALLIF`'s packed result count a live encoding.* It was
+added with multi-return and could only be reached through `return`, because
+no valid program could bind an interface call to two names. Now one can.
+
+#### A forward reference reached through a callee
+
+The last real divergence, and the one that needed more than a positional
+check:
+
+```
+class C
+    static fn go() -> integer  return later(1)  end
+end
+local r: integer = C.go()          -- tree-walker: error. VM: 101.
+fn later(x: integer) -> integer  return x + 100  end
+```
+
+The reference to `later` inside `go` is legal — a forward reference in a
+function body is ordinary Saule — and only the **call** is early. Nothing at
+the call site distinguishes a callee that reaches an undeclared name from one
+that does not.
+
+A blunter guard was tried in an earlier session and reverted: "refuse any
+module-body call while a `fn` is still ahead" refused two perfectly good
+differential fixtures, because a call partway down a file with any `fn` below
+it is an ordinary shape.
+
+The precise version is reachability. A pre-pass records, for each top-level
+declaration, the set of top-level names its body **mentions** — one edge per
+mention, collected with `saule_ast::visit_stmts`. `Compiler::reaches_undeclared`
+closes that transitively at the call site and refuses when it reaches a
+declaration the module body has not run yet. Inside a function body it is
+vacuously false: by the time one runs, every top-level name exists.
+
+Deliberately one-sided. It over-approximates — a local shadowing a top-level
+name still counts as reaching it, and a name mentioned on a branch that never
+executes counts too — because over-approximating costs a fallback while
+under-approximating costs a wrong answer on a program the tree-walker rejects
+outright. **It refuses nothing in either corpus**: 84 of 92 fixtures and 17
+of 61 example files compile exactly as before.
+
+The canary `a_forward_reference_reached_through_a_callee_still_diverges` is
+repointed and renamed; it now asserts the refusal, plus the two fixtures the
+blunt guard broke as the other half of what it is worth.
+
+### Tail calls — done, and the two bugs it uncovered
+
+`return f(args)` **replaces** the running frame instead of nesting inside it,
+in both engines. The tree-walker got a trampoline first (commit `3a9b6f7`);
+this is the VM half, and it was not a feature but a **live divergence**:
+
+```
+fn countdown(n: integer, acc: integer) -> integer
+    if n == 0 then return acc end
+    return countdown(n - 1, acc + n)
+end
+println(countdown(100000, 0))
+```
+
+`5000050000` exit 0 under the tree-walker, `stack overflow: evaluation
+nested more than 10000 levels deep` exit 1 under `--vm`. No fixture had the
+shape, so none of the three `run_tests.sh` modes could see it.
+
+**The rule is the tree-walker's**, in `Stmt::Return`: a single returned
+expression that is a call, whose callee is **not** a `Member`/`SafeMember`,
+and which evaluates to a `Value::Function`. Two things then veto it, and
+both are properties of the enclosing function rather than of the call:
+
+* **Inside a `try` body.** `exec_try` forces the call to happen for real,
+  because the handler must still be on the stack when the callee runs.
+* **The module body.** `run_in` does the same — a module body is not a
+  function, so there is no frame to replace.
+
+The compiler settles both once, in `Compiler::ret`, and passes `Want::Tail`
+only when neither applies. It is a *request*, not a promise: only the shapes
+that can genuinely replace a frame honour it, and everything else reports
+`tail: false` and gets its ordinary `RET`.
+
+#### Three opcodes, because two of the three call forms have no callee register
+
+| Opcode | Covers | Callee |
+|---|---|---|
+| `TAILCALL` | a value — a local holding a lambda, an upvalue, a module slot | `R[A]`, decided at **run time** |
+| `TAILCALLK` | a top-level `fn` | module/proto packed 8/16 in `EXTRAARG` |
+| `TAILCALLS` | a bare-name `static fn` | declaring class/slot packed 8/16 in `EXTRAARG` |
+
+`TAILCALL` alone would have been enough only if a static method's value
+could be loaded into a register, and no opcode does that — `GETSTAT` reads a
+static *field*. `TAILCALLS` earns its place regardless: `class Main` with a
+`static fn` is the idiomatic shape of a Saule program, so it is where the
+commonest tail-recursive function in the language actually lives.
+
+`TAILCALL` dispatches like `CALL` because *whether* it is a tail call is a
+run-time question there — a local can hold a lambda or a native. A native, a
+constructor, anything else callable has no Saule frame to replace, so it is
+an ordinary call made on the spot and returned, which is word for word what
+`Stmt::Return` does.
+
+**`ret_to` and `n_ret` are inherited by the replacing frame**, so multi-return
+survives a tail chain with nothing added: `two() -> one() -> pair()` still
+delivers two values to a parallel `local`. Upvalues are closed at `base`
+before the arguments move down — a tail call ends a frame just as surely as
+a return does, and skipping that would hand a closure whatever the next
+iteration wrote.
+
+`TAILCALLK`/`TAILCALLS` carry an `EXTRAARG`, so the *physically* last word of
+such a proto is the `EXTRAARG` rather than the tail call. `verify.rs`'s
+"runs off the end" check now steps back over it.
+
+#### Bug 1: the fixture that stopped being a test and became a hang
+
+`tests/ui/stack_overflow_recursion.sau` was `return forever(n + 1)` — a
+**tail** call. Once the tree-walker trampolined it, unbounded recursion
+became an unbounded *loop*: both engines spin, and `run_tests.sh` has no
+per-fixture timeout, so the whole suite hangs rather than fails. Pre-existing
+at `HEAD`, and invisible unless you actually run the suite to completion.
+
+Fixed by binding the result first, so the call is no longer in tail position
+and the fixture tests what its comment says it tests. The comment now says
+not to "simplify" it back.
+
+#### Bug 2: `try return f() catch` stopped catching
+
+Found by the VM, which was *more* correct than the oracle — the first time
+that has happened on this project.
+
+`exec_try` forces a tail call into a real one so the handler stays live, and
+that is right. But it made the call with a `?`:
+
+```rust
+Ok(Flow::TailCall { callee, args, span }) => Ok(Flow::Return(
+    call_function_multi(&callee, &args, span)?,   // <- escapes this `try`
+)),
+```
+
+The `?` propagates past `exec_try`'s own `Err(Thrown)` arm, so the callee ran
+outside the very handler that forced it:
+
+```
+fn boom() -> integer  throw "bang"  end
+fn guarded() -> integer
+    try return boom() catch e: any return -7 end
+end
+```
+
+`uncaught exception: bang` under the tree-walker, `-7` under the VM. The fix
+folds the forced call back into the same `Result` the body produced, so one
+`match` sees both. Pinned by
+`a_try_around_a_tail_call_still_catches_what_the_callee_throws`.
+
+#### Measured: tail calls buy depth, not speed
+
+Neither engine got faster. Release, min of 5–7, same binary with only the
+tail-call path differing:
+
+| | tree-walker | VM |
+|---|---|---|
+| Best benchmark | `strings` +0.7% | `map` +4.2% |
+| Worst benchmark | `oop` −2.4% | `fib` −2.3% |
+| Mean | ≈ −0.5% | ≈ −0.1% |
+
+Every figure is inside the ~3% noise floor. That is expected rather than
+disappointing: no benchmark contains a qualifying tail call. `fib` returns
+`fib(n-1) + fib(n-2)`, which is a binary operation and not a call, and the
+rest wrap their work in `class Main` / `static fn main()` where the inner
+calls are methods. What changed is that `countdown(100000, 0)` returns an
+answer instead of overflowing.
+
+#### Negative cases are asserted on the *disassembly*, not on depth
+
+"This must **not** be a tail call" could be shown by recursing past the depth
+guard, but 10 000 tree-walker frames overflow libtest's thread even at
+`RUST_MIN_STACK=16777216` in a debug build — which is how
+`a_method_call_in_tail_position_is_not_a_tail_call` first failed. Reading the
+opcode back out of `disasm_of` is exact, cheap, and fails for the right
+reason. The positive cases still recurse 50 000 deep, because constant depth
+is precisely what they are asserting.
 
 ### Multi-return and parallel binding — done, and the divergence it exposed
 
@@ -1549,16 +1960,118 @@ is that they now fall back rather than compute a wrong answer.
 
 # Phase 4 — Flip the default
 
-*Estimate: 1–2 weeks.*
+*Estimate: 1–2 weeks. **Done**, except the one item that is a release rather
+than a change — see the note under it.*
 
-- [ ] `--vm` becomes the default; `--interp` selects the tree-walker
-- [ ] `saule-wasm` switches `run` / `check_and_run` to the VM
-- [ ] One release ships with both engines and a documented escape hatch
-- [ ] Update `PRODUCTION.md` §"How fast is it?", the grade table, and
-      Appendix A with **real measured numbers**
-- [ ] `saule-lsp` and `saule-db` need no changes — confirm, don't assume (§14)
-- [ ] Keep the tree-walker in-tree for at least one full release cycle. It is
+- [x] `--vm` becomes the default; `--interp` selects the tree-walker.
+      `run.rs`'s `use_vm() -> bool` became `engine() -> Engine`, because the
+      question stopped being yes/no: the VM can now be *defaulted* into or
+      *asked* for, and the two differ in one visible way — see the next item.
+      `SAULE_ENGINE` gained `interp`, and clap's `conflicts_with` rejects
+      `--vm --interp` rather than picking a winner.
+- [x] **The fallback note is printed only when the VM was asked for.**
+      Not on the original list, and the one place where flipping a default was
+      not mechanical. ``note: the bytecode compiler does not handle `X` yet``
+      was useful advice while `--vm` was opt-in and is noise once it is the
+      default: it fires on 4 of 9 example projects, on every run, about a gap
+      the user cannot act on, for a fallback that by construction changes
+      nothing observable. `--vm` and `SAULE_ENGINE=vm` restore it — which is
+      also what keeps `run_examples_diff.sh`'s fallback count working, since it
+      sets `SAULE_ENGINE=vm` explicitly, as does `run_tests.sh`.
+- [x] `saule-wasm` switches `run` / `check_and_run` to the VM.
+      The single-module route (`saule_vm::compile` + `run_chunk`) — a browser
+      has no filesystem for an import graph to live in — with the CLI's
+      fallback discipline. Three things worth keeping:
+      **(a)** compiling happens *outside* `output::capture`, or a program that
+      printed and then fell back would print its output twice;
+      **(b)** `saule-vm` grew a `native-packages` feature that is a pure
+      passthrough to `saule-interpreter`'s, and now depends on the interpreter
+      with `default-features = false`. Without that, `saule-wasm` pulls
+      `libloading` back in *through the VM* and stops building for wasm32 —
+      the exact blocker that feature was added to remove. The check that
+      catches it is `cargo check -p saule-wasm --target wasm32-unknown-unknown`,
+      not `cargo build`, which passes happily on the host;
+      **(c)** every test in that crate passes under either engine, because the
+      fallback is behaviour-preserving by design — which is exactly what would
+      let the wiring rot back to "always the tree-walker" unnoticed. So one
+      test asserts the *compile* step succeeds on the playground's own showcase
+      program.
+      A `Phase::Compile` was added to the playground's JSON contract, for a
+      compiler *fault*; an unsupported construct is not one and never reaches a
+      diagnostic. `www/` renders `phase` as a string, so the new variant needs
+      no front-end change.
+- [~] One release ships with both engines and a documented escape hatch.
+      The escape hatch is documented: README's new "Execution Engines" section
+      covers `--interp`, `--vm` and `SAULE_ENGINE`, and says plainly that
+      needing `--interp` is a bug worth reporting with the program that needs
+      it. **The release itself has not shipped**, and cannot be ticked from
+      inside the tree: `git tag` still shows one tag and the release workflow
+      has never published (`PRODUCTION.md` §1 calls that the binding
+      constraint on everything else). This box closes when a release does.
+- [x] Update `PRODUCTION.md` §"How fast is it?", the grade table, and
+      Appendix A with **real measured numbers**. Measured on this box, not
+      carried forward: 1.0×–4.8× PUC Lua 5.4.8 against the tree-walker's
+      5.5×–9.0× in the same conditions; runtime-performance grade C – B.
+      §3.3, §3.6 and §10's Phase 6 were rewritten too — each of them argued
+      *for* building a VM, and reads wrong once one exists.
+      The LuaJIT column was **removed** rather than reused: it is not installed
+      here, and the old 30–90× came from a different OS and architecture. A
+      stale column beside a fresh one reads as a comparison that was not made.
+- [x] `saule-lsp` and `saule-db` need no changes — confirm, don't assume (§14).
+      **Confirmed, and this is the confirmation rather than the claim.** Neither
+      crate depends on `saule-vm`, and neither executes user code: every
+      `saule_interpreter::` reference across both is a static-fact API —
+      `init`, `all`, `all_prelude_names`, `export_names`, `lookup`,
+      `package_names`, `is_dynamic_package`, `resolve_import_path`,
+      `collect_import_seed{,_io}` — with no `run`, `run_in`, `check_and_run` or
+      `call_class_static_method` anywhere. There is no engine for them to pick.
+- [x] Keep the tree-walker in-tree for at least one full release cycle. It is
       the differential oracle and it is ~13k lines that already work.
+      Nothing was deleted. §22.1's one-way dependency arrow is what makes this
+      cheap to honour: `saule-vm` depends on `saule-interpreter`, never the
+      reverse, so the oracle stays buildable and testable with the VM removed
+      from the workspace.
+
+## Verification at the flip
+
+All five commands, plus the two the flip made newly meaningful. Debug build
+unless stated.
+
+| Command | Result |
+|---|---|
+| `cargo test --workspace` | **1405 passed, 0 failed, 5 ignored** |
+| `run_tests.sh` (no `SAULE_ENGINE` — now the VM) | 236/236 |
+| `SAULE_ENGINE=vm run_tests.sh` | 236/236 |
+| `SAULE_ENGINE=interp run_tests.sh` | 236/236 |
+| `SAULE_DIFF=1 run_tests.sh` | 236/236, engines agree on output, 2 exempt |
+| `run_examples_diff.sh` | 9 of 11 compared, 4 fell back, all agree |
+| `--example compare` (release) | agrees, then 2.63×–3.74× |
+| `benchmarks/bench.py check` | VM, tree-walker and Lua print identically |
+| `cargo check -p saule-wasm --target wasm32-unknown-unknown` | clean |
+
+The bare `run_tests.sh` row is the one that was not a test before: with no
+`SAULE_ENGINE` set it used to exercise the tree-walker and now exercises the
+VM, which is the flip itself.
+
+## What flipping the default did *not* fix
+
+The compiler's coverage. The flip is safe because the *fallback* is safe, not
+because the gap closed — at the flip, 5 of the 9 comparable example projects
+ran fully on the VM and 4 took the tree-walker, unchanged by any of this work.
+The earlier handoff's rule ("do not start Phase 4 until real-program coverage
+is well above 4 of 9") was a rule about *value*, not safety: what it guards
+against is shipping a default that is mostly a no-op on real code, and that
+risk is real and still open. `run_examples_diff.sh` prints the fallback count
+on every run and that is the number to steer by — not "236/236 under
+`SAULE_ENGINE=vm`", which scores a fallback as a pass.
+
+**Deliberately not done here: raising the frame limit.** The previous handoff
+called it Phase 4 work, and it is not on this checklist. `MAX_EVAL_DEPTH` is
+aligned at the tree-walker's 10 000 and §6.4 argues for a million, since a
+call under the VM is a `Vec` push rather than a native frame — but that
+changes which programs the *language* accepts, not which engine runs them, and
+it has to move in both engines in one change or `depth(50_000)` diverges again.
+Its own task, with its own differential fixture.
 
 ---
 
@@ -1587,7 +2100,27 @@ is that they now fall back rather than compute a wrong answer.
 
 - [~] **Differential testing** — `crates/saule-vm/tests/differential.rs`
       runs every program under **both** engines and compares the result,
-      error text included. **150 tests.** Multi-return added 16: both
+      error text included. **191 tests.** Closing the open correctness
+      items added 12: a safe read, a safe call and a member **write** on an
+      unproved receiver, a safe call's arguments **counted** to prove the
+      nil guard still wraps them, a dynamic write reporting the same error
+      as the tree-walker, an interface method's return type known at last
+      (single- and two-valued, and one reached through `extends`),
+      `return x?.m()` through both arms, and the reachability guard
+      asserted in both directions — refusing a callee that reaches a later
+      declaration, and *not* refusing an ordinary call with an unrelated
+      `fn` below it. Tail calls added 12: a
+      tail-recursive top-level `fn`, static method and lambda each recursing
+      50 000 deep (constant depth is the assertion, so the depth has to
+      exceed the 10 000 guard); mutual recursion, which proves the frame is
+      reused rather than merely reset; a method call and a `return` inside a
+      `try` asserted **on the disassembly** to be *not* tail calls, with a
+      `catch` body asserted to still be one; a `try` that catches what a
+      forced tail call throws (the interpreter bug); tail calls to a native
+      and to a constructor falling back to ordinary calls; results passing
+      through two replaced frames; upvalues closed by the frame a tail call
+      replaces; and defaulted and variadic parameters bound through the
+      entry stubs of a *dirty* reused frame. Multi-return added 16: both
       results of a call, a plain value list, nil padding in both directions,
       a surplus expression **counted** to prove it still runs, only-the-last
       expanding, the swap, parallel writes to fields and table slots,
@@ -1631,6 +2164,10 @@ is that they now fall back rather than compute a wrong answer.
       `if`/`while`/`for`, nesting and block scoping. Programs the compiler
       cannot compile yet are *skipped*, since `Unsupported` is the designed
       fall-back signal, not a failure.
+- [x] **`tests/ui/` audited** — all 144 fixtures read against their names,
+      not just their exit status. Three were failing for the wrong reason;
+      two are fixed and one is recorded as a missing diagnostic. See
+      "`tests/ui/` is the diagnostic corpus" above and `tests/ui/README.md`.
 - [x] **`SAULE_DIFF=1 ./run_tests.sh`** — every fixture under **both**
       engines, output compared character for character. This is the
       "conformance tests at no authoring cost" item, and it closes a hole

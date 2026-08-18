@@ -115,9 +115,7 @@ fn real_main() {
 /// the user's intent — script arguments have their own place, after `--`,
 /// so there is nothing left to disambiguate.
 fn cmd_run(args: RunArgs) {
-    if args.vm {
-        run::request_vm();
-    }
+    run::select_engine(args.vm, args.interp);
     saule_interpreter::stdlib::os::set_script_args(args.args);
 
     match args.target {
@@ -159,6 +157,37 @@ mod tests {
             let parsed = run_args(&["saule", "run", target]);
             assert_eq!(parsed.target, Some(PathBuf::from(target)));
             assert!(parsed.args.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_windows_escaped_trailing_quote_is_stripped_from_a_path() {
+        // `saule run ".\examples\UI Project\"` reaches the program as
+        // `.\examples\UI Project"`: the shell quotes the argument because it
+        // has a space, and the trailing `\` escapes the closing `"` under
+        // the MSVC rules Rust's argument parsing follows. Tab completion
+        // produces exactly that, so it is the ordinary way to name such a
+        // directory — and it used to fail with `file '...UI Project"' does
+        // not exist`, naming a quote the user never typed.
+        let parsed = run_args(&["saule", "run", r#".\examples\UI Project""#]);
+        let want = if cfg!(windows) {
+            r".\examples\UI Project"
+        } else {
+            // On Unix `"` is an ordinary filename character, so the argument
+            // is a real path and must survive untouched.
+            r#".\examples\UI Project""#
+        };
+        assert_eq!(parsed.target, Some(PathBuf::from(want)));
+    }
+
+    #[test]
+    fn only_a_trailing_quote_is_stripped() {
+        // A quote anywhere but the end is left alone even on Windows: the
+        // fix-up exists for one specific escaping artefact, not to sanitise
+        // paths in general.
+        for target in [r#"a"b"#, r#""quoted"#, "plain"] {
+            let parsed = run_args(&["saule", "run", target]);
+            assert_eq!(parsed.target, Some(PathBuf::from(target)), "{target}");
         }
     }
 
@@ -220,6 +249,24 @@ mod tests {
             }
             other => panic!("expected init, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn neither_engine_flag_is_the_default_and_that_default_is_the_vm() {
+        // Phase 4's flip lives in `run::engine`, not here: both flags absent
+        // must reach it as "no opinion" so `SAULE_ENGINE` still gets a say.
+        let parsed = run_args(&["saule", "run"]);
+        assert!(!parsed.vm);
+        assert!(!parsed.interp);
+    }
+
+    #[test]
+    fn each_engine_flag_parses_and_the_pair_is_rejected() {
+        assert!(run_args(&["saule", "run", "--vm"]).vm);
+        assert!(run_args(&["saule", "run", "--interp"]).interp);
+        // Asking for both is a mistake worth an error rather than a
+        // silently-picked winner.
+        assert!(Cli::try_parse_from(["saule", "run", "--vm", "--interp"]).is_err());
     }
 
     #[test]

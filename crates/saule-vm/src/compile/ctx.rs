@@ -135,6 +135,18 @@ pub struct FuncCtx {
     /// proved a table from the type alone, and this records what the
     /// compiler already knows.
     pub variadic_param: Option<Rc<str>>,
+    /// How many `try` **bodies** enclose the statement being compiled.
+    ///
+    /// A tail call inside one must not replace the frame: the handler has to
+    /// still be on the stack when the callee runs, or `try return f() catch`
+    /// stops catching what `f` throws. `exec_try` forces the tree-walker's
+    /// `Flow::TailCall` into a real call for exactly this reason, and the two
+    /// engines have to draw the line in the same place — the depth at which
+    /// a program dies is observable.
+    ///
+    /// Per function, not per compiler: a lambda written inside a `try` body
+    /// gets a frame of its own, and its own `return` is in no handler's way.
+    pub try_depth: u32,
     /// Lexical scopes, innermost last: `name -> register`. The compiler's
     /// own map, authoritative for register numbers.
     scopes: Vec<Vec<(Rc<str>, u16)>>,
@@ -144,6 +156,7 @@ impl FuncCtx {
     pub fn new(name: Option<&str>) -> FuncCtx {
         FuncCtx {
             name: name.map(Rc::from),
+            try_depth: 0,
             code: Vec::new(),
             regs: RegAlloc::new(),
             lines: Vec::new(),
@@ -269,6 +282,21 @@ pub struct Compiler<'a> {
     /// "fully declared" and refused every call in a file that ends in a
     /// declaration — which is most of them.
     pub module_type_decls: std::collections::HashSet<String>,
+    /// Top-level declaration name → the top-level names its body mentions.
+    ///
+    /// The direct guards above are exact but *local*: they fire when the
+    /// module body itself names something undeclared. They cannot see one
+    /// level down — `C.go()` called above `fn later`, where `go`'s body
+    /// reads `later`. The reference inside `go` is legal; only the call is
+    /// early, and nothing at the call site distinguishes a callee that
+    /// reaches an undeclared name from one that does not.
+    ///
+    /// A blunter guard was tried first — refuse any module-body call while
+    /// a `fn` is still ahead — and reverted, because a call partway down a
+    /// file with any `fn` below it is an ordinary shape and it refused two
+    /// perfectly good programs. This is the precise version: one edge per
+    /// mention, closed transitively at the call site.
+    pub module_refs: HashMap<String, std::collections::HashSet<String>>,
     pub loops: Vec<LoopCtx>,
     /// Class name -> index, from Pass 1.
     pub layouts: crate::compile::layout::Layouts,
@@ -345,6 +373,7 @@ impl<'a> Compiler<'a> {
             fn_protos: HashMap::new(),
             module_decls_seen: std::collections::HashSet::new(),
             module_type_decls: std::collections::HashSet::new(),
+            module_refs: HashMap::new(),
             loops: Vec::new(),
             layouts: Default::default(),
             mutated_receivers: Default::default(),
@@ -668,6 +697,40 @@ impl<'a> Compiler<'a> {
 
     pub fn callk_resolvable(&self, name: &str) -> bool {
         !self.enclosing.is_empty() || self.module_decls_seen.contains(name)
+    }
+
+    /// Whether calling `name` from the **module body** could reach a
+    /// top-level declaration the body has not run yet.
+    ///
+    /// A breadth-first closure over [`Self::module_refs`]. Inside a function
+    /// body it is vacuously false: by the time one runs, the module body has
+    /// finished and every top-level name exists.
+    ///
+    /// Deliberately one-sided. It over-approximates — a name mentioned on a
+    /// branch that never executes still counts — and over-approximating here
+    /// costs a fallback, while under-approximating costs a wrong answer on a
+    /// program the tree-walker rejects outright.
+    pub fn reaches_undeclared(&self, name: &str) -> bool {
+        if !self.enclosing.is_empty() {
+            return false;
+        }
+        let mut queue = vec![name.to_string()];
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Some(cur) = queue.pop() {
+            if !seen.insert(cur.clone()) {
+                continue;
+            }
+            let Some(refs) = self.module_refs.get(&cur) else {
+                continue;
+            };
+            for r in refs {
+                if self.module_type_decls.contains(r) && !self.module_decls_seen.contains(r) {
+                    return true;
+                }
+                queue.push(r.clone());
+            }
+        }
+        false
     }
 
     /// A `CALLK` target: the proto index packed with its module.

@@ -99,6 +99,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
         expect_extra = matches!(
             op,
             Op::CALLK | Op::CALLNAT | Op::CALLM_MR | Op::CALLMX | Op::CALLIF | Op::CALLSTAT | Op::NEWVAR | Op::ARITHX | Op::UNARYX
+                | Op::TAILCALLK | Op::TAILCALLS
         );
 
         // Register operands. `A` is a register for every format that has
@@ -165,8 +166,19 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
     if expect_extra {
         return Err(bad(name, n, "the proto ends before a required EXTRAARG"));
     }
-    match proto.code.last().and_then(|i| i.op()) {
-        Some(Op::RET | Op::RET0 | Op::RET1 | Op::TAILCALL | Op::JMP) => Ok(()),
+    // A tail call never comes back, so it terminates a proto exactly as a
+    // return does — but the statically-resolved forms carry an `EXTRAARG`,
+    // which is then the physically last word. Step back over it, or a
+    // perfectly good proto looks like one that runs off its end.
+    let terminator = match proto.code.last().and_then(|i| i.op()) {
+        Some(Op::EXTRAARG) => proto.code.get(n - 2).and_then(|i| i.op()),
+        other => other,
+    };
+    match terminator {
+        Some(
+            Op::RET | Op::RET0 | Op::RET1 | Op::JMP
+            | Op::TAILCALL | Op::TAILCALLK | Op::TAILCALLS,
+        ) => Ok(()),
         _ => Err(bad(
             name,
             n - 1,

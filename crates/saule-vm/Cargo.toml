@@ -11,7 +11,11 @@ license.workspace = true
 # workspace, because it is the differential oracle for every VM bug.
 [dependencies]
 saule-ast = { path = "../saule-ast" }
-saule-interpreter = { path = "../saule-interpreter" }
+# `default-features = false` here, and re-exported as this crate's own
+# `native-packages`, so `saule-wasm` can depend on the VM without dragging
+# `libloading` in. Cargo unifies features across the graph, so the CLI --
+# which asks for the interpreter's defaults directly -- still gets them.
+saule-interpreter = { path = "../saule-interpreter", default-features = false }
 # The front end, for `program.rs`: compiling a program means resolving the
 # import graph here rather than at run time, so this crate reads and parses
 # the imported files itself. Both sit *below* `saule-interpreter` in the
@@ -22,3 +26,9 @@ saule-semantic = { path = "../saule-semantic" }
 saule-typeck = { path = "../saule-typeck" }
 miette = "7.6.0"
 thiserror = "2.0.18"
+
+[features]
+default = ["native-packages"]
+# Passthrough to `saule-interpreter`'s feature of the same name. See the
+# comment on the dependency above.
+native-packages = ["saule-interpreter/native-packages"]

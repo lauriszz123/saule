@@ -213,7 +213,17 @@ impl Compiler<'_> {
         let ty = self.type_desc(catch_ty);
 
         let start = self.f.label_here() as u32;
-        self.block(body)?;
+        // A `return f()` in here must **not** replace the frame: the handler
+        // has to still be on the stack when the callee runs, or
+        // `try return f() catch` stops catching what `f` throws. `exec_try`
+        // forces the tree-walker's `Flow::TailCall` into a real call for the
+        // same reason, and the two engines must agree — the depth at which a
+        // program dies is observable. The `catch` body is deliberately
+        // outside this, exactly as it is there.
+        self.f.try_depth += 1;
+        let r = self.block(body);
+        self.f.try_depth -= 1;
+        r?;
         let end = self.f.label_here() as u32;
         let over = self.emit_jump(Op::JMP, 0, span);
 
@@ -394,7 +404,34 @@ impl Compiler<'_> {
                 // value (a constructor, `self.super()`); a genuine call
                 // leaves its results in its own window and says so.
                 let dst = self.alloc(span)?;
-                let r = self.expr_results(&values[0], dst, Want::All)?;
+                // `return f(args)` is a **tail call** — unless one of two
+                // things forbids it, both properties of the enclosing
+                // function rather than of the call, and both about matching
+                // the tree-walker rather than about the VM:
+                //
+                // * **Inside a `try` body.** `exec_try` forces
+                //   `Flow::TailCall` into a real call so the handler is
+                //   still on the stack when the callee runs; replacing the
+                //   frame would make `try return f() catch` stop catching
+                //   what `f` throws.
+                // * **The module body.** `run_in` makes a module-level tail
+                //   call for real — a module body is not a function, so
+                //   there is no frame to replace — and the VM's outermost
+                //   frame is the one `run_chunk_entry` returns through.
+                //
+                // Even then it is a *request*: only the shapes that can
+                // replace a frame honour it, and the rest hand back an
+                // ordinary result run to return.
+                let tail_ok = self.f.try_depth == 0 && self.f.name.as_deref() != Some("main");
+                let want = if tail_ok { Want::Tail } else { Want::All };
+                let r = self.expr_results(&values[0], dst, want)?;
+                if r.terminated {
+                    // The frame is gone. Emitting a `RET` after this would
+                    // be unreachable code the verifier would then have to
+                    // accept.
+                    self.free_to(m);
+                    return Ok(());
+                }
                 let a = self.reg8(r.base, span)?;
                 match r.count {
                     Some(1) => self.emit(Instruction::abc(Op::RET1, a, 0, 0), span),
@@ -422,25 +459,47 @@ impl Compiler<'_> {
                 if n > u8::MAX as usize - 1 {
                     return Err(CompileError::unsupported("returning over 254 values", span.clone()));
                 }
-                // `return a, f()` returns `a` followed by *all* of `f`'s
-                // results, and how many that is is a run-time fact. The
-                // range has to be contiguous, so `f`'s window would have to
-                // begin exactly where `a` ends — which the bump allocator
-                // cannot promise while `a` is still live. Refused rather
-                // than truncated to one value.
-                if matches!(values[n - 1].value, Expr::Call { .. }) {
-                    return Err(CompileError::unsupported(
-                        "a `return` whose last of several values is a call",
-                        span.clone(),
-                    ));
-                }
+                // `return a, f()` returns `a` followed by **all** of `f`'s
+                // results — `eval_expr_list` expands the last element and
+                // only the last — and how many that is is a run-time fact.
+                // The range `RET` reads has to be contiguous, so `f`'s
+                // window must begin exactly where the fixed values end.
+                //
+                // It does, and for free: the register allocator is a bump
+                // pointer, so after the first `n - 1` values are in place
+                // `free` sits precisely at the landing register. Reserving
+                // that register and releasing it again is what makes the
+                // frame big enough for a single-valued last expression
+                // *and* leaves the next allocation — the call's window —
+                // landing on it. This used to refuse for want of noticing
+                // that.
                 let m = self.mark();
-                let base = self.alloc_n(n as u16, span)?;
-                for (i, v) in values.iter().enumerate() {
+                let base = self.alloc_n(n as u16 - 1, span)?;
+                for (i, v) in values.iter().take(n - 1).enumerate() {
                     self.expr_to(v, base + i as u16)?;
                 }
+                let landing = self.mark();
+                let dst = self.alloc(span)?;
+                debug_assert_eq!(dst, base + n as u16 - 1);
+                self.free_to(landing);
+
+                let r = self.expr_results(&values[n - 1], dst, Want::All)?;
+                debug_assert_eq!(r.base, dst, "the last value did not land contiguously");
                 let a = self.reg8(base, span)?;
-                self.emit(Instruction::abc(Op::RET, a, n as u8 + 1, 0), span);
+                match r.count {
+                    // `B = 0`: the run ends at `top`, which the call set.
+                    None => self.emit(Instruction::abc(Op::RET, a, 0, 0), span),
+                    Some(k) => {
+                        let total = n as u16 - 1 + k as u16;
+                        let Ok(total) = u8::try_from(total) else {
+                            return Err(CompileError::unsupported(
+                                "returning over 254 values",
+                                span.clone(),
+                            ));
+                        };
+                        self.emit(Instruction::abc(Op::RET, a, total + 1, 0), span);
+                    }
+                }
                 self.free_to(m);
                 Ok(())
             }
@@ -740,23 +799,34 @@ impl Compiler<'_> {
                 return Ok(());
             }
 
-            let Some(class) = self.class_of_expr(obj) else {
-                return Err(CompileError::unsupported(
-                    "an assignment to a member of a receiver with no proved class",
-                    span.clone(),
-                ));
-            };
-            let Some(slot) = self.chunk.classes[class as usize].layout.slot(name) else {
-                return Err(CompileError::unsupported(
-                    "an assignment to something that is not an instance field",
-                    span.clone(),
-                ));
-            };
+            // A proved class resolves to a field slot; anything else is
+            // `SETFX`, which asks `assign_member` at run time (§8.5). This
+            // is the write half of the same escape hatch `GETFX` gives the
+            // read, and it used to refuse — which was `json_usage`'s first
+            // refusal, on a `table` field reached through an `any`.
+            let slot = self
+                .class_of_expr(obj)
+                .and_then(|class| self.chunk.classes[class as usize].layout.slot(name));
             let m = self.mark();
             let o = self.expr_tmp(obj)?;
             let v = self.rhs_tmp(value)?;
             let (a, c) = (self.reg8(o, span)?, self.reg8(v, span)?);
-            self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span);
+            match slot {
+                Some(slot) => self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span),
+                None => {
+                    let k = self.constant(
+                        saule_interpreter::Value::Str(std::rc::Rc::new(name.clone())),
+                        span,
+                    )?;
+                    let Ok(kb) = u8::try_from(k) else {
+                        return Err(CompileError::unsupported(
+                            "a dynamic member name past the 256-constant window",
+                            span.clone(),
+                        ));
+                    };
+                    self.emit(Instruction::abc(Op::SETFX, a, kb, c), span);
+                }
+            }
             self.free_to(m);
             return Ok(());
         }

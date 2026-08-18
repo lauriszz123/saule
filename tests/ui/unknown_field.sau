@@ -1,13 +1,19 @@
--- Reading an unknown field on a known class should be a compile error
--- (typeck has no class registry yet, so it slips through to runtime).
+-- Reading an unknown field on a known class is a compile error.
+--
+-- This fixture used to be dead. It was written with `constructor(label)`,
+-- which is not Saule syntax, so it failed in the *parser* with "expected `:`
+-- and type on field" and never reached a member check at all — and its
+-- comment still claimed "typeck has no class registry yet, so it slips
+-- through to runtime", which stopped being true long ago. `run_tests.sh`
+-- checks exit status, so a fixture failing for the wrong reason passes.
 
 class Box
-  label: string
+	label: string
 
-  constructor(label: string)
-    self.label = label
-  end
+	fn init(label: string)
+		self.label = label
+	end
 end
 
-local b = Box("hi")
+local b: Box = Box("hi")
 println(b.nonexistentField)

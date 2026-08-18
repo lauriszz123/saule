@@ -45,6 +45,15 @@ pub(crate) enum Want {
     /// end; only `RET A 0` can read that, which is why `return f()` is the
     /// sole caller.
     All,
+    /// `return f(args)` in **tail position** — replace the frame instead of
+    /// nesting inside it (§6.4).
+    ///
+    /// A request, not a promise. Only the three shapes that can actually
+    /// replace a frame honour it; a constructor, a native, a method call or
+    /// a pipeline treats it as [`Want::All`] and reports back through
+    /// [`Results::terminated`], because the tree-walker draws the line in the same
+    /// place — `Flow::TailCall` is built only for a `Value::Function`.
+    Tail,
 }
 
 impl Want {
@@ -52,7 +61,10 @@ impl Want {
     fn c(self) -> u8 {
         match self {
             Want::Fixed(n) => n + 1,
-            Want::All => 0,
+            // A tail call that has to fall back to an ordinary one still
+            // has to hand every result through, so it wants what `All`
+            // wants.
+            Want::All | Want::Tail => 0,
         }
     }
 
@@ -63,9 +75,19 @@ impl Want {
     fn slots(self) -> u16 {
         match self {
             Want::Fixed(n) => n as u16,
-            Want::All => 1,
+            Want::All | Want::Tail => 1,
         }
     }
+}
+
+/// How a safe method call `obj?.m(...)` reaches its method.
+#[derive(Clone, Copy)]
+pub(crate) enum SafeCall {
+    /// A proved class: one indexed load out of the vtable.
+    Vtable(u16),
+    /// No proved class: the method name, as a constant index, looked up by
+    /// the tree-walker's own `dispatch_member_call_multi` (§8.5).
+    Dynamic(u16),
 }
 
 /// Where a call left its results.
@@ -75,6 +97,15 @@ pub(crate) struct Results {
     /// How many registers from `base` hold results, or `None` when only the
     /// VM knows — the run then ends at the frame's `top`.
     pub count: Option<u8>,
+    /// Control has already left the function: nothing is left to return and
+    /// the caller must emit no `RET`.
+    ///
+    /// Two things set it, and both are only reachable from a `return`, which
+    /// is what makes writing control flow from an expression helper
+    /// legitimate here: a **tail call**, which replaced the frame, and
+    /// `return x?.m()`, whose two arms return separately because their
+    /// result counts differ and only one of them is known at compile time.
+    pub terminated: bool,
 }
 
 impl Compiler<'_> {
@@ -819,14 +850,24 @@ impl Compiler<'_> {
                     self.expr_to(arg, base + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
+                let packed = ((cls as u32) << 16) | slot as u32;
+                // `class Main` / `static fn` is the idiomatic shape of a
+                // Saule program, so this is the commonest tail-recursive
+                // function in the language. The tree-walker tail-calls it:
+                // a bare-name static resolves to a `Value::Function`.
+                if self.tail_position(want) {
+                    self.emit(
+                        Instruction::abc(Op::TAILCALLS, a, positional.len() as u8 + 1, 0),
+                        span,
+                    );
+                    self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
+                    return Ok(Compiler::tail_result(base));
+                }
                 self.emit(
                     Instruction::abc(Op::CALLSTAT, a, positional.len() as u8 + 1, want.c()),
                     span,
                 );
-                self.emit(
-                    Instruction::ax_of(Op::EXTRAARG, ((cls as u32) << 16) | slot as u32),
-                    span,
-                );
+                self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
                 self.finish_call(base, dst, want, mark, span)
             }
             Some(Binding::Module { .. }) if self.fn_protos.contains_key(name) => {
@@ -841,6 +882,15 @@ impl Compiler<'_> {
                         span.clone(),
                     ));
                 }
+                // Declared above, but its *body* may still reach something
+                // that is not. The tree-walker errors when the callee runs;
+                // the VM would resolve the proto and return a value.
+                if self.reaches_undeclared(name) {
+                    return Err(CompileError::unsupported(
+                        "a module-level call whose callee reaches a declaration further down",
+                        span.clone(),
+                    ));
+                }
                 let proto = self.fn_protos[name];
                 let m = self.mark();
                 // `CALLK`'s window starts at the *arguments*: there is no
@@ -851,11 +901,19 @@ impl Compiler<'_> {
                     self.expr_to(arg, base + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
+                let t = self.own_call_target(proto, span)?;
+                if self.tail_position(want) {
+                    self.emit(
+                        Instruction::abc(Op::TAILCALLK, a, positional.len() as u8 + 1, 0),
+                        span,
+                    );
+                    self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
+                    return Ok(Compiler::tail_result(base));
+                }
                 self.emit(
                     Instruction::abc(Op::CALLK, a, positional.len() as u8 + 1, want.c()),
                     span,
                 );
-                let t = self.own_call_target(proto, span)?;
                 self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
                 self.finish_call(base, dst, want, m, span)
             }
@@ -873,6 +931,17 @@ impl Compiler<'_> {
                     self.expr_to(arg, base + 1 + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
+                // The callee is a value, so *whether* this is a tail call is
+                // a run-time question — a local can hold a lambda or a
+                // native. `TAILCALL` asks it the same way the tree-walker
+                // does, and falls back to an ordinary call and return.
+                if self.tail_position(want) {
+                    self.emit(
+                        Instruction::abc(Op::TAILCALL, a, positional.len() as u8 + 1, 0),
+                        span,
+                    );
+                    return Ok(Compiler::tail_result(base));
+                }
                 self.emit(
                     Instruction::abc(Op::CALL, a, positional.len() as u8 + 1, want.c()),
                     span,
@@ -880,6 +949,16 @@ impl Compiler<'_> {
                 self.finish_call(base, dst, want, m, span)
             }
         }
+    }
+
+    /// Whether this call site asked to replace the frame.
+    ///
+    /// Only the three branches that *can* replace one consult it; the whole
+    /// question of whether a tail call is allowed **here at all** is settled
+    /// once, in [`Compiler::ret`], because both vetoes are properties of the
+    /// enclosing function rather than of the call.
+    fn tail_position(&self, want: Want) -> bool {
+        want == Want::Tail
     }
 
     /// `obj.method(args)` or `Class.method(args)`.
@@ -948,6 +1027,17 @@ impl Compiler<'_> {
         if let Some(class) = self.class_named_by(obj)
             && let Some(&s) = self.chunk.classes[class as usize].smindex.get(name)
         {
+            // `C.go()` from the module body, where `go`'s body reads a
+            // `fn` declared below the call. The class itself is declared —
+            // the direct guard is satisfied — so only reachability sees it.
+            if let Expr::Ident(cn) = &obj.value
+                && self.reaches_undeclared(cn)
+            {
+                return Err(CompileError::unsupported(
+                    "a module-level call whose callee reaches a declaration further down",
+                    span.clone(),
+                ));
+            }
             let m = self.mark();
             let base = self.alloc_n((args.len().max(1) as u16).max(want.slots()), span)?;
             for (i, arg) in args.iter().enumerate() {
@@ -1167,6 +1257,12 @@ impl Compiler<'_> {
                     span.clone(),
                 ));
             }
+            if self.reaches_undeclared(name) {
+                return Err(CompileError::unsupported(
+                    "a module-level call whose callee reaches a declaration further down",
+                    span.clone(),
+                ));
+            }
             let m = self.mark();
             let base = self.alloc_n(n_args, span)?;
             self.move_result(cur, base, span)?;
@@ -1360,7 +1456,10 @@ impl Compiler<'_> {
         span: &Range<usize>,
     ) -> Result<Results, CompileError> {
         match want {
-            Want::All => Ok(Results { base, count: None }),
+            // A `Tail` that reached here is one of the shapes that cannot
+            // replace a frame, so it behaves as `All` and says `terminated: false`
+            // — the caller then emits the `RET` it would have anyway.
+            Want::All | Want::Tail => Ok(Results { base, count: None, terminated: false }),
             Want::Fixed(n) => {
                 for i in 0..n as u16 {
                     self.move_result(base + i, dst + i, span)?;
@@ -1369,9 +1468,16 @@ impl Compiler<'_> {
                 Ok(Results {
                     base: dst,
                     count: Some(n),
+                    terminated: false,
                 })
             }
         }
+    }
+
+    /// The frame was replaced; there is nothing to return and nothing to
+    /// move. See [`Results::terminated`].
+    fn tail_result(base: u16) -> Results {
+        Results { base, count: None, terminated: true }
     }
 
     /// A call shape that yields exactly one value, already written to `dst`.
@@ -1388,7 +1494,9 @@ impl Compiler<'_> {
     ) -> Result<Results, CompileError> {
         let n = match want {
             Want::Fixed(n) => n,
-            Want::All => return Ok(Results { base: dst, count: Some(1) }),
+            Want::All | Want::Tail => {
+                return Ok(Results { base: dst, count: Some(1), terminated: false });
+            }
         };
         for i in 1..n as u16 {
             let a = self.reg8(dst + i, span)?;
@@ -1397,6 +1505,7 @@ impl Compiler<'_> {
         Ok(Results {
             base: dst,
             count: Some(n),
+            terminated: false,
         })
     }
 
@@ -1717,17 +1826,31 @@ impl Compiler<'_> {
         // Resolve the slot *before* emitting anything. A refusal has to
         // leave the code array untouched, because `Unsupported` falls back
         // to the tree-walker and half-written code cannot be taken back.
-        let Some(class) = self.class_of_nullable_expr(obj) else {
-            return Err(CompileError::unsupported(
-                "a safe member access on a receiver with no proved class",
-                span.clone(),
-            ));
-        };
-        let Some(access) = self.member_access(class, name) else {
-            return Err(CompileError::unsupported(
-                "a safe member access on a member that is neither an instance field nor a static",
-                span.clone(),
-            ));
+        //
+        // With no proved class the read becomes `GETFX`, which defers to
+        // `read_member` — the same escape hatch §8.5 gives an ordinary
+        // member read, and the reason a file handle, an enum variant and a
+        // module-level variable all work here without the compiler learning
+        // each one. A nullable receiver is if anything *more* likely to be
+        // unproved, so refusing here was the odd one out.
+        let access = self
+            .class_of_nullable_expr(obj)
+            .and_then(|class| self.member_access(class, name));
+        // `GETFX` carries its key in `C`, an 8-bit constant index — same
+        // window, and the same clean refusal past it, as the ordinary
+        // dynamic read.
+        let key = match access {
+            Some(_) => None,
+            None => {
+                let k = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+                let Ok(kc) = u8::try_from(k) else {
+                    return Err(CompileError::unsupported(
+                        "a dynamic member name past the 256-constant window",
+                        span.clone(),
+                    ));
+                };
+                Some(kc)
+            }
         };
 
         let m = self.mark();
@@ -1737,7 +1860,11 @@ impl Compiler<'_> {
         // jump is taken exactly on the nil path.
         self.emit(Instruction::abc(Op::JNOTNIL, b, 0, 0), span);
         let to_nil = self.emit_jump(Op::JMP, 0, span);
-        self.emit(self.member_load(access, a, b), span);
+        match (access, key) {
+            (Some(access), _) => self.emit(self.member_load(access, a, b), span),
+            (None, Some(kc)) => self.emit(Instruction::abc(Op::GETFX, a, b, kc), span),
+            (None, None) => unreachable!("a key is interned whenever the access is unresolved"),
+        }
         let done = self.emit_jump(Op::JMP, 0, span);
         self.patch_here(to_nil)?;
         self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
@@ -1763,29 +1890,19 @@ impl Compiler<'_> {
     ) -> Result<Results, CompileError> {
         let span = &e.span;
 
-        let Some(class) = self.class_of_nullable_expr(obj) else {
-            return Err(CompileError::unsupported(
-                "a safe method call on a receiver with no proved class",
-                span.clone(),
-            ));
-        };
-        let Some(&slot) = self.chunk.classes[class as usize].vindex.get(name) else {
-            return Err(CompileError::unsupported(
-                "a safe method call on a method the class does not declare",
-                span.clone(),
-            ));
-        };
-        // The nil arm has to produce *as many* results as the call arm, and
-        // for `Want::All` that count is a run-time fact carried in `top` —
-        // which nothing but a return can set. `return x?.m()` therefore
-        // refuses and falls back rather than returning one value where the
-        // tree-walker returns several.
-        let Want::Fixed(nret) = want else {
-            return Err(CompileError::unsupported(
-                "a safe method call whose results are passed straight through by `return`",
-                span.clone(),
-            ));
-        };
+        let dispatch = self.safe_call_dispatch(obj, name, span)?;
+        // `return x?.m()` — the two arms produce different numbers of
+        // values and only the call arm's count is knowable at run time, so
+        // there is no single register run for a `RET` to read. It used to
+        // refuse for that reason. It does not need to: the arms never have
+        // to *merge*. Each returns for itself, which also matches the
+        // tree-walker exactly — a nil receiver yields one nil
+        // (`values_of(Value::Nil)`) while a present one yields everything
+        // `dispatch_member_call_multi` produced.
+        if !matches!(want, Want::Fixed(_)) {
+            return self.safe_method_call_returning(obj, args, dispatch, span);
+        }
+        let Want::Fixed(nret) = want else { unreachable!("checked above") };
 
         let m = self.mark();
         let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
@@ -1796,18 +1913,7 @@ impl Compiler<'_> {
         for (i, arg) in args.iter().enumerate() {
             self.expr_to(arg, base + 1 + i as u16)?;
         }
-        if nret == 1 {
-            self.emit(
-                Instruction::abc(Op::CALLM, rb, args.len() as u8 + 1, slot as u8),
-                span,
-            );
-        } else {
-            self.emit(
-                Instruction::abc(Op::CALLM_MR, rb, args.len() as u8 + 1, want.c()),
-                span,
-            );
-            self.emit(Instruction::ax_of(Op::EXTRAARG, slot as u32), span);
-        }
+        self.emit_safe_call(dispatch, rb, args.len() as u8, want.c(), span);
         for i in 0..nret as u16 {
             self.move_result(base + i, dst + i, span)?;
         }
@@ -1822,7 +1928,107 @@ impl Compiler<'_> {
         Ok(Results {
             base: dst,
             count: Some(nret),
+            terminated: false,
         })
+    }
+
+    /// `return x?.m(args)` — the safe call as a **whole return**.
+    ///
+    /// Emitted only from a `return`, which is why it may write `RET` itself:
+    /// the two arms need different ones, and forcing them to merge is what
+    /// made this refuse before. The present-receiver arm asks for every
+    /// result and returns the run `top` delimits; the nil arm returns a
+    /// single nil, which is exactly `eval_values`' `values_of(Value::Nil)`.
+    ///
+    /// Reported back as [`Results::terminated`], so the caller emits nothing
+    /// further — the same contract a tail call uses.
+    fn safe_method_call_returning(
+        &mut self,
+        obj: &Spanned<Expr>,
+        args: &[&Spanned<Expr>],
+        dispatch: SafeCall,
+        span: &Range<usize>,
+    ) -> Result<Results, CompileError> {
+        let m = self.mark();
+        let base = self.alloc_n(args.len() as u16 + 1, span)?;
+        self.expr_to(obj, base)?;
+        let rb = self.reg8(base, span)?;
+        // `JNOTNIL` skips the jump when the receiver is present, so the jump
+        // is taken exactly on the nil path. The arguments are **inside** the
+        // guard: the tree-walker returns before evaluating them, so
+        // evaluating them here would run side effects it does not.
+        self.emit(Instruction::abc(Op::JNOTNIL, rb, 0, 0), span);
+        let to_nil = self.emit_jump(Op::JMP, 0, span);
+        for (i, arg) in args.iter().enumerate() {
+            self.expr_to(arg, base + 1 + i as u16)?;
+        }
+        self.emit_safe_call(dispatch, rb, args.len() as u8, 0, span);
+        self.emit(Instruction::abc(Op::RET, rb, 0, 0), span);
+        self.patch_here(to_nil)?;
+        self.emit(Instruction::abc(Op::LOADNIL, rb, 0, 0), span);
+        self.emit(Instruction::abc(Op::RET1, rb, 0, 0), span);
+        self.free_to(m);
+        Ok(Results {
+            base,
+            count: None,
+            terminated: true,
+        })
+    }
+
+    /// How `obj?.m(...)` reaches its method.
+    ///
+    /// The same choice `method_call_to` makes for an ordinary call, and it
+    /// has to be made **before** anything is emitted: `Unsupported` falls
+    /// back to the tree-walker, and half-written code cannot be taken back.
+    fn safe_call_dispatch(
+        &mut self,
+        obj: &Spanned<Expr>,
+        name: &str,
+        span: &Range<usize>,
+    ) -> Result<SafeCall, CompileError> {
+        if let Some(class) = self.class_of_nullable_expr(obj)
+            && let Some(&slot) = self.chunk.classes[class as usize].vindex.get(name)
+        {
+            return Ok(SafeCall::Vtable(slot));
+        }
+        // No proved class, or a method it does not declare: `CALLMX` defers
+        // to `dispatch_member_call_multi` (§8.5), which is what makes a
+        // stdlib instance, an enum variant or a file handle work here
+        // without the compiler learning each one. A *nullable* receiver is
+        // if anything more likely to be unproved than a plain one, so
+        // refusing here was the odd one out — and it was `todo-app`'s first
+        // refusal.
+        let k = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+        Ok(SafeCall::Dynamic(k))
+    }
+
+    /// Emit the call itself, whichever way it dispatches.
+    ///
+    /// `c` is the raw `C` operand — `nret + 1`, or 0 for every result.
+    /// `CALLM` is the one form that cannot carry it, because `C` is its
+    /// vtable slot, so a single-result vtable call takes it and everything
+    /// else moves the slot into `EXTRAARG`.
+    fn emit_safe_call(
+        &mut self,
+        dispatch: SafeCall,
+        recv: u8,
+        n_args: u8,
+        c: u8,
+        span: &Range<usize>,
+    ) {
+        match dispatch {
+            SafeCall::Vtable(slot) if c == 2 => {
+                self.emit(Instruction::abc(Op::CALLM, recv, n_args + 1, slot as u8), span);
+            }
+            SafeCall::Vtable(slot) => {
+                self.emit(Instruction::abc(Op::CALLM_MR, recv, n_args + 1, c), span);
+                self.emit(Instruction::ax_of(Op::EXTRAARG, slot as u32), span);
+            }
+            SafeCall::Dynamic(k) => {
+                self.emit(Instruction::abc(Op::CALLMX, recv, n_args + 1, c), span);
+                self.emit(Instruction::ax_of(Op::EXTRAARG, k as u32), span);
+            }
+        }
     }
 
     /// A lambda.

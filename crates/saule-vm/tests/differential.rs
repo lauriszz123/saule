@@ -2677,27 +2677,25 @@ fn a_module_level_forward_call_is_refused_not_miscompiled() {
 }
 
 #[test]
-fn a_forward_reference_reached_through_a_callee_still_diverges() {
-    // **A known gap, pinned deliberately so it cannot be forgotten.**
-    //
-    // The three positional guards are exact: they fire when the module body
-    // *names* something it has not declared yet. This shape hides the name
-    // one level down — `later` is referenced inside `C.go`, where a forward
-    // reference is legal, and only the **call** is early. Nothing local to
+fn a_forward_reference_reached_through_a_callee_is_refused() {
+    // `C.go()` above `fn later`, where `go`'s body reads `later`. The
+    // reference inside `go` is legal — a forward reference in a function
+    // body is ordinary Saule — and only the *call* is early, so nothing at
     // the call site distinguishes a callee that reaches an undeclared name
     // from one that does not.
     //
-    // A conservative "refuse any module-body call while a `fn` is still
-    // ahead" guard was tried and reverted: it refused
-    // `a_module_level_parallel_local_writes_module_slots` and
-    // `the_recursion_guard_still_unwinds_after_re_entrant_calls`, both
-    // perfectly good programs, because a call in the middle of a file with
-    // any `fn` below it is an ordinary shape. Closing this needs call-graph
-    // reachability, which is real work for a program the language already
-    // rejects — the tree-walker errors on it either way.
+    // This used to diverge: the tree-walker errored, the VM resolved the
+    // proto and returned 101. It was pinned here as *expected* divergence,
+    // with a note that closing it needed call-graph reachability. That is
+    // now what `Compiler::reaches_undeclared` does — one edge per mention,
+    // closed transitively at the call site.
     //
-    // So it is asserted as *currently divergent*. If a later change fixes
-    // it, this test fails and should be turned into a `must_agree`.
+    // A blunter guard was tried before this and reverted: "refuse any
+    // module-body call while a `fn` is still ahead" refused
+    // `a_module_level_parallel_local_writes_module_slots` and
+    // `the_recursion_guard_still_unwinds_after_re_entrant_calls`, because a
+    // call partway down a file with any `fn` below it is an ordinary shape.
+    // Those two still pass, which is half of what this test is worth.
     let src = "class C\n\
                \x20 static fn go() -> integer\n\
                \x20   return later(1)\n\
@@ -2708,12 +2706,18 @@ fn a_forward_reference_reached_through_a_callee_still_diverges() {
                \x20 return x + 100\n\
                end\nr";
     let module = front_end_unchecked(src);
-    let tw = tree_walker(&module);
-    let got = vm(&module, src).expect("the compiler still handles this shape");
-    assert_ne!(
-        got, tw,
-        "this divergence was fixed — re-point this canary at `must_agree`"
-    );
+    match saule_vm::compile(&module, "diff.sau", src) {
+        Err(saule_vm::CompileError::Unsupported { thing, .. }) => assert_eq!(
+            thing,
+            "a module-level call whose callee reaches a declaration further down"
+        ),
+        other => panic!(
+            "expected a refusal so the tree-walker defines the diagnostic, got {other:?}"
+        ),
+    }
+    // And the fallback really does reproduce the oracle: the tree-walker is
+    // what reports it, so the two agree by construction.
+    assert!(matches!(tree_walker(&module), Outcome::Error(_)));
 }
 
 #[test]
@@ -2775,4 +2779,498 @@ fn deep_recursion_hits_the_same_limit_under_both_engines() {
         "the VM's frame cap drifted from the tree-walker's depth limit — \
          the two engines would then disagree about how deep is too deep"
     );
+}
+
+// ── §6.4 tail calls ───────────────────────────────────────────────────────
+//
+// The two engines must agree about **which** calls are tail calls, not just
+// that both have them: the depth at which a program dies is observable, and
+// a mismatch either way is a divergence. The tree-walker's rule, in
+// `Stmt::Return`, is the specification — a single returned expression that
+// is a call, whose callee is not a `Member`/`SafeMember`, and which
+// evaluates to a `Value::Function`. `exec_try` then forces one back into an
+// ordinary call, and `run_in` does the same for a module body.
+//
+// Depth is what these assert, so each recursion is deeper than the 10 000
+// the shared guard allows. A test that ran 100 levels would pass whether or
+// not the tail call happened.
+
+/// The disassembly of a program the compiler is expected to accept.
+///
+/// Used where the question is *what the compiler emitted* rather than what
+/// the program computes. For a tail call that is the sharper assertion: a
+/// negative case ("this must **not** be one") could be shown by recursing
+/// past the depth guard, but that costs ~10 000 native frames per run and
+/// makes the suite depend on `RUST_MIN_STACK`. Reading the opcode back is
+/// exact, cheap, and fails for the right reason.
+fn disasm_of(src: &str) -> String {
+    let module = front_end(src);
+    saule_vm::compile(&module, "diff.sau", src)
+        .map(|c| saule_vm::disasm::chunk(&c))
+        .expect("the compiler should handle this program")
+}
+
+#[test]
+fn a_tail_recursive_top_level_fn_runs_in_constant_depth() {
+    must_agree(
+        "fn countdown(n: integer, acc: integer) -> integer\n\
+         \x20 if n == 0 then\n    return acc\n  end\n\
+         \x20 return countdown(n - 1, acc + n)\n\
+         end\n\
+         countdown(50000, 0)",
+    );
+}
+
+#[test]
+fn a_tail_recursive_static_method_runs_in_constant_depth() {
+    // `class Main` / `static fn` is the idiomatic shape of a Saule program,
+    // so this is the commonest tail-recursive function in the language —
+    // and it needs its own opcode, because a static method's proto is
+    // reached through the class table rather than named directly.
+    must_agree(
+        "class Sum\n\
+         \x20 static fn down(n: integer, acc: integer) -> integer\n\
+         \x20   if n == 0 then\n      return acc\n    end\n\
+         \x20   return down(n - 1, acc + n)\n\
+         \x20 end\n\
+         end\n\
+         Sum.down(50000, 0)",
+    );
+}
+
+#[test]
+fn a_tail_recursive_lambda_runs_in_constant_depth() {
+    // The callee is a *value* here, so whether this is a tail call is a
+    // run-time question — `TAILCALL` asks it the same way the tree-walker's
+    // `Value::Function` check does.
+    must_agree(
+        "local step: fn(integer, integer) -> integer = \
+         fn(n: integer, acc: integer) -> integer\n\
+         \x20 if n == 0 then\n    return acc\n  end\n\
+         \x20 return step(n - 1, acc + n)\n\
+         end\n\
+         step(50000, 0)",
+    );
+}
+
+#[test]
+fn a_tail_call_inside_a_try_is_not_a_tail_call() {
+    // **The direction that is easy to get wrong.** A handler has to still be
+    // on the stack when the callee runs, or `try return f() catch` stops
+    // catching what `f` throws — so `exec_try` forces the tail call into a
+    // real one, and the compiler must not emit one inside a protected range.
+    // Getting this wrong makes the VM survive where the tree-walker
+    // overflows, which no output comparison on a terminating program can
+    // see: it is a difference in depth, not in value.
+    let src = "fn down(n: integer, acc: integer) -> integer\n\
+               \x20 if n == 0 then\n    return acc\n  end\n\
+               \x20 try\n\
+               \x20   return down(n - 1, acc + n)\n\
+               \x20 catch e: any\n\
+               \x20   return -1\n\
+               \x20 end\n\
+               end\n\
+               down(6, 0)";
+    must_agree(src);
+    assert!(
+        !disasm_of(src).contains("TAILCALL"),
+        "a `return` inside a `try` body must not compile to a tail call\n{}",
+        disasm_of(src)
+    );
+
+    // The `catch` body is *outside* the protected range, and `exec_try`
+    // forces only the body — so a tail call there is correct on both sides.
+    let caught = "fn down(n: integer, acc: integer) -> integer\n\
+                  \x20 if n == 0 then\n    return acc\n  end\n\
+                  \x20 try\n\
+                  \x20   throw \"again\"\n\
+                  \x20 catch e: any\n\
+                  \x20   return down(n - 1, acc + n)\n\
+                  \x20 end\n\
+                  end\n\
+                  down(6, 0)";
+    must_agree(caught);
+    assert!(
+        disasm_of(caught).contains("TAILCALL"),
+        "a `return` in a `catch` body is past the handler and stays a tail \
+         call\n{}",
+        disasm_of(caught)
+    );
+}
+
+#[test]
+fn a_try_around_a_tail_call_still_catches_what_the_callee_throws() {
+    // The reason for the rule above, checked directly rather than inferred:
+    // if the frame were replaced, the handler would already be gone.
+    must_agree(
+        "fn boom() -> integer\n  throw \"bang\"\nend\n\
+         fn guarded() -> string\n\
+         \x20 try\n\
+         \x20   return \"\" .. boom()\n\
+         \x20 catch e: any\n\
+         \x20   return \"caught \" .. tostring(e)\n\
+         \x20 end\n\
+         end\n\
+         guarded()",
+    );
+    // And the same with the call *itself* in tail position.
+    must_agree(
+        "fn boom() -> integer\n  throw \"bang\"\nend\n\
+         fn guarded() -> integer\n\
+         \x20 try\n\
+         \x20   return boom()\n\
+         \x20 catch e: any\n\
+         \x20   return -7\n\
+         \x20 end\n\
+         end\n\
+         guarded()",
+    );
+}
+
+#[test]
+fn a_method_call_in_tail_position_is_not_a_tail_call() {
+    // Deliberately excluded on both sides. `obj.m()` resolves through
+    // `dispatch_member_call_multi`, which binds a receiver and handles
+    // natives, enum variants and file handles; routing that through the
+    // trampoline would mean reimplementing it — so the tree-walker's rule
+    // names `Member`/`SafeMember` explicitly, and the compiler must agree.
+    let src = "class Counter\n\
+               \x20 fn down(n: integer, acc: integer) -> integer\n\
+               \x20   if n == 0 then\n      return acc\n    end\n\
+               \x20   return self.down(n - 1, acc + n)\n\
+               \x20 end\n\
+               end\n\
+               local c: Counter = Counter()\n\
+               c.down(6, 0)";
+    must_agree(src);
+    assert!(
+        !disasm_of(src).contains("TAILCALL"),
+        "a method call must not compile to a tail call\n{}",
+        disasm_of(src)
+    );
+}
+
+#[test]
+fn a_tail_call_to_a_native_is_an_ordinary_call() {
+    // A native has no Saule frame to replace, so `Flow::TailCall` is never
+    // built for one and `TAILCALL` falls back to calling it here and
+    // returning — including the multi-value case, which goes back through
+    // `store_results` rather than `pop_frame`.
+    must_agree(
+        "fn upper(s: string) -> string\n  return String.upper(s)\nend\n\
+         upper(\"abc\")",
+    );
+    must_agree(
+        "fn find(h: string, n: string) -> (integer?, integer?)\n\
+         \x20 return String.find(h, n)\n\
+         end\n\
+         local s: integer?, e: integer? = find(\"hello world\", \"world\")\n\
+         local r: string = tostring(s) .. \"/\" .. tostring(e)\nr",
+    );
+}
+
+#[test]
+fn a_tail_call_to_a_constructor_is_an_ordinary_call() {
+    // `ClassName(args)` evaluates to a `Value::Class`, not a
+    // `Value::Function`, so the tree-walker makes it for real.
+    must_agree(
+        "class Box\n  v: integer\n  fn init(v: integer)\n    self.v = v\n  end\nend\n\
+         fn make(v: integer) -> Box\n  return Box(v)\nend\n\
+         make(4).v",
+    );
+}
+
+#[test]
+fn a_tail_call_still_passes_every_result_through() {
+    // The frame is replaced but `ret_to` and `n_ret` are inherited, so
+    // multi-return survives a tail chain without anything extra. Two
+    // levels, so the results cross a replaced frame rather than just a
+    // pushed one.
+    must_agree(
+        "fn pair() -> (integer, integer)\n  return 11, 22\nend\n\
+         fn one() -> (integer, integer)\n  return pair()\nend\n\
+         fn two() -> (integer, integer)\n  return one()\nend\n\
+         local a: integer, b: integer = two()\n\
+         local r: string = a .. \"/\" .. b\nr",
+    );
+}
+
+#[test]
+fn a_tail_call_closes_the_upvalues_of_the_frame_it_replaces() {
+    // The replaced frame's registers are about to become the callee's
+    // arguments, so a closure built in it must have stopped pointing at
+    // them. This is `pop_frame`'s rule; a tail call ends a frame just as
+    // surely as a return does, and skipping it would hand the closure
+    // whatever the *next* iteration wrote.
+    must_agree(
+        "fn build(n: integer, acc: table) -> table\n\
+         \x20 if n == 0 then\n    return acc\n  end\n\
+         \x20 local captured: integer = n\n\
+         \x20 acc[#acc + 1] = fn() -> integer return captured end\n\
+         \x20 return build(n - 1, acc)\n\
+         end\n\
+         local fs: table = build(3, {})\n\
+         local out: string = \"\"\n\
+         for f in fs do\n  out = out .. f() .. \",\"\nend\n\
+         out",
+    );
+}
+
+#[test]
+fn mutual_tail_recursion_runs_in_constant_depth() {
+    // Two frames alternating, each replacing the other — the shape that
+    // proves the frame is genuinely reused rather than merely reset.
+    must_agree(
+        "fn even(n: integer) -> boolean\n\
+         \x20 if n == 0 then\n    return true\n  end\n\
+         \x20 return odd(n - 1)\n\
+         end\n\
+         fn odd(n: integer) -> boolean\n\
+         \x20 if n == 0 then\n    return false\n  end\n\
+         \x20 return even(n - 1)\n\
+         end\n\
+         even(50000)",
+    );
+}
+
+#[test]
+fn a_tail_call_with_defaulted_and_variadic_parameters_binds_them() {
+    // The frame is entered through `entry_for(n_args)` exactly as a pushed
+    // one is, so a default still runs in the callee and `VARARG` still
+    // gathers — but the frame it enters is *dirty*, holding the previous
+    // call's registers rather than fresh stack, which is what makes the
+    // missing-parameter fill load-bearing here in a way it is not for a
+    // pushed frame.
+    must_agree(
+        "fn walk(n: integer, acc: integer = 100) -> integer\n\
+         \x20 if n == 0 then\n    return acc\n  end\n\
+         \x20 return walk(n - 1, acc + n)\n\
+         end\n\
+         walk(20000)",
+    );
+    must_agree(
+        "fn gather(n: integer, ...rest: integer) -> integer\n\
+         \x20 if n == 0 then\n    return #rest\n  end\n\
+         \x20 return gather(n - 1, 1, 2, 3)\n\
+         end\n\
+         gather(20000)",
+    );
+}
+
+// ── §8.5 the dynamic escape hatch, nullable and write sides ───────────────
+//
+// `GETFX`/`CALLMX` gave an ordinary member read and call a fallback for a
+// receiver the front end did not prove. The *nullable* read and call, and
+// the member **write**, kept refusing — which is backwards: a nullable
+// receiver is if anything more likely to be unproved than a plain one.
+
+#[test]
+fn a_safe_member_read_on_an_unproved_receiver_matches() {
+    must_agree(
+        "class Box\n  v: integer\n  fn init(v: integer)\n    self.v = v\n  end\nend\n\
+         local b: any = Box(4)\n\
+         local r: string = tostring(b?.v)\nr",
+    );
+    // And the nil arm still short-circuits rather than asking `read_member`
+    // for a member of nil.
+    must_agree(
+        "local b: any? = nil\n\
+         local r: string = tostring(b?.v)\nr",
+    );
+}
+
+#[test]
+fn a_safe_method_call_on_an_unproved_receiver_matches() {
+    must_agree(
+        "class Box\n\
+         \x20 v: integer\n\
+         \x20 fn init(v: integer)\n    self.v = v\n  end\n\
+         \x20 fn doubled() -> integer\n    return self.v * 2\n  end\n\
+         end\n\
+         local b: any = Box(7)\n\
+         local r: string = tostring(b?.doubled())\nr",
+    );
+    must_agree(
+        "local b: any? = nil\n\
+         local r: string = tostring(b?.doubled())\nr",
+    );
+}
+
+#[test]
+fn a_safe_call_on_an_unproved_receiver_does_not_evaluate_its_arguments() {
+    // The nil guard wraps the *whole* call on the dynamic path too — the
+    // tree-walker returns before evaluating arguments, so evaluating them
+    // here would run side effects it does not. Counted rather than assumed.
+    must_agree(
+        "local calls: integer = 0\n\
+         fn bump() -> integer\n  calls = calls + 1\n  return 1\nend\n\
+         local b: any? = nil\n\
+         local ignored: any? = b?.doubled(bump())\n\
+         local r: string = \"\" .. calls\nr",
+    );
+}
+
+#[test]
+fn a_member_write_on_an_unproved_receiver_matches() {
+    // `SETFX`, the write half of `GETFX`. It was `json_usage`'s first
+    // refusal — a field reached through a value that came out of a decoder
+    // as `any`.
+    must_agree(
+        "class Box\n  v: integer\n  fn init(v: integer)\n    self.v = v\n  end\nend\n\
+         local b: any = Box(1)\n\
+         b.v = 9\n\
+         local r: string = \"\" .. (b as Box)!.v\nr",
+    );
+}
+
+#[test]
+fn a_member_write_on_an_unproved_receiver_reports_the_same_error() {
+    // The error text has to match too, which is the whole reason this
+    // defers to `assign_member` rather than reimplementing the write.
+    must_agree(
+        "class Box\n  v: integer\n  fn init(v: integer)\n    self.v = v\n  end\nend\n\
+         local b: any = Box(1)\n\
+         b.nope = 9\n\
+         local r: string = \"done\"\nr",
+    );
+}
+
+// ── interface method return types (front end) ─────────────────────────────
+
+#[test]
+fn an_interface_method_call_has_a_known_return_type() {
+    // `saule-typeck` used to answer `cannot determine the type of this
+    // expression` for **any** call on an interface-typed receiver, because
+    // the semantic registry recorded only what each interface *extends* and
+    // never its signatures. A single-valued method was as unusable as a
+    // multi-valued one.
+    must_agree(
+        "interface Shape\n  fn area() -> integer\nend\n\
+         class Square implements Shape\n\
+         \x20 s: integer\n\
+         \x20 fn init(s: integer)\n    self.s = s\n  end\n\
+         \x20 fn area() -> integer\n    return self.s * self.s\n  end\n\
+         end\n\
+         fn describe(x: Shape) -> string\n\
+         \x20 local a: integer = x.area()\n\
+         \x20 return \"area \" .. a\n\
+         end\n\
+         describe(Square(5))",
+    );
+}
+
+#[test]
+fn an_interface_method_call_binds_two_results() {
+    // Now reachable from source, which is what makes `CALLIF`'s packed
+    // result count a live encoding rather than a speculative one.
+    must_agree(
+        "interface Splitter\n  fn halves() -> (integer, integer)\nend\n\
+         class Seven implements Splitter\n\
+         \x20 fn halves() -> (integer, integer)\n    return 3, 4\n  end\n\
+         end\n\
+         fn use(s: Splitter) -> string\n\
+         \x20 local a: integer, b: integer = s.halves()\n\
+         \x20 return a .. \"/\" .. b\n\
+         end\n\
+         use(Seven())",
+    );
+}
+
+#[test]
+fn an_extended_interfaces_method_is_found_through_the_extends_chain() {
+    // An interface composes by extension rather than inheritance, so the
+    // lookup walks a *list* per level. A method declared on the base has to
+    // be reachable from the extending interface's static type.
+    must_agree(
+        "interface Named\n  fn name() -> string\nend\n\
+         interface Shape extends Named\n  fn area() -> integer\nend\n\
+         class Square implements Shape\n\
+         \x20 s: integer\n\
+         \x20 fn init(s: integer)\n    self.s = s\n  end\n\
+         \x20 fn area() -> integer\n    return self.s * self.s\n  end\n\
+         \x20 fn name() -> string\n    return \"square\"\n  end\n\
+         end\n\
+         fn describe(x: Shape) -> string\n\
+         \x20 local n: string = x.name()\n\
+         \x20 local a: integer = x.area()\n\
+         \x20 return n .. \" \" .. a\n\
+         end\n\
+         describe(Square(3))",
+    );
+}
+
+// ── `return x?.m()` and `return a, f()` ───────────────────────────────────
+
+#[test]
+fn a_returned_safe_call_passes_every_result_through() {
+    // The two arms return **separately** — a nil receiver yields one nil,
+    // a present one yields everything the method produced — which is why
+    // this no longer needs a single register run for one `RET` to read.
+    must_agree(
+        "class Box\n\
+         \x20 v: integer?\n\
+         \x20 fn init(v: integer?)\n    self.v = v\n  end\n\
+         \x20 fn twin() -> (integer?, integer?)\n    return self.v, self.v\n  end\n\
+         end\n\
+         fn twoOf(b: Box?) -> (integer?, integer?)\n\
+         \x20 return b?.twin()\n\
+         end\n\
+         local p: integer?, q: integer? = twoOf(Box(5))\n\
+         local r: integer?, s: integer? = twoOf(nil)\n\
+         local out: string = tostring(p) .. tostring(q) .. tostring(r) .. tostring(s)\nout",
+    );
+}
+
+#[test]
+fn a_returned_safe_call_still_yields_one_value_where_it_should() {
+    must_agree(
+        "class Box\n\
+         \x20 v: integer?\n\
+         \x20 fn init(v: integer?)\n    self.v = v\n  end\n\
+         \x20 fn one() -> integer?\n    return self.v\n  end\n\
+         end\n\
+         fn oneOf(b: Box?) -> integer?\n  return b?.one()\nend\n\
+         local a: integer? = oneOf(Box(9))\n\
+         local b: integer? = oneOf(nil)\n\
+         local r: string = tostring(a) .. \"/\" .. tostring(b)\nr",
+    );
+}
+
+// ── forward references through a callee ───────────────────────────────────
+
+#[test]
+fn a_module_body_call_whose_callee_is_fully_declared_still_compiles() {
+    // The other half of the reachability guard: it must not refuse an
+    // ordinary program. `helper` is declared above the call and reaches
+    // only names above it, so nothing here is early — and a `fn` declared
+    // *below* the call that the callee never touches must not matter.
+    let src = "fn helper(x: integer) -> integer\n  return x * 2\nend\n\
+               local r: integer = helper(21)\n\
+               fn unrelated(y: integer) -> integer\n  return y\nend\nr";
+    must_agree(src);
+    assert!(
+        !disasm_of(src).is_empty(),
+        "the reachability guard must not refuse a program with an unrelated \
+         `fn` below the call"
+    );
+}
+
+#[test]
+fn a_module_body_call_reaching_a_later_class_is_refused() {
+    // The same shape one level down, through a class rather than a `fn`:
+    // `run()` constructs `Later`, which is declared below the call.
+    let src = "fn run() -> integer\n  local l: Later = Later()\n  return l.v\nend\n\
+               local r: integer = run()\n\
+               class Later\n\
+               \x20 v: integer\n\
+               \x20 fn init()\n    self.v = 5\n  end\n\
+               end\nr";
+    let module = front_end_unchecked(src);
+    match saule_vm::compile(&module, "diff.sau", src) {
+        Err(saule_vm::CompileError::Unsupported { thing, .. }) => assert_eq!(
+            thing,
+            "a module-level call whose callee reaches a declaration further down"
+        ),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 }

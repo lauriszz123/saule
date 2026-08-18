@@ -1293,6 +1293,7 @@ dependencies = [
  "saule-semantic",
  "saule-typeck",
  "saule-version",
+ "saule-vm",
  "serde",
  "serde_json",
  "wasm-bindgen",

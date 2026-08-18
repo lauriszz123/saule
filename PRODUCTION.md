@@ -81,7 +81,7 @@ uniformly:
 | How do I write a test? | There is no test runner. Write a `.sau` file and check the output by eye. |
 | Where did my error come from? | The line it failed on. There is no call stack. |
 | Is my editor going to work? | Yes — the parser recovers, so features survive half-typed code. |
-| How fast is it? | 5–11× slower than PUC Lua, 30–90× slower than LuaJIT. |
+| How fast is it? | 1.0×–4.8× PUC Lua on the bytecode VM, now the default engine. |
 | Is it stable? | Nothing states what "stable" means, and nothing enforces it. |
 
 None of those are research problems. All of them are work, and the sequencing
@@ -327,27 +327,52 @@ nothing measures it.
 
 ### 3.3 Execution model
 
-**A tree-walking interpreter.** `eval` calls `exec` calls `eval` across the AST,
-with no bytecode, no IR, and no JIT. Consequences:
+**Two engines running one language.** A register-based bytecode VM
+(`saule-vm`) is the default; the original tree-walking interpreter
+(`saule-interpreter`) is still in-tree, still complete, and selected with
+`saule run --interp` or `SAULE_ENGINE=interp`. Neither is a JIT.
 
-- **Performance is what a tree-walker gives you.** Measured against PUC Lua on
-  the repo's own benchmark suite: 5.1×–10.9× slower on everything except
-  `map` (1.2×, dominated by hashing) and `startup` (level with Lua, which is
-  genuinely good — parse and typecheck cost nothing perceptible). Against
-  LuaJIT the gap is 30–90×. Full table in [Appendix A](#appendix-a--raw-measurements).
+The two are held to identical observable behaviour — output, exit status and
+error text — by a differential harness that runs every `.sau` fixture and every
+example project under both, plus 191 differential tests in Rust. That harness
+is the reason the tree-walker is kept rather than deleted: it is the oracle,
+and it has caught every VM bug found so far.
+
+The bytecode compiler does not yet reach the whole language. A module it
+cannot compile **falls back to the tree-walker** rather than guessing, so a
+gap costs speed and never correctness. Today that is 5 of the 9 comparable
+example projects running fully on the VM and 4 taking the fallback; the
+remaining refusals are concentrated in cross-module class hierarchies.
+
+Consequences:
+
+- **Performance is now what a bytecode VM gives you.** Measured against PUC
+  Lua 5.4.8 on the repo's own benchmark suite: 1.0×–4.8× slower, against
+  5.5×–9.0× for the tree-walker on the same run. The VM is 2.0×–2.8× the
+  tree-walker on everything except `map` (1.25×) and `sort` (1.15×), both
+  of which are dominated by hashing and comparison callbacks inside the table
+  implementation rather than by dispatch. `startup` is *faster* than Lua —
+  parse and typecheck cost nothing perceptible. Full table in
+  [Appendix A](#appendix-a--raw-measurements).
 - **Native stack depth is the recursion limit.** `MAX_EVAL_DEPTH = 10_000`
   ([eval/mod.rs:35](crates/saule-interpreter/src/eval/mod.rs:35)) converts what
   would be a SIGSEGV into a catchable `RuntimeError::StackOverflow`. Commit
   `60ccc75` shows the depth of thought here — the main thread gets a 512 MiB
   stack via a linker flag on macOS because AppKit forbids running the interpreter
   on a spawned thread. This is careful work.
-- **No tail calls**, so recursive-loop idioms from Lua will hit the depth limit.
+- **Tail calls are eliminated in both engines** — a trampoline in the
+  tree-walker, `TAILCALL`/`TAILCALLK`/`TAILCALLS` in the VM — so `return f(...)`
+  in tail position runs in constant frame depth. `down(500_000)` returns
+  under both. They had to land together: whichever engine got it first
+  would have disagreed with the other about which programs overflow.
 
-Whether the tree-walker is a problem depends entirely on the target. For scripting
-a game's logic, config, or tooling, 7× Lua is fine. For anything compute-bound it
-is not, and a bytecode VM is the standard next step. **Decide the target
-workload before optimising**, because a bytecode compiler is a multi-month
-project that also invalidates parts of the LSP's story.
+This was the multi-month project — the original draft of this document called
+a bytecode VM "the standard next step" and warned it would invalidate parts of
+the LSP's story. It did not: `saule-lsp` and `saule-db` execute no user code,
+so neither links `saule-vm` and neither needed a line changed. What is still
+true is the ranking — the remaining performance work is optimisation with a
+profile in hand (inline caches, superinstructions), and it is worth less than
+any single item in [§5](#5-the-gaps-ranked).
 
 ### 3.4 Error model
 
@@ -420,11 +445,14 @@ no threads, no async, no channels. The interpreter is `Rc`-based and explicitly
 thread-confined; every registry is `thread_local!`.
 
 For a Lua-lineage language this is a notable absence — coroutines are one of
-Lua's defining features and the idiom people bring with them. It is also the
-feature most entangled with the tree-walking design: implementing real coroutines
-on a recursive `eval` requires either OS threads with handoff, stack copying, or
-a bytecode VM with an explicit frame stack. **Coroutines are effectively a vote
-for a bytecode VM**, and should be decided together with §3.3.
+Lua's defining features and the idiom people bring with them. This section used
+to argue that implementing them on a recursive `eval` needed OS threads,
+stack copying, or a bytecode VM with an explicit frame stack, and that
+**coroutines were effectively a vote for a bytecode VM**. That VM now exists
+and is the default (§3.3), and its frame stack is an ordinary `Vec` of frames
+in one `Vm` — the shape a coroutine implementation wants. The obstacle is no
+longer the engine; it is that a coroutine has to mean something under *both*
+engines, or the differential harness that keeps them honest stops applying.
 
 ---
 
@@ -442,7 +470,7 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Formatter | Dedicated crate, config-driven, corpus tests, round-trips | **A−** |
 | LSP feature breadth | Hover, goto, refs, symbols, inlay, sighelp, completion, format | **A−** |
 | LSP robustness | Error recovery + prior-parse seeding + completion repair | **B+** |
-| Runtime performance | 5–11× PUC Lua, 30–90× LuaJIT | **C** |
+| Runtime performance | Bytecode VM by default: 1.0×–4.8× PUC Lua, 2.0×–2.8× the tree-walker | **B** |
 | Memory management | Refcount; closure capture fixed; user-authored cycles still leak, no tooling to see them | **C** |
 | Runtime diagnostics | No stack traces, boolean FS errors | **C−** |
 | Concurrency | Absent | **D** |
@@ -498,8 +526,12 @@ part (a coherent, working implementation) is done.
    `Node` pair. It still leaks for the process lifetime, there is still no way
    to observe it, and `weak` plus a cycle report is still the answer.
 8. **No debugger.** No DAP implementation. Print debugging only.
-9. **Performance.** Acceptable for scripting; disqualifying for compute. Decide
-   the target workload, then decide whether a bytecode VM is on the roadmap.
+9. **Performance.** The bytecode VM landed and is the default, which moved this
+   from 5–11× PUC Lua to 1.0×–4.8× (§3.3). It is no longer the thing that
+   decides whether Saule is usable — every item above it on this list matters
+   more. What remains is that the compiler does not reach the whole language
+   yet, so some real projects still take the tree-walking fallback and get the
+   old numbers.
 10. **Stdlib holes that force a native package**: pattern matching / regex
     (Lua's `string.match`, `gmatch`, `gsub` have no equivalent — `String.find`
     is literal-only), JSON, structured filesystem errors, date/time beyond
@@ -1066,39 +1098,93 @@ assets. Plus `saule doc`.
   benchmark regression, three-platform test matrix.
 - Publish the `saule` facade + `EMBEDDING.md`.
 
-### Phase 6 — Make it fast (decide first)
-Bytecode VM, and with it coroutines and tail calls. **Do not start this before
-Phase 5**: it is the change most likely to break semantics, and without the
-stability gates you will not know that it did. It is also the phase to revisit
-the query layer (§9.2), since both touch the same foundations.
+### Phase 6 — Make it fast (**done ahead of schedule — read the caveat**)
+The bytecode VM shipped and is the default engine, and tail calls came with it.
+This phase was sequenced last, and deliberately: "it is the change most likely
+to break semantics, and without the stability gates you will not know that it
+did." Building it early meant paying for that warning some other way, and the
+substitute was differential testing — the tree-walker kept in-tree as an oracle,
+every fixture and every example project run under both engines and compared on
+output rather than exit status. That is narrower than a conformance suite: it
+proves the two engines agree, not that either matches a specification, because
+there still is not one. Phase 5 is still owed.
+
+Still open here: coroutines (§3.6), and the query layer (§9.2), which touches the
+same foundations.
 
 ---
 
 ## Appendix A — raw measurements
 
-### Benchmarks
+### Benchmarks — both engines against PUC Lua
 
-`REPS=3 python3 benchmarks/bench.py`, release build (fat LTO, 1 codegen unit),
-macOS 25.6 arm64. Seconds; compare ratios, not absolute times.
+`REPS=5 python benchmarks/bench.py`, release build (fat LTO, 1 codegen unit),
+Windows 11 Pro x86_64, Lua 5.4.8. Seconds, minimum across reps; **compare
+ratios, not absolute times.**
 
-| bench | saule | lua | luajit | saule/lua |
-|---|---:|---:|---:|---:|
-| loop_arith | 0.454 | 0.064 | 0.014 | 7.0× |
-| fib | 0.259 | 0.024 | 0.006 | 10.9× |
-| array | 0.271 | 0.053 | 0.007 | 5.1× |
-| map | 0.420 | 0.364 | 0.085 | 1.2× |
-| oop | 0.375 | 0.050 | 0.004 | 7.6× |
-| mandel | 0.348 | 0.040 | 0.008 | 8.8× |
-| strings | 0.124 | 0.041 | 0.016 | 3.0× |
-| closure | 0.197 | 0.023 | 0.004 | 8.5× |
-| sort | 0.663 | 0.145 | 0.104 | 4.6× |
-| startup | 0.003 | 0.003 | 0.003 | 1.2× |
+Two runs of `bench.py`, one per engine, each timing `lua` alongside it — the
+two runs saw the same Lua times to within a millisecond on every benchmark,
+which is what makes their columns comparable to each other and not just to
+their own reference. The engine was selected with `SAULE_ENGINE`; all ten
+benchmarks compile fully, so the VM column is a VM measurement and not a
+fallback in disguise. All three engines were confirmed to print identical
+output first (`bench.py check`).
 
-Reading: the recursive-call path (`fib`, 10.9×) and raw arithmetic loops
-(`loop_arith`, 7.0×) are the weakest, which is exactly what a tree-walker
-predicts — every operation pays AST dispatch. `map` at 1.2× shows the table
-implementation is competitive when hashing dominates. **`startup` level with Lua
-is a real achievement** and means the front end costs the user nothing.
+| bench | VM | tree-walker | lua | VM/lua | walker/lua | VM speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| loop_arith | 0.251 | 0.616 | 0.068 | 3.7× | 9.0× | **2.45×** |
+| fib | 0.123 | 0.333 | 0.052 | 2.4× | 6.3× | **2.71×** |
+| array | 0.144 | 0.355 | 0.082 | 1.8× | 4.3× | **2.47×** |
+| map | 0.324 | 0.405 | 0.331 | 1.0× | 1.2× | 1.25× |
+| oop | 0.191 | 0.482 | 0.072 | 2.7× | 6.6× | **2.52×** |
+| mandel | 0.172 | 0.481 | 0.064 | 2.7× | 7.3× | **2.80×** |
+| strings | 0.105 | 0.272 | 0.066 | 1.6× | 4.1× | **2.59×** |
+| closure | 0.112 | 0.288 | 0.053 | 2.1× | 5.5× | **2.57×** |
+| sort | 0.711 | 0.821 | 0.147 | 4.8× | 5.5× | 1.15× |
+| startup | 0.033 | 0.033 | 0.040 | 0.8× | 0.8× | 1.00× |
+
+Reading:
+
+- **The two weakest cases became the two strongest gains.** `fib` (recursive
+  calls) went 6.3× – 2.4× Lua and `loop_arith` 9.0× – 3.7×, because both
+  were paying AST dispatch on every operation and that is exactly the cost a
+  register VM deletes.
+- **`map` and `sort` barely move** (1.25×, 1.15×), and they are the two
+  benchmarks whose time is spent inside `TableObject` — hashing and comparison
+  callbacks — rather than in dispatch. `VM_DESIGN.md` §20 predicted this before
+  the VM was written. `map` was already 1.2× Lua under the tree-walker; there
+  was nothing there for a VM to win.
+- **`startup` is faster than Lua** and unchanged by the engine, since compiling
+  a 3-line program costs nothing measurable. The front end still costs the user
+  nothing.
+- **LuaJIT is not in this table.** It is not installed on the measuring machine,
+  and the 30–90× figure this document used to quote came from a different OS
+  and architecture. Carrying it forward next to freshly measured columns would
+  read as a comparison that was not made.
+
+### Bytecode VM vs tree-walker, in-process
+
+`cargo run --release -p saule-vm --example compare`, same machine. This one
+runs both engines inside a single process, so there is no process-spawn floor
+in the numbers and no `class Main` wrapper — and it **asserts the two engines
+produced the same value** before it reports a timing.
+
+| program | tree-walker | VM | speedup |
+|---|---:|---:|---:|
+| loop_arith | 397.5 ms | 148.6 ms | 2.68× |
+| fib | 177.0 ms | 51.3 ms | **3.45×** |
+| while_sum | 464.0 ms | 176.4 ms | 2.63× |
+| call_heavy | 291.2 ms | 77.8 ms | **3.74×** |
+
+The call-heavy programs gain most (3.45×, 3.74×) and gain more here than in
+the table above, which is the process-spawn floor showing: `bench.py` measures
+wall clock from `CreateProcess`, and on Windows that floor is ~33 ms of the
+123 ms `fib` run. Net of it, `fib` is 3.1×. Both readings are honest — the
+first is what a user waiting at a prompt experiences, the second is what the
+engine actually does.
+
+`VM_DESIGN.md` §21.3 gated Phase 2 on `loop_arith` and `fib` reaching **at least
+2.5×** the tree-walker. Both clear it.
 
 ### Memory behaviour
 

@@ -411,6 +411,34 @@ pub(crate) fn compile_into(
         }
     }
 
+    // One edge per *mention*: for each top-level declaration, the set of
+    // names its body names. `reaches_undeclared` closes it transitively at
+    // the call site, which is what catches a call whose callee reaches a
+    // declaration further down the file (§ "Forward references").
+    for s in &module.stmts {
+        if let saule_ast::Stmt::Decl(d) = &s.value {
+            let (name, body): (&String, Vec<saule_ast::Spanned<saule_ast::Stmt>>) = match &d.value {
+                saule_ast::Decl::Function { name, body, .. } => (name, body.clone()),
+                saule_ast::Decl::Class { name, members, .. } => {
+                    let mut stmts = Vec::new();
+                    for m in members {
+                        if let saule_ast::ClassMember::Method(meth) = &m.value {
+                            stmts.extend(meth.body.iter().cloned());
+                        }
+                    }
+                    (name, stmts)
+                }
+                _ => continue,
+            };
+            let mut names = NameRefs::default();
+            saule_ast::visit_stmts(&body, &mut names);
+            c.module_refs
+                .entry(name.clone())
+                .or_default()
+                .extend(names.0);
+        }
+    }
+
     let mut last = None;
     for s in &module.stmts {
         last = c.stmt(s)?.or(last);
@@ -458,6 +486,36 @@ pub(crate) fn compile_into(
 /// fallback on every call it makes; one added here that the resolver does
 /// not treat as a module slot would do the reverse and let a forward
 /// reference through.
+/// Every bare identifier a body mentions.
+///
+/// Deliberately crude: it does not distinguish a local named `later` from
+/// the top-level `fn later`, so a body with a local of the same name is
+/// counted as reaching it. The caller filters against
+/// `module_type_decls`, and an over-count costs a fallback rather than a
+/// wrong answer — which is the right side to err on for a guard whose whole
+/// job is to refuse programs the tree-walker rejects.
+#[derive(Default)]
+struct NameRefs(std::collections::HashSet<String>);
+
+impl saule_ast::Visitor for NameRefs {
+    fn expr(&mut self, e: &saule_ast::Spanned<saule_ast::Expr>) {
+        match &e.value {
+            saule_ast::Expr::Ident(n) => {
+                self.0.insert(n.clone());
+            }
+            // `C.go()` names `C`, which the flattened walk would otherwise
+            // only see as the receiver expression it already visits — but a
+            // pipe stage is a bare `String` with no expression node at all.
+            saule_ast::Expr::Pipe { stages, .. } => {
+                for st in stages {
+                    self.0.insert(st.name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn top_level_declared_names(stmt: &saule_ast::Spanned<saule_ast::Stmt>) -> Vec<String> {
     use saule_ast::{Decl, ImportNames, Stmt};
     let mut out = Vec::new();

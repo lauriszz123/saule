@@ -2,8 +2,16 @@
 -- not a native stack overflow. Before the depth guard in
 -- `saule_interpreter::eval::DepthGuard` this aborted the process with
 -- SIGABRT — no span, no message, and no chance for `try`/`catch` to run.
+--
+-- The recursive call is deliberately **not** in tail position. It used to be
+-- (`return forever(n + 1)`), and tail calls turned this fixture from a test
+-- into a hang: a tail-recursive loop is bounded by nothing, so both engines
+-- span forever and `run_tests.sh`, which has no per-fixture timeout, never
+-- finished. Binding the result first is what keeps a frame alive per level,
+-- which is the thing being tested. Do not "simplify" it back.
 local fn forever(n: integer) -> integer
-	return forever(n + 1)
+	local deeper: integer = forever(n + 1)
+	return deeper
 end
 
 class Main

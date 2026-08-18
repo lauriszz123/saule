@@ -252,11 +252,17 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             {
                 return semantic_method_return(&sig, args, scope);
             }
-            // `instance.method(args)` — receiver inferred to a class.
+            // `instance.method(args)` — receiver inferred to a class, or
+            // to an **interface**. The interface arm was missing entirely,
+            // so `local a: integer = s.half()` on an interface-typed `s`
+            // was `cannot determine the type of this expression` even for a
+            // single-valued method: the registry held only what each
+            // interface extends, never its signatures.
             if let Expr::Member { obj, name } = &callee.value
                 && let Some(ty) = infer(obj, scope)
-                && let Type::Named(class_name) = strip_nullable(ty)
-                && let Some(sig) = saule_semantic::lookup_method(&class_name, name)
+                && let Type::Named(type_name) = strip_nullable(ty)
+                && let Some(sig) = saule_semantic::lookup_method(&type_name, name)
+                    .or_else(|| saule_semantic::lookup_interface_method(&type_name, name))
             {
                 return semantic_method_return(&sig, args, scope);
             }

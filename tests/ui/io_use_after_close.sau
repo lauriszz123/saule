@@ -1,10 +1,17 @@
 -- Using a file after close() must error at runtime.
-class Main
-  static fn main()
-    local f: File = Io.open("/tmp/saule_io_use_after_close.txt", IoMode.Write)!
-    f.write("hi\n")
-    f.close()
-    f.write("oops")
-  end
-end
+--
+-- The path is **relative on purpose**. This fixture used to open
+-- `/tmp/saule_io_use_after_close.txt`, which does not exist on Windows, so
+-- `Io.open` returned nil, the `!` unwrapped it, and the run died at line 4
+-- with "force-unwrapped a `nil` value" — never reaching the close, let alone
+-- the use after it. It passed the harness the whole time, because
+-- `run_tests.sh` gates on exit status and any error will do.
 
+class Main
+	static fn main()
+		local f: File = Io.open("saule_io_use_after_close.tmp", IoMode.Write)!
+		f.write("hi\n")
+		f.close()
+		f.write("oops")
+	end
+end
