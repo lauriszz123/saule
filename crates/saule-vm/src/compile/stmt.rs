@@ -5,7 +5,45 @@ use saule_semantic::Binding;
 
 use super::CompileError;
 use super::ctx::{Compiler, Num};
+use super::expr::Want;
 use crate::op::{Instruction, Op};
+
+/// What an assignment stores.
+///
+/// A parallel assignment evaluates its **whole** right-hand side before it
+/// writes any target — that is what makes `a, b = b, a` a swap — so by the
+/// time a target is written the value is already sitting in a register.
+/// Every other assignment still hands over the expression, which is what
+/// lets it be evaluated straight into the target's own register with no
+/// temporary in between.
+#[derive(Clone, Copy)]
+enum Rhs<'a> {
+    Expr(&'a Spanned<Expr>),
+    Reg(u16),
+}
+
+impl Compiler<'_> {
+    fn rhs_to(
+        &mut self,
+        rhs: Rhs<'_>,
+        dst: u16,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        match rhs {
+            Rhs::Expr(e) => self.expr_to(e, dst),
+            Rhs::Reg(r) => self.move_result(r, dst, span),
+        }
+    }
+
+    /// The register holding the value, allocating a temporary only when the
+    /// right-hand side is still an expression.
+    fn rhs_tmp(&mut self, rhs: Rhs<'_>) -> Result<u16, CompileError> {
+        match rhs {
+            Rhs::Expr(e) => self.expr_tmp(e),
+            Rhs::Reg(r) => Ok(r),
+        }
+    }
+}
 
 impl Compiler<'_> {
     /// Compile a block in its own scope.
@@ -38,8 +76,18 @@ impl Compiler<'_> {
                 Ok(None)
             }
 
+            Stmt::LocalMulti { names, values } => {
+                self.local_multi(names, values, span)?;
+                Ok(None)
+            }
+
             Stmt::Assign { target, value } => {
-                self.assign(target, value)?;
+                self.assign(target, Rhs::Expr(value))?;
+                Ok(None)
+            }
+
+            Stmt::AssignMulti { targets, values } => {
+                self.assign_multi(targets, values, span)?;
                 Ok(None)
             }
 
@@ -333,6 +381,30 @@ impl Compiler<'_> {
                 self.emit(Instruction::abc(Op::RET0, 0, 0, 0), span);
                 Ok(())
             }
+            // `return f()` hands the callee's results **through**, however
+            // many there are: `eval_expr_list` runs `eval_values` on the
+            // last element, so the tree-walker's `return f()` returns every
+            // value `f` produced, not just the first. Truncating here to one
+            // was silent and invisible until something consumed more than
+            // one — which nothing compiled did before parallel `local`.
+            1 if matches!(values[0].value, Expr::Call { .. }) => {
+                let m = self.mark();
+                // A landing register for the shapes that yield exactly one
+                // value (a constructor, `self.super()`); a genuine call
+                // leaves its results in its own window and says so.
+                let dst = self.alloc(span)?;
+                let r = self.expr_results(&values[0], dst, Want::All)?;
+                let a = self.reg8(r.base, span)?;
+                match r.count {
+                    Some(1) => self.emit(Instruction::abc(Op::RET1, a, 0, 0), span),
+                    // `B = 0`: the run ends at the frame's `top`, which the
+                    // call that just returned set (§6.3).
+                    None => self.emit(Instruction::abc(Op::RET, a, 0, 0), span),
+                    Some(n) => self.emit(Instruction::abc(Op::RET, a, n + 1, 0), span),
+                }
+                self.free_to(m);
+                Ok(())
+            }
             // The overwhelmingly common shape, and why `RET1` is its own
             // opcode rather than `RET` with a count.
             1 => {
@@ -348,6 +420,18 @@ impl Compiler<'_> {
                 // the caller take the values without allocating (§6.3).
                 if n > u8::MAX as usize - 1 {
                     return Err(CompileError::unsupported("returning over 254 values", span.clone()));
+                }
+                // `return a, f()` returns `a` followed by *all* of `f`'s
+                // results, and how many that is is a run-time fact. The
+                // range has to be contiguous, so `f`'s window would have to
+                // begin exactly where `a` ends — which the bump allocator
+                // cannot promise while `a` is still live. Refused rather
+                // than truncated to one value.
+                if matches!(values[n - 1].value, Expr::Call { .. }) {
+                    return Err(CompileError::unsupported(
+                        "a `return` whose last of several values is a call",
+                        span.clone(),
+                    ));
                 }
                 let m = self.mark();
                 let base = self.alloc_n(n as u16, span)?;
@@ -416,10 +500,148 @@ impl Compiler<'_> {
         Ok(())
     }
 
+    /// `local a, b = f()` — parallel binding (§6.3).
+    ///
+    /// The whole right-hand side is evaluated into a **contiguous** run
+    /// before any name is bound. Contiguity is what lets a trailing call
+    /// write its results straight into the run instead of through
+    /// temporaries, and binding afterwards is what makes `local a, b = b, a`
+    /// read the *outer* `a` and `b` — the same order plain `local` uses.
+    fn local_multi(
+        &mut self,
+        names: &[(String, std::ops::Range<usize>, Option<saule_ast::Type>)],
+        values: &[Spanned<Expr>],
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        let Ok(n) = u8::try_from(names.len()) else {
+            return Err(CompileError::unsupported(
+                "a parallel `local` binding over 255 names",
+                span.clone(),
+            ));
+        };
+        if n == 0 {
+            return Ok(());
+        }
+
+        // A module-level `local` is a module *slot*, not a frame register
+        // (0.6), so here the run is temporaries that `SETMOD` publishes.
+        // Inside a function the run **is** the locals, and the names are
+        // declared onto it with no moves at all.
+        if self.at_module_top() {
+            let mut slots = Vec::with_capacity(names.len());
+            for (name, _, _) in names {
+                let Some(i) = self
+                    .bindings
+                    .module_slots
+                    .iter()
+                    .position(|s| s.as_ref() == name.as_str())
+                else {
+                    return Err(CompileError::unsupported(
+                        "a top-level binding the resolver did not record",
+                        span.clone(),
+                    ));
+                };
+                slots.push(i as u16);
+            }
+            let m = self.mark();
+            let base = self.alloc_n(n as u16, span)?;
+            self.expr_list_to(values, base, n, span)?;
+            for (i, slot) in slots.into_iter().enumerate() {
+                let a = self.reg8(base + i as u16, span)?;
+                let g = self.mod_slot(slot, span)?;
+                self.emit(Instruction::abx(Op::SETMOD, a, g), span);
+            }
+            self.free_to(m);
+            return Ok(());
+        }
+
+        let base = self.alloc_n(n as u16, span)?;
+        self.expr_list_to(values, base, n, span)?;
+        for (i, (name, _, _)) in names.iter().enumerate() {
+            self.f.declare(name, base + i as u16);
+        }
+        Ok(())
+    }
+
+    /// `a, b = b, a` — parallel assignment.
+    ///
+    /// The right-hand side is evaluated **in full** before any target is
+    /// written, which is what makes the swap a swap. That is also why the
+    /// targets are written from registers rather than from expressions, and
+    /// why [`Rhs`] exists.
+    fn assign_multi(
+        &mut self,
+        targets: &[Spanned<Expr>],
+        values: &[Spanned<Expr>],
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        let Ok(n) = u8::try_from(targets.len()) else {
+            return Err(CompileError::unsupported(
+                "a parallel assignment to over 255 targets",
+                span.clone(),
+            ));
+        };
+        if n == 0 {
+            return Ok(());
+        }
+        let m = self.mark();
+        let base = self.alloc_n(n as u16, span)?;
+        self.expr_list_to(values, base, n, span)?;
+        for (i, target) in targets.iter().enumerate() {
+            self.assign(target, Rhs::Reg(base + i as u16))?;
+        }
+        self.free_to(m);
+        Ok(())
+    }
+
+    /// Fill `dst .. dst + n` from an expression list.
+    ///
+    /// Mirrors `eval_expr_list`: every expression but the last contributes
+    /// exactly one value, and **only the last** expands into however many a
+    /// call returned. A surplus expression is still evaluated — dropping its
+    /// value is not the same as not running it — and a surplus target is
+    /// left nil, both of which the tree-walker does by construction.
+    fn expr_list_to(
+        &mut self,
+        values: &[Spanned<Expr>],
+        dst: u16,
+        n: u8,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        let n = n as u16;
+        if values.is_empty() {
+            for i in 0..n {
+                let a = self.reg8(dst + i, span)?;
+                self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
+            }
+            return Ok(());
+        }
+        let last = values.len() - 1;
+        for (i, v) in values.iter().enumerate() {
+            let filled = i as u16;
+            if filled >= n {
+                // Past the last target: evaluated for its side effects and
+                // the value dropped, which is what `eval_expr_list` does
+                // with the surplus.
+                let m = self.mark();
+                let _ = self.expr_tmp(v)?;
+                self.free_to(m);
+            } else if i < last {
+                self.expr_to(v, dst + filled)?;
+            } else {
+                // The count is known here, so no `top` is involved: `C`
+                // asks for exactly the registers still to fill, and the VM
+                // pads a short callee with nil.
+                self.expr_results(v, dst + filled, Want::Fixed((n - filled) as u8))?;
+            }
+        }
+        Ok(())
+    }
+
     fn assign(
         &mut self,
         target: &Spanned<Expr>,
-        value: &Spanned<Expr>,
+        value: Rhs<'_>,
     ) -> Result<(), CompileError> {
         let span = &target.span;
 
@@ -444,7 +666,7 @@ impl Compiler<'_> {
                 let base = self.alloc_n(3, span)?;
                 self.expr_to(obj, base)?;
                 self.expr_to(index, base + 1)?;
-                self.expr_to(value, base + 2)?;
+                self.rhs_to(value, base + 2, span)?;
                 let a = self.reg8(base, span)?;
                 self.emit(Instruction::abc(Op::CALLM, a, 3, slot as u8), span);
                 self.free_to(m);
@@ -454,7 +676,7 @@ impl Compiler<'_> {
             let m = self.mark();
             let o = self.expr_tmp(obj)?;
             let k = self.expr_tmp(index)?;
-            let v = self.expr_tmp(value)?;
+            let v = self.rhs_tmp(value)?;
             let (a, b, c) = (
                 self.reg8(o, span)?,
                 self.reg8(k, span)?,
@@ -471,7 +693,7 @@ impl Compiler<'_> {
                 && let Some(&s) = self.chunk.classes[class as usize].sindex.get(name.as_str())
             {
                 let m = self.mark();
-                let r = self.expr_tmp(value)?;
+                let r = self.rhs_tmp(value)?;
                 let a = self.reg8(r, span)?;
                 // `s.class`, not `class`: `Child.counter = 1` writes the
                 // slot `Parent` declares, so a bare-name read from a
@@ -492,7 +714,7 @@ impl Compiler<'_> {
                     saule_interpreter::Value::Str(std::rc::Rc::new(name.clone())),
                     span,
                 )?;
-                let v = self.expr_tmp(value)?;
+                let v = self.rhs_tmp(value)?;
                 self.map_key_write(o, key, v, span)?;
                 self.free_to(m);
                 return Ok(());
@@ -507,7 +729,7 @@ impl Compiler<'_> {
                 && let Some(&s) = self.chunk.classes[class as usize].sindex.get(name.as_str())
             {
                 let m = self.mark();
-                let r = self.expr_tmp(value)?;
+                let r = self.rhs_tmp(value)?;
                 let a = self.reg8(r, span)?;
                 self.emit(
                     Instruction::abc(Op::SETSTAT, a, s.class as u8, s.slot as u8),
@@ -531,7 +753,7 @@ impl Compiler<'_> {
             };
             let m = self.mark();
             let o = self.expr_tmp(obj)?;
-            let v = self.expr_tmp(value)?;
+            let v = self.rhs_tmp(value)?;
             let (a, c) = (self.reg8(o, span)?, self.reg8(v, span)?);
             self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span);
             self.free_to(m);
@@ -550,10 +772,10 @@ impl Compiler<'_> {
                 let slot = *slot;
                 match self.f.lookup(name) {
                     // The module body holds it in a register.
-                    Some(reg) => self.expr_to(value, reg),
+                    Some(reg) => self.rhs_to(value, reg, span),
                     None => {
                         let m = self.mark();
-                        let r = self.expr_tmp(value)?;
+                        let r = self.rhs_tmp(value)?;
                         let a = self.reg8(r, span)?;
                         let g = self.mod_slot(slot, span)?;
             self.emit(Instruction::abx(Op::SETMOD, a, g), span);
@@ -567,13 +789,13 @@ impl Compiler<'_> {
                     thing: "assignment to a local the compiler has not seen declared",
                     span: span.clone(),
                 })?;
-                self.expr_to(value, reg)
+                self.rhs_to(value, reg, span)
             }
             Some(Binding::Upvalue { .. }) => {
                 // A closure writing through to the variable it captured —
                 // the live-binding half of closure semantics.
                 let m = self.mark();
-                let r = self.expr_tmp(value)?;
+                let r = self.rhs_tmp(value)?;
                 let idx = self.capture_upvalue(name).ok_or_else(|| CompileError::Unsupported {
                     thing: "assignment to a captured variable the compiler could not locate",
                     span: span.clone(),
@@ -596,7 +818,7 @@ impl Compiler<'_> {
                     ));
                 };
                 let m = self.mark();
-                let r = self.expr_tmp(value)?;
+                let r = self.rhs_tmp(value)?;
                 let a = self.reg8(r, span)?;
                 self.emit(
                     Instruction::abc(Op::SETSTAT, a, s.class as u8, s.slot as u8),
@@ -686,7 +908,7 @@ impl Compiler<'_> {
             span: span.clone(),
             id: saule_ast::NodeId::NONE,
         };
-        self.assign(target, &combined)
+        self.assign(target, Rhs::Expr(&combined))
     }
 
     fn if_chain(
@@ -1026,8 +1248,6 @@ impl Compiler<'_> {
 
 fn stmt_label(s: &Stmt) -> &'static str {
     match s {
-        Stmt::LocalMulti { .. } => "a parallel `local`",
-        Stmt::AssignMulti { .. } => "a parallel assignment",
         Stmt::Error => "an unparsable statement",
         _ => "this statement",
     }

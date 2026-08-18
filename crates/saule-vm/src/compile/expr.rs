@@ -27,6 +27,56 @@ use super::CompileError;
 use super::ctx::{Compiler, Num, num_of};
 use crate::op::{Instruction, Op};
 
+/// How many values a call site wants back (§6.2's `C` operand).
+///
+/// Saule is multi-return, but almost every call site consumes exactly one
+/// value, which is why `Fixed(1)` is the default everywhere and the other
+/// two shapes are reached only from a parallel `local`/assignment and from
+/// `return f()`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Want {
+    /// Exactly `n`. A callee returning fewer is padded with nil and a
+    /// callee returning more has the surplus dropped — which is what
+    /// `pop_frame` does with a non-zero `C`, and exactly the tree-walker's
+    /// "extras → nil, surplus dropped".
+    Fixed(u8),
+    /// Every value the callee produced. The count is a **run-time** fact, so
+    /// the results stay in the call window and the frame's `top` marks their
+    /// end; only `RET A 0` can read that, which is why `return f()` is the
+    /// sole caller.
+    All,
+}
+
+impl Want {
+    /// The `C` operand: `nret + 1`, with 0 meaning "all results, set `top`".
+    fn c(self) -> u8 {
+        match self {
+            Want::Fixed(n) => n + 1,
+            Want::All => 0,
+        }
+    }
+
+    /// Registers the call window must reserve for the results it will
+    /// receive. `All` reserves one; anything beyond that lands above the
+    /// frame's high-water mark, which is safe because the window is the
+    /// top of the register file and `RET` consumes it immediately.
+    fn slots(self) -> u16 {
+        match self {
+            Want::Fixed(n) => n as u16,
+            Want::All => 1,
+        }
+    }
+}
+
+/// Where a call left its results.
+pub(crate) struct Results {
+    /// First register of the run.
+    pub base: u16,
+    /// How many registers from `base` hold results, or `None` when only the
+    /// VM knows — the run then ends at the frame's `top`.
+    pub count: Option<u8>,
+}
+
 impl Compiler<'_> {
     /// Compile `e`, leaving its value in register `dst`.
     pub fn expr_to(&mut self, e: &Spanned<Expr>, dst: u16) -> Result<(), CompileError> {
@@ -146,6 +196,38 @@ impl Compiler<'_> {
         let r = self.alloc(&e.span)?;
         self.expr_to(e, r)?;
         Ok(r)
+    }
+
+    /// Compile `e` as the value **list** it produces, not the single value
+    /// `expr_to` reduces it to.
+    ///
+    /// Only a call can yield more than one value: `eval_values` expands
+    /// `Expr::Call` and returns a one-element list for everything else, so
+    /// matching that here is reproducing the oracle rather than approximating
+    /// it. `dst` must own `want.slots()` consecutive registers.
+    pub(crate) fn expr_results(
+        &mut self,
+        e: &Spanned<Expr>,
+        dst: u16,
+        want: Want,
+    ) -> Result<Results, CompileError> {
+        match &e.value {
+            Expr::Call { callee, args } => {
+                let m = self.mark();
+                let r = self.call_to_want(e, callee, args, dst, want)?;
+                // `Want::All` leaves the window allocated on purpose, so
+                // only a counted result run can be released here — the `All`
+                // caller frees once its `RET` has read the run.
+                if r.count.is_some() {
+                    self.free_to(m);
+                }
+                Ok(r)
+            }
+            _ => {
+                self.expr_to(e, dst)?;
+                self.one_result(dst, want, &e.span)
+            }
+        }
     }
 
     fn ident_to(
@@ -574,6 +656,25 @@ impl Compiler<'_> {
         args: &[saule_ast::CallArg],
         dst: u16,
     ) -> Result<(), CompileError> {
+        self.call_to_want(e, callee, args, dst, Want::Fixed(1)).map(|_| ())
+    }
+
+    /// [`call_to`](Self::call_to), asking for a specific number of results.
+    ///
+    /// `dst` is where a `Fixed` result run lands. For [`Want::All`] the
+    /// results stay in the call window — the count is not known until the
+    /// callee returns — so `dst` is used only by the shapes that produce
+    /// exactly one value, and the returned [`Results`] says which happened.
+    /// **The window is not released**: the caller took the mark and must
+    /// free back to it once it has consumed the results.
+    fn call_to_want(
+        &mut self,
+        e: &Spanned<Expr>,
+        callee: &Spanned<Expr>,
+        args: &[saule_ast::CallArg],
+        dst: u16,
+        want: Want,
+    ) -> Result<Results, CompileError> {
         let span = &e.span;
         // Only a bare name can be a `CALLNAT`/`CALLK` target; anything else
         // is a value and falls through to the generic `CALL` below.
@@ -627,19 +728,20 @@ impl Compiler<'_> {
 
         // `obj.method(args)` and `Class.method(args)`.
         if let Expr::Member { obj, name } = &callee.value {
-            return self.method_call_to(e, obj, name, &positional, dst);
+            return self.method_call_to(e, obj, name, &positional, dst, want);
         }
         // `obj?.method(args)` — the nil check has to wrap the *call*, not
         // just the callee lookup, or `p?.foo()` on a nil `p` would end up
         // calling nil rather than producing nil.
         if let Expr::SafeMember { obj, name } = &callee.value {
-            return self.safe_method_call_to(e, obj, name, &positional, dst);
+            return self.safe_method_call_to(e, obj, name, &positional, dst, want);
         }
         // `ClassName(args)` — a constructor, not a function call.
         if let Some(class) = self.layouts.get(name)
             && self.not_shadowed(name)
         {
-            return self.construct_to(class, &positional, dst, span);
+            self.construct_to(class, &positional, dst, span)?;
+            return self.one_result(dst, want, span);
         }
 
         // A name with a compile-time value — the prelude, or something an
@@ -655,19 +757,18 @@ impl Compiler<'_> {
                 // `CALLNAT` reads its arguments from `A+1..`, mirroring
                 // `CALL`, so the window has room for the callee slot even
                 // though the callee itself is a constant.
-                let base = self.alloc_n(positional.len() as u16 + 1, span)?;
+                let base =
+                    self.alloc_n((positional.len() as u16 + 1).max(want.slots()), span)?;
                 for (i, arg) in positional.iter().enumerate() {
                     self.expr_to(arg, base + 1 + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
                 self.emit(
-                    Instruction::abc(Op::CALLNAT, a, positional.len() as u8 + 1, 2),
+                    Instruction::abc(Op::CALLNAT, a, positional.len() as u8 + 1, want.c()),
                     span,
                 );
                 self.emit(Instruction::ax_of(Op::EXTRAARG, k as u32), span);
-                self.move_result(base, dst, span)?;
-                self.free_to(m);
-                Ok(())
+                self.finish_call(base, dst, want, m, span)
             }
             // A `static fn` of the enclosing class, called by its bare name
             // — `check(code)` from a sibling static. The name is a *method*,
@@ -684,44 +785,40 @@ impl Compiler<'_> {
                 let mark = self.mark();
                 // `CALLSTAT`'s window starts at the arguments: a static has
                 // no receiver.
-                let n = positional.len().max(1) as u16;
+                let n = (positional.len().max(1) as u16).max(want.slots());
                 let base = self.alloc_n(n, span)?;
                 for (i, arg) in positional.iter().enumerate() {
                     self.expr_to(arg, base + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
                 self.emit(
-                    Instruction::abc(Op::CALLSTAT, a, positional.len() as u8 + 1, 2),
+                    Instruction::abc(Op::CALLSTAT, a, positional.len() as u8 + 1, want.c()),
                     span,
                 );
                 self.emit(
                     Instruction::ax_of(Op::EXTRAARG, ((cls as u32) << 16) | slot as u32),
                     span,
                 );
-                self.move_result(base, dst, span)?;
-                self.free_to(mark);
-                Ok(())
+                self.finish_call(base, dst, want, mark, span)
             }
             Some(Binding::Module { .. }) if self.fn_protos.contains_key(name) => {
                 let proto = self.fn_protos[name];
                 let m = self.mark();
                 // `CALLK`'s window starts at the *arguments*: there is no
                 // callee register, because the callee is the operand.
-                let n = positional.len().max(1) as u16;
+                let n = (positional.len().max(1) as u16).max(want.slots());
                 let base = self.alloc_n(n, span)?;
                 for (i, arg) in positional.iter().enumerate() {
                     self.expr_to(arg, base + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
                 self.emit(
-                    Instruction::abc(Op::CALLK, a, positional.len() as u8 + 1, 2),
+                    Instruction::abc(Op::CALLK, a, positional.len() as u8 + 1, want.c()),
                     span,
                 );
                 let t = self.own_call_target(proto, span)?;
                 self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
-                self.move_result(base, dst, span)?;
-                self.free_to(m);
-                Ok(())
+                self.finish_call(base, dst, want, m, span)
             }
             // Anything else callable is a *value* — a local holding a
             // lambda, a captured one, a module slot bound to a function.
@@ -730,19 +827,18 @@ impl Compiler<'_> {
             // typed ones above are specialisations of.
             _ => {
                 let m = self.mark();
-                let base = self.alloc_n(positional.len() as u16 + 1, span)?;
+                let base =
+                    self.alloc_n((positional.len() as u16 + 1).max(want.slots()), span)?;
                 self.expr_to(callee, base)?;
                 for (i, arg) in positional.iter().enumerate() {
                     self.expr_to(arg, base + 1 + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
                 self.emit(
-                    Instruction::abc(Op::CALL, a, positional.len() as u8 + 1, 2),
+                    Instruction::abc(Op::CALL, a, positional.len() as u8 + 1, want.c()),
                     span,
                 );
-                self.move_result(base, dst, span)?;
-                self.free_to(m);
-                Ok(())
+                self.finish_call(base, dst, want, m, span)
             }
         }
     }
@@ -755,7 +851,8 @@ impl Compiler<'_> {
         name: &str,
         args: &[&Spanned<Expr>],
         dst: u16,
-    ) -> Result<(), CompileError> {
+        want: Want,
+    ) -> Result<Results, CompileError> {
         let span = &e.span;
 
         // `Event.Click(x, y)` — a tuple-variant constructor, not a call.
@@ -764,7 +861,8 @@ impl Compiler<'_> {
             && let Some(e_idx) = self.layouts.enum_of(en)
             && let Some(&tag) = self.chunk.enums[e_idx as usize].by_name.get(name)
         {
-            return self.variant_ctor_to(e_idx, tag, args, dst, span);
+            self.variant_ctor_to(e_idx, tag, args, dst, span)?;
+            return self.one_result(dst, want, span);
         }
 
         // `self.super(args)` — the parent's `init`, dispatched **statically**.
@@ -803,7 +901,7 @@ impl Compiler<'_> {
             // `self.super()` is a statement, not a value.
             let d = self.reg8(dst, span)?;
             self.emit(Instruction::abc(Op::LOADNIL, d, 0, 0), span);
-            return Ok(());
+            return self.one_result(dst, want, span);
         }
 
         // A static method: the receiver is a class name, so the target is
@@ -812,22 +910,20 @@ impl Compiler<'_> {
             && let Some(&s) = self.chunk.classes[class as usize].smindex.get(name)
         {
             let m = self.mark();
-            let base = self.alloc_n(args.len().max(1) as u16, span)?;
+            let base = self.alloc_n((args.len().max(1) as u16).max(want.slots()), span)?;
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + i as u16)?;
             }
             let a = self.reg8(base, span)?;
             self.emit(
-                Instruction::abc(Op::CALLSTAT, a, args.len() as u8 + 1, 2),
+                Instruction::abc(Op::CALLSTAT, a, args.len() as u8 + 1, want.c()),
                 span,
             );
             // The *declaring* class, so an inherited `static fn` reached
             // through a subclass name still loads the parent's proto.
             let packed = ((s.class) << 16) | s.slot as u32;
             self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
-            self.move_result(base, dst, span)?;
-            self.free_to(m);
-            return Ok(());
+            return self.finish_call(base, dst, want, m, span);
         }
 
         // `String.len(s)`, `Table.insert(t, v)` — a static on a *stdlib*
@@ -848,19 +944,17 @@ impl Compiler<'_> {
         {
             let k = self.constant(v, span)?;
             let m = self.mark();
-            let base = self.alloc_n(args.len() as u16 + 1, span)?;
+            let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
             }
             let a = self.reg8(base, span)?;
             self.emit(
-                Instruction::abc(Op::CALLNAT, a, args.len() as u8 + 1, 2),
+                Instruction::abc(Op::CALLNAT, a, args.len() as u8 + 1, want.c()),
                 span,
             );
             self.emit(Instruction::ax_of(Op::EXTRAARG, k as u32), span);
-            self.move_result(base, dst, span)?;
-            self.free_to(m);
-            return Ok(());
+            return self.finish_call(base, dst, want, m, span);
         }
 
         // An interface-typed receiver: the concrete class is not known, but
@@ -871,8 +965,14 @@ impl Compiler<'_> {
             .and_then(|t| self.layouts.interface_of(t))
             && let Some(&slot) = self.chunk.interfaces[iface as usize].index.get(name)
         {
+            if iface > 0xFFFF {
+                return Err(CompileError::unsupported(
+                    "a program with more than 65 536 interfaces",
+                    span.clone(),
+                ));
+            }
             let m = self.mark();
-            let base = self.alloc_n(args.len() as u16 + 1, span)?;
+            let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
             self.expr_to(obj, base)?;
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
@@ -882,10 +982,16 @@ impl Compiler<'_> {
                 Instruction::abc(Op::CALLIF, a, args.len() as u8 + 1, slot as u8),
                 span,
             );
-            self.emit(Instruction::ax_of(Op::EXTRAARG, iface), span);
-            self.move_result(base, dst, span)?;
-            self.free_to(m);
-            return Ok(());
+            // Packed 8/16, the same split `CALLK` uses for its module: `C`
+            // is spent on the interface's method slot, so the result count
+            // has nowhere else to ride. `return s.area()` is what makes
+            // this live — it asks for *all* results, and truncating to one
+            // would be the same silent wrong value `RET1` used to produce.
+            self.emit(
+                Instruction::ax_of(Op::EXTRAARG, ((want.c() as u32) << 16) | iface),
+                span,
+            );
+            return self.finish_call(base, dst, want, m, span);
         }
 
         // An instance method: one indexed load out of the vtable, and the
@@ -899,7 +1005,7 @@ impl Compiler<'_> {
             let m = self.mark();
             // The receiver sits at `A` and the arguments after it, exactly
             // as `CALLM` lays them out.
-            let base = self.alloc_n(args.len() as u16 + 1, span)?;
+            let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
             self.expr_to(obj, base)?;
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
@@ -907,13 +1013,11 @@ impl Compiler<'_> {
             let key = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
             let a = self.reg8(base, span)?;
             self.emit(
-                Instruction::abc(Op::CALLMX, a, args.len() as u8 + 1, 2),
+                Instruction::abc(Op::CALLMX, a, args.len() as u8 + 1, want.c()),
                 span,
             );
             self.emit(Instruction::ax_of(Op::EXTRAARG, key as u32), span);
-            self.move_result(base, dst, span)?;
-            self.free_to(m);
-            return Ok(());
+            return self.finish_call(base, dst, want, m, span);
         };
         let Some(&slot) = self.chunk.classes[class as usize].vindex.get(name) else {
             return Err(CompileError::unsupported(
@@ -925,19 +1029,29 @@ impl Compiler<'_> {
         let m = self.mark();
         // The receiver occupies the window's first register and becomes the
         // callee's `R[0]`, so `self` costs no copy.
-        let base = self.alloc_n(args.len() as u16 + 1, span)?;
+        let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
         self.expr_to(obj, base)?;
         for (i, arg) in args.iter().enumerate() {
             self.expr_to(arg, base + 1 + i as u16)?;
         }
         let a = self.reg8(base, span)?;
-        self.emit(
-            Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
-            span,
-        );
-        self.move_result(base, dst, span)?;
-        self.free_to(m);
-        Ok(())
+        // `CALLM` carries the vtable slot in `C`, so it can only ever
+        // produce one result. Anything else moves the slot into `EXTRAARG`
+        // and lets `C` say how many — which is the whole reason §15.10
+        // reserves a second opcode for this.
+        if want == Want::Fixed(1) {
+            self.emit(
+                Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
+                span,
+            );
+        } else {
+            self.emit(
+                Instruction::abc(Op::CALLM_MR, a, args.len() as u8 + 1, want.c()),
+                span,
+            );
+            self.emit(Instruction::ax_of(Op::EXTRAARG, slot as u32), span);
+        }
+        self.finish_call(base, dst, want, m, span)
     }
 
     /// A call leaves its single result in the first register of its window;
@@ -1180,6 +1294,63 @@ impl Compiler<'_> {
         let (a, b) = (self.reg8(dst, span)?, self.reg8(from, span)?);
         self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
         Ok(())
+    }
+
+    /// Land a call's results where the caller asked, and say where they are.
+    ///
+    /// `m` is the mark taken before the call window was allocated. A `Fixed`
+    /// count moves down to `dst` — ascending, which is safe because the
+    /// window is always above `dst` — and the window is released.
+    /// [`Want::All`] can move nothing, since the count is only known once the
+    /// callee has returned, so the window **stays allocated** and its base is
+    /// handed back for the caller to consume with `RET A 0`.
+    fn finish_call(
+        &mut self,
+        base: u16,
+        dst: u16,
+        want: Want,
+        m: crate::compile::regalloc::Mark,
+        span: &Range<usize>,
+    ) -> Result<Results, CompileError> {
+        match want {
+            Want::All => Ok(Results { base, count: None }),
+            Want::Fixed(n) => {
+                for i in 0..n as u16 {
+                    self.move_result(base + i, dst + i, span)?;
+                }
+                self.free_to(m);
+                Ok(Results {
+                    base: dst,
+                    count: Some(n),
+                })
+            }
+        }
+    }
+
+    /// A call shape that yields exactly one value, already written to `dst`.
+    ///
+    /// Constructors, variant constructors, `self.super()` and pipelines are
+    /// all single-valued under the tree-walker too, so padding the surplus
+    /// with nil here is `eval_expr_list`'s own rule rather than a shortcut:
+    /// `local a, b = Foo()` binds the instance and a nil.
+    fn one_result(
+        &mut self,
+        dst: u16,
+        want: Want,
+        span: &Range<usize>,
+    ) -> Result<Results, CompileError> {
+        let n = match want {
+            Want::Fixed(n) => n,
+            Want::All => return Ok(Results { base: dst, count: Some(1) }),
+        };
+        for i in 1..n as u16 {
+            let a = self.reg8(dst + i, span)?;
+            self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
+        }
+        Ok(Results {
+            base: dst,
+            count: Some(n),
+        })
     }
 
     /// `obj.name` — a field read, or a static read off a class name.
@@ -1541,7 +1712,8 @@ impl Compiler<'_> {
         name: &str,
         args: &[&Spanned<Expr>],
         dst: u16,
-    ) -> Result<(), CompileError> {
+        want: Want,
+    ) -> Result<Results, CompileError> {
         let span = &e.span;
 
         let Some(class) = self.class_of_nullable_expr(obj) else {
@@ -1556,9 +1728,20 @@ impl Compiler<'_> {
                 span.clone(),
             ));
         };
+        // The nil arm has to produce *as many* results as the call arm, and
+        // for `Want::All` that count is a run-time fact carried in `top` —
+        // which nothing but a return can set. `return x?.m()` therefore
+        // refuses and falls back rather than returning one value where the
+        // tree-walker returns several.
+        let Want::Fixed(nret) = want else {
+            return Err(CompileError::unsupported(
+                "a safe method call whose results are passed straight through by `return`",
+                span.clone(),
+            ));
+        };
 
         let m = self.mark();
-        let base = self.alloc_n(args.len() as u16 + 1, span)?;
+        let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
         self.expr_to(obj, base)?;
         let rb = self.reg8(base, span)?;
         self.emit(Instruction::abc(Op::JNOTNIL, rb, 0, 0), span);
@@ -1566,18 +1749,33 @@ impl Compiler<'_> {
         for (i, arg) in args.iter().enumerate() {
             self.expr_to(arg, base + 1 + i as u16)?;
         }
-        self.emit(
-            Instruction::abc(Op::CALLM, rb, args.len() as u8 + 1, slot as u8),
-            span,
-        );
-        self.move_result(base, dst, span)?;
+        if nret == 1 {
+            self.emit(
+                Instruction::abc(Op::CALLM, rb, args.len() as u8 + 1, slot as u8),
+                span,
+            );
+        } else {
+            self.emit(
+                Instruction::abc(Op::CALLM_MR, rb, args.len() as u8 + 1, want.c()),
+                span,
+            );
+            self.emit(Instruction::ax_of(Op::EXTRAARG, slot as u32), span);
+        }
+        for i in 0..nret as u16 {
+            self.move_result(base + i, dst + i, span)?;
+        }
         let done = self.emit_jump(Op::JMP, 0, span);
         self.patch_here(to_nil)?;
-        let d = self.reg8(dst, span)?;
-        self.emit(Instruction::abc(Op::LOADNIL, d, 0, 0), span);
+        for i in 0..nret as u16 {
+            let d = self.reg8(dst + i, span)?;
+            self.emit(Instruction::abc(Op::LOADNIL, d, 0, 0), span);
+        }
         self.patch_here(done)?;
         self.free_to(m);
-        Ok(())
+        Ok(Results {
+            base: dst,
+            count: Some(nret),
+        })
     }
 
     /// A lambda.

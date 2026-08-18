@@ -1280,15 +1280,46 @@ impl Vm {
                         )?;
                         continue 'reentry;
                     }
+                    Op::CALLM_MR => {
+                        // `CALLM` with the vtable slot displaced into
+                        // `EXTRAARG`, which frees `C` to say how many
+                        // results the call site wants. `CALLM` cannot: `C`
+                        // *is* its slot. Emitted only where more or fewer
+                        // than one result is asked for — a parallel `local`,
+                        // or a `return` passing the callee's results through.
+                        let slot = self.extra_arg(code, &mut pc, &proto, here)? as usize;
+                        let recv = base + a;
+                        let n_args = (ins.b() as usize).saturating_sub(1);
+                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+                        let (tm, target) = self.vtable_lookup(recv, slot, &proto, here)?;
+                        let tc = Rc::clone(&self.shared.chunks[tm]);
+                        let p = Rc::clone(tc.proto(target));
+                        let handle = self.closure_for(&tc, target, p);
+                        self.frames.last_mut().expect("frame").pc = pc as u32;
+                        self.push_frame(
+                            handle,
+                            recv as u32,
+                            n_args + 1,
+                            recv as u32,
+                            n_ret,
+                            proto.span_at(here),
+                        )?;
+                        continue 'reentry;
+                    }
                     Op::CALLIF => {
                         // Interface dispatch: the receiver's class, one
                         // small-map probe into its itable, one vtable index
-                        // (§8.4). The interface index rides in `EXTRAARG`
-                        // because `C` is already the interface's method slot.
-                        let iface = self.extra_arg(code, &mut pc, &proto, here)?;
+                        // (§8.4). `C` is already the interface's method
+                        // slot, so `EXTRAARG` carries both the interface
+                        // index and the result count, packed 8/16 exactly
+                        // as `CALLK` packs its module — the same pressure
+                        // that gives `CALLM` a second opcode in `CALLM_MR`.
+                        let packed = self.extra_arg(code, &mut pc, &proto, here)?;
+                        let (c, iface) = ((packed >> 16) as u8, packed & 0xFFFF);
                         let recv = base + a;
                         let slot = ins.c() as usize;
                         let n_args = (ins.b() as usize).saturating_sub(1);
+                        let n_ret = if c == 0 { ALL_RESULTS } else { c - 1 };
                         let (tm, target) = self.itable_lookup(recv, iface, slot, &proto, here)?;
                         let tc = Rc::clone(&self.shared.chunks[tm]);
                         let p = Rc::clone(tc.proto(target));
@@ -1299,7 +1330,7 @@ impl Vm {
                             recv as u32,
                             n_args + 1,
                             recv as u32,
-                            1,
+                            n_ret,
                             proto.span_at(here),
                         )?;
                         continue 'reentry;

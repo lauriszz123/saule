@@ -74,7 +74,7 @@ steer by. The real one:
 | | Compiles fully | Falls back |
 |---|---|---|
 | `benchmarks/sau` | **10 of 10** | — |
-| `tests/*.sau` | **80 of 92** | 12 |
+| `tests/*.sau` | **84 of 92** | 8 |
 
 **And the same measurement on real code, which says something different.**
 `tests/*.sau` are single files; every real Saule program is a project with
@@ -123,19 +123,23 @@ for f in tests/*.sau; do SAULE_ENGINE=vm ./target/debug/saule.exe run "$f" 2>&1 
 
 | Cause | Fixtures | Note |
 |---|---|---|
-| method call on a receiver with no proved class | **5** | **this** is the one that genuinely wants §8.5's `GETFX` |
-| multi-return / parallel `local a, b = f()` | 4 | needs variadic call/return through `top`, deferred out of Phase 2 |
-| `for … in` over a closure or an instance | 3 | the §15.8 closure driver |
-| assignment to this kind of binding | 2 | |
-| member read on a receiver with no proved class | 2 | same `GETFX` gap, read side |
-| imports | 1 | structurally the big one |
-| `Assignable<T>` | 1 | |
-| tuple patterns | 1 | |
-| compound assignment to a member | 1 | |
-| assignment to something that is not an instance field | 1 | |
+| an enum with methods | 1 | §0.6's missing `NodeId`, or a different key |
+| a tuple pattern | 1 | |
+| a skipped parameter whose default must run in the callee | 1 | §19 |
+| a prelude name outside a call | 1 | |
+| a declaration the compiler does not handle | 1 | |
+| a compound assignment to a member | 1 | |
+| a class implementing `Assignable` | 1 | |
 | `self` outside a method | 1 | |
+
+Each is independent; none unlocks another.
+
 *Fixed since:* `case x when …` was right — it was a bug, not a gap, and it
 was hiding a second, silent one. See "Two bugs in `match` guards" below.
+**Multi-return / parallel `local a, b = f()`** closed four fixtures at once
+(`fibonacci`, `string_lib`, `call_return_inference`,
+`multiple_return_values`) and, along the way, a live silent divergence —
+see "Multi-return and parallel binding" below.
 
 Gone from this table since re-entrancy landed: `classes with a toString
 overload` (2), `function value passed to a built-in` (1), and `methods on a
@@ -469,7 +473,12 @@ exists to replace.
       free (§7.2)
 - [x] `CONCAT` n-ary and single-allocation
 - [ ] `TAILCALL` — reuse the frame; closes the gap `PRODUCTION.md:344` names
-- [ ] Variadic call/return through `top` (`B = 0` / `C = 0`) exercised by a test
+- [x] Variadic **return** through `top` (`C = 0` on the call, `B = 0` on the
+      `RET`) exercised by tests — see "Multi-return and parallel binding".
+      `B = 0` on a *call* is still unused, and deliberately: Saule's
+      `eval_call_args` does not expand a trailing call into several
+      arguments, so `f(g())` passes exactly one. Implementing it would be
+      inventing a language rule, not matching one.
 - [ ] `SAULE_MAX_DEPTH` semantics documented as "frames", raised two orders of
       magnitude (§6.4) *(the limit is implemented; the doc change is not)*
 
@@ -526,7 +535,8 @@ exists to replace.
 
 - [ ] `TAILCALL` — needs no new front-end work; closes the gap
       `PRODUCTION.md:344` names
-- [ ] Variadic call/return through `top` (`B = 0` / `C = 0`)
+- [x] Variadic call/return through `top` — done on the return side; the
+      argument side has no language rule to implement (see above)
 - [ ] `SAULE_MAX_DEPTH` re-documented as "frames" (6.4)
 
 ### Phase 2 exit criteria
@@ -1118,6 +1128,111 @@ The verifier also earned its keep: `CALLMX` was missing from its
 `expect_extra` list, and four fixtures failed with `an EXTRAARG with no
 instruction before it` rather than running a mis-decoded chunk.
 
+### Multi-return and parallel binding — done, and the divergence it exposed
+
+`local a, b = f()`, `a, b = b, a`, and `return f()` passing a callee's
+results **through**. Four fixtures (`fibonacci`, `string_lib`,
+`call_return_inference`, `multiple_return_values`), and the last item on
+§21.4's list of language features.
+
+**The rule is `eval_expr_list`'s, and it is narrower than it looks.** Only
+the **last** expression of a value list expands, and only when it is a call
+— `eval_values` matches `Expr::Call` and returns a one-element list for
+everything else. Extra names are nil; surplus values are dropped *after*
+being evaluated. Reproducing that exactly is what `compile/stmt.rs`'s
+`expr_list_to` does, and every clause of it has a differential test.
+
+**A count the compiler knows needs no `top` at all.** A parallel `local`
+knows how many registers it is filling, so `C = nret + 1` asks for exactly
+that and `pop_frame` pads a short callee with nil and drops a long one's
+surplus — the tree-walker's rule, for free, the same way the `for … in`
+driver already got it. `top` is needed in exactly one place: `return f()`,
+where the count is a run-time fact. There the call takes `C = 0` and the
+return takes `B = 0`.
+
+**`B = 0` on a *call* remains unimplemented on purpose.** `f(g())` passes
+one argument in Saule: `eval_call_args` evaluates each argument with `eval`,
+not `eval_values`. Implementing argument expansion would be inventing a
+language rule rather than matching one.
+
+#### The bug this found before a line was written
+
+`return f()` compiled to `RET1` and **truncated the callee's results to
+one**. Under the tree-walker it returns all of them. That was live, silent,
+and reachable today — not by a parallel `local`, which did not compile, but
+through a `for … in` **driver**, which asks for `nvars` results:
+
+```
+fn pair() -> (integer, integer) return 11, 22 end
+fn wrap() -> (integer, integer) return pair() end
+-- a driver whose body is `return wrap()`
+for a, b in mkdriver() do println(a, b) end
+```
+
+`11  22` under the tree-walker, `11  nil` under the VM. **Exit status 0, no
+error, wrong value.** No fixture pairs a pass-through return with a
+multi-value consumer, so `SAULE_DIFF=1` could not see it either. Pinned now
+by `a_returned_call_through_a_driver_yields_every_value`.
+
+Worth drawing out, because it is the third time this pattern has appeared:
+the truncation had been correct-by-accident for as long as nothing compiled
+that could consume two values. It became a wrong answer the moment coverage
+widened — the same shape as `EnumObject.methods` and the `toString` guard.
+**Re-read what a gap is "known safe because of" whenever you close a
+neighbouring one.**
+
+#### Two opcodes had no room for a result count
+
+Both spend `C` on something else, which is exactly the pressure §15.10
+anticipated:
+
+- **`CALLM`** carries the vtable slot in `C`. `CALLM_MR` — reserved in the
+  opcode table since Phase 1 and unimplemented until now — moves the slot
+  into `EXTRAARG` so `C` can be `nret + 1`. A call wanting exactly one
+  result still takes the cheaper `CALLM`, so nothing on the hot path
+  changed.
+- **`CALLIF`** carries the interface's *method* slot in `C` and the
+  interface index in `EXTRAARG`. The count now rides packed 8/16 in that
+  `EXTRAARG`, the same split `CALLK` uses for its module. This is a **chunk
+  ABI change** to an existing opcode's operand, which is worth noting: the
+  numbering is untouched, but a cached chunk from before this change would
+  decode the count as 0.
+
+  It was briefly implemented as a *refusal* instead, on the argument that no
+  program could reach it — and that was wrong. `return s.area()` on an
+  interface-typed receiver asks for all results, which is ordinary code;
+  refusing it made `one_call_site_dispatches_to_two_implementations` fall
+  back. A **parallel `local`** from an interface call genuinely cannot be
+  written yet, but for an unrelated front-end reason (below).
+
+#### Refused rather than guessed
+
+- **`return a, f()`** — several values whose last is a call. The returned
+  range has to be contiguous, so `f`'s window would have to begin exactly
+  where `a` ends, which the bump allocator cannot promise while `a` is
+  still live. Refusing costs a fallback; truncating would cost a wrong
+  answer.
+- **`return x?.m()`** — a safe method call's nil arm has to produce as many
+  results as the call arm, and for an unknown count that means setting
+  `top`, which no opcode does. `local a, b = x?.m()` is fine, because there
+  the count is known and the nil arm is just `n` × `LOADNIL`.
+
+#### Noticed, not fixed: typeck cannot see through an interface method call
+
+`saule-typeck` reports `cannot determine the type of this expression` for
+**any** call on an interface-typed receiver, single-valued ones included:
+
+```
+fn use(s: Splitter) -> string
+    local a: integer = s.half()   -- cannot determine the type
+end
+```
+
+So `return s.area()` works only because a `return` position does not demand
+one. This is a front-end gap with nothing to do with the VM, and it is why
+the `CALLIF` multi-result encoding is currently exercised through `return`
+and not through a parallel `local`.
+
 ### Open divergence: a module-level forward call
 
 **Found while adding pipes; it has nothing to do with pipes.** At module
@@ -1346,7 +1461,7 @@ is that they now fall back rather than compute a wrong answer.
       runs, so the second engine starts from the state the first one saw —
       otherwise `todo-app` reports a different second run for a reason that
       has nothing to do with the engine.
-- [ ] Coverage: 80 of 92 `tests/*.sau` compile fully. The remaining 12 fall
+- [ ] Coverage: 84 of 92 `tests/*.sau` compile fully. The remaining 8 fall
       back cleanly, which is correct-but-slow; the gaps are listed at the
       top of this file.
 
@@ -1392,7 +1507,18 @@ is that they now fall back rather than compute a wrong answer.
 
 - [~] **Differential testing** — `crates/saule-vm/tests/differential.rs`
       runs every program under **both** engines and compares the result,
-      error text included. **134 tests.** The `for … in` driver added 4,
+      error text included. **150 tests.** Multi-return added 16: both
+      results of a call, a plain value list, nil padding in both directions,
+      a surplus expression **counted** to prove it still runs, only-the-last
+      expanding, the swap, parallel writes to fields and table slots,
+      `return f()` passing everything through (the divergence), a
+      single-valued callee *not* growing a second nil, a constructor
+      returned through the same path, `CALLM_MR` beside plain `CALLM` in one
+      program, an interface call's results through a `return`, a native's
+      two results (`store_results`, a different padding path from
+      `pop_frame`), module slots, a lambda callee, a driver whose body is a
+      pass-through return, and eight values passing through a two-register
+      frame. The `for … in` driver added 4,
       including a driver that yields nothing (the case that decided the
       calling convention) and nested driver loops.
  The `match`-guard fix added 3: a
@@ -1448,8 +1574,15 @@ is that they now fall back rather than compute a wrong answer.
       rejects.
 - [x] Hand-assembled chunk tests for the implemented opcodes
 - [ ] Encoding property tests with random operands
-- [ ] Verifier tests — hand-built malformed chunks must be *rejected*, not
-      crash the VM
+- [~] Verifier tests — hand-built malformed chunks must be *rejected*, not
+      crash the VM. **Seven exist**, in `compile/verify.rs`'s own `mod
+      tests`: a register past the frame, a jump off the end, a constant
+      index past the pool, a missing `EXTRAARG`, an undeclared upvalue, a
+      proto that runs off its end, and a well-formed chunk that passes.
+      (An earlier note here said none existed; it was wrong.) What is *not*
+      covered: a bad opcode byte, an `EXTRAARG` with no instruction before
+      it, and an out-of-range `Bx` for each of the tables `verify_proto`
+      limits.
 - [ ] Closure-semantics fixtures asserting **values**, not just exit status:
       per-iteration capture, self-recursive locals, upvalue closing. This is
       where a subtle divergence is most likely and least likely to be caught
