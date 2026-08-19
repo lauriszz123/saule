@@ -165,8 +165,15 @@ down; this is the index, so you meet them before you repeat them.
 ## Where things stand
 
 **Phases 0, 1, 2 and 4 are complete.** The compiler turns Saule source into
-bytecode and the VM runs it 2.6x–3.7x faster than the tree-walker, with 191
-differential tests asserting the two engines agree.
+bytecode and the VM runs it **1.2x–3.3x** faster than the tree-walker end to
+end (geometric mean **2.2x**), with **209** differential tests asserting the
+two engines agree.
+
+That range is wider at both ends than the "2.6x–3.7x" this line used to
+carry, and the difference is *platform*, not regression: the old figure came
+from the in-process `compare` example on Windows x86_64, this one from
+`bench.py`'s ten programs on macOS arm64. Both are recorded, per machine and
+per Lua version, in `PRODUCTION.md` Appendix A — do not average them.
 
 **The VM is the default engine** as of Phase 4. `saule run` uses it; `--interp`
 or `SAULE_ENGINE=interp` selects the tree-walker, which stays in-tree as the
@@ -2374,9 +2381,12 @@ than a change — see the note under it.*
       Appendix A with **real measured numbers**. Measured on this box, not
       carried forward: 1.0×–4.8× PUC Lua 5.4.8 against the tree-walker's
       5.5×–9.0× in the same conditions; runtime-performance grade C – B.
+      (Re-measured later on macOS arm64 against Lua 5.5.0: 1.1×–4.5× for the
+      VM and 1.3×–12.8× for the tree-walker. Different machine and different
+      Lua, so it is a second row in Appendix A rather than a correction.)
       §3.3, §3.6 and §10's Phase 6 were rewritten too — each of them argued
       *for* building a VM, and reads wrong once one exists.
-      The LuaJIT column was **removed** rather than reused: it is not installed
+      The LuaJIT column was **removed** rather than reused: it was not installed
       here, and the old 30–90× came from a different OS and architecture. A
       stale column beside a fresh one reads as a comparison that was not made.
 - [x] `saule-lsp` and `saule-db` need no changes — confirm, don't assume (§14).

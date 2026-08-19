@@ -81,7 +81,7 @@ uniformly:
 | How do I write a test? | There is no test runner. Write a `.sau` file and check the output by eye. |
 | Where did my error come from? | The line it failed on. There is no call stack. |
 | Is my editor going to work? | Yes — the parser recovers, so features survive half-typed code. |
-| How fast is it? | 1.0×–4.8× PUC Lua on the bytecode VM, now the default engine. |
+| How fast is it? | 1.0×–4.8× PUC Lua on the bytecode VM (1.1×–4.5× on macOS/Lua 5.5), now the default engine. |
 | Is it stable? | Nothing states what "stable" means, and nothing enforces it. |
 
 None of those are research problems. All of them are work, and the sequencing
@@ -334,25 +334,45 @@ nothing measures it.
 
 The two are held to identical observable behaviour — output, exit status and
 error text — by a differential harness that runs every `.sau` fixture and every
-example project under both, plus 191 differential tests in Rust. That harness
+example project under both, plus 209 differential tests in Rust. That harness
 is the reason the tree-walker is kept rather than deleted: it is the oracle,
 and it has caught every VM bug found so far.
 
 The bytecode compiler does not yet reach the whole language. A module it
 cannot compile **falls back to the tree-walker** rather than guessing, so a
-gap costs speed and never correctness. Today that is 5 of the 9 comparable
-example projects running fully on the VM and 4 taking the fallback; the
-remaining refusals are concentrated in cross-module class hierarchies.
+gap costs speed and never correctness. Today **9 of the 11 example projects
+run entirely on the VM** and `run_examples_diff.sh` reports **0 fallbacks**;
+the two that remain are refused by design, on `an import of a dynamic native
+package`, since loading one is a runtime side effect that compiling must not
+perform. At the file level, 87 of 92 `tests/*.sau` fixtures compile fully.
+
+**A note on how that is measured, because this section previously reported it
+wrongly.** It once read "the remaining refusals are concentrated in
+cross-module class hierarchies", a conclusion drawn from running `saule
+disasm` over individual `examples/**/*.sau` files. That census compiles one
+file through the *single-module* path, while a real program compiles through
+`program::compile`, which walks the import graph — so files that refuse
+standalone routinely compile fine as part of their project. Steer by the
+per-project number above, not by a per-file one.
 
 Consequences:
 
-- **Performance is now what a bytecode VM gives you.** Measured against PUC
-  Lua 5.4.8 on the repo's own benchmark suite: 1.0×–4.8× slower, against
-  5.5×–9.0× for the tree-walker on the same run. The VM is 2.0×–2.8× the
-  tree-walker on everything except `map` (1.25×) and `sort` (1.15×), both
-  of which are dominated by hashing and comparison callbacks inside the table
-  implementation rather than by dispatch. `startup` is *faster* than Lua —
-  parse and typecheck cost nothing perceptible. Full table in
+- **Performance is now what a bytecode VM gives you.** Measured twice, on two
+  machines, and the two agree on shape rather than on digits — quote a range,
+  and quote which machine.
+
+  | | vs PUC Lua | VM over tree-walker |
+  |---|---|---|
+  | Windows x86_64, Lua 5.4.8 | 1.0×–4.8× (walker 5.5×–9.0×) | 1.15×–2.80× |
+  | macOS arm64, Lua 5.5.0 | 1.1×–4.5× (walker 1.3×–12.8×) | 1.20×–3.32×, geomean 2.19× |
+
+  The exceptions are the same on both: `map` and `sort` barely move (1.20×,
+  1.28× on macOS), because their time goes on hashing and comparator
+  callbacks inside the table implementation rather than on dispatch. On
+  macOS, LuaJIT 2.1 is 3.5×–40.5× ahead of the VM — a tracing JIT against an
+  interpreter, so a categorical gap rather than a to-do list. `startup` is
+  faster than Lua on Windows and slower on macOS; it measures process launch,
+  not the front end. Full tables in
   [Appendix A](#appendix-a--raw-measurements).
 - **Native stack depth is the recursion limit.** `MAX_EVAL_DEPTH = 10_000`
   ([eval/mod.rs:35](crates/saule-interpreter/src/eval/mod.rs:35)) converts what
@@ -470,7 +490,7 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Formatter | Dedicated crate, config-driven, corpus tests, round-trips | **A−** |
 | LSP feature breadth | Hover, goto, refs, symbols, inlay, sighelp, completion, format | **A−** |
 | LSP robustness | Error recovery + prior-parse seeding + completion repair | **B+** |
-| Runtime performance | Bytecode VM by default: 1.0×–4.8× PUC Lua, 2.0×–2.8× the tree-walker | **B** |
+| Runtime performance | Bytecode VM by default: 1.0×–4.8× PUC Lua, 1.15×–3.32× the tree-walker across two machines | **B** |
 | Memory management | Refcount; closure capture fixed; user-authored cycles still leak, no tooling to see them | **C** |
 | Runtime diagnostics | No stack traces, boolean FS errors | **C−** |
 | Concurrency | Absent | **D** |
@@ -529,9 +549,17 @@ part (a coherent, working implementation) is done.
 9. **Performance.** The bytecode VM landed and is the default, which moved this
    from 5–11× PUC Lua to 1.0×–4.8× (§3.3). It is no longer the thing that
    decides whether Saule is usable — every item above it on this list matters
-   more. What remains is that the compiler does not reach the whole language
-   yet, so some real projects still take the tree-walking fallback and get the
-   old numbers.
+   more.
+
+   The caveat this entry used to carry — "some real projects still take the
+   tree-walking fallback and get the old numbers" — has largely been paid off:
+   **9 of the 11 example projects now run entirely on the VM**, and
+   `run_examples_diff.sh` reports **0 fallbacks**. The two that remain are
+   refused by *design*, on `an import of a dynamic native package`, because
+   loading one is a runtime side effect that compiling must not perform. Three
+   single-file gaps are left (an enum with methods, a prelude name outside a
+   call, `self` outside a method); each costs speed on the file that uses it,
+   never correctness.
 10. **Stdlib holes that force a native package**: pattern matching / regex
     (Lua's `string.match`, `gmatch`, `gsub` have no equivalent — `String.find`
     is literal-only), JSON, structured filesystem errors, date/time beyond
@@ -1157,10 +1185,58 @@ Reading:
 - **`startup` is faster than Lua** and unchanged by the engine, since compiling
   a 3-line program costs nothing measurable. The front end still costs the user
   nothing.
-- **LuaJIT is not in this table.** It is not installed on the measuring machine,
-  and the 30–90× figure this document used to quote came from a different OS
-  and architecture. Carrying it forward next to freshly measured columns would
-  read as a comparison that was not made.
+- **LuaJIT is not in this table.** It was not installed on *this* measuring
+  machine, and the 30–90× figure this document used to quote came from a
+  different OS and architecture. Carrying it forward next to freshly measured
+  columns would read as a comparison that was not made. It *is* installed on
+  the macOS box, so the second table below has the column this one cannot.
+
+### The same benchmarks on macOS arm64
+
+`REPS=7 python3 benchmarks/bench.py`, release build, macOS arm64 (Darwin
+25.6.0), **Lua 5.5.0** and **LuaJIT 2.1**. A separate machine and a separate
+Lua from the table above, so this is a second measurement rather than a
+correction to it — **do not average the two, and do not read a difference
+between them as a regression.**
+
+Both engines were timed in one run each via `SAULE_ENGINE`, and all ten
+programs were confirmed to print identical output under the VM, the
+tree-walker and Lua first (`bench.py check`). Two independent runs agreed
+within ~1%.
+
+| bench | VM | tree-walker | lua | luajit | VM/lua | walker/lua | VM/luajit | VM speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| loop_arith | 0.179 | 0.452 | 0.061 | 0.013 | 2.9× | 7.4× | 13.8× | **2.53×** |
+| fib | 0.104 | 0.294 | 0.023 | 0.005 | 4.5× | 12.8× | 20.8× | **2.83×** |
+| array | 0.110 | 0.278 | 0.051 | 0.007 | 2.2× | 5.5× | 15.7× | **2.53×** |
+| map | 0.334 | 0.401 | 0.316 | 0.075 | 1.1× | 1.3× | 4.5× | 1.20× |
+| oop | 0.162 | 0.394 | 0.049 | 0.004 | 3.3× | 8.0× | 40.5× | **2.43×** |
+| mandel | 0.120 | 0.398 | 0.040 | 0.009 | 3.0× | 10.0× | 13.3× | **3.32×** |
+| strings | 0.082 | 0.133 | 0.041 | 0.017 | 2.0× | 3.2× | 4.8× | 1.62× |
+| closure | 0.086 | 0.274 | 0.023 | 0.004 | 3.7× | 11.9× | 21.5× | **3.19×** |
+| sort | 0.660 | 0.845 | 0.146 | 0.104 | 4.5× | 5.8× | 6.3× | 1.28× |
+| startup | 0.007 | 0.006 | 0.003 | 0.002 | 2.3× | 2.0× | 3.5× | 0.86× |
+
+**VM over the tree-walker: 1.20×–3.32×, geometric mean 2.19×** (excluding
+`startup`, which is the control).
+
+Reading, and where it differs from the Windows run:
+
+- **The shape is the same, the spread is wider.** `map` (1.20×), `sort`
+  (1.28×) and `strings` (1.62×) are the three that barely move, and they are
+  the three whose time is spent inside `TableObject` — hashing, comparator
+  callbacks, concatenation — rather than in dispatch. §20 predicted `map`
+  before the VM existed. `strings` moved 2.59× on Windows and 1.62× here,
+  which is the largest platform disagreement in the table and is worth a
+  profile before anyone quotes either number as *the* figure.
+- **`startup` is no longer faster than Lua.** 0.007 s against Lua's 0.003 s,
+  where the Windows run had Saule ahead at 0.033 vs 0.040. The control is
+  measuring process launch, and the two platforms' launch costs differ by an
+  order of magnitude; nothing about the front end changed.
+- **LuaJIT is 3.5×–40.5× ahead of the VM**, and that is the honest ceiling
+  reference: it is a tracing JIT and this is an interpreter, so the gap is
+  categorical rather than a list of missing optimizations. `oop` (40.5×) is
+  where a JIT's inlining of field access shows most.
 
 ### Bytecode VM vs tree-walker, in-process
 
@@ -1182,6 +1258,19 @@ wall clock from `CreateProcess`, and on Windows that floor is ~33 ms of the
 123 ms `fib` run. Net of it, `fib` is 3.1×. Both readings are honest — the
 first is what a user waiting at a prompt experiences, the second is what the
 engine actually does.
+
+The same example on macOS arm64, three consecutive runs:
+
+| program | tree-walker | VM | speedup |
+|---|---:|---:|---:|
+| loop_arith | 308–311 ms | 114–115 ms | 2.67×–2.73× |
+| fib | 153 ms | 58–59 ms | 2.61×–2.63× |
+| while_sum | 314 ms | 146 ms | 2.15×–2.16× |
+| call_heavy | 276–278 ms | 79–83 ms | **3.33×–3.51×** |
+
+**In-process: 2.15×–3.51×.** The call-heavy shape again gains most, and the
+run-to-run spread on it (3.33×–3.51×) is larger than the ~3% noise floor the
+rest of the table sits inside — so quote it as a range, not a point.
 
 `VM_DESIGN.md` §21.3 gated Phase 2 on `loop_arith` and `fib` reaching **at least
 2.5×** the tree-walker. Both clear it.
