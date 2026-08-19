@@ -1,90 +1,90 @@
 import * from json
 
 class Main
-	static fn main()
-		-- Read the small test file.
-		println("test.json:")
+  static fn main()
+    -- Read the small test file.
+    println("test.json:")
 
-		match Main.loadFile("test.json")
-			-- Force unwrap since we know it exists.
-			case nil then println("Failed to parse test.json")
+    match Main.loadFile("test.json")
+      -- Force unwrap since we know it exists.
+      case nil then println("Failed to parse test.json")
 
-			case v then Main.dumpAny(Json.decode(v), "  ")
-		end
+      case v then Main.dumpAny(Json.decode(v), "  ")
+    end
 
-		-- Read the kitchen-sink file.
-		println()
-		println("kitchen_sink.json:")
+    -- Read the kitchen-sink file.
+    println()
+    println("kitchen_sink.json:")
 
-		-- We know that it exists so we can force unwrap.
-		local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json") ?? "") as table
+    -- We know that it exists so we can force unwrap.
+    local raw: table? = Json.decode(Main.loadFile("kitchen_sink.json") ?? "") as table
 
-		if raw == nil then
-			println("Failed to parse!")
-			return
-		end
+    if raw == nil then
+      println("Failed to parse!")
+      return
+    end
 
-		Main.dumpTable(raw, "  ")
+    Main.dumpTable(raw, "  ")
 
-		-- Mutate: clear a key, add a key, change a value.
-		raw["draft"] = nil
-		raw["lastRun"] = "2026-05-28T00:00:00Z"
-		raw.version = raw.version + 1
+    -- Mutate: clear a key, add a key, change a value.
+    raw["draft"] = nil
+    raw["lastRun"] = "2026-05-28T00:00:00Z"
+    raw.version = raw.version + 1
 
-		-- Write the modified copy to a separate file so the original
-		-- kitchen_sink.json stays untouched between runs.
-		Main.saveJson("kitchen_sink_modified.json", raw)
-	end
+    -- Write the modified copy to a separate file so the original
+    -- kitchen_sink.json stays untouched between runs.
+    Main.saveJson("kitchen_sink_modified.json", raw)
+  end
 
-	static fn loadFile(path: string) -> string?
-		if Os.exists(path) then
-			local file = Io.open(path, IoMode.Read)!
-			local source: string? = file.read("a")
-			file.close()
+  static fn loadFile(path: string) -> string?
+    if Os.exists(path) then
+      local file = Io.open(path, IoMode.Read)!
+      local source: string? = file.read("a")
+      file.close()
 
-			return source
-		end
-	end
+      return source
+    end
+  end
 
-	static fn saveJson(path: string, object: table)
-		local file = Io.open(path, IoMode.Write)
-		file?.write(Json.encode(object))
-		file?.close()
-	end
+  static fn saveJson(path: string, object: table)
+    local file = Io.open(path, IoMode.Write)
+    file?.write(Json.encode(object))
+    file?.close()
+  end
 
-	static fn dumpAny(v: any?, indent: string)
-		if v == nil then
-			println(indent .. "nil")
-			return
-		end
+  static fn dumpAny(v: any?, indent: string)
+    if v == nil then
+      println(indent .. "nil")
+      return
+    end
 
-		match type(v)
-			case "table" then Main.dumpTable(v as table, indent)
+    match type(v)
+      case "table" then Main.dumpTable(v as table, indent)
 
-			case t then println(indent .. "(" .. t .. ") " .. tostring(v))
-		end
-	end
+      case t then println(indent .. "(" .. t .. ") " .. tostring(v))
+    end
+  end
 
-	static fn dumpTable(t: table?, indent: string)
-		if t == nil then
-			return
-		end
+  static fn dumpTable(t: table?, indent: string)
+    if t == nil then
+      return
+    end
 
-		local next = indent .. "  "
+    local next = indent .. "  "
 
-		for k, v in t do
-			local label: string = indent .. tostring(k)
-			if v == nil then
-				println(label .. ": nil")
-			else
-				match type(v)
-					case "table" then
-						println(label .. ":")
-						Main.dumpTable(v, next)
+    for k, v in t do
+      local label: string = indent .. tostring(k)
+      if v == nil then
+        println(label .. ": nil")
+      else
+        match type(v)
+          case "table" then
+            println(label .. ":")
+            Main.dumpTable(v, next)
 
-					case t then println(label .. " (" .. t .. "): " .. tostring(v))
-				end
-			end
-		end
-	end
+          case t then println(label .. " (" .. t .. "): " .. tostring(v))
+        end
+      end
+    end
+  end
 end
