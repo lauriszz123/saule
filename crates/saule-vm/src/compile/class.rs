@@ -105,6 +105,7 @@ impl Compiler<'_> {
                 self.f.declare(&p.name, first + i as u16);
             }
             self.f.entries = self.param_entries(&m.params, first, span)?;
+            self.coerce_params(&m.params, first, span)?;
             for st in &m.body {
                 self.stmt(st)?;
             }

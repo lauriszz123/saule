@@ -1741,6 +1741,17 @@ impl Vm {
                             TableObject::from_array(items),
                         )));
                     }
+                    Op::NVALS => {
+                        // How many values the call left in the window at
+                        // `B`. `store_results` set `top` to one past the
+                        // last of them when the caller asked for all, so
+                        // the count is the distance from the window base —
+                        // saturating, because a callee that returned
+                        // nothing leaves `top` below it.
+                        let win = base + ins.b() as usize;
+                        let top = self.frames.last().expect("frame").top as usize;
+                        self.stack[base + a] = Value::Int(top.saturating_sub(win) as i64);
+                    }
                     Op::CHKTY => {
                         let ok = self.type_matches(&chunk, base + ins.b() as usize, ins.c() as u32);
                         self.stack[base + a] = Value::Bool(ok);

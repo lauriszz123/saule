@@ -260,18 +260,6 @@ pub fn build(
                 ..
             } = &d.value
         {
-            // `Assignable<T>` makes `local x: C = <a bare T>` build a `C` at
-            // the *binding site*, from the declared type (`eval/coerce.rs`).
-            // Nothing in this compiler does that yet, so a chunk would store
-            // the bare value and the first method call on it would find a
-            // `string` where an instance was promised. Refuse the module
-            // rather than compile that.
-            if imps.iter().any(|i| i == "Assignable") {
-                return Err(CompileError::unsupported(
-                    "a class implementing `Assignable`",
-                    d.span.clone(),
-                ));
-            }
             implements.insert(name, imps);
             decls.push((name, extends.as_deref(), members, d.span.clone()));
         }
@@ -307,6 +295,15 @@ pub fn build(
         // class will have — which its own statics must be recorded against.
         let self_idx = classes.len() as ClassIdx;
         let mut proto = build_one(name, self_idx, parent_idx, members, classes, span)?;
+        // `Assignable<T>` is a *behaviour* contract rather than a method
+        // table, so it needs no itable — only a flag the binding site can
+        // test. `saule-semantic` and the typechecker have already checked
+        // that an implementing class declares `of`; codegen re-checks by
+        // looking the static up, and declines to coerce if it is missing
+        // rather than emitting a call to nothing.
+        proto.assignable = implements
+            .get(*name)
+            .is_some_and(|v| v.iter().any(|i| i == saule_ast::ops::ASSIGNABLE.interface));
         // An itable per implemented interface: interface slot -> this
         // class's vtable slot. Built once here, so a `CALLIF` is a small-map
         // probe and an indexed load rather than a name lookup (§8.4).
@@ -533,6 +530,8 @@ fn build_one(
         field_init: None,
         vtable,
         vindex,
+        // Set by the caller, which is where the `implements` list lives.
+        assignable: false,
         n_statics,
         sindex,
         statics_init: None,

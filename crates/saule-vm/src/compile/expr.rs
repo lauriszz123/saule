@@ -1382,11 +1382,66 @@ impl Compiler<'_> {
         for (i, slot) in filled.iter().take(n).enumerate() {
             match slot {
                 Some(a) => order.push(ArgSlot::Given(*a)),
+                // A parameter skipped in the *middle* of the list, which
+                // has a default. The entry stubs cannot help: they fill a
+                // *suffix*, and there is no entry point meaning "fill slot 1
+                // but not slot 2".
+                //
+                // A **scalar literal** default is materialized here instead.
+                // That is sound for exactly the reason §19 says a general
+                // default is not: a literal reads nothing from the callee's
+                // frame and nothing from the callee's module scope, and it
+                // has no side effect to happen in the wrong place or at the
+                // wrong time — so evaluating it at the call site is
+                // observationally identical to evaluating it in the callee.
+                // The same argument, and the same restriction, is why a
+                // valued enum variant's value must be a literal.
+                //
+                // The node is rebuilt from the call site's span rather than
+                // cloned from the declaration, because the declaration's
+                // `NodeId` belongs to the *callee's* module and would answer
+                // the wrong module's binding and type tables when the callee
+                // is imported.
                 None if params[i].default.is_some() => {
-                    return Err(CompileError::unsupported(
-                        "a skipped parameter whose default must run in the callee",
-                        span.clone(),
-                    ));
+                    let d = params[i].default.as_ref().expect("matched `is_some`");
+                    let lit = match &d.value {
+                        Expr::Int(n) => Expr::Int(*n),
+                        Expr::Float(f) => Expr::Float(*f),
+                        Expr::Bool(b) => Expr::Bool(*b),
+                        Expr::Str(t) => Expr::Str(t.clone()),
+                        Expr::Nil => Expr::Nil,
+                        // `-1` and `-2.5`: a negated numeric literal is
+                        // still a literal by the argument above, and a
+                        // plausible enough default that excluding it would be
+                        // an arbitrary wart. Rebuilt rather than folded, so
+                        // the operand keeps whatever overflow behaviour the
+                        // ordinary unary path already has for `i64::MIN`.
+                        Expr::Unary { op: saule_ast::UnaryOp::Neg, rhs }
+                            if matches!(rhs.value, Expr::Int(_) | Expr::Float(_)) =>
+                        {
+                            let inner = match &rhs.value {
+                                Expr::Int(n) => Expr::Int(*n),
+                                Expr::Float(f) => Expr::Float(*f),
+                                _ => unreachable!("guarded by the `matches!` above"),
+                            };
+                            Expr::Unary {
+                                op: saule_ast::UnaryOp::Neg,
+                                rhs: Box::new(Spanned::new(inner, span.clone())),
+                            }
+                        }
+                        // Anything else — a call, a name, a table literal —
+                        // may read the callee's scope or have a side effect,
+                        // so it keeps refusing rather than being guessed at
+                        // from here.
+                        _ => {
+                            return Err(CompileError::unsupported(
+                                "a skipped parameter whose non-literal default must run in the callee",
+                                span.clone(),
+                            ));
+                        }
+                    };
+                    order.push(ArgSlot::Nil(gaps.len()));
+                    gaps.push(Spanned::new(lit, span.clone()));
                 }
                 None => {
                     order.push(ArgSlot::Nil(gaps.len()));
@@ -2065,6 +2120,7 @@ impl Compiler<'_> {
                 self.f.declare(&p.name, i as u16);
             }
             self.f.entries = self.param_entries(params, 0, span)?;
+            self.coerce_params(params, 0, span)?;
             match body {
                 saule_ast::LambdaBody::Expr(inner) => {
                     // An expression-bodied lambda returns its expression.

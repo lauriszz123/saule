@@ -444,6 +444,20 @@ define_ops! {
     /// so without this the commonest tail-recursive function in the language
     /// would still grow the frame stack.
     TAILCALLS: Abc,
+
+    // ---- §9 tuple patterns -----------------------------------------------
+    /// `R[A] := how many values the variadic window at `R[B]` holds`, as an
+    /// integer — `top - (base + B)`, saturating at 0.
+    ///
+    /// A tuple pattern's arity test needs the *count*, not the values: the
+    /// oracle refuses to match `case (q, r, s)` against a two-value
+    /// scrutinee, so a compiler that padded the window with nil and skipped
+    /// the test would match an arm the tree-walker rejects. The count is only
+    /// knowable at run time for a call, since `top` is what the callee set.
+    ///
+    /// Emitted once per `match` whose scrutinee is a call and whose arms use
+    /// a tuple pattern, never on any other path.
+    NVALS: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.
