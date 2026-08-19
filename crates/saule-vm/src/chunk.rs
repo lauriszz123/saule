@@ -347,6 +347,13 @@ pub struct ClassProto {
     pub vtable: Vec<ProtoIdx>,
     /// name -> vtable slot. Compile-time use; the VM indexes directly.
     pub vindex: HashMap<Rc<str>, u16>,
+    /// Whether this class declares `implements Assignable<T>`, so a bare `T`
+    /// in a slot declared as this class is built with its `of` static.
+    ///
+    /// On the **program-global** class table rather than in a per-module set,
+    /// because the coercion fires at the *binding site*, which is very often
+    /// in a module that only imported the class.
+    pub assignable: bool,
     pub n_statics: u16,
     /// name -> the class that *declares* the static, and its slot there.
     ///

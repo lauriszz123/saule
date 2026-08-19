@@ -884,6 +884,132 @@ impl<'a> Compiler<'a> {
         Some((s.class, s.slot))
     }
 
+    /// Coerce every parameter whose declared type asks for it (§`coerce.rs`).
+    ///
+    /// **Emitted after the default entry stubs, and that placement is the
+    /// point.** `entries[n_params]` is recorded at the end of
+    /// `param_entries`, so a full-arity call enters exactly here, and the
+    /// stubs for the lower arities fall through into it. One copy therefore
+    /// covers every way the frame can be entered — a coercion at pc 0 would
+    /// be jumped straight over by any call that lands on a stub.
+    ///
+    /// `base` matches `param_entries`: 1 for an instance method, whose
+    /// register 0 is `self`.
+    pub fn coerce_params(
+        &mut self,
+        params: &[saule_ast::Param],
+        base: u16,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        for (i, p) in params.iter().enumerate() {
+            // A variadic parameter is a table of the surplus arguments, not
+            // a slot with a declared element type, so it never coerces.
+            if p.variadic {
+                continue;
+            }
+            self.coerce_to_declared(base + i as u16, Some(&p.ty), span)?;
+        }
+        Ok(())
+    }
+
+    /// `Assignable<T>`: build the declared class from a bare value, in place.
+    ///
+    /// The tree-walker does this in `eval/coerce.rs::to_declared`, and this
+    /// is that function expressed as code rather than a call — the one place
+    /// the "reuse rather than reimplement" rule cannot be followed, because
+    /// `to_declared` needs an `Environment` to resolve the class name and the
+    /// VM has a class *table* instead. So the decisions it makes at run time
+    /// are made here at compile time, and only the two it cannot make
+    /// statically are emitted as branches:
+    ///
+    /// * a declared type that is not a `Named` class, a class that does not
+    ///   implement `Assignable`, or one with no `of` static — decided here,
+    ///   emitting nothing at all;
+    /// * `nil`, which fills a nullable slot on its own terms, and a value
+    ///   that is *already* an instance of the class — the overwhelmingly
+    ///   common case, and the one `to_declared` also keeps free.
+    ///
+    /// `Type::Nullable` is stripped first: `Text?` names the same target for
+    /// a non-nil value.
+    ///
+    /// Emits nothing when no conversion can apply, so callers wrap a binding
+    /// unconditionally, exactly as they do in the tree-walker.
+    pub fn coerce_to_declared(
+        &mut self,
+        r: u16,
+        declared: Option<&saule_ast::Type>,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        fn strip(t: &saule_ast::Type) -> &saule_ast::Type {
+            match t {
+                saule_ast::Type::Nullable(inner) => strip(inner),
+                other => other,
+            }
+        }
+        let Some(saule_ast::Type::Named(name)) = declared.map(strip) else {
+            return Ok(());
+        };
+        // A module-level `local Text = {…}` must not make the class's `of`
+        // fire on a slot declared as that local's type. Trap 1.
+        if !self.not_shadowed(name) {
+            return Ok(());
+        }
+        let Some(idx) = self.layouts.get(name) else {
+            return Ok(());
+        };
+        if !self.chunk.classes[idx as usize].assignable {
+            return Ok(());
+        }
+        let Some((sclass, sslot)) = self.static_method_of(name, saule_ast::ops::ASSIGNABLE.method)
+        else {
+            return Ok(());
+        };
+
+        let ra = self.reg8(r, span)?;
+        // nil → leave it alone. `JNIL` skips the next instruction when the
+        // value is nil, so the jump past the bail-out is what runs for a
+        // *non*-nil value.
+        self.emit(Instruction::abc(Op::JNIL, ra, 0, 0), span);
+        let not_nil = self.emit_jump(Op::JMP, 0, span);
+        let keep_nil = self.emit_jump(Op::JMP, 0, span);
+        self.patch_here(not_nil)?;
+
+        // Already an instance of the class → leave it alone.
+        let m = self.mark();
+        let isa = self.alloc(span)?;
+        let ia = self.reg8(isa, span)?;
+        let cidx = u8::try_from(idx).map_err(|_| CompileError::Unsupported {
+            thing: "an `Assignable` class past the 256th in a program",
+            span: span.clone(),
+        })?;
+        self.emit(Instruction::abc(Op::ISA, ia, ra, cidx), span);
+        // `TEST` skips the next instruction when truthiness matches `C`, so
+        // with `C = 0` an instance skips the jump into the conversion.
+        self.emit(Instruction::abc(Op::TEST, ia, 0, 0), span);
+        let convert = self.emit_jump(Op::JMP, 0, span);
+        let keep_isa = self.emit_jump(Op::JMP, 0, span);
+        self.free_to(m);
+        self.patch_here(convert)?;
+
+        // `C.of(value)` — an ordinary static call, into a fresh window whose
+        // single result lands back in `r`.
+        let m2 = self.mark();
+        let base = self.alloc_n(1, span)?;
+        self.move_result(r, base, span)?;
+        let ba = self.reg8(base, span)?;
+        self.emit(Instruction::abc(Op::CALLSTAT, ba, 2, 2), span);
+        self.emit(
+            Instruction::ax_of(Op::EXTRAARG, (sclass << 16) | sslot as u32),
+            span,
+        );
+        self.move_result(base, r, span)?;
+        self.free_to(m2);
+
+        self.patch_here(keep_nil)?;
+        self.patch_here(keep_isa)?;
+        Ok(())
+    }
+
     /// This module's slot for `name`, by name.
     ///
     /// For the places that have a name but no `NodeId` to ask the binding

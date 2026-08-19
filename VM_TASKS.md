@@ -72,6 +72,88 @@ bite that do not on Windows:
   to be the harness than the engine; the script now prefers coreutils and
   falls back to a shell watchdog, so it runs the same everywhere.
 
+## Working conventions that have paid off — please keep them
+
+- **Differential testing is the discipline.**
+  `crates/saule-vm/tests/differential.rs` runs every program under both
+  engines and compares results *including error text*. Add cases there first.
+- **Refuse rather than guess.** Anything codegen cannot handle returns
+  `CompileError::Unsupported` naming the construct, and the CLI falls back to
+  the tree-walker. A wrong slot reads different data and nothing notices;
+  a refusal costs speed, never correctness.
+- **Reuse rather than reimplement.** `ARITHX` calls `ops::binary`, `CASTCHK`
+  calls `cast`, `GETFX` calls `read_member`, `CALLMX` calls
+  `dispatch_member_call_multi`, `CONCAT` calls `display_value`, `LEN` defers
+  to `ops::unary`, and `ITERPREPX` calls `call_member_dynamic` for an
+  instance's `iter()`. Every time this rule was broken the engines diverged.
+  (But read trap 5 — reuse the *logic*, not the *type tests*.)
+- **A missing type is never a wrong opcode** — it selects the dynamic form.
+  The `X` suffix is that convention: `ARITHX`, `UNARYX`, `GETFX`, `CALLMX`,
+  `ITERPREPX`.
+- **Opcodes are appended, never inserted.** The numbering is the chunk ABI,
+  and it will matter the day §14's bytecode cache lands. `encoding.rs`'s
+  `opcode_numbering_is_stable` pins the first four and the last one (now
+  `TAILCALLS`) and must be extended — not edited in the middle — with each
+  addition. Operand *encodings* are part of that ABI too.
+- **Two canaries to re-point when the construct they name finally lands:**
+  `differential.rs`'s `unsupported_constructs_report_rather_than_miscompile`
+  (currently a tuple pattern) and `handwritten.rs`'s unimplemented-opcode
+  canary (currently `SUPER`). Both assert that the *designed* failure still
+  happens; when the construct lands, they need a new stand-in rather than
+  deletion.
+
+## Six traps this codebase has already fallen into
+
+Each one cost real debugging time and each is written up in full further
+down; this is the index, so you meet them before you repeat them.
+
+1. **A module-level `local` is a module *slot*, not a frame local**, so
+   `FuncCtx::lookup` structurally cannot see it. Three shadowing bugs came
+   from checks built on that lookup alone — `local Math = {pi: 3.0}` reading
+   π, `local String = {…}` calling the stdlib's `String.len`, a `local`
+   shadowing a class reading the class's static. Use
+   `Compiler::not_shadowed`, which checks both places a `local` can land, or
+   the resolver's `Binding::Prelude` where that is the precise question.
+   (Phase 3 item 8, "Stdlib value members and table dot access"; the same
+   ordering trap is called out again in item 9, "Pipes".)
+2. **Widening what compiles can turn an inert documented gap into a live
+   divergence.** `EnumObject.methods` was empty and *documented as safe*
+   because enum-method calls refused — then `CALLMX` dispatched dynamically
+   and reached the empty map. A dynamic fallback is only as safe as the
+   runtime data it falls back *onto*. Re-read the "known safe because X
+   refuses" notes whenever you delete a refusal. (§ "§8.5 dynamic member
+   dispatch — done, and what it exposed".)
+3. **A reported refusal can be hiding an unreported miscompile.** Chasing
+   `case x when x < 0` (a clean refusal) found a second bug beside it: a
+   failed pattern jumped into the arm body whenever the arm had a guard —
+   wrong value, exit status 0, invisible to `SAULE_DIFF=1` because no
+   fixture paired a *literal* pattern with a guard. A refusal says the
+   compiler mishandles a construct; it does not say the mishandling is
+   confined to the part that refused. (§ "Two bugs in `match` guards — one
+   silent".)
+4. **Correct-by-accident survives exactly as long as nothing can observe
+   it.** `return f()` truncated a callee's results to one, which was
+   invisible while nothing compiled could consume two — and became a wrong
+   value the moment a `for … in` driver could. Before widening coverage, ask
+   what the *narrowness* was quietly making safe. (§ "Multi-return and
+   parallel binding — done, and the divergence it exposed".)
+5. **Copying the oracle verbatim is wrong where the two engines represent a
+   value differently.** `ITERPREPX`'s callable test was lifted from
+   `exec_for_in`, which lists `Function`/`Native`/`NativeClosure` and never
+   `VmFunction` — because the tree-walker cannot construct one. Under the VM
+   every compiled closure *is* a `VmFunction`, so the first cut refused every
+   driver on the new path. Reuse the oracle's *logic*; check its *type tests*
+   against this engine's value representation. (Phase 3 item 5, "`for … in`".)
+6. **A "not yet — it would diverge" note expires when the other engine
+   moves.** This file argued at length that `TAILCALL` must wait, because a
+   tail-recursive loop would run unbounded under `--vm` and overflow without
+   it. True — until the tree-walker got a trampoline, at which point the same
+   note was defending the divergence it was written to prevent. **Every
+   deferral justified by "the engines would disagree" is relative to what the
+   other engine does today.** When you change the tree-walker, grep this file
+   for the deferrals that reasoning supported. (§ "Tail calls — done, and the
+   two bugs it uncovered".)
+
 ## Legend
 
 | Mark | Meaning |
@@ -110,7 +192,7 @@ steer by. The real one:
 | | Compiles fully | Falls back |
 |---|---|---|
 | `benchmarks/sau` | **10 of 10** | — |
-| `tests/*.sau` | **84 of 92** | 8 |
+| `tests/*.sau` | **87 of 92** | 5 |
 
 (Re-measured at the Phase 4 flip. The line above said 85; `HEAD` was 84, and
 the handoff before it made the same slip in the other direction. Re-count
@@ -123,8 +205,8 @@ whether the VM engages on anything a user would write.
 
 | Corpus | Compiles fully |
 |---|---|
-| `examples/**/*.sau` | **10 of 61** |
-| `examples/*` projects, end to end | **5 of 9 compared** (2 interactive, skipped) |
+| `examples/**/*.sau` | **10 of 61** — but see the box above; this number does not mean what it looks like |
+| `examples/*` projects, end to end | **9 of 11** run fully on the VM. `run_examples_diff.sh` reports **0 fallbacks**; the 2 that remain are `toying` and `UI Project`, refused by *design* on `an import of a dynamic native package` |
 
 The project row is the one Phase 4 turned into a headline: it is the fraction
 of real programs for which the new default engine is the engine that actually
@@ -178,18 +260,52 @@ the exit status — a cause you cannot parse is still a refusal.
 |---|---|
 | a class extending one the compiler cannot see | **24** |
 | an import declaration | **10** |
-| a name the resolver could not classify | 8 |
-| a named argument to a callee the compiler cannot identify | 5 |
-| a class implementing an interface this compiler cannot see | 2 |
+| a name the resolver could not classify | 9 |
+| a named argument to a callee the compiler cannot identify | 4 |
 | a variant of an unknown enum | 1 |
-| a skipped parameter whose default must run in the callee | 1 |
+| a class implementing `Assignable` | 1 |
+| a class implementing an interface this compiler cannot see | 1 |
+| *(not a refusal — see below)* | 1 |
+
+Re-censused at `HEAD` (`5c9325f`) with two independently-written parses that
+agree. The previous version of this table read 8 / 5 / 2 and carried a
+`a skipped parameter whose default must run in the callee` row that belongs
+to `tests/*.sau`, not here — it is not a cause in `examples/` at all.
+
+**One of the 51 is not a refusal.** `examples/todo-app/src/storage.sau` fails
+`disasm` with `cannot determine the type of this expression` on
+`Json.encode(data)` — a *typecheck* error, because `disasm` compiles one file
+without its import graph and cannot see `Json`. The census counts it as a
+failure because it counts exit status, which is the right rule; just do not
+read it as a compiler gap. True refusals are **50**.
 
 First-refusal-wins, so a cause that only appears late in a file is
-under-counted. The headline is now sharper than it was: **34 of 44
-refusals are the cross-module slice** (24 + 10), which the fixture table
-scores at *one* fixture. That is the gap between "236/236 with fallback"
-and "the VM runs real programs", and it is now the only thing of its size
-left.
+under-counted.
+
+> **This per-file census does not measure what it was being read as
+> measuring, and an earlier version of this section drew the wrong
+> conclusion from it.** `disasm` compiles **one file**, through the
+> single-module path; a real program compiles through `program::compile`,
+> which walks the import graph. So a file that refuses standalone may be
+> perfectly compilable as part of its project, and most of them are:
+>
+> * All **24** `a class extending one the compiler cannot see` files are in
+>   one project, `UI Project` — which falls back earlier anyway, on the
+>   *deliberate* `an import of a dynamic native package` refusal, and never
+>   reaches class layout.
+> * All **10** `an import declaration` files are refusing by design: a lone
+>   `import` on the single-module path is a documented correctness rule,
+>   pinned by `an_import_without_a_program_driver_still_refuses`.
+> * Five files across `vector-math`, `json_usage`, `bitwise-flags`, `bf` and
+>   `json` refuse standalone while **their projects run fully on the VM with
+>   no fallback at all**.
+>
+> So "34 of 50 refusals are the cross-module slice, the only thing of its
+> size left" was wrong: the cross-module slice had already been closed by the
+> imports work, and this census could not see it. **Steer by the per-project
+> table below, not by this one.** This one is still worth keeping — it is a
+> cheap smoke test of the single-module path — but it is not a coverage
+> measurement for real code.
 
 Every remaining cause, by the fixtures it blocks. Regenerate this with:
 
@@ -201,13 +317,16 @@ for f in tests/*.sau; do SAULE_ENGINE=vm ./target/debug/saule.exe run "$f" 2>&1 
 | Cause | Fixtures | Note |
 |---|---|---|
 | an enum with methods | 1 | §0.6's missing `NodeId`, or a different key |
-| a tuple pattern | 1 | |
-| a skipped parameter whose default must run in the callee | 1 | §19 |
 | a prelude name outside a call | 1 | |
 | a declaration the compiler does not handle | 1 | |
-| a compound assignment to a member | 1 | |
-| a class implementing `Assignable` | 1 | |
 | `self` outside a method | 1 | |
+| a compound assignment whose target cannot be evaluated only once | 1 | **not a gap** — the refusal is what fixes a miscompile; see "Compound assignment" below |
+
+Five, down from eight. Closed since: `a tuple pattern`, `a skipped parameter
+whose default must run in the callee`, and `a class implementing
+`Assignable``, each written up below. `a compound assignment to a member`
+also closed, and `tests/compound_assign.sau` now falls back on a *different*
+and deliberate line.
 
 Each is independent; none unlocks another.
 
@@ -712,8 +831,9 @@ files under the VM is the first thing Phase 3 unlocks.
    - [x] **All 10 benchmark files run under the VM**, with output verified
          identical to the interpreter. `sort.sau` was the last holdout and
          landed with re-entrancy.
-   - [ ] A class from another module is refused rather than guessed — the
-         imports slice lifts that
+   - [x] A class from another module is refused rather than guessed — the
+         imports slice lifted that for *layout*, and §19 argument binding
+         followed later; see "Named arguments across a module boundary".
    - [ ] `CALLM` currently costs one hash probe to map a receiver's class to
          its vtable; §8.5's inline cache is the fix, and it is Phase 5
    - [x] Reading a class-level **static through an instance** (`b.label`,
@@ -815,7 +935,8 @@ automatically a benchmark that got *faster*.
    A trailing wildcard becomes the table's default.
    [ ] A valued variant's value must be a *literal*: a chunk stores
    constants, not code. Non-literals are refused rather than mis-evaluated.
-   [ ] Tuple patterns (`case (q, r)`) and nested payload patterns
+   [x] Tuple patterns (`case (q, r)`) and nested payload patterns — see
+   "Tuple patterns and nested payload patterns" below.
 4. **`try`/`catch`/`throw`** — [x] handler tables, unwinding, `CHKTY`,
    `TypeDesc` runtime type tests.
    Entering a `try` emits **zero instructions**: the protected range lives
@@ -923,9 +1044,16 @@ automatically a benchmark that got *faster*.
    would run side effects it does not. Asserted by a differential test that
    counts them.
 
-   - [ ] `?.` on a receiver whose class the front end did not prove, and on
-         a table or string receiver, still refuses — it needs the dynamic
-         `GETFX`, which is Phase 5's inline-cache work
+   - [x] `?.` on a receiver whose class the front end did not prove, and on
+         a table receiver. **This box read `[ ]` long after it was true** —
+         the dynamic safe read and safe call landed with `GETFX`/`SETFX` in
+         the correctness slice (see "The open correctness items — closed"),
+         not in Phase 5. Verified rather than assumed: `local t = {a: 1}`
+         then `t?.a`, and `t.g?.hi()` on a receiver the front end never
+         proved, both compile and both agree with the tree-walker. A
+         *string* receiver is a type error in **both** engines (`cannot read
+         field ... on value of type string`), so it is a language rule, not a
+         VM gap.
    - [ ] Tuple/`Nullable` `catch` types still collapse to `TypeDesc::Any`;
          unchanged by this slice
 
@@ -1102,11 +1230,21 @@ new top cause:
 
 | Cause | Projects |
 |---|---|
-| `for … in` over an **unproved** source | 2 |
-| an import of a dynamic native package | 2 |
-| a variadic or defaulted parameter | 1 |
-| a member read on a receiver with no proved class | 1 |
+| an import of a dynamic native package | 2 | 
+| a skipped parameter whose default must run in the callee | 1 |
+| a variant of an unknown enum | 1 |
 | a class implementing `Assignable` | 1 |
+
+Re-censused after the named-argument fix. **The two dynamic-native-package
+projects are a deliberate refusal, not a gap** — loading one is a runtime
+side effect and compiling must not perform it (§ item 10) — and they are also
+the two interactive projects the diff harness skips. So the addressable
+remainder is **three projects, three distinct causes**, one of which
+(`a skipped parameter whose default must run in the callee`) is the last open
+sub-item of item 11.
+
+This table is the one to steer by. Run it with a timeout — two of these
+projects open a window and never terminate:
 
 ```
 while IFS= read -r cfg; do
@@ -1144,25 +1282,23 @@ done < <(find examples -name saule.config) | sort | uniq -c | sort -rn
           `callee_params` map collected in a pre-pass, because a `Proto`
           deliberately carries neither names nor defaults — those are
           compile-time facts.
-    - [~] A skipped parameter that has a **default**. Two different cases,
-          and only one of them works:
+    - [x] A skipped parameter that has a **default**. Two different cases,
+          both now handled — the second by materializing a *literal* at the
+          call site; see "A default skipped in the middle" below:
           * A default at the **end** of the parameter list, filled by the
             entry stubs, does run in the callee: a default of `nextId()`
             called twice yields `a#1`, `b#2`, `calls=2` under both engines,
             so it is evaluated per call rather than folded once at the call
             site. Pinned by `a_default_is_evaluated_in_the_callees_frame`.
-          * A default **skipped in the middle** still refuses, at
-            `compile/expr.rs`'s `reorder_args`, with `a skipped parameter
-            whose default must run in the callee`. Stubs fill a *suffix*;
-            there is no entry point meaning "fill slot 1 but not slot 2".
+          * A default **skipped in the middle**. Stubs fill a *suffix*, so
+            there is no entry point meaning "fill slot 1 but not slot 2". A
+            **scalar literal** default is materialized at the call site
+            instead; anything else still refuses, now as `a skipped parameter
+            whose non-literal default must run in the callee`.
 
-          **This item was marked `[x]` and claimed `trailing_block_layout.sau`
-          compiles. It does not** — `saule disasm tests/trailing_block_layout.sau`
-          exits 1 on `Ui.panel(title: "inner") do … end`, which skips the
-          defaulted `pad` while filling the `body` that follows it. The cited
-          test passes and is real; it covers the trailing case, which is the
-          one the stubs already handled. Fixing the middle case wants either
-          a per-gap-pattern stub or a sentinel the prologue tests.
+          **This item was once marked `[x]` while claiming
+          `trailing_block_layout.sau` compiles, when it did not.** It does
+          now, and the claim is re-checked rather than carried forward.
     - [x] **Variadic** parameters, via a new `VARARG` opcode — the first one
           this project has added since the table was frozen in Phase 1, and
           **appended**, never inserted, because the numbering is the chunk
@@ -1479,12 +1615,233 @@ Deliberately one-sided. It over-approximates — a local shadowing a top-level
 name still counts as reaching it, and a name mentioned on a branch that never
 executes counts too — because over-approximating costs a fallback while
 under-approximating costs a wrong answer on a program the tree-walker rejects
-outright. **It refuses nothing in either corpus**: 84 of 92 fixtures and 17
+outright. **It refuses nothing in either corpus**: 84 of 92 fixtures and 10
 of 61 example files compile exactly as before.
 
 The canary `a_forward_reference_reached_through_a_callee_still_diverges` is
 repointed and renamed; it now asserts the refusal, plus the two fixtures the
 blunt guard broke as the other half of what it is worth.
+
+### `Assignable<T>` — done
+
+`local x: Text = "hello"` builds a `Text` at the **binding site**. The
+tree-walker does this in `eval/coerce.rs::to_declared`; a class declaring
+`implements Assignable<T>` used to refuse the whole module at layout time.
+
+**This is the one place "reuse rather than reimplement" could not be
+followed.** `to_declared` needs an `Environment` to resolve the class name,
+and the VM has a class *table* instead. So its decisions are split: the ones
+that can be made at compile time are (not a `Named` class, no `Assignable`,
+no `of` static — all emit **nothing at all**), and only the two that cannot
+are branches: `nil` fills a nullable slot on its own terms, and a value that
+is already an instance is returned untouched. `ClassProto` gained an
+`assignable` flag, on the **program-global** table because the coercion fires
+at a binding site that is usually in a module that only imported the class.
+
+The site list is `coerce.rs`'s, and no wider: an annotated `local`, a module
+variable, and a function or method parameter. **Parameter coercion is emitted
+after the default entry stubs**, which is the whole of why it works for every
+arity — `entries[n_params]` is recorded at the end of `param_entries`, so a
+full-arity call enters exactly there and the lower-arity stubs fall through
+into it. A copy at pc 0 would be jumped straight over by any call landing on
+a stub, and the first cut did exactly that.
+
+Five differential tests, including the shadowing guard: a module-level
+`local Text = 1` must not make the class's `of` fire.
+
+Closes `tests/assignable.sau` and `examples/wrapper-types` — the **last**
+example project that was falling back for a reason other than design.
+
+### Prelude enums in `match` — done
+
+`case FsKind.File` refused as `a variant of an unknown enum`, which is what
+sent `examples/fs-info-example` to the tree-walker. `FsKind` and `OsPlatform`
+are defined in Rust and are in no module's layout table — but
+`install_*_enum` numbers their variants by declaration order, so their tags
+are dense and fixed before a program runs, exactly like a compiled enum's.
+`variant_tag` now falls back to the prelude, guarded by `not_shadowed`
+(trap 1). A name the enum does not declare now says so, rather than claiming
+the enum is unknown.
+
+### Compound assignment — a silent miscompile, found by lifting a refusal
+
+Trap 3, and the sharpest instance of it this project has produced.
+
+`compound_assign` builds a synthetic `target op value` node holding a
+**clone** of the target and then assigns to the target again, so every
+sub-expression of the target ran **twice**. `t[idx()] += 1` called `idx`
+twice under the VM and once under the tree-walker: wrong value, exit status
+0, and **present at `HEAD` (`5c9325f`) before any of this work** — verified
+against the pre-existing binary, not inferred.
+
+Nothing could see it. The only fixture that writes that shape,
+`tests/compound_assign.sau`, also compound-assigns to a *member* two lines
+later; that refused, so the whole file fell back and the index bug never ran.
+Lifting the member refusal is what exposed it — a refusal standing next to a
+miscompile, which is exactly what trap 3 warns about.
+
+The rule now: a compound assignment compiles only when re-reading its target
+is **unobservable**. `self`, a bare name and a literal qualify; a call, a
+nested index or a chain does not, and refuses so the module falls back to the
+engine that evaluates it once. That closes the miscompile and opens
+`self.n += 1` and `Counter.total += 1`, which are the shapes real code
+writes.
+
+`tests/compound_assign.sau` still falls back — on its deliberate
+`t[idx()] += 1` line — and that is now the *correct* outcome rather than a
+gap. Lifting it properly means rebuilding compound assignment to resolve its
+target into registers once, which needs a register-level binary emitter
+(`binary_to` works on AST nodes, because it needs `num_of_node` and
+`class_of_expr` for typed opcodes and operator overloads). Its own task.
+
+The canary `unsupported_constructs_report_rather_than_miscompile` now stands
+on this refusal — deliberately, because unlike its four predecessors
+(`import`, a pipe, a tuple pattern, a compound assignment to a member) it is
+*principled* rather than unfinished, and should not need moving again.
+
+### A default skipped in the middle — done, by restriction
+
+`Ui.panel(title: "inner") do … end` skips the defaulted `pad` while supplying
+the `body` that follows it. Entry stubs fill a **suffix**, so no entry point
+means "fill slot 1 but not slot 2", and this refused.
+
+**A scalar literal default is materialized at the call site.** That is sound
+for exactly the reason §19 says a general default is not: a literal reads
+nothing from the callee's frame and nothing from the callee's module scope,
+and has no side effect to happen in the wrong place or at the wrong time — so
+evaluating it at the call site is observationally identical. The same
+argument, and the same restriction, is why a valued enum variant's value must
+be a literal. `Int`, `Float`, `Bool`, `Str`, `Nil` and a negated numeric
+literal qualify.
+
+The node is **rebuilt from the call site's span** rather than cloned from the
+declaration: the declaration's `NodeId` belongs to the callee's module and
+would answer the wrong module's binding and type tables for an imported
+callee.
+
+Anything else — a call, a name, a table literal — still refuses, now as
+`a skipped parameter whose non-literal default must run in the callee`. The
+restriction is not merely conservative, and a differential test pins why:
+`fn f(a, d = a * 2, t)` called as `f(a: 3, t: "!")` must yield `6` from the
+callee's `a`, not `200` from a caller that happens to have its own `a`.
+
+Closes `tests/trailing_block_layout.sau` and `examples/ui-blocks`.
+
+### Tuple patterns and nested payload patterns — done, and the bug it hid
+
+Two gaps in one walk. `case (q, r)` refused outright, and a variant payload
+had to be all plain binds (`a nested pattern in a variant payload`).
+
+**A tuple pattern needs the scrutinee's whole value list**, which is what the
+oracle's `eval_values` produces. Only a **top-level** tuple pattern does: the
+oracle recurses with `from_ref(val)`, so a tuple nested inside a payload is
+matched against a single value. A `match` with no top-level tuple pattern
+therefore still evaluates its scrutinee into one register and emits exactly
+the code it did before.
+
+**`NVALS` is a new opcode, and the reason it is needed is worth stating.**
+The oracle fails a tuple pattern when `values.len() < elems.len()`, and that
+is reachable in a well-typed program — the typechecker accepts
+`case (a, b, c)` over a two-value call, which simply does not match. A
+compiler that evaluated the scrutinee into a fixed window and padded with nil
+could not tell "returned nil" from "returned nothing", so it would match an
+arm the tree-walker rejects. `NVALS A B` writes `top - (base + B)`: the count
+the callee actually set. Appended after `TAILCALLS`; `opcode_numbering_is_stable`
+now pins `NVALS` as last.
+
+`arm_test` and `bind_payload` collapsed into one recursive `test_and_bind`,
+which is what closes the nested-payload half for free.
+
+**Two bugs this uncovered, one silent and one loud.**
+
+1. **`NVALS` wrote over `values[1]`.** With `Want::All` a call writes as many
+   results as the callee returned, which can be *more* than the window the
+   register allocator sized for its **arguments** — `store_results` grows the
+   stack and the allocator never hears about it. So a register allocated
+   after the call aliased the second result: `case (q, r)` on `return 4, 0`
+   bound `r` to **2**, the count. Wrong value, exit status 0, and
+   `SAULE_DIFF=1` could not have seen it because no fixture paired a
+   multi-return scrutinee with a literal element. Every register the match
+   needs is now reserved **before** the scrutinee is evaluated, which makes
+   the two ranges disjoint by construction.
+2. **A pattern wider than the callee's return read off the end of the frame.**
+   `case (a, b, c)` copies three elements out of a two-value window, and the
+   third register was past `max_regs`. Allocating above the window raises the
+   high-water mark that becomes `max_regs`; the registers are never used.
+
+**And a live divergence this would have created, caught by trap 2.**
+`switchable` accepted any variant arm regardless of its payload, which was
+safe only because `bind_payload` refused every non-`Bind` field — an inert
+gap holding up a fast path. Widening it would have sent `case Shape.Circle(0)`
+down the jump-table path, where the arm is entered by a table dispatch and a
+failing payload sub-pattern **has no next arm to jump to**. `switchable` now
+requires every payload sub-pattern to be irrefutable, and `match_switch`
+`debug_assert!`s that no failure label reached it. A differential test asserts
+on the disassembly that an irrefutable payload still reaches `SWITCH`, so the
+guard cannot quietly turn the fast path off.
+
+Closes `tests/match_tuple.sau`. Six differential tests; the canary
+`unsupported_constructs_report_rather_than_miscompile` moved on to
+`a compound assignment to a member`, its fourth construct.
+
+### Named arguments across a module boundary — done
+
+The top *real* cause, once the per-project census replaced the per-file one.
+`ui-blocks` and `todo-app` both fell back on their first `Panel(title: "…")`
+with `a named argument to a callee the compiler cannot identify`.
+
+**The class resolved; its parameter list did not.** `layouts` has been
+program-global since the imports slice, so `Panel` was found. But `Tables`
+carried only classes, interfaces, enums and the slot counter across modules —
+`Compiler::callee_params`, which §19 needs to turn `title:` into a position,
+was rebuilt from scratch for every module by Pass 1b's walk over
+`module.stmts`. A class declared elsewhere therefore had no entry, and
+`reorder_args` had nothing to reorder against.
+
+`Tables` now carries two more maps, and **the split between them is the whole
+design**:
+
+- `method_params`, keyed by `(ClassIdx, name)`. A `ClassIdx` is
+  program-global, so an entry written by the declaring module answers
+  correctly for every importer. Safe to accumulate wholesale.
+- `fn_params_by_slot`, keyed by a top-level `fn`'s **program-global module
+  slot**. A `CalleeKey::Function` is a bare *name*, and two modules may each
+  declare `fn tag`; accumulating those by name would let one answer for the
+  other and **swap the arguments silently** — a wrong answer, not a fallback,
+  and exactly trap 1's shape. So the publisher keys by slot, and each module
+  seeds only the names it actually imports, by walking its own
+  `ImportBinding`s (`local` → `from`). Aliases fall out for free: the
+  exporter's list is bound under the importer's name for it.
+
+Post-order is what makes both sound — every module is compiled after the ones
+it imports, so an entry is always present before an importer needs it.
+
+The seed runs *before* the module's own Pass 1b declarations, so a local `fn`
+overwrites an imported one of the same name, matching the resolver's
+shadowing order.
+
+**A second gap surfaced while testing the first.** The leak test's initial
+form called an imported `fn` with named arguments and refused — class methods
+had been made reachable across the boundary, plain exported `fn`s had not.
+That is what `fn_params_by_slot` exists for; without writing the guard test
+it would have shipped as a still-live half of the same gap.
+
+Four tests in `program.rs`: the imported constructor in both argument orders
+(reversed order is what proves the reorder ran rather than the names merely
+being dropped), an imported `fn` under its own name and under an alias, and
+the no-leak guard — two modules each declaring `fn tag` with the parameters
+in opposite order, where a name-keyed map would print the other module's
+answer.
+
+| | Before | After |
+|---|---|---|
+| `examples/*` projects running fully on the VM | 5 of 11 | **6 of 11** |
+| projects falling back in `run_examples_diff.sh` | 4 | **3** |
+
+`todo-app` closed outright. `ui-blocks` advanced to the next refusal —
+`a skipped parameter whose default must run in the callee`, the one sub-item
+still open under item 11 — which is the honest way to read a
+first-refusal-wins census: closing one cause reveals the next.
 
 ### Tail calls — done, and the two bugs it uncovered
 
@@ -1952,9 +2309,14 @@ is that they now fall back rather than compute a wrong answer.
       runs, so the second engine starts from the state the first one saw —
       otherwise `todo-app` reports a different second run for a reason that
       has nothing to do with the engine.
-- [ ] Coverage: 85 of 92 `tests/*.sau` compile fully. The remaining 7 fall
-      back cleanly, which is correct-but-slow; the gaps are listed at the
-      top of this file.
+- [~] Coverage: **87 of 92** `tests/*.sau` compile fully, and **9 of 11**
+      example projects run entirely on the VM with `run_examples_diff.sh`
+      reporting **0 fallbacks**. The 2 projects that remain are refused by
+      *design* (`an import of a dynamic native package` is a runtime side
+      effect that compiling must not perform), and one of the 5 remaining
+      fixtures is a principled refusal rather than a gap — see the table at
+      the top. Three real gaps are left: an enum with methods, a prelude name
+      outside a call, and `self` outside a method.
 
 ---
 

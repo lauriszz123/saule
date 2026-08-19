@@ -293,31 +293,34 @@ fn unsupported_constructs_report_rather_than_miscompile() {
     // The contract that makes `--vm` usable before it is finished: anything
     // codegen cannot do yet is refused by name, never guessed at.
     //
-    // A **tuple pattern** is the construct standing in for that here —
-    // repoint this at another unsupported one when they land, the same way
-    // the `unimplemented_opcodes_report_rather_than_panic` canary is.
-    // It has already moved twice, from `import` and then from `a pipe`, as
-    // each of those landed.
+    // The construct standing in for that here is a **compound assignment
+    // whose target cannot be evaluated only once** — `t[idx()] += 1`.
+    //
+    // This one is deliberately different from its four predecessors
+    // (`import`, then a pipe, then a tuple pattern, then a compound
+    // assignment to a member), every one of which had to be repointed as the
+    // feature landed. This refusal is *principled* rather than unfinished:
+    // the target appears twice in what the compiler builds, so re-reading it
+    // has to be unobservable, and a side-effecting subscript never will be.
+    // It should therefore stay put — and if it is ever lifted, that will be
+    // because compound assignment was rebuilt to resolve its target into
+    // registers once, which is a change worth failing a canary over.
+    //
     // The assertion is about the *shape* of the refusal: it names the
     // construct and carries a span, so the CLI can fall back and say why.
-    //
-    // It used to point at `import`, which no longer refuses when a program
-    // driver resolved it (`saule_vm::program::compile`). A lone `import`
-    // compiled through this single-module path still does — see
-    // `an_import_without_a_program_driver_still_refuses` below, which pins
-    // that separately because it is a correctness rule rather than a
-    // stand-in.
-    let src = "fn divmod(a: integer, b: integer) -> (integer, integer)\n\
-               \x20 return a / b, a % b\n\
+    let src = "local t: table<integer> = {1, 2}\n\
+               fn idx() -> integer\n\
+               \x20 return 1\n\
                end\n\
-               local r: string = match divmod(7, 2)\n\
-               \x20 case (q, 0) then \"clean\"\n\
-               \x20 case _ then \"rem\"\n\
-               end\nr";
+               t[idx()] += 1\n\
+               t[1]";
     let module = front_end(src);
     match saule_vm::compile(&module, "x.sau", src) {
         Err(saule_vm::CompileError::Unsupported { thing, span }) => {
-            assert_eq!(thing, "a tuple pattern");
+            assert_eq!(
+                thing,
+                "a compound assignment whose target cannot be evaluated only once"
+            );
             assert!(span.start < span.end, "the refusal must point somewhere");
         }
         other => panic!("expected a clean Unsupported, got {other:?}"),
@@ -3273,4 +3276,393 @@ fn a_module_body_call_reaching_a_later_class_is_refused() {
         ),
         other => panic!("expected a refusal, got {other:?}"),
     }
+}
+
+#[test]
+fn a_literal_default_skipped_in_the_middle_is_filled() {
+    // The case the entry stubs structurally cannot serve: `pad` is skipped
+    // while `body`, which comes *after* it, is supplied. Stubs fill a
+    // suffix, so there is no entry point meaning "fill slot 1 but not
+    // slot 2", and this refused until the literal default was materialized
+    // at the call site.
+    //
+    // Both call shapes are asserted, because they take different paths: the
+    // one that skips the middle default and the one that supplies it.
+    must_agree(
+        "fn box(title: string, pad: integer = 7, tail: string) -> string\n\
+         \x20 return title .. \":\" .. tostring(pad) .. \":\" .. tail\n\
+         end\n\
+         local a: string = box(title: \"t\", tail: \"z\")\n\
+         local b: string = box(title: \"t\", pad: 1, tail: \"z\")\n\
+         a .. \"/\" .. b",
+    );
+}
+
+#[test]
+fn every_scalar_literal_default_can_be_skipped_in_the_middle() {
+    // One per literal shape the call site is allowed to materialize, so a
+    // future edit that narrows the set fails here rather than silently
+    // sending these back to the tree-walker.
+    must_agree(
+        "fn f(a: integer, i: integer = -4, s: string = \"d\", b: boolean = true, x: float = 2.5, t: string) -> string\n\
+         \x20 return tostring(a) .. tostring(i) .. s .. tostring(b) .. tostring(x) .. t\n\
+         end\n\
+         f(a: 1, t: \"end\")",
+    );
+}
+
+#[test]
+fn a_skipped_middle_default_still_runs_in_the_callee_when_it_is_not_a_literal() {
+    // The other half of the rule, and the reason the literal restriction is
+    // not merely conservative. A default that reads an earlier *parameter*
+    // cannot be materialized at the call site — `a` there is the caller's
+    // `a`, not the callee's — so this must keep refusing rather than
+    // quietly binding the wrong value.
+    //
+    // `agree` rather than `must_agree`: a refusal is the designed outcome,
+    // and it means the VM never runs this, so there is nothing to compare.
+    // What is asserted is that the tree-walker's answer is the one a
+    // materializing compiler would have got *wrong* — 200 from the caller's
+    // `a`, not 6 from the callee's.
+    let src = "local a: integer = 100\n\
+               fn f(a: integer, d: integer = a * 2, t: string) -> string\n\
+               \x20 return tostring(d) .. t\n\
+               end\n\
+               f(a: 3, t: \"!\")";
+    let module = front_end(src);
+    assert!(
+        matches!(
+            saule_vm::compile(&module, "diff.sau", src),
+            Err(saule_vm::CompileError::Unsupported { .. })
+        ),
+        "a non-literal skipped default must refuse rather than be materialized at the call site"
+    );
+    assert_eq!(tree_walker(&module), Outcome::Value("string:6!".into()));
+}
+
+// ── tuple patterns and nested payload patterns ────────────────────────────
+
+#[test]
+fn a_tuple_pattern_destructures_a_multi_return_scrutinee() {
+    // The shape the fixture uses: a call returning two values, matched
+    // positionally, with a literal in one position.
+    must_agree(
+        "fn divmod(a: integer, b: integer) -> (integer, integer)\n\
+         \x20 return a / b, a % b\n\
+         end\n\
+         fn describe(a: integer, b: integer) -> string\n\
+         \x20 return match divmod(a, b)\n\
+         \x20   case (q, 0) then \"clean \" .. q\n\
+         \x20   case (q, r) then q .. \" rem \" .. r\n\
+         \x20 end\n\
+         end\n\
+         describe(10, 2) .. \"/\" .. describe(10, 3)",
+    );
+}
+
+#[test]
+fn a_tuple_pattern_wider_than_the_scrutinee_does_not_match() {
+    // The oracle's rule is `values.len() < elems.len()` fails, and it is
+    // reachable in a well-typed program — the typechecker allows
+    // `case (a, b, c)` over a two-value call.
+    //
+    // **This is why `NVALS` exists.** A compiler that evaluated the
+    // scrutinee into a fixed window and padded with nil would have no way to
+    // tell "returned nil" from "returned nothing", would match the
+    // three-element arm, and would answer `three` where the tree-walker
+    // answers `two`.
+    must_agree(
+        "fn two() -> (integer, integer)\n\
+         \x20 return 1, 2\n\
+         end\n\
+         local s: string = match two()\n\
+         \x20 case (a, b, c) then \"three\"\n\
+         \x20 case (a, b) then \"two\"\n\
+         \x20 case _ then \"other\"\n\
+         end\ns",
+    );
+}
+
+#[test]
+fn a_tuple_patterns_second_element_survives_the_count() {
+    // The regression that took the longest to see. `NVALS` writes the value
+    // count into a register, and with `Want::All` the results can extend
+    // *above* the window the allocator sized for the call's arguments — so
+    // the first cut allocated that register on top of `values[1]` and bound
+    // `r` to the count.
+    //
+    // `return 4, 0` and a literal `0` in the second position is the shape
+    // that catches it: the count is 2, so a clobbered `values[1]` reads as
+    // 2, the `case (q, 0)` arm fails, and the answer silently becomes
+    // `4 rem 2` instead of `clean 4`. Exit status 0 either way.
+    must_agree(
+        "fn two() -> (integer, integer)\n\
+         \x20 return 4, 0\n\
+         end\n\
+         local s: string = match two()\n\
+         \x20 case (q, 0) then \"clean \" .. q\n\
+         \x20 case (q, r) then q .. \" rem \" .. r\n\
+         end\ns",
+    );
+}
+
+#[test]
+fn a_tuple_pattern_over_a_non_call_scrutinee() {
+    // `eval_values` on anything that is not a call yields exactly one value,
+    // so the length test is decidable at compile time and no `NVALS` is
+    // emitted. Both directions are asserted: the one-element pattern
+    // matches, and the wider one cannot.
+    must_agree(
+        "local n: integer = 9\n\
+         local a: string = match n\n\
+         \x20 case (x) then \"one:\" .. x\n\
+         \x20 case _ then \"other\"\n\
+         end\n\
+         local b: string = match n\n\
+         \x20 case (x, y) then \"two\"\n\
+         \x20 case _ then \"other\"\n\
+         end\n\
+         a .. \"/\" .. b",
+    );
+}
+
+#[test]
+fn a_literal_inside_a_variant_payload_selects_the_arm() {
+    // Nested patterns in a payload used to refuse outright (`a nested
+    // pattern in a variant payload`), which is what kept the jump-table path
+    // safe without knowing it: `switchable` accepted any variant arm, and a
+    // payload sub-pattern that can *fail* has no next arm to jump to there.
+    //
+    // Trap 2 exactly — an inert gap that widening turns into a live
+    // divergence — so `switchable` now requires every payload sub-pattern to
+    // be irrefutable, and a refutable one takes the chain. This asserts the
+    // answers, and `both_arms_of_a_refutable_payload_still_switch` below
+    // asserts the fast path did not simply stop being taken.
+    must_agree(
+        "enum Shape\n\
+         \x20 Circle(r: integer),\n\
+         \x20 Rect(w: integer, h: integer),\n\
+         \x20 Dot\n\
+         end\n\
+         fn describe(s: Shape) -> string\n\
+         \x20 return match s\n\
+         \x20   case Shape.Circle(0) then \"unit\"\n\
+         \x20   case Shape.Circle(r) then \"circle \" .. r\n\
+         \x20   case Shape.Rect(2, h) then \"narrow \" .. h\n\
+         \x20   case Shape.Rect(w, h) then \"rect \" .. w .. \"x\" .. h\n\
+         \x20   case _ then \"dot\"\n\
+         \x20 end\n\
+         end\n\
+         describe(Shape.Circle(0)) .. \"|\" .. describe(Shape.Circle(7))\n\
+         \x20 .. \"|\" .. describe(Shape.Rect(2, 3)) .. \"|\" .. describe(Shape.Rect(5, 3))\n\
+         \x20 .. \"|\" .. describe(Shape.Dot)",
+    );
+}
+
+#[test]
+fn a_wildcard_inside_a_variant_payload_still_switches() {
+    // The other side of the `switchable` guard: a wildcard and a bind are
+    // both irrefutable, so this arm set must keep the jump table. Asserted
+    // on the disassembly, because the answers alone cannot tell which path
+    // ran — and a guard that quietly sent every payload arm to the chain
+    // would be a silent performance regression rather than a wrong answer.
+    let src = "enum Shape\n\
+               \x20 Circle(r: integer),\n\
+               \x20 Rect(w: integer, h: integer),\n\
+               \x20 Dot\n\
+               end\n\
+               fn describe(s: Shape) -> string\n\
+               \x20 return match s\n\
+               \x20   case Shape.Circle(_) then \"circle\"\n\
+               \x20   case Shape.Rect(w, _) then \"rect \" .. w\n\
+               \x20   case Shape.Dot then \"dot\"\n\
+               \x20 end\n\
+               end\n\
+               describe(Shape.Rect(5, 3))";
+    must_agree(src);
+    let module = front_end(src);
+    let chunk = saule_vm::compile(&module, "x.sau", src).expect("compiles");
+    let text = saule_vm::disasm::chunk(&chunk).to_string();
+    assert!(
+        text.contains("SWITCH"),
+        "an irrefutable payload must still reach the jump table:\n{text}"
+    );
+}
+
+#[test]
+fn a_prelude_enums_variants_match_by_tag() {
+    // `OsPlatform` is defined in Rust, not in any Saule module, so it is in
+    // no layout table and matching on it used to refuse as `a variant of an
+    // unknown enum` — which is what sent `examples/fs-info-example` to the
+    // tree-walker. Its tags are dense and fixed before the program runs, so
+    // the compiler can read them from the prelude for the same reason it
+    // folds `Math.pi`.
+    must_agree(
+        "local p: OsPlatform = Os.platform()\n\
+         local s: string = match p\n\
+         \x20 case OsPlatform.Linux then \"linux\"\n\
+         \x20 case OsPlatform.Macos then \"macos\"\n\
+         \x20 case OsPlatform.Windows then \"windows\"\n\
+         \x20 case _ then \"other\"\n\
+         end\n\
+         s == \"\"",
+    );
+}
+
+#[test]
+fn a_shadowed_prelude_enum_is_not_read_from_the_prelude() {
+    // Trap 1, in the place the prelude-enum lookup opens up. A module-level
+    // `local OsPlatform = {…}` is a module *slot*, and the compiler must not
+    // answer the pattern from the stdlib's enum of the same name.
+    //
+    // `must_agree` is the assertion either way: whatever the tree-walker
+    // makes of this, the VM has to make the same thing of it — and folding
+    // the prelude's tags here would produce a different answer rather than a
+    // refusal.
+    must_agree(
+        "local OsPlatform = {Linux: 1}\n\
+         local v: integer = OsPlatform.Linux\n\
+         v",
+    );
+}
+
+// ── Assignable<T> ─────────────────────────────────────────────────────────
+
+/// A class that opts into `Assignable<string>`, for the tests below.
+const TEXT_CLASS: &str = "class Text implements Assignable<string>\n\
+                          \x20 local raw: string\n\
+                          \x20 fn init(raw: string)\n\
+                          \x20   self.raw = raw\n\
+                          \x20 end\n\
+                          \x20 static fn of(s: string) -> Text\n\
+                          \x20   return Text(s)\n\
+                          \x20 end\n\
+                          \x20 fn value() -> string\n\
+                          \x20   return self.raw\n\
+                          \x20 end\n\
+                          end\n";
+
+#[test]
+fn an_annotated_local_builds_the_assignable_class() {
+    // The shape the feature exists for: a bare `string` in a slot declared
+    // as `Text` becomes a `Text`, so the method call finds an instance.
+    must_agree(&format!("{TEXT_CLASS}local t: Text = \"hi\"\nt.value()"));
+}
+
+#[test]
+fn an_assignable_parameter_is_converted_in_the_callee() {
+    // The second of `coerce.rs`'s two sites. The conversion is emitted
+    // **after** the default entry stubs, which is what makes it run however
+    // the frame was entered — a copy at pc 0 would be jumped straight over
+    // by any call that lands on a stub.
+    must_agree(&format!(
+        "{TEXT_CLASS}fn shout(t: Text) -> string\n\
+         \x20 return t.value() .. \"!\"\n\
+         end\n\
+         shout(\"quiet\")"
+    ));
+}
+
+#[test]
+fn an_assignable_parameter_converts_behind_a_default() {
+    // The interaction the placement is about: `pad` has a default, so the
+    // proto has entry stubs, and a one-argument call enters at a stub rather
+    // than at the body. The conversion must still happen.
+    must_agree(&format!(
+        "{TEXT_CLASS}fn tag(t: Text, pad: integer = 2) -> string\n\
+         \x20 return t.value() .. tostring(pad)\n\
+         end\n\
+         tag(\"a\") .. \"/\" .. tag(\"b\", 9)"
+    ));
+}
+
+#[test]
+fn an_assignable_slot_leaves_nil_and_an_instance_alone() {
+    // The two runtime checks the emitted sequence makes, both of which
+    // `to_declared` also makes: `nil` fills a nullable slot on its own
+    // terms, and a value that is already an instance is returned untouched
+    // rather than passed through `of` a second time.
+    must_agree(&format!(
+        "{TEXT_CLASS}local a: Text? = nil\n\
+         local b: Text = Text(\"direct\")\n\
+         local c: Text? = \"present\"\n\
+         tostring(a == nil) .. b.value() .. c!.value()"
+    ));
+}
+
+#[test]
+fn a_shadowed_assignable_class_does_not_coerce() {
+    // Trap 1 again, at the binding site. A module-level `local Text = {…}`
+    // is a module slot, and the class of the same name must not fire its
+    // `of` on a slot annotated with that local's type.
+    must_agree(&format!(
+        "{TEXT_CLASS}local Text = 1\n\
+         local n: integer = 2\n\
+         Text + n"
+    ));
+}
+
+#[test]
+fn a_compound_assignment_evaluates_its_target_once() {
+    // **A miscompile that predates this work and that nothing could see.**
+    // `t[idx()] += 1` called `idx` twice under the VM and once under the
+    // tree-walker: the compiler built a synthetic `target op value` node
+    // holding a *clone* of the target, then assigned to the target again, so
+    // every sub-expression of it ran twice. Wrong value, exit status 0.
+    //
+    // `SAULE_DIFF=1` could not catch it: the only fixture that writes this
+    // shape, `tests/compound_assign.sau`, also compound-assigns to a member
+    // two lines later, which refused and sent the whole file to the oracle.
+    // A refusal standing next to a miscompile is trap 3.
+    //
+    // The compiler now refuses a target it cannot evaluate once, so the
+    // module falls back to the engine that gets it right. Both halves are
+    // asserted: that it refuses rather than compiling the double
+    // evaluation, and that the oracle's answer is the `1` a correct
+    // compilation would have to produce.
+    let src = "local calls: integer = 0\n\
+               local t: table<integer> = {10, 20}\n\
+               fn idx() -> integer\n\
+               \x20 calls += 1\n\
+               \x20 return 1\n\
+               end\n\
+               t[idx()] += 1\n\
+               calls .. \":\" .. t[1]";
+    let module = front_end(src);
+    assert!(
+        matches!(
+            saule_vm::compile(&module, "x.sau", src),
+            Err(saule_vm::CompileError::Unsupported { .. })
+        ),
+        "a target with a side-effecting subscript must refuse, not be evaluated twice"
+    );
+    assert_eq!(tree_walker(&module), Outcome::Value("string:1:11".into()));
+}
+
+#[test]
+fn a_compound_assignment_to_a_simple_member_compiles() {
+    // The other side of the same rule: `self` and a bare name are re-read
+    // for free, so these are compiled rather than refused. Asserted to
+    // *compile*, not merely to agree — agreeing is what a fallback does too.
+    let src = "class Counter\n\
+               \x20 n: integer\n\
+               \x20 static total: integer = 0\n\
+               \x20 fn init()\n\
+               \x20   self.n = 0\n\
+               \x20 end\n\
+               \x20 fn bump()\n\
+               \x20   self.n += 3\n\
+               \x20   Counter.total += 1\n\
+               \x20 end\n\
+               end\n\
+               local c: Counter = Counter()\n\
+               c.bump()\n\
+               c.bump()\n\
+               c.n .. \":\" .. Counter.total";
+    must_agree(src);
+    let module = front_end(src);
+    assert!(
+        saule_vm::compile(&module, "x.sau", src).is_ok(),
+        "a compound assignment to `self.f` and `Class.f` must compile, not fall back"
+    );
 }

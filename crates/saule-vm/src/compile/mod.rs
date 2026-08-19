@@ -196,6 +196,34 @@ pub struct Tables {
     /// Running total of module slots claimed so far — the next module's
     /// base in the program's flat slot space.
     pub module_slots: usize,
+    /// Declared parameters of every class method compiled so far, for §19's
+    /// call-site argument binding, keyed the way [`ctx::CalleeKey::Method`]
+    /// is: by **program-global** `ClassIdx` and method name.
+    ///
+    /// This accumulates across modules, and it is the one part of
+    /// `callee_params` that safely can. A `ClassIdx` means the same thing in
+    /// every chunk of a program, so an entry written by the module that
+    /// *declared* the class answers correctly for any module that imports
+    /// it. `CalleeKey::Function`, by contrast, is keyed on a bare name and
+    /// stays strictly per module: two modules may each declare `fn helper`,
+    /// and letting one answer for the other is the same class of bug as the
+    /// shadowing family in trap 1.
+    ///
+    /// Modules arrive in post-order — every module after the ones it imports
+    /// — so a class's entry is always present before any importer needs it.
+    pub method_params:
+        std::collections::HashMap<(crate::chunk::ClassIdx, String), Vec<saule_ast::Param>>,
+    /// Declared parameters of every top-level `fn` compiled so far, keyed by
+    /// its **program-global module slot**.
+    ///
+    /// A slot, unlike a name, is unique across the program, which is what
+    /// makes this safe to accumulate where a name-keyed map would not be.
+    /// The call site cannot look a name up here directly — an importer holds
+    /// its *own* slot for an imported name, not the exporter's — so the seed
+    /// below goes through `ImportBinding`, which carries exactly that
+    /// mapping. Only names a module actually imports are seeded, under the
+    /// alias that module used.
+    pub fn_params_by_slot: std::collections::HashMap<u16, Vec<saule_ast::Param>>,
 }
 
 /// Compile one module of a program, appending its types to `tables`.
@@ -307,12 +335,48 @@ pub(crate) fn compile_into(
     // Pass 1b: every callee's declared parameters, for §19's call-site
     // argument binding. One pass before any body, because a method may call
     // another declared further down the file.
+    //
+    // Seeded first with the methods of every class compiled so far, so a
+    // constructor or method call on an **imported** class can be bound by
+    // name. Without this the class resolved fine — `layouts` has been
+    // program-global since the imports slice — while its parameter list did
+    // not exist, and `Panel(title: "…")` on an imported `Panel` refused with
+    // `a named argument to a callee the compiler cannot identify`.
+    for ((class, method), params) in &tables.method_params {
+        c.callee_params.insert(
+            ctx::CalleeKey::Method(*class, method.clone()),
+            params.clone(),
+        );
+    }
+    // Imported top-level `fn`s, by the slot they were exported from. Done
+    // before the module's own declarations below, so a local `fn` of the same
+    // name overwrites the import rather than the other way round — which is
+    // the shadowing order the resolver uses.
+    for ib in &c.import_bindings {
+        if let Some(params) = tables.fn_params_by_slot.get(&ib.from)
+            && let Some(local_name) = bindings.module_slots.get(ib.local as usize)
+        {
+            c.callee_params.insert(
+                ctx::CalleeKey::Function(local_name.to_string()),
+                params.clone(),
+            );
+        }
+    }
     for s in &module.stmts {
         let saule_ast::Stmt::Decl(d) = &s.value else { continue };
         match &d.value {
             saule_ast::Decl::Function { name, params, .. } => {
                 c.callee_params
                     .insert(ctx::CalleeKey::Function(name.clone()), params.clone());
+                // Published for importers, keyed by the slot the program
+                // gave it. `module_slot_base` is this module's offset into
+                // the flat slot space, so this is the same number an
+                // importer's `ImportBinding::from` will carry.
+                if let Some(local) = c.module_slot_of(name)
+                    && let Ok(global) = u16::try_from(c.module_slot_base + local as usize)
+                {
+                    tables.fn_params_by_slot.insert(global, params.clone());
+                }
             }
             saule_ast::Decl::Class { name, members, .. } => {
                 let Some(idx) = c.layouts.get(name) else { continue };
@@ -322,6 +386,12 @@ pub(crate) fn compile_into(
                             ctx::CalleeKey::Method(idx, me.name.clone()),
                             me.params.clone(),
                         );
+                        // Published program-wide for the modules that import
+                        // this class. Keyed on the global `ClassIdx`, so it
+                        // cannot be answered by the wrong class.
+                        tables
+                            .method_params
+                            .insert((idx, me.name.clone()), me.params.clone());
                     }
                 }
             }

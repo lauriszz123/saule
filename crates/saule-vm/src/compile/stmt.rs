@@ -71,8 +71,8 @@ impl Compiler<'_> {
     pub fn stmt(&mut self, s: &Spanned<Stmt>) -> Result<Option<u16>, CompileError> {
         let span = &s.span;
         match &s.value {
-            Stmt::Local { name, value, .. } => {
-                self.local(name, value.as_ref(), span)?;
+            Stmt::Local { name, value, ty, .. } => {
+                self.local(name, value.as_ref(), ty.as_ref(), span)?;
                 Ok(None)
             }
 
@@ -349,6 +349,7 @@ impl Compiler<'_> {
                 self.f.declare(&p.name, i as u16);
             }
             self.f.entries = self.param_entries(params, 0, span)?;
+            self.coerce_params(params, 0, span)?;
             for st in body {
                 self.stmt(st)?;
             }
@@ -510,6 +511,7 @@ impl Compiler<'_> {
         &mut self,
         name: &str,
         value: Option<&Spanned<Expr>>,
+        ty: Option<&saule_ast::Type>,
         span: &std::ops::Range<usize>,
     ) -> Result<(), CompileError> {
         // The rule mirrors the resolver's exactly (0.6): a declaration at
@@ -537,6 +539,8 @@ impl Compiler<'_> {
                     r
                 }
             };
+            // A module variable is one of `coerce.rs`'s sites.
+            self.coerce_to_declared(r, ty, span)?;
             let a = self.reg8(r, span)?;
             let g = self.mod_slot(slot, span)?;
             self.emit(Instruction::abx(Op::SETMOD, a, g), span);
@@ -554,6 +558,9 @@ impl Compiler<'_> {
                 self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
             }
         }
+        // An annotated `local` is the other of `coerce.rs`'s sites. Before
+        // the name is declared, so the conversion cannot see it.
+        self.coerce_to_declared(reg, ty, span)?;
         // Declared *after* the initializer, so `local x = x` reads the outer
         // `x` — the same order the resolver uses.
         self.f.declare(name, reg);
@@ -962,9 +969,45 @@ impl Compiler<'_> {
         value: &Spanned<Expr>,
         span: &std::ops::Range<usize>,
     ) -> Result<(), CompileError> {
-        if matches!(&target.value, Expr::Member { .. }) {
+        // The target appears **twice** in what this builds — once as the
+        // read inside `combined`, once as the destination — so every
+        // sub-expression of the target is evaluated twice. The AST keeps
+        // `CompoundAssign` as its own node precisely so that cannot happen,
+        // and this is where that promise has to be kept.
+        //
+        // **This was a live silent miscompile, not merely a gap.** `t[idx()]
+        // += 1` called `idx` twice under the VM and once under the
+        // tree-walker — wrong value, exit status 0 — and no test could see
+        // it, because the one fixture that writes it also compound-assigns
+        // to a *member* two lines later, which refused and sent the whole
+        // file to the oracle. A refusal hiding a miscompile beside it is
+        // trap 3.
+        //
+        // The rule now: a target may be compiled here only if re-reading it
+        // is unobservable. `self`, a bare name and a literal all qualify;
+        // a call, a nested index or a chain does not, and refuses so the
+        // module falls back to the engine that evaluates it once.
+        fn rereadable(e: &Expr) -> bool {
+            matches!(
+                e,
+                Expr::Self_
+                    | Expr::Ident(_)
+                    | Expr::Int(_)
+                    | Expr::Float(_)
+                    | Expr::Str(_)
+                    | Expr::Bool(_)
+                    | Expr::Nil
+            )
+        }
+        let ok = match &target.value {
+            Expr::Member { obj, .. } => rereadable(&obj.value),
+            Expr::Index { obj, index } => rereadable(&obj.value) && rereadable(&index.value),
+            // A bare local or module slot has no sub-expression at all.
+            _ => true,
+        };
+        if !ok {
             return Err(CompileError::unsupported(
-                "a compound assignment to a member",
+                "a compound assignment whose target cannot be evaluated only once",
                 span.clone(),
             ));
         }

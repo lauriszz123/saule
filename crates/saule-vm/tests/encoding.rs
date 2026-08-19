@@ -181,8 +181,8 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::EXTRAARG as u8, 6);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::TAILCALLS),
-        "a new opcode was appended after TAILCALLS — extend this assertion rather than \
+        Some(Op::NVALS),
+        "a new opcode was appended after NVALS — extend this assertion rather than \
          inserting one in the middle"
     );
 }

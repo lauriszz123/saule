@@ -202,3 +202,137 @@ fn a_module_top_level_runs_before_the_module_that_imports_it() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines, ["first", "second", "main"]);
 }
+
+#[test]
+fn a_named_argument_binds_to_an_imported_classs_constructor() {
+    // §19 argument binding across a module boundary.
+    //
+    // `layouts` has been program-global since the imports slice, so `Box`
+    // itself resolved fine — but `callee_params` was rebuilt from scratch per
+    // module, so the *parameter list* needed to turn `label:` into a position
+    // did not exist for a class declared elsewhere. The call refused with
+    // `a named argument to a callee the compiler cannot identify`, which is
+    // what made `ui-blocks` and `todo-app` fall back on their first
+    // `Panel(title: …)`.
+    //
+    // Both orders are asserted: `width:` before `label:` is the one that
+    // proves the reorder ran, since a compiler that merely dropped the names
+    // and kept the written order would still pass the first case.
+    let dir = project(
+        "named_arg_imported_ctor",
+        &[
+            (
+                "boxes.sau",
+                "export class Box\n\
+                 \x20 fn init(label: string, width: integer = 10)\n\
+                 \x20   self.label = label\n\
+                 \x20   self.width = width\n\
+                 \x20 end\n\
+                 \x20 label: string\n\
+                 \x20 width: integer\n\
+                 \x20 fn show() -> string\n\
+                 \x20   return self.label .. \":\" .. tostring(self.width)\n\
+                 \x20 end\n\
+                 end\n",
+            ),
+            (
+                "main.sau",
+                "import Box from boxes\n\
+                 class Main\n\
+                 \x20 static fn main()\n\
+                 \x20   println(Box(label: \"a\").show())\n\
+                 \x20   println(Box(width: 3, label: \"b\").show())\n\
+                 \x20 end\n\
+                 end\n",
+            ),
+        ],
+    );
+
+    // The assertion is as much that this *compiles* as that it prints: before
+    // the fix `compile` returned `Unsupported` and the CLI fell back.
+    let out = run_capturing(compile(&dir.join("main.sau")));
+    assert_eq!(out.trim(), "a:10\nb:3");
+}
+
+#[test]
+fn a_top_level_fns_parameters_do_not_leak_across_modules() {
+    // The boundary the fix deliberately does not cross. `CalleeKey::Method`
+    // is keyed on a program-global `ClassIdx` and accumulates safely; a
+    // top-level `fn` is keyed on a bare **name**, so it is published by
+    // *slot* and seeded only through the importer's own `ImportBinding`.
+    //
+    // Both modules declare `fn tag`, with the two parameters in opposite
+    // order, and `main` does **not** import lib's. A name-keyed accumulation
+    // would let the module compiled first answer for the one compiled second
+    // and silently swap the arguments — a wrong answer, not a fallback, and
+    // the shadowing family of trap 1. `main` imports `seed` only to force the
+    // dependency edge, so lib is guaranteed to be compiled first.
+    let dir = project(
+        "fn_params_no_leak",
+        &[
+            (
+                "lib.sau",
+                "export fn seed() -> integer\n\
+                 \x20 return 1\n\
+                 end\n\
+                 fn tag(head: string, tail: string) -> string\n\
+                 \x20 return head .. \"|\" .. tail\n\
+                 end\n",
+            ),
+            (
+                "main.sau",
+                "import seed from lib\n\
+                 fn tag(tail: string, head: string) -> string\n\
+                 \x20 return head .. \"/\" .. tail\n\
+                 end\n\
+                 class Main\n\
+                 \x20 static fn main()\n\
+                 \x20   println(seed())\n\
+                 \x20   println(tag(head: \"h\", tail: \"t\"))\n\
+                 \x20 end\n\
+                 end\n",
+            ),
+        ],
+    );
+
+    // `h/t`, from *main's* `tag`. Lib's would print `h|t`.
+    let out = run_capturing(compile(&dir.join("main.sau")));
+    assert_eq!(out.trim(), "1\nh/t");
+}
+
+#[test]
+fn a_named_argument_binds_to_an_imported_fn() {
+    // The gap the leak test above turned up on its first run: a class's
+    // methods were reachable across a module boundary but a plain exported
+    // `fn`'s parameters were not, so `tag(head: …)` on an imported `tag`
+    // refused with the same message the imported constructor used to.
+    //
+    // The alias is the point of the second call: an importer binds the
+    // exporter's parameter list under *its own* name for it, so seeding by
+    // name at the exporter would bind nothing here.
+    let dir = project(
+        "named_arg_imported_fn",
+        &[
+            (
+                "lib.sau",
+                "export fn tag(head: string, tail: string) -> string\n\
+                 \x20 return head .. \"|\" .. tail\n\
+                 end\n",
+            ),
+            (
+                "main.sau",
+                "import tag from lib\n\
+                 import tag as mark from lib\n\
+                 class Main\n\
+                 \x20 static fn main()\n\
+                 \x20   println(tag(tail: \"t\", head: \"h\"))\n\
+                 \x20   println(mark(tail: \"y\", head: \"x\"))\n\
+                 \x20 end\n\
+                 end\n",
+            ),
+        ],
+    );
+
+    let out = run_capturing(compile(&dir.join("main.sau")));
+    assert_eq!(out.trim(), "h|t\nx|y");
+}
