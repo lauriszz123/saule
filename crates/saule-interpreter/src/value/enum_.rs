@@ -4,7 +4,7 @@ use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use super::Value;
-use super::function::FunctionObject;
+use super::class::MethodRef;
 
 #[derive(Debug)]
 pub struct EnumVariantObject {
@@ -42,7 +42,14 @@ pub struct EnumObject {
     /// `value` is an array-style table of the positional arguments.
     pub tuple_variants: HashMap<String, usize>,
     /// Methods defined on the enum, keyed by name.
-    pub methods: HashMap<String, Rc<FunctionObject>>,
+    ///
+    /// A [`MethodRef`] for the same reason a class's methods are one: an
+    /// enum is built by exactly one engine, and before this the map could
+    /// only hold a tree-walker `FunctionObject`. The VM's answer was an
+    /// empty map, so the bytecode compiler had to refuse any enum with
+    /// methods rather than ship a `no property or method` where the
+    /// tree-walker succeeds.
+    pub methods: HashMap<String, MethodRef>,
 }
 
 impl EnumObject {

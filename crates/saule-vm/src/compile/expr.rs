@@ -162,12 +162,29 @@ impl Compiler<'_> {
             Expr::Call { callee, args } => self.call_to(e, callee, args, dst)?,
 
             Expr::Self_ => {
-                if !self.f.in_method {
+                if self.f.in_method {
+                    // `self` is parameter 0, so it is already in register 0.
+                    if a != 0 {
+                        self.emit(Instruction::abc(Op::MOVE, a, 0, 0), span);
+                    }
+                } else if let Some(idx) = self.capture_upvalue("self") {
+                    // A lambda written in a method body. `self` is an
+                    // ordinary local of the enclosing frame — `method_proto`
+                    // declares it under that name at register 0 — so the
+                    // same capture walk every other free variable takes
+                    // reaches it, and `CLOSEUP` keeps it alive if the
+                    // closure outlives the call. Mirrors the tree-walker,
+                    // where a lambda body mentioning `self` captures it by
+                    // name like anything else.
+                    let b = self.reg8(idx, span)?;
+                    self.emit(Instruction::abc(Op::GETUPVAL, a, b, 0), span);
+                } else {
+                    // Nothing enclosing declares it: a `static fn`, where
+                    // `self` denotes the class rather than an instance.
+                    // `member_to` folds `self.x` there at compile time; bare
+                    // `self` would need a class in a register, which no
+                    // opcode produces.
                     return Err(CompileError::unsupported("`self` outside a method", span.clone()));
-                }
-                // `self` is parameter 0, so it is already in register 0.
-                if a != 0 {
-                    self.emit(Instruction::abc(Op::MOVE, a, 0, 0), span);
                 }
             }
 
@@ -315,11 +332,60 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
-            Some(Binding::Prelude { .. }) => Err(CompileError::unsupported(
-                "a prelude name outside a call",
-                span.clone(),
-            )),
+            Some(Binding::Prelude { .. }) => {
+                // A prelude name in a *value* position — `Io.stdout`, where
+                // the member is an object rather than a scalar and so is not
+                // one `prelude_member` folds, or a bare `print` assigned to
+                // a local. The prelude is fixed before a program runs, so
+                // the entity itself is a constant: one `LOADK`, and every
+                // read or call through it is then the ordinary dynamic
+                // member path (`GETFX` / `CALLMX`), which defers to the
+                // tree-walker's own `read_member`. The same compile-time
+                // resolution `CALLNAT` gets, applied to the name rather than
+                // to the call.
+                //
+                // `static_value` is what declines a shadowed name, so a
+                // module-level `local Io = {…}` still reads the program's
+                // own table — trap 1, and the reason this does not test for
+                // `Binding::Prelude` and stop there.
+                //
+                // Declined for a receiver this module **assigns through**,
+                // the same guard `prelude_member`'s fold carries and for the
+                // same reason: the compiler and the tree-walker install
+                // their own prelude, so `install` builds a *different*
+                // `ClassObject` for each. Reads and writes that all go
+                // through the folded constant stay consistent with one
+                // another, but `Math.pi = 3.0` would then be writing into an
+                // object only the VM can see. Refusing the module keeps the
+                // two engines agreeing —
+                // `a_reassigned_stdlib_constant_is_not_folded` pins it.
+                let folded = (!self.mutated_receivers.contains(name))
+                    .then(|| self.static_value(e.id, name))
+                    .flatten();
+                match folded {
+                    Some(v) => {
+                        let k = self.constant(v, span)?;
+                        self.emit(Instruction::abx(Op::LOADK, a, k), span);
+                        Ok(())
+                    }
+                    None => Err(CompileError::unsupported(
+                        "a prelude name outside a call",
+                        span.clone(),
+                    )),
+                }
+            }
             Some(Binding::Upvalue { .. }) => {
+                // A lambda calling itself by the name it is being bound to.
+                // The enclosing frame has no register for it yet — `local`
+                // declares one only *after* the initializer is compiled —
+                // so there is nothing to capture, and capturing it once
+                // there were would close an `Rc` cycle per call. `SELFFUNC`
+                // reads the running closure off the frame instead, which is
+                // what the tree-walker's `FunctionObject::self_name` does.
+                if self.f.self_fn_name.as_deref() == Some(name) {
+                    self.emit(Instruction::abc(Op::SELFFUNC, a, 0, 0), span);
+                    return Ok(());
+                }
                 // The resolver proved this crosses a function boundary; the
                 // index is ours to assign, and asking for it builds the
                 // capture chain lazily.
@@ -2108,7 +2174,12 @@ impl Compiler<'_> {
             ));
         }
 
+        // Taken, not read: `binding_lambda_to` names *this* lambda only. A
+        // lambda nested inside it must not inherit the name, or a reference
+        // there would compile to the inner closure instead of the outer one.
+        let self_fn_name = self.binding_lambda_to.take();
         self.push_function(None);
+        self.f.self_fn_name = self_fn_name;
         let outcome = (|| -> Result<(), CompileError> {
             let label = self.func_label();
             self.f

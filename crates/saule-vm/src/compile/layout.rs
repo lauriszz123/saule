@@ -154,20 +154,19 @@ pub fn build_enums(
             continue;
         };
         // An enum method is a bare `Method` with no `Spanned` wrapper, so it
-        // has no `NodeId` for the resolver to key a `FunctionInfo` on (§0.6)
-        // — the compiler cannot produce a proto for it, and the runtime
-        // `EnumObject` the VM builds therefore has an empty method map.
+        // has no `NodeId` — which is why `Bindings` has no `FunctionInfo`
+        // keyed on it (§0.6). That turns out to cost nothing here: the
+        // resolver *does* walk the body (`resolve/decls.rs`'s `Decl::Enum`
+        // arm calls `enter_function` with `NodeId::NONE`), so every
+        // identifier inside has a binding, and the frame layout is the
+        // compiler's to compute anyway.
         //
-        // That was harmless while every enum-method call refused on its own.
-        // `CALLMX` dispatches dynamically now, so it would reach the empty
-        // map instead and report `no property or method` — a *failure* where
-        // the tree-walker succeeds. Refusing the module keeps the two
-        // engines agreeing about which programs run.
-        if !methods.is_empty() {
-            return Err(CompileError::unsupported(
-                "an enum with methods",
-                d.span.clone(),
-            ));
+        // The names are recorded now and the protos filled by `enum_decl` in
+        // pass 2, mirroring a class: a method may mention a type declared
+        // further down the file.
+        let mut method_protos = HashMap::new();
+        for m in methods {
+            method_protos.insert(Rc::from(m.name.as_str()), u32::MAX);
         }
 
         let mut protos = Vec::with_capacity(variants.len());
@@ -208,6 +207,7 @@ pub fn build_enums(
             module,
             variants: protos,
             by_name,
+            methods: method_protos,
         });
     }
     Ok(())

@@ -155,11 +155,35 @@ pub(crate) fn dispatch_member_call_multi(
                 span,
             })
         }
-        Value::EnumVariant(_variant) => {
-            let v = read_member(receiver, name, span.clone())?;
-            match v {
-                Value::Function(m) => call_instance_method_multi(&m, receiver.clone(), args, span),
-                _ => call_value_multi(v, args, span),
+        Value::EnumVariant(variant) => {
+            // A method the enum declares is called *with* the variant as its
+            // receiver; `.value`, `.name`, and anything a payload happens to
+            // hold are not. Which of the two this is has to be decided by
+            // looking in the method map — deciding it from the shape of what
+            // `read_member` returned would call a variant whose payload is a
+            // function with a receiver it never declared.
+            //
+            // `read_member` answers `value` and `name` before it consults
+            // the method map, so a method spelled either way is already
+            // unreachable as a method. Mirrored here rather than reordered:
+            // the two paths have to agree about which name wins.
+            let method = (!matches!(name, "value" | "name"))
+                .then(|| {
+                    variant
+                        .enum_obj
+                        .borrow()
+                        .as_ref()
+                        .and_then(|e| e.methods.get(name).cloned())
+                })
+                .flatten();
+            match method {
+                // Either engine's method, receiver prepended for a compiled
+                // one exactly as an instance method's is.
+                Some(m) => call_method_ref_multi(&m, receiver.clone(), args, span),
+                None => {
+                    let v = read_member(receiver, name, span.clone())?;
+                    call_value_multi(v, args, span)
+                }
             }
         }
         Value::File(handle) => {

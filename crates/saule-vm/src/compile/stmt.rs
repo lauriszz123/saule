@@ -268,6 +268,9 @@ impl Compiler<'_> {
             },
             Type::Function { .. } => TypeDesc::Function,
             Type::Table { .. } => TypeDesc::Table,
+            // Interned inner-first, so the index is already valid when the
+            // wrapper is pushed.
+            Type::Nullable(inner) => TypeDesc::Nullable(self.type_desc(inner)),
             // A nullable or generic `catch` type is not a runtime test the
             // tree-walker performs either; `any` is the honest answer.
             _ => TypeDesc::Any,
@@ -308,6 +311,53 @@ impl Compiler<'_> {
                     span.clone(),
                 ))
             };
+        }
+
+        // `export name: T = value` — a module-level variable. The resolver
+        // already gave it a module slot (`collect_module_scope` pushes
+        // `Decl::Variable` alongside `Stmt::Local`), so this is the same
+        // store a module-top `local` compiles to.
+        //
+        // **No `coerce_to_declared` here, deliberately.** `exec_decl`'s
+        // `Decl::Variable` arm evaluates the initializer and defines the
+        // name — it never calls `coerce::to_declared`, which the `Stmt::Local`
+        // arm right above it does. Coercing here would make
+        // `export x: Str = "…"` build a `Str` under the VM and leave a
+        // string under the tree-walker: a silent divergence, and the oracle
+        // is the tree-walker.
+        if let saule_ast::Decl::Variable { name, value, .. } = &d.value {
+            if !self.at_module_top() {
+                return Err(CompileError::unsupported(
+                    "an `export` variable outside the module body",
+                    span.clone(),
+                ));
+            }
+            let Some(slot) = self
+                .bindings
+                .module_slots
+                .iter()
+                .position(|n| n.as_ref() == name.as_str())
+            else {
+                return Err(CompileError::unsupported(
+                    "a top-level binding the resolver did not record",
+                    span.clone(),
+                ));
+            };
+            let m = self.mark();
+            let r = match value {
+                Some(v) => self.expr_tmp(v)?,
+                None => {
+                    let r = self.alloc(span)?;
+                    let a = self.reg8(r, span)?;
+                    self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
+                    r
+                }
+            };
+            let a = self.reg8(r, span)?;
+            let g = self.mod_slot(slot as u16, span)?;
+            self.emit(Instruction::abx(Op::SETMOD, a, g), span);
+            self.free_to(m);
+            return Ok(());
         }
 
         let saule_ast::Decl::Function {
@@ -551,6 +601,12 @@ impl Compiler<'_> {
         // A frame local: allocate its register first, then evaluate straight
         // into it. No temporary, no move.
         let reg = self.alloc(span)?;
+        // `local go = fn(k) … go(…) … end`. The tree-walker's `Stmt::Local`
+        // arm tests for exactly this shape too, and for the same reason: the
+        // recursion must not become a capture. See `Op::SELFFUNC`.
+        if matches!(value.map(|v| &v.value), Some(Expr::Lambda { .. })) {
+            self.binding_lambda_to = Some(std::rc::Rc::from(name));
+        }
         match value {
             Some(v) => self.expr_to(v, reg)?,
             None => {

@@ -458,6 +458,22 @@ define_ops! {
     /// Emitted once per `match` whose scrutinee is a call and whose arms use
     /// a tuple pattern, never on any other path.
     NVALS: Abc,
+
+    // ---- §7 self-recursive lambdas ---------------------------------------
+    /// `R[A] := the closure this frame is running`
+    ///
+    /// `local go = fn(k) … go(k - 1) … end` — a lambda that calls itself by
+    /// the name it is being bound to. Capturing that name as an upvalue
+    /// would work and would **leak**: the closed cell holds the closure and
+    /// the closure holds the cell, an `Rc` cycle per call. The tree-walker
+    /// solved the same problem by *not* capturing — `FunctionObject`'s
+    /// `self_name` resolves the recursion through the call scope — and this
+    /// is the bytecode counterpart: the running closure is already on the
+    /// frame, so the recursive call reads it from there and no cell exists
+    /// to close a cycle with.
+    ///
+    /// Appended, never inserted: the numbering is the chunk ABI.
+    SELFFUNC: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

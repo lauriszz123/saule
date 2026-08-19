@@ -49,6 +49,10 @@ const ALLOW_INCOMPLETE = [
 ];
 
 function findCompiler() {
+	// `SAULE_BIN` first, matching `run_tests.sh` and `run_examples_diff.sh`:
+	// this script is now a differential check, and a differential check run
+	// against a stale binary proves nothing.
+	if (process.env.SAULE_BIN) return process.env.SAULE_BIN;
 	const local = join(repoRoot, 'target', 'release', 'saule');
 	if (existsSync(local)) return local;
 	const debug = join(repoRoot, 'target', 'debug', 'saule');
@@ -114,7 +118,41 @@ const workDir = mkdtempSync(join(tmpdir(), 'saule-check-'));
 
 let checked = 0;
 let skipped = 0;
+let fellBack = 0;
 const failures = [];
+const divergences = [];
+
+/**
+ * Run one sample under one engine, returning its combined output.
+ *
+ * `SAULE_ENGINE` rather than a flag, because that is the spelling that also
+ * restores the fallback note - which is what makes the fallback count below
+ * possible (`VM_TASKS.md`, Phase 4's "the fallback note is printed only when
+ * the VM was asked for").
+ */
+function runUnder(engine, path) {
+	try {
+		const out = execFileSync(compiler, ['run', path], {
+			stdio: ['ignore', 'pipe', 'pipe'],
+			timeout: 15_000,
+			encoding: 'utf8',
+			env: { ...process.env, SAULE_ENGINE: engine },
+		});
+		return { ok: true, out };
+	} catch (err) {
+		return { ok: false, out: (err.stderr || err.stdout || err.message || '').trim() };
+	}
+}
+
+/** The fallback note the VM prints when it cannot compile a construct. */
+const FALLBACK = 'the bytecode compiler does not handle';
+
+/**
+ * The note is a property of the engine, not of the program, so it is stripped
+ * before the two outputs are compared - otherwise every falling-back sample
+ * would read as a divergence.
+ */
+const strip = (t) => t.split('\n').filter((l) => !l.includes(FALLBACK)).join('\n');
 
 function check(sample) {
 	if (ALLOW_INCOMPLETE.some((needle) => sample.source.includes(needle))) {
@@ -126,16 +164,24 @@ function check(sample) {
 	writeFileSync(path, sample.source, 'utf8');
 	checked++;
 
-	try {
-		execFileSync(compiler, ['run', path], {
-			stdio: ['ignore', 'pipe', 'pipe'],
-			timeout: 15_000,
-			encoding: 'utf8',
-		});
-	} catch (err) {
-		failures.push({
+	// Both engines, output compared rather than exit status alone. These
+	// samples are the only complete Saule programs `www/` holds, so this is
+	// what closes Phase 3's "the differential harness does not cover
+	// `www/`". A sample that runs but prints the wrong thing under the VM is
+	// exactly the failure `SAULE_DIFF=1 ./run_tests.sh` exists to catch, and
+	// it was invisible here while this script ran one engine once.
+	const vm = runUnder('vm', path);
+	if (!vm.ok) {
+		failures.push({ ...sample, detail: vm.out });
+		return;
+	}
+	if (vm.out.includes(FALLBACK)) fellBack++;
+
+	const interp = runUnder('interp', path);
+	if (!interp.ok || strip(vm.out) !== strip(interp.out)) {
+		divergences.push({
 			...sample,
-			detail: (err.stderr || err.stdout || err.message || '').trim(),
+			detail: `--- vm\n${strip(vm.out)}\n--- interp\n${strip(interp.out)}`,
 		});
 	}
 }
@@ -155,14 +201,26 @@ for (const example of await playgroundExamples()) check(example);
 
 rmSync(workDir, { recursive: true, force: true });
 
-if (failures.length) {
-	console.error(`✗ ${failures.length} of ${checked} samples failed to compile:\n`);
+if (failures.length || divergences.length) {
 	for (const f of failures) {
-		console.error(`── ${f.file}:${f.line}`);
+		console.error(`✗ failed to run   ── ${f.file}:${f.line}`);
 		console.error(f.detail.split('\n').slice(0, 18).join('\n'));
 		console.error('');
 	}
+	for (const d of divergences) {
+		console.error(`✗ engines disagree ── ${d.file}:${d.line}`);
+		console.error(d.detail.split('\n').slice(0, 24).join('\n'));
+		console.error('');
+	}
+	console.error(
+		`${failures.length} of ${checked} samples failed to run, ` +
+			`${divergences.length} diverged between engines.`,
+	);
 	process.exit(1);
 }
 
-console.log(`✓ ${checked} samples compile and run (${skipped} fragments skipped).`);
+console.log(
+	`✓ ${checked} samples compile and run under both engines, with identical ` +
+		`output (${skipped} fragments skipped, ${fellBack} fell back to the ` +
+		`tree-walker).`,
+);

@@ -140,7 +140,7 @@ pub(crate) fn read_member(
                 if let Some(enum_obj) = variant.enum_obj.borrow().as_ref()
                     && let Some(m) = enum_obj.methods.get(name)
                 {
-                    return Ok(Value::Function(m.clone()));
+                    return Ok(m.to_value());
                 }
                 Err(RuntimeError::TypeError {
                     message: format!(
