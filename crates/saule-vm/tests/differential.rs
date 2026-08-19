@@ -3666,3 +3666,86 @@ fn a_compound_assignment_to_a_simple_member_compiles() {
         "a compound assignment to `self.f` and `Class.f` must compile, not fall back"
     );
 }
+
+
+// -- Phase 3's last four gaps ---------------------------------------------
+
+#[test]
+fn an_exported_module_variable_is_read_and_written() {
+    // `export name: T = value` is the module-scope counterpart of a class
+    // field, and the resolver already gives it a module slot -- the compiler
+    // simply had no branch for `Decl::Variable` and refused the whole module
+    // as `a declaration the compiler does not handle`.
+    must_agree(
+        "export appName: string = \"Saule\"\n         export version: integer = 26\n         export pending: string?\n         version = version + 1\n         appName .. \" v\" .. version .. \" \" .. (pending ?? \"none\")",
+    );
+}
+
+#[test]
+fn a_lambda_in_a_method_body_reaches_self() {
+    // `self` is an ordinary local of the enclosing frame -- `method_proto`
+    // declares it at register 0 under that name -- so the capture walk every
+    // other free variable takes reaches it. It used to refuse as ``self`
+    // outside a method`, because the test was `in_method` on the *lambda's*
+    // frame, which is never a method.
+    must_agree(
+        "class Widget\n           label: string\n           fn init(label: string)\n             self.label = label\n           end\n           fn describe() -> string\n             local f: fn() -> string = fn()\n               return self.label\n             end\n             return f()\n           end\n         end\n         Widget(\"w\").describe()",
+    );
+}
+
+#[test]
+fn a_self_recursive_local_lambda_does_not_capture_itself() {
+    // `SELFFUNC`: the name is not a capturable local of the enclosing frame
+    // (its register is declared *after* the initializer compiles), and
+    // capturing it once it were would close an `Rc` cycle per call -- the
+    // leak the tree-walker's `FunctionObject::self_name` exists to avoid.
+    must_agree(
+        "fn fact(n: integer) -> integer\n           local go: fn(integer) -> integer = fn(k: integer)\n             if k <= 1 then\n               return 1\n             end\n             return k * go(k - 1)\n           end\n           return go(n)\n         end\n         fact(6)",
+    );
+}
+
+#[test]
+fn a_prelude_name_in_a_value_position_folds() {
+    // `Io.stdout` is an object, not one of the scalars `prelude_member`
+    // folds, so the bare `Io` had to become a value of its own. The prelude
+    // is fixed before a program runs, so it is one `LOADK`.
+    must_agree("tostring(type(Io)) .. tostring(type(Math))");
+}
+
+#[test]
+fn a_shadowed_prelude_name_in_a_value_position_is_not_folded() {
+    // Trap 1 again: a module-level `local` is a module *slot*, so
+    // `FuncCtx::lookup` cannot see it and only `static_value`'s
+    // `not_shadowed` gate keeps the program's own table from becoming the
+    // stdlib's.
+    must_agree(
+        "local Math: table<string, float> = {pi: 3.0}\n         local m: table<string, float> = Math\n         m[\"pi\"]",
+    );
+}
+
+#[test]
+fn an_enum_method_runs_on_the_variant_that_received_it() {
+    // The refusal was structural: `EnumObject::methods` could only hold a
+    // tree-walker `FunctionObject`, so a VM-built enum had an empty map and
+    // `CALLMX` would have reported `no property or method` where the
+    // tree-walker succeeds. `MethodRef` is what makes both representable,
+    // exactly as it already did for classes.
+    must_agree(
+        "enum Status\n           Alive = \"alive\",\n           Dead = \"dead\"\n           fn describe() -> string\n             return \"Status is: \" .. self.value\n           end\n         end\n         local s: Status = Status.Alive\n         s.describe() .. \"/\" .. Status.Dead.describe() .. \"/\" .. Status.Dead.name",
+    );
+}
+
+#[test]
+fn a_nullable_catch_type_does_not_catch_everything() {
+    // A live silent divergence, not a gap: `TypeDesc` had no `Nullable`, so
+    // `catch e: string?` interned as `Any` and caught a thrown integer the
+    // tree-walker lets escape. `runtime_matches_type` reads `T?` as
+    // `nil || T`, and `TypeDesc::Nullable` now does the same.
+    must_agree(
+        "local caught: string = \"no\"\n         try\n           try\n             throw 42\n           catch e: string?\n             caught = \"yes\"\n           end\n         catch outer: any\n           caught = \"escaped\"\n         end\n         caught",
+    );
+    // ...and still catches what it should, on both sides of the `?`.
+    must_agree(
+        "local out: string = \"\"\n         try\n           throw \"boom\"\n         catch e: string?\n           out = e ?? \"nil\"\n         end\n         try\n           throw nil\n         catch e: string?\n           out = out .. \"|\" .. (e ?? \"nil\")\n         end\n         out",
+    );
+}

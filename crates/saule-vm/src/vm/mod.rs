@@ -171,7 +171,7 @@ impl Vm {
         let shared = Rc::new_cyclic(|weak: &std::rc::Weak<VmShared>| {
             let (classes, class_of, statics) = build_classes(&chunks, weak);
             VmShared {
-                enums: build_enums(&chunks),
+                enums: build_enums(&chunks, weak),
                 modules: RefCell::new(vec![Value::Nil; module_slots]),
                 closure_cache: RefCell::new(cache),
                 chunks,
@@ -330,8 +330,11 @@ fn build_classes(
 /// same `Rc` every time it is mentioned and identity comparison works
 /// (§9.1). A tuple variant has no singleton: each call constructs a
 /// fresh object carrying its own payload, stamped with the same tag.
-fn build_enums(chunks: &[Rc<Chunk>]) -> Vec<Rc<saule_interpreter::value::EnumObject>> {
-    use saule_interpreter::value::{EnumObject, EnumVariantObject};
+fn build_enums(
+    chunks: &[Rc<Chunk>],
+    weak: &std::rc::Weak<VmShared>,
+) -> Vec<Rc<saule_interpreter::value::EnumObject>> {
+    use saule_interpreter::value::{EnumObject, EnumVariantObject, MethodRef};
     let table = Rc::clone(&chunks[0].enums);
     let mut enums = Vec::with_capacity(table.len());
     {
@@ -361,13 +364,36 @@ fn build_enums(chunks: &[Rc<Chunk>]) -> Vec<Rc<saule_interpreter::value::EnumObj
                 by_tag.push(Some(obj));
             }
 
+            // An enum method captures nothing — module slots through
+            // `GETMOD`, statics through `GETSTAT` — so an upvalue-free
+            // closure over the *declaring* module's chunk is the whole of
+            // it, exactly as a class method's is. A proto index only means
+            // something within its own chunk, which is why this reads
+            // `proto.module` rather than the running one.
+            let methods = proto
+                .methods
+                .iter()
+                .filter(|&(_, &target)| target != u32::MAX)
+                .map(|(name, &target)| {
+                    (
+                        name.to_string(),
+                        MethodRef::Vm(VmFunctionRef::new(Closure {
+                            proto: Rc::clone(chunk.proto(target)),
+                            chunk: Rc::clone(chunk),
+                            upvals: Vec::new(),
+                            shared: weak.clone(),
+                        })),
+                    )
+                })
+                .collect();
+
             let e = Rc::new(EnumObject {
                 name: proto.name.to_string(),
                 variants: variants.clone(),
                 by_tag,
                 tags,
                 tuple_variants,
-                methods: Default::default(),
+                methods,
             });
             for v in variants.values() {
                 *v.enum_obj.borrow_mut() = Some(Rc::clone(&e));
@@ -1741,6 +1767,11 @@ impl Vm {
                             TableObject::from_array(items),
                         )));
                     }
+                    Op::SELFFUNC => {
+                        // The frame's own handle — no allocation, no cell,
+                        // and therefore no cycle. See the opcode's doc.
+                        self.stack[base + a] = Value::VmFunction(Rc::clone(&func));
+                    }
                     Op::NVALS => {
                         // How many values the call left in the window at
                         // `B`. `store_results` set `top` to one past the
@@ -1952,6 +1983,9 @@ impl Vm {
                     .is_some_and(|e| e.name.as_ref() == ev.enum_name.as_str()),
                 _ => false,
             },
+            TypeDesc::Nullable(inner) => {
+                matches!(v, Value::Nil) || self.value_matches(chunk, v, *inner)
+            }
             // A name from another module: compare by class name, which is
             // what the tree-walker's `catch` test does too.
             TypeDesc::Named(n) => match v {

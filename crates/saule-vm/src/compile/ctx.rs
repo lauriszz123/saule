@@ -135,6 +135,15 @@ pub struct FuncCtx {
     /// proved a table from the type alone, and this records what the
     /// compiler already knows.
     pub variadic_param: Option<Rc<str>>,
+    /// The name this lambda is being bound to by the `local` that owns it,
+    /// when it mentions that name itself.
+    ///
+    /// `local go = fn(k) … go(k - 1) … end`. The name is not a capturable
+    /// local of the enclosing frame — the register is declared *after* the
+    /// initializer is compiled — and capturing it would leak, so a reference
+    /// to it compiles to `SELFFUNC` instead. Only the lambda directly bound
+    /// by the `local` carries it; a deeper nested lambda still refuses.
+    pub self_fn_name: Option<Rc<str>>,
     /// How many `try` **bodies** enclose the statement being compiled.
     ///
     /// A tail call inside one must not replace the frame: the handler has to
@@ -168,6 +177,7 @@ impl FuncCtx {
             in_method: false,
             entries: Vec::new(),
             variadic_param: None,
+            self_fn_name: None,
             scopes: vec![Vec::new()],
         }
     }
@@ -327,6 +337,11 @@ pub struct Compiler<'a> {
     /// its own — an `import` must still be refused, because the name has a
     /// module slot that nothing would ever write.
     pub imports_bound: bool,
+    /// The name a `local NAME = fn …` is binding, live only while that
+    /// lambda's initializer is being compiled. `lambda_to` takes it into the
+    /// new `FuncCtx`'s `self_fn_name`, so it reaches exactly the one lambda
+    /// the `local` names and no deeper one.
+    pub binding_lambda_to: Option<Rc<str>>,
     /// Where this module's slots start in the program's flat slot space.
     /// Added to every module-slot operand by [`Compiler::mod_slot`].
     pub module_slot_base: usize,
@@ -379,6 +394,7 @@ impl<'a> Compiler<'a> {
             mutated_receivers: Default::default(),
             shadowed_names: Default::default(),
             imports_bound: false,
+            binding_lambda_to: None,
             module_slot_base: 0,
             import_bindings: Vec::new(),
             native_imports: HashMap::new(),

@@ -73,6 +73,80 @@ impl Compiler<'_> {
         Ok(())
     }
 
+    /// Compile every method of an `enum` into a proto, and record its index.
+    ///
+    /// An enum method is an instance method with no layout behind it: `self`
+    /// is the *variant object*, which has no field slots, so every access
+    /// through it takes the dynamic path (`GETFX` / `CALLMX`) and defers to
+    /// the tree-walker's own `read_member` — which is what makes `.value`
+    /// and `.name` mean the same thing under both engines by construction.
+    ///
+    /// Dispatch is dynamic too: `CALLMX` on a variant receiver reaches
+    /// `dispatch_member_call_multi`, which finds the `MethodRef` the VM's
+    /// start-up pass put in the runtime `EnumObject`. There is no vtable to
+    /// build because an enum cannot be extended, so a name probe is the
+    /// whole of it.
+    pub fn enum_decl(&mut self, d: &Spanned<Decl>) -> Result<(), CompileError> {
+        let span = &d.span;
+        let Decl::Enum { name, methods, .. } = &d.value else {
+            unreachable!("enum_decl called with a non-enum");
+        };
+        if methods.is_empty() {
+            return Ok(());
+        }
+        let Some(idx) = self.layouts.enum_of(name) else {
+            return Err(CompileError::unsupported(
+                "an enum the compiler did not lay out",
+                span.clone(),
+            ));
+        };
+        for m in methods {
+            let proto = self.enum_method_proto(name, m, span)?;
+            self.chunk.enums_mut()[idx as usize]
+                .methods
+                .insert(std::rc::Rc::from(m.name.as_str()), proto);
+        }
+        Ok(())
+    }
+
+    /// One enum method body. Shaped like [`Self::method_proto`] with
+    /// `has_self` set and no owning class — `self` is a variant, not an
+    /// instance, so there is no `current_class` for a static or a field slot
+    /// to resolve against.
+    fn enum_method_proto(
+        &mut self,
+        enum_name: &str,
+        m: &saule_ast::Method,
+        span: &Range<usize>,
+    ) -> Result<u32, CompileError> {
+        self.push_function(Some(&format!("{enum_name}.{}", m.name)));
+        self.f.in_method = true;
+
+        let outcome = (|| -> Result<(), CompileError> {
+            let n = m.params.len() as u16 + 1;
+            let label = self.func_label();
+            self.f
+                .regs
+                .reserve_params(n)
+                .map_err(|o| o.at(&label, span.clone()))?;
+            self.f.n_params = n as u8;
+            self.f.declare("self", 0);
+            for (i, p) in m.params.iter().enumerate() {
+                self.f.declare(&p.name, 1 + i as u16);
+            }
+            self.f.entries = self.param_entries(&m.params, 1, span)?;
+            self.coerce_params(&m.params, 1, span)?;
+            for st in &m.body {
+                self.stmt(st)?;
+            }
+            Ok(())
+        })();
+
+        let proto = self.pop_function(span);
+        outcome?;
+        Ok(self.chunk.add_proto(proto))
+    }
+
     /// Compile one method body into a proto.
     fn method_proto(
         &mut self,

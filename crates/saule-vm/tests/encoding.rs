@@ -181,8 +181,11 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::EXTRAARG as u8, 6);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::NVALS),
-        "a new opcode was appended after NVALS — extend this assertion rather than \
+        // `NVALS` kept its number when `SELFFUNC` was appended after it,
+        // which is the property this pins: the tail moves, the numbering
+        // does not.
+        Some(Op::SELFFUNC),
+        "a new opcode was appended after SELFFUNC — extend this assertion rather than \
          inserting one in the middle"
     );
 }

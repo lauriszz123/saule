@@ -31,7 +31,7 @@ pub(super) fn exec_enum_decl(
             method.body.clone(),
             env,
         ));
-        enum_methods.insert(method.name.clone(), func);
+        enum_methods.insert(method.name.clone(), value::MethodRef::Tree(func));
     }
 
     // Create all variants (without enum references initially).

@@ -418,6 +418,13 @@ pub struct EnumProto {
     pub module: usize,
     pub variants: Vec<VariantProto>,
     pub by_name: HashMap<Rc<str>, u32>,
+    /// Methods declared on the enum: name -> proto index in the declaring
+    /// module's chunk.
+    ///
+    /// Laid out in pass 1 with a `u32::MAX` placeholder and filled by
+    /// `enum_decl` in pass 2, the same two-step every class method takes —
+    /// a method may mention a class or enum declared further down the file.
+    pub methods: HashMap<Rc<str>, u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -465,6 +472,20 @@ pub enum TypeDesc {
     /// Named rather than indexed: a `catch` may filter on a class that lives
     /// in another module and has no `ClassProto` in this chunk.
     Named(Rc<str>),
+    /// `T?` — nil, or whatever the descriptor at this index says.
+    ///
+    /// An index into the same `type_descs` pool rather than a `Box`, so the
+    /// pool stays flat and a chunk stays as serializable as it was.
+    ///
+    /// **This collapsed to `Any` and that was a live divergence.**
+    /// `runtime_matches_type` reads `Type::Nullable(inner)` as
+    /// `nil || inner`, so `catch e: string?` does *not* catch a thrown
+    /// integer under the tree-walker — while `Any` caught everything under
+    /// the VM. Silent: the program ran and printed, it just printed where
+    /// the oracle raised. `Type::Tuple` really is `true` on both sides
+    /// (`multi-return shapes aren't introspectable here`), so that one stays
+    /// `Any`.
+    Nullable(u32),
 }
 
 #[cfg(test)]

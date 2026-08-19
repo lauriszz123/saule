@@ -409,6 +409,17 @@ pub(crate) fn compile_into(
         }
     }
 
+    // Enum method bodies, for the same reason and at the same point: an
+    // enum is a compile-time table too, and a method on it must exist before
+    // the module body can call one.
+    for s in &module.stmts {
+        if let saule_ast::Stmt::Decl(d) = &s.value
+            && matches!(&d.value, saule_ast::Decl::Enum { .. })
+        {
+            c.enum_decl(d)?;
+        }
+    }
+
     // Pass 2a: inherit the vtable slots a subclass did not override.
     //
     // Pass 1 copies the parent's vtable so the *slot numbering* extends it —

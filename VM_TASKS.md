@@ -102,7 +102,7 @@ bite that do not on Windows:
   happens; when the construct lands, they need a new stand-in rather than
   deletion.
 
-## Six traps this codebase has already fallen into
+## Eight traps this codebase has already fallen into
 
 Each one cost real debugging time and each is written up in full further
 down; this is the index, so you meet them before you repeat them.
@@ -154,6 +154,27 @@ down; this is the index, so you meet them before you repeat them.
    for the deferrals that reasoning supported. (§ "Tail calls — done, and the
    two bugs it uncovered".)
 
+7. **A comment that asserts one property of several cases is a claim about
+   each of them, and it will be read as documentation.** `Compiler::type_desc`
+   collapsed both `Type::Tuple` and `Type::Nullable` to `TypeDesc::Any` under
+   one sentence — "not a runtime test the tree-walker performs either".
+   `Tuple` really is `true` in `runtime_matches_type`; `Nullable` is
+   `nil || inner`, three lines further down the same `match`. So
+   `catch e: string?` caught a thrown integer under the VM and let it escape
+   under the tree-walker: silent, exit status 0, and no fixture exercised it.
+   Check a multi-case claim case by case, against the oracle's own `match`.
+   (§ "A nullable `catch` type caught everything".)
+8. **The refusal message names the construct, not the cause.** Three of
+   Phase 3's last four gaps were misread from their own wording.
+   `a declaration the compiler does not handle` was a missing `match` arm for
+   a node the resolver had already given a slot; ``self` outside a method`
+   was `in_method` asked of a *lambda's* frame; `an enum with methods` was a
+   `HashMap<String, Rc<FunctionObject>>` that a bytecode method could not
+   inhabit — and this file's own note against it blamed §0.6's missing
+   `NodeId`, which would have meant changing the AST for no reason. Read the
+   refusal as "here is where compilation stopped", never as "here is what is
+   missing". (§ "The last four gaps — closed".)
+
 ## Legend
 
 | Mark | Meaning |
@@ -164,10 +185,14 @@ down; this is the index, so you meet them before you repeat them.
 
 ## Where things stand
 
-**Phases 0, 1, 2 and 4 are complete.** The compiler turns Saule source into
-bytecode and the VM runs it **1.2x–3.3x** faster than the tree-walker end to
-end (geometric mean **2.2x**), with **209** differential tests asserting the
-two engines agree.
+**Phases 0–4 are complete.** The compiler turns Saule source into bytecode and
+the VM runs it **1.2x–3.3x** faster than the tree-walker end to end (geometric
+mean **2.2x**), with **216** differential tests asserting the two engines
+agree — plus 236 fixtures, 11 example projects and 20 `www/` samples run under
+both engines and compared by output.
+
+**Next is Phase 5** (inline caches, §8.4/§8.5) and the one Phase 4 box that
+cannot be ticked from inside the tree: a release has to actually ship.
 
 That range is wider at both ends than the "2.6x–3.7x" this line used to
 carry, and the difference is *platform*, not regression: the old figure came
@@ -181,16 +206,39 @@ differential oracle. Nothing about the fallback changed — a module the
 compiler cannot reach still runs on the tree-walker, silently now rather than
 with a note, so the flip is safe on any program. `--vm` restores the note.
 
-**Phase 4 did not change coverage, and coverage is the open risk.** 4 of the 9
-comparable example projects still take the fallback, so for those the new
-default is a no-op. Read Phase 4's "What flipping the default did *not* fix".
+**Phase 4 did not change coverage — but the end of Phase 3 did.** That
+paragraph used to read "4 of the 9 comparable example projects still take the
+fallback, so for those the new default is a no-op", and it is now **0 of 9**:
+every comparable project runs entirely on the VM. Phase 4's "What flipping
+the default did *not* fix" is worth reading for the reasoning, not for its
+numbers.
 
-**Phase 3 is nearly complete.** Classes, interfaces, enums + `match`,
-`try`/`catch`, `for … in` (table path), operator overloading (left operand,
-including unary and index), **nullability** (`?.`, `??`, `!`, `as`), stdlib
-value members, table dot access, the `ARITHX`/`UNARYX` dynamic fallback, and
-**VM re-entrancy** are done. Remaining in §21.4 order: pipes,
-imports/modules, §19 argument binding.
+**Phase 3 is complete.** Classes, interfaces, enums + `match`, `try`/`catch`,
+`for … in` (table path), operator overloading (left operand, including unary
+and index), **nullability** (`?.`, `??`, `!`, `as`), stdlib value members,
+table dot access, pipes, imports/modules, §19 argument binding, the
+`ARITHX`/`UNARYX` dynamic fallback, and **VM re-entrancy** are all done.
+
+The paragraph above used to end "Remaining in §21.4 order: pipes,
+imports/modules, §19 argument binding" — which was stale by three items when
+it was read. Those three had been checked off below without this summary
+being touched, which is the second time this file has carried a status line
+that its own item list contradicted. **Re-read the items before trusting the
+summary.**
+
+The last four real gaps closed together, and they were four unrelated one-line
+premises rather than one missing feature:
+
+| Gap | What it actually was |
+|---|---|
+| `a declaration the compiler does not handle` | `Decl::Variable` (`export name: T = value`) had no branch. The resolver already gave it a module slot. |
+| ``self` outside a method` | The test was `in_method` on the *lambda's* frame, which is never a method. `self` is a capturable local named `self`. |
+| `a prelude name outside a call` | `Io.stdout` is an object, not one of the scalars `prelude_member` folds, so the bare `Io` had to become a value. |
+| `an enum with methods` | `EnumObject::methods` could only hold a tree-walker `FunctionObject`. |
+
+Each is written up below, along with a **live silent divergence** the last of
+them turned up next door: `catch e: string?` caught a thrown integer under
+the VM and let it escape under the tree-walker.
 
 **Coverage, measured rather than inferred.** "236/236 under
 `SAULE_ENGINE=vm`" counts a fallback as a pass, so it is not the number to
@@ -199,11 +247,16 @@ steer by. The real one:
 | | Compiles fully | Falls back |
 |---|---|---|
 | `benchmarks/sau` | **10 of 10** | — |
-| `tests/*.sau` | **87 of 92** | 5 |
+| `tests/*.sau` | **91 of 92** | 1 |
 
-(Re-measured at the Phase 4 flip. The line above said 85; `HEAD` was 84, and
-the handoff before it made the same slip in the other direction. Re-count
-before planning around either number — the census commands are below.)
+(Re-measured at the close of Phase 3. It read 87 before, and at the Phase 4
+flip 85, where the line above it said 84 — three successive handoffs slipped
+this number in both directions. Re-count before planning around it; the
+census commands are below.)
+
+**The one that falls back is not a gap.** `tests/compound_assign.sau` refuses
+on `a compound assignment whose target cannot be evaluated only once`, and
+that refusal is what *fixes* a miscompile — see "Compound assignment" below.
 
 **And the same measurement on real code, which says something different.**
 `tests/*.sau` are single files; every real Saule program is a project with
@@ -212,7 +265,7 @@ whether the VM engages on anything a user would write.
 
 | Corpus | Compiles fully |
 |---|---|
-| `examples/**/*.sau` | **10 of 61** — but see the box above; this number does not mean what it looks like |
+| `examples/**/*.sau` | **12 of 61** — but see the box above; this number does not mean what it looks like |
 | `examples/*` projects, end to end | **9 of 11** run fully on the VM. `run_examples_diff.sh` reports **0 fallbacks**; the 2 that remain are `toying` and `UI Project`, refused by *design* on `an import of a dynamic native package` |
 
 The project row is the one Phase 4 turned into a headline: it is the fraction
@@ -260,6 +313,12 @@ while IFS= read -r f; do
 done < <(find examples -name '*.sau') | sort | uniq -c | sort -rn
 ```
 
+*(The `head -1` has to be inside a command substitution, not on the end
+of the pipeline: `sed -n ...p` emits no trailing newline for a one-line
+match, so writing it inline concatenated all 48 causes onto a single
+line that `uniq -c` then counted as one. A fourth way to get this
+census wrong — wrap the pipeline in `c=$(...)` and `echo "$c"`.)*
+
 Cross-check its total against the exit-status count. If they disagree, trust
 the exit status — a cause you cannot parse is still a refusal.
 
@@ -269,22 +328,21 @@ the exit status — a cause you cannot parse is still a refusal.
 | an import declaration | **10** |
 | a name the resolver could not classify | 9 |
 | a named argument to a callee the compiler cannot identify | 4 |
-| a variant of an unknown enum | 1 |
-| a class implementing `Assignable` | 1 |
 | a class implementing an interface this compiler cannot see | 1 |
 | *(not a refusal — see below)* | 1 |
 
-Re-censused at `HEAD` (`5c9325f`) with two independently-written parses that
-agree. The previous version of this table read 8 / 5 / 2 and carried a
-`a skipped parameter whose default must run in the callee` row that belongs
-to `tests/*.sau`, not here — it is not a cause in `examples/` at all.
+Re-censused at the close of Phase 3. `a variant of an unknown enum` and
+`a class implementing `Assignable`` are both gone; the standalone count rose
+from 10 to **12 of 61**. An earlier version of this table read 8 / 5 / 2 and
+carried a `a skipped parameter whose default must run in the callee` row that
+belongs to `tests/*.sau`, not here — it is not a cause in `examples/` at all.
 
-**One of the 51 is not a refusal.** `examples/todo-app/src/storage.sau` fails
+**One of the 49 is not a refusal.** `examples/todo-app/src/storage.sau` fails
 `disasm` with `cannot determine the type of this expression` on
 `Json.encode(data)` — a *typecheck* error, because `disasm` compiles one file
 without its import graph and cannot see `Json`. The census counts it as a
 failure because it counts exit status, which is the right rule; just do not
-read it as a compiler gap. True refusals are **50**.
+read it as a compiler gap. True refusals are **48**.
 
 First-refusal-wins, so a cause that only appears late in a file is
 under-counted.
@@ -323,19 +381,19 @@ for f in tests/*.sau; do SAULE_ENGINE=vm ./target/debug/saule.exe run "$f" 2>&1 
 
 | Cause | Fixtures | Note |
 |---|---|---|
-| an enum with methods | 1 | §0.6's missing `NodeId`, or a different key |
-| a prelude name outside a call | 1 | |
-| a declaration the compiler does not handle | 1 | |
-| `self` outside a method | 1 | |
 | a compound assignment whose target cannot be evaluated only once | 1 | **not a gap** — the refusal is what fixes a miscompile; see "Compound assignment" below |
 
-Five, down from eight. Closed since: `a tuple pattern`, `a skipped parameter
-whose default must run in the callee`, and `a class implementing
-`Assignable``, each written up below. `a compound assignment to a member`
-also closed, and `tests/compound_assign.sau` now falls back on a *different*
-and deliberate line.
+**One, down from eight, and it is the one that should stay.** Closed at the
+end of Phase 3: `an enum with methods`, `a prelude name outside a call`,
+`a declaration the compiler does not handle` and ``self` outside a method`,
+each written up below. Closed before it: `a tuple pattern`, `a skipped
+parameter whose default must run in the callee`, `a class implementing
+`Assignable`` and `a compound assignment to a member`.
 
-Each is independent; none unlocks another.
+`§0.6's missing NodeId, or a different key` — the note this table carried
+against `an enum with methods` — was the wrong diagnosis, and following it
+would have meant changing the AST. The `NodeId` was never what blocked it;
+see the write-up.
 
 *Fixed since:* `case x when …` was right — it was a bug, not a gap, and it
 was hiding a second, silent one. See "Two bugs in `match` guards" below.
@@ -795,9 +853,14 @@ files under the VM is the first thing Phase 3 unlocks.
 
 # Phase 3 — Full language
 
-*Estimate: 4–6 weeks. In dependency order.*
+*Estimate: 4–6 weeks. **Done.** In dependency order. Read the exit criteria at
+the end of this phase before the item list — several boxes below stayed `[ ]`
+long after they were true, and one stayed `[x]` while its claim was false.*
 
-1. **Classes** — §8. Done except the two items marked `[ ]` at the end.
+1. **Classes** — §8. **Done.** The one `[ ]` left below is §8.5's inline
+   cache, which is Phase 5 and performance rather than coverage. (This line
+   said "except the two items marked `[ ]` at the end"; there is one, and it
+   is not at the end.)
    - [x] **Pass 1 layout** (`compile/layout.rs`): field slots, vtable slots,
          statics index and the `init` slot per class. Field slots **and**
          vtable slots extend the parent's rather than reordering them, which
@@ -1024,10 +1087,23 @@ automatically a benchmark that got *faster*.
          was refused as "cannot iterate over a `function`". A place where
          copying the oracle verbatim is wrong precisely because the two
          engines represent the same value differently.
-6. **Operator overloading** — [ ] compile-time contract resolution via
+6. **Operator overloading** — [x] compile-time contract resolution via
    `binary_contract`; dispatch-on-left-operand and the `==`/`compare`
-   symmetry rules move into the compiler. `..` falling through to
-   `OpToString` needs care (§8.7)
+   symmetry rules moved into the compiler, including unary and index.
+
+   **This box read `[ ]` long after it was true** — the code is in
+   `binary_to`, resolved through `saule_ast::ops::binary_contract` against the
+   *left* operand's proved class, with `equals` normalised through two `NOT`s
+   and `compare` read against a `LOADI 0`. The summary at the top of this
+   file had it right and the checkbox did not, which is the same drift the
+   "Where things stand" paragraph carried in the other direction.
+
+   One comment beside it is now stale in its *reasoning* though not in its
+   conclusion: it says the overload "must" be resolved at compile time
+   because "the runtime `ClassObject` the VM builds has an empty method map".
+   That stopped being true when `MethodRef` landed. Compile-time resolution
+   is still right — it costs nothing at run time — but it is now a choice
+   rather than a necessity.
 7. **Nullability** — [x] `?.`, `??`, `!`, `as`.
    `??` already compiled (`JNIL` + `JMP`, laziness preserved). Added: `!`
    → `UNWRAPNIL`; `x as T` → `CASTCHK`; `obj?.name` and `obj?.method(args)`
@@ -1061,8 +1137,17 @@ automatically a benchmark that got *faster*.
          *string* receiver is a type error in **both** engines (`cannot read
          field ... on value of type string`), so it is a language rule, not a
          VM gap.
-   - [ ] Tuple/`Nullable` `catch` types still collapse to `TypeDesc::Any`;
-         unchanged by this slice
+   - [x] `Nullable` `catch` types. **This was not a gap, it was a live
+         silent divergence** — see "A nullable `catch` type caught
+         everything" below. `TypeDesc` grew a `Nullable(u32)` pointing into
+         the same descriptor pool, and `value_matches` reads it as
+         `nil || inner`, which is what `runtime_matches_type` does.
+   - [x] Tuple `catch` types still collapse to `TypeDesc::Any`, and that is
+         **correct**: the oracle's own arm is `Type::Tuple(_) => true`
+         (`multi-return shapes aren't introspectable here`). Checked rather
+         than assumed — the neighbouring `Nullable` case in the same line of
+         this file was wrong, which is why this one was verified against
+         `try_.rs` instead of reasoned about.
 
    **Front-end fix this needed:** `saule-typeck`'s `Expr::Call` arm
    dispatches on the *shape* of the callee rather than walking into it, so
@@ -2271,7 +2356,7 @@ gating every new codegen path off and re-running: the same nine failed
 either way. Every one was the same shape: **the compiler emitted code for
 something it did not actually support, instead of refusing.**
 
-`SAULE_ENGINE=vm` is back to **235/235**.
+`SAULE_ENGINE=vm` is back to **235/235** (236 as the suite stands today).
 
 | Was failing | Cause | Fix |
 |---|---|---|
@@ -2281,24 +2366,198 @@ something it did not actually support, instead of refusing.**
 | `iter_closure`, `iter_object`, `iter_pairs`, `ui/iter_missing_iter_method` | `ITERPREP` emitted for a `for … in` over a closure or an instance — the closure-driver path (item 5) is not written. | Refuse unless the source is a **proved table**. An unproved table is refused too; that costs a needless fallback, which is the right side to err on. |
 | `ui/implements_missing_method` | A class missing an interface method compiled with a hole in its itable. Nothing before the compiler rejects it — the *tree-walker* catches it at class declaration. | Pass 1 refuses when a declared interface has an unmatched method; a new pass does the same for the stdlib contracts, looked up by name in a prelude scope exactly as the tree-walker looks them up. |
 
-Not fixed, refused instead — the closure-driver `for … in` (item 5) and
-right-operand operator dispatch (item 6) are still real gaps. What changed
-is that they now fall back rather than compute a wrong answer.
+Not fixed at the time, refused instead — the closure-driver `for … in` (item
+5) and right-operand operator dispatch (item 6). What changed *then* is that
+they fell back rather than computing a wrong answer.
+
+**Both are settled now.** The closure driver landed with `ITERPREPX` (item 5)
+and compiles. Right-operand dispatch never needed its own path: an operator
+the compiler cannot resolve against the left operand's proved class emits
+`ARITHX`, which calls `saule_interpreter::eval::ops::binary` — the oracle's
+own operator logic, including its right-operand rules — so the answer is
+identical by construction rather than by care. Slower than a resolved
+overload, never wrong.
+
+### The last four gaps — closed
+
+Four fixtures, four unrelated premises, none of which was the feature it
+looked like. Worth reading together: in three of the four the *refusal
+message* named a language construct while the actual cause was a missing
+`match` arm or a test asked of the wrong frame.
+
+**`export name: T = value` — `Decl::Variable` had no branch.** `decl()`
+handled `Function`, waved through `Class`/`Enum`/`Interface`, decided about
+`Import`, and refused everything else as `a declaration the compiler does not
+handle`. `Decl::Variable` fell into that `else`. There was nothing to build:
+`collect_module_scope` already pushes it alongside `Stmt::Local`, so the slot
+existed and the store is the same `SETMOD` a module-top `local` compiles to.
+
+One thing this must **not** do is coerce. The module-top `local` path calls
+`coerce_to_declared`, and copying it here would have been the obvious move —
+but `exec_decl`'s `Decl::Variable` arm evaluates the initializer and defines
+the name, full stop, while the `Stmt::Local` arm directly above it calls
+`coerce::to_declared`. So `export x: Str = "…"` builds no `Str` under the
+oracle, and coercing would have made the VM build one. **Two arms of the same
+`match` in the tree-walker do not have to agree with each other, and the
+compiler has to copy each one separately.**
+
+**``self` outside a method` — the test was asked of the wrong frame.**
+`Expr::Self_` checked `self.f.in_method`, which is false in a lambda's
+`FuncCtx` by construction, so a lambda written in a method body — the
+`fn describe() … local f = fn() return self.label end … end` shape —
+refused. But `method_proto` declares `self` as an ordinary local at register
+0 *under the name `self`*, so the capture walk every other free variable
+takes already reaches it: `capture_upvalue("self")` and `GETUPVAL`.
+
+The class-static half of the same shape (`count = count + 1` inside that
+lambda) already worked, because the resolver carries the *class name* on
+`Binding::ClassStatic` rather than a slot — a decision made specifically so
+the answer survives a lambda nested inside a method. That is the same problem
+solved properly one layer up, and it is why only `self` was left.
+
+**And it uncovered a second refusal beside it, which needed a new opcode.**
+`tests/closure_capture.sau` then failed on `local go = fn(k) … go(k - 1) … end`
+with `a captured variable the compiler could not locate`. The name is not a
+capturable local of the enclosing frame — `local` declares its register
+*after* the initializer compiles — and making it one would have been wrong
+rather than merely awkward: the closed upvalue cell would hold the closure
+and the closure would hold the cell, an `Rc` cycle per call. That is exactly
+the leak `FunctionObject::self_name` exists to avoid on the tree-walker side
+(2,468 MB against a 7.5 MB control, in the measurement that motivated it).
+
+So `SELFFUNC` — `R[A] := the closure this frame is running`. The handle is
+already on the `Frame`, so the recursive call reads it from there and no cell
+exists to close a cycle with. **Appended after `NVALS`, never inserted:** the
+numbering is the chunk ABI, and `opcode_numbering_is_stable` is the test that
+says so — it failed on this change and was extended rather than edited around.
+
+Only the lambda the `local` directly names gets this: `Compiler::binding_lambda_to`
+is `take()`n by `lambda_to`, so a deeper nested lambda mentioning the same
+name still refuses rather than silently resolving to the wrong closure.
+
+**`a prelude name outside a call` — folded members, unfolded entities.**
+`prelude_member` folds `Math.pi` to a `LOADK` but only for `Int`/`Float`/
+`Str`/`Bool`/`EnumVariant`. `Io.stdout` is a file handle, so it fell through
+to evaluating the receiver `Io` as an expression — and *that* is what
+refused. The fix is one layer down: fold the **entity**, so `Io` is a
+constant and `Io.stdout.write(…)` is then an ordinary `GETFX` + `CALLMX`
+deferring to the tree-walker's own `read_member`.
+
+**This immediately fired a canary, which is what canaries are for.**
+`a_reassigned_stdlib_constant_is_not_folded` asserted the two engines
+*disagree* on `Math.pi = 3.0`, documenting that the write did not compile and
+that the no-fold guard was therefore untested. Folding `Math` made the write
+compile, and the test failed exactly as its own comment predicted. The guard
+it was protecting is real and needed: the compiler and the tree-walker each
+call `Environment::with_prelude()`, and `install` builds a **fresh
+`ClassObject` per environment** — so a folded `Math` is not the object the
+tree-walker mutates. The bare-name fold now carries the same
+`mutated_receivers` gate the member fold does, and `Math.pi = 3.0` falls back.
+
+**`an enum with methods` — the note in this file named the wrong cause.**
+The table above said "§0.6's missing `NodeId`, or a different key", and
+following that would have meant changing the AST. The `NodeId` was never the
+blocker: `resolve/decls.rs`'s `Decl::Enum` arm calls `enter_function` on every
+method body, so every identifier inside one already has a binding, and the
+frame layout is the compiler's to compute anyway. What a missing `NodeId`
+actually costs is the `FunctionInfo` a *caller* would use for named arguments
+and defaults — not the body.
+
+The real blocker was a type: `EnumObject::methods` was
+`HashMap<String, Rc<FunctionObject>>`, which a bytecode method cannot inhabit.
+That is the identical failure `MethodRef` was introduced for on the class
+side, and the fix is to reuse it — `methods` is now
+`HashMap<String, MethodRef>`, `exec_enum_decl` wraps in `Tree`, and the VM's
+start-up pass builds `Vm` closures over the declaring module's chunk. No
+vtable, because an enum cannot be extended: a name probe is the whole of it.
+
+Dispatch needed one correction beside it. `dispatch_member_call_multi`'s
+`EnumVariant` arm read the member and then branched on the *shape* of what
+came back — `Value::Function` got the receiver, anything else did not. A
+compiled method comes back as `Value::VmFunction` and would have been called
+with no `self` at all. It now looks the name up in the method map directly
+and goes through `call_method_ref_multi`, which is what deciding by shape was
+approximating. (`value` and `name` still win over a method of the same name,
+because `read_member` answers them first; that ordering is mirrored rather
+than reordered.)
+
+### A nullable `catch` type caught everything
+
+Found while auditing item 7's remaining `[ ]`, and it was not a gap:
+
+```
+try
+  throw 42
+catch e: string?
+  println("caught")
+end
+```
+
+printed `caught` under the VM and let the exception escape under the
+tree-walker. Silent — exit status 0, output present, just the wrong output.
+
+`Compiler::type_desc` mapped anything that was not a `Named`, `Function` or
+`Table` type to `TypeDesc::Any`, under a comment saying "a nullable or
+generic `catch` type is not a runtime test the tree-walker performs either".
+Half right. `runtime_matches_type` really does answer `true` for
+`Type::Tuple(_)`, with its own comment explaining why. But its very next arm
+is `Type::Nullable(inner) => matches!(value, Value::Nil) || runtime_matches_type(value, inner)`
+— a real test, and `Any` is the opposite of it.
+
+`TypeDesc` grew `Nullable(u32)`, an index into the same descriptor pool
+rather than a `Box`, so the pool stays flat and a chunk stays as serializable
+as it was for §14's cache. `value_matches` recurses.
+
+**The lesson is about the comment, not the code.** One sentence asserted a
+property of two AST variants at once, one of which had it and one of which
+did not, and that sentence had been read as documentation ever since. A claim
+covering several cases has to be checked case by case; this one cost a live
+divergence that no fixture exercised, because no fixture throws a
+non-matching value at a nullable `catch`. Pinned now by
+`a_nullable_catch_type_does_not_catch_everything`, which asserts both
+directions — that it does *not* catch the integer, and that it still catches
+a string and a nil.
+
+### `www/` is covered now — by the script that was already there
+
+Phase 3's harness criterion carried "`www/` is not covered yet". It is now,
+and it needed no new harness: `www/scripts/check-samples.mjs` already
+extracted every complete program the site ships — the playground's example
+picker plus the hand-written fenced blocks in the guides — and ran each one
+through the real compiler. It just ran them **once**, under whichever engine
+was the default, which proves they compile and proves nothing about
+agreement.
+
+It now runs each sample under `SAULE_ENGINE=vm` and `SAULE_ENGINE=interp` and
+compares output, strips the fallback note before comparing (the note is a
+property of the engine, not of the program), counts fallbacks, and honours
+`SAULE_BIN` like the two shell harnesses do — which mattered immediately,
+because `findCompiler` prefers `target/release` and the release binary here
+was stale. **20 samples, both engines, identical output, 0 fallbacks.**
+
+What this does *not* cover is the rest of `www/`: the generated pages come
+from `README.md` and `DOCS.md`, where most snippets are illustrative
+fragments — a lone method body, a type signature — that were never meant to
+compile standalone. `HAND_WRITTEN` is the opt-in list, and growing it is how
+that coverage grows.
 
 ### Phase 3 exit criteria
 
+**All five are met. Phase 3 is closed.**
+
 - [x] All `tests/*.sau` and all `tests/ui/*.sau` behave identically under
-      both engines — `SAULE_DIFF=1 ./run_tests.sh`, 235/235, output compared
-      rather than just exit status, one documented exemption.
+      both engines — `SAULE_DIFF=1 ./run_tests.sh`, **236/236**, output
+      compared rather than just exit status, two documented exemptions.
       **Note what this does and does not say:** it holds *including* the
       programs that fall back, so it proves the two engines agree, not that
       the VM compiles everything. Read it together with the coverage table
       at the top.
 - [x] All 10 benchmarks run under `--vm` — `sort.sau` was the last, and
-      re-entrancy is what unblocked it.
-- [~] The differential harness is green across `examples/` —
+      re-entrancy is what unblocked it. Re-checked at the close of Phase 3:
+      10 of 10, zero fallbacks.
+- [x] The differential harness is green across `examples/` —
       `run_examples_diff.sh`, **9 of 11 projects compared, both engines
-      agreeing on every one**. `www/` is not covered yet.
+      agreeing on every one, 0 fallbacks**.
 
       Different from `run_tests.sh` in the way that matters: those fixtures
       are small, single-file and side-effect-free, while these are real
@@ -2316,14 +2575,44 @@ is that they now fall back rather than compute a wrong answer.
       runs, so the second engine starts from the state the first one saw —
       otherwise `todo-app` reports a different second run for a reason that
       has nothing to do with the engine.
-- [~] Coverage: **87 of 92** `tests/*.sau` compile fully, and **9 of 11**
+
+      **`www/` is covered too**, which is what this box was waiting on:
+      `www/scripts/check-samples.mjs` now runs its 20 complete programs
+      under both engines and compares output. See "`www/` is covered now"
+      above for what it does and does not reach.
+- [x] Coverage: **91 of 92** `tests/*.sau` compile fully, and **9 of 11**
       example projects run entirely on the VM with `run_examples_diff.sh`
-      reporting **0 fallbacks**. The 2 projects that remain are refused by
-      *design* (`an import of a dynamic native package` is a runtime side
-      effect that compiling must not perform), and one of the 5 remaining
-      fixtures is a principled refusal rather than a gap — see the table at
-      the top. Three real gaps are left: an enum with methods, a prelude name
-      outside a call, and `self` outside a method.
+      reporting **0 fallbacks**, as do all **10** benchmarks and all **20**
+      `www/` samples.
+
+      **Every remaining refusal is a deliberate one.** The 2 projects are
+      refused by design (`an import of a dynamic native package` is a
+      runtime side effect that compiling must not perform), and the 1
+      fixture is `tests/compound_assign.sau`, where the refusal is what
+      *fixes* a miscompile. The three real gaps this box used to name — an
+      enum with methods, a prelude name outside a call, and `self` outside a
+      method — are closed, along with a fourth (`a declaration the compiler
+      does not handle`) that this box never listed.
+
+      **What "coverage" still does not mean.** A fixture that compiles fully
+      is not a fixture that exercises much: `tests/*.sau` are single files,
+      and the per-file `disasm` census over `examples/` (12 of 61) measures
+      the single-module path rather than how real programs compile. The
+      project row is the honest one, and it is the one to steer by.
+
+**Deferred out of Phase 3, on purpose:**
+
+- The `CALLM` inline cache (§8.5) and the interface-call inline cache (§8.4)
+  are **Phase 5**. Both are performance, not coverage, and both want a
+  benchmark rather than a guess.
+- A valued variant's value must be a **literal**. A chunk stores constants,
+  not code; a non-literal is refused rather than mis-evaluated. Not a gap —
+  a representation limit, and it blocks no fixture, no benchmark, no example
+  project and no `www/` sample.
+- `saule-typeck` does not check the **arguments** of a safe method call
+  (`g?.twice("no")` passes today). Noticed during item 7, still true, and
+  still not a VM item: it adds diagnostics to a working language and belongs
+  in its own change.
 
 ---
 
