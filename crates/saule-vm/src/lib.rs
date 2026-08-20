@@ -36,18 +36,25 @@
 //!
 //! ## Status
 //!
-//! | Piece | State |
-//! |---|---|
-//! | Instruction encoding, opcode table (§5.2, §15) | complete |
-//! | Chunk / proto / class / handler model (§5.1, §8.1, §12.1) | complete |
-//! | Disassembler (§17.1) | complete |
-//! | Dispatch loop: arithmetic, branches, loops, tables, closures, calls | complete |
-//! | Dispatch loop: classes, enums, `match`, `try`/`catch`, `for … in` | opcodes reserved, bodies pending |
-//! | AST → bytecode compiler (§17) | pending — blocked on Phase 0 |
+//! The engine is complete: it compiles and runs the language, and every
+//! program in `tests/` produces the same output under both engines. What
+//! remains is coverage rather than construction — a construct the compiler
+//! has not been taught yet reports [`CompileError::Unsupported`] and the
+//! CLI falls back to the tree-walker, so a gap is a slower run rather than
+//! a failure (§21.3).
 //!
-//! Because the compiler is not written yet, the only way to build a chunk
-//! today is by hand — see this crate's tests, and [`disasm`] for reading one
-//! back.
+//! ## Where things are
+//!
+//! ```text
+//!   lib.rs        run / run_chunk / run_program / disassemble — the ways in
+//!   op.rs         the instruction set: opcodes, operand layouts, encoding
+//!   chunk/        one compiled module: protos, classes, enums, pools
+//!   compile/      AST → chunk, in four passes (§17)
+//!   vm/           the register machine that executes one (§5.3, §6)
+//!   program.rs    resolving an import graph into a runnable set of chunks
+//!   disasm.rs     reading a chunk back as text
+//!   profile.rs    opt-in bytecode profiling (§16), off in shipped binaries
+//! ```
 
 pub mod chunk;
 pub mod compile;

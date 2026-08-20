@@ -102,7 +102,7 @@ bite that do not on Windows:
   happens; when the construct lands, they need a new stand-in rather than
   deletion.
 
-## Eight traps this codebase has already fallen into
+## Nine traps this codebase has already fallen into
 
 Each one cost real debugging time and each is written up in full further
 down; this is the index, so you meet them before you repeat them.
@@ -175,6 +175,25 @@ down; this is the index, so you meet them before you repeat them.
    refusal as "here is where compilation stopped", never as "here is what is
    missing". (§ "The last four gaps — closed".)
 
+9. **An opcode existing is not an opcode being emitted, and a comment
+   saying "the compiler uses X here" is not evidence that it does.**
+   `JLTI`–`JGEF` were implemented in the dispatch loop in Phase 1, covered by
+   the opcode tests, and **never emitted once**. What kept that invisible for
+   four phases was a comment in `binary_opcode` asserting the opposite —
+   "the fused branch forms are used where the value feeds an `if`, which
+   `stmt::cond_jump` handles" — next to the code it was describing. Nothing
+   fails when an optimization silently does not happen: the program runs, the
+   differential tests agree, the disassembly is the only witness. Assert on
+   the **emitted code** for anything whose whole purpose is to not be there.
+
+   **Three instances in one week**, all found by reading a profile rather
+   than by any test failing: `JLTI` and its eleven siblings, the
+   `ADDII`/`SUBII`/`MULII` immediate family, and `if_chain`'s "only worth a
+   jump to the end when something follows" — which emitted one every time.
+   In each case a comment stated the optimization as fact. Treat a comment
+   that describes what the compiler emits as a **hypothesis**, and check it
+   against `disasm`. (§ Phase 5, "§17 emission peepholes".)
+
 ## Legend
 
 | Mark | Meaning |
@@ -191,8 +210,24 @@ mean **2.2x**), with **216** differential tests asserting the two engines
 agree — plus 236 fixtures, 11 example projects and 20 `www/` samples run under
 both engines and compared by output.
 
-**Next is Phase 5** (inline caches, §8.4/§8.5) and the one Phase 4 box that
-cannot be ticked from inside the tree: a release has to actually ship.
+**Phase 5 has started, and §17's emission peepholes are done.** Not the
+inline caches this phase was written around — `--profile-bytecode` chose
+these instead, and the numbers are under the item. **No new opcodes:** every
+one of the six changes is the compiler emitting instructions the VM already
+had, three of which had never been emitted once since Phase 1.
+
+Instructions retired, which is the figure that is not a stopwatch:
+`loop_arith` **−50%**, `mandel` **−45%**, `fib` **−35%**, `sort` −24%,
+`closure` −20%, `array` −18%, `oop` −11%. On the clock, net of process
+start-up: `loop_arith` −31%, `mandel` −21%, `fib` −21%.
+
+The one Phase 4 box that cannot be ticked from inside the tree is still open:
+a release has to actually ship.
+
+**Two trap entries came out of this week and are worth reading before
+optimizing anything else:** a claim in a comment that covers several cases is
+a claim about each of them (§ trap 7), and a refusal message names where
+compilation stopped, not what is missing (§ trap 8).
 
 That range is wider at both ends than the "2.6x–3.7x" this line used to
 carry, and the difference is *platform*, not regression: the old figure came
@@ -2738,7 +2773,9 @@ Its own task, with its own differential fixture.
 
 # Phase 5 — Optimization
 
-*Ongoing, and **only with a profile in hand**.*
+*Ongoing, and **only with a profile in hand**. Started; the first slice is
+the emission peepholes below, which the profile asked for ahead of every
+candidate this phase was originally written around.*
 
 - [x] **`--profile-bytecode` — the profile the rest of this phase requires.**
       §16 says every superinstruction "must be justified by a profile before
@@ -2791,7 +2828,10 @@ Its own task, with its own differential fixture.
       shows another item off that same list in one screen: `0007 JMP -> 0008`
       is a jump to the very next instruction. Both readings say the same
       thing — the first Phase 5 wins are in the **emitter**, not in new
-      opcodes.
+      opcodes. **Both were acted on; see the next item.** The `LTI TEST`
+      reading in particular was not a request for a new instruction: `JLTI`
+      already existed and was already implemented, and the profile's job was
+      to notice that the compiler never emitted it.
 
       Two more worth recording, because neither is on the candidate list and
       both are larger than anything on it. `sort` spends **46%** of its 29M
@@ -2803,6 +2843,198 @@ Its own task, with its own differential fixture.
       benchmark named for method dispatch spends eight times as much of
       itself shuffling registers as dispatching, which is worth knowing
       before the `CALLM` inline cache (§8.5) is written to speed it up.
+- [x] **§17 emission peepholes — all of them, and the profile chose them
+      over every candidate below.** Six changes across two slices, **no new
+      opcodes and no dispatch-loop changes**: every one is the compiler
+      emitting instructions the VM already had.
+
+      Slice 1, the two largest:
+
+      **(a) A comparison feeding a branch emits the fused form.**
+      `binary_opcode`'s comment had claimed since Phase 1 that "the fused
+      branch forms (§15.7) are used where the value feeds an `if`, which
+      `stmt::cond_jump` handles". It did not. `JLTI` and its eleven siblings
+      were implemented in the dispatch loop and **nothing ever emitted one**:
+      every `if a < b` compiled to `LTI` + `TEST` + `JMP`, materialising a
+      `Value::Bool` into a register read once and discarded. `--profile-bytecode`
+      counted the `LTI TEST` pair 1,028,457 times in `fib` — that is what
+      sent anyone looking.
+
+      Gated on a **proved numeric kind**, which is what rules out an `Op*`
+      overload without re-deriving `binary_to`'s contract lookup: an
+      `integer` or `float` operand cannot be a class instance, so there is no
+      `compare` or `equals` to dispatch to. An unproved `==` keeps `EQV` +
+      `TEST`, and `an_unproved_equality_keeps_the_materialising_form` pins
+      that it does. Float `==`/`!=` have no fused form and stay on the
+      materialising path rather than switching to `JEQ`'s different
+      predicate.
+
+      **(b) An operand already in a register is used where it is.** `MOVE`
+      was the most-executed opcode in every benchmark — 25% of `loop_arith`,
+      30% of `fib`, 42% of `oop`, 26% of `sort` — and most of them were a
+      local or a parameter copied into a fresh temporary purely to be an
+      operand. `fib`'s `n < 2` emitted `MOVE 1 0` for an `n` that was sitting
+      in register 0 the whole time; `oop`'s `self.y` emitted `MOVE r 0`
+      2,000,002 times.
+
+      **The safety rule is "every operand is pure", and it is not
+      conservatism.** A captured local is an *open* upvalue pointing at this
+      frame's register, so a closure called between the read and the use
+      writes through it — and the operand would then read the new value
+      where the tree-walker read the old one. Rather than track which locals
+      are captured (a fact not even settled when the operand is compiled,
+      because a lambda *below* it can capture), require that nothing is
+      evaluated in between at all: every operand must be a literal, `self`,
+      or a frame local. `n + f()` therefore still copies. Pinned by
+      `an_in_place_operand_still_sees_the_value_the_oracle_sees`.
+
+      `..` is excluded by name: `CONCAT` is n-ary over a register *range*, so
+      its operands must be adjacent temporaries and reusing a local's
+      register would break the range rather than shorten it.
+
+      **Measured, release build, min of 7, ~27 ms of process start-up in
+      every column:**
+
+      | Benchmark | Before | After | Wall | Net of start-up |
+      |---|---|---|---|---|
+      | mandel | 170 ms | 144 ms | −15.3% | **−18.2%** |
+      | oop | 187 ms | 161 ms | −13.9% | **−16.3%** |
+      | fib | 108 ms | 97 ms | −10.2% | **−13.6%** |
+      | closure | 100 ms | 92 ms | −8.0% | −11.0% |
+      | loop_arith | 243 ms | 234 ms | −3.7% | −4.2% |
+      | array | 137 ms | 135 ms | −1.5% | −1.8% |
+      | sort | 705 ms | 700 ms | −0.7% | −0.7% |
+      | map, strings, startup | — | — | flat | flat |
+
+      And in instructions retired, which is the figure that is not a
+      stopwatch:
+
+      | Benchmark | Instructions | `MOVE` |
+      |---|---|---|
+      | fib | 11,827,257 → 8,741,887 (**−26%**) | 3,599,600 → 1,542,687 (**−57%**) |
+      | loop_arith | 40,000,011 → 35,000,011 (−12.5%) | 10,000,003 → 5,000,003 (−50%) |
+      | oop | 19,000,035 → 17,000,031 (−10.5%) | 8,000,014 → 6,000,010 (−25%) |
+
+      `oop` moved from **3.1x** PUC Lua to **2.6x** on this box.
+
+      **One in-place read was tried and is wrong, and the copy it leaves in
+      is load-bearing.** `RET1` reading a local directly turns
+      `fn run() local n = 0; local bump = fn() n = n + 1 end; bump();
+      return n end` from `3` into `nil`, because `pop_frame` calls
+      `close_upvalues(frame.base)` **before** it moves the results out, and
+      closing does `mem::replace(slot, Value::Nil)`. The `MOVE` reads the
+      register while the frame is still whole, which is exactly why it is
+      correct. Caught by
+      `a_closure_writes_through_to_its_captured_variable`, and now explained
+      in place by `a_returned_local_is_still_copied_before_the_frame_pops`
+      so nobody deletes it twice.
+
+      **These tests assert the emitted code, not agreement.** A peephole that
+      silently stops firing is invisible to every differential test in the
+      file — the program still runs and still agrees, just slower — so the
+      disassembly is the only thing that can catch the regression. Note the
+      token-wise `emits()` helper: `contains("LTI")` is true of `JLTI`, which
+      is the exact pair these tests exist to tell apart.
+
+      **Slice 2 took the rest of §17's list.** Four more changes, still no
+      new opcodes:
+
+      **(c) A small integer literal folds into the instruction.**
+      `ADDII` / `SUBII` / `MULII` take a signed 8-bit immediate, have been in
+      the dispatch loop since Phase 1, and — the third instance of trap 9 in
+      one week — **had never been emitted**. `loop_arith`'s
+      `s = s + i * 2 - 1` spent two of its six instructions materialising
+      `2` and `1` into registers read once. `Add` and `Mul` commute so the
+      literal folds from either side; `Sub` does not (`1 - x` is not
+      `x - 1`), and a literal outside `i8` keeps the register form rather
+      than being truncated into a wrong answer.
+
+      **(d) Arithmetic over pure operands is itself pure.** Slice 1's purity
+      rule only admitted literals, `self` and frame locals, so `s + i * 2`
+      still copied `s`: the right operand was a `Binary`. Arithmetic on
+      proved-numeric operands cannot run user code — it is a typed opcode,
+      not `ARITHX` — so it joins the rule. **The proved-kind condition is
+      the whole of the safety argument**: without it the operator compiles
+      to `ARITHX`, which calls `ops::binary`, which dispatches an `Op*`
+      overload.
+
+      **(e) `CASTCHK`, `UNWRAPNIL`, the unary ops and `GETIDX`/`SETIDX` read
+      their operands in place**, the same way `GETF` already did. `sort`'s
+      comparator — `(a as integer)! < (b as integer)!` on untyped lambda
+      parameters — went from 8 instructions to 6.
+
+      **(f) No jump to the next instruction.** `if_chain`'s loop carried the
+      comment "only worth a jump to the end when something follows" and
+      emitted one unconditionally, so every `if c then … end` ended in a
+      `JMP` to the very next instruction. Decided at emission rather than by
+      popping the instruction afterwards: popping would have to reason about
+      handler `pc` ranges and the line table, while not emitting has nothing
+      to undo.
+
+      **(f) broke `json_usage`, and the bug is worth the space.** A proto
+      gets a synthesized `RET0` when control can reach the end of its code
+      array, and `pop_function` tested that with *"is the last instruction a
+      return"*. Those are different questions: **a forward jump patched to
+      `code.len()` lands one past the last instruction.** While every `if`
+      arm ended in an unconditional jump the two coincided — so
+      `fn f() … if c then return a end end`, whose last statement is a
+      conditional return, ran off the end of the proto the moment those
+      jumps stopped being emitted. `FuncCtx::max_patch_target` records the
+      furthest target any jump was patched to, and `pop_function` asks that
+      instead.
+
+      **No fixture could have caught it** — it needs a function whose last
+      statement is a conditional return, which is ordinary in real code and
+      absent from small tests. `run_examples_diff.sh` caught it, on the one
+      project shaped like a program. That is the fifth time this file has
+      recorded the same lesson about fixture shape.
+
+      **Measured, release build, min of 7, cumulative over both slices:**
+
+      | Benchmark | Before Phase 5 | After | Wall | Net of ~27 ms start-up |
+      |---|---|---|---|---|
+      | loop_arith | 243 ms | 177 ms | −27% | **−31%** |
+      | mandel | 167 ms | 137 ms | −18% | **−21%** |
+      | fib | 107 ms | 90 ms | −16% | **−21%** |
+      | oop | 187 ms | 159 ms | −15% | −17% |
+      | closure | 101 ms | 91 ms | −10% | −13% |
+      | array | 136 ms | 123 ms | −10% | −12% |
+      | sort | 704 ms | 650 ms | −8% | −8% |
+      | map, strings, startup | — | — | flat | flat |
+
+      And in instructions retired, which is the figure that is not a
+      stopwatch and not a loaded laptop:
+
+      | Benchmark | Before Phase 5 | After | Change |
+      |---|---:|---:|---:|
+      | loop_arith | 40,000,011 | 20,000,011 | **−50%** |
+      | mandel | 25,620,013 | 14,203,848 | **−45%** |
+      | fib | 11,827,257 | 7,713,431 | **−35%** |
+      | sort | 29,063,881 | 22,197,914 | −24% |
+      | closure | 10,000,012 | 8,000,012 | −20% |
+      | array | 11,000,017 | 9,000,017 | −18% |
+      | oop | 19,000,035 | 17,000,029 | −11% |
+
+      `loop_arith`'s inner loop is **6 instructions → 3**; `fib`'s hot proto
+      21 → 15 with two fewer registers; `oop`'s constructor 7 → 3.
+
+      **Still on the table, and now with a profile behind it:**
+
+      * **`CASTCHK UNWRAPNIL` as a superinstruction.** 6,665,964 adjacent
+        pairs in `sort`, 22.9% of the program in each half — which is
+        exactly the justification §16 demands, and the first candidate this
+        project has that meets it. Note what it is *not*: `sort` spends that
+        time because the program says `(a as integer)!` on an untyped
+        comparator parameter, and the tree-walker does the same work. The
+        instruction count is a compiler artifact; the *cast* is the
+        program's own semantics.
+      * `MOVE r, r` → drop. Never observed being emitted; worth a debug
+        assertion rather than a peephole until one turns up.
+      * The remaining `MOVE`s in `fib` are call-result shuffles — the callee
+        window's base differs from where the operand temp was allocated —
+        which is a register-allocation question, not a peephole.
+      * `map` and `sort` still barely move on the clock, for the reason §20
+        gave before the VM existed: their time is inside `TableObject`.
 - [ ] Inline caches for `GETFX` / `CALLIF`
 - [ ] Superinstructions from a measured opcode-pair histogram collected under
       `--profile-bytecode` (§16). **The collector now exists — see the item

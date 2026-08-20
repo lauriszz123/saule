@@ -1242,28 +1242,52 @@ buildable in isolation.
 crates/saule-vm/
 ├── Cargo.toml
 └── src/
-    ├── lib.rs          — entry points mirroring saule_interpreter::run/run_in
-    ├── chunk.rs        — Chunk, Proto, ClassProto, EnumProto, Handler, LineEntry
-    ├── op.rs           — the Op enum, encode/decode helpers, a Display impl
+    ├── lib.rs            — run / run_chunk / run_program / disassemble
+    ├── op.rs             — the opcode table, operand layouts, Instruction
+    ├── disasm.rs         — `saule disasm <file>`, essential for debugging
+    ├── program.rs        — resolving an import graph into a set of chunks
+    ├── profile.rs        — opt-in bytecode profiling (§16)
+    ├── chunk/
+    │   ├── mod.rs        — Chunk: one compiled module and its pools
+    │   ├── proto.rs      — Proto, UpvalDesc, Handler, LineEntry, InlineCache
+    │   └── desc.rs       — ClassProto, EnumProto, TypeDesc, StaticSlot, ...
     ├── compile/
-    │   ├── mod.rs      — the driver
-    │   ├── layout.rs   — Pass 1
-    │   ├── expr.rs     — expression codegen
-    │   ├── stmt.rs     — statement codegen
-    │   ├── decl.rs     — fn / class / enum / interface / import
-    │   ├── call.rs     — §19, argument binding
-    │   ├── match_.rs   — pattern compilation and jump tables
-    │   ├── regalloc.rs — §18
-    │   └── verify.rs   — Pass 4
-    ├── vm/
-    │   ├── mod.rs      — the dispatch loop
-    │   ├── frame.rs
-    │   ├── upval.rs
-    │   ├── class.rs    — NEW / GETF / CALLM / CALLIF
-    │   ├── table.rs
-    │   └── error.rs    — unwinding
-    └── disasm.rs       — `saule disasm <file>`, essential for debugging
+    │   ├── mod.rs        — the four-pass driver
+    │   ├── layout.rs     — Pass 1
+    │   ├── class.rs      — compiling a class body against its layout
+    │   ├── match_.rs     — pattern compilation and jump tables
+    │   ├── verify.rs     — Pass 4
+    │   ├── ctx/          — the compiler's own state
+    │   │   ├── mod.rs    — the Compiler struct, construction, finish
+    │   │   ├── func.rs   — one function: scopes, locals, upvalue capture
+    │   │   ├── emit.rs   — instructions, jumps, labels, patches, constants
+    │   │   ├── regalloc.rs — §18
+    │   │   ├── operand.rs  — purity and in-place reads
+    │   │   ├── resolve.rs  — a name → a slot, a static, a callee
+    │   │   └── coerce.rs   — §19 argument binding, declared-type coercion
+    │   ├── expr/         — expression codegen
+    │   │   ├── mod.rs    — expr_to / expr_tmp / expr_results
+    │   │   ├── ident.rs  arith.rs  call.rs  args.rs  results.rs
+    │   │   └── pipe.rs   member.rs  safe.rs  literal.rs
+    │   └── stmt/         — statement codegen
+    │       ├── mod.rs    — block / stmt dispatch
+    │       └── decl.rs  assign.rs  control.rs  loops.rs  ret.rs  try_catch.rs
+    └── vm/
+        ├── mod.rs        — Vm, VmShared, and the ways in
+        ├── dispatch.rs   — the interpreter loop, deliberately one function
+        ├── call.rs       — frames, tail calls, natives, vtable lookup
+        ├── unwind.rs     — finding a handler, and the type tests it applies
+        ├── build.rs      — chunk protos → runtime class and enum objects
+        ├── frame.rs  upval.rs
+        └── ops.rs        — reading operands out of registers, numeric helpers
 ```
+
+**The dispatch loop is one function on purpose.** `vm/dispatch.rs` holds
+`execute_loop` whole: its arms borrow loop-local state across the entire body,
+and it is monomorphised twice over `PROFILE` — the second copy alone measured
+2-3% on the call-heavy benchmarks through code layout, with no profiling
+instruction executing. Splitting arms out of it is a performance change, not a
+tidying one.
 
 Write `disasm.rs` **first**. Debugging a bytecode compiler without a disassembler
 is miserable.

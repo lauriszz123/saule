@@ -81,7 +81,7 @@ uniformly:
 | How do I write a test? | There is no test runner. Write a `.sau` file and check the output by eye. |
 | Where did my error come from? | The line it failed on. There is no call stack. |
 | Is my editor going to work? | Yes — the parser recovers, so features survive half-typed code. |
-| How fast is it? | 1.0×–4.8× PUC Lua on the bytecode VM (1.1×–4.5× on macOS/Lua 5.5), now the default engine. |
+| How fast is it? | 0.8×–4.8× PUC Lua on the bytecode VM, now the default engine, and **1.24×–3.52× the tree-walker** — the second figure is the one that does not depend on which Lua is installed. Phase 5's peepholes cut instructions retired by 11–50% depending on the benchmark. |
 | Is it stable? | Nothing states what "stable" means, and nothing enforces it. |
 
 None of those are research problems. All of them are work, and the sequencing
@@ -357,13 +357,16 @@ per-project number above, not by a per-file one.
 
 Consequences:
 
-- **Performance is now what a bytecode VM gives you.** Measured twice, on two
-  machines, and the two agree on shape rather than on digits — quote a range,
-  and quote which machine.
+- **Performance is now what a bytecode VM gives you.** Measured three times,
+  on two machines, and they agree on shape rather than on digits — quote a
+  range, and quote which row. The first two rows are the *same* box and the
+  same Lua, before and after Phase 5's first slice, so they are the only pair
+  here that may be read as a change rather than as a difference of machine.
 
   | | vs PUC Lua | VM over tree-walker |
   |---|---|---|
-  | Windows x86_64, Lua 5.4.8 | 1.0×–4.8× (walker 5.5×–9.0×) | 1.15×–2.80× |
+  | Windows x86_64, Lua 5.4.8, after Phase 5's peepholes | 0.8×–4.8× (walker 0.9×–9.4×) | 1.24×–3.52× |
+  | Windows x86_64, Lua 5.4.8, at the Phase 4 flip | 1.0×–4.8× (walker 5.5×–9.0×) | 1.15×–2.80× |
   | macOS arm64, Lua 5.5.0 | 1.1×–4.5× (walker 1.3×–12.8×) | 1.20×–3.32×, geomean 2.19× |
 
   The exceptions are the same on both: `map` and `sort` barely move (1.20×,
@@ -490,7 +493,7 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Formatter | Dedicated crate, config-driven, corpus tests, round-trips | **A−** |
 | LSP feature breadth | Hover, goto, refs, symbols, inlay, sighelp, completion, format | **A−** |
 | LSP robustness | Error recovery + prior-parse seeding + completion repair | **B+** |
-| Runtime performance | Bytecode VM by default: 1.0×–4.8× PUC Lua, 1.15×–3.32× the tree-walker across two machines | **B** |
+| Runtime performance | Bytecode VM by default: 0.8×–4.8× PUC Lua, 1.24×–3.52× the tree-walker. Phase 5's peepholes cut instructions retired 11–50% — `loop_arith` halved | **B** |
 | Memory management | Refcount; closure capture fixed; user-authored cycles still leak, no tooling to see them | **C** |
 | Runtime diagnostics | No stack traces, boolean FS errors | **C−** |
 | Concurrency | Absent | **D** |
@@ -547,7 +550,7 @@ part (a coherent, working implementation) is done.
    to observe it, and `weak` plus a cycle report is still the answer.
 8. **No debugger.** No DAP implementation. Print debugging only.
 9. **Performance.** The bytecode VM landed and is the default, which moved this
-   from 5–11× PUC Lua to 1.0×–4.8× (§3.3). It is no longer the thing that
+   from 5–11× PUC Lua to 0.8×–4.8× (§3.3). It is no longer the thing that
    decides whether Saule is usable — every item above it on this list matters
    more.
 
@@ -1144,7 +1147,60 @@ same foundations.
 
 ## Appendix A — raw measurements
 
-### Benchmarks — both engines against PUC Lua
+### Benchmarks — both engines against PUC Lua, after Phase 5's peepholes
+
+`REPS=5 python benchmarks/bench.py`, release build, Windows 11 Pro x86_64,
+Lua 5.4.8 — the **same box and the same Lua** as the run below it, which is
+what makes the two tables a before/after rather than two unrelated rows.
+Seconds, minimum across reps; **compare ratios, not absolute times.** This
+box was under more load for this run than for the one below — `lua`'s own
+times are 10–25% higher across the board — which is exactly why the ratio
+columns are the ones to read, and why the instruction counts further down
+are the figure to quote.
+
+The change measured here is §17's emission peepholes (`VM_TASKS.md`, Phase 5),
+in six parts and **with no new opcodes**: fused comparison branches, operands
+read where they already are, small integer literals folded into the
+instruction, and no jump to the next instruction.
+
+| bench | VM | tree-walker | lua | VM/lua | walker/lua | VM speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| loop_arith | 0.190 | 0.657 | 0.071 | 2.7× | 9.4× | **3.46×** |
+| fib | 0.101 | 0.352 | 0.050 | 2.0× | 7.1× | **3.49×** |
+| array | 0.137 | 0.394 | 0.085 | 1.6× | 4.6× | **2.88×** |
+| map | 0.389 | 0.499 | 0.478 | 0.8× | 1.0× | 1.28× |
+| oop | 0.172 | 0.503 | 0.071 | 2.5× | 7.0× | **2.92×** |
+| mandel | 0.144 | 0.507 | 0.062 | 2.3× | 8.3× | **3.52×** |
+| strings | 0.110 | 0.179 | 0.066 | 1.7× | 2.7× | 1.63× |
+| closure | 0.101 | 0.306 | 0.051 | 2.0× | 6.1× | **3.03×** |
+| sort | 0.734 | 0.907 | 0.153 | 4.8× | 6.0× | 1.24× |
+| startup | 0.032 | 0.031 | 0.036 | 0.9× | 0.9× | 0.97× |
+
+**Instructions retired, `--profile-bytecode`, before Phase 5 → after.** This
+is the honest measure of what the peepholes did: it is a count, not a
+stopwatch, and it does not move with machine load.
+
+| bench | before | after | change |
+|---|---:|---:|---:|
+| loop_arith | 40,000,011 | 20,000,011 | **−50%** |
+| mandel | 25,620,013 | 14,203,848 | **−45%** |
+| fib | 11,827,257 | 7,713,431 | **−35%** |
+| sort | 29,063,881 | 22,197,914 | −24% |
+| closure | 10,000,012 | 8,000,012 | −20% |
+| array | 11,000,017 | 9,000,017 | −18% |
+| oop | 19,000,035 | 17,000,029 | −11% |
+
+`loop_arith`'s inner loop is **6 instructions → 3**. `MOVE` — the
+most-executed opcode in every benchmark this project has — fell by half or
+more on the loop-heavy ones.
+
+`map` and `sort` still barely move, for the reason §20 gave before the VM was
+written: their time is inside `TableObject`, hashing and comparison callbacks,
+not in dispatch. `sort` is 46% `CASTCHK` + `UNWRAPNIL` in the profile — and
+that is the *program*, not the compiler: its comparator casts an untyped
+parameter on every comparison, and the tree-walker does the same work.
+
+### Benchmarks — both engines against PUC Lua, at the Phase 4 flip
 
 `REPS=5 python benchmarks/bench.py`, release build (fat LTO, 1 codegen unit),
 Windows 11 Pro x86_64, Lua 5.4.8. Seconds, minimum across reps; **compare
