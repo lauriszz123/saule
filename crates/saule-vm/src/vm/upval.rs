@@ -29,3 +29,45 @@ impl Upvalue {
         }
     }
 }
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use super::Vm;
+
+impl Vm {
+
+    // ---- upvalues ------------------------------------------------------
+
+    pub(crate) fn capture_upvalue(&mut self, index: u32) -> Rc<RefCell<Upvalue>> {
+        match self
+            .open_upvals
+            .binary_search_by_key(&Some(index), |u| u.borrow().stack_index())
+        {
+            Ok(i) => Rc::clone(&self.open_upvals[i]),
+            Err(i) => {
+                let cell = Rc::new(RefCell::new(Upvalue::Open(index)));
+                self.open_upvals.insert(i, Rc::clone(&cell));
+                cell
+            }
+        }
+    }
+
+    /// Close every open upvalue pointing at a register >= `from`. The value
+    /// **moves** out of the register into the cell.
+    pub(crate) fn close_upvalues(&mut self, from: u32) {
+        while let Some(last) = self.open_upvals.last() {
+            let Some(idx) = last.borrow().stack_index() else {
+                self.open_upvals.pop();
+                continue;
+            };
+            if idx < from {
+                break;
+            }
+            let cell = self.open_upvals.pop().expect("checked");
+            let v = std::mem::replace(&mut self.stack[idx as usize], Value::Nil);
+            *cell.borrow_mut() = Upvalue::Closed(v);
+        }
+    }
+
+}

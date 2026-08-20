@@ -11,30 +11,38 @@
 //!   └─ Pass 4: verify   — debug builds only (§17 Pass 4)
 //! ```
 //!
-//! **Status: not implemented — but no longer blocked.** Phase 0 has landed,
-//! so the two inputs codegen needs now exist: `saule_typeck::check_with_types`
-//! publishes a `TypeTable` (which is what lets the compiler select `ADDI`
-//! over `ARITHX`), and `saule_semantic::analyze_with_bindings` publishes a
-//! `Bindings` with a slot for every local and an exact upvalue list for every
-//! closure (which is what lets a name become a register index). Writing
-//! codegen before those existed would have meant rewriting it afterwards,
-//! which is the whole argument of §24.6.
+//! ## What lives where
 //!
-//! Passes 1–4 are Phase 2 and 3 work.
+//! | file | pass | holds |
+//! |---|---|---|
+//! | [`layout`] | 1 | class layouts, vtables, itables, enum tags, module slots |
+//! | [`class`] | 1-2 | compiling a class body against the layout it was given |
+//! | [`ctx`] | 2 | the compiler's own state: registers, scopes, emission |
+//! | [`expr`] | 2 | expression codegen |
+//! | [`stmt`] | 2 | statement codegen |
+//! | [`match_`] | 2 | `match`, its jump table, and pattern binding |
+//! | [`verify`] | 4 | the debug-build check that a chunk is well formed |
 //!
-//! Until then this module exists to fix the *interface*: everything the
-//! compiler cannot handle is a [`CompileError::Unsupported`], which the CLI
-//! reads as "fall back to the tree-walker" rather than as a hard failure.
-//! That is what makes `--vm` usable long before it is complete (§21.3).
+//! ## The `Unsupported` contract
+//!
+//! Anything the compiler cannot handle is a [`CompileError::Unsupported`],
+//! which the CLI reads as "fall back to the tree-walker" rather than as a
+//! hard failure. That is what made `--vm` usable long before it was
+//! complete (§21.3), and it is still what keeps a gap from becoming a
+//! crash: a construct nobody has taught the compiler yet runs under the
+//! other engine and prints a note, rather than miscompiling.
 
 pub mod class;
 pub mod ctx;
 pub mod expr;
 pub mod layout;
 pub mod match_;
-pub mod regalloc;
 pub mod stmt;
 pub mod verify;
+
+/// Register allocation is part of the compiler's state, so it lives in
+/// [`ctx`]; this keeps the `compile::regalloc` path it had before.
+pub use ctx::regalloc;
 
 use std::ops::Range;
 

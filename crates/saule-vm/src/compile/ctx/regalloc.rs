@@ -37,6 +37,7 @@ use std::ops::Range;
 
 use crate::compile::CompileError;
 use crate::op::MAX_REGS;
+use super::Compiler;
 
 /// A saved `free` position. Releasing back to one frees every register
 /// allocated since it was taken.
@@ -193,6 +194,40 @@ impl RegAlloc {
     pub fn block_depth(&self) -> usize {
         self.blocks.len()
     }
+}
+
+impl Compiler<'_> {
+
+    // ---- registers -----------------------------------------------------
+
+    pub fn alloc(&mut self, span: &Range<usize>) -> Result<u16, CompileError> {
+        let name = self.func_label();
+        self.f.regs.alloc().map_err(|o| o.at(&name, span.clone()))
+    }
+
+    pub fn alloc_n(&mut self, n: u16, span: &Range<usize>) -> Result<u16, CompileError> {
+        let name = self.func_label();
+        self.f.regs.alloc_n(n).map_err(|o| o.at(&name, span.clone()))
+    }
+
+    pub fn mark(&self) -> Mark {
+        self.f.regs.mark()
+    }
+
+    pub fn free_to(&mut self, m: Mark) {
+        self.f.regs.free_to(m);
+    }
+
+
+    /// A register operand must fit in an 8-bit field.
+    pub fn reg8(&self, r: u16, span: &Range<usize>) -> Result<u8, CompileError> {
+        u8::try_from(r).map_err(|_| CompileError::TooManyRegisters {
+            name: self.func_label(),
+            needed: r as usize + 1,
+            span: span.clone(),
+        })
+    }
+
 }
 
 #[cfg(test)]
