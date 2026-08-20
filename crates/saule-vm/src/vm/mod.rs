@@ -530,7 +530,37 @@ impl Vm {
 
     // ---- the loop ------------------------------------------------------
 
+    /// Run until the frame this was entered on returns.
+    ///
+    /// The dispatch loop itself is [`Vm::execute_loop`], generic over
+    /// whether it counts what it runs (§16). Picking the copy *here*, once
+    /// per entry, keeps the profiling branch out of the loop entirely: the
+    /// `PROFILE = false` copy monomorphises every counter and every
+    /// thread-local read away.
+    ///
+    /// **Why the `cfg` as well as the const generic.** Compiling away the
+    /// profiling code is not enough — the counting copy merely *existing*
+    /// costs 2-3% on `loop_arith`, `fib`, `array`, `closure` and `sort`,
+    /// measured against the same tree built without it, with the histogram
+    /// switched off and not one counter running. That is code layout, not
+    /// work, and it is exactly the size of the wins Phase 5 is chasing. So
+    /// the second copy is not compiled at all unless the `profile` feature
+    /// asks for it, and `--profile-bytecode` refuses on a binary built
+    /// without it rather than reporting nothing and letting the user
+    /// conclude their program executed no bytecode.
+    ///
+    /// The alternative measured worse: one loop with a runtime `bool` costs
+    /// up to 8.7% (`loop_arith`), a branch per instruction being precisely
+    /// the thing a dispatch loop cannot afford.
     fn execute(&mut self) -> Result<Vec<Value>, RuntimeError> {
+        #[cfg(feature = "profile")]
+        if crate::profile::is_enabled() {
+            return self.execute_loop::<true>();
+        }
+        self.execute_loop::<false>()
+    }
+
+    fn execute_loop<const PROFILE: bool>(&mut self) -> Result<Vec<Value>, RuntimeError> {
         let entry_depth = self.frames.len();
 
         'reentry: loop {
@@ -547,6 +577,11 @@ impl Vm {
             let base = self.frames.last().expect("frame").base as usize;
             let mut pc = self.frames.last().expect("frame").pc as usize;
             let code: &[Instruction] = &proto.code;
+            // The previous instruction of *this* activation, for the pair
+            // histogram. Reset on every `continue 'reentry` — a call or a
+            // return — because a pair only means something within one
+            // proto, and only the emitter's own neighbours are fusable.
+            let mut prev: Option<(u32, Op)> = None;
 
             loop {
                 if pc >= code.len() {
@@ -568,6 +603,17 @@ impl Vm {
                         span: proto.span_at(here),
                     });
                 };
+
+                if PROFILE {
+                    // `Some` only when the last instruction executed was
+                    // the word immediately before this one — which is the
+                    // adjacency a superinstruction needs. An `EXTRAARG`
+                    // consumed by its handler advances `pc` past this test
+                    // and correctly breaks the pair.
+                    let adjacent = prev.and_then(|(at, op)| (at + 1 == here).then_some(op));
+                    crate::profile::record(adjacent, op);
+                    prev = Some((here, op));
+                }
 
                 let a = ins.a() as usize;
 

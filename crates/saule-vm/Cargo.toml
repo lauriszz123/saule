@@ -32,3 +32,13 @@ default = ["native-packages"]
 # Passthrough to `saule-interpreter`'s feature of the same name. See the
 # comment on the dependency above.
 native-packages = ["saule-interpreter/native-packages"]
+# Bytecode profiling (`VM_DESIGN.md` §16), off by default and off in every
+# shipped binary. The collector itself costs nothing at run time, but the
+# dispatch loop has to exist twice for it — once counting, once not — and
+# measurement showed that the *second copy* alone costs 2-3% on the
+# call-heavy benchmarks through code layout, without a single profiling
+# instruction executing. A profile is a development activity; a 2-3% tax on
+# every user's programs to keep it one flag away is the wrong trade.
+# Build it when you want it:
+#     cargo build --release --features profile -p saule-cli
+profile = []

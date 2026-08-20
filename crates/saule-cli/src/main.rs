@@ -115,7 +115,21 @@ fn real_main() {
 /// the user's intent — script arguments have their own place, after `--`,
 /// so there is nothing left to disambiguate.
 fn cmd_run(args: RunArgs) {
-    run::select_engine(args.vm, args.interp);
+    // `--profile-bytecode` selects the VM explicitly, not merely by
+    // default: a profile of a program that fell back to the tree-walker is
+    // empty, and the fallback `note:` is the only thing that says why.
+    run::select_engine(args.vm || args.profile_bytecode, args.interp);
+    if args.profile_bytecode {
+        if !saule_vm::profile::SUPPORTED {
+            eprintln!(
+                "error: this build cannot profile bytecode — the counting dispatch loop is \n\
+                 behind a feature, because merely compiling it costs 2-3% on the benchmarks.\n\
+                 Rebuild with:  cargo build --release --features profile -p saule-cli"
+            );
+            std::process::exit(1);
+        }
+        saule_vm::profile::enable();
+    }
     saule_interpreter::stdlib::os::set_script_args(args.args);
 
     match args.target {
@@ -123,7 +137,18 @@ fn cmd_run(args: RunArgs) {
         Some(target) if target.is_dir() => project::run_project(&target),
         Some(target) => run::run_file(target, false),
     }
+
+    // Only on a clean finish: a failing run exits from inside, and a
+    // partial histogram of a program that died is not something to reason
+    // about optimisations from.
+    if let Some(report) = saule_vm::profile::take() {
+        eprint!("\n{}", report.render(PROFILE_ROWS));
+    }
 }
+
+/// Rows per table in a `--profile-bytecode` report. The tail of a bytecode
+/// histogram is long and flat; the top of it is the whole question.
+const PROFILE_ROWS: usize = 20;
 
 #[cfg(test)]
 mod tests {
