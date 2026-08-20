@@ -399,8 +399,8 @@ pub(crate) fn collect_enum_variant_fields(
 
 /// Render hover info for a `Variant` pattern, e.g.
 /// `(variant) Event.Click(x: integer, y: integer)`. Falls back to a
-/// bare `Enum.Variant` when the enum isn't in our pre-collected map
-/// (likely a bare or valued variant that carries no payload).
+/// bare `Enum.Variant` when nothing declares a payload for it (a bare
+/// or valued variant), and to bare arity when the enum is unknown.
 pub(crate) fn render_variant_pattern(
     enum_name: &str,
     variant: &str,
@@ -408,7 +408,7 @@ pub(crate) fn render_variant_pattern(
     enum_fields: &HashMap<(String, String), Vec<Param>>,
 ) -> String {
     let mut s = format!("```saule\n(variant) {enum_name}.{variant}");
-    if let Some(params) = enum_fields.get(&(enum_name.to_string(), variant.to_string())) {
+    if let Some(params) = declared_variant_fields(enum_name, variant, enum_fields) {
         s.push('(');
         s.push_str(
             &params
@@ -428,6 +428,29 @@ pub(crate) fn render_variant_pattern(
     }
     s.push_str("\n```");
     s
+}
+
+/// The declared payload of `Enum.Variant`, preferring the map collected
+/// from this module and falling back to the semantic registry.
+///
+/// The map only holds enums declared in the file being hovered, so an
+/// *imported* enum — the common case in a project of more than one
+/// module — missed it and rendered as bare arity, `(_, _, _)`. The
+/// registry is seeded with the imports and keeps whole `Param`s per
+/// variant, so the names and types are already there. Reading them off
+/// the seed also keeps this clear of the import graph, which a hover
+/// must not re-walk.
+pub(crate) fn declared_variant_fields(
+    enum_name: &str,
+    variant: &str,
+    enum_fields: &HashMap<(String, String), Vec<Param>>,
+) -> Option<Vec<Param>> {
+    if let Some(params) = enum_fields.get(&(enum_name.to_string(), variant.to_string())) {
+        return Some(params.clone());
+    }
+    let info = saule_semantic::with_enums(|r| r.get(enum_name).cloned())?;
+    let shape = info.variants.get(variant)?;
+    (shape.arity() > 0).then(|| shape.fields.clone())
 }
 
 // ─── doc comments ───────────────────────────────────────────────────────────

@@ -1177,15 +1177,16 @@ instruction, and no jump to the next instruction.
 | startup | 0.032 | 0.031 | 0.036 | 0.9× | 0.9× | 0.97× |
 
 **Instructions retired, `--profile-bytecode`, before Phase 5 → after.** This
-is the honest measure of what the peepholes did: it is a count, not a
-stopwatch, and it does not move with machine load.
+is the honest measure of what Phase 5 did: it is a count, not a stopwatch,
+and it does not move with machine load. Covers the emission peepholes and
+the one superinstruction, `CASTUNWRAP`.
 
 | bench | before | after | change |
 |---|---:|---:|---:|
 | loop_arith | 40,000,011 | 20,000,011 | **−50%** |
 | mandel | 25,620,013 | 14,203,848 | **−45%** |
 | fib | 11,827,257 | 7,713,431 | **−35%** |
-| sort | 29,063,881 | 22,197,914 | −24% |
+| sort | 29,063,881 | 15,531,950 | **−47%** |
 | closure | 10,000,012 | 8,000,012 | −20% |
 | array | 11,000,017 | 9,000,017 | −18% |
 | oop | 19,000,035 | 17,000,029 | −11% |
@@ -1194,10 +1195,18 @@ stopwatch, and it does not move with machine load.
 most-executed opcode in every benchmark this project has — fell by half or
 more on the loop-heavy ones.
 
-`map` and `sort` still barely move, for the reason §20 gave before the VM was
-written: their time is inside `TableObject`, hashing and comparison callbacks,
-not in dispatch. `sort` is 46% `CASTCHK` + `UNWRAPNIL` in the profile — and
-that is the *program*, not the compiler: its comparator casts an untyped
+**`sort` is the one to read twice.** Its instruction count fell 47% and its
+wall clock moved about 10% — most of that gap arriving with `CASTUNWRAP`,
+which cut 30% of its instructions for 2.3% of its time. That is §20's
+prediction with numbers attached: what is left in `map` and `sort` is
+`TableObject` and the cost of crossing the engine boundary once per
+comparison, not dispatch. Optimising dispatch further will not move them.
+
+`map` and `sort` still barely move on the clock, for the reason §20 gave
+before the VM was written: their time is inside `TableObject`, hashing and
+comparison callbacks, not in dispatch. `sort` was 46% `CASTCHK` +
+`UNWRAPNIL` in the profile before those two fused — and that is the
+*program*, not the compiler: its comparator casts an untyped
 parameter on every comparison, and the tree-walker does the same work.
 
 ### Benchmarks — both engines against PUC Lua, at the Phase 4 flip

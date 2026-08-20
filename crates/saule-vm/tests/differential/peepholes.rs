@@ -378,3 +378,88 @@ fn a_cast_and_an_index_read_their_operands_in_place() {
     );
 }
 
+// -- §16 superinstructions -------------------------------------------------
+
+#[test]
+fn a_cast_that_is_immediately_unwrapped_becomes_one_instruction() {
+    // The first superinstruction in this instruction set, and the only
+    // candidate a profile has ever supported: `--profile-bytecode` counts
+    // `CASTCHK UNWRAPNIL` as an adjacent pair 6,665,964 times in
+    // `benchmarks/sau/sort.sau` — 46% of the program between the two halves.
+    let l = listing(
+        "local t: table<integer> = {3, 1, 2}\n\
+         Table.sort(t, (a, b) => (a as integer)! < (b as integer)!)\n\
+         t[1] .. \",\" .. t[3]",
+    );
+    let body = proto(&l, "<lambda>");
+    assert!(emits(body, "CASTUNWRAP"), "the pair did not fuse:{NL}{body}");
+    assert!(!emits(body, "CASTCHK"), "the cast is still separate:{NL}{body}");
+    assert!(!emits(body, "UNWRAPNIL"), "the unwrap is still separate:{NL}{body}");
+}
+
+#[test]
+fn a_cast_without_an_unwrap_keeps_the_nil_yielding_form() {
+    // `x as T` on its own must not raise: the static type is `T?` and the
+    // caller is expected to handle the nil. Fusing unconditionally would
+    // turn every failed cast in the language into an error.
+    let program = "local x: any = \"no\"\nlocal r: integer? = x as integer\nr ?? -1";
+    let l = listing(program);
+    assert!(emits(&l, "CASTCHK"), "expected the nil-yielding form:{NL}{l}");
+    assert!(!emits(&l, "CASTUNWRAP"), "a bare cast fused into the raising form:{NL}{l}");
+    must_agree(program);
+}
+
+#[test]
+fn an_unwrap_that_is_not_a_cast_keeps_its_own_opcode() {
+    let program = "local x: integer? = 7\nx!";
+    let l = listing(program);
+    assert!(emits(&l, "UNWRAPNIL"), "expected a plain unwrap:{NL}{l}");
+    assert!(!emits(&l, "CASTUNWRAP"), "a plain unwrap fused with nothing:{NL}{l}");
+    must_agree(program);
+}
+
+#[test]
+fn a_fused_cast_raises_exactly_where_the_pair_did() {
+    // The failure path is `UNWRAPNIL`'s, not a new one, and the span it
+    // reports is the `!`'s — which is the span `UNWRAPNIL` carried. Both
+    // halves matter: a cast that *succeeds* must still yield the value, and
+    // one that fails must raise rather than yield nil.
+    must_agree(
+        "local ok: any = 7\n\
+         local good: integer = (ok as integer)!\n\
+         local caught: string = \"none\"\n\
+         try\n\
+         \x20 local bad: any = \"not a number\"\n\
+         \x20 local n: integer = (bad as integer)!\n\
+         \x20 caught = \"unreachable \" .. n\n\
+         catch e: any\n\
+         \x20 caught = \"raised\"\n\
+         end\n\
+         good .. \"/\" .. caught",
+    );
+}
+
+#[test]
+fn a_fused_cast_still_walks_the_type_it_was_given() {
+    // `CASTUNWRAP` calls the same `eval::expr::cast::cast` `CASTCHK` does,
+    // so the deep cases come along: a `table<integer>` is checked
+    // elementwise and a class cast walks the inheritance chain. Reusing the
+    // oracle's function is what makes that true by construction rather than
+    // by care.
+    must_agree(
+        "local t: any = {1, 2, 3}\n\
+         local nums: table<integer> = (t as table<integer>)!\n\
+         nums[1] + nums[3]",
+    );
+    must_agree(
+        "class Animal\n\
+         \x20 name: string = \"a\"\n\
+         end\n\
+         class Dog extends Animal\n\
+         end\n\
+         local d: any = Dog()\n\
+         local a: Animal = (d as Animal)!\n\
+         a.name",
+    );
+}
+

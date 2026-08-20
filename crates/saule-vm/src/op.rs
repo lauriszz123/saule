@@ -474,6 +474,30 @@ define_ops! {
     ///
     /// Appended, never inserted: the numbering is the chunk ABI.
     SELFFUNC: Abc,
+
+    // ---- §16 superinstructions -------------------------------------------
+    /// `x as T` immediately force-unwrapped: `R[A] := R[B]` if `R[B]` matches
+    /// `cast_types[C]`, else `ForceUnwrapNil`.
+    ///
+    /// **The first superinstruction in this instruction set, and the only
+    /// candidate a profile has ever supported.** §16 says every one must be
+    /// justified by a measured opcode-pair histogram before it is added;
+    /// `--profile-bytecode` counts `CASTCHK UNWRAPNIL` as an adjacent pair
+    /// **6,665,964 times** in `benchmarks/sau/sort.sau` — 22.9% of that
+    /// program in each half, 46% together. Nothing else in any benchmark
+    /// comes close, and every candidate the task list was originally written
+    /// with (`GETF_CALLM`, `FORLOOP_GETARR`, `ADDII_MOVE`, …) is unsupported
+    /// by any reading.
+    ///
+    /// Read the caveat with the number: `sort` spends that time because its
+    /// comparator writes `(a as integer)!` on an untyped parameter, and the
+    /// tree-walker does the same work. The *pair* is a compiler artifact and
+    /// fusing it removes one dispatch and one register write per comparison;
+    /// the *cast* is the program's own semantics and is still performed.
+    ///
+    /// Appended after `SELFFUNC`, never inserted: the numbering is the chunk
+    /// ABI.
+    CASTUNWRAP: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.
