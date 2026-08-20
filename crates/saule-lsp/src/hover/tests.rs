@@ -810,6 +810,131 @@ end
     assert!(md.contains("x: integer"), "got: {md}");
 }
 
+/// A `case Event.MousePressed(x, y, button)` arm on an enum declared in
+/// *another* module hovered as `(variant) Event.MousePressed(_, _, _)`.
+///
+/// The field map the pattern renderer consults is collected from the
+/// module being hovered, so an imported enum is never in it and the
+/// renderer fell back to reporting bare arity. The seeded registry
+/// carries the same declared fields — ask it before giving up.
+#[test]
+fn an_imported_variant_pattern_shows_its_declared_fields() {
+    init_stdlib();
+    let dir = std::env::temp_dir().join(format!(
+        "saule-lsp-hover-variant-test-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(
+        dir.join("events.sau"),
+        "\
+enum Event
+  MousePressed(x: number, y: number, button: integer),
+  Quit
+end
+",
+    )
+    .unwrap();
+
+    let app_src = "\
+import Event from \"events\"
+
+fn dispatch(event: Event) -> string
+  return match event
+case Event.MousePressed(x, y, button) then \"down\"
+case Event.Quit then \"bye\"
+  end
+end
+";
+    let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
+    let module = saule_parser::parse(tokens).unwrap();
+
+    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let _ = saule_semantic::analyze_with_seed(&module, seed);
+    let imports = build_import_context(&module, app_src, Some(&dir));
+
+    let pos = app_src.find("Event.MousePressed(").unwrap() + "Event.".len() + 1;
+    let md = hover_at_with(&module, pos, &imports)
+        .map(|(m, _)| m)
+        .unwrap();
+    assert!(!md.contains('_'), "payload rendered as bare arity: {md}");
+    assert!(md.contains("x: number"), "got: {md}");
+    assert!(md.contains("button: integer"), "got: {md}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The shape the UI Project actually uses: `import * from Events` over an
+/// `export enum`, hovered on a `case` arm in a `match`.
+///
+/// A named import and a wildcard reach the registry by different routes,
+/// so the named-import test above passing is no evidence for this one.
+#[test]
+fn a_wildcard_imported_variant_pattern_shows_its_declared_fields() {
+    init_stdlib();
+    let dir = std::env::temp_dir().join(format!(
+        "saule-lsp-hover-variant-star-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(
+        dir.join("events.sau"),
+        "\
+export enum Event
+  MousePressed(x: float, y: float, button: integer),
+  Quit
+end
+",
+    )
+    .unwrap();
+
+    let app_src = "\
+import * from \"events\"
+
+fn dispatch(event: Event) -> string
+  return match event
+case Event.MousePressed(x, y, button) then \"down\"
+case Event.Quit then \"bye\"
+  end
+end
+";
+    let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
+    let module = saule_parser::parse(tokens).unwrap();
+
+    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let _ = saule_semantic::analyze_with_seed(&module, seed);
+    let imports = build_import_context(&module, app_src, Some(&dir));
+
+    let pos = app_src.find("Event.MousePressed(").unwrap() + "Event.".len() + 1;
+    let md = hover_at_with(&module, pos, &imports)
+        .map(|(m, _)| m)
+        .unwrap();
+    assert!(!md.contains('_'), "payload rendered as bare arity: {md}");
+    assert!(md.contains("x: float"), "got: {md}");
+    assert!(md.contains("button: integer"), "got: {md}");
+
+    // The bindings the arm introduces are typed from the same declaration.
+    // These went through a second lookup that also only knew about locally
+    // declared enums, so every payload binding read as `any`.
+    let pos = app_src.find("button) then").unwrap() + 1;
+    let md = hover_at_with(&module, pos, &imports)
+        .map(|(m, _)| m)
+        .unwrap();
+    assert!(md.contains("(binding) button: integer"), "got: {md}");
+
+    let pos = app_src.find("(x, y, button)").unwrap() + 2;
+    let md = hover_at_with(&module, pos, &imports)
+        .map(|(m, _)| m)
+        .unwrap();
+    assert!(md.contains("(binding) x: float"), "got: {md}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Source-threaded hovers: parameter / field / extends / implements / named-arg
 // keys / per-import-name / return keyword
@@ -2898,3 +3023,5 @@ end
         "got: {md}"
     );
 }
+
+

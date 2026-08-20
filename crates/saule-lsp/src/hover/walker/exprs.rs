@@ -2,7 +2,8 @@
 //! the markdown shown for the expression under the cursor.
 
 use crate::hover::render::{
-    render_method_sig, render_param, render_type, render_variant_pattern, with_param_doc,
+    declared_variant_fields, render_method_sig, render_param, render_type, render_variant_pattern,
+    with_param_doc,
 };
 use crate::hover::util::{
     contains, locate_word_in, render_unknown_member, resolve_member, strip_nullable_type,
@@ -365,11 +366,13 @@ impl<'a> Cx<'a> {
                 variant,
                 fields,
             } => {
-                let field_tys: Vec<Type> = self
-                    .enum_variant_fields
-                    .get(&(enum_name.clone(), variant.clone()))
-                    .map(|ps| ps.iter().map(|p| p.ty.clone()).collect())
-                    .unwrap_or_default();
+                // Same lookup the variant *renderer* uses, and for the same
+                // reason: the module-local map has nothing for an imported
+                // enum, which left every payload binding typed `any`.
+                let field_tys: Vec<Type> =
+                    declared_variant_fields(enum_name, variant, &self.enum_variant_fields)
+                        .map(|ps| ps.iter().map(|p| p.ty.clone()).collect())
+                        .unwrap_or_default();
                 for (i, sub) in fields.iter().enumerate() {
                     let sub_ty = field_tys.get(i);
                     self.bind_pattern(&sub.value, sub_ty);

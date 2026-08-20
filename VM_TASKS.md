@@ -210,16 +210,25 @@ mean **2.2x**), with **216** differential tests asserting the two engines
 agree — plus 236 fixtures, 11 example projects and 20 `www/` samples run under
 both engines and compared by output.
 
-**Phase 5 has started, and §17's emission peepholes are done.** Not the
-inline caches this phase was written around — `--profile-bytecode` chose
-these instead, and the numbers are under the item. **No new opcodes:** every
-one of the six changes is the compiler emitting instructions the VM already
-had, three of which had never been emitted once since Phase 1.
+**Phase 5 has started. §17's emission peepholes are done, and the one
+superinstruction a profile ever supported has shipped.** Not the inline
+caches this phase was written around — `--profile-bytecode` chose these
+instead, and the numbers are under the items.
 
 Instructions retired, which is the figure that is not a stopwatch:
-`loop_arith` **−50%**, `mandel` **−45%**, `fib` **−35%**, `sort` −24%,
+`loop_arith` **−50%**, `sort` **−47%**, `mandel` **−45%**, `fib` **−35%**,
 `closure` −20%, `array` −18%, `oop` −11%. On the clock, net of process
-start-up: `loop_arith` −31%, `mandel` −21%, `fib` −21%.
+start-up: `loop_arith` −31%, `mandel` −21%, `fib` −21%, `sort` −10%.
+
+**The two halves of that read differently, and the difference is the useful
+part.** The peepholes were six changes with **no new opcodes** — every one
+the compiler emitting instructions the VM already had, three of which had
+never been emitted once since Phase 1 — and they moved both columns
+together. `CASTUNWRAP` cut `sort`'s instruction count by a further 30% and
+moved its clock by 2.3%, which is §20's prediction arriving with numbers
+attached: what is left in `map` and `sort` is `TableObject` and the
+engine-boundary crossing, not dispatch. **Stop optimising dispatch for those
+two.**
 
 The one Phase 4 box that cannot be ticked from inside the tree is still open:
 a release has to actually ship.
@@ -827,10 +836,16 @@ exists to replace.
       indices valid, `EXTRAARG` present where required, no proto that can run
       off its end. Wired into `compile` under `debug_assertions`, so all 43
       differential tests compile through it.
-- [ ] Peephole during emission (drop `MOVE r,r`, fold small `LOADK` into the
+- [x] Peephole during emission (drop `MOVE r,r`, fold small `LOADK` into the
       `*II` immediates, fuse comparison + branch, drop jumps to the next
-      instruction). Deferred: each is a measurable optimisation, and 16
-      says to measure first.
+      instruction). Deferred here because each is a measurable optimisation
+      and §16 says to measure first — **and that is what eventually happened**:
+      `--profile-bytecode` landed in Phase 5 and then chose these four ahead
+      of every candidate that phase was written around. Three of them turned
+      out to be opcodes the VM already had and the compiler never emitted.
+      Done in Phase 5; see "§17 emission peepholes" there for the numbers.
+      Only `MOVE r,r` was not implemented — nothing appears to emit one, so
+      it wants a debug assertion rather than a peephole.
 
 ### Integration
 
@@ -3010,7 +3025,7 @@ candidate this phase was originally written around.*
       | loop_arith | 40,000,011 | 20,000,011 | **−50%** |
       | mandel | 25,620,013 | 14,203,848 | **−45%** |
       | fib | 11,827,257 | 7,713,431 | **−35%** |
-      | sort | 29,063,881 | 22,197,914 | −24% |
+      | sort | 29,063,881 | 22,197,914 | −24% (a further −30% from `CASTUNWRAP`; see below) |
       | closure | 10,000,012 | 8,000,012 | −20% |
       | array | 11,000,017 | 9,000,017 | −18% |
       | oop | 19,000,035 | 17,000,029 | −11% |
@@ -3036,16 +3051,56 @@ candidate this phase was originally written around.*
       * `map` and `sort` still barely move on the clock, for the reason §20
         gave before the VM existed: their time is inside `TableObject`.
 - [ ] Inline caches for `GETFX` / `CALLIF`
-- [ ] Superinstructions from a measured opcode-pair histogram collected under
-      `--profile-bytecode` (§16). **The collector now exists — see the item
-      above — and its first readings do not support any of the candidates
-      below yet.** Candidates in expected-value order:
-      `GETF_CALLM`, `FORLOOP_GETARR`, `ADDII_MOVE`, `GETUPVAL_CALL`,
-      `JLTI_ADDII`
+- [x] Superinstructions from a measured opcode-pair histogram collected under
+      `--profile-bytecode` (§16). **One shipped: `CASTUNWRAP`.** It was the
+      only candidate that met §16's bar, and it was not on the list this item
+      was written with.
+
+      `(x as T)!` — `CASTCHK` followed immediately by `UNWRAPNIL`. The
+      profile counted the pair **6,665,964 times** in `sort`, 22.9% of the
+      program in each half. The compiler emits the fused form only from
+      `Expr::ForceUnwrap(Expr::Cast { .. })`, at the `!`'s span, so a failed
+      cast raises `ForceUnwrapNil` exactly where the pair did; a bare
+      `x as T` keeps the nil-yielding `CASTCHK`, because the static type is
+      `T?` and turning every failed cast into an error would be a language
+      change. The cast itself still calls
+      `saule_interpreter::eval::expr::cast::cast`, so the deep cases —
+      `table<T>` elementwise, a class walking its chain — come along
+      unchanged.
+
+      **The result is the clearest evidence yet for §20, and it is worth
+      more than the speedup.** `sort` retires **22,197,914 → 15,531,950**
+      instructions, a **30% cut**, exactly the 6,665,964 the fusion removes.
+      Wall clock moved **2.3%**. A thirty-percent instruction cut buying two
+      percent says the remaining time is not dispatch: it is inside
+      `TableObject` and in crossing the engine boundary once per comparison,
+      which is what §20 predicted before the VM was written and what the
+      `map`/`sort` rows have been saying since Phase 3.
+
+      Read the 46% with its caveat, too: `sort` spends it because its
+      comparator writes `(a as integer)!` on an untyped parameter and the
+      tree-walker does the same work. The *pair* was a compiler artifact and
+      is gone; the *cast* is the program's own semantics and is still
+      performed.
+
+      **Nothing else qualifies, and the original candidates least of all.**
+      `GETF_CALLM`, `FORLOOP_GETARR`, `ADDII_MOVE`, `GETUPVAL_CALL` and
+      `JLTI_ADDII` are unsupported by any reading, and two of them were
+      written before the peepholes existed — `ADDII_MOVE` assumes a `MOVE`
+      that no longer follows. Re-profile before reviving any of them, and
+      expect the answer to be no: after the peepholes the top pairs are
+      spread thin, which is what a compiler that stopped emitting redundant
+      instructions looks like.
 - [ ] `NativeClosureMulti` writing into `&mut [Value]`, for `stdlib/iter.rs`
 - [ ] Precomputed hashes on constant string keys
 - [ ] Raw `pc`/`base` pointers and `get_unchecked` in the dispatch loop —
-      **only after the verifier lands**
+      **only after the verifier lands**. It has, and its tests now cover
+      every table it bounds — but read the note under "Verifier tests"
+      before relying on it: `verify` runs under `debug_assertions` only, and
+      the `EXTRAARG` payloads are still unchecked. `get_unchecked` on a
+      chunk this compiler just produced is safe today because the compiler
+      produced it; on a chunk read back from `.saule/cache/` it would not be.
+      Sequence those two together.
 - [ ] Dispatch threading experiments (worth 5–15%, cost real readability)
 - [ ] Bytecode caching in `.saule/cache/` for `startup` on large projects
 - [ ] **Only then:** reconsider NaN-boxing, with numbers. The decision today
@@ -3149,15 +3204,49 @@ candidate this phase was originally written around.*
       rejects.
 - [x] Hand-assembled chunk tests for the implemented opcodes
 - [ ] Encoding property tests with random operands
-- [~] Verifier tests — hand-built malformed chunks must be *rejected*, not
-      crash the VM. **Seven exist**, in `compile/verify.rs`'s own `mod
-      tests`: a register past the frame, a jump off the end, a constant
-      index past the pool, a missing `EXTRAARG`, an undeclared upvalue, a
-      proto that runs off its end, and a well-formed chunk that passes.
-      (An earlier note here said none existed; it was wrong.) What is *not*
-      covered: a bad opcode byte, an `EXTRAARG` with no instruction before
-      it, and an out-of-range `Bx` for each of the tables `verify_proto`
-      limits.
+- [x] Verifier tests — hand-built malformed chunks must be *rejected*, not
+      crash the VM. **Twenty-four now**, in `compile/verify.rs`'s own
+      `mod tests` (counted with `grep -c '#\[test\]'`, not estimated).
+      The seven that existed covered a register past the frame, a jump off
+      the end, a constant index past the pool, a missing `EXTRAARG`, an
+      undeclared upvalue, a proto that runs off its end, and a well-formed
+      chunk. Added: an unassigned opcode byte, an orphan `EXTRAARG`, a proto
+      with no instructions, more parameters than registers, and one
+      out-of-range case **per table** `verify_proto` bounds.
+
+      **Writing them found a hole, which is the point of writing them.**
+      `GETMAPK` and `SETMAPK` were listed in the `Fmt::ABx` limit match and
+      are **`Abc`** — so that arm never ran for them and their constant index
+      had gone unchecked for the life of the verifier. A listing that reads
+      as coverage and is not. The `Abc` path now bounds `GETMAPK`,
+      `SETMAPK`, `JEQK`, `GETFX`, `SETFX`, `CASTCHK`, `CASTUNWRAP` and
+      `CHKTY` against the table each one indexes.
+
+      **And it found the opposite mistake immediately after.** `CALLMX`
+      looks like `GETFX`'s sibling; its `C` is the **result count** and its
+      member name rides in the `EXTRAARG`. Bounding `C` against the constant
+      pool rejected three valid chunks, caught by the differential suite
+      within a minute. `a_dynamic_member_call_is_not_mistaken_for_one` pins
+      that shape so the next person extending the table has a reason not to
+      add it back.
+
+      A test per table, deliberately: the `_ => usize::MAX` arm means an
+      opcode nobody listed is silently unchecked, and one test covering
+      "some `Bx` is bounded" would not notice the next table arriving
+      without a bound.
+
+      **Still not verified, and now for a written-down reason:** the
+      `EXTRAARG` payloads. Eleven opcodes take one and each packs something
+      different — a module and proto packed 8/16, a constant index, a
+      `dynop` code. `CALLMX` is the evidence that guessing from doc comments
+      rejects valid chunks, which is worse than a gap. That wants a table on
+      `Op` declaring what its `EXTRAARG` means, not a `match` written by
+      hand.
+
+      Two **positive** tests came out of it as well, both pinning rules that
+      read like bugs at a glance: a `TAILCALLK` terminates a proto even
+      though its `EXTRAARG` is the physically last word, and a `JMP` with a
+      zero close-upvalues threshold is not a bad register.
 - [ ] Closure-semantics fixtures asserting **values**, not just exit status:
       per-iteration capture, self-recursive locals, upvalue closing. This is
       where a subtle divergence is most likely and least likely to be caught

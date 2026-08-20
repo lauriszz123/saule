@@ -774,6 +774,28 @@ impl Vm {
                             });
                         self.stack[base + a] = if ok { v } else { Value::Nil };
                     }
+                    // `(x as T)!` — the two above, fused. See the opcode's
+                    // doc for the profile that justifies it.
+                    //
+                    // The failure path is `UNWRAPNIL`'s, not a new one: a
+                    // cast that does not hold yields `nil`, and unwrapping a
+                    // `nil` is `ForceUnwrapNil` at this instruction's span.
+                    // A missing `cast_types` entry is a malformed chunk, and
+                    // `is_some_and` makes it fail the cast rather than panic
+                    // — the same choice `CASTCHK` makes.
+                    Op::CASTUNWRAP => {
+                        let v = self.stack[base + ins.b() as usize].clone();
+                        let ok = chunk
+                            .cast_types
+                            .get(ins.c() as usize)
+                            .is_some_and(|t| {
+                                saule_interpreter::eval::expr::cast::cast(&v, t)
+                            });
+                        if !ok || matches!(v, Value::Nil) {
+                            return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
+                        }
+                        self.stack[base + a] = v;
+                    }
 
                     // ---- §15.13 calls and returns -------------------------
                     Op::CALL => {

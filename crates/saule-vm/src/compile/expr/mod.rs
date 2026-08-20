@@ -137,35 +137,25 @@ impl Compiler<'_> {
             Expr::SafeMember { obj, name } => self.safe_member_to(e, obj, name, dst)?,
 
             // `x!` — the value, or `ForceUnwrapNil` at this span.
-            Expr::ForceUnwrap(inner) => {
-                let m = self.mark();
-                let r = self.operand_to_reg(inner, self.operand_is_pure(inner))?;
-                let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
-                self.emit(Instruction::abc(Op::UNWRAPNIL, a, b, 0), span);
-                self.free_to(m);
-            }
+            //
+            // `(x as T)!` fuses into one `CASTUNWRAP`. Emitted at the
+            // **`!`'s** span, which is the span `UNWRAPNIL` carried, so the
+            // error a failed cast raises points where it always did.
+            Expr::ForceUnwrap(inner) => match &inner.value {
+                Expr::Cast { value, ty } => self.cast_to(value, ty, dst, span, true)?,
+                _ => {
+                    let m = self.mark();
+                    let r = self.operand_to_reg(inner, self.operand_is_pure(inner))?;
+                    let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+                    self.emit(Instruction::abc(Op::UNWRAPNIL, a, b, 0), span);
+                    self.free_to(m);
+                }
+            },
 
             // `x as T`. The type travels as an index into the chunk's cast
             // table rather than as a `TypeDesc`, because the test is deep —
             // see `Chunk::cast_types`.
-            Expr::Cast { value, ty } => {
-                let k = self.chunk.add_cast_type(ty);
-                let Ok(k) = u8::try_from(k) else {
-                    return Err(CompileError::unsupported(
-                        "a module casting to more than 256 distinct types",
-                        span.clone(),
-                    ));
-                };
-                // `sort`'s comparator is `(a as integer)! < (b as integer)!`
-                // on untyped lambda parameters, so `CASTCHK` + `UNWRAPNIL`
-                // is 46% of that benchmark and every one of them was
-                // preceded by a `MOVE` of a parameter into a temporary.
-                let m = self.mark();
-                let r = self.operand_to_reg(value, self.operand_is_pure(value))?;
-                let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
-                self.emit(Instruction::abc(Op::CASTCHK, a, b, k), span);
-                self.free_to(m);
-            }
+            Expr::Cast { value, ty } => self.cast_to(value, ty, dst, span, false)?,
 
             Expr::Match { scrutinee, arms } => self.match_to(e, scrutinee, arms, dst)?,
 
@@ -232,6 +222,44 @@ impl Compiler<'_> {
         self.ty_name(e.id).and_then(num_of)
     }
 
+    /// `value as ty`, optionally force-unwrapped in the same instruction.
+    ///
+    /// One function for both because the two differ only in the opcode and
+    /// in what a failed cast does — `CASTCHK` yields nil, `CASTUNWRAP`
+    /// raises `ForceUnwrapNil`. Writing them apart would leave two places
+    /// that have to agree about interning the cast type and about the
+    /// 256-type limit.
+    ///
+    /// `span` is the caller's, not the cast's: for the fused form it is the
+    /// `!`'s span, which is the one `UNWRAPNIL` used to carry, so a failed
+    /// cast still points where it always did.
+    fn cast_to(
+        &mut self,
+        value: &Spanned<Expr>,
+        ty: &saule_ast::Type,
+        dst: u16,
+        span: &std::ops::Range<usize>,
+        unwrap: bool,
+    ) -> Result<(), CompileError> {
+        let k = self.chunk.add_cast_type(ty);
+        let Ok(k) = u8::try_from(k) else {
+            return Err(CompileError::unsupported(
+                "a module casting to more than 256 distinct types",
+                span.clone(),
+            ));
+        };
+        // `sort`'s comparator is `(a as integer)! < (b as integer)!` on
+        // untyped lambda parameters, so this pair is 46% of that benchmark
+        // and every one of them used to be preceded by a `MOVE` of a
+        // parameter into a temporary as well.
+        let m = self.mark();
+        let r = self.operand_to_reg(value, self.operand_is_pure(value))?;
+        let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+        let op = if unwrap { Op::CASTUNWRAP } else { Op::CASTCHK };
+        self.emit(Instruction::abc(op, a, b, k), span);
+        self.free_to(m);
+        Ok(())
+    }
 }
 
 /// A human-readable name for an unsupported construct, so the diagnostic
