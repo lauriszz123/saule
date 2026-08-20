@@ -169,6 +169,26 @@ pub(crate) struct RunArgs {
     /// `SAULE_ENGINE=interp`.
     #[arg(long, conflicts_with = "vm")]
     pub interp: bool,
+
+    /// Count what the bytecode VM executes and print an opcode and
+    /// opcode-pair histogram to stderr when the program finishes.
+    ///
+    /// The collector `VM_DESIGN.md` §16 requires before a superinstruction
+    /// is added: it reports which opcodes dominate a run and which
+    /// *statically adjacent* pairs are worth fusing. Implies `--vm`, so a
+    /// program the compiler cannot handle says so rather than producing an
+    /// empty profile without explanation.
+    ///
+    /// Needs a binary built with the `profile` feature — the counting loop
+    /// is not compiled otherwise, and this flag says so rather than
+    /// reporting an empty run:
+    ///
+    ///     cargo build --release --features profile -p saule-cli
+    ///
+    /// Measure a release build. A debug build's costs are not the costs the
+    /// optimisation is aimed at.
+    #[arg(long = "profile-bytecode", conflicts_with = "interp")]
+    pub profile_bytecode: bool,
 }
 
 /// `saule init <name>`

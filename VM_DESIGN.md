@@ -1173,6 +1173,26 @@ A superinstruction is only worth it when the pair appears in a hot loop *and* th
 fused version removes a register round-trip. Measure with a per-opcode-pair
 histogram collected under a `--profile-bytecode` flag.
 
+**The collector exists** — `crates/saule-vm/src/profile.rs`, wired into the
+dispatch loop and printed by `saule run --profile-bytecode`:
+
+```bash
+cargo build --release --features profile -p saule-cli
+./target/release/saule run --profile-bytecode benchmarks/sau/fib.sau
+```
+
+It is behind a cargo feature because the counting copy of the loop costs 2–3%
+on the call-heavy benchmarks by *existing*, with every counter compiled out;
+`VM_TASKS.md`'s Phase 5 records the measurement. A pair is counted only when
+the two instructions were **statically adjacent** — neighbouring words of one
+proto — because that is the only adjacency the emitter can fuse. A back-edge
+into a loop body is not one.
+
+Its first readings argue for the emission peephole (§17) ahead of any of the
+five candidates above: `MOVE` is 30% of `fib`, `LOADI` and `MOVE` are half of
+`loop_arith`, and `fib` runs `LTI TEST` a million times as a pair while
+`JLTI` — the fused form, already in the instruction set — goes unemitted.
+
 ---
 
 # Part IV — The compiler

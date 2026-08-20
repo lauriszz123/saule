@@ -53,6 +53,7 @@ pub mod chunk;
 pub mod compile;
 pub mod disasm;
 pub mod op;
+pub mod profile;
 pub mod program;
 pub mod vm;
 

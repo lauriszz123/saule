@@ -2740,9 +2740,74 @@ Its own task, with its own differential fixture.
 
 *Ongoing, and **only with a profile in hand**.*
 
+- [x] **`--profile-bytecode` — the profile the rest of this phase requires.**
+      §16 says every superinstruction "must be justified by a profile before
+      it is added" and names the collector; `crates/saule-vm/src/profile.rs`
+      is it. `saule run --profile-bytecode <target>` prints two tables to
+      stderr when the program finishes: executions per opcode, and
+      executions per **statically adjacent** opcode pair, each with a share
+      and a running cumulative share.
+
+      **Adjacent, not "whatever ran next"**, and the distinction is the
+      whole point. A superinstruction is emitted by the compiler, which can
+      only fuse two words it emits side by side. `FORLOOP_I` is dynamically
+      followed by the top of the loop body on every iteration and fusing
+      them is not something the emitter can do — counting that pair would
+      make the histogram argue for work nobody can perform. Pinned by
+      `pairs_are_only_counted_when_the_two_are_neighbours`, where the
+      back-edge contributes 0 pairs across 10 iterations and the
+      fall-through exit contributes 1.
+
+      **It is behind a `profile` cargo feature, and that is a measurement,
+      not caution.** The counting loop is a second monomorphisation of the
+      dispatch loop (`const PROFILE: bool`), so with profiling off there is
+      no counter, no branch and no thread-local read on the hot path — and
+      it was *still* 2–3% slower on `loop_arith`, `fib`, `array`, `closure`
+      and `sort`. The second copy merely existing costs that much in code
+      layout. Confirmed by building the same tree with the `true`
+      instantiation unreferenced, which measured bit-for-bit at baseline,
+      and by a control build of unchanged code, which measured identical to
+      the shipped binary. A single loop with a runtime `bool` was worse
+      again — up to **8.7%** on `loop_arith`, a branch per instruction being
+      exactly what a dispatch loop cannot afford. So the default build pays
+      **nothing**, and profiling is a rebuild away:
+
+      ```bash
+      cargo build --release --features profile -p saule-cli
+      ```
+
+      Asking for `--profile-bytecode` on a binary without the feature is an
+      error naming the rebuild, never an empty report — an empty report
+      reads as "your program executed no bytecode", which is a different and
+      alarming claim. `saule_vm::profile::SUPPORTED` is what the CLI checks.
+
+      **First results, on release builds.** `loop_arith`: `LOADI` and `MOVE`
+      are **50%** of 40M instructions between them, and `MOVE LOADI` is the
+      hottest pair — that is the deferred emission peephole (§17, "Peephole
+      during emission"), not a superinstruction. `fib`: `MOVE` alone is
+      **30%** of 11.8M, and `LTI TEST` runs 1,028,457 times as a pair even
+      though `JLTI` — the fused comparison-and-branch — is already in the
+      instruction set and already implemented. `disasm benchmarks/sau/fib.sau`
+      shows another item off that same list in one screen: `0007 JMP -> 0008`
+      is a jump to the very next instruction. Both readings say the same
+      thing — the first Phase 5 wins are in the **emitter**, not in new
+      opcodes.
+
+      Two more worth recording, because neither is on the candidate list and
+      both are larger than anything on it. `sort` spends **46%** of its 29M
+      instructions in `CASTCHK` + `UNWRAPNIL`, 6,665,964 of each: reading a
+      `table<integer, integer>` yields an optional that is checked and
+      unwrapped on every comparison, and that is a *compiler* question about
+      what a typed table read must prove, not a dispatch-loop one. `oop` is
+      **42%** `MOVE` across 19M instructions, against 5.3% `CALLM` — the
+      benchmark named for method dispatch spends eight times as much of
+      itself shuffling registers as dispatching, which is worth knowing
+      before the `CALLM` inline cache (§8.5) is written to speed it up.
 - [ ] Inline caches for `GETFX` / `CALLIF`
 - [ ] Superinstructions from a measured opcode-pair histogram collected under
-      `--profile-bytecode` (§16). Candidates in expected-value order:
+      `--profile-bytecode` (§16). **The collector now exists — see the item
+      above — and its first readings do not support any of the candidates
+      below yet.** Candidates in expected-value order:
       `GETF_CALLM`, `FORLOOP_GETARR`, `ADDII_MOVE`, `GETUPVAL_CALL`,
       `JLTI_ADDII`
 - [ ] `NativeClosureMulti` writing into `&mut [Value]`, for `stdlib/iter.rs`

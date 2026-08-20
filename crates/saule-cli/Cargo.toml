@@ -24,3 +24,9 @@ saule-vm = { path = "../saule-vm" }
 saule-fmt = { path = "../saule-fmt" }
 miette = { version = "7.6.0", features = ["fancy"] }
 clap = { version = "4.6.4", features = ["derive"] }
+
+[features]
+# Passthrough for `--profile-bytecode` (`VM_DESIGN.md` §16). Off by
+# default, and deliberately so — see the comment on `saule-vm`'s feature of
+# the same name for the measurement behind that.
+profile = ["saule-vm/profile"]
