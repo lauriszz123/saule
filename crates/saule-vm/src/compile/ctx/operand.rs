@@ -81,6 +81,43 @@ impl Compiler<'_> {
                     && self.num_of_node(rhs).is_some()
                     && self.operand_is_pure(rhs)
             }
+            // Reading an element of a plain table runs no user code: it
+            // compiles to `GETIDX`/`GETIDXU`, which touch the table and the
+            // destination and nothing else. A class receiver is the case
+            // that *would* — `index_to` sends it to the `OpIndex` overload,
+            // which is a method call — so the receiver's type decides.
+            //
+            // This does not let the index read itself happen in place;
+            // `in_place_operand` still answers `None` for it. What it unlocks
+            // is the operand **beside** it: `aik * b[j]!` copied `aik` into a
+            // temporary purely because its neighbour was an index, and that
+            // one `MOVE` was a third of the matrix inner loop.
+            Expr::Index { obj, index } => {
+                self.class_of_expr(obj).is_none()
+                    && self.operand_is_pure(obj)
+                    && self.operand_is_pure(index)
+            }
+            // `x!` is `UNWRAPNIL` — one register written, no user code. It
+            // can raise, but raising unwinds rather than running anything
+            // that could write the operand beside it.
+            Expr::ForceUnwrap(inner) => self.operand_is_pure(inner),
+            // A field read on a class whose layout resolves the name is
+            // `GETF`: one indexed load out of the instance, no user code.
+            // The slot lookup is the whole test — a member that is *not* a
+            // known field is a method reference, a static, a module slot or
+            // an `any` receiver, and those compile to something that can
+            // run code or that this function has no business promising for.
+            //
+            // `self.pos = self.pos + 1` is the shape this unlocks, and it is
+            // the inner loop of every scanner: the receiver was copied into
+            // a temporary purely because the right-hand side mentioned a
+            // field.
+            Expr::Member { obj, name } => {
+                self.class_of_expr(obj)
+                    .and_then(|c| self.chunk.classes[c as usize].layout.slot(name))
+                    .is_some()
+                    && self.operand_is_pure(obj)
+            }
             _ => self.in_place_operand(e).is_some(),
         }
     }

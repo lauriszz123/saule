@@ -656,25 +656,56 @@ impl Vm {
                             })?;
                         }
                     }
+                    // Both index forms borrow the table and the key in place.
+                    // Taking `Rc::clone` of the table and a `Value::clone` of
+                    // the key cost a refcount pair and a discriminant branch
+                    // per index operation — three per iteration of a matrix
+                    // inner loop — to produce two operands that are only read.
                     Op::GETMAP | Op::GETMAPK | Op::GETIDX => {
-                        let t = self.table_at(base + ins.b() as usize, &proto, here)?;
-                        let key = if op == Op::GETMAPK {
-                            chunk.constants[ins.c() as usize].clone()
-                        } else {
-                            self.stack[base + ins.c() as usize].clone()
+                        let tr = base + ins.b() as usize;
+                        let v = {
+                            let Value::Table(t) = &self.stack[tr] else {
+                                return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                            };
+                            let t = t.borrow();
+                            if op == Op::GETMAPK {
+                                t.get(&chunk.constants[ins.c() as usize])
+                            } else {
+                                t.get(&self.stack[base + ins.c() as usize])
+                            }
                         };
-                        let v = t.borrow().get(&key);
+                        self.stack[base + a] = v;
+                    }
+                    // `t[i]!` — the index and the force-unwrap in one word.
+                    // See the opcode's doc for the profile that justifies it.
+                    Op::GETIDXU => {
+                        let tr = base + ins.b() as usize;
+                        let v = {
+                            let Value::Table(t) = &self.stack[tr] else {
+                                return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                            };
+                            let v = t.borrow().get(&self.stack[base + ins.c() as usize]);
+                            v
+                        };
+                        if matches!(v, Value::Nil) {
+                            return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
+                        }
                         self.stack[base + a] = v;
                     }
                     Op::SETMAP | Op::SETMAPK | Op::SETIDX => {
-                        let t = self.table_at(base + a, &proto, here)?;
-                        let key = if op == Op::SETMAPK {
-                            chunk.constants[ins.b() as usize].clone()
-                        } else {
-                            self.stack[base + ins.b() as usize].clone()
-                        };
+                        let tr = base + a;
+                        // The stored value is the one thing that genuinely
+                        // moves into the table, so it is the one clone left.
                         let v = self.stack[base + ins.c() as usize].clone();
-                        t.borrow_mut().set(&key, v).map_err(|m| RuntimeError::TypeError {
+                        let Value::Table(t) = &self.stack[tr] else {
+                            return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                        };
+                        let r = if op == Op::SETMAPK {
+                            t.borrow_mut().set(&chunk.constants[ins.b() as usize], v)
+                        } else {
+                            t.borrow_mut().set(&self.stack[base + ins.b() as usize], v)
+                        };
+                        r.map_err(|m| RuntimeError::TypeError {
                             message: m,
                             span: proto.span_at(here),
                         })?;

@@ -30,6 +30,11 @@ impl Vm {
 
     // ---- typed operand reads -------------------------------------------
 
+    /// Marked `#[inline]` so the error half never materialises on the hot
+    /// path. `RuntimeError` is 64 bytes, so out of line these return ~72-byte
+    /// `Result`s by value for what is, on the path that actually runs, one
+    /// discriminant test and a register move.
+    #[inline]
     pub(crate) fn int_at(&self, i: usize, proto: &Proto, here: u32) -> Result<i64, RuntimeError> {
         match &self.stack[i] {
             Value::Int(n) => Ok(*n),
@@ -37,6 +42,8 @@ impl Vm {
         }
     }
 
+
+    #[inline]
     pub(crate) fn float_at(&self, i: usize, proto: &Proto, here: u32) -> Result<f64, RuntimeError> {
         match &self.stack[i] {
             Value::Float(n) => Ok(*n),
@@ -44,6 +51,8 @@ impl Vm {
         }
     }
 
+
+    #[inline]
     pub(crate) fn table_at(
         &self,
         i: usize,
@@ -56,6 +65,8 @@ impl Vm {
         }
     }
 
+
+    #[inline]
     pub(crate) fn int_pair(
         &self,
         base: usize,
@@ -69,6 +80,8 @@ impl Vm {
         ))
     }
 
+
+    #[inline]
     pub(crate) fn float_pair(
         &self,
         base: usize,

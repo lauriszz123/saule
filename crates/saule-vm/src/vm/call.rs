@@ -262,7 +262,11 @@ impl Vm {
     /// Inlined into its one real body below: the split exists so a resolved
     /// caller can skip the downcast, not to add a call to the path that
     /// still needs it. Dynamic `CALL` — a lambda through a local — comes
-    /// through here, and paid ~3% for the extra hop until this was marked.
+    /// through here.
+    ///
+    /// `inline`, not `inline(always)`: forcing the whole body into the two
+    /// call sites cost `closure` 12% — the dispatch loop is already large
+    /// enough that the extra code hurts more than the saved frame helps.
     #[inline]
     pub(crate) fn push_frame(
         &mut self,
@@ -440,32 +444,20 @@ impl Vm {
 
     /// A cached, upvalue-free closure for a statically-resolved callee, so
     /// `CALLK` allocates nothing per call.
-    pub(crate) fn closure_for(&mut self, chunk: &Rc<Chunk>, idx: u32) -> Rc<VmFunctionRef> {
+    pub(crate) fn closure_for(&self, chunk: &Rc<Chunk>, idx: u32) -> Rc<VmFunctionRef> {
         let m = chunk.module_index;
-        // Hit path first, under a shared borrow: a `borrow_mut` here would
-        // be taken on every call, not just the first.
-        if let Some(Some(c)) = self.shared.closure_cache.borrow().get(m).and_then(|r| r.get(idx as usize)) {
-            return Rc::clone(c);
-        }
-        // Cloned here rather than by the caller: on the hit path above there
-        // is no proto to clone, and every static call site takes that path
-        // after its first visit.
-        let c = VmFunctionRef::new(Closure::bound(
-            Rc::clone(chunk.proto(idx)),
-            Rc::clone(chunk),
-            Vec::new(),
-            &self.shared,
-        ));
-        if let Some(slot) = self
-            .shared
-            .closure_cache
-            .borrow_mut()
-            .get_mut(m)
-            .and_then(|r| r.get_mut(idx as usize))
-        {
-            *slot = Some(Rc::clone(&c));
-        }
-        c
+        Rc::clone(self.shared.closure_cache[m][idx as usize].get_or_init(|| {
+            // Only on the first visit to this call site. Cloning the proto
+            // here rather than in the caller keeps the hit path — which is
+            // every call after the first — down to two indexed loads and a
+            // refcount bump.
+            VmFunctionRef::new(Closure::bound(
+                Rc::clone(chunk.proto(idx)),
+                Rc::clone(chunk),
+                Vec::new(),
+                &self.shared,
+            ))
+        }))
     }
 
 }

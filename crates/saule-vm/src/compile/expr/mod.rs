@@ -143,6 +143,13 @@ impl Compiler<'_> {
             // error a failed cast raises points where it always did.
             Expr::ForceUnwrap(inner) => match &inner.value {
                 Expr::Cast { value, ty } => self.cast_to(value, ty, dst, span, true)?,
+                // `t[i]!` fuses into one `GETIDXU`. Indexing a `table<T>`
+                // yields `T?`, so this is not a niche shape — it is how a
+                // typed element read is spelled, and the pair was 17.7% of
+                // every instruction `matrix` executed.
+                Expr::Index { obj, index } => {
+                    self.index_to(inner, obj, index, dst, Some(span))?
+                }
                 _ => {
                     let m = self.mark();
                     let r = self.operand_to_reg(inner, self.operand_is_pure(inner))?;
@@ -163,7 +170,7 @@ impl Compiler<'_> {
 
             Expr::Table(entries) => self.table_to(e, entries, dst)?,
 
-            Expr::Index { obj, index } => self.index_to(e, obj, index, dst)?,
+            Expr::Index { obj, index } => self.index_to(e, obj, index, dst, None)?,
 
             Expr::Pipe { source, stages } => self.pipe_to(source, stages, dst, span)?,
 

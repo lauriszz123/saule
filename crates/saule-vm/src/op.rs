@@ -498,6 +498,28 @@ define_ops! {
     /// Appended after `SELFFUNC`, never inserted: the numbering is the chunk
     /// ABI.
     CASTUNWRAP: Abc,
+
+    /// `R[A] = R[B][R[C]]`, raising `ForceUnwrapNil` if the element is nil —
+    /// `GETIDX` and `UNWRAPNIL` fused (§16).
+    ///
+    /// The best-justified pair in the whole histogram. Indexing a `table<T>`
+    /// yields `T?`, so *every* typed element read in the language is written
+    /// `t[i]!` and compiles to exactly these two words. They are emitted
+    /// adjacently by one expression, so no jump can land between them.
+    ///
+    /// `benchmarks/sau/matrix.sau` executes 2,686,640 `GETIDX` and
+    /// 2,686,640 `UNWRAPNIL` — a perfect 1:1 — and the pair is 17.7% of all
+    /// instructions it runs, the single largest entry in its pair table.
+    /// `array`, `bintree`, `entity` and `interp` all read their tables the
+    /// same way.
+    ///
+    /// Carries the `!`'s span rather than the index expression's, so a nil
+    /// element still blames the operator that refused it — the same choice
+    /// [`CASTUNWRAP`](Op::CASTUNWRAP) makes.
+    ///
+    /// Appended after `CASTUNWRAP`, never inserted: the numbering is the
+    /// chunk ABI.
+    GETIDXU: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

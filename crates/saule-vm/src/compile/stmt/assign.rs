@@ -255,10 +255,22 @@ impl Compiler<'_> {
                 return Ok(());
             }
 
+            // `t[i] = …` on operands already in registers is the write half
+            // of the shape `index_to` already reads in place, and it emitted
+            // two `MOVE`s per store: one for the table, one for the key. The
+            // value is evaluated *after* both, so reading them where they
+            // sit is only safe when it cannot run user code either — the
+            // same all-operands-pure rule the read side takes.
+            let in_place = self.operand_is_pure(obj)
+                && self.operand_is_pure(index)
+                && match value {
+                    Rhs::Expr(e) => self.operand_is_pure(e),
+                    Rhs::Reg(_) => true,
+                };
             let m = self.mark();
-            let o = self.expr_tmp(obj)?;
-            let k = self.expr_tmp(index)?;
-            let v = self.rhs_tmp(value)?;
+            let o = self.operand_to_reg(obj, in_place)?;
+            let k = self.operand_to_reg(index, in_place)?;
+            let v = self.rhs_operand(value, in_place)?;
             let (a, b, c) = (
                 self.reg8(o, span)?,
                 self.reg8(k, span)?,
