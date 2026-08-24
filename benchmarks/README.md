@@ -7,7 +7,7 @@ comparable and any gap is a gap in the implementation rather than in the
 language.
 
 ```bash
-python3 benchmarks/bench.py                    # release build vs lua, luajit
+python3 benchmarks/bench.py                    # release build vs lua
 python3 benchmarks/bench.py check              # confirm outputs still agree
 ```
 

@@ -136,6 +136,26 @@ impl Compiler<'_> {
         if in_place && let Some(r) = self.in_place_operand(e) {
             return Ok(r);
         }
+        // A call's result is already in a register — the call window's base
+        // — and an operand only has to be *somewhere* that stays live until
+        // the instruction reads it. `expr_tmp` allocates a destination
+        // first and compiles into it, which for a call means landing the
+        // result in the window and then `MOVE`ing it down by one. Handing
+        // the call the window's own base as its destination makes
+        // `move_result` a no-op, and re-allocating that register afterwards
+        // pins the result there.
+        //
+        // `f(n - 1) + f(n - 2)` is the shape: two of `fib`'s thirteen
+        // instructions were these moves.
+        if matches!(e.value, saule_ast::Expr::Call { .. }) {
+            let base = self.f.regs.top();
+            self.expr_to(e, base)?;
+            // `finish_call` released the window; the allocator is a stack,
+            // so this hands back the very register the result is in.
+            let r = self.alloc(&e.span)?;
+            debug_assert_eq!(r, base, "the register allocator is a stack");
+            return Ok(r);
+        }
         self.expr_tmp(e)
     }
 }

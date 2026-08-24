@@ -27,6 +27,11 @@ impl Vm {
         proto: &Proto,
         here: u32,
     ) -> Result<(), RuntimeError> {
+        // Taken before the first `pop`: `proto` is borrowed from the frame
+        // this throw is unwinding out of (see `Frame::proto`), so it stops
+        // being safe to read the moment that frame goes. Only the escaping
+        // case uses it, and a throw is cold enough not to care.
+        let span = proto.span_at(here);
         loop {
             let Some(frame) = self.frames.last() else { break };
             let func = Rc::clone(&frame.func);
@@ -59,10 +64,7 @@ impl Vm {
             self.frames.pop();
         }
 
-        Err(RuntimeError::Thrown {
-            value: value.to_display_string(),
-            span: proto.span_at(here),
-        })
+        Err(RuntimeError::Thrown { value: value.to_display_string(), span })
     }
 
     pub(crate) fn type_matches(&self, chunk: &Chunk, reg: usize, ty: u32) -> bool {

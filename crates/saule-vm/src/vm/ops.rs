@@ -28,6 +28,46 @@ impl Vm {
         }
     }
 
+    /// Make registers `..top` available to a frame that is about to run.
+    ///
+    /// Grows the file to `top` plus [`REG_HEADROOM`](super::REG_HEADROOM),
+    /// which is the invariant the dispatch loop's unchecked register access
+    /// rests on, and records `top` so the re-entry pool knows how much of
+    /// the file was actually written.
+    #[inline]
+    pub(crate) fn claim_registers(&mut self, top: usize) {
+        self.ensure_stack(top + super::REG_HEADROOM);
+        if top > self.high_water {
+            self.high_water = top;
+        }
+    }
+
+    /// Read a register of the running frame, without a bounds check.
+    ///
+    /// # Safety of the unchecked access
+    ///
+    /// Not `unsafe` to call, because it cannot be called wrongly from the
+    /// only place that calls it. Every index the dispatch loop forms is
+    /// `base + A (+ B)` out of 8-bit operands, and
+    /// [`claim_registers`](Self::claim_registers) leaves
+    /// [`REG_HEADROOM`](super::REG_HEADROOM) = 512 live slots above
+    /// `base + max_regs` — more than two saturated operand bytes. So the
+    /// index is inside the `Vec` for *any* instruction, including a
+    /// malformed one, and the verifier's `A < max_regs` is a second, tighter
+    /// proof on top.
+    #[inline(always)]
+    pub(crate) fn reg(&self, i: usize) -> &Value {
+        debug_assert!(i < self.stack.len(), "register {i} outside the file");
+        unsafe { self.stack.get_unchecked(i) }
+    }
+
+    /// [`reg`](Self::reg), mutably. Same argument.
+    #[inline(always)]
+    pub(crate) fn reg_mut(&mut self, i: usize) -> &mut Value {
+        debug_assert!(i < self.stack.len(), "register {i} outside the file");
+        unsafe { self.stack.get_unchecked_mut(i) }
+    }
+
     // ---- typed operand reads -------------------------------------------
 
     /// Marked `#[inline]` so the error half never materialises on the hot
@@ -36,7 +76,7 @@ impl Vm {
     /// discriminant test and a register move.
     #[inline]
     pub(crate) fn int_at(&self, i: usize, proto: &Proto, here: u32) -> Result<i64, RuntimeError> {
-        match &self.stack[i] {
+        match self.reg(i) {
             Value::Int(n) => Ok(*n),
             other => Err(operand_err(other, "integer", proto, here)),
         }
@@ -45,7 +85,7 @@ impl Vm {
 
     #[inline]
     pub(crate) fn float_at(&self, i: usize, proto: &Proto, here: u32) -> Result<f64, RuntimeError> {
-        match &self.stack[i] {
+        match self.reg(i) {
             Value::Float(n) => Ok(*n),
             other => Err(operand_err(other, "float", proto, here)),
         }
@@ -59,7 +99,7 @@ impl Vm {
         proto: &Proto,
         here: u32,
     ) -> Result<Rc<RefCell<TableObject>>, RuntimeError> {
-        match &self.stack[i] {
+        match self.reg(i) {
             Value::Table(t) => Ok(Rc::clone(t)),
             other => Err(operand_err(other, "table", proto, here)),
         }

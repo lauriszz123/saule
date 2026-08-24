@@ -352,12 +352,13 @@ fn invoke_comp(comp: &Value, a: &Value, b: &Value, buf: &mut Vec<Value>) -> Resu
     buf.push(b.clone());
     let result = match comp {
         // The common case: a lambda the VM compiled. Straight to the
-        // re-entrant call, no argument repackaging on the way.
-        Value::VmFunction(f) => f.invoke(buf, 0..0),
+        // re-entrant call, no argument repackaging on the way, and no
+        // `Vec` around the one boolean it answers with.
+        Value::VmFunction(f) => f.invoke_first(buf, 0..0),
         Value::Native(nf) => (nf.func)(buf)
-            .map(|v| vec![v])
             .map_err(|message| crate::error::RuntimeError::TypeError { message, span: 0..0 }),
         Value::NativeClosure(nc) => (nc.func)(buf)
+            .map(|vs| vs.into_iter().next().unwrap_or(Value::Nil))
             .map_err(|message| crate::error::RuntimeError::TypeError { message, span: 0..0 }),
         // A tree-walker closure still goes the long way; it is the engine
         // that needs the named-argument machinery.
@@ -367,10 +368,11 @@ fn invoke_comp(comp: &Value, a: &Value, b: &Value, buf: &mut Vec<Value>) -> Resu
                 EvaluatedArg::Positional(b.clone()),
             ];
             call_value_multi(other.clone(), &args, 0..0)
+                .map(|vs| vs.into_iter().next().unwrap_or(Value::Nil))
         }
     }
     .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
-    Ok(result.into_iter().next().unwrap_or(Value::Nil).is_truthy())
+    Ok(result.is_truthy())
 }
 
 // ─── Table.concat ────────────────────────────────────────────────────────────

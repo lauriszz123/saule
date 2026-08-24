@@ -23,6 +23,7 @@ use saule_ast::{Expr, Spanned, Stmt};
 
 use super::CompileError;
 use super::ctx::Compiler;
+use super::expr::results::Want;
 use crate::op::{Instruction, Op};
 
 /// What an assignment stores.
@@ -79,7 +80,26 @@ impl Compiler<'_> {
     pub fn block(&mut self, stmts: &[Spanned<Stmt>]) -> Result<(), CompileError> {
         self.f.enter_scope();
         for s in stmts {
-            self.stmt(s)?;
+            match &s.value {
+                // A call in statement position inside a block. **Nothing
+                // reads its value** — only the module body and a
+                // block-bodied `match` arm keep a statement's value, and
+                // neither of them comes through here — so asking for one
+                // result was two wasted instructions per call: `pop_frame`
+                // copying a value down out of the callee, and the `MOVE`
+                // `finish_call` emits to land it in a register the program
+                // never looks at again. `p.move(1.0, 2.0)` in a loop was
+                // one sixth `MOVE`.
+                Stmt::Expr(e @ Spanned { value: Expr::Call { callee, args }, .. }) => {
+                    let m = self.mark();
+                    let dst = self.alloc(&s.span)?;
+                    self.call_to_want(e, callee, args, dst, Want::Fixed(0))?;
+                    self.free_to(m);
+                }
+                _ => {
+                    self.stmt(s)?;
+                }
+            }
         }
         // A block that something captured needs its registers closed before
         // they are reused — otherwise the next iteration of a loop would

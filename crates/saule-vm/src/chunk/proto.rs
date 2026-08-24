@@ -134,13 +134,20 @@ pub struct LineEntry {
 ///
 /// No invalidation is needed: Saule has no metatables and no runtime class
 /// mutation, so a `(class, slot)` pair is permanently valid once observed.
+/// Caches the **resolved callee**, not the slot: the slot is already in the
+/// instruction, and what the probe actually costs is turning it into a
+/// `(module, proto)` pair — an `Rc::as_ptr`, a hash, a map probe and two
+/// indexed loads. A hit replaces all of that with one pointer compare.
 #[derive(Debug, Clone, Default)]
 pub enum InlineCache {
     #[default]
     Empty,
     Mono {
         class: Rc<ClassObject>,
-        slot: u16,
+        /// Module the resolved method was compiled in.
+        module: u16,
+        /// Proto index within that module.
+        target: u32,
     },
 }
 

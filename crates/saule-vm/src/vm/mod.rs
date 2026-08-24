@@ -64,6 +64,7 @@ use saule_interpreter::{RuntimeError, Value};
 
 use crate::chunk::Chunk;
 
+pub(crate) use call::Site;
 pub use frame::{ALL_RESULTS, Closure, Frame};
 pub use upval::Upvalue;
 
@@ -93,6 +94,21 @@ use ops::max_frames_from_env;
 /// rather than a difference between two engines that are supposed to agree.
 /// Pinned by `deep_recursion_hits_the_same_limit_under_both_engines`.
 pub const DEFAULT_MAX_FRAMES: usize = saule_interpreter::eval::MAX_EVAL_DEPTH as usize;
+
+/// Registers kept allocated **above** the active frame at all times.
+///
+/// This is what licenses the dispatch loop to read and write registers
+/// without a bounds check (§5.3). Operands are 8-bit, and the widest thing
+/// any opcode addresses is `base + A + B` with both bytes at their maximum,
+/// so a frame whose registers end at `base + max_regs` with 512 live slots
+/// above it cannot be indexed out of the register file by *any* instruction,
+/// well-formed or not. The verifier proves `A < max_regs` on top of that;
+/// this proves the arithmetic cannot leave the `Vec` even when it doesn't.
+///
+/// The cost is 512 `Value`s — 8KB — once, at the deepest frame the program
+/// reaches, because `ensure_stack` only ever grows. What it buys is two or
+/// three bounds checks per instruction executed, for the life of the run.
+pub(crate) const REG_HEADROOM: usize = 512;
 
 /// Everything about a running program that is **not** per-invocation: the
 /// code, the module slots, the statics, the classes and the enums (§5.1).
@@ -172,6 +188,22 @@ pub struct Vm {
     /// Open upvalues, sorted ascending by the stack index they point at, so
     /// `CLOSEUP` can pop from the back.
     open_upvals: Vec<Rc<RefCell<Upvalue>>>,
+    /// The highest register any frame has claimed since this VM was last
+    /// reset.
+    ///
+    /// Only the re-entry pool reads it, and only to answer "how much of the
+    /// register file did that callback actually touch?" — everything above
+    /// is [`REG_HEADROOM`] padding that has never been written, and
+    /// nil-ing 8KB of it per sort comparison would cost more than the
+    /// bounds checks the padding removes.
+    high_water: usize,
+    /// Where the outermost frame's return values land.
+    ///
+    /// Owned by the `Vm` rather than allocated per return, because a
+    /// re-entrant call — a sort comparator, an operator overload — *is* an
+    /// outermost return, once per invocation. Handing back a fresh `Vec`
+    /// each time was a malloc and a free per comparison on `sort`.
+    results: Vec<Value>,
 }
 
 impl Vm {
@@ -231,6 +263,8 @@ impl Vm {
             stack: Vec::with_capacity(256),
             frames: Vec::with_capacity(32),
             open_upvals: Vec::new(),
+            high_water: 0,
+            results: Vec::new(),
         }
     }
 }
@@ -246,17 +280,27 @@ impl VmShared {
 
     /// Park a `Vm` whose call returned cleanly.
     ///
-    /// The stack is cleared rather than left as it was: a stale register
-    /// would keep every value the last callback touched alive for as long
-    /// as the program runs. `clear` drops the values and keeps the
-    /// capacity, which is the whole point of the pool.
+    /// The registers are reset to `nil`: a stale one would keep every value
+    /// the last callback touched alive for as long as the program runs.
+    ///
+    /// **Reset in place, and only up to the high-water mark.** `clear`ing
+    /// would put the length back to zero, and the next call would then have
+    /// to `resize` the whole frame *plus* [`REG_HEADROOM`] — 8KB of `nil`
+    /// per sort comparison. The length stays where it is instead, which is
+    /// sound because a `Vm` handed back has no frames and the next
+    /// invocation starts from register zero.
     fn give_vm(&self, mut vm: Vm) {
         debug_assert!(vm.frames.is_empty(), "a clean return pops every frame");
         debug_assert!(
             vm.open_upvals.is_empty(),
             "popping the outermost frame closes every upvalue"
         );
-        vm.stack.clear();
+        let touched = vm.high_water.min(vm.stack.len());
+        for slot in &mut vm.stack[..touched] {
+            *slot = Value::Nil;
+        }
+        vm.high_water = 0;
+        vm.results.clear();
         // Bounded so a deeply nested program does not park a register file
         // per level for the rest of the run.
         if self.reentry_pool.borrow().len() < 8 {
@@ -266,6 +310,18 @@ impl VmShared {
 }
 
 impl Vm {
+    /// The first register no live frame is described by.
+    ///
+    /// **Zero whenever there are no frames**, which is every entry point's
+    /// situation: popping a frame closes its upvalues and its registers die
+    /// with it, so an empty frame list means the whole file is free. Taking
+    /// `stack.len()` instead — as this used to — climbed by a frame's worth
+    /// on every re-entrant call, which with a recycled `Vm` meant a sort
+    /// comparator started higher on every comparison.
+    fn free_base(&self) -> u32 {
+        if self.frames.is_empty() { 0 } else { self.stack.len() as u32 }
+    }
+
     /// Execute the entry module's `main` proto.
     pub fn run(&mut self) -> Result<Vec<Value>, RuntimeError> {
         let last = self.shared.chunks.len() - 1;
@@ -283,12 +339,9 @@ impl Vm {
         let chunk = Rc::clone(&self.shared.chunks[module]);
         let main_idx = chunk.main;
         let handle = self.closure_for(&chunk, main_idx);
-        // Start above whatever an earlier module left behind: module slots
-        // are shared, but registers are not, and a later module must not
-        // scribble on a frame an earlier one is still described by.
-        let base = self.stack.len() as u32;
-        self.push_frame(handle, base, 0, base, ALL_RESULTS, 0..0)?;
-        self.execute()
+        let base = self.free_base();
+        self.push_frame(handle, base, 0, base, ALL_RESULTS, &Site::Known(0..0))?;
+        self.execute_collecting()
     }
 
     /// Call an already-built closure value with `args`. The entry point an
@@ -326,7 +379,20 @@ impl Vm {
         span: std::ops::Range<usize>,
     ) -> Result<Vec<Value>, RuntimeError> {
         let _depth = saule_interpreter::enter_call_depth(&span)?;
-        let base = self.stack.len() as u32;
+        self.enter_invocation(handle, args, span)?;
+        self.execute_collecting()
+    }
+
+    /// Lay `args` out above whatever is on the stack and push `handle`'s
+    /// frame. Shared by [`invoke`](Self::invoke) and
+    /// [`invoke_first`](Self::invoke_first).
+    fn enter_invocation(
+        &mut self,
+        handle: &Rc<VmFunctionRef>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<(), RuntimeError> {
+        let base = self.free_base();
         self.ensure_stack(base as usize + args.len());
         for (i, a) in args.iter().enumerate() {
             self.stack[base as usize + i] = a.clone();
@@ -337,9 +403,32 @@ impl Vm {
             args.len(),
             base,
             ALL_RESULTS,
-            span,
-        )?;
-        self.execute()
+            &Site::Known(span),
+        )
+    }
+
+    /// [`invoke`](Self::invoke) for a caller that wants a single value, with
+    /// no `Vec` in the middle.
+    ///
+    /// The callback shape: `Table.sort`'s comparator, an operator overload,
+    /// a `toString`. The results stay in this VM's own buffer, which the
+    /// re-entry pool then hands to the next call.
+    pub(crate) fn invoke_first(
+        &mut self,
+        handle: &Rc<VmFunctionRef>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, RuntimeError> {
+        let _depth = saule_interpreter::enter_call_depth(&span)?;
+        self.enter_invocation(handle, args, span)?;
+        self.execute()?;
+        let first = if self.results.is_empty() {
+            Value::Nil
+        } else {
+            self.results.swap_remove(0)
+        };
+        self.results.clear();
+        Ok(first)
     }
 
     /// Invoke a static method by name, after `run` has executed the module
@@ -378,13 +467,11 @@ impl Vm {
         }
         let chunk = Rc::clone(&self.shared.chunks[module]);
         let handle = self.closure_for(&chunk, proto_idx);
-        // Start above whatever the module body left behind, so its module
-        // slots and any live registers are untouched.
-        let base = self.stack.len() as u32;
-        if let Err(e) = self.push_frame(handle, base, 0, base, ALL_RESULTS, 0..0) {
+        let base = self.free_base();
+        if let Err(e) = self.push_frame(handle, base, 0, base, ALL_RESULTS, &Site::Known(0..0)) {
             return Some(Err(e));
         }
-        Some(self.execute())
+        Some(self.execute_collecting())
     }
 
 }

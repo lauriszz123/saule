@@ -36,7 +36,7 @@ pub use interface::InterfaceObject;
 pub use table::{TableKey, TableObject};
 
 /// A Saule runtime value.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Value {
     Nil,
     Bool(bool),
@@ -81,6 +81,62 @@ pub enum Value {
     /// `Io.stdin`/`stdout`/`stderr` statics. Methods are dispatched via a
     /// static table inside `stdlib::io`.
     File(Rc<RefCell<FileHandle>>),
+}
+
+/// Copying a value is the single most common thing the engines do — every
+/// register move, every field read, every table lookup — and the derived
+/// `clone` was one out-of-line call for all of it.
+///
+/// Fifteen variants of refcount bumping is more than LLVM will inline into a
+/// dispatch loop, so it emitted a `bl` even for `Value::Int(3)`: a call, a
+/// jump table and a spill to copy sixteen bytes. Splitting the scalars out
+/// gives the caller a tag compare and a 16-byte move inline, and leaves the
+/// heap variants — where an `Rc` increment is the real work anyway — behind
+/// the call they were always going to need.
+impl Clone for Value {
+    #[inline]
+    fn clone(&self) -> Value {
+        match self {
+            Value::Nil => Value::Nil,
+            Value::Bool(b) => Value::Bool(*b),
+            Value::Int(n) => Value::Int(*n),
+            Value::Float(f) => Value::Float(*f),
+            heap => heap.clone_heap(),
+        }
+    }
+}
+
+impl Value {
+    /// The refcounting half of [`Clone`], deliberately out of line.
+    ///
+    /// Not `cold` — strings and tables are ordinary traffic. Just too big to
+    /// be worth duplicating at the hundred-odd sites that copy a value.
+    #[inline(never)]
+    fn clone_heap(&self) -> Value {
+        match self {
+            Value::Str(s) => Value::Str(Rc::clone(s)),
+            Value::Table(t) => Value::Table(Rc::clone(t)),
+            Value::Native(f) => Value::Native(Rc::clone(f)),
+            Value::NativeClosure(f) => Value::NativeClosure(Rc::clone(f)),
+            Value::Function(f) => Value::Function(Rc::clone(f)),
+            Value::VmFunction(f) => Value::VmFunction(Rc::clone(f)),
+            Value::Class(c) => Value::Class(Rc::clone(c)),
+            Value::Instance(i) => Value::Instance(Rc::clone(i)),
+            Value::EnumVariant(v) => Value::EnumVariant(Rc::clone(v)),
+            Value::Enum(e) => Value::Enum(Rc::clone(e)),
+            Value::Interface(i) => Value::Interface(Rc::clone(i)),
+            Value::File(h) => Value::File(Rc::clone(h)),
+            // The scalars never reach here; `clone` answers them inline.
+            other => match other {
+                Value::Nil => Value::Nil,
+                Value::Bool(b) => Value::Bool(*b),
+                Value::Int(n) => Value::Int(*n),
+                Value::Float(f) => Value::Float(*f),
+                _ => unreachable!(),
+            },
+        }
+    }
+
 }
 
 impl Value {
@@ -169,7 +225,13 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
-            (Value::Str(a), Value::Str(b)) => a == b,
+            // Pointer first, then contents. Two strings that came from the
+            // intern table *are* the same allocation, so the common
+            // comparison in a scanner — a character against a literal —
+            // answers in one instruction instead of a length check and a
+            // memcmp. Falling through to the content compare is what keeps
+            // this correct for strings that were never interned.
+            (Value::Str(a), Value::Str(b)) => Rc::ptr_eq(a, b) || a == b,
             (Value::Table(a), Value::Table(b)) => Rc::ptr_eq(a, b),
             (Value::Native(a), Value::Native(b)) => Rc::ptr_eq(a, b),
             (Value::NativeClosure(a), Value::NativeClosure(b)) => Rc::ptr_eq(a, b),
