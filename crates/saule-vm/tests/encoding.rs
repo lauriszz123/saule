@@ -179,16 +179,18 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::LOADK as u8, 1);
     assert_eq!(Op::LOADI as u8, 2);
     assert_eq!(Op::EXTRAARG as u8, 6);
-    // `NVALS` kept its number when `SELFFUNC` was appended after it, and
-    // both kept theirs when `CASTUNWRAP` was appended after that. The tail
-    // moves; the numbering does not. Pinning the earlier two by value is
-    // what makes this an ABI test rather than a note about the last entry.
+    // `NVALS` kept its number when `SELFFUNC` was appended after it, both
+    // kept theirs when `CASTUNWRAP` was appended after that, and all three
+    // kept theirs when `GETIDXU` was appended after *that*. The tail moves;
+    // the numbering does not. Pinning the earlier ones by value is what
+    // makes this an ABI test rather than a note about the last entry.
     assert_eq!(Op::NVALS as u8, 120);
     assert_eq!(Op::SELFFUNC as u8, 121);
+    assert_eq!(Op::CASTUNWRAP as u8, 122);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::CASTUNWRAP),
-        "a new opcode was appended after CASTUNWRAP — extend this assertion rather than \
+        Some(Op::GETIDXU),
+        "a new opcode was appended after GETIDXU — extend this assertion rather than \
          inserting one in the middle"
     );
 }

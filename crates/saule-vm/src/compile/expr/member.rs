@@ -290,12 +290,19 @@ impl Compiler<'_> {
     /// for the same reason the arithmetic overloads are (§8.7): a bytecode
     /// method never reaches the runtime `ClassObject`'s method map, so no
     /// run-time lookup could find it.
+    /// `t[i]`, or `t[i]!` when `unwrap_at` carries the `!`'s span.
+    ///
+    /// Fusing the force-unwrap in is worth a parameter because indexing a
+    /// `table<T>` yields `T?`: the unwrapped form is not a special case, it
+    /// is how every typed element read in the language is written. See
+    /// [`Op::GETIDXU`].
     pub(crate) fn index_to(
         &mut self,
         e: &Spanned<Expr>,
         obj: &Spanned<Expr>,
         index: &Spanned<Expr>,
         dst: u16,
+        unwrap_at: Option<&std::ops::Range<usize>>,
     ) -> Result<(), CompileError> {
         let span = &e.span;
 
@@ -321,6 +328,13 @@ impl Compiler<'_> {
             self.emit(Instruction::abc(Op::CALLM, a, 2, slot as u8), span);
             self.move_result(base, dst, span)?;
             self.free_to(m);
+            // An `OpIndex` overload returns whatever the method returns, so
+            // there is no `GETIDX` to fuse with — the unwrap stays its own
+            // instruction, exactly as it was before the fusion existed.
+            if let Some(bang) = unwrap_at {
+                let a = self.reg8(dst, bang)?;
+                self.emit(Instruction::abc(Op::UNWRAPNIL, a, a, 0), bang);
+            }
             return Ok(());
         }
 
@@ -335,7 +349,10 @@ impl Compiler<'_> {
             self.reg8(o, span)?,
             self.reg8(i, span)?,
         );
-        self.emit(Instruction::abc(Op::GETIDX, a, b, c), span);
+        match unwrap_at {
+            Some(bang) => self.emit(Instruction::abc(Op::GETIDXU, a, b, c), bang),
+            None => self.emit(Instruction::abc(Op::GETIDX, a, b, c), span),
+        }
         self.free_to(m);
         Ok(())
     }

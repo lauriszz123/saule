@@ -114,7 +114,10 @@ pub struct VmShared {
     /// Lazily-built closures for protos that capture nothing, so `CALLK`
     /// does not allocate one per call. Indexed `[module][proto]`, because a
     /// proto index only means something within its own chunk.
-    closure_cache: RefCell<Vec<Vec<Option<Rc<VmFunctionRef>>>>>,
+    /// `OnceCell` rather than `RefCell<Option<..>>`: the slot is written at
+    /// most once, so the borrow flag a `RefCell` maintains was pure cost on
+    /// a path every statically-resolved call takes.
+    closure_cache: Vec<Vec<std::cell::OnceCell<Rc<VmFunctionRef>>>>,
     /// One runtime class per `ClassProto`, built once at start-up.
     classes: Vec<Rc<saule_interpreter::value::ClassObject>>,
     /// Class identity -> index, so `CALLM` can find a receiver's vtable.
@@ -196,7 +199,10 @@ impl Vm {
             .map(|c| c.module_slot_base + c.module_slots)
             .max()
             .unwrap_or(0);
-        let cache = chunks.iter().map(|c| vec![None; c.protos.len()]).collect();
+        let cache: Vec<Vec<std::cell::OnceCell<Rc<VmFunctionRef>>>> = chunks
+            .iter()
+            .map(|c| (0..c.protos.len()).map(|_| std::cell::OnceCell::new()).collect())
+            .collect();
         // `new_cyclic` because the classes built here carry method closures,
         // and a closure needs a `Weak<VmShared>` to be able to run itself —
         // which does not exist until the `Rc` does.
@@ -205,7 +211,7 @@ impl Vm {
             VmShared {
                 enums: build_enums(&chunks, weak),
                 modules: RefCell::new(vec![Value::Nil; module_slots]),
-                closure_cache: RefCell::new(cache),
+                closure_cache: cache,
                 chunks,
                 classes,
                 class_of,
