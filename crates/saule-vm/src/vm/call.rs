@@ -28,15 +28,19 @@ impl Vm {
         let Value::Instance(inst) = &self.stack[recv] else {
             return Err(operand_err(&self.stack[recv], "instance", proto, here));
         };
-        let class = Rc::clone(&inst.borrow().class);
+        // The identity is the pointer, so the probe needs no strong count of
+        // its own — cloning the `Rc` here cost a bump and a drop on every
+        // dynamic dispatch. The borrow ends with the statement; the error
+        // path re-borrows, because it is the path that is allowed to be slow.
+        let key = Rc::as_ptr(&inst.borrow().class) as usize;
         let idx = self
             .shared.class_of
-            .get(&(Rc::as_ptr(&class) as usize))
+            .get(&key)
             .copied()
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!(
                     "internal: `{}` was not built from this chunk",
-                    class.name
+                    inst.borrow().class.name
                 ),
                 span: proto.span_at(here),
             })?;
@@ -52,7 +56,7 @@ impl Vm {
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!(
                     "internal: `{}` has no method in vtable slot {slot}",
-                    class.name
+                    inst.borrow().class.name
                 ),
                 span: proto.span_at(here),
             })
@@ -76,13 +80,16 @@ impl Vm {
         let Value::Instance(inst) = &self.stack[recv] else {
             return Err(operand_err(&self.stack[recv], "instance", proto, here));
         };
-        let class = Rc::clone(&inst.borrow().class);
+        let key = Rc::as_ptr(&inst.borrow().class) as usize;
         let idx = self
             .shared.class_of
-            .get(&(Rc::as_ptr(&class) as usize))
+            .get(&key)
             .copied()
             .ok_or_else(|| RuntimeError::TypeError {
-                message: format!("internal: `{}` was not built from this chunk", class.name),
+                message: format!(
+                    "internal: `{}` was not built from this chunk",
+                    inst.borrow().class.name
+                ),
                 span: proto.span_at(here),
             })?;
         let cp = &self.shared.chunks[0].classes[idx as usize];
@@ -94,7 +101,7 @@ impl Vm {
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!(
                     "`{}` does not implement the interface this call requires",
-                    class.name
+                    inst.borrow().class.name
                 ),
                 span: proto.span_at(here),
             })?;
@@ -104,7 +111,10 @@ impl Vm {
             .filter(|t| *t != u32::MAX)
             .map(|t| (cp.module, t))
             .ok_or_else(|| RuntimeError::TypeError {
-                message: format!("internal: `{}` has no method in slot {vslot}", class.name),
+                message: format!(
+                    "internal: `{}` has no method in slot {vslot}",
+                    inst.borrow().class.name
+                ),
                 span: proto.span_at(here),
             })
     }
@@ -195,14 +205,12 @@ impl Vm {
         n_args: usize,
         span: std::ops::Range<usize>,
     ) -> Result<(), RuntimeError> {
-        let proto = Rc::clone(
-            &Closure::from_handle(&handle)
-                .ok_or_else(|| RuntimeError::TypeError {
-                    message: "internal: frame handle is not a bytecode closure".into(),
-                    span: span.clone(),
-                })?
-                .proto,
-        );
+        let cl = Closure::from_handle(&handle).ok_or_else(|| RuntimeError::TypeError {
+            message: "internal: frame handle is not a bytecode closure".into(),
+            span: span.clone(),
+        })?;
+        let proto = Rc::clone(&cl.proto);
+        let chunk = Rc::clone(&cl.chunk);
 
         let frame = self.frames.last().expect("frame");
         let base = frame.base as usize;
@@ -239,6 +247,8 @@ impl Vm {
         let pc = proto.entry_for(n_args);
         *self.frames.last_mut().expect("frame") = Frame {
             func: handle,
+            proto,
+            chunk,
             base: base as u32,
             ret_to,
             n_ret,
@@ -249,6 +259,11 @@ impl Vm {
         Ok(())
     }
 
+    /// Inlined into its one real body below: the split exists so a resolved
+    /// caller can skip the downcast, not to add a call to the path that
+    /// still needs it. Dynamic `CALL` — a lambda through a local — comes
+    /// through here, and paid ~3% for the extra hop until this was marked.
+    #[inline]
     pub(crate) fn push_frame(
         &mut self,
         func: Rc<VmFunctionRef>,
@@ -264,14 +279,39 @@ impl Vm {
                 span,
             });
         }
-        let proto = Rc::clone(
-            &Closure::from_handle(&func)
-                .ok_or_else(|| RuntimeError::TypeError {
-                    message: "internal: frame handle is not a bytecode closure".into(),
-                    span: span.clone(),
-                })?
-                .proto,
-        );
+        let cl = Closure::from_handle(&func).ok_or_else(|| RuntimeError::TypeError {
+            message: "internal: frame handle is not a bytecode closure".into(),
+            span: span.clone(),
+        })?;
+        let proto = Rc::clone(&cl.proto);
+        let chunk = Rc::clone(&cl.chunk);
+        self.push_frame_resolved(func, proto, chunk, base, n_args, ret_to, n_ret, span)
+    }
+
+    /// [`push_frame`](Self::push_frame) for a caller that already holds the
+    /// proto and chunk, so the handle does not have to be downcast to
+    /// recover them.
+    ///
+    /// Every statically-resolved call site is in that position — it looked
+    /// both up to find the callee in the first place.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_frame_resolved(
+        &mut self,
+        func: Rc<VmFunctionRef>,
+        proto: Rc<Proto>,
+        chunk: Rc<Chunk>,
+        base: u32,
+        n_args: usize,
+        ret_to: u32,
+        n_ret: u8,
+        span: std::ops::Range<usize>,
+    ) -> Result<(), RuntimeError> {
+        if self.frames.len() >= self.shared.max_frames {
+            return Err(RuntimeError::StackOverflow {
+                limit: self.shared.max_frames as u32,
+                span,
+            });
+        }
         let top = base as usize + proto.max_regs as usize;
         self.ensure_stack(top);
         // Missing parameters read as nil. Registers past `n_params` are the
@@ -283,6 +323,8 @@ impl Vm {
         let pc = proto.entry_for(n_args.min(u8::MAX as usize) as u8);
         self.frames.push(Frame {
             func,
+            proto,
+            chunk,
             base,
             ret_to,
             n_ret,
@@ -296,7 +338,11 @@ impl Vm {
     /// Pop the active frame, moving `count` results from `src` into the
     /// caller. Returns `Some` when the outermost frame returned, in which
     /// case the values are the program's result.
-    pub(crate) fn pop_frame(&mut self, src: usize, count: usize) -> Result<Option<Vec<Value>>, RuntimeError> {
+    /// Infallible, and typed that way on purpose: `RuntimeError` is 64
+    /// bytes, so a `Result` return made every `RET` construct and test a
+    /// 64-byte value to carry an error this function cannot produce. The
+    /// `Some` case only fires when the outermost frame returns.
+    pub(crate) fn pop_frame(&mut self, src: usize, count: usize) -> Option<Vec<Value>> {
         let frame = self.frames.pop().expect("frame");
         self.close_upvalues(frame.base);
 
@@ -305,7 +351,7 @@ impl Vm {
             for i in 0..count {
                 out.push(std::mem::replace(&mut self.stack[src + i], Value::Nil));
             }
-            return Ok(Some(out));
+            return Some(out);
         }
 
         let dst = frame.ret_to as usize;
@@ -324,7 +370,7 @@ impl Vm {
         if frame.n_ret == ALL_RESULTS {
             self.frames.last_mut().expect("frame").top = (dst + count) as u32;
         }
-        Ok(None)
+        None
     }
 
     pub(crate) fn store_results(&mut self, dst: usize, vals: &[Value], n_ret: u8) {
@@ -366,16 +412,50 @@ impl Vm {
         Ok(ins.ax())
     }
 
+    /// Resolve `(module, proto)` to its cached closure and enter it.
+    ///
+    /// Every statically-resolved call — `CALLK`, `CALLSTAT`, `CALLM`,
+    /// `CALLI` and the `super` forms — repeated the same five lines, and
+    /// two of them cost more than they read: the proto was cloned only to
+    /// be handed to `closure_for`, which drops it on every cache hit, and
+    /// `push_frame` then recovered the same proto and chunk from the handle
+    /// by downcast. Resolving once and moving the results into the frame
+    /// removes two refcount pairs and a downcast from every call.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn enter_static(
+        &mut self,
+        tm: usize,
+        target: u32,
+        base: u32,
+        n_args: usize,
+        ret_to: u32,
+        n_ret: u8,
+        span: std::ops::Range<usize>,
+    ) -> Result<(), RuntimeError> {
+        let chunk = Rc::clone(&self.shared.chunks[tm]);
+        let proto = Rc::clone(chunk.proto(target));
+        let handle = self.closure_for(&chunk, target);
+        self.push_frame_resolved(handle, proto, chunk, base, n_args, ret_to, n_ret, span)
+    }
+
     /// A cached, upvalue-free closure for a statically-resolved callee, so
     /// `CALLK` allocates nothing per call.
-    pub(crate) fn closure_for(&mut self, chunk: &Rc<Chunk>, idx: u32, proto: Rc<Proto>) -> Rc<VmFunctionRef> {
+    pub(crate) fn closure_for(&mut self, chunk: &Rc<Chunk>, idx: u32) -> Rc<VmFunctionRef> {
         let m = chunk.module_index;
         // Hit path first, under a shared borrow: a `borrow_mut` here would
         // be taken on every call, not just the first.
         if let Some(Some(c)) = self.shared.closure_cache.borrow().get(m).and_then(|r| r.get(idx as usize)) {
             return Rc::clone(c);
         }
-        let c = VmFunctionRef::new(Closure::bound(proto, Rc::clone(chunk), Vec::new(), &self.shared));
+        // Cloned here rather than by the caller: on the hit path above there
+        // is no proto to clone, and every static call site takes that path
+        // after its first visit.
+        let c = VmFunctionRef::new(Closure::bound(
+            Rc::clone(chunk.proto(idx)),
+            Rc::clone(chunk),
+            Vec::new(),
+            &self.shared,
+        ));
         if let Some(slot) = self
             .shared
             .closure_cache

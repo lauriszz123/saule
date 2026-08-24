@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use saule_interpreter::fxhash::FxHashMap;
 use saule_interpreter::value::VmFunctionRef;
 use saule_interpreter::Value;
 
@@ -36,7 +37,7 @@ pub(crate) fn build_classes(
     weak: &std::rc::Weak<VmShared>,
 ) -> (
     Vec<Rc<saule_interpreter::value::ClassObject>>,
-    std::collections::HashMap<usize, u32>,
+    FxHashMap<usize, u32>,
     Vec<RefCell<Vec<Value>>>,
 ) {
     use saule_interpreter::value::{ClassObject, MethodRef};
@@ -45,7 +46,7 @@ pub(crate) fn build_classes(
     // the first is not a choice of module.
     let table = Rc::clone(&chunks[0].classes);
     let mut classes: Vec<Rc<ClassObject>> = Vec::with_capacity(table.len());
-    let mut class_of = std::collections::HashMap::new();
+    let mut class_of = saule_interpreter::fxhash::fxmap();
     let mut statics = Vec::with_capacity(table.len());
 
     // A method proto captures nothing — it reaches module slots through

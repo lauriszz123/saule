@@ -293,6 +293,9 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
     // ("does the right element belong before the left?"), so this asks it
     // once, and taking the left element on a tie keeps the sort stable.
     let mut buf: Vec<Value> = Vec::with_capacity(elements.len());
+    // Scratch for the comparator's two arguments, allocated once for the
+    // whole sort rather than once per comparison.
+    let mut argbuf: Vec<Value> = Vec::with_capacity(2);
     let n = elements.len();
     let mut width = 1;
     while width < n {
@@ -304,7 +307,7 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
                 buf.clear();
                 let (mut i, mut j) = (lo, mid);
                 while i < mid && j < hi {
-                    if invoke_comp(&comp, &elements[j], &elements[i])? {
+                    if invoke_comp(&comp, &elements[j], &elements[i], &mut argbuf)? {
                         buf.push(elements[j].clone());
                         j += 1;
                     } else {
@@ -325,7 +328,15 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
     Ok(vec![Value::Nil])
 }
 
-fn invoke_comp(comp: &Value, a: &Value, b: &Value) -> Result<bool, String> {
+/// Ask the comparator whether `a` precedes `b`.
+///
+/// `buf` is the caller's scratch, reused across the whole sort. A sort of
+/// 200k elements asks this about 3.5 million times, and the generic path
+/// underneath allocates twice per call — once for the `EvaluatedArg` vector
+/// built here and again for the positional vector `call_value_multi` unpacks
+/// it into — before the callee runs at all. A bytecode comparator wants
+/// neither: `invoke` already takes a plain slice.
+fn invoke_comp(comp: &Value, a: &Value, b: &Value, buf: &mut Vec<Value>) -> Result<bool, String> {
     use crate::eval::expr::{EvaluatedArg, call_value_multi};
     if !matches!(
         comp,
@@ -336,12 +347,29 @@ fn invoke_comp(comp: &Value, a: &Value, b: &Value) -> Result<bool, String> {
             comp.type_name()
         ));
     }
-    let args = vec![
-        EvaluatedArg::Positional(a.clone()),
-        EvaluatedArg::Positional(b.clone()),
-    ];
-    let result = call_value_multi(comp.clone(), &args, 0..0)
-        .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
+    buf.clear();
+    buf.push(a.clone());
+    buf.push(b.clone());
+    let result = match comp {
+        // The common case: a lambda the VM compiled. Straight to the
+        // re-entrant call, no argument repackaging on the way.
+        Value::VmFunction(f) => f.invoke(buf, 0..0),
+        Value::Native(nf) => (nf.func)(buf)
+            .map(|v| vec![v])
+            .map_err(|message| crate::error::RuntimeError::TypeError { message, span: 0..0 }),
+        Value::NativeClosure(nc) => (nc.func)(buf)
+            .map_err(|message| crate::error::RuntimeError::TypeError { message, span: 0..0 }),
+        // A tree-walker closure still goes the long way; it is the engine
+        // that needs the named-argument machinery.
+        other => {
+            let args = vec![
+                EvaluatedArg::Positional(a.clone()),
+                EvaluatedArg::Positional(b.clone()),
+            ];
+            call_value_multi(other.clone(), &args, 0..0)
+        }
+    }
+    .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
     Ok(result.into_iter().next().unwrap_or(Value::Nil).is_truthy())
 }
 

@@ -121,8 +121,11 @@ pub struct VmShared {
     ///
     /// A hash probe per dynamic dispatch, which is what §8.5's inline cache
     /// exists to remove. Correct first; the cache is a Phase 5 line item
-    /// with a benchmark attached.
-    class_of: std::collections::HashMap<usize, u32>,
+    /// with a benchmark attached. Until then the probe at least uses the
+    /// same `FxHashMap` the interpreter's other hot maps do — the key is an
+    /// `Rc::as_ptr`, so SipHash's resistance bought nothing and cost ~4% of
+    /// the `oop` benchmark.
+    class_of: saule_interpreter::fxhash::FxHashMap<usize, u32>,
     /// Static fields, flat per class — the `GETSTAT`/`SETSTAT` form. Kept
     /// beside the class rather than inside it because a static is a slot,
     /// not a named entry, once the compiler has resolved it.
@@ -273,8 +276,7 @@ impl Vm {
     pub fn run_module(&mut self, module: usize) -> Result<Vec<Value>, RuntimeError> {
         let chunk = Rc::clone(&self.shared.chunks[module]);
         let main_idx = chunk.main;
-        let main = Rc::clone(chunk.proto(main_idx));
-        let handle = self.closure_for(&chunk, main_idx, main);
+        let handle = self.closure_for(&chunk, main_idx);
         // Start above whatever an earlier module left behind: module slots
         // are shared, but registers are not, and a later module must not
         // scribble on a frame an earlier one is still described by.
@@ -369,8 +371,7 @@ impl Vm {
             return None;
         }
         let chunk = Rc::clone(&self.shared.chunks[module]);
-        let p = Rc::clone(chunk.proto(proto_idx));
-        let handle = self.closure_for(&chunk, proto_idx, p);
+        let handle = self.closure_for(&chunk, proto_idx);
         // Start above whatever the module body left behind, so its module
         // slots and any live registers are untouched.
         let base = self.stack.len() as u32;

@@ -1,0 +1,57 @@
+-- Word frequency: split a document, count into a map, rank the results.
+--
+-- The most common shape in everyday code and the one that touches the most
+-- runtime at once — string slicing, string-keyed hashing, map update in a
+-- loop, then a comparator sort over the collected pairs.
+class Main
+	static fn text(words: integer) -> string
+		local vocab: table<string> = {
+			"alpha", "beta", "gamma", "delta", "epsilon",
+			"zeta", "eta", "theta", "iota", "kappa",
+			"lambda", "mu", "nu", "xi", "omicron",
+		}
+		local parts: table<string> = {}
+		local seed: integer = 987654321
+		for i: integer = 1, words do
+			seed = (seed * 1103515245 + 12345) % 2147483648
+			Table.insert(parts, vocab[seed % 15 + 1]!)
+		end
+		return Table.concat(parts, " ")
+	end
+
+	static fn main()
+		local doc: string = Main.text(120000)
+		local counts: table<string, integer> = {}
+		local n: integer = String.len(doc)
+
+		local start: integer = 1
+		local i: integer = 1
+		while i <= n + 1 do
+			local atEnd: boolean = i > n
+			if atEnd or String.sub(doc, i, i) == " " then
+				if i > start then
+					local w: string = String.sub(doc, start, i - 1)
+					counts[w] = (counts[w] ?? 0) + 1
+				end
+				start = i + 1
+			end
+			i = i + 1
+		end
+
+		local keys: table<string> = {}
+		for k, v in counts do
+			Table.insert(keys, k)
+		end
+		Table.sort(keys, (a, b) => (a as string)! < (b as string)!)
+
+		local total: integer = 0
+		local out: table<string> = {}
+		for j: integer = 1, #keys do
+			local k: string = keys[j]!
+			local c: integer = counts[k] ?? 0
+			total = total + c
+			Table.insert(out, k .. "=" .. c)
+		end
+		println(total .. " " .. #keys .. " " .. out[1]!)
+	end
+end

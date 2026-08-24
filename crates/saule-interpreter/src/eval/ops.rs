@@ -100,7 +100,7 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
             }),
         },
         UnaryOp::Len => match v {
-            Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+            Value::Str(s) => Ok(Value::Int(crate::stdlib::string::char_len(s.as_str()) as i64)),
             Value::Table(items) => Ok(Value::Int(items.borrow().array_len() as i64)),
             other => Err(RuntimeError::TypeError {
                 message: format!(

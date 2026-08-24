@@ -20,7 +20,14 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-BENCHES = "loop_arith fib array map oop mandel strings closure sort startup".split()
+BENCHES = (
+    # Microbenchmarks: one language mechanism each.
+    "loop_arith fib array map oop mandel strings closure sort "
+    # Whole programs, in the shape everyday code actually takes.
+    "bintree matrix entity wordfreq json interp "
+    # Control.
+    "startup"
+).split()
 REPS = int(os.environ.get("REPS", "7"))
 
 

@@ -39,6 +39,18 @@ impl Vm {
 
     // ---- upvalues ------------------------------------------------------
 
+    /// The upvalue cell at `i` of the running closure.
+    ///
+    /// This is where the `Closure` downcast lives now. Three opcodes read
+    /// upvalues and the other ninety-odd do not, so paying for it here costs
+    /// those three a vtable compare and saves every call and every return
+    /// one — see [`Frame::func`](super::Frame::func).
+    pub(crate) fn upvalue(&self, i: usize) -> Rc<RefCell<Upvalue>> {
+        let f = self.frames.last().expect("frame");
+        let cl = super::Closure::from_handle(&f.func).expect("VM frame holds a Closure");
+        Rc::clone(&cl.upvals[i])
+    }
+
     pub(crate) fn capture_upvalue(&mut self, index: u32) -> Rc<RefCell<Upvalue>> {
         match self
             .open_upvals
@@ -55,7 +67,21 @@ impl Vm {
 
     /// Close every open upvalue pointing at a register >= `from`. The value
     /// **moves** out of the register into the cell.
+    ///
+    /// Split in two so the common case is a load and a branch at the call
+    /// site. Every `pop_frame` and every tail call runs this, while most
+    /// programs capture nothing at all — `fib` and `oop` never build a
+    /// closure — so the empty check is worth inlining and the loop is not.
+    #[inline]
     pub(crate) fn close_upvalues(&mut self, from: u32) {
+        if self.open_upvals.is_empty() {
+            return;
+        }
+        self.close_upvalues_slow(from);
+    }
+
+    #[inline(never)]
+    fn close_upvalues_slow(&mut self, from: u32) {
         while let Some(last) = self.open_upvals.last() {
             let Some(idx) = last.borrow().stack_index() else {
                 self.open_upvals.pop();

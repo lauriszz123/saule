@@ -1,0 +1,94 @@
+-- An entity update loop over a mixed-subclass collection.
+--
+-- The shape most application code actually has: a heterogeneous list walked
+-- every tick, one virtual call per element landing on a different override
+-- each time, each override reading and writing its own fields. The call
+-- sites here are genuinely polymorphic, so an inline cache that assumed
+-- monomorphism would miss on them.
+class Entity
+	x: float
+	y: float
+	hp: integer
+
+	fn init(x: float, y: float, hp: integer)
+		self.x = x
+		self.y = y
+		self.hp = hp
+	end
+
+	fn update(dt: float)
+		self.x = self.x + dt
+	end
+
+	fn score() -> integer
+		return self.hp
+	end
+end
+
+class Walker extends Entity
+	fn init(x: float, y: float, hp: integer)
+		self.super(x, y, hp)
+	end
+
+	fn update(dt: float)
+		self.x = self.x + dt
+		self.y = self.y + dt * 0.5
+		self.hp = self.hp - 1
+	end
+
+	fn score() -> integer
+		return self.hp * 2
+	end
+end
+
+class Flyer extends Entity
+	alt: float
+
+	fn init(x: float, y: float, hp: integer)
+		self.super(x, y, hp)
+		self.alt = 1.0
+	end
+
+	fn update(dt: float)
+		self.x = self.x + dt * 2.0
+		self.alt = self.alt + dt
+		if self.alt > 100.0 then
+			self.alt = 0.0
+			self.hp = self.hp - 2
+		end
+	end
+
+	fn score() -> integer
+		return self.hp * 3 + int(self.alt)
+	end
+end
+
+class Main
+	static fn main()
+		local n: integer = 6000
+		local ticks: integer = 120
+		local es: table<Entity> = {}
+		for i: integer = 1, n do
+			local m: integer = i % 3
+			if m == 0 then
+				Table.insert(es, Entity(float(i), 0.0, 1000))
+			elseif m == 1 then
+				Table.insert(es, Walker(float(i), 0.0, 1000))
+			else
+				Table.insert(es, Flyer(float(i), 0.0, 1000))
+			end
+		end
+
+		for t: integer = 1, ticks do
+			for i: integer = 1, n do
+				es[i]!.update(0.25)
+			end
+		end
+
+		local total: integer = 0
+		for i: integer = 1, n do
+			total = total + es[i]!.score()
+		end
+		println(total)
+	end
+end
