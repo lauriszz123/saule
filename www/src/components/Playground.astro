@@ -757,12 +757,61 @@ println("Hello from my script!")
 			return span;
 		}
 
-		/** Render a diagnostic the way the CLI does: phase, message, help. */
-		function renderDiagnostic(d: Diagnostic): HTMLElement {
+		/**
+		 * Turn a diagnostic's byte offset into a line and column.
+		 *
+		 * The runtime reports UTF-8 byte offsets, because that is what the
+		 * compiler works in; JavaScript strings are indexed in UTF-16 code
+		 * units. The two agree for ASCII and diverge the moment a program
+		 * contains a non-ASCII string literal or comment, so the walk below
+		 * counts bytes explicitly rather than trusting the string index.
+		 */
+		function locate(source: string, byteOffset: number): { line: number; column: number } {
+			let bytes = 0;
+			let ln = 1;
+			let column = 1;
+
+			for (let i = 0; i < source.length && bytes < byteOffset; i++) {
+				const code = source.codePointAt(i)!;
+
+				if (source[i] === '\n') {
+					ln++;
+					column = 1;
+				} else {
+					column++;
+				}
+
+				if (code > 0xffff) {
+					// An astral character is one surrogate pair here and four
+					// bytes there; skip its low surrogate so it counts once.
+					bytes += 4;
+					i++;
+				} else if (code > 0x7ff) {
+					bytes += 3;
+				} else if (code > 0x7f) {
+					bytes += 2;
+				} else {
+					bytes += 1;
+				}
+			}
+
+			return { line: ln, column };
+		}
+
+		/** Render a diagnostic the way the CLI does: phase, position, message, help. */
+		function renderDiagnostic(d: Diagnostic, source: string): HTMLElement {
 			const wrap = document.createElement('div');
 			wrap.className = d.severity === 'error' ? 'pg-error' : 'pg-warning';
 
-			wrap.append(line(`${d.phase} ${d.severity}: `, 'pg-diag-label'), line(d.message));
+			wrap.append(line(`${d.phase} ${d.severity}`, 'pg-diag-label'));
+			// Some errors carry no location at all — a runtime failure with no
+			// frame to blame, say — and those simply go without one.
+			if (d.span) {
+				const { line: ln, column } = locate(source, d.span.start);
+				wrap.append(line(` (line ${ln}, column ${column})`, 'pg-diag-loc'));
+			}
+			wrap.append(line(': '), line(d.message));
+
 			if (d.help) {
 				wrap.append(document.createElement('br'), line(`  help: ${d.help}`, 'pg-dim'));
 			}
@@ -790,15 +839,20 @@ println("Hello from my script!")
 			status.className = 'pg-status';
 			output.replaceChildren();
 
+			// The source is captured rather than re-read after the run, so the
+			// offsets in the diagnostics are resolved against the exact text
+			// that produced them even if the editor moved on meanwhile.
+			const source = view.state.doc.toString();
+
 			try {
-				const result = await runSaule(view.state.doc.toString());
+				const result = await runSaule(source);
 				firstRun = false;
 
 				const nodes: Node[] = [];
 				for (const chunk of result.output) {
 					nodes.push(line(chunk.text, chunk.stream === 'stderr' ? 'pg-stderr' : undefined));
 				}
-				for (const d of result.diagnostics) nodes.push(renderDiagnostic(d));
+				for (const d of result.diagnostics) nodes.push(renderDiagnostic(d, source));
 
 				if (!nodes.length) nodes.push(dim('(no output)'));
 				output.replaceChildren(...nodes);
@@ -1196,6 +1250,11 @@ println("Hello from my script!")
 	.pg-output :global(.pg-diag-label) {
 		font-weight: 600;
 		text-transform: capitalize;
+	}
+
+	/* Part of the heading line, but the message is what should be read first. */
+	.pg-output :global(.pg-diag-loc) {
+		opacity: 0.8;
 	}
 
 	.pg-output :global(.pg-notice) {

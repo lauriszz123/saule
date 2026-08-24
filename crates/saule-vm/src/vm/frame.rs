@@ -117,6 +117,35 @@ impl VmFunction for Closure {
         }
         out
     }
+
+    /// The single-result form, and the one the callbacks actually use.
+    ///
+    /// Identical to [`call`](Self::call) except that the result never
+    /// becomes a `Vec`: it comes straight out of the VM's own results
+    /// buffer, which the re-entry pool then hands to the next call. On
+    /// `Table.sort` that removes a malloc and a free per comparison.
+    fn call_first(
+        &self,
+        handle: &Rc<VmFunctionRef>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, RuntimeError> {
+        let Some(shared) = self.shared.upgrade() else {
+            return Err(RuntimeError::TypeError {
+                message: format!(
+                    "cannot call `{}`: the engine that compiled it is no longer running",
+                    self.proto.label()
+                ),
+                span,
+            });
+        };
+        let mut vm = shared.take_vm();
+        let out = vm.invoke_first(handle, args, span);
+        if out.is_ok() {
+            shared.give_vm(vm);
+        }
+        out
+    }
 }
 
 /// One activation record. `Environment` disappears entirely: a call is a

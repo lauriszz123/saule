@@ -505,7 +505,14 @@ impl Compiler<'_> {
         // produce one result. Anything else moves the slot into `EXTRAARG`
         // and lets `C` say how many — which is the whole reason §15.10
         // reserves a second opcode for this.
-        if want == Want::Fixed(1) {
+        //
+        // **`Fixed(0)` takes the one-word form too.** A call in statement
+        // position wants nothing back, and letting the callee write its one
+        // result into the call window is free: `finish_call` releases the
+        // window without reading it. Sending that case down the `CALLM_MR`
+        // path instead would trade the `MOVE` this saves for the `EXTRAARG`
+        // that path needs, which is no saving at all.
+        if matches!(want, Want::Fixed(0) | Want::Fixed(1)) {
             self.emit(
                 Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
                 span,

@@ -47,6 +47,26 @@ pub trait VmFunction: fmt::Debug {
         args: &[Value],
         span: std::ops::Range<usize>,
     ) -> Result<Vec<Value>, crate::error::RuntimeError>;
+
+    /// [`call`](Self::call) for a caller that wants one value.
+    ///
+    /// Almost every callback is this shape — a sort comparator, an operator
+    /// overload, a `toString` — and going through `call` means a `Vec` is
+    /// allocated and freed to carry a single `Value`. On `Table.sort` that
+    /// is a malloc and a free *per comparison*, which measured as a quarter
+    /// of the comparator's cost.
+    ///
+    /// The default implementation is the honest one for any implementor
+    /// that has no cheaper route; the VM overrides it with a path that
+    /// returns out of the register file directly.
+    fn call_first(
+        &self,
+        handle: &std::rc::Rc<VmFunctionRef>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, crate::error::RuntimeError> {
+        Ok(self.call(handle, args, span)?.into_iter().next().unwrap_or(Value::Nil))
+    }
 }
 
 /// A [`VmFunction`] held behind a **thin** pointer.
@@ -84,6 +104,15 @@ impl VmFunctionRef {
         span: std::ops::Range<usize>,
     ) -> Result<Vec<Value>, crate::error::RuntimeError> {
         self.0.call(self, args, span)
+    }
+
+    /// [`invoke`](Self::invoke) for the single-result callers.
+    pub fn invoke_first(
+        self: &std::rc::Rc<Self>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, crate::error::RuntimeError> {
+        self.0.call_first(self, args, span)
     }
 }
 

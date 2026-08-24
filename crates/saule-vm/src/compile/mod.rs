@@ -541,13 +541,19 @@ pub(crate) fn compile_into(
     let span = module.stmts.last().map(|s| s.span.clone()).unwrap_or(0..0);
     let mut chunk = c.finish(last, &span)?;
 
-    // Pass 4. Debug builds only: this catches *compiler* bugs, and in a
-    // release build of a chunk this compiler just produced there is nothing
-    // new to learn. A chunk read back from a cache would be another matter —
-    // that one is untrusted and must always be verified (§17).
+    // Pass 4, and it runs in release now (§17).
+    //
+    // It used to be a debug-only check for compiler bugs, on the reasoning
+    // that a chunk this compiler just produced has nothing new to say. What
+    // changed is that the dispatch loop *takes it at its word*: opcode bytes
+    // and register operands are read unchecked, on the strength of this pass
+    // having proved every one of them in range. That trade is only honest if
+    // the proof actually happens, so it always does — one linear scan per
+    // proto at compile time against a bounds check per operand for the life
+    // of the run.
+    //
     // Verified *before* the tables are taken back, since the verifier checks
     // class and enum indices against them.
-    #[cfg(debug_assertions)]
     if let Err(e) = verify::verify(&chunk) {
         return Err(CompileError::MalformedChunk {
             detail: e.to_string(),

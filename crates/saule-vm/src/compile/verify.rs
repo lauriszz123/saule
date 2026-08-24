@@ -140,11 +140,18 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
                 // Displacements are relative to the *next* instruction,
                 // because the dispatch loop has already advanced `pc`.
                 let target = pc as i64 + 1 + ins.sbx() as i64;
-                if target < 0 || target as usize > n {
+                // **Strictly inside the code**, not `0..=n`. A jump landing
+                // exactly one past the last instruction used to pass, and
+                // the only thing standing between that and a read off the
+                // end of the code array was the dispatch loop's own `pc >=
+                // code.len()` test — which is now gone, because this is
+                // what replaces it (§17). Every proto ends in a terminator,
+                // so a jump to `n` could only ever have fallen off anyway.
+                if target < 0 || target as usize >= n {
                     return Err(bad(
                         name,
                         pc,
-                        format!("{op} jumps to {target}, outside 0..={n}"),
+                        format!("{op} jumps to {target}, outside 0..{n}"),
                     ));
                 }
             }

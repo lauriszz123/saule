@@ -29,6 +29,11 @@ BENCHES = (
     "startup"
 ).split()
 REPS = int(os.environ.get("REPS", "7"))
+# `ONLY=fib,sort` narrows the run while iterating on one hot path. Ratios
+# stay comparable because every engine still runs back to back within a rep.
+if os.environ.get("ONLY"):
+    _want = set(os.environ["ONLY"].split(","))
+    BENCHES = [b for b in BENCHES if b in _want]
 
 
 def engines(argv):
@@ -36,9 +41,8 @@ def engines(argv):
     out = [(n, [p, "run"], "sau", ".sau") for n, p in (a.split("=", 1) for a in argv if "=" in a)]
     if not out:
         out = [("saule", [os.path.join(ROOT, "target/release/saule"), "run"], "sau", ".sau")]
-    for lua in ("lua", "luajit"):
-        if subprocess.run(["which", lua], capture_output=True).returncode == 0:
-            out.append((lua, [lua], "lua", ".lua"))
+    if subprocess.run(["which", "lua"], capture_output=True).returncode == 0:
+        out.append(("lua", ["lua"], "lua", ".lua"))
     return out
 
 
@@ -53,14 +57,8 @@ def timed(argv):
 
 
 def check(engs):
-    """Confirm Saule and Lua 5.4+ agree on every benchmark's output.
-
-    LuaJIT is timed but deliberately not checked: it implements Lua 5.1, which
-    has no integer type, so it prints `3000000` where the others print
-    `3000000.0` and wraps the `sort` benchmark's 64-bit LCG through a double.
-    Those are language-version differences, not benchmark bugs.
-    """
-    checked = [e for e in engs if e[0] != "luajit"]
+    """Confirm Saule and Lua 5.4+ agree on every benchmark's output."""
+    checked = list(engs)
     ok = True
     for bench in BENCHES:
         outputs = {}
