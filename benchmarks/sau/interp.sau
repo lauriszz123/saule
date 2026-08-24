@@ -1,0 +1,111 @@
+-- A stack machine, executed by a `match` over an enum opcode.
+--
+-- The inner loop of any interpreter, rule engine or state machine written in
+-- the language itself: fetch an instruction object, dispatch on its tag,
+-- mutate a stack. This is the one benchmark whose hot path is `match` on an
+-- enum rather than arithmetic or calls.
+enum Op
+	Push,
+	Add,
+	Sub,
+	Mul,
+	Dup,
+	Drop,
+	Loop,
+	Halt
+end
+
+class Instr
+	op: Op
+	arg: integer
+
+	fn init(o: Op, a: integer)
+		self.op = o
+		self.arg = a
+	end
+end
+
+class Machine
+	stack: table<integer>
+	sp: integer
+
+	fn init()
+		self.stack = {}
+		self.sp = 0
+	end
+
+	fn push(v: integer)
+		self.sp = self.sp + 1
+		self.stack[self.sp] = v
+	end
+
+	fn pop() -> integer
+		local v: integer = self.stack[self.sp] ?? 0
+		self.sp = self.sp - 1
+		return v
+	end
+
+	fn run(prog: table<Instr>) -> integer
+		local pc: integer = 1
+		local steps: integer = 0
+		local n: integer = #prog
+		while pc <= n do
+			local ins: Instr = prog[pc]!
+			steps = steps + 1
+			match ins.op
+				case Op.Push then
+					self.push(ins.arg)
+				case Op.Add then
+					local b: integer = self.pop()
+					local a: integer = self.pop()
+					self.push(a + b)
+				case Op.Sub then
+					local b: integer = self.pop()
+					local a: integer = self.pop()
+					self.push(a - b)
+				case Op.Mul then
+					local b: integer = self.pop()
+					local a: integer = self.pop()
+					self.push((a * b) % 1000003)
+				case Op.Dup then
+					local a: integer = self.pop()
+					self.push(a)
+					self.push(a)
+				case Op.Drop then
+					local d: integer = self.pop()
+				case Op.Loop then
+					local c: integer = self.pop()
+					if c > 0 then
+						self.push(c - 1)
+						pc = ins.arg
+					end
+				case Op.Halt then
+					return steps
+			end
+			pc = pc + 1
+		end
+		return steps
+	end
+end
+
+class Main
+	static fn main()
+		-- Counted loop body: push a counter, then grind arithmetic on it
+		-- until it runs out.
+		local prog: table<Instr> = {}
+		Table.insert(prog, Instr(Op.Push, 400000))
+		Table.insert(prog, Instr(Op.Dup, 0))
+		Table.insert(prog, Instr(Op.Push, 7))
+		Table.insert(prog, Instr(Op.Mul, 0))
+		Table.insert(prog, Instr(Op.Push, 3))
+		Table.insert(prog, Instr(Op.Add, 0))
+		Table.insert(prog, Instr(Op.Push, 5))
+		Table.insert(prog, Instr(Op.Sub, 0))
+		Table.insert(prog, Instr(Op.Drop, 0))
+		Table.insert(prog, Instr(Op.Loop, 1))
+		Table.insert(prog, Instr(Op.Halt, 0))
+
+		local m: Machine = Machine()
+		println(m.run(prog))
+	end
+end

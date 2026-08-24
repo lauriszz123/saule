@@ -63,17 +63,20 @@ impl Vm {
 
         'reentry: loop {
             // Re-derived once per frame activation, then held in locals
-            // across the whole inner loop (§5.3). `func` keeps the closure
-            // alive so `closure` can borrow from it independently of `self`.
-            let func = Rc::clone(&self.frames.last().expect("frame").func);
-            let closure = Closure::from_handle(&func).expect("VM frame holds a Closure");
-            let proto = Rc::clone(&closure.proto);
-            // Constants, protos, jump tables and cast types are per chunk, so
-            // they follow the frame: a closure built in one module and called
-            // from another must read its own module's pools.
-            let chunk = Rc::clone(&closure.chunk);
-            let base = self.frames.last().expect("frame").base as usize;
-            let mut pc = self.frames.last().expect("frame").pc as usize;
+            // across the whole inner loop (§5.3). The clones are what let
+            // `code` borrow the proto while `self` is mutated underneath.
+            //
+            // Read straight off the frame: this runs on every call *and*
+            // every return, so the downcast that used to stand here ran
+            // about two million times in `fib(28)` to recover two pointers
+            // the frame can simply carry. Constants, protos, jump tables and
+            // cast types are per chunk, so the chunk follows the frame too —
+            // a closure built in one module and called from another must
+            // read its own module's pools.
+            let (proto, chunk, base, mut pc) = {
+                let f = self.frames.last().expect("frame");
+                (Rc::clone(&f.proto), Rc::clone(&f.chunk), f.base as usize, f.pc as usize)
+            };
             let code: &[Instruction] = &proto.code;
             // The previous instruction of *this* activation, for the pair
             // histogram. Reset on every `continue 'reentry` — a call or a
@@ -140,7 +143,7 @@ impl Vm {
 
                     // ---- §15.2 upvalues, module slots, closures ----------
                     Op::GETUPVAL => {
-                        let cell = &closure.upvals[ins.b() as usize];
+                        let cell = self.upvalue(ins.b() as usize);
                         let v = match &*cell.borrow() {
                             Upvalue::Open(i) => self.stack[*i as usize].clone(),
                             Upvalue::Closed(v) => v.clone(),
@@ -149,7 +152,7 @@ impl Vm {
                     }
                     Op::SETUPVAL => {
                         let v = self.stack[base + a].clone();
-                        let cell = Rc::clone(&closure.upvals[ins.b() as usize]);
+                        let cell = self.upvalue(ins.b() as usize);
                         let target = cell.borrow().stack_index();
                         match target {
                             Some(i) => self.stack[i as usize] = v,
@@ -173,7 +176,7 @@ impl Vm {
                             upvals.push(if desc.from_parent_stack {
                                 self.capture_upvalue((base + desc.index as usize) as u32)
                             } else {
-                                Rc::clone(&closure.upvals[desc.index as usize])
+                                self.upvalue(desc.index as usize)
                             });
                         }
                         // Bound to the engine state, so a closure handed to a
@@ -816,12 +819,9 @@ impl Vm {
                         let (tm, target) = ((packed >> 16) as usize, packed & 0xFFFF);
                         let n_args = self.arg_count(ins.b(), base + a);
                         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
-                        let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let p = Rc::clone(tc.proto(target));
-                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         let dst = (base + a) as u32;
-                        self.push_frame(handle, dst, n_args, dst, n_ret, proto.span_at(here))?;
+                        self.enter_static(tm, target, dst, n_args, dst, n_ret, proto.span_at(here))?;
                         continue 'reentry;
                     }
                     Op::CALLNAT => {
@@ -853,7 +853,7 @@ impl Vm {
                             other => {
                                 self.call_native(&other, callee_abs, n_args, ALL_RESULTS, span)?;
                                 let n = self.arg_count(0, callee_abs);
-                                if let Some(vs) = self.pop_frame(callee_abs, n)? {
+                                if let Some(vs) = self.pop_frame(callee_abs, n) {
                                     return Ok(vs);
                                 }
                                 if self.frames.len() < entry_depth {
@@ -868,8 +868,7 @@ impl Vm {
                         let (tm, target) = ((packed >> 16) as usize, packed & 0xFFFF);
                         let n_args = self.arg_count(ins.b(), base + a);
                         let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let p = Rc::clone(tc.proto(target));
-                        let handle = self.closure_for(&tc, target, p);
+                        let handle = self.closure_for(&tc, target);
                         self.enter_tail_frame(handle, base + a, n_args, proto.span_at(here))?;
                         continue 'reentry;
                     }
@@ -893,13 +892,12 @@ impl Vm {
                         };
                         let n_args = self.arg_count(ins.b(), base + a);
                         let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let p = Rc::clone(tc.proto(target));
-                        let handle = self.closure_for(&tc, target, p);
+                        let handle = self.closure_for(&tc, target);
                         self.enter_tail_frame(handle, base + a, n_args, proto.span_at(here))?;
                         continue 'reentry;
                     }
                     Op::RET0 => {
-                        if let Some(vs) = self.pop_frame(base, 0)? {
+                        if let Some(vs) = self.pop_frame(base, 0) {
                             return Ok(vs);
                         }
                         if self.frames.len() < entry_depth {
@@ -908,7 +906,7 @@ impl Vm {
                         continue 'reentry;
                     }
                     Op::RET1 => {
-                        if let Some(vs) = self.pop_frame(base + a, 1)? {
+                        if let Some(vs) = self.pop_frame(base + a, 1) {
                             return Ok(vs);
                         }
                         if self.frames.len() < entry_depth {
@@ -918,7 +916,7 @@ impl Vm {
                     }
                     Op::RET => {
                         let n = self.arg_count(ins.b(), base + a);
-                        if let Some(vs) = self.pop_frame(base + a, n)? {
+                        if let Some(vs) = self.pop_frame(base + a, n) {
                             return Ok(vs);
                         }
                         if self.frames.len() < entry_depth {
@@ -1031,14 +1029,12 @@ impl Vm {
                         let slot = ins.c() as usize;
                         let n_args = (ins.b() as usize).saturating_sub(1);
                         let (tm, target) = self.vtable_lookup(recv, slot, &proto, here)?;
-                        let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let p = Rc::clone(tc.proto(target));
-                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         // `self` counts as an argument: the frame starts at
                         // the receiver, not past it.
-                        self.push_frame(
-                            handle,
+                        self.enter_static(
+                            tm,
+                            target,
                             recv as u32,
                             n_args + 1,
                             recv as u32,
@@ -1059,12 +1055,10 @@ impl Vm {
                         let n_args = (ins.b() as usize).saturating_sub(1);
                         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
                         let (tm, target) = self.vtable_lookup(recv, slot, &proto, here)?;
-                        let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let p = Rc::clone(tc.proto(target));
-                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
-                        self.push_frame(
-                            handle,
+                        self.enter_static(
+                            tm,
+                            target,
                             recv as u32,
                             n_args + 1,
                             recv as u32,
@@ -1088,12 +1082,10 @@ impl Vm {
                         let n_args = (ins.b() as usize).saturating_sub(1);
                         let n_ret = if c == 0 { ALL_RESULTS } else { c - 1 };
                         let (tm, target) = self.itable_lookup(recv, iface, slot, &proto, here)?;
-                        let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let p = Rc::clone(tc.proto(target));
-                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
-                        self.push_frame(
-                            handle,
+                        self.enter_static(
+                            tm,
+                            target,
                             recv as u32,
                             n_args + 1,
                             recv as u32,
@@ -1123,13 +1115,10 @@ impl Vm {
                             }
                         };
                         let n_args = (ins.b() as usize).saturating_sub(1);
-                        let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let p = Rc::clone(tc.proto(target));
-                        let handle = self.closure_for(&tc, target, p);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         let dst = (base + a) as u32;
                         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
-                        self.push_frame(handle, dst, n_args, dst, n_ret, proto.span_at(here))?;
+                        self.enter_static(tm, target, dst, n_args, dst, n_ret, proto.span_at(here))?;
                         continue 'reentry;
                     }
 
@@ -1336,7 +1325,8 @@ impl Vm {
                     Op::SELFFUNC => {
                         // The frame's own handle — no allocation, no cell,
                         // and therefore no cycle. See the opcode's doc.
-                        self.stack[base + a] = Value::VmFunction(Rc::clone(&func));
+                        let f = Rc::clone(&self.frames.last().expect("frame").func);
+                        self.stack[base + a] = Value::VmFunction(f);
                     }
                     Op::NVALS => {
                         // How many values the call left in the window at

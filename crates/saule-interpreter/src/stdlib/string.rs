@@ -115,9 +115,16 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<String, String> {
+/// Borrow a string argument.
+///
+/// Returns the `Rc`, not a copy of it. Cloning the `String` here meant every
+/// `String.*` call allocated and memcpy'd its whole first argument before it
+/// looked at the index it was asked about — so a loop scanning a 320k-char
+/// document copied 320k bytes per character read, on top of whatever the
+/// function itself did.
+fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<Rc<String>, String> {
     match args.get(idx) {
-        Some(Value::Str(s)) => Ok((**s).clone()),
+        Some(Value::Str(s)) => Ok(Rc::clone(s)),
         Some(other) => Err(format!(
             "{name} expects a string at argument {}, got `{}`",
             idx + 1,
@@ -154,22 +161,136 @@ fn resolve_index(i: i64, char_count: usize) -> usize {
     }
 }
 
+// ─── character indexing ─────────────────────────────────────────────────────
+
+/// Number of characters in `s`, for a caller that has no `Rc` to memoise on.
+///
+/// Saule indexes strings by character, not byte, so this is the length every
+/// `String.*` function resolves its arguments against. For an ASCII string —
+/// which is nearly all of them — the byte length *is* the character count.
+#[inline]
+pub(crate) fn char_len(s: &str) -> usize {
+    if s.is_ascii() {
+        s.len()
+    } else {
+        s.chars().count()
+    }
+}
+
+thread_local! {
+    /// One-entry memo of `(string, is_ascii, char_len)`.
+    ///
+    /// Character-indexed access into UTF-8 is O(n) unless the answer is
+    /// already known, and for an immutable string the answer never changes.
+    /// A loop that scans a document asks about the **same** string on every
+    /// iteration, which is what kept such loops quadratic even after the
+    /// per-call `Vec<char>` and the per-call `String` clone were gone: the
+    /// `is_ascii` probe alone re-read 320k bytes twenty thousand times.
+    ///
+    /// The `Rc` is held, not just its address. Keeping the allocation alive
+    /// is what makes pointer identity a sound key — a freed string cannot be
+    /// replaced by a different one at the same address while the memo still
+    /// refers to it. One entry is enough because the pattern this exists for
+    /// is a loop over a single string; anything else simply misses and pays
+    /// what it used to.
+    static STR_MEMO: RefCell<Option<(Rc<String>, bool, usize)>> =
+        const { RefCell::new(None) };
+}
+
+thread_local! {
+    /// The 128 one-character ASCII strings, and the empty string, built once.
+    ///
+    /// Scanning text means producing one-character strings by the million —
+    /// `String.sub(src, i, i)` is the inner loop of every tokeniser, parser
+    /// and state machine written in the language. Allocating a fresh `String`
+    /// for each one put `malloc`/`free` at ~15% of the JSON benchmark, with
+    /// another ~19% in the `Value` clone and drop traffic around it.
+    ///
+    /// These are immutable and shared, so handing out a clone of the `Rc` is
+    /// indistinguishable from a fresh allocation to every observer: Saule
+    /// strings have no identity operator and no mutation. This is the same
+    /// bargain Lua makes by interning its short strings.
+    static ASCII_STRS: [Rc<String>; 128] =
+        std::array::from_fn(|i| Rc::new((i as u8 as char).to_string()));
+    static EMPTY_STR: Rc<String> = Rc::new(String::new());
+}
+
+/// The shared one-character string for ASCII byte `b`.
+#[inline]
+fn interned_ascii(b: u8) -> Rc<String> {
+    debug_assert!(b < 128);
+    ASCII_STRS.with(|t| Rc::clone(&t[b as usize]))
+}
+
+/// The shared empty string.
+#[inline]
+fn interned_empty() -> Rc<String> {
+    EMPTY_STR.with(Rc::clone)
+}
+
+/// `(is_ascii, char_len)` for `s`, computed once per string.
+fn str_facts(s: &Rc<String>) -> (bool, usize) {
+    STR_MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        if let Some((cached, ascii, n)) = m.as_ref()
+            && Rc::ptr_eq(cached, s)
+        {
+            return (*ascii, *n);
+        }
+        let ascii = s.is_ascii();
+        let n = if ascii { s.len() } else { s.chars().count() };
+        *m = Some((Rc::clone(s), ascii, n));
+        (ascii, n)
+    })
+}
+
+/// Character count of `s`, memoised.
+#[inline]
+pub(crate) fn char_len_rc(s: &Rc<String>) -> usize {
+    str_facts(s).1
+}
+
+/// Byte offset of character index `ci` (0-based), clamped to `s.len()`.
+///
+/// The reason this exists at all: the obvious way to index a string by
+/// character is `s.chars().collect::<Vec<char>>()[ci]`, and that allocates a
+/// copy of the whole string **per call**. Every function here used to do it,
+/// which made any loop that scans a string quadratic — 20k single-character
+/// reads across a 320k-char document took 3.7s, against Lua's 0.01s.
+#[inline]
+fn byte_at(s: &Rc<String>, ci: usize) -> usize {
+    if str_facts(s).0 {
+        ci.min(s.len())
+    } else {
+        s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b)
+    }
+}
+
 // ─── functions ──────────────────────────────────────────────────────────────
 
 fn str_byte(args: &[Value]) -> Result<Value, String> {
     expect_min_arity("String.byte", args, 1)?;
     let s = expect_string("String.byte", args, 0)?;
-    let chars: Vec<char> = s.chars().collect();
     let pos: i64 = if args.len() >= 2 {
         expect_int("String.byte", args, 1)?
     } else {
         1
     };
-    if pos < 1 || (pos as usize) > chars.len() {
+    if pos < 1 {
         return Ok(Value::Nil);
     }
-    let c = chars[(pos as usize) - 1];
-    Ok(Value::Int(c as i64))
+    // ASCII indexes straight into the bytes; anything else decodes forward to
+    // the requested character and stops there rather than to the end.
+    if str_facts(&s).0 {
+        return match s.as_bytes().get((pos as usize) - 1) {
+            Some(b) => Ok(Value::Int(*b as i64)),
+            None => Ok(Value::Nil),
+        };
+    }
+    match s.chars().nth((pos as usize) - 1) {
+        Some(c) => Ok(Value::Int(c as i64)),
+        None => Ok(Value::Nil),
+    }
 }
 
 fn str_char(args: &[Value]) -> Result<Value, String> {
@@ -199,22 +320,21 @@ fn str_char(args: &[Value]) -> Result<Value, String> {
 fn str_len(args: &[Value]) -> Result<Value, String> {
     expect_arity("String.len", args, 1)?;
     let s = expect_string("String.len", args, 0)?;
-    Ok(Value::Int(s.chars().count() as i64))
+    Ok(Value::Int(char_len_rc(&s) as i64))
 }
 
 fn str_sub(args: &[Value]) -> Result<Value, String> {
     expect_min_arity("String.sub", args, 2)?;
     let s = expect_string("String.sub", args, 0)?;
-    let chars: Vec<char> = s.chars().collect();
+    let n = char_len_rc(&s) as i64;
     let i = expect_int("String.sub", args, 1)?;
     let j: i64 = if args.len() >= 3 {
         expect_int("String.sub", args, 2)?
     } else {
-        chars.len() as i64
+        n
     };
 
     // Resolve to 0-based [start, end) range with Lua semantics.
-    let n = chars.len() as i64;
     let mut start = if i < 0 { (n + i + 1).max(1) } else { i.max(1) };
     let mut end = if j < 0 { n + j + 1 } else { j };
     if end > n {
@@ -224,10 +344,23 @@ fn str_sub(args: &[Value]) -> Result<Value, String> {
         start = 1;
     }
     if start > end {
-        return Ok(Value::Str(Rc::new(String::new())));
+        return Ok(Value::Str(interned_empty()));
     }
-    let out: String = chars[(start as usize - 1)..(end as usize)].iter().collect();
-    Ok(Value::Str(Rc::new(out)))
+    // Slice the original bytes rather than rebuilding from characters: the
+    // range is already known to fall on character boundaries.
+    let from = byte_at(&s, start as usize - 1);
+    let to = byte_at(&s, end as usize);
+    // `sub(s, i, i)` in a loop is how every hand-written scanner reads text,
+    // and a fresh allocation per character is what made that pattern cost
+    // more in malloc than in the VM. One-byte results come from the shared
+    // table instead.
+    if to == from + 1 {
+        let b = s.as_bytes()[from];
+        if b < 128 {
+            return Ok(Value::Str(interned_ascii(b)));
+        }
+    }
+    Ok(Value::Str(Rc::new(s[from..to].to_string())))
 }
 
 fn str_rep(args: &[Value]) -> Result<Value, String> {
@@ -244,14 +377,14 @@ fn str_starts(args: &[Value]) -> Result<Value, String> {
     expect_arity("String.starts", args, 2)?;
     let s = expect_string("String.starts", args, 0)?;
     let prefix = expect_string("String.starts", args, 1)?;
-    Ok(Value::Bool(s.starts_with(&prefix)))
+    Ok(Value::Bool(s.starts_with(prefix.as_str())))
 }
 
 fn str_ends(args: &[Value]) -> Result<Value, String> {
     expect_arity("String.ends", args, 2)?;
     let s = expect_string("String.ends", args, 0)?;
     let suffix = expect_string("String.ends", args, 1)?;
-    Ok(Value::Bool(s.ends_with(&suffix)))
+    Ok(Value::Bool(s.ends_with(suffix.as_str())))
 }
 
 fn str_find(args: &[Value]) -> Result<Vec<Value>, String> {
@@ -266,15 +399,16 @@ fn str_find(args: &[Value]) -> Result<Vec<Value>, String> {
     } else {
         1
     };
-    let chars: Vec<char> = s.chars().collect();
-    let start = resolve_index(init, chars.len());
+    let start = resolve_index(init, char_len_rc(&s));
 
-    let hay: String = chars[start..].iter().collect();
-    let Some(byte_off) = hay.find(&pat) else {
+    // Search the tail in place. Collecting it into a fresh `String` copied the
+    // haystack on every call, which is what made scanning loops quadratic.
+    let hay = &s[byte_at(&s, start)..];
+    let Some(byte_off) = hay.find(&*pat) else {
         return Ok(vec![Value::Nil]);
     };
-    let char_off_in_hay = hay[..byte_off].chars().count();
-    let pat_len = pat.chars().count();
+    let char_off_in_hay = char_len(&hay[..byte_off]);
+    let pat_len = char_len(&pat);
     let s_idx = (start + char_off_in_hay + 1) as i64;
     let e_idx = if pat_len == 0 {
         s_idx - 1

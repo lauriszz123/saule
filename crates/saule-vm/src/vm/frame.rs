@@ -124,10 +124,20 @@ impl VmFunction for Closure {
 #[derive(Debug)]
 pub struct Frame {
     /// The running closure, held erased. The concrete [`Closure`] is
-    /// recovered with [`Closure::from_handle`]; the downcast is a vtable
-    /// pointer compare and happens once per frame entry, not per
-    /// instruction.
+    /// recovered with [`Closure::from_handle`].
+    ///
+    /// "Once per frame entry, not per instruction" undersold what that
+    /// costs: a frame is entered on every call *and* every return, so
+    /// `fib(28)` performed the downcast about two million times. The two
+    /// things the dispatch loop actually wants from the closure are cached
+    /// beside it, and `func` is now read only by the three opcodes that
+    /// touch upvalues.
     pub func: Rc<VmFunctionRef>,
+    /// The running proto — `func`'s, resolved once when the frame is built.
+    pub proto: Rc<Proto>,
+    /// The chunk `proto` was compiled in. Constants, protos, jump tables and
+    /// cast types are per chunk, so they follow the frame rather than the VM.
+    pub chunk: Rc<crate::chunk::Chunk>,
     /// `R[0]` is `stack[base]`.
     pub base: u32,
     /// Absolute register in the *caller* where this call's results go.
