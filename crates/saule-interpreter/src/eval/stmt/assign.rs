@@ -12,6 +12,7 @@ use crate::value::{ClassObject, Value};
 
 use super::super::expr::members::{read_index, read_member};
 use super::super::{Flow, expr, ops};
+use crate::value::SauleStr;
 
 pub(super) fn exec_assign(
     target: &Spanned<Expr>,
@@ -165,7 +166,7 @@ pub(crate) fn assign_member(
         }
         // Lua-style table write: `t.foo = v` is sugar for `t["foo"] = v`.
         Value::Table(items) => {
-            let key = Value::Str(Rc::new(name.to_string()));
+            let key = Value::Str(SauleStr::new(name.to_string()));
             items
                 .borrow_mut()
                 .set(&key, value)

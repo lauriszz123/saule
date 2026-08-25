@@ -13,6 +13,7 @@ use crate::value::{
 
 use super::calls::{bind_params, inject_class_statics, run_function_body, user_params};
 use super::{EvaluatedArg, SUPER_OWNER_BINDING, eval};
+use crate::value::SauleStr;
 
 /// Build a callable that constructs a fresh `EnumVariant` carrying its
 /// arguments as an array-style table payload. The arity is checked at call
@@ -47,8 +48,8 @@ pub(super) fn make_tuple_variant_ctor(
                 args.to_vec(),
             ))));
             let variant = Rc::new(EnumVariantObject {
-                enum_name: enum_name.clone(),
-                variant_name: variant_name.clone(),
+                enum_name: SauleStr::new(enum_name.clone()),
+                variant_name: SauleStr::new(variant_name.clone()),
                 tag,
                 value: Some(payload),
                 enum_obj: RefCell::new(Some(enum_obj.clone())),

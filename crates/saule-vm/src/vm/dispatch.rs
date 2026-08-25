@@ -38,7 +38,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_interpreter::value::{TableObject, VmFunctionRef};
+use saule_interpreter::value::{SauleStr, TableObject, VmFunctionRef};
 use saule_interpreter::{RuntimeError, Value};
 
 use crate::chunk::{Chunk, Proto};
@@ -86,7 +86,7 @@ impl Vm {
         for i in from..=to {
             saule_interpreter::eval::ops::display_into(&self.stack[i], span.clone(), &mut s)?;
         }
-        *self.reg_mut(dst) = Value::Str(Rc::new(s));
+        *self.reg_mut(dst) = Value::Str(SauleStr::new(s));
         Ok(())
     }
 
@@ -155,8 +155,8 @@ impl Vm {
         };
         let name = chunk.enums[e_idx].variants[tag as usize].name.to_string();
         let v = saule_interpreter::value::EnumVariantObject {
-            enum_name: e.name.clone(),
-            variant_name: name,
+            enum_name: e.name.clone().into(),
+            variant_name: name.into(),
             tag,
             value: Some(payload),
             enum_obj: RefCell::new(Some(Rc::clone(e))),
@@ -1072,7 +1072,7 @@ impl Vm {
                             self.reg(base + ins.b() as usize),
                             proto.span_at(here),
                         )?;
-                        *self.reg_mut(base + a) = Value::Str(Rc::new(s));
+                        *self.reg_mut(base + a) = Value::Str(SauleStr::new(s));
                     }
 
                     // ---- §15.12 nullability -------------------------------
@@ -1526,7 +1526,7 @@ impl Vm {
                             // read nil until `GETFX` let `enums.sau` compile
                             // and `SAULE_DIFF=1` put the two side by side.
                             Value::EnumVariant(v) => v.value.clone().unwrap_or_else(|| {
-                                Value::Str(Rc::new(v.variant_name.clone()))
+                                Value::Str(v.variant_name.clone())
                             }),
                             other => return Err(operand_err(other, "enum", &proto, here)),
                         };

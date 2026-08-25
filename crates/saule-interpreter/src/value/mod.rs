@@ -21,6 +21,7 @@ pub mod enum_;
 pub mod file;
 pub mod function;
 pub mod interface;
+pub mod str;
 pub mod table;
 
 use std::cell::RefCell;
@@ -33,6 +34,7 @@ pub use function::{
     FunctionBody, FunctionObject, NativeClosure, NativeFn, VmFunction, VmFunctionRef,
 };
 pub use interface::InterfaceObject;
+pub use str::{SauleStr, hash_str};
 pub use table::{TableKey, TableObject};
 
 /// A Saule runtime value.
@@ -42,8 +44,9 @@ pub enum Value {
     Bool(bool),
     Int(i64),
     Float(f64),
-    /// Interned via `Rc` so cloning a value is cheap.
-    Str(Rc<String>),
+    /// Shared by reference so cloning a value is cheap, and carrying its own
+    /// hash so a table never walks the same bytes twice. See [`SauleStr`].
+    Str(SauleStr),
     /// Hybrid table storage: a dense array part plus a hashmap part. `table<T>`
     /// uses only the array; `table<K, V>` uses the map (and may also use the
     /// array when keys happen to be positive integers). Shared by reference so
@@ -114,7 +117,7 @@ impl Value {
     #[inline(never)]
     fn clone_heap(&self) -> Value {
         match self {
-            Value::Str(s) => Value::Str(Rc::clone(s)),
+            Value::Str(s) => Value::Str(s.clone()),
             Value::Table(t) => Value::Table(Rc::clone(t)),
             Value::Native(f) => Value::Native(Rc::clone(f)),
             Value::NativeClosure(f) => Value::NativeClosure(Rc::clone(f)),
@@ -233,7 +236,7 @@ impl PartialEq for Value {
             // answers in one instruction instead of a length check and a
             // memcmp. Falling through to the content compare is what keeps
             // this correct for strings that were never interned.
-            (Value::Str(a), Value::Str(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Table(a), Value::Table(b)) => Rc::ptr_eq(a, b),
             (Value::Native(a), Value::Native(b)) => Rc::ptr_eq(a, b),
             (Value::NativeClosure(a), Value::NativeClosure(b)) => Rc::ptr_eq(a, b),

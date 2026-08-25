@@ -4,80 +4,82 @@ import Settings from "settings"
 -- A parameter is one of the sites `Assignable` applies at, so callers may pass a
 -- bare `string` and get a `Text` bound here.
 fn describe(t: Text) -> string
-	return t.words() .. " word(s), " .. t.length() .. " chars"
+  return t.words() .. " word(s), " .. t.length() .. " chars"
 end
 
 class Main
-	static fn main()
-		Main.building()
-		Main.dynamic()
-		Main.boundaries()
-	end
+  static fn main()
+    Main.building()
+    Main.dynamic()
+    Main.boundaries()
+  end
 
-	-- `Assignable<T>`: a value assigned straight into a typed slot builds the
-	-- object. Everything `Text` exposes, it declares itself.
-	static fn building()
-		println("-- building from a value --")
+  -- `Assignable<T>`: a value assigned straight into a typed slot builds the
+  -- object. Everything `Text` exposes, it declares itself.
+  static fn building()
+    println("-- building from a value --")
 
-		local greeting: Text = "hello wrapped world"
+    local greeting: Text = "hello wrapped world"
 
-		printf("printed   = %s\n", tostring(greeting))
-		printf("length    = %d\n", greeting.length())
-		printf("upper     = %s\n", greeting.upper())
-		printf("slice     = %s\n", greeting.slice(1, 5))
-		printf("starts    = %s\n", tostring(greeting.startsWith("hello")))
+    printf("printed   = %s\n", tostring(greeting))
+    printf("length    = %d\n", greeting.length())
+    printf("upper     = %s\n", greeting.upper())
+    printf("slice     = %s\n", greeting.slice(1, 5))
+    printf("starts    = %s\n", tostring(greeting.startsWith("hello")))
 
-		-- A member that is about `Text`, not about strings.
-		printf("words     = %d\n", greeting.words())
+    -- A member that is about `Text`, not about strings.
+    printf("words     = %d\n", greeting.words())
 
-		-- Conversion happens at a parameter too.
-		printf("describe  = %s\n", describe("two words"))
-	end
+    -- Conversion happens at a parameter too.
+    printf("describe  = %s\n", describe("two words"))
+  end
 
-	-- `OpIndex` / `OpNewIndex`: full control of fetching and setting.
-	static fn dynamic()
-		println("")
-		println("-- dynamic get / set --")
+  -- `OpIndex` / `OpNewIndex`: full control of fetching and setting.
+  static fn dynamic()
+    println("")
+    println("-- dynamic get / set --")
 
-		local s: Settings = Settings({theme: "dark", editor: "vim"})
+    local s: Settings = Settings({theme: "dark", editor: "vim"})
 
-		s["theme"] = "SOLARIZED"
-		s["font"] = "Mono"
+    s["theme"] = "SOLARIZED"
+    s["font"] = "Mono"
 
-		-- Reads run `index`, so the defaults answer without being stored…
-		printf("theme     = %s\n", s["theme"])
-		printf("editor    = %s\n", s["editor"])
-		printf("font      = %s\n", s["font"])
-		printf("unknown   = '%s'\n", s["nothing"])
+    -- Reads run `index`, so the defaults answer without being stored…
+    printf("theme     = %s\n", s["theme"])
+    printf("editor    = %s\n", s["editor"])
+    printf("font      = %s\n", s["font"])
+    printf("unknown   = '%s'\n", s["nothing"])
 
-		-- …and writes run `newIndex`, so normalising happened in one place.
-		printf("writes    = %d\n", s.writeCount())
-		printf("explicit? = %s / %s\n",
-			tostring(s.isExplicit("theme")),
-			tostring(s.isExplicit("editor")))
+    -- …and writes run `newIndex`, so normalising happened in one place.
+    printf("writes    = %d\n", s.writeCount())
+    printf(
+      "explicit? = %s / %s\n",
+      tostring(s.isExplicit("theme")),
+      tostring(s.isExplicit("editor"))
+    )
 
-		-- Compound assignment reads and then writes, so it runs both hooks.
-		s["font"] ..= "space"
-		printf("font      = %s\n", s["font"])
-	end
+    -- Compound assignment reads and then writes, so it runs both hooks.
+    s["font"] ..= "space"
+    printf("font      = %s\n", s["font"])
+  end
 
-	-- The edges are as much a part of the design as the happy path.
-	static fn boundaries()
-		println("")
-		println("-- boundaries --")
+  -- The edges are as much a part of the design as the happy path.
+  static fn boundaries()
+    println("")
+    println("-- boundaries --")
 
-		-- Nothing is injected: `Text` exposes only what it declares, so a
-		-- name `String` happens to have is still a compile error unless
-		-- `Text` declared it:
-		--
-		--   greeting.rep(3)     -- no member `rep` on `Text`
-		println("a wrapper exposes only what it declares")
+    -- Nothing is injected: `Text` exposes only what it declares, so a
+    -- name `String` happens to have is still a compile error unless
+    -- `Text` declared it:
+    --
+    --   greeting.rep(3)     -- no member `rep` on `Text`
+    println("a wrapper exposes only what it declares")
 
-		-- `Assignable` applies only where the interpreter can see a declared
-		-- type — an annotated binding or a parameter:
-		--
-		--   local all: table<Text> = {"a"}   -- table element
-		--   local t: Text = "a"; t = "b"     -- later assignment
-		println("conversion is limited to sites that really convert")
-	end
+    -- `Assignable` applies only where the interpreter can see a declared
+    -- type — an annotated binding or a parameter:
+    --
+    --   local all: table<Text> = {"a"}   -- table element
+    --   local t: Text = "a"; t = "b"     -- later assignment
+    println("conversion is limited to sites that really convert")
+  end
 end

@@ -476,7 +476,7 @@ impl Compiler<'_> {
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
             }
-            let key = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+            let key = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(name.to_string())), span)?;
             let a = self.reg8(base, span)?;
             self.emit(
                 Instruction::abc(Op::CALLMX, a, args.len() as u8 + 1, want.c()),

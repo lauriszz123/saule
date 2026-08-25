@@ -1,11 +1,11 @@
 //! Core prelude functions.
 
-use std::rc::Rc;
 
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::stdlib::{define_native, expect_arity};
 use crate::value::Value;
+use crate::value::SauleStr;
 
 /// `import { print, println, … } from "core"`. Also auto-installed so
 /// these names are visible without an explicit import (the common
@@ -138,7 +138,7 @@ fn builtin_printf(args: &[Value]) -> Result<Value, String> {
 
 fn builtin_tostring(args: &[Value]) -> Result<Value, String> {
     let v = args.first().cloned().unwrap_or(Value::Nil);
-    Ok(Value::Str(Rc::new(crate::eval::ops::display_value_native(
+    Ok(Value::Str(SauleStr::new(crate::eval::ops::display_value_native(
         &v,
     )?)))
 }
@@ -149,7 +149,7 @@ fn builtin_type(args: &[Value]) -> Result<Value, String> {
         Value::Instance(inst) => inst.borrow().class.name.clone(),
         _ => v.type_name().to_string(),
     };
-    Ok(Value::Str(Rc::new(name)))
+    Ok(Value::Str(SauleStr::new(name)))
 }
 
 fn builtin_int(args: &[Value]) -> Result<Value, String> {
@@ -257,7 +257,7 @@ fn builtin_assert(args: &[Value]) -> Result<Value, String> {
     let message = args
         .get(1)
         .cloned()
-        .unwrap_or_else(|| Value::Str(Rc::new("assertion failed".to_string())));
+        .unwrap_or_else(|| Value::Str(SauleStr::new("assertion failed".to_string())));
     Err(format!("assertion failed: {}", message.to_display_string()))
 }
 
@@ -265,6 +265,6 @@ fn builtin_error(args: &[Value]) -> Result<Value, String> {
     let msg = args
         .first()
         .cloned()
-        .unwrap_or_else(|| Value::Str(Rc::new("error".to_string())));
+        .unwrap_or_else(|| Value::Str(SauleStr::new("error".to_string())));
     Err(msg.to_display_string())
 }

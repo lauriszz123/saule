@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
-use crate::value::{ClassObject, FieldDef, TableObject, Value};
+use crate::value::{ClassObject, FieldDef, SauleStr, TableObject, Value};
 
 /// `import Project from "project"`. Auto-prelude'd so the existing bare
 /// `Project.name` references keep working.
@@ -42,18 +42,18 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     let src_dirs: Vec<Value> = info
         .src_dirs
         .iter()
-        .map(|p| Value::Str(Rc::new(crate::project::user_path(p))))
+        .map(|p| Value::Str(SauleStr::new(crate::project::user_path(p))))
         .collect();
 
     let mut static_fields = fxmap();
-    static_fields.insert("name".to_string(), Value::Str(Rc::new(info.name.clone())));
+    static_fields.insert("name".to_string(), Value::Str(SauleStr::new(info.name.clone())));
     static_fields.insert(
         "version".to_string(),
-        Value::Str(Rc::new(info.version.clone())),
+        Value::Str(SauleStr::new(info.version.clone())),
     );
     static_fields.insert(
         "root".to_string(),
-        Value::Str(Rc::new(crate::project::user_path(&info.root))),
+        Value::Str(SauleStr::new(crate::project::user_path(&info.root))),
     );
     static_fields.insert(
         "srcDirs".to_string(),

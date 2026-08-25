@@ -122,7 +122,7 @@ pub(crate) fn literal_value(e: &saule_ast::Expr) -> Option<saule_interpreter::Va
         Expr::Int(n) => Value::Int(*n),
         Expr::Float(f) => Value::Float(*f),
         Expr::Bool(b) => Value::Bool(*b),
-        Expr::Str(s) => Value::Str(std::rc::Rc::new(s.clone())),
+        Expr::Str(s) => Value::Str(saule_interpreter::value::SauleStr::new(s.clone())),
         Expr::Nil => Value::Nil,
         _ => return None,
     })

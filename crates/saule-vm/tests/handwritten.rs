@@ -166,7 +166,7 @@ fn closure_captures_a_live_register_then_closes_over_it() {
 #[test]
 fn tables_and_concat() {
     let mut c = Chunk::empty("table.sau");
-    let k = c.add_constant(Value::Str(Rc::new("!".to_string())));
+    let k = c.add_constant(Value::Str(SauleStr::new("!".to_string())));
     let main = Proto::new(
         Some("main"),
         0,

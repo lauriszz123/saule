@@ -12,6 +12,7 @@ use crate::value::{self, Value};
 
 use super::super::{Flow, expr};
 use super::make_function;
+use crate::value::SauleStr;
 
 pub(super) fn exec_enum_decl(
     enum_name: &str,
@@ -54,8 +55,8 @@ pub(super) fn exec_enum_decl(
                     _ => None,
                 };
                 let variant_obj = Rc::new(value::EnumVariantObject {
-                    enum_name: enum_name.to_string(),
-                    variant_name: name.clone(),
+                    enum_name: SauleStr::from(enum_name),
+                    variant_name: SauleStr::new(name.clone()),
                     tag,
                     value: val,
                     enum_obj: RefCell::new(None),

@@ -34,7 +34,7 @@ use saule_ast::{BinOp, Expr, LambdaBody, Spanned, TableEntry, Type};
 
 use crate::env::Environment;
 use crate::error::RuntimeError;
-use crate::value::{FunctionBody, FunctionObject, Value};
+use crate::value::{FunctionBody, FunctionObject, SauleStr, Value};
 
 use super::ops;
 
@@ -72,7 +72,7 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
         Expr::Int(n) => Ok(Value::Int(*n)),
         Expr::Float(f) => Ok(Value::Float(*f)),
         Expr::Bool(b) => Ok(Value::Bool(*b)),
-        Expr::Str(s) => Ok(Value::Str(Rc::new(s.clone()))),
+        Expr::Str(s) => Ok(Value::Str(SauleStr::new(s.clone()))),
         Expr::Nil => Ok(Value::Nil),
 
         Expr::Ident(name) => env.borrow().get(name).ok_or_else(|| {

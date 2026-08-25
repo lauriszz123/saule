@@ -25,6 +25,7 @@ use saule_native_abi::{CValue, Handle, HostApi, SET_HOST_SYMBOL, SetHostFn, tag}
 
 use crate::eval::expr::{EvaluatedArg, call_value_multi};
 use crate::value::{TableObject, Value};
+use crate::value::SauleStr;
 
 thread_local! {
     /// Call-scoped registry of host-owned reference values. Slot `0` is never
@@ -128,7 +129,7 @@ pub fn cvalue_to_value(c: &CValue) -> Value {
         tag::INT => Value::Int(c.integer),
         tag::FLOAT => Value::Float(c.float),
         // SAFETY: a STR tag implies a valid `(ptr, len)` pair from the peer.
-        tag::STR => Value::Str(Rc::new(unsafe { c.as_str() }.unwrap_or("").to_string())),
+        tag::STR => Value::Str(SauleStr::new(unsafe { c.as_str() }.unwrap_or("").to_string())),
         tag::TABLE | tag::FUNC => resolve(c.as_handle().unwrap_or(0)).unwrap_or(Value::Nil),
         _ => Value::Nil,
     }
