@@ -157,14 +157,7 @@ pub fn binary(
                 s.push_str(b);
                 Ok(Value::Str(Rc::new(s)))
             }
-            // Either side may be an instance rendering itself through
-            // `OpToString`, so go through `display_value` rather than
-            // `to_display_string` directly.
-            _ => Ok(Value::Str(Rc::new(format!(
-                "{}{}",
-                display_value(&l, span.clone())?,
-                display_value(&r, span)?
-            )))),
+            _ => concat_mixed(&l, &r, span),
         },
 
         Coalesce | And | Or => unreachable!("and/or/?? are short-circuited in expr::eval"),
@@ -527,6 +520,74 @@ pub fn display_value(v: &Value, span: std::ops::Range<usize>) -> Result<String, 
 /// strings and have no span to attribute them to.
 pub fn display_value_native(v: &Value) -> Result<String, String> {
     display_value(v, 0..0).map_err(|e| e.to_string())
+}
+
+/// `..` where at least one side is not already a string.
+///
+/// Either side may be an instance rendering itself through `OpToString`, so
+/// this goes through the `display_*` helpers rather than
+/// [`Value::to_display_string`] directly. Appending both into one buffer is
+/// the same saving the `Str`/`Str` arm in [`binary`] is written for —
+/// `"key" .. i` lands here, not there.
+///
+/// Out of line on purpose, for the reason `saule_vm`'s `Vm::concat` is:
+/// [`binary`] is the tree-walker's operator hot path, run for every `+` and
+/// every `<` in the program, and a `String` plus its capacity arithmetic
+/// and drop paths living in one arm widens the frame that all of the other
+/// arms are compiled under. Inlined here it cost ~9% on `closure`, a
+/// benchmark that never concatenates anything.
+#[inline(never)]
+fn concat_mixed(l: &Value, r: &Value, span: std::ops::Range<usize>) -> Result<Value, RuntimeError> {
+    let mut s = String::with_capacity(display_hint(l) + display_hint(r));
+    display_into(l, span.clone(), &mut s)?;
+    display_into(r, span, &mut s)?;
+    Ok(Value::Str(Rc::new(s)))
+}
+
+/// [`display_value`] straight into an existing buffer.
+///
+/// `..` is building a `String` it already owns, so the `String` that
+/// `display_value` returns is pure overhead on the way there: `"key" .. i`
+/// allocated one for the left operand's clone and another for the right
+/// operand's digits, only to copy both into the result and drop them.
+/// Appending in place skips all of that.
+///
+/// Equivalent to `out.push_str(&display_value(v, span)?)` for every input.
+/// The scalar arms are a shortcut and not a second rendering rule —
+/// [`has_overload`] answers `false` for everything except
+/// [`Value::Instance`], so no value handled here can have an `OpToString`
+/// to honour, and anything that might still goes the long way round.
+pub fn display_into(
+    v: &Value,
+    span: std::ops::Range<usize>,
+    out: &mut String,
+) -> Result<(), RuntimeError> {
+    match v {
+        Value::Str(s) => out.push_str(s),
+        Value::Int(n) => crate::itoa::push_i64(out, *n),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Nil => out.push_str("nil"),
+        other => out.push_str(&display_value(other, span)?),
+    }
+    Ok(())
+}
+
+/// A lower bound on the room `v` will need in [`display_into`], for sizing
+/// the buffer before the appends start.
+///
+/// Deliberately inspects nothing that can run user code — an instance's
+/// `toString` must be called exactly once, by `display_into` itself, so
+/// this only guesses at the shapes it can measure for free and leaves the
+/// rest to `String`'s own growth.
+pub fn display_hint(v: &Value) -> usize {
+    match v {
+        Value::Str(s) => s.len(),
+        // Wide enough for any `i64`, sign included.
+        Value::Int(_) => 20,
+        Value::Bool(_) => 5,
+        Value::Nil => 3,
+        _ => 16,
+    }
 }
 
 /// Type name for diagnostics — the class name for instances (`Vec2`),
