@@ -365,3 +365,26 @@ fn an_unproved_iter_returning_a_non_function_reports_the_same_error() {
 }
 
 
+
+#[test]
+fn map_keys_iterate_in_the_same_order_under_both_engines() {
+    // A live silent divergence, found while making the VM's snapshot stop
+    // allocating: the tree-walker sorted map keys by type and value, the VM
+    // sorted them on `TableKey::display()`. So integer keys came out
+    // numerically under one engine and *lexicographically* under the other —
+    // `{10, 2, 3}` iterated `2, 3, 10` against `10, 2, 3` — and nothing
+    // caught it because no fixture iterated a map whose keys disagree about
+    // the two orders. Ten sorts before two exactly when the comparison is a
+    // string.
+    must_agree(
+        "local m: table<integer, integer> = {}\nm[10] = 1\nm[2] = 2\nm[3] = 3\n\
+         local s: string = \"\"\nfor k, v in m do s = s .. k .. \",\" end\ns",
+    );
+    // The variant order too: integers before strings before booleans. On
+    // `display()` a quoted string sorted *below* a digit, so this was the
+    // other half of the same bug.
+    must_agree(
+        "local m: table<any, integer> = {}\nm[\"b\"] = 1\nm[20] = 2\nm[true] = 3\nm[100] = 4\n\
+         local s: string = \"\"\nfor k, v in m do s = s .. tostring(k) .. \",\" end\ns",
+    );
+}

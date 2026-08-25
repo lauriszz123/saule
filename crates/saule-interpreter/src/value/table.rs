@@ -112,6 +112,42 @@ impl<'a> Borrow<dyn AsTableKeyRef + 'a> for TableKey {
     }
 }
 
+/// **The** iteration order of a table's map part, for both engines.
+///
+/// `for k, v in t` yields the array part and then the map part *sorted*, so
+/// that iterating a table is deterministic and the order is observable. That
+/// makes this comparator a language-level guarantee rather than a detail, and
+/// it lived in two places until it was found to disagree with itself: the
+/// tree-walker compared keys by type and value, while the VM's snapshot
+/// sorted on `display()` — so `{10, 2, 3}` iterated `2, 3, 10` under one
+/// engine and `10, 2, 3` under the other, integer keys ordering
+/// lexicographically on one side and numerically on the other.
+///
+/// Written out rather than derived. A derived `Ord` would order the variants
+/// by however they happen to be declared above, which makes reordering them a
+/// silent change to what every `for … in` yields — the same reason `Hash` is
+/// written out with explicit tags.
+impl Ord for TableKey {
+    fn cmp(&self, other: &TableKey) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (TableKey::Int(x), TableKey::Int(y)) => x.cmp(y),
+            (TableKey::Int(_), _) => Ordering::Less,
+            (_, TableKey::Int(_)) => Ordering::Greater,
+            (TableKey::Str(x), TableKey::Str(y)) => x.cmp(y),
+            (TableKey::Str(_), _) => Ordering::Less,
+            (_, TableKey::Str(_)) => Ordering::Greater,
+            (TableKey::Bool(x), TableKey::Bool(y)) => x.cmp(y),
+        }
+    }
+}
+
+impl PartialOrd for TableKey {
+    fn partial_cmp(&self, other: &TableKey) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl TableKey {
     pub fn from_value(v: &Value) -> Option<TableKey> {
         match v {
@@ -208,10 +244,20 @@ impl TableObject {
             if slot == self.array.len() {
                 self.array.push(value);
                 // Pull any contiguous map entries into the array.
-                let mut next = self.array.len() as i64 + 1;
-                while let Some(v) = self.map.remove(&TableKey::Int(next)) {
-                    self.array.push(v);
-                    next += 1;
+                //
+                // Guarded on a non-empty map, and that guard is the whole
+                // point: appending to an array-shaped `table<T>` is the
+                // common write, and without it every append hashed
+                // `TableKey::Int` and probed a map that could not contain
+                // it. `interp`'s stack push, `array`'s fill loop and every
+                // `Table.insert` were paying for a lookup that only a table
+                // with sparse integer keys can ever answer.
+                if !self.map.is_empty() {
+                    let mut next = self.array.len() as i64 + 1;
+                    while let Some(v) = self.map.remove(&TableKey::Int(next)) {
+                        self.array.push(v);
+                        next += 1;
+                    }
                 }
                 return Ok(());
             }

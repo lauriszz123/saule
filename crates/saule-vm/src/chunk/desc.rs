@@ -179,3 +179,106 @@ pub enum TypeDesc {
     Nullable(u32),
 }
 
+
+/// A `CASTCHK` / `CASTUNWRAP` type test, pre-resolved to something the
+/// dispatch loop can answer with a tag compare.
+///
+/// **Why this exists.** Both opcodes called
+/// `saule_interpreter::eval::expr::cast::cast`, which walks a
+/// [`saule_ast::Type`] and ends in `matches_named` — a `match` on a `&str`.
+/// So proving that an `Int` is an `integer` meant string comparisons, every
+/// time the instruction ran: measured at **10.3ns per `CASTUNWRAP`**, and
+/// `sort` executes 6.67 million of them, about a quarter of its run.
+///
+/// The type is fixed when the chunk is compiled, so the walk is loop
+/// invariant across the whole program and is done once, here.
+///
+/// **The fallback is the point, not an afterthought.** Only the shallow
+/// primitive tests are resolved; `table<T>` is elementwise, a class name
+/// walks the inheritance chain, and both stay [`CastTest::Deep`] and still
+/// call the tree-walker's own `cast`. That is the "reuse rather than
+/// reimplement" rule holding: this is a *cache* of `matches_named`'s
+/// primitive arms, not a second implementation of casting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CastFast {
+    pub test: CastTest,
+    /// `T?` — a `nil` passes in addition to whatever `test` admits.
+    pub nullable: bool,
+}
+
+/// The shallow half of [`CastFast`]. One variant per arm of
+/// `matches_named`, plus [`Deep`](CastTest::Deep) for everything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastTest {
+    Any,
+    Int,
+    Float,
+    /// The `integer or float` sentinel native signatures use.
+    Number,
+    Str,
+    Bool,
+    Nil,
+    /// The bare name `table`, which is a shallow test. The parameterised
+    /// `table<K, V>` form is elementwise and is `Deep`.
+    Table,
+    /// Not resolvable to a tag compare — ask `cast::cast`.
+    Deep,
+}
+
+impl CastFast {
+    /// Resolve a source type once, at chunk-build time.
+    pub fn of(ty: &saule_ast::Type) -> CastFast {
+        use saule_ast::Type;
+        match ty {
+            Type::Nullable(inner) => {
+                let inner = CastFast::of(inner);
+                // A nested `Deep` cannot be lifted: `cast` has to see the
+                // whole `T?` to apply its own nil rule.
+                if inner.test == CastTest::Deep {
+                    CastFast { test: CastTest::Deep, nullable: false }
+                } else {
+                    CastFast { test: inner.test, nullable: true }
+                }
+            }
+            Type::Named(name) => {
+                let test = match name.as_str() {
+                    "any" => CastTest::Any,
+                    "integer" => CastTest::Int,
+                    "float" => CastTest::Float,
+                    "number" => CastTest::Number,
+                    "string" => CastTest::Str,
+                    "boolean" => CastTest::Bool,
+                    "nil" => CastTest::Nil,
+                    "table" => CastTest::Table,
+                    // A class or enum name: the chain walk stays in `cast`.
+                    _ => CastTest::Deep,
+                };
+                CastFast { test, nullable: false }
+            }
+            _ => CastFast { test: CastTest::Deep, nullable: false },
+        }
+    }
+
+    /// Answer the test, or `None` when only `cast::cast` can.
+    #[inline(always)]
+    pub fn eval(self, v: &saule_interpreter::Value) -> Option<bool> {
+        use saule_interpreter::Value;
+        if self.test == CastTest::Deep {
+            return None;
+        }
+        if self.nullable && matches!(v, Value::Nil) {
+            return Some(true);
+        }
+        Some(match self.test {
+            CastTest::Any => true,
+            CastTest::Int => matches!(v, Value::Int(_)),
+            CastTest::Float => matches!(v, Value::Float(_)),
+            CastTest::Number => matches!(v, Value::Int(_) | Value::Float(_)),
+            CastTest::Str => matches!(v, Value::Str(_)),
+            CastTest::Bool => matches!(v, Value::Bool(_)),
+            CastTest::Nil => matches!(v, Value::Nil),
+            CastTest::Table => matches!(v, Value::Table(_)),
+            CastTest::Deep => unreachable!("returned above"),
+        })
+    }
+}

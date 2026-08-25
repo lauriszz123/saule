@@ -180,17 +180,21 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::LOADI as u8, 2);
     assert_eq!(Op::EXTRAARG as u8, 6);
     // `NVALS` kept its number when `SELFFUNC` was appended after it, both
-    // kept theirs when `CASTUNWRAP` was appended after that, and all three
-    // kept theirs when `GETIDXU` was appended after *that*. The tail moves;
-    // the numbering does not. Pinning the earlier ones by value is what
-    // makes this an ABI test rather than a note about the last entry.
+    // kept theirs when `CASTUNWRAP` was appended after that, all three kept
+    // theirs when `GETIDXU` was appended after *that*, and all four kept
+    // theirs when the `JLTII` family was appended after that. The tail
+    // moves; the numbering does not. Pinning the earlier ones by value is
+    // what makes this an ABI test rather than a note about the last entry.
     assert_eq!(Op::NVALS as u8, 120);
     assert_eq!(Op::SELFFUNC as u8, 121);
     assert_eq!(Op::CASTUNWRAP as u8, 122);
+    assert_eq!(Op::GETIDXU as u8, 123);
+    // The immediate compares, appended as one block and so numbered as one.
+    assert_eq!(Op::JLTII as u8, 124);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::GETIDXU),
-        "a new opcode was appended after GETIDXU — extend this assertion rather than \
+        Some(Op::JNEII),
+        "a new opcode was appended after JNEII — extend this assertion rather than \
          inserting one in the middle"
     );
 }

@@ -8,6 +8,7 @@
 //!   │                     discipline (§18); consults the TypeTable for
 //!   │                     opcode selection and the ResolveTable for names
 //!   ├─ Pass 3: patch    — forward jump labels, match jump tables, lines
+//!   │           peephole — pairs no single emitter could see (§17)
 //!   └─ Pass 4: verify   — debug builds only (§17 Pass 4)
 //! ```
 //!
@@ -21,6 +22,7 @@
 //! | [`expr`] | 2 | expression codegen |
 //! | [`stmt`] | 2 | statement codegen |
 //! | [`match_`] | 2 | `match`, its jump table, and pattern binding |
+//! | [`peephole`] | 3 | deleting dead words, and relocating what named them |
 //! | [`verify`] | 4 | the debug-build check that a chunk is well formed |
 //!
 //! ## The `Unsupported` contract
@@ -37,6 +39,7 @@ pub mod ctx;
 pub mod expr;
 pub mod layout;
 pub mod match_;
+pub mod peephole;
 pub mod stmt;
 pub mod verify;
 

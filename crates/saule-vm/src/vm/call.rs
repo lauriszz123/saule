@@ -253,25 +253,57 @@ impl Vm {
         site: &Site<'_>,
         pc_after: usize,
     ) -> Result<bool, RuntimeError> {
-        let callee = self.stack[callee_abs].clone();
-        match callee {
-            Value::VmFunction(handle) => {
-                self.frames.last_mut().expect("frame").pc = pc_after as u32;
-                self.push_frame(
-                    handle,
-                    (callee_abs + 1) as u32,
-                    n_args,
-                    callee_abs as u32,
-                    n_ret,
-                    site,
-                )?;
-                Ok(true)
-            }
-            other => {
-                self.call_native(&other, callee_abs, n_args, n_ret, site)?;
-                Ok(false)
-            }
+        // The bytecode case reads the register **in place** and clones only
+        // the handle. It used to `Value::clone` the whole register first, and
+        // `Value`'s clone sends every heap variant to an `#[inline(never)]`
+        // `clone_heap` — so a dynamic call paid an out-of-line function call
+        // to bump one refcount, on the one path where the tag is already
+        // known to be `VmFunction`. The native arm still clones, and has to:
+        // `call_native` takes `&Value` and `&mut self`, so it cannot borrow
+        // the register it is passed.
+        if let Value::VmFunction(h) = &self.stack[callee_abs] {
+            let handle = Rc::clone(h);
+            self.frames.last_mut().expect("frame").pc = pc_after as u32;
+            self.push_frame(
+                handle,
+                (callee_abs + 1) as u32,
+                n_args,
+                callee_abs as u32,
+                n_ret,
+                site,
+            )?;
+            return Ok(true);
         }
+        let other = self.stack[callee_abs].clone();
+        self.call_native(&other, callee_abs, n_args, n_ret, site)?;
+        Ok(false)
+    }
+
+    /// The `CALLNAT` arm's body, out of line.
+    ///
+    /// Not a tidiness split: keeping the arm itself down to one call is worth
+    /// measurable time on programs that make no native calls at all, because
+    /// what it displaces in the dispatch loop costs them. See the arm.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_nat(
+        &mut self,
+        chunk: &Chunk,
+        k: u32,
+        ins: Instruction,
+        base: usize,
+        a: usize,
+        proto: &Proto,
+        here: u32,
+    ) -> Result<(), RuntimeError> {
+        let n_args = self.arg_count(ins.b(), base + a + 1);
+        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+        self.call_native(
+            &chunk.constants[k as usize],
+            base + a,
+            n_args,
+            n_ret,
+            &Site::Code(proto, here),
+        )
     }
 
     /// Call a native, a native closure, or fail with the same message shape
@@ -290,7 +322,12 @@ impl Vm {
             Value::Native(nf) => {
                 let v = (nf.func)(&self.stack[args_from..args_from + n_args])
                     .map_err(|m| RuntimeError::TypeError { message: m, span: site.span() })?;
-                self.store_results(dst, std::slice::from_ref(&v), n_ret);
+                // **Moved**, not cloned. `store_results` takes a slice, so
+                // the one value a `Native` returns went in by reference and
+                // came back out through `cloned()` — a refcount pair per
+                // call, and the original dropped an instruction later. This
+                // is the single commonest shape in the stdlib.
+                self.store_one(dst, v, n_ret);
                 Ok(())
             }
             Value::NativeClosure(nc) => {
@@ -500,6 +537,26 @@ impl Vm {
             self.frames.last_mut().expect("frame").top = (dst + count) as u32;
         }
         false
+    }
+
+    /// [`store_results`](Self::store_results) for a caller that owns exactly
+    /// one value, so it can be moved into the register rather than cloned.
+    ///
+    /// Behaviourally identical to `store_results(dst, &[v], n_ret)`, down to
+    /// what `top` becomes and what happens when the call site wants zero
+    /// results (the value is dropped) or more than one (the rest are nil).
+    pub(crate) fn store_one(&mut self, dst: usize, v: Value, n_ret: u8) {
+        let wanted = if n_ret == ALL_RESULTS { 1 } else { n_ret as usize };
+        self.ensure_stack(dst + wanted);
+        if wanted > 0 {
+            self.stack[dst] = v;
+            for i in 1..wanted {
+                self.stack[dst + i] = Value::Nil;
+            }
+        }
+        if n_ret == ALL_RESULTS && let Some(f) = self.frames.last_mut() {
+            f.top = (dst + 1) as u32;
+        }
     }
 
     pub(crate) fn store_results(&mut self, dst: usize, vals: &[Value], n_ret: u8) {

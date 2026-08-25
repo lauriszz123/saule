@@ -1,15 +1,29 @@
 //! The interpreter loop.
 //!
-//! **Do not turn `proto` and `chunk` into borrows.** They are cloned out of
-//! the frame on every activation — a call *and* a return — and removing
-//! those two refcount pairs looks like free money. It is not: reading them
-//! as `&*Rc::as_ptr(..)` instead measured **44% slower on `loop_arith`**,
-//! which does not make a single call. A `Proto` holds a `RefCell` of inline
-//! caches, so a shared reference to one is not `readonly`, and the loop
-//! writes registers through `&mut self` the whole time — as borrows they
-//! stop being loop-invariant and every constant-pool and code access
-//! reloads. Owning them is what tells LLVM the pointers cannot move.
-//! Tried twice, with and without hoisting the code pointer separately.
+//! **Do not turn `proto` and `chunk` into borrows.** Reading them as
+//! `&*Rc::as_ptr(..)` measured **44% slower on `loop_arith`**, which does not
+//! make a single call. A `Proto` holds a `RefCell` of inline caches, so a
+//! shared reference to one is not `readonly`, and the loop writes registers
+//! through `&mut self` the whole time — as borrows they stop being
+//! loop-invariant and every constant-pool and code access reloads. Owning
+//! them is what tells LLVM the pointers cannot move. Tried twice, with and
+//! without hoisting the code pointer separately.
+//!
+//! **They are no longer *cloned* either, and that is a different thing.**
+//! This paragraph used to open "they are cloned out of the frame on every
+//! activation — a call *and* a return — and removing those two refcount
+//! pairs looks like free money", and it does not: four refcount pairs per
+//! call round trip was real money. What the 44% measured was *borrowing*.
+//! `ManuallyDrop<Rc<_>>` built by `ptr::read` is neither — the same pointer
+//! in a register and the same type to codegen as the clone, so it keeps
+//! whatever the owned form was buying and drops only the traffic. Worth
+//! **`fib` −7.8%, `mandel` −5.5%, `closure` −4.8%**. See the `SAFETY` note at
+//! the read for why the pointee cannot go away: it is `shared`, not the
+//! frame, that keeps every `Proto` and `Chunk` alive for the whole call.
+//!
+//! The lesson generalises past this function: "owned beats borrowed here"
+//! and "the refcount is load-bearing" are two claims, and the measurement
+//! only ever supported the first.
 //!
 //! One function, and it stays one function. The arms borrow state held in
 //! loop locals across the whole body — `pc`, `base`, the decoded `code`
@@ -31,8 +45,8 @@ use saule_interpreter::{RuntimeError, Value};
 use crate::op::{Instruction, Op};
 
 use super::ops::{
-    field_slot_err, float_in_range, index_array, int_in_range, jump, operand_err, shift,
-    snapshot_pairs,
+    cast_holds, field_slot_err, float_in_range, index_array, int_in_range, jump, operand_err,
+    shift, snapshot_pairs,
 };
 use super::call::Site;
 use super::{ALL_RESULTS, Closure, Upvalue, Vm};
@@ -97,9 +111,36 @@ impl Vm {
             // cast types are per chunk, so the chunk follows the frame too —
             // a closure built in one module and called from another must
             // read its own module's pools.
+            // Read, **not** cloned. See the note on refcounts in this
+            // module's header for why these are owned values rather than
+            // borrows; this keeps them owned values and stops paying for it.
+            //
+            // SAFETY: the pointee outlives this loop unconditionally, and not
+            // because the frame keeps it alive. Every `Rc<Proto>` the VM ever
+            // runs comes from `chunk.proto(idx)`, so the `Chunk` holds a
+            // strong reference to it for the chunk's whole life; every
+            // `Rc<Chunk>` comes from `self.shared.chunks`, which lives as long
+            // as the `Rc<VmShared>` this `Vm` holds — which is the entire
+            // call. So a `Proto` cannot be freed while `execute_loop` runs,
+            // whatever happens to the frame that named it: `pop_frame`
+            // dropping the frame, or `enter_tail_frame` overwriting it in
+            // place, both leave `shared` holding the last word.
+            //
+            // `ManuallyDrop` rather than a reference on purpose. These are
+            // re-derived on every call *and* every return, so the four
+            // refcount pairs a round trip paid here were pure overhead — but
+            // the header records that turning them into borrows measured 44%
+            // slower on `loop_arith`. A `ManuallyDrop<Rc<T>>` is the same
+            // pointer in a register and the same type to codegen, so it keeps
+            // whatever made the owned form fast and drops only the traffic.
             let (proto, chunk, base, mut pc) = {
                 let f = self.frames.last().expect("frame");
-                (Rc::clone(&f.proto), Rc::clone(&f.chunk), f.base as usize, f.pc as usize)
+                (
+                    unsafe { std::mem::ManuallyDrop::new(std::ptr::read(&f.proto)) },
+                    unsafe { std::mem::ManuallyDrop::new(std::ptr::read(&f.chunk)) },
+                    f.base as usize,
+                    f.pc as usize,
+                )
             };
             let code: &[Instruction] = &proto.code;
             // The previous instruction of *this* activation, for the pair
@@ -140,6 +181,94 @@ impl Vm {
                 }
 
                 let a = ins.a() as usize;
+
+                // ---- an arm per *hot* opcode, spelled once -------------------------
+                //
+                // Thirteen families used to share an arm and then re-`match op`
+                // inside it — `ADDI | SUBI | MULI | …` and then
+                // `match op { Op::ADDI => … }`. That is two indirect branches per
+                // instruction where the point of a jump table is to have one, and
+                // it collapsed every arithmetic opcode onto a single back-edge, so
+                // the branch predictor saw one site with six targets instead of six
+                // sites with one target each. These macros give each opcode its own
+                // arm without spelling the operand plumbing out thirteen times.
+                //
+                // **Splitting is not free and not applied uniformly.** An arm of its
+                // own buys a dispatch target and costs the code it holds, in a
+                // function whose sheer size is worth 2-3% (see this module's
+                // header). Splitting all thirty-four opcodes measured *−7% on
+                // `loop_arith` and `mandel` but +7% on `interp` and +10% on
+                // `entity`* — the branchy programs paying for arms they never
+                // execute. So `--profile-bytecode` picked the list: an opcode the
+                // suite actually retires gets an arm, and the rest keep the shared
+                // one with its inner `match`, which costs nothing it does not run.
+                // The regrouped arms carry that reasoning individually.
+                //
+                // The operand names are macro parameters rather than identifiers
+                // bound in the body because `macro_rules!` hygiene would otherwise
+                // hide them from the expression passed in. `$e` expands inline in
+                // the function, so an arm that has to fail can still `return Err`
+                // out of the loop exactly as it did when it was a nested `match`.
+
+                /// `R[A] = R[B] op R[C]`, integers.
+                macro_rules! int_arith {
+                    (|$l:ident, $r:ident| $e:expr) => {{
+                        let ($l, $r) = self.int_pair(base, ins, &proto, here)?;
+                        *self.reg_mut(base + a) = Value::Int($e);
+                    }};
+                }
+
+                /// `R[A] = R[B] op sC`, integer against a signed 8-bit immediate.
+                macro_rules! int_arith_imm {
+                    (|$l:ident, $r:ident| $e:expr) => {{
+                        let $l = self.int_at(base + ins.b() as usize, &proto, here)?;
+                        let $r = ins.sc();
+                        *self.reg_mut(base + a) = Value::Int($e);
+                    }};
+                }
+
+                /// `R[A] = R[B] op R[C]`, floats.
+                macro_rules! float_arith {
+                    (|$l:ident, $r:ident| $e:expr) => {{
+                        let ($l, $r) = self.float_pair(base, ins, &proto, here)?;
+                        *self.reg_mut(base + a) = Value::Float($e);
+                    }};
+                }
+
+                /// Fused compare-and-branch: skip the following `JMP` when the
+                /// comparison holds. `R[A]` against `R[B]`, integers.
+                macro_rules! jump_int {
+                    (|$l:ident, $r:ident| $e:expr) => {{
+                        let $l = self.int_at(base + a, &proto, here)?;
+                        let $r = self.int_at(base + ins.b() as usize, &proto, here)?;
+                        if $e {
+                            pc += 1;
+                        }
+                    }};
+                }
+
+                /// [`jump_int`] against a signed 8-bit immediate — `fib`'s `n < 2`.
+                macro_rules! jump_int_imm {
+                    (|$l:ident, $r:ident| $e:expr) => {{
+                        let $l = self.int_at(base + a, &proto, here)?;
+                        let $r = ins.sc();
+                        if $e {
+                            pc += 1;
+                        }
+                    }};
+                }
+
+                /// [`jump_int`], floats.
+                macro_rules! jump_float {
+                    (|$l:ident, $r:ident| $e:expr) => {{
+                        let $l = self.float_at(base + a, &proto, here)?;
+                        let $r = self.float_at(base + ins.b() as usize, &proto, here)?;
+                        if $e {
+                            pc += 1;
+                        }
+                    }};
+                }
+
 
                 match op {
                     // ---- §15.1 moves and constants -----------------------
@@ -214,29 +343,41 @@ impl Vm {
                     }
 
                     // ---- §15.3 integer arithmetic ------------------------
-                    Op::ADDI | Op::SUBI | Op::MULI | Op::DIVI | Op::MODI | Op::POWI => {
+                    Op::ADDI => int_arith!(|l, r| l.wrapping_add(r)),
+                    Op::SUBI => int_arith!(|l, r| l.wrapping_sub(r)),
+                    Op::MULI => int_arith!(|l, r| l.wrapping_mul(r)),
+                    // Regrouped deliberately, and the profile is the reason.
+                    // Splitting an opcode into its own arm buys a dispatch
+                    // target; it costs the code that arm holds, in a function
+                    // whose own size is worth 2-3% (see this module's header).
+                    // These three are the bulkiest arithmetic arms — two
+                    // error paths and a `format!` — and `--profile-bytecode`
+                    // finds them at 1.3% of `sort` and *zero* everywhere else
+                    // in the suite. So they share an arm, and the inner
+                    // `match` they pay for is one that essentially never runs.
+                    Op::DIVI | Op::MODI | Op::POWI => {
                         let (l, r) = self.int_pair(base, ins, &proto, here)?;
-                        let span = || proto.span_at(here);
                         let out = match op {
-                            Op::ADDI => l.wrapping_add(r),
-                            Op::SUBI => l.wrapping_sub(r),
-                            Op::MULI => l.wrapping_mul(r),
                             Op::DIVI => {
                                 if r == 0 {
-                                    return Err(RuntimeError::DivisionByZero { span: span() });
+                                    return Err(RuntimeError::DivisionByZero {
+                                        span: proto.span_at(here),
+                                    });
                                 }
                                 l.wrapping_div(r)
                             }
                             Op::MODI => {
                                 if r == 0 {
-                                    return Err(RuntimeError::DivisionByZero { span: span() });
+                                    return Err(RuntimeError::DivisionByZero {
+                                        span: proto.span_at(here),
+                                    });
                                 }
                                 l.wrapping_rem(r)
                             }
+                            // `integer ^ integer` stays an integer, so a
+                            // negative exponent has no answer — an error
+                            // rather than a silent 0, matching `int_op`.
                             _ => {
-                                // `integer ^ integer` stays an integer, so a
-                                // negative exponent has no answer — an error
-                                // rather than a silent 0, matching `int_op`.
                                 let Ok(exp) = u32::try_from(r) else {
                                     return Err(RuntimeError::TypeError {
                                         message: format!(
@@ -244,7 +385,7 @@ impl Vm {
                                              got {r} — use floats (`float(base) ^ {r}.0`) for a \
                                              fractional result"
                                         ),
-                                        span: span(),
+                                        span: proto.span_at(here),
                                     });
                                 };
                                 l.wrapping_pow(exp)
@@ -256,26 +397,21 @@ impl Vm {
                         let v = self.int_at(base + ins.b() as usize, &proto, here)?;
                         *self.reg_mut(base + a) = Value::Int(v.wrapping_neg());
                     }
-                    Op::ADDII | Op::SUBII | Op::MULII => {
-                        let l = self.int_at(base + ins.b() as usize, &proto, here)?;
-                        let imm = ins.sc();
-                        let out = match op {
-                            Op::ADDII => l.wrapping_add(imm),
-                            Op::SUBII => l.wrapping_sub(imm),
-                            _ => l.wrapping_mul(imm),
-                        };
-                        *self.reg_mut(base + a) = Value::Int(out);
-                    }
+                    Op::ADDII => int_arith_imm!(|l, imm| l.wrapping_add(imm)),
+                    Op::SUBII => int_arith_imm!(|l, imm| l.wrapping_sub(imm)),
+                    Op::MULII => int_arith_imm!(|l, imm| l.wrapping_mul(imm)),
 
                     // ---- §15.4 float arithmetic --------------------------
-                    Op::ADDF | Op::SUBF | Op::MULF | Op::DIVF | Op::MODF | Op::POWF => {
+                    Op::ADDF => float_arith!(|l, r| l + r),
+                    Op::SUBF => float_arith!(|l, r| l - r),
+                    Op::MULF => float_arith!(|l, r| l * r),
+                    // Cold, so grouped: `DIVF` is 0.3% of `mandel` and the
+                    // other two never execute in the suite at all. Float
+                    // division by zero yields infinity, matching `float_op` —
+                    // only integer division errors.
+                    Op::DIVF | Op::MODF | Op::POWF => {
                         let (l, r) = self.float_pair(base, ins, &proto, here)?;
                         let out = match op {
-                            Op::ADDF => l + r,
-                            Op::SUBF => l - r,
-                            Op::MULF => l * r,
-                            // Float division by zero yields infinity, matching
-                            // `float_op` — only integer division errors.
                             Op::DIVF => l / r,
                             Op::MODF => l % r,
                             _ => l.powf(r),
@@ -288,6 +424,10 @@ impl Vm {
                     }
 
                     // ---- §15.5 bitwise -----------------------------------
+                    // Zero executions across all sixteen benchmarks, so
+                    // these keep the shared arm: five dispatch targets bought
+                    // nothing and cost five arms' worth of code sitting
+                    // between the ones that do run.
                     Op::BAND | Op::BOR | Op::BXOR | Op::SHL | Op::SHR => {
                         let (l, r) = self.int_pair(base, ins, &proto, here)?;
                         let out = match op {
@@ -353,36 +493,48 @@ impl Vm {
                         }
                         pc = jump(pc, ins.sbx());
                     }
-                    Op::JLTI | Op::JLEI | Op::JGTI | Op::JGEI | Op::JEQI | Op::JNEI => {
+                    Op::JLTI => jump_int!(|l, r| l < r),
+                    Op::JLEI => jump_int!(|l, r| l <= r),
+                    // `JLTI` and `JLEI` above are the two the compiler
+                    // actually emits into hot code — the other four are
+                    // absent from every profile in the suite, so they share
+                    // an arm. "Skip the next instruction" is the convention:
+                    // that next instruction is the `JMP` to the false branch.
+                    Op::JGTI | Op::JGEI | Op::JEQI | Op::JNEI => {
                         let l = self.int_at(base + a, &proto, here)?;
                         let r = self.int_at(base + ins.b() as usize, &proto, here)?;
                         let take = match op {
-                            Op::JLTI => l < r,
-                            Op::JLEI => l <= r,
                             Op::JGTI => l > r,
                             Op::JGEI => l >= r,
                             Op::JEQI => l == r,
                             _ => l != r,
                         };
-                        // "Skip the next instruction" — by convention that
-                        // next instruction is the JMP to the false branch.
                         if take {
                             pc += 1;
                         }
                     }
-                    Op::JLTF | Op::JLEF | Op::JGTF | Op::JGEF => {
-                        let l = self.float_at(base + a, &proto, here)?;
-                        let r = self.float_at(base + ins.b() as usize, &proto, here)?;
+                    // The same six against a signed 8-bit immediate, so the
+                    // `LOADI` that materialised the literal is gone. `fib`'s
+                    // `n < 2` is the shape, and it runs once per call.
+                    Op::JLTII => jump_int_imm!(|l, imm| l < imm),
+                    Op::JLEII => jump_int_imm!(|l, imm| l <= imm),
+                    Op::JGTII => jump_int_imm!(|l, imm| l > imm),
+                    Op::JGEII | Op::JEQII | Op::JNEII => {
+                        let l = self.int_at(base + a, &proto, here)?;
+                        let imm = ins.sc();
                         let take = match op {
-                            Op::JLTF => l < r,
-                            Op::JLEF => l <= r,
-                            Op::JGTF => l > r,
-                            _ => l >= r,
+                            Op::JGEII => l >= imm,
+                            Op::JEQII => l == imm,
+                            _ => l != imm,
                         };
                         if take {
                             pc += 1;
                         }
                     }
+                    Op::JLTF => jump_float!(|l, r| l < r),
+                    Op::JLEF => jump_float!(|l, r| l <= r),
+                    Op::JGTF => jump_float!(|l, r| l > r),
+                    Op::JGEF => jump_float!(|l, r| l >= r),
                     Op::JEQ | Op::JNE => {
                         let eq = (*self.reg(base + a)) == (*self.reg(base + ins.b() as usize));
                         if eq == (op == Op::JEQ) {
@@ -413,6 +565,14 @@ impl Vm {
                             pc += 1;
                         }
                     }
+                    // `LTI` is 21.7% of `sort` and absent everywhere else, and
+                    // it is the one hot opcode that measured *worse* with an arm
+                    // of its own (+2% on `sort`, reproduced across passes). That
+                    // fits what this benchmark is: the `CASTUNWRAP` fusion cut
+                    // 30% of its instructions for 2.3% of its clock, so `sort`
+                    // is bound by the native→VM crossing per comparison, not by
+                    // dispatch — an extra target buys nothing there and the code
+                    // it displaces still costs. Grouped.
                     Op::LTI | Op::LEI | Op::EQI => {
                         let (l, r) = self.int_pair(base, ins, &proto, here)?;
                         *self.reg_mut(base + a) = Value::Bool(match op {
@@ -826,14 +986,14 @@ impl Vm {
                     // Never throws: a failed cast is `nil`, and the static
                     // type is `T?`, so the caller already has to handle it.
                     Op::CASTCHK => {
-                        let v = (*self.reg(base + ins.b() as usize)).clone();
-                        let ok = chunk
-                            .cast_types
-                            .get(ins.c() as usize)
-                            .is_some_and(|t| {
-                                saule_interpreter::eval::expr::cast::cast(&v, t)
-                            });
-                        *self.reg_mut(base + a) = if ok { v } else { Value::Nil };
+                        // Tested through the register, and cloned only if it
+                        // holds — the clone used to happen first, so a cast
+                        // that failed paid a refcount pair to produce a value
+                        // it then threw away for a `nil`.
+                        let src = base + ins.b() as usize;
+                        let ok = cast_holds(&chunk, ins.c() as usize, self.reg(src));
+                        let v = if ok { (*self.reg(src)).clone() } else { Value::Nil };
+                        *self.reg_mut(base + a) = v;
                     }
                     // `(x as T)!` — the two above, fused. See the opcode's
                     // doc for the profile that justifies it.
@@ -845,16 +1005,12 @@ impl Vm {
                     // `is_some_and` makes it fail the cast rather than panic
                     // — the same choice `CASTCHK` makes.
                     Op::CASTUNWRAP => {
-                        let v = (*self.reg(base + ins.b() as usize)).clone();
-                        let ok = chunk
-                            .cast_types
-                            .get(ins.c() as usize)
-                            .is_some_and(|t| {
-                                saule_interpreter::eval::expr::cast::cast(&v, t)
-                            });
-                        if !ok || matches!(v, Value::Nil) {
+                        let src = base + ins.b() as usize;
+                        let ok = cast_holds(&chunk, ins.c() as usize, self.reg(src));
+                        if !ok || matches!(*self.reg(src), Value::Nil) {
                             return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
                         }
+                        let v = (*self.reg(src)).clone();
                         *self.reg_mut(base + a) = v;
                     }
 
@@ -883,11 +1039,25 @@ impl Vm {
                         continue 'reentry;
                     }
                     Op::CALLNAT => {
+                        // The callee is read **out of the constant pool in
+                        // place**. It used to be cloned first, and a `Value`
+                        // clone of a heap variant is a call to an
+                        // `#[inline(never)]` `clone_heap` plus a matching
+                        // out-of-line drop at the end of the statement — two
+                        // function calls per native call, to borrow a
+                        // `Rc<NativeFn>` the chunk owns for its whole life
+                        // anyway. `chunk` is a loop local rather than a field
+                        // of `self`, so indexing it does not borrow `self`
+                        // and `call_native` can still take `&mut`.
+                        //
+                        // Kept to one call so the arm stays small: spelling
+                        // the operand decoding out here instead cost
+                        // `loop_arith` 5.6%, and `loop_arith` makes exactly
+                        // one native call in its whole run — pure code
+                        // layout, the same effect the opcode-splitting item
+                        // measured in both directions.
                         let k = self.extra_arg(code.as_ptr(), &mut pc);
-                        let callee = chunk.constants[k as usize].clone();
-                        let n_args = self.arg_count(ins.b(), base + a + 1);
-                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
-                        self.call_native(&callee, base + a, n_args, n_ret, &Site::Code(&proto, here))?;
+                        self.call_nat(&chunk, k, ins, base, a, &proto, here)?;
                     }
                     // ---- §6.4 tail calls ----------------------------
                     Op::TAILCALL => {

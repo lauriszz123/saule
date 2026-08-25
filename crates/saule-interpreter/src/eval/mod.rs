@@ -43,20 +43,27 @@ thread_local! {
 
 /// The active depth limit: `SAULE_MAX_DEPTH` if set and parseable, else
 /// [`MAX_EVAL_DEPTH`]. Read from the environment once per thread.
+#[inline]
 pub fn depth_limit() -> u32 {
-    DEPTH_LIMIT.with(|c| {
-        let cached = c.get();
-        if cached != 0 {
-            return cached;
-        }
-        let limit = std::env::var("SAULE_MAX_DEPTH")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(MAX_EVAL_DEPTH);
-        c.set(limit);
-        limit
-    })
+    let cached = DEPTH_LIMIT.with(|c| c.get());
+    if cached != 0 {
+        return cached;
+    }
+    depth_limit_uncached()
+}
+
+/// The environment read, out of line: it happens once per thread and the
+/// caller is on the call path of every re-entrant invocation.
+#[cold]
+#[inline(never)]
+fn depth_limit_uncached() -> u32 {
+    let limit = std::env::var("SAULE_MAX_DEPTH")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(MAX_EVAL_DEPTH);
+    DEPTH_LIMIT.with(|c| c.set(limit));
+    limit
 }
 
 /// Enter one call level against the shared recursion counter, returning a
@@ -68,6 +75,12 @@ pub fn depth_limit() -> u32 {
 /// inside a single `Vm`, so it cannot see that nesting at all. Sharing this
 /// counter is also what bounds a program bouncing between the two engines
 /// once rather than twice.
+///
+/// `inline` for the same reason `Vm::int_at` is: `RuntimeError` is 64 bytes,
+/// so out of line this returns a ~72-byte `Result` by value to carry an error
+/// that, on the path that actually runs, is never built. `Table.sort` reaches
+/// it once per comparison.
+#[inline]
 pub fn enter_call_depth(
     span: &std::ops::Range<usize>,
 ) -> Result<DepthGuard, crate::error::RuntimeError> {
@@ -84,6 +97,7 @@ impl DepthGuard {
     ///
     /// On failure the depth is *not* incremented, so the error propagates
     /// out through frames that each decrement exactly once.
+    #[inline]
     pub(crate) fn enter(span: &std::ops::Range<usize>) -> Result<Self, crate::error::RuntimeError> {
         let limit = depth_limit();
         let depth = EVAL_DEPTH.with(|d| {
@@ -96,12 +110,17 @@ impl DepthGuard {
         });
         match depth {
             Some(_) => Ok(DepthGuard),
-            None => Err(crate::error::RuntimeError::StackOverflow {
-                limit,
-                span: span.clone(),
-            }),
+            None => Err(too_deep(limit, span)),
         }
     }
+}
+
+/// The overflow error, out of line so building it is not inlined into every
+/// caller of [`DepthGuard::enter`].
+#[cold]
+#[inline(never)]
+fn too_deep(limit: u32, span: &std::ops::Range<usize>) -> crate::error::RuntimeError {
+    crate::error::RuntimeError::StackOverflow { limit, span: span.clone() }
 }
 
 impl Drop for DepthGuard {

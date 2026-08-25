@@ -27,7 +27,8 @@ pub mod desc;
 pub mod proto;
 
 pub use desc::{
-    ClassProto, EnumProto, InterfaceProto, JumpTable, StaticSlot, TypeDesc, VariantProto,
+    CastFast, CastTest, ClassProto, EnumProto, InterfaceProto, JumpTable, StaticSlot, TypeDesc,
+    VariantProto,
 };
 pub use proto::{Handler, InlineCache, LineEntry, Proto, UpvalDesc};
 
@@ -88,6 +89,13 @@ pub struct Chunk {
     /// tree-walker's own `cast`, so the two engines agree by construction
     /// rather than by care.
     pub cast_types: Vec<Rc<saule_ast::Type>>,
+    /// [`cast_types`](Self::cast_types) pre-resolved to a tag compare, one
+    /// entry per entry, maintained by [`add_cast_type`](Self::add_cast_type).
+    ///
+    /// **Derived, not data.** Like [`Proto::caches`] this is recomputed from
+    /// the chunk rather than carried by it, so §14's bytecode cache can
+    /// rebuild it on load and never has to serialize it.
+    pub cast_fast: Vec<CastFast>,
     /// Jump tables for `SWITCH`.
     pub jump_tables: Vec<JumpTable>,
     /// `(enum, tag)` pairs `VARIANT` refers to.
@@ -130,6 +138,7 @@ impl Chunk {
             constants: Vec::new(),
             type_descs: Vec::new(),
             cast_types: Vec::new(),
+            cast_fast: Vec::new(),
             jump_tables: Vec::new(),
             variant_refs: Vec::new(),
             module_slots: 0,
@@ -194,6 +203,10 @@ impl Chunk {
             return i as TypeIdx;
         }
         self.cast_types.push(Rc::new(ty.clone()));
+        // Pushed in lockstep: this is the only place either vector grows, and
+        // the dispatch loop indexes them with the same operand.
+        self.cast_fast.push(CastFast::of(ty));
+        debug_assert_eq!(self.cast_types.len(), self.cast_fast.len());
         (self.cast_types.len() - 1) as TypeIdx
     }
 }
