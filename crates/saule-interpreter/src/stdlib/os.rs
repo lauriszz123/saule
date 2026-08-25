@@ -25,7 +25,7 @@ use std::rc::Rc;
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::value::{
-    ClassObject, EnumObject, EnumVariantObject, FieldDef, InstanceObject, NativeClosure,
+    ClassObject, EnumObject, EnumVariantObject, FieldDef, InstanceObject, NativeClosure, SauleStr,
     TableObject, Value,
 };
 
@@ -113,11 +113,11 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     // constants
     static_fields.insert(
         "sep".to_string(),
-        Value::Str(Rc::new(path_sep().to_string())),
+        Value::Str(SauleStr::new(path_sep().to_string())),
     );
     static_fields.insert(
         "lineSep".to_string(),
-        Value::Str(Rc::new(line_sep().to_string())),
+        Value::Str(SauleStr::new(line_sep().to_string())),
     );
 
     let class = ClassObject {
@@ -236,10 +236,10 @@ fn install_platform_enum(env: &Rc<RefCell<Environment>>) {
     // Declaration order is the slice order, so the index is the tag.
     for (tag, (vname, vvalue)) in variants.iter().enumerate() {
         let variant = Rc::new(EnumVariantObject {
-            enum_name: name.to_string(),
-            variant_name: (*vname).to_string(),
+            enum_name: name.to_string().into(),
+            variant_name: (*vname).to_string().into(),
             tag: tag as u32,
-            value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
+            value: Some(Value::Str(SauleStr::new((*vvalue).to_string()))),
             enum_obj: RefCell::new(None),
         });
         variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
@@ -310,7 +310,7 @@ fn expect_integer(name: &str, args: &[Value], idx: usize) -> Result<i64, String>
 }
 
 fn str_value(s: String) -> Value {
-    Value::Str(Rc::new(s))
+    Value::Str(SauleStr::new(s))
 }
 
 fn bool_vec(b: bool) -> Vec<Value> {
@@ -585,8 +585,8 @@ fn os_platform(_args: &[Value]) -> Result<Vec<Value>, String> {
         _ => "Other",
     };
     let variant = EnumVariantObject {
-        enum_name: "OsPlatform".to_string(),
-        variant_name: variant_name.to_string(),
+        enum_name: "OsPlatform".to_string().into(),
+        variant_name: variant_name.to_string().into(),
         tag: tag_in(&OS_PLATFORM_VARIANTS, variant_name),
         value: Some(str_value(platform_str().to_string())),
         enum_obj: RefCell::new(None),
@@ -816,10 +816,10 @@ fn install_fskind_enum(env: &Rc<RefCell<Environment>>) {
     // Declaration order is the slice order, so the index is the tag.
     for (tag, (vname, vvalue)) in variants.iter().enumerate() {
         let variant = Rc::new(EnumVariantObject {
-            enum_name: name.to_string(),
-            variant_name: (*vname).to_string(),
+            enum_name: name.to_string().into(),
+            variant_name: (*vname).to_string().into(),
             tag: tag as u32,
-            value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
+            value: Some(Value::Str(SauleStr::new((*vvalue).to_string()))),
             enum_obj: RefCell::new(None),
         });
         variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
@@ -883,10 +883,10 @@ fn fskind_variant(kind: &str) -> Value {
     // Falls back to a freshly-constructed variant if the enum isn't
     // installed (which would only happen if the stdlib wasn't loaded).
     Value::EnumVariant(Rc::new(EnumVariantObject {
-        enum_name: "FsKind".to_string(),
-        variant_name: kind.to_string(),
+        enum_name: "FsKind".to_string().into(),
+        variant_name: kind.to_string().into(),
         tag: tag_in(&FS_KIND_VARIANTS, kind),
-        value: Some(Value::Str(Rc::new(kind.to_ascii_lowercase()))),
+        value: Some(Value::Str(SauleStr::new(kind.to_ascii_lowercase()))),
         enum_obj: RefCell::new(None),
     }))
 }
@@ -943,7 +943,7 @@ fn os_fs_info(args: &[Value]) -> Result<Vec<Value>, String> {
         .ok_or_else(|| "Os.fsInfo: FsInfo class not installed".to_string())?;
 
     let mut inst = InstanceObject::new(class);
-    inst.set_field("path", Value::Str(Rc::new(path)));
+    inst.set_field("path", Value::Str(SauleStr::new(path)));
     inst.set_field("kind", fskind_variant(kind_str));
     inst.set_field("size", Value::Int(meta.len() as i64));
     inst.set_field("modifiedAt", modified_at);

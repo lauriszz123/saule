@@ -7,14 +7,13 @@
 //! and call it if present. The `implements OpAdd<…>` clause is what
 //! `saule-typeck` enforces statically; the runtime only needs the method.
 
-use std::rc::Rc;
 
 use saule_ast::ops::{binary_contract, binop_symbol, unary_contract};
 use saule_ast::{BinOp, UnaryOp};
 
 use crate::error::RuntimeError;
 use crate::eval::expr::{EvaluatedArg, invoke_method_multi};
-use crate::value::Value;
+use crate::value::{SauleStr, Value};
 
 /// Does `v` carry an operator overload named `method`? Walks the class
 /// chain, so a subclass inherits its parent's overloads.
@@ -155,7 +154,7 @@ pub fn binary(
                 let mut s = String::with_capacity(a.len() + b.len());
                 s.push_str(a);
                 s.push_str(b);
-                Ok(Value::Str(Rc::new(s)))
+                Ok(Value::Str(SauleStr::new(s)))
             }
             _ => concat_mixed(&l, &r, span),
         },
@@ -541,7 +540,7 @@ fn concat_mixed(l: &Value, r: &Value, span: std::ops::Range<usize>) -> Result<Va
     let mut s = String::with_capacity(display_hint(l) + display_hint(r));
     display_into(l, span.clone(), &mut s)?;
     display_into(r, span, &mut s)?;
-    Ok(Value::Str(Rc::new(s)))
+    Ok(Value::Str(SauleStr::new(s)))
 }
 
 /// [`display_value`] straight into an existing buffer.

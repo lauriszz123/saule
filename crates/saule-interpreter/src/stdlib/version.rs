@@ -28,7 +28,7 @@ use std::rc::Rc;
 
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
-use crate::value::{ClassObject, FieldDef, NativeClosure, Value};
+use crate::value::{ClassObject, FieldDef, NativeClosure, SauleStr, Value};
 
 /// `import Saule from "saule"`. Auto-prelude'd, like every other stdlib
 /// static class — a version check shouldn't need an import.
@@ -51,11 +51,11 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
     static_fields.insert(
         "version".to_string(),
-        Value::Str(Rc::new(saule_version::VERSION.to_string())),
+        Value::Str(SauleStr::new(saule_version::VERSION.to_string())),
     );
     static_fields.insert(
         "full".to_string(),
-        Value::Str(Rc::new(saule_version::FULL.to_string())),
+        Value::Str(SauleStr::new(saule_version::FULL.to_string())),
     );
     static_fields.insert(
         "year".to_string(),
@@ -68,7 +68,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     static_fields.insert("isDev".to_string(), Value::Bool(saule_version::IS_DEV));
     static_fields.insert(
         "commit".to_string(),
-        Value::Str(Rc::new(saule_version::COMMIT.to_string())),
+        Value::Str(SauleStr::new(saule_version::COMMIT.to_string())),
     );
     static_fields.insert(
         "atLeast".to_string(),

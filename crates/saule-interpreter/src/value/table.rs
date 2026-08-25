@@ -9,24 +9,24 @@
 use crate::fxhash::FxHashMap as HashMap;
 use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
-use super::Value;
+use super::{SauleStr, Value};
 
 /// A hashable key for the map part of a table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableKey {
     Int(i64),
-    Str(String),
+    Str(SauleStr),
     Bool(bool),
 }
 
 /// A borrowed view of a [`TableKey`], so a `&str` can be looked up without
 /// first being copied into an owned key. See [`TableObject::get_str`].
-#[derive(PartialEq, Eq)]
 pub(crate) enum TableKeyRef<'a> {
     Int(i64),
-    Str(&'a str),
+    /// The text **and its hash**, so a probe that already knows the hash —
+    /// which is every probe made with a [`SauleStr`] — does not recompute it.
+    Str(&'a str, u32),
     Bool(bool),
 }
 
@@ -34,39 +34,59 @@ impl TableKey {
     fn as_ref(&self) -> TableKeyRef<'_> {
         match self {
             TableKey::Int(i) => TableKeyRef::Int(*i),
-            TableKey::Str(s) => TableKeyRef::Str(s),
+            // `hash32` is cached on the string, so a stored key answers this
+            // without touching a byte after the first time.
+            TableKey::Str(s) => TableKeyRef::Str(s, s.hash32()),
             TableKey::Bool(b) => TableKeyRef::Bool(*b),
         }
     }
 }
+
+/// Fold a variant tag and a payload into the hash the map indexes with.
+///
+/// One function for both halves of the key, which is what keeps the owned
+/// and borrowed forms agreeing bit for bit — the property the whole
+/// `Borrow<dyn AsTableKeyRef>` arrangement rests on.
+fn tag_hash(tag: u8, payload: i64) -> u64 {
+    let mut h = crate::fxhash::FxHasher::default();
+    h.write_u8(tag);
+    h.write_i64(payload);
+    h.finish()
+}
+
+impl TableKeyRef<'_> {
+    fn key_hash(&self) -> u64 {
+        match self {
+            TableKeyRef::Int(i) => tag_hash(0, *i),
+            TableKeyRef::Str(_, h) => tag_hash(1, *h as i64),
+            TableKeyRef::Bool(b) => tag_hash(2, *b as i64),
+        }
+    }
+}
+
+impl PartialEq for TableKeyRef<'_> {
+    /// Text, not hash. Two keys that collide must still compare unequal, so
+    /// the cached hash is a filter for the map and never the answer.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TableKeyRef::Int(a), TableKeyRef::Int(b)) => a == b,
+            (TableKeyRef::Str(a, _), TableKeyRef::Str(b, _)) => a == b,
+            (TableKeyRef::Bool(a), TableKeyRef::Bool(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TableKeyRef<'_> {}
 
 // `TableKey` and `TableKeyRef` are used as the owned and borrowed halves of
 // the same map key, so their hashes have to agree bit for bit. Writing the
 // tag explicitly (rather than deriving) makes that a property of this code
 // instead of a property of how the compiler happens to hash enum
 // discriminants.
-impl Hash for TableKeyRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            TableKeyRef::Int(i) => {
-                state.write_u8(0);
-                i.hash(state);
-            }
-            TableKeyRef::Str(s) => {
-                state.write_u8(1);
-                s.hash(state);
-            }
-            TableKeyRef::Bool(b) => {
-                state.write_u8(2);
-                b.hash(state);
-            }
-        }
-    }
-}
-
 impl Hash for TableKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_ref().hash(state);
+        state.write_u64(self.as_ref().key_hash());
     }
 }
 
@@ -86,7 +106,7 @@ impl AsTableKeyRef for TableKeyRef<'_> {
     fn key(&self) -> TableKeyRef<'_> {
         match self {
             TableKeyRef::Int(i) => TableKeyRef::Int(*i),
-            TableKeyRef::Str(s) => TableKeyRef::Str(s),
+            TableKeyRef::Str(s, h) => TableKeyRef::Str(s, *h),
             TableKeyRef::Bool(b) => TableKeyRef::Bool(*b),
         }
     }
@@ -94,7 +114,7 @@ impl AsTableKeyRef for TableKeyRef<'_> {
 
 impl Hash for dyn AsTableKeyRef + '_ {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.key().hash(state);
+        state.write_u64(self.key().key_hash());
     }
 }
 
@@ -152,7 +172,10 @@ impl TableKey {
     pub fn from_value(v: &Value) -> Option<TableKey> {
         match v {
             Value::Int(i) => Some(TableKey::Int(*i)),
-            Value::Str(s) => Some(TableKey::Str((**s).clone())),
+            // Was `(**s).clone()` — a fresh `String` allocation and a
+            // memcpy on *every map insert*. Sharing the allocation is the
+            // whole point of `SauleStr`.
+            Value::Str(s) => Some(TableKey::Str(s.clone())),
             Value::Bool(b) => Some(TableKey::Bool(*b)),
             _ => None,
         }
@@ -161,7 +184,7 @@ impl TableKey {
     pub fn to_value(&self) -> Value {
         match self {
             TableKey::Int(i) => Value::Int(*i),
-            TableKey::Str(s) => Value::Str(Rc::new(s.clone())),
+            TableKey::Str(s) => Value::Str(s.clone()),
             TableKey::Bool(b) => Value::Bool(*b),
         }
     }
@@ -209,7 +232,13 @@ impl TableObject {
             return self.array[(*i as usize) - 1].clone();
         }
         if let Value::Str(s) = key {
-            return self.get_str(s);
+            // Straight to the cached hash — `get_str` would take the `&str`
+            // path and hash the bytes again.
+            return self
+                .map
+                .get(&TableKeyRef::Str(s, s.hash32()) as &dyn AsTableKeyRef)
+                .cloned()
+                .unwrap_or(Value::Nil);
         }
         match TableKey::from_value(key) {
             Some(k) => self.map.get(&k).cloned().unwrap_or(Value::Nil),
@@ -225,7 +254,7 @@ impl TableObject {
     /// borrowed-key lookup does it with none.
     pub fn get_str(&self, key: &str) -> Value {
         self.map
-            .get(&TableKeyRef::Str(key) as &dyn AsTableKeyRef)
+            .get(&TableKeyRef::Str(key, super::hash_str(key)) as &dyn AsTableKeyRef)
             .cloned()
             .unwrap_or(Value::Nil)
     }

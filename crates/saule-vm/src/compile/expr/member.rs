@@ -123,7 +123,7 @@ impl Compiler<'_> {
         if matches!(self.types.get(&obj.id), Some(saule_ast::Type::Table { .. })) {
             let m = self.mark();
             let r = self.expr_tmp(obj)?;
-            let key = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+            let key = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(name.to_string())), span)?;
             self.map_key_read(dst, r, key, span)?;
             self.free_to(m);
             return Ok(());
@@ -135,7 +135,7 @@ impl Compiler<'_> {
         let Some(class) = self.class_of_expr(obj) else {
             let m = self.mark();
             let r = self.expr_tmp(obj)?;
-            let key = self.constant(Value::Str(std::rc::Rc::new(name.to_string())), span)?;
+            let key = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(name.to_string())), span)?;
             let Ok(kc) = u8::try_from(key) else {
                 return Err(CompileError::unsupported(
                     "a dynamic member name past the 256-constant window",

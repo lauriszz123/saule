@@ -142,8 +142,8 @@ pub(crate) fn build_enums(
                     continue;
                 }
                 let obj = Rc::new(EnumVariantObject {
-                    enum_name: proto.name.to_string(),
-                    variant_name: v.name.to_string(),
+                    enum_name: proto.name.to_string().into(),
+                    variant_name: v.name.to_string().into(),
                     tag: tag as u32,
                     value: v.value.map(|k| chunk.constants[k as usize].clone()),
                     enum_obj: RefCell::new(None),

@@ -30,6 +30,7 @@ use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::stdlib::expect_min_arity;
 use crate::value::{ClassObject, NativeClosure, TableObject, Value};
+use crate::value::SauleStr;
 
 /// `import Table from "table"`. Auto-prelude'd so bare `Table.insert(…)`
 /// also works.
@@ -404,7 +405,7 @@ fn tbl_concat(args: &[Value]) -> Result<Vec<Value>, String> {
     };
 
     if i > j {
-        return Ok(vec![Value::Str(Rc::new(String::new()))]);
+        return Ok(vec![Value::Str(SauleStr::new(String::new()))]);
     }
     if i < 1 || j > len {
         return Err(format!(
@@ -419,5 +420,5 @@ fn tbl_concat(args: &[Value]) -> Result<Vec<Value>, String> {
         }
         out.push_str(&t.array[(k - 1) as usize].to_display_string());
     }
-    Ok(vec![Value::Str(Rc::new(out))])
+    Ok(vec![Value::Str(SauleStr::new(out))])
 }

@@ -3,13 +3,16 @@
 use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
-use super::Value;
+use super::{SauleStr, Value};
 use super::class::MethodRef;
 
 #[derive(Debug)]
 pub struct EnumVariantObject {
-    pub enum_name: String,
-    pub variant_name: String,
+    /// Shared, not owned: `NEWVAR` builds one of these per tuple-variant
+    /// construction, and these two fields were a `String` allocation each
+    /// for text the compiler has known since the enum was declared.
+    pub enum_name: SauleStr,
+    pub variant_name: SauleStr,
     /// Dense index in declaration order, `0..variant_count`.
     ///
     /// Every variant of an enum has one, including tuple variants — a

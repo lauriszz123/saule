@@ -83,7 +83,7 @@ impl Compiler<'_> {
                 self.emit(Instruction::abx(Op::LOADK, a, k), span);
             }
             Expr::Str(s) => {
-                let k = self.constant(Value::Str(std::rc::Rc::new(s.clone())), span)?;
+                let k = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(s.clone())), span)?;
                 self.emit(Instruction::abx(Op::LOADK, a, k), span);
             }
 

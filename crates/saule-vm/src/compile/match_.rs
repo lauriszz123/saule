@@ -599,7 +599,7 @@ impl Compiler<'_> {
             Pattern::Int(n) => Value::Int(*n),
             Pattern::Float(f) => Value::Float(*f),
             Pattern::Bool(b) => Value::Bool(*b),
-            Pattern::Str(s) => Value::Str(std::rc::Rc::new(s.clone())),
+            Pattern::Str(s) => Value::Str(saule_interpreter::value::SauleStr::new(s.clone())),
             Pattern::Nil => Value::Nil,
             _ => unreachable!("only literal patterns reach here"),
         };

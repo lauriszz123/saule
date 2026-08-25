@@ -305,7 +305,7 @@ impl Compiler<'_> {
                 let m = self.mark();
                 let o = self.expr_tmp(obj)?;
                 let key = self.constant(
-                    saule_interpreter::Value::Str(std::rc::Rc::new(name.clone())),
+                    saule_interpreter::Value::Str(saule_interpreter::value::SauleStr::new(name.clone())),
                     span,
                 )?;
                 let v = self.rhs_tmp(value)?;
@@ -366,7 +366,7 @@ impl Compiler<'_> {
                 Some(slot) => self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span),
                 None => {
                     let k = self.constant(
-                        saule_interpreter::Value::Str(std::rc::Rc::new(name.clone())),
+                        saule_interpreter::Value::Str(saule_interpreter::value::SauleStr::new(name.clone())),
                         span,
                     )?;
                     let Ok(kb) = u8::try_from(k) else {

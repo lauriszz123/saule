@@ -25,7 +25,7 @@ use std::rc::Rc;
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::value::{
-    ClassObject, EnumObject, EnumVariantObject, FieldDef, FileHandle, NativeClosure, Value,
+    ClassObject, EnumObject, EnumVariantObject, FieldDef, FileHandle, NativeClosure, SauleStr, Value,
 };
 
 // ─── native-package descriptor ─────────────────────────────────────────────
@@ -189,10 +189,10 @@ fn install_enum(env: &Rc<RefCell<Environment>>, name: &str, variants: &[(&str, &
     // Declaration order is the slice order, so the index is the tag.
     for (tag, (vname, vvalue)) in variants.iter().enumerate() {
         let variant = Rc::new(EnumVariantObject {
-            enum_name: name.to_string(),
-            variant_name: (*vname).to_string(),
+            enum_name: name.to_string().into(),
+            variant_name: (*vname).to_string().into(),
             tag: tag as u32,
-            value: Some(Value::Str(Rc::new((*vvalue).to_string()))),
+            value: Some(Value::Str(SauleStr::new((*vvalue).to_string()))),
             enum_obj: RefCell::new(None),
         });
         variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
@@ -350,7 +350,7 @@ fn lines_step_file(reader: Rc<RefCell<BufReader<std::fs::File>>>) -> Value {
                 Ok(0) => Ok(vec![Value::Nil]),
                 Ok(_) => {
                     strip_trailing_newline(&mut buf);
-                    Ok(vec![Value::Str(Rc::new(buf))])
+                    Ok(vec![Value::Str(SauleStr::new(buf))])
                 }
                 Err(e) => Err(format!("Io.lines: read error: {e}")),
             }
@@ -369,7 +369,7 @@ fn lines_step_stdin(reader: Rc<RefCell<BufReader<std::io::Stdin>>>) -> Value {
                 Ok(0) => Ok(vec![Value::Nil]),
                 Ok(_) => {
                     strip_trailing_newline(&mut buf);
-                    Ok(vec![Value::Str(Rc::new(buf))])
+                    Ok(vec![Value::Str(SauleStr::new(buf))])
                 }
                 Err(e) => Err(format!("Io.lines: read error: {e}")),
             }
@@ -427,12 +427,12 @@ fn read_format(fmt: &str, src: &mut ReadSource<'_>) -> Result<Vec<Value>, String
             if fmt == "l" {
                 strip_trailing_newline(&mut buf);
             }
-            Ok(vec![Value::Str(Rc::new(buf))])
+            Ok(vec![Value::Str(SauleStr::new(buf))])
         }
         "a" => {
             let mut buf = String::new();
             read_all_src(src, &mut buf)?;
-            Ok(vec![Value::Str(Rc::new(buf))])
+            Ok(vec![Value::Str(SauleStr::new(buf))])
         }
         "n" => {
             let mut buf = String::new();
@@ -583,7 +583,7 @@ fn file_lines(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
                         Ok(0) => Ok(vec![Value::Nil]),
                         Ok(_) => {
                             strip_trailing_newline(&mut buf);
-                            Ok(vec![Value::Str(Rc::new(buf))])
+                            Ok(vec![Value::Str(SauleStr::new(buf))])
                         }
                         Err(e) => Err(format!("File.lines: {e}")),
                     }
@@ -594,7 +594,7 @@ fn file_lines(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
                         Ok(0) => Ok(vec![Value::Nil]),
                         Ok(_) => {
                             strip_trailing_newline(&mut buf);
-                            Ok(vec![Value::Str(Rc::new(buf))])
+                            Ok(vec![Value::Str(SauleStr::new(buf))])
                         }
                         Err(e) => Err(format!("File.lines: {e}")),
                     }

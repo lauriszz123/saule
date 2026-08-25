@@ -10,6 +10,7 @@ use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::{ClassObject, Value};
+use crate::value::SauleStr;
 
 /// `import Math from "math"`. Auto-prelude'd so bare `Math.sqrt(…)`
 /// also works.
@@ -427,8 +428,8 @@ fn math_randomseed(args: &[Value]) -> Result<Value, String> {
 fn math_type(args: &[Value]) -> Result<Value, String> {
     expect_arity("type", args, 1)?;
     match args[0] {
-        Value::Int(_) => Ok(Value::Str(Rc::new("integer".to_string()))),
-        Value::Float(_) => Ok(Value::Str(Rc::new("float".to_string()))),
+        Value::Int(_) => Ok(Value::Str(SauleStr::new("integer".to_string()))),
+        Value::Float(_) => Ok(Value::Str(SauleStr::new("float".to_string()))),
         _ => Ok(Value::Nil),
     }
 }

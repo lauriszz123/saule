@@ -46,7 +46,7 @@ fn local_then_lookup() {
 fn string_concat_and_length() {
     assert_eq!(
         eval(r#""foo" .. "bar""#).unwrap(),
-        Value::Str(Rc::new("foobar".into()))
+        Value::Str(SauleStr::new("foobar".into()))
     );
     assert_eq!(eval(r#"#"hello""#).unwrap(), Value::Int(5));
 }
@@ -56,7 +56,7 @@ fn comparison_and_logic() {
     assert_eq!(eval("1 < 2 and 3 >= 3").unwrap(), Value::Bool(true));
     assert_eq!(
         eval(r#"nil or "fallback""#).unwrap(),
-        Value::Str(Rc::new("fallback".into()))
+        Value::Str(SauleStr::new("fallback".into()))
     );
 }
 
@@ -64,11 +64,11 @@ fn comparison_and_logic() {
 fn null_coalescing() {
     assert_eq!(
         eval(r#"nil ?? "x""#).unwrap(),
-        Value::Str(Rc::new("x".into()))
+        Value::Str(SauleStr::new("x".into()))
     );
     assert_eq!(
         eval(r#""y" ?? "x""#).unwrap(),
-        Value::Str(Rc::new("y".into()))
+        Value::Str(SauleStr::new("y".into()))
     );
 }
 
@@ -97,11 +97,11 @@ fn division_by_zero() {
 fn type_builtin() {
     assert_eq!(
         eval("type(42)").unwrap(),
-        Value::Str(Rc::new("integer".into()))
+        Value::Str(SauleStr::new("integer".into()))
     );
     assert_eq!(
         eval(r#"type("hi")"#).unwrap(),
-        Value::Str(Rc::new("string".into()))
+        Value::Str(SauleStr::new("string".into()))
     );
 }
 
@@ -154,7 +154,7 @@ fn if_elseif_else_chain() {
         end
         kind
     "#;
-    assert_eq!(eval(src).unwrap(), Value::Str(Rc::new("small".into())));
+    assert_eq!(eval(src).unwrap(), Value::Str(SauleStr::new("small".into())));
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn default_parameter_value() {
     "#;
     assert_eq!(
         eval(src).unwrap(),
-        Value::Str(Rc::new("hello, world".into()))
+        Value::Str(SauleStr::new("hello, world".into()))
     );
 }
 
@@ -394,7 +394,7 @@ fn function_type_name_is_function() {
         fn id(x: integer) -> integer return x end
         type(id)
     "#;
-    assert_eq!(eval(src).unwrap(), Value::Str(Rc::new("function".into())));
+    assert_eq!(eval(src).unwrap(), Value::Str(SauleStr::new("function".into())));
 }
 
 #[test]
@@ -1851,7 +1851,7 @@ fn compound_assignment_arithmetic() {
 fn compound_assignment_concat() {
     assert_eq!(
         eval("local s = \"foo\"\ns ..= \"bar\"\ns").unwrap(),
-        Value::Str(Rc::new("foobar".into()))
+        Value::Str(SauleStr::new("foobar".into()))
     );
 }
 

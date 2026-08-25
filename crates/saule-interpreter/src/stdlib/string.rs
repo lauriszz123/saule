@@ -8,6 +8,7 @@ use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::{ClassObject, NativeClosure, Value};
+use crate::value::SauleStr;
 
 /// `import String from "string"`. Auto-prelude'd so bare
 /// `String.format(…)` also works.
@@ -122,9 +123,9 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
 /// looked at the index it was asked about — so a loop scanning a 320k-char
 /// document copied 320k bytes per character read, on top of whatever the
 /// function itself did.
-fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<Rc<String>, String> {
+fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<SauleStr, String> {
     match args.get(idx) {
-        Some(Value::Str(s)) => Ok(Rc::clone(s)),
+        Some(Value::Str(s)) => Ok(s.clone()),
         Some(other) => Err(format!(
             "{name} expects a string at argument {}, got `{}`",
             idx + 1,
@@ -193,7 +194,7 @@ thread_local! {
     /// refers to it. One entry is enough because the pattern this exists for
     /// is a loop over a single string; anything else simply misses and pays
     /// what it used to.
-    static STR_MEMO: RefCell<Option<(Rc<String>, bool, usize)>> =
+    static STR_MEMO: RefCell<Option<(SauleStr, bool, usize)>> =
         const { RefCell::new(None) };
 }
 
@@ -210,16 +211,16 @@ thread_local! {
     /// indistinguishable from a fresh allocation to every observer: Saule
     /// strings have no identity operator and no mutation. This is the same
     /// bargain Lua makes by interning its short strings.
-    static ASCII_STRS: [Rc<String>; 128] =
-        std::array::from_fn(|i| Rc::new((i as u8 as char).to_string()));
-    static EMPTY_STR: Rc<String> = Rc::new(String::new());
+    static ASCII_STRS: [SauleStr; 128] =
+        std::array::from_fn(|i| SauleStr::new((i as u8 as char).to_string()));
+    static EMPTY_STR: SauleStr = SauleStr::new(String::new());
 }
 
 /// The shared one-character string for ASCII byte `b`.
 #[inline]
-fn interned_ascii(b: u8) -> Rc<String> {
+fn interned_ascii(b: u8) -> SauleStr {
     debug_assert!(b < 128);
-    ASCII_STRS.with(|t| Rc::clone(&t[b as usize]))
+    ASCII_STRS.with(|t| t[b as usize].clone())
 }
 
 /// Longest string worth interning.
@@ -238,7 +239,7 @@ const INTERN_MAX: usize = 32;
 const INTERN_CAP: usize = 4096;
 
 /// A table entry, keyed by its own text so a lookup needs no allocation.
-struct Interned(Rc<String>);
+struct Interned(SauleStr);
 
 impl std::borrow::Borrow<str> for Interned {
     fn borrow(&self) -> &str {
@@ -272,18 +273,18 @@ thread_local! {
 /// So this is called from the places whose output repeats — slicing a token
 /// out of a document, case-folding — and not from `..`, whose whole purpose
 /// is building strings that did not exist before.
-fn intern(s: &str) -> Rc<String> {
+fn intern(s: &str) -> SauleStr {
     if s.len() > INTERN_MAX {
-        return Rc::new(s.to_string());
+        return SauleStr::new(s.to_string());
     }
     INTERN.with(|t| {
         let mut t = t.borrow_mut();
         if let Some(hit) = t.get(s) {
-            return Rc::clone(&hit.0);
+            return hit.0.clone();
         }
-        let rc = Rc::new(s.to_string());
+        let rc = SauleStr::new(s.to_string());
         if t.len() < INTERN_CAP {
-            t.insert(Interned(Rc::clone(&rc)));
+            t.insert(Interned(rc.clone()));
         }
         rc
     })
@@ -291,29 +292,29 @@ fn intern(s: &str) -> Rc<String> {
 
 /// The shared empty string.
 #[inline]
-fn interned_empty() -> Rc<String> {
-    EMPTY_STR.with(Rc::clone)
+fn interned_empty() -> SauleStr {
+    EMPTY_STR.with(SauleStr::clone)
 }
 
 /// `(is_ascii, char_len)` for `s`, computed once per string.
-fn str_facts(s: &Rc<String>) -> (bool, usize) {
+fn str_facts(s: &SauleStr) -> (bool, usize) {
     STR_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if let Some((cached, ascii, n)) = m.as_ref()
-            && Rc::ptr_eq(cached, s)
+            && SauleStr::ptr_eq(cached, s)
         {
             return (*ascii, *n);
         }
         let ascii = s.is_ascii();
         let n = if ascii { s.len() } else { s.chars().count() };
-        *m = Some((Rc::clone(s), ascii, n));
+        *m = Some((s.clone(), ascii, n));
         (ascii, n)
     })
 }
 
 /// Character count of `s`, memoised.
 #[inline]
-pub(crate) fn char_len_rc(s: &Rc<String>) -> usize {
+pub(crate) fn char_len_rc(s: &SauleStr) -> usize {
     str_facts(s).1
 }
 
@@ -325,7 +326,7 @@ pub(crate) fn char_len_rc(s: &Rc<String>) -> usize {
 /// which made any loop that scans a string quadratic — 20k single-character
 /// reads across a 320k-char document took 3.7s, against Lua's 0.01s.
 #[inline]
-fn byte_at(s: &Rc<String>, ci: usize) -> usize {
+fn byte_at(s: &SauleStr, ci: usize) -> usize {
     if str_facts(s).0 {
         ci.min(s.len())
     } else {
@@ -381,7 +382,7 @@ fn str_char(args: &[Value]) -> Result<Value, String> {
         };
         out.push(c);
     }
-    Ok(Value::Str(Rc::new(out)))
+    Ok(Value::Str(SauleStr::new(out)))
 }
 
 fn str_len(args: &[Value]) -> Result<Value, String> {
@@ -438,9 +439,9 @@ fn str_rep(args: &[Value]) -> Result<Value, String> {
     let s = expect_string("String.rep", args, 0)?;
     let n = expect_int("String.rep", args, 1)?;
     if n <= 0 {
-        return Ok(Value::Str(Rc::new(String::new())));
+        return Ok(Value::Str(SauleStr::new(String::new())));
     }
-    Ok(Value::Str(Rc::new(s.repeat(n as usize))))
+    Ok(Value::Str(SauleStr::new(s.repeat(n as usize))))
 }
 
 fn str_starts(args: &[Value]) -> Result<Value, String> {
@@ -494,13 +495,13 @@ fn _unused_install_find() {}
 fn str_lower(args: &[Value]) -> Result<Value, String> {
     expect_arity("String.lower", args, 1)?;
     let s = expect_string("String.lower", args, 0)?;
-    Ok(Value::Str(Rc::new(s.to_lowercase())))
+    Ok(Value::Str(SauleStr::new(s.to_lowercase())))
 }
 
 fn str_upper(args: &[Value]) -> Result<Value, String> {
     expect_arity("String.upper", args, 1)?;
     let s = expect_string("String.upper", args, 0)?;
-    Ok(Value::Str(Rc::new(s.to_uppercase())))
+    Ok(Value::Str(SauleStr::new(s.to_uppercase())))
 }
 
 // ─── iter: returns a NativeClosure yielding (char, index) per call ──────────
@@ -522,7 +523,7 @@ fn str_iter(args: &[Value]) -> Result<Value, String> {
             let idx = *i + 1;
             *i += 1;
             Ok(vec![
-                Value::Str(Rc::new(c.to_string())),
+                Value::Str(SauleStr::new(c.to_string())),
                 Value::Int(idx as i64),
             ])
         }),
@@ -536,7 +537,7 @@ fn str_iter(args: &[Value]) -> Result<Value, String> {
 // Optional width/precision: `%5d`, `%.2f`, `%-10s`, `%05d`.
 
 fn str_format(args: &[Value]) -> Result<Value, String> {
-    Ok(Value::Str(Rc::new(format_args_impl(args)?)))
+    Ok(Value::Str(SauleStr::new(format_args_impl(args)?)))
 }
 
 /// Shared formatter used by `String.format` and `printf`. Takes the same

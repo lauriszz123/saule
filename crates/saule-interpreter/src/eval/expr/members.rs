@@ -1,11 +1,11 @@
 //! Reading members and indices (`obj.field`, `obj[index]`).
 
-use std::rc::Rc;
 
 use crate::error::RuntimeError;
 use crate::value::Value;
 
 use super::construct::make_tuple_variant_ctor;
+use crate::value::SauleStr;
 
 #[allow(dead_code)]
 pub(crate) fn table_index_to_slot(index: &Value) -> Result<Option<usize>, String> {
@@ -134,8 +134,8 @@ pub(crate) fn read_member(
             "value" => Ok(variant
                 .value
                 .clone()
-                .unwrap_or(Value::Str(Rc::new(variant.variant_name.clone())))),
-            "name" => Ok(Value::Str(Rc::new(variant.variant_name.clone()))),
+                .unwrap_or(Value::Str(variant.variant_name.clone()))),
+            "name" => Ok(Value::Str(variant.variant_name.clone())),
             _ => {
                 if let Some(enum_obj) = variant.enum_obj.borrow().as_ref()
                     && let Some(m) = enum_obj.methods.get(name)
