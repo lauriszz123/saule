@@ -262,6 +262,11 @@ impl TableObject {
     /// Write by arbitrary value index. Positive integers ≤ len+1 grow the
     /// array part; everything else lands in the map.
     pub fn set(&mut self, key: &Value, value: Value) -> Result<(), String> {
+        // A container coming to rest inside another container is the only
+        // way a cycle can form, so it is the only thing the collector needs
+        // to hear about. Everything else — every integer, every string —
+        // returns from here immediately. See `crate::gc`.
+        crate::gc::on_store(&value);
         if let Value::Int(i) = key
             && *i >= 1
         {

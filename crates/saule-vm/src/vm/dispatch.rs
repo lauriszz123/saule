@@ -1302,6 +1302,9 @@ impl Vm {
                     Op::SETF => {
                         let slot = ins.b() as usize;
                         let v = (*self.reg(base + ins.c() as usize)).clone();
+                        // The VM's instance write, the counterpart of
+                        // `InstanceObject::set_field`. See `saule_interpreter::gc`.
+                        saule_interpreter::gc::on_store(&v);
                         match self.reg(base + a) {
                             Value::Instance(i) => {
                                 let mut i = i.borrow_mut();

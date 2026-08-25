@@ -215,6 +215,8 @@ impl InstanceObject {
     pub fn set_field(&mut self, name: &str, value: Value) -> bool {
         match self.class.layout.slot(name) {
             Some(slot) => {
+                // The tree-walker's instance write. See `crate::gc`.
+                crate::gc::on_store(&value);
                 self.fields[slot as usize] = value;
                 true
             }
