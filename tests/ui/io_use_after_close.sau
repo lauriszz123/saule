@@ -1,15 +1,21 @@
 -- Using a file after close() must error at runtime.
 --
--- The path is **relative on purpose**. This fixture used to open
+-- The path comes from `Os.tmpname()` **on purpose**. This fixture first used
 -- `/tmp/saule_io_use_after_close.txt`, which does not exist on Windows, so
 -- `Io.open` returned nil, the `!` unwrapped it, and the run died at line 4
 -- with "force-unwrapped a `nil` value" — never reaching the close, let alone
 -- the use after it. It passed the harness the whole time, because
 -- `run_tests.sh` gates on exit status and any error will do.
+--
+-- The fix for that was a *relative* path, which traded the Windows bug for a
+-- quieter one: the harness runs from the repo root, so every test run dropped
+-- `saule_io_use_after_close.tmp` there and left the working tree dirty (the
+-- file was even committed once). `Os.tmpname()` is cross-platform and lands
+-- outside the repo, which is what both versions actually wanted.
 
 class Main
 	static fn main()
-		local f: File = Io.open("saule_io_use_after_close.tmp", IoMode.Write)!
+		local f: File = Io.open(Os.tmpname(), IoMode.Write)!
 		f.write("hi\n")
 		f.close()
 		f.write("oops")

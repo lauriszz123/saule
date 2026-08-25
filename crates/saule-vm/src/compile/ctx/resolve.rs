@@ -57,8 +57,7 @@ impl Compiler<'_> {
             *slot = Some(saule_interpreter::Environment::with_prelude());
         }
         let env = slot.as_ref().expect("just installed");
-        let v = env.borrow().get(name);
-        v
+        env.borrow().get(name)
     }
 
     /// The value a bare name denotes at **compile** time, if any.

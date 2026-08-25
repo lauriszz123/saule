@@ -285,8 +285,7 @@ impl Compiler<'_> {
             && let Some(class) = self.class_of_expr(lhs)
             && self.chunk.classes[class as usize]
                 .vindex
-                .get(contract.method)
-                .is_some()
+                .contains_key(contract.method)
         {
             return Ok(None);
         }

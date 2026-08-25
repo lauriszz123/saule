@@ -187,7 +187,7 @@ impl Compiler<'_> {
                     self.expr_to(arg, base + i as u16)?;
                 }
                 let a = self.reg8(base, span)?;
-                let packed = ((cls as u32) << 16) | slot as u32;
+                let packed = (cls << 16) | slot as u32;
                 // `class Main` / `static fn` is the idiomatic shape of a
                 // Saule program, so this is the commonest tail-recursive
                 // function in the language. The tree-walker tail-calls it:

@@ -28,6 +28,19 @@
 //! unlikely, it is unrepresentable.
 
 use std::collections::HashMap;
+
+/// One `class` declaration as gathered from a module, before anything is
+/// built: its name, the name it `extends`, its members, and its source span.
+///
+/// Named rather than written out because `class_decls` produces it and
+/// [`order_by_depth`] consumes it, and the two have to agree on the shape
+/// exactly — the depth ordering indexes `.0` and `.1` by position.
+type ClassDecl<'a> = (
+    &'a str,
+    Option<&'a str>,
+    &'a [saule_ast::Spanned<ClassMember>],
+    std::ops::Range<usize>,
+);
 use std::rc::Rc;
 
 use saule_ast::{ClassMember, Decl, Module, Stmt};
@@ -248,8 +261,7 @@ pub fn build(
     let ifaces = &*interfaces;
     // Gather declarations first so a forward `extends` resolves.
     let mut implements: HashMap<&str, &Vec<String>> = HashMap::new();
-    let mut decls: Vec<(&str, Option<&str>, &[saule_ast::Spanned<ClassMember>], std::ops::Range<usize>)> =
-        Vec::new();
+    let mut decls: Vec<ClassDecl<'_>> = Vec::new();
     for s in &module.stmts {
         if let Stmt::Decl(d) = &s.value
             && let Decl::Class {
@@ -349,9 +361,7 @@ pub fn build(
 }
 
 /// Order classes so a parent is always built before its children.
-fn order_by_depth(
-    decls: &[(&str, Option<&str>, &[saule_ast::Spanned<ClassMember>], std::ops::Range<usize>)],
-) -> Result<Vec<usize>, CompileError> {
+fn order_by_depth(decls: &[ClassDecl<'_>]) -> Result<Vec<usize>, CompileError> {
     let position: HashMap<&str, usize> = decls.iter().enumerate().map(|(i, d)| (d.0, i)).collect();
     let mut done = vec![false; decls.len()];
     let mut out = Vec::with_capacity(decls.len());
