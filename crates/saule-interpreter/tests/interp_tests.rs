@@ -4,7 +4,6 @@ use saule_interpreter::{PipelineError, RuntimeError, Value, check_and_run};
 use saule_lexer::Lexer;
 use saule_parser::parse;
 use saule_semantic::SemanticError;
-use std::rc::Rc;
 
 fn eval(src: &str) -> Result<Value, PipelineError> {
     let toks = Lexer::new(src).tokenize().expect("lex");

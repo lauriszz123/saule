@@ -5,7 +5,6 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 
 use super::construct::make_tuple_variant_ctor;
-use crate::value::SauleStr;
 
 #[allow(dead_code)]
 pub(crate) fn table_index_to_slot(index: &Value) -> Result<Option<usize>, String> {

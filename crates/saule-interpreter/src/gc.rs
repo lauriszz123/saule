@@ -69,17 +69,6 @@ enum Node {
     Instance(Weak<RefCell<InstanceObject>>),
 }
 
-impl Node {
-    /// The allocation's address, for identity. Only ever compared, never
-    /// dereferenced.
-    fn addr(&self) -> usize {
-        match self {
-            Node::Table(w) => w.as_ptr() as *const u8 as usize,
-            Node::Instance(w) => w.as_ptr() as *const u8 as usize,
-        }
-    }
-}
-
 /// A live handle to a registered node, held for the duration of a
 /// collection. Holding it is what adds the `1` that [`collect`] subtracts.
 enum Live {
