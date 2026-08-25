@@ -168,6 +168,10 @@ pub struct VmShared {
     /// vectors and an `Rc` — north of a hundred bytes — and `Table.sort`
     /// takes and gives one *per comparison*, so an unboxed pool memcpy'd the
     /// whole struct twice for every element comparison in the sort.
+    // `clippy::vec_box` reads `Vec<Box<Vm>>` as a redundant indirection. It is
+    // the opposite: the box is what makes park/unpark a pointer move instead
+    // of a struct memcpy, twice per comparison in `Table.sort` — see above.
+    #[allow(clippy::vec_box)]
     reentry_pool: RefCell<Vec<Box<Vm>>>,
 }
 

@@ -871,8 +871,7 @@ impl Vm {
                             let Value::Table(t) = &self.stack[tr] else {
                                 return Err(operand_err(&self.stack[tr], "table", &proto, here));
                             };
-                            let v = t.borrow().get(self.reg(base + ins.c() as usize));
-                            v
+                            t.borrow().get(self.reg(base + ins.c() as usize))
                         };
                         if matches!(v, Value::Nil) {
                             return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
@@ -1453,11 +1452,11 @@ impl Vm {
                     Op::THROW => {
                         let v = (*self.reg(base + a)).clone();
                         self.frames.last_mut().expect("frame").pc = pc as u32;
-                        match self.unwind(v, &proto, here)? {
-                            // A handler took it: re-enter with the frame and
-                            // pc the handler restored.
-                            () => continue 'reentry,
-                        }
+                        // Returning at all means a handler took it — an
+                        // unhandled throw leaves through the `?`. Re-enter with
+                        // the frame and pc the handler restored.
+                        self.unwind(v, &proto, here)?;
+                        continue 'reentry;
                     }
                     // ---- §8.5 dynamic member dispatch --------------------
                     //

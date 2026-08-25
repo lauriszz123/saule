@@ -243,6 +243,10 @@ pub struct Tables {
 /// already resolved to program-global indices — see `program::compile`.
 /// Returns the chunk and the module's own view of the type world, which the
 /// driver reads to work out what this module *exports*.
+// Eleven parameters, each documented where it is declared. Bundling them into
+// a struct would move the same fields behind one more name without making any
+// call site clearer — this has exactly two callers, both in `program.rs`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_into(
     module: &Module,
     name: &str,

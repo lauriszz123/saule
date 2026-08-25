@@ -32,8 +32,7 @@ impl Vm {
         // being safe to read the moment that frame goes. Only the escaping
         // case uses it, and a throw is cold enough not to care.
         let span = proto.span_at(here);
-        loop {
-            let Some(frame) = self.frames.last() else { break };
+        while let Some(frame) = self.frames.last() {
             let func = Rc::clone(&frame.func);
             let (base, pc) = (frame.base, frame.pc);
             let closure = Closure::from_handle(&func).expect("frame holds a Closure");

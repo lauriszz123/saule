@@ -152,7 +152,7 @@ fn arbitrary_words_decode_without_panicking() {
     // A chunk read off disk one day will not be trusted. Decoding must be
     // total: any 32-bit word either yields an opcode and operands, or says
     // it is not an instruction.
-    let mut rng = Rng(0x0DDB_A11);
+    let mut rng = Rng(0x00DD_BA11);
     for _ in 0..100_000 {
         let ins = Instruction(rng.next() as u32);
         match ins.op() {

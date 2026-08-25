@@ -42,3 +42,10 @@ www/src/lib/saule_wasm/
 # the main tree, and a stray `git add -A` would commit it onto the wrong branch.
 .gh-pages-worktree/
 
+# Runtime artifacts dropped in the repo root by the test and example harnesses.
+# `run_examples_diff.sh` invokes `saule run <dir>` from the root, so an example
+# that writes a file relative to its CWD — `examples/todo-app` and its
+# `todo.json` — lands it here rather than in its own directory. The harness's
+# snapshot/restore only covers the example dir, so these are left behind on
+# every run; `todo.json` was committed that way once already.
+/todo.json

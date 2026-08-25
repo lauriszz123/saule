@@ -295,14 +295,15 @@ impl Compiler<'_> {
             Shr => Some(Op::SHR),
             _ => None,
         };
-        if let Some(o) = bitwise {
-            if kind == Some(Num::Int) {
-                self.emit(Instruction::abc(o, a, b, c), span);
-                return Ok(());
-            }
-            // Untyped operands: `ops::bitwise` rejects a non-integer with
-            // the message the tree-walker gives, which is better than a
-            // compile-time refusal of a program that might be fine.
+        // An untyped operand falls through on purpose: `ops::bitwise` rejects
+        // a non-integer at runtime with the message the tree-walker gives,
+        // which is better than a compile-time refusal of a program that might
+        // be fine.
+        if let Some(o) = bitwise
+            && kind == Some(Num::Int)
+        {
+            self.emit(Instruction::abc(o, a, b, c), span);
+            return Ok(());
         }
 
         // Comparisons produce a boolean here. The *fused* branch forms

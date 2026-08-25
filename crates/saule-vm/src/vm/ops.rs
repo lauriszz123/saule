@@ -225,6 +225,11 @@ pub(crate) fn shift(a: i64, n: i64) -> i64 {
 /// The ordering is not incidental: `exec_for_in` sorts its map snapshot, so
 /// iteration order is deterministic and observable, and the two engines have
 /// to agree about it.
+// `clippy::unnecessary_sort_by` wants `sort_by_key(|(k, _)| k)` on the sort
+// below. That is precisely the version this function used to have, and it was
+// wrong twice over — see the comment at the call. The lint cannot see either
+// problem, so it is off for this function rather than papered over at the line.
+#[allow(clippy::unnecessary_sort_by)]
 pub(crate) fn snapshot_pairs(t: &TableObject) -> Vec<Value> {
     let mut out = Vec::with_capacity((t.array.len() + t.map.len()) * 2);
     for (i, v) in t.array.iter().enumerate() {

@@ -154,14 +154,12 @@ fn pass(
                     removed += 1;
                 }
             }
-            // A jump to the instruction that already follows it.
-            Op::JMP if ins.sbx() == 0 => {
-                // `A > 0` means it closes upvalues on the way, which is
-                // work rather than control flow.
-                if ins.a() == 0 {
-                    dead[pc] = true;
-                    removed += 1;
-                }
+            // A jump to the instruction that already follows it. `A > 0`
+            // means it closes upvalues on the way, which is work rather than
+            // control flow, so only `A == 0` is actually dead.
+            Op::JMP if ins.sbx() == 0 && ins.a() == 0 => {
+                dead[pc] = true;
+                removed += 1;
             }
             _ => {}
         }

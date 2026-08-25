@@ -224,18 +224,20 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
 /// `collect_module_scope` gives every imported name a module slot, so
 /// compiling on would emit a `GETMOD` against a slot nothing ever writes —
 /// `nil`, silently.
+/// What a module's `import`s resolve to: the layouts they bring into scope,
+/// the value bindings to copy in before the body runs, and the native-package
+/// exports folded at compile time.
+type Imported = (
+    crate::compile::layout::Layouts,
+    Vec<ImportBinding>,
+    HashMap<String, saule_interpreter::Value>,
+);
+
 fn imported_layouts(
     unit: &Unit,
     exports: &[HashMap<String, Export>],
     bindings: &saule_semantic::Bindings,
-) -> Result<
-    (
-        crate::compile::layout::Layouts,
-        Vec<ImportBinding>,
-        HashMap<String, saule_interpreter::Value>,
-    ),
-    ProgramError,
-> {
+) -> Result<Imported, ProgramError> {
     let mut out = crate::compile::layout::Layouts::default();
     let mut values: Vec<ImportBinding> = Vec::new();
     let mut natives: HashMap<String, saule_interpreter::Value> = HashMap::new();

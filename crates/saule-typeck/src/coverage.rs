@@ -102,14 +102,11 @@ pub fn measure(module: &Module, table: &TypeTable) -> Coverage {
         {
             for operand in [lhs, rhs] {
                 c.arith_operands += 1;
-                match table.get(&operand.id) {
-                    Some(t) => {
-                        c.arith_typed += 1;
-                        if is_numeric(t) {
-                            c.arith_numeric += 1;
-                        }
+                if let Some(t) = table.get(&operand.id) {
+                    c.arith_typed += 1;
+                    if is_numeric(t) {
+                        c.arith_numeric += 1;
                     }
-                    None => {}
                 }
             }
         }
