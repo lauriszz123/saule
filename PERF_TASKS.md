@@ -280,7 +280,88 @@ compute it. Rides along with Task 1's interned pool.
 
 ---
 
-## Task 4 — A cycle collector (correctness, not speed)
+## Task 4 — A cycle collector ✓ DONE
+
+**The leak is fixed and the cost is +1.6% geomean.** Landed as
+`saule_interpreter::gc`.
+
+```
+                        before      after
+n =   200,000 cycles     50 MB       7 MB
+n = 1,000,000 cycles      —          7 MB
+n = 4,000,000 cycles      —          7 MB
+```
+
+Flat across a 20x range: bounded, not merely smaller. Both engines
+(`--vm` 7 MB, `--interp` 8 MB).
+
+### What was built
+
+A registry, not a `Gc<T>` — for the two reasons below, which are what make
+textbook Bacon–Rajan the wrong shape here. `Rc` is untouched, so there is no
+call-site churn, no rooting, no safepoints, and no ABI change.
+
+* A container is registered when it is **stored into another container** —
+  `TableObject::set` and `InstanceObject::set_field`, plus the VM's
+  `SETFIELD`, are the three choke points. A table of integers never
+  registers at all.
+* Collection computes, per registered node, how many of its `Rc` references
+  come from other registered nodes; anything with no external reference and
+  unreachable from one is a cycle, and gets its contents cleared so ordinary
+  refcounting reclaims it.
+* Registering on *store* is sufficient because every node in a cycle is, by
+  definition, stored inside another node of that cycle.
+
+**The safety property is never freeing something reachable**, which reduces
+to never over-counting internal references. The traversal walks only
+`array`/`map`/`fields` — exactly the `Rc`s those objects hold — and counts
+only *direct* `Value::Table`/`Value::Instance` children. Everything else
+(`EnumVariant` payloads, `Function`, `VmFunction`) is **opaque**, so a
+reference held through one counts as external and its cycle survives.
+Under-collecting is safe; over-collecting would not be. `collects_only_what_it_can_prove`
+pins that limit as deliberate rather than an oversight.
+
+Seven unit tests, including three that assert the collector *declines* to
+free live data. Those tests initially failed, and the tests were wrong, not
+the collector: they held their own local `Rc`, which **is** a legitimate
+external reference. They now observe through `Weak` after the handle dies —
+which is also the exact shape of the leak.
+
+### The cost, and where it falls
+
+| | Δ |
+| --- | --- |
+| geomean | **+1.6%** |
+| `bintree` | +7.6% |
+| `fib` | +5.6% |
+| `closure` | +3.3% |
+| everything else | ≤ +2% |
+
+`bintree` is real work: it stores instances into instance fields constantly,
+so it registers constantly. Isolated by building without the VM's `SETFIELD`
+hook — +7.8% becomes +1.6%. Raising the collection threshold 16x (8k → 128k)
+only recovered 1.8 points, so the cost is the per-store `Rc::downgrade` and
+push, not the scans; the low threshold is kept because it collects sooner
+for nearly the same price.
+
+`fib` and `closure` store no containers at all and were unaffected by
+removing the VM hook, so their few percent is whole-binary code layout
+(`lto = "fat"`, `codegen-units = 1`) — the same sensitivity recorded
+throughout this file. `inline(never)` on `on_store` was tried against it and
+made every row *worse*.
+
+**Whether +1.6% is worth an unbounded leak going away is a product call, not
+a performance one.** If it should be opt-out, the hook is three call sites
+and a feature flag.
+
+### What is still leaked
+
+Cycles routed through an opaque variant — a closure capturing the thing that
+holds it, a shared enum payload. Extending coverage means proving each new
+edge cannot double-count one `Rc` between two parents; do not widen the
+traversal without that argument.
+
+### The original plan, for reference
 
 **`Rc` cannot collect cycles, and Saule leaks them today.** 200,000 tables
 in a loop, release build, VM engine:
@@ -340,7 +421,75 @@ the wrong profile; see Task 5.
 
 ---
 
-## Task 5 — Replicated dispatch
+## Task 5 — Dispatch ✗ CLOSED: `execute_loop`'s size budget is already spent
+
+**Tried the low-risk half first — a superinstruction, per §16's own
+workflow — and it lost on precisely the benchmarks it targeted.**
+
+`--profile-bytecode` gave an unusually clean case for fusing `ADDI RET1`:
+
+```
+fib      ADDI RET1   514,228 pairs   10.0% of all instructions executed
+closure  ADDI RET1 1,000,000 pairs   12.5% of all instructions executed
+```
+
+In `closure` that pair is the *entire* body of the lambda, so a call there
+cost two dispatches for one addition:
+
+```
+proto[0] <lambda>(2 params)      →   proto[0] <lambda>(2 params)
+  0000  ADDI  2  0  1                  0000  ADDRET  2  0  1
+  0001  RET1  2  0  0
+```
+
+It worked, and all six verification modes passed. Then:
+
+| | `fib` | `closure` | geomean |
+| --- | --- | --- | --- |
+| `ADDRET` superinstruction | **+5.3%** | **+10.4%** | **+1.4%** |
+
+*(min of 15, interleaved; confirmed across two sweeps.)*
+
+**Removing 10-12.5% of the dispatches made those programs 5-10% slower.**
+The fused arm cannot be outlined the way `Vm::concat` was — it ends in
+`continue 'reentry`, so it is control flow that has to live inside the loop —
+and one more inline arm costs this function more than a tenth of its
+dispatches are worth.
+
+### What that means for replication, without building it
+
+The original plan here was to replicate the decode-and-jump into hot arms,
+Lua-style, so each opcode gets its own branch-predictor entry. That plan
+made `execute_loop` **much** bigger. This result prices that: if *one* added
+arm costs `closure` 10%, replicating dispatch across the hot arms is not a
+close call. Not attempted, and it should not be attempted without first
+breaking the size dependency.
+
+### The pattern this completes
+
+Every dispatch-bound result in this file points the same way, and it is the
+opposite of the intuition:
+
+| change | direction | result |
+| --- | --- | --- |
+| profiling loop's *second copy* merely existing | bigger | -2-3% |
+| `Vec<String>` removed from `CONCAT` | smaller | double digits on benchmarks that never concatenate |
+| four allocating arms outlined | smaller | **-4.8% geomean, every row improved** |
+| `ADDRET` arm added | bigger | **+1.4% geomean, worst on its targets** |
+
+**`execute_loop` has a size budget and it is saturated.** The lever that
+works is making the function smaller, not doing less work inside it. The
+next person should audit the remaining arms for anything outlinable — the
+four already moved were the ones that allocate, but they will not be the
+only ones — rather than adding superinstructions, replicating dispatch, or
+fusing pairs, all of which push the wrong way.
+
+The corollary is that Saule's dispatch is at its architecture's floor.
+Getting past it means a design where the hot loop is not one enormous
+function — a tail-called handler table (`become`, RFC 3407, still unstable)
+or generated code — not another change inside this one.
+
+### The original plan, for reference
 
 **Targets `fib` (2.43x) and `closure` (2.00x)** — the two rows Tasks 1-3 did
 not move, and the ones a collector will not move either.
@@ -378,12 +527,19 @@ Task 1 has landed and moved the string and table half decisively (`map` is
 now **0.46x** Lua). Task 3's remaining items are small. Task 2 is closed as
 a loss.
 
-What is left is Task 5: the 1.22–1.40x cluster is respectable and probably
-near what this dispatch design gives, while `fib` and `closure` are held
-back by the shared indirect branch. If replicated dispatch works, ~1.1x
-geomean is plausible. If it does not, this VM is at its design's floor and
-the next move is a different dispatch architecture, not another
-optimization.
+Task 5 is now closed too, and it answers the question it was written to ask:
+this VM **is** at its design's floor. `fib` and `closure` are held back by
+dispatch, and dispatch cannot be improved from inside `execute_loop`, because
+every change that adds code to that function costs more than the work it
+saves. Going further means a different architecture for the hot loop — a
+tail-called handler table, or generated code — not another optimization
+within this one.
 
-Task 4 is orthogonal to all of it and should be scheduled on its own merits:
-it buys no speed and fixes a real leak.
+So the standing recommendation for speed is narrow: **audit the remaining
+arms for anything that can be moved out of line.** That is the only lever
+with a track record here (-4.8% geomean, every row improved), and the four
+arms already outlined were chosen for allocating, not for being the only
+candidates.
+
+Task 4 has landed and is orthogonal to all of it: it buys no speed, costs
++1.6%, and makes an unbounded leak bounded.

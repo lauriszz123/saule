@@ -11,6 +11,7 @@
 use std::rc::Rc;
 
 use saule_interpreter::Value;
+use saule_interpreter::value::SauleStr;
 use saule_vm::chunk::{Chunk, Proto, UpvalDesc};
 use saule_vm::op::{Instruction as I, Op};
 use saule_vm::{disasm, run_chunk};

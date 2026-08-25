@@ -1,4 +1,5 @@
 //! Tests moved out of src/lib.rs.
+use saule_interpreter::value::SauleStr;
 use saule_interpreter::{PipelineError, RuntimeError, Value, check_and_run};
 use saule_lexer::Lexer;
 use saule_parser::parse;

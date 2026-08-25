@@ -40,6 +40,7 @@ pub mod env;
 pub mod error;
 pub mod eval;
 pub mod fxhash;
+pub mod gc;
 pub mod itoa;
 pub mod module;
 // The host-callback table exists solely so a dlopen'd package can manipulate
