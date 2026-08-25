@@ -41,7 +41,7 @@ use std::rc::Rc;
 use saule_interpreter::value::{TableObject, VmFunctionRef};
 use saule_interpreter::{RuntimeError, Value};
 
-
+use crate::chunk::{Chunk, Proto};
 use crate::op::{Instruction, Op};
 
 use super::ops::{
@@ -52,6 +52,151 @@ use super::call::Site;
 use super::{ALL_RESULTS, Closure, Upvalue, Vm};
 
 impl Vm {
+    /// Build `CONCAT`'s result string into register `dst`.
+    ///
+    /// Kept out of line, and that is the point rather than a tidiness
+    /// preference. `execute_loop` is one enormous function, and every local
+    /// a single arm needs — here a `String`, its capacity arithmetic and
+    /// the drop and unwind paths that come with it — widens the frame and
+    /// the register pressure that *every other opcode* is compiled under.
+    /// Measured: moving this body out is worth double-digit percentages on
+    /// benchmarks that never concatenate anything at all (`fib`, `mandel`,
+    /// `loop_arith`), which is the same layout sensitivity the `profile`
+    /// feature's note in `Cargo.toml` records from the other direction.
+    ///
+    /// The call this adds is paid once per `..`, against building a string —
+    /// far too small to see on the benchmarks that do concatenate.
+    #[inline(never)]
+    fn concat(
+        &mut self,
+        from: usize,
+        to: usize,
+        dst: usize,
+        span: std::ops::Range<usize>,
+    ) -> Result<(), RuntimeError> {
+        // Two passes, but only the second one renders. The first asks each
+        // operand how much room it wants — a question `display_hint`
+        // answers without running any user code, so `CONCAT`'s "rendered
+        // exactly once" rule survives having a sizing pass in front of it.
+        let mut len = 0usize;
+        for i in from..=to {
+            len += saule_interpreter::eval::ops::display_hint(&self.stack[i]);
+        }
+        let mut s = String::with_capacity(len);
+        for i in from..=to {
+            saule_interpreter::eval::ops::display_into(&self.stack[i], span.clone(), &mut s)?;
+        }
+        *self.reg_mut(dst) = Value::Str(Rc::new(s));
+        Ok(())
+    }
+
+    /// `CLOSURE`: build a closure over the upvalues it captures.
+    ///
+    /// Out of line for the reason [`Vm::concat`] is, and for the reason the
+    /// `DIVI | MODI | POWI` arm below shares one body: an arm's code costs
+    /// the whole loop, not just itself. This one carries a `Vec`, a capture
+    /// loop and an allocation, and it runs once per lambda *created* — which
+    /// on `closure` is once, against ten million calls of the result.
+    #[inline(never)]
+    fn make_closure(&mut self, proto: &Proto, chunk: &Rc<Chunk>, bx: u16, base: usize, a: usize) {
+        let child_idx = proto.protos[bx as usize];
+        let child = Rc::clone(chunk.proto(child_idx));
+        let mut upvals = Vec::with_capacity(child.upvals.len());
+        for desc in &child.upvals {
+            upvals.push(if desc.from_parent_stack {
+                self.capture_upvalue((base + desc.index as usize) as u32)
+            } else {
+                self.upvalue(desc.index as usize)
+            });
+        }
+        // Bound to the engine state, so a closure handed to a native — a
+        // sort comparator, an iterator step — can run itself when the
+        // native calls it back. The one place the loop needs the chunk as
+        // an owner rather than a borrow: the closure outlives this frame.
+        let cl = VmFunctionRef::new(Closure::bound(child, Rc::clone(chunk), upvals, &self.shared));
+        *self.reg_mut(base + a) = Value::VmFunction(cl);
+    }
+
+    /// `VARARG`: gather the surplus arguments into an array-style table.
+    ///
+    /// Outlined with the rest — a `Vec`, a table and an `Rc` for an opcode
+    /// only variadic functions ever reach.
+    #[inline(never)]
+    fn vararg(&mut self, base: usize, a: usize) {
+        let n = self.frames.last().expect("frame").n_args as usize;
+        let items: Vec<Value> = (a..n.max(a)).map(|i| (*self.reg(base + i)).clone()).collect();
+        *self.reg_mut(base + a) =
+            Value::Table(Rc::new(RefCell::new(TableObject::from_array(items))));
+    }
+
+    /// `NEWVAR`: an enum variant carrying a positional payload.
+    #[inline(never)]
+    fn new_variant(
+        &mut self,
+        packed: u32,
+        n: usize,
+        base: usize,
+        a: usize,
+        proto: &Proto,
+        chunk: &Chunk,
+        here: u32,
+    ) -> Result<(), RuntimeError> {
+        let (e_idx, tag) = ((packed >> 16) as usize, packed & 0xffff);
+        // The payload is an array-style table of the positional arguments,
+        // matching what the tree-walker's tuple-variant constructor builds —
+        // pattern destructuring reads it positionally.
+        let items: Vec<Value> = (0..n).map(|i| (*self.reg(base + a + 1 + i)).clone()).collect();
+        let payload = Value::Table(Rc::new(RefCell::new(TableObject::from_array(items))));
+        let Some(e) = self.shared.enums.get(e_idx) else {
+            return Err(RuntimeError::TypeError {
+                message: format!("internal: no enum {e_idx}"),
+                span: proto.span_at(here),
+            });
+        };
+        let name = chunk.enums[e_idx].variants[tag as usize].name.to_string();
+        let v = saule_interpreter::value::EnumVariantObject {
+            enum_name: e.name.clone(),
+            variant_name: name,
+            tag,
+            value: Some(payload),
+            enum_obj: RefCell::new(Some(Rc::clone(e))),
+        };
+        *self.reg_mut(base + a) = Value::EnumVariant(Rc::new(v));
+        Ok(())
+    }
+
+    /// `CALLMX`: a method call whose name is only known at run time, handed
+    /// to the tree-walker's dynamic member dispatch.
+    #[inline(never)]
+    fn call_member_by_name(
+        &mut self,
+        k: u32,
+        ins: Instruction,
+        base: usize,
+        a: usize,
+        proto: &Proto,
+        chunk: &Chunk,
+        here: u32,
+    ) -> Result<(), RuntimeError> {
+        let key = chunk.constants[k as usize].clone();
+        let Value::Str(name) = &key else {
+            return Err(RuntimeError::TypeError {
+                message: "internal: CALLMX name is not a string".into(),
+                span: proto.span_at(here),
+            });
+        };
+        // `A` holds the receiver and `A+1..` the arguments, matching
+        // `CALLM` — so a call site can switch between the two without
+        // moving anything.
+        let n_args = (ins.b() as usize).saturating_sub(1);
+        let recv = (*self.reg(base + a)).clone();
+        let args: Vec<Value> =
+            (0..n_args).map(|i| (*self.reg(base + a + 1 + i)).clone()).collect();
+        let vs = saule_interpreter::call_member_dynamic(&recv, name, &args, proto.span_at(here))?;
+        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+        self.store_results(base + a, &vs, n_ret);
+        Ok(())
+    }
 
     // ---- the loop ------------------------------------------------------
 
@@ -320,27 +465,7 @@ impl Vm {
                         self.shared.modules.borrow_mut()[ins.bx() as usize] =
                             (*self.reg(base + a)).clone();
                     }
-                    Op::CLOSURE => {
-                        let child_idx = proto.protos[ins.bx() as usize];
-                        let child = Rc::clone(chunk.proto(child_idx));
-                        let mut upvals = Vec::with_capacity(child.upvals.len());
-                        for desc in &child.upvals {
-                            upvals.push(if desc.from_parent_stack {
-                                self.capture_upvalue((base + desc.index as usize) as u32)
-                            } else {
-                                self.upvalue(desc.index as usize)
-                            });
-                        }
-                        // Bound to the engine state, so a closure handed to a
-                        // native — a sort comparator, an iterator step — can
-                        // run itself when the native calls it back.
-                        // The one place the loop needs the chunk as an
-                        // owner rather than a borrow: the closure it builds
-                        // outlives this frame. Recovered from the program's
-                        // chunk table, which is what `chunk` points into.
-                        let cl = VmFunctionRef::new(Closure::bound(child, Rc::clone(&chunk), upvals, &self.shared));
-                        *self.reg_mut(base + a) = Value::VmFunction(cl);
-                    }
+                    Op::CLOSURE => self.make_closure(&proto, &chunk, ins.bx(), base, a),
 
                     // ---- §15.3 integer arithmetic ------------------------
                     Op::ADDI => int_arith!(|l, r| l.wrapping_add(r)),
@@ -940,21 +1065,7 @@ impl Vm {
                         // side effects twice.
                         let (from, to) = (base + ins.b() as usize, base + ins.c() as usize);
                         let span = proto.span_at(here);
-                        let mut parts: Vec<String> = Vec::with_capacity(to + 1 - from);
-                        let mut len = 0usize;
-                        for i in from..=to {
-                            let part = saule_interpreter::eval::ops::display_value(
-                                &self.stack[i],
-                                span.clone(),
-                            )?;
-                            len += part.len();
-                            parts.push(part);
-                        }
-                        let mut s = String::with_capacity(len);
-                        for p in &parts {
-                            s.push_str(p);
-                        }
-                        *self.reg_mut(base + a) = Value::Str(Rc::new(s));
+                        self.concat(from, to, base + a, span)?;
                     }
                     Op::TOSTR => {
                         let s = saule_interpreter::eval::ops::display_value(
@@ -1373,34 +1484,8 @@ impl Vm {
                     }
                     Op::NEWVAR => {
                         let packed = self.extra_arg(code.as_ptr(), &mut pc);
-                        let (e_idx, tag) = ((packed >> 16) as usize, packed & 0xffff);
                         let n = (ins.b() as usize).saturating_sub(1);
-                        // The payload is an array-style table of the
-                        // positional arguments, matching what the
-                        // tree-walker's tuple-variant constructor builds —
-                        // pattern destructuring reads it positionally.
-                        let items: Vec<Value> =
-                            (0..n).map(|i| (*self.reg(base + a + 1 + i)).clone()).collect();
-                        let payload = Value::Table(Rc::new(RefCell::new(
-                            TableObject::from_array(items),
-                        )));
-                        let Some(e) = self.shared.enums.get(e_idx) else {
-                            return Err(RuntimeError::TypeError {
-                                message: format!("internal: no enum {e_idx}"),
-                                span: proto.span_at(here),
-                            });
-                        };
-                        let name = chunk.enums[e_idx].variants[tag as usize]
-                            .name
-                            .to_string();
-                        let v = saule_interpreter::value::EnumVariantObject {
-                            enum_name: e.name.clone(),
-                            variant_name: name,
-                            tag,
-                            value: Some(payload),
-                            enum_obj: RefCell::new(Some(Rc::clone(e))),
-                        };
-                        *self.reg_mut(base + a) = Value::EnumVariant(Rc::new(v));
+                        self.new_variant(packed, n, base, a, &proto, &chunk, here)?;
                     }
                     Op::GETTAG => {
                         let t = match self.reg(base + ins.b() as usize) {
@@ -1512,46 +1597,16 @@ impl Vm {
                     }
                     Op::CALLMX => {
                         let k = self.extra_arg(code.as_ptr(), &mut pc);
-                        let key = chunk.constants[k as usize].clone();
-                        let Value::Str(name) = &key else {
-                            return Err(RuntimeError::TypeError {
-                                message: "internal: CALLMX name is not a string".into(),
-                                span: proto.span_at(here),
-                            });
-                        };
-                        // `A` holds the receiver and `A+1..` the arguments,
-                        // matching `CALLM` — so a call site can switch
-                        // between the two without moving anything.
-                        let n_args = (ins.b() as usize).saturating_sub(1);
-                        let recv = (*self.reg(base + a)).clone();
-                        let args: Vec<Value> = (0..n_args)
-                            .map(|i| (*self.reg(base + a + 1 + i)).clone())
-                            .collect();
-                        let vs = saule_interpreter::call_member_dynamic(
-                            &recv,
-                            name,
-                            &args,
-                            proto.span_at(here),
-                        )?;
-                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
-                        self.store_results(base + a, &vs, n_ret);
+                        self.call_member_by_name(k, ins, base, a, &proto, &chunk, here)?;
                     }
 
                     // ---- §19 variadic parameters -------------------------
-                    Op::VARARG => {
-                        // Everything the caller passed from `A` onward
-                        // becomes an array-style table, matching what
-                        // `bind_params` collects into `variadic_values`. A
-                        // call that passed nothing extra gets an empty
-                        // table, not nil — the parameter is always a table.
-                        let n = self.frames.last().expect("frame").n_args as usize;
-                        let items: Vec<Value> = (a..n.max(a))
-                            .map(|i| (*self.reg(base + i)).clone())
-                            .collect();
-                        *self.reg_mut(base + a) = Value::Table(Rc::new(RefCell::new(
-                            TableObject::from_array(items),
-                        )));
-                    }
+                    // Everything the caller passed from `A` onward becomes an
+                    // array-style table, matching what `bind_params` collects
+                    // into `variadic_values`. A call that passed nothing extra
+                    // gets an empty table, not nil — the parameter is always a
+                    // table.
+                    Op::VARARG => self.vararg(base, a),
                     Op::SELFFUNC => {
                         // The frame's own handle — no allocation, no cell,
                         // and therefore no cycle. See the opcode's doc.

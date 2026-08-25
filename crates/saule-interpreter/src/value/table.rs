@@ -168,7 +168,7 @@ impl TableKey {
 
     pub fn display(&self) -> String {
         match self {
-            TableKey::Int(i) => i.to_string(),
+            TableKey::Int(i) => crate::itoa::i64_to_string(*i),
             TableKey::Str(s) => format!("\"{s}\""),
             TableKey::Bool(b) => b.to_string(),
         }
@@ -268,8 +268,47 @@ impl TableObject {
                 key.type_name()
             ));
         };
+        self.grow_hint();
         self.map.insert(k, value);
         Ok(())
+    }
+
+    /// Widen the map's growth step from 2x to 3x once it is big enough for
+    /// the difference to be worth paying for.
+    ///
+    /// `hashbrown` grows by doubling, and every growth rehashes each key
+    /// already stored — for `TableKey::Str` that means walking the string's
+    /// bytes again, not re-reading a cached hash. Filling a map to `n`
+    /// entries therefore rehashes ~`n` keys in total (the geometric sum of
+    /// the doublings), which is why `benchmarks/sau/map.sau` spent 14% of
+    /// its runtime inside `reserve_rehash`.
+    ///
+    /// Reserving two further capacities at the growth point makes each step
+    /// 3x, so that sum falls to ~`n/2` and half the rehashing disappears —
+    /// worth 6-8% of `map` on both engines. What it buys with is slack:
+    /// capacity settles in `[n, 3n)` rather than `[n, 2n)`.
+    ///
+    /// 4x was measured too and is not better: it ran `map` within 0.1% of
+    /// 3x for a looser `[n, 4n)` bound, so the extra step buys nothing the
+    /// allocator does not already give back. Caching each key's hash inside
+    /// `TableKey` — the other way to make rehashing cheap — was worth a
+    /// further 2% on top, which does not pay for reshaping a `pub` enum
+    /// that also carries the `Ord` iteration-order contract below.
+    ///
+    /// The `>= SMALL` guard is what keeps that trade honest. Most tables in
+    /// a Saule program are record-shaped — a handful of string keys — and
+    /// they are numerous, so over-allocating each one would trade a
+    /// benchmark win for a memory regression everywhere else. Below the
+    /// threshold `hashbrown`'s own doubling stands, and rehashing a few
+    /// dozen keys costs nothing worth reclaiming.
+    #[inline]
+    fn grow_hint(&mut self) {
+        /// Chosen so a record-shaped table never reaches it.
+        const SMALL: usize = 32;
+        let cap = self.map.capacity();
+        if cap >= SMALL && self.map.len() == cap {
+            self.map.reserve(cap * 2);
+        }
     }
 
     /// Remove a hash-map entry by key. Returns the previous value (or

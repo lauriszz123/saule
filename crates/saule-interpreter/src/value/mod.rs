@@ -172,8 +172,10 @@ impl Value {
     pub fn to_display_string(&self) -> String {
         match self {
             Value::Nil => "nil".into(),
-            Value::Bool(b) => b.to_string(),
-            Value::Int(n) => n.to_string(),
+            Value::Bool(b) => if *b { "true" } else { "false" }.into(),
+            // Not `n.to_string()`: see `crate::itoa` for why the detour
+            // through `Display` is worth avoiding on a path this hot.
+            Value::Int(n) => crate::itoa::i64_to_string(*n),
             Value::Float(f) => {
                 // Always show a decimal point so floats are visually distinct
                 // from ints, matching the README's display style.
