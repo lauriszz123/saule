@@ -75,6 +75,16 @@ pub struct FuncCtx {
     /// keeps a serialized chunk relocatable if the bytecode cache of §14
     /// ever lands.
     pub nested: Vec<u32>,
+    /// Chunk jump-table indices this function's `SWITCH` instructions own.
+    ///
+    /// The tables themselves live in the [`Chunk`](crate::chunk::Chunk),
+    /// shared by every function in the module, and their entries are
+    /// **absolute instruction indices into the proto that emitted them**.
+    /// So the peephole cannot relocate "the jump tables" — it has to
+    /// relocate this function's, and leave a sibling's numbering alone.
+    /// Recorded here because the emitter is the only thing that knows which
+    /// are which.
+    pub jump_tables: Vec<u16>,
     /// Upvalue descriptors for this function, in index order.
     ///
     /// Rebuilt here rather than copied from `saule-semantic`: the resolver
@@ -145,6 +155,7 @@ impl FuncCtx {
             handlers: Vec::new(),
             n_params: 0,
             nested: Vec::new(),
+            jump_tables: Vec::new(),
             upvals: Vec::new(),
             current_class: None,
             in_method: false,
@@ -240,6 +251,20 @@ impl Compiler<'_> {
         if reachable_end || !ends_in_return(&self.f.code) {
             self.emit(Instruction::abc(Op::RET0, 0, 0, 0), span);
         }
+        // Pass 3.5, and **after** the terminator above rather than before
+        // it: the peephole may delete the word a jump lands on the far side
+        // of, so `max_patch_target` stops meaning anything the moment it
+        // runs. Deleting a dead `MOVE` cannot make a body fall off its own
+        // end, so the invariant this establishes survives the pass.
+        let jump_tables = std::mem::take(&mut self.f.jump_tables);
+        crate::compile::peephole::run(
+            &mut self.f.code,
+            &mut self.f.lines,
+            &mut self.f.handlers,
+            &mut self.f.entries,
+            &mut self.chunk.jump_tables,
+            &jump_tables,
+        );
         let mut proto = Proto::new(
             self.f.name.as_deref(),
             self.f.n_params,

@@ -134,15 +134,10 @@ pub(super) fn exec_for_in(
                 let array = t.array.clone();
                 let mut map_entries: Vec<(crate::value::TableKey, Value)> =
                     t.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                map_entries.sort_by(|a, b| match (&a.0, &b.0) {
-                    (crate::value::TableKey::Int(x), crate::value::TableKey::Int(y)) => x.cmp(y),
-                    (crate::value::TableKey::Int(_), _) => std::cmp::Ordering::Less,
-                    (_, crate::value::TableKey::Int(_)) => std::cmp::Ordering::Greater,
-                    (crate::value::TableKey::Str(x), crate::value::TableKey::Str(y)) => x.cmp(y),
-                    (crate::value::TableKey::Str(_), _) => std::cmp::Ordering::Less,
-                    (_, crate::value::TableKey::Str(_)) => std::cmp::Ordering::Greater,
-                    (crate::value::TableKey::Bool(x), crate::value::TableKey::Bool(y)) => x.cmp(y),
-                });
+                // `TableKey::cmp` is this comparator, moved onto the key
+                // itself so the VM's snapshot cannot order a table
+                // differently — it did, until they were made one function.
+                map_entries.sort_by(|a, b| a.0.cmp(&b.0));
                 (array, map_entries)
             };
 

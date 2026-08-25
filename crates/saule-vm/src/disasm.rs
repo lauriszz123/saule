@@ -111,6 +111,24 @@ pub fn instruction(c: &Chunk, p: &Proto, ins: Instruction, pc: usize) -> String 
 /// jumps resolved to absolute targets, callee names filled in.
 fn annotate(c: &Chunk, p: &Proto, op: Op, ins: Instruction, pc: usize) -> Option<String> {
     match op {
+        // The immediate families carry a **signed** byte in `C`, and the
+        // operand column prints it unsigned — `n < -1` reads as `255`.
+        // Annotated rather than printed signed in the column, so every
+        // other opcode's listing stays byte for byte what it was, and only
+        // when it is actually negative, which is when the column misleads.
+        Op::ADDII
+        | Op::SUBII
+        | Op::MULII
+        | Op::JLTII
+        | Op::JLEII
+        | Op::JGTII
+        | Op::JGEII
+        | Op::JEQII
+        | Op::JNEII
+            if ins.sc() < 0 =>
+        {
+            Some(format!("immediate {}", ins.sc()))
+        }
         Op::LOADK | Op::JEQK => c.constants.get(ins.bx() as usize).map(quote),
         Op::GETMAPK => c.constants.get(ins.c() as usize).map(quote),
         Op::SETMAPK => c.constants.get(ins.b() as usize).map(quote),

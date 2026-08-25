@@ -164,7 +164,11 @@ pub struct VmShared {
     /// `Vm` in use is simply not in the pool. Only a cleanly-returned `Vm`
     /// goes back — one unwound by an error still has frames and possibly
     /// open upvalues, and sorting that out is not worth an allocation.
-    reentry_pool: RefCell<Vec<Vm>>,
+    /// Boxed, so parking and unparking one moves a pointer. A `Vm` is five
+    /// vectors and an `Rc` — north of a hundred bytes — and `Table.sort`
+    /// takes and gives one *per comparison*, so an unboxed pool memcpy'd the
+    /// whole struct twice for every element comparison in the sort.
+    reentry_pool: RefCell<Vec<Box<Vm>>>,
 }
 
 impl std::fmt::Debug for VmShared {
@@ -271,10 +275,10 @@ impl Vm {
 
 impl VmShared {
     /// A `Vm` for a re-entrant call — recycled if one is parked.
-    fn take_vm(self: &Rc<Self>) -> Vm {
+    fn take_vm(self: &Rc<Self>) -> Box<Vm> {
         match self.reentry_pool.borrow_mut().pop() {
             Some(vm) => vm,
-            None => Vm::from_shared(Rc::clone(self)),
+            None => Box::new(Vm::from_shared(Rc::clone(self))),
         }
     }
 
@@ -289,7 +293,7 @@ impl VmShared {
     /// per sort comparison. The length stays where it is instead, which is
     /// sound because a `Vm` handed back has no frames and the next
     /// invocation starts from register zero.
-    fn give_vm(&self, mut vm: Vm) {
+    fn give_vm(&self, mut vm: Box<Vm>) {
         debug_assert!(vm.frames.is_empty(), "a clean return pops every frame");
         debug_assert!(
             vm.open_upvals.is_empty(),
@@ -302,9 +306,11 @@ impl VmShared {
         vm.high_water = 0;
         vm.results.clear();
         // Bounded so a deeply nested program does not park a register file
-        // per level for the rest of the run.
-        if self.reentry_pool.borrow().len() < 8 {
-            self.reentry_pool.borrow_mut().push(vm);
+        // per level for the rest of the run. One borrow, not two: this runs
+        // per re-entrant call.
+        let mut pool = self.reentry_pool.borrow_mut();
+        if pool.len() < 8 {
+            pool.push(vm);
         }
     }
 }

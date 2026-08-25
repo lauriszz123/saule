@@ -520,6 +520,43 @@ define_ops! {
     /// Appended after `CASTUNWRAP`, never inserted: the numbering is the
     /// chunk ABI.
     GETIDXU: Abc,
+
+    // ---- §15.7 immediate compares -----------------------------------------
+    /// If `R[A] <  sext(C)` as `i64`, skip the next instruction
+    ///
+    /// The comparison counterpart of the [`ADDII`](Op::ADDII) family, and
+    /// the same argument: `if n < 2` compiled to `LOADI` + `JLTI`, spending
+    /// an instruction and a register materialising a literal that is read
+    /// once. `fib` pays it on **every call** — the guard is the first thing
+    /// the function does — and `benchmarks/sau/fib.sau` was 11 instructions
+    /// per activation with one of them this `LOADI`.
+    ///
+    /// `A` is the register and `C` the signed 8-bit immediate, which is
+    /// `ADDII`'s operand assignment minus the `B` it has no use for.
+    ///
+    /// **Integer only, and a literal outside `i8` keeps the register form.**
+    /// `sext(C)` is an `i64`, so truncating a wider literal would silently
+    /// compare against a different number — the one outcome this project
+    /// treats as worse than a slow one. There is no float immediate for the
+    /// same reason `ADDF` has none.
+    ///
+    /// A literal on the *left* is emitted as the mirrored opcode against the
+    /// right operand — `2 < n` is `n > 2` — so both sides fold without a
+    /// second set of "immediate on the left" opcodes.
+    ///
+    /// Appended after `GETIDXU`, never inserted: the numbering is the chunk
+    /// ABI.
+    JLTII: Abc,
+    /// If `R[A] <= sext(C)` as `i64`, skip the next instruction
+    JLEII: Abc,
+    /// If `R[A] >  sext(C)` as `i64`, skip the next instruction
+    JGTII: Abc,
+    /// If `R[A] >= sext(C)` as `i64`, skip the next instruction
+    JGEII: Abc,
+    /// If `R[A] == sext(C)` as `i64`, skip the next instruction
+    JEQII: Abc,
+    /// If `R[A] != sext(C)` as `i64`, skip the next instruction
+    JNEII: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

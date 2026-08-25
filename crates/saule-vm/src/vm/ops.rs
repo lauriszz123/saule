@@ -161,6 +161,35 @@ pub(crate) fn operand_err(got: &Value, want: &str, proto: &Proto, here: u32) -> 
     }
 }
 
+/// Does the value in `v` satisfy `cast_types[idx]`?
+///
+/// The fast half is a tag compare against the pre-resolved
+/// [`CastFast`](crate::chunk::CastFast); the slow half is the tree-walker's
+/// own `cast`, unchanged, for the tests that actually need to walk something.
+/// See `CastFast` for why the split exists and what it measured.
+#[inline(always)]
+pub(crate) fn cast_holds(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> bool {
+    if let Some(f) = chunk.cast_fast.get(idx)
+        && let Some(answer) = f.eval(v)
+    {
+        return answer;
+    }
+    cast_holds_deep(chunk, idx, v)
+}
+
+/// [`cast_holds`]'s fallback, out of line so the tag compare is what the
+/// dispatch arm inlines. Not `cold` — `table<T>` and class casts are
+/// ordinary code, just not reducible to a tag.
+#[inline(never)]
+fn cast_holds_deep(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> bool {
+    // A missing entry is a malformed chunk. Failing the cast rather than
+    // panicking is the choice the `is_some_and` here always made.
+    chunk
+        .cast_types
+        .get(idx)
+        .is_some_and(|t| saule_interpreter::eval::expr::cast::cast(v, t))
+}
+
 #[inline]
 pub(crate) fn jump(pc: usize, sbx: i32) -> usize {
     (pc as i64 + sbx as i64) as usize
@@ -203,7 +232,12 @@ pub(crate) fn snapshot_pairs(t: &TableObject) -> Vec<Value> {
         out.push(v.clone());
     }
     let mut entries: Vec<(&saule_interpreter::value::TableKey, &Value)> = t.map.iter().collect();
-    entries.sort_by_key(|(k, _)| k.display());
+    // `TableKey`'s own order, which is the tree-walker's order too — see the
+    // comment on its `Ord`. This used to sort on `k.display()`, which built a
+    // `String` per *comparison* (`sort_by_key` re-runs its key function, it
+    // does not cache) and ordered integer keys lexicographically, so it was
+    // both the allocation-heaviest and the wrong answer.
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
     for (k, v) in entries {
         out.push(k.to_value());
         out.push(v.clone());

@@ -43,7 +43,7 @@ Plus two more:
 
 ```
 SAULE_BIN=./target/debug/saule.exe bash run_examples_diff.sh   # 9/9 agree, 4 fall back
-cargo run --release -p saule-vm --example compare              # agrees, then times
+cargo run --release -p saule-vm --example bench -- FILE.sau    # in-process timing
 ```
 
 `run_examples_diff.sh` runs the *example projects* under both engines —
@@ -3050,6 +3050,289 @@ candidate this phase was originally written around.*
         which is a register-allocation question, not a peephole.
       * `map` and `sort` still barely move on the clock, for the reason §20
         gave before the VM existed: their time is inside `TableObject`.
+- [x] **§17's peephole as a *pass*, plus the immediate compare forms.** One
+      new file, six new opcodes, and both halves are things the
+      per-expression emitters cannot do from where they stand.
+
+      **(a) `JLTII` and its five siblings — a comparison against a signed
+      8-bit immediate.** `if n < 2` emitted `LOADI` then `JLTI`: an
+      instruction and a register holding a literal the next instruction
+      reads once and discards. `fib`'s guard is exactly that shape, and it
+      runs **once per call**. The gate is `immediate_arith`'s, because the
+      argument is the same one — integer only, and a literal outside `i8`
+      keeps the register form rather than truncating into a comparison
+      against a different number. A literal on the *left* folds as the
+      mirrored opcode (`2 < a` is `a > 2`), so there is no second family of
+      "immediate on the left" instructions. `-1` is `Unary { Neg, Int }` in
+      the AST rather than `Int(-1)`, so the fold unwraps a negation itself;
+      without that it folded `n < 1` and declined `n < -1`.
+
+      **(b) `compile::peephole` — a real pass over the finished body.**
+      Everything this file called a peephole before was a decision made
+      *during* emission, and those cannot see a pair whose halves are
+      written by different parts of the compiler. `MOVE d, s` + `RET1 d` is
+      the whole language's `return x`, and neither half knows the other is
+      coming.
+
+      **Being a pass is what makes it possible, not merely tidier.**
+      `a_returned_local_is_still_copied_before_the_frame_pops` records why
+      the emitter has to keep that `MOVE`: `pop_frame` closes this frame's
+      upvalues *before* moving the result out, and closing **moves** the
+      value out of its register and leaves `Nil` behind — so a `RET1`
+      naming a captured register returns nil. Whether a register is
+      captured is not settled when the `return` is compiled, because a
+      lambda *below* it can still capture. By `pop_function` every
+      `CLOSURE` the body will ever hold has been emitted, so the question
+      finally has an answer, and the fusion is gated on the body containing
+      no `CLOSURE` at all. Two differential tests caught this the first
+      time round, which is the argument for running them before believing a
+      peephole.
+
+      Deleting a word is a **relocation**, and five tables name instructions
+      by index: jump displacements (relative, so a deletion between a jump
+      and its target has to shorten it), handler ranges, the per-arity entry
+      stubs of §19, `SWITCH` jump tables — which live in the *chunk*, so the
+      pass relocates the ones this function owns and leaves a sibling's
+      numbering alone — and the line table, whose breakage is the only one
+      invisible to a passing program. Three things are never deleted: a jump
+      target, the word a conditional skip skips (§15.7), and an `EXTRAARG`
+      or the instruction that owns one.
+
+      **The numbers, and they are small everywhere but one place.** `fib`'s
+      hot proto goes 22 → 20 words and `fib(32)` runs **10.7% faster**
+      (0.348 → 0.311 s, min of 9 interleaved reps, same-binary control
+      spread 1.0%) — both changes fire per call there, and the gap to Lua
+      on that program closes from 3.15x to 2.83x. Everywhere else the
+      static count moves by 0 to 4 words (`json` -4, `interp` -3, `entity`
+      -2, the other eleven unchanged) and the wall clock does not move
+      outside the noise floor, which the same-binary control puts at 1-10%
+      depending on the benchmark. Read that the way §20 asks:
+      `loop_arith`, `oop` and `mandel` contain no literal comparison and no
+      returned local, so there was nothing here for them to gain.
+
+      **Not done, and deliberately.** The value-producing compares (`LTI`,
+      `LEI`, `EQI`) get no immediate form: the branch form is what `fib`
+      pays, and since slice 1 the materialising path is the uncommon one.
+      `MOVE d, d` and `JMP +0` are rules the pass carries and neither has
+      been observed firing — `if_chain` stopped emitting the trailing jump
+      in slice 1 — but they cost one comparison each on a pass that already
+      walks the array.
+- [x] **`JEQK` at last, and `and` as control flow.** Two compiler changes,
+      **no new opcodes**, both found by reading a pair histogram rather than
+      by guessing — and one guess is recorded below as refuted, because it
+      was a good-sounding one.
+
+      **(a) `JEQK` was emitted by nothing.** The same discovery
+      `fused_compare_jump` was written for, one opcode over: `JEQK`
+      (`R[A] == K[C]`, skip next) has been in the instruction set since
+      Phase 1, is bounds-checked by the verifier, has a verifier test of its
+      own — and no code path ever produced one. So `if c == "{"`, which is
+      what every scanner and every `elseif` chain in a parser is made of,
+      compiled to `LOADK` + `EQV` + `TEST` + `JMP`: four words to ask one
+      question.
+
+      `--profile-bytecode` on `json` (110,843,923 instructions):
+      `LOADK EQV` **6,234,024** (5.6%), `EQV TEST` **4,860,006** (4.4%),
+      `TEST JMP` **4,680,003** (4.2%) — about 14% of the program.
+
+      The substitution is **exact, not close**: `EQV` and `JEQK` both read
+      `Value`'s own `PartialEq`, one between two registers and one between a
+      register and a constant. It declines on `!=` (`JEQK` skips *on
+      equality* and has no counterpart; inverting it needs a second jump to
+      undo the skip, three words against the materialising path's four), on
+      a constant past the 8-bit `C` window, and on an `equals` overload —
+      that last guard being unreachable today, for reasons recorded on
+      `constant_compare_jump` and pinned by a test.
+
+      **(b) `and` in branch position is two tests, not a value.** `a and b`
+      feeding an `if` materialised a `Value` through `TESTSET` and then
+      tested *that* — and worse, a comparison inside it never reached
+      `fused_compare_jump` at all, because that only ever saw the top-level
+      expression. So `while p <= n and …` emitted exactly the materialising
+      `LEI` that slice 1 existed to remove. The profile counted the
+      `LEI TEST` pair **4,541,139** times in `json`, 4.1%, every one a
+      conjunct of an `and`.
+
+      `cond_jumps_if_false` now returns *every* jump leaving a condition, one
+      per conjunct, and the caller patches them all to the same target.
+      Short-circuiting is preserved by construction: the jump out of the left
+      conjunct is emitted before the right one's code.
+
+      **`or` is deliberately not split**, and not for symmetry's sake.
+      `a or b` needs a jump taken when `a` is **true**, and inverting a
+      fused comparison at the `BinOp` level is sound for integers and
+      **wrong for floats**: `!(a < b)` is true when either side is NaN,
+      where `a >= b` is false. `JLTF` is emitted on real paths, so a
+      true-polarity form has to decline floats — and no profile asks for
+      any of it, `or` appearing in no benchmark's hot pair table.
+
+      **The numbers.** `json` retires **110,843,923 → 95,155,654**
+      instructions, **-14.2%** (a: -5.2%, b: the remaining -9%), and the
+      wall clock moved with it — `-4.3%` for (a) alone against a 1.3%
+      same-binary control, taking `json` from 1.92x Lua to 1.84x. `mandel`
+      was not a target and gains **-10.6%** anyway (14,123,448 →
+      12,628,739): its inner-loop escape test is an `and`. `interp` and
+      `wordfreq` are unchanged to the instruction — `interp` dispatches
+      through `GETTAG`/`SWITCH` rather than constant equality, which is the
+      profile saying these two changes are aimed at scanners and not at
+      interpreters.
+
+      Note the conversion rate against `CASTUNWRAP`'s: a 30% instruction cut
+      bought 2.3% there, and 5.2% bought 4.3% here. Removing a `LOADK` is
+      not removing a dispatch — it is removing a constant-pool load and a
+      `Value` clone, which for a string constant is a refcount bump.
+
+- [ ] ~~Immediate index forms (`LOADI` + `GETIDX`, Lua's `GETI`)~~ —
+      **proposed and refuted by the profile; do not revive without a new
+      reading.** The reasoning was that indexing a `table<T>` yields `T?`,
+      so every typed element read is `t[i]!`, and a constant index would
+      then be `LOADI` + `GETIDXU` — the same shape the `ADDII` and `JLTII`
+      families both paid off on.
+
+      It does not happen. Across all sixteen benchmarks the pair occurs
+      **twice** statically (`wordfreq` and `sort`, once each) and in no hot
+      pair table dynamically. `matrix` is the most index-heavy program in
+      the suite — `GETIDXU` alone is 31.7% of its 8.5M instructions — and
+      `LOADI` is 0.9% of it and never precedes an index. Real code indexes
+      with a loop variable; a literal index is what a *test* looks like.
+      Two new opcodes in a permanent chunk ABI for that is precisely the
+      trade §16 exists to refuse.
+
+- [x] **The dynamic `CALL` path — and the downcast that turned out not to be
+      the problem.** `dispatch_call` opened with
+      `self.stack[callee_abs].clone()`, and `Value::clone` routes every heap
+      variant to an `#[inline(never)]` `clone_heap`. So a dynamic call made
+      an out-of-line function call to bump one refcount, on the one path
+      where the tag is already known to be `VmFunction`. Reading the register
+      in place and cloning just the `Rc`: **`closure` −4 to −6%**, a
+      call-plus-upvalue microbenchmark **−3.1%** (twice, independently),
+      `json` −0.8%. Free and safe.
+
+      **The `Closure` downcast was the suspect and it is nearly innocent.**
+      `from_handle` is two indirect calls plus a 128-bit `TypeId` compare on
+      every dynamic call, every tail call and every upvalue read, which reads
+      like an obvious cost. Priced with a throwaway unchecked cast it is
+      worth **2% of `closure` and nothing anywhere else** — both calls are
+      perfectly predicted, the target never varies. Buying it soundly needs
+      either an `unsafe` contract on a public trait that `saule-interpreter`
+      cannot even state (it cannot name `Closure`) or a per-call-site cache
+      holding closures alive. Not a 2% shape. Written up on `from_handle` so
+      the next reader prices it before rebuilding it.
+
+      **Where the call-path money actually is.** `fib` uses `CALLSTAT` and
+      never downcasts, and is still 2.0x Lua; `closure` uses dynamic `CALL`
+      and is 2.6x. The gap between them is not the downcast — it is the
+      refcount traffic every call pays regardless: `enter_static` clones
+      proto and chunk into the frame, and the loop's `'reentry` block clones
+      both *again* on every activation, which is every call **and** every
+      return. That is four inc/dec pairs per call, against the two predicted
+      indirect calls this item just priced at 2%. It is the next thing to
+      try in this path, and it is the open item below.
+- [x] **An in-process benchmark timer - `examples/bench.rs`. Build this
+      before optimising anything else.** `cargo run --release -p saule-vm
+      --example bench -- benchmarks/sau/fib.sau [reps]` compiles once and
+      times only `run_module` + `Main.main`.
+
+      Timing `saule run` from a shell measures ~50ms of process start-up,
+      parse and typecheck, and half the suite carries only 10-40ms of actual
+      work - so the figure of interest was a small difference between two
+      large numbers, over a start-up baseline that itself drifts. A 3% change
+      in the VM showed up as a 30% swing. Two concrete costs of that this
+      week: `matrix` reported +12.4% and `oop` +9.4% on changes that could not
+      have touched them, and a genuine 13% *win* on `loop_arith` read as a 6%
+      loss for three consecutive measurements. Do not trust a sub-100ms
+      benchmark measured through the shell.
+
+      Even in-process, take the minimum over several *invocations* as well as
+      several reps: one invocation is repeatable to about 3%, and it was a
+      single-invocation outlier that produced the phantom `matrix` figure.
+
+      (The line at the top of this file used to name `--example compare`,
+      which has never existed in this tree. Fixed to name this one.)
+- [x] **Stop re-cloning `proto` and `chunk` per frame activation.** Done with
+      `ManuallyDrop<Rc<_>>` built by `ptr::read`: an owned value in a
+      register, codegen-identical to the clone minus the inc/dec. **`fib`
+      -7.8%, `mandel` -5.5%, `closure` -4.8%, `interp` -2.1%; geomean -1.1%.**
+
+      The 44%-slower result the module header records was a *different*
+      mechanism - `&*Rc::as_ptr(..)`, a borrow tied to `self.frames`. What
+      makes this comfortable is that soundness does not rest on the frame at
+      all: every `Rc<Proto>` the VM runs comes from `chunk.proto(idx)`, so its
+      `Chunk` holds a strong reference for the chunk's life, and every
+      `Rc<Chunk>` comes from `shared.chunks`, which outlives the whole call.
+      `Closure::new` - the one constructor that could have built a `Proto`
+      living outside a chunk - has zero call sites.
+- [x] **The native-call path: two wasted operations per `CALLNAT`.** Found by
+      microbenchmark, not by reading: a bare `Math.floor` call cost **21.6ns**
+      (~75 cycles) and `String.sub` **48.6ns**, against a `GETF` at 4.0ns.
+
+      Both were plumbing. The callee was `Value::clone`d out of the constant
+      pool - and a heap `Value` clone is a call to `#[inline(never)]`
+      `clone_heap` plus a matching out-of-line drop, so two function calls to
+      borrow an `Rc<NativeFn>` the chunk owns anyway. `chunk` is a loop local,
+      not a field of `self`, so it can simply be passed by reference. And the
+      returned value went into `store_results`, which takes a *slice* and so
+      `cloned()` it back out, dropping the original an instruction later; a
+      `store_one` that moves fixes that.
+
+      Bare native call **21.6 -> 13.0ns**, `String.sub` **48.6 -> 36.1ns**.
+      **`wordfreq` -13.2%, `json` -9.4%, `mandel` -9.1%, `array` -3.6%.**
+- [x] **`CASTCHK` / `CASTUNWRAP` no longer decide types by string compare.**
+      Both called `cast::cast`, which bottoms out in `matches_named` - a
+      `match` on a `&str`. So proving an `Int` is an `integer` ran string
+      comparisons **every time the instruction executed**: 10.3ns per
+      `CASTUNWRAP`, and `sort` retires 6.67 million of them.
+
+      The type is fixed when the chunk is compiled, so that walk is loop
+      invariant over the entire program. `Chunk::cast_fast` resolves each
+      entry once to a tag compare, maintained in lockstep by `add_cast_type`,
+      which is the only place either vector grows. **Only the shallow
+      primitive arms are resolved** - `table<T>` is elementwise and a class
+      name walks the inheritance chain, and both still call the tree-walker's
+      `cast`. This is a cache of `matches_named`'s primitive arms, not a
+      second implementation of casting, so "reuse rather than reimplement"
+      is intact. Derived, not data, so the cache of section 14 rebuilds it on
+      load.
+
+      **10.3 -> 7.5ns; `sort` -5.8%.**
+- [x] **The `Table.sort` boundary crossing.** Two things, both measured:
+
+      *The re-entry pool moved a whole `Vm` twice per comparison.* A `Vm` is
+      five vectors and an `Rc`, north of a hundred bytes, and `take_vm` /
+      `give_vm` memcpy'd it out of and back into a `Vec` for every element
+      comparison in the sort. `Vec<Box<Vm>>` makes both a pointer move.
+      **`sort` -9.7%.**
+
+      *The depth guard was not inlined.* `enter_call_depth` runs once per
+      crossing and returns `Result<DepthGuard, RuntimeError>` - 72 bytes, to
+      carry an error the running path never builds. `#[inline]` on it and on
+      `DepthGuard::enter`, with the error construction and the one-time
+      environment read moved behind `#[cold]` helpers. This is `Vm::int_at`'s
+      documented fix applied to the interpreter side. **`sort` -1.6%.**
+
+      Priced but *not* taken: removing the guard entirely is worth 3.5% of
+      `sort`, and it is what stops re-entrant recursion from exhausting the
+      native stack. Not available.
+
+      **`sort` -15.8% overall**, the largest single-benchmark move of the
+      phase.
+- [ ] ~~Inline instance fields (`Rc<RefCell<InstanceObject>>` to one
+      allocation)~~ - **measured and not worth it; do not start this without
+      new numbers.** The reasoning was that `GETF` is 31.8% of `json` and
+      22.6% of `interp` and chases two pointers behind a `RefCell` flag.
+
+      `GETF`'s marginal cost is **4.0ns**, so `json` spends about 19% of its
+      run there and a perfect layout would reclaim a fraction of that - call
+      it 4%, in exchange for manual `Rc` allocation of a slice-tailed DST with
+      hand-rolled drop glue. And the `RefCell` flag, the part that looked most
+      obviously removable, is **not the cost at all**: bypassing it with
+      `as_ptr` made things *slower* (`json` +3.2%, `oop` +9.4%).
+
+      The same measurement session found where those benchmarks actually spend
+      the time - the native-call path above, at 5x the available win and none
+      of the unsafe. That is why `json` moved 14.5% this phase without anyone
+      touching `InstanceObject`.
+
 - [ ] Inline caches for `GETFX` / `CALLIF`
 - [x] Superinstructions from a measured opcode-pair histogram collected under
       `--profile-bytecode` (§16). **One shipped: `CASTUNWRAP`.** It was the
@@ -3091,6 +3374,39 @@ candidate this phase was originally written around.*
       expect the answer to be no: after the peepholes the top pairs are
       spread thin, which is what a compiler that stopped emitting redundant
       instructions looks like.
+- [x] **`TableKey` owns the map-iteration order — and it was two orders.**
+      Found while making the VM's `for … in` snapshot stop allocating, not
+      by a test: `exec_for_in` sorted map keys by type and value, while
+      `snapshot_pairs` sorted them on `TableKey::display()`. So integer keys
+      came out **numerically under the tree-walker and lexicographically
+      under the VM** — `{10, 2, 3}` iterated `2, 3, 10` against `10, 2, 3` —
+      and the variant order disagreed too, a quoted string sorting below a
+      digit. A live silent divergence in the default engine, of exactly the
+      shape `SAULE_DIFF=1` exists to catch, surviving because no fixture
+      iterated a map whose keys distinguish the two orders.
+
+      The comparator is now `impl Ord for TableKey` and both engines call
+      it — the "reuse rather than reimplement" rule applied to an *ordering*
+      rather than to logic. Written out rather than derived, so that
+      reordering the variants is not a silent change to what every
+      `for … in` yields, for the reason `Hash` is written out with explicit
+      tags. Pinned by `map_keys_iterate_in_the_same_order_under_both_engines`,
+      which fails on the old code with `10,2,3` against `2,3,10`.
+
+      The allocation half was real and is gone — `sort_by_key` re-runs its
+      key function per *comparison*, so iterating an n-entry map built
+      O(n log n) throwaway `String`s — but **it is worth zero on this
+      suite**: `wordfreq` is the only benchmark that iterates a map and its
+      map holds fifteen entries. Filed as a fix for user code, not a
+      benchmark win. Do not go looking for it in the numbers.
+- [x] **`TableObject::set` no longer probes the map on every array append.**
+      The append path pulled contiguous map entries into the array
+      unconditionally, so every `t[#t+1] = v` hashed a `TableKey::Int` and
+      probed a map that could not contain it. Guarded on a non-empty map.
+      Correct, and **also worth nothing measurable** — an empty
+      `FxHashMap` probe is a multiply and a group compare, invisible beside
+      the rest of a `SETIDX`. Recorded so the next person does not re-derive
+      it and expect a win.
 - [ ] `NativeClosureMulti` writing into `&mut [Value]`, for `stdlib/iter.rs`
 - [ ] Precomputed hashes on constant string keys
 - [ ] Raw `pc`/`base` pointers and `get_unchecked` in the dispatch loop —
@@ -3101,7 +3417,53 @@ candidate this phase was originally written around.*
       chunk this compiler just produced is safe today because the compiler
       produced it; on a chunk read back from `.saule/cache/` it would not be.
       Sequence those two together.
-- [ ] Dispatch threading experiments (worth 5–15%, cost real readability)
+- [x] **One arm per *hot* opcode in the dispatch `match`.** Thirteen opcode
+      families shared an arm and then re-`match op`'d inside it — `ADDI |
+      SUBI | MULI | …` and then `match op { Op::ADDI => … }`. That is two
+      indirect branches per instruction where the point of a jump table is
+      to have one, and it collapsed every arithmetic opcode onto a single
+      back-edge, so the predictor saw one site with six targets rather than
+      six sites with one each.
+
+      **Splitting all thirty-four measured worse, and that is the finding
+      worth keeping.** `loop_arith` −7% and `mandel` −10%, but `interp`
+      **+7%** and `entity` **+10%** — the branchy programs paying, in code
+      layout, for arms they never execute. This function's sensitivity to
+      its own size is already recorded twice in this file (the profiling
+      copy alone is worth 2-3%); this is the same effect with the sign
+      flipped.
+
+      So `--profile-bytecode` picked the list, which is what §16 is for. An
+      opcode the suite actually retires gets an arm; the rest keep the
+      shared one, whose inner `match` then costs nothing it does not run.
+      Regrouped on the evidence: the bitwise five (**zero** executions
+      across all sixteen benchmarks), `DIVI`/`MODI`/`POWI` and
+      `DIVF`/`MODF`/`POWF` (the bulkiest arms — two error paths and a
+      `format!` — at 1.3% of `sort` and absent elsewhere), and the compare
+      variants the compiler never emits into hot code.
+
+      **`LTI` is the instructive exception.** It is 21.7% of `sort` and hot
+      by any reading, and it measured **+2% with an arm of its own**,
+      reproduced across passes. That is `CASTUNWRAP`'s lesson restated: a
+      30% instruction cut there bought 2.3% of clock, so `sort` is bound by
+      the native→VM crossing per comparison, not by dispatch. Hot in the
+      histogram does not mean dispatch-bound — check which one the
+      benchmark is before spending code on it.
+
+      Net, best-of-11 against the previous build, process start-up netted
+      out: **geomean −2.1%**, no benchmark regressed outside the noise
+      floor. `closure` **−10.7%**, `mandel` **−9.8%**, `matrix` −4.3%,
+      `entity` −2.8%, `loop_arith` −2.7%.
+
+      Note what this does *not* do: it leaves `MOVE`, `GETF`, `SETF`, `JMP`
+      and the call opcodes exactly as they were, and those are 57% of
+      `interp` and 44% of `json`. The remaining gap on the branchy programs
+      is field access and calls, not dispatch shape.
+- [ ] Dispatch threading experiments (worth 5–15%, cost real readability) —
+      **read the item above first.** Splitting the grouped arms was a
+      down-payment on this and it already found the ceiling: the branchy
+      programs regressed on code size alone, before any threading. Expect
+      the same wall, and expect it sooner than the 5-15% estimate suggests.
 - [ ] Bytecode caching in `.saule/cache/` for `startup` on large projects
 - [ ] **Only then:** reconsider NaN-boxing, with numbers. The decision today
       is no — `Value` is already 16 bytes, `i64` does not fit in 51 bits, and

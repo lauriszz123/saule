@@ -61,9 +61,18 @@ fn a_comparison_feeding_an_if_becomes_a_fused_branch() {
          end\n\
          f(3)",
     );
-    assert!(emits(&l, "JLTI"), "expected a fused branch:{NL}{l}");
+    // `2` is a literal, so this now goes one further than the fused branch
+    // this test was written for: `JLTII` takes the immediate as well, and
+    // the `LOADI` that materialised it is gone too. `JLTI` itself is
+    // asserted by `every_ordering_operator_has_a_fused_form`, which
+    // compares two locals and so has no immediate to fold.
+    assert!(emits(&l, "JLTII"), "expected a fused immediate branch:{NL}{l}");
     assert!(!emits(&l, "LTI"), "the materialising form is still emitted:{NL}{l}");
     assert!(!emits(&l, "TEST"), "the boolean is still being tested:{NL}{l}");
+    // No `LOADI` assertion here: `return 0` and `return 1` legitimately load
+    // literals of their own, and `emits` reads the whole listing. That the
+    // comparison's own `LOADI` is gone is what
+    // `every_ordering_operator_has_an_immediate_form` checks.
 }
 
 #[test]
@@ -463,3 +472,425 @@ fn a_fused_cast_still_walks_the_type_it_was_given() {
     );
 }
 
+
+
+// -- Phase 5, slice 3: immediate compares and the peephole pass -------------
+
+#[test]
+fn every_ordering_operator_has_an_immediate_form() {
+    // The comparison counterpart of `a_small_integer_literal_folds_into_the_
+    // instruction`. `fib`'s `n < 2` runs once per call and spent an
+    // instruction and a register materialising the `2`.
+    for (op, want) in [
+        ("<", "JLTII"),
+        ("<=", "JLEII"),
+        (">", "JGTII"),
+        (">=", "JGEII"),
+        ("==", "JEQII"),
+        ("!=", "JNEII"),
+    ] {
+        let src = format!(
+            "local a: integer = 1{NL}\
+             local r: integer = 0{NL}if a {op} 2 then{NL} r = 1{NL}end{NL}r"
+        );
+        let l = listing(&src);
+        assert!(emits(&l, want), "`{op} 2` did not fold to {want}:{NL}{l}");
+        must_agree(&src);
+    }
+}
+
+#[test]
+fn a_literal_on_the_left_mirrors_the_comparison() {
+    // `2 < a` is `a > 2`, so it folds against the *right* operand with the
+    // mirrored opcode rather than needing a second family of "immediate on
+    // the left" instructions. Getting the mirror backwards inverts the
+    // branch and is invisible in the listing, which is what `must_agree` is
+    // here for.
+    for (op, want) in [
+        ("<", "JGTII"),
+        ("<=", "JGEII"),
+        (">", "JLTII"),
+        (">=", "JLEII"),
+        ("==", "JEQII"),
+        ("!=", "JNEII"),
+    ] {
+        let src = format!(
+            "local a: integer = 1{NL}\
+             local r: integer = 0{NL}if 2 {op} a then{NL} r = 1{NL}end{NL}r"
+        );
+        let l = listing(&src);
+        assert!(emits(&l, want), "`2 {op} a` did not mirror to {want}:{NL}{l}");
+        must_agree(&src);
+    }
+}
+
+#[test]
+fn a_literal_too_wide_for_a_byte_keeps_the_register_form() {
+    // `sext(C)` is an `i64`, so truncating a wider literal would compare
+    // against a different number - a wrong answer, which this project
+    // treats as worse than a slow one. Both ends of the range, and one past
+    // each.
+    for (lit, want) in [
+        ("127", "JLTII"),
+        ("128", "JLTI"),
+        ("-128", "JLTII"),
+        ("-129", "JLTI"),
+        ("1000", "JLTI"),
+    ] {
+        let src = format!(
+            "local a: integer = 1{NL}\
+             local r: integer = 0{NL}if a < {lit} then{NL} r = 1{NL}end{NL}r"
+        );
+        let l = listing(&src);
+        assert!(emits(&l, want), "`a < {lit}` should emit {want}:{NL}{l}");
+        must_agree(&src);
+    }
+}
+
+#[test]
+fn an_unproved_comparison_does_not_fold_a_literal() {
+    // The immediate forms read their register as an `i64`. An `any` operand
+    // may be an instance with a `compare` overload, and the gate is the
+    // same proved-numeric-kind test the register forms use.
+    let src =
+        format!("local a: any = 1{NL}local r: integer = 0{NL}if a < 2 then{NL} r = 1{NL}end{NL}r");
+    let l = listing(&src);
+    assert!(!emits(&l, "JLTII"), "an unproved `<` must not fold:{NL}{l}");
+    must_agree(&src);
+}
+
+#[test]
+fn a_float_comparison_does_not_fold_a_literal() {
+    // There is no float immediate, for the same reason `ADDF` has none: the
+    // operand is a byte.
+    let src = format!(
+        "local a: float = 1.0{NL}local r: integer = 0{NL}\
+         if a < 2.0 then{NL} r = 1{NL}end{NL}r"
+    );
+    let l = listing(&src);
+    assert!(emits(&l, "JLTF"), "a float compare should still fuse:{NL}{l}");
+    assert!(
+        !emits(&l, "JLTII"),
+        "a float folded into an integer immediate:{NL}{l}"
+    );
+    must_agree(&src);
+}
+
+#[test]
+fn a_returned_local_is_not_copied_when_the_frame_cannot_capture() {
+    // The peephole's reason to exist: the `MOVE` and the `RET1` are emitted
+    // by different parts of the compiler, and neither can see the other's
+    // operand at the time it is written.
+    //
+    // And it is a *pass* rather than an emission rule precisely because of
+    // what `a_returned_local_is_still_copied_before_the_frame_pops`
+    // documents: whether a register is captured is not settled when the
+    // `return` is compiled, since a lambda below it can still capture it.
+    // By the time the body is finished, every `CLOSURE` it will ever hold
+    // has been emitted, so the question finally has an answer.
+    const SRC: &str = "fn pick(n: integer) -> integer\n\
+         \x20 local out: integer = n + 1\n\
+         \x20 return out\n\
+         end\n\
+         pick(3)";
+    let l = listing(SRC);
+    let body = proto(&l, "pick(");
+    assert!(
+        !emits(body, "MOVE"),
+        "the return copy survived the peephole:{NL}{body}"
+    );
+    must_agree(SRC);
+}
+
+#[test]
+fn the_peephole_relocates_the_jumps_it_moves() {
+    // Deleting a word renumbers every instruction after it, and a jump
+    // displacement is *relative*: a deletion between a jump and its target
+    // has to shorten it. `fib`'s own shape is the case - the `JMP` over the
+    // early return jumps across the `MOVE` this pass removes - and an
+    // unrelocated displacement lands one instruction late, inside the code
+    // it was meant to skip.
+    must_agree(
+        "fn fib(n: integer) -> integer\n\
+         \x20 if n < 2 then\n\
+         \x20   return n\n\
+         \x20 end\n\
+         \x20 return fib(n - 1) + fib(n - 2)\n\
+         end\n\
+         fib(12)",
+    );
+    // Backward as well as forward: a loop's back edge crosses whatever the
+    // pass removed inside the body.
+    must_agree(
+        "fn count(n: integer) -> integer\n\
+         \x20 local s: integer = 0\n\
+         \x20 for i: integer = 1, n do\n\
+         \x20   if i > 2 then\n\
+         \x20     s = s + i\n\
+         \x20   end\n\
+         \x20 end\n\
+         \x20 return s\n\
+         end\n\
+         count(10)",
+    );
+}
+
+#[test]
+fn the_peephole_relocates_a_match_jump_table() {
+    // `SWITCH` targets live in the **chunk**, shared by every function in
+    // the module, and they are absolute instruction indices into the proto
+    // that emitted them. So the pass relocates the tables this function
+    // owns and leaves a sibling's numbering alone - a table renumbered
+    // against the wrong body jumps into the middle of an arm.
+    must_agree(
+        "enum Color\n\
+         \x20 Red\n\
+         \x20 Green\n\
+         \x20 Blue\n\
+         end\n\
+         fn name(c: Color) -> string\n\
+         \x20 local out: string = match c\n\
+         \x20   case Color.Red then \"r\"\n\
+         \x20   case Color.Green then \"g\"\n\
+         \x20   case Color.Blue then \"b\"\n\
+         \x20 end\n\
+         \x20 return out\n\
+         end\n\
+         fn other(n: integer) -> integer\n\
+         \x20 local m: integer = n + 1\n\
+         \x20 return m\n\
+         end\n\
+         name(Color.Green) .. other(1)",
+    );
+}
+
+#[test]
+fn the_peephole_relocates_a_handler_range() {
+    // A `try` body is a pc *range* plus a catch entry, all three absolute.
+    // A deletion inside the body that did not move `pc_end` would leave a
+    // throw at the end of the body outside the handler meant to catch it.
+    must_agree(
+        "fn risky(n: integer) -> string\n\
+         \x20 local out: string = \"none\"\n\
+         \x20 try\n\
+         \x20   local m: integer = n + 1\n\
+         \x20   if m > 2 then\n\
+         \x20     throw \"too big\"\n\
+         \x20   end\n\
+         \x20   out = \"ok\"\n\
+         \x20 catch e: any\n\
+         \x20   out = \"caught\"\n\
+         \x20 end\n\
+         \x20 return out\n\
+         end\n\
+         risky(5) .. risky(0)",
+    );
+}
+
+#[test]
+fn a_fault_after_a_peephole_still_blames_the_right_line() {
+    // The line table names instructions by index too, and it is the only
+    // one whose breakage is invisible to a passing program: the answer is
+    // right and the error message points at the wrong source. `must_agree`
+    // compares error *text*, so a shifted span fails here.
+    must_agree(
+        "fn get(t: table<integer>, i: integer) -> integer\n\
+         \x20 local v: integer = t[i]!\n\
+         \x20 return v\n\
+         end\n\
+         local t: table<integer> = {1, 2}\n\
+         get(t, 5)",
+    );
+}
+
+
+// -- Phase 5, slice 4: JEQK, and `and` in branch position -------------------
+
+#[test]
+fn an_equality_against_a_constant_becomes_a_fused_branch() {
+    // `JEQK` had been in the instruction set since Phase 1, was checked by
+    // the verifier, had a verifier test of its own — and nothing ever
+    // emitted one. `if c == "{"` compiled to `LOADK` + `EQV` + `TEST` +
+    // `JMP`: four words to ask one question, and `json` asked it six
+    // million times.
+    let src = format!(
+        "local c: string = \"x\"{NL}local r: integer = 0{NL}\
+         if c == \"{{\" then{NL} r = 1{NL}end{NL}r"
+    );
+    let l = listing(&src);
+    assert!(emits(&l, "JEQK"), "a constant `==` did not fuse:{NL}{l}");
+    assert!(!emits(&l, "EQV"), "the materialising form is still emitted:{NL}{l}");
+    assert!(!emits(&l, "TEST"), "the boolean is still being tested:{NL}{l}");
+    must_agree(&src);
+}
+
+#[test]
+fn a_constant_equality_folds_from_either_side() {
+    // `==` commutes and `JEQK` reads `R[A] == K[C]`, so the constant folds
+    // from the left with no mirrored opcode — unlike the ordering
+    // comparisons, which need one.
+    let src = format!(
+        "local c: string = \"x\"{NL}local r: integer = 0{NL}\
+         if \"x\" == c then{NL} r = 1{NL}end{NL}r"
+    );
+    let l = listing(&src);
+    assert!(emits(&l, "JEQK"), "a left-hand constant did not fold:{NL}{l}");
+    must_agree(&src);
+}
+
+#[test]
+fn an_inequality_against_a_constant_keeps_the_materialising_form() {
+    // `JEQK` skips *on equality* and has no `!=` counterpart, so inverting
+    // it would need a second jump to undo the skip — three words where the
+    // materialising path takes four. Not worth a second opcode until a
+    // profile asks for one.
+    let src = format!(
+        "local c: string = \"x\"{NL}local r: integer = 0{NL}\
+         if c != \"y\" then{NL} r = 1{NL}end{NL}r"
+    );
+    let l = listing(&src);
+    assert!(!emits(&l, "JEQK"), "`!=` must not fuse to an equality:{NL}{l}");
+    must_agree(&src);
+}
+
+#[test]
+fn a_class_receiver_compared_to_a_constant_matches_the_materialising_form() {
+    // `constant_compare_jump` carries an `equals`-overload guard copied
+    // from `binary_to`, and today that guard **cannot fire** — which is
+    // worth pinning rather than leaving to be rediscovered.
+    //
+    // `saule-typeck` rejects `Money == 2` outright (`DisjointEquality`),
+    // so a class-typed operand never meets a literal of another type. And
+    // an *optional* class type does not resolve through `class_of_expr`,
+    // so `m == nil` dispatches no overload here — and none in `binary_to`
+    // either, which asks the same question. Both therefore fall back to
+    // `Value`'s own equality, which is exactly what makes substituting
+    // `JEQK` for `EQV` sound rather than merely plausible.
+    //
+    // If `class_of_expr` ever learns about optionals, this is where the
+    // guard has to be looked at again.
+    must_agree(
+        "class Money\n\
+         \x20 cents: integer = 0\n\
+         \x20 fn init(cents: integer)\n\
+         \x20   self.cents = cents\n\
+         \x20 end\n\
+         \x20 fn equals(other: any) -> boolean\n\
+         \x20   return true\n\
+         \x20 end\n\
+         end\n\
+         local m: Money? = Money(1)\n\
+         local r: integer = 0\n\
+         if m == nil then\n\
+         \x20 r = 1\n\
+         end\n\
+         r",
+    );
+}
+
+#[test]
+fn an_and_in_branch_position_tests_each_conjunct() {
+    // `and` compiled as an *expression* materialises a value through
+    // `TESTSET` and the branch then tests that — and a comparison inside it
+    // never reached `fused_compare_jump` at all, because that only saw the
+    // top-level expression. `--profile-bytecode` counted the resulting
+    // `LEI TEST` pair 4,541,139 times in `json`, 4.1% of the program.
+    let src = format!(
+        "local a: integer = 1{NL}local b: integer = 2{NL}local r: integer = 0{NL}\
+         if a <= b and b <= 9 then{NL} r = 1{NL}end{NL}r"
+    );
+    let l = listing(&src);
+    assert!(emits(&l, "JLEI"), "the first conjunct did not fuse:{NL}{l}");
+    assert!(emits(&l, "JLEII"), "the second conjunct did not fuse:{NL}{l}");
+    assert!(!emits(&l, "TESTSET"), "the `and` still materialises:{NL}{l}");
+    assert!(!emits(&l, "LEI"), "a conjunct still materialises a bool:{NL}{l}");
+    must_agree(&src);
+}
+
+#[test]
+fn an_and_still_short_circuits_its_right_hand_side() {
+    // The jump out of the left conjunct is emitted *before* the right
+    // one's code, so a false left leaves without evaluating the right. A
+    // side effect on the right is what makes that observable rather than
+    // merely faster, and the oracle evaluates it the same way.
+    must_agree(
+        "local calls: integer = 0\n\
+         fn bump() -> boolean\n\
+         \x20 calls = calls + 1\n\
+         \x20 return true\n\
+         end\n\
+         local r: integer = 0\n\
+         if false and bump() then\n\
+         \x20 r = 1\n\
+         end\n\
+         if true and bump() then\n\
+         \x20 r = 2\n\
+         end\n\
+         r .. \"/\" .. calls",
+    );
+}
+
+#[test]
+fn a_chain_of_ands_leaves_from_every_conjunct() {
+    // `a and b and c` parses as `(a and b) and c`, so the split recurses
+    // and all three tests jump to the same false target. Each arm is
+    // exercised in turn, because a mispatched label shows up as one
+    // specific conjunct being skipped.
+    must_agree(
+        "fn check(a: integer, b: integer, c: integer) -> string\n\
+         \x20 if a > 0 and b > 0 and c > 0 then\n\
+         \x20   return \"all\"\n\
+         \x20 end\n\
+         \x20 return \"no\"\n\
+         end\n\
+         check(1, 1, 1) .. check(0, 1, 1) .. check(1, 0, 1) .. check(1, 1, 0)",
+    );
+}
+
+#[test]
+fn an_and_in_a_while_condition_still_leaves_the_loop() {
+    // `while` patches the condition's jumps *after* the back edge, so a
+    // second conjunct's label has to survive being patched later than the
+    // first. This is `json`'s own scanner shape.
+    must_agree(
+        "local s: string = \"aaab\"\n\
+         local pos: integer = 1\n\
+         local n: integer = 4\n\
+         while pos <= n and String.sub(s, pos, pos) == \"a\" do\n\
+         \x20 pos = pos + 1\n\
+         end\n\
+         pos",
+    );
+}
+
+#[test]
+fn an_and_as_a_value_still_materialises() {
+    // Only *branch* position is split. `and` is still an expression that
+    // yields a value everywhere else, and Saule's yields the operand rather
+    // than a boolean — so this is not a shape the split may quietly change.
+    must_agree(
+        "local a: any = 0\n\
+         local b: any = \"kept\"\n\
+         local x: any = a and b\n\
+         local y: any = b and a\n\
+         tostring(x) .. \"/\" .. tostring(y)",
+    );
+}
+
+#[test]
+fn an_or_in_branch_position_is_left_alone() {
+    // Not symmetry for its own sake: `a or b` needs a jump taken when `a`
+    // is **true**, and inverting a fused comparison at the `BinOp` level is
+    // wrong for floats — `!(a < b)` is true when either side is NaN, where
+    // `a >= b` is false. No profile asks for it, so `or` keeps the
+    // materialising path and this pins that it still works.
+    must_agree(
+        "fn check(a: integer, b: integer) -> string\n\
+         \x20 if a > 0 or b > 0 then\n\
+         \x20   return \"some\"\n\
+         \x20 end\n\
+         \x20 return \"none\"\n\
+         end\n\
+         check(1, 0) .. check(0, 1) .. check(0, 0) .. check(1, 1)",
+    );
+}

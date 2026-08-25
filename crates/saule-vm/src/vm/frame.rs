@@ -71,6 +71,25 @@ impl Closure {
     ///
     /// Every `Value::VmFunction` this crate creates wraps a `Closure`, so a
     /// failure here means a chunk was handed a foreign `VmFunction` impl.
+    ///
+    /// **This looks more expensive than it is; it was measured, leave it
+    /// alone.** Two indirect calls — `as_any` through `VmFunction`'s vtable,
+    /// then `type_id` through `Any`'s — plus a 128-bit compare, on every
+    /// dynamic `CALL`, every `TAILCALL` and every upvalue read. Replacing the
+    /// whole thing with an unchecked pointer cast (as a throwaway, to price
+    /// it) is worth **2% of `closure` and nothing measurable anywhere else**,
+    /// because both calls are perfectly predicted: the target is the same
+    /// every time.
+    ///
+    /// Buying that 2% soundly costs more than it is worth. `Closure` is the
+    /// only implementor of `VmFunction` in the workspace, but the trait is
+    /// public, so skipping the check means either an `unsafe` contract on it
+    /// — one that cannot even be *stated* in `saule-interpreter`, which
+    /// cannot name `Closure` — or a per-call-site cache holding closures
+    /// alive to keep a pointer compare honest. Neither is a 2% shape.
+    ///
+    /// What *was* worth taking sat next door, in `dispatch_call`: see the
+    /// comment there.
     pub fn from_handle(handle: &Rc<VmFunctionRef>) -> Option<&Closure> {
         handle.as_any().downcast_ref::<Closure>()
     }

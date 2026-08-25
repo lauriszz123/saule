@@ -284,6 +284,9 @@ impl Compiler<'_> {
             targets: vec![0; n_variants],
             default: 0,
         });
+        // The table's entries are instruction indices into *this* function,
+        // so the peephole has to know it is this function's to relocate.
+        self.f.jump_tables.push(table_idx);
         self.emit(Instruction::abx(Op::SWITCH, ta, table_idx), span);
         // The switch always jumps, so nothing falls through to here; the
         // placeholder is replaced once every arm's entry point is known.
