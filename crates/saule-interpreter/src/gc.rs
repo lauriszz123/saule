@@ -52,6 +52,13 @@
 //!   `VmFunction` — is **opaque**, so a reference held through one is counted
 //!   as external and its cycle is kept alive.
 //!
+//! Nor may it assume it can read a node. Collection is triggered from
+//! `on_store`, which is called from `TableObject::set` and
+//! `InstanceObject::set_field` — `&mut self` methods, so the container being
+//! written to is already mutably borrowed by the frame underneath us. Every
+//! borrow in `collect` is therefore a `try_`, and a node it cannot read is
+//! pinned rather than guessed at.
+//!
 //! Under-counting is safe (a live-looking cycle is merely not collected);
 //! over-counting would not be. Every uncertainty here is resolved in the
 //! under-counting direction, which is why cycles routed through a closure or
@@ -91,15 +98,16 @@ impl Live {
         }
     }
 
-    /// Call `f` with every directly-held container child.
+    /// Call `f` with every directly-held container child. Returns `false` if
+    /// the node is mutably borrowed right now and could not be read.
     ///
     /// **Direct only.** Recursing through an opaque variant would risk
     /// attributing one `Rc` to two different parents, which is the one error
     /// that could free live data — see this module's safety argument.
-    fn each_child(&self, mut f: impl FnMut(&Value)) {
+    fn each_child(&self, mut f: impl FnMut(&Value)) -> bool {
         match self {
             Live::Table(r) => {
-                let t = r.borrow();
+                let Ok(t) = r.try_borrow() else { return false };
                 for v in &t.array {
                     f(v);
                 }
@@ -108,30 +116,39 @@ impl Live {
                 }
             }
             Live::Instance(r) => {
-                for v in &r.borrow().fields {
+                let Ok(i) = r.try_borrow() else { return false };
+                for v in &i.fields {
                     f(v);
                 }
             }
         }
+        true
     }
 
     /// Drop everything this node holds, breaking the cycle it sits in.
+    /// Returns `false` if the node is borrowed right now and was left alone.
     ///
     /// Refcounting does the actual reclaiming: once no node in the cycle
     /// points at another, every count reaches zero on its own.
-    fn clear(&self) {
+    fn clear(&self) -> bool {
         match self {
             Live::Table(r) => {
-                let mut t = r.borrow_mut();
+                let Ok(mut t) = r.try_borrow_mut() else {
+                    return false;
+                };
                 t.array.clear();
                 t.map.clear();
             }
             Live::Instance(r) => {
-                for v in &mut r.borrow_mut().fields {
+                let Ok(mut i) = r.try_borrow_mut() else {
+                    return false;
+                };
+                for v in &mut i.fields {
                     *v = Value::Nil;
                 }
             }
         }
+        true
     }
 }
 
@@ -210,15 +227,27 @@ pub fn collect() -> usize {
     }
 
     // How many of each node's references come from another registered node.
+    //
+    // A node can be *mutably borrowed* while we run: `on_store` is called
+    // from inside `TableObject::set` and `InstanceObject::set_field`, both
+    // `&mut self`, so the container being written to is borrowed by the
+    // frame that triggered this collection. Such a node is unreadable here,
+    // and unreadable resolves in the under-counting direction like every
+    // other uncertainty: its children go uncounted, so each of them keeps
+    // the reference *from* it as apparent external evidence of life, and
+    // the node itself is pinned as a root below — code holding a `&mut` to
+    // it is as live as a reference gets.
     let mut internal = vec![0usize; live.len()];
-    for node in &live {
-        node.each_child(|v| {
+    let mut pinned = vec![false; live.len()];
+    for (i, node) in live.iter().enumerate() {
+        let read = node.each_child(|v| {
             if let Some(addr) = container_addr(v)
                 && let Some(&idx) = seen.get(&addr)
             {
                 internal[idx] += 1;
             }
         });
+        pinned[i] = !read;
     }
 
     // A node with a reference from outside the registry is a root: the stack,
@@ -227,7 +256,7 @@ pub fn collect() -> usize {
     let mut reachable = vec![false; live.len()];
     let mut stack: Vec<usize> = Vec::new();
     for (i, node) in live.iter().enumerate() {
-        if node.strong_count().saturating_sub(1) > internal[i] {
+        if pinned[i] || node.strong_count().saturating_sub(1) > internal[i] {
             reachable[i] = true;
             stack.push(i);
         }
@@ -248,11 +277,19 @@ pub fn collect() -> usize {
     // What is left is cyclic garbage. Clearing contents rather than freeing
     // directly is what keeps this sound: refcounting still owns the actual
     // deallocation, and anything we were wrong about merely survives.
+    //
+    // A node can be readable but still *shared*-borrowed by a live frame, in
+    // which case there is nothing to write through. It stays registered and
+    // is reconsidered by the next collection, once that frame has returned.
     let mut cleared = 0;
+    let mut retain = reachable;
     for (i, node) in live.iter().enumerate() {
-        if !reachable[i] {
-            node.clear();
-            cleared += 1;
+        if !retain[i] {
+            if node.clear() {
+                cleared += 1;
+            } else {
+                retain[i] = true;
+            }
         }
     }
 
@@ -262,7 +299,7 @@ pub fn collect() -> usize {
     let survivors: Vec<Node> = keep
         .into_iter()
         .enumerate()
-        .filter(|(i, _)| reachable[*i])
+        .filter(|(i, _)| retain[*i])
         .map(|(_, n)| n)
         .collect();
     // Scale the next threshold to what survived, so a program with a large
@@ -398,5 +435,54 @@ mod tests {
         // A real cycle, but one this collector declines to reason about.
         assert_eq!(collect(), 0, "opaque payloads are treated as external");
         assert_eq!(Rc::strong_count(&t), 2);
+    }
+
+    /// The shape that actually panicked: `TableObject::set` takes `&mut self`,
+    /// so the table being written to is mutably borrowed when the store that
+    /// exhausts the budget calls in here. Reading it is impossible; guessing
+    /// at it would be wrong. It is pinned, and the rest still collects.
+    #[test]
+    fn collects_while_a_node_is_mutably_borrowed() {
+        reset();
+        let garbage = {
+            let g = table();
+            put(&g, "self", Value::Table(Rc::clone(&g)));
+            Rc::downgrade(&g)
+        };
+
+        let host = table();
+        put(&host, "keep", Value::Int(1));
+        // Register `host` the way a real store would, then collect from
+        // underneath a live `&mut` to it — exactly what `set` does.
+        crate::gc::on_store(&Value::Table(Rc::clone(&host)));
+        let cleared = {
+            let mut guard = host.borrow_mut();
+            let n = collect();
+            guard.array.push(Value::Int(2));
+            n
+        };
+
+        assert_eq!(cleared, 1, "the unrelated cycle is still collected");
+        assert!(garbage.upgrade().is_none(), "and freed");
+        assert_eq!(host.borrow().array.len(), 1, "the pinned node is untouched");
+        assert!(!host.borrow().map.is_empty(), "and was not cleared");
+    }
+
+    /// A node that is only *shared*-borrowed reads fine but cannot be written
+    /// through, so clearing it is deferred instead of panicking. The leaked
+    /// guard is how the test holds a borrow without also holding the `Rc`
+    /// that would make the node a root for the ordinary reason.
+    #[test]
+    fn defers_a_node_that_is_shared_borrowed() {
+        reset();
+        let t = table();
+        put(&t, "self", Value::Table(Rc::clone(&t)));
+        let w = Rc::downgrade(&t);
+        std::mem::forget(t.borrow());
+        drop(t);
+
+        assert_eq!(collect(), 0, "cannot write through a live shared borrow");
+        let alive = w.upgrade().expect("left intact rather than half-cleared");
+        assert!(!alive.borrow().map.is_empty());
     }
 }

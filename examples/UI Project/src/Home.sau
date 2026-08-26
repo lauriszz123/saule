@@ -59,9 +59,9 @@ export class HomeScreen extends View
 		return Screen(toolbar: Toolbar(title: "Saule UIKit")) do
 			VStack(alignment: StackAlignment.Fill, sizing: StackSize.Fit, spacing: 22.0) do
 				VStack(alignment: StackAlignment.Center, sizing: StackSize.Fit, spacing: 6.0) do
-					Text("Three screens").font(28.0).foregroundStyle(theme.text)
+					Text("Three screens").font(32.0).foregroundStyle(theme.text)
 
-					Text("Each one opens as a route. Escape or the back arrow returns here.").font(13.0).foregroundStyle(
+					Text("Each one opens as a route. Escape or the back arrow returns here.").font(18.0).foregroundStyle(
 						theme.textMuted
 					)
 				end
