@@ -18,8 +18,8 @@ hero:
       link: /saule/play/
       icon: rocket
       variant: secondary
-    - text: GitHub
-      link: https://github.com/lauriszz123/saule
+    - text: GitLab
+      link: https://gitlab.com/lauriszz123/saule
       icon: external
       variant: minimal
 ---
@@ -190,10 +190,13 @@ local lengths: table<integer> = map<string, integer>({"a", "bb", "ccc"}, s => #s
 ## Install
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule
-cargo build --release -p saule-cli -p saule-lsp
-./scripts/install_path.sh
+curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
+```
+
+On Windows:
+
+```powershell
+irm https://lauriszz123.github.io/saule/install.ps1 | iex
 ```
 
 Then write a file and run it:

@@ -1,0 +1,162 @@
+# The gate on the Rust side of the repo — the port of
+# `.github/workflows/ci.yml`. Same reasoning as there: deliberately one
+# platform. The release pipeline builds all six triples, and that is where a
+# platform-specific break shows up; running the full matrix on every push
+# would cost minutes to catch almost nothing.
+
+test:
+  stage: test
+  image: rust:1-bookworm
+
+  # `interruptible` is GitLab's `cancel-in-progress`. It only takes effect when
+  # the project has "auto-cancel redundant pipelines" enabled (Settings → CI/CD
+  # → General pipelines), which is the default — a force-push then stops the
+  # previous run rather than leaving it burning a runner.
+  interruptible: true
+  rules:
+    # Tag pipelines are release pipelines. Re-running the suite there would
+    # test a commit that already passed on its way into main.
+    - if: $CI_COMMIT_TAG
+      when: never
+    - if: $RELEASE_DRY_RUN == "true"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    # Cargo's caches must sit inside the project directory for `cache:` below
+    # to reach them; by default they land in ~/.cargo, outside the workspace,
+    # and nothing is preserved between jobs. Scoped to this job rather than
+    # set globally: on the self-hosted macOS and Windows runners ~/.cargo is
+    # the real rustup install and should be left alone.
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  cache:
+    # Keyed on the lockfile: dependencies only change when it does, and a
+    # stale-but-valid cache is worse than a cheap miss.
+    key:
+      files:
+        - Cargo.lock
+    paths:
+      - .cargo/registry/index
+      - .cargo/registry/cache
+      - .cargo/git/db
+      - target/
+  before_script:
+    - rustup component add rustfmt clippy
+    # `run_tests.sh` and the fixtures shell out to these; the rust image is
+    # slim enough not to carry them.
+    - apt-get update && apt-get install -y --no-install-recommends git
+  script:
+    # Both lint steps are blocking. They were advisory while the repo carried
+    # pre-existing drift (~190 rustfmt hunks and a handful of clippy
+    # warnings); that backlog has since been cleared, so the gates are live
+    # and the tree is expected to stay clean. Run `cargo fmt --all` before
+    # pushing.
+    - cargo fmt --all --check
+    # `saule-engine-lib` is excluded deliberately. It is an *example* native
+    # package — a minifb/arboard graphics demo — and the release pipeline
+    # doesn't build it either (`-p saule-cli -p saule-lsp`). Gating the
+    # toolchain on whether a windowing library links on a headless runner
+    # would add a failure mode without protecting anything that ships.
+    - cargo clippy --workspace --all-targets --exclude saule-engine-lib -- -D warnings
+    - cargo test --workspace --locked --exclude saule-engine-lib
+
+    # The `.sau` fixtures under tests/ are the language's real regression
+    # suite and are not reachable from `cargo test`.
+    - cargo build --locked -p saule-cli
+
+    # Since Phase 4 a bare run uses the bytecode VM, so the first of these
+    # means something different than it used to and the other three are no
+    # longer optional. Without them CI would gate on one engine and stop
+    # noticing the other, which is the one thing the differential design
+    # cannot survive: the tree-walker is the oracle.
+    - ./run_tests.sh
+    - SAULE_ENGINE=interp ./run_tests.sh
+    # Not redundant with the first: a fallback is silent under the default
+    # and reported here, and this is the run whose notes the harness counts.
+    - SAULE_ENGINE=vm ./run_tests.sh
+    # The one that catches wrong *values*. Exit status cannot see a VM bug
+    # that prints the wrong thing and still exits 0.
+    - SAULE_DIFF=1 ./run_tests.sh
+    # Multi-module programs with imports and file IO, which is a different
+    # question from the single-file fixtures above and the one that has
+    # actually caught divergences. Through `bash` because this one is not
+    # chmod +x in git, unlike run_tests.sh.
+    - bash run_examples_diff.sh
+
+    # Three places report the version and they are all fed by the same crate;
+    # this catches a wiring mistake that no unit test would, because each
+    # surface formats the value independently.
+    - |
+      set -euo pipefail
+      cli="$(./target/debug/saule --version)"
+      lsp="$(cargo run -q --locked -p saule-lsp -- --version)"
+      echo "cli: $cli"
+      echo "lsp: $lsp"
+      if [ "${cli#saule }" != "${lsp#saule-lsp }" ]; then
+        echo "error: saule and saule-lsp report different versions" >&2
+        exit 1
+      fi
+
+# The port of `.github/workflows/check-www.yml`. That workflow still exists on
+# the GitHub side, because that is where the site is built and served from —
+# but it only runs *after* a merge reaches GitHub through the push mirror, by
+# which point a stale generated page is already on main. Running it here too is
+# what makes it a gate on merge requests, where the fix is cheap.
+#
+# Two guarantees, both easy to break by editing prose:
+#
+#   1. Every Saule sample the website shows by hand actually compiles and runs
+#      — checked against the real compiler built from this commit.
+#   2. The generated pages under www/src/content/docs are in sync with the
+#      README.md / DOCS.md / examples they come from, so a committed page can
+#      never contradict its source.
+check-www:
+  stage: test
+  image: rust:1-bookworm
+  interruptible: true
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: never
+    - if: $RELEASE_DRY_RUN == "true"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  cache:
+    key:
+      files:
+        - Cargo.lock
+      prefix: www
+    paths:
+      - .cargo/registry/index
+      - .cargo/registry/cache
+      - .cargo/git/db
+      - target/
+  before_script:
+    # The rust image has no Node. Nodesource rather than Debian's package
+    # because bookworm ships Node 18 and the site is built on 22.
+    - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git
+    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    - apt-get install -y --no-install-recommends nodejs
+    - node --version
+  script:
+    # check-samples runs every hand-written sample through the real compiler,
+    # so the compiler has to exist first.
+    - cargo build --release --locked -p saule-cli
+    - cd www
+    - npm ci
+    - npm run check-samples
+    - npm run sync-docs
+    # `git status --porcelain`, not `git diff`: a new `##` section in the
+    # README generates a page that does not exist yet, and an *untracked* file
+    # is invisible to `git diff`. That would let a new documentation page pass
+    # CI and then be missing from the repository.
+    - |
+      changed="$(git status --porcelain -- src/content/docs)"
+      if [ -n "$changed" ]; then
+        echo "error: generated docs are stale. Run 'npm run sync-docs' in www/ and commit the result." >&2
+        echo "$changed" >&2
+        exit 1
+      fi
+    - npm run build

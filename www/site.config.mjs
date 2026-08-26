@@ -7,7 +7,19 @@
  */
 export const site = 'https://lauriszz123.github.io';
 export const base = '/saule';
-export const repo = 'https://github.com/lauriszz123/saule';
+
+/**
+ * Source of truth for the code. The site is still *hosted* on GitHub Pages —
+ * that is what keeps the installer URL stable — but development, CI and
+ * releases all live on GitLab, so every link out of the docs points there.
+ */
+export const repo = 'https://gitlab.com/lauriszz123/saule';
+
+/**
+ * Where a "edit this page" link goes. GitLab puts `/-/` in front of the verb,
+ * so this cannot be derived from `repo` with the same suffix GitHub uses.
+ */
+export const editBase = `${repo}/-/edit/main/www/`;
 
 /** Join `base` with a site-absolute path, avoiding a doubled slash. */
 export function withBase(path) {
