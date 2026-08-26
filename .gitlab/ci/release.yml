@@ -1,0 +1,399 @@
+# Building the toolchain for every supported platform and publishing it, which
+# is what `install.sh` downloads from. The port of
+# `.github/workflows/release.yml`, restructured around two GitLab facts:
+#
+#   * A tag pushed by CI *does* start a new pipeline here (Actions suppresses
+#     the equivalent). So `cut-release` only creates the tag and stops; the
+#     pipeline that tag starts is the one that builds and publishes. Two entry
+#     points, one publisher, no race.
+#
+#   * There are no hosted macOS or Windows runners on the free tier, so those
+#     three archives are built on self-hosted runners tagged `saule-macos` and
+#     `saule-windows`. Everything Linux — including the aarch64 cross build —
+#     stays on GitLab's hosted runners and needs no machine of yours.
+#     Registering the two is GITLAB.md.
+
+# ---------------------------------------------------------------------------
+# Entry point 1 — cut a release from `main`.
+# ---------------------------------------------------------------------------
+# Run it from CI/CD → Pipelines → Run pipeline on `main`, then press play on
+# this job. The version is generated (`scripts/next-version.sh` reads the
+# existing tags and takes the next build number), so nobody types a version
+# number and nobody can fat-finger one or reuse one.
+#
+# Entry point 2 is pushing a `v26.7` tag by hand, which skips this job
+# entirely. That is the escape hatch for re-cutting a release whose build
+# failed for an infrastructure reason.
+cut-release:
+  stage: tag
+  image: alpine:3.20
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $RELEASE_DRY_RUN != "true"
+      when: manual
+      # A pipeline whose only job is manual would otherwise sit "blocked" and
+      # report the branch as failing.
+      allow_failure: true
+  # Two releases cut at once would race for the same build number and produce
+  # two tags claiming one version. Queue them instead.
+  resource_group: release
+  before_script:
+    - apk add --no-cache bash git curl
+  script:
+    - |
+      set -euo pipefail
+
+      if [ -n "${RELEASE_VERSION:-}" ]; then
+        version="${RELEASE_VERSION#v}"
+      else
+        version="$(bash scripts/next-version.sh)"
+      fi
+
+      # One shape only. `26.7` — no patch component, no pre-release suffix, no
+      # `v` left in the version itself.
+      if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+$'; then
+        echo "error: \`$version\` is not a <year>.<build> version (e.g. 26.7)" >&2
+        exit 1
+      fi
+
+      # A release takes its year from the version being built, but *dev* builds
+      # take theirs from Cargo.toml. Letting the two disagree would mean that
+      # after releasing 27.1, every local build still called itself
+      # 26.something. Caught here, where the fix is one line.
+      year_of_record="$(bash scripts/next-version.sh --year)"
+      if [ "${version%%.*}" != "$year_of_record" ]; then
+        echo "error: $version disagrees with the year in Cargo.toml ($year_of_record)." >&2
+        echo "       Set [workspace.package] version to ${version%%.*}.0.0 first." >&2
+        exit 1
+      fi
+
+      tag="v$version"
+      if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+        echo "error: tag $tag already exists. A published version is never rebuilt —" >&2
+        echo "       cut the next build number instead." >&2
+        exit 1
+      fi
+
+      # $RELEASE_TOKEN is a Project Access Token with the `api` scope and the
+      # Maintainer role — see GITLAB.md. $CI_JOB_TOKEN deliberately cannot
+      # create tags, and it is worth keeping it that way.
+      : "${RELEASE_TOKEN:?set RELEASE_TOKEN (masked, protected) in CI/CD settings}"
+
+      echo "Cutting Saule $version (tag $tag) from $CI_COMMIT_SHA"
+      curl --fail --silent --show-error \
+        --request POST \
+        --header "PRIVATE-TOKEN: $RELEASE_TOKEN" \
+        --data-urlencode "tag_name=$tag" \
+        --data-urlencode "ref=$CI_COMMIT_SHA" \
+        --data-urlencode "message=Saule $version" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags" > /dev/null
+
+      echo "Tagged. The release pipeline for $tag is now starting."
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+
+.build:
+  stage: build
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]/
+    # A dry run proves the matrix builds; it deliberately publishes nothing.
+    - if: $RELEASE_DRY_RUN == "true"
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+
+# The shared body of every non-Windows build. Not a job of its own, and not
+# something the two jobs below `extends`: that would drag this template's own
+# keys along, matrix included. `!reference` pulls in the script and nothing
+# else, which is the whole point.
+.build-unix:
+  script:
+    - |
+      set -eu
+
+      # The one input that decides what the binaries report. Everything else —
+      # `saule --version`, `Saule.version`, the LSP handshake — reads it back
+      # out of the binary.
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        SAULE_VERSION="${CI_COMMIT_TAG#v}"
+      else
+        SAULE_VERSION="$(bash scripts/next-version.sh)"
+      fi
+      export SAULE_VERSION
+      echo "Building Saule $SAULE_VERSION for $TRIPLE"
+
+      cargo build --release --locked --target "$TRIPLE" -p saule-cli -p saule-lsp
+
+      # Every archive is executed here rather than shipped unverified: natively
+      # where the runner matches, under Rosetta for the x86_64 Apple build, and
+      # under qemu-user for the aarch64 Linux cross build. A dev-marked or
+      # misnumbered binary in a release archive is the one failure that would
+      # be invisible until a user reported it.
+      bin="target/$TRIPLE/release/saule"
+      got="$(${EMULATOR:-} "$bin" --version)"
+      echo "$bin --version -> $got"
+      if [ "$got" != "saule $SAULE_VERSION" ]; then
+        echo "error: expected \`saule $SAULE_VERSION\`, got \`$got\`" >&2
+        exit 1
+      fi
+
+      name="saule-$SAULE_VERSION-$TRIPLE"
+      staging="dist/$name"
+      mkdir -p "$staging"
+      cp "target/$TRIPLE/release/saule" "target/$TRIPLE/release/saule-lsp" "$staging/"
+      cp README.md "$staging/"
+      # Written as an `if` rather than `[ -f LICENSE ] && cp …`: under `set -e`
+      # a failing `&&` chain in tail position aborts the job, so the terse
+      # spelling would break every build until LICENSE exists.
+      if [ -f LICENSE ]; then
+        cp LICENSE "$staging/"
+      else
+        echo "warning: no LICENSE file. Archives are not redistributable without one." >&2
+      fi
+
+      tar czf "dist/$name.tar.gz" -C dist "$name"
+      rm -rf "$staging"
+      ls -la dist
+
+# The three Linux triples, all on GitLab's hosted amd64 runners.
+#
+# aarch64 is cross-compiled rather than built natively: hosted arm64 runners
+# are a paid tier, and `saule-cli`/`saule-lsp` are pure Rust over libc — the
+# SDL and minifb dependencies in Cargo.lock belong to `saule-engine-lib`,
+# which is an example package and is not built here. So the cross build needs
+# a linker and nothing else. It is still *executed* before being shipped, under
+# qemu-user, so it gets the same version check as every other archive.
+build:linux:
+  extends: .build
+  image: rust:1-bookworm
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  cache:
+    key:
+      files:
+        - Cargo.lock
+      prefix: release-$TRIPLE
+    paths:
+      - .cargo/registry/index
+      - .cargo/registry/cache
+      - .cargo/git/db
+    # Dependency sources only — `target/` is deliberately not cached here. The
+    # release profile is fat LTO with one codegen unit, so a cached artifact
+    # from a different toolchain patch is a plausible way to ship a subtly
+    # different binary than the one that was tested. A release rebuilds clean.
+  parallel:
+    matrix:
+      - TRIPLE: x86_64-unknown-linux-gnu
+      # Statically linked: the one build that runs on distros whose glibc is
+      # older than the builder's, and inside Alpine-based containers.
+      - TRIPLE: x86_64-unknown-linux-musl
+        APT: musl-tools
+      - TRIPLE: aarch64-unknown-linux-gnu
+        APT: gcc-aarch64-linux-gnu qemu-user
+        LINKER: aarch64-linux-gnu-gcc
+        EMULATOR: qemu-aarch64
+  before_script:
+    - |
+      set -eu
+      if [ -n "${APT:-}" ]; then
+        apt-get update
+        # Word-split on purpose: $APT is a list of packages.
+        # shellcheck disable=SC2086
+        apt-get install -y --no-install-recommends $APT
+      fi
+      rustup target add "$TRIPLE"
+      # Cargo wants the linker under the triple upper-cased with underscores.
+      if [ -n "${LINKER:-}" ]; then
+        var="CARGO_TARGET_$(printf '%s' "$TRIPLE" | tr 'a-z-' 'A-Z_')_LINKER"
+        export "$var=$LINKER"
+        echo "$var=$LINKER"
+      fi
+  script:
+    - !reference [.build-unix, script]
+
+# macOS has no free hosted runner, so both Apple triples are pinned to a
+# self-hosted runner you register on your own Mac. An Apple Silicon machine
+# builds the x86_64 archive too — the Rust toolchain cross-compiles between the
+# two Apple targets out of the box, and the result still runs locally under
+# Rosetta, so the version check below is real on both.
+build:macos:
+  extends: .build
+  tags: [$RUNNER_MACOS]
+  parallel:
+    matrix:
+      - TRIPLE: aarch64-apple-darwin
+      - TRIPLE: x86_64-apple-darwin
+  before_script:
+    - rustup target add "$TRIPLE"
+  script:
+    - !reference [.build-unix, script]
+
+build:windows:
+  extends: .build
+  tags: [$RUNNER_WINDOWS]
+  variables:
+    TRIPLE: x86_64-pc-windows-msvc
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+
+      if ($env:CI_COMMIT_TAG) {
+        $version = $env:CI_COMMIT_TAG -replace '^v', ''
+      } else {
+        $version = (bash scripts/next-version.sh).Trim()
+      }
+      $env:SAULE_VERSION = $version
+      Write-Host "Building Saule $version for $env:TRIPLE"
+
+      rustup target add $env:TRIPLE
+      cargo build --release --locked --target $env:TRIPLE -p saule-cli -p saule-lsp
+      if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+
+      $bin = "target/$env:TRIPLE/release/saule.exe"
+      $got = & $bin --version
+      Write-Host "$bin --version -> $got"
+      if ($got -ne "saule $version") { throw "expected 'saule $version', got '$got'" }
+
+      $name = "saule-$version-$env:TRIPLE"
+      $staging = "dist/$name"
+      New-Item -ItemType Directory -Force -Path $staging | Out-Null
+      Copy-Item "target/$env:TRIPLE/release/saule.exe","target/$env:TRIPLE/release/saule-lsp.exe" $staging
+      Copy-Item README.md $staging
+      if (Test-Path LICENSE) {
+        Copy-Item LICENSE $staging
+      } else {
+        Write-Warning "no LICENSE file. Archives are not redistributable without one."
+      }
+
+      # Compress-Archive rather than 7z: it ships with PowerShell 5+, so the
+      # runner needs nothing installed beyond rustup, git and MSVC.
+      Compress-Archive -Path $staging -DestinationPath "dist/$name.zip" -Force
+      Remove-Item -Recurse -Force $staging
+      Get-ChildItem dist
+
+# ---------------------------------------------------------------------------
+# Publish
+# ---------------------------------------------------------------------------
+
+# Archives go to the project's generic package registry rather than being
+# attached to the release directly: GitLab release assets are *links*, and the
+# registry is the thing they link to. On a public project these URLs are
+# anonymously downloadable, which is what lets `install.sh` work without a
+# token.
+publish:packages:
+  stage: publish
+  image: alpine:3.20
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]/
+  before_script:
+    - apk add --no-cache curl coreutils
+  script:
+    - |
+      set -eu
+      VERSION="${CI_COMMIT_TAG#v}"
+      cd dist
+
+      # Checked before anything else touches the archives: a partial set is
+      # worse than no release, because the installer would 404 for whichever
+      # platform is missing and only for the users on it. Doing this first is
+      # what makes the failure say so, rather than surfacing as a sha256sum
+      # error about a glob that matched nothing.
+      count="$(ls saule-*.tar.gz saule-*.zip 2>/dev/null | wc -l | tr -d " ")"
+      if [ "$count" -ne 6 ]; then
+        echo "error: expected 6 archives, found $count. Refusing to publish a partial set." >&2
+        ls -la
+        exit 1
+      fi
+
+      # `install.sh` refuses to install anything it cannot verify against this
+      # file, so it is a required asset rather than a nicety.
+      #
+      # The archives are listed explicitly rather than with `./*`: on a re-run
+      # of this job a stale SHA256SUMS would otherwise end up checksumming
+      # itself.
+      sha256sum saule-*.tar.gz saule-*.zip > SHA256SUMS
+      cat SHA256SUMS
+
+      for f in saule-*.tar.gz saule-*.zip SHA256SUMS; do
+        echo "uploading $f"
+        curl --fail --silent --show-error \
+          --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          --upload-file "$f" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PACKAGE_NAME}/${VERSION}/${f}"
+      done
+
+      cd ..
+      # Handed to the release job below, which cannot do shell string
+      # manipulation inside the `release:` keyword.
+      echo "VERSION=$VERSION" > version.env
+  artifacts:
+    paths:
+      - dist/SHA256SUMS
+    reports:
+      dotenv: version.env
+
+publish:release:
+  stage: publish
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: publish:packages
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]/
+  script:
+    - echo "Publishing Saule $VERSION"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: Saule $VERSION
+    description: |
+      ## Install
+
+      ```sh
+      curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
+      ```
+
+      ```powershell
+      irm https://lauriszz123.github.io/saule/install.ps1 | iex
+      ```
+
+      Then `saule --version` should print `saule $VERSION`.
+
+      ### Installing by hand
+
+      Download the archive for your platform below, verify it against
+      `SHA256SUMS`, and put **both** binaries somewhere on your `PATH`:
+
+      ```sh
+      shasum -a 256 -c SHA256SUMS --ignore-missing
+      tar xzf saule-$VERSION-<triple>.tar.gz
+      mkdir -p ~/.saule/bin
+      cp saule-$VERSION-<triple>/saule saule-$VERSION-<triple>/saule-lsp ~/.saule/bin/
+      ```
+
+      Then add `~/.saule/bin` to your `PATH`.
+
+      `saule-lsp` is the language server every editor plugin uses; without it
+      on `PATH` you get syntax highlighting and indentation but no
+      diagnostics, hover, or formatting.
+
+      On macOS, if you downloaded the archive in a browser rather than with
+      `curl`, clear the quarantine flag:
+      `xattr -dr com.apple.quarantine ~/.saule/bin`.
+    assets:
+      links:
+        - name: saule-$VERSION-aarch64-apple-darwin.tar.gz
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/saule-$VERSION-aarch64-apple-darwin.tar.gz
+        - name: saule-$VERSION-x86_64-apple-darwin.tar.gz
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/saule-$VERSION-x86_64-apple-darwin.tar.gz
+        - name: saule-$VERSION-x86_64-unknown-linux-gnu.tar.gz
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/saule-$VERSION-x86_64-unknown-linux-gnu.tar.gz
+        - name: saule-$VERSION-aarch64-unknown-linux-gnu.tar.gz
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/saule-$VERSION-aarch64-unknown-linux-gnu.tar.gz
+        - name: saule-$VERSION-x86_64-unknown-linux-musl.tar.gz
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/saule-$VERSION-x86_64-unknown-linux-musl.tar.gz
+        - name: saule-$VERSION-x86_64-pc-windows-msvc.zip
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/saule-$VERSION-x86_64-pc-windows-msvc.zip
+        - name: SHA256SUMS
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$PACKAGE_NAME/$VERSION/SHA256SUMS

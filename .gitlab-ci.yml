@@ -1,0 +1,55 @@
+# Saule's GitLab CI/CD entry point.
+#
+# GitLab has no equivalent of GitHub's several-workflows-per-repo layout: one
+# pipeline definition covers everything, and which jobs actually run is decided
+# by `rules:` rather than by which file they live in. The three concerns are
+# split into includes below purely so each stays readable.
+#
+# Three kinds of pipeline come out of this file:
+#
+#   * **Branch / merge request** — the test stage only. This is the port of
+#     `.github/workflows/ci.yml`.
+#
+#   * **`v26.7` tag** — build every platform, publish the archives to the
+#     package registry, create the GitLab Release. This is what `install.sh`
+#     downloads from.
+#
+#   * **Manual on `main`** — the `cut-release` job, which only creates the
+#     tag. The tag push then starts a release pipeline of the second kind.
+#     Splitting it this way is deliberate: GitHub Actions suppresses pipelines
+#     for events raised by its own token, GitLab does not, so a job that both
+#     tagged *and* published would race with the pipeline its own tag started.
+#     Here the tag is the handoff and there is exactly one publisher.
+
+stages:
+  - test
+  - tag
+  - build
+  - publish
+
+variables:
+  CARGO_TERM_COLOR: always
+  # The published name of the package inside the project's generic package
+  # registry. `install.sh` builds its download URLs from this, so the two move
+  # together or not at all.
+  PACKAGE_NAME: saule
+  # Fetching the full history is not the default here as it is in Actions, and
+  # `saule-version`'s build script plus `scripts/next-version.sh` both read
+  # tags. Cheaper than `fetch-depth: 0` and enough for both.
+  GIT_DEPTH: "0"
+
+  # ---------------------------------------------------------------------
+  # Runners.
+  #
+  # Linux — including the aarch64 build, which is cross-compiled — runs on
+  # GitLab's hosted shared runners, so those jobs carry no tag and need no
+  # machine of yours. macOS and Windows have no free hosted runner, so both
+  # are pinned to self-hosted runners you register with these tags; see
+  # GITLAB.md.
+  # ---------------------------------------------------------------------
+  RUNNER_MACOS: saule-macos
+  RUNNER_WINDOWS: saule-windows
+
+include:
+  - local: .gitlab/ci/test.yml
+  - local: .gitlab/ci/release.yml

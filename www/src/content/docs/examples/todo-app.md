@@ -9,12 +9,12 @@ sidebar:
 
 A complete command-line application: argument parsing with `Os.args()`, JSON persistence through the `json` library declared in `dependencies:`, `match` over subcommands, and rendering split into its own module.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/todo-app)
+[Browse this example on GitLab](https://gitlab.com/lauriszz123/saule/-/tree/main/examples/todo-app)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
+git clone https://gitlab.com/lauriszz123/saule.git
 cd saule/examples/todo-app
 saule run -- add "write some Saule"
 saule run -- list
