@@ -6,13 +6,32 @@ use crate::event::Event;
 use crate::keyboard::{self, KeyState};
 use minifb::{CursorStyle, Key, MouseMode};
 
+/// How long after a click a second one still counts as a double-click, and how
+/// far the pointer may drift in between.
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+const DOUBLE_CLICK_SLOP: f64 = 4.0;
+
 impl Engine {
-    /// Cursor position in window pixels, clamped to the window bounds.
+    /// Cursor position in framebuffer pixels, clamped to the window bounds.
+    ///
+    /// minifb reports this in the same units as `get_size`, which on macOS is
+    /// points — so it is scaled to match the framebuffer, or every hit test
+    /// would be off by the backing scale on a Retina display.
     pub(crate) fn mouse_pos(&self) -> (f64, f64) {
+        let backing = self.backing_scale();
         self.window
             .get_mouse_pos(MouseMode::Clamp)
-            .map(|(x, y)| (x as f64, y as f64))
+            .map(|(x, y)| (x as f64 * backing, y as f64 * backing))
             .unwrap_or((0.0, 0.0))
+    }
+
+    /// Whether the pointer is over the window right now.
+    ///
+    /// `Discard` is the mode that answers this: it reports `None` rather than
+    /// clamping when the pointer is outside, which is what separates "at the
+    /// edge" from "gone".
+    pub(crate) fn pointer_over_window(&self) -> bool {
+        self.window.get_mouse_pos(MouseMode::Discard).is_some()
     }
 
     /// This frame's mouse state: held buttons, edges, and wheel movement.
@@ -113,11 +132,26 @@ impl Engine {
             self.events.push(Event::FocusChanged(focused));
         }
 
-        if !self.is_open() {
+        // Delivered once, on the transition. Re-reporting it every poll made
+        // any handler that was not idempotent fire for as long as the loop
+        // took to notice.
+        if !self.is_open() && !self.close_reported {
+            self.close_reported = true;
             self.events.push(Event::Closed);
         }
 
         let (x, y) = self.mouse_pos();
+
+        let inside = self.pointer_over_window();
+        if inside != self.pointer_inside {
+            self.pointer_inside = inside;
+            self.events.push(if inside {
+                Event::MouseEntered { x, y }
+            } else {
+                Event::MouseLeft
+            });
+        }
+
         match self.last_mouse {
             Some((px, py)) if px != x || py != y => {
                 self.events.push(Event::MouseMoved {
@@ -141,6 +175,26 @@ impl Engine {
         for button in 1..=3 {
             if self.mouse.was_pressed(button) {
                 self.events.push(Event::MousePressed { x, y, button });
+
+                // A second press close in time *and* place is a double-click.
+                // Deriving it here rather than in every app is the point: the
+                // timing threshold should be one number, not one per widget.
+                let slot = (button - 1) as usize;
+                let now = Instant::now();
+                let double = self.last_click[slot].is_some_and(|(at, px, py)| {
+                    now.duration_since(at) <= DOUBLE_CLICK_WINDOW
+                        && (x - px).abs() <= DOUBLE_CLICK_SLOP
+                        && (y - py).abs() <= DOUBLE_CLICK_SLOP
+                });
+
+                if double {
+                    self.events.push(Event::MouseDoubleClicked { x, y, button });
+                    // Consumed, so a third click starts a fresh pair rather
+                    // than reporting a second double.
+                    self.last_click[slot] = None;
+                } else {
+                    self.last_click[slot] = Some((now, x, y));
+                }
             }
             if self.mouse.was_released(button) {
                 self.events.push(Event::MouseReleased { x, y, button });

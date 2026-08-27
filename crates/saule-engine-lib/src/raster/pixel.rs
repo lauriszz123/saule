@@ -404,6 +404,9 @@ pub struct Paint {
     pub antialias: bool,
     /// Bilinear rather than nearest sampling for blits.
     pub linear_filter: bool,
+    /// Colour source for fills. `None` is the flat [`Paint::color`]; a
+    /// gradient replaces it per pixel and gives up the solid-run fast paths.
+    pub gradient: Option<Gradient>,
 }
 
 impl Paint {
@@ -444,3 +447,168 @@ impl Paint {
 // ---------------------------------------------------------------------------
 // Polygon filling
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Gradients
+// ---------------------------------------------------------------------------
+
+/// The most colour stops a gradient can carry.
+///
+/// Fixed rather than growable so [`Paint`] stays `Copy` and a draw call still
+/// costs one memcpy instead of a heap allocation. Eight covers every gradient
+/// a UI actually draws; more than that is a texture.
+pub const MAX_STOPS: usize = 8;
+
+/// One colour stop: a position in `0.0..=1.0` and the colour there.
+#[derive(Clone, Copy, Debug)]
+pub struct Stop {
+    pub at: f32,
+    pub color: [f32; 4],
+}
+
+impl Default for Stop {
+    fn default() -> Self {
+        Stop {
+            at: 0.0,
+            color: [0.0, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+/// Where a gradient's parameter runs from and to, in device coordinates.
+#[derive(Clone, Copy, Debug)]
+pub enum GradientKind {
+    /// `t` is the projection onto the axis from `(x0, y0)` to `(x1, y1)`.
+    Linear { x0: f64, y0: f64, x1: f64, y1: f64 },
+    /// `t` is the distance from `(cx, cy)` over `radius`.
+    Radial { cx: f64, cy: f64, radius: f64 },
+}
+
+/// A colour ramp used as a fill source in place of a flat colour.
+///
+/// Geometry is device-space: [`crate::render::Renderer::set_gradient`] bakes
+/// the current transform in when the gradient is set, so a gradient stays put
+/// under a later `translate` exactly the way a scissor does.
+#[derive(Clone, Copy, Debug)]
+pub struct Gradient {
+    pub kind: GradientKind,
+    stops: [Stop; MAX_STOPS],
+    count: u8,
+}
+
+impl Gradient {
+    /// Build a gradient from its stops, which are sorted and clamped here so
+    /// the sampler can assume they are ordered.
+    pub fn new(kind: GradientKind, stops: &[Stop]) -> Result<Self, String> {
+        if stops.len() < 2 {
+            return Err(format!(
+                "a gradient needs at least 2 colour stops, got {}",
+                stops.len()
+            ));
+        }
+        if stops.len() > MAX_STOPS {
+            return Err(format!(
+                "a gradient may have at most {MAX_STOPS} colour stops, got {}",
+                stops.len()
+            ));
+        }
+
+        let mut buf = [Stop::default(); MAX_STOPS];
+        for (slot, stop) in buf.iter_mut().zip(stops) {
+            *slot = Stop {
+                at: stop.at.clamp(0.0, 1.0),
+                color: stop.color,
+            };
+        }
+        let count = stops.len();
+        buf[..count].sort_by(|a, b| a.at.partial_cmp(&b.at).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok(Gradient {
+            kind,
+            stops: buf,
+            count: count as u8,
+        })
+    }
+
+    /// The same gradient with `t` mapped through a transform.
+    pub fn transformed(&self, t: &crate::geom::Transform) -> Gradient {
+        let kind = match self.kind {
+            GradientKind::Linear { x0, y0, x1, y1 } => {
+                let (x0, y0) = t.apply(x0, y0);
+                let (x1, y1) = t.apply(x1, y1);
+                GradientKind::Linear { x0, y0, x1, y1 }
+            }
+            GradientKind::Radial { cx, cy, radius } => {
+                let (cx, cy) = t.apply(cx, cy);
+                GradientKind::Radial {
+                    cx,
+                    cy,
+                    // A non-uniform scale has no single radius; the isotropic
+                    // estimate is the same one curve tessellation uses.
+                    radius: radius * t.mean_scale(),
+                }
+            }
+        };
+        Gradient { kind, ..*self }
+    }
+
+    /// The gradient's parameter at a device point, clamped to `0.0..=1.0`.
+    #[inline]
+    fn parameter(&self, x: f64, y: f64) -> f32 {
+        let t = match self.kind {
+            GradientKind::Linear { x0, y0, x1, y1 } => {
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len2 = dx * dx + dy * dy;
+                if len2 <= 1e-12 {
+                    0.0
+                } else {
+                    ((x - x0) * dx + (y - y0) * dy) / len2
+                }
+            }
+            GradientKind::Radial { cx, cy, radius } => {
+                if radius.abs() <= 1e-12 {
+                    1.0
+                } else {
+                    ((x - cx).hypot(y - cy)) / radius
+                }
+            }
+        };
+        (t as f32).clamp(0.0, 1.0)
+    }
+
+    /// The colour at the centre of device pixel `(px, py)`.
+    #[inline]
+    pub fn sample(&self, px: usize, py: usize) -> [f32; 4] {
+        let t = self.parameter(px as f64 + 0.5, py as f64 + 0.5);
+        let stops = &self.stops[..self.count as usize];
+
+        // Before the first stop and after the last, the ramp is flat.
+        if t <= stops[0].at {
+            return stops[0].color;
+        }
+        let last = stops[stops.len() - 1];
+        if t >= last.at {
+            return last.color;
+        }
+
+        for pair in stops.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if t <= b.at {
+                let span = b.at - a.at;
+                let local = if span <= f32::EPSILON {
+                    0.0
+                } else {
+                    (t - a.at) / span
+                };
+                let mut out = [0.0f32; 4];
+                for (channel, (&from, &to)) in
+                    out.iter_mut().zip(a.color.iter().zip(b.color.iter()))
+                {
+                    *channel = from + (to - from) * local;
+                }
+                return out;
+            }
+        }
+        last.color
+    }
+}

@@ -108,3 +108,38 @@ fn window_get_size() -> Result<(i64, i64), String> {
     let (w, h) = state::with(|e| e.size())?;
     Ok((w as i64, h as i64))
 }
+
+/// `Window.setQuitOnEscape(enable)` — whether holding Escape ends the loop.
+///
+/// **Off by default, unlike Love2D.** Escape is how an application dismisses a
+/// modal, closes a menu, or cancels an autocomplete — and when the engine
+/// quits on it, the app has no way to decline. The `Closed` event and the
+/// window's own close button cover the real close; this is here for a game
+/// that genuinely wants the Love2D behaviour.
+#[saule_export(class = "Window", name = "setQuitOnEscape")]
+fn window_set_quit_on_escape(enable: bool) -> Result<(), String> {
+    state::with(|e| e.set_quit_on_escape(enable))
+}
+
+/// `Window.getQuitOnEscape()` — whether Escape currently ends the loop.
+#[saule_export(class = "Window", name = "getQuitOnEscape")]
+fn window_get_quit_on_escape() -> bool {
+    state::with(|e| e.quit_on_escape()).unwrap_or(false)
+}
+
+/// `Window.setTargetFPS(fps)` — cap the loop at `fps` frames per second, or
+/// `0` to run unthrottled.
+///
+/// `Graphics.present` is the only thing pacing a Saule game loop, and the cap
+/// used to be a hardcoded 60 with no way to ask for less — a mostly idle UI on
+/// battery — or more, on a 120 Hz display.
+#[saule_export(class = "Window", name = "setTargetFPS")]
+fn window_set_target_fps(fps: i64) -> Result<(), String> {
+    state::with(|e| e.set_target_fps(fps))?
+}
+
+/// `Window.getTargetFPS()` — the current cap, or `0` when uncapped.
+#[saule_export(class = "Window", name = "getTargetFPS")]
+fn window_get_target_fps() -> Result<i64, String> {
+    state::with(|e| e.target_fps())
+}

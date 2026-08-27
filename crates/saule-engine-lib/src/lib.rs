@@ -31,6 +31,7 @@ mod image;
 mod keyboard;
 mod mouse;
 mod raster;
+mod render;
 mod state;
 mod timer;
 mod window;
@@ -64,18 +65,36 @@ saule_sdk::saule_package! {
 /// Taking the address of each shim here references those members, keeping
 /// their colocated registrations alive. `gen-manifest` calls this before
 /// rendering. It is a no-op at runtime.
+///
+/// This list was maintained by hand and had drifted — Clipboard, the window
+/// chrome methods, `newImage`, `drawFrame` and others were never listed, and
+/// the manifest only came out complete because of how the compiler happened to
+/// partition code into object files. `manifest_matches_the_checked_in_file` in
+/// the tests below is the real guard now: it renders the manifest and compares
+/// it against `engine.toml`, so an export that goes missing here fails the
+/// build rather than silently disappearing from the package.
 #[doc(hidden)]
 pub fn anchor() {
     use std::hint::black_box;
 
-    // Window exports
+    // Window
     black_box(window::saule_export_Window_create as *const ());
+    black_box(window::saule_export_Window_setTitle as *const ());
+    black_box(window::saule_export_Window_getPosition as *const ());
+    black_box(window::saule_export_Window_setPosition as *const ());
+    black_box(window::saule_export_Window_setTopmost as *const ());
+    black_box(window::saule_export_Window_isFocused as *const ());
+    black_box(window::saule_export_Window_getScale as *const ());
     black_box(window::saule_export_Window_isOpen as *const ());
     black_box(window::saule_export_Window_pollEvents as *const ());
     black_box(window::saule_export_Window_close as *const ());
     black_box(window::saule_export_Window_getSize as *const ());
+    black_box(window::saule_export_Window_setQuitOnEscape as *const ());
+    black_box(window::saule_export_Window_getQuitOnEscape as *const ());
+    black_box(window::saule_export_Window_setTargetFPS as *const ());
+    black_box(window::saule_export_Window_getTargetFPS as *const ());
 
-    // Keyboard exports
+    // Keyboard
     black_box(keyboard::saule_export_Keyboard_isDown as *const ());
     black_box(keyboard::saule_export_Keyboard_isAnyDown as *const ());
     black_box(keyboard::saule_export_Keyboard_getKeysDown as *const ());
@@ -84,15 +103,15 @@ pub fn anchor() {
     black_box(keyboard::saule_export_Keyboard_setTextInput as *const ());
     black_box(keyboard::saule_export_Keyboard_hasTextInput as *const ());
 
-    // Mouse exports
-    black_box(mouse::saule_export_Mouse_isDown as *const ());
+    // Mouse
     black_box(mouse::saule_export_Mouse_getPos as *const ());
+    black_box(mouse::saule_export_Mouse_isDown as *const ());
+    black_box(mouse::saule_export_Mouse_setCursor as *const ());
+    black_box(mouse::saule_export_Mouse_setVisible as *const ());
 
-    // Graphics — frame lifecycle
+    // Graphics
     black_box(graphics::saule_export_Graphics_clear as *const ());
     black_box(graphics::saule_export_Graphics_present as *const ());
-
-    // Graphics — shapes
     black_box(graphics::saule_export_Graphics_rectangle as *const ());
     black_box(graphics::saule_export_Graphics_circle as *const ());
     black_box(graphics::saule_export_Graphics_ellipse as *const ());
@@ -102,8 +121,6 @@ pub fn anchor() {
     black_box(graphics::saule_export_Graphics_polyline as *const ());
     black_box(graphics::saule_export_Graphics_points as *const ());
     black_box(graphics::saule_export_Graphics_point as *const ());
-
-    // Graphics — text
     black_box(graphics::saule_export_Graphics_print as *const ());
     black_box(graphics::saule_export_Graphics_printf as *const ());
     black_box(graphics::saule_export_Graphics_newFont as *const ());
@@ -112,8 +129,6 @@ pub fn anchor() {
     black_box(graphics::saule_export_Graphics_getFont as *const ());
     black_box(graphics::saule_export_Graphics_getFontHeight as *const ());
     black_box(graphics::saule_export_Graphics_getTextWidth as *const ());
-
-    // Graphics — colour, lines, blending
     black_box(graphics::saule_export_Graphics_setColor as *const ());
     black_box(graphics::saule_export_Graphics_getColor as *const ());
     black_box(graphics::saule_export_Graphics_setBackgroundColor as *const ());
@@ -129,19 +144,16 @@ pub fn anchor() {
     black_box(graphics::saule_export_Graphics_setDefaultFilter as *const ());
     black_box(graphics::saule_export_Graphics_getDefaultFilter as *const ());
     black_box(graphics::saule_export_Graphics_reset as *const ());
-
-    // Graphics — clipping
     black_box(graphics::saule_export_Graphics_setScissor as *const ());
     black_box(graphics::saule_export_Graphics_intersectScissor as *const ());
     black_box(graphics::saule_export_Graphics_getScissor as *const ());
-
-    // Graphics — canvases
     black_box(graphics::saule_export_Graphics_newCanvas as *const ());
     black_box(graphics::saule_export_Graphics_setCanvas as *const ());
     black_box(graphics::saule_export_Graphics_getCanvas as *const ());
     black_box(graphics::saule_export_Graphics_draw as *const ());
-
-    // Graphics — coordinate system
+    black_box(graphics::saule_export_Graphics_newImage as *const ());
+    black_box(graphics::saule_export_Graphics_imageSize as *const ());
+    black_box(graphics::saule_export_Graphics_drawFrame as *const ());
     black_box(graphics::saule_export_Graphics_push as *const ());
     black_box(graphics::saule_export_Graphics_pop as *const ());
     black_box(graphics::saule_export_Graphics_origin as *const ());
@@ -154,8 +166,6 @@ pub fn anchor() {
     black_box(graphics::saule_export_Graphics_getStackDepth as *const ());
     black_box(graphics::saule_export_Graphics_transformPoint as *const ());
     black_box(graphics::saule_export_Graphics_inverseTransformPoint as *const ());
-
-    // Graphics — dimensions
     black_box(graphics::saule_export_Graphics_getWidth as *const ());
     black_box(graphics::saule_export_Graphics_getHeight as *const ());
     black_box(graphics::saule_export_Graphics_getDimensions as *const ());
@@ -163,14 +173,125 @@ pub fn anchor() {
     black_box(graphics::saule_export_Graphics_getPixelWidth as *const ());
     black_box(graphics::saule_export_Graphics_getPixelHeight as *const ());
     black_box(graphics::saule_export_Graphics_getPixelDimensions as *const ());
+    black_box(graphics::saule_export_Graphics_release as *const ());
+    black_box(graphics::saule_export_Graphics_releaseFont as *const ());
+    black_box(graphics::saule_export_Graphics_getStats as *const ());
+    black_box(graphics::saule_export_Graphics_loadImage as *const ());
+    black_box(graphics::saule_export_Graphics_loadFont as *const ());
+    black_box(graphics::saule_export_Graphics_newImageFromBase64 as *const ());
+    black_box(graphics::saule_export_Graphics_saveImage as *const ());
+    black_box(graphics::saule_export_Graphics_setLinearGradient as *const ());
+    black_box(graphics::saule_export_Graphics_setRadialGradient as *const ());
+    black_box(graphics::saule_export_Graphics_clearGradient as *const ());
+    black_box(graphics::saule_export_Graphics_hasGradient as *const ());
 
-    // Timer exports
+    // Timer
     black_box(timer::saule_export_Timer_getTime as *const ());
     black_box(timer::saule_export_Timer_getDelta as *const ());
+    black_box(timer::saule_export_Timer_getFPS as *const ());
+    black_box(timer::saule_export_Timer_sleep as *const ());
+
+    // Clipboard
+    black_box(clipboard::saule_export_Clipboard_get as *const ());
+    black_box(clipboard::saule_export_Clipboard_set as *const ());
+    black_box(clipboard::saule_export_Clipboard_hasText as *const ());
+
+}
+
+/// A global allocator that can be told to count allocations for a moment.
+///
+/// The renderer is meant to be allocation-free once its scratch buffers have
+/// grown, and that is a property no timing benchmark can actually pin down — a
+/// machine under load makes any wall-clock number arguable. Counting is exact:
+/// arm the counter, draw a frame, and assert nothing was allocated.
+///
+/// The counters are **thread-local**, which is the part that makes the
+/// measurement mean anything: the test harness runs tests in parallel, so a
+/// process-wide counter measures whatever else happened to be running at the
+/// same time. They are `const`-initialised `Cell`s so that reading them inside
+/// the allocator cannot itself allocate and recurse.
+#[cfg(test)]
+mod counting_allocator {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static ARMED: Cell<bool> = const { Cell::new(false) };
+        static COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Record one allocation, if this thread is currently measuring.
+    ///
+    /// `try_with` rather than `with`: during thread teardown the local is gone,
+    /// and an allocation then must not panic.
+    fn tally() {
+        let armed = ARMED.try_with(Cell::get).unwrap_or(false);
+        if armed {
+            let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+        }
+    }
+
+    pub struct Counting;
+
+    // Safety: every method forwards to the system allocator unchanged; the
+    // counter is incidental bookkeeping on the side.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            tally();
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            tally();
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    /// Run `f` with allocation counting on, and report how many it made on
+    /// this thread.
+    pub fn count(f: impl FnOnce()) -> usize {
+        COUNT.with(|c| c.set(0));
+        ARMED.with(|a| a.set(true));
+        f();
+        ARMED.with(|a| a.set(false));
+        COUNT.with(Cell::get)
+    }
 }
 
 #[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: counting_allocator::Counting = counting_allocator::Counting;
+
+#[cfg(test)]
 mod tests {
+    /// The manifest the interpreter loads must describe the exports this crate
+    /// actually has.
+    ///
+    /// `engine.toml` is checked in and the Unix install scripts copy it
+    /// verbatim, so a signature changed without regenerating it produced a
+    /// package whose declared types disagreed with its code — a mismatch that
+    /// only showed up as a confusing runtime error in somebody's `.sau`
+    /// program. Nothing checked for it before; this does, on every test run.
+    #[test]
+    fn manifest_matches_the_checked_in_file() {
+        super::anchor();
+
+        let rendered = saule_sdk::manifest::render().expect("render the manifest");
+        let checked_in = include_str!("../engine.toml");
+
+        assert_eq!(
+            rendered.trim(),
+            checked_in.trim(),
+            "engine.toml is stale — regenerate it with:\n    \
+             cargo run --release -p saule-engine-lib --bin gen-manifest -- \
+             crates/saule-engine-lib/engine.toml"
+        );
+    }
+
     #[test]
     fn graphics_circle_without_window_errors() {
         // No window has been created on this test thread, so drawing must

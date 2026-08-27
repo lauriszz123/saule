@@ -24,7 +24,7 @@ use saule_sdk::prelude::*;
 use saule_sdk::saule_export;
 
 use crate::geom::Point;
-use crate::raster::Rect;
+use crate::raster::{Gradient, GradientKind, Rect, Stop};
 use crate::state;
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ fn graphics_clear(
         (None, None, None) => None,
         _ => return Err("Graphics.clear: pass all of r, g, b — or none at all".into()),
     };
-    state::with(|e| e.clear(color))?;
+    state::draw(|gfx| gfx.clear(color))?;
     Ok(())
 }
 
@@ -108,7 +108,7 @@ fn graphics_rectangle(
 ) -> Result<(), String> {
     let rx = rx.unwrap_or(0.0);
     let ry = ry.unwrap_or(rx);
-    state::with(|e| e.rectangle(&mode, x, y, w, h, rx, ry))?
+    state::draw(|gfx| gfx.rectangle(&mode, x, y, w, h, rx, ry))?
         .map_err(|e| format!("Graphics.rectangle: {e}"))
 }
 
@@ -122,7 +122,7 @@ pub(crate) fn graphics_circle(
     radius: f64,
     segments: Option<i64>,
 ) -> Result<(), String> {
-    state::with(|e| e.circle(&mode, x, y, radius, segments))?
+    state::draw(|gfx| gfx.circle(&mode, x, y, radius, segments))?
         .map_err(|e| format!("Graphics.circle: {e}"))
 }
 
@@ -136,7 +136,7 @@ fn graphics_ellipse(
     radiusy: f64,
     segments: Option<i64>,
 ) -> Result<(), String> {
-    state::with(|e| e.ellipse(&mode, x, y, radiusx, radiusy, segments))?
+    state::draw(|gfx| gfx.ellipse(&mode, x, y, radiusx, radiusy, segments))?
         .map_err(|e| format!("Graphics.ellipse: {e}"))
 }
 
@@ -155,7 +155,7 @@ fn graphics_arc(
     arctype: Option<String>,
 ) -> Result<(), String> {
     let arctype = arctype.unwrap_or_else(|| "pie".to_string());
-    state::with(|e| e.arc(&mode, x, y, radius, angle1, angle2, &arctype))?
+    state::draw(|gfx| gfx.arc(&mode, x, y, radius, angle1, angle2, &arctype))?
         .map_err(|e| format!("Graphics.arc: {e}"))
 }
 
@@ -164,13 +164,13 @@ fn graphics_arc(
 #[saule_export(class = "Graphics", name = "polygon")]
 fn graphics_polygon(mode: String, points: STable) -> Result<(), String> {
     let pts = points_from(&points, "Graphics.polygon")?;
-    state::with(|e| e.polygon(&mode, &pts))?.map_err(|e| format!("Graphics.polygon: {e}"))
+    state::draw(|gfx| gfx.polygon(&mode, &pts))?.map_err(|e| format!("Graphics.polygon: {e}"))
 }
 
 /// `Graphics.line(x1, y1, x2, y2)` — dividers, borders, connectors.
 #[saule_export(class = "Graphics", name = "line")]
 fn graphics_line(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<(), String> {
-    state::with(|e| e.line(x1, y1, x2, y2))?.map_err(|e| format!("Graphics.line: {e}"))
+    state::draw(|gfx| gfx.line(x1, y1, x2, y2))?.map_err(|e| format!("Graphics.line: {e}"))
 }
 
 /// `Graphics.polyline({x1, y1, x2, y2, ...})` — a multi-segment line with
@@ -178,21 +178,21 @@ fn graphics_line(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<(), String> {
 #[saule_export(class = "Graphics", name = "polyline")]
 fn graphics_polyline(points: STable) -> Result<(), String> {
     let pts = points_from(&points, "Graphics.polyline")?;
-    state::with(|e| e.polyline(&pts))?.map_err(|e| format!("Graphics.polyline: {e}"))
+    state::draw(|gfx| gfx.polyline(&pts))?.map_err(|e| format!("Graphics.polyline: {e}"))
 }
 
 /// `Graphics.points({x1, y1, x2, y2, ...})` — one pixel per pair.
 #[saule_export(class = "Graphics", name = "points")]
 fn graphics_points(points: STable) -> Result<(), String> {
     let pts = points_from(&points, "Graphics.points")?;
-    state::with(|e| e.points(&pts))?;
+    state::draw(|gfx| gfx.points(&pts))?;
     Ok(())
 }
 
 /// `Graphics.point(x, y)` — a single pixel.
 #[saule_export(class = "Graphics", name = "point")]
 fn graphics_point(x: f64, y: f64) -> Result<(), String> {
-    state::with(|e| e.points(&[(x, y)]))?;
+    state::draw(|gfx| gfx.points(&[(x, y)]))?;
     Ok(())
 }
 
@@ -204,7 +204,7 @@ fn graphics_point(x: f64, y: f64) -> Result<(), String> {
 /// line's top-left. Embedded newlines start a new line.
 #[saule_export(class = "Graphics", name = "print")]
 fn graphics_print(text: String, x: f64, y: f64) -> Result<(), String> {
-    state::with(|e| e.print(&text, x, y))?.map_err(|e| format!("Graphics.print: {e}"))
+    state::draw(|gfx| gfx.print(&text, x, y))?.map_err(|e| format!("Graphics.print: {e}"))
 }
 
 /// `Graphics.printf(text, x, y, limit [, align])` — paragraphs with word wrap.
@@ -218,7 +218,7 @@ fn graphics_printf(
     align: Option<String>,
 ) -> Result<(), String> {
     let align = align.unwrap_or_else(|| "left".to_string());
-    state::with(|e| e.printf(&text, x, y, limit, &align))?
+    state::draw(|gfx| gfx.printf(&text, x, y, limit, &align))?
         .map_err(|e| format!("Graphics.printf: {e}"))
 }
 
@@ -227,16 +227,16 @@ fn graphics_printf(
 /// to ship. Returns a font handle for `setFont`.
 #[saule_export(class = "Graphics", name = "newFont")]
 fn graphics_new_font(size: f64, path: Option<String>) -> Result<i64, String> {
-    state::with(|e| e.new_font(size, path.as_deref()))?
+    state::draw(|gfx| gfx.new_font(size, path.as_deref()))?
         .map_err(|e| format!("Graphics.newFont: {e}"))
 }
 
 /// `Graphics.setNewFont(size [, path])` — `newFont` followed by `setFont`.
 #[saule_export(class = "Graphics", name = "setNewFont")]
 fn graphics_set_new_font(size: f64, path: Option<String>) -> Result<i64, String> {
-    state::with(|e| -> Result<i64, String> {
-        let handle = e.new_font(size, path.as_deref())?;
-        e.set_font(handle)?;
+    state::draw(|gfx| -> Result<i64, String> {
+        let handle = gfx.new_font(size, path.as_deref())?;
+        gfx.set_font(handle)?;
         Ok(handle)
     })?
     .map_err(|e| format!("Graphics.setNewFont: {e}"))
@@ -246,28 +246,28 @@ fn graphics_set_new_font(size: f64, path: Option<String>) -> Result<i64, String>
 /// default face.
 #[saule_export(class = "Graphics", name = "setFont")]
 fn graphics_set_font(handle: i64) -> Result<(), String> {
-    state::with(|e| e.set_font(handle))??;
+    state::draw(|gfx| gfx.set_font(handle))??;
     Ok(())
 }
 
 /// `Graphics.getFont()` — the active font handle.
 #[saule_export(class = "Graphics", name = "getFont")]
 fn graphics_get_font() -> Result<i64, String> {
-    state::with(|e| e.get_font())
+    state::draw(|gfx| gfx.get_font())
 }
 
 /// `Graphics.getFontHeight()` — baseline-to-baseline line height, the vertical
 /// step for stacking labels.
 #[saule_export(class = "Graphics", name = "getFontHeight")]
 fn graphics_get_font_height() -> Result<f64, String> {
-    state::with(|e| e.font_height())?.map_err(|e| format!("Graphics.getFontHeight: {e}"))
+    state::draw(|gfx| gfx.font_height())?.map_err(|e| format!("Graphics.getFontHeight: {e}"))
 }
 
 /// `Graphics.getTextWidth(text)` — advance width in pixels. The measurement
 /// half of layout: use it to size buttons around their labels.
 #[saule_export(class = "Graphics", name = "getTextWidth")]
 fn graphics_get_text_width(text: String) -> Result<f64, String> {
-    state::with(|e| e.text_width(&text))?.map_err(|e| format!("Graphics.getTextWidth: {e}"))
+    state::draw(|gfx| gfx.text_width(&text))?.map_err(|e| format!("Graphics.getTextWidth: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -278,69 +278,69 @@ fn graphics_get_text_width(text: String) -> Result<f64, String> {
 /// Channels are `0.0..=1.0`; alpha defaults to opaque.
 #[saule_export(class = "Graphics", name = "setColor")]
 fn graphics_set_color(r: f64, g: f64, b: f64, a: Option<f64>) -> Result<(), String> {
-    state::with(|e| e.set_color(r, g, b, a.unwrap_or(1.0)))?;
+    state::draw(|gfx| gfx.set_color(r, g, b, a.unwrap_or(1.0)))?;
     Ok(())
 }
 
 /// `Graphics.getColor()` — `local r, g, b, a = Graphics.getColor()`.
 #[saule_export(class = "Graphics", name = "getColor")]
 fn graphics_get_color() -> Result<(f64, f64, f64, f64), String> {
-    state::with(|e| e.color())
+    state::draw(|gfx| gfx.color())
 }
 
 /// `Graphics.setBackgroundColor(r, g, b [, a])` — the colour `clear()` uses
 /// when called with no arguments.
 #[saule_export(class = "Graphics", name = "setBackgroundColor")]
 fn graphics_set_background_color(r: f64, g: f64, b: f64, a: Option<f64>) -> Result<(), String> {
-    state::with(|e| e.set_background_color(r, g, b, a.unwrap_or(1.0)))?;
+    state::draw(|gfx| gfx.set_background_color(r, g, b, a.unwrap_or(1.0)))?;
     Ok(())
 }
 
 /// `Graphics.getBackgroundColor()`.
 #[saule_export(class = "Graphics", name = "getBackgroundColor")]
 fn graphics_get_background_color() -> Result<(f64, f64, f64, f64), String> {
-    state::with(|e| e.background_color())
+    state::draw(|gfx| gfx.background_color())
 }
 
 /// `Graphics.setLineWidth(width)` — stroke thickness in local units, so it
 /// scales with the current transform.
 #[saule_export(class = "Graphics", name = "setLineWidth")]
 fn graphics_set_line_width(width: f64) -> Result<(), String> {
-    state::with(|e| e.set_line_width(width))?;
+    state::draw(|gfx| gfx.set_line_width(width))?;
     Ok(())
 }
 
 /// `Graphics.getLineWidth()`.
 #[saule_export(class = "Graphics", name = "getLineWidth")]
 fn graphics_get_line_width() -> Result<f64, String> {
-    state::with(|e| e.line_width())
+    state::draw(|gfx| gfx.line_width())
 }
 
 /// `Graphics.setLineStyle(style)` — `"smooth"` (antialiased, the default) or
 /// `"rough"` (hard pixel edges, for crisp hairlines).
 #[saule_export(class = "Graphics", name = "setLineStyle")]
 fn graphics_set_line_style(style: String) -> Result<(), String> {
-    state::with(|e| e.set_line_style(&style))??;
+    state::draw(|gfx| gfx.set_line_style(&style))??;
     Ok(())
 }
 
 /// `Graphics.getLineStyle()`.
 #[saule_export(class = "Graphics", name = "getLineStyle")]
 fn graphics_get_line_style() -> Result<String, String> {
-    state::with(|e| e.line_style().to_string())
+    state::draw(|gfx| gfx.line_style().to_string())
 }
 
 /// `Graphics.setLineJoin(join)` — `"miter"` (default), `"bevel"`, or `"none"`.
 #[saule_export(class = "Graphics", name = "setLineJoin")]
 fn graphics_set_line_join(join: String) -> Result<(), String> {
-    state::with(|e| e.set_line_join(&join))??;
+    state::draw(|gfx| gfx.set_line_join(&join))??;
     Ok(())
 }
 
 /// `Graphics.getLineJoin()`.
 #[saule_export(class = "Graphics", name = "getLineJoin")]
 fn graphics_get_line_join() -> Result<String, String> {
-    state::with(|e| e.line_join().to_string())
+    state::draw(|gfx| gfx.line_join().to_string())
 }
 
 /// `Graphics.setBlendMode(mode)` — `"alpha"` (default), `"add"`, `"subtract"`,
@@ -348,35 +348,35 @@ fn graphics_get_line_join() -> Result<String, String> {
 /// and `"add"` respectively.
 #[saule_export(class = "Graphics", name = "setBlendMode")]
 fn graphics_set_blend_mode(mode: String) -> Result<(), String> {
-    state::with(|e| e.set_blend_mode(&mode))??;
+    state::draw(|gfx| gfx.set_blend_mode(&mode))??;
     Ok(())
 }
 
 /// `Graphics.getBlendMode()`.
 #[saule_export(class = "Graphics", name = "getBlendMode")]
 fn graphics_get_blend_mode() -> Result<String, String> {
-    state::with(|e| e.blend_mode().to_string())
+    state::draw(|gfx| gfx.blend_mode().to_string())
 }
 
 /// `Graphics.setDefaultFilter(mode)` — `"linear"` (default, smooth) or
 /// `"nearest"` (crisp) sampling for scaled canvases and rotated text.
 #[saule_export(class = "Graphics", name = "setDefaultFilter")]
 fn graphics_set_default_filter(mode: String) -> Result<(), String> {
-    state::with(|e| e.set_default_filter(&mode))??;
+    state::draw(|gfx| gfx.set_default_filter(&mode))??;
     Ok(())
 }
 
 /// `Graphics.getDefaultFilter()`.
 #[saule_export(class = "Graphics", name = "getDefaultFilter")]
 fn graphics_get_default_filter() -> Result<String, String> {
-    state::with(|e| e.default_filter().to_string())
+    state::draw(|gfx| gfx.default_filter().to_string())
 }
 
 /// `Graphics.reset()` — restore colour, line settings, blend mode, filter,
 /// scissor, transform, and render target to their defaults.
 #[saule_export(class = "Graphics", name = "reset")]
 fn graphics_reset() -> Result<(), String> {
-    state::with(|e| e.reset())?;
+    state::draw(|gfx| gfx.reset())?;
     Ok(())
 }
 
@@ -399,7 +399,7 @@ fn graphics_set_scissor(
         (None, None, None, None) => None,
         _ => return Err("Graphics.setScissor: pass all of x, y, w, h — or none at all".into()),
     };
-    state::with(|e| e.set_scissor(rect))?;
+    state::draw(|gfx| gfx.set_scissor(rect))?;
     Ok(())
 }
 
@@ -408,7 +408,7 @@ fn graphics_set_scissor(
 /// (a scroll view inside a scroll view) compose correctly.
 #[saule_export(class = "Graphics", name = "intersectScissor")]
 fn graphics_intersect_scissor(x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
-    state::with(|e| e.intersect_scissor(x, y, w, h))?;
+    state::draw(|gfx| gfx.intersect_scissor(x, y, w, h))?;
     Ok(())
 }
 
@@ -416,7 +416,7 @@ fn graphics_intersect_scissor(x: f64, y: f64, w: f64, h: f64) -> Result<(), Stri
 /// full render target when clipping is off.
 #[saule_export(class = "Graphics", name = "getScissor")]
 fn graphics_get_scissor() -> Result<(f64, f64, f64, f64), String> {
-    state::with(|e| e.scissor())
+    state::draw(|gfx| gfx.scissor())
 }
 
 // ---------------------------------------------------------------------------
@@ -427,21 +427,21 @@ fn graphics_get_scissor() -> Result<(f64, f64, f64, f64), String> {
 /// canvas handle.
 #[saule_export(class = "Graphics", name = "newCanvas")]
 fn graphics_new_canvas(width: i64, height: i64) -> Result<i64, String> {
-    state::with(|e| e.new_canvas(width, height))?
+    state::draw(|gfx| gfx.new_canvas(width, height))?
 }
 
 /// `Graphics.setCanvas([handle])` — route subsequent draws into a canvas; no
 /// argument (or `0`) restores the screen.
 #[saule_export(class = "Graphics", name = "setCanvas")]
 fn graphics_set_canvas(handle: Option<i64>) -> Result<(), String> {
-    state::with(|e| e.set_canvas(handle))??;
+    state::draw(|gfx| gfx.set_canvas(handle))??;
     Ok(())
 }
 
 /// `Graphics.getCanvas()` — the bound canvas handle, or `0` for the screen.
 #[saule_export(class = "Graphics", name = "getCanvas")]
 fn graphics_get_canvas() -> Result<i64, String> {
-    state::with(|e| e.get_canvas())
+    state::draw(|gfx| gfx.get_canvas())
 }
 
 /// `Graphics.draw(canvas, x, y [, angle, sx, sy, ox, oy])` — composite a canvas
@@ -462,8 +462,8 @@ fn graphics_draw(
     oy: Option<f64>,
 ) -> Result<(), String> {
     let sx = sx.unwrap_or(1.0);
-    state::with(|e| {
-        e.draw_canvas(
+    state::draw(|gfx| {
+        gfx.draw_canvas(
             canvas,
             x,
             y,
@@ -484,14 +484,14 @@ fn graphics_draw(
 /// frame.
 #[saule_export(class = "Graphics", name = "newImage")]
 fn graphics_new_image(path: String) -> Result<i64, String> {
-    state::with(|e| e.new_image(&path))?
+    state::draw(|gfx| gfx.new_image(&path))?
 }
 
 /// `Graphics.imageSize(handle)` — pixel dimensions of an image or canvas, as
 /// `width, height`.
 #[saule_export(class = "Graphics", name = "imageSize")]
 fn graphics_image_size(handle: i64) -> Result<(i64, i64), String> {
-    state::with(|e| e.image_size(handle))?
+    state::draw(|gfx| gfx.image_size(handle))?
 }
 
 /// `Graphics.drawFrame(image, fx, fy, fw, fh, x, y [, angle, sx, sy, ox, oy])`
@@ -516,8 +516,8 @@ fn graphics_draw_frame(
     oy: Option<f64>,
 ) -> Result<(), String> {
     let sx = sx.unwrap_or(1.0);
-    state::with(|e| {
-        e.draw_frame(
+    state::draw(|gfx| {
+        gfx.draw_frame(
             image,
             Rect::new(fx, fy, fw, fh),
             x,
@@ -549,28 +549,28 @@ fn graphics_push(mode: Option<String>) -> Result<(), String> {
             ));
         }
     };
-    state::with(|e| e.push(all))?;
+    state::draw(|gfx| gfx.push(all))?;
     Ok(())
 }
 
 /// `Graphics.pop()` — restore the matching `push`.
 #[saule_export(class = "Graphics", name = "pop")]
 fn graphics_pop() -> Result<(), String> {
-    state::with(|e| e.pop())??;
+    state::draw(|gfx| gfx.pop())??;
     Ok(())
 }
 
 /// `Graphics.origin()` — reset the transform to the identity.
 #[saule_export(class = "Graphics", name = "origin")]
 fn graphics_origin() -> Result<(), String> {
-    state::with(|e| e.origin())?;
+    state::draw(|gfx| gfx.origin())?;
     Ok(())
 }
 
 /// `Graphics.translate(dx, dy)` — positioning and scroll offsets.
 #[saule_export(class = "Graphics", name = "translate")]
 fn graphics_translate(dx: f64, dy: f64) -> Result<(), String> {
-    state::with(|e| e.translate(dx, dy))?;
+    state::draw(|gfx| gfx.translate(dx, dy))?;
     Ok(())
 }
 
@@ -578,21 +578,21 @@ fn graphics_translate(dx: f64, dy: f64) -> Result<(), String> {
 /// `sx` for uniform scaling.
 #[saule_export(class = "Graphics", name = "scale")]
 fn graphics_scale(sx: f64, sy: Option<f64>) -> Result<(), String> {
-    state::with(|e| e.scale(sx, sy.unwrap_or(sx)))?;
+    state::draw(|gfx| gfx.scale(sx, sy.unwrap_or(sx)))?;
     Ok(())
 }
 
 /// `Graphics.rotate(angle)` — radians, clockwise on screen.
 #[saule_export(class = "Graphics", name = "rotate")]
 fn graphics_rotate(angle: f64) -> Result<(), String> {
-    state::with(|e| e.rotate(angle))?;
+    state::draw(|gfx| gfx.rotate(angle))?;
     Ok(())
 }
 
 /// `Graphics.shear(kx, ky)`.
 #[saule_export(class = "Graphics", name = "shear")]
 fn graphics_shear(kx: f64, ky: f64) -> Result<(), String> {
-    state::with(|e| e.shear(kx, ky))?;
+    state::draw(|gfx| gfx.shear(kx, ky))?;
     Ok(())
 }
 
@@ -607,7 +607,7 @@ fn graphics_apply_transform(
     tx: f64,
     ty: f64,
 ) -> Result<(), String> {
-    state::with(|e| e.apply_transform(a, b, c, d, tx, ty))?;
+    state::draw(|gfx| gfx.apply_transform(a, b, c, d, tx, ty))?;
     Ok(())
 }
 
@@ -622,27 +622,27 @@ fn graphics_replace_transform(
     tx: f64,
     ty: f64,
 ) -> Result<(), String> {
-    state::with(|e| e.replace_transform(a, b, c, d, tx, ty))?;
+    state::draw(|gfx| gfx.replace_transform(a, b, c, d, tx, ty))?;
     Ok(())
 }
 
 /// `Graphics.getStackDepth()` — pushes without a matching pop.
 #[saule_export(class = "Graphics", name = "getStackDepth")]
 fn graphics_get_stack_depth() -> Result<i64, String> {
-    state::with(|e| e.stack_depth())
+    state::draw(|gfx| gfx.stack_depth())
 }
 
 /// `Graphics.transformPoint(x, y)` — local coordinates to screen coordinates.
 #[saule_export(class = "Graphics", name = "transformPoint")]
 fn graphics_transform_point(x: f64, y: f64) -> Result<(f64, f64), String> {
-    state::with(|e| e.transform_point(x, y))
+    state::draw(|gfx| gfx.transform_point(x, y))
 }
 
 /// `Graphics.inverseTransformPoint(x, y)` — screen coordinates back to local
 /// ones. This is how you hit-test the mouse against a transformed widget.
 #[saule_export(class = "Graphics", name = "inverseTransformPoint")]
 fn graphics_inverse_transform_point(x: f64, y: f64) -> Result<(f64, f64), String> {
-    state::with(|e| e.inverse_transform_point(x, y))?
+    state::draw(|gfx| gfx.inverse_transform_point(x, y))?
 }
 
 // ---------------------------------------------------------------------------
@@ -696,4 +696,175 @@ fn graphics_get_pixel_dimensions() -> Result<(i64, i64), String> {
         let (w, h) = e.size();
         (w as i64, h as i64)
     })
+}
+
+// ---------------------------------------------------------------------------
+// Resource lifetime
+// ---------------------------------------------------------------------------
+
+/// `Graphics.release(handle)` — free a canvas or image and its pixels.
+///
+/// Canvases and images used to live for the whole process: the registry only
+/// ever grew, so a view that reallocated its canvas on every resize leaked the
+/// old one, and dropping an image cache freed the handles but not the memory
+/// behind them. Releasing is explicit rather than automatic because the engine
+/// cannot see how many Saule values still hold the handle.
+///
+/// A released handle is not reused: a later `draw` with it reports an error
+/// rather than silently addressing whatever has since taken the slot.
+#[saule_export(class = "Graphics", name = "release")]
+fn graphics_release(handle: i64) -> Result<(), String> {
+    state::draw(|gfx| gfx.release_canvas(handle))?
+}
+
+/// `Graphics.releaseFont(handle)` — free a loaded font and its glyph cache.
+///
+/// Refused while the font is selected or held by a `push("all")` state, since
+/// either would leave a live reference to a freed slot.
+#[saule_export(class = "Graphics", name = "releaseFont")]
+fn graphics_release_font(handle: i64) -> Result<(), String> {
+    state::draw(|gfx| gfx.release_font(handle))?
+}
+
+/// `Graphics.getStats()` — live canvases, live fonts, and the bytes their
+/// pixels occupy, as three values.
+///
+/// The number a leak shows up in: hold it steady across a few hundred frames
+/// and the frame is not allocating anything it fails to release.
+#[saule_export(class = "Graphics", name = "getStats")]
+fn graphics_get_stats() -> Result<(i64, i64, i64), String> {
+    state::draw(|gfx| {
+        let (canvases, fonts) = gfx.live_counts();
+        (canvases, fonts, gfx.canvas_bytes())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Fallible loading
+// ---------------------------------------------------------------------------
+
+/// `Graphics.loadImage(path)` — `newImage` that reports failure as `nil`.
+///
+/// A native error ends the program, so code that wants to skip a missing asset
+/// had to `Io.open` the file first purely to find out whether it exists — two
+/// opens, and still a race against anything that removes it in between. This
+/// returns the handle or `nil`, with no probe and no race.
+#[saule_export(class = "Graphics", name = "loadImage")]
+fn graphics_load_image(path: String) -> Result<Option<i64>, String> {
+    state::draw(|gfx| gfx.try_new_image(&path))
+}
+
+/// `Graphics.loadFont(size [, path])` — `newFont` that reports failure as
+/// `nil`, so a missing typeface can fall back to the default face instead of
+/// ending the program.
+#[saule_export(class = "Graphics", name = "loadFont")]
+fn graphics_load_font(size: f64, path: Option<String>) -> Result<Option<i64>, String> {
+    state::draw(|gfx| gfx.try_new_font(size, path.as_deref()))
+}
+
+/// `Graphics.newImageFromBase64(data)` — decode a base64-encoded PNG.
+///
+/// The native ABI carries strings as UTF-8, so raw PNG bytes cannot cross it;
+/// base64 is what lets an asset be embedded in a `.sau` source file, or arrive
+/// over a network, without a temporary file on the way in.
+#[saule_export(class = "Graphics", name = "newImageFromBase64")]
+fn graphics_new_image_from_base64(data: String) -> Result<i64, String> {
+    state::draw(|gfx| gfx.new_image_from_base64(&data))?
+}
+
+/// `Graphics.saveImage(handle, path)` — write a canvas, image, or the screen
+/// (handle `0`) to `path` as a PNG.
+///
+/// The screenshot, and the thing that makes a rendering regression testable:
+/// draw a frame, save it, compare it against a reference.
+#[saule_export(class = "Graphics", name = "saveImage")]
+fn graphics_save_image(handle: i64, path: String) -> Result<(), String> {
+    state::draw(|gfx| gfx.save_image(handle, &path))?
+}
+
+// ---------------------------------------------------------------------------
+// Gradients
+// ---------------------------------------------------------------------------
+
+/// Decode a flat `{position, r, g, b, a, ...}` stop table.
+///
+/// Five numbers per stop, in the same flat-table style the point lists use.
+/// Positions run `0.0..=1.0` along the gradient's axis.
+fn stops_from(table: &STable, func: &str) -> Result<Vec<Stop>, String> {
+    let values = table.to_vec()?;
+    if values.is_empty() || values.len() % 5 != 0 {
+        return Err(format!(
+            "{func}: the stop table must hold 5 numbers per stop \
+             (position, r, g, b, a), got {} value(s)",
+            values.len()
+        ));
+    }
+
+    let mut out = Vec::with_capacity(values.len() / 5);
+    for (i, stop) in values.chunks_exact(5).enumerate() {
+        let mut parsed = [0.0f64; 5];
+        for (slot, value) in parsed.iter_mut().zip(stop) {
+            *slot = number(value).ok_or_else(|| {
+                format!("{func}: stop {} contains a value that is not a number", i + 1)
+            })?;
+        }
+        out.push(Stop {
+            at: parsed[0] as f32,
+            color: [
+                parsed[1] as f32,
+                parsed[2] as f32,
+                parsed[3] as f32,
+                parsed[4] as f32,
+            ],
+        });
+    }
+    Ok(out)
+}
+
+/// `Graphics.setLinearGradient(x0, y0, x1, y1, stops)` — fill shapes with a
+/// ramp along the axis from `(x0, y0)` to `(x1, y1)` instead of a flat colour.
+///
+/// The coordinates are local and baked through the current transform when the
+/// gradient is set, so it stays anchored to the shape under a later
+/// `translate` — the same rule scissors follow. It applies to fills and
+/// strokes; images and text keep using the flat colour as their tint.
+#[saule_export(class = "Graphics", name = "setLinearGradient")]
+fn graphics_set_linear_gradient(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    stops: STable,
+) -> Result<(), String> {
+    let stops = stops_from(&stops, "Graphics.setLinearGradient")?;
+    let gradient = Gradient::new(GradientKind::Linear { x0, y0, x1, y1 }, &stops)
+        .map_err(|e| format!("Graphics.setLinearGradient: {e}"))?;
+    state::draw(|gfx| gfx.set_gradient(gradient))
+}
+
+/// `Graphics.setRadialGradient(cx, cy, radius, stops)` — a ramp running
+/// outward from `(cx, cy)`.
+#[saule_export(class = "Graphics", name = "setRadialGradient")]
+fn graphics_set_radial_gradient(
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    stops: STable,
+) -> Result<(), String> {
+    let stops = stops_from(&stops, "Graphics.setRadialGradient")?;
+    let gradient = Gradient::new(GradientKind::Radial { cx, cy, radius }, &stops)
+        .map_err(|e| format!("Graphics.setRadialGradient: {e}"))?;
+    state::draw(|gfx| gfx.set_gradient(gradient))
+}
+
+/// `Graphics.clearGradient()` — go back to filling with the flat colour.
+#[saule_export(class = "Graphics", name = "clearGradient")]
+fn graphics_clear_gradient() -> Result<(), String> {
+    state::draw(|gfx| gfx.clear_gradient())
+}
+
+/// `Graphics.hasGradient()` — whether a gradient is currently the fill source.
+#[saule_export(class = "Graphics", name = "hasGradient")]
+fn graphics_has_gradient() -> Result<bool, String> {
+    state::draw(|gfx| gfx.has_gradient())
 }

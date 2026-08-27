@@ -24,11 +24,11 @@ export class Images
 	-- directory — see `Assets.resolve` for why. Caching is keyed on the path as
 	-- written, since that is what a caller repeats.
 	--
-	-- A missing file is checked for rather than caught: an error raised inside a
-	-- native call is fatal in Saule, not catchable by `try`. That covers the
-	-- case that actually happens — a typo'd or not-yet-copied asset. A file that
-	-- exists but isn't a valid PNG is still a hard error, and should be: that is
-	-- a broken build, not a missing one.
+	-- `Graphics.loadImage` reports failure as nil rather than raising, which is
+	-- what makes this safe: an error raised inside a native call is fatal in
+	-- Saule and not catchable by `try`, so this used to `Io.open` the file
+	-- first purely to find out whether it existed — opening it twice, and still
+	-- racing anything that removed it in between.
 	static fn load(path: string) -> integer?
 		local cached = handles[path]
 
@@ -41,19 +41,16 @@ export class Images
 		end
 
 		local resolved: string = Assets.resolve(path)
-		local probe: File? = Io.open(resolved, IoMode.Read)
+		local handle: integer? = Graphics.loadImage(resolved)
 
-		if probe == nil then
+		if handle == nil then
 			failed[path] = true
-			println("Images.load: cannot open " .. resolved)
+			println("Images.load: cannot load " .. resolved)
 
 			return nil
 		end
 
-		probe!.close()
-
-		local handle: integer = Graphics.newImage(resolved)
-		handles[path] = handle
+		handles[path] = handle!
 
 		return handle
 	end
@@ -71,7 +68,15 @@ export class Images
 	end
 
 	-- Drop the cache: call it if assets changed on disk and you want a reload.
+	--
+	-- Each handle is released, not just forgotten. Dropping the table alone
+	-- used to leave every decoded image resident for the life of the process,
+	-- because nothing could free one.
 	static fn clear() -> nil
+		for path: string, handle: integer in Images.handles do
+			Graphics.release(handle)
+		end
+
 		Images.handles = {}
 		Images.failed = {}
 	end

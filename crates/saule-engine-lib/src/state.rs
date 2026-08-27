@@ -1,22 +1,21 @@
-//! Shared engine state: the OS window, its render targets, the graphics state
-//! machine (colour, line style, blend mode, scissor, transform, font), and the
-//! glue that turns each `Graphics.*` call into work for [`crate::raster`].
+//! The live engine: the OS window, input latching, frame pacing, and the
+//! [`Renderer`] that owns everything drawable.
+//!
+//! The split matters. Everything that turns a `Graphics.*` call into pixels
+//! lives in [`crate::render`] and touches no OS handle, so the whole drawing
+//! pipeline can be exercised headlessly. What is left here is the part that
+//! genuinely needs a window: opening one, pumping its queue, latching input,
+//! and pacing the frame.
 //!
 //! The interpreter is single-threaded and calls every native symbol from the
 //! same thread, so the state lives in a `thread_local!`. That sidesteps the
 //! `Send`/`Sync` requirements a `static` would impose (minifb's `Window` is
 //! not `Send`), and matches the actual call pattern exactly.
 
-mod draw;
 mod input;
-#[cfg(test)]
-mod tests;
-mod text;
 mod window;
 
-pub(crate) use draw::*;
 pub(crate) use input::*;
-pub(crate) use text::*;
 pub(crate) use window::*;
 
 use std::cell::RefCell;
@@ -25,34 +24,23 @@ use std::time::Instant;
 use minifb::{Scale, Window, WindowOptions};
 
 use crate::event::Event;
-use crate::font::FontRes;
 use crate::keyboard::{self, KeyState, TextCollector};
-use crate::raster::Surface;
+use crate::render::Renderer;
 
 /// Live engine state, created by `Window.create`.
 pub struct Engine {
     pub(crate) window: Window,
-    /// The window's framebuffer. minifb reads it as `0RGB` and ignores alpha.
-    pub(crate) screen: Surface,
-    /// Canvas registry; a slot is `None` only while its surface is on loan to
-    /// a draw call (see [`Engine::draw_canvas`]). Handle `n` is index `n - 1`.
-    pub(crate) canvases: Vec<Option<Surface>>,
-    /// Bound render target: `None` is the screen, `Some(i)` a canvas index.
-    pub(crate) target: Option<usize>,
-    /// Font registry. Slot 0 is the system default, loaded on first use.
-    pub(crate) fonts: Vec<Option<FontRes>>,
-    pub(crate) background: [f64; 4],
-    pub(crate) st: GState,
-    pub(crate) stack: Vec<Saved>,
-    /// Bilinear rather than nearest sampling for transformed blits.
-    pub(crate) linear_filter: bool,
+    /// Render targets, graphics state, and resources.
+    pub(crate) r: Renderer,
     /// Per-frame keyboard edges, latched by [`Engine::poll_events`].
     pub(crate) keys: KeyState,
     /// Per-frame mouse edges and wheel, latched by [`Engine::poll_events`].
     pub(crate) mouse: MouseState,
     /// Instant the next presented frame should be released at — the single
-    /// 60 FPS pacing point (see [`Engine::present`]).
+    /// pacing point (see [`Engine::present`]).
     pub(crate) next_frame: Instant,
+    /// Frame budget, or `None` when the loop runs unthrottled.
+    pub(crate) frame_dur: Option<std::time::Duration>,
     /// OS scale factor, refreshed each frame so dragging a window between
     /// monitors of different DPI is picked up.
     pub(crate) scale: f64,
@@ -63,6 +51,21 @@ pub struct Engine {
     pub(crate) last_mouse: Option<(f64, f64)>,
     /// Previous focus state, so only changes are reported.
     pub(crate) last_focused: bool,
+    /// Whether the pointer was over the window last frame, so `mouseEntered`
+    /// and `mouseLeft` report transitions rather than a state.
+    pub(crate) pointer_inside: bool,
+    /// Recent clicks per button, for double-click detection.
+    pub(crate) last_click: [Option<(Instant, f64, f64)>; 3],
+    /// Whether holding Escape should end the loop.
+    ///
+    /// Love2D's default, and off here. A toolkit uses Escape to dismiss a
+    /// modal — the engine cannot both quit and let the app handle it, and
+    /// quitting is the one the app cannot opt out of. `Closed` already covers
+    /// the real close.
+    pub(crate) quit_on_escape: bool,
+    /// Whether the `Closed` event has already been delivered, so the close is
+    /// reported exactly once rather than on every poll after it.
+    pub(crate) close_reported: bool,
 }
 
 thread_local! {
@@ -107,24 +110,30 @@ pub fn create(width: i64, height: i64, title: &str, resizable: bool) -> Result<(
 
     let scale = query_scale(&window);
 
+    // The window was asked for in whatever units minifb takes; the framebuffer
+    // is physical pixels. On a Retina display those differ from the first
+    // frame, and waiting for the first `pollEvents` to notice would open with
+    // one frame at half resolution.
+    let backing = backing_scale_for(scale);
+    let buffer_w = (width as f64 * backing).round() as usize;
+    let buffer_h = (height as f64 * backing).round() as usize;
+
     ENGINE.with(|cell| {
         *cell.borrow_mut() = Some(Engine {
             window,
-            screen: Surface::opaque(width, height),
-            canvases: Vec::new(),
-            target: None,
-            fonts: vec![None],
-            background: [0.0, 0.0, 0.0, 1.0],
-            st: GState::default(),
-            stack: Vec::new(),
-            linear_filter: true,
+            r: Renderer::new(buffer_w, buffer_h),
             keys: KeyState::default(),
             mouse: MouseState::default(),
-            next_frame: Instant::now() + FRAME_DUR,
+            next_frame: Instant::now() + DEFAULT_FRAME_DUR,
+            frame_dur: Some(DEFAULT_FRAME_DUR),
             scale,
             events: Vec::new(),
             last_mouse: None,
             last_focused: true,
+            pointer_inside: false,
+            last_click: [None; 3],
+            quit_on_escape: false,
+            close_reported: false,
         });
     });
     Ok(())
@@ -146,6 +155,8 @@ pub fn with<R>(f: impl FnOnce(&mut Engine) -> R) -> Result<R, String> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Window, input, framing
-// ---------------------------------------------------------------------------
+/// Run `f` against the renderer. The common case: most `Graphics.*` calls
+/// never touch the window at all.
+pub fn draw<R>(f: impl FnOnce(&mut Renderer) -> R) -> Result<R, String> {
+    with(|engine| f(&mut engine.r))
+}

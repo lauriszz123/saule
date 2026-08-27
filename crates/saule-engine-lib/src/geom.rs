@@ -149,13 +149,23 @@ pub fn curve_segments(device_radius: f64) -> usize {
     ((10.0 * r.sqrt()).ceil() as usize).clamp(8, 512)
 }
 
+#[cfg(test)]
 pub fn rect_path(x: f64, y: f64, w: f64, h: f64) -> Vec<Point> {
-    vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+    let mut out = Vec::new();
+    rect_path_into(x, y, w, h, &mut out);
+    out
+}
+
+/// [`rect_path`] into a caller-owned buffer, which it clears first.
+pub fn rect_path_into(x: f64, y: f64, w: f64, h: f64, out: &mut Vec<Point>) {
+    out.clear();
+    out.extend_from_slice(&[(x, y), (x + w, y), (x + w, y + h), (x, y + h)]);
 }
 
 /// A rectangle with elliptical corners. `rx`/`ry` are clamped to half the
 /// respective side, so passing a huge radius yields a stadium/circle rather
 /// than self-intersecting garbage.
+#[cfg(test)]
 pub fn rounded_rect_path(
     x: f64,
     y: f64,
@@ -165,19 +175,38 @@ pub fn rounded_rect_path(
     ry: f64,
     segments: usize,
 ) -> Vec<Point> {
+    let mut out = Vec::new();
+    rounded_rect_path_into(x, y, w, h, rx, ry, segments, &mut out);
+    out
+}
+
+/// [`rounded_rect_path`] into a caller-owned buffer, which it clears first.
+#[allow(clippy::too_many_arguments)]
+pub fn rounded_rect_path_into(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    rx: f64,
+    ry: f64,
+    segments: usize,
+    pts: &mut Vec<Point>,
+) {
     let (x, w) = if w < 0.0 { (x + w, -w) } else { (x, w) };
     let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
 
     let rx = rx.abs().min(w * 0.5);
     let ry = ry.abs().min(h * 0.5);
     if rx <= 0.0 || ry <= 0.0 {
-        return rect_path(x, y, w, h);
+        rect_path_into(x, y, w, h, pts);
+        return;
     }
 
     // Quarter-arc resolution; at least two segments keeps a corner from
     // collapsing into a single chamfer.
     let n = (segments / 4).max(2);
-    let mut pts = Vec::with_capacity(n * 4 + 4);
+    pts.clear();
+    pts.reserve(n * 4 + 4);
 
     // Corner centres and the arc's start angle, walked clockwise in screen
     // space (y grows downward) so the path comes out consistently wound.
@@ -193,17 +222,24 @@ pub fn rounded_rect_path(
             pts.push((cx + rx * t.cos(), cy + ry * t.sin()));
         }
     }
-    pts
 }
 
-pub fn ellipse_path(cx: f64, cy: f64, rx: f64, ry: f64, segments: usize) -> Vec<Point> {
+/// [`ellipse_path`] into a caller-owned buffer, which it clears first.
+pub fn ellipse_path_into(
+    cx: f64,
+    cy: f64,
+    rx: f64,
+    ry: f64,
+    segments: usize,
+    out: &mut Vec<Point>,
+) {
     let n = segments.max(3);
-    (0..n)
-        .map(|i| {
-            let t = TAU * (i as f64 / n as f64);
-            (cx + rx * t.cos(), cy + ry * t.sin())
-        })
-        .collect()
+    out.clear();
+    out.reserve(n);
+    for i in 0..n {
+        let t = TAU * (i as f64 / n as f64);
+        out.push((cx + rx * t.cos(), cy + ry * t.sin()));
+    }
 }
 
 /// How an arc's endpoints are joined up.
@@ -232,6 +268,7 @@ impl ArcType {
 
 /// Build an arc's point list. Returns the points and whether the path should
 /// be treated as closed when stroked.
+#[cfg(test)]
 pub fn arc_path(
     cx: f64,
     cy: f64,
@@ -241,13 +278,32 @@ pub fn arc_path(
     segments: usize,
     arctype: ArcType,
 ) -> (Vec<Point>, bool) {
+    let mut out = Vec::new();
+    let closed = arc_path_into(cx, cy, radius, angle1, angle2, segments, arctype, &mut out);
+    (out, closed)
+}
+
+/// [`arc_path`] into a caller-owned buffer, which it clears first. Returns
+/// whether the path should be treated as closed when stroked.
+#[allow(clippy::too_many_arguments)]
+pub fn arc_path_into(
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    angle1: f64,
+    angle2: f64,
+    segments: usize,
+    arctype: ArcType,
+    pts: &mut Vec<Point>,
+) -> bool {
     // Scale the segment count to the swept fraction of a full turn so a 10°
     // arc doesn't get the same budget as a full circle.
     let sweep = angle2 - angle1;
     let frac = (sweep.abs() / TAU).clamp(0.0, 1.0);
     let n = ((segments as f64 * frac).ceil() as usize).max(2);
 
-    let mut pts = Vec::with_capacity(n + 2);
+    pts.clear();
+    pts.reserve(n + 2);
     if arctype == ArcType::Pie {
         pts.push((cx, cy));
     }
@@ -255,7 +311,7 @@ pub fn arc_path(
         let t = angle1 + sweep * (i as f64 / n as f64);
         pts.push((cx + radius * t.cos(), cy + radius * t.sin()));
     }
-    (pts, arctype != ArcType::Open)
+    arctype != ArcType::Open
 }
 
 // ---------------------------------------------------------------------------
@@ -312,11 +368,72 @@ fn signed_area2(pts: &[Point]) -> f64 {
 /// rasterizer combines them with the nonzero rule — which unions overlapping
 /// polygons only when they wind the *same* way. Normalising here is what keeps
 /// a thick polyline's joins from punching holes in themselves.
-fn wind_positive(mut pts: Vec<Point>) -> Vec<Point> {
-    if signed_area2(&pts) < 0.0 {
+fn wind_positive_in_place(pts: &mut [Point]) {
+    if signed_area2(pts) < 0.0 {
         pts.reverse();
     }
-    pts
+}
+
+/// A growable set of polygons that reuses its inner allocations.
+///
+/// [`PathSet::begin`] rewinds without freeing, so the vectors a stroke filled
+/// last frame are the vectors it fills this frame. This is what keeps a steady
+/// frame of drawing from allocating: the renderer keeps one of these and every
+/// shape passes through it.
+#[derive(Default)]
+pub struct PathSet {
+    bufs: Vec<Vec<Point>>,
+    used: usize,
+}
+
+impl PathSet {
+    /// Rewind to empty, keeping every buffer for reuse.
+    pub fn begin(&mut self) {
+        self.used = 0;
+    }
+
+    /// Add a polygon and hand back its (empty) buffer to fill.
+    pub fn push(&mut self) -> &mut Vec<Point> {
+        if self.used == self.bufs.len() {
+            self.bufs.push(Vec::new());
+        }
+        let i = self.used;
+        self.used += 1;
+        self.bufs[i].clear();
+        &mut self.bufs[i]
+    }
+
+    /// Add a polygon built elsewhere.
+    pub fn push_slice(&mut self, points: &[Point]) {
+        self.push().extend_from_slice(points);
+    }
+
+    /// The polygons added since the last [`PathSet::begin`].
+    pub fn paths(&self) -> &[Vec<Point>] {
+        &self.bufs[..self.used]
+    }
+}
+
+/// The stroke expander's working memory.
+#[derive(Default)]
+pub struct StrokeScratch {
+    /// The input path with consecutive duplicates removed.
+    pts: Vec<Point>,
+    /// Unit direction of each segment.
+    dirs: Vec<Point>,
+}
+
+/// Expand a polyline into the polygon set that covers its stroke, allocating a
+/// fresh result.
+///
+/// Convenience wrapper over [`stroke_into`] for callers with nowhere to keep
+/// the scratch buffers. The renderer uses the scratch-taking form.
+#[cfg(test)]
+pub fn stroke(path: &[Point], closed: bool, width: f64, join: LineJoin) -> Vec<Vec<Point>> {
+    let mut scratch = StrokeScratch::default();
+    let mut out = PathSet::default();
+    stroke_into(path, closed, width, join, &mut scratch, &mut out);
+    out.paths().to_vec()
 }
 
 /// Expand a polyline into the polygon set that covers its stroke.
@@ -324,12 +441,21 @@ fn wind_positive(mut pts: Vec<Point>) -> Vec<Point> {
 /// `width` is in device units and points are device coordinates, so a stroke
 /// keeps a constant on-screen thickness regardless of the current transform —
 /// the same behaviour Love2D's GPU stroking has.
-pub fn stroke(path: &[Point], closed: bool, width: f64, join: LineJoin) -> Vec<Vec<Point>> {
+pub fn stroke_into(
+    path: &[Point],
+    closed: bool,
+    width: f64,
+    join: LineJoin,
+    scratch: &mut StrokeScratch,
+    out: &mut PathSet,
+) {
     let hw = (width * 0.5).max(0.05);
+    out.begin();
 
     // Drop consecutive duplicates: zero-length segments have no direction, and
     // they'd otherwise produce degenerate joins.
-    let mut pts: Vec<Point> = Vec::with_capacity(path.len());
+    let pts = &mut scratch.pts;
+    pts.clear();
     for &p in path {
         match pts.last() {
             Some(&q) if (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9 => {}
@@ -348,17 +474,19 @@ pub fn stroke(path: &[Point], closed: bool, width: f64, join: LineJoin) -> Vec<V
         // A degenerate path still deserves a visible dot, matching how a
         // zero-length line renders in most 2D APIs.
         if let Some(&(x, y)) = pts.first() {
-            return vec![wind_positive(ellipse_path(x, y, hw, hw, 12))];
+            let dot = out.push();
+            ellipse_path_into(x, y, hw, hw, 12, dot);
+            wind_positive_in_place(dot);
         }
-        return Vec::new();
+        return;
     }
 
     let n = pts.len();
     let seg_count = if closed { n } else { n - 1 };
-    let mut out: Vec<Vec<Point>> = Vec::with_capacity(seg_count * 2);
 
     // Unit direction and unit left-normal of each segment.
-    let mut dirs: Vec<Point> = Vec::with_capacity(seg_count);
+    let dirs = &mut scratch.dirs;
+    dirs.clear();
     for i in 0..seg_count {
         let (x0, y0) = pts[i];
         let (x1, y1) = pts[(i + 1) % n];
@@ -373,26 +501,25 @@ pub fn stroke(path: &[Point], closed: bool, width: f64, join: LineJoin) -> Vec<V
         let (x1, y1) = pts[(i + 1) % n];
         let (dx, dy) = dirs[i];
         let (nx, ny) = (-dy * hw, dx * hw);
-        out.push(wind_positive(vec![
+        let quad = out.push();
+        quad.extend_from_slice(&[
             (x0 + nx, y0 + ny),
             (x1 + nx, y1 + ny),
             (x1 - nx, y1 - ny),
             (x0 - nx, y0 - ny),
-        ]));
+        ]);
+        wind_positive_in_place(quad);
     }
 
     if join == LineJoin::None {
-        return out;
+        return;
     }
 
     // One join wedge per vertex where two segments actually meet: the interior
     // vertices of an open path, or every vertex of a closed one.
-    let joints: Vec<usize> = if closed {
-        (0..n).collect()
-    } else {
-        (1..n.saturating_sub(1)).collect()
-    };
-    for idx in joints {
+    let joint_count = if closed { n } else { n.saturating_sub(1) };
+    let joint_start = if closed { 0 } else { 1 };
+    for idx in joint_start..joint_count {
         // The segment arriving at this vertex, and the one leaving it.
         let prev = (idx + seg_count - 1) % seg_count;
         let (d0x, d0y) = dirs[prev];
@@ -412,7 +539,8 @@ pub fn stroke(path: &[Point], closed: bool, width: f64, join: LineJoin) -> Vec<V
         let a = (px + n0x * hw, py + n0y * hw);
         let b = (px + n1x * hw, py + n1y * hw);
 
-        let mut wedge = vec![(px, py), a, b];
+        // The miter tip, when the turn is shallow enough to earn one.
+        let mut tip = None;
         if join == LineJoin::Miter {
             let (mx, my) = (n0x + n1x, n0y + n1y);
             let len = (mx * mx + my * my).sqrt();
@@ -421,14 +549,17 @@ pub fn stroke(path: &[Point], closed: bool, width: f64, join: LineJoin) -> Vec<V
             let cos_half = len * 0.5;
             if cos_half > 1e-6 && 1.0 / cos_half <= MITER_LIMIT {
                 let miter = hw / cos_half;
-                let tip = (px + mx / len * miter, py + my / len * miter);
-                wedge = vec![(px, py), a, tip, b];
+                tip = Some((px + mx / len * miter, py + my / len * miter));
             }
         }
-        out.push(wind_positive(wedge));
-    }
 
-    out
+        let wedge = out.push();
+        match tip {
+            Some(tip) => wedge.extend_from_slice(&[(px, py), a, tip, b]),
+            None => wedge.extend_from_slice(&[(px, py), a, b]),
+        }
+        wind_positive_in_place(wedge);
+    }
 }
 
 #[cfg(test)]

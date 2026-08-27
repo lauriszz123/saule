@@ -16,24 +16,61 @@ pub(crate) struct Edge {
     winding: i32,
 }
 
+/// The filler's working memory, reused across calls.
+///
+/// Every one of these was a fresh allocation per shape — the coverage row in
+/// particular is as wide as the shape's bounding box and had to be zeroed each
+/// time. Hoisting them onto the caller makes a steady frame of drawing
+/// allocation-free; see [`crate::render::Scratch`].
+#[derive(Default)]
+pub struct FillScratch {
+    edges: Vec<Edge>,
+    coverage: Vec<f32>,
+    crossings: Vec<(f64, i32)>,
+    active: Vec<usize>,
+    spans: Vec<(usize, usize)>,
+}
+
+/// Fill a set of polygons using the **nonzero winding rule**, allocating fresh
+/// working buffers.
+///
+/// Convenience wrapper over [`fill_paths_with`] for callers that fill once and
+/// have nowhere to keep a [`FillScratch`] — tests, mostly. The renderer uses
+/// the scratch-taking form.
+#[cfg(test)]
+pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
+    let mut scratch = FillScratch::default();
+    fill_paths_with(surf, paths, paint, &mut scratch);
+}
+
 /// Fill a set of polygons using the **nonzero winding rule**.
 ///
 /// Passing several polygons at once is not just a convenience: overlapping
 /// polygons that wind the same way union cleanly under this rule, which is how
 /// [`crate::geom::stroke`] gets a thick polyline's segments and joins to merge
 /// into one shape instead of double-blending at every corner.
-pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
+pub fn fill_paths_with(
+    surf: &mut Surface,
+    paths: &[Vec<Point>],
+    paint: &Paint,
+    scratch: &mut FillScratch,
+) {
     let clip = paint.clip.intersect(&Rect::surface(surf.w, surf.h));
     if clip.is_empty() {
         return;
     }
 
-    if let Some(rect) = axis_aligned_rect(paths) {
+    // The rectangle shortcut writes whole runs of one colour, which a gradient
+    // does not have — those fills take the general scanline path instead.
+    if paint.gradient.is_none()
+        && let Some(rect) = axis_aligned_rect(paths)
+    {
         fill_axis_aligned_rect(surf, rect, paint, clip);
         return;
     }
 
-    let mut edges: Vec<Edge> = Vec::new();
+    let edges = &mut scratch.edges;
+    edges.clear();
     let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
     let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
 
@@ -83,18 +120,32 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
 
     // Sort by top edge so the active list can be advanced with a cursor rather
     // than rescanning every edge for every sub-scanline.
-    edges.sort_by(|a, b| {
+    //
+    // Unstable, because the stable sort allocates a scratch buffer once the
+    // slice passes 20 elements — which a stroked rounded rectangle does easily,
+    // and which showed up as the last allocation in an otherwise steady frame.
+    // Order among equal `y_top` values is not observable: the active list
+    // admits everything starting in the row and retires by `y_bot`.
+    edges.sort_unstable_by(|a, b| {
         a.y_top
             .partial_cmp(&b.y_top)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let width = px1 - px0;
-    let mut coverage = vec![0.0f32; width];
-    let mut crossings: Vec<(f64, i32)> = Vec::with_capacity(16);
-    let mut active: Vec<usize> = Vec::with_capacity(16);
+    // Grown, never shrunk, and cleared to zero over exactly the range this
+    // call uses — the fill loop below also hands each row back zeroed, so the
+    // buffer stays clean for the next shape without a full-width wipe.
+    let coverage = &mut scratch.coverage;
+    if coverage.len() < width {
+        coverage.resize(width, 0.0);
+    }
+    let coverage = &mut coverage[..width];
+    let crossings = &mut scratch.crossings;
+    let active = &mut scratch.active;
     // The column ranges the current row actually covers.
-    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(16);
+    let spans = &mut scratch.spans;
+    active.clear();
     let mut cursor = 0usize;
 
     let sub_weight = 1.0 / SUBSAMPLES as f32;
@@ -127,7 +178,7 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
         for s in 0..SUBSAMPLES {
             let sy = py as f64 + (s as f64 + 0.5) / SUBSAMPLES as f64;
             crossings.clear();
-            for &i in &active {
+            for &i in active.iter() {
                 let e = &edges[i];
                 if sy >= e.y_top && sy < e.y_bot {
                     crossings.push((e.x0 + (sy - e.y0) * e.dxdy, e.winding));
@@ -136,7 +187,11 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
             if crossings.len() < 2 {
                 continue;
             }
-            crossings.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            // Unstable for the same reason. Two crossings at the same x bound
+            // a zero-width span, so which one is taken first cannot change the
+            // coverage that comes out.
+            crossings
+                .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
             let mut winding = 0;
             let mut span_start = 0.0f64;
@@ -148,7 +203,7 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
                     span_start = x;
                 } else if was_inside && !is_inside {
                     let covered = add_span(
-                        &mut coverage,
+                        coverage,
                         px0,
                         px1,
                         span_start.max(clip.x0),
@@ -166,10 +221,25 @@ pub fn fill_paths(surf: &mut Surface, paths: &[Vec<Point>], paint: &Paint) {
         if spans.is_empty() {
             continue; // this row is entirely outside the shape
         }
-        merge_spans(&mut spans);
+        merge_spans(spans);
 
         let row = py * surf.w;
         for &(lo, hi) in spans.iter() {
+            // A gradient sources a different colour per pixel, so none of the
+            // run-based shortcuts below apply — every covered pixel is sampled
+            // and composited on its own.
+            if let Some(g) = paint.gradient {
+                for (offset, &cov) in coverage[lo..hi].iter().enumerate() {
+                    let x = px0 + lo + offset;
+                    let c = paint.shape(cov);
+                    if c > 0.0 {
+                        surf.blend(row + x, g.sample(x, py), c, paint.blend);
+                    }
+                }
+                coverage[lo..hi].fill(0.0);
+                continue;
+            }
+
             match solid {
                 // Opaque paint: the fully covered interior is a memory fill,
                 // and only the feathered edge pixels need a real blend. On a
