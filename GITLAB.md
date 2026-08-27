@@ -14,8 +14,14 @@ The short version:
 | Release archives | **GitLab** package registry + Releases | What `install.sh` downloads |
 | Docs site + `install.sh` URL | **GitHub Pages**, unchanged | Keeps the installer URL stable forever |
 
+> **Migration status: partly done.** The GitLab CI config is in place, but the
+> repository itself has never been pushed there — `origin` has no SSH key (see
+> step 5) and no branches. Until that is fixed, GitHub is pushed **directly**
+> and is still the working remote.
+
 GitHub keeps exactly two workflows — `deploy-www.yml` and `check-www.yml` —
-and is fed by a push mirror. `ci.yml` and `release.yml` were deleted: with
+and will be fed by a push mirror once step 5 is live. `ci.yml` and
+`release.yml` were deleted: with
 tags mirroring across, leaving `release.yml` in place would build and publish
 every release a second time.
 
@@ -29,14 +35,20 @@ that path is written down in three places: `www/site.config.mjs` (`repo`),
 (`$GitLabProject`). The CI config needs no change — it addresses the project
 through `$CI_PROJECT_ID`.
 
-Remotes: `origin` is GitLab, and pushing to `github` is deliberately disabled
-so nothing lands there except through the mirror in step 5.
+Remotes: `origin` is GitLab, and `github` is pushed directly.
+
+Do **not** disable the `github` push URL until the step 5 mirror is actually
+live. Disabling it first closes the only working route: `origin` cannot be
+pushed to without the SSH key, so commits simply strand on your machine and
+the docs site stops redeploying.
 
 ```bash
 git remote add origin git@gitlab.com:lauriszz12313/saule.git
-git remote set-url --push github DISABLED_use_gitlab_mirror
 git push -u origin main
 git push origin --tags
+
+# Only once the step 5 mirror is confirmed working:
+# git remote set-url --push github DISABLED_use_gitlab_mirror
 ```
 
 Pushing the tags matters: `scripts/next-version.sh` derives the next build
@@ -152,6 +164,19 @@ bump `26` to `27` in `Cargo.toml`'s `[workspace.package] version` and nowhere
 else; `cut-release` refuses to build a version whose year disagrees with it.
 
 ## 5. The GitHub mirror
+
+**Not set up yet — this is the step that is blocking the rest.** `origin` is
+unreachable because `gitlab.com` has no entry in `~/.ssh/config` (only
+`github-personal` does), so it falls back to a default key GitLab does not
+know:
+
+```
+$ git ls-remote origin
+git@gitlab.com: Permission denied (publickey)
+```
+
+Add a GitLab SSH key first; step 1's `git push -u origin main` cannot work
+until you do.
 
 The docs site stays on GitHub Pages, which is what keeps
 `https://lauriszz123.github.io/saule/install.sh` working forever regardless of
