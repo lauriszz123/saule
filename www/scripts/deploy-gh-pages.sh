@@ -60,13 +60,40 @@ cd "$REPO_ROOT"
 git worktree remove --force "$WORKTREE" 2>/dev/null || true
 rm -rf "$WORKTREE"
 
+# The site is published to GitHub Pages, so the deploy target is the `github`
+# remote — *not* `origin`, which has pointed at GitLab since the move (see
+# GITLAB.md). Getting this wrong is not a harmless failure: `ls-remote` against
+# a remote you cannot read fails identically to "the branch does not exist", so
+# the fallback below would quietly rebuild `gh-pages` from HEAD and bury the
+# published site under the entire source history.
+PAGES_REMOTE="${PAGES_REMOTE:-github}"
+
+if ! git remote get-url "$PAGES_REMOTE" >/dev/null 2>&1; then
+	echo "error: no git remote named '$PAGES_REMOTE'." >&2
+	echo "       Set PAGES_REMOTE=<name> to whichever remote hosts Pages." >&2
+	exit 1
+fi
+
+# Distinguish "cannot reach the remote" from "the branch is not there yet".
+# Only the second one may create the branch.
+if ! git ls-remote --heads "$PAGES_REMOTE" >/dev/null 2>&1; then
+	echo "error: cannot read from remote '$PAGES_REMOTE'." >&2
+	echo "       Fix access before deploying — continuing would rewrite" >&2
+	echo "       $BRANCH from scratch instead of building on the live site." >&2
+	exit 1
+fi
+
 # Track the remote branch if it exists; otherwise start the branch here.
-if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-	git fetch origin "$BRANCH"
-	git worktree add -B "$BRANCH" "$WORKTREE" "origin/$BRANCH"
+if git ls-remote --exit-code --heads "$PAGES_REMOTE" "$BRANCH" >/dev/null 2>&1; then
+	git fetch "$PAGES_REMOTE" "$BRANCH"
+	git worktree add -B "$BRANCH" "$WORKTREE" "$PAGES_REMOTE/$BRANCH"
 else
-	echo "    (no remote $BRANCH yet — creating it)"
-	git worktree add -B "$BRANCH" "$WORKTREE"
+	# First deploy: an *orphan* branch, so the published site carries only its
+	# own deploy history and not a copy of the source tree's.
+	echo "    (no $BRANCH on $PAGES_REMOTE yet — creating it)"
+	git worktree add --detach "$WORKTREE"
+	git -C "$WORKTREE" checkout --orphan "$BRANCH"
+	git -C "$WORKTREE" rm -rf --cached . >/dev/null 2>&1 || true
 fi
 
 echo "==> Copying the build"
@@ -100,13 +127,13 @@ if [[ "$DRY_RUN" == true ]]; then
 	echo
 	echo "==> --dry-run: committed to $BRANCH but not pushed."
 	echo "    Inspect it:  git -C $WORKTREE show --stat"
-	echo "    Then push:   git -C $WORKTREE push origin $BRANCH"
+	echo "    Then push:   git -C $WORKTREE push $PAGES_REMOTE $BRANCH"
 	echo "    Clean up:    git worktree remove --force $WORKTREE"
 	exit 0
 fi
 
-echo "==> Pushing $BRANCH"
-git push origin "$BRANCH"
+echo "==> Pushing $BRANCH to $PAGES_REMOTE"
+git push "$PAGES_REMOTE" "$BRANCH"
 
 cd "$REPO_ROOT"
 git worktree remove --force "$WORKTREE"
