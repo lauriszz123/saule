@@ -304,7 +304,7 @@ pub(crate) fn eval_values(
 ) -> Result<Vec<Value>, RuntimeError> {
     let span = expr.span.clone();
     match &expr.value {
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             if let Expr::Member { obj, name } = &callee.value {
                 if name == "super" {
                     return Ok(crate::recycle::values_of(super_call(obj, args, env, span)?));

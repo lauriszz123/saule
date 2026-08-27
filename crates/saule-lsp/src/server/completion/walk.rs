@@ -422,7 +422,7 @@ impl Walk {
                 self.expr(obj);
                 self.expr(index);
             }
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 self.expr(callee);
                 self.call_args(&callee.value, args);
             }

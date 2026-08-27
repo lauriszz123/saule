@@ -3,6 +3,7 @@
 
 use saule_ast::{
     ClassMember, Decl, EnumVariant, ImportNames, Method, MethodSig, Module, Param, Spanned,
+    TypeArgs,
 };
 
 use super::*;
@@ -339,6 +340,21 @@ impl<'a> Printer<'a> {
                 self.write(")");
             }
         }
+    }
+
+    /// Emit a call site's `<T, U>`. The declaration counterpart is
+    /// [`Self::type_params`]; this one prints *types*, so each goes through
+    /// [`Printer::ty`] rather than out as a bare name.
+    pub(crate) fn type_args(&mut self, ta: Option<&TypeArgs>) {
+        let Some(ta) = ta else { return };
+        self.write("<");
+        for (i, t) in ta.types.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.ty(t);
+        }
+        self.write(">");
     }
 
     pub(crate) fn type_params(&mut self, tps: &[String]) {

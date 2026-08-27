@@ -56,7 +56,7 @@ impl<'a> Cx<'a> {
                 .rev()
                 .find(|l| l.name == *name)
                 .map(|l| l.ty.clone()),
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 if let Expr::Ident(name) = &callee.value {
                     if with_classes(|r| r.contains_key(name)) {
                         return Some(Type::Named(name.clone()));

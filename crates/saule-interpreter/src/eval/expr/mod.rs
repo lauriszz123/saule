@@ -130,7 +130,7 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             }
         },
 
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             // Dotted calls (`obj.method(args)`) and `self.super(args)` need
             // special handling so we can auto-bind `self` and route to the
             // parent constructor respectively.

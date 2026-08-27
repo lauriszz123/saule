@@ -45,7 +45,7 @@ impl Resolver {
                 self.expr(obj);
                 self.expr(index);
             }
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 self.check_arg_ordering(args);
                 self.check_super_call(callee, &span);
                 self.expr(callee);

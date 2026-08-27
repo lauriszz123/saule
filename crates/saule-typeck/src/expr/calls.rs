@@ -2,7 +2,7 @@
 //! functions, methods and enum variants, plus the member-access
 //! diagnostics (nullable receiver, private access, unknown member).
 
-use saule_ast::{CallArg, Expr, Spanned, Type};
+use saule_ast::{CallArg, Expr, Spanned, Type, TypeArgs};
 
 use crate::TypeCheckError;
 use crate::funcs;
@@ -746,6 +746,7 @@ pub(crate) fn report_if_function_value_call(
 pub(crate) fn report_if_user_function_arity(
     callee: &Spanned<Expr>,
     args: &[CallArg],
+    type_args: Option<&TypeArgs>,
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
     span: std::ops::Range<usize>,
@@ -797,7 +798,9 @@ pub(crate) fn report_if_user_function_arity(
     // parameters as we go, then checks each slot for compatibility.
     let fresh = Freshened::new(&info.type_params);
     let type_params = &fresh.params;
-    let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
+    // An explicit `<T, U>` binds the parameters up front; without one this is
+    // empty and every parameter is inferred from the arguments as before.
+    let mut subst = seed_explicit_type_args(type_args, name, &fresh, errors);
 
     // Which parameter each argument fills. Positional arguments still line up
     // by index — the rule only differs for a trailing block, which targets the

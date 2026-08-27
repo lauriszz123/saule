@@ -1,7 +1,7 @@
 //! Type parsing: nullable suffix, table<T>/table<K,V>, generic param/arg
 //! lists, function types.
 
-use saule_ast::{Spanned, Type};
+use saule_ast::{Spanned, Type, TypeArgs};
 use saule_lexer::Token;
 
 use crate::Parser;
@@ -176,23 +176,29 @@ impl Parser {
     /// `filter<table<integer>>(xs)` is already split by the *inner*
     /// `parse_type`, which leaves a plain `>` for this `eat` to take. The
     /// only shape that would need it is `f<T>>(…)`, which is not a call.
-    pub(crate) fn try_eat_generic_call_args(&mut self) -> bool {
+    pub(crate) fn try_eat_generic_call_args(&mut self) -> Option<Box<TypeArgs>> {
         if !self.check(&Token::Lt) {
-            return false;
+            return None;
         }
+        let start = self.peek().span.start;
         self.speculate(|p| {
             // Consume a `<` ... `>` window where every entry parses as a
             // type. If the window doesn't end in `>(`, this isn't one.
             p.advance(); // `<`
-            p.parse_type().ok()?;
+            let mut types = vec![p.parse_type().ok()?];
             while p.eat(&Token::Comma) {
-                p.parse_type().ok()?;
+                types.push(p.parse_type().ok()?);
             }
             if !p.eat(&Token::Gt) {
                 return None;
             }
-            p.check(&Token::LParen).then_some(())
+            let end = p.last_consumed_end();
+            p.check(&Token::LParen).then(|| {
+                Box::new(TypeArgs {
+                    types,
+                    span: start..end,
+                })
+            })
         })
-        .is_some()
     }
 }

@@ -322,7 +322,7 @@ fn unclosed_call_still_produces_a_call_node() {
     let Stmt::Expr(e) = &parsed.module.stmts[0].value else {
         panic!("expected an expression statement");
     };
-    let Expr::Call { callee, args } = &e.value else {
+    let Expr::Call { callee, args, .. } = &e.value else {
         panic!("expected a call, got {:?}", e.value);
     };
     assert!(matches!(&callee.value, Expr::Ident(n) if n == "draw"));

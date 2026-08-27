@@ -50,6 +50,15 @@ pub enum Expr {
     Call {
         callee: Box<Spanned<Expr>>,
         args: Vec<CallArg>,
+        /// Explicit type arguments — the `<integer>` in
+        /// `filter<integer>(nums)`. `None` when the call site wrote none and
+        /// every type parameter is inferred from the actual arguments.
+        ///
+        /// Boxed because it is the rare case: inline, its `Vec` + `Range`
+        /// put 40 bytes into *every* `Expr` in every program, which
+        /// `node_size.rs` exists to catch. Behind a pointer the common
+        /// call pays 8 bytes and only a written `<...>` allocates.
+        type_args: Option<Box<TypeArgs>>,
     },
     /// `x!`
     ForceUnwrap(Box<Spanned<Expr>>),
@@ -117,6 +126,19 @@ pub enum Expr {
 }
 
 /// One `:name(args)` step inside an [`Expr::Pipe`] chain.
+/// The `<T, U>` written at a call site.
+///
+/// Distinct from a declaration's type *parameters*: those introduce names,
+/// these supply types for them. Kept as its own struct rather than a bare
+/// `Vec<Type>` so the angle brackets carry a span — an arity complaint has to
+/// point at the list, not at the call's arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeArgs {
+    pub types: Vec<Type>,
+    /// Span covering `<...>`, for diagnostics.
+    pub span: std::ops::Range<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipeStage {
     /// Free-function name invoked at this step. Resolved as a regular
@@ -126,6 +148,9 @@ pub struct PipeStage {
     /// to this list at call time, so the function's first parameter is
     /// always the upstream value.
     pub args: Vec<CallArg>,
+    /// Explicit type arguments, as on a plain call: the `<integer>` in
+    /// `:filter<integer>(x => x % 2 == 0)`. Boxed to match `Expr::Call`.
+    pub type_args: Option<Box<TypeArgs>>,
     /// Span covering `:name(args)` for diagnostics.
     pub span: std::ops::Range<usize>,
 }

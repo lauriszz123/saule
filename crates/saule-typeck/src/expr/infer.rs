@@ -239,7 +239,11 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         //      (`Foo.bar(...)` → return type of `Foo.bar`); or
         //   2. the native signature table (`String.byte`, `Math.tointeger`,
         //      `assert`).
-        Expr::Call { callee, args } => {
+        Expr::Call {
+            callee,
+            args,
+            type_args,
+        } => {
             if let Expr::Ident(n) = &callee.value
                 && with_classes(|reg| reg.contains_key(n))
             {
@@ -336,11 +340,22 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 if info.type_params.is_empty() {
                     return Some(ret.clone());
                 }
-                // Generic `fn id<T>(x: T) -> T`: explicit type arguments are
-                // discarded by the parser, so bind the type params from the
-                // actual argument types, exactly as the native path above does.
+                // Generic `fn id<T>(x: T) -> T`: an explicit `<T>` at the
+                // call site pins the parameters outright, and anything it
+                // leaves unset is bound from the actual argument types, as
+                // the native path above does.
                 let mut subst: std::collections::HashMap<String, Type> =
                     std::collections::HashMap::new();
+                // A wrong-length list is ignored rather than reported: `infer`
+                // runs many times over the same node, and `check_expr` already
+                // raises exactly one `TypeArgArity` for it.
+                if let Some(ta) = type_args
+                    && ta.types.len() == info.type_params.len()
+                {
+                    for (param, ty) in info.type_params.iter().zip(ta.types.iter()) {
+                        subst.insert(param.clone(), ty.clone());
+                    }
+                }
                 let positional: Vec<&Spanned<Expr>> = args
                     .iter()
                     .filter_map(|a| match a {

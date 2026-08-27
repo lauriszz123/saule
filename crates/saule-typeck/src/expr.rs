@@ -39,7 +39,11 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             report_if_private(obj, name, scope, errors);
             report_if_unknown_member(obj, name, scope, errors);
         }
-        Expr::Call { callee, args } => {
+        Expr::Call {
+            callee,
+            args,
+            type_args,
+        } => {
             // `obj.method(args)` is parsed as Call(Member { obj, name }, args)
             // — same nullable-receiver rule applies.
             if let Expr::Member { obj, name } = &callee.value {
@@ -50,7 +54,14 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                 report_if_enum_variant_arity(obj, name, args, errors, expr.span.clone());
             } else {
                 check_expr(callee, scope, errors);
-                report_if_user_function_arity(callee, args, scope, errors, expr.span.clone());
+                report_if_user_function_arity(
+                    callee,
+                    args,
+                    type_args.as_deref(),
+                    scope,
+                    errors,
+                    expr.span.clone(),
+                );
                 report_if_function_value_call(callee, args, scope, errors, expr.span.clone());
             }
             // Each argument is walked against the type its slot expects,

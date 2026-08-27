@@ -1,0 +1,12 @@
+-- The `<...>` supplies one type per declared type parameter. `filter` declares
+-- one, so two is a mistake the call site should hear about rather than have
+-- silently ignored.
+-- Should be a compile error.
+
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+	return items
+end
+
+local nums: table<integer> = {1, 2, 3}
+local out = filter<integer, string>(nums, x => x % 2 == 0)
+println(out)

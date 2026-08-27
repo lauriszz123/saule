@@ -434,6 +434,18 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`{callee}` expects {expected} type argument(s), got {found}")]
+    #[diagnostic(help(
+        "the `<...>` at a call site supplies one type per type parameter the function declares — write them all, or none and let them be inferred from the arguments"
+    ))]
+    TypeArgArity {
+        callee: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of type arguments")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`{callee}` expects {expected} argument(s), got {found}")]
     #[diagnostic(help(
         "check the signature of `{callee}` — pass exactly the right number of arguments (or rely on declared defaults)"

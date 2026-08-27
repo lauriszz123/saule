@@ -65,20 +65,29 @@ impl Parser {
                         Expr::Call {
                             callee: Box::new(expr),
                             args,
+                            type_args: None,
                         },
                         span,
                     );
                 }
-                Token::Lt if self.try_eat_generic_call_args() => {
-                    // `name<T, U>(args)` — generic instantiation. Type args
-                    // are erased at parse time; the typechecker is generic-
-                    // parameter aware so it doesn't penalize the call.
+                // `name<T, U>(args)` — generic instantiation. The type args
+                // are kept: the typechecker binds the callee's parameters to
+                // them, so `filter<string>(nums)` on a `table<integer>` is a
+                // mismatch rather than a silently re-inferred `T`.
+                Token::Lt => {
+                    // Not an instantiation after all (`a < b`) — leave the `<`
+                    // for the binary-operator level to claim.
+                    let Some(type_args) = self.try_eat_generic_call_args() else {
+                        break;
+                    };
+                    let type_args = Some(type_args);
                     let (args, close_span) = self.parse_call_args()?;
                     let span = expr.span.start..close_span.end;
                     expr = Spanned::new(
                         Expr::Call {
                             callee: Box::new(expr),
                             args,
+                            type_args,
                         },
                         span,
                     );
@@ -94,11 +103,23 @@ impl Parser {
                 Token::Do if !self.no_trailing_block && matches!(expr.value, Expr::Call { .. }) => {
                     let block = self.parse_trailing_block()?;
                     let span = expr.span.start..block.span.end;
-                    let Expr::Call { callee, mut args } = expr.value else {
+                    let Expr::Call {
+                        callee,
+                        mut args,
+                        type_args,
+                    } = expr.value
+                    else {
                         unreachable!("guarded by the match arm above")
                     };
                     args.push(CallArg::Positional(block));
-                    expr = Spanned::new(Expr::Call { callee, args }, span);
+                    expr = Spanned::new(
+                        Expr::Call {
+                            callee,
+                            args,
+                            type_args,
+                        },
+                        span,
+                    );
                 }
                 Token::Bang => {
                     let bang = self.advance();

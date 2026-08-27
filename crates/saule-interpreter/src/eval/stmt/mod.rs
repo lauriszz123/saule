@@ -305,7 +305,7 @@ fn exec_inner(stmt: &Spanned<Stmt>, env: &Rc<RefCell<Environment>>) -> Result<Fl
             // must agree about *which* calls are tail calls, because the
             // depth at which a program dies is observable.
             if let [only] = exprs.as_slice()
-                && let Expr::Call { callee, args } = &only.value
+                && let Expr::Call { callee, args, .. } = &only.value
                 && !matches!(
                     &callee.value,
                     Expr::Member { .. } | Expr::SafeMember { .. }

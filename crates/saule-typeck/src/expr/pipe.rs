@@ -4,7 +4,7 @@
 //! 0, so each stage binds its type parameters from the value that reaches
 //! it and hands the *instantiated* result to the next stage.
 
-use saule_ast::{CallArg, Expr, PipeStage, Spanned, Type};
+use saule_ast::{CallArg, Expr, PipeStage, Spanned, Type, TypeArgs};
 
 use crate::TypeCheckError;
 use crate::funcs;
@@ -31,11 +31,23 @@ pub(crate) fn bind_stage_generics(
     info: &funcs::FunctionInfo,
     incoming: Option<&Type>,
     args: &[CallArg],
+    type_args: Option<&TypeArgs>,
     scope: &Scope,
 ) -> std::collections::HashMap<String, Type> {
     let mut subst = std::collections::HashMap::new();
     if info.type_params.is_empty() {
         return subst;
+    }
+    // An explicit `:filter<integer>(…)` pins the parameters before anything
+    // is inferred, and `unify` never overwrites a name already bound — so the
+    // written type wins over the one the piped value would have implied. A
+    // wrong-length list is ignored here and reported once by `check_pipe`.
+    if let Some(ta) = type_args
+        && ta.types.len() == info.type_params.len()
+    {
+        for (param, ty) in info.type_params.iter().zip(ta.types.iter()) {
+            subst.insert(param.clone(), ty.clone());
+        }
     }
     if let (Some(first), Some(actual)) = (info.params.first(), incoming) {
         unify(&first.ty, actual, &info.type_params, &mut subst);
@@ -124,7 +136,13 @@ pub(crate) fn infer_pipe(
     let mut current = infer(source, scope);
     for stage in stages {
         let info = funcs::lookup(&stage.name)?;
-        let subst = bind_stage_generics(&info, current.as_ref(), &stage.args, scope);
+        let subst = bind_stage_generics(
+            &info,
+            current.as_ref(),
+            &stage.args,
+            stage.type_args.as_deref(),
+            scope,
+        );
         current = stage_return(&info, &subst);
     }
     current
@@ -178,6 +196,21 @@ pub(crate) fn check_pipe(
             continue;
         };
 
+        // A stage takes explicit type arguments like any other call, so the
+        // same wrong-length complaint applies. Reported here rather than in
+        // `bind_stage_generics` because that runs from `infer_pipe` too, and
+        // inference must stay silent.
+        if let Some(ta) = &stage.type_args
+            && ta.types.len() != info.type_params.len()
+        {
+            errors.push(TypeCheckError::TypeArgArity {
+                callee: stage.name.clone(),
+                expected: info.type_params.len(),
+                found: ta.types.len(),
+                span: to_source_span(ta.span.clone()),
+            });
+        }
+
         // Arity check: piped value counts as one argument. The declared
         // function must therefore have at least one parameter, and the
         // explicit args must fit into `params[1..]` (respecting defaults
@@ -217,7 +250,13 @@ pub(crate) fn check_pipe(
 
         // Bind the stage's type parameters before comparing anything, so a
         // generic stage is checked as the caller actually instantiated it.
-        let subst = bind_stage_generics(&info, current.as_ref(), &stage.args, scope);
+        let subst = bind_stage_generics(
+            &info,
+            current.as_ref(),
+            &stage.args,
+            stage.type_args.as_deref(),
+            scope,
+        );
 
         // Now the arguments, each against what its slot expects.
         check_stage_args(&info, &stage.args, &subst, scope, errors);

@@ -137,9 +137,8 @@ impl Vm {
         n: usize,
         base: usize,
         a: usize,
-        proto: &Proto,
         chunk: &Chunk,
-        here: u32,
+        site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
         let (e_idx, tag) = ((packed >> 16) as usize, packed & 0xffff);
         // The payload is an array-style table of the positional arguments,
@@ -150,7 +149,7 @@ impl Vm {
         let Some(e) = self.shared.enums.get(e_idx) else {
             return Err(RuntimeError::TypeError {
                 message: format!("internal: no enum {e_idx}"),
-                span: proto.span_at(here),
+                span: site.span(),
             });
         };
         let name = chunk.enums[e_idx].variants[tag as usize].name.to_string();
@@ -174,15 +173,14 @@ impl Vm {
         ins: Instruction,
         base: usize,
         a: usize,
-        proto: &Proto,
         chunk: &Chunk,
-        here: u32,
+        site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
         let key = chunk.constants[k as usize].clone();
         let Value::Str(name) = &key else {
             return Err(RuntimeError::TypeError {
                 message: "internal: CALLMX name is not a string".into(),
-                span: proto.span_at(here),
+                span: site.span(),
             });
         };
         // `A` holds the receiver and `A+1..` the arguments, matching
@@ -192,7 +190,7 @@ impl Vm {
         let recv = (*self.reg(base + a)).clone();
         let args: Vec<Value> =
             (0..n_args).map(|i| (*self.reg(base + a + 1 + i)).clone()).collect();
-        let vs = saule_interpreter::call_member_dynamic(&recv, name, &args, proto.span_at(here))?;
+        let vs = saule_interpreter::call_member_dynamic(&recv, name, &args, site.span())?;
         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
         self.store_results(base + a, &vs, n_ret);
         Ok(())
@@ -1488,7 +1486,7 @@ impl Vm {
                     Op::NEWVAR => {
                         let packed = self.extra_arg(code.as_ptr(), &mut pc);
                         let n = (ins.b() as usize).saturating_sub(1);
-                        self.new_variant(packed, n, base, a, &proto, &chunk, here)?;
+                        self.new_variant(packed, n, base, a, &chunk, &Site::Code(&proto, here))?;
                     }
                     Op::GETTAG => {
                         let t = match self.reg(base + ins.b() as usize) {
@@ -1600,7 +1598,14 @@ impl Vm {
                     }
                     Op::CALLMX => {
                         let k = self.extra_arg(code.as_ptr(), &mut pc);
-                        self.call_member_by_name(k, ins, base, a, &proto, &chunk, here)?;
+                        self.call_member_by_name(
+                            k,
+                            ins,
+                            base,
+                            a,
+                            &chunk,
+                            &Site::Code(&proto, here),
+                        )?;
                     }
 
                     // ---- §19 variadic parameters -------------------------

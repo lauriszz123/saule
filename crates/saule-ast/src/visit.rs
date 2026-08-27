@@ -211,7 +211,7 @@ fn walk_expr<V: Visitor>(e: &Spanned<Expr>, v: &mut V) {
             walk_expr(obj, v);
             walk_expr(index, v);
         }
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             walk_expr(callee, v);
             walk_args(args, v);
         }

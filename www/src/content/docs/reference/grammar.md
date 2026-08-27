@@ -175,7 +175,7 @@ pattern ::= 'nil' | 'true' | 'false' | ['-'] Numeral | String
           | '(' [pattern {',' pattern}] ')'
 
 pipeline ::= 'when' '(' exp ')' stage {stage}
-stage    ::= ':' Name args
+stage    ::= ':' Name [typeArgs] args
 ```
 
 Four parts of this need a word of explanation.

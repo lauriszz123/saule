@@ -1,0 +1,46 @@
+-- Explicit generic instantiation at a call site, in both spellings the guide
+-- documents: `filter<integer>(...)` and the pipeline stage `:filter<integer>(...)`.
+--
+-- The pipeline form did not parse at all before — `parse_pipe_stage` went
+-- straight from the stage name to `(`, so the `<` was an unexpected token even
+-- though README.md and the functions guide both show the form.
+fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
+	local result: table<T> = {}
+
+	for item: T in items do
+		if predicate(item) then
+			result[#result + 1] = item
+		end
+	end
+
+	return result
+end
+
+fn firstOf<T>(items: table<T>) -> T?
+	if #items == 0 then
+		return nil
+	end
+	return items[1]
+end
+
+local nums: table<integer> = {1, 2, 3, 4, 5, 6}
+
+-- Plain call with the type argument written out.
+local evens: table<integer> = filter<integer>(nums, x => x % 2 == 0)
+println(#evens)
+
+-- The written argument determines the result type, not just the parameters.
+local firstEven: integer? = firstOf<integer>(evens)
+println(firstEven!)
+
+-- Pipeline stage, same instantiation.
+local piped: table<integer> = when(nums):filter<integer>(x => x > 3)
+println(#piped)
+
+-- A nested type argument still closes on `>>`, which the parser splits.
+local nested: table<table<integer>> = filter<table<integer>>({{1}, {2}}, t => #t > 0)
+println(#nested)
+
+-- Omitting the list entirely still infers, as before.
+local odds: table<integer> = filter(nums, x => x % 2 == 1)
+println(#odds)

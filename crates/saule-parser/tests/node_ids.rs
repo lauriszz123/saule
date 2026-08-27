@@ -175,6 +175,7 @@ fn collect(m: &Module) -> Vec<NodeId> {
             Expr::Call {
                 callee,
                 args: call_args,
+                ..
             } => {
                 expr(callee, out);
                 args(call_args, out);
