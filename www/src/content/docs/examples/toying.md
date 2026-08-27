@@ -9,7 +9,7 @@ sidebar:
 
 Opens a window and draws a rectangle that follows the mouse, using the Love2D-style `engine` native package. Shows how Saule calls into a dynamically-loaded Rust library.
 
-[Browse this example on GitLab](https://gitlab.com/lauriszz123/saule/-/tree/main/examples/toying)
+[Browse this example on GitLab](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/toying)
 
 :::caution[Prerequisite]
 This one needs the `engine` native package installed first — run the `install_mac.sh` / `install_wsl.sh` / `install_windows.ps1` script for your platform from `scripts/`.
@@ -18,7 +18,7 @@ This one needs the `engine` native package installed first — run the `install_
 ## Run it
 
 ```sh
-git clone https://gitlab.com/lauriszz123/saule.git
+git clone https://gitlab.com/lauriszz12313/saule.git
 cd saule/examples/toying
 saule run
 ```
