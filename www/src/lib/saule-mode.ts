@@ -38,22 +38,61 @@ const SELF = new Set(['self', 'super']);
 const CONSTANTS = new Set(['true', 'false', 'nil']);
 
 // support.type.primitive.saule
+// No `function`: a function's type is its signature, written `fn(...) -> T`,
+// and `fn` is already a declaration keyword.
 const PRIMITIVES = new Set([
-	'integer', 'float', 'string', 'boolean', 'any', 'nil', 'function', 'table',
+	'integer', 'float', 'string', 'boolean', 'any', 'nil', 'table',
 	'userdata', 'thread', 'number',
 ]);
 
+/**
+ * The shape of a generic call's `<...>` window, mirroring the `#generics`
+ * lookahead in `saule.tmLanguage.json`. The trailing `(` is what separates
+ * `filter<integer>(nums)` from `a < b`; one level of nesting covers
+ * `filter<table<integer>>(xs)`. The genuinely ambiguous `a < b, c > (d)`
+ * matches here too — the real parser settles that with a speculative parse
+ * (`Parser::try_eat_generic_call_args`), which a regex cannot do.
+ */
+const TYPE_ARG_CALL =
+	/^[ \t]*<(?:[A-Za-z0-9_,?()\t ]|->)*(?:<(?:[A-Za-z0-9_,?()\t ]|->)*>(?:[A-Za-z0-9_,?()\t ]|->)*)*>[ \t]*\(/;
+
 interface State {
-	/** Depth of the `--[[ … ]]` block comment we're inside, 0 when outside. */
+	/** True while inside a `--[[ … ]]` block comment. */
 	inComment: boolean;
+	/**
+	 * Nesting depth of the `<...>` type-argument list we're inside, 0 when
+	 * outside. Tracked so the angle brackets colour as brackets rather than
+	 * comparisons, and — the part that actually shows — so the `>>` closing
+	 * `table<table<string>>` is two brackets instead of a right shift.
+	 */
+	angleDepth: number;
+	/** True when the next non-space character is a `<` opening such a list. */
+	expectTypeArgs: boolean;
+	/**
+	 * True when the token just read was the keyword `fn`, so the name that
+	 * follows is defining a function rather than calling one.
+	 */
+	afterFn: boolean;
 }
 
 const sauleStream = StreamLanguage.define<State>({
 	name: 'saule',
 
-	startState: () => ({ inComment: false }),
+	startState: () => ({
+		inComment: false,
+		angleDepth: 0,
+		expectTypeArgs: false,
+		afterFn: false,
+	}),
 
 	token(stream: StringStream, state: State): string | null {
+		// Type-argument lists are line-local, as in the TextMate grammar: an
+		// unclosed `<` colours one line rather than the rest of the document.
+		if (stream.sol()) {
+			state.angleDepth = 0;
+			state.expectTypeArgs = false;
+		}
+
 		// Block comments span lines, so they're the first thing to resolve.
 		if (state.inComment) {
 			if (stream.match(/^.*?\]\]/)) state.inComment = false;
@@ -62,6 +101,11 @@ const sauleStream = StreamLanguage.define<State>({
 		}
 
 		if (stream.eatSpace()) return null;
+
+		// Read and clear in one go: only the token immediately after `fn` is a
+		// declaration name, and every branch below counts as that next token.
+		const afterFn = state.afterFn;
+		state.afterFn = false;
 
 		// `--[[ … ]]` block comment, then `--` line comment. Order matters:
 		// a block comment opener also matches the line-comment pattern.
@@ -124,22 +168,64 @@ const sauleStream = StreamLanguage.define<State>({
 			const word = stream.current();
 
 			if (CONTROL.has(word)) return 'keyword';
-			if (DECLARATION.has(word)) return 'definitionKeyword';
+			if (DECLARATION.has(word)) {
+				state.afterFn = word === 'fn';
+				return 'definitionKeyword';
+			}
 			if (LOGICAL.has(word)) return 'operatorKeyword';
 			if (SELF.has(word)) return 'self';
 			if (CONSTANTS.has(word)) return 'atom';
-			if (PRIMITIVES.has(word)) return 'typeName';
+			if (PRIMITIVES.has(word)) {
+				// `table` is the one generic head that cannot be a variable
+				// being compared, so `table <` is never a less-than and the
+				// list can be opened without a lookahead.
+				if (word === 'table' && stream.match(/^[ \t]*</, false)) {
+					state.expectTypeArgs = true;
+				}
+				return 'typeName';
+			}
 
 			// Same heuristic the TextMate grammar uses: PascalCase is a type.
 			if (/^[A-Z]/.test(word)) return 'typeName';
 
-			// A lowercase identifier immediately followed by `(` is a call.
+			// `fn name` / `fn name<T, U>` — the name defines a function rather
+			// than calling one, the distinction the TextMate grammar draws
+			// between `entity.name.function` and `entity.name.function.call`.
+			if (afterFn) {
+				if (stream.match(TYPE_ARG_CALL, false)) state.expectTypeArgs = true;
+				// Both modifiers: `definition` carries the meaning, `function`
+				// keeps the function colour in themes that style calls but have
+				// no rule for a bare definition.
+				return 'variableName.definition.function';
+			}
+
+			// A lowercase identifier followed by `(` is a call, and so is one
+			// followed by a type-argument list and *then* `(`.
 			// `function` is a Lezer *modifier*, not a tag, so it has to be
 			// applied to a base tag — a bare 'function' would only produce a
 			// console warning and no highlighting.
 			if (stream.match(/^\s*\(/, false)) return 'variableName.function';
+			if (stream.match(TYPE_ARG_CALL, false)) {
+				state.expectTypeArgs = true;
+				return 'variableName.function';
+			}
 
 			return 'variableName';
+		}
+
+		// Angle brackets of a type-argument list, taken one at a time and
+		// ahead of the operator rules — otherwise the `>>` closing a nested
+		// list would be claimed as a right shift.
+		if ((state.expectTypeArgs || state.angleDepth > 0) && stream.eat('<')) {
+			// `++`, not `= 1`: the inner `table<` of `table<table<integer>>`
+			// arrives here with the outer list already open.
+			state.expectTypeArgs = false;
+			state.angleDepth++;
+			return 'bracket';
+		}
+		if (state.angleDepth > 0 && stream.eat('>')) {
+			state.angleDepth--;
+			return 'bracket';
 		}
 
 		// Operators, longest match first so `..` doesn't tokenize as two `.`,

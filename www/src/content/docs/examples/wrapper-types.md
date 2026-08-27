@@ -9,12 +9,12 @@ sidebar:
 
 A `Text` built straight from a string literal and a `Settings` with full control of every read and write. Shows `Assignable<T>` target-typed construction and `OpIndex` / `OpNewIndex` as Saule's `__index` / `__newindex` — with nothing injected: a wrapper declares every method it exposes, calling the `String` class explicitly.
 
-[Browse this example on GitLab](https://gitlab.com/lauriszz123/saule/-/tree/main/examples/wrapper-types)
+[Browse this example on GitLab](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/wrapper-types)
 
 ## Run it
 
 ```sh
-git clone https://gitlab.com/lauriszz123/saule.git
+git clone https://gitlab.com/lauriszz12313/saule.git
 cd saule/examples/wrapper-types
 saule run
 ```

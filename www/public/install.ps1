@@ -26,7 +26,7 @@ try {
 # The one line to change if the project ever moves namespace. The API addresses
 # a project by its URL-encoded path; anything a human clicks needs real slashes.
 $GitLabHost    = 'https://gitlab.com'
-$GitLabProject = 'lauriszz123/saule'
+$GitLabProject = 'lauriszz12313/saule'
 $PackageName   = 'saule'
 
 $ProjectEnc = $GitLabProject -replace '/', '%2F'

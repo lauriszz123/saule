@@ -9,6 +9,7 @@
     { "include": "#numbers" },
     { "include": "#keywords" },
     { "include": "#constants" },
+    { "include": "#generics" },
     { "include": "#types" },
     { "include": "#functions" },
     { "include": "#operators" },
@@ -82,6 +83,62 @@
         { "name": "constant.language.saule", "match": "\\b(true|false|nil)\\b" }
       ]
     },
+    "generics": {
+      "comment": "A generic argument list `<T, U>` is a bracketed construct, not a run of comparison operators, and the `>>` that closes a nested one is two brackets rather than a right shift. Both are matched as begin/end regions so the closing `>` is consumed one at a time, which is the only way `table<table<integer>>` stops highlighting as a shift. Every window is line-local (`[ \\t]`, and an `$` alternative on each `end`) so an unclosed `<` colours one line rather than running away to the end of the file.",
+      "patterns": [
+        {
+          "comment": "The same list on a declaration `fn name<T, U>(...)`, where the name defines a function rather than calling one. Listed first so it beats the call form below. Anchored with a lookbehind because `#keywords` has already consumed the `fn`, so a rule that started there would never get the chance to run — which is what made the old `fn name` rule dead.",
+          "begin": "(?<=\\bfn[ \\t])[ \\t]*([A-Za-z_][A-Za-z0-9_]*)[ \\t]*(<)(?=(?:[A-Za-z0-9_,?()\\\\t ]|->)*(?:<(?:[A-Za-z0-9_,?()\\\\t ]|->)*>(?:[A-Za-z0-9_,?()\\\\t ]|->)*)*>[ \\t]*\\()",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.saule" },
+            "2": { "name": "punctuation.definition.generic.begin.saule" }
+          },
+          "end": "(>)(?=[ \\t]*\\()|$",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.generic.end.saule" }
+          },
+          "patterns": [{ "include": "#generic-body" }]
+        },
+        {
+          "comment": "Generic call `f<T>(...)`. The trailing `(` is what distinguishes this from `a < b`: the lookahead requires the whole `<...>` window to be type-shaped and to be followed by a call's open paren. One level of nesting is allowed, which covers `filter<table<integer>>(xs)`. The genuinely ambiguous `a < b, c > (d)` still matches — the real parser resolves that by speculative parse (`Parser::try_eat_generic_call_args`), which a regex grammar cannot do.",
+          "begin": "\\b([a-z_][A-Za-z0-9_]*)[ \\t]*(<)(?=(?:[A-Za-z0-9_,?()\\t ]|->)*(?:<(?:[A-Za-z0-9_,?()\\t ]|->)*>(?:[A-Za-z0-9_,?()\\t ]|->)*)*>[ \\t]*\\()",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.call.saule" },
+            "2": { "name": "punctuation.definition.generic.begin.saule" }
+          },
+          "end": "(>)(?=[ \\t]*\\()|$",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.generic.end.saule" }
+          },
+          "patterns": [{ "include": "#generic-body" }]
+        },
+        {
+          "comment": "`table<V>` / `table<K, V>` in a type position. Anchored on `table` alone because it is the one generic head that cannot be a variable being compared — `table` is a primitive type name, so `table <` is never a less-than. User-written generic types (`Box<T>`) are deliberately not anchored here: generics are still accept-and-discard in the parser, and `Name <` is ambiguous.",
+          "begin": "\\b(table)[ \\t]*(<)",
+          "beginCaptures": {
+            "1": { "name": "support.type.primitive.saule" },
+            "2": { "name": "punctuation.definition.generic.begin.saule" }
+          },
+          "end": "(>)|$",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.generic.end.saule" }
+          },
+          "patterns": [{ "include": "#generic-body" }]
+        }
+      ]
+    },
+    "generic-body": {
+      "comment": "What may appear between the angle brackets. `#generics` first so a nested list opens its own region and eats its own `>`; `#types` supplies the primitive and PascalCase names without a second copy of the primitive list.",
+      "patterns": [
+        { "include": "#generics" },
+        { "include": "#types" },
+        { "name": "keyword.declaration.saule", "match": "\\bfn\\b" },
+        { "name": "keyword.operator.saule", "match": "->" },
+        { "name": "keyword.operator.nullable.saule", "match": "\\?" },
+        { "name": "punctuation.section.brackets.saule", "match": "[()]" },
+        { "name": "punctuation.separator.saule", "match": "," }
+      ]
+    },
     "types": {
       "patterns": [
         {
@@ -98,11 +155,10 @@
     "functions": {
       "patterns": [
         {
-          "comment": "fn name(",
-          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "comment": "The name in a declaration `fn name(...)`. Anchored on the name with a lookbehind rather than on the `fn`: `#keywords` is included earlier and wins the tie at the `fn`, so a rule matching from there never fires. Listed ahead of the call rule below so a declaration is not mistaken for a call.",
+          "match": "(?<=\\bfn[ \\t])[ \\t]*([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.declaration.saule" },
-            "2": { "name": "entity.name.function.saule" }
+            "1": { "name": "entity.name.function.saule" }
           }
         },
         {

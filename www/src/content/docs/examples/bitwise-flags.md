@@ -9,12 +9,12 @@ sidebar:
 
 A `Permissions` flag set that unions, intersects and flips with the bitwise operators and prints like `rwx`, plus an RGBA colour packed into one `integer` with shifts and masks. Shows the Lua 5.3 spellings (`~` is xor, because `^` is already exponentiation), the precedence that makes `bits & flag != 0` need no parentheses, and the `Op*` interfaces that put all six operators on a class.
 
-[Browse this example on GitLab](https://gitlab.com/lauriszz123/saule/-/tree/main/examples/bitwise-flags)
+[Browse this example on GitLab](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/bitwise-flags)
 
 ## Run it
 
 ```sh
-git clone https://gitlab.com/lauriszz123/saule.git
+git clone https://gitlab.com/lauriszz12313/saule.git
 cd saule/examples/bitwise-flags
 saule run
 ```

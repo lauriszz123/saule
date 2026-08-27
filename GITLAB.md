@@ -23,15 +23,18 @@ every release a second time.
 
 ## 1. Create the project and push
 
-Create an **empty** project at `gitlab.com/lauriszz123/saule` — no README, no
-`.gitignore`, no license, or the first push is rejected as a non-fast-forward.
-If you pick a different path, change it in three places: `www/site.config.mjs`
-(`repo`), `www/public/install.sh` (`GITLAB_PROJECT`) and
-`www/public/install.ps1` (`$GitLabProject`).
+The project lives at `gitlab.com/lauriszz12313/saule`. If it ever moves,
+that path is written down in three places: `www/site.config.mjs` (`repo`),
+`www/public/install.sh` (`GITLAB_PROJECT`) and `www/public/install.ps1`
+(`$GitLabProject`). The CI config needs no change — it addresses the project
+through `$CI_PROJECT_ID`.
+
+Remotes: `origin` is GitLab, and pushing to `github` is deliberately disabled
+so nothing lands there except through the mirror in step 5.
 
 ```bash
-git remote rename origin github
-git remote add origin git@gitlab.com:lauriszz123/saule.git
+git remote add origin git@gitlab.com:lauriszz12313/saule.git
+git remote set-url --push github DISABLED_use_gitlab_mirror
 git push -u origin main
 git push origin --tags
 ```
@@ -40,9 +43,10 @@ Pushing the tags matters: `scripts/next-version.sh` derives the next build
 number from them, so without them the next release would restart at `.1` and
 collide with a version you already published.
 
-Then set **Settings → General → Visibility** to **Public**. The installer
-downloads from the package registry with no token, which only works on a
-public project.
+Then set **Settings → General → Visibility** to **Public**. This is not
+optional: `install.sh` downloads from the package registry with no token, so on
+a private project every user's install fails with a 401. It is also what lets
+anyone read the project without an account.
 
 ## 2. The release token
 
@@ -178,7 +182,7 @@ in this commit has not reached GitHub yet.
 #    CI/CD → Run pipeline on main, RELEASE_DRY_RUN=true
 
 # 2. Cut a real release, then confirm the installer sees it:
-curl -fsSL "https://gitlab.com/api/v4/projects/lauriszz123%2Fsaule/releases/permalink/latest"
+curl -fsSL "https://gitlab.com/api/v4/projects/lauriszz12313%2Fsaule/releases/permalink/latest"
 
 # 3. Install into a scratch directory rather than over your real toolchain:
 SAULE_HOME=/tmp/saule-test SAULE_NO_MODIFY_PATH=1 \
