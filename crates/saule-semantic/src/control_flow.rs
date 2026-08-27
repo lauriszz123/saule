@@ -230,7 +230,7 @@ fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
             check_expr(obj, ctx, errors);
             check_expr(index, ctx, errors);
         }
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             check_expr(callee, ctx, errors);
             for a in args {
                 check_call_arg(a, ctx, errors);

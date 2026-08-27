@@ -1,7 +1,7 @@
 //! Generic instantiation: binding a signature's type parameters from
 //! actual argument types, and substituting them back out again.
 
-use saule_ast::Type;
+use saule_ast::{Type, TypeArgs};
 
 use crate::state::{pop_sig_params, push_sig_params};
 
@@ -188,6 +188,44 @@ pub(crate) fn instantiate_param_types(
             (!mentions_unbound_param(&resolved, &fresh.params)).then_some(resolved)
         })
         .collect()
+}
+
+/// Seed a substitution from an explicit `<T, U>` written at the call site.
+///
+/// Binding here rather than leaving every parameter free is the whole point:
+/// [`unify`] refuses to overwrite a name already in `subst`, so a seeded
+/// `T := string` survives the walk over the actual arguments and
+/// `filter<string>(nums)` on a `table<integer>` is reported as the argument
+/// mismatch it is instead of quietly re-inferring `T := integer`.
+///
+/// A list of the wrong length is reported and then *ignored*, so the call is
+/// still checked by inference alone — one complaint about the `<...>` rather
+/// than a second, confusing one about every argument.
+pub(crate) fn seed_explicit_type_args(
+    type_args: Option<&TypeArgs>,
+    callee: &str,
+    fresh: &Freshened,
+    errors: &mut Vec<TypeCheckError>,
+) -> std::collections::HashMap<String, Type> {
+    let mut subst = std::collections::HashMap::new();
+    let Some(ta) = type_args else {
+        return subst;
+    };
+    // Covers the non-generic callee too: it declares no parameters, so any
+    // list at all is the wrong length.
+    if ta.types.len() != fresh.params.len() {
+        errors.push(TypeCheckError::TypeArgArity {
+            callee: callee.to_string(),
+            expected: fresh.params.len(),
+            found: ta.types.len(),
+            span: to_source_span(ta.span.clone()),
+        });
+        return subst;
+    }
+    for (param, ty) in fresh.params.iter().zip(ta.types.iter()) {
+        subst.insert(param.clone(), ty.clone());
+    }
+    subst
 }
 
 /// One-way unification: bind type-param names in `expected` to corresponding

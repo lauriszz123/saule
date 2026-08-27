@@ -90,7 +90,7 @@ impl Compiler<'_> {
                 // `finish_call` emits to land it in a register the program
                 // never looks at again. `p.move(1.0, 2.0)` in a loop was
                 // one sixth `MOVE`.
-                Stmt::Expr(e @ Spanned { value: Expr::Call { callee, args }, .. }) => {
+                Stmt::Expr(e @ Spanned { value: Expr::Call { callee, args, .. }, .. }) => {
                     let m = self.mark();
                     let dst = self.alloc(&s.span)?;
                     self.call_to_want(e, callee, args, dst, Want::Fixed(0))?;

@@ -124,7 +124,7 @@ impl<'a> CollectCx<'a> {
                 self.visit_expr(obj);
                 self.visit_expr(index);
             }
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 self.visit_expr(callee);
                 for a in args {
                     self.visit_call_arg(a);
