@@ -30,7 +30,11 @@
 # the branch means pushes to main stop updating the site.
 [CmdletBinding()]
 param(
-    [switch]$DryRun
+    [switch]$DryRun,
+    # The site is published to GitHub Pages, so the deploy target is the
+    # `github` remote — *not* `origin`, which has pointed at GitLab since the
+    # move (see GITLAB.md).
+    [string]$PagesRemote = 'github'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -139,15 +143,34 @@ if (Test-Path $Worktree) {
     Remove-Item -LiteralPath $Worktree -Recurse -Force
 }
 
+# Getting the remote wrong is not a harmless failure: `ls-remote` against a
+# remote you cannot read fails identically to "the branch does not exist", so
+# the create path below would quietly rebuild $Branch from HEAD and bury the
+# published site under the entire source history.
+if ((Invoke-Probe -Exe 'git' -Arguments @('remote', 'get-url', $PagesRemote)) -ne 0) {
+    throw "no git remote named '$PagesRemote'. Pass -PagesRemote <name> for whichever remote hosts Pages."
+}
+
+# Distinguish "cannot reach the remote" from "the branch is not there yet".
+# Only the second one may create the branch.
+if ((Invoke-Probe -Exe 'git' -Arguments @('ls-remote', '--heads', $PagesRemote)) -ne 0) {
+    throw "cannot read from remote '$PagesRemote'. Fix access before deploying - continuing would rewrite $Branch from scratch instead of building on the live site."
+}
+
 # Track the remote branch if it exists; otherwise start the branch here.
-if ((Invoke-Probe -Exe 'git' -Arguments @('ls-remote', '--exit-code', '--heads', 'origin', $Branch)) -eq 0) {
-    Invoke-Native -What "git fetch $Branch" -Exe 'git' -Arguments @('fetch', 'origin', $Branch)
+if ((Invoke-Probe -Exe 'git' -Arguments @('ls-remote', '--exit-code', '--heads', $PagesRemote, $Branch)) -eq 0) {
+    Invoke-Native -What "git fetch $Branch" -Exe 'git' -Arguments @('fetch', $PagesRemote, $Branch)
     Invoke-Native -What 'git worktree add' -Exe 'git' `
-        -Arguments @('worktree', 'add', '-B', $Branch, $Worktree, "origin/$Branch")
+        -Arguments @('worktree', 'add', '-B', $Branch, $Worktree, "$PagesRemote/$Branch")
 } else {
-    Write-Host "    (no remote $Branch yet - creating it)"
+    # First deploy: an *orphan* branch, so the published site carries only its
+    # own deploy history and not a copy of the source tree's.
+    Write-Host "    (no $Branch on $PagesRemote yet - creating it)"
     Invoke-Native -What 'git worktree add' -Exe 'git' `
-        -Arguments @('worktree', 'add', '-B', $Branch, $Worktree)
+        -Arguments @('worktree', 'add', '--detach', $Worktree)
+    Invoke-Native -What 'git checkout --orphan' -Exe 'git' `
+        -Arguments @('-C', $Worktree, 'checkout', '--orphan', $Branch)
+    Invoke-Probe -Exe 'git' -Arguments @('-C', $Worktree, 'rm', '-rf', '--cached', '.') | Out-Null
 }
 
 Write-Host '==> Copying the build'
@@ -194,13 +217,13 @@ if ($DryRun) {
     Write-Host ''
     Write-Host "==> -DryRun: committed to $Branch but not pushed."
     Write-Host "    Inspect it:  git -C $Worktree show --stat"
-    Write-Host "    Then push:   git -C $Worktree push origin $Branch"
+    Write-Host "    Then push:   git -C $Worktree push $PagesRemote $Branch"
     Write-Host "    Clean up:    git worktree remove --force $Worktree"
     exit 0
 }
 
-Write-Host "==> Pushing $Branch"
-Invoke-Native -What 'git push' -Exe 'git' -Arguments @('push', 'origin', $Branch)
+Write-Host "==> Pushing $Branch to $PagesRemote"
+Invoke-Native -What 'git push' -Exe 'git' -Arguments @('push', $PagesRemote, $Branch)
 
 Set-Location $RepoRoot
 Invoke-Native -What 'git worktree remove' -Exe 'git' `
