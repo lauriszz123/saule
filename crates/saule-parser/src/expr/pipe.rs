@@ -47,10 +47,14 @@ impl Parser {
     pub(crate) fn parse_pipe_stage(&mut self) -> Result<PipeStage, ParseError> {
         let colon = self.expect(&Token::Colon, "`:` to begin a pipeline stage")?;
         let (name, _) = self.expect_ident_recover("function name after `:` in pipeline")?;
+        // A stage is an ordinary call, so it takes the same explicit
+        // instantiation: `:filter<integer>(x => x % 2 == 0)`.
+        let type_args = self.try_eat_generic_call_args();
         let (args, close_span) = self.parse_call_args()?;
         Ok(PipeStage {
             name,
             args,
+            type_args,
             span: colon.span.start..close_span.end.max(colon.span.end),
         })
     }

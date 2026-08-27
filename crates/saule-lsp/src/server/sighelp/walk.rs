@@ -348,7 +348,7 @@ impl Cx<'_> {
             // A recovery hole has no children to walk.
             Expr::Error => {}
             Expr::Cast { value, .. } => self.visit_expr(value),
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 self.visit_expr(callee);
                 for a in args {
                     visit_arg(self, a);

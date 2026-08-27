@@ -41,7 +41,7 @@ impl<'a> Cx<'a> {
                 self.visit_expr(obj);
                 self.visit_expr(index);
             }
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 self.visit_expr(callee);
                 let sig = self.callee_sig(&callee.value);
                 // What each slot expects, with the callee's generics

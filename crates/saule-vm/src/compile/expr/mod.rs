@@ -103,7 +103,7 @@ impl Compiler<'_> {
 
             Expr::Binary { op, lhs, rhs } => self.binary_to(e, *op, lhs, rhs, dst)?,
 
-            Expr::Call { callee, args } => self.call_to(e, callee, args, dst)?,
+            Expr::Call { callee, args, .. } => self.call_to(e, callee, args, dst)?,
 
             Expr::Self_ => {
                 if self.f.in_method {
@@ -205,7 +205,7 @@ impl Compiler<'_> {
         want: Want,
     ) -> Result<Results, CompileError> {
         match &e.value {
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 let m = self.mark();
                 let r = self.call_to_want(e, callee, args, dst, want)?;
                 // `Want::All` leaves the window allocated on purpose, so

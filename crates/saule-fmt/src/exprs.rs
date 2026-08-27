@@ -96,7 +96,11 @@ impl<'a> Printer<'a> {
                 self.expr(index, 0);
                 self.write("]");
             }
-            Expr::Call { callee, args } => {
+            Expr::Call {
+                callee,
+                args,
+                type_args,
+            } => {
                 // A trailing block prints back as one — but only when that is
                 // how it was written. `f(a, fn() … end)` and `f(a) do … end`
                 // parse to the same tree, so moving the lambda out of the
@@ -115,6 +119,7 @@ impl<'a> Printer<'a> {
                     trailing_block_arg(args).filter(|t| self.is_written_as_do_block(t))
                 };
                 self.expr(callee, MAX_PREC);
+                self.type_args(type_args.as_deref());
                 self.write("(");
                 self.call_args(trailing.map_or(args, |t| t.leading));
                 self.write(")");
@@ -297,6 +302,7 @@ impl<'a> Printer<'a> {
                         }
                         self.write(":");
                         self.write(&stage.name);
+                        self.type_args(stage.type_args.as_deref());
                         self.write("(");
                         self.call_args(&stage.args);
                         self.write(")");
@@ -359,6 +365,7 @@ impl<'a> Printer<'a> {
         for stage in stages {
             sub.write(":");
             sub.write(&stage.name);
+            sub.type_args(stage.type_args.as_deref());
             sub.write("(");
             sub.call_args(&stage.args);
             sub.write(")");

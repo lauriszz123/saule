@@ -283,7 +283,7 @@ impl<'a> Cx<'a> {
             // A recovery hole has no children to walk.
             Expr::Error => {}
             Expr::Cast { value, .. } => self.visit_expr(value),
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 self.visit_expr(callee);
                 let params = self.callee_params(&callee.value);
                 self.emit_param_hints(args, params.as_ref());
