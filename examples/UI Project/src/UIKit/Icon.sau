@@ -64,22 +64,21 @@ export class IconFont
 			return cached
 		end
 
-		-- A native error is fatal in Saule, so check the file exists rather
-		-- than trying and catching.
+		-- `loadFont` reports failure as nil instead of raising, so a missing or
+		-- unreadable icon font degrades to "no icons" rather than ending the
+		-- program. It also replaces the `Io.open` probe this used to need,
+		-- which opened the file an extra time and still raced a delete.
 		local resolved: string = Assets.resolve(IconFont.path)
-		local probe: File? = Io.open(resolved, IoMode.Read)
+		local created: integer? = Graphics.loadFont(size * Display.scale(), resolved)
 
-		if probe == nil then
+		if created == nil then
 			IconFont.missing = true
-			println("IconFont: cannot open " .. resolved .. " — icons will not draw")
+			println("IconFont: cannot load " .. resolved .. " — icons will not draw")
 
 			return nil
 		end
 
-		probe!.close()
-
-		local created: integer = Graphics.newFont(size * Display.scale(), resolved)
-		handles[key] = created
+		handles[key] = created!
 
 		return created
 	end

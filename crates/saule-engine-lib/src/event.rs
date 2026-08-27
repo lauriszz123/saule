@@ -60,11 +60,27 @@ pub enum Event {
         y: f64,
         button: i64,
     },
+    /// A second press of the same button, close enough in time and place to
+    /// the first. Always follows the `MousePressed` it completes, so a handler
+    /// that only cares about single clicks needs no change.
+    MouseDoubleClicked {
+        x: f64,
+        y: f64,
+        button: i64,
+    },
     /// Wheel movement in notches, positive away from the user.
     WheelMoved {
         dx: f64,
         dy: f64,
     },
+    /// The pointer came over the window. A hover highlight that only ever sees
+    /// motion events has no other way to know it should light up.
+    MouseEntered {
+        x: f64,
+        y: f64,
+    },
+    /// The pointer left the window, so nothing is hovered any more.
+    MouseLeft,
     Resized {
         width: i64,
         height: i64,
@@ -85,6 +101,9 @@ impl Event {
             Event::MouseMoved { .. } => "mouseMoved",
             Event::MousePressed { .. } => "mousePressed",
             Event::MouseReleased { .. } => "mouseReleased",
+            Event::MouseDoubleClicked { .. } => "mouseDoubleClicked",
+            Event::MouseEntered { .. } => "mouseEntered",
+            Event::MouseLeft => "mouseLeft",
             Event::WheelMoved { .. } => "wheelMoved",
             Event::Resized { .. } => "resized",
             Event::FocusChanged(_) => "focusChanged",
@@ -128,11 +147,18 @@ impl Event {
                 out.push(SValue::from(*dx))?;
                 out.push(SValue::from(*dy))?;
             }
-            Event::MousePressed { x, y, button } | Event::MouseReleased { x, y, button } => {
+            Event::MousePressed { x, y, button }
+            | Event::MouseReleased { x, y, button }
+            | Event::MouseDoubleClicked { x, y, button } => {
                 out.push(SValue::from(*x))?;
                 out.push(SValue::from(*y))?;
                 out.push(SValue::from(*button))?;
             }
+            Event::MouseEntered { x, y } => {
+                out.push(SValue::from(*x))?;
+                out.push(SValue::from(*y))?;
+            }
+            Event::MouseLeft => {}
             Event::WheelMoved { dx, dy } => {
                 out.push(SValue::from(*dx))?;
                 out.push(SValue::from(*dy))?;

@@ -1,9 +1,8 @@
 //! The drawing state machine: current colour and transform, the
 //! save/restore stack, and the clear/draw entry points.
 
-use crate::font::FontRes;
 use crate::geom::{self, ArcType, LineJoin, Point, Transform};
-use crate::raster::{self, BlendMode, Paint, Rect, Surface};
+use crate::raster::{self, BlendMode, Gradient, Rect};
 
 use super::*;
 
@@ -12,7 +11,7 @@ use super::*;
 #[derive(Clone)]
 pub(crate) struct GState {
     /// Kept at `f64` so `getColor` returns exactly what `setColor` was given;
-    /// it narrows to `f32` only when a [`Paint`] is built.
+    /// it narrows to `f32` only when a [`Paint`](crate::raster::Paint) is built.
     pub(crate) color: [f64; 4],
     pub(crate) line_width: f64,
     pub(crate) line_join: LineJoin,
@@ -22,8 +21,10 @@ pub(crate) struct GState {
     /// Device-space clip. `None` means "the whole render target".
     pub(crate) scissor: Option<Rect>,
     pub(crate) transform: Transform,
-    /// Index into [`Engine::fonts`]; `0` is the lazily-loaded system default.
+    /// Index into [`Renderer::fonts`]; `0` is the lazily-loaded system default.
     pub(crate) font: usize,
+    /// Gradient source for fills, or `None` for the flat [`GState::color`].
+    pub(crate) gradient: Option<Gradient>,
 }
 
 impl Default for GState {
@@ -37,6 +38,7 @@ impl Default for GState {
             scissor: None,
             transform: Transform::IDENTITY,
             font: 0,
+            gradient: None,
         }
     }
 }
@@ -48,7 +50,20 @@ pub(crate) enum Saved {
     All(Box<GState>),
 }
 
-impl Engine {
+impl Saved {
+    /// Whether restoring this frame would select font slot `idx`.
+    ///
+    /// Releasing a font a saved state still names would leave `pop()` pointing
+    /// at a free slot, so the release is refused instead.
+    pub(crate) fn names_font(&self, idx: usize) -> bool {
+        match self {
+            Saved::TransformOnly(_) => false,
+            Saved::All(state) => state.font == idx,
+        }
+    }
+}
+
+impl Renderer {
     pub fn set_color(&mut self, r: f64, g: f64, b: f64, a: f64) {
         self.st.color = [r, g, b, a];
     }
@@ -185,8 +200,8 @@ impl Engine {
     }
 
     /// Restore every default: colour, line settings, blend mode, filter,
-    /// scissor, transform, and font selection. Canvases and loaded fonts
-    /// survive, since they are resources rather than state.
+    /// scissor, transform, gradient, and font selection. Canvases and loaded
+    /// fonts survive, since they are resources rather than state.
     pub fn reset(&mut self) {
         self.st = GState::default();
         self.stack.clear();
@@ -200,7 +215,7 @@ impl Engine {
 // Coordinate system
 // ---------------------------------------------------------------------------
 
-impl Engine {
+impl Renderer {
     pub fn push(&mut self, all: bool) {
         self.stack.push(if all {
             Saved::All(Box::new(self.st.clone()))
@@ -274,7 +289,7 @@ impl Engine {
 // Shapes
 // ---------------------------------------------------------------------------
 
-impl Engine {
+impl Renderer {
     pub fn clear(&mut self, color: Option<(f64, f64, f64, f64)>) {
         let c = narrow(match color {
             Some((r, g, b, a)) => [r, g, b, a],
@@ -290,23 +305,37 @@ impl Engine {
 
     /// The shared tail of every shape call: transform the path into device
     /// space, then either fill it or expand it into a stroke.
+    ///
+    /// Both stages write into the renderer's scratch buffers, so a shape costs
+    /// no allocation once the buffers have grown to fit the frame's largest.
     pub(crate) fn draw_path(
         &mut self,
         mode: &str,
         local: &[Point],
         closed: bool,
     ) -> Result<(), String> {
-        let t = self.st.transform;
-        let device: Vec<Point> = local.iter().map(|&(x, y)| t.apply(x, y)).collect();
+        // Copy into the scratch so there is one code path; the copy reuses a
+        // grown buffer, so it costs no allocation.
+        self.scratch.local.clear();
+        self.scratch.local.extend_from_slice(local);
+        self.draw_local_path(mode, closed)
+    }
 
-        let paths = match mode {
-            "fill" => vec![device],
-            "line" => {
-                // Line width is a local-space quantity in Love2D, so it scales
-                // with the transform just like the geometry does.
-                let w = self.st.line_width * t.mean_scale();
-                geom::stroke(&device, closed, w, self.st.line_join)
-            }
+    /// [`Renderer::draw_path`] over the path already sitting in
+    /// `scratch.local`, which is where the shape builders write.
+    pub(crate) fn draw_local_path(&mut self, mode: &str, closed: bool) -> Result<(), String> {
+        // Everything read out of `self.st` has to be copied before the fields
+        // are split below, since the split borrows the whole struct.
+        let t = self.st.transform;
+        let join = self.st.line_join;
+        // Line width is a local-space quantity in Love2D, so it scales with
+        // the transform just like the geometry does.
+        let stroke_width = self.st.line_width * t.mean_scale();
+        let paint = self.paint();
+
+        let stroking = match mode {
+            "fill" => false,
+            "line" => true,
             other => {
                 return Err(format!(
                     "draw mode must be \"fill\" or \"line\", got `{other}`"
@@ -314,8 +343,38 @@ impl Engine {
             }
         };
 
-        let paint = self.paint();
-        raster::fill_paths(self.target_mut(), &paths, &paint);
+        // The scratch buffers and the destination surface are both borrowed
+        // for the duration of the fill, so the fields are destructured to make
+        // the two provably disjoint.
+        let Renderer {
+            screen,
+            canvases,
+            target,
+            scratch,
+            ..
+        } = self;
+
+        scratch.device.clear();
+        scratch
+            .device
+            .extend(scratch.local.iter().map(|&(x, y)| t.apply(x, y)));
+
+        if stroking {
+            geom::stroke_into(
+                &scratch.device,
+                closed,
+                stroke_width,
+                join,
+                &mut scratch.stroke,
+                &mut scratch.paths,
+            );
+        } else {
+            scratch.paths.begin();
+            scratch.paths.push_slice(&scratch.device);
+        }
+
+        let surf = surface_of(screen, canvases, *target);
+        raster::fill_paths_with(surf, scratch.paths.paths(), &paint, &mut scratch.fill);
         Ok(())
     }
 
@@ -336,13 +395,13 @@ impl Engine {
         rx: f64,
         ry: f64,
     ) -> Result<(), String> {
-        let path = if rx > 0.0 || ry > 0.0 {
+        if rx > 0.0 || ry > 0.0 {
             let segs = self.segments_for(rx.abs().max(ry.abs()));
-            geom::rounded_rect_path(x, y, w, h, rx, ry, segs)
+            geom::rounded_rect_path_into(x, y, w, h, rx, ry, segs, &mut self.scratch.local);
         } else {
-            geom::rect_path(x, y, w, h)
-        };
-        self.draw_path(mode, &path, true)
+            geom::rect_path_into(x, y, w, h, &mut self.scratch.local);
+        }
+        self.draw_local_path(mode, true)
     }
 
     pub fn circle(
@@ -371,8 +430,8 @@ impl Engine {
             Some(n) => return Err(format!("segment count must be at least 3, got {n}")),
             None => self.segments_for(rx.abs().max(ry.abs())),
         };
-        let path = geom::ellipse_path(x, y, rx, ry, segs);
-        self.draw_path(mode, &path, true)
+        geom::ellipse_path_into(x, y, rx, ry, segs, &mut self.scratch.local);
+        self.draw_local_path(mode, true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -388,8 +447,17 @@ impl Engine {
     ) -> Result<(), String> {
         let kind = ArcType::parse(arctype)?;
         let segs = self.segments_for(radius);
-        let (path, closed) = geom::arc_path(x, y, radius, angle1, angle2, segs, kind);
-        self.draw_path(mode, &path, closed)
+        let closed = geom::arc_path_into(
+            x,
+            y,
+            radius,
+            angle1,
+            angle2,
+            segs,
+            kind,
+            &mut self.scratch.local,
+        );
+        self.draw_local_path(mode, closed)
     }
 
     pub fn polygon(&mut self, mode: &str, points: &[Point]) -> Result<(), String> {
@@ -414,52 +482,34 @@ impl Engine {
     /// transformed position, so points stay crisp under any transform.
     pub fn points(&mut self, points: &[Point]) {
         let t = self.st.transform;
-        let paths: Vec<Vec<Point>> = points
-            .iter()
-            .map(|&(x, y)| {
-                let (dx, dy) = t.apply(x, y);
-                let (px, py) = (dx.floor(), dy.floor());
-                vec![
-                    (px, py),
-                    (px + 1.0, py),
-                    (px + 1.0, py + 1.0),
-                    (px, py + 1.0),
-                ]
-            })
-            .collect();
         let paint = self.paint();
-        raster::fill_paths(self.target_mut(), &paths, &paint);
+
+        let Renderer {
+            screen,
+            canvases,
+            target,
+            scratch,
+            ..
+        } = self;
+
+        scratch.paths.begin();
+        for &(x, y) in points {
+            let (dx, dy) = t.apply(x, y);
+            let (px, py) = (dx.floor(), dy.floor());
+            scratch.paths.push().extend_from_slice(&[
+                (px, py),
+                (px + 1.0, py),
+                (px + 1.0, py + 1.0),
+                (px, py + 1.0),
+            ]);
+        }
+
+        let surf = surface_of(screen, canvases, *target);
+        raster::fill_paths_with(surf, scratch.paths.paths(), &paint, &mut scratch.fill);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Text
-// ---------------------------------------------------------------------------
-
-/// Blit one laid-out line. `y` is the line's *top*, matching how Love2D's
-/// `print` anchors text.
-pub(crate) fn draw_line(
-    surf: &mut Surface,
-    font: &mut FontRes,
-    text: &str,
-    x: f64,
-    y: f64,
-    xform: &Transform,
-    paint: &Paint,
-) {
-    if text.is_empty() {
-        return;
-    }
-    let baseline = y + font.ascent();
-    let (glyphs, _) = font.layout(text);
-    for (ch, pen) in glyphs {
-        let Some(glyph) = font.glyph(ch) else {
-            continue;
-        };
-        if glyph.mask.w == 0 || glyph.mask.h == 0 {
-            continue; // whitespace carries advance but no pixels
-        }
-        let placement = Transform::translation(x + pen + glyph.left, baseline + glyph.top);
-        raster::blit_mask(surf, &glyph.mask, &xform.then(&placement), paint);
-    }
+/// Narrow a state colour to the rasterizer's working precision.
+pub(crate) fn narrow(c: [f64; 4]) -> [f32; 4] {
+    [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32]
 }

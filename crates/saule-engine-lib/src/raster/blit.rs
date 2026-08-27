@@ -74,6 +74,7 @@ pub fn blit_mask(surf: &mut Surface, mask: &Mask, xform: &Transform, paint: &Pai
 
 /// Draw one surface onto another through `xform`, modulated by the paint
 /// colour. This is how a Canvas is composited back onto the screen.
+#[cfg(test)]
 pub fn blit_surface(dst: &mut Surface, src: &Surface, xform: &Transform, paint: &Paint) {
     let whole = Rect::new(0.0, 0.0, src.w as f64, src.h as f64);
     blit_surface_sub(dst, src, whole, xform, paint);

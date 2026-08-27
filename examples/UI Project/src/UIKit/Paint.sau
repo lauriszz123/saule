@@ -420,14 +420,21 @@ export class Opacity extends SingleChildView
 		Graphics.setColor(1.0, 1.0, 1.0, 1.0)
 	end
 
-	-- One canvas per element, reallocated only when the size changes. The engine
-	-- has no way to free a canvas, so resizing a faded subtree leaks the old
-	-- one — fine for a fade, not for something that resizes every frame.
+	-- One canvas per element, reallocated only when the size changes.
+	--
+	-- The old canvas is released before the new one is allocated. This used to
+	-- leak it — the engine had no way to free a canvas at all — so a subtree
+	-- that faded while resizing grew the process by its full pixel buffer on
+	-- every size change.
 	local fn canvasFor(el: Element, width: integer, height: integer) -> integer
 		local signature: string = width .. "x" .. height
 		local cached: integer? = el.data.scratch.canvas as integer
 
 		if el.data.scratch.canvasKey != signature or cached == nil then
+			if cached != nil then
+				Graphics.release(cached!)
+			end
+
 			local made: integer = Graphics.newCanvas(width, height)
 
 			el.data.scratch.canvasKey = signature
