@@ -52,11 +52,11 @@ test:
     # and the tree is expected to stay clean. Run `cargo fmt --all` before
     # pushing.
     - cargo fmt --all --check
-    # `saule-engine-lib` is excluded deliberately. It is an *example* native
-    # package — a minifb/arboard graphics demo — and the release pipeline
-    # doesn't build it either (`-p saule-cli -p saule-lsp`). Gating the
-    # toolchain on whether a windowing library links on a headless runner
-    # would add a failure mode without protecting anything that ships.
+    # `saule-engine-lib` is excluded from the *toolchain* gate and covered by
+    # the `test-engine` job below instead. It is an example native package
+    # rather than something the release pipeline builds (`-p saule-cli
+    # -p saule-lsp`), so a break there should not read as a break in the
+    # compiler — but it is no longer unchecked either.
     - cargo clippy --workspace --all-targets --exclude saule-engine-lib -- -D warnings
     - cargo test --workspace --locked --exclude saule-engine-lib
 
@@ -96,6 +96,53 @@ test:
         echo "error: saule and saule-lsp report different versions" >&2
         exit 1
       fi
+
+# The graphics package, gated separately from the toolchain.
+#
+# It used to be excluded outright, which meant its unit tests never ran
+# anywhere and clippy never saw it. That was justified by the windowing
+# dependency, but nothing here needs a display:
+#
+#   * minifb's `x11` feature goes through `x11-dl`, and `arboard` is built with
+#     default features off (x11rb) — both `dlopen` their libraries at *runtime*,
+#     so the build needs no X headers and no X server.
+#   * the tests are headless by construction. The rasterizer and the `Renderer`
+#     operate on plain pixel buffers, and the handful of tests that touch
+#     `Window` assert that it fails cleanly when no window exists.
+#   * the font tests skip themselves when the image has no typeface installed,
+#     which a slim container does not.
+#
+# It also runs the manifest check: `engine.toml` is checked in and copied
+# verbatim by the Unix install scripts, so a signature edited without
+# regenerating it would ship a package whose declared types disagree with its
+# code. `manifest_matches_the_checked_in_file` is one of the tests below.
+test-engine:
+  stage: test
+  image: rust:1-bookworm
+  interruptible: true
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: never
+    - if: $RELEASE_DRY_RUN == "true"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  cache:
+    key:
+      files:
+        - Cargo.lock
+    paths:
+      - .cargo/registry/index
+      - .cargo/registry/cache
+      - .cargo/git/db
+      - target/
+  before_script:
+    - rustup component add clippy
+  script:
+    - cargo clippy -p saule-engine-lib --all-targets -- -D warnings
+    - cargo test -p saule-engine-lib --locked
 
 # The port of `.github/workflows/check-www.yml`. That workflow still exists on
 # the GitHub side, because that is where the site is built and served from —

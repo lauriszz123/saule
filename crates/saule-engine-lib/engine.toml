@@ -50,6 +50,11 @@ sig = "fn(r: float?, g: float?, b: float?, a: float?) -> nil"
 native_symbol = "saule_export_Graphics_clear"
 
 [[exports.Graphics.methods]]
+name = "clearGradient"
+sig = "fn() -> nil"
+native_symbol = "saule_export_Graphics_clearGradient"
+
+[[exports.Graphics.methods]]
 name = "draw"
 sig = "fn(canvas: integer, x: float, y: float, angle: float?, sx: float?, sy: float?, ox: float?, oy: float?) -> nil"
 native_symbol = "saule_export_Graphics_draw"
@@ -155,6 +160,11 @@ sig = "fn() -> integer"
 native_symbol = "saule_export_Graphics_getStackDepth"
 
 [[exports.Graphics.methods]]
+name = "getStats"
+sig = "fn() -> (integer, integer, integer)"
+native_symbol = "saule_export_Graphics_getStats"
+
+[[exports.Graphics.methods]]
 name = "getTextWidth"
 sig = "fn(text: string) -> float"
 native_symbol = "saule_export_Graphics_getTextWidth"
@@ -163,6 +173,11 @@ native_symbol = "saule_export_Graphics_getTextWidth"
 name = "getWidth"
 sig = "fn() -> integer"
 native_symbol = "saule_export_Graphics_getWidth"
+
+[[exports.Graphics.methods]]
+name = "hasGradient"
+sig = "fn() -> boolean"
+native_symbol = "saule_export_Graphics_hasGradient"
 
 [[exports.Graphics.methods]]
 name = "imageSize"
@@ -185,6 +200,16 @@ sig = "fn(x1: float, y1: float, x2: float, y2: float) -> nil"
 native_symbol = "saule_export_Graphics_line"
 
 [[exports.Graphics.methods]]
+name = "loadFont"
+sig = "fn(size: float, path: string?) -> integer?"
+native_symbol = "saule_export_Graphics_loadFont"
+
+[[exports.Graphics.methods]]
+name = "loadImage"
+sig = "fn(path: string) -> integer?"
+native_symbol = "saule_export_Graphics_loadImage"
+
+[[exports.Graphics.methods]]
 name = "newCanvas"
 sig = "fn(width: integer, height: integer) -> integer"
 native_symbol = "saule_export_Graphics_newCanvas"
@@ -198,6 +223,11 @@ native_symbol = "saule_export_Graphics_newFont"
 name = "newImage"
 sig = "fn(path: string) -> integer"
 native_symbol = "saule_export_Graphics_newImage"
+
+[[exports.Graphics.methods]]
+name = "newImageFromBase64"
+sig = "fn(data: string) -> integer"
+native_symbol = "saule_export_Graphics_newImageFromBase64"
 
 [[exports.Graphics.methods]]
 name = "origin"
@@ -255,6 +285,16 @@ sig = "fn(mode: string, x: float, y: float, w: float, h: float, rx: float?, ry: 
 native_symbol = "saule_export_Graphics_rectangle"
 
 [[exports.Graphics.methods]]
+name = "release"
+sig = "fn(handle: integer) -> nil"
+native_symbol = "saule_export_Graphics_release"
+
+[[exports.Graphics.methods]]
+name = "releaseFont"
+sig = "fn(handle: integer) -> nil"
+native_symbol = "saule_export_Graphics_releaseFont"
+
+[[exports.Graphics.methods]]
 name = "replaceTransform"
 sig = "fn(a: float, b: float, c: float, d: float, tx: float, ty: float) -> nil"
 native_symbol = "saule_export_Graphics_replaceTransform"
@@ -268,6 +308,11 @@ native_symbol = "saule_export_Graphics_reset"
 name = "rotate"
 sig = "fn(angle: float) -> nil"
 native_symbol = "saule_export_Graphics_rotate"
+
+[[exports.Graphics.methods]]
+name = "saveImage"
+sig = "fn(handle: integer, path: string) -> nil"
+native_symbol = "saule_export_Graphics_saveImage"
 
 [[exports.Graphics.methods]]
 name = "scale"
@@ -320,9 +365,19 @@ sig = "fn(width: float) -> nil"
 native_symbol = "saule_export_Graphics_setLineWidth"
 
 [[exports.Graphics.methods]]
+name = "setLinearGradient"
+sig = "fn(x0: float, y0: float, x1: float, y1: float, stops: table) -> nil"
+native_symbol = "saule_export_Graphics_setLinearGradient"
+
+[[exports.Graphics.methods]]
 name = "setNewFont"
 sig = "fn(size: float, path: string?) -> integer"
 native_symbol = "saule_export_Graphics_setNewFont"
+
+[[exports.Graphics.methods]]
+name = "setRadialGradient"
+sig = "fn(cx: float, cy: float, radius: float, stops: table) -> nil"
+native_symbol = "saule_export_Graphics_setRadialGradient"
 
 [[exports.Graphics.methods]]
 name = "setScissor"
@@ -417,9 +472,19 @@ sig = "fn() -> float"
 native_symbol = "saule_export_Timer_getDelta"
 
 [[exports.Timer.methods]]
+name = "getFPS"
+sig = "fn() -> float"
+native_symbol = "saule_export_Timer_getFPS"
+
+[[exports.Timer.methods]]
 name = "getTime"
 sig = "fn() -> float"
 native_symbol = "saule_export_Timer_getTime"
+
+[[exports.Timer.methods]]
+name = "sleep"
+sig = "fn(seconds: float) -> nil"
+native_symbol = "saule_export_Timer_sleep"
 
 [exports.Window]
 type = "class"
@@ -441,6 +506,11 @@ sig = "fn() -> (integer, integer)"
 native_symbol = "saule_export_Window_getPosition"
 
 [[exports.Window.methods]]
+name = "getQuitOnEscape"
+sig = "fn() -> boolean"
+native_symbol = "saule_export_Window_getQuitOnEscape"
+
+[[exports.Window.methods]]
 name = "getScale"
 sig = "fn() -> float"
 native_symbol = "saule_export_Window_getScale"
@@ -449,6 +519,11 @@ native_symbol = "saule_export_Window_getScale"
 name = "getSize"
 sig = "fn() -> (integer, integer)"
 native_symbol = "saule_export_Window_getSize"
+
+[[exports.Window.methods]]
+name = "getTargetFPS"
+sig = "fn() -> integer"
+native_symbol = "saule_export_Window_getTargetFPS"
 
 [[exports.Window.methods]]
 name = "isFocused"
@@ -469,6 +544,16 @@ native_symbol = "saule_export_Window_pollEvents"
 name = "setPosition"
 sig = "fn(x: integer, y: integer) -> nil"
 native_symbol = "saule_export_Window_setPosition"
+
+[[exports.Window.methods]]
+name = "setQuitOnEscape"
+sig = "fn(enable: boolean) -> nil"
+native_symbol = "saule_export_Window_setQuitOnEscape"
+
+[[exports.Window.methods]]
+name = "setTargetFPS"
+sig = "fn(fps: integer) -> nil"
+native_symbol = "saule_export_Window_setTargetFPS"
 
 [[exports.Window.methods]]
 name = "setTitle"

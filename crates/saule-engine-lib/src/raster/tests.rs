@@ -8,6 +8,7 @@ fn paint(color: [f32; 4], w: usize, h: usize) -> Paint {
         clip: Rect::surface(w, h),
         antialias: true,
         linear_filter: false,
+        gradient: None,
     }
 }
 

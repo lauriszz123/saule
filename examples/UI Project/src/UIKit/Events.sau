@@ -46,6 +46,17 @@ export enum Event
 	MousePressed(x: float, y: float, button: integer),
 	MouseReleased(x: float, y: float, button: integer),
 
+	-- A second press of the same button, close enough in time and place to the
+	-- first. It always *follows* the `MousePressed` that completed it, so a
+	-- handler that only cares about single clicks needs no change. The timing
+	-- threshold lives in the engine, so every widget agrees on it.
+	MouseDoubleClicked(x: float, y: float, button: integer),
+
+	-- The pointer came over the window, or left it. A hover highlight that only
+	-- ever sees motion has no other way to know it should clear.
+	MouseEntered(x: float, y: float),
+	MouseLeft,
+
 	-- Wheel movement in notches, positive away from the user.
 	WheelMoved(dx: float, dy: float),
 
@@ -123,6 +134,14 @@ export fn decodeEvent(record: table) -> Event?
 
 		case "mouseReleased" then
 			Event.MouseReleased(number(record, 2), number(record, 3), whole(record, 4))
+
+		case "mouseDoubleClicked" then
+			Event.MouseDoubleClicked(number(record, 2), number(record, 3), whole(record, 4))
+
+		case "mouseEntered" then
+			Event.MouseEntered(number(record, 2), number(record, 3))
+
+		case "mouseLeft" then Event.MouseLeft
 
 		case "wheelMoved" then Event.WheelMoved(number(record, 2), number(record, 3))
 
