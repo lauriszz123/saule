@@ -24,7 +24,7 @@ set -eu
 # two spellings: the API addresses a project by an id or a *URL-encoded* path,
 # while anything a human is meant to click needs the ordinary slash.
 GITLAB_HOST="https://gitlab.com"
-GITLAB_PROJECT="lauriszz123/saule"
+GITLAB_PROJECT="lauriszz12313/saule"
 PACKAGE_NAME="saule"
 
 GITLAB_PROJECT_ENC="$(printf '%s' "$GITLAB_PROJECT" | sed 's|/|%2F|g')"

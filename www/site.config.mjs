@@ -13,7 +13,7 @@ export const base = '/saule';
  * that is what keeps the installer URL stable — but development, CI and
  * releases all live on GitLab, so every link out of the docs points there.
  */
-export const repo = 'https://gitlab.com/lauriszz123/saule';
+export const repo = 'https://gitlab.com/lauriszz12313/saule';
 
 /**
  * Where a "edit this page" link goes. GitLab puts `/-/` in front of the verb,

@@ -41,6 +41,7 @@ assign ::= exp {',' exp} '=' explist
 
 compoundAssign ::= exp compoundOp exp
 compoundOp     ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '..='
+                 | '&=' | '|=' | '<<=' | '>>='
 
 if     ::= 'if' exp 'then' chunk
            {'elseif' exp 'then' chunk}
@@ -224,9 +225,9 @@ comment ::= '--' {any} newline | '--[[' {any} ']]'
 ```
 and       as        break     case      catch     class     continue  do
 else      elseif    end       enum      export    extends   false     fn
-for       from      if        implements in       interface local     match
-nil       not       or        repeat    return    self      static    super
-then      throw     true      try       until     when      while
+for       from      if        implements import    in        interface local
+match     nil       not       or        repeat    return    self      static
+super     then      throw     true      try       until     when      while
 ```
 
 Strings take either quote style, and only the delimiter that opened one closes

@@ -54,16 +54,32 @@ syntax region sauleString      start=+'+ skip=+\\.+ end=+'+ contains=sauleEscape
 syntax match  sauleEscape      "\\." contained
 
 " ── Types ───────────────────────────────────────────────────────────────
+" No `function`: a function's type is its signature, written `fn(...) -> T`,
+" and `fn` is already highlighted as a declaration keyword.
 syntax keyword sauleType        integer float string boolean any
-                              \ function table userdata thread number
+                              \ table userdata thread number
 syntax match   sauleTypeName    "\<[A-Z][A-Za-z0-9_]*\>"
 
 " ── Functions ───────────────────────────────────────────────────────────
 " `fn name` (handles `fn name<T, U>` too — the `<...>` simply isn't captured).
 syntax match   sauleFunction    "\<fn\>\s\+\zs[A-Za-z_][A-Za-z0-9_]*"
-" Direct call: ident( ... and generic call: ident<T>(
+" Direct call: `ident(`. And generic call: `ident<T>(`, where the trailing
+" `(` is what separates it from `a < b`. One level of nesting is allowed, so
+" `filter<table<integer>>(xs)` counts; the same window the TextMate grammar
+" uses in `#generics`.
 syntax match   sauleFuncCall    "\<[a-z_][A-Za-z0-9_]*\>\ze\s*("
-syntax match   sauleFuncCall    "\<[a-z_][A-Za-z0-9_]*\>\ze\s*<[A-Za-z_][^<>]*>\s*("
+syntax match   sauleFuncCall    "\<[a-z_][A-Za-z0-9_]*\>\ze\s*<[^<>]*\%(<[^<>]*>[^<>]*\)*>\s*("
+
+" A `table<...>` type is a bracketed list, not a run of comparisons, and the
+" `>>` closing a nested one is two brackets rather than a right shift. The
+" region nests via `contains=sauleGeneric`, so the inner list eats its own `>`
+" and `table<table<string>>` stops highlighting as a shift. Anchored on
+" `table` alone: it is the one generic head that cannot be a variable being
+" compared, so `table <` is never a less-than.
+syntax region  sauleGeneric matchgroup=sauleDelimiter
+                              \ start="\%(\<table\>\s*\)\@<=<" end=">" oneline
+                              \ contains=sauleGeneric,sauleType,sauleTypeName,sauleNullable,
+                              \          sauleDelimiter,sauleBracket,sauleArrow,sauleDeclaration
 
 " ── Keywords (defined late so they override the variable catch-all) ─────
 syntax keyword sauleConditional if else elseif then end

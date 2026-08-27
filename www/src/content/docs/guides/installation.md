@@ -73,7 +73,7 @@ but no formatting, hover, or diagnostics.
 ## Installing by hand
 
 Every release publishes a signed-checksum archive per platform on the
-[releases page](https://gitlab.com/lauriszz123/saule/-/releases).
+[releases page](https://gitlab.com/lauriszz12313/saule/-/releases).
 
 ```sh
 # Verify before unpacking — SHA256SUMS covers every archive in the release.
@@ -108,7 +108,7 @@ Saule is written in Rust and needs a toolchain on **edition 2024** — Rust 1.85
 or newer.
 
 ```sh
-git clone https://gitlab.com/lauriszz123/saule.git
+git clone https://gitlab.com/lauriszz12313/saule.git
 cd saule
 cargo build --release -p saule-cli -p saule-lsp
 ```
@@ -126,7 +126,7 @@ Applications launched from the Dock or Finder do not read `~/.zshrc` or
 ## Editor support
 
 Plugins for VS Code, Neovim, and IntelliJ live in
-[`editors/`](https://gitlab.com/lauriszz123/saule/-/tree/main/editors). See
+[`editors/`](https://gitlab.com/lauriszz12313/saule/-/tree/main/editors). See
 [Editor Support](/saule/reference/editors/) for per-editor setup.
 
 ## Next steps

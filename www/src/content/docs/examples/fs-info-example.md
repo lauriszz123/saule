@@ -9,12 +9,12 @@ sidebar:
 
 Inspects one path with `Os.fsInfo` and reports what it is. Shows nullable returns for paths that may not exist, and `match` over an enum with a `_` fallback.
 
-[Browse this example on GitLab](https://gitlab.com/lauriszz123/saule/-/tree/main/examples/fs-info-example)
+[Browse this example on GitLab](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/fs-info-example)
 
 ## Run it
 
 ```sh
-git clone https://gitlab.com/lauriszz123/saule.git
+git clone https://gitlab.com/lauriszz12313/saule.git
 cd saule/examples/fs-info-example
 saule run -- .
 ```
