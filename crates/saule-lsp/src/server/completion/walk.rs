@@ -414,6 +414,13 @@ impl Walk {
             }
             Expr::Unary { rhs, .. } => self.expr(rhs),
             Expr::ForceUnwrap(inner) => self.expr(inner),
+            // `x as T` — both halves can hold the caret. The target is a
+            // type annotation like any other, so `v as <caret>` wants type
+            // names rather than the values `Ctx::Value` would offer.
+            Expr::Cast { value, ty, .. } => {
+                self.expr(value);
+                self.ty(Some(ty));
+            }
             Expr::Binary { lhs, rhs, .. } => {
                 self.expr(lhs);
                 self.expr(rhs);
