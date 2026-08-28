@@ -42,7 +42,7 @@ const CONSTANTS = new Set(['true', 'false', 'nil']);
 // and `fn` is already a declaration keyword.
 const PRIMITIVES = new Set([
 	'integer', 'float', 'string', 'boolean', 'any', 'nil', 'table',
-	'userdata', 'thread', 'number',
+	'userdata', 'thread',
 ]);
 
 /**

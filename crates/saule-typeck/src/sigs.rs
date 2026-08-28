@@ -52,7 +52,10 @@ pub struct NativeSig {
 static INITIALIZER: OnceLock<fn()> = OnceLock::new();
 
 thread_local! {
-    static SIGS: RefCell<HashMap<String, NativeSig>> = RefCell::new(HashMap::new());
+    /// `name -> overload set`. Almost every native has exactly one entry.
+    /// A handful (`Math.random`, `Math.abs`, `Math.fmod`) genuinely change
+    /// their result type with the call — see [`register_overloads`].
+    static SIGS: RefCell<HashMap<String, Vec<NativeSig>>> = RefCell::new(HashMap::new());
     /// `module -> { member names }` — knows every public member of every
     /// stdlib "static class" (`Table`, `String`, `Math`, `Os`, `Io`, …)
     /// regardless of whether a signature is registered. The typechecker
@@ -91,12 +94,12 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
-            NativeSig {
+            vec![NativeSig {
                 type_params: Vec::new(),
                 params,
                 variadic: None,
                 returns,
-            },
+            }],
         );
     });
 }
@@ -112,12 +115,12 @@ pub fn register_g(name: &str, type_params: Vec<&str>, params: Vec<Type>, returns
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
-            NativeSig {
+            vec![NativeSig {
                 type_params: type_params.into_iter().map(String::from).collect(),
                 params,
                 variadic: None,
                 returns,
-            },
+            }],
         );
     });
 }
@@ -133,13 +136,50 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
     SIGS.with(|s| {
         s.borrow_mut().insert(
             name.to_string(),
-            NativeSig {
+            vec![NativeSig {
                 type_params: Vec::new(),
                 params,
                 variadic: Some(variadic),
                 returns,
-            },
+            }],
         );
+    });
+}
+
+/// Register a native that has more than one form, as `(params, returns)`
+/// pairs in preference order.
+///
+/// For the handful of natives whose *result type* depends on the call —
+/// `Math.random()` is a float but `Math.random(1, 6)` is an integer,
+/// `Math.abs` follows the flavour of its argument. One `returns` list
+/// cannot describe those, and leaving them unregistered was worse: an
+/// unregistered member infers as `any`, and `any` flowing into a declared
+/// slot is a downcast the checker rejects, so every typed use of them
+/// failed with a mismatch naming a type the user never wrote.
+///
+/// Selection is first-match: the earliest form whose arity fits and whose
+/// parameters all accept the actual arguments wins, so order forms
+/// narrowest-first and put the widest fallback last.
+pub fn register_overloads(name: &str, forms: Vec<(Vec<Type>, Vec<Type>)>) {
+    record_member(name);
+    let sigs: Vec<NativeSig> = forms
+        .into_iter()
+        .map(|(params, returns)| {
+            debug_assert_no_bare_function(name, params.iter().chain(returns.iter()));
+            NativeSig {
+                type_params: Vec::new(),
+                params,
+                variadic: None,
+                returns,
+            }
+        })
+        .collect();
+    debug_assert!(
+        !sigs.is_empty(),
+        "native `{name}` registered with an empty overload set"
+    );
+    SIGS.with(|s| {
+        s.borrow_mut().insert(name.to_string(), sigs);
     });
 }
 
@@ -189,7 +229,7 @@ pub fn register_module(name: &str) {
 /// Panic in debug builds if a registered signature spells a callback with the
 /// bare name `function`.
 ///
-/// User-written source is already guarded — `reject_bare_function_type` in the
+/// User-written source is already guarded — `reject_non_types` in the
 /// assignment checker rejects `f: function` wherever it is typed by hand. The
 /// natives registered here never pass through that check, so the same mistake
 /// in a stdlib or prelude signature used to reach call sites intact, where a
@@ -248,6 +288,17 @@ pub fn set_initializer(f: fn()) {
 /// that as "unknown call" and skips signature-based checks rather than
 /// emitting a false positive.
 pub fn lookup(name: &str) -> Option<NativeSig> {
+    ensure_registered();
+    SIGS.with(|s| s.borrow().get(name).and_then(|v| v.first().cloned()))
+}
+
+/// Every registered form of `name`, in registration order.
+///
+/// Only the checker's call path needs this: it picks the form the actual
+/// arguments select (see `crate::expr::calls::select_native_sig`). Tools
+/// that just want *a* signature to display keep using [`lookup`], which
+/// answers with the first — the canonical — form.
+pub fn lookup_all(name: &str) -> Option<Vec<NativeSig>> {
     ensure_registered();
     SIGS.with(|s| s.borrow().get(name).cloned())
 }
@@ -430,12 +481,6 @@ pub fn t_named(s: &str) -> Type {
 
 pub fn t_any() -> Type {
     Type::Named("any".to_string())
-}
-
-/// Sentinel meaning "either `integer` or `float`". Recognised by
-/// `crate::expr::types_compatible`. Use for math/numeric natives.
-pub fn t_number() -> Type {
-    Type::Named("number".to_string())
 }
 
 pub fn t_nullable(inner: Type) -> Type {

@@ -271,7 +271,10 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 return semantic_method_return(&sig, args, scope);
             }
             if let Some(qname) = native_callee_name(callee, scope)
-                && let Some(sig) = crate::sigs::lookup(&qname)
+                // The *selected* form, not merely the first: `Math.random()`
+                // is a float where `Math.random(1, 6)` is an integer, and
+                // the call's own arguments are what choose between them.
+                && let Some(sig) = calls::select_native_sig(&qname, args, scope).map(|s| s.sig)
             {
                 // Generic native: bind type params from the actual args, then
                 // substitute the return list. Falls back to the raw returns

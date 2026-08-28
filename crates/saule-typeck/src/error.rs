@@ -241,6 +241,16 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`{callee}` expects {} argument(s), got {found}", crate::error::join_or(expected))]
+    #[diagnostic(help("check the signature of `{callee}`"))]
+    NativeArityOverload {
+        callee: String,
+        expected: Vec<usize>,
+        found: usize,
+        #[label("wrong number of arguments")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`{callee}` expects {expected} argument(s), got {found}")]
     #[diagnostic(help("check the signature of `{callee}`"))]
     NativeArity {
@@ -487,6 +497,17 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`number` is not a type — Saule has `integer` and `float`")]
+    #[diagnostic(help(
+        "pick the one you mean: `integer` for whole numbers, `float` for decimals. The two never \
+         convert implicitly, so a value that could be either has to be narrowed with `as integer` \
+         / `as float`, or converted with `int(...)` / `float(...)`."
+    ))]
+    NumberNotAType {
+        #[label("no such type")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`function` is not a type — write the signature the value must have")]
     #[diagnostic(help(
         "use the `fn(...) -> T` form, e.g. `fn(string) -> nil` for a callback taking a string and returning nothing; an optional callback is `(fn(string) -> nil)?`"
@@ -533,4 +554,18 @@ pub enum TypeCheckError {
         #[label("no top-level function with this name")]
         span: miette::SourceSpan,
     },
+}
+
+/// Render an overloaded native's accepted argument counts as `0, 1, or 2`
+/// — the wording the runtime's own arity errors use.
+pub(crate) fn join_or(counts: &[usize]) -> String {
+    match counts {
+        [] => String::new(),
+        [n] => n.to_string(),
+        [a, b] => format!("{a} or {b}"),
+        [rest @ .., last] => {
+            let head: Vec<String> = rest.iter().map(usize::to_string).collect();
+            format!("{}, or {last}", head.join(", "))
+        }
+    }
 }

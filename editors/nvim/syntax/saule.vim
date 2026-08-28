@@ -57,7 +57,7 @@ syntax match  sauleEscape      "\\." contained
 " No `function`: a function's type is its signature, written `fn(...) -> T`,
 " and `fn` is already highlighted as a declaration keyword.
 syntax keyword sauleType        integer float string boolean any
-                              \ table userdata thread number
+                              \ table userdata thread
 syntax match   sauleTypeName    "\<[A-Z][A-Za-z0-9_]*\>"
 
 " ── Functions ───────────────────────────────────────────────────────────

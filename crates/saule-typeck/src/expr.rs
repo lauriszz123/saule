@@ -93,8 +93,28 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             // argument types positionally. Named arguments are skipped (those
             // aren't supported on natives anyway, and they error at runtime).
             if let Some(qname) = native_callee_name(callee, scope) {
-                if let Some(sig) = crate::sigs::lookup(&qname) {
-                    check_native_args(&qname, &sig, args, scope, errors, expr.span.clone());
+                if let Some(selected) = calls::select_native_sig(&qname, args, scope) {
+                    // An overloaded native that no form's arity accepts is
+                    // reported once, against the whole set — checking the
+                    // closest form as well would add a second, narrower
+                    // arity error contradicting the first.
+                    if let Some(arities) = selected.arity_mismatch {
+                        errors.push(TypeCheckError::NativeArityOverload {
+                            callee: qname,
+                            expected: arities,
+                            found: args.len(),
+                            span: to_source_span(expr.span.clone()),
+                        });
+                    } else {
+                        check_native_args(
+                            &qname,
+                            &selected.sig,
+                            args,
+                            scope,
+                            errors,
+                            expr.span.clone(),
+                        );
+                    }
                 } else if crate::sigs::lookup_const(&qname).is_some() {
                     // `Math.huge()` — the member exists but holds a value.
                     // Say so directly; otherwise the call infers as `any`
@@ -195,7 +215,7 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             // `x as function` used to be a bare callability test. The target
             // of a cast is a type like any other, so it has to name the
             // signature the value is being narrowed to.
-            super::stmt::reject_bare_function_type(ty, expr.span.clone(), errors);
+            super::stmt::reject_non_types(ty, expr.span.clone(), errors);
             if let Some(vt) = infer(value, scope) {
                 let base = strip_nullable(vt.clone());
                 let narrowable =
@@ -254,7 +274,7 @@ fn check_lambda_return_ty(
     errors: &mut Vec<TypeCheckError>,
 ) {
     if let Some(rt) = return_ty {
-        super::stmt::reject_bare_function_type(rt, span, errors);
+        super::stmt::reject_non_types(rt, span, errors);
     }
 }
 

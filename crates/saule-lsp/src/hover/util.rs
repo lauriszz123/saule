@@ -137,11 +137,17 @@ pub(super) fn resolve_member(
     }
     // Stdlib fallback: `Math.sqrt`, `String.byte`, etc.
     let qname = format!("{class}.{name}");
-    if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
-        return Some(format!(
-            "```saule\nfn {qname}{}\n```",
-            render_native_sig_full(&sig)
-        ));
+    if let Some(sigs) = saule_typeck::sigs::lookup_all(&qname) {
+        // An overloaded native gets a line per form. Showing only the first
+        // would under-report it: `Math.random` really does return a float
+        // with no arguments and an integer with bounds, and a hover naming
+        // one of those hides the call the reader is looking at.
+        let body = sigs
+            .iter()
+            .map(|sig| format!("fn {qname}{}", render_native_sig_full(sig)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Some(format!("```saule\n{body}\n```"));
     }
     if saule_typeck::sigs::has_member(class, name) {
         // Member is known but its signature wasn't registered (typed
