@@ -45,7 +45,7 @@ pub mod safe;
 pub(crate) use results::{Results, Want};
 
 
-use saule_ast::{BinOp, Expr, Spanned};
+use saule_ast::{BinOp, CastKind, Expr, Spanned};
 use saule_interpreter::Value;
 
 use super::CompileError;
@@ -142,7 +142,12 @@ impl Compiler<'_> {
             // **`!`'s** span, which is the span `UNWRAPNIL` carried, so the
             // error a failed cast raises points where it always did.
             Expr::ForceUnwrap(inner) => match &inner.value {
-                Expr::Cast { value, ty } => self.cast_to(value, ty, dst, span, true)?,
+                // Only the *test* fuses. A conversion has its own opcode
+                // and no measured pair behind it, so `(s as integer)!`
+                // stays `CONV` + `UNWRAPNIL` and falls through below.
+                Expr::Cast { value, ty, kind } if *kind != CastKind::Convert => {
+                    self.cast_to(value, ty, dst, span, true, *kind)?
+                }
                 // `t[i]!` fuses into one `GETIDXU`. Indexing a `table<T>`
                 // yields `T?`, so this is not a niche shape — it is how a
                 // typed element read is spelled, and the pair was 17.7% of
@@ -162,7 +167,7 @@ impl Compiler<'_> {
             // `x as T`. The type travels as an index into the chunk's cast
             // table rather than as a `TypeDesc`, because the test is deep —
             // see `Chunk::cast_types`.
-            Expr::Cast { value, ty } => self.cast_to(value, ty, dst, span, false)?,
+            Expr::Cast { value, ty, kind } => self.cast_to(value, ty, dst, span, false, *kind)?,
 
             Expr::Match { scrutinee, arms } => self.match_to(e, scrutinee, arms, dst)?,
 
@@ -247,6 +252,7 @@ impl Compiler<'_> {
         dst: u16,
         span: &std::ops::Range<usize>,
         unwrap: bool,
+        kind: CastKind,
     ) -> Result<(), CompileError> {
         let k = self.chunk.add_cast_type(ty);
         let Ok(k) = u8::try_from(k) else {
@@ -262,7 +268,13 @@ impl Compiler<'_> {
         let m = self.mark();
         let r = self.operand_to_reg(value, self.operand_is_pure(value))?;
         let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
-        let op = if unwrap { Op::CASTUNWRAP } else { Op::CASTCHK };
+        // An unresolved cast runs as the test — the reading that cannot
+        // invent a value — matching the tree-walker.
+        let op = match (kind, unwrap) {
+            (CastKind::Convert, _) => Op::CONV,
+            (_, true) => Op::CASTUNWRAP,
+            (_, false) => Op::CASTCHK,
+        };
         self.emit(Instruction::abc(op, a, b, k), span);
         self.free_to(m);
         Ok(())

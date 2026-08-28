@@ -157,29 +157,37 @@ pub fn run(source: &str) -> RunResult {
         Err(err) => return failed(vec![to_diagnostic(&err, Phase::Lex)], Vec::new()),
     };
 
-    let module = match saule_parser::parse(tokens) {
+    let mut module = match saule_parser::parse(tokens) {
         Ok(module) => module,
         Err(err) => return failed(vec![to_diagnostic(&err, Phase::Parse)], Vec::new()),
     };
 
+    // The three static passes by hand, in the order `analyze_and_check`
+    // enforces — analyse, typecheck-and-resolve, then publish captures.
+    // Spelled out here rather than delegated because that helper stops at
+    // the first diagnostic and this one must report them all.
+    //
     // No import seed: resolving imports needs a filesystem, and there isn't
     // one. A program that imports gets a normal diagnostic from the loader.
-    let semantic: Vec<Diagnostic> =
-        saule_interpreter::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default())
-            .iter()
-            .map(|e| to_diagnostic(e, Phase::Semantic))
-            .collect();
+    let (sem_errors, bindings) =
+        saule_interpreter::analyze_with_bindings(&module, saule_semantic::ModuleSeed::default());
+    let semantic: Vec<Diagnostic> = sem_errors
+        .iter()
+        .map(|e| to_diagnostic(e, Phase::Semantic))
+        .collect();
     if !semantic.is_empty() {
         return failed(semantic, Vec::new());
     }
 
-    let type_errors: Vec<Diagnostic> = saule_typeck::check(&module)
+    let type_errors: Vec<Diagnostic> = saule_typeck::check_and_resolve(&mut module)
         .iter()
         .map(|e| to_diagnostic(e, Phase::Type))
         .collect();
     if !type_errors.is_empty() {
         return failed(type_errors, Vec::new());
     }
+
+    saule_interpreter::prepare_captures(&module, &bindings);
 
     // The bytecode engine, default since Phase 4, with the same fall-back
     // discipline as the CLI (VM_DESIGN.md §21.3): `Unsupported` means "the

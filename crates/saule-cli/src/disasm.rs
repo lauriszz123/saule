@@ -39,7 +39,7 @@ pub(crate) fn cmd_disasm(path: &Path) {
         Ok(t) => t,
         Err(e) => fail(Report::new(e).with_source_code(make_src())),
     };
-    let module = match saule_parser::parse(tokens) {
+    let mut module = match saule_parser::parse(tokens) {
         Ok(m) => m,
         Err(e) => fail(Report::new(e).with_source_code(make_src())),
     };
@@ -52,14 +52,8 @@ pub(crate) fn cmd_disasm(path: &Path) {
         Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
         None => saule_semantic::ModuleSeed::default(),
     };
-    if let Some(first) = saule_interpreter::analyze_and_prepare(&module, seed)
-        .into_iter()
-        .next()
-    {
-        fail(Report::new(first).with_source_code(make_src()));
-    }
-    if let Some(first) = saule_interpreter::typeck::check(&module).into_iter().next() {
-        fail(Report::new(first).with_source_code(make_src()));
+    if let Err(e) = saule_interpreter::analyze_and_check(&mut module, seed) {
+        fail(Report::new(e).with_source_code(make_src()));
     }
 
     match saule_vm::disassemble(&module, &name, &source) {

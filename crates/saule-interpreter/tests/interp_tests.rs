@@ -7,8 +7,8 @@ use saule_semantic::SemanticError;
 
 fn eval(src: &str) -> Result<Value, PipelineError> {
     let toks = Lexer::new(src).tokenize().expect("lex");
-    let module = parse(toks).expect("parse");
-    check_and_run(&module)
+    let mut module = parse(toks).expect("parse");
+    check_and_run(&mut module)
 }
 
 // ── Phase 1 regression coverage ──────────────────────────────────────────
@@ -427,8 +427,8 @@ fn try_eval(src: &str) -> Result<Value, String> {
     let toks = Lexer::new(src)
         .tokenize()
         .map_err(|e| format!("lex error: {e:?}"))?;
-    let module = parse(toks).map_err(|e| format!("parse error: {e:?}"))?;
-    check_and_run(&module).map_err(|e| format!("{e:?}"))
+    let mut module = parse(toks).map_err(|e| format!("parse error: {e:?}"))?;
+    check_and_run(&mut module).map_err(|e| format!("{e:?}"))
 }
 
 fn assert_int(src: &str, expected: i64) {
@@ -598,6 +598,88 @@ mod casts {
     #[test]
     fn int_with_no_args_errors() {
         assert_errs("int()");
+    }
+
+    // ── the `as` conversions ─────────────────────────────────────────
+
+    #[test]
+    fn as_integer_truncates_toward_zero() {
+        assert_int("7.9 as integer", 7);
+        // Truncation, not rounding, in both directions.
+        assert_int("-3.7 as integer", -3);
+        assert_int("10.0 as integer", 10);
+    }
+
+    #[test]
+    fn as_float_promotes_an_integer() {
+        assert_float("5 as float", 5.0);
+    }
+
+    #[test]
+    fn as_string_renders_the_way_tostring_does() {
+        assert_str("42 as string", "42");
+        // The decimal point is what keeps a float visibly a float.
+        assert_str("2.0 as string", "2.0");
+        assert_str("true as string", "true");
+    }
+
+    #[test]
+    fn as_integer_parses_a_string_and_may_fail() {
+        assert_int(r#""42" as integer ?? -1"#, 42);
+        // Surrounding space is trimmed; a non-number is `nil`, not an error.
+        assert_int(r#"" 42 " as integer ?? -1"#, 42);
+        assert_int(r#""nope" as integer ?? -1"#, -1);
+        assert_float(r#""3.5" as float ?? -1.0"#, 3.5);
+    }
+
+    #[test]
+    fn a_conversion_off_a_nullable_keeps_the_nil() {
+        assert_int(
+            "local f: float? = 2.9
+f as integer ?? -1",
+            2,
+        );
+        assert_int(
+            "local f: float? = nil
+f as integer ?? -1",
+            -1,
+        );
+    }
+
+    /// The reading that makes `any` sound is untouched by the conversions:
+    /// a float reached through an `any` is not an integer, and saying so is
+    /// the whole point of the test. Truncating it here would be the silent
+    /// conversion the language exists to refuse.
+    #[test]
+    fn the_checked_reading_still_refuses_a_float_in_an_any() {
+        assert_int(
+            "local a: any = 3.9
+a as integer ?? -1",
+            -1,
+        );
+        assert_float(
+            "local a: any = 3.9
+a as float ?? -1.0",
+            3.9,
+        );
+    }
+
+    /// The resolution is recorded per node, so a cast inside a lambda body
+    /// — reached through an `Arc` the walk has to write through — has to
+    /// come out converting like any other.
+    #[test]
+    fn a_conversion_inside_a_lambda_body_is_resolved_too() {
+        assert_int(
+            "local f = (x: float) => x as integer
+f(9.9)",
+            9,
+        );
+    }
+
+    #[test]
+    fn the_old_conversion_functions_still_agree_with_the_cast() {
+        assert_int("int(7.9) - (7.9 as integer)", 0);
+        assert_float("float(5) - (5 as float)", 0.0);
     }
 }
 

@@ -156,7 +156,7 @@ fn load_module_inner(
         .tokenize()
         .map_err(|e| wrap(&e))?;
 
-    let module = saule_parser::parse(tokens).map_err(|e| wrap(&e))?;
+    let mut module = saule_parser::parse(tokens).map_err(|e| wrap(&e))?;
 
     let dir = abs_path
         .parent()
@@ -174,14 +174,8 @@ fn load_module_inner(
     // Pipeline: semantic (registry build + field-init + control-flow) runs
     // first; if it produces *any* error we don't even attempt typecheck —
     // the type pass assumes a structurally valid module.
-    let sem_errors = crate::analyze_and_prepare(&module, seed);
-    if let Some(first) = sem_errors.into_iter().next() {
-        return Err(wrap(&first));
-    }
-
-    let errors = saule_typeck::check(&module);
-    if let Some(first) = errors.into_iter().next() {
-        return Err(wrap(&first));
+    if let Err(e) = crate::analyze_and_check(&mut module, seed) {
+        return Err(wrap(&e));
     }
 
     let env = Environment::with_prelude_and_context(Some(dir.clone()), Some(loader.clone()));
