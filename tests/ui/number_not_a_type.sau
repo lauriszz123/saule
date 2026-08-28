@@ -1,0 +1,11 @@
+-- `number` is not a Saule type. It existed only as an internal sentinel in
+-- the native signature registry meaning "integer or float accepted", and it
+-- never worked the other way: a `number` value was assignable to neither
+-- `integer` nor `float`, so anything annotated with it was unusable.
+--
+-- Rejecting it has to cover every position a type can be written — this
+-- fixture pins the binding one; the checker also rejects it on parameters,
+-- return types, table element types, class fields and `as` targets.
+
+local n: number = 5
+println(n)

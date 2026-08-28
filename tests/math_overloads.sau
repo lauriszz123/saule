@@ -1,0 +1,42 @@
+-- Math natives whose result type follows the call rather than just the name.
+-- `Math.random()` is a float where `Math.random(1, 6)` is an integer, and
+-- `Math.abs` / `Math.fmod` follow the flavour of their arguments. Every
+-- binding here is annotated, so the file passes only when the checker picks
+-- the same form the runtime actually takes.
+
+local unit: float = Math.random()
+println(unit >= 0.0 and unit < 1.0)
+
+Math.randomseed(7)
+local roll: integer = Math.random(6)
+println(roll >= 1 and roll <= 6)
+
+local ranged: integer = Math.random(0, 10)
+println(ranged >= 0 and ranged <= 10)
+
+-- The regression this file exists for: a typed table's element type is
+-- exactly what the call's result has to satisfy. While `Math.random` went
+-- unregistered this failed as `any` against `integer`.
+local nums: table<integer> = {}
+for i = 1, 5 do
+  nums[#nums + 1] = Math.random(0, 100)
+end
+println(#nums)
+
+-- `abs` follows its argument; `fmod` is integer only when both sides are.
+local ai: integer = Math.abs(-8)
+local af: float = Math.abs(-8.5)
+local fi: integer = Math.fmod(7, 3)
+local ff: float = Math.fmod(7.5, 3f)
+println(ai, af, fi, ff)
+
+-- Always float, whatever goes in: these run every argument through `as_f64`.
+local lo: float = Math.min(1f, 7f, 2f)
+local hi: float = Math.max(1f, 7f, 2f)
+local p: float = Math.pow(2f, 8f)
+local c: float = Math.clamp(11f, 0f, 10f)
+println(lo, hi, p, c)
+
+-- Two floats — the integer and the fractional part.
+local parts: table<float> = Math.modf(5.25)
+println(parts[1], parts[2])

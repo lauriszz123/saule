@@ -127,6 +127,104 @@ pub(crate) fn expected_arg_types(
         .collect()
 }
 
+/// The overload of a native the actual arguments select, plus whether any
+/// form accepted this many of them.
+pub(crate) struct SelectedSig {
+    /// The form to check and infer against. Always present: when no form
+    /// fits the argument count this is the closest one, so argument *type*
+    /// checking still says something useful alongside the arity error.
+    pub sig: crate::sigs::NativeSig,
+    /// `Some(arities)` when no registered form accepts this many positional
+    /// arguments, listing the counts that are accepted. `None` when one did.
+    /// Only ever set for genuine overload sets — a single-form native
+    /// reports its own arity through [`check_native_args`], which words the
+    /// error in terms of that one signature.
+    pub arity_mismatch: Option<Vec<usize>>,
+}
+
+/// Pick the registered form of `qname` that a call with `args` selects.
+///
+/// Single-form natives (nearly all of them) come back unchanged. For an
+/// overload set the rule is first-match: among the forms whose arity fits,
+/// the earliest one that accepts every argument whose type we could infer,
+/// falling back to the last (widest, by the registration convention) when
+/// none accepts them all.
+pub(crate) fn select_native_sig(
+    qname: &str,
+    args: &[CallArg],
+    scope: &Scope,
+) -> Option<SelectedSig> {
+    let forms = crate::sigs::lookup_all(qname)?;
+    let [only] = &forms[..] else {
+        return Some(select_overload(&forms, args, scope));
+    };
+    Some(SelectedSig {
+        sig: only.clone(),
+        arity_mismatch: None,
+    })
+}
+
+fn select_overload(
+    forms: &[crate::sigs::NativeSig],
+    args: &[CallArg],
+    scope: &Scope,
+) -> SelectedSig {
+    let positional: Vec<&Spanned<Expr>> = args
+        .iter()
+        .filter_map(|a| match a {
+            CallArg::Positional(e) => Some(e),
+            CallArg::Named { .. } => None,
+        })
+        .collect();
+    let arg_types: Vec<Option<Type>> = positional.iter().map(|e| infer(e, scope)).collect();
+
+    let fits_arity = |sig: &crate::sigs::NativeSig| {
+        let required = sig.params.iter().take_while(|p| !is_nullable(p)).count();
+        positional.len() >= required
+            && (sig.variadic.is_some() || positional.len() <= sig.params.len())
+    };
+    let candidates: Vec<&crate::sigs::NativeSig> =
+        forms.iter().filter(|s| fits_arity(s)).collect();
+
+    if candidates.is_empty() {
+        // Nothing takes this many arguments. Report against the form
+        // closest in size so the argument-type pass still has a signature
+        // to work with, and hand back every accepted arity for the error.
+        let mut arities: Vec<usize> = forms.iter().map(|s| s.params.len()).collect();
+        arities.sort_unstable();
+        arities.dedup();
+        let closest = forms
+            .iter()
+            .min_by_key(|s| s.params.len().abs_diff(positional.len()))
+            .expect("overload sets are never empty");
+        return SelectedSig {
+            sig: closest.clone(),
+            arity_mismatch: Some(arities),
+        };
+    }
+
+    // Every argument we could type has to be acceptable in its slot. An
+    // argument `infer` gave up on constrains nothing — it neither picks a
+    // form nor rules one out.
+    let accepts_all = |sig: &crate::sigs::NativeSig| {
+        arg_types.iter().enumerate().all(|(i, found)| {
+            let Some(found_ty) = found else { return true };
+            match sig.params.get(i).or(sig.variadic.as_ref()) {
+                Some(expected) => types_compatible(expected, found_ty),
+                None => true,
+            }
+        })
+    };
+    let chosen = candidates
+        .iter()
+        .find(|s| accepts_all(s))
+        .unwrap_or_else(|| candidates.last().expect("checked non-empty"));
+    SelectedSig {
+        sig: (*chosen).clone(),
+        arity_mismatch: None,
+    }
+}
+
 /// Check positional arguments of a native call against the registered
 /// signature. Skips named arguments (natives don't support them; the runtime
 /// will surface that as an error).

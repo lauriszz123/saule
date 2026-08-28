@@ -137,7 +137,7 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named, t_nullable, t_number};
+    use crate::stdlib::sigs::{register, t_named, t_nullable};
     use saule_ast::Type;
     let s = || t_named("string");
     let i = || t_named("integer");
@@ -162,7 +162,7 @@ pub fn register_sigs() {
         vec![s(), t_nullable(s())],
         vec![t_nullable(i())],
     );
-    register("Os.sleep", vec![t_number()], vec![nil()]);
+    register("Os.sleep", vec![t_named("float")], vec![nil()]);
 
     // environment
     register("Os.getenv", vec![s()], vec![str_opt()]);

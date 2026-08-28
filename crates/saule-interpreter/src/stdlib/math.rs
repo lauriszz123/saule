@@ -82,38 +82,46 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, register_const, t_named, t_nullable, t_number};
+    use crate::stdlib::sigs::{
+        register, register_const, register_overloads, register_v, t_named, t_nullable, t_table,
+    };
     let any = || t_named("any");
-    let n = t_number;
     let i = || t_named("integer");
     let f = || t_named("float");
     let b = || t_named("boolean");
     let s = || t_named("string");
 
+    // Every parameter below is `integer` or `float` — the two numeric types
+    // the language actually has. There is no `number`: it accepted both on
+    // the way in but assigned to neither on the way out, so anything typed
+    // with it was a value no program could use. Functions that do float
+    // maths take `float`; call them with a float literal (`2f`, `2.0`) or
+    // `float(x)` on an integer.
+    //
     // `type` accepts anything by design (it returns nil for non-numeric
     // values). Numeric coercion (`tointeger` / `tofloat`) lives in core.
     register("Math.type", vec![any()], vec![t_nullable(s())]);
 
-    // Definitely-integer returns; require a number in.
-    register("Math.floor", vec![n()], vec![i()]);
-    register("Math.ceil", vec![n()], vec![i()]);
-    register("Math.round", vec![n()], vec![i()]);
-    register("Math.sign", vec![n()], vec![i()]);
+    // Float in, integer out — rounding is what these are for.
+    register("Math.floor", vec![f()], vec![i()]);
+    register("Math.ceil", vec![f()], vec![i()]);
+    register("Math.round", vec![f()], vec![i()]);
+    register("Math.sign", vec![f()], vec![i()]);
 
-    // Definitely-float returns; require a number in.
-    register("Math.sqrt", vec![n()], vec![f()]);
-    register("Math.sin", vec![n()], vec![f()]);
-    register("Math.cos", vec![n()], vec![f()]);
-    register("Math.tan", vec![n()], vec![f()]);
-    register("Math.asin", vec![n()], vec![f()]);
-    register("Math.acos", vec![n()], vec![f()]);
+    // Float in, float out.
+    register("Math.sqrt", vec![f()], vec![f()]);
+    register("Math.sin", vec![f()], vec![f()]);
+    register("Math.cos", vec![f()], vec![f()]);
+    register("Math.tan", vec![f()], vec![f()]);
+    register("Math.asin", vec![f()], vec![f()]);
+    register("Math.acos", vec![f()], vec![f()]);
     // `atan(y)` and `atan(y, x)` are both valid (the 2-arg form is atan2).
-    register("Math.atan", vec![n(), t_nullable(n())], vec![f()]);
-    register("Math.exp", vec![n()], vec![f()]);
+    register("Math.atan", vec![f(), t_nullable(f())], vec![f()]);
+    register("Math.exp", vec![f()], vec![f()]);
     // `log(x)` natural log; `log(x, base)` arbitrary base.
-    register("Math.log", vec![n(), t_nullable(n())], vec![f()]);
-    register("Math.deg", vec![n()], vec![f()]);
-    register("Math.rad", vec![n()], vec![f()]);
+    register("Math.log", vec![f(), t_nullable(f())], vec![f()]);
+    register("Math.deg", vec![f()], vec![f()]);
+    register("Math.rad", vec![f()], vec![f()]);
 
     // Constants, not functions — `install` defines these as plain values
     // (`Value::Float(f64::INFINITY)` and friends). Registering them as
@@ -128,25 +136,50 @@ pub fn register_sigs() {
     // Boolean.
     register("Math.ult", vec![i(), i()], vec![b()]);
 
-    // `abs`, `min`, `max`, `pow`, `clamp`, `fmod`, `modf`, `random`,
-    // `randomseed` can be either integer or float depending on input —
-    // left unregistered so the checker stays conservative (`None`) rather
-    // than narrowing wrongly. We still record their names so the
-    // unknown-member check doesn't flag them as typos.
-    use crate::stdlib::sigs::register_member;
-    for name in [
+    // The rest used to be left unregistered on the theory that "integer or
+    // float depending on input" was untypeable. It isn't, and unregistered
+    // was the worst of the options: a known member with no signature infers
+    // as `any`, and `any` into a declared slot is a downcast the checker
+    // rejects — so `local n: integer = Math.random(0, 1000)` failed with a
+    // mismatch against a type the user never wrote.
+
+    // Unconditionally float: these run every argument through `as_f64` and
+    // return `Value::Float`, whatever went in.
+    register_v("Math.min", vec![f()], f(), vec![f()]);
+    register_v("Math.max", vec![f()], f(), vec![f()]);
+    register("Math.pow", vec![f(), f()], vec![f()]);
+    register("Math.clamp", vec![f(), f(), f()], vec![f()]);
+    // Two floats — the integer and fractional parts — in an array table.
+    register("Math.modf", vec![f()], vec![t_table(f())]);
+
+    // Integer domain: bounds and seeds are counts, not measurements.
+    register("Math.randomseed", vec![i()], vec![t_named("nil")]);
+
+    // …and these two vary with the call itself, so they get one form each.
+    // Narrowest first: selection takes the earliest form the arguments fit.
+
+    // `abs` and `fmod` preserve the flavour they were given, because the
+    // runtime does: `Math.abs(-8)` is `Value::Int(8)` and `Math.fmod(7, 3)`
+    // is `Value::Int(1)`, while either one with a float argument is a float.
+    register_overloads(
         "Math.abs",
-        "Math.min",
-        "Math.max",
-        "Math.pow",
-        "Math.clamp",
+        vec![(vec![i()], vec![i()]), (vec![f()], vec![f()])],
+    );
+    register_overloads(
         "Math.fmod",
-        "Math.modf",
+        vec![(vec![i(), i()], vec![i()]), (vec![f(), f()], vec![f()])],
+    );
+
+    // Arity is what decides here: the no-arg form draws a unit float, both
+    // bounded forms draw an integer between integer bounds.
+    register_overloads(
         "Math.random",
-        "Math.randomseed",
-    ] {
-        register_member(name);
-    }
+        vec![
+            (vec![], vec![f()]),
+            (vec![i()], vec![i()]),
+            (vec![i(), i()], vec![i()]),
+        ],
+    );
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {

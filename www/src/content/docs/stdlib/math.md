@@ -24,27 +24,27 @@ functions return `integer` even when given a `float` (e.g. `floor`, `ceil`).
 
 | Signature | Description |
 | --- | --- |
-| `Math.floor(n: number) -> integer` | Round toward `-inf`. |
-| `Math.ceil(n: number) -> integer` | Round toward `+inf`. |
-| `Math.round(n: number) -> integer` | Banker's-friendly round. |
+| `Math.floor(n: float) -> integer` | Round toward `-inf`. |
+| `Math.ceil(n: float) -> integer` | Round toward `+inf`. |
+| `Math.round(n: float) -> integer` | Banker's-friendly round. |
 | `Math.tointeger(v: any) -> integer?` | Lossless integer conversion (`3.0` → `3`, `3.5` → `nil`). |
 | `Math.type(v: any) -> string?` | `"integer"` / `"float"` for numbers, `nil` for non-numbers. |
-| `Math.sign(n: number) -> integer` | `-1`, `0`, or `1`. |
+| `Math.sign(n: float) -> integer` | `-1`, `0`, or `1`. |
 
 ### Arithmetic
 
 | Signature | Description |
 | --- | --- |
-| `Math.abs(n: number) -> number` | Magnitude (returns same kind as input). |
-| `Math.min(...number) -> number` | Minimum of all arguments. |
-| `Math.max(...number) -> number` | Maximum of all arguments. |
-| `Math.clamp(n: number, lo: number, hi: number) -> number` | Pin `n` into `[lo, hi]`. |
-| `Math.fmod(a: number, b: number) -> number` | Truncated remainder. |
-| `Math.modf(n: float) -> table<any>` | `[int_part, frac_part]`. |
-| `Math.pow(a: number, b: number) -> number` | `a^b`. |
-| `Math.sqrt(n: number) -> float` | √n. |
-| `Math.exp(n: number) -> float` | `e^n`. |
-| `Math.log(n: number, base: number?) -> float` | Natural log; with `base`, log in that base. |
+| `Math.abs(n: integer) -> integer`<br />`Math.abs(n: float) -> float` | Magnitude, in the same kind as the input. |
+| `Math.min(...float) -> float` | Minimum of all arguments. |
+| `Math.max(...float) -> float` | Maximum of all arguments. |
+| `Math.clamp(n: float, lo: float, hi: float) -> float` | Pin `n` into `[lo, hi]`. |
+| `Math.fmod(a: integer, b: integer) -> integer`<br />`Math.fmod(a: float, b: float) -> float` | Truncated remainder, in the kind it was given. |
+| `Math.modf(n: float) -> table<float>` | `[int_part, frac_part]`. |
+| `Math.pow(a: float, b: float) -> float` | `a^b`. |
+| `Math.sqrt(n: float) -> float` | √n. |
+| `Math.exp(n: float) -> float` | `e^n`. |
+| `Math.log(n: float, base: float?) -> float` | Natural log; with `base`, log in that base. |
 
 ### Trigonometry
 

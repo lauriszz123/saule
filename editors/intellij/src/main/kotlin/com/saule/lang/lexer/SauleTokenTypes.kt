@@ -69,6 +69,6 @@ object SauleTokenTypes {
     // and `fn` is already highlighted as a declaration keyword.
     val PRIMITIVE_TYPES = setOf(
         "integer", "float", "string", "boolean", "any",
-        "table", "userdata", "thread", "number",
+        "table", "userdata", "thread",
     )
 }

@@ -72,7 +72,7 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                     .map(|p| p.span.clone())
                     .or_else(|| body.first().map(|s| s.span.clone()))
                     .unwrap_or(0..0);
-                reject_bare_function_type(rt, span, errors);
+                reject_non_types(rt, span, errors);
             }
             let prev_generics = push_generics(type_params);
             let mut scope = Scope::default();
@@ -126,7 +126,7 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             for sig in methods {
                 check_param_types(&sig.params, errors);
                 if let Some(rt) = &sig.return_ty {
-                    reject_bare_function_type(rt, sig.span.clone(), errors);
+                    reject_non_types(rt, sig.span.clone(), errors);
                 }
             }
         }
@@ -341,7 +341,7 @@ pub(crate) fn check_class(
         if let ClassMember::Method(meth) = &m.value {
             check_param_types(&meth.params, errors);
             if let Some(rt) = &meth.return_ty {
-                reject_bare_function_type(rt, meth.span.clone(), errors);
+                reject_non_types(rt, meth.span.clone(), errors);
             }
             let prev_generics = push_generics(&meth.type_params);
             let mut scope = Scope::default();
