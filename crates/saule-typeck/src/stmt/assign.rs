@@ -38,6 +38,28 @@ pub(crate) fn check_binding_type(
 /// value no further code could use. Rejecting it outright is the only
 /// honest answer: there is no widening, so the author has to pick the one
 /// they meant.
+/// Does `ty` mention a name the language has no type for — `function` or
+/// `number`?
+///
+/// Once [`reject_non_types`] has reported one, the annotation must not go
+/// on to constrain anything: checking a value against it produces a second
+/// diagnostic phrased as though the name *were* a type, which contradicts
+/// the first. `local test: number` used to report "`number` is not a type"
+/// and then, in the next breath, "mark the type nullable with `?` (e.g.
+/// `number?`)" — advice that cannot be followed. Callers fall back to `any`
+/// instead, so the reader gets the one error that is actually true.
+pub(crate) fn is_non_type(ty: &Type) -> bool {
+    match ty {
+        Type::Named(n) => n == "function" || n == "number",
+        Type::Nullable(inner) => is_non_type(inner),
+        Type::Table { key, value } => {
+            key.as_deref().map(is_non_type).unwrap_or(false) || is_non_type(value)
+        }
+        Type::Tuple(items) => items.iter().any(is_non_type),
+        Type::Function { params, ret } => params.iter().any(is_non_type) || is_non_type(ret),
+    }
+}
+
 pub(crate) fn reject_non_types(
     ty: &Type,
     span: std::ops::Range<usize>,

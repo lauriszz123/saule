@@ -36,6 +36,12 @@ pub(super) fn check_stmt(
             if let Some(t) = ty {
                 check_binding_type(t, stmt.span.clone(), errors);
             }
+            // A name the language has no type for cannot constrain this
+            // binding. `check_binding_type` has already reported it; going
+            // on to check the value against it too would contradict that
+            // error — see [`is_non_type`]. Drop the annotation and treat
+            // the binding as untyped.
+            let ty = ty.as_ref().filter(|t| !is_non_type(t));
             if let (Some(ty), Some(v)) = (ty, value) {
                 check_expr_expecting(v, Some(ty), scope, errors);
                 // An annotated `local` is one of the sites the interpreter
@@ -65,6 +71,11 @@ pub(super) fn check_stmt(
                     });
                 }
                 scope.bind(name.clone(), ty.clone());
+            } else {
+                // Annotation dropped above, no initializer: the name still
+                // has to exist for the rest of the scope, or the one real
+                // error is followed by a pile of "unknown variable".
+                scope.bind(name.clone(), Type::Named("any".into()));
             }
         }
 
