@@ -1,0 +1,38 @@
+-- `as` on a value whose type is known converts it. The pairs are fixed:
+-- integer <-> float, anything numeric or boolean into string, and a string
+-- parsed back into a number — that last one being the only direction that
+-- can fail, which is why it alone is nullable.
+class Main
+	static fn main()
+		-- Numeric, both directions. Truncation is toward zero, not rounding.
+		local a: integer = 10.9 as integer
+		local b: integer = -10.9 as integer
+		local c: float = 3 as float
+		println(a, b, c)  -- 10  -10  3.0
+
+		-- Rendering. The same text `tostring` and `..` produce, so a float
+		-- keeps its decimal point.
+		println(42 as string, 2.0 as string, true as string)  -- 42  2.0  true
+
+		-- Parsing. `integer?`, because "nope" is a string too.
+		local n: integer? = "42" as integer
+		local f: float? = " 3.5 " as float
+		println(n!, f!)  -- 42  3.5
+		println("nope" as integer ?? -1)  -- -1
+
+		-- A conversion off a nullable value keeps the nil.
+		local maybe: float? = nil
+		println(maybe as integer ?? -99)  -- -99
+
+		-- Chained: parse, then widen. The parentheses are the `??`, not
+		-- the casts — `as` binds tighter than every binary operator.
+		println((("7" as integer) ?? 0) as float)  -- 7.0
+
+		-- The checked reading is untouched. A float that arrives inside an
+		-- `any` is not an integer, and `as integer` still says so rather
+		-- than quietly truncating it.
+		local any_float: any = 3.9
+		println(any_float as integer ?? -1)  -- -1
+		println(any_float as float ?? -1.0)  -- 3.9
+	end
+end

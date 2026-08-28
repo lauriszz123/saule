@@ -31,9 +31,9 @@ fn run(src: &str) -> Result<String, String> {
     let tokens = saule_lexer::Lexer::new(src)
         .tokenize()
         .map_err(|e| e.to_string())?;
-    let module = saule_parser::parse(tokens).map_err(|e| e.to_string())?;
+    let mut module = saule_parser::parse(tokens).map_err(|e| e.to_string())?;
     let (sink, result) =
-        saule_interpreter::output::capture(|| saule_interpreter::check_and_run(&module));
+        saule_interpreter::output::capture(|| saule_interpreter::check_and_run(&mut module));
     match result {
         Ok(_) => Ok(sink.text()),
         Err(e) => Err(e.to_string()),

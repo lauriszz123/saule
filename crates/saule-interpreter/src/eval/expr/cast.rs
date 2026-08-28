@@ -1,12 +1,18 @@
-//! `x as T` — the checked downcast out of `any`.
+//! `x as T` — the checked downcast out of `any`, and the conversion.
 //!
-//! This is what makes `any` sound. Values flow *into* `any` freely, but the
-//! only way back out is a runtime type test: [`cast`] returns the value when
-//! it really is a `T`, and `nil` otherwise. Since the expression's static
-//! type is `T?`, the caller is forced to handle the failure — with `??`, a
-//! `nil` check, or `!` to turn it back into a throw.
+//! Two operations, one keyword; which one a given `as` is was settled by
+//! the typechecker and travels in the node's [`CastKind`]. [`cast`] is the
+//! test, [`convert`] is the conversion. They meet the same values — a
+//! `3.9` is `nil` to the test and `3` to the conversion — which is exactly
+//! why the decision could not be left until now.
 //!
-//! ## Depth
+//! The test is what makes `any` sound. Values flow *into* `any` freely,
+//! but the only way back out is a runtime type test: [`cast`] returns the
+//! value when it really is a `T`, and `nil` otherwise. Since the
+//! expression's static type is `T?`, the caller is forced to handle the
+//! failure — with `??`, a `nil` check, or `!` to turn it back into a throw.
+//!
+//! ## Depth (the test)
 //!
 //! `table<T>` is checked **elementwise**: `t as table<integer>` walks every
 //! entry and fails if any is not an integer. That is O(n) per cast, and it
@@ -22,7 +28,7 @@
 //! contradict it, and the alternative (rejecting `{}`) would make the cast
 //! useless for freshly-built containers.
 
-use crate::value::Value;
+use crate::value::{SauleStr, Value};
 use saule_ast::Type;
 
 /// Perform `value as ty`, yielding `Some(value)` on a match and `None`
@@ -140,5 +146,62 @@ fn key_matches(key: &crate::value::TableKey, ty: &Type) -> bool {
         Type::Named(n) if n == "boolean" => matches!(key, TableKey::Bool(_)),
         Type::Nullable(inner) => key_matches(key, inner),
         _ => false,
+    }
+}
+
+/// Perform a converting `value as ty`.
+///
+/// Only reached on a node the typechecker resolved to
+/// [`CastKind::Convert`](saule_ast::CastKind::Convert), so `ty` is one of
+/// the pairs `saule_typeck::casts` admits and the arms below cover them
+/// all. Returns [`Value::Nil`] for the conversions that are allowed to
+/// fail — a string that holds no number — which is why those are typed
+/// `T?` and the total ones are not.
+pub fn convert(value: &Value, ty: &Type) -> Value {
+    // `x as T?` converts the same way `x as T` does; the `?` only shows up
+    // in the static type. And `nil` converts to `nil` whatever the target:
+    // a cast off a nullable value preserves the absence rather than
+    // inventing a `0` for it.
+    let ty = match ty {
+        Type::Nullable(inner) => inner.as_ref(),
+        other => other,
+    };
+    if matches!(value, Value::Nil) {
+        return Value::Nil;
+    }
+
+    let Type::Named(name) = ty else {
+        return Value::Nil;
+    };
+
+    match (name.as_str(), value) {
+        // Truncation toward zero, saturating at the `i64` ends and
+        // mapping NaN to `0` — Rust's `as` on the float, and the same
+        // answer the old `int()` gave for every one of those inputs.
+        ("integer", Value::Float(f)) => Value::Int(f.trunc() as i64),
+        ("integer", Value::Int(n)) => Value::Int(*n),
+        ("float", Value::Int(n)) => Value::Float(*n as f64),
+        ("float", Value::Float(f)) => Value::Float(*f),
+
+        // Parsing: the fallible direction. Surrounding space is trimmed
+        // because a string read from input usually carries some.
+        ("integer", Value::Str(s)) => match s.trim().parse::<i64>() {
+            Ok(n) => Value::Int(n),
+            Err(_) => Value::Nil,
+        },
+        ("float", Value::Str(s)) => match s.trim().parse::<f64>() {
+            Ok(f) => Value::Float(f),
+            Err(_) => Value::Nil,
+        },
+
+        // Rendering. `to_display_string` is what `print` and `..` use, so
+        // `n as string` and `"" .. n` agree — including the `2.0` that
+        // keeps a float visibly a float.
+        ("string", v @ (Value::Int(_) | Value::Float(_) | Value::Bool(_))) => {
+            Value::Str(SauleStr::new(v.to_display_string()))
+        }
+        ("string", Value::Str(s)) => Value::Str(s.clone()),
+
+        _ => Value::Nil,
     }
 }

@@ -30,7 +30,7 @@ pub(crate) use members::table_index_to_slot;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_ast::{BinOp, Expr, LambdaBody, Spanned, TableEntry, Type};
+use saule_ast::{BinOp, CastKind, Expr, LambdaBody, Spanned, TableEntry, Type};
 
 use crate::env::Environment;
 use crate::error::RuntimeError;
@@ -96,12 +96,26 @@ pub fn eval(expr: &Spanned<Expr>, env: &Rc<RefCell<Environment>>) -> Result<Valu
             ops::unary(*op, v, span)
         }
 
-        // `x as T` — runtime type test. Yields the value on a match and
-        // `nil` otherwise; never throws, because the static type is `T?`
-        // and the caller is already obliged to handle the `nil`.
-        Expr::Cast { value, ty } => {
+        // `x as T` — either a runtime type test or a conversion, decided
+        // by the typechecker and carried in `kind`. Neither throws: a
+        // failed test and a failed parse are both `nil`, which the static
+        // type already forced the caller to handle.
+        //
+        // An unresolved node runs as the test. That is the reading that
+        // cannot invent a value, so a tree that skipped the checker
+        // behaves as it did before conversions existed.
+        Expr::Cast { value, ty, kind } => {
             let v = eval(value, env)?;
-            Ok(if cast::cast(&v, ty) { v } else { Value::Nil })
+            Ok(match kind {
+                CastKind::Convert => cast::convert(&v, ty),
+                _ => {
+                    if cast::cast(&v, ty) {
+                        v
+                    } else {
+                        Value::Nil
+                    }
+                }
+            })
         }
 
         Expr::Binary { op, lhs, rhs } => match op {

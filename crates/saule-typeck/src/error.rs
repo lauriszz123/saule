@@ -39,14 +39,28 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
-    #[error("`as` expects an `any` value, but this is already `{found}`")]
+    #[error("this cast does nothing: the value is already `{found}`")]
     #[diagnostic(help(
-        "`as` is the checked escape from `any`; a value with a known type needs no cast \
-         (use `int()` / `float()` for numeric conversion)"
+        "on an `any` `as` is a checked type test, and on a typed value it converts \
+         (`10f as integer`, `n as string`) — casting to the type it already has is \
+         neither, so drop the cast"
     ))]
     RedundantCast {
         found: String,
-        #[label("already has a known type")]
+        #[label("already has this type")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("there is no cast from `{from}` to `{to}`")]
+    #[diagnostic(help(
+        "`as` converts between `integer` and `float`, renders `integer` / `float` / \
+         `boolean` as `string`, and parses a `string` into `integer` / `float`. \
+         Anything else has no single obvious answer, so write the conversion you mean"
+    ))]
+    ImpossibleCast {
+        from: String,
+        to: String,
+        #[label("this conversion is not defined")]
         span: miette::SourceSpan,
     },
 

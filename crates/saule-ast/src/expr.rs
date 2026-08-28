@@ -63,20 +63,28 @@ pub enum Expr {
     /// `x!`
     ForceUnwrap(Box<Spanned<Expr>>),
 
-    /// `x as T` — a **checked** downcast out of `any`.
+    /// `x as T` — one keyword, two readings, chosen by the operand's type.
     ///
-    /// The sole escape hatch from `any`, and the reason `any` can be sound:
-    /// values enter `any` freely, but nothing leaves it without a runtime
-    /// type test. Evaluates to `T?` — the value when it really is a `T`,
-    /// `nil` otherwise — so it composes with the existing nullable
+    /// On an `any` (or a generic parameter) it is a **checked downcast**:
+    /// the escape hatch from `any`, and the reason `any` can be sound —
+    /// values enter freely, but nothing leaves without a runtime type
+    /// test. Evaluates to `T?`, the value when it really is a `T` and
+    /// `nil` otherwise, so it composes with the existing nullable
     /// machinery (`x as integer ?? 0`, `(x as integer)!`) instead of
     /// introducing a second failure mode.
     ///
-    /// Legal only when the operand is `any` or `any?`; anywhere else the
-    /// cast is redundant and the typechecker says so.
+    /// On a value whose type is already known it is a **conversion**:
+    /// `10f as integer` truncates to `10`, `2 as float` widens to `2.0`,
+    /// `n as string` renders. The pairs that convert are listed in
+    /// `saule_typeck::casts`; anything not on that list is an error rather
+    /// than a silent no-op, so a cast never lies about what it did.
     Cast {
         value: Box<Spanned<Expr>>,
         ty: Type,
+        /// Which of the two readings this cast is, filled in by
+        /// [`saule_typeck::resolve_casts`] once the operand's static type is
+        /// known. The parser cannot decide it — see [`CastKind`].
+        kind: CastKind,
     },
 
     /// `{a, b, c}` or `{name: "alice", "x y": 1, 42}` — array, map, and
@@ -456,4 +464,27 @@ pub struct Param {
     pub default: Option<Spanned<Expr>>,
     pub variadic: bool,
     pub span: std::ops::Range<usize>,
+}
+
+/// Which reading an [`Expr::Cast`] carries, once the checker has seen the
+/// operand's static type.
+///
+/// The parser cannot tell these apart — `x as integer` is the same three
+/// tokens whether `x` is an `any` being probed or a `float` being
+/// truncated — and the runtime cannot either, because both readings can
+/// meet the very same value. A `3.9` reached through an `any` must stay
+/// `nil` (the type test failed; `any` stays honest), while a `3.9` whose
+/// type was known must become `3`. So the decision is recorded here, by
+/// the one pass that knows both types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CastKind {
+    /// Not yet resolved. Runs as [`Checked`](CastKind::Checked) so a tree
+    /// that never met the typechecker keeps the older, conservative
+    /// meaning instead of converting something behind the user's back.
+    #[default]
+    Unresolved,
+    /// Runtime type test against `T`, yielding the value or `nil`.
+    Checked,
+    /// Value conversion into `T`, per `saule_typeck::casts`.
+    Convert,
 }

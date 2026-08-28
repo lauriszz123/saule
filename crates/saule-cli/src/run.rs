@@ -108,7 +108,7 @@ fn run_source(
         .tokenize()
         .map_err(|e| Report::new(e).with_source_code(make_src()))?;
 
-    let module =
+    let mut module =
         saule_parser::parse(tokens).map_err(|e| Report::new(e).with_source_code(make_src()))?;
 
     // Pre-collect class/interface/enum metadata from each direct import
@@ -130,14 +130,10 @@ fn run_source(
     //
     // Semantic runs first because the type pass assumes a structurally
     // valid module and reads the class/interface/enum registry it installs.
-    let sem_errors = saule_interpreter::analyze_and_prepare(&module, seed);
-    if let Some(first) = sem_errors.into_iter().next() {
-        return Err(Report::new(first).with_source_code(make_src()));
-    }
-
-    let errors = saule_interpreter::typeck::check(&module);
-    if let Some(first) = errors.into_iter().next() {
-        return Err(Report::new(first).with_source_code(make_src()));
+    // `analyze_and_check` owns that ordering — including where the cast
+    // resolution has to sit relative to closure-capture registration.
+    if let Err(e) = saule_interpreter::analyze_and_check(&mut module, seed) {
+        return Err(Report::new(e).with_source_code(make_src()));
     }
 
     // Bytecode engine — the default since Phase 4 — when the compiler can

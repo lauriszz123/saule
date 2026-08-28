@@ -45,11 +45,16 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         // scope misses — a local of the same name shadows it.
         Expr::Ident(n) => scope.lookup(n).cloned().or_else(|| crate::vars::lookup(n)),
         Expr::Self_ => current_class().map(Type::Named),
-        // `x as T` always produces `T?` — the cast is checked at runtime
-        // and yields `nil` when the value isn't a `T`. Making the result
-        // nullable is what keeps the escape from `any` sound: the caller
-        // has to deal with the failure case via `??`, `!`, or a nil test.
-        Expr::Cast { ty, .. } => Some(Type::Nullable(Box::new(ty.clone()))),
+        // `x as T` produces `T?` whenever the cast can fail — a type test
+        // that finds the wrong type, or a parse that finds no number —
+        // which is what keeps the escape from `any` sound: the caller has
+        // to deal with the failure via `??`, `!`, or a nil test. A
+        // conversion that cannot fail (`10f as integer`) produces a plain
+        // `T`, so it can be assigned straight to a non-nullable slot.
+        Expr::Cast { value, ty, .. } => {
+            let source = infer(value, scope);
+            Some(crate::casts::resolve(source.as_ref(), ty).result(ty))
+        }
         // `obj.field` — when `obj` resolves to a known class, return the
         // declared type of that field (walks parents). Methods aren't fields,
         // so this only fires for stored slots declared with `local x: T`.

@@ -557,6 +557,28 @@ define_ops! {
     JEQII: Abc,
     /// If `R[A] != sext(C)` as `i64`, skip the next instruction
     JNEII: Abc,
+
+    // ---- §15.12 Nullability (continued) ----------------------------------
+    /// `x as T` where the checker resolved the cast to a **conversion** —
+    /// `R[A] := convert(R[B], cast_types[C])`.
+    ///
+    /// The sibling of [`CASTCHK`](Op::CASTCHK), and separate from it for
+    /// the reason the two readings are separate everywhere else: they meet
+    /// the same values and must answer differently. `3.9` fails `CASTCHK
+    /// integer` and yields `nil`; `CONV integer` truncates it to `3`. Only
+    /// the typechecker can tell which the source meant, so it decides and
+    /// the compiler emits accordingly.
+    ///
+    /// Never throws. The conversions that can fail (`"x" as integer`) yield
+    /// `nil`, which is why they are typed `T?` — so `(s as integer)!` is
+    /// this opcode followed by `UNWRAPNIL`, the same shape `CASTCHK` had
+    /// before its fusion was measured. No fusion here yet: §16 wants a
+    /// pair histogram first, and there is no program to profile until the
+    /// conversions are in use.
+    ///
+    /// Appended after `JNEII`, never inserted: the numbering is the chunk
+    /// ABI.
+    CONV: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

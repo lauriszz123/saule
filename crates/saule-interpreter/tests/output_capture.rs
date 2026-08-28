@@ -14,9 +14,9 @@ use saule_interpreter::output::{self, Stream};
 /// Run `src` through the whole pipeline with output captured.
 fn run_capturing(src: &str) -> (String, Vec<(Stream, String)>) {
     let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
-    let module = saule_parser::parse(tokens).expect("parse");
+    let mut module = saule_parser::parse(tokens).expect("parse");
 
-    let (sink, result) = output::capture(|| saule_interpreter::check_and_run(&module));
+    let (sink, result) = output::capture(|| saule_interpreter::check_and_run(&mut module));
     result.expect("program should run cleanly");
 
     let chunks = sink

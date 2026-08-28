@@ -19,8 +19,8 @@ use saule_parser::parse;
 fn eval(src: &str) -> Value {
     saule_interpreter::init();
     let toks = Lexer::new(src).tokenize().expect("lex");
-    let module = parse(toks).expect("parse");
-    match check_and_run(&module) {
+    let mut module = parse(toks).expect("parse");
+    match check_and_run(&mut module) {
         Ok(v) => v,
         Err(e) => panic!("pipeline failed: {e:?}\n--- source ---\n{src}"),
     }
