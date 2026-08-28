@@ -83,6 +83,10 @@ it makes sense.</li>
 you to handle the absence with <code dir="auto">?.</code>, <code dir="auto">??</code>, <code dir="auto">!</code>, or a <code dir="auto">match</code>.</li>
 <li><strong>Multi-return is a tuple.</strong> Functions like <code dir="auto">String.find</code> return
 <code dir="auto">(integer?, integer?)</code>. Destructure with <code dir="auto">local s, e = ...</code> or pattern-match.</li>
+<li><strong>Conversion is a cast, not a call.</strong> <code dir="auto">as</code> converts between <code dir="auto">integer</code> and
+<code dir="auto">float</code>, renders either (and <code dir="auto">boolean</code>) as a <code dir="auto">string</code>, and parses a
+<code dir="auto">string</code> back — and on an <code dir="auto">any</code> it is the checked type test instead. It
+refuses any pair with no obvious answer rather than inventing one.</li>
 <li><strong>No exceptions for “expected” failures.</strong> Filesystem helpers return
 <code dir="auto">boolean</code> rather than throwing. Use <code dir="auto">throw</code> / <code dir="auto">try</code> / <code dir="auto">catch</code> for genuinely
 exceptional cases — see <a href="/saule/language/error-handling/">README §Error Handling</a>.</li>
