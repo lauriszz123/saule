@@ -16,15 +16,19 @@ These names are bound at the top of every module — no import required.
 | `printf(fmt: string, ...any) -> nil` | Format like `String.format` and write to stdout (no newline). |
 | `tostring(v: any) -> string` | Human-readable rendering of any value. For a class instance implementing `OpToString`, calls its `toString()`; `print` / `println` / `..` render the same way. |
 | `type(v: any) -> string` | Returns the runtime type name: `"integer"`, `"float"`, `"string"`, `"boolean"`, `"nil"`, `"function"`, `"table"`, or the class name for instances. `"function"` is a runtime tag covering every callable — it is not a type you can write, since a function's type is its signature (`fn(A) -> R`). |
-| `int(n: integer \| float) -> integer` | Truncating conversion (`int(3.9) == 3`). |
-| `float(n: integer \| float) -> float` | Lossless widening (`float(3) == 3.0`). |
+| `int(n: integer \| float) -> integer` | Truncating conversion (`int(3.9) == 3`). Prefer the cast: `3.9 as integer`. |
+| `float(n: integer \| float) -> float` | Lossless widening (`float(3) == 3.0`). Prefer the cast: `3 as float`. |
 | `assert<T>(v: T?, msg: string?) -> T` | If `v` is truthy, returns it with its nullability stripped; otherwise throws `msg` (default `"assertion failed"`). |
 | `error(msg: string) -> nil` | Throws `msg` as a runtime error. Equivalent to `throw msg`. |
 
 ```saule
-local n: integer = assert(int("42"!), "expected an integer")
+local n: integer = "42" as integer ?? 0
 printf("got %d\n", n)
 ```
+
+Conversion between types is the `as` cast, not a function — `3.9 as
+integer`, `n as string`, `"42" as integer` (which is `integer?`, since the
+text may hold no number). See [README §Casting](/saule/language/types/#casting).
 
 ### Prelude interfaces
 
