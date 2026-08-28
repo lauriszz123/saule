@@ -97,6 +97,7 @@ pub use recover::{MAX_ERRORS, PriorShape};
 
 use saule_ast::{BinOp, Decl, Expr, Module, Spanned, Stmt};
 use saule_lexer::Token;
+use std::borrow::Cow;
 use std::ops::Range;
 
 // ─── Entry points ────────────────────────────────────────────────────────────
@@ -456,10 +457,7 @@ impl Parser {
         if self.check(t) {
             Ok(self.advance())
         } else {
-            Err(ParseError::Expected {
-                expected: what,
-                span: self.peek().span.clone(),
-            })
+            Err(self.expected_here(what))
         }
     }
 
@@ -472,11 +470,14 @@ impl Parser {
             self.advance();
             Ok((name, tok.span))
         } else {
-            Err(ParseError::Expected {
-                expected: what,
-                span: tok.span,
-            })
+            Err(recover::name_expected(what, &tok))
         }
+    }
+
+    /// [`ParseError::expected`] against the token under the cursor — the one
+    /// every rule but a handful reports on.
+    pub(crate) fn expected_here(&self, what: impl Into<Cow<'static, str>>) -> ParseError {
+        ParseError::expected(what, self.peek())
     }
 }
 

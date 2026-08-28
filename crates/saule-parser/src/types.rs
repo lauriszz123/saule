@@ -3,11 +3,46 @@
 
 use saule_ast::{Spanned, Type, TypeArgs};
 use saule_lexer::Token;
+use std::ops::Range;
 
 use crate::Parser;
 use crate::error::ParseError;
 
 impl Parser {
+    // ── `<>` ────────────────────────────────────────────────────────────────
+
+    /// Whether the cursor is on a `<` closed by the very next token.
+    ///
+    /// `<>` has no reading in Saule: empty type argument and parameter lists
+    /// are not a thing, and the pair is not an operator either. Recognising
+    /// it as a *shape* — before any rule tries to parse a type out of it — is
+    /// what lets each caller say which of those three mistakes it is looking
+    /// at, instead of leaving the reader with "expected an expression"
+    /// pointing at the `>`.
+    pub(crate) fn at_empty_angles(&self) -> bool {
+        self.check(&Token::Lt) && matches!(self.peek_at(1).value, Token::Gt)
+    }
+
+    /// Consume the `<>` under the cursor and report it as `err`.
+    ///
+    /// Recovering: the brackets are dropped and parsing continues as though
+    /// they had never been written, which is what makes the rest of the line
+    /// — the argument list, the function body — still parse. Returns `Err`
+    /// while speculating, where a probe needs the failure.
+    pub(crate) fn report_empty_angles(
+        &mut self,
+        err: impl FnOnce(Range<usize>) -> ParseError,
+    ) -> Result<(), ParseError> {
+        let open = self.advance();
+        let close = self.advance();
+        let err = err(open.span.start..close.span.end);
+        if !self.recovering() {
+            return Err(err);
+        }
+        self.record(err);
+        Ok(())
+    }
+
     /// Re-split a `>>` sitting where a type-argument list wants to close.
     ///
     /// `table<table<integer>>` ends in two closers the lexer has no way to
@@ -81,6 +116,12 @@ impl Parser {
                 // forms in the type system. Other identifiers may carry generic
                 // arguments which we still accept-and-discard for forward-compat.
                 if name == "table" && self.check(&Token::Lt) {
+                    // `table<>`: recover as the bare `table` the brackets
+                    // were adding nothing to.
+                    if self.at_empty_angles() {
+                        self.report_empty_angles(|span| ParseError::EmptyTypeArgs { span })?;
+                        return Ok(Type::Named(name));
+                    }
                     self.expect(&Token::Lt, "`<`")?;
                     let first = self.parse_type()?;
                     let (key, value) = if self.eat(&Token::Comma) {
@@ -131,6 +172,9 @@ impl Parser {
     /// Consumes a `<T, U, ...>` generic argument list, discarding the types.
     /// We assume `<` is currently the next token.
     pub(crate) fn skip_generic_args(&mut self) -> Result<(), ParseError> {
+        if self.at_empty_angles() {
+            return self.report_empty_angles(|span| ParseError::EmptyTypeArgs { span });
+        }
         self.expect(&Token::Lt, "`<`")?;
         let _ = self.parse_type()?;
         while self.eat(&Token::Comma) {
@@ -141,10 +185,27 @@ impl Parser {
         Ok(())
     }
 
+    /// [`Self::skip_generic_args`] for the *declaring* side — `class Box<T>`,
+    /// `interface Seq<T>` — which discards the names just the same, but where
+    /// an empty `<>` is a parameter that was never named rather than an
+    /// argument that was never supplied.
+    pub(crate) fn skip_generic_params(&mut self) -> Result<(), ParseError> {
+        if self.at_empty_angles() {
+            return self.report_empty_angles(|span| ParseError::EmptyTypeParams { span });
+        }
+        self.skip_generic_args()
+    }
+
     /// Consumes a `<T, U, ...>` *parameter* list on a function or method
     /// declaration and returns the type-parameter names. Unlike
     /// [`skip_generic_args`], every entry must be a bare identifier.
     pub(crate) fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
+        // `fn map<>(…)` — recovered as the non-generic declaration it
+        // otherwise is, so its parameters and body still parse.
+        if self.at_empty_angles() {
+            self.report_empty_angles(|span| ParseError::EmptyTypeParams { span })?;
+            return Ok(Vec::new());
+        }
         self.expect(&Token::Lt, "`<`")?;
         let mut params = Vec::new();
         let (first, _) = self.expect_ident_recover("generic parameter name")?;

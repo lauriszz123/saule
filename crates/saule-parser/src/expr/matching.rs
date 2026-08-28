@@ -23,10 +23,7 @@ impl Parser {
             // the leading keyword. A bare "expected `end`" message in
             // that situation is confusing; point at the arm-start
             // explicitly.
-            let err = ParseError::Expected {
-                expected: "`case` to start a match arm, or `end` to close `match`",
-                span: self.peek().span.clone(),
-            };
+            let err = self.expected_here("`case` to start a match arm, or `end` to close `match`");
             if !self.recovering() {
                 return Err(err);
             }
@@ -91,10 +88,7 @@ impl Parser {
                 (MatchBody::Expr(e.clone()), end)
             }
             (0, _) => {
-                let err = ParseError::Expected {
-                    expected: "an expression or statement after `then`",
-                    span: self.peek().span.clone(),
-                };
+                let err = self.expected_here("an expression or statement after `then`");
                 if !self.recovering() {
                     return Err(err);
                 }
@@ -164,10 +158,7 @@ impl Parser {
                         let span = tok.span.start..next.span.end;
                         Ok(Spanned::new(Pattern::Float(-f), span))
                     }
-                    _ => Err(ParseError::Expected {
-                        expected: "a numeric literal after `-`",
-                        span: next.span,
-                    }),
+                    _ => Err(ParseError::expected("a numeric literal after `-`", &next)),
                 }
             }
             // Tuple pattern: `(p1, p2, ...)`
@@ -220,10 +211,10 @@ impl Parser {
                 Ok(Spanned::new(Pattern::Bind(name), tok.span))
             }
             _ => {
-                let err = ParseError::Expected {
-                    expected: "a pattern (literal, identifier, `_`, `(...)`, or `Enum.Variant`)",
-                    span: tok.span.clone(),
-                };
+                let err = ParseError::expected(
+                    "a pattern (literal, identifier, `_`, `(...)`, or `Enum.Variant`)",
+                    &tok,
+                );
                 if !self.recovering() {
                     return Err(err);
                 }

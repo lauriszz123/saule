@@ -75,6 +75,28 @@ impl Parser {
                 // them, so `filter<string>(nums)` on a `table<integer>` is a
                 // mismatch rather than a silently re-inferred `T`.
                 Token::Lt => {
+                    // `f<>(…)` — the brackets were written and the types were
+                    // not. Claimed here, before the probe below: the probe can
+                    // only *fail* on an empty list, which hands the `<` to the
+                    // comparison rung and turns one omission into "expected an
+                    // expression" pointing at the `>`.
+                    //
+                    // `f<>(x)` and `f <> (x)` are the same three tokens, and
+                    // the second is far more likely to be the SQL not-equal
+                    // than a generic call — nobody puts a space between a
+                    // callee and its type arguments. So the claim is made
+                    // only on the tight spelling, and the spaced one falls
+                    // through to [`Parser::comparison_expr`], which reports
+                    // it as the `!=` it probably is. Either way the reader
+                    // gets an error on this token; this decides which
+                    // sentence it is.
+                    if self.at_empty_angles()
+                        && expr.span.end == self.peek().span.start
+                        && matches!(self.peek_at(2).value, Token::LParen)
+                    {
+                        self.report_empty_angles(|span| ParseError::EmptyTypeArgs { span })?;
+                        continue;
+                    }
                     // Not an instantiation after all (`a < b`) — leave the `<`
                     // for the binary-operator level to claim.
                     let Some(type_args) = self.try_eat_generic_call_args() else {
