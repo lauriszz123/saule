@@ -139,11 +139,14 @@ impl<'a> Cx<'a> {
                 ),
             }),
             Expr::Pipe { source, stages } => crate::exprty::pipe_type(self, &source.value, stages),
-            // `x as T` is `T?` — the cast is checked at runtime and
-            // yields nil when the value isn't a `T`. Worth a hint
-            // precisely *because* of the `?`: it is the reason the
-            // result still has to be unwrapped.
-            Expr::Cast { ty, .. } => Some(Type::Nullable(Box::new(ty.clone()))),
+            // `x as T` — `T?` for the readings that can fail (a type test,
+            // a parse), `T` for a conversion that cannot. Worth a hint
+            // either way, and especially when the `?` is there: it is the
+            // reason the result still has to be unwrapped.
+            Expr::Cast { value, ty, .. } => {
+                let source = self.infer_type(&value.value);
+                Some(saule_typeck::casts::resolve(source.as_ref(), ty).result(ty))
+            }
             // `x!` drops the nullability the unwrap just asserted away.
             Expr::ForceUnwrap(inner) => Some(strip_nullable(self.infer_type(&inner.value)?)),
             // `obj.field` — the field's declared type. A bare method

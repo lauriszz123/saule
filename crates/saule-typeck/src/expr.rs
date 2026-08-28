@@ -4,8 +4,8 @@
 
 mod calls;
 mod compat;
-mod generics;
-mod infer;
+pub(crate) mod generics;
+pub(crate) mod infer;
 mod narrow;
 mod operators;
 mod pipe;
@@ -22,7 +22,7 @@ use saule_ast::{CallArg, Expr, LambdaBody, Param, Spanned, TableEntry, Type};
 
 use super::TypeCheckError;
 use super::matches::check_match;
-use super::state::{Scope, current_class, is_type_param, set_return_ty, with_classes};
+use super::state::{Scope, current_class, set_return_ty, with_classes};
 use super::stmt::{check_stmt, seed_params};
 use super::to_source_span;
 
@@ -201,31 +201,35 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             check_binary_op(*op, lhs, rhs, scope, errors);
         }
         Expr::ForceUnwrap(inner) => check_expr(inner, scope, errors),
-        // `x as T` is only meaningful when the checker cannot know what
-        // `x` holds. That is `any` — and a generic type parameter, which
-        // is exactly as unknown inside the body: it stands for whatever
-        // the caller chose. Since a rigid `T` no longer flows into a
-        // concrete slot on its own, the cast is the only checked way to
-        // narrow one, and rejecting it would leave no way at all.
-        //
-        // On an already-typed value the cast is noise at best and a false
-        // sense of safety at worst, so say so rather than allow it.
-        Expr::Cast { value, ty } => {
+        // `x as T` reads two ways, and `casts::resolve` picks which — a
+        // type test when the checker cannot know what `x` holds (`any`,
+        // and a generic type parameter, which is exactly as unknown inside
+        // the body: it stands for whatever the caller chose), a conversion
+        // when it can. The two error rules are the ends of that spectrum:
+        // a cast that would do nothing, and one with no reading at all.
+        Expr::Cast { value, ty, .. } => {
             check_expr(value, scope, errors);
             // `x as function` used to be a bare callability test. The target
             // of a cast is a type like any other, so it has to name the
             // signature the value is being narrowed to.
             super::stmt::reject_non_types(ty, expr.span.clone(), errors);
-            if let Some(vt) = infer(value, scope) {
-                let base = strip_nullable(vt.clone());
-                let narrowable =
-                    is_any(&base) || matches!(&base, Type::Named(n) if is_type_param(n));
-                if !narrowable {
-                    errors.push(TypeCheckError::RedundantCast {
-                        found: type_to_string(&vt),
-                        span: to_source_span(value.span.clone()),
-                    });
-                }
+            let source = infer(value, scope);
+            let rule = crate::casts::resolve(source.as_ref(), ty);
+            // Publish the decision before reporting on it: an erroring
+            // module never runs, and recording unconditionally keeps the
+            // "every cast the checker saw has a kind" invariant simple.
+            crate::casts::record(expr.id, &rule);
+            match rule {
+                crate::casts::CastRule::Redundant => errors.push(TypeCheckError::RedundantCast {
+                    found: type_to_string(source.as_ref().unwrap_or(ty)),
+                    span: to_source_span(value.span.clone()),
+                }),
+                crate::casts::CastRule::Impossible => errors.push(TypeCheckError::ImpossibleCast {
+                    from: type_to_string(source.as_ref().unwrap_or(ty)),
+                    to: type_to_string(ty),
+                    span: to_source_span(expr.span.clone()),
+                }),
+                _ => {}
             }
         }
         Expr::Table(items) => {

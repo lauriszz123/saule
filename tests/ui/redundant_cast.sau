@@ -1,8 +1,9 @@
--- `as` is only for escaping `any`; on an already-typed value it is noise.
+-- `as` narrows an `any` or converts a typed value. Casting to the type the
+-- value already has is neither, so it is an error rather than a no-op.
 class Main
 	static fn main()
 		local n: integer = 5
-		local s = n as string
-		println(s)
+		local m = n as integer
+		println(m)
 	end
 end

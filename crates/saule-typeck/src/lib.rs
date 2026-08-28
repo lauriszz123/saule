@@ -34,10 +34,11 @@
 use saule_ast::Module;
 pub(crate) use saule_ast::to_source_span;
 
+pub mod casts;
 mod coerce_sites;
 pub mod coverage;
 mod error;
-mod expr;
+pub(crate) mod expr;
 mod funcs;
 mod matches;
 pub mod ops;
@@ -80,6 +81,59 @@ pub fn check_with_types(module: &Module) -> (Vec<TypeCheckError>, TypeTable) {
     let previous = table::begin();
     let errors = check_inner(module);
     (errors, table::end(previous))
+}
+
+/// [`check`], then stamp each `as` in `module` with the reading the check
+/// decided on (see [`saule_ast::CastKind`]).
+///
+/// **Execution paths should call this rather than [`check`].** A cast left
+/// unresolved runs as the checked type test, which is the conservative
+/// reading but the wrong one for `10f as integer` — the checker will have
+/// typed that as `integer` while the runtime hands back `nil`.
+///
+/// Run it *before* anything keys off the identity of a lambda body (in the
+/// standard pipeline, `saule_interpreter::prepare_captures`): resolving a
+/// cast inside a lambda body reallocates that body if its `Arc` is already
+/// shared.
+pub fn check_and_resolve(module: &mut Module) -> Vec<TypeCheckError> {
+    let previous = casts::begin();
+    let errors = check_inner(module);
+    stamp_casts(module, casts::end(previous));
+    errors
+}
+
+/// [`check_and_resolve`] and [`check_with_types`] in one pass, for the
+/// bytecode path — which needs both the stamped tree and the type table,
+/// and would otherwise typecheck every module twice to get them.
+pub fn check_and_resolve_with_types(module: &mut Module) -> (Vec<TypeCheckError>, TypeTable) {
+    let prev_casts = casts::begin();
+    let prev_types = table::begin();
+    let errors = check_inner(module);
+    let types = table::end(prev_types);
+    stamp_casts(module, casts::end(prev_casts));
+    (errors, types)
+}
+
+/// Write the decided [`CastKind`](saule_ast::CastKind)s back into the tree.
+///
+/// Skipped outright when nothing was recorded, which is most modules: the
+/// walk is `&mut`, and reaching a lambda body through one reallocates that
+/// body when its `Arc` is shared. A program with no `as` in it should not
+/// pay for a feature it does not use.
+fn stamp_casts(
+    module: &mut Module,
+    kinds: std::collections::HashMap<saule_ast::NodeId, saule_ast::CastKind>,
+) {
+    if kinds.is_empty() {
+        return;
+    }
+    saule_ast::visit_exprs_mut(module, |e| {
+        if let saule_ast::Expr::Cast { kind, .. } = &mut e.value
+            && let Some(k) = kinds.get(&e.id)
+        {
+            *kind = *k;
+        }
+    });
 }
 
 fn check_inner(module: &Module) -> Vec<TypeCheckError> {

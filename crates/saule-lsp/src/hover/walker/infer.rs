@@ -62,9 +62,15 @@ impl<'a> Cx<'a> {
             // nothing to infer from. Falls back to `any` like any other
             // unknown, which is what keeps the binding usable.
             Expr::Error => None,
-            // `x as T` is always `T?` — the cast can fail, and the
-            // nullable result is what forces the caller to handle it.
-            Expr::Cast { ty, .. } => Some(Type::Nullable(Box::new(ty.clone()))),
+            // `x as T` is `T?` when the cast can fail — a type test that
+            // finds the wrong type, or a parse that finds no number — and
+            // a plain `T` when it is a conversion that cannot. Deferred to
+            // the checker's own rule so hover cannot drift from the type
+            // the program is actually held to.
+            Expr::Cast { value, ty, .. } => {
+                let source = self.infer_init_type(&value.value);
+                Some(saule_typeck::casts::resolve(source.as_ref(), ty).result(ty))
+            }
             Expr::Call { callee, args, .. } => {
                 if let Expr::Ident(name) = &callee.value {
                     if with_classes(|r| r.contains_key(name)) {

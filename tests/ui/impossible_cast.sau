@@ -1,0 +1,10 @@
+-- ERROR: there is no `integer` -> `boolean` conversion. Rather than invent
+-- one (is `0` false? is every non-zero true?), `as` refuses and the program
+-- has to say which rule it meant.
+class Main
+	static fn main()
+		local n: integer = 5
+		local b = n as boolean
+		println(b)
+	end
+end

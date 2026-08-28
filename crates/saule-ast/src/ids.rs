@@ -27,21 +27,50 @@ use crate::{
 ///
 /// Idempotent in effect: running it twice produces the same numbering.
 pub fn assign_ids(module: &mut Module) -> usize {
-    let mut w = Walk { next: 0 };
+    let mut w = Walk {
+        next: Some(0),
+        hook: |_: &mut Spanned<Expr>| {},
+    };
     w.stmts(&mut module.stmts);
-    w.next as usize
+    w.next.unwrap_or(0) as usize
 }
 
-struct Walk {
-    next: u32,
+/// Call `f` on every expression node in `module`, pre-order, with mutable
+/// access — the `&mut` counterpart to
+/// [`visit_exprs`](crate::visit_exprs).
+///
+/// Numbering is left alone, so this is safe to run on an already-numbered
+/// tree: side tables keyed by [`NodeId`] stay valid across it.
+///
+/// It shares [`assign_ids`]' traversal rather than defining a second one.
+/// The shape of the tree is written down once, so a new [`Expr`] variant
+/// cannot be reached by one walk and missed by the other.
+pub fn visit_exprs_mut<F: FnMut(&mut Spanned<Expr>)>(module: &mut Module, f: F) {
+    let mut w = Walk {
+        next: None,
+        hook: f,
+    };
+    w.stmts(&mut module.stmts);
 }
 
-impl Walk {
+/// The one mutable pre-order traversal.
+///
+/// `next` is `Some` only when numbering; `hook` runs on every expression.
+/// Both jobs walk the identical shape, and the pair of `Option` / closure
+/// is what keeps that shape from being written twice.
+struct Walk<F> {
+    next: Option<u32>,
+    hook: F,
+}
+
+impl<F: FnMut(&mut Spanned<Expr>)> Walk<F> {
     /// Stamp a node and return its id. Pre-order: the parent is numbered
-    /// before its children.
+    /// before its children. A no-op when this walk is not numbering.
     fn stamp<T>(&mut self, node: &mut Spanned<T>) {
-        node.id = NodeId(self.next);
-        self.next += 1;
+        if let Some(next) = &mut self.next {
+            node.id = NodeId(*next);
+            *next += 1;
+        }
     }
 
     fn stmts(&mut self, stmts: &mut [Spanned<Stmt>]) {
@@ -189,6 +218,7 @@ impl Walk {
 
     fn expr(&mut self, e: &mut Spanned<Expr>) {
         self.stamp(e);
+        (self.hook)(e);
         match &mut e.value {
             Expr::Int(_)
             | Expr::Float(_)

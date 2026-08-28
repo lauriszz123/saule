@@ -45,8 +45,8 @@ use crate::chunk::{Chunk, Proto};
 use crate::op::{Instruction, Op};
 
 use super::ops::{
-    cast_holds, field_slot_err, float_in_range, index_array, int_in_range, jump, operand_err,
-    shift, snapshot_pairs,
+    cast_holds, convert_to, field_slot_err, float_in_range, index_array, int_in_range, jump,
+    operand_err, shift, snapshot_pairs,
 };
 use super::call::Site;
 use super::{ALL_RESULTS, Closure, Upvalue, Vm};
@@ -1119,6 +1119,17 @@ impl Vm {
                             return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
                         }
                         let v = (*self.reg(src)).clone();
+                        *self.reg_mut(base + a) = v;
+                    }
+
+                    // `x as T` where the cast converts rather than tests.
+                    // The conversion is the tree-walker's own function, for
+                    // the reason `CASTCHK` calls into its `cast`: one
+                    // definition, so the two engines cannot drift on what
+                    // `3.9 as integer` is.
+                    Op::CONV => {
+                        let src = base + ins.b() as usize;
+                        let v = convert_to(&chunk, ins.c() as usize, self.reg(src));
                         *self.reg_mut(base + a) = v;
                     }
 

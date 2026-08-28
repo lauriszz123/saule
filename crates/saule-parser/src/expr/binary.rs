@@ -243,8 +243,9 @@ impl Parser {
     /// postfix chain means `obj.field() as string` casts the call's result
     /// rather than the callee.
     ///
-    /// The loop tolerates `x as A as B`; it parses, and the typechecker
-    /// rejects it because the second operand is no longer `any`.
+    /// The loop accepts `x as A as B`, which is a chain of two casts and
+    /// means what it reads as: probe, then convert (`v as float as
+    /// integer`). The typechecker rejects the links that have no meaning.
     pub(crate) fn cast_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let mut expr = self.postfix_expr()?;
         while self.check(&Token::As) {
@@ -255,6 +256,10 @@ impl Parser {
                 Expr::Cast {
                     value: Box::new(expr),
                     ty,
+                    // Undecidable here: which reading this is depends on
+                    // the operand's type. `saule_typeck::resolve_casts`
+                    // fills it in.
+                    kind: saule_ast::CastKind::Unresolved,
                 },
                 span,
             );

@@ -293,26 +293,49 @@ local pending: string? = nil   -- ok — `string?` means "string or nil"
 
 ### Casting
 
-Use `int()` and `float()` to explicitly convert between the two:
+`as` converts between them, explicitly:
 
 ```saule
 local health: integer = 100
 local dmg: float = 10.5
 
-local result: integer = health - int(dmg)       -- dmg truncated to 10
-local precise: float = float(health) - dmg      -- health promoted to 100.0
+local result: integer = health - (dmg as integer)   -- dmg truncated to 10
+local precise: float = (health as float) - dmg      -- health promoted to 100.0
 ```
 
-Casting rules:
-- `int(float)` — truncates toward zero, no rounding
-- `float(integer)` — always safe, no precision loss
+The pairs `as` converts, and nothing else:
+
+| Cast | Result | Rule |
+| --- | --- | --- |
+| `float as integer` | `integer` | truncates toward zero, no rounding |
+| `integer as float` | `float` | always safe, no precision loss |
+| `integer` / `float` / `boolean` `as string` | `string` | the text `tostring` gives |
+| `string as integer` / `as float` | `integer?` / `float?` | parses; `nil` when the text is not a number |
+
+Two rules keep a cast from ever being decoration:
+
+- **A cast to the type the value already has is an error**, not a no-op.
+  `n as integer` on an `integer` does nothing, so the compiler says so.
+- **A pair not in the table is an error too.** There is no `integer as
+  boolean`: which of `0` and `""` counts as false is a convention, not a
+  fact, so the language makes you write the one you meant.
+
+A cast off a nullable value converts the payload and passes `nil` through,
+so `maybeFloat as integer` is `integer?` — nil in, nil out.
+
+The old `int()` and `float()` prelude functions still work and mean exactly
+what the first two rows mean.
 
 ### Escaping `any` with `as`
 
+The same keyword does a second job, and which one it is depends on what is
+on the left. On a value whose type is known it converts, as above. On an
+`any` there is nothing to convert *from*, so it **tests** instead.
+
 `any` is the one type the checker cannot see through, so it is the one type
-that needs a way out. `x as T` is a **checked** cast: it tests the value at
-runtime and evaluates to `T?` — the value when it really is a `T`, and `nil`
-when it isn't.
+that needs a way out. `x as T` there is a **checked** cast: it tests the
+value at runtime and evaluates to `T?` — the value when it really is a `T`,
+and `nil` when it isn't.
 
 ```saule
 fn describe(y: any) -> string
@@ -341,13 +364,18 @@ through a test.
 - Class casts respect inheritance — a `Dog` satisfies `as Animal`.
 - `table<T>` is checked **elementwise**, so the element type is honest. That
   is O(n); an empty table satisfies any element type.
-- `as` on a value whose type is already known is an error, not a no-op —
-  use `int()` / `float()` for numeric conversion.
-- Both are explicit — Saule **never** casts silently
+- The two readings never blur into each other. A `3.9` that arrives inside
+  an `any` is **not** an integer, and `x as integer` says `nil` rather than
+  silently truncating it — the truncation is what you get when you cast a
+  value the checker already knows is a `float`.
+- Every cast is explicit — Saule **never** converts on its own.
 
 ```saule
 local x: float = 7.9
-print(int(x))    -- 7, not 8, truncation not rounding
+print(x as integer)          -- 7, not 8: truncation, not rounding
+
+local boxed: any = 7.9
+print(boxed as integer ?? -1)   -- -1: a float is not an integer
 ```
 
 ---

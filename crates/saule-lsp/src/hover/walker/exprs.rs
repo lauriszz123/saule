@@ -27,7 +27,7 @@ impl<'a> Cx<'a> {
             Expr::Error => {}
             // Recurse into the operand so the cast is transparent for
             // hover; the target type's own idents are handled below.
-            Expr::Cast { value, ty } => {
+            Expr::Cast { value, ty, .. } => {
                 self.visit_expr(value);
                 self.record_type_idents_in(ty, &e.span);
             }

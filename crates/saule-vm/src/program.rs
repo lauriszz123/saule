@@ -149,13 +149,13 @@ impl ProgramError {
 /// so a class declared in one module and extended in another has exactly one
 /// layout (§24.2).
 pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
-    let (units, entry_idx) = load_units(entry)?;
+    let (mut units, entry_idx) = load_units(entry)?;
 
     let mut tables = crate::compile::Tables::default();
     let mut exports: Vec<HashMap<String, Export>> = vec![HashMap::new(); units.len()];
     let mut chunks: Vec<Chunk> = Vec::with_capacity(units.len());
 
-    for (i, unit) in units.iter().enumerate() {
+    for (i, unit) in units.iter_mut().enumerate() {
         let dir = unit
             .path
             .parent()
@@ -170,7 +170,11 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
         // tree-walker is the engine that reports.
         let seed = saule_interpreter::module::collect_import_seed(&unit.ast, &dir);
         let (_, bindings) = saule_semantic::analyze_with_bindings(&unit.ast, seed);
-        let (_, types) = saule_typeck::check_with_types(&unit.ast);
+        // Resolving, not just checking: these units were parsed here, from
+        // disk, so their `as` nodes have never met a typechecker. Compiling
+        // them unresolved would emit `CASTCHK` where the program — and the
+        // tree-walker running the same source — means a conversion.
+        let (_, types) = saule_typeck::check_and_resolve_with_types(&mut unit.ast);
 
         let (imported, import_bindings, natives) = imported_layouts(unit, &exports, &bindings)?;
         let (chunk, layouts) = crate::compile::compile_into(

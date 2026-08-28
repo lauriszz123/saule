@@ -261,7 +261,62 @@ pub fn analyze_and_prepare(
     errors
 }
 
-pub fn check_and_run(module: &Module) -> Result<Value, PipelineError> {
+/// The first half of [`analyze_and_prepare`]: analyse, and hand back what
+/// was learned instead of publishing it.
+///
+/// For callers that must report *every* diagnostic rather than stopping at
+/// the first, and so cannot use [`analyze_and_check`]: pair this with
+/// `typeck::check_and_resolve` and then [`prepare_captures`], in that
+/// order. See [`analyze_and_check`] for why the order is not free.
+pub fn analyze_with_bindings(
+    module: &Module,
+    seed: semantic::ModuleSeed,
+) -> (Vec<semantic::SemanticError>, semantic::Bindings) {
+    init();
+    semantic::analyze_with_bindings(module, seed)
+}
+
+/// The second half: publish the capture sets from [`analyze_with_bindings`].
+///
+/// Runs last, after the tree has stopped changing — it keys on the address
+/// of every lambda body it sees.
+pub fn prepare_captures(module: &Module, bindings: &semantic::Bindings) {
+    capture::register(module, bindings);
+}
+
+/// The whole static half of the pipeline, in the one order the three
+/// passes can run in: semantic analysis, then typecheck-and-resolve, then
+/// capture registration.
+///
+/// **Every path that goes on to execute `module` should use this** rather
+/// than pairing [`analyze_and_prepare`] with `typeck::check` by hand,
+/// because the order is not free:
+///
+/// * typecheck needs the registries semantic analysis installs, so it
+///   cannot come first;
+/// * resolving casts writes into the tree, and a lambda body it writes
+///   through is reallocated when its `Arc` is shared — so it has to come
+///   *before* capture registration, which holds a reference to every body
+///   to keep the addresses it keys on alive.
+///
+/// Returns the first error from whichever pass failed; a module that
+/// errors is never executed, so later passes are skipped.
+pub fn analyze_and_check(
+    module: &mut Module,
+    seed: semantic::ModuleSeed,
+) -> Result<(), PipelineError> {
+    let (errors, bindings) = analyze_with_bindings(module, seed);
+    if let Some(first) = errors.into_iter().next() {
+        return Err(PipelineError::Semantic(first));
+    }
+    if let Some(first) = typeck::check_and_resolve(module).into_iter().next() {
+        return Err(PipelineError::Typeck(first));
+    }
+    prepare_captures(module, &bindings);
+    Ok(())
+}
+
+pub fn check_and_run(module: &mut Module) -> Result<Value, PipelineError> {
     check_and_run_in(module, None)
 }
 
@@ -269,7 +324,7 @@ pub fn check_and_run(module: &Module) -> Result<Value, PipelineError> {
 /// module lives in so cross-module imports can be resolved when building
 /// the typecheck seed. Pass `None` for in-memory snippets (tests, REPL).
 pub fn check_and_run_in(
-    module: &Module,
+    module: &mut Module,
     dir: Option<&std::path::Path>,
 ) -> Result<Value, PipelineError> {
     init();
@@ -277,12 +332,7 @@ pub fn check_and_run_in(
         Some(d) => module::collect_import_seed(module, d),
         None => saule_semantic::ModuleSeed::default(),
     };
-    if let Some(first) = analyze_and_prepare(module, seed).into_iter().next() {
-        return Err(PipelineError::Semantic(first));
-    }
-    if let Some(first) = typeck::check(module).into_iter().next() {
-        return Err(PipelineError::Typeck(first));
-    }
+    analyze_and_check(module, seed)?;
     Ok(run(module)?)
 }
 

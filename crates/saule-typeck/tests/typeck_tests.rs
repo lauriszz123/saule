@@ -446,11 +446,37 @@ fn a_cast_composes_with_coalesce_and_force_unwrap() {
 }
 
 #[test]
-fn casting_an_already_typed_value_is_rejected() {
+fn casting_to_the_type_a_value_already_has_is_rejected() {
     rejects(
-        &in_fn("  local n: integer = 5\n  local s = n as string"),
+        &in_fn("  local n: integer = 5\n  local m = n as integer"),
         "already",
     );
+}
+
+/// The other end of the rule: a pair with no conversion is an error too,
+/// rather than a cast that quietly produces `nil` forever.
+#[test]
+fn a_cast_with_no_conversion_is_rejected() {
+    rejects(
+        &in_fn("  local n: integer = 5\n  local b = n as boolean"),
+        "no cast",
+    );
+}
+
+/// A typed value converts. `int()` / `float()` used to be the only way to
+/// say these, and the cast now says them without a call.
+#[test]
+fn a_typed_value_converts() {
+    accepts(&in_fn("  local x: integer = 10f as integer"));
+    accepts(&in_fn("  local y: float = 3 as float"));
+    accepts(&in_fn("  local s: string = 42 as string"));
+    // Parsing is the direction that can fail, so it stays nullable.
+    accepts(&in_fn("  local n: integer? = \"42\" as integer"));
+    rejects(&in_fn("  local n: integer = \"42\" as integer"), "nullable");
+    // As does a conversion off a nullable operand.
+    accepts(&in_fn(
+        "  local f: float? = 1.5\n  local n: integer? = f as integer",
+    ));
 }
 
 #[test]
@@ -872,15 +898,31 @@ fn a_type_param_can_be_narrowed_with_a_checked_cast() {
 }
 
 /// Opening `as` up to type parameters must not open it to everything: on
-/// a value whose type is already known the cast is still noise.
+/// a value whose type is already known the cast is a conversion, and it is
+/// held to the conversion table rather than narrowing anything.
 #[test]
-fn a_cast_on_a_concrete_value_is_still_rejected() {
-    rejects(
-        "fn nope(x: string) -> integer\n\
+fn a_cast_on_a_concrete_value_converts_instead_of_narrowing() {
+    // `string` -> `integer` is a parse, and a parse can fail: `integer?`.
+    accepts(
+        "fn ok(x: string) -> integer\n\
         \x20 local n: integer? = x as integer\n\
         \x20 return n ?? 0\n\
         end\n",
-        "already",
+    );
+    rejects(
+        "fn nope(x: string) -> integer\n\
+        \x20 local n: integer = x as integer\n\
+        \x20 return n\n\
+        end\n",
+        "nullable",
+    );
+    // And a pair off the table is still an error, type parameters or not.
+    rejects(
+        "fn nope(x: string) -> boolean\n\
+        \x20 local b: boolean = x as boolean\n\
+        \x20 return b\n\
+        end\n",
+        "no cast",
     );
 }
 
@@ -1802,4 +1844,68 @@ fn assignable_needs_a_static_method() {
         "#,
         "Str",
     );
+}
+
+// ── Cast resolution ─────────────────────────────────────────────────────
+
+/// Collect the [`CastKind`] of every `as` in `src`, in source order, after
+/// running the resolving check.
+fn cast_kinds(src: &str) -> Vec<saule_ast::CastKind> {
+    let mut module = parse(src);
+    let _ = saule_semantic::analyze(&module);
+    let _ = saule_typeck::check_and_resolve(&mut module);
+
+    let mut kinds = Vec::new();
+    saule_ast::visit_exprs(&module, &mut |e| {
+        if let saule_ast::Expr::Cast { kind, .. } = &e.value {
+            kinds.push(*kind);
+        }
+    });
+    kinds
+}
+
+/// The stamping pass is what carries the checker's decision to the two
+/// engines. A cast it misses runs as the type test, which is silently the
+/// wrong answer for a conversion — so "every cast got a kind" is the
+/// property worth pinning, not just the kinds themselves.
+#[test]
+fn every_cast_is_stamped_with_the_reading_the_checker_chose() {
+    use saule_ast::CastKind::{Checked, Convert};
+
+    let kinds = cast_kinds(&in_fn(
+        "  local a: any = 1\n\
+        \x20 local w = a as integer\n\
+        \x20 local x = 10.5 as integer\n\
+        \x20 local y = \"42\" as float\n\
+        \x20 local z = true as string",
+    ));
+    assert_eq!(kinds, vec![Checked, Convert, Convert, Convert]);
+}
+
+/// A lambda body lives behind an `Arc`, so the resolving walk has to write
+/// *through* one to reach a cast inside it. Getting this wrong leaves the
+/// body unstamped and the conversion silently returning `nil`.
+#[test]
+fn a_cast_inside_a_lambda_body_is_stamped() {
+    let kinds = cast_kinds(&in_fn("  local f = (n: float) => n as integer"));
+    assert_eq!(kinds, vec![saule_ast::CastKind::Convert]);
+}
+
+/// Resolution must not disturb the numbering: the type table and the
+/// binding table are both keyed by `NodeId`, and the bytecode compiler
+/// reads all three together.
+#[test]
+fn resolving_leaves_node_ids_alone() {
+    let src = in_fn("  local a: any = 1\n  local n = a as integer");
+    let before = parse(&src);
+    let mut after = parse(&src);
+    let _ = saule_semantic::analyze(&after);
+    let _ = saule_typeck::check_and_resolve(&mut after);
+
+    let ids = |m: &Module| {
+        let mut v = Vec::new();
+        saule_ast::visit_exprs(m, &mut |e| v.push(e.id));
+        v
+    };
+    assert_eq!(ids(&before), ids(&after));
 }

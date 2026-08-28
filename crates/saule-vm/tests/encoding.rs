@@ -191,10 +191,13 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::GETIDXU as u8, 123);
     // The immediate compares, appended as one block and so numbered as one.
     assert_eq!(Op::JLTII as u8, 124);
+    // ...and all of them kept theirs when `CONV` was appended after the
+    // block, which is the same story one entry later.
+    assert_eq!(Op::JNEII as u8, 129);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::JNEII),
-        "a new opcode was appended after JNEII — extend this assertion rather than \
+        Some(Op::CONV),
+        "a new opcode was appended after CONV — extend this assertion rather than \
          inserting one in the middle"
     );
 }

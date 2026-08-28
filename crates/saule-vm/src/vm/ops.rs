@@ -190,6 +190,20 @@ fn cast_holds_deep(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> bool {
         .is_some_and(|t| saule_interpreter::eval::expr::cast::cast(v, t))
 }
 
+/// Convert the value in `v` to `cast_types[idx]`.
+///
+/// No fast half, unlike [`cast_holds`]: a conversion has to read the
+/// payload whatever the tag, so there is nothing a tag compare could skip.
+///
+/// A missing entry is a malformed chunk. Yielding `nil` rather than
+/// panicking is the choice `cast_holds_deep` makes for the same situation.
+pub(crate) fn convert_to(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> Value {
+    match chunk.cast_types.get(idx) {
+        Some(t) => saule_interpreter::eval::expr::cast::convert(v, t),
+        None => Value::Nil,
+    }
+}
+
 #[inline]
 pub(crate) fn jump(pc: usize, sbx: i32) -> usize {
     (pc as i64 + sbx as i64) as usize

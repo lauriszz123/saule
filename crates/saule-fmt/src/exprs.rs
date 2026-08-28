@@ -146,7 +146,7 @@ impl<'a> Printer<'a> {
                 self.expr(inner, MAX_PREC);
                 self.write("!");
             }
-            Expr::Cast { value, ty } => {
+            Expr::Cast { value, ty, .. } => {
                 // `as` sits between the binary operators and the postfix
                 // chain, so it needs parentheses in a postfix context and
                 // none inside a binary one: `(x as integer)!` must keep
