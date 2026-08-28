@@ -1,0 +1,10 @@
+-- `f<>(...)` — the angle brackets written, the type left out. Pinned because
+-- the parser has to recognise the *shape*: left to the ordinary rules the `<`
+-- is read as less-than, and the mistake is reported as a missing expression
+-- in front of the `>`, which sends the reader to the wrong token.
+fn first<T>(items: table<T>) -> T
+  return items[1]
+end
+
+local nums: table = {1, 2, 3}
+println(first<>(nums))

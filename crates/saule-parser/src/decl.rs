@@ -22,10 +22,7 @@ impl Parser {
             // introduces it, so an identifier here is the whole signal.
             Token::Identifier(_) => self.parse_variable_decl(true, kw.span.start)?,
             _ => {
-                return Err(ParseError::Expected {
-                    expected: "a declaration or `name: T = value` after `export`",
-                    span: self.peek().span.clone(),
-                });
+                return Err(self.expected_here("a declaration or `name: T = value` after `export`"));
             }
         };
         Ok(stmt_decl(decl))
@@ -106,7 +103,7 @@ impl Parser {
         let kw = self.advance(); // `class`
         let (name, _) = self.expect_ident("class name")?;
         if self.check(&Token::Lt) {
-            self.skip_generic_args()?;
+            self.skip_generic_params()?;
         }
 
         let extends = if self.eat(&Token::Extends) {
@@ -265,10 +262,9 @@ impl Parser {
                 }
             }
             _ => {
-                return Err(ParseError::Expected {
-                    expected: "a class member (`[local] name: type`, `fn`, or `static`)",
-                    span: self.peek().span.clone(),
-                });
+                return Err(
+                    self.expected_here("a class member (`[local] name: type`, `fn`, or `static`)")
+                );
             }
         };
         Ok(Spanned::new(member, self.span_to_here(start)))
@@ -281,7 +277,7 @@ impl Parser {
         let kw = self.advance(); // `interface`
         let (name, _) = self.expect_ident("interface name")?;
         if self.check(&Token::Lt) {
-            self.skip_generic_args()?;
+            self.skip_generic_params()?;
         }
 
         let mut extends = Vec::new();
@@ -485,10 +481,10 @@ impl Parser {
                 (parts.join("."), false, end)
             }
             _ => {
-                let err = ParseError::Expected {
-                    expected: "a module path, quoted or bare (e.g. \"a/b\" or a.b)",
-                    span: path_tok.span.clone(),
-                };
+                let err = ParseError::expected(
+                    "a module path, quoted or bare (e.g. \"a/b\" or a.b)",
+                    &path_tok,
+                );
                 if !self.recovering() {
                     return Err(err);
                 }

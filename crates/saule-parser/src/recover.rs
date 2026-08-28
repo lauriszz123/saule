@@ -25,6 +25,7 @@
 
 use saule_ast::{Expr, Spanned, Stmt, Type};
 use saule_lexer::Token;
+use std::borrow::Cow;
 use std::ops::Range;
 
 use crate::Parser;
@@ -209,10 +210,7 @@ impl Parser {
         if self.check(t) {
             return Ok(Some(self.advance()));
         }
-        let err = ParseError::Expected {
-            expected: what,
-            span: self.peek().span.clone(),
-        };
+        let err = self.expected_here(what);
         if !self.recovering() {
             return Err(err);
         }
@@ -273,10 +271,7 @@ impl Parser {
             self.advance();
             return Ok((name, tok.span));
         }
-        let err = ParseError::Expected {
-            expected: what,
-            span: tok.span.clone(),
-        };
+        let err = name_expected(what, &tok);
         if !self.recovering() {
             return Err(err);
         }
@@ -302,15 +297,99 @@ impl Parser {
     /// safe.
     pub(crate) fn error_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let span = self.peek().span.clone();
-        let err = ParseError::Expected {
-            expected: "an expression",
-            span: span.clone(),
-        };
+        let err = self.missing_expression();
         if !self.recovering() {
             return Err(err);
         }
         self.record(err);
         Ok(Spanned::new(Expr::Error, span.start..span.start))
+    }
+
+    /// The diagnostic for [`Self::error_expr`], named by the token that asked
+    /// for the operand rather than by the grammar rule that happened to be
+    /// running.
+    ///
+    /// "expected an expression" is true of every one of these and useful in
+    /// none of them: the reader is looking at the caret already and can see
+    /// that whatever is under it is not an expression. What they cannot see
+    /// is *who wanted one*. The `+` two tokens back is the thing to fix, so
+    /// the message names it.
+    fn missing_expression(&self) -> ParseError {
+        let prev = self.pos.checked_sub(1).map(|i| &self.tokens[i].value);
+        // Only tokens that make an operand *grammatically required* are named.
+        // Anything else in front of a failed expression is a coincidence of
+        // position — "expected an expression after `]`" would send the reader
+        // to a token that is not the problem.
+        let demands_operand = prev.is_some_and(|t| {
+            matches!(
+                t,
+                Token::Plus
+                    | Token::Minus
+                    | Token::Star
+                    | Token::Slash
+                    | Token::Percent
+                    | Token::Caret
+                    | Token::Amp
+                    | Token::Pipe
+                    | Token::Tilde
+                    | Token::Shl
+                    | Token::Shr
+                    | Token::EqEq
+                    | Token::NotEq
+                    | Token::Lt
+                    | Token::Gt
+                    | Token::LtEq
+                    | Token::GtEq
+                    | Token::DotDot
+                    | Token::QuestionQuestion
+                    | Token::And
+                    | Token::Or
+                    | Token::Not
+                    | Token::Hash
+                    | Token::Assign
+                    | Token::PlusEq
+                    | Token::MinusEq
+                    | Token::StarEq
+                    | Token::SlashEq
+                    | Token::PercentEq
+                    | Token::CaretEq
+                    | Token::DotDotEq
+                    | Token::AmpEq
+                    | Token::PipeEq
+                    | Token::ShlEq
+                    | Token::ShrEq
+                    | Token::Comma
+                    | Token::Colon
+                    | Token::LParen
+                    | Token::LBracket
+                    | Token::FatArrow
+                    | Token::If
+                    | Token::Elseif
+                    | Token::While
+                    | Token::Until
+                    | Token::In
+                    | Token::Return
+                    | Token::Throw
+            )
+        });
+
+        let expected = match prev.filter(|_| demands_operand).and_then(Token::lexeme) {
+            Some(text) => format!("an expression after `{text}`").into(),
+            None => Cow::Borrowed("an expression"),
+        };
+        let err = ParseError::expected(expected, self.peek());
+
+        // `f(a,)`. The comma is the mistake, not the `)` under the caret:
+        // argument lists take no trailing comma (table literals do, and never
+        // reach here).
+        let closes_something = matches!(
+            self.peek().value,
+            Token::RParen | Token::RBracket | Token::RBrace
+        );
+        if prev == Some(&Token::Comma) && closes_something {
+            return err.with_help("remove the trailing `,`, or write the missing item after it");
+        }
+        err
     }
 
     /// The type to use where one was required but couldn't be parsed.
@@ -321,10 +400,7 @@ impl Parser {
     /// completes, and produces no second diagnostic on top of the parse
     /// error.
     pub(crate) fn error_type(&mut self, what: &'static str) -> Result<Type, ParseError> {
-        let err = ParseError::Expected {
-            expected: what,
-            span: self.peek().span.clone(),
-        };
+        let err = self.expected_here(what);
         if !self.recovering() {
             return Err(err);
         }
@@ -535,6 +611,22 @@ impl Parser {
         {
             self.advance();
         }
+    }
+}
+
+/// [`ParseError::expected`] for a position that wants a *name*, with the
+/// reserved-word case spelled out.
+///
+/// `local end = 1` is not a mysterious parse failure, it is a name collision
+/// with a keyword, and that is a different sentence to write. Every
+/// name-reading rule goes through here so the sentence is written once.
+pub(crate) fn name_expected(what: &'static str, found: &Spanned<Token>) -> ParseError {
+    let err = ParseError::expected(what, found);
+    match found.value.lexeme() {
+        Some(text) if found.value.is_keyword() => {
+            err.with_help(format!("`{text}` is a reserved word — choose another name"))
+        }
+        _ => err,
     }
 }
 

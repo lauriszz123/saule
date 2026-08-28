@@ -58,6 +58,20 @@ impl Parser {
     pub(crate) fn comparison_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let mut left = self.bor_expr()?;
         loop {
+            // `a <> b` — not-equal in SQL, Pascal and BASIC, and nothing at
+            // all here. Left alone it reads as `a < (> b)` and reports a
+            // missing operand, which describes the parser's predicament
+            // rather than the reader's mistake. Recovered as the `!=` it was
+            // meant to be, so the expression around it still typechecks.
+            //
+            // A generic call — `f<>(…)`, the other empty `<>` — never reaches
+            // this rung: [`Parser::postfix_expr`] has already claimed it.
+            if self.at_empty_angles() {
+                self.report_empty_angles(|span| ParseError::LtGtNotEqual { span })?;
+                let right = self.bor_expr()?;
+                left = mk_binary(BinOp::NotEq, left, right);
+                continue;
+            }
             let op = match self.peek().value {
                 Token::Lt => BinOp::Lt,
                 Token::LtEq => BinOp::LtEq,
