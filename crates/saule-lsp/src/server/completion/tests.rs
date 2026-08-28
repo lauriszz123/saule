@@ -156,6 +156,45 @@ fn type_position_still_offers_everything() {
     assert!(got.contains(&"Drawable".to_string()));
 }
 
+// ── Casts ───────────────────────────────────────────────────────────────────
+
+/// A cast target is a type position: `v as <caret>` offers the names that
+/// can stand there, not the values in scope.
+#[test]
+fn a_cast_target_offers_type_names() {
+    let got = complete(&format!(
+        "{DECLS}fn probe(v: any)\n    local x = v as @\nend\n"
+    ));
+    assert!(got.contains(&"integer".to_string()), "{got:?}");
+    assert!(got.contains(&"Entity".to_string()), "{got:?}");
+    assert!(got.contains(&"Colour".to_string()), "{got:?}");
+    // The operand is a value, not a candidate for its own cast target.
+    assert!(!got.contains(&"v".to_string()), "{got:?}");
+}
+
+/// Inside `table<...>` too — the target is walked as a whole type.
+#[test]
+fn a_nested_cast_target_offers_type_names() {
+    let got = complete(&format!(
+        "{DECLS}fn probe(v: any)\n    local x = v as table<@>\nend\n"
+    ));
+    assert!(got.contains(&"string".to_string()), "{got:?}");
+}
+
+/// The operand half stays a value position — a caret there used to be
+/// invisible, because the walker had no arm for `Expr::Cast` at all.
+#[test]
+fn a_cast_operand_still_completes_values() {
+    let src = "\
+fn build()
+  local speed = 10
+  local n = spe@ as string
+end
+";
+    let got = complete(src);
+    assert!(got.iter().any(|i| i == "speed"), "{got:?}");
+}
+
 // ── Trailing blocks ─────────────────────────────────────────────────────────
 
 const BLOCK_DECLS: &str = "\
