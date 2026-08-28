@@ -3,9 +3,13 @@
 -- never worked the other way: a `number` value was assignable to neither
 -- `integer` nor `float`, so anything annotated with it was unusable.
 --
--- Rejecting it has to cover every position a type can be written — this
--- fixture pins the binding one; the checker also rejects it on parameters,
--- return types, table element types, class fields and `as` targets.
+-- Each line below must produce exactly ONE diagnostic — the "not a type"
+-- one. A rejected annotation is dropped rather than used to check the rest
+-- of the binding, because using it produced a second error phrased as if
+-- `number` were a type: "mark the type nullable with `?` (e.g. `number?`)",
+-- advice that cannot be followed. The same held for `function`.
 
-local n: number = 5
-println(n)
+local uninitialized: number
+local annotated: number = 5
+local element: table<number> = {}
+println(uninitialized, annotated, element)
