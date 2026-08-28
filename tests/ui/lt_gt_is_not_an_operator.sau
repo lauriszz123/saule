@@ -1,0 +1,10 @@
+-- `<>` is how SQL, Pascal and BASIC spell not-equal, and it is not an
+-- operator here. Pinned for the same reason the lexer refuses to read `~=`
+-- as xor-assignment: a habit carried in from another language deserves the
+-- message that names it, not two unrelated operators and a missing operand.
+local a: integer = 1
+local b: integer = 2
+
+if a <> b then
+  println("different")
+end

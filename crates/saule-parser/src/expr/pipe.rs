@@ -17,10 +17,9 @@ impl Parser {
             stages.push(self.parse_pipe_stage()?);
         }
         if stages.is_empty() {
-            let err = ParseError::Expected {
-                expected: "`:name(args)` after `when(...)` — a pipeline needs at least one stage",
-                span: self.peek().span.clone(),
-            };
+            let err = self.expected_here(
+                "`:name(args)` after `when(...)` — a pipeline needs at least one stage",
+            );
             if !self.recovering() {
                 return Err(err);
             }
