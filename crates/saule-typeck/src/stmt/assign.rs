@@ -11,14 +11,14 @@ use crate::to_source_span;
 
 /// Validate a type written in a binding position: a `local`, a parameter, a
 /// field, a loop variable, a `catch` type. Two spellings are rejected —
-/// see [`reject_nil_in_binding_type`] and [`reject_bare_function_type`].
+/// see [`reject_nil_in_binding_type`] and [`reject_non_types`].
 pub(crate) fn check_binding_type(
     ty: &Type,
     span: std::ops::Range<usize>,
     errors: &mut Vec<TypeCheckError>,
 ) {
     reject_nil_in_binding_type(ty, span.clone(), errors);
-    reject_bare_function_type(ty, span, errors);
+    reject_non_types(ty, span, errors);
 }
 
 /// Reject the bare name `function` used as a type. A function value's type
@@ -30,22 +30,39 @@ pub(crate) fn check_binding_type(
 ///
 /// Applies in every type position, return slots included: `-> function`
 /// is as unhelpful to a caller as `f: function` is to a call site.
-pub(crate) fn reject_bare_function_type(
+/// Also rejects the bare name `number`. Saule's numeric types are `integer`
+/// and `float`; `number` was only ever an internal sentinel in the native
+/// signature registry, meaning "either one accepted". It never worked in
+/// the other direction — a `number` value is assignable to neither
+/// `integer` nor `float` — so anything a user annotated with it became a
+/// value no further code could use. Rejecting it outright is the only
+/// honest answer: there is no widening, so the author has to pick the one
+/// they meant.
+pub(crate) fn reject_non_types(
     ty: &Type,
     span: std::ops::Range<usize>,
     errors: &mut Vec<TypeCheckError>,
 ) {
-    fn walk(ty: &Type) -> bool {
+    fn walk(ty: &Type, name: &str) -> bool {
         match ty {
-            Type::Named(n) => n == "function",
-            Type::Nullable(inner) => walk(inner),
-            Type::Table { key, value } => key.as_deref().map(walk).unwrap_or(false) || walk(value),
-            Type::Tuple(items) => items.iter().any(walk),
-            Type::Function { params, ret } => params.iter().any(walk) || walk(ret),
+            Type::Named(n) => n == name,
+            Type::Nullable(inner) => walk(inner, name),
+            Type::Table { key, value } => {
+                key.as_deref().map(|k| walk(k, name)).unwrap_or(false) || walk(value, name)
+            }
+            Type::Tuple(items) => items.iter().any(|t| walk(t, name)),
+            Type::Function { params, ret } => {
+                params.iter().any(|t| walk(t, name)) || walk(ret, name)
+            }
         }
     }
-    if walk(ty) {
+    if walk(ty, "function") {
         errors.push(TypeCheckError::BareFunctionType {
+            span: to_source_span(span.clone()),
+        });
+    }
+    if walk(ty, "number") {
+        errors.push(TypeCheckError::NumberNotAType {
             span: to_source_span(span),
         });
     }
@@ -253,7 +270,7 @@ pub(crate) fn check_member_assign_receiver(
     let bad = match &stripped {
         Type::Named(n) => matches!(
             n.as_str(),
-            "integer" | "float" | "number" | "boolean" | "string"
+            "integer" | "float" | "boolean" | "string"
         ),
         Type::Tuple(_) | Type::Function { .. } => true,
         _ => false,

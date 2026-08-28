@@ -1,0 +1,5 @@
+-- `Math.random` accepts 0, 1 or 2 arguments. Three is none of them, and the
+-- diagnostic has to name every arity the overload set accepts instead of
+-- picking one form and reporting against that alone.
+
+println(Math.random(1, 2, 3))

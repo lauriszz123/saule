@@ -265,10 +265,6 @@ fn check_pattern_literal_compat(
         if n == "any" || n == pat_ty_name || is_type_param(n) {
             return;
         }
-        // `number` accepts integer/float literals.
-        if n == "number" && (pat_ty_name == "integer" || pat_ty_name == "float") {
-            return;
-        }
         errors.push(TypeCheckError::MatchPatternTypeMismatch {
             expected: n.clone(),
             found: pat_ty_name.to_string(),

@@ -51,7 +51,7 @@ pub(crate) fn check_coalesce_fallback(
 /// True for numeric scalars: `integer`, `float`, the `number` sentinel, and
 /// `any` (which acts as a wildcard).
 pub(crate) fn is_numeric_like(ty: &Type) -> bool {
-    matches!(ty, Type::Named(n) if n == "integer" || n == "float" || n == "number" || n == "any")
+    matches!(ty, Type::Named(n) if n == "integer" || n == "float" || n == "any")
 }
 
 /// True for operands of the bitwise operators.
@@ -63,7 +63,7 @@ pub(crate) fn is_numeric_like(ty: &Type) -> bool {
 /// kind is not pinned down and `any` is the wildcard, so both pass — same
 /// conservatism the arithmetic rules use.
 pub(crate) fn is_bitwise_like(ty: &Type) -> bool {
-    matches!(ty, Type::Named(n) if n == "integer" || n == "number" || n == "any")
+    matches!(ty, Type::Named(n) if n == "integer" || n == "any")
 }
 
 /// True for operands of `..` (string concatenation). Saule follows Lua and

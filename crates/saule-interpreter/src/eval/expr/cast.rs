@@ -90,8 +90,6 @@ fn matches_named(value: &Value, name: &str) -> bool {
         "any" => true,
         "integer" => matches!(value, Value::Int(_)),
         "float" => matches!(value, Value::Float(_)),
-        // The sentinel used by native signatures for "integer or float".
-        "number" => matches!(value, Value::Int(_) | Value::Float(_)),
         "string" => matches!(value, Value::Str(_)),
         "boolean" => matches!(value, Value::Bool(_)),
         "nil" => matches!(value, Value::Nil),
@@ -129,7 +127,7 @@ fn is_callable(value: &Value) -> bool {
 /// Whether a declared table-key type admits integer keys — the array part
 /// is integer-keyed, so anything else rules it out.
 fn is_integer_key_type(ty: &Type) -> bool {
-    matches!(ty, Type::Named(n) if n == "integer" || n == "any" || n == "number")
+    matches!(ty, Type::Named(n) if n == "integer" || n == "any")
 }
 
 /// Check a stored table key against a declared key type.
@@ -137,7 +135,7 @@ fn key_matches(key: &crate::value::TableKey, ty: &Type) -> bool {
     use crate::value::TableKey;
     match ty {
         Type::Named(n) if n == "any" => true,
-        Type::Named(n) if n == "integer" || n == "number" => matches!(key, TableKey::Int(_)),
+        Type::Named(n) if n == "integer" => matches!(key, TableKey::Int(_)),
         Type::Named(n) if n == "string" => matches!(key, TableKey::Str(_)),
         Type::Named(n) if n == "boolean" => matches!(key, TableKey::Bool(_)),
         Type::Nullable(inner) => key_matches(key, inner),

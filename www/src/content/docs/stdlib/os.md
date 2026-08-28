@@ -26,7 +26,7 @@ in `assert` if you want to abort).
 | `Os.clock() -> float` | CPU time used by the process, in seconds. |
 | `Os.difftime(t2: integer, t1: integer) -> integer` | `t2 - t1`. |
 | `Os.date(format: string?, time: integer?) -> string` | `strftime`-style. Default format `"%c"`, default time = now. |
-| `Os.sleep(seconds: number) -> nil` | Floats allowed for sub-second sleeps. |
+| `Os.sleep(seconds: float) -> nil` | Fractions allowed for sub-second sleeps. |
 
 ### Environment
 

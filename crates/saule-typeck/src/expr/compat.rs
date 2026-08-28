@@ -384,11 +384,6 @@ pub(crate) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
                 (true, false) | (false, true) => return false,
                 (false, false) => {}
             }
-            // `number` is the sentinel used in native sigs to mean
-            // "integer or float" — accept either.
-            if a == "number" && (b == "integer" || b == "float" || b == "number") {
-                return true;
-            }
             // Class/interface subtyping: a value of type `b` is assignable to
             // a slot of type `a` if `b` is a subtype of `a` (class implements
             // interface, class extends class, interface extends interface).

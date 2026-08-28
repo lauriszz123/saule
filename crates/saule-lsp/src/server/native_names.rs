@@ -56,7 +56,7 @@ fn derive_one(ty: &Type) -> String {
         Type::Named(n) => match n.as_str() {
             "string" => "s",
             "integer" => "i",
-            "float" | "number" => "n",
+            "float" => "n",
             "boolean" => "flag",
             "any" => "value",
             other => {

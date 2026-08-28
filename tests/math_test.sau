@@ -1,23 +1,23 @@
 class Main
 	static fn main()
 		println(Math.abs(-8))
-		println(Math.acos(1), Math.asin(0), Math.atan(1), Math.atan(1, 1))
-		println(Math.ceil(2.1), Math.floor(2.9), Math.cos(0), Math.sin(Math.pi / 2.0), Math.tan(0))
-		println(Math.deg(Math.pi), Math.rad(180), Math.exp(1), Math.log(Math.e), Math.log(8, 2))
-		println(Math.fmod(7, 3), Math.max(1, 7, 2), Math.min(1, 7, 2))
+		println(Math.acos(1f), Math.asin(0f), Math.atan(1f), Math.atan(1f, 1f))
+		println(Math.ceil(2.1), Math.floor(2.9), Math.cos(0f), Math.sin(Math.pi / 2.0), Math.tan(0f))
+		println(Math.deg(Math.pi), Math.rad(180f), Math.exp(1f), Math.log(Math.e), Math.log(8f, 2f))
+		println(Math.fmod(7, 3), Math.max(1f, 7f, 2f), Math.min(1f, 7f, 2f))
 		println(Math.huge, Math.maxinteger, Math.mininteger)
 
-		local parts: table<any> = Math.modf(5.25)
+		local parts: table<float> = Math.modf(5.25)
 		println(parts[1], parts[2])
 
 		Math.randomseed(99)
-		local a: integer = Math.random(1, 100) as integer ?? 0
+		local a: integer = Math.random(1, 100)
 
 		Math.randomseed(99)
 
-		local b: integer = Math.random(1, 100) as integer ?? 0
+		local b: integer = Math.random(1, 100)
 		println(a, b, a == b)
 
-		println(Math.sqrt(9), tointeger(5.0), Math.type(5), Math.type(5.5), Math.ult(1, 2))
+		println(Math.sqrt(9f), tointeger(5.0), Math.type(5), Math.type(5.5), Math.ult(1, 2))
 	end
 end

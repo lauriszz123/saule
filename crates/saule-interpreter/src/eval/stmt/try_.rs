@@ -83,7 +83,6 @@ fn runtime_matches_type(value: &Value, ty: &Type) -> bool {
             "boolean" => matches!(value, Value::Bool(_)),
             "integer" => matches!(value, Value::Int(_)),
             "float" => matches!(value, Value::Float(_)),
-            "number" => matches!(value, Value::Int(_) | Value::Float(_)),
             "string" => matches!(value, Value::Str(_)),
             "table" => matches!(value, Value::Table(_)),
             // No `"function"` arm: the bare name is not a type. A callable
