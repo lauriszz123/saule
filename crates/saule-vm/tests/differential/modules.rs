@@ -230,28 +230,27 @@ fn a_skipped_middle_default_still_runs_in_the_callee_when_it_is_not_a_literal() 
     // The other half of the rule, and the reason the literal restriction is
     // not merely conservative. A default that reads an earlier *parameter*
     // cannot be materialized at the call site — `a` there is the caller's
-    // `a`, not the callee's — so this must keep refusing rather than
-    // quietly binding the wrong value.
+    // `a`, not the callee's.
     //
-    // `agree` rather than `must_agree`: a refusal is the designed outcome,
-    // and it means the VM never runs this, so there is nothing to compare.
-    // What is asserted is that the tree-walker's answer is the one a
-    // materializing compiler would have got *wrong* — 200 from the caller's
-    // `a`, not 6 from the callee's.
+    // This refused outright until the gap mask: the call skips `d` while
+    // supplying `t` after it, which no per-arity entry stub can express. Now
+    // the caller passes a bitmask naming `d`, and the callee's gap entry runs
+    // `a * 2` in its own frame.
+    //
+    // The literal value is asserted, not just agreement: `6` is the callee's
+    // `a` doubled, and `200` is what a compiler that materialized the default
+    // at the call site would have produced from the caller's `a`. Two engines
+    // agreeing on `200` would be two engines that are both wrong.
     let src = "local a: integer = 100\n\
                fn f(a: integer, d: integer = a * 2, t: string) -> string\n\
                \x20 return tostring(d) .. t\n\
                end\n\
                f(a: 3, t: \"!\")";
-    let module = front_end(src);
-    assert!(
-        matches!(
-            saule_vm::compile(&module, "diff.sau", src),
-            Err(saule_vm::CompileError::Unsupported { .. })
-        ),
-        "a non-literal skipped default must refuse rather than be materialized at the call site"
+    must_agree(src);
+    assert_eq!(
+        tree_walker(&front_end(src)),
+        Outcome::Value("string:6!".into())
     );
-    assert_eq!(tree_walker(&module), Outcome::Value("string:6!".into()));
 }
 
 
@@ -264,6 +263,197 @@ fn an_exported_module_variable_is_read_and_written() {
     must_agree(
         "export appName: string = \"Saule\"\n         export version: integer = 26\n         export pending: string?\n         version = version + 1\n         appName .. \" v\" .. version .. \" \" .. (pending ?? \"none\")",
     );
+}
+
+
+// ── §19 the gap mask ──────────────────────────────────────────────────────
+//
+// A call that skips a defaulted parameter while supplying one after it. The
+// per-arity entry stubs fill a *suffix*, so the caller names the skipped
+// slots in a bitmask and the callee's gap entry runs those defaults — in the
+// callee's own frame, in parameter order.
+
+#[test]
+fn a_skipped_default_with_a_side_effect_runs_once_in_the_callee() {
+    // *When* the default runs is observable, not just what it evaluates to.
+    // The tree-walker evaluates it during binding — after every argument,
+    // before the body — and exactly once. `log` records the order.
+    must_agree(
+        "local log: string = \"\"\n\
+         fn note(s: string) -> string\n\
+         \x20 log = log .. s\n\
+         \x20 return s\n\
+         end\n\
+         fn f(a: string, d: string = note(\"D\"), t: string) -> string\n\
+         \x20 return a .. d .. t\n\
+         end\n\
+         local r = f(a: note(\"A\"), t: note(\"T\"))\n\
+         r .. \"/\" .. log",
+    );
+}
+
+/// A module-level `a` and `b`, shadowed by the parameters of every callee
+/// below.
+///
+/// Not decoration. Saule's resolver only accepts a default that mentions an
+/// earlier *parameter* when that name also exists at module scope — so this
+/// prefix is what makes the interesting cases legal source at all, and it is
+/// simultaneously the trap: `100` and `200` are what a call site that
+/// materialized these defaults itself would bind, and the callee's own
+/// parameters are what it must bind instead.
+const SHADOWED: &str = "local a: integer = 100\nlocal b: integer = 200\n";
+
+#[test]
+fn two_skipped_defaults_are_filled_in_parameter_order() {
+    // The second default reads the first, so filling them out of order — or
+    // filling only one — is visible in the answer.
+    let src = format!(
+        "{SHADOWED}\
+         fn f(a: integer, b: integer = a + 1, c: integer = b + 1, t: string) -> string\n\
+         \x20 return tostring(a) .. tostring(b) .. tostring(c) .. t\n\
+         end\n\
+         f(a: 1, t: \"!\")"
+    );
+    must_agree(&src);
+    // Spelled out: `123!` is the chain resolved against the callee's own
+    // parameters. `1201!` would be `b` from module scope.
+    assert_eq!(
+        tree_walker(&front_end(&src)),
+        Outcome::Value("string:123!".into())
+    );
+}
+
+#[test]
+fn a_gap_and_a_trailing_default_are_both_filled() {
+    // Once a mask is needed the call passes the *whole* parameter list, which
+    // pulls the trailing defaults in with it. They need mask bits of their
+    // own — computing the mask only over the middle would leave `e` nil.
+    must_agree(&format!(
+        "{SHADOWED}\
+         fn f(a: integer, b: integer = a + 1, t: string, e: integer = a + 100) -> string\n\
+         \x20 return tostring(a) .. tostring(b) .. t .. tostring(e)\n\
+         end\n\
+         f(a: 2, t: \"-\")"
+    ));
+}
+
+#[test]
+fn a_literal_and_a_non_literal_default_can_be_skipped_together() {
+    // The literal is still materialized at the call site (no bit), the other
+    // is left to the callee (bit set). Both routes in one call.
+    must_agree(&format!(
+        "{SHADOWED}\
+         fn f(a: integer, lit: integer = 9, other: integer = a * 3, t: string) -> string\n\
+         \x20 return tostring(a) .. tostring(lit) .. tostring(other) .. t\n\
+         end\n\
+         f(a: 4, t: \"!\")"
+    ));
+}
+
+#[test]
+fn an_explicit_nil_is_a_value_and_does_not_trigger_the_default() {
+    // Why the mask exists at all, rather than the callee testing each slot
+    // for `nil`. `bind_params` treats a supplied `nil` as a value: `d` stays
+    // nil here even though it has a default. A nil-testing gap entry would
+    // hand back 99 — and `e`, genuinely absent, must still get its default,
+    // so the two cases have to be told apart within one call.
+    must_agree(
+        "fn f(a: integer, d: integer? = 99, e: integer? = 77, t: string) -> string\n\
+         \x20 return tostring(a) .. (d == nil and \"nil\" or tostring(d)) .. tostring(e) .. t\n\
+         end\n\
+         f(a: 1, d: nil, t: \"!\")",
+    );
+}
+
+#[test]
+fn a_skipped_default_reads_the_callees_module_scope() {
+    // The other thing a default may reach that the call site cannot: a name
+    // in the callee's module. Same file here, so `SCALE` happens to be
+    // visible either way — the cross-module form is `examples/UI Project`,
+    // where the default is an enum variant the calling module never imported
+    // and materializing it at the call site could not have resolved at all.
+    must_agree(
+        "local SCALE: integer = 10\n\
+         fn f(d: integer = SCALE * 3, t: string) -> string\n\
+         \x20 return tostring(d) .. t\n\
+         end\n\
+         f(t: \"!\")",
+    );
+}
+
+#[test]
+fn a_constructor_fills_a_skipped_default() {
+    // `VStack(alignment: …, sizing: …, children: …)`, reduced. A constructor
+    // enters through `CALLM` with the receiver at argument 0, so its gap
+    // entry sits one arity higher than a plain function's — the arithmetic
+    // that indexes it has to account for `self`.
+    let src = format!(
+        "{SHADOWED}local TAG: string = \"T\"\n\
+         class Box\n\
+         \x20 a: integer\n\
+         \x20 m: string\n\
+         \x20 t: string\n\
+         \x20 fn init(a: integer, m: string = TAG .. tostring(a), t: string = \"z\")\n\
+         \x20   self.a = a\n\
+         \x20   self.m = m\n\
+         \x20   self.t = t\n\
+         \x20 end\n\
+         end\n\
+         local x = Box(a: 5, t: \"!\")\n\
+         tostring(x.a) .. x.m .. x.t"
+    );
+    must_agree(&src);
+    // `T5`, from the constructor's own `a` — not `T100` from module scope.
+    assert_eq!(
+        tree_walker(&front_end(&src)),
+        Outcome::Value("string:5T5!".into())
+    );
+}
+
+#[test]
+fn a_method_fills_a_skipped_default() {
+    // A default that reaches `self`: only the callee has one.
+    must_agree(&format!(
+        "{SHADOWED}\
+         class Box\n\
+         \x20 n: integer\n\
+         \x20 fn init(n: integer)\n    self.n = n\n  end\n\
+         \x20 fn go(a: integer, d: integer = a + self.n, t: string) -> string\n\
+         \x20   return tostring(d) .. t\n\
+         \x20 end\n\
+         end\n\
+         local x = Box(10)\n\
+         x.go(a: 5, t: \"!\")"
+    ));
+}
+
+#[test]
+fn a_static_method_fills_a_skipped_default() {
+    // A static enters with no receiver, so its gap entry is at the plain
+    // function's arity. Both bases in one pair of tests.
+    must_agree(&format!(
+        "{SHADOWED}\
+         class Util\n\
+         \x20 static fn go(a: integer, d: integer = a * 7, t: string) -> string\n\
+         \x20   return tostring(d) .. t\n\
+         \x20 end\n\
+         end\n\
+         Util.go(a: 2, t: \"!\")"
+    ));
+}
+
+#[test]
+fn a_full_arity_call_does_not_take_the_gap_entry() {
+    // The gap entry sits at arity `n_params + 1`, one past a complete call.
+    // If the two were ever confused, a full call would read its last
+    // argument as a mask and overwrite a parameter with a default.
+    must_agree(&format!(
+        "{SHADOWED}\
+         fn f(a: integer, d: integer = a * 2, t: string) -> string\n\
+         \x20 return tostring(d) .. t\n\
+         end\n\
+         f(1, 500, \"!\") .. f(a: 2, d: 600, t: \"?\")"
+    ));
 }
 
 

@@ -310,7 +310,7 @@ whether the VM engages on anything a user would write.
 | Corpus | Compiles fully |
 |---|---|
 | `examples/**/*.sau` | **12 of 61** — but see the box above; this number does not mean what it looks like |
-| `examples/*` projects, end to end | **9 of 11** run fully on the VM. `run_examples_diff.sh` reports **0 fallbacks**; the 2 that remain are `toying` and `UI Project`, refused by *design* on `an import of a dynamic native package` |
+| `examples/*` projects, end to end | **10 of 11** run fully on the VM. `run_examples_diff.sh` reports **0 fallbacks**. `UI Project` no longer falls back at all — it now **compiles end to end** and fails at *run* time instead, on a typed opcode reading `nil` in `AnimatedBuilder.body`. That is a miscompile, not a gap, and it is the one thing on this page that costs correctness rather than speed. See "`UI Project` compiles — and that is not the same as working" |
 
 The project row is the one Phase 4 turned into a headline: it is the fraction
 of real programs for which the new default engine is the engine that actually
@@ -399,9 +399,11 @@ under-counted.
 > perfectly compilable as part of its project, and most of them are:
 >
 > * All **24** `a class extending one the compiler cannot see` files are in
->   one project, `UI Project` — which falls back earlier anyway, on the
->   *deliberate* `an import of a dynamic native package` refusal, and never
->   reaches class layout.
+>   one project, `UI Project`, and every one of them compiles as part of that
+>   project — the parents are in sibling modules, which the single-module
+>   path cannot see. (Written when `UI Project` fell back earlier still, on
+>   the dynamic-native-package refusal; that refusal is gone, and the project
+>   now reaches class layout and gets past it.)
 > * All **10** `an import declaration` files are refusing by design: a lone
 >   `import` on the single-module path is a documented correctness rule,
 >   pinned by `an_import_without_a_program_driver_still_refuses`.
@@ -1345,9 +1347,12 @@ automatically a benchmark that got *faster*.
           program starts, exactly like the prelude. `Compiler::static_value`
           now answers for both, and the four `Binding::Prelude` gates were
           widened to go through it.
-    - [x] A **dynamic** (manifest-described, `dlopen`-ed) package still
-          refuses. Loading one is a runtime side effect, and compiling must
-          not perform it.
+    - [x] A **dynamic** (manifest-described, `dlopen`-ed) package refused
+          here, because loading one is a runtime side effect and compiling
+          must not perform it. **Since closed** — the refusal was about the
+          `dlopen`, not about the package: the *manifest* carries every name,
+          symbol and arity the compiler needs and is parsed without touching
+          the binary. See "Dynamic native packages compile" in Phase 5.
     - [x] `differential.rs`'s unsupported-construct canary re-pointed at a
           pipe. A lone `import` compiled through the single-module path
           still refuses, and that is now pinned by its own test
@@ -1372,18 +1377,19 @@ new top cause:
 
 | Cause | Projects |
 |---|---|
-| an import of a dynamic native package | 2 | 
+| an import of a dynamic native package *(closed — see Phase 5)* | 2 |
 | a skipped parameter whose default must run in the callee | 1 |
 | a variant of an unknown enum | 1 |
 | a class implementing `Assignable` | 1 |
 
-Re-censused after the named-argument fix. **The two dynamic-native-package
-projects are a deliberate refusal, not a gap** — loading one is a runtime
-side effect and compiling must not perform it (§ item 10) — and they are also
-the two interactive projects the diff harness skips. So the addressable
-remainder is **three projects, three distinct causes**, one of which
-(`a skipped parameter whose default must run in the callee`) is the last open
-sub-item of item 11.
+Re-censused after the named-argument fix. The two dynamic-native-package
+projects were recorded here as a deliberate refusal rather than a gap —
+loading one is a runtime side effect and compiling must not perform it
+(§ item 10) — and they are also the two interactive projects the diff harness
+skips. **That reading was half right and cost two projects.** The side effect
+is the `dlopen`; the *names* come from a manifest that is parsed without it.
+Separating the two closed the refusal: see "Dynamic native packages compile"
+in Phase 5.
 
 This table is the one to steer by. Run it with a timeout — two of these
 projects open a window and never terminate:
@@ -1861,11 +1867,15 @@ declaration: the declaration's `NodeId` belongs to the callee's module and
 would answer the wrong module's binding and type tables for an imported
 callee.
 
-Anything else — a call, a name, a table literal — still refuses, now as
+Anything else — a call, a name, a table literal — refused here, as
 `a skipped parameter whose non-literal default must run in the callee`. The
-restriction is not merely conservative, and a differential test pins why:
+restriction was not merely conservative, and a differential test pins why:
 `fn f(a, d = a * 2, t)` called as `f(a: 3, t: "!")` must yield `6` from the
 callee's `a`, not `200` from a caller that happens to have its own `a`.
+
+**Since closed** — by telling the callee which slots to fill rather than by
+relaxing the rule. That test now runs under both engines and still answers
+`6`. See "The gap mask" in Phase 5.
 
 Closes `tests/trailing_block_layout.sau` and `examples/ui-blocks`.
 
@@ -2630,19 +2640,33 @@ that coverage grows.
       `www/scripts/check-samples.mjs` now runs its 20 complete programs
       under both engines and compares output. See "`www/` is covered now"
       above for what it does and does not reach.
-- [x] Coverage: **91 of 92** `tests/*.sau` compile fully, and **9 of 11**
+- [x] Coverage: **91 of 92** `tests/*.sau` compile fully, and **10 of 11**
       example projects run entirely on the VM with `run_examples_diff.sh`
       reporting **0 fallbacks**, as do all **10** benchmarks and all **20**
       `www/` samples.
 
-      **Every remaining refusal is a deliberate one.** The 2 projects are
-      refused by design (`an import of a dynamic native package` is a
-      runtime side effect that compiling must not perform), and the 1
-      fixture is `tests/compound_assign.sau`, where the refusal is what
-      *fixes* a miscompile. The three real gaps this box used to name — an
-      enum with methods, a prelude name outside a call, and `self` outside a
-      method — are closed, along with a fourth (`a declaration the compiler
-      does not handle`) that this box never listed.
+      **One deliberate refusal, and one thing that is worse than a gap.**
+      The deliberate refusal is `tests/compound_assign.sau`, where refusing
+      is what *fixes* a miscompile. `UI Project` no longer refuses anywhere:
+      it compiles end to end and then **fails at run time**, on a typed
+      opcode reading `nil` in `AnimatedBuilder.body`. A gap costs speed; this
+      costs correctness, and it is the one open item on this page that does.
+
+      **Stop treating this line as a list of what is left.** It has said
+      "every remaining refusal is deliberate" three times and been wrong
+      three times, and the count of causes named here has never once been
+      the count of causes in the program. What actually happened, in order:
+      the 2 dynamic-native-package projects were recorded as by-design and
+      were not ("Dynamic native packages compile"); behind that sat
+      `self.builder()` ("Calling a function-valued field"); behind that, a
+      skipped non-literal default — genuinely deliberate, closable anyway
+      ("The gap mask"); behind that, an inherited method's parameter list;
+      behind that, a barrel module's re-exports ("Barrel modules
+      re-export"); behind that, `self`'s class inside a lambda; and behind
+      that, the nullable receiver above. Seven, found one at a time, because
+      **a fallback reports only the first thing a program trips on.** The
+      next cause is not visible until the current one is closed, so a
+      measured cause is a next step, never a remainder.
 
       **What "coverage" still does not mean.** A fixture that compiles fully
       is not a fixture that exercises much: `tests/*.sau` are single files,
@@ -3459,6 +3483,400 @@ candidate this phase was originally written around.*
       and the call opcodes exactly as they were, and those are 57% of
       `interp` and 44% of `json`. The remaining gap on the branchy programs
       is field access and calls, not dispatch shape.
+### Dynamic native packages compile — done
+
+A dynamic package is a TOML manifest plus a shared library loaded with
+`dlopen`. Compiling an `import` of one was refused from Phase 3 on, and the
+reason given was sound: loading a library is a runtime side effect, and
+compiling must not perform side effects. `saule disasm` on a file must not
+execute a line of anybody's native code.
+
+**The reason was right about the `dlopen` and wrong about the package.** The
+compiler does not want the library. It wants names — which classes a package
+exports, which methods each class has, what the parameters are called, how
+many values each returns — and every one of those is in the manifest, which
+`discover()` already parses at start-up, from TOML, without touching the
+binary. The refusal conflated the two halves and threw away the half that
+was free.
+
+Splitting them is the whole change:
+
+- `dynamic_packages::build_exports_deferred` builds the same `ClassObject`s
+  the eager `build_exports` does, from the manifest alone. Each method is a
+  `NativeClosure` that resolves its symbol on the first *call* and remembers
+  it, instead of at build time. Building loads nothing.
+- `program::compile` folds those into `native_imports` through the same path
+  a statically-linked package already used — once the exports exist the two
+  are the same thing to the compiler, a fixed set of values known before the
+  program runs — and records the package on `Chunk::dynamic_imports`.
+- `run_program` calls `dynamic_packages::preload` for a chunk's packages
+  immediately before running that chunk's body. That is the point at which
+  the tree-walker resolves the same `import`, so a package that fails to load
+  fails at the same place, with the same message, under both engines.
+  `preload` resolves **every** symbol the manifest names — the same set
+  `build_exports` resolves — for the same reason.
+
+**`preload`, not the lazy path, is what keeps the engines agreeing.** The
+deferred closures could carry the whole thing on their own: first call, load,
+resolve, dispatch. That would also mean a program with no library behind it
+runs partway and dies at the first call into the package, where the
+tree-walker refuses it at the `import` before anything prints. The lazy
+resolve stays in the closures anyway, so one that somehow outlives its
+preload reports rather than dangles, but in a real run it is a cache hit.
+
+Two things to know if you touch this:
+
+- **Drop the `RefCell` borrow before calling the native.** A package can call
+  back into Saule through `native_host`, and that call can reach the same
+  closure. Holding the borrow across the call turns ordinary re-entrancy into
+  a panic. The pointer is copied out and the guard dropped first.
+- **A build without `native-packages` (wasm) still refuses.**
+  `build_exports_deferred` returns `None` there, the compiler emits the old
+  `Unsupported`, and the tree-walker produces the clear "cannot be loaded in
+  this build" diagnostic it always did.
+
+Tests: `crates/saule-vm/tests/dynamic_package.rs` (its own file, because it
+needs its own `SAULE_HOME` and `discover()` runs once per process) installs a
+manifest whose binary is **deliberately not present**. That absence is the
+assertion — compiling succeeds anyway, which is only possible if nothing
+opened the library; and running then fails naming the package, which is
+`preload` doing its job. Two unit tests in `dynamic_packages/tests.rs` cover
+the deferred binding and `preload`'s error shape.
+
+**Measured:** `toying` goes from a whole-program fallback to running entirely
+on the VM, taking the project row from 9 of 11 to 10 of 11.
+
+**What it exposed.** `UI Project` gets past the import now and falls back one
+gap later, on `a method the class does not declare` at
+`UIKit/Framework.sau:1566` — `self.builder()`, where `builder` is a
+*field* holding a `fn() -> View`, not a method. `member_call` proves the
+receiver's class, looks `builder` up in the vtable, does not find it and
+refuses. Calling a function-valued field is a real gap and this is the first
+program to reach it; it is unrelated to native packages.
+
+### Calling a function-valued field — done, and the divergence under it
+
+`self.builder()`, where `builder` is a **field** holding a `fn() -> View`.
+`member_call` proved the receiver's class, looked the name up in `vindex`,
+missed, and refused as `a method the class does not declare` — handing the
+whole module to the tree-walker. The field's slot is known at exactly that
+point, so the callee is a `GETF` and the call an ordinary `CALL`.
+
+**Precedence is the part to get right, not the emission.** The tree-walker's
+order for an instance receiver (`dispatch_member_call_multi`) is instance
+method, then *static* method, then instance field. Only the first and third
+have a compiled form here, so `field_call_to` refuses on a name in `smindex`
+rather than taking it as a field — the two engines have to agree about which
+member a call *names*, not only about what it answers. It also resolves
+against `layout.slot` alone and not `resolve_member`, because
+`resolve_member` falls through to `sindex`, and a *static field* is not
+reachable through an instance under either engine: taking that path would
+have compiled a call the tree-walker rejects.
+
+**Evaluation order is observable and it is not the obvious one.** The
+tree-walker reads the field *after* evaluating the arguments, so an argument
+that reassigns the field changes which function is called. Emitting the
+`GETF` before the arguments — the way it reads most naturally — silently
+calls the old one. The receiver is held in `base` while the arguments are
+evaluated (which is also what keeps it alive), and `GETF a, a` then
+overwrites it with the callee; sound because the opcode clones the field out
+before writing its destination. `a_function_valued_field_is_read_after_the_arguments_are_evaluated`
+pins it.
+
+#### The divergence this uncovered: two wordings for "not callable"
+
+The negative test — a field that exists and holds an `integer` — failed, and
+not because of anything in this change. The VM's `CALL` said `attempt to call
+a `integer`` and the tree-walker's `call_value_multi` said `value of type
+`integer` is not callable — only functions, classes, and methods can be
+called`. Two engines, one program, two messages.
+
+It had been there since Phase 1 and nothing caught it, because until now
+every program that reached the VM's version was refused by the compiler for
+some other reason first. Lifting one refusal is what made it reachable —
+the third time in this file that a refusal turned out to be hiding a bug
+rather than avoiding one.
+
+Both now go through `RuntimeError::not_callable`, so the wording is written
+once and cannot drift. `calling_a_non_callable_value_fails_the_same_way`
+pins the bare form (`local f: any = 5  f()`), which is the shape that was
+diverging all along.
+
+**Measured:** `UI Project` gets past this and falls back one gap further, on
+`a skipped parameter whose non-literal default must run in the callee` —
+closed next.
+
+### The gap mask — a default skipped in the middle, done properly
+
+`VStack(alignment: …, sizing: …, children: rows)` over a signature whose
+second parameter is `distribution: Distribution = Distribution.Start`. The
+call fills slots 0, 2 and 3 and skips slot 1.
+
+The per-arity entry stubs cannot express that. They fill a **suffix**:
+entering at `entries[k]` runs the default blocks for `k`, `k+1`, … in one
+fall-through stream, so there is no arity meaning "fill slot 1 but not slot
+2". Materializing the default at the call site is the thing §19 forbids — and
+`Distribution.Start` shows why with no subtlety at all: `Distribution` is not
+imported by the calling module, so there is nothing at the call site for that
+name to resolve to.
+
+**So the caller says which slots it left behind.** `param_entries` emits one
+extra entry point, at arity `n_params + 1`, that reads a bitmask from
+`R[n_params]` — one register past the declared parameters, which is why the
+mask is passed as one extra argument and why the entry sits at that arity. It
+then walks the defaults in parameter order, running each one whose bit is set.
+The defaults still execute in the callee's frame, in order, so
+`b: integer = a * 2` reads the register holding `a` exactly as the
+fall-through chain does and exactly as `bind_params` does.
+
+**A mask, not a `nil` sentinel, and that is the whole design.** Testing each
+slot for `nil` would be free and is wrong: `bind_params` treats an explicitly
+passed `nil` as a *value*, not an absence. `f(a: 1, d: nil, t: "!")` over
+`(a, d: integer? = 99, e: integer? = 77, t)` must bind `d = nil` and
+`e = 77` — absence and nil in the same call, told apart.
+`an_explicit_nil_is_a_value_and_does_not_trigger_the_default` pins it.
+
+Three things worth knowing:
+
+* **pc 0 still means "fill every default".** `entry_for` falls back to pc 0
+  for any arity the table does not cover, and the gap entry would read a mask
+  register such a caller never wrote. A `JMP` at pc 0 into the chain buys
+  that back for one instruction word and zero runtime cost — nothing
+  well-typed executes it, because every arity a checked call can produce has
+  an explicit entry.
+* **The mask rides as an ordinary argument.** It goes into `order`/`gaps`
+  like any synthesized fill, so `CALLK`, `CALLSTAT`, `CALLM` and the
+  constructor path needed no changes at all: the arity they already compute
+  is what selects the entry. The receiver is counted in that arity, which is
+  why the method and constructor cases are tested separately from the
+  function and static ones.
+* **Once a mask is needed, the call stops truncating** and passes the whole
+  parameter list. That is what keeps the gap entry at one fixed arity instead
+  of colliding with an ordinary one — and it pulls the *trailing* defaults in
+  too, so they need bits of their own. Computing the mask over the middle
+  only would leave a trailing default silently `nil`;
+  `a_gap_and_a_trailing_default_are_both_filled` is there for that.
+
+The literal fast path stays: a scalar literal default is still materialized
+at the call site and gets no bit, so the mask is only paid for when something
+actually has to run in the callee. Both routes meet in
+`a_literal_and_a_non_literal_default_can_be_skipped_together`.
+
+Refusals kept, both stated rather than assumed: a signature with more than 63
+parameters and a default (the mask is an `i64`), and a skipped default on a
+254-parameter signature (`B` is a `u8` and the mask is one more argument).
+
+The differential test that pinned the old refusal now runs under both engines
+and still answers `6` — the callee's `a`, not the caller's `200`. Ten tests
+cover the family: ordering across two chained defaults, a default with a side
+effect (it runs once, in the callee, after the arguments), module scope,
+`self`, function/static/method/constructor arities, and a full-arity call
+proving it does not stray into the gap entry.
+
+#### Found on the way: an inherited method's parameters were invisible
+
+`Text(…).padding(insets: …)` refused with `a named argument to a callee the
+compiler cannot identify`, which was not about the argument at all.
+`callee_params` is keyed by the class that **declares** a method; `padding`
+is declared on `View` and the receiver is a `Text`, so the lookup missed and
+the whole module went to the tree-walker. `method_param_list` walks the
+parent chain now — the same rule the vtable already follows, with an
+override still found before its parent because the subclass's own entry is
+tried first.
+
+**Measured:** `UI Project` gets past both and falls back on a fourth,
+unrelated gap — the barrel modules below.
+
+### Barrel modules re-export — done
+
+`a class extending one the compiler cannot see` at `Shared.sau:46`,
+`class RouteScreen extends View`, which is the wrong diagnostic for the
+problem. `UIKit` is a **barrel**: `UIKit/init.sau` re-exports two dozen
+siblings and declares nothing itself, and `program.rs`'s `collect_exports`
+gathered only a module's own `export`s — so `View` never reached the
+importer and the class layout pass could not find the parent it was told to
+extend. The tree-walker has carried `reexport_imports` for exactly this
+since it shipped.
+
+**Almost all of this was already built.** `layout::build` seeds a module's
+`Layouts` with what its imports brought in — that is what lets a subclass
+extend an imported parent at all — so a barrel's `layouts.get("View")`
+already answered. The whole change is that `collect_exports` was only
+*asking* about names the module declared. Extracting the name→`Export`
+mapping into `export_of` and running it over the imported names as well is
+the entire type half, and it lands on the same program-global `ClassIdx`
+for free.
+
+Three decisions worth recording:
+
+* **`is_init_module` is called, not restated.** It was `pub(crate)` in the
+  interpreter and is now `pub`. Which modules re-export is a language rule;
+  two engines each carrying their own copy of it is how they drift.
+* **A re-exported value publishes the barrel's own slot, not the source
+  module's.** The barrel's prologue copies the value into that slot when the
+  barrel runs, and the tree-walker's barrel snapshots `env.get(name)` at
+  precisely that moment. Forwarding the source slot instead would hand a
+  later importer a *fresher* value than the tree-walker gives it, in the
+  case where something mutated the original in between. Types have no such
+  question — the index is program-global and there is only one of it.
+* **Statements are walked in source order, imports included**, because that
+  is the order the tree-walker resolves a collision in: a barrel that both
+  declares `X` and imports one publishes whichever came last.
+
+Refused rather than guessed: a barrel re-exporting a **native package**. Its
+exports fold into constants at compile time and reach no module slot and no
+layout table, so there is no `Export` to forward; the tree-walker's barrel
+*would* republish them, so dropping them silently would be a divergence. No
+example does it, and the refusal is stated rather than discovered.
+
+Four tests in `tests/program.rs`: a type and a value through one barrel
+(asserting `Derived.parent` is `Base`'s program-global index, so the
+re-export is the same layout and not a second one), barrels nested two deep,
+`import X as Y` publishing the alias, and a plain module **not**
+re-exporting — that last one pinning `init.sau`-only, which is the half a
+future edit is most likely to over-generalise.
+
+#### And behind it: `self`'s class did not survive into a lambda
+
+`self.setState() do … end` inside a callback, refusing as `a named argument
+to a callee the compiler cannot identify`. `self` crosses into a lambda as a
+captured upvalue and always ran correctly; what did not cross was the
+*compiler's* knowledge of its class. A lambda gets a fresh `FuncCtx` with no
+`current_class`, so `class_of_expr` answered `None` — harmless for a plain
+call, which `CALLMX` handles, but a named argument or a trailing block needs
+the callee's parameter list and there is no callee without a class.
+
+**Inheriting `current_class` would have been a miscompile**, which is why
+this is a second field rather than one line. `current_class` is read in two
+places as "we are lexically inside a method body of this class", and paired
+with `!in_method` that pattern *identifies a static method*: `self.count`
+there is a static read, not a field read (`member.rs`, `assign.rs`). A
+lambda has `in_method == false`, so inheriting the class would have turned
+every `self.field` inside a lambda into a static access.
+`a_field_read_inside_a_lambda_is_still_a_field_read` is that regression,
+written down.
+
+So `self_class` is separate: set only where `self` is genuinely bound
+(`has_self`), inherited by nested frames, and read by `class_of_expr` ahead
+of `current_class` — which stays the fallback so a static method's bare
+`self` answers exactly what it always did. `self.super` is untouched for the
+same reason: it reads `current_class`, still `None` in a lambda, so it still
+refuses rather than emitting a `MOVE` from a register that is not the
+receiver.
+
+**Measured:** `UI Project` gets past all of it and falls back one further,
+on a safe-call receiver — closed next.
+
+### A safe call's receiver, and the two things behind it
+
+`context.navigator()?.push() do … end` refused with `a named argument to a
+callee the compiler cannot identify`. The gap was narrower than it looked:
+`class_of_nullable_expr` — which strips the `Nullable` before the layout
+lookup — already existed, and `call_to` already routed a `SafeMember` callee
+to `safe_method_call_to`. What was missing was one arm.
+`callee_param_list` matched `Expr::Ident` and `Expr::Member` and simply had
+no case for `Expr::SafeMember`, so a safe call could dispatch but could not
+*bind*.
+
+It uses the same `class_of_nullable_expr` the safe-call emitter uses to pick
+its vtable slot, so the two agree about which class this is by sharing the
+answer rather than by care. Binding against it is sound for the same reason
+that slot is: `safe_method_call_to` guards the whole call on nil, so the
+arguments are bound only on the branch where the receiver really is an
+instance.
+
+#### A re-exported `fn` lost its parameter list
+
+Immediately behind it, and **caused by the barrel work above**: publishing a
+re-exported value under the barrel's own slot is right for value semantics,
+but `Tables::fn_params_by_slot` is keyed on the slot the *declaring* module
+exported from. So a `fn` reached through a barrel had no parameter list, and
+every named argument or trailing block on it refused —
+`showDialog(context) do … end`.
+
+`Exported::value_aliases` carries the `(destination, source)` pairs out of
+`collect_exports`, and the driver copies the entry across. The two slots hold
+the same function; whatever the program knows about one it knows about the
+other. Classes need no equivalent — `method_params` is keyed on a
+program-global `ClassIdx`, which a re-export does not change.
+
+### The vtable bug this uncovered — §24.2, live
+
+Behind *that*, `UI Project` compiled and then crashed: a proto index past the
+end of its own module's proto vector. The crash was the lucky part.
+
+`Center` extends `Align` extends `SingleChildView` extends `View`, with
+`View` and `SingleChildView` in one module and `Align` and `Center` in
+another. `Align` **overrides** `layout`. Pass 1 clones the parent's vtable so
+the slot *numbering* extends it, and an override recorded itself in
+`member_of_vslot` — but left the inherited proto index sitting in the slot.
+Across a module boundary that index is real and filled, not a placeholder. So
+`Center`, laid out before `Align`'s codegen ran, cloned **`View`'s** index,
+and Pass 2a then skipped the slot because it was not `u32::MAX`.
+
+`Center.layout` therefore resolved to `View.layout`. Here it faulted, because
+`View`'s index was past the end of `Align`'s module's protos. **In a longer
+module it would have called the wrong function and said nothing** — which is
+exactly the failure §24.2 names as the worst this project could ship.
+
+Two things were wrong, and both are fixed:
+
+* **An override now clears the slot** (`vtable[slot] = u32::MAX`) as well as
+  claiming it. "This class supplies the body, and it is not compiled yet" is
+  what the placeholder means, and an override is precisely that.
+* **`ClassProto::vowner`**, one entry per vtable slot, naming the class that
+  *declared* each body. A `ProtoIdx` means nothing outside its own chunk, and
+  an inherited slot holds an index into the **ancestor's** chunk — but every
+  reader was resolving it through the *inheriting* class's `module`. Four
+  sites: `build_classes`, `CALLM`, `CALLIF`, and `self.super`. `smindex` has
+  carried the declaring class for statics since Phase 1 for the identical
+  reason; the vtable simply never did. Pass 2a copies the owner along with
+  the index, because the two describe one thing.
+
+**Why no test caught it.** Single-module hierarchies cannot reproduce it: the
+parent's slot is still `u32::MAX` at Pass 1, so the sweep does the right
+thing. It needs an ancestor that has *already been compiled*, which only an
+`import` gives you — and
+`a_subclass_extends_a_parent_from_another_module` compiles such a program but
+never runs it, asserting only that the slot is non-placeholder.
+`an_override_of_an_imported_method_is_inherited_by_its_own_subclass` is the
+four-file case, and it *runs*: `C.who()` answered `nil` before the fix.
+Three single-file differential tests cover the same-module shapes that were
+always correct, so a future change cannot fix one by breaking the other.
+
+### `UI Project` compiles — and that is not the same as working
+
+With all of the above, `UI Project` no longer falls back anywhere. It
+compiles end to end and then fails at **run** time:
+
+```
+type error: internal: typed opcode in `AnimatedBuilder.body` expected
+`instance` but the register held `nil` — the chunk disagrees with the types
+it was compiled against
+```
+
+`fn body(context) -> View?  return self.content(self.controller.value) end`,
+on a class four levels down a cross-module hierarchy with a `self.super(key)`
+constructor. **Not diagnosed.** The reduced shape — a function-valued field
+called with an argument read through another field — agrees under both
+engines, so `field_call_to` is not implicated on its own.
+
+This is the one open item that costs **correctness rather than speed**, and
+it is worth being blunt about the trade it represents: before this work the
+project fell back at its first `import` and ran correctly on the tree-walker.
+It now compiles and runs wrong. Each individual change here is tested and
+right; what they did collectively was carry a 60-file program far enough to
+reach a latent miscompile that no fixture reaches. That is the same thing the
+vtable bug above was — one of them was found, this one is not yet.
+
+- [ ] **Diagnose the `AnimatedBuilder.body` miscompile.** Start by bisecting
+      which construct produces the bad register: the class sits under
+      `View` → `AnimatedBuilder` with `self.super(key)`, a `fn(float) -> View`
+      field, and a nullable return. Given what the vtable bug turned out to
+      be, suspect the interaction of inheritance with something laid out
+      before its codegen rather than the opcode that faults. Blocking:
+      `UI Project` should fall back rather than miscompile until this is
+      understood.
 - [ ] Dispatch threading experiments (worth 5–15%, cost real readability) —
       **read the item above first.** Splitting the grouped arms was a
       down-payment on this and it already found the ceiling: the branchy

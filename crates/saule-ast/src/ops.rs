@@ -26,39 +26,48 @@ pub struct OperatorContract {
     /// Parameters the method takes — 1 for binary operators, 0 for the
     /// unary ones and `toString`.
     pub params: usize,
+    /// Generic type parameters the *interface* declares, as documented:
+    /// `OpAdd<T, R>` has two, `OpEq<T>` one, `OpLen` none.
+    ///
+    /// These interfaces are built in, so no declaration exists for the
+    /// checker to read an arity off. Recording it here is what lets
+    /// `implements OpAdd<Vec2>` be reported as the missing result type it
+    /// is, rather than passing because nothing knew better.
+    pub type_params: usize,
     /// The operator as written in source, for diagnostics.
     pub symbol: &'static str,
 }
 
 macro_rules! contract {
-    ($iface:literal, $method:literal, $params:literal, $symbol:literal) => {
+    ($iface:literal, $method:literal, $params:literal, $symbol:literal, $tps:literal) => {
         OperatorContract {
             interface: $iface,
             method: $method,
             params: $params,
             symbol: $symbol,
+            type_params: $tps,
         }
     };
 }
 
-pub const OP_ADD: OperatorContract = contract!("OpAdd", "add", 1, "+");
-pub const OP_SUB: OperatorContract = contract!("OpSub", "sub", 1, "-");
-pub const OP_MUL: OperatorContract = contract!("OpMul", "mul", 1, "*");
-pub const OP_DIV: OperatorContract = contract!("OpDiv", "div", 1, "/");
-pub const OP_MOD: OperatorContract = contract!("OpMod", "mod", 1, "%");
-pub const OP_POW: OperatorContract = contract!("OpPow", "pow", 1, "^");
-pub const OP_BAND: OperatorContract = contract!("OpBAnd", "band", 1, "&");
-pub const OP_BOR: OperatorContract = contract!("OpBOr", "bor", 1, "|");
-pub const OP_BXOR: OperatorContract = contract!("OpBXor", "bxor", 1, "~");
-pub const OP_SHL: OperatorContract = contract!("OpShl", "shl", 1, "<<");
-pub const OP_SHR: OperatorContract = contract!("OpShr", "shr", 1, ">>");
-pub const OP_NEG: OperatorContract = contract!("OpNeg", "neg", 0, "-");
-pub const OP_BNOT: OperatorContract = contract!("OpBNot", "bnot", 0, "~");
-pub const OP_LEN: OperatorContract = contract!("OpLen", "len", 0, "#");
-pub const OP_CONCAT: OperatorContract = contract!("OpConcat", "concat", 1, "..");
-pub const OP_EQ: OperatorContract = contract!("OpEq", "equals", 1, "==");
-pub const OP_COMPARE: OperatorContract = contract!("OpCompare", "compare", 1, "<");
-pub const OP_TO_STRING: OperatorContract = contract!("OpToString", "toString", 0, "tostring");
+pub const OP_ADD: OperatorContract = contract!("OpAdd", "add", 1, "+", 2);
+pub const OP_SUB: OperatorContract = contract!("OpSub", "sub", 1, "-", 2);
+pub const OP_MUL: OperatorContract = contract!("OpMul", "mul", 1, "*", 2);
+pub const OP_DIV: OperatorContract = contract!("OpDiv", "div", 1, "/", 2);
+pub const OP_MOD: OperatorContract = contract!("OpMod", "mod", 1, "%", 2);
+pub const OP_POW: OperatorContract = contract!("OpPow", "pow", 1, "^", 2);
+pub const OP_BAND: OperatorContract = contract!("OpBAnd", "band", 1, "&", 2);
+pub const OP_BOR: OperatorContract = contract!("OpBOr", "bor", 1, "|", 2);
+pub const OP_BXOR: OperatorContract = contract!("OpBXor", "bxor", 1, "~", 2);
+pub const OP_SHL: OperatorContract = contract!("OpShl", "shl", 1, "<<", 2);
+pub const OP_SHR: OperatorContract = contract!("OpShr", "shr", 1, ">>", 2);
+pub const OP_NEG: OperatorContract = contract!("OpNeg", "neg", 0, "-", 1);
+pub const OP_BNOT: OperatorContract = contract!("OpBNot", "bnot", 0, "~", 1);
+pub const OP_LEN: OperatorContract = contract!("OpLen", "len", 0, "#", 0);
+pub const OP_CONCAT: OperatorContract = contract!("OpConcat", "concat", 1, "..", 2);
+pub const OP_EQ: OperatorContract = contract!("OpEq", "equals", 1, "==", 1);
+pub const OP_COMPARE: OperatorContract = contract!("OpCompare", "compare", 1, "<", 1);
+pub const OP_TO_STRING: OperatorContract = contract!("OpToString", "toString", 0, "tostring", 0);
 
 // ── Behaviour contracts ──────────────────────────────────────────────────────
 //
@@ -68,15 +77,15 @@ pub const OP_TO_STRING: OperatorContract = contract!("OpToString", "toString", 0
 // identical, and every registration site iterates [`ALL_CONTRACTS`].
 
 /// `obj[key]` on a class instance. Saule's `__index`.
-pub const OP_INDEX: OperatorContract = contract!("OpIndex", "index", 1, "[]");
+pub const OP_INDEX: OperatorContract = contract!("OpIndex", "index", 1, "[]", 2);
 /// `obj[key] = value` on a class instance. Saule's `__newindex`.
-pub const OP_NEW_INDEX: OperatorContract = contract!("OpNewIndex", "newIndex", 2, "[]=");
+pub const OP_NEW_INDEX: OperatorContract = contract!("OpNewIndex", "newIndex", 2, "[]=", 2);
 /// `Class.of(value)` — and the same call applied *implicitly* wherever a
 /// declared type asks for the class and a bare value is supplied.
 ///
 /// The method is **static**, unlike every other contract here: there is no
 /// instance yet to call it on.
-pub const ASSIGNABLE: OperatorContract = contract!("Assignable", "of", 1, "of");
+pub const ASSIGNABLE: OperatorContract = contract!("Assignable", "of", 1, "of", 1);
 
 /// Every operator contract, in declaration order.
 ///

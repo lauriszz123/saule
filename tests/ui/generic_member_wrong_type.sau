@@ -1,0 +1,20 @@
+-- `get()` returns the class's `T`, which on a `Box<integer>` receiver is
+-- an `integer`. Assigning it to a `string` is the mistake the substitution
+-- exists to catch.
+-- Should be a compile error.
+
+class Box<T>
+	value: T
+
+	fn init(value: T)
+		self.value = value
+	end
+
+	fn get() -> T
+		return self.value
+	end
+end
+
+local b: Box<integer> = Box(5)
+local s: string = b.get()
+println(s)

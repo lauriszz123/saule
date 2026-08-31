@@ -1909,3 +1909,193 @@ fn resolving_leaves_node_ids_alone() {
     };
     assert_eq!(ids(&before), ids(&after));
 }
+
+// ─── generic declarations ───────────────────────────────────────────────
+//
+// `enum Result<T>`, `class Box<T>` and `interface Repo<T>` all carry real
+// type arguments. These used to be parsed and discarded, so `Box<integer>`
+// and `Box<string>` were the same type and the argument meant nothing.
+
+const GENERIC_BOX: &str = "\
+class Box<T>
+  value: T
+  fn init(value: T)
+    self.value = value
+  end
+  fn get() -> T
+    return self.value
+  end
+end
+";
+
+const RESULT: &str = "\
+enum Result<T>
+  Ok(value: T),
+  Err(message: string)
+end
+";
+
+#[test]
+fn generic_class_member_takes_the_receivers_type_argument() {
+    accepts(&format!(
+        "{GENERIC_BOX}{}",
+        in_fn("  local b: Box<integer> = Box(1)\n  local n: integer = b.get()")
+    ));
+}
+
+#[test]
+fn generic_class_member_rejects_the_other_instantiations_type() {
+    rejects(
+        &format!(
+            "{GENERIC_BOX}{}",
+            in_fn("  local b: Box<integer> = Box(1)\n  local s: string = b.get()")
+        ),
+        "cannot assign",
+    );
+}
+
+/// A field declared `T` gets the same substitution a method's return does.
+#[test]
+fn generic_class_field_takes_the_receivers_type_argument() {
+    accepts(&format!(
+        "{GENERIC_BOX}{}",
+        in_fn("  local b: Box<string> = Box(\"hi\")\n  local s: string = b.value")
+    ));
+}
+
+/// Instantiations are distinct types. They share one declaration, but a
+/// `Box<string>` in a `Box<integer>` slot is an alias through which the
+/// element type could be violated.
+#[test]
+fn generic_arguments_are_invariant() {
+    rejects(
+        &format!(
+            "{GENERIC_BOX}{}",
+            in_fn("  local b: Box<integer> = Box(\"no\")")
+        ),
+        "cannot assign",
+    );
+}
+
+#[test]
+fn generic_class_infers_its_argument_from_the_constructor() {
+    accepts(&format!(
+        "{GENERIC_BOX}{}",
+        in_fn("  local b = Box(1)\n  local n: integer = b.get()")
+    ));
+}
+
+#[test]
+fn generic_argument_count_must_match_the_declaration() {
+    rejects(
+        &format!(
+            "{GENERIC_BOX}{}",
+            in_fn("  local b: Box<integer, string> = Box(1)")
+        ),
+        "expects 1 type argument",
+    );
+}
+
+#[test]
+fn a_non_generic_declaration_takes_no_type_arguments() {
+    rejects(
+        &format!(
+            "class Plain\n  x: integer\n  fn init(x: integer)\n    self.x = x\n  end\nend\n{}",
+            in_fn("  local p: Plain<integer> = Plain(1)")
+        ),
+        "is not generic",
+    );
+}
+
+/// The bare name means "some instantiation, unknown which", so it is
+/// accepted against any of them — in both directions.
+#[test]
+fn a_bare_generic_name_is_compatible_with_any_instantiation() {
+    accepts(&format!(
+        "{GENERIC_BOX}{}",
+        in_fn("  local b: Box = Box(1)\n  local c: Box<integer> = b")
+    ));
+}
+
+#[test]
+fn generic_enum_binds_its_payload_at_the_type_argument() {
+    accepts(&format!(
+        "{RESULT}{}",
+        in_fn(
+            "  local r: Result<integer> = Result.Ok(1)\n  \
+             local n: integer = match r\n    \
+             case Result.Ok(v) then v\n    \
+             case Result.Err(m) then 0\n  end"
+        )
+    ));
+}
+
+#[test]
+fn generic_enum_payload_is_not_the_other_instantiations_type() {
+    rejects(
+        &format!(
+            "{RESULT}{}",
+            in_fn(
+                "  local r: Result<integer> = Result.Ok(1)\n  \
+                 local s: string = match r\n    \
+                 case Result.Ok(v) then v\n    \
+                 case Result.Err(m) then m\n  end"
+            )
+        ),
+        "incompatible types",
+    );
+}
+
+/// `Err` says nothing about `T`, so the construction cannot contradict the
+/// annotation — and the annotation is what supplies the instantiation.
+#[test]
+fn a_variant_that_pins_nothing_down_fits_any_instantiation() {
+    accepts(&format!(
+        "{RESULT}{}",
+        in_fn("  local r: Result<integer> = Result.Err(\"boom\")")
+    ));
+}
+
+#[test]
+fn generic_enum_still_requires_exhaustive_arms() {
+    rejects(
+        &format!(
+            "{RESULT}{}",
+            in_fn(
+                "  local r: Result<integer> = Result.Ok(1)\n  \
+                 local n: integer = match r\n    \
+                 case Result.Ok(v) then v\n  end"
+            )
+        ),
+        "non-exhaustive",
+    );
+}
+
+/// Two parameters bind independently, from the positions they appear in.
+#[test]
+fn multiple_type_parameters_bind_independently() {
+    accepts(&format!(
+        "class Pair<A, B>\n  left: A\n  right: B\n  \
+         fn init(left: A, right: B)\n    self.left = left\n    self.right = right\n  end\n  \
+         fn first() -> A\n    return self.left\n  end\nend\n{}",
+        in_fn("  local p = Pair(1, \"x\")\n  local n: integer = p.first()")
+    ));
+}
+
+/// A type parameter is in scope for the declaration's own members — without
+/// that, `class Box<T>` fails on its own field.
+#[test]
+fn a_type_parameter_is_in_scope_for_its_declarations_members() {
+    accepts(GENERIC_BOX);
+}
+
+#[test]
+fn a_generic_interface_is_implemented_at_a_concrete_instantiation() {
+    accepts(
+        "interface Repo<T>\n  fn find(id: integer) -> T?\nend\n\
+         class IntRepo implements Repo<integer>\n  \
+         local items: table<integer>\n  \
+         fn init()\n    self.items = {}\n  end\n  \
+         fn find(id: integer) -> integer?\n    return self.items[id]\n  end\nend\n",
+    );
+}

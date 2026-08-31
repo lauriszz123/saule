@@ -70,6 +70,17 @@ fn derive_one(ty: &Type) -> String {
             }
         },
         Type::Nullable(inner) => return derive_one(inner),
+        // Named after its head, as a bare name would be: `Box<Player>`
+        // suggests `b`. The arguments say what is inside, not what to
+        // call it.
+        Type::Generic(g) => {
+            return g
+                .name
+                .chars()
+                .next()
+                .map(|c| c.to_ascii_lowercase().to_string())
+                .unwrap_or_else(|| "value".to_string());
+        }
         Type::Function { .. } => "fn",
         Type::Table { .. } => "t",
         Type::Tuple(_) => "tup",
@@ -223,6 +234,7 @@ mod tests {
     fn sig(params: Vec<Type>, variadic: Option<Type>) -> NativeSig {
         NativeSig {
             type_params: vec![],
+            bounds: Vec::new(),
             params,
             variadic,
             returns: vec![],

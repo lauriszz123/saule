@@ -267,10 +267,7 @@ impl Resolver {
         let slot = f.next_slot;
         f.next_slot += 1;
         f.n_slots = f.n_slots.max(f.next_slot);
-        f.blocks
-            .last_mut()
-            .expect("block scope")
-            .push((name, slot));
+        f.blocks.last_mut().expect("block scope").push((name, slot));
     }
 
     fn declare_param(&mut self, name: &str) {

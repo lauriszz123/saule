@@ -78,7 +78,78 @@ impl Compiler<'_> {
             return Ok(Vec::new());
         };
         let base = base as usize;
-        let mut entries = vec![0u32; base + params.len() + 1];
+        let n_params = base + params.len();
+        // The gap mask is an `i64`, one bit per parameter. No corpus
+        // signature comes near this, and refusing beats a silently dropped
+        // bit.
+        if params.len() > 63 {
+            return Err(CompileError::unsupported(
+                "a signature with more than 63 parameters and a default",
+                span.clone(),
+            ));
+        }
+        // One index past the arities: `entries[n_params + 1]` is the
+        // gap-filling entry built below.
+        let mut entries = vec![0u32; n_params + 2];
+
+        // **pc 0 has to keep meaning "fill every default".** `entry_for`
+        // falls back to it for any arity this table does not cover, and the
+        // gap stub immediately below would read a mask register such a
+        // caller never wrote. One jump buys that back, and nothing
+        // well-typed ever executes it: every arity a checked call can
+        // produce has an explicit entry.
+        let over_arity = self.emit_jump(Op::JMP, 0, span);
+
+        // ── The gap-filling entry (§19) ─────────────────────────────────
+        //
+        // Reached only from a call site that skipped a defaulted parameter
+        // with supplied parameters *after* it — `VStack(alignment: …,
+        // sizing: …, children: …)` over a signature whose second parameter
+        // is `distribution: Distribution = Distribution.Start`. The
+        // per-arity stubs cannot express that: they fill a *suffix*, and
+        // there is no arity meaning "fill slot 1 but not slot 2".
+        //
+        // So the caller says which slots it left behind. `R[n_params]` — one
+        // register past the declared parameters, passed as an extra
+        // argument, which is why this entry sits at arity `n_params + 1` —
+        // holds a bitmask of exactly those slots. Every other slot is a real
+        // argument and must not be touched, which is what rules out testing
+        // the slot itself for `nil`: an explicitly passed `nil` is a value,
+        // not an absence, and `bind_params` treats it as one.
+        //
+        // The defaults still run here, in the callee's frame, in parameter
+        // order — so `b: integer = a * 2` reads the register holding `a`
+        // whether `a` was passed or defaulted, exactly as the chain below
+        // does and exactly as `bind_params` does.
+        entries[n_params + 1] = self.f.label_here() as u32;
+        let mask = self.alloc(span)?;
+        debug_assert_eq!(
+            mask as usize, n_params,
+            "the mask register must be the one the caller passes as its extra argument"
+        );
+        let maskr = self.reg8(mask, span)?;
+        let m = self.mark();
+        let bit = self.alloc(span)?;
+        let test = self.alloc(span)?;
+        let (bitr, testr) = (self.reg8(bit, span)?, self.reg8(test, span)?);
+        for (k, p) in params.iter().enumerate() {
+            let Some(d) = &p.default else { continue };
+            let kbit = self.constant(saule_interpreter::Value::Int(1i64 << k), span)?;
+            self.emit(Instruction::abx(Op::LOADK, bitr, kbit), span);
+            self.emit(Instruction::abc(Op::BAND, testr, maskr, bitr), span);
+            // `JNEII` skips the next instruction when the bit is set, so the
+            // jump *over* the default is taken exactly when the caller
+            // supplied that slot.
+            self.emit(Instruction::abc(Op::JNEII, testr, 0, 0), span);
+            let supplied = self.emit_jump(Op::JMP, 0, span);
+            self.expr_to(d, (base + k) as u16)?;
+            self.patch_here(supplied)?;
+        }
+        self.free_to(m);
+        let to_body = self.emit_jump(Op::JMP, 0, span);
+
+        // ── The per-arity chain ─────────────────────────────────────────
+        self.patch_here(over_arity)?;
         for (k, p) in params.iter().enumerate().skip(first_default) {
             entries[base + k] = self.f.label_here() as u32;
             // A parameter after the first defaulted one with no default of
@@ -96,9 +167,10 @@ impl Compiler<'_> {
         for e in entries.iter_mut().take(base + first_default) {
             *e = first_pc;
         }
-        // Full arity: straight to the body.
-        entries[base + params.len()] = self.f.label_here() as u32;
-        let _ = span;
+        // Full arity: straight to the body — and the gap entry's jump lands
+        // here too, so both routes run `coerce_params` once.
+        entries[n_params] = self.f.label_here() as u32;
+        self.patch_here(to_body)?;
         Ok(entries)
     }
 

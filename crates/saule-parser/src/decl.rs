@@ -102,33 +102,23 @@ impl Parser {
     pub(crate) fn parse_class_decl(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `class`
         let (name, _) = self.expect_ident("class name")?;
-        if self.check(&Token::Lt) {
-            self.skip_generic_params()?;
-        }
+        let type_params = if self.check(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
 
         let extends = if self.eat(&Token::Extends) {
-            let (p, _) = self.expect_ident_recover("parent class name")?;
-            if self.check(&Token::Lt) {
-                self.skip_generic_args()?;
-            }
-            Some(p)
+            Some(self.parse_type_ref("parent class name")?)
         } else {
             None
         };
 
         let mut implements = Vec::new();
         if self.eat(&Token::Implements) {
-            let (n, _) = self.expect_ident_recover("interface name")?;
-            if self.check(&Token::Lt) {
-                self.skip_generic_args()?;
-            }
-            implements.push(n);
+            implements.push(self.parse_type_ref("interface name")?);
             while self.eat(&Token::Comma) {
-                let (n, _) = self.expect_ident_recover("interface name")?;
-                if self.check(&Token::Lt) {
-                    self.skip_generic_args()?;
-                }
-                implements.push(n);
+                implements.push(self.parse_type_ref("interface name")?);
             }
         }
 
@@ -169,6 +159,7 @@ impl Parser {
             Decl::Class {
                 exported,
                 name,
+                type_params,
                 extends,
                 implements,
                 members,
@@ -276,23 +267,17 @@ impl Parser {
     ) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `interface`
         let (name, _) = self.expect_ident("interface name")?;
-        if self.check(&Token::Lt) {
-            self.skip_generic_params()?;
-        }
+        let type_params = if self.check(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
 
         let mut extends = Vec::new();
         if self.eat(&Token::Extends) {
-            let (n, _) = self.expect_ident_recover("parent interface name")?;
-            if self.check(&Token::Lt) {
-                self.skip_generic_args()?;
-            }
-            extends.push(n);
+            extends.push(self.parse_type_ref("parent interface name")?);
             while self.eat(&Token::Comma) {
-                let (n, _) = self.expect_ident_recover("parent interface name")?;
-                if self.check(&Token::Lt) {
-                    self.skip_generic_args()?;
-                }
-                extends.push(n);
+                extends.push(self.parse_type_ref("parent interface name")?);
             }
         }
 
@@ -329,6 +314,7 @@ impl Parser {
             Decl::Interface {
                 exported,
                 name,
+                type_params,
                 extends,
                 methods,
             },
@@ -341,14 +327,17 @@ impl Parser {
         let m_start = self.peek().span.start;
         self.expect(&Token::Fn, "`fn` in interface body")?;
         let (name, _) = self.expect_ident("method name")?;
-        if self.check(&Token::Lt) {
-            self.skip_generic_args()?;
-        }
+        let type_params = if self.check(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
         let params = self.parse_param_list()?;
         let return_ty = self.parse_return_type_opt()?;
         let m_end = self.last_consumed_end();
         Ok(MethodSig {
             name,
+            type_params,
             params,
             return_ty,
             span: m_start..m_end.max(m_start),
@@ -358,6 +347,11 @@ impl Parser {
     pub(crate) fn parse_enum_decl(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `enum`
         let (name, _) = self.expect_ident("enum name")?;
+        let type_params = if self.check(&Token::Lt) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
 
         let mut variants = Vec::new();
         let mut methods = Vec::new();
@@ -419,6 +413,7 @@ impl Parser {
             Decl::Enum {
                 exported,
                 name,
+                type_params,
                 variants,
                 methods,
             },

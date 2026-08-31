@@ -27,19 +27,33 @@ pub enum Decl {
     Class {
         exported: bool,
         name: String,
-        extends: Option<String>,
-        implements: Vec<String>,
+        /// Generic type parameters declared with `<T, U>` after the name.
+        ///
+        /// Erased at runtime, like a function's. Inside the body each name is
+        /// a rigid type standing for whatever the *user of the class* picked.
+        type_params: Vec<String>,
+        extends: Option<TypeRef>,
+        implements: Vec<TypeRef>,
         members: Vec<Spanned<ClassMember>>,
     },
     Interface {
         exported: bool,
         name: String,
-        extends: Vec<String>,
+        /// Generic type parameters declared with `<T, U>` after the name.
+        type_params: Vec<String>,
+        extends: Vec<TypeRef>,
         methods: Vec<MethodSig>,
     },
     Enum {
         exported: bool,
         name: String,
+        /// Generic type parameters declared with `<T, U>` after the name.
+        ///
+        /// A variant's payload may be typed by one (`Ok(value: T)`), which is
+        /// what makes `enum Result<T>` worth having: the arm that matches
+        /// `Ok` binds a real `T`, substituted for whatever the value's own
+        /// type argument turned out to be.
+        type_params: Vec<String>,
         variants: Vec<Spanned<EnumVariant>>,
         methods: Vec<Method>,
     },
@@ -71,6 +85,40 @@ pub enum Decl {
         /// only exists so the formatter can preserve the author's style.
         quoted: bool,
     },
+}
+
+/// A reference to a named type in a declaration header — the `Animal` in
+/// `class Dog extends Animal`, the `Repository<Player>` in
+/// `implements Repository<Player>`.
+///
+/// A bare name carries an empty `args`, so the common non-generic case reads
+/// the same as the `String` it replaced. Kept as its own struct rather than a
+/// [`Type`] because these positions accept only a named type: `extends fn()`
+/// or `implements table<integer>` are not things to represent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeRef {
+    pub name: String,
+    pub args: Vec<Type>,
+}
+
+impl TypeRef {
+    /// A reference with no type arguments.
+    pub fn plain(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            args: Vec::new(),
+        }
+    }
+
+    /// The [`Type`] this reference denotes: `Named` when bare, `Generic`
+    /// when it carries arguments.
+    pub fn to_type(&self) -> Type {
+        if self.args.is_empty() {
+            Type::Named(self.name.clone())
+        } else {
+            Type::generic(self.name.clone(), self.args.clone())
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +157,11 @@ pub struct Method {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodSig {
     pub name: String,
+    /// Generic type parameters declared with `<T, U>` after the method name.
+    /// A method's own parameters, distinct from the interface's — in
+    /// `interface Seq<T> … fn mapTo<U>(f: fn(T) -> U) -> Seq<U>`, `T` belongs
+    /// to the interface and `U` to this one method.
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
     pub span: std::ops::Range<usize>,

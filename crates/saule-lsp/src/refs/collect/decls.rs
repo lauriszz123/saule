@@ -54,7 +54,12 @@ impl<'a> CollectCx<'a> {
                     self.push(span, true);
                 }
                 // `extends` / `implements` references
-                self.collect_type_name_refs_in_header(d, extends.as_deref(), implements);
+                let implemented: Vec<String> = implements.iter().map(|i| i.name.clone()).collect();
+                self.collect_type_name_refs_in_header(
+                    d,
+                    extends.as_ref().map(|e| e.name.as_str()),
+                    &implemented,
+                );
                 let prev = self.enclosing_class.replace(name.clone());
                 for m in members {
                     self.visit_member(m);
@@ -73,7 +78,8 @@ impl<'a> CollectCx<'a> {
                 {
                     self.push(span, true);
                 }
-                self.collect_type_name_refs_in_header(d, None, extends);
+                let parents: Vec<String> = extends.iter().map(|e| e.name.clone()).collect();
+                self.collect_type_name_refs_in_header(d, None, &parents);
                 // Method-sig param/return type references handled via
                 // a span-bounded source scan inside the decl head.
                 let _ = methods;

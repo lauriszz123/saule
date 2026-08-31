@@ -345,6 +345,17 @@ impl<'a> Printer<'a> {
                 }
                 self.write("?");
             }
+            Type::Generic(g) => {
+                self.write(&g.name);
+                self.write("<");
+                for (i, a) in g.args.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.ty(a);
+                }
+                self.write(">");
+            }
             Type::Table { key, value } => match key {
                 Some(k) => {
                     self.write("table<");

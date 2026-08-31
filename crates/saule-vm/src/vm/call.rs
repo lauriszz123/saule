@@ -130,12 +130,17 @@ impl Vm {
         // The prefix invariant at work: a slot resolved against a parent's
         // vtable indexes the subclass's override, because a subclass's
         // vtable extends its parent's rather than reordering it (§8.3).
-        let cp = &self.shared.chunks[0].classes[idx as usize];
+        let table = &self.shared.chunks[0].classes;
+        let cp = &table[idx as usize];
         cp.vtable
             .get(slot)
             .copied()
             .filter(|t| *t != u32::MAX)
-            .map(|t| (cp.module, t))
+            // The module of the class that **declared** the body, which is
+            // not `cp` when the slot was inherited: a `ProtoIdx` only means
+            // something inside its own chunk (`ClassProto::vowner`).
+            .zip(cp.vowner.get(slot).map(|o| table[*o as usize].module))
+            .map(|(t, m)| (m, t))
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!(
                     "internal: `{}` has no method in vtable slot {slot}",
@@ -213,7 +218,8 @@ impl Vm {
                 ),
                 span: proto.span_at(here),
             })?;
-        let cp = &self.shared.chunks[0].classes[idx as usize];
+        let table = &self.shared.chunks[0].classes;
+        let cp = &table[idx as usize];
         let vslot = cp
             .itables
             .get(&iface)
@@ -230,7 +236,14 @@ impl Vm {
             .get(vslot as usize)
             .copied()
             .filter(|t| *t != u32::MAX)
-            .map(|t| (cp.module, t))
+            // The declaring class's module — an itable lands on a vtable
+            // slot, and an inherited one is the ancestor's proto index.
+            .zip(
+                cp.vowner
+                    .get(vslot as usize)
+                    .map(|o| table[*o as usize].module),
+            )
+            .map(|(t, m)| (m, t))
             .ok_or_else(|| RuntimeError::TypeError {
                 message: format!(
                     "internal: `{}` has no method in slot {vslot}",
@@ -336,10 +349,10 @@ impl Vm {
                 self.store_results(dst, &vs, n_ret);
                 Ok(())
             }
-            other => Err(RuntimeError::TypeError {
-                message: format!("attempt to call a `{}`", other.type_name()),
-                span: site.span(),
-            }),
+            // The tree-walker's wording, from its own constructor: `CALL`
+            // and `call_value_multi` compile the same source, so a value
+            // that is not callable has to say so identically.
+            other => Err(RuntimeError::not_callable(other.type_name(), site.span())),
         }
     }
 

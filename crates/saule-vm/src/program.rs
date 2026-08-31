@@ -105,6 +105,19 @@ pub enum Target {
     /// them. Nothing to compile and nothing to run, so its exports are
     /// resolved at compile time like prelude names.
     Native(std::collections::HashMap<String, saule_interpreter::Value>),
+    /// A dynamic native package: a TOML manifest plus a shared library.
+    ///
+    /// Folded at compile time like [`Native`](Target::Native), because the
+    /// manifest — already parsed, and parsed without touching the binary —
+    /// carries every name, symbol and arity the compiler needs. What the
+    /// manifest cannot give is the code, so each folded method defers its
+    /// symbol lookup, and the `dlopen` happens at run time from
+    /// [`Chunk::dynamic_imports`].
+    Dynamic {
+        /// Import name, e.g. `engine`.
+        package: String,
+        exports: std::collections::HashMap<String, saule_interpreter::Value>,
+    },
 }
 
 /// Anything that can go wrong turning a file tree into a [`Program`].
@@ -176,21 +189,31 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
         // tree-walker running the same source — means a conversion.
         let (_, types) = saule_typeck::check_and_resolve_with_types(&mut unit.ast);
 
-        let (imported, import_bindings, natives) = imported_layouts(unit, &exports, &bindings)?;
-        let (chunk, layouts) = crate::compile::compile_into(
+        let imported = imported_layouts(unit, &exports, &bindings)?;
+        let (mut chunk, layouts) = crate::compile::compile_into(
             &unit.ast,
             &unit.label,
             &unit.source,
             &bindings,
             &types,
-            &imported,
+            &imported.layouts,
             &mut tables,
             true,
-            import_bindings,
+            imported.values,
             i,
-            natives,
+            imported.natives,
         )?;
-        exports[i] = collect_exports(unit, chunk.module_slot_base, &layouts, &bindings);
+        chunk.dynamic_imports = imported.dynamic;
+        let exported =
+            collect_exports(unit, chunk.module_slot_base, &layouts, &bindings, &exports)?;
+        // A re-exported `fn` answers about its parameters at its new slot
+        // too — see `Exported::value_aliases`.
+        for (dst, src) in &exported.value_aliases {
+            if let Some(params) = tables.fn_params_by_slot.get(src).cloned() {
+                tables.fn_params_by_slot.insert(*dst, params);
+            }
+        }
+        exports[i] = exported.names;
         chunks.push(chunk);
     }
 
@@ -228,14 +251,45 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
 /// `collect_module_scope` gives every imported name a module slot, so
 /// compiling on would emit a `GETMOD` against a slot nothing ever writes —
 /// `nil`, silently.
-/// What a module's `import`s resolve to: the layouts they bring into scope,
-/// the value bindings to copy in before the body runs, and the native-package
-/// exports folded at compile time.
-type Imported = (
-    crate::compile::layout::Layouts,
-    Vec<ImportBinding>,
-    HashMap<String, saule_interpreter::Value>,
-);
+/// What a module's `import`s resolve to.
+struct Imported {
+    /// The layouts the imported types bring into scope.
+    layouts: crate::compile::layout::Layouts,
+    /// Value bindings to copy in before the body runs.
+    values: Vec<ImportBinding>,
+    /// Native-package exports, folded at compile time.
+    natives: HashMap<String, saule_interpreter::Value>,
+    /// Dynamic packages this module imports, in source order — see
+    /// [`Chunk::dynamic_imports`], which this becomes.
+    dynamic: Vec<(String, std::ops::Range<usize>)>,
+}
+
+/// Bind a native package's exports into `natives` under the names the
+/// `import` asks for. Shared by the static and dynamic cases: once the
+/// exports exist, the two are the same thing to the compiler — a fixed set
+/// of values, resolved before the program runs.
+fn fold_native(
+    vals: &HashMap<String, saule_interpreter::Value>,
+    names: &ImportNames,
+    span: &std::ops::Range<usize>,
+    natives: &mut HashMap<String, saule_interpreter::Value>,
+) -> Result<(), ProgramError> {
+    match names {
+        ImportNames::All => natives.extend(vals.iter().map(|(k, v)| (k.clone(), v.clone()))),
+        ImportNames::List(items) => {
+            for (orig, alias) in items {
+                let Some(v) = vals.get(orig) else {
+                    return Err(ProgramError::Compile(CompileError::unsupported(
+                        "an import of a name the package does not export",
+                        span.clone(),
+                    )));
+                };
+                natives.insert(alias.clone().unwrap_or_else(|| orig.clone()), v.clone());
+            }
+        }
+    }
+    Ok(())
+}
 
 fn imported_layouts(
     unit: &Unit,
@@ -245,30 +299,22 @@ fn imported_layouts(
     let mut out = crate::compile::layout::Layouts::default();
     let mut values: Vec<ImportBinding> = Vec::new();
     let mut natives: HashMap<String, saule_interpreter::Value> = HashMap::new();
+    let mut dynamic: Vec<(String, std::ops::Range<usize>)> = Vec::new();
     for edge in &unit.imports {
         // A native package's exports fold at compile time, so they never
         // reach a module slot at all.
         let from = match &edge.target {
             Target::Native(vals) => {
-                match &edge.names {
-                    ImportNames::All => natives.extend(
-                        vals.iter().map(|(k, v)| (k.clone(), v.clone())),
-                    ),
-                    ImportNames::List(items) => {
-                        for (orig, alias) in items {
-                            let Some(v) = vals.get(orig) else {
-                                return Err(ProgramError::Compile(CompileError::unsupported(
-                                    "an import of a name the package does not export",
-                                    edge.span.clone(),
-                                )));
-                            };
-                            natives.insert(
-                                alias.clone().unwrap_or_else(|| orig.clone()),
-                                v.clone(),
-                            );
-                        }
-                    }
-                }
+                fold_native(vals, &edge.names, &edge.span, &mut natives)?;
+                continue;
+            }
+            // The same fold, plus a note to load the library at run time.
+            // Recorded per `import` rather than per package: two modules
+            // importing one package each load it where *they* would have,
+            // and the cache in `load_library` makes the second a no-op.
+            Target::Dynamic { package, exports } => {
+                fold_native(exports, &edge.names, &edge.span, &mut natives)?;
+                dynamic.push((package.clone(), edge.span.clone()));
                 continue;
             }
             Target::Module(i) => &exports[*i],
@@ -328,54 +374,178 @@ fn imported_layouts(
             }
         }
     }
-    Ok((out, values, natives))
+    Ok(Imported {
+        layouts: out,
+        values,
+        natives,
+        dynamic,
+    })
+}
+
+/// What one name this module holds looks like to an importer.
+///
+/// `None` where there is nothing to publish — the tree-walker's
+/// `env.get(name)` would come back empty too.
+fn export_of(
+    name: &str,
+    slot_base: usize,
+    layouts: &crate::compile::layout::Layouts,
+    bindings: &saule_semantic::Bindings,
+) -> Option<Export> {
+    // Types first: a class and a function cannot share a name, so the order
+    // only decides which lookup answers, not which is right.
+    //
+    // `layouts` here is this module's *whole* type scope, imports included —
+    // `layout::build` seeds it with them so a subclass can extend an
+    // imported parent — which is exactly what makes a barrel's re-export of
+    // a type fall out with no extra lookup, and with the same program-global
+    // index the declaring module assigned.
+    if let Some(i) = layouts.get(name) {
+        return Some(Export::Class(i));
+    }
+    if let Some(i) = layouts.enum_of(name) {
+        return Some(Export::Enum(i));
+    }
+    if let Some(i) = layouts.interface_of(name) {
+        return Some(Export::Interface(i));
+    }
+    let slot = bindings
+        .module_slots
+        .iter()
+        .position(|s| s.as_ref() == name)?;
+    // Rebased on the way out, so an importer never has to know which module
+    // a value came from.
+    u16::try_from(slot_base + slot).ok().map(|slot| Export::Value { slot })
 }
 
 /// What this module publishes to its importers.
 ///
-/// Only `export`ed declarations, matching `module::collect_exports` in the
-/// tree-walker — a name without `export` stays private.
+/// Normally only `export`ed declarations, matching `module::collect_exports`
+/// in the tree-walker — a name without `export` stays private.
+///
+/// ## Barrels
+///
+/// An `init.sau` is a **barrel**: it also publishes everything its `import`
+/// statements brought in, which is what lets a folder of files be consumed
+/// as one module. `examples/UI Project` is built on it — `UIKit/init.sau`
+/// re-exports two dozen siblings and declares nothing of its own — and until
+/// this existed here, a class declared behind the barrel was invisible to
+/// the modules that extend it, which surfaced as the wrong diagnostic
+/// entirely: `a class extending one the compiler cannot see`.
+///
+/// The rule is `module::is_init_module`, called rather than restated: which
+/// modules re-export is a language rule, and two engines each with their own
+/// copy of it is how they drift.
+///
+/// **A re-exported value publishes the barrel's own slot, not the original
+/// module's.** The barrel's prologue copies the value into that slot when
+/// the barrel runs, and the tree-walker's barrel snapshots
+/// `env.get(name)` at exactly the same moment — so forwarding the source
+/// slot instead would hand a later importer a *fresher* value than the
+/// tree-walker gives it, in the one case where something mutated the
+/// original in between. Types have no such question: the index is
+/// program-global and there is only one of it.
+///
+/// Statements are walked in source order, imports included, because that is
+/// the order the tree-walker resolves collisions in — a barrel that both
+/// declares `X` and imports one publishes whichever came last.
+struct Exported {
+    names: HashMap<String, Export>,
+    /// `(destination, source)` global slot pairs for values a barrel
+    /// re-published under a slot of its own.
+    ///
+    /// The two slots hold the same function, so whatever the program knows
+    /// about the one it knows about the other — `Tables::fn_params_by_slot`
+    /// in particular, which §19's call-site binding reads and which is keyed
+    /// on the slot the *declaring* module exported from. Without carrying it
+    /// across, a `fn` reached through a barrel had no parameter list, and
+    /// every named argument or trailing block on it refused with
+    /// `a named argument to a callee the compiler cannot identify`.
+    ///
+    /// Classes need no equivalent: `Tables::method_params` is keyed on a
+    /// program-global `ClassIdx`, which a re-export does not change.
+    value_aliases: Vec<(u16, u16)>,
+}
+
 fn collect_exports(
     unit: &Unit,
     slot_base: usize,
     layouts: &crate::compile::layout::Layouts,
     bindings: &saule_semantic::Bindings,
-) -> HashMap<String, Export> {
+    exports: &[HashMap<String, Export>],
+) -> Result<Exported, ProgramError> {
+    let barrel = saule_interpreter::module::is_init_module(&unit.path);
     let mut out = HashMap::new();
+    let mut value_aliases = Vec::new();
+    // `unit.imports` is one edge per `Decl::Import`, in source order, so a
+    // running index keeps the two in step without re-resolving anything.
+    let mut edge = 0usize;
     for stmt in &unit.ast.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
-        let name = match &d.value {
+        match &d.value {
             Decl::Class { exported: true, name, .. }
             | Decl::Interface { exported: true, name, .. }
             | Decl::Enum { exported: true, name, .. }
             | Decl::Function { exported: true, name, .. }
-            | Decl::Variable { exported: true, name, .. } => name,
-            _ => continue,
-        };
-        // Types first: a class and a function cannot share a name, so the
-        // order only decides which lookup answers, not which is right.
-        let export = if let Some(i) = layouts.get(name) {
-            Export::Class(i)
-        } else if let Some(i) = layouts.enum_of(name) {
-            Export::Enum(i)
-        } else if let Some(i) = layouts.interface_of(name) {
-            Export::Interface(i)
-        } else {
-            match bindings.module_slots.iter().position(|s| s.as_ref() == name.as_str()) {
-                // Rebased on the way out, so an importer never has to know
-                // which module a value came from.
-                Some(slot) => match u16::try_from(slot_base + slot) {
-                    Ok(slot) => Export::Value { slot },
-                    Err(_) => continue,
-                },
-                // No slot and no type: nothing to publish. The tree-walker
-                // would find nothing either.
-                None => continue,
+            | Decl::Variable { exported: true, name, .. } => {
+                if let Some(e) = export_of(name, slot_base, layouts, bindings) {
+                    out.insert(name.clone(), e);
+                }
             }
-        };
-        out.insert(name.clone(), export);
+            Decl::Import { names, .. } => {
+                let Some(this) = unit.imports.get(edge) else { continue };
+                edge += 1;
+                if !barrel {
+                    continue;
+                }
+                let from = match &this.target {
+                    Target::Module(i) => &exports[*i],
+                    // A native package's exports are folded into constants
+                    // at compile time — they reach no module slot and no
+                    // layout table, so there is no `Export` to forward. The
+                    // tree-walker's barrel *would* republish them, and
+                    // dropping them here would be a silent divergence, so
+                    // this refuses and lets the tree-walker run the program.
+                    // No example does it; the refusal is stated rather than
+                    // discovered.
+                    Target::Native(_) | Target::Dynamic { .. } => {
+                        return Err(ProgramError::Compile(CompileError::unsupported(
+                            "a barrel module re-exporting a native package",
+                            this.span.clone(),
+                        )));
+                    }
+                };
+                // The names this import bound *locally* — under their
+                // aliases, since that is what the barrel published them as.
+                let locals: Vec<String> = match names {
+                    ImportNames::All => from.keys().cloned().collect(),
+                    ImportNames::List(items) => items
+                        .iter()
+                        .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone()))
+                        .collect(),
+                };
+                for local in locals {
+                    let Some(e) = export_of(&local, slot_base, layouts, bindings) else {
+                        continue;
+                    };
+                    // A value moved to a slot of the barrel's own; note the
+                    // pair so what the program knows about the source slot
+                    // follows it there.
+                    if let (Export::Value { slot: dst }, Some(Export::Value { slot: src })) =
+                        (&e, from.get(&local))
+                    {
+                        value_aliases.push((*dst, *src));
+                    }
+                    out.insert(local, e);
+                }
+            }
+            _ => {}
+        }
     }
-    out
+    Ok(Exported {
+        names: out,
+        value_aliases,
+    })
 }
 
 /// Read, parse and topologically order every module reachable from `entry`.
@@ -442,14 +612,34 @@ fn load_one(
                 .and_then(saule_interpreter::native_packages::lookup)
         {
             Target::Native(saule_interpreter::native_packages::build_exports(pkg).values)
-        } else if saule_interpreter::dynamic_packages::name_from_sentinel(&target_path).is_some() {
-            // A manifest-described shared library. Loading one is a runtime
-            // side effect — `dlopen` — that compiling must not perform, so
-            // this still refuses and falls back.
-            return Err(ProgramError::Compile(CompileError::unsupported(
-                "an import of a dynamic native package",
-                d.span.clone(),
-            )));
+        } else if let Some(pkg) =
+            saule_interpreter::dynamic_packages::name_from_sentinel(&target_path)
+        {
+            // A manifest-described shared library. The manifest is the part
+            // the compiler needs — class names, method names, parameter
+            // names, arities — and it is already parsed, from TOML, with the
+            // binary untouched. So the exports fold here exactly like a
+            // static package's, each method carrying a deferred symbol
+            // lookup rather than a resolved pointer.
+            //
+            // The `dlopen` remains a runtime side effect that compiling must
+            // not perform. It is recorded on the chunk instead and performed
+            // by `run_program` just before this module's body runs.
+            match saule_interpreter::dynamic_packages::build_exports_deferred(pkg) {
+                Some(e) => Target::Dynamic {
+                    package: pkg.to_string(),
+                    exports: e.values,
+                },
+                // No manifest behind the sentinel, or a build without
+                // dynamic loading at all (wasm). Refuse and let the
+                // tree-walker produce the diagnostic.
+                None => {
+                    return Err(ProgramError::Compile(CompileError::unsupported(
+                        "an import of a dynamic native package",
+                        d.span.clone(),
+                    )));
+                }
+            }
         } else {
             Target::Module(load_one(&target_path, units, index, in_flight)?)
         };

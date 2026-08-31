@@ -36,6 +36,22 @@ pub struct ClassProto {
     /// Instance methods by slot; parent slots inherited, overrides written
     /// in place, new methods appended.
     pub vtable: Vec<ProtoIdx>,
+    /// Which class **declared** the body in each [`vtable`](Self::vtable)
+    /// slot. Same length as `vtable`, and the reason it has to exist:
+    ///
+    /// a `ProtoIdx` means nothing outside its own chunk, and an *inherited*
+    /// slot holds an index into the **ancestor's** chunk, not this class's.
+    /// `module` answers for the class, so reading a vtable slot through it
+    /// loads proto 52 of the subclass's module where the parent's module was
+    /// meant — a different function, or a panic when the subclass's chunk is
+    /// shorter. `smindex` has always carried the declaring class for the
+    /// same reason (see [`StaticSlot`]); the vtable did not, and nothing
+    /// caught it until a program with deep cross-module hierarchies compiled
+    /// end to end.
+    ///
+    /// Inherited entries keep naming the ancestor. A slot this class
+    /// declares — new or an override — names this class.
+    pub vowner: Vec<ClassIdx>,
     /// name -> vtable slot. Compile-time use; the VM indexes directly.
     pub vindex: HashMap<Rc<str>, u16>,
     /// Whether this class declares `implements Assignable<T>`, so a bare `T`

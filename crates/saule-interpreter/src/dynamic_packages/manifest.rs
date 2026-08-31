@@ -226,6 +226,7 @@ fn names_function(ty: &Type) -> bool {
         }
         Type::Tuple(items) => items.iter().any(names_function),
         Type::Function { params, ret } => params.iter().any(names_function) || names_function(ret),
+        Type::Generic(g) => g.args.iter().any(names_function),
     }
 }
 

@@ -79,10 +79,12 @@ impl Layouts {
 /// `extends` is flattened here: an interface's slot list includes everything
 /// it inherits, so an implementing class needs one itable per interface
 /// rather than one per level.
-pub fn build_interfaces(module: &Module) -> (Vec<crate::chunk::InterfaceProto>, HashMap<String, u32>) {
+pub fn build_interfaces(
+    module: &Module,
+) -> (Vec<crate::chunk::InterfaceProto>, HashMap<String, u32>) {
     use crate::chunk::InterfaceProto;
 
-    let mut decls: HashMap<&str, (&Vec<String>, Vec<&str>)> = HashMap::new();
+    let mut decls: HashMap<&str, (Vec<&str>, Vec<&str>)> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
     for st in &module.stmts {
         if let Stmt::Decl(d) = &st.value
@@ -93,7 +95,11 @@ pub fn build_interfaces(module: &Module) -> (Vec<crate::chunk::InterfaceProto>, 
                 ..
             } = &d.value
         {
-            decls.insert(name, (extends, methods.iter().map(|m| m.name.as_str()).collect()));
+            let parents: Vec<&str> = extends.iter().map(|e| e.name.as_str()).collect();
+            decls.insert(
+                name,
+                (parents, methods.iter().map(|m| m.name.as_str()).collect()),
+            );
             order.push(name);
         }
     }
@@ -101,7 +107,7 @@ pub fn build_interfaces(module: &Module) -> (Vec<crate::chunk::InterfaceProto>, 
     /// Method names of `name`, parents first, deduplicated.
     fn gather<'a>(
         name: &'a str,
-        decls: &HashMap<&'a str, (&'a Vec<String>, Vec<&'a str>)>,
+        decls: &HashMap<&'a str, (Vec<&'a str>, Vec<&'a str>)>,
         seen: &mut Vec<&'a str>,
         out: &mut Vec<String>,
     ) {
@@ -152,8 +158,8 @@ pub fn build_enums(
     chunk: &mut crate::chunk::Chunk,
     layouts: &mut Layouts,
 ) -> Result<(), CompileError> {
-    use saule_ast::EnumVariant;
     use crate::chunk::{EnumProto, VariantProto};
+    use saule_ast::EnumVariant;
 
     for st in &module.stmts {
         let Stmt::Decl(d) = &st.value else { continue };
@@ -199,9 +205,7 @@ pub fn build_enums(
                     };
                     (n.clone(), 0, Some(k))
                 }
-                EnumVariant::Tuple { name, fields } => {
-                    (name.clone(), fields.len() as u8, None)
-                }
+                EnumVariant::Tuple { name, fields } => (name.clone(), fields.len() as u8, None),
             };
             by_name.insert(Rc::from(vname.as_str()), tag as u32);
             protos.push(VariantProto {
@@ -211,9 +215,7 @@ pub fn build_enums(
             });
         }
 
-        layouts
-            .enums
-            .insert(name.clone(), chunk.enums.len() as u32);
+        layouts.enums.insert(name.clone(), chunk.enums.len() as u32);
         let module = chunk.module_index;
         chunk.enums_mut().push(EnumProto {
             name: Rc::from(name.as_str()),
@@ -260,7 +262,7 @@ pub fn build(
     interfaces.append(&mut ifaces);
     let ifaces = &*interfaces;
     // Gather declarations first so a forward `extends` resolves.
-    let mut implements: HashMap<&str, &Vec<String>> = HashMap::new();
+    let mut implements: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut decls: Vec<ClassDecl<'_>> = Vec::new();
     for s in &module.stmts {
         if let Stmt::Decl(d) = &s.value
@@ -272,8 +274,14 @@ pub fn build(
                 ..
             } = &d.value
         {
-            implements.insert(name, imps);
-            decls.push((name, extends.as_deref(), members, d.span.clone()));
+            let imp_names: Vec<&str> = imps.iter().map(|i| i.name.as_str()).collect();
+            implements.insert(name, imp_names);
+            decls.push((
+                name,
+                extends.as_ref().map(|e| e.name.as_str()),
+                members,
+                d.span.clone(),
+            ));
         }
     }
 
@@ -315,12 +323,12 @@ pub fn build(
         // rather than emitting a call to nothing.
         proto.assignable = implements
             .get(*name)
-            .is_some_and(|v| v.iter().any(|i| i == saule_ast::ops::ASSIGNABLE.interface));
+            .is_some_and(|v| v.contains(&saule_ast::ops::ASSIGNABLE.interface));
         // An itable per implemented interface: interface slot -> this
         // class's vtable slot. Built once here, so a `CALLIF` is a small-map
         // probe and an indexed load rather than a name lookup (§8.4).
         for iname in implements.get(*name).into_iter().flat_map(|v| v.iter()) {
-            let Some(&ii) = iface_index.get(iname.as_str()) else {
+            let Some(&ii) = iface_index.get(*iname) else {
                 continue;
             };
             let slots: Option<Vec<u16>> = ifaces[ii as usize]
@@ -407,9 +415,9 @@ fn build_one(
     // The tree-walker promotes a defaulted field to a static when the class
     // has no `init` (`eval/stmt/classes.rs`). The compiler has to make the
     // same call, or the two engines disagree about what `C.field` means.
-    let has_init = members.iter().any(|m| {
-        matches!(&m.value, ClassMember::Method(me) if me.name == "init" && !me.is_static)
-    });
+    let has_init = members
+        .iter()
+        .any(|m| matches!(&m.value, ClassMember::Method(me) if me.name == "init" && !me.is_static));
 
     let mut own_fields: Vec<Rc<str>> = Vec::new();
     let mut statics: Vec<Rc<str>> = Vec::new();
@@ -465,23 +473,42 @@ fn build_one(
     // methods appended. `usize::MAX` is a placeholder for "body not compiled
     // yet"; codegen fills it in.
     let mut vtable: Vec<u32> = parent_proto.map(|p| p.vtable.clone()).unwrap_or_default();
-    let mut vindex: HashMap<Rc<str>, u16> = parent_proto
-        .map(|p| p.vindex.clone())
-        .unwrap_or_default();
+    // Inherited slots keep naming the ancestor that declared them, so their
+    // proto index is still read out of that ancestor's chunk. See
+    // `ClassProto::vowner`.
+    let mut vowner: Vec<ClassIdx> = parent_proto.map(|p| p.vowner.clone()).unwrap_or_default();
+    let mut vindex: HashMap<Rc<str>, u16> =
+        parent_proto.map(|p| p.vindex.clone()).unwrap_or_default();
     let mut member_of_slot: HashMap<u16, usize> = HashMap::new();
     for (mname, member_i) in instance_methods {
         match vindex.get(&mname) {
             Some(&slot) => {
+                // An override: this class supplies the body, so the slot
+                // stops naming the ancestor.
+                //
+                // **And the inherited index has to go.** What the clone
+                // above put here is the ancestor's proto — a real, filled
+                // index whenever the ancestor came from another module —
+                // and codegen has not run yet. A subclass laid out after
+                // this one and before that codegen would clone *that* value
+                // and keep it, because Pass 2a only fills a slot still
+                // holding `u32::MAX`. The result was a grandchild running
+                // its grandparent's method, or reading a proto index past
+                // the end of its own module's vector.
+                vtable[slot as usize] = u32::MAX;
+                vowner[slot as usize] = self_idx;
                 member_of_slot.insert(slot, member_i);
             }
             None => {
                 let slot = vtable.len() as u16;
                 vtable.push(u32::MAX);
+                vowner.push(self_idx);
                 vindex.insert(Rc::clone(&mname), slot);
                 member_of_slot.insert(slot, member_i);
             }
         }
     }
+    debug_assert_eq!(vowner.len(), vtable.len(), "one owner per vtable slot");
     if vtable.len() > u8::MAX as usize {
         return Err(CompileError::unsupported(
             "a class with more than 255 methods",
@@ -492,14 +519,16 @@ fn build_one(
     // Inherited entries keep naming the class that declared them, so a
     // subclass finds a parent's `static fn` in one probe and still loads it
     // from the parent's own proto vector.
-    let mut smindex: HashMap<Rc<str>, crate::chunk::StaticSlot> = parent_proto
-        .map(|p| p.smindex.clone())
-        .unwrap_or_default();
+    let mut smindex: HashMap<Rc<str>, crate::chunk::StaticSlot> =
+        parent_proto.map(|p| p.smindex.clone()).unwrap_or_default();
     let mut static_slots: Vec<usize> = Vec::new();
     for (mname, member_i) in static_methods {
         smindex.insert(
             mname,
-            crate::chunk::StaticSlot { class: self_idx, slot: static_slots.len() as u16 },
+            crate::chunk::StaticSlot {
+                class: self_idx,
+                slot: static_slots.len() as u16,
+            },
         );
         static_slots.push(member_i);
     }
@@ -510,9 +539,8 @@ fn build_one(
     // rule, expressed as data. Only this class's *own* statics claim slots
     // in this class's storage, so `n_statics` counts from zero rather than
     // continuing the parent's.
-    let mut sindex: HashMap<Rc<str>, crate::chunk::StaticSlot> = parent_proto
-        .map(|p| p.sindex.clone())
-        .unwrap_or_default();
+    let mut sindex: HashMap<Rc<str>, crate::chunk::StaticSlot> =
+        parent_proto.map(|p| p.sindex.clone()).unwrap_or_default();
     let mut n_statics = 0u16;
     for s in statics {
         // A redeclared static shadows the parent's, which is what the
@@ -539,6 +567,7 @@ fn build_one(
         field_template: None,
         field_init: None,
         vtable,
+        vowner,
         vindex,
         // Set by the caller, which is where the `implements` list lives.
         assignable: false,
