@@ -51,8 +51,12 @@ contract the language itself looks for.
 | `OpNewIndex<K, V>` | `a[k] = v` — `fn newIndex(key: K, value: V) -> nil`. Saule's `__newindex`. |
 | `Assignable<T>` | `local a: C = t` — `static fn of(value: T) -> C`. A bare `T` may fill a `C` slot; `C.of` builds it. |
 
-See [Custom Iterable](/saule/language/interfaces/#custom-iterable) and
+The `<T>` on these is a real type argument, checked like any other: `OpAdd`
+takes two (the operand and the result), `OpEq` one, `OpLen` none — supplying
+the wrong number is an error rather than being ignored. See
+[Custom Iterable](/saule/language/interfaces/#custom-iterable) and
 [Operator Overloading](/saule/language/interfaces/#operator-overloading) for the rules and
-worked examples.
+worked examples, and [Generic Classes](/saule/language/classes/#generic-classes) for
+declaring your own.
 
 ---

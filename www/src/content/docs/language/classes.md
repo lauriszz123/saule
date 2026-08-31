@@ -229,4 +229,65 @@ and forward what the parent wants via `self.super(...)`.
 
 If a method wasn't meant to override anything, give it a different name.
 
+### Generic Classes
+
+A class takes type parameters after its name, and they are in scope for every field, method signature and body inside it:
+
+```saule
+class Box<T>
+    value: T
+
+    fn init(value: T)
+        self.value = value
+    end
+
+    fn get() -> T
+        return self.value
+    end
+end
+
+local ints: Box<integer> = Box(5)
+local n: integer = ints.get()       -- `T` is `integer` here
+
+local words: Box<string> = Box("hi")
+local s: string = words.get()       -- and `string` here
+```
+
+The argument is **inferred from the constructor** when you don't write it, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
+
+```saule
+class Pair<A, B>
+    left: A
+    right: B
+
+    fn init(left: A, right: B)
+        self.left = left
+        self.right = right
+    end
+
+    fn first() -> A
+        return self.left
+    end
+end
+
+local p = Pair(7, "seven")          -- Pair<integer, string>
+local n: integer = p.first()
+```
+
+Type arguments are **invariant**, the same rule [table elements](/saule/language/tables/#element-types-are-invariant) follow and for the same reason: a `Box<string>` accepted into a `Box<integer>` slot would be an alias through which the wrong type could be written back.
+
+```saule
+local b: Box<integer> = Box("no")   -- ERROR: Box<string> is not Box<integer>
+local c: Box<integer, string> = ... -- ERROR: `Box` expects 1 type argument
+```
+
+Naming the class **without** its arguments means "some instantiation, unknown which", and is accepted against any of them:
+
+```saule
+local any: Box = Box(1)             -- ok
+local back: Box<integer> = any      -- ok
+```
+
+Like a function's, a class's type parameters are erased at runtime — they constrain the program, they don't reach it.
+
 ---

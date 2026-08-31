@@ -24,7 +24,7 @@ Saule enums (`IoMode`, `IoSeek`) so the typechecker can catch typos.
 | Signature | Description |
 | --- | --- |
 | `Io.open(path: string, mode: IoMode) -> File?` | Open a file; `nil` on error. |
-| `Io.lines(path: string?) -> fn(): string?` | Line-iterator step closure. With no path, reads stdin. |
+| `Io.lines(path: string?) -> fn() -> string?` | Line-iterator step closure. With no path, reads stdin. |
 | `Io.read(...string) -> string?` | Read formats from stdin: `"l"`/`"L"` (line), `"a"` (all), `"n"` (number), or a numeric byte count. |
 | `Io.write(...string) -> nil` | Write to stdout. |
 
@@ -52,8 +52,8 @@ Saule enums (`IoMode`, `IoSeek`) so the typechecker can catch typos.
 | --- | --- |
 | `f.read(...string) -> string?` | Same formats as `Io.read`. |
 | `f.write(...string) -> nil` | Append bytes. |
-| `f.lines() -> fn(): string?` | Per-line step closure. |
-| `f.seek(whence: IoSeek?, offset: integer?) -> integer` | Defaults `(Cur, 0)`. Returns new position. |
+| `f.lines() -> fn() -> string?` | Per-line step closure. |
+| `f.seek(whence: IoSeek?, offset: integer?) -> integer?` | Defaults `(Cur, 0)`. Returns the new position, or `nil` when the handle can't seek (a pipe, a closed file). |
 | `f.flush() -> nil` | Force buffered writes to disk. |
 | `f.close() -> nil` | Release the underlying handle. |
 
