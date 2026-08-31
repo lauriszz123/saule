@@ -131,8 +131,23 @@ pub fn run_chunk_entry(chunk: Rc<Chunk>) -> Result<bool, RuntimeError> {
 pub fn run_program(program: program::Program) -> Result<bool, RuntimeError> {
     saule_interpreter::init();
     let entry = program.entry;
+    // Lifted out before the chunks move into the VM. Compiling a dynamic
+    // native package folds its exports from the manifest and deliberately
+    // does *not* `dlopen` the library behind them, so the load happens here
+    // — per module, immediately before that module's body runs, which is the
+    // point at which the tree-walker resolves the same `import`. A package
+    // that fails to load therefore fails at the same place under both
+    // engines, with the same message.
+    let dynamic: Vec<Vec<(String, std::ops::Range<usize>)>> = program
+        .modules
+        .iter()
+        .map(|c| c.dynamic_imports.clone())
+        .collect();
     let mut vm = Vm::for_chunks(program.modules);
     for i in 0..=entry {
+        for (package, span) in &dynamic[i] {
+            saule_interpreter::dynamic_packages::preload(package, span.clone())?;
+        }
         vm.run_module(i)?;
     }
     match vm.call_static("Main", "main") {

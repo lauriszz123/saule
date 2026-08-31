@@ -1,0 +1,87 @@
+-- `class Box<T>` / `interface Repo<T>` — a class's type parameters are
+-- substituted when a member is read off an instance, so `Box<integer>.get()`
+-- is an `integer` and the same declaration serves `Box<string>`.
+
+class Box<T>
+	value: T
+
+	fn init(value: T)
+		self.value = value
+	end
+
+	fn get() -> T
+		return self.value
+	end
+end
+
+local ints: Box<integer> = Box(5)
+println(ints.get() + 1)
+println(ints.value + 2)
+
+local words: Box<string> = Box("hi")
+println(words.get() .. "!")
+
+-- Inferred, with no annotation anywhere.
+local inferred = Box(true)
+println(inferred.get())
+
+-- Nested: the argument is itself a generic application.
+local nested = Box(Box(3))
+println(nested.get().get() + 1)
+
+-- Two parameters, bound independently from the constructor's arguments.
+class Pair<A, B>
+	left: A
+	right: B
+
+	fn init(left: A, right: B)
+		self.left = left
+		self.right = right
+	end
+
+	fn first() -> A
+		return self.left
+	end
+
+	fn second() -> B
+		return self.right
+	end
+end
+
+local p = Pair(7, "seven")
+println(p.first() + 1, p.second() .. "!")
+
+-- A generic application as a table element, and through a declared return.
+local boxes: table<Box<integer>> = {Box(1), Box(2)}
+println(boxes[1].get() + boxes[2].get())
+
+fn wrap(n: integer) -> Box<integer>
+	return Box(n)
+end
+println(wrap(9).get() + 1)
+
+-- A generic *function* over a generic class.
+fn unwrap<T>(box: Box<T>) -> T
+	return box.get()
+end
+println(unwrap(Box("via fn")))
+
+-- Generic interface, implemented at a concrete instantiation.
+interface Repo<T>
+	fn find(id: integer) -> T?
+end
+
+class IntRepo implements Repo<integer>
+	local items: table<integer>
+
+	fn init()
+		self.items = {10, 20, 30}
+	end
+
+	fn find(id: integer) -> integer?
+		return self.items[id]
+	end
+end
+
+local repo: IntRepo = IntRepo()
+println(repo.find(2) ?? -1)

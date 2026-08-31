@@ -7,8 +7,8 @@ use std::rc::Rc;
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::stdlib::{expect_arity, expect_min_arity};
-use crate::value::{ClassObject, NativeClosure, Value};
 use crate::value::SauleStr;
+use crate::value::{ClassObject, NativeClosure, TableObject, Value};
 
 /// `import String from "string"`. Auto-prelude'd so bare
 /// `String.format(…)` also works.
@@ -40,6 +40,31 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     static_fields.insert("lower".to_string(), native("String.lower", str_lower));
     static_fields.insert("upper".to_string(), native("String.upper", str_upper));
     static_fields.insert("iter".to_string(), native("String.iter", str_iter));
+    static_fields.insert("split".to_string(), native("String.split", str_split));
+    static_fields.insert("join".to_string(), native("String.join", str_join));
+    static_fields.insert("trim".to_string(), native("String.trim", str_trim));
+    static_fields.insert(
+        "trimStart".to_string(),
+        native("String.trimStart", str_trim_start),
+    );
+    static_fields.insert(
+        "trimEnd".to_string(),
+        native("String.trimEnd", str_trim_end),
+    );
+    static_fields.insert("replace".to_string(), native("String.replace", str_replace));
+    static_fields.insert(
+        "contains".to_string(),
+        native("String.contains", str_contains),
+    );
+    static_fields.insert(
+        "indexOf".to_string(),
+        native("String.indexOf", str_index_of),
+    );
+    static_fields.insert(
+        "padStart".to_string(),
+        native("String.padStart", str_pad_start),
+    );
+    static_fields.insert("padEnd".to_string(), native("String.padEnd", str_pad_end));
 
     let class = ClassObject {
         name: "String".to_string(),
@@ -97,6 +122,54 @@ pub fn register_sigs() {
             Type::Tuple(vec![t_nullable(s()), t_nullable(i())]),
         )],
     );
+
+    // ─── text manipulation ──────────────────────────────────────────────
+    //
+    // Saule has no pattern language, so these are the plain-substring
+    // operations that Lua leaves to `string.gsub` and friends. Every one of
+    // them takes and returns literal text: `String.replace(s, ".", "-")`
+    // replaces full stops, not "any character".
+
+    use crate::stdlib::sigs::{register_g, t_table};
+    // `split(s, sep) -> table<string>`. An empty separator splits into
+    // characters rather than looping forever on a zero-width match.
+    register("String.split", vec![s(), s()], vec![t_table(s())]);
+    // `join(sep, parts) -> string`. Generic in the element type: the parts
+    // are rendered the way `tostring` would, so a `table<integer>` joins
+    // without being mapped through a conversion first.
+    register_g(
+        "String.join",
+        vec!["V"],
+        vec![s(), t_table(t_named("V"))],
+        vec![s()],
+    );
+    register("String.trim", vec![s()], vec![s()]);
+    register("String.trimStart", vec![s()], vec![s()]);
+    register("String.trimEnd", vec![s()], vec![s()]);
+    // `replace(s, from, to, limit?) -> string` — every occurrence by
+    // default, at most `limit` when given.
+    register(
+        "String.replace",
+        vec![s(), s(), s(), t_nullable(i())],
+        vec![s()],
+    );
+    register("String.contains", vec![s(), s()], vec![b()]);
+    // `indexOf(s, needle, from?) -> integer?` — the start index alone, for
+    // when the caller doesn't want `String.find`'s second return. Nullable
+    // because a miss is an ordinary outcome, not an error.
+    register(
+        "String.indexOf",
+        vec![s(), s(), t_nullable(i())],
+        vec![t_nullable(i())],
+    );
+    // `padStart(s, width, fill?) -> string` — `fill` defaults to a space.
+    // A string already at or past `width` is returned unchanged.
+    register(
+        "String.padStart",
+        vec![s(), i(), t_nullable(s())],
+        vec![s()],
+    );
+    register("String.padEnd", vec![s(), i(), t_nullable(s())], vec![s()]);
     let _ = t_any;
 }
 
@@ -712,4 +785,208 @@ fn as_float(v: &Value, spec: char) -> Result<f64, String> {
             other.type_name()
         )),
     }
+}
+
+// ─── text manipulation ──────────────────────────────────────────────────────
+//
+// Plain-substring operations. Saule dropped Lua's pattern language, and
+// nothing replaced it, which left `split` / `replace` / `trim` — the three
+// things every text-handling program starts with — as hand-written loops over
+// `String.find` and `String.sub`. These are the literal-text versions; a
+// pattern or regex facility, if one ever lands, is a separate surface and does
+// not change what these mean.
+
+/// A `table<string>` value from an iterator of pieces.
+fn string_table<I: IntoIterator<Item = String>>(parts: I) -> Value {
+    let values: Vec<Value> = parts
+        .into_iter()
+        .map(|p| Value::Str(SauleStr::new(p)))
+        .collect();
+    Value::Table(Rc::new(RefCell::new(TableObject::from_array(values))))
+}
+
+/// `String.split(s, sep) -> table<string>`
+///
+/// An empty separator splits into characters. The alternative — matching a
+/// zero-width separator between every position — yields an empty piece per
+/// character plus two at the ends, which is nobody's intent when they write
+/// `String.split(word, "")`.
+///
+/// Splitting the empty string gives one empty piece, not zero: `#parts` is
+/// then always `occurrences + 1`, so a caller counting fields doesn't have to
+/// special-case empty input.
+fn str_split(args: &[Value]) -> Result<Value, String> {
+    expect_arity("String.split", args, 2)?;
+    let s = expect_string("String.split", args, 0)?;
+    let sep = expect_string("String.split", args, 1)?;
+
+    if sep.is_empty() {
+        return Ok(string_table(s.chars().map(|c| c.to_string())));
+    }
+    Ok(string_table(
+        s.split(sep.as_str()).map(|piece| piece.to_string()),
+    ))
+}
+
+/// `String.join(sep, parts) -> string`
+///
+/// Elements render as `tostring` would, so a table of numbers joins directly.
+/// This is the same operation as `Table.concat(parts, sep)` with the
+/// arguments in the order the name suggests — `String.join(", ", names)`
+/// reads as the sentence it is, and it is where people look for it.
+fn str_join(args: &[Value]) -> Result<Value, String> {
+    expect_arity("String.join", args, 2)?;
+    let sep = expect_string("String.join", args, 0)?;
+    let table = match args.get(1) {
+        Some(Value::Table(t)) => t.clone(),
+        Some(other) => {
+            return Err(format!(
+                "String.join expects a table at argument 2, got `{}`",
+                other.type_name()
+            ));
+        }
+        None => return Err("String.join missing argument 2".to_string()),
+    };
+    let t = table.borrow();
+    let mut out = String::new();
+    for (i, v) in t.array.iter().enumerate() {
+        if i > 0 {
+            out.push_str(&sep);
+        }
+        out.push_str(&v.to_display_string());
+    }
+    Ok(Value::Str(SauleStr::new(out)))
+}
+
+/// Trim by Unicode whitespace, not just ASCII spaces — `char::is_whitespace`
+/// is what `str::trim` uses, and text arriving from a file or the network
+/// carries non-breaking spaces and the like often enough to matter.
+fn str_trim(args: &[Value]) -> Result<Value, String> {
+    expect_arity("String.trim", args, 1)?;
+    let s = expect_string("String.trim", args, 0)?;
+    Ok(Value::Str(intern(s.trim())))
+}
+
+fn str_trim_start(args: &[Value]) -> Result<Value, String> {
+    expect_arity("String.trimStart", args, 1)?;
+    let s = expect_string("String.trimStart", args, 0)?;
+    Ok(Value::Str(intern(s.trim_start())))
+}
+
+fn str_trim_end(args: &[Value]) -> Result<Value, String> {
+    expect_arity("String.trimEnd", args, 1)?;
+    let s = expect_string("String.trimEnd", args, 0)?;
+    Ok(Value::Str(intern(s.trim_end())))
+}
+
+/// `String.replace(s, from, to, limit?) -> string`
+///
+/// Replaces every occurrence, or the first `limit` of them. An empty `from`
+/// matches nothing and the string comes back unchanged — the zero-width
+/// alternative inserts `to` between every character, which is never what the
+/// call meant and reads as a hang when `to` is long.
+fn str_replace(args: &[Value]) -> Result<Value, String> {
+    expect_min_arity("String.replace", args, 3)?;
+    let s = expect_string("String.replace", args, 0)?;
+    let from = expect_string("String.replace", args, 1)?;
+    let to = expect_string("String.replace", args, 2)?;
+
+    if from.is_empty() {
+        return Ok(Value::Str(s));
+    }
+    let limit = match args.get(3) {
+        None | Some(Value::Nil) => None,
+        Some(_) => Some(expect_int("String.replace", args, 3)?),
+    };
+    let out = match limit {
+        None => s.replace(from.as_str(), to.as_str()),
+        Some(n) if n <= 0 => return Ok(Value::Str(s)),
+        Some(n) => s.replacen(from.as_str(), to.as_str(), n as usize),
+    };
+    Ok(Value::Str(SauleStr::new(out)))
+}
+
+fn str_contains(args: &[Value]) -> Result<Value, String> {
+    expect_arity("String.contains", args, 2)?;
+    let s = expect_string("String.contains", args, 0)?;
+    let needle = expect_string("String.contains", args, 1)?;
+    Ok(Value::Bool(s.contains(needle.as_str())))
+}
+
+/// `String.indexOf(s, needle, from?) -> integer?`
+///
+/// The start index alone, 1-based in characters like every other index in the
+/// language. `String.find` already answers this, but it answers with a pair,
+/// and the second half is dead weight at the call sites that only want to
+/// know *where*.
+fn str_index_of(args: &[Value]) -> Result<Value, String> {
+    expect_min_arity("String.indexOf", args, 2)?;
+    let s = expect_string("String.indexOf", args, 0)?;
+    let needle = expect_string("String.indexOf", args, 1)?;
+    let init: i64 = match args.get(2) {
+        None | Some(Value::Nil) => 1,
+        Some(_) => expect_int("String.indexOf", args, 2)?,
+    };
+    let start = resolve_index(init, char_len_rc(&s));
+
+    // Search the tail in place rather than copying it, for the same reason
+    // `String.find` does: this is the inner loop of every scanner.
+    let from_byte = byte_at(&s, start);
+    let Some(byte_off) = s[from_byte..].find(needle.as_str()) else {
+        return Ok(Value::Nil);
+    };
+    // Byte offset back to a 1-based character index.
+    let abs_byte = from_byte + byte_off;
+    let char_index = if str_facts(&s).0 {
+        abs_byte
+    } else {
+        s[..abs_byte].chars().count()
+    };
+    Ok(Value::Int(char_index as i64 + 1))
+}
+
+/// Pad `s` to `width` characters with `fill`, on the given side.
+///
+/// `width` counts characters, matching `String.len`. A string already that
+/// long or longer is returned untouched — padding never truncates, because a
+/// caller lining up a column would rather see the overlong value than a
+/// silently cut one.
+fn pad(name: &str, args: &[Value], at_start: bool) -> Result<Value, String> {
+    expect_min_arity(name, args, 2)?;
+    let s = expect_string(name, args, 0)?;
+    let width = expect_int(name, args, 1)?;
+    let fill = match args.get(2) {
+        None | Some(Value::Nil) => " ".to_string(),
+        Some(_) => expect_string(name, args, 2)?.as_str().to_string(),
+    };
+    if fill.is_empty() {
+        return Err(format!("{name}: fill must not be empty"));
+    }
+
+    let len = char_len_rc(&s) as i64;
+    if width <= len {
+        return Ok(Value::Str(s));
+    }
+    // A multi-character fill repeats and is cut at the boundary, so the
+    // result is exactly `width` characters however long the fill is.
+    let missing = (width - len) as usize;
+    let padding: String = fill.chars().cycle().take(missing).collect();
+
+    let mut out = String::with_capacity(padding.len() + s.len());
+    if at_start {
+        out.push_str(&padding);
+        out.push_str(&s);
+    } else {
+        out.push_str(&s);
+        out.push_str(&padding);
+    }
+    Ok(Value::Str(SauleStr::new(out)))
+}
+
+fn str_pad_start(args: &[Value]) -> Result<Value, String> {
+    pad("String.padStart", args, true)
+}
+
+fn str_pad_end(args: &[Value]) -> Result<Value, String> {
+    pad("String.padEnd", args, false)
 }

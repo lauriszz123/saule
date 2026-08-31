@@ -452,3 +452,17 @@ fn a_self_recursive_local_lambda_does_not_capture_itself() {
 }
 
 
+
+
+#[test]
+fn calling_a_non_callable_value_fails_the_same_way() {
+    // `CALL` and the tree-walker's `call_value_multi` compile the same
+    // source, and they used to word this differently — "attempt to call a
+    // `integer`" against "value of type `integer` is not callable". Nothing
+    // caught it because every program that reached the VM's version was
+    // refused by the compiler for some other reason first; lifting the
+    // refusal on a function-valued field call is what exposed it. Both now
+    // go through `RuntimeError::not_callable`.
+    must_agree("local f: any = 5\nf()");
+    must_agree("local s: any = \"x\"\ns()");
+}

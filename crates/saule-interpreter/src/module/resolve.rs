@@ -99,6 +99,11 @@ pub(crate) fn try_resolve_base(base: &Path) -> Option<PathBuf> {
 ///
 /// Such a file is a *barrel*: it re-exports whatever it imports, so a folder
 /// of files can be consumed as one module. See [`collect_exports`].
-pub(crate) fn is_init_module(path: &Path) -> bool {
+///
+/// `pub` because `saule-vm`'s program driver has to answer the same question
+/// about the same file. Which modules re-export is a language rule, not an
+/// engine's private business, and the two must not each have their own copy
+/// of it.
+pub fn is_init_module(path: &Path) -> bool {
     path.file_stem().and_then(|s| s.to_str()) == Some("init")
 }

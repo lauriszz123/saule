@@ -255,7 +255,10 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
-    #[error("`{callee}` expects {} argument(s), got {found}", crate::error::join_or(expected))]
+    #[error(
+        "`{callee}` expects {} argument(s), got {found}",
+        crate::error::join_or(expected)
+    )]
     #[diagnostic(help("check the signature of `{callee}`"))]
     NativeArityOverload {
         callee: String,
@@ -470,6 +473,27 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("`{name}` expects {expected} type argument(s), got {found}")]
+    #[diagnostic(help(
+        "`{name}` is declared with {expected} type parameter(s) — supply one type for each, or name it bare to leave the instantiation unspecified"
+    ))]
+    GenericArity {
+        name: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of type arguments")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{name}` is not generic, but was given {found} type argument(s)")]
+    #[diagnostic(help("drop the `<...>` — `{name}` declares no type parameters"))]
+    NotGeneric {
+        name: String,
+        found: usize,
+        #[label("unexpected type arguments")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`{callee}` expects {expected} argument(s), got {found}")]
     #[diagnostic(help(
         "check the signature of `{callee}` — pass exactly the right number of arguments (or rely on declared defaults)"
@@ -495,7 +519,7 @@ pub enum TypeCheckError {
 
     #[error("cannot mix `integer` and `float` in arithmetic — type mismatch")]
     #[diagnostic(help(
-        "Saule never auto-promotes numeric types; wrap one operand in `int(...)` or `float(...)` to make the kinds match"
+        "Saule never auto-promotes numeric types; cast one operand with `as integer` or `as float` to make the kinds match"
     ))]
     NumericMix {
         #[label("incompatible numeric kinds")]

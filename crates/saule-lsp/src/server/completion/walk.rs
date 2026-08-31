@@ -284,12 +284,12 @@ impl Walk {
                 members,
                 ..
             } => {
-                if extends.as_deref() == Some(SENTINEL) {
+                if extends.as_ref().is_some_and(|e| e.name == SENTINEL) {
                     self.record(Ctx::BaseClass {
                         exclude: vec![name.clone()],
                     });
                 }
-                if implements.iter().any(|i| i == SENTINEL) {
+                if implements.iter().any(|i| i.name == SENTINEL) {
                     self.record(Ctx::Interfaces {
                         exclude: without_sentinel(implements),
                     });
@@ -321,7 +321,7 @@ impl Walk {
                 methods,
                 ..
             } => {
-                if extends.iter().any(|e| e == SENTINEL) {
+                if extends.iter().any(|e| e.name == SENTINEL) {
                     let mut exclude = without_sentinel(extends);
                     exclude.push(name.clone());
                     self.record(Ctx::Interfaces { exclude });

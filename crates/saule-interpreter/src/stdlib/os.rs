@@ -67,6 +67,10 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
 
     // time
     static_fields.insert("time".to_string(), native_multi("Os.time", os_time));
+    static_fields.insert(
+        "timeMillis".to_string(),
+        native_multi("Os.timeMillis", os_time_millis),
+    );
     static_fields.insert("clock".to_string(), native_multi("Os.clock", os_clock));
     static_fields.insert(
         "difftime".to_string(),
@@ -102,6 +106,10 @@ pub fn install(env: &Rc<RefCell<Environment>>) {
     static_fields.insert(
         "execute".to_string(),
         native_multi("Os.execute", os_execute),
+    );
+    static_fields.insert(
+        "capture".to_string(),
+        native_multi("Os.capture", os_capture),
     );
     static_fields.insert("pid".to_string(), native_multi("Os.pid", os_pid));
     static_fields.insert(
@@ -152,6 +160,9 @@ pub fn register_sigs() {
 
     // time
     register("Os.time", vec![], vec![i()]);
+    // Milliseconds since the epoch. `Os.time` is whole seconds, which is
+    // coarser than anything that measures a request, a frame or a test.
+    register("Os.timeMillis", vec![], vec![i()]);
     register("Os.clock", vec![], vec![f()]);
     register("Os.difftime", vec![i(), i()], vec![i()]);
     register("Os.date", vec![t_nullable(s()), t_nullable(i())], vec![s()]);
@@ -186,6 +197,12 @@ pub fn register_sigs() {
     // process
     register("Os.exit", vec![t_nullable(i())], vec![nil()]);
     register("Os.execute", vec![s()], vec![i()]);
+    // `Os.capture(cmd) -> (integer, string, string)` — exit code, stdout,
+    // stderr. A multi-return rather than a new `Process` class: the language
+    // already destructures tuples (`local code, out, err = …`), and three
+    // strongly-typed slots say as much as three fields would without adding
+    // a type to the stdlib's surface.
+    register("Os.capture", vec![s()], vec![i(), s(), s()]);
     register("Os.pid", vec![], vec![i()]);
     register("Os.platform", vec![], vec![t_named("OsPlatform")]);
     // `Os.args() -> table<string>` — process argv. Not generic: the
@@ -362,6 +379,18 @@ fn os_time(_args: &[Value]) -> Result<Vec<Value>, String> {
     let secs =
         crate::platform::unix_time_secs().ok_or_else(|| crate::platform::unavailable("Os.time"))?;
     Ok(vec![Value::Int(secs as i64)])
+}
+
+/// Milliseconds since the epoch.
+///
+/// `Os.time` is whole seconds, which cannot time a request, a frame, or a
+/// test — anything sub-second reads as zero. `Os.clock` measures elapsed time
+/// but from an arbitrary origin, so it can't be recorded or compared across
+/// runs; this is the wall clock at a resolution worth having.
+fn os_time_millis(_args: &[Value]) -> Result<Vec<Value>, String> {
+    let secs = crate::platform::unix_time_secs()
+        .ok_or_else(|| crate::platform::unavailable("Os.timeMillis"))?;
+    Ok(vec![Value::Int((secs * 1000.0) as i64)])
 }
 
 fn os_clock(_args: &[Value]) -> Result<Vec<Value>, String> {
@@ -552,13 +581,18 @@ fn os_exit(args: &[Value]) -> Result<Vec<Value>, String> {
     Err(format!("program exited with code {code}"))
 }
 
-fn os_execute(args: &[Value]) -> Result<Vec<Value>, String> {
-    let cmd = expect_string("Os.execute", args, 0)?;
-    let (program, shell_flag) = if cfg!(target_family = "windows") {
+/// The shell this platform runs a command line through.
+fn shell() -> (&'static str, &'static str) {
+    if cfg!(target_family = "windows") {
         ("cmd", "/C")
     } else {
         ("sh", "-c")
-    };
+    }
+}
+
+fn os_execute(args: &[Value]) -> Result<Vec<Value>, String> {
+    let cmd = expect_string("Os.execute", args, 0)?;
+    let (program, shell_flag) = shell();
     let status = std::process::Command::new(program)
         .arg(shell_flag)
         .arg(&cmd)
@@ -568,6 +602,41 @@ fn os_execute(args: &[Value]) -> Result<Vec<Value>, String> {
         Err(_) => -1,
     };
     Ok(vec![Value::Int(code)])
+}
+
+/// `Os.capture(cmd) -> (code, stdout, stderr)`
+///
+/// The counterpart to `Os.execute`, which streams both output channels to
+/// this process's own and hands back only the exit status — fine for running
+/// something, useless for *reading* what it said. Every script that shells
+/// out to ask a question (`git rev-parse`, `uname -m`, a formatter's opinion)
+/// wants this one.
+///
+/// Output is captured, so nothing reaches the terminal. Non-UTF-8 bytes are
+/// replaced rather than rejected: a command that emits a stray byte should
+/// not turn a script into an error, and Saule strings are UTF-8.
+///
+/// A command that cannot be spawned at all reports `-1` with empty output,
+/// matching what `Os.execute` already answers in that case.
+fn os_capture(args: &[Value]) -> Result<Vec<Value>, String> {
+    let cmd = expect_string("Os.capture", args, 0)?;
+    let (program, shell_flag) = shell();
+    let output = std::process::Command::new(program)
+        .arg(shell_flag)
+        .arg(&cmd)
+        .output();
+    match output {
+        Ok(out) => Ok(vec![
+            Value::Int(out.status.code().unwrap_or(-1) as i64),
+            str_value(String::from_utf8_lossy(&out.stdout).into_owned()),
+            str_value(String::from_utf8_lossy(&out.stderr).into_owned()),
+        ]),
+        Err(_) => Ok(vec![
+            Value::Int(-1),
+            str_value(String::new()),
+            str_value(String::new()),
+        ]),
+    }
 }
 
 fn os_pid(_args: &[Value]) -> Result<Vec<Value>, String> {
@@ -947,10 +1016,7 @@ fn os_fs_info(args: &[Value]) -> Result<Vec<Value>, String> {
     inst.set_field("kind", fskind_variant(kind_str));
     inst.set_field("size", Value::Int(meta.len() as i64));
     inst.set_field("modifiedAt", modified_at);
-    inst.set_field(
-        "readOnly",
-        Value::Bool(meta.permissions().readonly()),
-    );
+    inst.set_field("readOnly", Value::Bool(meta.permissions().readonly()));
 
     Ok(vec![Value::Instance(Rc::new(RefCell::new(inst)))])
 }
@@ -982,6 +1048,9 @@ pub fn builtin_registries() -> (
 
     // FsInfo ────────────────────────────────────────────────────────────
     let mut info = ClassInfo {
+        type_params: Vec::new(),
+        parent_args: Vec::new(),
+        implements_args: Vec::new(),
         parent: None,
         implements: Vec::new(),
         members: Default::default(),

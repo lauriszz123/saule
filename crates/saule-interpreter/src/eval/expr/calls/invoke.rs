@@ -68,13 +68,7 @@ pub(crate) fn call_value_multi(
             let positional = vm_positional_args(&f, args, &span)?;
             f.invoke(&positional, span)
         }
-        other => Err(RuntimeError::TypeError {
-            message: format!(
-                "value of type `{}` is not callable — only functions, classes, and methods can be called",
-                other.type_name()
-            ),
-            span,
-        }),
+        other => Err(RuntimeError::not_callable(other.type_name(), span)),
     }
 }
 

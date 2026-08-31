@@ -85,8 +85,8 @@ fn parses_class_with_init_and_method() {
                 ..
             } => {
                 assert_eq!(name, "Player");
-                assert_eq!(extends.as_deref(), Some("Entity"));
-                assert_eq!(implements, &vec!["Damageable".to_string()]);
+                assert_eq!(extends.as_ref().map(|e| e.name.as_str()), Some("Entity"));
+                assert_eq!(implements, &vec![TypeRef::plain("Damageable")]);
                 assert_eq!(members.len(), 3);
             }
             _ => panic!("expected class"),

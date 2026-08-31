@@ -3,7 +3,7 @@
 
 use saule_ast::{
     ClassMember, Decl, EnumVariant, ImportNames, Method, MethodSig, Module, Param, Spanned,
-    TypeArgs,
+    TypeArgs, TypeRef,
 };
 
 use super::*;
@@ -76,6 +76,7 @@ impl<'a> Printer<'a> {
             Decl::Class {
                 exported,
                 name,
+                type_params,
                 extends,
                 implements,
                 members,
@@ -85,9 +86,10 @@ impl<'a> Printer<'a> {
                 }
                 self.write("class ");
                 self.write(name);
+                self.type_params(type_params);
                 if let Some(p) = extends {
                     self.write(" extends ");
-                    self.write(p);
+                    self.type_ref(p);
                 }
                 if !implements.is_empty() {
                     self.write(" implements ");
@@ -95,7 +97,7 @@ impl<'a> Printer<'a> {
                         if i > 0 {
                             self.write(", ");
                         }
-                        self.write(n);
+                        self.type_ref(n);
                     }
                 }
                 self.newline();
@@ -105,6 +107,7 @@ impl<'a> Printer<'a> {
             Decl::Interface {
                 exported,
                 name,
+                type_params,
                 extends,
                 methods,
             } => {
@@ -113,13 +116,14 @@ impl<'a> Printer<'a> {
                 }
                 self.write("interface ");
                 self.write(name);
+                self.type_params(type_params);
                 if !extends.is_empty() {
                     self.write(" extends ");
                     for (i, n) in extends.iter().enumerate() {
                         if i > 0 {
                             self.write(", ");
                         }
-                        self.write(n);
+                        self.type_ref(n);
                     }
                 }
                 self.newline();
@@ -137,6 +141,7 @@ impl<'a> Printer<'a> {
             Decl::Enum {
                 exported,
                 name,
+                type_params,
                 variants,
                 methods,
             } => {
@@ -145,6 +150,7 @@ impl<'a> Printer<'a> {
                 }
                 self.write("enum ");
                 self.write(name);
+                self.type_params(type_params);
                 self.newline();
                 self.indent += 1;
                 for (i, v) in variants.iter().enumerate() {
@@ -316,6 +322,7 @@ impl<'a> Printer<'a> {
     pub(crate) fn method_sig(&mut self, m: &MethodSig) {
         self.write("fn ");
         self.write(&m.name);
+        self.type_params(&m.type_params);
         self.write("(");
         self.params(&m.params);
         self.write(")");
@@ -349,6 +356,23 @@ impl<'a> Printer<'a> {
         let Some(ta) = ta else { return };
         self.write("<");
         for (i, t) in ta.types.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.ty(t);
+        }
+        self.write(">");
+    }
+
+    /// Emit a named type reference from a declaration header — the `Animal`
+    /// in `extends Animal`, the `Repository<Player>` in `implements …`.
+    pub(crate) fn type_ref(&mut self, r: &TypeRef) {
+        self.write(&r.name);
+        if r.args.is_empty() {
+            return;
+        }
+        self.write("<");
+        for (i, t) in r.args.iter().enumerate() {
             if i > 0 {
                 self.write(", ");
             }

@@ -2,14 +2,14 @@
 //! arm-body type unification. Pattern-bound variables are added to a per-arm
 //! scope so guards and bodies can reference them.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use saule_ast::{Expr, MatchArm, MatchBody, Pattern, Spanned, Type};
 
 use super::TypeCheckError;
 use super::expr::{
-    check_boolean_cond, check_expr, infer, is_nullable, strip_nullable, type_to_string,
+    check_boolean_cond, check_expr, infer, is_nullable, strip_nullable, substitute, type_to_string,
     types_compatible,
 };
 use super::state::{Scope, is_type_param, with_enums};
@@ -47,6 +47,10 @@ pub(super) fn check_match(
     let scrut_enum_name = match &scrut_ty {
         Some(ty) => match strip_nullable(ty.clone()) {
             Type::Named(n) if with_enums(|e| e.contains_key(&n)) => Some(n),
+            // A `Result<integer>` scrutinee drives exhaustiveness exactly as
+            // a bare `Result` does — the arguments say what the payloads
+            // hold, never which variants exist.
+            Type::Generic(g) if with_enums(|e| e.contains_key(&g.name)) => Some(g.name.clone()),
             _ => None,
         },
         None => None,
@@ -273,6 +277,42 @@ fn check_pattern_literal_compat(
     }
 }
 
+/// Map `enum_name`'s type parameters onto the arguments the scrutinee
+/// supplied — `T := integer` when matching a `Result<integer>`.
+///
+/// Empty when the scrutinee is not a generic application of this enum: a
+/// bare `Result` (its instantiation never established), a mismatched head,
+/// or the wrong argument count, all of which leave the payload types as the
+/// declaration wrote them. That is the honest answer — nothing here knows
+/// what `T` was — and it degrades to exactly the pre-generic behaviour.
+fn enum_arg_substitution(enum_name: &str, scrut_ty: Option<&Type>) -> HashMap<String, Type> {
+    let mut subst = HashMap::new();
+    let Some(Type::Generic(g)) = scrut_ty.map(strip_nullable_ref) else {
+        return subst;
+    };
+    if g.name != enum_name {
+        return subst;
+    }
+    let params = with_enums(|e| e.get(enum_name).map(|i| i.type_params.clone()));
+    let Some(params) = params else { return subst };
+    if params.len() != g.args.len() {
+        return subst;
+    }
+    for (p, a) in params.into_iter().zip(g.args.iter()) {
+        subst.insert(p, a.clone());
+    }
+    subst
+}
+
+/// Look through a `?` without copying — a `Result<integer>?` scrutinee still
+/// says what `T` is on the arms that matched a variant rather than `nil`.
+fn strip_nullable_ref(ty: &Type) -> &Type {
+    match ty {
+        Type::Nullable(inner) => strip_nullable_ref(inner),
+        other => other,
+    }
+}
+
 /// Bind the variables introduced by a pattern into `scope`.
 ///
 /// A top-level bind takes the scrutinee's type, and a variant's payload binds
@@ -291,6 +331,14 @@ fn bind_pattern(pat: &Pattern, scrut_ty: Option<&Type>, scope: &mut Scope) {
             variant,
             fields,
         } => {
+            // `Ok(value: T)` declares `T`; the scrutinee says which `T`.
+            // Matching a `Result<integer>` binds `v: integer`, and that
+            // substitution is the whole reason a generic enum beats one
+            // whose payload is `any`.
+            let subst = enum_arg_substitution(enum_name, scrut_ty);
+            let params: Vec<String> =
+                with_enums(|e| e.get(enum_name).map(|i| i.type_params.clone())).unwrap_or_default();
+
             let declared: Vec<Option<Type>> = with_enums(|e| {
                 let shape = e.get(enum_name).and_then(|info| info.variants.get(variant));
                 (0..fields.len())
@@ -299,6 +347,7 @@ fn bind_pattern(pat: &Pattern, scrut_ty: Option<&Type>, scope: &mut Scope) {
             });
 
             for (f, ty) in fields.iter().zip(declared) {
+                let ty = ty.map(|t| substitute(&t, &subst, &params));
                 bind_pattern(&f.value, ty.as_ref(), scope);
             }
         }

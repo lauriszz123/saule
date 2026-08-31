@@ -155,6 +155,29 @@ pub enum RuntimeError {
     },
 }
 
+impl RuntimeError {
+    /// "this value cannot be called" — the error both engines must produce
+    /// for the same program.
+    ///
+    /// Written once because it is reached from two unrelated places: the
+    /// tree-walker's `call_value_multi`, and the VM's `CALL` on a register
+    /// holding something that is not a function. They compile the *same*
+    /// source — `f()` on a local, `obj.f()` on a function-valued field — so
+    /// a program that fails here has to fail identically under both. It did
+    /// not: the VM said "attempt to call a `integer`" and the tree-walker
+    /// said this, and nothing caught it while the only way to reach the VM's
+    /// version was a program the compiler refused for other reasons.
+    pub fn not_callable(type_name: &str, span: std::ops::Range<usize>) -> RuntimeError {
+        RuntimeError::TypeError {
+            message: format!(
+                "value of type `{type_name}` is not callable — only functions, classes, and methods can be called"
+            ),
+            span,
+        }
+    }
+}
+
+
 /// Convenience constructor — most non-`Local`/`Expr` statements still funnel
 /// through this until the matching phase lands.
 pub fn unsupported(thing: &'static str, span: std::ops::Range<usize>) -> RuntimeError {

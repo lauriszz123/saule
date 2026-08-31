@@ -9,8 +9,8 @@ use std::thread_local;
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
 use crate::stdlib::{expect_arity, expect_min_arity};
-use crate::value::{ClassObject, Value};
 use crate::value::SauleStr;
+use crate::value::{ClassObject, Value};
 
 /// `import Math from "math"`. Auto-prelude'd so bare `Math.sqrt(…)`
 /// also works.
@@ -83,7 +83,8 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
     use crate::stdlib::sigs::{
-        register, register_const, register_overloads, register_v, t_named, t_nullable, t_table,
+        Bound, register, register_const, register_g_bounded, register_overloads, t_named,
+        t_nullable, t_table,
     };
     let any = || t_named("any");
     let i = || t_named("integer");
@@ -91,37 +92,61 @@ pub fn register_sigs() {
     let b = || t_named("boolean");
     let s = || t_named("string");
 
-    // Every parameter below is `integer` or `float` — the two numeric types
-    // the language actually has. There is no `number`: it accepted both on
-    // the way in but assigned to neither on the way out, so anything typed
-    // with it was a value no program could use. Functions that do float
-    // maths take `float`; call them with a float literal (`2f`, `2.0`) or
-    // `float(x)` on an integer.
+    // Most of `Math` is generic over numeric *flavour*. There is no `number`
+    // type to write — it accepted both on the way in but assigned to neither
+    // on the way out, so anything typed with it was a value no program could
+    // use — and spelling every parameter `float` was worse still: it made
+    // `Math.sqrt(9)` and `Math.clamp(hp, 0, 100)` type errors, so integer code
+    // had to cast into and back out of every call it made.
     //
+    // The honest signature is a type parameter bounded to the two numeric
+    // types: `N` is `integer` or `float`, nothing else. `n()` below is that
+    // parameter and `num` its bound.
+    let n = || t_named("N");
+    let num = || vec![Bound("N", &["integer", "float"])];
+
+    // Flavour is still not mixable *within* a call. `N` binds to the first
+    // argument and every later slot is checked against that binding, so
+    // `Math.max(1, 2.5)` is refused exactly as `1 + 2.5` is. Saule never
+    // auto-promotes, and the stdlib does not get a private exemption.
+
     // `type` accepts anything by design (it returns nil for non-numeric
     // values). Numeric conversion is the `as` cast, not a function.
     register("Math.type", vec![any()], vec![t_nullable(s())]);
 
-    // Float in, integer out — rounding is what these are for.
-    register("Math.floor", vec![f()], vec![i()]);
-    register("Math.ceil", vec![f()], vec![i()]);
-    register("Math.round", vec![f()], vec![i()]);
-    register("Math.sign", vec![f()], vec![i()]);
+    // Number in, integer out — rounding is what these are for. The integer
+    // call is not a no-op worth refusing: `Math.floor(n)` where `n` happens
+    // to be an integer is how flavour-agnostic code spells "give me a whole
+    // number", and the runtime already returns it untouched.
+    for name in ["Math.floor", "Math.ceil", "Math.round", "Math.sign"] {
+        register_g_bounded(name, num(), vec![n()], None, vec![i()]);
+    }
 
-    // Float in, float out.
-    register("Math.sqrt", vec![f()], vec![f()]);
-    register("Math.sin", vec![f()], vec![f()]);
-    register("Math.cos", vec![f()], vec![f()]);
-    register("Math.tan", vec![f()], vec![f()]);
-    register("Math.asin", vec![f()], vec![f()]);
-    register("Math.acos", vec![f()], vec![f()]);
-    // `atan(y)` and `atan(y, x)` are both valid (the 2-arg form is atan2).
-    register("Math.atan", vec![f(), t_nullable(f())], vec![f()]);
-    register("Math.exp", vec![f()], vec![f()]);
-    // `log(x)` natural log; `log(x, base)` arbitrary base.
-    register("Math.log", vec![f(), t_nullable(f())], vec![f()]);
-    register("Math.deg", vec![f()], vec![f()]);
-    register("Math.rad", vec![f()], vec![f()]);
+    // Real-valued: the answer is a float whichever flavour went in, because
+    // the runtime routes every argument through `as_f64`. Taking `N` rather
+    // than `float` is what lets an integer argument through — demanding
+    // `Math.sqrt(n as float)` bought nothing, since the cast could not change
+    // the result.
+    for name in [
+        "Math.sqrt",
+        "Math.sin",
+        "Math.cos",
+        "Math.tan",
+        "Math.asin",
+        "Math.acos",
+        "Math.exp",
+        "Math.deg",
+        "Math.rad",
+    ] {
+        register_g_bounded(name, num(), vec![n()], None, vec![f()]);
+    }
+    // `atan(y)` and `atan(y, x)` are both valid (the 2-arg form is atan2);
+    // `log(x)` is the natural log and `log(x, base)` an arbitrary base. The
+    // optional second argument is `N?` — the same flavour as the first, which
+    // is the only combination that reads sensibly anyway.
+    for name in ["Math.atan", "Math.log"] {
+        register_g_bounded(name, num(), vec![n(), t_nullable(n())], None, vec![f()]);
+    }
 
     // Constants, not functions — `install` defines these as plain values
     // (`Value::Float(f64::INFINITY)` and friends). Registering them as
@@ -136,42 +161,32 @@ pub fn register_sigs() {
     // Boolean.
     register("Math.ult", vec![i(), i()], vec![b()]);
 
-    // The rest used to be left unregistered on the theory that "integer or
-    // float depending on input" was untypeable. It isn't, and unregistered
-    // was the worst of the options: a known member with no signature infers
-    // as `any`, and `any` into a declared slot is a downcast the checker
-    // rejects — so `local n: integer = Math.random(0, 1000)` failed with a
-    // mismatch against a type the user never wrote.
+    // `abs`, `min`, `max`, `clamp` and `fmod` answer in the flavour they were
+    // asked in, because the runtime does: they pick or preserve one of the
+    // values handed to them rather than deriving a new kind of number.
+    // `Math.abs(-8)` is `Value::Int(8)`, `Math.max(3, 7)` is `Value::Int(7)`,
+    // and either with a float argument is a float. `-> N` says exactly that.
+    register_g_bounded("Math.abs", num(), vec![n()], None, vec![n()]);
+    register_g_bounded("Math.fmod", num(), vec![n(), n()], None, vec![n()]);
+    register_g_bounded("Math.min", num(), vec![n()], Some(n()), vec![n()]);
+    register_g_bounded("Math.max", num(), vec![n()], Some(n()), vec![n()]);
+    register_g_bounded("Math.clamp", num(), vec![n(), n(), n()], None, vec![n()]);
 
-    // Unconditionally float: these run every argument through `as_f64` and
-    // return `Value::Float`, whatever went in.
-    register_v("Math.min", vec![f()], f(), vec![f()]);
-    register_v("Math.max", vec![f()], f(), vec![f()]);
-    register("Math.pow", vec![f(), f()], vec![f()]);
-    register("Math.clamp", vec![f(), f(), f()], vec![f()]);
+    // `pow` is the exception in that group: it is genuinely real-valued —
+    // `Math.pow(2, -1)` is 0.5 — so integer arguments still answer with a
+    // float. Generic in, float out.
+    register_g_bounded("Math.pow", num(), vec![n(), n()], None, vec![f()]);
     // Two floats — the integer and fractional parts — in an array table.
-    register("Math.modf", vec![f()], vec![t_table(f())]);
+    register_g_bounded("Math.modf", num(), vec![n()], None, vec![t_table(f())]);
 
-    // Integer domain: bounds and seeds are counts, not measurements.
+    // Integer domain: bounds and seeds are counts, not measurements. These
+    // stay concrete because we *do* know they take and return integers —
+    // there is no flavour to be generic over.
     register("Math.randomseed", vec![i()], vec![t_named("nil")]);
 
-    // …and these two vary with the call itself, so they get one form each.
-    // Narrowest first: selection takes the earliest form the arguments fit.
-
-    // `abs` and `fmod` preserve the flavour they were given, because the
-    // runtime does: `Math.abs(-8)` is `Value::Int(8)` and `Math.fmod(7, 3)`
-    // is `Value::Int(1)`, while either one with a float argument is a float.
-    register_overloads(
-        "Math.abs",
-        vec![(vec![i()], vec![i()]), (vec![f()], vec![f()])],
-    );
-    register_overloads(
-        "Math.fmod",
-        vec![(vec![i(), i()], vec![i()]), (vec![f(), f()], vec![f()])],
-    );
-
-    // Arity is what decides here: the no-arg form draws a unit float, both
-    // bounded forms draw an integer between integer bounds.
+    // Arity is what decides `random`, not flavour: the no-arg form draws a
+    // unit float, both bounded forms draw an integer between integer bounds.
+    // Selection is first-match, so order narrowest-first.
     register_overloads(
         "Math.random",
         vec![
@@ -272,8 +287,29 @@ fn math_atan(args: &[Value]) -> Result<Value, String> {
     }
 }
 
+/// True when every argument is an `integer`.
+///
+/// `min` / `max` / `clamp` return one of the values they were handed rather
+/// than deriving a new one, so flattening to `f64` threw away a fact the
+/// caller had already established. An all-integer call now answers with an
+/// integer; one float anywhere makes the whole call float, which is the same
+/// rule the arithmetic operators follow.
+fn all_ints(args: &[Value]) -> bool {
+    args.iter().all(|v| matches!(v, Value::Int(_)))
+}
+
 fn math_min(args: &[Value]) -> Result<Value, String> {
     expect_min_arity("min", args, 1)?;
+    if all_ints(args) {
+        let mut min = i64::MAX;
+        for (i, _) in args.iter().enumerate() {
+            match number_at(args, i, "min")? {
+                Number::Int(n) => min = min.min(n),
+                Number::Float(_) => unreachable!("checked by all_ints"),
+            }
+        }
+        return Ok(Value::Int(min));
+    }
     let mut min = number_at(args, 0, "min")?.as_f64();
     for i in 1..args.len() {
         min = min.min(number_at(args, i, "min")?.as_f64());
@@ -283,6 +319,16 @@ fn math_min(args: &[Value]) -> Result<Value, String> {
 
 fn math_max(args: &[Value]) -> Result<Value, String> {
     expect_min_arity("max", args, 1)?;
+    if all_ints(args) {
+        let mut max = i64::MIN;
+        for (i, _) in args.iter().enumerate() {
+            match number_at(args, i, "max")? {
+                Number::Int(n) => max = max.max(n),
+                Number::Float(_) => unreachable!("checked by all_ints"),
+            }
+        }
+        return Ok(Value::Int(max));
+    }
     let mut max = number_at(args, 0, "max")?.as_f64();
     for i in 1..args.len() {
         max = max.max(number_at(args, i, "max")?.as_f64());
@@ -483,6 +529,17 @@ fn math_pow(args: &[Value]) -> Result<Value, String> {
 
 fn math_clamp(args: &[Value]) -> Result<Value, String> {
     expect_arity("clamp", args, 3)?;
+    if all_ints(args) {
+        let (value, min, max) = (
+            to_i64(number_at(args, 0, "clamp")?, "clamp")?,
+            to_i64(number_at(args, 1, "clamp")?, "clamp")?,
+            to_i64(number_at(args, 2, "clamp")?, "clamp")?,
+        );
+        if min > max {
+            return Err("clamp expects min <= max".to_string());
+        }
+        return Ok(Value::Int(value.clamp(min, max)));
+    }
     let value = number_at(args, 0, "clamp")?.as_f64();
     let min = number_at(args, 1, "clamp")?.as_f64();
     let max = number_at(args, 2, "clamp")?.as_f64();

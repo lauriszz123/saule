@@ -1,0 +1,14 @@
+-- `Plain` declares no type parameters, so there is nothing for the
+-- argument to instantiate.
+-- Should be a compile error.
+
+class Plain
+	x: integer
+
+	fn init(x: integer)
+		self.x = x
+	end
+end
+
+local p: Plain<integer> = Plain(1)
+println(p.x)

@@ -159,6 +159,9 @@ impl Compiler<'_> {
         self.push_function(Some(&format!("{class_name}.{}", m.name)));
         self.f.current_class = Some(class);
         self.f.in_method = has_self;
+        // Only when `self` is really bound: a static method's lambdas must
+        // not think they have a receiver.
+        self.f.self_class = has_self.then_some(class);
 
         let outcome = (|| -> Result<(), CompileError> {
             // `self` is parameter 0 — the receiver already sits at the base
@@ -231,6 +234,7 @@ impl Compiler<'_> {
         self.push_function(Some("<field-init>"));
         self.f.current_class = Some(class);
         self.f.in_method = true;
+        self.f.self_class = Some(class);
         let outcome = (|| -> Result<(), CompileError> {
             let label = self.func_label();
             self.f
@@ -356,7 +360,12 @@ impl Compiler<'_> {
     /// proved one. `None` means "fall back", never "guess".
     pub fn class_of_expr(&self, e: &Spanned<Expr>) -> Option<ClassIdx> {
         if matches!(e.value, Expr::Self_) {
-            return self.f.current_class;
+            // `self_class` first, because it is the one that survives into a
+            // lambda — `self.setState() do … end` written inside a callback
+            // still has a receiver, and its class is the enclosing method's.
+            // `current_class` remains the fallback so a *static* method's
+            // bare `self` answers exactly what it always did.
+            return self.f.self_class.or(self.f.current_class);
         }
         self.ty_name(e.id).and_then(|n| self.layouts.get(n))
     }
@@ -392,7 +401,9 @@ impl Compiler<'_> {
             let Some(idx) = self.layouts.get(name) else {
                 continue;
             };
-            for iname in implements {
+            // Type arguments are erased by the time layouts are built, so
+            // conformance is resolved against the interface's head name.
+            for iname in implements.iter().map(|i| i.name.as_str()) {
                 // Declared here: Pass 1 already answered.
                 if self.layouts.interface_of(iname).is_some() {
                     continue;

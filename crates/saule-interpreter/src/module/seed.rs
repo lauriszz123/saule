@@ -294,7 +294,8 @@ pub(crate) fn collect_import_seed_inner(
             continue;
         };
 
-        let (reg, ifaces, enums, iface_methods) = saule_semantic::build_registry(&imported);
+        let (reg, ifaces, enums, iface_methods, _iface_params) =
+            saule_semantic::build_registry(&imported);
         let funcs = saule_semantic::build_function_registry(&imported);
         let vars = saule_semantic::build_variable_registry(&imported);
 

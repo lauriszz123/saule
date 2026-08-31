@@ -1,0 +1,14 @@
+-- Type arguments are invariant: a `Box<string>` is not a `Box<integer>`.
+-- The class is one declaration, but its instantiations are distinct types.
+-- Should be a compile error.
+
+class Box<T>
+	value: T
+
+	fn init(value: T)
+		self.value = value
+	end
+end
+
+local b: Box<integer> = Box("nope")
+println(b.value)

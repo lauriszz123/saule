@@ -133,7 +133,11 @@ fn render_type(ty: &Type) -> String {
         }
         Type::Function { params, ret } => {
             let p: Vec<_> = params.iter().map(render_type).collect();
-            format!("fn({}): {}", p.join(", "), render_type(ret))
+            format!("fn({}) -> {}", p.join(", "), render_type(ret))
+        }
+        Type::Generic(g) => {
+            let a: Vec<_> = g.args.iter().map(render_type).collect();
+            format!("{}<{}>", g.name, a.join(", "))
         }
     }
 }

@@ -110,7 +110,7 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             if let Type::Table { value, .. } = &stripped {
                 return Some((**value).clone());
             }
-            let Type::Named(class_name) = stripped else {
+            let Some((class_name, type_args)) = named_head(&stripped) else {
                 return Some(Type::Named("any".into()));
             };
             // A member of an `any` is itself `any` — the chain stays
@@ -125,13 +125,17 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 return Some(Type::Named("any".into()));
             }
             if let Some(t) = saule_semantic::lookup_field_type(&class_name, name) {
-                return Some(t);
+                // A field declared `T` on `class Box<T>` is an `integer` when
+                // read off a `Box<integer>` — the same substitution methods
+                // get, applied to the one declared type a field has.
+                return Some(substitute_class_args(&t, &class_name, &type_args));
             }
             // Not a field — fall back to method-as-value: a bare `obj.method`
             // reference (no parens) yields a function value. We surface this
             // so downstream checks (e.g. `match` against a method ref) can
             // detect a missing call.
             let sig = saule_semantic::lookup_method(&class_name, name)?;
+            let sig = substitute_receiver_args(&sig, &class_name, &type_args);
             Some(Type::Function {
                 params: sig.params.iter().map(|p| p.ty.clone()).collect(),
                 ret: Box::new(sig.return_ty.clone().unwrap_or(Type::Named("any".into()))),
@@ -252,7 +256,19 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             if let Expr::Ident(n) = &callee.value
                 && with_classes(|reg| reg.contains_key(n))
             {
-                return Some(Type::Named(n.clone()));
+                return Some(class_instance_type(n, args, scope));
+            }
+            // `Result.Ok(5)` — constructing a payload variant. Checked
+            // before the `Class.method` path because an enum is not in the
+            // class registry, so nothing below would answer for it.
+            if let Expr::Member { obj, name } = &callee.value
+                && let Expr::Ident(enum_name) = &obj.value
+                && with_enums(|reg| {
+                    reg.get(enum_name)
+                        .is_some_and(|e| e.variants.contains_key(name))
+                })
+            {
+                return Some(enum_variant_type(enum_name, name, args, scope));
             }
             // `Class.method(args)` — receiver is the class itself.
             if let Expr::Member { obj, name } = &callee.value
@@ -269,10 +285,16 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             // interface extends, never its signatures.
             if let Expr::Member { obj, name } = &callee.value
                 && let Some(ty) = infer(obj, scope)
-                && let Type::Named(type_name) = strip_nullable(ty)
+                && let Some((type_name, type_args)) = named_head(&strip_nullable(ty))
                 && let Some(sig) = saule_semantic::lookup_method(&type_name, name)
                     .or_else(|| saule_semantic::lookup_interface_method(&type_name, name))
             {
+                // Substitute the *receiver's* type arguments before the
+                // method's own generics are considered. On a `Box<integer>`,
+                // `fn get() -> T` returns `integer`; without this the caller
+                // gets the declaration's bare `T`, which names nothing it
+                // can use.
+                let sig = substitute_receiver_args(&sig, &type_name, &type_args);
                 return semantic_method_return(&sig, args, scope);
             }
             if let Some(qname) = native_callee_name(callee, scope)
@@ -300,7 +322,18 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                         let Some(arg_expr) = positional.get(i) else {
                             break;
                         };
-                        if let Some(found_ty) = infer(arg_expr, scope) {
+                        // Substituting first is what makes the callback slot
+                        // useful: after argument 0 has bound `V`, the slot
+                        // `fn(V) -> U` reads as `fn(User) -> U`, which is
+                        // enough to type the lambda's parameter and infer its
+                        // body — and that body is the only place `U` can come
+                        // from. Left-to-right order is therefore load-bearing,
+                        // and it is why the receiver comes first in every
+                        // `Iter.*` signature.
+                        let slot = substitute(expected, &subst, &sig.type_params);
+                        let found = infer_lambda_expecting(arg_expr, &slot, scope)
+                            .or_else(|| infer(arg_expr, scope));
+                        if let Some(found_ty) = found {
                             unify(expected, &found_ty, &sig.type_params, &mut subst);
                         }
                     }
@@ -474,6 +507,228 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             })
         }
     }
+}
+
+/// Split a type into the name it heads and the arguments it applies, so one
+/// code path serves `Player` and `Box<integer>` alike.
+///
+/// `None` for anything that heads no name — a table, a tuple, a function.
+pub(crate) fn named_head(ty: &Type) -> Option<(String, Vec<Type>)> {
+    match ty {
+        Type::Named(n) => Some((n.clone(), Vec::new())),
+        Type::Generic(g) => Some((g.name.clone(), g.args.clone())),
+        _ => None,
+    }
+}
+
+/// Substitute a receiver's type arguments into one declared type.
+///
+/// The single-type counterpart of [`substitute_receiver_args`], for a field
+/// rather than a whole signature.
+fn substitute_class_args(ty: &Type, type_name: &str, type_args: &[Type]) -> Type {
+    if type_args.is_empty() {
+        return ty.clone();
+    }
+    let params =
+        with_classes(|r| r.get(type_name).map(|c| c.type_params.clone())).unwrap_or_default();
+    if params.len() != type_args.len() {
+        return ty.clone();
+    }
+    let subst: std::collections::HashMap<String, Type> = params
+        .iter()
+        .cloned()
+        .zip(type_args.iter().cloned())
+        .collect();
+    substitute(ty, &subst, &params)
+}
+
+/// Rewrite `sig` with the receiver's type arguments substituted for the
+/// declaring type's parameters.
+///
+/// `class Box<T> … fn get() -> T` read off a `Box<integer>` receiver becomes
+/// `fn get() -> integer`. Parameters are rewritten too, so passing the wrong
+/// thing to `Box<integer>.set(…)` is caught against `integer` rather than
+/// against a `T` that matches everything.
+///
+/// Returns `sig` untouched when the receiver supplied no arguments, or the
+/// wrong number of them — there is nothing to substitute, and inventing a
+/// binding would be worse than leaving the declaration's own names in place.
+fn substitute_receiver_args(
+    sig: &saule_semantic::MethodSig,
+    type_name: &str,
+    type_args: &[Type],
+) -> saule_semantic::MethodSig {
+    if type_args.is_empty() {
+        return sig.clone();
+    }
+    let params = with_classes(|r| r.get(type_name).map(|c| c.type_params.clone()))
+        .or_else(|| with_enums(|r| r.get(type_name).map(|e| e.type_params.clone())))
+        .unwrap_or_else(|| saule_semantic::interface_type_params(type_name));
+    if params.len() != type_args.len() {
+        return sig.clone();
+    }
+    let subst: std::collections::HashMap<String, Type> = params
+        .iter()
+        .cloned()
+        .zip(type_args.iter().cloned())
+        .collect();
+
+    let mut out = sig.clone();
+    out.return_ty = out.return_ty.map(|t| substitute(&t, &subst, &params));
+    for p in &mut out.params {
+        p.ty = substitute(&p.ty, &subst, &params);
+    }
+    out
+}
+
+/// The type `EnumName.Variant(args)` produces.
+///
+/// For a non-generic enum that is just the enum's name. For a generic one the
+/// arguments are what pin the parameters down: `Result.Ok(5)` unifies the
+/// declared payload `T` against `integer` and answers `Result<integer>`.
+///
+/// A parameter nothing pinned down stays as the declaration wrote it —
+/// `Result.Err("boom")` says nothing about `T`, so it infers as `Result<T>`.
+/// That is deliberate: the annotation on the binding supplies the missing
+/// half (`local r: Result<integer> = Result.Err("boom")` is accepted because
+/// an unbound parameter is compatible with anything), and guessing `any`
+/// instead would silently widen every error-only construction.
+fn enum_variant_type(enum_name: &str, variant: &str, args: &[CallArg], scope: &Scope) -> Type {
+    let Some(info) = with_enums(|r| r.get(enum_name).cloned()) else {
+        return Type::Named(enum_name.to_string());
+    };
+    if info.type_params.is_empty() {
+        return Type::Named(enum_name.to_string());
+    }
+    let declared: Vec<Type> = info
+        .variants
+        .get(variant)
+        .map(|v| v.fields.iter().map(|f| f.ty.clone()).collect())
+        .unwrap_or_default();
+
+    let mut subst = std::collections::HashMap::new();
+    for (expected, arg) in declared.iter().zip(args.iter()) {
+        let CallArg::Positional(e) = arg else {
+            continue;
+        };
+        if let Some(found) = infer(e, scope) {
+            unify(expected, &found, &info.type_params, &mut subst);
+        }
+    }
+    applied_or_bare(enum_name, &info.type_params, &subst)
+}
+
+/// The type `ClassName(args)` produces — the class, with its parameters
+/// pinned down from the arguments `init` received.
+///
+/// `Box(5)` on `class Box<T> … fn init(v: T)` answers `Box<integer>`, which
+/// is what lets `b.get()` come back an `integer` rather than a bare `T`.
+fn class_instance_type(class_name: &str, args: &[CallArg], scope: &Scope) -> Type {
+    let Some(info) = with_classes(|r| r.get(class_name).cloned()) else {
+        return Type::Named(class_name.to_string());
+    };
+    if info.type_params.is_empty() {
+        return Type::Named(class_name.to_string());
+    }
+    let mut subst = std::collections::HashMap::new();
+    if let Some(init) = info.methods.get("init") {
+        for (p, arg) in init.params.iter().zip(args.iter()) {
+            let CallArg::Positional(e) = arg else {
+                continue;
+            };
+            if let Some(found) = infer(e, scope) {
+                unify(&p.ty, &found, &info.type_params, &mut subst);
+            }
+        }
+    }
+    applied_or_bare(class_name, &info.type_params, &subst)
+}
+
+/// `Name<args…>` when every parameter was pinned down, and the bare `Name`
+/// when any was not.
+///
+/// The bare name is what "some instantiation, unknown which" is spelled as,
+/// and [`types_compatible`] already accepts it against any instantiation in
+/// both directions. Emitting `Result<T>` instead would put the *declaration's*
+/// parameter name into a caller's type, where it matches nothing — so
+/// `local e: Result<integer> = Result.Err("boom")` would be rejected even
+/// though `Err` says nothing about `T` and cannot contradict it.
+fn applied_or_bare(
+    name: &str,
+    type_params: &[String],
+    subst: &std::collections::HashMap<String, Type>,
+) -> Type {
+    let args: Option<Vec<Type>> = type_params.iter().map(|p| subst.get(p).cloned()).collect();
+    match args {
+        Some(args) => Type::generic(name, args),
+        None => Type::Named(name.to_string()),
+    }
+}
+
+/// Infer a lambda's type with its untyped parameters filled in from the slot
+/// it is being passed to.
+///
+/// Plain [`infer`] types `u => u.name` in the caller's scope, where `u` is
+/// not bound to anything — so the body yields nothing and the whole lambda
+/// comes back as `fn(any) -> any`. That is enough for a callback whose result
+/// type the signature already fixes (`Table.sort` wants a `boolean` whatever
+/// happens), and useless for one the signature has to *learn*:
+/// `Iter.map<V, U>(t: table<V>, f: fn(V) -> U) -> table<U>` can only answer
+/// `table<string>` if something reads `u.name` and sees a string.
+///
+/// So the expected slot — already substituted, so `V` has become the real
+/// element type — seeds the parameters, and the body is inferred against
+/// them. An explicit annotation on the lambda still wins, exactly as in
+/// [`crate::expr::check_expr_expecting`], which does the same refinement for
+/// *checking* the body.
+///
+/// `None` when this doesn't apply: a non-lambda, a non-function slot, or a
+/// block-bodied lambda that declares no return type. Block bodies are not
+/// walked for a result type anywhere in the checker; writing `-> T` on the
+/// lambda supplies it.
+pub(crate) fn infer_lambda_expecting(
+    expr: &Spanned<Expr>,
+    expected: &Type,
+    scope: &Scope,
+) -> Option<Type> {
+    let Expr::Lambda {
+        params,
+        return_ty,
+        body,
+    } = &expr.value
+    else {
+        return None;
+    };
+    let Type::Function { params: want, .. } = expected else {
+        return None;
+    };
+    let refined: Vec<saule_ast::Param> = params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| match want.get(i) {
+            Some(t) if crate::expr::is_any(&p.ty) => saule_ast::Param {
+                ty: t.clone(),
+                ..p.clone()
+            },
+            _ => p.clone(),
+        })
+        .collect();
+
+    let ret = match return_ty {
+        Some(rt) => rt.clone(),
+        None => {
+            let LambdaBody::Expr(e) = body else {
+                return None;
+            };
+            let mut lscope = scope.clone();
+            crate::stmt::seed_params(&mut lscope, &refined);
+            infer(e, &lscope)?
+        }
+    };
+    Some(Type::Function {
+        params: refined.into_iter().map(|p| p.ty).collect(),
+        ret: Box::new(ret),
+    })
 }
 
 pub(crate) fn strip_nullable(ty: Type) -> Type {

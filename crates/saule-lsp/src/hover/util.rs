@@ -213,6 +213,14 @@ pub(super) fn named_type(ty: &Type) -> Option<String> {
 pub(super) fn collect_named_heads(ty: &Type, out: &mut Vec<String>) {
     match ty {
         Type::Named(n) => out.push(n.clone()),
+        // Both halves are navigable: the head of `Box<Player>` is a class
+        // worth jumping to, and so is `Player`.
+        Type::Generic(g) => {
+            out.push(g.name.clone());
+            for a in &g.args {
+                collect_named_heads(a, out);
+            }
+        }
         Type::Nullable(inner) => collect_named_heads(inner, out),
         Type::Table { key, value } => {
             if let Some(k) = key {

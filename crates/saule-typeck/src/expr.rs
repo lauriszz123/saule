@@ -78,8 +78,21 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             // and unknown named params get caught at typeck time.
             if let Expr::Ident(class_name) = &callee.value
                 && with_classes(|r| r.contains_key(class_name))
-                && let Some(sig) = saule_semantic::lookup_method(class_name, "init")
+                && let Some(mut sig) = saule_semantic::lookup_method(class_name, "init")
             {
+                // A generic class's parameters are inference variables at its
+                // constructor, exactly as they are in `callee_signature`:
+                // `Box(5)` has to bind `T := integer` rather than compare an
+                // `integer` against a rigid `T` and reject it.
+                let class_params = with_classes(|r| {
+                    r.get(class_name)
+                        .map(|c| c.type_params.clone())
+                        .unwrap_or_default()
+                });
+                sig.type_params = class_params
+                    .into_iter()
+                    .chain(sig.type_params.iter().cloned())
+                    .collect();
                 check_user_method_args(
                     &format!("{class_name}.init"),
                     &sig,
@@ -418,6 +431,12 @@ pub(super) fn type_to_string(ty: &Type) -> String {
             // spelling, so quoting it handed the reader a type they could not
             // write down.
             format!("fn({}) -> {}", parts.join(", "), type_to_string(ret))
+        }
+        Type::Generic(g) => {
+            let parts: Vec<String> = g.args.iter().map(type_to_string).collect();
+            // The head is unfreshened for the same reason a bare name is:
+            // a diagnostic about `Box<T>` must not quote the internal `T$`.
+            format!("{}<{}>", unfreshen_name(&g.name), parts.join(", "))
         }
     }
 }

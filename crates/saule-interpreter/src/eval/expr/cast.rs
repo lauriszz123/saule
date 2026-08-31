@@ -45,6 +45,12 @@ fn matches_type(value: &Value, ty: &Type) -> bool {
 
         Type::Named(name) => matches_named(value, name),
 
+        // Erased: `x as Result<integer>` can only test that `x` is *a*
+        // `Result`, because the value does not record which instantiation
+        // built it. The cast still narrows the head, which is what makes
+        // `case` on the variants that follow it exhaustive.
+        Type::Generic(g) => matches_named(value, &g.name),
+
         Type::Table { key, value: elem } => match value {
             Value::Table(t) => {
                 let t = t.borrow();

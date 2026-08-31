@@ -6,8 +6,9 @@ use saule_ast::{Expr, Param, Spanned, Stmt, Type};
 
 use crate::TypeCheckError;
 use crate::expr::{infer, is_any, is_nullable, strip_nullable, type_to_string, types_compatible};
-use crate::state::{Scope, with_classes};
+use crate::state::{Scope, is_type_param, with_classes, with_enums};
 use crate::to_source_span;
+use saule_semantic::is_interface;
 
 /// Validate a type written in a binding position: a `local`, a parameter, a
 /// field, a loop variable, a `catch` type. Two spellings are rejected —
@@ -18,7 +19,91 @@ pub(crate) fn check_binding_type(
     errors: &mut Vec<TypeCheckError>,
 ) {
     reject_nil_in_binding_type(ty, span.clone(), errors);
+    check_generic_arity(ty, span.clone(), errors);
     reject_non_types(ty, span, errors);
+}
+
+/// Check every generic application inside `ty` against the declaration it
+/// names: `Box<integer>` needs `class Box<T>`, and one argument.
+///
+/// Worth reporting rather than ignoring because the arguments now *mean*
+/// something. While they were parsed and thrown away, `Box<integer, string>`
+/// and `Box` were the same type and there was nothing to be wrong about;
+/// now a mismatched count is a substitution that cannot be performed, and
+/// silently falling back to the bare name would make the annotation a lie.
+///
+/// A name the registries have never heard of is left alone — that is an
+/// unknown-type diagnostic from elsewhere, and adding "…and it isn't
+/// generic" on top only buries it.
+pub(crate) fn check_generic_arity(
+    ty: &Type,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    match ty {
+        Type::Generic(g) => {
+            for a in &g.args {
+                check_generic_arity(a, span.clone(), errors);
+            }
+            let (name, args) = (&g.name, &g.args);
+            // A type parameter in scope (`T` inside `class Box<T>`) is not a
+            // declaration and has no parameters of its own.
+            if is_type_param(name) {
+                return;
+            }
+            let Some(expected) = declared_type_param_count(name) else {
+                return;
+            };
+            if expected == 0 {
+                errors.push(TypeCheckError::NotGeneric {
+                    name: name.clone(),
+                    found: args.len(),
+                    span: to_source_span(span),
+                });
+            } else if expected != args.len() {
+                errors.push(TypeCheckError::GenericArity {
+                    name: name.clone(),
+                    expected,
+                    found: args.len(),
+                    span: to_source_span(span),
+                });
+            }
+        }
+        Type::Nullable(inner) => check_generic_arity(inner, span, errors),
+        Type::Table { key, value } => {
+            if let Some(k) = key {
+                check_generic_arity(k, span.clone(), errors);
+            }
+            check_generic_arity(value, span, errors);
+        }
+        Type::Tuple(items) => {
+            for t in items {
+                check_generic_arity(t, span.clone(), errors);
+            }
+        }
+        Type::Function { params, ret } => {
+            for t in params {
+                check_generic_arity(t, span.clone(), errors);
+            }
+            check_generic_arity(ret, span, errors);
+        }
+        Type::Named(_) => {}
+    }
+}
+
+/// How many type parameters the class / interface / enum called `name`
+/// declares, or `None` when nothing by that name is declared.
+pub(crate) fn declared_type_param_count(name: &str) -> Option<usize> {
+    if let Some(n) = with_classes(|r| r.get(name).map(|c| c.type_params.len())) {
+        return Some(n);
+    }
+    if let Some(n) = with_enums(|r| r.get(name).map(|e| e.type_params.len())) {
+        return Some(n);
+    }
+    if is_interface(name) {
+        return Some(saule_semantic::interface_type_params(name).len());
+    }
+    None
 }
 
 /// Reject the bare name `function` used as a type. A function value's type
@@ -57,6 +142,7 @@ pub(crate) fn is_non_type(ty: &Type) -> bool {
         }
         Type::Tuple(items) => items.iter().any(is_non_type),
         Type::Function { params, ret } => params.iter().any(is_non_type) || is_non_type(ret),
+        Type::Generic(g) => g.args.iter().any(is_non_type),
     }
 }
 
@@ -76,6 +162,7 @@ pub(crate) fn reject_non_types(
             Type::Function { params, ret } => {
                 params.iter().any(|t| walk(t, name)) || walk(ret, name)
             }
+            Type::Generic(g) => g.args.iter().any(|t| walk(t, name)),
         }
     }
     if walk(ty, "function") {
@@ -108,6 +195,7 @@ pub(crate) fn reject_nil_in_binding_type(
             Type::Table { key, value } => key.as_deref().map(walk).unwrap_or(false) || walk(value),
             Type::Tuple(items) => items.iter().any(walk),
             Type::Function { params, ret } => params.iter().any(walk) || walk_return(ret),
+            Type::Generic(g) => g.args.iter().any(walk),
         }
     }
     /// The return slot of a function *type* is a return position, so a bare
@@ -290,10 +378,7 @@ pub(crate) fn check_member_assign_receiver(
     // shaped like a table is allowed through. Reject only the truly
     // field-less primitives / functions.
     let bad = match &stripped {
-        Type::Named(n) => matches!(
-            n.as_str(),
-            "integer" | "float" | "boolean" | "string"
-        ),
+        Type::Named(n) => matches!(n.as_str(), "integer" | "float" | "boolean" | "string"),
         Type::Tuple(_) | Type::Function { .. } => true,
         _ => false,
     };

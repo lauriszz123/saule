@@ -69,6 +69,7 @@ impl<'a> Cx<'a> {
             }
             Decl::Class {
                 name,
+                type_params,
                 extends,
                 implements,
                 members,
@@ -81,7 +82,9 @@ impl<'a> Cx<'a> {
                 // hasn't run yet.
                 let md = with_classes(|r| r.get(name).cloned())
                     .map(|info| render_class_full(name, &info))
-                    .unwrap_or_else(|| render_class_head(name, extends.as_deref(), implements));
+                    .unwrap_or_else(|| {
+                        render_class_head(name, type_params, extends.as_ref(), implements)
+                    });
                 let doc = self.doc_at(d.span.start);
                 let header_end = members.first().map(|m| m.span.start).unwrap_or(d.span.end);
                 let name_span = self.decl_name_span(&d.span, name, header_end);
@@ -93,9 +96,10 @@ impl<'a> Cx<'a> {
                 // as the hover target.
                 let header_span = d.span.start..header_end;
                 if let Some(parent) = extends {
-                    self.record_named_idents_in(std::slice::from_ref(parent), &header_span);
+                    self.record_named_idents_in(std::slice::from_ref(&parent.name), &header_span);
                 }
-                self.record_named_idents_in(implements, &header_span);
+                let implemented: Vec<String> = implements.iter().map(|i| i.name.clone()).collect();
+                self.record_named_idents_in(&implemented, &header_span);
                 let prev = self.enclosing_class.replace(name.clone());
                 for m in members {
                     self.visit_member(m);
@@ -104,6 +108,7 @@ impl<'a> Cx<'a> {
             }
             Decl::Interface {
                 name,
+                type_params,
                 extends,
                 methods,
                 ..
@@ -113,11 +118,15 @@ impl<'a> Cx<'a> {
                 let name_span = self.decl_name_span(&d.span, name, head_end);
                 self.record(
                     name_span,
-                    with_doc(render_interface_head(name, extends, methods), doc.as_ref()),
+                    with_doc(
+                        render_interface_head(name, type_params, extends, methods),
+                        doc.as_ref(),
+                    ),
                 );
                 // Same idea as class `extends` — locate parent
                 // interface names within the interface decl span.
-                self.record_named_idents_in(extends, &d.span);
+                let parents: Vec<String> = extends.iter().map(|e| e.name.clone()).collect();
+                self.record_named_idents_in(&parents, &d.span);
                 // Each bodiless method is a hover target of its own so
                 // a `---` block written above it has somewhere to go.
                 for m in methods {

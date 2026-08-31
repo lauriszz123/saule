@@ -332,9 +332,15 @@ impl Compiler<'_> {
             };
             let parent = self.chunk.classes[class as usize].parent.and_then(|p| {
                 let pc = &self.chunk.classes[p as usize];
-                pc.init
-                    .and_then(|slot| pc.vtable.get(slot as usize).copied())
-                    .map(|t| (pc.module, t))
+                let slot = pc.init? as usize;
+                let target = pc.vtable.get(slot).copied()?;
+                // Not `pc.module`: the parent may itself have *inherited*
+                // its `init`, in which case the proto index is the
+                // grandparent's chunk's (`ClassProto::vowner`). A class with
+                // no `init` of its own between two that have one is all it
+                // takes.
+                let owner = *pc.vowner.get(slot)?;
+                Some((self.chunk.classes[owner as usize].module, target))
             });
             let Some((pmod, target)) = parent.filter(|(_, t)| *t != u32::MAX) else {
                 return Err(CompileError::unsupported(
@@ -486,10 +492,7 @@ impl Compiler<'_> {
             return self.finish_call(base, dst, want, m, span);
         };
         let Some(&slot) = self.chunk.classes[class as usize].vindex.get(name) else {
-            return Err(CompileError::unsupported(
-                "a method the class does not declare",
-                span.clone(),
-            ));
+            return self.field_call_to(class, obj, name, args, dst, want, span);
         };
 
         let m = self.mark();
@@ -524,6 +527,70 @@ impl Compiler<'_> {
             );
             self.emit(Instruction::ax_of(Op::EXTRAARG, slot as u32), span);
         }
+        self.finish_call(base, dst, want, m, span)
+    }
+
+    /// `obj.name(args)` where `name` is a **field** holding a callable —
+    /// `self.builder()`, where `builder: fn() -> View`.
+    ///
+    /// Reached only after `vindex` has said `name` is not a method. The
+    /// tree-walker's order for an instance receiver is instance method,
+    /// then static method, then instance field
+    /// (`dispatch_member_call_multi`), so this handles the third case and
+    /// refuses on anything else — including a name in `smindex`, which has
+    /// no compiled form here. Which member a call *names* has to match, not
+    /// just what it answers.
+    #[allow(clippy::too_many_arguments)]
+    fn field_call_to(
+        &mut self,
+        class: crate::chunk::ClassIdx,
+        obj: &Spanned<Expr>,
+        name: &str,
+        args: &[&Spanned<Expr>],
+        dst: u16,
+        want: Want,
+        span: &std::ops::Range<usize>,
+    ) -> Result<Results, CompileError> {
+        let proto = &self.chunk.classes[class as usize];
+        // `layout.slot` is instance fields only, which is exactly what
+        // `InstanceObject::field` consults — a *static* field of the same
+        // name is not reachable through an instance under either engine, so
+        // resolving against `sindex` here would compile a call the
+        // tree-walker rejects.
+        let field = (!proto.smindex.contains_key(name))
+            .then(|| proto.layout.slot(name))
+            .flatten();
+        let Some(fslot) = field else {
+            return Err(CompileError::unsupported(
+                "a method the class does not declare",
+                span.clone(),
+            ));
+        };
+
+        let m = self.mark();
+        let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
+        // Receiver first, then the arguments, then the field read — in that
+        // order, because the tree-walker looks the field up *after* it has
+        // evaluated the arguments. An argument that reassigns the field
+        // would otherwise call the value the field held before it ran.
+        //
+        // Holding the receiver in `base` while the arguments are evaluated
+        // is also what keeps it alive; `GETF` then overwrites it with the
+        // callee, which is sound because the opcode clones the field out
+        // before it writes its destination.
+        self.expr_to(obj, base)?;
+        for (i, arg) in args.iter().enumerate() {
+            self.expr_to(arg, base + 1 + i as u16)?;
+        }
+        let a = self.reg8(base, span)?;
+        self.emit(Instruction::abc(Op::GETF, a, a, fslot as u8), span);
+        // The callee is a value now, so this is the same `CALL` a local
+        // holding a lambda compiles to — no vtable, no `EXTRAARG`, and `C`
+        // free to carry the result count directly.
+        self.emit(
+            Instruction::abc(Op::CALL, a, args.len() as u8 + 1, want.c()),
+            span,
+        );
         self.finish_call(base, dst, want, m, span)
     }
 }

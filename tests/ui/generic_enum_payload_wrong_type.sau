@@ -1,0 +1,17 @@
+-- Matching a `Result<integer>` binds the `Ok` payload as an `integer`,
+-- not as `any` — so a `string` annotation on it is a real mismatch. This
+-- is the whole reason a generic enum beats one whose payload is untyped.
+-- Should be a compile error.
+
+enum Result<T>
+	Ok(value: T),
+	Err(message: string)
+end
+
+local r: Result<integer> = Result.Ok(5)
+match r
+	case Result.Ok(v) then
+		local s: string = v
+		println(s)
+	case Result.Err(m) then println(m)
+end

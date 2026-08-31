@@ -8,7 +8,8 @@
 //! cover just the name token, recovered by scanning the source for the
 //! first occurrence of the name inside the decl span.
 
-use saule_ast::{ClassMember, Decl, EnumVariant, Method, Module, Stmt};
+use crate::hover::render::render_type_ref;
+use saule_ast::{ClassMember, Decl, EnumVariant, Method, Module, Stmt, TypeRef};
 use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind, Url};
 
 use crate::line_index::LineIndex;
@@ -84,7 +85,7 @@ fn build(module: &Module, source: &str, idx: &LineIndex) -> Vec<DocumentSymbol> 
                 out.push(symbol(
                     name,
                     SymbolKind::CLASS,
-                    Some(detail_class(extends.as_deref(), implements)),
+                    Some(detail_class(extends.as_ref(), implements)),
                     &d.span,
                     name,
                     source,
@@ -265,22 +266,24 @@ fn detail_function(arity: usize, has_return: bool) -> String {
     format!("({arity} args){suffix}")
 }
 
-fn detail_class(extends: Option<&str>, implements: &[String]) -> String {
+fn detail_class(extends: Option<&TypeRef>, implements: &[TypeRef]) -> String {
     let mut parts = Vec::new();
     if let Some(p) = extends {
-        parts.push(format!("extends {p}"));
+        parts.push(format!("extends {}", render_type_ref(p)));
     }
     if !implements.is_empty() {
-        parts.push(format!("implements {}", implements.join(", ")));
+        let names: Vec<String> = implements.iter().map(render_type_ref).collect();
+        parts.push(format!("implements {}", names.join(", ")));
     }
     parts.join(" ")
 }
 
-fn detail_interface(extends: &[String]) -> String {
+fn detail_interface(extends: &[TypeRef]) -> String {
     if extends.is_empty() {
         String::new()
     } else {
-        format!("extends {}", extends.join(", "))
+        let names: Vec<String> = extends.iter().map(render_type_ref).collect();
+        format!("extends {}", names.join(", "))
     }
 }
 

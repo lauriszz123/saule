@@ -92,8 +92,29 @@ pub struct FuncCtx {
     /// numbers are its own. Registers are this compiler's to assign, so the
     /// descriptor's `index` has to come from the enclosing `FuncCtx`.
     pub upvals: Vec<UpvalDesc>,
-    /// The class whose method this is, if any — what `self` denotes.
+    /// The class whose method body this frame *is*, if any.
+    ///
+    /// Deliberately **not** inherited by a nested lambda, because several
+    /// call sites read it as "we are lexically inside a method of this
+    /// class" rather than as "`self` is one of these". Paired with
+    /// `!in_method` it is what identifies a **static** method, where
+    /// `self.count` is a static read rather than a field read — inheriting
+    /// it would turn a field read inside a lambda into a static one.
+    /// See [`Self::self_class`] for the question a lambda does need answered.
     pub current_class: Option<crate::chunk::ClassIdx>,
+    /// The class `self` denotes here, **inherited by nested lambdas**.
+    ///
+    /// A lambda written in a method body reaches `self` as an ordinary
+    /// captured upvalue, so it is a perfectly good receiver — but the frame
+    /// it compiles in has no `current_class`, and `class_of_expr` therefore
+    /// answered `None` for it. That lost the receiver's class for every
+    /// `self.m(...)` inside a callback, which surfaced as
+    /// `a named argument to a callee the compiler cannot identify` on
+    /// `self.setState() do … end` in `examples/UI Project`.
+    ///
+    /// Set only where `self` is genuinely bound, so a static method's lambda
+    /// still answers `None`.
+    pub self_class: Option<crate::chunk::ClassIdx>,
     /// Whether `self` is bound (register 0). False in a static method.
     pub in_method: bool,
     /// Per-arity entry points for defaulted parameters (§19), built by
@@ -158,6 +179,7 @@ impl FuncCtx {
             jump_tables: Vec::new(),
             upvals: Vec::new(),
             current_class: None,
+            self_class: None,
             in_method: false,
             entries: Vec::new(),
             variadic_param: None,
@@ -234,7 +256,14 @@ impl Compiler<'_> {
 
     /// Begin compiling a nested function body.
     pub fn push_function(&mut self, name: Option<&str>) {
-        let outer = std::mem::replace(&mut self.f, FuncCtx::new(name));
+        let mut inner = FuncCtx::new(name);
+        // `self` crosses into a lambda as a captured upvalue, so the class it
+        // denotes crosses with it — and keeps crossing, through a lambda
+        // inside a lambda. Nothing else about the enclosing frame does:
+        // `current_class` deliberately stays behind, so a nested frame is
+        // never mistaken for a static method body.
+        inner.self_class = self.f.self_class;
+        let outer = std::mem::replace(&mut self.f, inner);
         self.enclosing.push(outer);
     }
 

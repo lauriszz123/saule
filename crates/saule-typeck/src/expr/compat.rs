@@ -442,6 +442,34 @@ pub(crate) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         // Tuple shapes aren't tracked precisely yet; accept rather than
         // emit false positives.
         (Type::Tuple(_), Type::Tuple(_)) => true,
+        // `Box<integer>` against `Box<integer>`.
+        //
+        // Arguments are **invariant**, the same rule table elements follow
+        // and for the same reason: a `Box<integer>` accepted into a
+        // `Box<any>` slot is an alias through which an `any` could be
+        // written back, and the original holder still believes it holds
+        // integers. Heads may still differ by subtyping — `Dog` for
+        // `Animal` — because that direction adds no writable slot the
+        // declared type doesn't already have.
+        (Type::Generic(e), Type::Generic(v)) => {
+            (e.name == v.name || is_subtype_named(&v.name, &e.name))
+                && e.args.len() == v.args.len()
+                && e.args
+                    .iter()
+                    .zip(v.args.iter())
+                    .all(|(a, b)| types_compatible(a, b) && types_compatible(b, a))
+        }
+        // A generic named without its arguments — `local b: Box = …` on a
+        // `class Box<T>`, or a `Box<integer>` reaching a slot declared bare.
+        // Accepted in both directions as "some instantiation, unknown which",
+        // which is what the name alone says. `any` and `nil` come along for
+        // the ride under the same rule that covers tables and functions.
+        (Type::Generic(e), Type::Named(v)) => {
+            v == "any" || v == "nil" || *v == e.name || is_subtype_named(v, &e.name)
+        }
+        (Type::Named(e), Type::Generic(v)) => {
+            e == "any" || *e == v.name || is_subtype_named(&v.name, e)
+        }
         // Different kinds (e.g. table vs integer) — reject.
         _ => false,
     }

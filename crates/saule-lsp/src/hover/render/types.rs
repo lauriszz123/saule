@@ -4,25 +4,47 @@
 
 use saule_ast::{
     Decl, EnumVariant, MethodSig as AstMethodSig, Module, Param, Pattern, Spanned, Stmt, Type,
+    TypeRef,
 };
 use saule_semantic::{ClassInfo, MethodSig};
 use std::collections::HashMap;
 
 use super::*;
 
+/// `<T, U>` as written on a declaration, or nothing when it declares none.
+pub(crate) fn render_type_params(type_params: &[String]) -> String {
+    if type_params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", type_params.join(", "))
+    }
+}
+
+/// A named type reference from a declaration header, arguments included —
+/// `Animal`, or `Repository<Player>`.
+pub(crate) fn render_type_ref(r: &TypeRef) -> String {
+    if r.args.is_empty() {
+        return r.name.clone();
+    }
+    let args: Vec<String> = r.args.iter().map(render_type).collect();
+    format!("{}<{}>", r.name, args.join(", "))
+}
+
 pub(crate) fn render_class_head(
     name: &str,
-    extends: Option<&str>,
-    implements: &[String],
+    type_params: &[String],
+    extends: Option<&TypeRef>,
+    implements: &[TypeRef],
 ) -> String {
-    let mut s = format!("```saule\nclass {name}");
+    let mut s = format!("```saule\nclass {name}{}", render_type_params(type_params));
     if let Some(p) = extends {
         s.push_str(" extends ");
-        s.push_str(p);
+        s.push_str(&render_type_ref(p));
     }
     if !implements.is_empty() {
+        let names: Vec<String> = implements.iter().map(render_type_ref).collect();
         s.push_str(" implements ");
-        s.push_str(&implements.join(", "));
+        s.push_str(&names.join(", "));
     }
     s.push_str("\n```");
     s
@@ -222,13 +244,18 @@ pub(crate) fn render_stdlib_module(name: &str, kind: &str) -> String {
 
 pub(crate) fn render_interface_head(
     name: &str,
-    extends: &[String],
+    type_params: &[String],
+    extends: &[TypeRef],
     methods: &[AstMethodSig],
 ) -> String {
-    let mut s = format!("```saule\ninterface {name}");
+    let mut s = format!(
+        "```saule\ninterface {name}{}",
+        render_type_params(type_params)
+    );
     if !extends.is_empty() {
+        let names: Vec<String> = extends.iter().map(render_type_ref).collect();
         s.push_str(" extends ");
-        s.push_str(&extends.join(", "));
+        s.push_str(&names.join(", "));
     }
     if !methods.is_empty() {
         s.push_str(" {\n");
@@ -254,7 +281,15 @@ pub(crate) fn render_interface_head(
 }
 
 pub(crate) fn render_interface_from_registry(name: &str, extends: &[String]) -> String {
-    render_interface_head(name, extends, &[])
+    // The registry keeps only head names — type arguments are erased by the
+    // time it is built — so each parent renders bare.
+    let refs: Vec<TypeRef> = extends.iter().map(TypeRef::plain).collect();
+    render_interface_head(
+        name,
+        &saule_semantic::interface_type_params(name),
+        &refs,
+        &[],
+    )
 }
 
 /// Signature blurb for one `interface` method. Interface methods are
@@ -371,6 +406,10 @@ pub(crate) fn render_type(ty: &Type) -> String {
         Type::Function { params, ret } => {
             let p: Vec<_> = params.iter().map(render_type).collect();
             format!("fn({}) -> {}", p.join(", "), render_type(ret))
+        }
+        Type::Generic(g) => {
+            let a: Vec<_> = g.args.iter().map(render_type).collect();
+            format!("{}<{}>", g.name, a.join(", "))
         }
     }
 }

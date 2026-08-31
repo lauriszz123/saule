@@ -78,7 +78,12 @@ pub(crate) fn build_classes(
             .iter()
             .filter_map(|(name, &slot)| {
                 let target = proto.vtable.get(slot as usize).copied()?;
-                Some((name.to_string(), MethodRef::Vm(bind(proto.module, target)?)))
+                // The **declaring** class's module, not this one's: an
+                // inherited slot holds a proto index into the ancestor's
+                // chunk. See `ClassProto::vowner`.
+                let owner = *proto.vowner.get(slot as usize)?;
+                let module = table.get(owner as usize)?.module;
+                Some((name.to_string(), MethodRef::Vm(bind(module, target)?)))
             })
             .collect();
         let static_methods = proto

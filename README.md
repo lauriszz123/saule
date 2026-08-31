@@ -818,6 +818,8 @@ end
 
 Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function you are *calling* is not the `T` declared by the one you are writing, however alike they read.
 
+Classes, interfaces and enums take type parameters the same way — see [Generic Classes](#generic-classes), [Generic Interfaces](#generic-interfaces) and [Generic Enums](#generic-enums).
+
 ### Piping with `when(...):`
 
 The `when(...)` keyword starts a **colon-based pipeline** ("Saule style"). It wraps a value, and every subsequent `:func(args)` calls `func` with the upstream value threaded in as the **first argument**:
@@ -1338,6 +1340,67 @@ and forward what the parent wants via `self.super(...)`.
 
 If a method wasn't meant to override anything, give it a different name.
 
+### Generic Classes
+
+A class takes type parameters after its name, and they are in scope for every field, method signature and body inside it:
+
+```saule
+class Box<T>
+    value: T
+
+    fn init(value: T)
+        self.value = value
+    end
+
+    fn get() -> T
+        return self.value
+    end
+end
+
+local ints: Box<integer> = Box(5)
+local n: integer = ints.get()       -- `T` is `integer` here
+
+local words: Box<string> = Box("hi")
+local s: string = words.get()       -- and `string` here
+```
+
+The argument is **inferred from the constructor** when you don't write it, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
+
+```saule
+class Pair<A, B>
+    left: A
+    right: B
+
+    fn init(left: A, right: B)
+        self.left = left
+        self.right = right
+    end
+
+    fn first() -> A
+        return self.left
+    end
+end
+
+local p = Pair(7, "seven")          -- Pair<integer, string>
+local n: integer = p.first()
+```
+
+Type arguments are **invariant**, the same rule [table elements](#element-types-are-invariant) follow and for the same reason: a `Box<string>` accepted into a `Box<integer>` slot would be an alias through which the wrong type could be written back.
+
+```saule
+local b: Box<integer> = Box("no")   -- ERROR: Box<string> is not Box<integer>
+local c: Box<integer, string> = ... -- ERROR: `Box` expects 1 type argument
+```
+
+Naming the class **without** its arguments means "some instantiation, unknown which", and is accepted against any of them:
+
+```saule
+local any: Box = Box(1)             -- ok
+local back: Box<integer> = any      -- ok
+```
+
+Like a function's, a class's type parameters are erased at runtime — they constrain the program, they don't reach it.
+
 ---
 
 ## Interfaces
@@ -1439,6 +1502,8 @@ export class PlayerRepository implements Repository<Player>
     end
 end
 ```
+
+The argument is real, not decoration: `Repository<Player>` substitutes `Player` for `T` throughout, so the implementing class must declare `save(item: Player)` and `findById(id: integer) -> Player`. An interface used as a type carries its argument too — a `Repository<Player>` slot accepts nothing a `Repository<Item>` would fill.
 
 ### Custom Iterable
 
@@ -1747,6 +1812,33 @@ fn move(self, dir: Direction) -> nil
     end
 end
 ```
+
+### Generic Enums
+
+An enum takes type parameters the same way, and a variant's payload may be typed by one. This is what makes a `Result` worth writing: the arm that matches `Ok` binds a real `T`, not an `any` you have to cast:
+
+```saule
+enum Result<T>
+    Ok(value: T),
+    Err(message: string)
+end
+
+local r: Result<integer> = Result.Ok(5)
+
+local n: integer = match r
+    case Result.Ok(v) then v + 1    -- `v` is an `integer`
+    case Result.Err(m) then 0
+end
+```
+
+The instantiation comes from the construction where the payload pins it down, and from the annotation where it doesn't — `Result.Err("boom")` says nothing about `T`, so it fits any `Result`:
+
+```saule
+local inferred = Result.Ok("hi")            -- Result<string>
+local failed: Result<integer> = Result.Err("boom")
+```
+
+Exhaustiveness is unaffected: type arguments say what the payloads hold, never which variants exist.
 
 ---
 
@@ -2511,7 +2603,7 @@ decl ::= ['export'] (function | class | interface | enum)
 
 function  ::= 'fn' Name [typeParams] params ['->' type] chunk 'end'
 
-class     ::= 'class' Name [typeArgs]
+class     ::= 'class' Name [typeParams]
               ['extends' Name [typeArgs]]
               ['implements' Name [typeArgs] {',' Name [typeArgs]}]
               {member} 'end'
@@ -2520,12 +2612,12 @@ modifiers ::= ['static'] ['local'] | ['local'] ['static']
 method    ::= 'fn' Name [typeParams] params ['->' type] chunk 'end'
 field     ::= Name ':' type ['=' exp]
 
-interface ::= 'interface' Name [typeArgs]
+interface ::= 'interface' Name [typeParams]
               ['extends' Name [typeArgs] {',' Name [typeArgs]}]
               {methodSig} 'end'
-methodSig ::= 'fn' Name [typeArgs] params ['->' type]
+methodSig ::= 'fn' Name [typeParams] params ['->' type]
 
-enum      ::= 'enum' Name {variant} {enumMethod} 'end'
+enum      ::= 'enum' Name [typeParams] {variant} {enumMethod} 'end'
 variant   ::= [','] Name ['=' exp | params]
 enumMethod::= 'fn' Name params ['->' type] chunk 'end'
 
@@ -2555,6 +2647,13 @@ baseType  ::= Name [typeArgs]
 typeArgs   ::= '<' type {',' type} '>'
 typeParams ::= '<' Name {',' Name} '>'
 ```
+
+`typeParams` **declares** — each entry is a bare name that stands for whatever
+the user of the declaration picks. `typeArgs` **applies** — each entry is a
+type, filling one of those slots. `Name typeArgs` in a type position is a
+generic application: `Box<integer>`, `Result<string>`, `Repository<Player>`.
+The count has to match what the named declaration declares, and `table<K, V>`
+is its own form rather than an application of a `table` declaration.
 
 A parenthesised list of one type is just grouping; two or more is a tuple,
 which is how a function returning multiple values states its return type.

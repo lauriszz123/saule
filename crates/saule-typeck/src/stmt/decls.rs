@@ -16,10 +16,30 @@ use crate::to_source_span;
 
 use super::*;
 
+/// Check the type arguments a class header supplies to its parent and its
+/// interfaces — `class C extends Box<integer> implements Repository<Player>`.
+///
+/// These are the one set of generic applications a class writes that don't
+/// pass through [`check_binding_type`], because they are not binding types;
+/// they arrive as [`saule_ast::TypeRef`]s in the declaration header. Reusing
+/// the same arity rule keeps one answer for what a wrong argument count
+/// means, wherever it is written.
+fn check_type_arg_arity(
+    extends: Option<&saule_ast::TypeRef>,
+    implements: &[saule_ast::TypeRef],
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    for r in extends.into_iter().chain(implements.iter()) {
+        check_generic_arity(&r.to_type(), span.clone(), errors);
+    }
+}
+
 pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
     match decl {
         Decl::Class {
             name: class_name,
+            type_params,
             extends,
             implements,
             members,
@@ -29,7 +49,7 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             // `implements` must refer to a real class / interface that
             // semantic has already collected into the registry.
             if let Some(parent) = extends
-                && !with_classes(|r| r.contains_key(parent))
+                && !with_classes(|r| r.contains_key(&parent.name))
             {
                 // Point the diagnostic at the first member span — class
                 // span isn't readily available here; tweaking the AST to
@@ -37,24 +57,32 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                 let span = members.first().map(|m| m.span.clone()).unwrap_or(0..0);
                 errors.push(TypeCheckError::UnknownParentClass {
                     name: class_name.clone(),
-                    parent: parent.clone(),
+                    parent: parent.name.clone(),
                     span: to_source_span(span),
                 });
             }
             for iface in implements {
-                if !is_interface(iface) {
+                if !is_interface(&iface.name) {
                     let span = members.first().map(|m| m.span.clone()).unwrap_or(0..0);
                     errors.push(TypeCheckError::UnknownInterface {
                         name: class_name.clone(),
-                        iface: iface.clone(),
+                        iface: iface.name.clone(),
                         span: to_source_span(span),
                     });
                 }
             }
+            // The class's own `<T, U>` are in scope for every member: a
+            // field typed `T`, a method returning `T`, a body mentioning it.
+            // Without this each one reads as an undeclared class name, and
+            // `class Box<T> local v: T` fails on its own field.
+            let prev_generics = push_generics(type_params);
+            let span_for = || members.first().map(|m| m.span.clone()).unwrap_or(0..0);
+            check_type_arg_arity(extends.as_ref(), implements, span_for(), errors);
             if let Some(parent) = extends {
-                check_overrides(class_name, parent, members, errors);
+                check_overrides(class_name, &parent.name, members, errors);
             }
-            check_class(class_name, members, errors)
+            check_class(class_name, members, errors);
+            pop_generics(prev_generics);
         }
         Decl::Function {
             type_params,
@@ -122,20 +150,39 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                 (None, None) => {}
             }
         }
-        Decl::Interface { methods, .. } => {
+        Decl::Interface {
+            type_params,
+            methods,
+            ..
+        } => {
+            // `<T>` is in scope for every signature: `fn get() -> T` on
+            // `interface Box<T>` must read `T` as the interface's parameter,
+            // not as an undeclared class. A method's own `<U>` nests inside.
+            let prev_generics = push_generics(type_params);
             for sig in methods {
+                let prev_method = push_generics(&sig.type_params);
                 check_param_types(&sig.params, errors);
                 if let Some(rt) = &sig.return_ty {
                     reject_non_types(rt, sig.span.clone(), errors);
                 }
+                pop_generics(prev_method);
             }
+            pop_generics(prev_generics);
         }
-        Decl::Enum { variants, .. } => {
+        Decl::Enum {
+            type_params,
+            variants,
+            ..
+        } => {
+            // `<T>` is in scope for the payload types: `Ok(value: T)` must
+            // read `T` as this enum's parameter, not as an undeclared class.
+            let prev_generics = push_generics(type_params);
             for v in variants {
                 if let saule_ast::EnumVariant::Tuple { fields, .. } = &v.value {
                     check_param_types(fields, errors);
                 }
             }
+            pop_generics(prev_generics);
         }
         _ => {}
     }

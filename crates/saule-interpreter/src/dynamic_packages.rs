@@ -28,6 +28,20 @@
 //! The interpreter never needs the package at compile time and the package
 //! never links the interpreter — the only shared contract is
 //! [`saule_native_abi`].
+//!
+//! ## The bytecode compiler's route through the same pipeline
+//!
+//! `saule-vm` resolves imports at *compile* time and folds a package's
+//! exports into constants, so it cannot use step 3 — that would `dlopen` a
+//! library while compiling, which a compile must never do. It splits the
+//! step instead:
+//!
+//! * [`build_exports_deferred`] builds the same surface from the manifest
+//!   alone, each method resolving its symbol on first call. Nothing loads.
+//! * [`preload`] does the loading half, and `run_program` calls it at *run*
+//!   time, immediately before the body of the module that imported the
+//!   package — the same point step 3 reaches under the tree-walker, so a
+//!   package that fails to load fails identically under both engines.
 
 mod bind;
 mod discovery;

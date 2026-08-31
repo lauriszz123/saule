@@ -117,6 +117,17 @@ pub struct Chunk {
     ///
     /// Zero for a single-module compile, where the two spaces coincide.
     pub module_slot_base: usize,
+    /// Dynamic native packages this module `import`s, in source order, each
+    /// with the span of the `import` that named it.
+    ///
+    /// Compiling one folds its exports into constants from the package's
+    /// *manifest*, which loads nothing. The shared library behind it is a
+    /// runtime side effect, so it stays one:
+    /// [`run_program`](crate::run_program) loads these immediately before
+    /// this module's body runs — the point at which the tree-walker resolves
+    /// the same `import`, so a package that fails to load fails at the same
+    /// place under both engines.
+    pub dynamic_imports: Vec<(String, std::ops::Range<usize>)>,
     /// This module's position in its program, and so the row of the VM's
     /// per-module closure cache it owns. Proto indices are per chunk, so one
     /// flat cache would have index 5 mean two different functions.
@@ -143,6 +154,7 @@ impl Chunk {
             variant_refs: Vec::new(),
             module_slots: 0,
             module_slot_base: 0,
+            dynamic_imports: Vec::new(),
             module_index: 0,
             main: 0,
             source: Rc::new(miette::NamedSource::new(name, String::new())),

@@ -77,6 +77,12 @@ fn runtime_matches_type(value: &Value, ty: &Type) -> bool {
             Value::Function(_) | Value::Native(_) | Value::NativeClosure(_)
         ),
         Type::Table { .. } => matches!(value, Value::Table(_)),
+        // Type arguments are erased, so `catch e: Result<integer>` can only
+        // be tested as `catch e: Result` — the value carries no record of
+        // which instantiation produced it. Checking the head is the whole
+        // of what is knowable at runtime, and it is what the arm above does
+        // for a bare name.
+        Type::Generic(g) => runtime_matches_type(value, &Type::Named(g.name.clone())),
         Type::Named(name) => match name.as_str() {
             "any" => true,
             "nil" => matches!(value, Value::Nil),

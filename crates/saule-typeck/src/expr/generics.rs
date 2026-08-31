@@ -66,6 +66,17 @@ impl Freshened {
         }
     }
 
+    /// The signature's own name for the fresh parameter `fresh`, or `None`
+    /// if `fresh` isn't one of this signature's parameters at all.
+    ///
+    /// Needed by anything keyed on the *declared* names — bounds, for one,
+    /// which are recorded as the signature wrote them while the types being
+    /// checked have already been renamed apart.
+    pub(crate) fn original_of(&self, fresh: &str) -> Option<&String> {
+        let i = self.params.iter().position(|p| p == fresh)?;
+        self.originals.get(i)
+    }
+
     /// Rewrite a type written in the signature's own parameter names into
     /// fresh space. A non-generic signature renames nothing.
     pub(crate) fn rename(&self, ty: &Type) -> Type {
@@ -132,6 +143,13 @@ pub(crate) fn substitute(
             params: ps.iter().map(|t| substitute(t, subst, params)).collect(),
             ret: Box::new(substitute(ret, subst, params)),
         },
+        // `Result<T>` under `T := integer` becomes `Result<integer>`. The
+        // *name* is never substituted — a generic's head is a declaration,
+        // not a variable — only its arguments.
+        Type::Generic(g) => Type::generic(
+            g.name.clone(),
+            g.args.iter().map(|t| substitute(t, subst, params)).collect(),
+        ),
     }
 }
 
@@ -153,6 +171,7 @@ pub(crate) fn mentions_unbound_param(ty: &Type, params: &[String]) -> bool {
             ps.iter().any(|t| mentions_unbound_param(t, params))
                 || mentions_unbound_param(ret, params)
         }
+        Type::Generic(g) => g.args.iter().any(|t| mentions_unbound_param(t, params)),
     }
 }
 
@@ -293,6 +312,17 @@ pub(crate) fn unify(
                 unify(e, f, params, subst);
             }
             unify(er, fr, params, subst);
+        }
+        // `Result<T>` against `Result<integer>` binds `T := integer`.
+        // The heads must match: two different generics say nothing about
+        // each other's arguments, and pairing them positionally would bind
+        // `T` from an unrelated declaration.
+        (Type::Generic(e), Type::Generic(f))
+            if e.name == f.name && e.args.len() == f.args.len() =>
+        {
+            for (a, b) in e.args.iter().zip(f.args.iter()) {
+                unify(a, b, params, subst);
+            }
         }
         _ => {}
     }

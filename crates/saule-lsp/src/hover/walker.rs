@@ -140,6 +140,7 @@ impl CalleeSig {
         saule_typeck::sigs::instantiate_params(
             &saule_typeck::sigs::NativeSig {
                 type_params: self.type_params.clone(),
+                bounds: Vec::new(),
                 params: self.params.iter().map(|p| p.ty.clone()).collect(),
                 variadic: None,
                 returns: Vec::new(),
@@ -169,6 +170,7 @@ fn collect_module_fns(module: &Module) -> HashMap<String, ModuleFn> {
                 params: params.clone(),
                 sig: saule_typeck::sigs::NativeSig {
                     type_params: type_params.clone(),
+                    bounds: Vec::new(),
                     params: params.iter().map(|p| p.ty.clone()).collect(),
                     variadic: None,
                     returns: return_ty.clone().into_iter().collect(),

@@ -11,6 +11,7 @@ use super::*;
 fn method_sig_as_native(sig: saule_semantic::MethodSig) -> saule_typeck::sigs::NativeSig {
     saule_typeck::sigs::NativeSig {
         type_params: sig.type_params,
+        bounds: Vec::new(),
         params: sig.params.iter().map(|p| p.ty.clone()).collect(),
         variadic: None,
         returns: sig.return_ty.into_iter().collect(),

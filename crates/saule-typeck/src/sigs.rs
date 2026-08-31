@@ -36,6 +36,17 @@ pub struct NativeSig {
     /// applied when checking later positional slots and when inferring
     /// the return type.
     pub type_params: Vec<String>,
+    /// The concrete types each type parameter is allowed to bind to, as
+    /// `(param, allowed)` pairs. A parameter absent from this list is
+    /// unbounded and binds to anything, which is what `register_g` produces.
+    ///
+    /// Bounds exist because most of `Math` is generic over *numeric flavour*
+    /// and nothing else: `Math.max` returns whichever of `integer` / `float`
+    /// it was handed, so its signature has to be `<N>(...N) -> N` — but an
+    /// unbounded `N` also happily binds to `string`, and `Math.max("a", "b")`
+    /// would typecheck its way to a runtime error. One list of permitted
+    /// bindings keeps the flavour polymorphism without the hole.
+    pub bounds: Vec<(String, Vec<String>)>,
     /// Declared positional parameter types.
     pub params: Vec<Type>,
     /// Type of additional trailing arguments. `Some(T)` makes the call
@@ -96,6 +107,7 @@ pub fn register(name: &str, params: Vec<Type>, returns: Vec<Type>) {
             name.to_string(),
             vec![NativeSig {
                 type_params: Vec::new(),
+                bounds: Vec::new(),
                 params,
                 variadic: None,
                 returns,
@@ -117,8 +129,66 @@ pub fn register_g(name: &str, type_params: Vec<&str>, params: Vec<Type>, returns
             name.to_string(),
             vec![NativeSig {
                 type_params: type_params.into_iter().map(String::from).collect(),
+                bounds: Vec::new(),
                 params,
                 variadic: None,
+                returns,
+            }],
+        );
+    });
+}
+
+/// One type parameter of a generic signature, with the concrete types it may
+/// bind to. An empty `allowed` list is unbounded.
+pub struct Bound<'a>(pub &'a str, pub &'a [&'a str]);
+
+/// Register a generic native whose type parameters carry bounds, and which
+/// may be variadic — the shape most of `Math` needs.
+///
+/// `Math.max` is generic over numeric *flavour*: it returns one of the values
+/// it was handed, so an all-integer call answers with an integer and a
+/// float call with a float. That is `<N>(...N) -> N`, which
+/// [`register_g`] can almost express — except it has no variadic slot, and
+/// its `N` is unbounded, so `Math.max("a", "b")` would pass the typechecker
+/// on its way to a runtime error. This adds both.
+///
+/// Flavour still may not be *mixed* within one call. `N` unifies against the
+/// first argument and every later slot is checked against that binding, so
+/// `Math.max(1, 2.5)` is rejected exactly as `1 + 2.5` is — the language does
+/// not auto-promote, and the stdlib does not get to either.
+pub fn register_g_bounded(
+    name: &str,
+    type_params: Vec<Bound<'_>>,
+    params: Vec<Type>,
+    variadic: Option<Type>,
+    returns: Vec<Type>,
+) {
+    record_member(name);
+    debug_assert_no_bare_function(
+        name,
+        params.iter().chain(returns.iter()).chain(variadic.iter()),
+    );
+    let bounds: Vec<(String, Vec<String>)> = type_params
+        .iter()
+        .filter(|Bound(_, allowed)| !allowed.is_empty())
+        .map(|Bound(p, allowed)| {
+            (
+                (*p).to_string(),
+                allowed.iter().map(|a| (*a).to_string()).collect(),
+            )
+        })
+        .collect();
+    SIGS.with(|s| {
+        s.borrow_mut().insert(
+            name.to_string(),
+            vec![NativeSig {
+                type_params: type_params
+                    .iter()
+                    .map(|Bound(p, _)| (*p).to_string())
+                    .collect(),
+                bounds,
+                params,
+                variadic,
                 returns,
             }],
         );
@@ -138,6 +208,7 @@ pub fn register_v(name: &str, params: Vec<Type>, variadic: Type, returns: Vec<Ty
             name.to_string(),
             vec![NativeSig {
                 type_params: Vec::new(),
+                bounds: Vec::new(),
                 params,
                 variadic: Some(variadic),
                 returns,
@@ -168,8 +239,45 @@ pub fn register_overloads(name: &str, forms: Vec<(Vec<Type>, Vec<Type>)>) {
             debug_assert_no_bare_function(name, params.iter().chain(returns.iter()));
             NativeSig {
                 type_params: Vec::new(),
+                bounds: Vec::new(),
                 params,
                 variadic: None,
+                returns,
+            }
+        })
+        .collect();
+    debug_assert!(
+        !sigs.is_empty(),
+        "native `{name}` registered with an empty overload set"
+    );
+    SIGS.with(|s| {
+        s.borrow_mut().insert(name.to_string(), sigs);
+    });
+}
+
+/// Register a native that has more than one form *and* whose forms may be
+/// variadic, as `(params, variadic, returns)` triples in preference order.
+///
+/// [`register_overloads`] cannot describe `Math.min(...integer) -> integer`
+/// beside `Math.min(...float) -> float`: it hard-codes `variadic: None`, so
+/// every form is fixed-arity. Selection works the same way — first form whose
+/// arity fits and whose parameters accept the actual arguments — and
+/// `select_overload` already consults `sig.variadic` for both tests, so a
+/// variadic form participates on equal footing once it can be spelled.
+pub fn register_overloads_v(name: &str, forms: Vec<(Vec<Type>, Option<Type>, Vec<Type>)>) {
+    record_member(name);
+    let sigs: Vec<NativeSig> = forms
+        .into_iter()
+        .map(|(params, variadic, returns)| {
+            debug_assert_no_bare_function(
+                name,
+                params.iter().chain(returns.iter()).chain(variadic.iter()),
+            );
+            NativeSig {
+                type_params: Vec::new(),
+                bounds: Vec::new(),
+                params,
+                variadic,
                 returns,
             }
         })
@@ -251,6 +359,7 @@ fn debug_assert_no_bare_function<'a>(name: &str, types: impl IntoIterator<Item =
             Type::Table { key, value } => key.as_deref().is_some_and(walk) || walk(value),
             Type::Tuple(items) => items.iter().any(walk),
             Type::Function { params, ret } => params.iter().any(walk) || walk(ret),
+            Type::Generic(g) => g.args.iter().any(walk),
         }
     }
     assert!(
@@ -528,6 +637,7 @@ mod tests {
         // fn<T>(t: table<T>, f: fn(T) -> T) -> table<T>
         let sig = NativeSig {
             type_params: vec!["T".into()],
+            bounds: Vec::new(),
             params: vec![
                 t_table(t_named("T")),
                 t_function(vec![t_named("T")], t_named("T")),
@@ -550,6 +660,7 @@ mod tests {
         // fn<T, U>(t: table<T>, f: fn(U, T) -> U, init: U) -> U
         let sig = NativeSig {
             type_params: vec!["T".into(), "U".into()],
+            bounds: Vec::new(),
             params: vec![
                 t_table(t_named("T")),
                 t_function(vec![t_named("U"), t_named("T")], t_named("U")),
@@ -573,6 +684,7 @@ mod tests {
     fn instantiate_returns_non_generic_clones_unchanged() {
         let sig = NativeSig {
             type_params: vec![],
+            bounds: Vec::new(),
             params: vec![t_named("integer")],
             variadic: None,
             returns: vec![t_named("boolean")],

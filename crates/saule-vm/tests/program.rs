@@ -336,3 +336,217 @@ fn a_named_argument_binds_to_an_imported_fn() {
     let out = run_capturing(compile(&dir.join("main.sau")));
     assert_eq!(out.trim(), "h|t\nx|y");
 }
+
+#[test]
+fn an_override_of_an_imported_method_is_inherited_by_its_own_subclass() {
+    // The §24.2 bug, found by `examples/UI Project` and reproducible in four
+    // files. `B` overrides a method it inherited from `A` in **another,
+    // already-compiled** module, and `C` — in `B`'s module — extends `B`
+    // without overriding. `C.who()` must run `B`'s body.
+    //
+    // It ran `A`'s. Pass 1 clones the parent's vtable for slot *numbering*,
+    // and an override recorded itself in `member_of_vslot` without clearing
+    // the proto index already sitting in that slot. Across a module boundary
+    // that index is real and filled, so `C`, laid out before `B`'s codegen,
+    // cloned `A`'s index — and Pass 2a then skipped the slot because it was
+    // not `u32::MAX`.
+    //
+    // Single-module hierarchies never showed it: there the parent's slot is
+    // still a placeholder at Pass 1, so the sweep does the right thing. It
+    // needs an ancestor that has already been compiled, which is exactly
+    // what an `import` gives you.
+    //
+    // What made it *visible* was a crash — `A`'s proto index was past the
+    // end of `C`'s module's proto vector. With a longer module it would have
+    // silently called the wrong function, which is the failure §24.2 calls
+    // the worst this project could ship.
+    let dir = project(
+        "override_across_modules",
+        &[
+            (
+                "base.sau",
+                "export class A\n\
+                 \x20 fn who() -> string\n    return \"A\"\n  end\n\
+                 \x20 fn tag() -> string\n    return \"<\" .. self.who() .. \">\"\n  end\n\
+                 end\n",
+            ),
+            (
+                "mid.sau",
+                "import * from base\n\
+                 export class B extends A\n\
+                 \x20 fn who() -> string\n    return \"B\"\n  end\n\
+                 end\n\
+                 export class C extends B\n\
+                 end\n",
+            ),
+            (
+                "main.sau",
+                "import * from mid\n\
+                 import * from base\n\
+                 class Main\n\
+                 \x20 static fn main()\n\
+                 \x20   local c: A = C()\n\
+                 \x20   local b: A = B()\n\
+                 \x20   println(b.who() .. c.who())\n\
+                 \x20   println(c.tag())\n\
+                 \x20 end\n\
+                 end\n",
+            ),
+        ],
+    );
+
+    // `BB`, not `BA`: `C` inherits `B`'s override, not `A`'s original. And
+    // `tag`, itself inherited from `A`, must dispatch back down to it.
+    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "BB\n<B>");
+}
+
+// ── barrel modules ────────────────────────────────────────────────────────
+//
+// An `init.sau` publishes what it *imported* as well as what it declared, so
+// a folder of files can be consumed as one module. `examples/UI Project` is
+// built on it. Until `collect_exports` knew that, a class behind the barrel
+// was invisible to the module extending it — reported, unhelpfully, as
+// `a class extending one the compiler cannot see`.
+
+#[test]
+fn a_barrel_module_re_exports_a_type_and_a_value() {
+    let dir = project(
+        "barrel_reexport",
+        &[
+            (
+                "kit/shapes.sau",
+                "export class Base\n\
+                 \x20 fn init()\n    self.a = 1\n  end\n\
+                 \x20 a: integer\n\
+                 \x20 fn describe() -> string\n    return \"base\"\n  end\n\
+                 end\n",
+            ),
+            (
+                "kit/util.sau",
+                "export fn tag(s: string) -> string\n\
+                 \x20 return \"[\" .. s .. \"]\"\n\
+                 end\n",
+            ),
+            // Declares nothing of its own — every name it publishes is one
+            // it imported.
+            ("kit/init.sau", "import * from shapes\nimport * from util\n"),
+            (
+                "main.sau",
+                "import * from kit\n\
+                 class Derived extends Base\n\
+                 \x20 fn init()\n    self.super()\n    self.b = 2\n  end\n\
+                 \x20 b: integer\n\
+                 \x20 fn describe() -> string\n\
+                 \x20   return \"derived\" .. tostring(self.a + self.b)\n\
+                 \x20 end\n\
+                 end\n\
+                 class Main\n\
+                 \x20 static fn main()\n\
+                 \x20   println(Derived().describe())\n\
+                 \x20   println(tag(\"x\"))\n\
+                 \x20 end\n\
+                 end\n",
+            ),
+        ],
+    );
+
+    let program = compile(&dir.join("main.sau"));
+
+    // The type half, and the property that matters about it: a re-exported
+    // class is the *same* program-global index, not a second layout of the
+    // same source. `Derived`'s slots extend `Base`'s real ones — §24.2's
+    // worst-bug case, reached through a barrel.
+    let cls = &program.entry_chunk().classes;
+    let base = cls.iter().position(|c| c.name.as_ref() == "Base").expect("Base");
+    let derived = cls
+        .iter()
+        .position(|c| c.name.as_ref() == "Derived")
+        .expect("Derived");
+    assert_eq!(cls[derived].parent, Some(base as u32));
+    assert_eq!(cls[derived].layout.slot("a"), Some(0));
+    assert_eq!(cls[derived].layout.slot("b"), Some(1));
+
+    // And the value half, end to end.
+    assert_eq!(run_capturing(program).trim(), "derived3\n[x]");
+}
+
+#[test]
+fn a_barrel_re_exports_through_another_barrel() {
+    // Barrels nest: `outer` publishes what `inner` published, which is what
+    // `inner` imported. Post-order makes this fall out — every barrel's
+    // export map is complete before its importer is compiled — but only if
+    // the re-export reads the *target's* map rather than its declarations.
+    let dir = project(
+        "barrel_nested",
+        &[
+            ("outer/inner/leaf.sau", "export fn leaf() -> string\n  return \"leaf\"\nend\n"),
+            ("outer/inner/init.sau", "import * from leaf\n"),
+            ("outer/init.sau", "import * from inner\n"),
+            (
+                "main.sau",
+                "import * from outer\n\
+                 class Main\n\
+                 \x20 static fn main()\n    println(leaf())\n  end\n\
+                 end\n",
+            ),
+        ],
+    );
+    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "leaf");
+}
+
+#[test]
+fn a_named_re_export_publishes_the_alias() {
+    // `import X as Y` inside a barrel publishes `Y`, because that is the
+    // name the barrel bound — and `X` is then *not* visible through it.
+    let dir = project(
+        "barrel_alias",
+        &[
+            ("kit/thing.sau", "export fn ping() -> string\n  return \"pong\"\nend\n"),
+            ("kit/init.sau", "import ping as knock from thing\n"),
+            (
+                "main.sau",
+                "import knock from kit\n\
+                 class Main\n\
+                 \x20 static fn main()\n    println(knock())\n  end\n\
+                 end\n",
+            ),
+        ],
+    );
+    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "pong");
+}
+
+#[test]
+fn a_plain_module_does_not_re_export_what_it_imported() {
+    // Re-export is `init.sau`'s alone — `module::is_init_module`, the same
+    // rule the tree-walker applies, called rather than restated. A plain
+    // module that imports `Base` does not republish it, so the compiler must
+    // refuse rather than invent a layout, and let the tree-walker produce
+    // the diagnostic.
+    let dir = project(
+        "barrel_only_init",
+        &[
+            (
+                "shapes.sau",
+                "export class Base\n  fn init()\n    self.a = 1\n  end\n  a: integer\nend\n",
+            ),
+            // Not an `init.sau`: imports `Base`, publishes nothing.
+            ("middle.sau", "import * from shapes\n"),
+            (
+                "main.sau",
+                "import * from middle\n\
+                 class Derived extends Base\n\
+                 \x20 fn init()\n    self.super()\n  end\n\
+                 end\n",
+            ),
+        ],
+    );
+    assert!(
+        matches!(
+            saule_vm::program::compile(&dir.join("main.sau")),
+            Err(saule_vm::program::ProgramError::Compile(
+                saule_vm::CompileError::Unsupported { .. }
+            ))
+        ),
+        "only an `init.sau` re-exports; a plain module must not"
+    );
+}
