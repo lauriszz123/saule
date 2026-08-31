@@ -720,7 +720,7 @@ export class Slider extends View
 		local next: float = raw
 
 		if self.step > 0.0 then
-			local steps: float = float(int((raw - self.min) / self.step + 0.5))
+			local steps: float = (((raw - self.min) / self.step + 0.5) as integer) as float
 			next = self.min + steps * self.step
 		end
 
@@ -1090,7 +1090,7 @@ export class ProgressTrack extends View
 		-- for the next frame itself.
 		Repaint.request()
 
-		local phase: float = Timer.getTime() - float(int(Timer.getTime()))
+		local phase: float = Timer.getTime() - ((Timer.getTime() as integer) as float)
 		local sweep: float = el.size.width * 0.3
 		local travel: float = (el.size.width + sweep) * phase - sweep
 

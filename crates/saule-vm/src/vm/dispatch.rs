@@ -505,8 +505,8 @@ impl Vm {
                                     return Err(RuntimeError::TypeError {
                                         message: format!(
                                             "`^` on integers requires a non-negative exponent, \
-                                             got {r} — use floats (`float(base) ^ {r}.0`) for a \
-                                             fractional result"
+                                             got {r} — use floats (`(base as float) ^ {r}.0`) \
+                                             for a fractional result"
                                         ),
                                         span: proto.span_at(here),
                                     });

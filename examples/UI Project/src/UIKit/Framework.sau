@@ -2674,8 +2674,8 @@ export fn runApp(
 
 		local windowWidth: integer, windowHeight: integer = Window.getSize()
 		local logical: Size = Size(
-			Display.toLogical(float(windowWidth)),
-			Display.toLogical(float(windowHeight))
+			Display.toLogical(windowWidth as float),
+			Display.toLogical(windowHeight as float)
 		)
 
 		rootElement.offset = Offset.zero()

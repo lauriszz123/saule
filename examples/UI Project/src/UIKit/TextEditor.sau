@@ -116,7 +116,7 @@ export class LineMap
 	-- Caret index for a point in the text's own coordinate space.
 	fn indexAtPoint(x: float, y: float) -> integer
 		local height: float = self.style.lineHeight()
-		local line: integer = self.clampLine(int(y / height) + 1)
+		local line: integer = self.clampLine(((y / height) as integer) + 1)
 		local within: integer = self.style.indexAt(self.textOf(line), x)
 
 		return self.startOf(line) + within - 1
@@ -127,7 +127,7 @@ export class LineMap
 		local line: integer = self.lineAt(index)
 		local prefix: string = String.sub(self.text, self.startOf(line), index)
 
-		return Offset(self.style.measure(prefix).width, self.style.lineHeight() * float(line - 1))
+		return Offset(self.style.measure(prefix).width, self.style.lineHeight() * ((line - 1) as float))
 	end
 
 	local fn clampLine(line: integer) -> integer
@@ -216,7 +216,7 @@ export class EditableParagraph extends View
 			widest = atLeast(widest, style.measure(self.placeholder).width)
 		end
 
-		return constraints.constrain(Size(widest, style.lineHeight() * float(map.count())))
+		return constraints.constrain(Size(widest, style.lineHeight() * (map.count() as float)))
 	end
 
 	fn paint(el: Element, x: float, y: float) -> nil
@@ -237,7 +237,7 @@ export class EditableParagraph extends View
 		local i: integer = 1
 
 		while i <= map.count() do
-			style.draw(map.textOf(i), x, y + height * float(i - 1))
+			style.draw(map.textOf(i), x, y + height * ((i - 1) as float))
 			i = i + 1
 		end
 
@@ -291,7 +291,7 @@ export class EditableParagraph extends View
 			local right: float = style.measure(String.sub(map.textOf(line), 1, runEnd - start + 1)).width
 
 			wash.apply()
-			Graphics.rectangle("fill", x + left, y + height * float(line - 1), right - left, height)
+			Graphics.rectangle("fill", x + left, y + height * ((line - 1) as float), right - left, height)
 
 			line = line + 1
 		end
@@ -436,7 +436,7 @@ export class TextEditor extends View
 		local inner: View = Box(
 			child: paragraph
 				.aligned(Alignment.topLeft())
-				.frame(height: style.lineHeight() * float(self.minLines)),
+				.frame(height: style.lineHeight() * (self.minLines as float)),
 			width: self.width,
 			color: self.background ?? theme.surface,
 			radius: self.radius,

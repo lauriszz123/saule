@@ -59,7 +59,7 @@ class Flyer extends Entity
 	end
 
 	fn score() -> integer
-		return self.hp * 3 + int(self.alt)
+		return self.hp * 3 + (self.alt as integer)
 	end
 end
 
@@ -71,11 +71,11 @@ class Main
 		for i: integer = 1, n do
 			local m: integer = i % 3
 			if m == 0 then
-				Table.insert(es, Entity(float(i), 0.0, 1000))
+				Table.insert(es, Entity(i as float, 0.0, 1000))
 			elseif m == 1 then
-				Table.insert(es, Walker(float(i), 0.0, 1000))
+				Table.insert(es, Walker(i as float, 0.0, 1000))
 			else
-				Table.insert(es, Flyer(float(i), 0.0, 1000))
+				Table.insert(es, Flyer(i as float, 0.0, 1000))
 			end
 		end
 

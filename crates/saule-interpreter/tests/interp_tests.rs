@@ -472,6 +472,55 @@ fn assert_errs(src: &str) {
     }
 }
 
+// ── §Prelude: assert ────────────────────────────────────────────────────
+
+/// `assert<T>(v: T?, msg: string?) -> T` returns the *checked value*.
+///
+/// It used to return `msg` whenever one was supplied, which the
+/// typechecker had no way to see: the signature says `T`, so
+/// `local n: integer = assert(maybeInt, "msg")` put a string in an integer
+/// slot and every later use of `n` was compiled against a lie.
+mod prelude_assert {
+    use super::*;
+
+    #[test]
+    fn returns_the_checked_value_not_the_message() {
+        assert_int(r#"assert(42, "boom")"#, 42);
+        assert_str(r#"assert("kept", "boom")"#, "kept");
+        assert_bool(r#"assert(true, "boom")"#, true);
+    }
+
+    #[test]
+    fn returns_the_value_with_no_message_too() {
+        assert_int("assert(42)", 42);
+    }
+
+    /// The point of the signature: `T?` in, `T` out, so the result drops
+    /// straight into a non-nullable slot.
+    #[test]
+    fn strips_nullability_for_the_declared_type() {
+        let src = r#"
+            local maybe: integer? = 7
+            local n: integer = assert(maybe, "expected an integer")
+            n
+        "#;
+        assert_int(src, 7);
+    }
+
+    #[test]
+    fn a_falsy_value_still_throws_with_the_message() {
+        let err = try_eval(r#"assert(nil, "expected an integer")"#).unwrap_err();
+        assert!(err.contains("expected an integer"), "got: {err}");
+    }
+
+    /// `false` is falsy, and `assert` is a truthiness check — so this
+    /// throws rather than returning `false`.
+    #[test]
+    fn false_throws_rather_than_being_returned() {
+        assert_errs(r#"assert(false, "nope")"#);
+    }
+}
+
 // ── §Stdlib constants ───────────────────────────────────────────────────
 
 /// `Math.huge`, `Os.sep`, `Io.stdout` and friends hold *values*, not
@@ -552,29 +601,15 @@ mod casts {
     use super::*;
 
     #[test]
-    fn int_truncates_positive_toward_zero() {
-        assert_int("int(7.9)", 7);
-    }
-    #[test]
-    fn int_truncates_negative_toward_zero() {
-        // README: "truncation not rounding"; -3.7 → -3, NOT -4.
-        assert_int("int(-3.7)", -3);
-    }
-    #[test]
-    fn int_of_whole_float() {
-        assert_int("int(10.0)", 10);
-    }
-    #[test]
-    fn float_promotes_integer() {
-        assert_float("float(5)", 5.0);
-    }
-    #[test]
     fn cast_enables_mixed_arithmetic() {
-        // README example: `float(health) - dmg`.
+        // README example: `(health as float) - dmg`. Bound rather than
+        // left bare because a statement that *starts* with `(` reads as a
+        // call on the line above — Lua's ambiguity, not the cast's.
         let src = r#"
             local health: integer = 100
             local dmg: float = 10.5
-            float(health) - dmg
+            local precise: float = (health as float) - dmg
+            precise
         "#;
         assert_float(src, 89.5);
     }
@@ -583,24 +618,33 @@ mod casts {
         let src = r#"
             local health: integer = 100
             local dmg: float = 10.5
-            health - int(dmg)
+            health - (dmg as integer)
         "#;
         assert_int(src, 90);
     }
-    #[test]
-    fn int_of_string_errors() {
-        assert_errs(r#"int("abc")"#);
-    }
-    #[test]
-    fn float_of_string_errors() {
-        assert_errs(r#"float("abc")"#);
-    }
-    #[test]
-    fn int_with_no_args_errors() {
-        assert_errs("int()");
-    }
 
-    // ── the `as` conversions ─────────────────────────────────────────
+    /// The five conversion natives are gone; `as` is the only spelling.
+    /// Left as a test because the names were prelude bindings for long
+    /// enough that a stray one should fail loudly rather than resolve to
+    /// something else.
+    #[test]
+    fn the_old_conversion_functions_are_no_longer_bound() {
+        for src in [
+            "int(7.9)",
+            "float(5)",
+            r#"tonumber("42")"#,
+            r#"tointeger("42")"#,
+            r#"tofloat("4.2")"#,
+        ] {
+            assert!(
+                matches!(
+                    try_eval(src).unwrap_err().as_str(),
+                    e if e.contains("UndefinedName")
+                ),
+                "expected `{src}` to be an undefined name"
+            );
+        }
+    }
 
     #[test]
     fn as_integer_truncates_toward_zero() {
@@ -676,11 +720,6 @@ f(9.9)",
         );
     }
 
-    #[test]
-    fn the_old_conversion_functions_still_agree_with_the_cast() {
-        assert_int("int(7.9) - (7.9 as integer)", 0);
-        assert_float("float(5) - (5 as float)", 0.0);
-    }
 }
 
 // ── §Tables ─────────────────────────────────────────────────────────────

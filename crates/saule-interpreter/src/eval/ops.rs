@@ -295,8 +295,8 @@ fn arithmetic(
         }
         (a, b) => Err(RuntimeError::TypeError {
             message: format!(
-                "arithmetic requires numbers but got `{}` and `{}` — use int()/float() to convert, \
-                 or implement `{}` on the class",
+                "arithmetic requires numbers but got `{}` and `{}` — cast with `as integer` \
+                 / `as float`, or implement `{}` on the class",
                 describe(&a),
                 describe(&b),
                 binary_contract(op).map_or("OpAdd", |c| c.interface)
@@ -341,7 +341,7 @@ fn int_op(op: BinOp, a: i64, b: i64, span: std::ops::Range<usize>) -> Result<Val
                 return Err(RuntimeError::TypeError {
                     message: format!(
                         "`^` on integers requires a non-negative exponent, got {b} — \
-                         use floats (`float(base) ^ {b}.0`) for a fractional result"
+                         use floats (`(base as float) ^ {b}.0`) for a fractional result"
                     ),
                     span,
                 });
@@ -367,8 +367,8 @@ fn bitwise(
     let (Value::Int(a), Value::Int(b)) = (&l, &r) else {
         return Err(RuntimeError::TypeError {
             message: format!(
-                "`{}` requires `integer` operands but got `{}` and `{}` — use int() to convert, \
-                 or implement `{}` on the class",
+                "`{}` requires `integer` operands but got `{}` and `{}` — cast with \
+                 `as integer`, or implement `{}` on the class",
                 binop_symbol(op),
                 describe(&l),
                 describe(&r),

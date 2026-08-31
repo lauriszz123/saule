@@ -323,10 +323,10 @@ class JsonParser
     local lexeme: string = String.sub(self.text, start, self.pos - 1)
 
     if sawDot or sawExp then
-      return tofloat(lexeme)
+      return lexeme as float
     end
 
-    return tointeger(lexeme)
+    return lexeme as integer
   end
 
   local fn parseTrue() -> boolean

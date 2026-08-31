@@ -17,7 +17,7 @@ import * from Animation
 -- no per-frame state. Shared with `TextEditor`.
 export fn blinkOn() -> boolean
 	local now: float = Timer.getTime()
-	local second: float = float(int(now))
+	local second: float = (now as integer) as float
 	local phase: float = now - second
 
 	-- Reached only from `paint`, and only while a caret is actually on screen.
