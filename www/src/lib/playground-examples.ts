@@ -51,12 +51,12 @@ local c: float = .5 * 4f -- the integer part may be omitted
 
 println(a, b, c)
 
--- Which is why \`2f\` is nicer than \`float(2)\` mid-expression:
+-- Which is why \`2f\` is nicer than \`2 as float\` mid-expression:
 println(speed * 2f)
 
 -- Conversions are explicit, never implicit.
-println(float(health) / 3.0)
-println(int(speed))
+println((health as float) / 3.0)
+println(speed as integer)
 
 -- Try uncommenting this line — it will not compile:
 -- local broken: integer = 3.14

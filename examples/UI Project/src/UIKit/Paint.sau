@@ -318,7 +318,7 @@ export class Text extends View
 			widest = atLeast(widest, style.measure(row).width)
 		end
 
-		return constraints.constrain(Size(widest, style.lineHeight() * float(#rows)))
+		return constraints.constrain(Size(widest, style.lineHeight() * ((#rows) as float)))
 	end
 
 	fn paint(el: Element, x: float, y: float) -> nil
@@ -345,7 +345,7 @@ export class Text extends View
 				style.apply()
 			end
 
-			style.draw(row, x + offset, y + height * float(i - 1))
+			style.draw(row, x + offset, y + height * ((i - 1) as float))
 
 			i = i + 1
 		end
@@ -388,8 +388,8 @@ export class Opacity extends SingleChildView
 			return
 		end
 
-		local width: integer = int(el.size.width)
-		local height: integer = int(el.size.height)
+		local width: integer = el.size.width as integer
+		local height: integer = el.size.height as integer
 
 		if width <= 0 or height <= 0 then
 			return
@@ -402,7 +402,7 @@ export class Opacity extends SingleChildView
 		local sx: float, sy: float, sw: float, sh: float = Graphics.getScissor()
 
 		Graphics.setCanvas(canvas)
-		Graphics.setScissor(0.0, 0.0, float(width), float(height))
+		Graphics.setScissor(0.0, 0.0, width as float, height as float)
 		Graphics.clear(0.0, 0.0, 0.0, 0.0)
 
 		Graphics.push()

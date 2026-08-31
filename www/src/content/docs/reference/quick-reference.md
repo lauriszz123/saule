@@ -73,5 +73,4 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `~a` | Bitwise complement (prefix `~`; infix `~` is xor) |
 | `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`, `&=`, `\|=`, `<<=`, `>>=` | Compound assignment (no `~=` — that is Lua's `!=`) |
 | `:` | Pipeline stage call inside `when(...)` |
-| `int()` | Cast float to integer, truncates toward zero |
-| `float()` | Cast integer to float, always safe |
+| `as` | Cast — converts a typed value (`x as integer` truncates toward zero, `n as string` renders), tests an `any` |

@@ -177,7 +177,8 @@ pub fn convert(value: &Value, ty: &Type) -> Value {
     match (name.as_str(), value) {
         // Truncation toward zero, saturating at the `i64` ends and
         // mapping NaN to `0` — Rust's `as` on the float, and the same
-        // answer the old `int()` gave for every one of those inputs.
+        // answer the removed `int()` prelude function gave for every
+        // one of those inputs.
         ("integer", Value::Float(f)) => Value::Int(f.trunc() as i64),
         ("integer", Value::Int(n)) => Value::Int(*n),
         ("float", Value::Int(n)) => Value::Float(*n as f64),

@@ -5,9 +5,9 @@ class Main
 		local maxIter: integer = 50
 		local count: integer = 0
 		for py: integer = 0, h - 1 do
-			local y0: float = float(py) / float(h) * 2.0 - 1.0
+			local y0: float = (py as float) / (h as float) * 2.0 - 1.0
 			for px: integer = 0, w - 1 do
-				local x0: float = float(px) / float(w) * 3.0 - 2.0
+				local x0: float = (px as float) / (w as float) * 3.0 - 2.0
 				local x: float = 0.0
 				local y: float = 0.0
 				local it: integer = 0

@@ -81,7 +81,7 @@ class Main
 				Renderer.print(storage.getAll())
 
 			case "done" then
-				local index: integer? = tointeger(args[2])
+				local index: integer? = args[2] as integer
 				if index == nil then
 					println("error: invalid task number")
 					return
@@ -90,7 +90,7 @@ class Main
 				storage.update(index, isDone: true)
 
 			case "due" then
-				local index: integer? = tointeger(args[2])
+				local index: integer? = args[2] as integer
 
 				if index == nil then
 					println("error: invalid task number")
@@ -111,7 +111,7 @@ class Main
 				storage.update(index, dueDate: due)
 
 			case "remove" then
-				local index: integer? = tointeger(args[2])
+				local index: integer? = args[2] as integer
 				if index == nil then
 					println("error: invalid task number")
 					return

@@ -99,7 +99,7 @@ pub fn register_sigs() {
     // `float(x)` on an integer.
     //
     // `type` accepts anything by design (it returns nil for non-numeric
-    // values). Numeric coercion (`tointeger` / `tofloat`) lives in core.
+    // values). Numeric conversion is the `as` cast, not a function.
     register("Math.type", vec![any()], vec![t_nullable(s())]);
 
     // Float in, integer out — rounding is what these are for.

@@ -100,7 +100,7 @@ export class Rect
     local column: integer = index % columns
     local row: integer = index / columns
 
-    return Rect(float(column) * width, float(row) * height, width, height)
+    return Rect((column as float) * width, (row as float) * height, width, height)
   end
 
   fn right() -> float
