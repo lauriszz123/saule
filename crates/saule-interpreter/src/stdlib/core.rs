@@ -3,7 +3,7 @@
 
 use crate::env::Environment;
 use crate::native_packages::NativePackage;
-use crate::stdlib::{define_native, expect_arity};
+use crate::stdlib::define_native;
 use crate::value::Value;
 use crate::value::SauleStr;
 
@@ -20,11 +20,6 @@ pub static CORE_PACKAGE: NativePackage = NativePackage {
         "printf",
         "tostring",
         "type",
-        "int",
-        "float",
-        "tonumber",
-        "tointeger",
-        "tofloat",
         "assert",
         "error",
     ],
@@ -43,11 +38,6 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Environment>>) {
     define_native(env, "printf", builtin_printf);
     define_native(env, "tostring", builtin_tostring);
     define_native(env, "type", builtin_type);
-    define_native(env, "int", builtin_int);
-    define_native(env, "float", builtin_float);
-    define_native(env, "tonumber", builtin_tonumber);
-    define_native(env, "tointeger", builtin_tointeger);
-    define_native(env, "tofloat", builtin_tofloat);
     define_native(env, "assert", builtin_assert);
     define_native(env, "error", builtin_error);
 }
@@ -71,27 +61,9 @@ pub fn register_sigs() {
     );
     register("tostring", vec![any.clone()], vec![t_named("string")]);
     register("type", vec![any.clone()], vec![t_named("string")]);
-    register("int", vec![any.clone()], vec![t_named("integer")]);
-    register("float", vec![any.clone()], vec![t_named("float")]);
-    // `tonumber(s)` returns `integer | float | nil` — modelled as nullable
-    // `any` so callers can `force-unwrap` or `match` on the result.
-    register(
-        "tonumber",
-        vec![any.clone()],
-        vec![t_nullable(t_named("any"))],
-    );
-    // Strict variants: succeed only when the value is/parses as the named
-    // kind, otherwise return `nil`.
-    register(
-        "tointeger",
-        vec![any.clone()],
-        vec![t_nullable(t_named("integer"))],
-    );
-    register(
-        "tofloat",
-        vec![any.clone()],
-        vec![t_nullable(t_named("float"))],
-    );
+    // No `int` / `float` / `tonumber` / `tointeger` / `tofloat`: numeric
+    // conversion is the `as` cast, which needs no signature here because
+    // the typechecker knows the pairs itself (`saule_typeck::casts`).
     // `assert<T>(v: T?, msg: string?) -> T` — strips the nullability of
     // the input on success. The generic param binds to whatever non-null
     // base type `v` has, so `local x: Foo = assert(maybeFoo)` is checked
@@ -152,106 +124,15 @@ fn builtin_type(args: &[Value]) -> Result<Value, String> {
     Ok(Value::Str(SauleStr::new(name)))
 }
 
-fn builtin_int(args: &[Value]) -> Result<Value, String> {
-    expect_arity("int", args, 1)?;
-    match &args[0] {
-        Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
-        other => Err(format!(
-            "int expects integer or float, got `{}`",
-            other.type_name()
-        )),
-    }
-}
-
-fn builtin_float(args: &[Value]) -> Result<Value, String> {
-    expect_arity("float", args, 1)?;
-    match &args[0] {
-        Value::Float(f) => Ok(Value::Float(*f)),
-        Value::Int(n) => Ok(Value::Float(*n as f64)),
-        other => Err(format!(
-            "float expects integer or float, got `{}`",
-            other.type_name()
-        )),
-    }
-}
-
-/// `tonumber(v)` — accept a number unchanged, or parse a string into
-/// integer-or-float. Returns `nil` on anything else or on parse failure so
-/// callers can branch with `if n != nil then`.
-fn builtin_tonumber(args: &[Value]) -> Result<Value, String> {
-    expect_arity("tonumber", args, 1)?;
-    match &args[0] {
-        Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(f) => Ok(Value::Float(*f)),
-        Value::Str(s) => {
-            let trimmed = s.trim();
-            // Integer wins when it parses; otherwise fall back to float.
-            // This keeps `tonumber("42")` strictly an integer instead of a
-            // float, matching `int`/`float`'s behaviour on numeric values.
-            if let Ok(i) = trimmed.parse::<i64>() {
-                Ok(Value::Int(i))
-            } else if let Ok(f) = trimmed.parse::<f64>() {
-                Ok(Value::Float(f))
-            } else {
-                Ok(Value::Nil)
-            }
-        }
-        _ => Ok(Value::Nil),
-    }
-}
-
-/// `tointeger(v)` — strict integer parse / coerce.
-///
-/// * `integer`        → unchanged
-/// * `float`          → only when it has no fractional part (e.g. `3.0`)
-/// * `string`         → only when it parses as an `i64`
-/// * anything else    → `nil`
-fn builtin_tointeger(args: &[Value]) -> Result<Value, String> {
-    expect_arity("tointeger", args, 1)?;
-    match &args[0] {
-        Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Float(f)
-            if f.is_finite()
-                && f.fract() == 0.0
-                && *f >= i64::MIN as f64
-                && *f <= i64::MAX as f64 =>
-        {
-            Ok(Value::Int(*f as i64))
-        }
-        Value::Str(s) => match s.trim().parse::<i64>() {
-            Ok(i) => Ok(Value::Int(i)),
-            Err(_) => Ok(Value::Nil),
-        },
-        _ => Ok(Value::Nil),
-    }
-}
-
-/// `tofloat(v)` — strict float parse / coerce.
-///
-/// * `float`          → unchanged
-/// * `integer`        → widened to `float`
-/// * `string`         → only when it parses as `f64`
-/// * anything else    → `nil`
-fn builtin_tofloat(args: &[Value]) -> Result<Value, String> {
-    expect_arity("tofloat", args, 1)?;
-    match &args[0] {
-        Value::Float(f) => Ok(Value::Float(*f)),
-        Value::Int(n) => Ok(Value::Float(*n as f64)),
-        Value::Str(s) => match s.trim().parse::<f64>() {
-            Ok(f) => Ok(Value::Float(f)),
-            Err(_) => Ok(Value::Nil),
-        },
-        _ => Ok(Value::Nil),
-    }
-}
-
 fn builtin_assert(args: &[Value]) -> Result<Value, String> {
     if args.is_empty() {
         return Err("assert expects at least 1 argument".to_string());
     }
+    // The *checked value*, never the message. `assert<T>(v: T?, msg) -> T`
+    // is what the typechecker was told, so handing back `msg` here put a
+    // string into whatever slot `T` was — a hole the checker could not see.
     if args[0].is_truthy() {
-        return Ok(args.get(1).cloned().unwrap_or_else(|| args[0].clone()));
+        return Ok(args[0].clone());
     }
 
     let message = args

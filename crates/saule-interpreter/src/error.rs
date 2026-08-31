@@ -45,7 +45,7 @@ pub enum RuntimeError {
 
     #[error("cannot mix `integer` and `float` in arithmetic — type mismatch")]
     NumericMix {
-        #[label("convert using int() or float() to make types compatible")]
+        #[label("cast one side with `as integer` / `as float` to make the types match")]
         span: std::ops::Range<usize>,
     },
 

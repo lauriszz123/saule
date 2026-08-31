@@ -92,7 +92,10 @@ local fn number(record: table, at: integer) -> float
 		return 0.0
 	end
 
-	return float(value)
+	-- An `any` yields one type at a time, so read the kind the engine
+	-- sends for this slot and widen the other. `!` on the second reading
+	-- keeps the old `float()` behaviour of refusing a non-number.
+	return value as float ?? ((value as integer)! as float)
 end
 
 local fn whole(record: table, at: integer) -> integer
@@ -102,7 +105,9 @@ local fn whole(record: table, at: integer) -> integer
 		return 0
 	end
 
-	return int(value)
+	-- As in `number` above, with the readings the other way round: a
+	-- float slot read as a whole number truncates toward zero.
+	return value as integer ?? ((value as float)! as integer)
 end
 
 local fn flag(record: table, at: integer) -> boolean

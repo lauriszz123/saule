@@ -322,6 +322,41 @@ fn type_hint_for_a_checked_cast() {
     );
 }
 
+/// A cast on a value whose type is already known is a *conversion*, not a
+/// test — it cannot fail, so the hint carries no `?`. The hint has to
+/// agree with the checker here or the reader is told to unwrap something
+/// that was never nullable.
+#[test]
+fn type_hint_for_a_conversion_has_no_question_mark() {
+    for (src, want) in [
+        ("fn f(x: float) -> nothing\n  local n = x as integer\nend\n", ": integer"),
+        ("fn f(i: integer) -> nothing\n  local n = i as float\nend\n", ": float"),
+        ("fn f(i: integer) -> nothing\n  local n = i as string\nend\n", ": string"),
+    ] {
+        let hints = raw_hints(src);
+        assert!(
+            hints
+                .iter()
+                .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == want),
+            "wanted `{want}` for `{src}`, got {hints:?}"
+        );
+    }
+}
+
+/// Parsing is the conversion that *can* fail, so this one keeps the `?`
+/// the checker gives it.
+#[test]
+fn type_hint_for_a_parse_keeps_the_question_mark() {
+    let src = "fn f(s: string) -> nothing\n  local n = s as integer\nend\n";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": integer?"),
+        "{hints:?}"
+    );
+}
+
 /// Casting a generic value is the same shape — a `T` narrowed to a
 /// concrete type, which is how a generic body has to do it.
 #[test]

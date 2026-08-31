@@ -349,7 +349,7 @@ export class AxisStack extends View
 		end
 
 		if count > 1 then
-			usedMain = usedMain + self.spacing * float(count - 1)
+			usedMain = usedMain + self.spacing * ((count - 1) as float)
 		end
 
 		-- Pass 2: split whatever is left between the flexible children.
@@ -367,7 +367,7 @@ export class AxisStack extends View
 					local flex: integer = child.view.flexFactor()
 
 					if flex > 0 then
-						local share: float = free * float(flex) / float(totalFlex)
+						local share: float = free * (flex as float) / (totalFlex as float)
 						local size: Size = child.layout(
 							flexChildConstraints(horizontal, share, share, crossMin, crossMax)
 						)
@@ -406,16 +406,16 @@ export class AxisStack extends View
 			leading = free / 2.0
 		elseif self.distribution == Distribution.SpaceBetween then
 			if count > 1 then
-				between = between + free / float(count - 1)
+				between = between + free / ((count - 1) as float)
 			end
 		elseif self.distribution == Distribution.SpaceAround then
 			if count > 0 then
-				local unit: float = free / float(count)
+				local unit: float = free / (count as float)
 				leading = unit / 2.0
 				between = between + unit
 			end
 		elseif self.distribution == Distribution.SpaceEvenly then
-			local unit: float = free / float(count + 1)
+			local unit: float = free / ((count + 1) as float)
 			leading = unit
 			between = between + unit
 		end
@@ -1024,16 +1024,16 @@ export class FlowStack extends View
 				leading = free / 2.0
 			elseif self.distribution == Distribution.SpaceBetween then
 				if count > 1 then
-					between = between + free / float(count - 1)
+					between = between + free / ((count - 1) as float)
 				end
 			elseif self.distribution == Distribution.SpaceAround then
 				if count > 0 then
-					local unit: float = free / float(count)
+					local unit: float = free / (count as float)
 					leading = unit / 2.0
 					between = between + unit
 				end
 			elseif self.distribution == Distribution.SpaceEvenly then
-				local unit: float = free / float(count + 1)
+				local unit: float = free / ((count + 1) as float)
 				leading = unit
 				between = between + unit
 			end

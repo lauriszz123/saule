@@ -322,10 +322,10 @@ export fn showMenu(
 		end
 
 		-- Rough height: enough to keep the menu on screen without measuring it.
-		local height: float = float(#rows) * 30.0 + 12.0
+		local height: float = ((#rows) as float) * 30.0 + 12.0
 		local windowWidth: integer, windowHeight: integer = Window.getSize()
-		local left: float = atMost(x, float(windowWidth) - width - 8.0)
-		local top: float = atMost(y, float(windowHeight) - height - 8.0)
+		local left: float = atMost(x, (windowWidth as float) - width - 8.0)
+		local top: float = atMost(y, (windowHeight as float) - height - 8.0)
 
 		return ModalBarrier(
 			onDismiss: fn()
@@ -574,9 +574,9 @@ export class Tooltip extends SingleChildView
 			-- Offset from the cursor, then nudged back on screen. The width is
 			-- estimated from the message rather than measured — a tooltip is
 			-- never load-bearing enough to justify a layout pass to place it.
-			local estimated: float = float(#message) * 7.0 + 20.0
-			local left: float = atMost(pointerX + 14.0, float(windowWidth) - estimated - 8.0)
-			local top: float = atMost(pointerY + 20.0, float(windowHeight) - 34.0)
+			local estimated: float = ((#message) as float) * 7.0 + 20.0
+			local left: float = atMost(pointerX + 14.0, (windowWidth as float) - estimated - 8.0)
+			local top: float = atMost(pointerY + 20.0, (windowHeight as float) - 34.0)
 
 			return ZStack(
 				children: {

@@ -208,7 +208,6 @@ fn stdlib_table() -> &'static HashMap<&'static str, &'static [&'static str]> {
         m.insert("error", &["message", "level"]);
         m.insert("typeof", &["value"]);
         m.insert("tostring", &["value"]);
-        m.insert("tonumber", &["s", "base"]);
         m.insert("pairs", &["t"]);
         m.insert("ipairs", &["t"]);
 

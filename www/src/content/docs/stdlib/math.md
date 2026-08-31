@@ -27,7 +27,6 @@ functions return `integer` even when given a `float` (e.g. `floor`, `ceil`).
 | `Math.floor(n: float) -> integer` | Round toward `-inf`. |
 | `Math.ceil(n: float) -> integer` | Round toward `+inf`. |
 | `Math.round(n: float) -> integer` | Banker's-friendly round. |
-| `Math.tointeger(v: any) -> integer?` | Lossless integer conversion (`3.0` → `3`, `3.5` → `nil`). |
 | `Math.type(v: any) -> string?` | `"integer"` / `"float"` for numbers, `nil` for non-numbers. |
 | `Math.sign(n: float) -> integer` | `-1`, `0`, or `1`. |
 

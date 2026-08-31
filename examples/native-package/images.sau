@@ -42,8 +42,8 @@ class Main
 		local backdrop = Graphics.newCanvas(180, 120)
 		Graphics.setCanvas(backdrop)
 		for i: integer = 0, 11 do
-			Graphics.setColor(0.15 + float(i) * 0.05, 0.2, 0.45, 1.0)
-			Graphics.rectangle("fill", float(i) * 15.0, 0.0, 15.0, 120.0)
+			Graphics.setColor(0.15 + (i as float) * 0.05, 0.2, 0.45, 1.0)
+			Graphics.rectangle("fill", (i as float) * 15.0, 0.0, 15.0, 120.0)
 		end
 		Graphics.setCanvas()
 
@@ -70,11 +70,11 @@ class Main
 			for event: table in Window.pollEvents() do
 				match tostring(event[1])
 					case "wheelMoved" then
-						zoom = clamp(zoom + float(event[3]) * 0.25, 0.5, 8.0)
+						zoom = clamp(zoom + (event[3] as float)! * 0.25, 0.5, 8.0)
 
-					case "mousePressed" then printf("clicked button %d\n", int(event[4]))
+					case "mousePressed" then printf("clicked button %d\n", (event[4] as integer)!)
 
-					case "mouseReleased" then printf("released button %d\n", int(event[4]))
+					case "mouseReleased" then printf("released button %d\n", (event[4] as integer)!)
 
 					case _ then nil
 				end
@@ -90,7 +90,7 @@ class Main
 
 			-- Advance the animation four cells a second.
 			elapsed = elapsed + Timer.getDelta()
-			frame = int(elapsed * 4.0) % 4
+			frame = ((elapsed * 4.0) as integer) % 4
 
 			Graphics.clear(0.09, 0.09, 0.12)
 
@@ -100,7 +100,7 @@ class Main
 			if sheet != 0 then
 				-- One 16x16 cell, scaled by the wheel. Sampling is confined to the
 				-- cell, so neighbouring frames never bleed in along the edges.
-				local cellX: float = float(frame % 4) * 16.0
+				local cellX: float = ((frame % 4) as float) * 16.0
 				local cellY: float = 0.0
 
 				Graphics.drawFrame(sheet, cellX, cellY, 16.0, 16.0, 260.0, 60.0, 0.0, zoom, zoom)

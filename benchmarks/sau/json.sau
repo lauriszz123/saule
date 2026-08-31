@@ -93,7 +93,7 @@ class Parser
 			self.pos = self.pos + 1
 		end
 		self.pos = self.pos + 1
-		return float(len)
+		return len as float
 	end
 
 	fn number() -> float
@@ -121,7 +121,7 @@ class Parser
 		if neg then
 			acc = -acc
 		end
-		return float(acc)
+		return acc as float
 	end
 end
 

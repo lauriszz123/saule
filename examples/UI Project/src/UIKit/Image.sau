@@ -64,7 +64,7 @@ export class Images
 
 		local width: integer, height: integer = Graphics.imageSize(handle!)
 
-		return Size(float(width), float(height))
+		return Size(width as float, height as float)
 	end
 
 	-- Drop the cache: call it if assets changed on disk and you want a reload.

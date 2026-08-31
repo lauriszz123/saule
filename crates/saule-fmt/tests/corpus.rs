@@ -865,6 +865,37 @@ fn no_unary_pairing_survives_a_format_with_a_different_meaning() {
     }
 }
 
+/// The shapes the `int()`/`float()` → `as` migration emits.
+///
+/// `as` binds tighter than every binary operator, so the parentheses in
+/// `(a + b) as integer` are the whole meaning: dropped, it re-reads as
+/// `a + (b as integer)`, which converts the wrong operand and still
+/// compiles. The tree comparison is what catches that — a textual check
+/// would pass on output that parses to a different program.
+#[test]
+fn a_conversion_casts_parentheses_survive() {
+    for src in [
+        // The parens carry the meaning.
+        "local x = (a + b) as integer",
+        "local x = (seed % 1000) as float",
+        "local x = (count - 1) as float",
+        // Unary binds looser than `as`, so these matter too.
+        "local x = (-7.9) as integer",
+        "local x = (#rows) as float",
+        // Parens the reader wants but precedence does not require.
+        "local x = (a as float) / (b as float)",
+        "local x = health - (dmg as integer)",
+        // Postfix around and after a cast.
+        "local x = t[1]! as integer",
+        "local x = (s as integer)!",
+        // Chained readings: probe, then convert.
+        "local x = (v as integer) as float",
+        "local x = v as integer ?? 0",
+    ] {
+        assert_tree_preserved(src);
+    }
+}
+
 /// Parentheses around a unary or a cast are the author's too, on the same
 /// terms as a binary's.
 #[test]

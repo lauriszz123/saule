@@ -704,6 +704,24 @@ end
     assert!(md.contains("value: boolean"), "got: {md}");
 }
 
+/// A local bound to a cast takes the cast's type — `T` for a conversion,
+/// `T?` for the readings that can fail. Hover and the checker share
+/// `saule_typeck::casts` for this, so a drift here is a drift there.
+#[test]
+fn hovers_local_bound_to_a_cast() {
+    for (src, want) in [
+        // Conversions cannot fail: no `?`.
+        ("fn run(x: float) -> nothing\n  local n = x as integer\n  println(n)\nend\n", "n: integer"),
+        ("fn run(i: integer) -> nothing\n  local n = i as string\n  println(n)\nend\n", "n: string"),
+        // A parse can, and a test on an `any` can.
+        ("fn run(s: string) -> nothing\n  local n = s as integer\n  println(n)\nend\n", "n: integer?"),
+        ("fn run(a: any) -> nothing\n  local n = a as integer\n  println(n)\nend\n", "n: integer?"),
+    ] {
+        let md = hover(src, "n)").unwrap_or_else(|| panic!("no hover for `{src}`"));
+        assert!(md.contains(want), "wanted `{want}` for `{src}`, got: {md}");
+    }
+}
+
 /// Annotated `local s: Storage = ...` should give the same hover
 /// info as the inferred case via the type ascription.
 #[test]

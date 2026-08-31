@@ -128,7 +128,7 @@ local exact: float = 2.5f      -- allowed, though the `.5` already decided it
 ```
 
 The suffix earns its keep in expressions, where `10f` is considerably easier to
-read than `float(10)`:
+read than `10 as float`:
 
 ```saule
 local speed: float = 3.5
@@ -203,10 +203,10 @@ local r: integer = 7 % 2     -- 1
 If you want the real-number quotient, convert one operand first:
 
 ```saule
-local q: float = float(7) / 2.0    -- 3.5
+local q: float = (7 as float) / 2.0    -- 3.5
 ```
 
-Because mixing kinds is a compile error, `7 / 2.0` won't silently produce `3.5` — the checker rejects it and forces an explicit `float(7)` (or `int(2.0)`) so the intent is visible at the call site.
+Because mixing kinds is a compile error, `7 / 2.0` won't silently produce `3.5` — the checker rejects it and forces an explicit `7 as float` (or `2.0 as integer`) so the intent is visible at the call site.
 
 Dividing by zero is a runtime error for both `/` and `%`, not a `nan` or an `inf`:
 
@@ -272,7 +272,7 @@ local halved: integer = 255 >> 4         -- 15
 ```saule
 local f: float = 6.0
 local bad: integer = f & 1               -- ERROR: `&` expects `integer`
-local ok: integer = int(f) & 1           -- 0
+local ok: integer = (f as integer) & 1   -- 0
 ```
 
 **Shifts fill with zeros in both directions**, which is Lua's rule and means `>>` is a *logical* shift, not an arithmetic one — the sign bit is not replicated. A negative shift count shifts the other way, and shifting by 64 or more shifts every bit out:
@@ -345,9 +345,6 @@ Two rules keep a cast from ever being decoration:
 
 A cast off a nullable value converts the payload and passes `nil` through,
 so `maybeFloat as integer` is `integer?` — nil in, nil out.
-
-The old `int()` and `float()` prelude functions still work and mean exactly
-what the first two rows mean.
 
 ### Escaping `any` with `as`
 
@@ -2447,8 +2444,7 @@ of every construct, see the [Grammar](#grammar).
 | `~a` | Bitwise complement (prefix `~`; infix `~` is xor) |
 | `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`, `&=`, `\|=`, `<<=`, `>>=` | Compound assignment (no `~=` — that is Lua's `!=`) |
 | `:` | Pipeline stage call inside `when(...)` |
-| `int()` | Cast float to integer, truncates toward zero |
-| `float()` | Cast integer to float, always safe |
+| `as` | Cast — converts a typed value (`x as integer` truncates toward zero, `n as string` renders), tests an `any` |
 
 ## Grammar
 

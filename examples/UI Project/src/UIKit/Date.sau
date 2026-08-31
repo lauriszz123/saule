@@ -284,8 +284,8 @@ export fn showDatePicker(
 		local windowWidth: integer, windowHeight: integer = Window.getSize()
 		local width: float = 232.0
 		local height: float = 260.0
-		local left: float = atMost(x, float(windowWidth) - width - 8.0)
-		local top: float = atMost(y, float(windowHeight) - height - 8.0)
+		local left: float = atMost(x, (windowWidth as float) - width - 8.0)
+		local top: float = atMost(y, (windowHeight as float) - height - 8.0)
 
 		return ModalBarrier(
 			onDismiss: fn()

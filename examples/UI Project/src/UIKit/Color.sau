@@ -38,11 +38,11 @@ export class Color
 	end
 
 	static fn rgb(r: integer, g: integer, b: integer) -> Color
-		return Color(float(r) / 255.0, float(g) / 255.0, float(b) / 255.0, 1.0)
+		return Color((r as float) / 255.0, (g as float) / 255.0, (b as float) / 255.0, 1.0)
 	end
 
 	static fn rgba(r: integer, g: integer, b: integer, a: float) -> Color
-		return Color(float(r) / 255.0, float(g) / 255.0, float(b) / 255.0, a)
+		return Color((r as float) / 255.0, (g as float) / 255.0, (b as float) / 255.0, a)
 	end
 
 	-- 0xRRGGBB, the way you'd copy it out of a design tool.

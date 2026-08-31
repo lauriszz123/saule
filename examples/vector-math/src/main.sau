@@ -36,7 +36,7 @@ class Main
 			velocity = velocity + gravity.scale(dt)
 			position = position + velocity.scale(dt)
 
-			printf("t=%.1f  pos=%s\n", float(step) * dt, tostring(position))
+			printf("t=%.1f  pos=%s\n", (step as float) * dt, tostring(position))
 		end
 	end
 

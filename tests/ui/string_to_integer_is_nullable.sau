@@ -1,0 +1,11 @@
+-- ERROR: parsing a string into a number can fail, so `as integer` on a
+-- string is `integer?` — the failure has to be handled rather than
+-- assumed away. `s as integer ?? 0` or `(s as integer)!` both compile.
+
+class Main
+  static fn main()
+    local s: string = "42"
+    local n: integer = s as integer    -- ERROR: `integer?`, not `integer`
+    println(n)
+  end
+end

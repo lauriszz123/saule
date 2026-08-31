@@ -1,6 +1,6 @@
 class Main
 	static fn main()
-		println(type(42), tostring(3.5), int(3.9), float(2))
+		println(type(42), tostring(3.5), 3.9 as integer, 2 as float)
 		println(Math.abs(-5), Math.min(3f, 1f, 7f), Math.max(3f, 1f, 7f))
 		println(
 			Math.floor(2.9),

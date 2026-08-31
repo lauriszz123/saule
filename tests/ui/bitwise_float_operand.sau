@@ -1,7 +1,7 @@
 -- ERROR: `&` is integer-only. A bit pattern is not a property a `float`
 -- has, and Saule never converts between the two numeric kinds implicitly —
 -- so unlike Lua 5.3, an integral-valued float is rejected rather than
--- accepted. `int(x) & 1` is the way to say it.
+-- accepted. `(x as integer) & 1` is the way to say it.
 class Main
 	static fn main()
 		local f: float = 6.0
