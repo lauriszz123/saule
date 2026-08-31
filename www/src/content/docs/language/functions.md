@@ -118,6 +118,8 @@ end
 
 Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function you are *calling* is not the `T` declared by the one you are writing, however alike they read.
 
+Classes, interfaces and enums take type parameters the same way — see [Generic Classes](/saule/language/classes/#generic-classes), [Generic Interfaces](/saule/language/interfaces/#generic-interfaces) and [Generic Enums](/saule/language/enums/#generic-enums).
+
 ### Piping with `when(...):`
 
 The `when(...)` keyword starts a **colon-based pipeline** ("Saule style"). It wraps a value, and every subsequent `:func(args)` calls `func` with the upstream value threaded in as the **first argument**:

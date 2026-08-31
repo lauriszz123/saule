@@ -105,6 +105,8 @@ export class PlayerRepository implements Repository<Player>
 end
 ```
 
+The argument is real, not decoration: `Repository<Player>` substitutes `Player` for `T` throughout, so the implementing class must declare `save(item: Player)` and `findById(id: integer) -> Player`. An interface used as a type carries its argument too — a `Repository<Player>` slot accepts nothing a `Repository<Item>` would fill.
+
 ### Custom Iterable
 
 Any class implementing `Iterable<T>` works inside a `for-in` loop automatically. The contract is a single method `iter()` that returns a **step closure**: each call returns the next element, or `nil` to signal the end. The loop stops on the first `nil`.

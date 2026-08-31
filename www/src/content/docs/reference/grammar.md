@@ -68,7 +68,7 @@ decl ::= ['export'] (function | class | interface | enum)
 
 function  ::= 'fn' Name [typeParams] params ['->' type] chunk 'end'
 
-class     ::= 'class' Name [typeArgs]
+class     ::= 'class' Name [typeParams]
               ['extends' Name [typeArgs]]
               ['implements' Name [typeArgs] {',' Name [typeArgs]}]
               {member} 'end'
@@ -77,12 +77,12 @@ modifiers ::= ['static'] ['local'] | ['local'] ['static']
 method    ::= 'fn' Name [typeParams] params ['->' type] chunk 'end'
 field     ::= Name ':' type ['=' exp]
 
-interface ::= 'interface' Name [typeArgs]
+interface ::= 'interface' Name [typeParams]
               ['extends' Name [typeArgs] {',' Name [typeArgs]}]
               {methodSig} 'end'
-methodSig ::= 'fn' Name [typeArgs] params ['->' type]
+methodSig ::= 'fn' Name [typeParams] params ['->' type]
 
-enum      ::= 'enum' Name {variant} {enumMethod} 'end'
+enum      ::= 'enum' Name [typeParams] {variant} {enumMethod} 'end'
 variant   ::= [','] Name ['=' exp | params]
 enumMethod::= 'fn' Name params ['->' type] chunk 'end'
 
@@ -112,6 +112,13 @@ baseType  ::= Name [typeArgs]
 typeArgs   ::= '<' type {',' type} '>'
 typeParams ::= '<' Name {',' Name} '>'
 ```
+
+`typeParams` **declares** — each entry is a bare name that stands for whatever
+the user of the declaration picks. `typeArgs` **applies** — each entry is a
+type, filling one of those slots. `Name typeArgs` in a type position is a
+generic application: `Box<integer>`, `Result<string>`, `Repository<Player>`.
+The count has to match what the named declaration declares, and `table<K, V>`
+is its own form rather than an application of a `table` declaration.
 
 A parenthesised list of one type is just grouping; two or more is a tuple,
 which is how a function returning multiple values states its return type.
