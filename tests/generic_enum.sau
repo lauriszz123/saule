@@ -1,0 +1,50 @@
+-- `enum Result<T>` — a generic enum's payload is typed by the type
+-- argument the value carries, not by `any`. Matching a `Result<integer>`
+-- binds an `integer`, and the same declaration serves `Result<string>`.
+
+enum Result<T>
+	Ok(value: T),
+	Err(message: string)
+end
+
+local ok: Result<integer> = Result.Ok(5)
+local n: integer = match ok
+	case Result.Ok(v) then v + 1
+	case Result.Err(m) then 0
+end
+println(n)
+
+-- The same enum at a different instantiation.
+local text: Result<string> = Result.Ok("hi")
+println(match text
+	case Result.Ok(v) then v .. "!"
+	case Result.Err(m) then m
+end)
+
+-- Inference without an annotation.
+local inferred = Result.Ok(true)
+println(match inferred
+	case Result.Ok(v) then v
+	case Result.Err(m) then false
+end)
+
+-- `Err` pins nothing down, so the annotation supplies the instantiation.
+-- The `Ok` arm still binds an `integer`, which is what the arms agreeing
+-- on `integer` proves.
+local failed: Result<integer> = Result.Err("boom")
+println(match failed
+	case Result.Ok(v) then v
+	case Result.Err(m) then -1
+end)
+
+-- Two parameters, bound independently.
+enum Either<L, R>
+	Left(value: L),
+	Right(value: R)
+end
+
+local e: Either<integer, string> = Either.Right("right")
+println(match e
+	case Either.Left(v) then tostring(v)
+	case Either.Right(v) then v
+end)

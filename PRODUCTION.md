@@ -340,11 +340,31 @@ and it has caught every VM bug found so far.
 
 The bytecode compiler does not yet reach the whole language. A module it
 cannot compile **falls back to the tree-walker** rather than guessing, so a
-gap costs speed and never correctness. Today **9 of the 11 example projects
-run entirely on the VM** and `run_examples_diff.sh` reports **0 fallbacks**;
-the two that remain are refused by design, on `an import of a dynamic native
-package`, since loading one is a runtime side effect that compiling must not
-perform. At the file level, 87 of 92 `tests/*.sau` fixtures compile fully.
+gap costs speed and never correctness. Today **10 of the 11 example projects
+run entirely on the VM** and `run_examples_diff.sh` reports **0 fallbacks**.
+At the file level, 87 of 92 `tests/*.sau` fixtures compile fully.
+
+**`UI Project` is the exception, and it is currently worse than a fallback.**
+It no longer refuses anywhere — it compiles end to end and fails at *run*
+time, on a typed opcode reading `nil` in `AnimatedBuilder.body`. That is a
+miscompile, not a gap, and it breaks the promise this section opens with: it
+costs correctness, not speed. Until it is diagnosed, that project should be
+run with `--interp`. `VM_TASKS.md` tracks it.
+
+The route there is worth knowing about, because it is what a large program
+does to a compiler: closing one gap reveals the next, and `UI Project` walked
+through seven of them before compiling at all — the last of which was a real
+`VM_DESIGN.md` §24.2 bug, a subclass silently inheriting its *grandparent's*
+method instead of its parent's override, reachable only across a module
+boundary. A fallback reports only the first thing a program trips on, so a
+measured cause is never a remainder.
+
+An `import` of a dynamic native package used to be the other refusal, and was
+a deliberate one: its exports could not be folded without `dlopen`, and
+compiling must not have that side effect. It is folded from the package's
+*manifest* now — names, symbols and arities, parsed without touching the
+binary — and the load itself happens at run time, per module, where the
+tree-walker does it.
 
 **A note on how that is measured, because this section previously reported it
 wrongly.** It once read "the remaining refusals are concentrated in
@@ -556,13 +576,13 @@ part (a coherent, working implementation) is done.
 
    The caveat this entry used to carry — "some real projects still take the
    tree-walking fallback and get the old numbers" — has largely been paid off:
-   **9 of the 11 example projects now run entirely on the VM**, and
-   `run_examples_diff.sh` reports **0 fallbacks**. The two that remain are
-   refused by *design*, on `an import of a dynamic native package`, because
-   loading one is a runtime side effect that compiling must not perform. Three
-   single-file gaps are left (an enum with methods, a prelude name outside a
-   call, `self` outside a method); each costs speed on the file that uses it,
-   never correctness.
+   **10 of the 11 example projects now run entirely on the VM**, and
+   `run_examples_diff.sh` reports **0 fallbacks**. The eleventh,
+   `UI Project`, compiles fully but miscompiles at run time — see the note
+   above; it is a bug to fix, not a gap to fall back on. Three single-file
+   gaps are left (an enum with methods,
+   a prelude name outside a call, `self` outside a method); each costs speed
+   on the file that uses it, never correctness.
 10. **Stdlib holes that force a native package**: pattern matching / regex
     (Lua's `string.match`, `gmatch`, `gsub` have no equivalent — `String.find`
     is literal-only), JSON, structured filesystem errors, date/time beyond

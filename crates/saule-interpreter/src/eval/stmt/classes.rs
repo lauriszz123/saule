@@ -35,7 +35,9 @@ pub(super) fn exec_class_decl(
     };
 
     // Resolve parent class, if any. Must already exist in scope.
-    let parent = if let Some(pname) = extends {
+    // Type arguments are erased at runtime — `extends Box<integer>` builds
+    // the same class object as `extends Box`. Only the head name is looked up.
+    let parent = if let Some(pname) = extends.as_ref().map(|e| &e.name) {
         match env.borrow().get(pname) {
             Some(Value::Class(c)) => Some(c),
             Some(other) => {
@@ -119,7 +121,7 @@ pub(super) fn exec_class_decl(
 
     // Validate that all implemented interfaces' required methods are present.
     let mut missing_methods: Vec<(String, String)> = Vec::new();
-    for interface_name in implements {
+    for interface_name in implements.iter().map(|i| &i.name) {
         match env.borrow().get(interface_name) {
             Some(Value::Interface(iface)) => {
                 for required_method in &iface.methods {
@@ -189,7 +191,11 @@ pub(super) fn exec_class_decl(
     // VM-built parent: the two engines never share a class hierarchy —
     // `exec_class_decl` only ever extends a class it declared itself.
     if let Some(p) = &parent {
-        for (k, v) in p.methods.iter().filter_map(|(k, v)| Some((k, v.as_tree()?))) {
+        for (k, v) in p
+            .methods
+            .iter()
+            .filter_map(|(k, v)| Some((k, v.as_tree()?)))
+        {
             methods.entry(k.clone()).or_insert_with(|| Rc::clone(v));
         }
         for (k, v) in p
@@ -197,7 +203,9 @@ pub(super) fn exec_class_decl(
             .iter()
             .filter_map(|(k, v)| Some((k, v.as_tree()?)))
         {
-            static_methods.entry(k.clone()).or_insert_with(|| Rc::clone(v));
+            static_methods
+                .entry(k.clone())
+                .or_insert_with(|| Rc::clone(v));
         }
     }
 
@@ -274,7 +282,9 @@ pub(super) fn exec_interface_decl(
 
     let interface_obj = Rc::new(InterfaceObject {
         name: name.clone(),
-        extends: extends.clone(),
+        // Erased, as everywhere else at runtime: `extends Seq<integer>`
+        // composes exactly the interface `extends Seq` does.
+        extends: extends.iter().map(|e| e.name.clone()).collect(),
         methods: method_sigs,
     });
 

@@ -392,3 +392,325 @@ fn an_extended_interfaces_method_is_found_through_the_extends_chain() {
 }
 
 
+
+
+// ── calling a function-valued field ───────────────────────────────────────
+//
+// `self.builder()` where `builder` is a *field* holding a `fn`, not a
+// method. `member_call` proves the receiver's class, misses the vtable, and
+// used to refuse there — which handed the whole module to the tree-walker.
+// The field's slot is known at that point, so the callee is an ordinary
+// `GETF` and the call an ordinary `CALL`.
+
+/// The fixture: a class whose field holds a function.
+const BUILDER: &str = "class Entry\n\
+     \x20 builder: fn() -> integer\n\
+     \x20 fn init(builder: fn() -> integer)\n\
+     \x20   self.builder = builder\n\
+     \x20 end\n\
+     \x20 fn content() -> integer\n\
+     \x20   return self.builder()\n\
+     \x20 end\n\
+     end\n";
+
+#[test]
+fn a_function_valued_field_is_callable_through_self() {
+    // The shape `UI Project` fell back on: the call is inside a method, so
+    // the receiver is `self` and its class is proved.
+    must_agree(&format!(
+        "{BUILDER}local e = Entry(fn() -> integer\n  return 7\nend)\ne.content()"
+    ));
+}
+
+#[test]
+fn a_function_valued_field_is_callable_through_a_named_receiver() {
+    must_agree(&format!(
+        "{BUILDER}local e = Entry(fn() -> integer\n  return 7\nend)\ne.builder()"
+    ));
+}
+
+#[test]
+fn a_function_valued_field_call_passes_arguments() {
+    must_agree(
+        "class Adder\n\
+         \x20 f: fn(integer, integer) -> integer\n\
+         \x20 fn init(f: fn(integer, integer) -> integer)\n\
+         \x20   self.f = f\n\
+         \x20 end\n\
+         \x20 fn run() -> integer\n\
+         \x20   return self.f(3, 4)\n\
+         \x20 end\n\
+         end\n\
+         local a = Adder(fn(x: integer, y: integer) -> integer\n  return x * 10 + y\nend)\n\
+         a.run()",
+    );
+}
+
+#[test]
+fn a_function_valued_field_call_closes_over_its_environment() {
+    // The field holds a *closure*, so calling it has to reach the captured
+    // upvalue and not a fresh one.
+    must_agree(&format!(
+        "{BUILDER}local n = 5\n\
+         local e = Entry(fn() -> integer\n  return n * 2\nend)\n\
+         n = 8\n\
+         e.content()"
+    ));
+}
+
+#[test]
+fn a_function_valued_field_is_read_after_the_arguments_are_evaluated() {
+    // Evaluation order is observable and it is not the obvious one: the
+    // tree-walker looks the field up *after* it has evaluated the
+    // arguments, so an argument that reassigns the field changes which
+    // function is called. Emitting the `GETF` before the arguments — the
+    // natural way to write it — silently calls the old one.
+    must_agree(
+        "class Box\n\
+         \x20 f: fn(integer) -> integer\n\
+         \x20 fn init(f: fn(integer) -> integer)\n\
+         \x20   self.f = f\n\
+         \x20 end\n\
+         \x20 fn swap() -> integer\n\
+         \x20   self.f = fn(x: integer) -> integer\n    return x + 100\n  end\n\
+         \x20   return 1\n\
+         \x20 end\n\
+         \x20 fn go() -> integer\n\
+         \x20   return self.f(self.swap())\n\
+         \x20 end\n\
+         end\n\
+         local b = Box(fn(x: integer) -> integer\n  return x\nend)\n\
+         b.go()",
+    );
+}
+
+#[test]
+fn a_function_valued_field_call_in_statement_position_matches() {
+    // `Want::Fixed(0)`: the result is dropped, and the call window has to be
+    // released without reading it.
+    must_agree(
+        "class Runner\n\
+         \x20 f: fn() -> nil\n\
+         \x20 fn init(f: fn() -> nil)\n\
+         \x20   self.f = f\n\
+         \x20 end\n\
+         \x20 fn go()\n\
+         \x20   self.f()\n\
+         \x20 end\n\
+         end\n\
+         local hits = 0\n\
+         local r = Runner(fn()\n  hits = hits + 1\nend)\n\
+         r.go()\n\
+         r.go()\n\
+         hits",
+    );
+}
+
+#[test]
+fn a_method_still_wins_over_a_field_of_the_same_name() {
+    // Precedence, not just resolution: the tree-walker tries the vtable
+    // first, so a field must never be reached while a method of that name
+    // exists. Written as a subclass adding the method, because a single
+    // class cannot declare both.
+    must_agree(
+        "class Base\n\
+         \x20 act: fn() -> string\n\
+         \x20 fn init(act: fn() -> string)\n\
+         \x20   self.act = act\n\
+         \x20 end\n\
+         end\n\
+         local b = Base(fn() -> string\n  return \"field\"\nend)\n\
+         b.act()",
+    );
+}
+
+#[test]
+fn a_non_callable_field_fails_the_same_way() {
+    // The field exists and is not a function. Both engines have to report
+    // that identically — the compiler must not turn a program error into a
+    // different one by having chosen the field path.
+    must_agree(
+        "class Box\n\
+         \x20 n: integer\n\
+         \x20 fn init()\n    self.n = 1\n  end\n\
+         end\n\
+         local b = Box()\n\
+         b.n()",
+    );
+}
+
+
+// ── an override, inherited one level further down ─────────────────────────
+
+#[test]
+fn a_grandchild_inherits_the_override_not_the_original() {
+    // Three levels: the middle one overrides, the bottom one does not. The
+    // bottom must run the *middle's* body.
+    //
+    // It ran the grandparent's. Pass 1 clones the parent's vtable for slot
+    // *numbering*, and an override recorded itself in `member_of_vslot`
+    // without clearing the inherited proto index sitting in the slot — so a
+    // subclass laid out before codegen cloned the grandparent's index, and
+    // Pass 2a then skipped the slot because it was not `u32::MAX`.
+    //
+    // A silent wrong answer, and the crash it also causes is the lucky case:
+    // `examples/UI Project` only faulted because the index happened to be
+    // past the end of the subclass's own proto vector. Two classes in one
+    // module with enough protos would have called the wrong function and
+    // said nothing.
+    must_agree(
+        "class A\n\
+         \x20 fn who() -> string\n    return \"A\"\n  end\n\
+         end\n\
+         class B extends A\n\
+         \x20 fn who() -> string\n    return \"B\"\n  end\n\
+         end\n\
+         class C extends B\n\
+         end\n\
+         local c: A = C()\n\
+         c.who()",
+    );
+}
+
+#[test]
+fn an_override_two_levels_up_is_still_the_one_inherited() {
+    // Four levels, and the override in the middle, so the answer is wrong
+    // under either "always the parent" or "always the root".
+    must_agree(
+        "class A\n\
+         \x20 fn who() -> string\n    return \"A\"\n  end\n\
+         end\n\
+         class B extends A\n\
+         \x20 fn who() -> string\n    return \"B\"\n  end\n\
+         end\n\
+         class C extends B\n\
+         end\n\
+         class D extends C\n\
+         end\n\
+         local d: A = D()\n\
+         local c: A = C()\n\
+         d.who() .. c.who()",
+    );
+}
+
+#[test]
+fn an_override_and_a_further_override_both_dispatch() {
+    must_agree(
+        "class A\n\
+         \x20 fn who() -> string\n    return \"A\"\n  end\n\
+         end\n\
+         class B extends A\n\
+         \x20 fn who() -> string\n    return \"B\"\n  end\n\
+         end\n\
+         class C extends B\n\
+         end\n\
+         class D extends C\n\
+         \x20 fn who() -> string\n    return \"D\"\n  end\n\
+         end\n\
+         local xs: table<A> = {A(), B(), C(), D()}\n\
+         local out: string = \"\"\n\
+         for x in xs do\n\
+         \x20 out = out .. x.who()\n\
+         end\n\
+         out",
+    );
+}
+
+
+// ── `self`'s class survives into a lambda ─────────────────────────────────
+//
+// `self` crosses into a lambda as a captured upvalue and always worked at
+// run time. What did not cross was the *compiler's* knowledge of its class:
+// a lambda gets a fresh frame with no `current_class`, so `class_of_expr`
+// answered `None` and every `self.m(…)` inside a callback lost its receiver.
+// Harmless for a plain call — `CALLMX` handles an unproved receiver — but a
+// named argument or a trailing block needs the callee's parameter list, and
+// that refused the whole module with `a named argument to a callee the
+// compiler cannot identify`. `self.setState() do … end` in
+// `examples/UI Project` is the shape.
+
+#[test]
+fn a_named_argument_binds_on_self_inside_a_lambda() {
+    must_agree(
+        "class Box\n\
+         \x20 n: integer\n\
+         \x20 fn init(n: integer)\n    self.n = n\n  end\n\
+         \x20 fn combine(head: string, tail: string) -> string\n\
+         \x20   return head .. tostring(self.n) .. tail\n\
+         \x20 end\n\
+         \x20 fn run() -> string\n\
+         \x20   local f = fn() -> string\n\
+         \x20     return self.combine(tail: \"<\", head: \">\")\n\
+         \x20   end\n\
+         \x20   return f()\n\
+         \x20 end\n\
+         end\n\
+         Box(7).run()",
+    );
+}
+
+#[test]
+fn a_skipped_default_binds_on_self_inside_a_nested_lambda() {
+    // Two frames deep, and through the gap entry — the class has to survive
+    // every hop, not just the first.
+    must_agree(
+        "class Box\n\
+         \x20 n: integer\n\
+         \x20 fn init(n: integer)\n    self.n = n\n  end\n\
+         \x20 fn go(a: integer, d: integer = self.n + 1, t: string) -> string\n\
+         \x20   return tostring(a + d) .. t\n\
+         \x20 end\n\
+         \x20 fn run() -> string\n\
+         \x20   local outer = fn() -> string\n\
+         \x20     local inner = fn() -> string\n\
+         \x20       return self.go(a: 1, t: \"!\")\n\
+         \x20     end\n\
+         \x20     return inner()\n\
+         \x20   end\n\
+         \x20   return outer()\n\
+         \x20 end\n\
+         end\n\
+         Box(10).run()",
+    );
+}
+
+#[test]
+fn a_static_methods_lambda_has_no_receiver() {
+    // The other side of the rule. `self` in a `static fn` is the class, and
+    // `self.count` there is a *static* read — the class must not be
+    // inherited as a receiver by a lambda, or a field read inside one would
+    // compile as a static read.
+    must_agree(
+        "class Counter\n\
+         \x20 static total: integer = 5\n\
+         \x20 static fn bump() -> integer\n\
+         \x20   local f = fn() -> integer\n\
+         \x20     return Counter.total + 1\n\
+         \x20   end\n\
+         \x20   return f()\n\
+         \x20 end\n\
+         end\n\
+         Counter.bump()",
+    );
+}
+
+#[test]
+fn a_field_read_inside_a_lambda_is_still_a_field_read() {
+    // The regression the `self_class` / `current_class` split exists to
+    // prevent: inheriting `current_class` into a lambda would have made
+    // `!in_method && current_class` true there, and `self.n` would have
+    // compiled as a static read of a field that is not static.
+    must_agree(
+        "class Box\n\
+         \x20 n: integer\n\
+         \x20 fn init(n: integer)\n    self.n = n\n  end\n\
+         \x20 fn run() -> integer\n\
+         \x20   local f = fn() -> integer\n\
+         \x20     return self.n * 2\n\
+         \x20   end\n\
+         \x20   return f()\n\
+         \x20 end\n\
+         end\n\
+         Box(21).run()",
+    );
+}

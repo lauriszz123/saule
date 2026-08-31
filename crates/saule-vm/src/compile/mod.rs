@@ -465,7 +465,14 @@ pub(crate) fn compile_into(
                 continue;
             }
             if let Some(&inherited) = c.chunk.classes[parent as usize].vtable.get(slot) {
-                c.chunk.classes_mut()[i].vtable[slot] = inherited;
+                // The owner travels with the index. They describe one thing
+                // — whose chunk this proto number is an index into — so
+                // adopting a body without adopting its owner would leave the
+                // pair describing two different classes.
+                let owner = c.chunk.classes[parent as usize].vowner[slot];
+                let row = &mut c.chunk.classes_mut()[i];
+                row.vtable[slot] = inherited;
+                row.vowner[slot] = owner;
             }
         }
     }

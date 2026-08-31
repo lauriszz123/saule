@@ -31,7 +31,14 @@ fn callee_signature(callee: &Expr, scope: &Scope) -> Option<(Vec<Type>, Vec<Stri
             if with_classes(|r| r.contains_key(name))
                 && let Some(sig) = saule_semantic::lookup_method(name, "init")
             {
-                return Some(from_params(&sig.params, sig.type_params));
+                // The *class's* parameters are inference variables here too,
+                // not just `init`'s own. `class Box<T> … fn init(v: T)` is
+                // called as `Box(5)`, and without `T` in this list the slot
+                // reads as a rigid type that matches only itself — so every
+                // construction of a generic class was an argument error.
+                let mut type_params = class_type_params(name);
+                type_params.extend(sig.type_params.iter().cloned());
+                return Some(from_params(&sig.params, type_params));
             }
             // A sibling member reached without `self.` inside a class body.
             if let Some(class) = current_class()
@@ -164,6 +171,54 @@ pub(crate) fn select_native_sig(
     })
 }
 
+/// The bound on the type parameter `expected` *is*, if it is one.
+///
+/// Only a slot that is exactly a bounded parameter — `N`, `N?`, or the
+/// variadic `...N` — is checked. A structural slot like `table<N>` is left to
+/// unification: the bound still applies to whatever `N` ends up as, and it is
+/// reported against the argument that actually pins it down.
+fn bound_for<'a>(
+    expected: &Type,
+    fresh: &Freshened,
+    bounds: &'a [(String, Vec<String>)],
+) -> Option<&'a Vec<String>> {
+    let name = match expected {
+        Type::Named(n) => n.as_str(),
+        Type::Nullable(inner) => match inner.as_ref() {
+            Type::Named(n) => n.as_str(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    // `expected` is in fresh space; the bounds are keyed by the signature's
+    // own parameter names.
+    let original = fresh.original_of(name)?;
+    bounds
+        .iter()
+        .find(|(p, _)| p == original)
+        .map(|(_, allowed)| allowed)
+}
+
+/// The plain type name `ty` denotes, looking through nullability. `None` for
+/// anything structural (a table, tuple or function type), which no numeric
+/// bound can accept anyway.
+fn concrete_name(ty: &Type) -> Option<&str> {
+    match ty {
+        Type::Named(n) => Some(n.as_str()),
+        Type::Nullable(inner) => concrete_name(inner),
+        _ => None,
+    }
+}
+
+/// The generic type parameters `class_name` declares.
+fn class_type_params(class_name: &str) -> Vec<String> {
+    with_classes(|r| {
+        r.get(class_name)
+            .map(|c| c.type_params.clone())
+            .unwrap_or_default()
+    })
+}
+
 fn select_overload(
     forms: &[crate::sigs::NativeSig],
     args: &[CallArg],
@@ -183,8 +238,7 @@ fn select_overload(
         positional.len() >= required
             && (sig.variadic.is_some() || positional.len() <= sig.params.len())
     };
-    let candidates: Vec<&crate::sigs::NativeSig> =
-        forms.iter().filter(|s| fits_arity(s)).collect();
+    let candidates: Vec<&crate::sigs::NativeSig> = forms.iter().filter(|s| fits_arity(s)).collect();
 
     if candidates.is_empty() {
         // Nothing takes this many arguments. Report against the form
@@ -308,6 +362,24 @@ pub(crate) fn check_native_args(
             // from sibling args downstream — but we have nothing to do here.
             continue;
         };
+        // A bounded type parameter (`Math.max<N: integer | float>`) only
+        // binds to the types its bound names. Checked before unification so
+        // the *first* argument out of bounds is the one reported, rather than
+        // the second one for disagreeing with a binding that should never
+        // have been made.
+        if let Some(allowed) = bound_for(&expected_raw, &fresh, &sig.bounds)
+            && let Some(found_name) = concrete_name(&found_ty)
+            && !allowed.iter().any(|a| a == found_name)
+        {
+            errors.push(TypeCheckError::NativeArgTypeMismatch {
+                callee: callee.to_string(),
+                arg: i + 1,
+                expected: allowed.join(" or "),
+                found: type_to_string(&found_ty),
+                span: to_source_span(value_expr.span.clone()),
+            });
+            continue;
+        }
         // Refine the substitution from this arg/expected pair before the
         // compatibility check, so a generic slot that's still free becomes
         // bound rather than rejected.

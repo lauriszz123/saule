@@ -54,6 +54,86 @@ pub fn build_exports(
     Ok(exports)
 }
 
+/// Build the importable surface of a dynamic package from its **manifest
+/// alone**, with every method deferring its symbol lookup to the first call.
+///
+/// This is what lets the bytecode compiler fold a dynamic package's exports
+/// into constants the way it already folds a static one's. The manifest
+/// carries every name, symbol and arity the compiler needs and is parsed at
+/// [`discover`] time, so building this surface loads nothing: no `dlopen`,
+/// no symbol resolution, no side effect a *compile* must not have.
+///
+/// The library is still loaded before any of these closures can run —
+/// `saule-vm`'s `run_program` calls [`preload`] immediately before the body
+/// of the module that imported it, which is where the tree-walker resolves
+/// the same `import`. The lazy resolve inside each closure is therefore a
+/// cache hit in practice; it is written to work anyway so that a closure
+/// which somehow outlives its preload fails with a diagnostic rather than a
+/// dangling pointer.
+///
+/// `None` when `name` is not a discovered package, or on a build with no
+/// dynamic loading at all — callers refuse and fall back.
+#[cfg(feature = "native-packages")]
+pub fn build_exports_deferred(name: &str) -> Option<ModuleExports> {
+    let manifest = lookup(name)?;
+    let mut exports = ModuleExports::default();
+    for class in &manifest.exports {
+        let class_obj = build_class_deferred(class, name);
+        exports
+            .values
+            .insert(class.name.clone(), Value::Class(Rc::new(class_obj)));
+    }
+    Some(exports)
+}
+
+/// See the `native-packages` version. Without dynamic loading there is no
+/// surface to defer to, so callers refuse and let the tree-walker report.
+#[cfg(not(feature = "native-packages"))]
+pub fn build_exports_deferred(_name: &str) -> Option<ModuleExports> {
+    None
+}
+
+/// Load a package's shared library and check that every symbol its manifest
+/// names resolves — the side-effecting half of [`build_exports`], without
+/// building any values.
+///
+/// Used by `saule-vm`, which folds a package's exports at compile time via
+/// [`build_exports_deferred`] and needs the load itself to happen at *run*
+/// time, at the point the tree-walker would have done it. Checking every
+/// symbol (not just the ones the importing module names — the same set
+/// [`build_exports`] resolves) is what makes a broken package fail
+/// identically under both engines.
+#[cfg(feature = "native-packages")]
+pub fn preload(name: &str, import_span: std::ops::Range<usize>) -> Result<(), RuntimeError> {
+    let manifest = lookup(name).ok_or_else(|| RuntimeError::ImportError {
+        message: format!("native package `{name}` is no longer registered"),
+        span: import_span.clone(),
+    })?;
+
+    let lib = load_library(&manifest).map_err(|message| RuntimeError::ImportError {
+        message,
+        span: import_span.clone(),
+    })?;
+
+    for class in &manifest.exports {
+        for method in &class.methods {
+            resolve_symbol(&lib, &method.symbol).map_err(|message| RuntimeError::ImportError {
+                message,
+                span: import_span.clone(),
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Stand-in for builds without the `native-packages` feature. Defers to
+/// [`build_exports`] so the "cannot be loaded in this build" wording is
+/// written once.
+#[cfg(not(feature = "native-packages"))]
+pub fn preload(name: &str, import_span: std::ops::Range<usize>) -> Result<(), RuntimeError> {
+    build_exports(name, import_span).map(|_| ())
+}
+
 /// Stand-in for builds without the `native-packages` feature — wasm, chiefly.
 ///
 /// A package's *manifest* is still discovered and its type signatures still
@@ -235,7 +315,39 @@ pub(crate) fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassO
         )?;
         static_fields.insert(method.name.clone(), value);
     }
-    Ok(ClassObject {
+    Ok(class_object(spec, static_fields))
+}
+
+/// [`build_class`] with no library in hand: each method resolves its symbol
+/// on first call instead of now. Used by the bytecode compiler, which folds
+/// a package's exports into constants and must not `dlopen` while doing it.
+///
+/// Infallible by construction — nothing here can fail, because nothing here
+/// touches the binary. Every failure the eager path reports at import time
+/// is reported by [`preload`] instead, at the same point in the program.
+#[cfg(feature = "native-packages")]
+pub(crate) fn build_class_deferred(spec: &ClassSpec, package: &str) -> ClassObject {
+    let mut static_fields = fxmap();
+    for method in &spec.methods {
+        let value = make_native_deferred(
+            format!("{}.{}", spec.name, method.name),
+            package.to_string(),
+            method.symbol.clone(),
+            method.param_names.clone(),
+            method.returns.len(),
+        );
+        static_fields.insert(method.name.clone(), value);
+    }
+    class_object(spec, static_fields)
+}
+
+/// The [`ClassObject`] shape both builders produce, written once.
+#[cfg(feature = "native-packages")]
+fn class_object(
+    spec: &ClassSpec,
+    static_fields: crate::fxhash::FxHashMap<String, Value>,
+) -> ClassObject {
+    ClassObject {
         name: spec.name.clone(),
         parent: None,
         field_defs: Vec::new(),
@@ -246,7 +358,7 @@ pub(crate) fn build_class(spec: &ClassSpec, lib: &Arc<Library>) -> Result<ClassO
         static_fields: RefCell::new(static_fields),
         static_methods: Default::default(),
         constructor: None,
-    })
+    }
 }
 
 /// Resolve `symbol` in `lib` and wrap it in a [`Value::NativeClosure`] that
@@ -266,15 +378,7 @@ pub(crate) fn make_native(
     param_names: Vec<String>,
     ret_arity: usize,
 ) -> Result<Value, String> {
-    // SAFETY: the symbol must have the ABI's frozen signature; a mismatch is
-    // the package author's bug. We copy the function pointer out and keep the
-    // library alive via the captured `Arc` below.
-    let raw: NativeSymbolFn = unsafe {
-        let sym: libloading::Symbol<NativeSymbolFn> = lib
-            .get(symbol.as_bytes())
-            .map_err(|e| format!("symbol `{symbol}` not found: {e}"))?;
-        *sym
-    };
+    let raw = resolve_symbol(&lib, symbol)?;
 
     // `NativeClosure::name` is `&'static str`; method names are bounded and
     // loaded once, so leaking is acceptable.
@@ -297,6 +401,82 @@ pub(crate) fn make_native(
         func,
         param_names,
     })))
+}
+
+/// Copy a symbol's function pointer out of `lib`.
+///
+/// Shared by the eager and deferred binders so a missing symbol reports the
+/// same message wherever it is noticed.
+#[cfg(feature = "native-packages")]
+pub(crate) fn resolve_symbol(lib: &Library, symbol: &str) -> Result<NativeSymbolFn, String> {
+    // SAFETY: the symbol must have the ABI's frozen signature; a mismatch is
+    // the package author's bug. The pointer is copied out; what keeps it
+    // valid is that `LIBS` holds the library for the life of the process,
+    // and that every caller also captures an `Arc` to it.
+    unsafe {
+        let sym: libloading::Symbol<NativeSymbolFn> = lib
+            .get(symbol.as_bytes())
+            .map_err(|e| format!("symbol `{symbol}` not found: {e}"))?;
+        Ok(*sym)
+    }
+}
+
+/// [`make_native`] with no library in hand: the package name and symbol are
+/// captured, and the `dlopen` plus symbol lookup happen on the first call
+/// and are then remembered.
+///
+/// This is what makes a dynamic package foldable at compile time. Building
+/// the closure loads nothing, so a compile — `saule disasm`, a check, a run
+/// that refuses later on for some other reason — never executes a line of
+/// the package's code.
+#[cfg(feature = "native-packages")]
+pub(crate) fn make_native_deferred(
+    qname: String,
+    package: String,
+    symbol: String,
+    param_names: Vec<String>,
+    ret_arity: usize,
+) -> Value {
+    // `NativeClosure::name` is `&'static str`; see `make_native`.
+    let name: &'static str = Box::leak(qname.into_boxed_str());
+
+    // The `Arc` is kept alongside the pointer for the same reason
+    // `make_native` keeps one: it states the lifetime the pointer depends
+    // on rather than relying on `LIBS` never being cleared.
+    let resolved: RefCell<Option<(Arc<Library>, NativeSymbolFn)>> = RefCell::new(None);
+
+    let func = Box::new(move |args: &[Value]| -> Result<Vec<Value>, String> {
+        // Copy the pointer out and drop the borrow *before* calling. A
+        // package can call back into Saule through the host callbacks
+        // (`native_host`), and that call can reach this same closure —
+        // holding the `RefCell` across the call would turn ordinary
+        // re-entrancy into a panic.
+        let raw = {
+            let mut slot = resolved.borrow_mut();
+            if slot.is_none() {
+                let manifest = lookup(&package).ok_or_else(|| {
+                    format!("native package `{package}` is no longer registered")
+                })?;
+                let lib = load_library(&manifest)?;
+                let raw = resolve_symbol(&lib, &symbol)?;
+                *slot = Some((lib, raw));
+            }
+            slot.as_ref().expect("just installed").1
+        };
+
+        let result = call_native(raw, args)?;
+        Ok(if ret_arity > 1 {
+            spread_multi_return(result, ret_arity)
+        } else {
+            vec![result]
+        })
+    });
+
+    Value::NativeClosure(Rc::new(NativeClosure {
+        name,
+        func,
+        param_names,
+    }))
 }
 
 /// Spread a multi-return native's result into `arity` values. The native

@@ -4,7 +4,7 @@
 //! `crate::stdlib::sigs::{register, t_named, ...}` unchanged.
 
 pub use saule_typeck::sigs::{
-    NativeSig, lookup, lookup_const, register, register_const, register_g, register_member,
-    register_module, register_overloads, register_v, set_initializer, t_any, t_function, t_named, t_nullable,
-    t_table, t_table_map,
+    Bound, NativeSig, lookup, lookup_const, register, register_const, register_g,
+    register_g_bounded, register_member, register_module, register_overloads, register_overloads_v,
+    register_v, set_initializer, t_any, t_function, t_named, t_nullable, t_table, t_table_map,
 };

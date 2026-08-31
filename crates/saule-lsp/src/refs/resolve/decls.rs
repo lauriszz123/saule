@@ -49,10 +49,12 @@ impl<'a> ResolveCx<'a> {
                     self.record(span, Symbol::Class(name.clone()));
                 }
                 let header_end = members.first().map(|m| m.span.start).unwrap_or(d.span.end);
-                self.record_header_names(
-                    &(d.span.start..header_end),
-                    extends.iter().chain(implements),
-                );
+                let header_names: Vec<String> = extends
+                    .iter()
+                    .chain(implements)
+                    .map(|r| r.name.clone())
+                    .collect();
+                self.record_header_names(&(d.span.start..header_end), &header_names);
                 let prev = self.enclosing_class.replace(name.clone());
                 for m in members {
                     self.visit_member(m);
@@ -69,7 +71,8 @@ impl<'a> ResolveCx<'a> {
                     self.record(span, Symbol::Interface(name.clone()));
                 }
                 let header_end = methods.first().map(|m| m.span.start).unwrap_or(d.span.end);
-                self.record_header_names(&(d.span.start..header_end), extends);
+                let parents: Vec<String> = extends.iter().map(|e| e.name.clone()).collect();
+                self.record_header_names(&(d.span.start..header_end), &parents);
                 for m in methods {
                     self.visit_method_sig(m);
                 }

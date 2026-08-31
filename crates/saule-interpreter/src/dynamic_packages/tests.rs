@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::RuntimeError;
 use crate::value::{TableObject, Value};
 use saule_ast::Type;
 use std::cell::RefCell;
@@ -194,4 +195,59 @@ fn class_info_uses_manifest_param_names() {
     let sig = info.methods.get("circle").expect("circle method");
     let names: Vec<&str> = sig.params.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["mode", "x", "y", "radius"]);
+}
+
+/// Building a package's surface for the *compiler* must not touch the
+/// binary. The proof is that this manifest names one that does not exist and
+/// building still succeeds — if a `dlopen` had happened it could not have.
+///
+/// This is what lets a dynamic package be folded into constants at compile
+/// time, which is the whole reason `saule-vm` can compile an import of one
+/// (`VM_TASKS.md`, "an import of a dynamic native package").
+#[cfg(feature = "native-packages")]
+#[test]
+fn a_deferred_binding_loads_nothing_until_it_is_called() {
+    let text = r#"
+            [package]
+            name = "nosuchpkg"
+            version = "0.1.0"
+            binary = "nosuchpkg-not-installed.so"
+
+            [exports.Graphics]
+              [[exports.Graphics.methods]]
+              name = "circle"
+              sig = "fn(mode: string, x: float, y: float, radius: float) -> nil"
+              native_symbol = "nosuchpkg_graphics_circle"
+        "#;
+    let m = parse_manifest(text).expect("manifest should parse");
+    let class = Rc::new(build_class_deferred(&m.exports[0], &m.name));
+
+    let Some(Value::NativeClosure(f)) = class.lookup_static_field("circle") else {
+        panic!("`circle` should bind to a native closure");
+    };
+    // The manifest's parameter names ride along, so named arguments work
+    // exactly as they do on the eager path.
+    assert_eq!(f.param_names, ["mode", "x", "y", "radius"]);
+
+    // Calling is where the load is attempted — and where it fails, because
+    // nothing ever registered this package. A deferred binding that could
+    // not resolve reports; it does not dangle.
+    let err = (f.func)(&[]).expect_err("an unregistered package cannot resolve");
+    assert!(err.contains("nosuchpkg"), "got: {err}");
+}
+
+/// `preload` is the side-effecting half `saule-vm` calls at run time, in
+/// place of the import-time load the tree-walker does. Its failure has to be
+/// the same shape — an `ImportError` carrying the `import`'s own span — or
+/// the two engines would report a broken package differently.
+#[test]
+fn preload_reports_an_unregistered_package_at_the_import_span() {
+    let err = preload("nosuchpkg", 3..9).expect_err("an unregistered package cannot load");
+    match err {
+        RuntimeError::ImportError { message, span } => {
+            assert!(message.contains("nosuchpkg"), "got: {message}");
+            assert_eq!(span, 3..9);
+        }
+        other => panic!("expected an ImportError, got: {other:?}"),
+    }
 }

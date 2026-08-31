@@ -1,0 +1,15 @@
+-- A generic applied with the wrong number of arguments is a substitution
+-- that cannot be performed. While the arguments were parsed and discarded
+-- there was nothing to be wrong about; now the annotation would be a lie.
+-- Should be a compile error.
+
+class Box<T>
+	value: T
+
+	fn init(value: T)
+		self.value = value
+	end
+end
+
+local b: Box<integer, string> = Box(1)
+println(b.value)

@@ -74,8 +74,11 @@ pub(crate) fn splice_sentinel(source: &str, offset: usize) -> Option<(String, St
 // ─── what the caret can see ─────────────────────────────────────────────────
 
 /// The names in a header list the author has already committed to.
-pub(crate) fn without_sentinel(names: &[String]) -> Vec<String> {
-    names.iter().filter(|n| *n != SENTINEL).cloned().collect()
+pub(crate) fn without_sentinel(refs: &[saule_ast::TypeRef]) -> Vec<String> {
+    refs.iter()
+        .filter(|r| r.name != SENTINEL)
+        .map(|r| r.name.clone())
+        .collect()
 }
 
 pub(crate) fn type_mentions_sentinel(ty: &Type) -> bool {
@@ -89,6 +92,7 @@ pub(crate) fn type_mentions_sentinel(ty: &Type) -> bool {
         Type::Function { params, ret } => {
             params.iter().any(type_mentions_sentinel) || type_mentions_sentinel(ret)
         }
+        Type::Generic(g) => g.name == SENTINEL || g.args.iter().any(type_mentions_sentinel),
     }
 }
 

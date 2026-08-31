@@ -33,9 +33,25 @@ pub struct MethodSig {
 /// visibility, parent classes, etc.
 #[derive(Default, Clone, Debug)]
 pub struct ClassInfo {
+    /// Generic type parameters declared with `<T, U>` after the name.
+    ///
+    /// These are what turn `Box<integer>` from a name with decoration into a
+    /// real type: the checker substitutes the caller's arguments for them
+    /// when reading a field's or a method's declared type off this class, so
+    /// `Box<integer>.get()` answers `integer` and `Box<string>.get()`
+    /// answers `string` from the one declaration.
+    pub type_params: Vec<String>,
     pub parent: Option<String>,
+    /// Type arguments passed to the parent (`class C extends Box<integer>`).
+    /// Empty when the parent is non-generic or was named bare.
+    pub parent_args: Vec<Type>,
     /// Interfaces declared on the class (`class C implements A, B`).
     pub implements: Vec<String>,
+    /// Type arguments for each entry of [`implements`], positionally.
+    /// `implements Repository<Player>` records `["Repository"]` there and
+    /// `[[Player]]` here, so conformance can be checked against the
+    /// interface's methods with `T` substituted.
+    pub implements_args: Vec<Vec<Type>>,
     /// member name -> is_private. Kept distinct from [`methods`] so the
     /// existing visibility check can stay O(1) when the member is a field.
     pub members: HashMap<String, bool>,
@@ -51,6 +67,14 @@ pub struct ClassInfo {
 
 pub type ClassRegistry = HashMap<String, ClassInfo>;
 pub type InterfaceRegistry = HashMap<String, Vec<String>>;
+
+/// Interface name → its generic type parameters.
+///
+/// A sibling map for the same reason [`InterfaceMethodRegistry`] is one:
+/// [`InterfaceRegistry`]'s value type is the `extends` list and several call
+/// sites destructure it, so widening it would churn them all to add a field
+/// most of them ignore.
+pub type InterfaceTypeParamRegistry = HashMap<String, Vec<String>>;
 
 /// Interface name → method name → signature.
 ///
@@ -90,6 +114,12 @@ impl VariantInfo {
 /// Enum info: variant name -> payload shape.
 #[derive(Default, Clone, Debug)]
 pub struct EnumInfo {
+    /// Generic type parameters declared with `<T, U>` after the name.
+    ///
+    /// A variant's payload may be typed by one — `Ok(value: T)` — and that is
+    /// the point of the whole feature: matching `Result<integer>` binds an
+    /// `integer`, because `T` is substituted for the value's own argument.
+    pub type_params: Vec<String>,
     pub variants: HashMap<String, VariantInfo>,
 }
 pub type EnumRegistry = HashMap<String, EnumInfo>;
@@ -118,6 +148,7 @@ thread_local! {
     static CLASSES: RefCell<ClassRegistry> = RefCell::new(HashMap::new());
     static INTERFACES: RefCell<InterfaceRegistry> = RefCell::new(HashMap::new());
     static INTERFACE_METHODS: RefCell<InterfaceMethodRegistry> = RefCell::new(HashMap::new());
+    static INTERFACE_TYPE_PARAMS: RefCell<InterfaceTypeParamRegistry> = RefCell::new(HashMap::new());
     static ENUMS: RefCell<EnumRegistry> = RefCell::new(HashMap::new());
     static FUNCTIONS: RefCell<FunctionRegistry> = RefCell::new(HashMap::new());
     static VARIABLES: RefCell<VariableRegistry> = RefCell::new(HashMap::new());
@@ -318,24 +349,30 @@ pub fn build_registry(
     InterfaceRegistry,
     EnumRegistry,
     InterfaceMethodRegistry,
+    InterfaceTypeParamRegistry,
 ) {
     let mut reg = ClassRegistry::new();
     let mut ifaces = InterfaceRegistry::new();
     let mut enums = EnumRegistry::new();
     let mut iface_methods = InterfaceMethodRegistry::new();
+    let mut iface_params = InterfaceTypeParamRegistry::new();
     for stmt in &module.stmts {
         if let Stmt::Decl(d) = &stmt.value {
             match &d.value {
                 Decl::Class {
                     name,
+                    type_params,
                     extends,
                     implements,
                     members,
                     ..
                 } => {
                     let mut info = ClassInfo {
-                        parent: extends.clone(),
-                        implements: implements.clone(),
+                        type_params: type_params.clone(),
+                        parent: extends.as_ref().map(|e| e.name.clone()),
+                        parent_args: extends.as_ref().map(|e| e.args.clone()).unwrap_or_default(),
+                        implements: implements.iter().map(|i| i.name.clone()).collect(),
+                        implements_args: implements.iter().map(|i| i.args.clone()).collect(),
                         members: HashMap::new(),
                         field_types: HashMap::new(),
                         methods: HashMap::new(),
@@ -370,11 +407,16 @@ pub fn build_registry(
                 }
                 Decl::Interface {
                     name,
+                    type_params,
                     extends,
                     methods,
                     ..
                 } => {
-                    ifaces.insert(name.clone(), extends.clone());
+                    ifaces.insert(
+                        name.clone(),
+                        extends.iter().map(|e| e.name.clone()).collect(),
+                    );
+                    iface_params.insert(name.clone(), type_params.clone());
                     let sigs: HashMap<String, MethodSig> = methods
                         .iter()
                         .map(|m| {
@@ -386,7 +428,7 @@ pub fn build_registry(
                                     // both flags are fixed rather than read.
                                     is_static: false,
                                     is_private: false,
-                                    type_params: Vec::new(),
+                                    type_params: m.type_params.clone(),
                                     params: m.params.clone(),
                                     return_ty: m.return_ty.clone(),
                                 },
@@ -395,8 +437,16 @@ pub fn build_registry(
                         .collect();
                     iface_methods.insert(name.clone(), sigs);
                 }
-                Decl::Enum { name, variants, .. } => {
-                    let mut info = EnumInfo::default();
+                Decl::Enum {
+                    name,
+                    type_params,
+                    variants,
+                    ..
+                } => {
+                    let mut info = EnumInfo {
+                        type_params: type_params.clone(),
+                        ..Default::default()
+                    };
                     for v in variants {
                         let (vname, fields) = match &v.value {
                             EnumVariant::Bare(n) => (n.clone(), Vec::new()),
@@ -415,12 +465,23 @@ pub fn build_registry(
     // see them even without explicit declarations in user code.
     ifaces.entry("Iterable".into()).or_default();
     ifaces.entry("Iterable2".into()).or_default();
+    // …and their arities, so `implements Iterable<T>` is checked like any
+    // other generic rather than skipped for having no declaration to read.
+    iface_params
+        .entry("Iterable".into())
+        .or_insert_with(|| vec!["T".into()]);
+    iface_params
+        .entry("Iterable2".into())
+        .or_insert_with(|| vec!["K".into(), "V".into()]);
     // Same for the built-in contracts, so `implements OpAdd<…>` and
     // `implements Assignable<…>` resolve without an import.
     for contract in saule_ast::ops::ALL_CONTRACTS {
         ifaces.entry(contract.interface.to_string()).or_default();
+        iface_params
+            .entry(contract.interface.to_string())
+            .or_insert_with(|| synthetic_param_names(contract.type_params));
     }
-    (reg, ifaces, enums, iface_methods)
+    (reg, ifaces, enums, iface_methods, iface_params)
 }
 
 /// Top-level `fn` signatures declared directly in `module`. Kept separate
@@ -456,11 +517,30 @@ pub fn install_registries(
     ifaces: InterfaceRegistry,
     enums: EnumRegistry,
     iface_methods: InterfaceMethodRegistry,
+    iface_params: InterfaceTypeParamRegistry,
 ) {
     CLASSES.with(|c| *c.borrow_mut() = reg);
     INTERFACES.with(|c| *c.borrow_mut() = ifaces);
     ENUMS.with(|c| *c.borrow_mut() = enums);
     INTERFACE_METHODS.with(|c| *c.borrow_mut() = iface_methods);
+    INTERFACE_TYPE_PARAMS.with(|c| *c.borrow_mut() = iface_params);
+}
+
+/// The generic type parameters `iface` declares, if any.
+pub fn interface_type_params(iface: &str) -> Vec<String> {
+    INTERFACE_TYPE_PARAMS.with(|c| c.borrow().get(iface).cloned().unwrap_or_default())
+}
+
+/// Placeholder parameter names for a built-in interface's arity.
+///
+/// The contracts are declared in Rust, not in Saule source, so they have no
+/// written parameter names. Only the *count* is ever consulted — by the
+/// arity check and by the substitution that pairs parameters with arguments
+/// positionally — so single letters carry everything needed.
+fn synthetic_param_names(count: usize) -> Vec<String> {
+    (0..count)
+        .map(|i| ((b'T' + i as u8) as char).to_string())
+        .collect()
 }
 
 /// The signature of `method` on `iface`, following `extends`.
@@ -521,6 +601,7 @@ pub fn clear_registries() {
     CLASSES.with(|c| c.borrow_mut().clear());
     INTERFACES.with(|c| c.borrow_mut().clear());
     INTERFACE_METHODS.with(|c| c.borrow_mut().clear());
+    INTERFACE_TYPE_PARAMS.with(|c| c.borrow_mut().clear());
     ENUMS.with(|c| c.borrow_mut().clear());
     FUNCTIONS.with(|c| c.borrow_mut().clear());
     VARIABLES.with(|c| c.borrow_mut().clear());

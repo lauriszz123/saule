@@ -26,8 +26,8 @@ use std::ops::Range;
 
 use saule_ast::{Decl, Module, Stmt};
 
-pub mod builtins;
 pub mod binding;
+pub mod builtins;
 mod control_flow;
 mod error;
 mod field_init;
@@ -40,13 +40,13 @@ pub use binding::{Binding, Bindings, FunctionInfo, FunctionTable, ResolveTable, 
 pub use error::SemanticError;
 pub use registry::{
     ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, FunctionRegistry, FunctionSig,
-    InterfaceMethodRegistry, InterfaceRegistry, MethodSig, VariableRegistry, VariantInfo,
-    build_function_registry,
-    build_registry, build_variable_registry, class_implements, class_implements_iterable,
-    clear_registries, install_functions, install_registries, install_variables, interface_extends,
-    is_interface, is_subtype_named, lookup_field_type, lookup_function, lookup_interface_method,
-    lookup_member, lookup_method, super_init_target, with_classes, with_enums, with_functions,
-    with_interfaces, with_variables,
+    InterfaceMethodRegistry, InterfaceRegistry, InterfaceTypeParamRegistry, MethodSig,
+    VariableRegistry, VariantInfo, build_function_registry, build_registry,
+    build_variable_registry, class_implements, class_implements_iterable, clear_registries,
+    install_functions, install_registries, install_variables, interface_extends,
+    interface_type_params, is_interface, is_subtype_named, lookup_field_type, lookup_function,
+    lookup_interface_method, lookup_member, lookup_method, super_init_target, with_classes,
+    with_enums, with_functions, with_interfaces, with_variables,
 };
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
@@ -132,7 +132,7 @@ fn analyze_inner(
     collect_bindings: bool,
 ) -> (Vec<SemanticError>, Option<Bindings>) {
     let wildcard_names = seed.wildcard_names;
-    let (mut reg, mut ifaces, mut enums, mut iface_methods) = build_registry(module);
+    let (mut reg, mut ifaces, mut enums, mut iface_methods, iface_params) = build_registry(module);
     for (name, info) in seed.classes {
         reg.entry(name).or_insert(info);
     }
@@ -165,7 +165,7 @@ fn analyze_inner(
     for (name, ty) in seed.variables {
         vars.entry(name).or_insert(ty);
     }
-    install_registries(reg, ifaces, enums, iface_methods);
+    install_registries(reg, ifaces, enums, iface_methods, iface_params);
     install_functions(funcs);
     install_variables(vars);
 

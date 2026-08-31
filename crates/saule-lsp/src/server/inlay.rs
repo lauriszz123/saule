@@ -174,6 +174,7 @@ fn collect_user_fns(module: &Module) -> HashMap<String, UserFn> {
                     params: params.clone(),
                     sig: saule_typeck::sigs::NativeSig {
                         type_params: type_params.clone(),
+                        bounds: Vec::new(),
                         params: params.iter().map(|p| p.ty.clone()).collect(),
                         variadic: None,
                         returns: return_ty.clone().into_iter().collect(),

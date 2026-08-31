@@ -189,6 +189,12 @@ pub(super) fn catch_var_span(
 pub(super) fn named_type_heads(ty: &Type, out: &mut Vec<String>) {
     match ty {
         Type::Named(n) => out.push(n.clone()),
+        Type::Generic(g) => {
+            out.push(g.name.clone());
+            for a in &g.args {
+                named_type_heads(a, out);
+            }
+        }
         Type::Nullable(inner) => named_type_heads(inner, out),
         Type::Table { key, value } => {
             if let Some(k) = key {

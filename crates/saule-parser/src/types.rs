@@ -1,7 +1,7 @@
 //! Type parsing: nullable suffix, table<T>/table<K,V>, generic param/arg
 //! lists, function types.
 
-use saule_ast::{Spanned, Type, TypeArgs};
+use saule_ast::{Spanned, Type, TypeArgs, TypeRef};
 use saule_lexer::Token;
 use std::ops::Range;
 
@@ -112,9 +112,10 @@ impl Parser {
             }
             Token::Identifier(name) => {
                 self.advance();
-                // `table<T>` (array) and `table<K, V>` (hashmap) are first-class
-                // forms in the type system. Other identifiers may carry generic
-                // arguments which we still accept-and-discard for forward-compat.
+                // `table<T>` (array) and `table<K, V>` (hashmap) have their own
+                // node — see `Type::Generic` for why the one built-in
+                // container stays special-cased. Any other identifier carrying
+                // arguments is a user-declared generic.
                 if name == "table" && self.check(&Token::Lt) {
                     // `table<>`: recover as the bare `table` the brackets
                     // were adding nothing to.
@@ -134,11 +135,17 @@ impl Parser {
                     self.expect_close(&Token::Gt, "`>` to close `table<...>`")?;
                     return Ok(Type::Table { key, value });
                 }
-                // Drop any generic argument list `<T, U>` — generics aren't
-                // implemented yet but appear in the README; we accept and
-                // ignore them so real programs parse.
+                // `Result<integer>`, `Box<string>` — a user-declared generic
+                // applied to its arguments. These used to be parsed and
+                // thrown away, which is why `local b: Box<integer>` checked
+                // as a bare `Box` and the argument meant nothing.
                 if self.check(&Token::Lt) {
-                    self.skip_generic_args()?;
+                    let args = self.parse_generic_args()?;
+                    // An empty list only happens after `<>` was reported;
+                    // fall back to the bare name so the rest still parses.
+                    if !args.is_empty() {
+                        return Ok(Type::generic(name, args));
+                    }
                 }
                 Ok(Type::Named(name))
             }
@@ -169,31 +176,37 @@ impl Parser {
         }
     }
 
-    /// Consumes a `<T, U, ...>` generic argument list, discarding the types.
+    /// Consumes a `<T, U, ...>` generic argument list and returns the types.
     /// We assume `<` is currently the next token.
-    pub(crate) fn skip_generic_args(&mut self) -> Result<(), ParseError> {
+    ///
+    /// Returns an empty vector for `<>`, which has already been reported —
+    /// the caller then treats the reference as the bare name it otherwise is,
+    /// so one bad annotation costs its own arguments and nothing else.
+    pub(crate) fn parse_generic_args(&mut self) -> Result<Vec<Type>, ParseError> {
         if self.at_empty_angles() {
-            return self.report_empty_angles(|span| ParseError::EmptyTypeArgs { span });
+            self.report_empty_angles(|span| ParseError::EmptyTypeArgs { span })?;
+            return Ok(Vec::new());
         }
         self.expect(&Token::Lt, "`<`")?;
-        let _ = self.parse_type()?;
+        let mut args = vec![self.parse_type()?];
         while self.eat(&Token::Comma) {
-            let _ = self.parse_type()?;
+            args.push(self.parse_type()?);
         }
         self.split_closing_shr();
         self.expect_close(&Token::Gt, "`>` to close generic arguments")?;
-        Ok(())
+        Ok(args)
     }
 
-    /// [`Self::skip_generic_args`] for the *declaring* side — `class Box<T>`,
-    /// `interface Seq<T>` — which discards the names just the same, but where
-    /// an empty `<>` is a parameter that was never named rather than an
-    /// argument that was never supplied.
-    pub(crate) fn skip_generic_params(&mut self) -> Result<(), ParseError> {
-        if self.at_empty_angles() {
-            return self.report_empty_angles(|span| ParseError::EmptyTypeParams { span });
-        }
-        self.skip_generic_args()
+    /// A named type reference in a declaration header — the `Animal` in
+    /// `extends Animal`, the `Repository<Player>` in `implements …`.
+    pub(crate) fn parse_type_ref(&mut self, what: &'static str) -> Result<TypeRef, ParseError> {
+        let (name, _) = self.expect_ident_recover(what)?;
+        let args = if self.check(&Token::Lt) {
+            self.parse_generic_args()?
+        } else {
+            Vec::new()
+        };
+        Ok(TypeRef { name, args })
     }
 
     /// Consumes a `<T, U, ...>` *parameter* list on a function or method
