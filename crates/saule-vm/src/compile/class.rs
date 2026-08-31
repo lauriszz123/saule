@@ -329,7 +329,15 @@ impl Compiler<'_> {
             let a = self.reg8(base, span)?;
             self.emit(Instruction::abc(Op::MOVE, a, ia, 0), span);
             self.emit(Instruction::abc(Op::CALLK, a, 2, 1), span);
-            let t = self.own_call_target(fi, span)?;
+            // The **declaring** class's module, not the one doing the
+            // constructing: `field_init` is a synthetic proto of the module
+            // that declared the class, and a `ProtoIdx` means nothing
+            // outside its own chunk. Constructing an imported class whose
+            // fields have non-constant defaults called whatever proto
+            // happened to sit at that index in the *calling* module — an
+            // arbitrary function, with the new instance as its receiver.
+            let owner = self.chunk.classes[class as usize].module;
+            let t = self.call_target(owner, fi, span)?;
             self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
             self.free_to(fm);
         }
