@@ -400,6 +400,55 @@ fn an_override_of_an_imported_method_is_inherited_by_its_own_subclass() {
     assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "BB\n<B>");
 }
 
+#[test]
+fn constructing_an_imported_class_calls_its_own_field_initializer() {
+    // A class whose field defaults are not constants gets a synthetic
+    // `field_init` proto, and `construct_to` calls it with `CALLK`. `CALLK`
+    // names its target as `(module, proto)` — and this passed the module
+    // doing the *constructing* rather than the one that declared the class.
+    //
+    // A `ProtoIdx` means nothing outside its own chunk, so constructing an
+    // imported class ran whatever function happened to sit at that index in
+    // the caller's own module, with the fresh instance as its receiver. In
+    // `examples/UI Project` that was `AnimatedBuilder.body` reading a field
+    // of a `Tween`.
+    //
+    // `filler.sau` exists to make the two modules' proto vectors disagree:
+    // with identical numbering the wrong index can still land on the right
+    // function and the bug hides.
+    let dir = project(
+        "imported_field_init",
+        &[
+            (
+                "vals.sau",
+                "export fn seed() -> integer\n  return 41\nend\n",
+            ),
+            (
+                "shapes.sau",
+                "import * from vals\n\
+                 export class Boxed\n\
+                 \x20 -- Not a constant, so this needs a `field_init` proto.\n\
+                 \x20 n: integer = seed() + 1\n\
+                 \x20 fn init()\n  end\n\
+                 end\n",
+            ),
+            (
+                "main.sau",
+                "import * from shapes\n\
+                 fn pad1() -> integer\n  return 1\nend\n\
+                 fn pad2() -> integer\n  return 2\nend\n\
+                 fn pad3() -> integer\n  return 3\nend\n\
+                 class Main\n\
+                 \x20 static fn main()\n\
+                 \x20   println(tostring(Boxed().n))\n\
+                 \x20 end\n\
+                 end\n",
+            ),
+        ],
+    );
+    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "42");
+}
+
 // ── barrel modules ────────────────────────────────────────────────────────
 //
 // An `init.sau` publishes what it *imported* as well as what it declared, so

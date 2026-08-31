@@ -310,7 +310,7 @@ whether the VM engages on anything a user would write.
 | Corpus | Compiles fully |
 |---|---|
 | `examples/**/*.sau` | **12 of 61** — but see the box above; this number does not mean what it looks like |
-| `examples/*` projects, end to end | **10 of 11** run fully on the VM. `run_examples_diff.sh` reports **0 fallbacks**. `UI Project` no longer falls back at all — it now **compiles end to end** and fails at *run* time instead, on a typed opcode reading `nil` in `AnimatedBuilder.body`. That is a miscompile, not a gap, and it is the one thing on this page that costs correctness rather than speed. See "`UI Project` compiles — and that is not the same as working" |
+| `examples/*` projects, end to end | **11 of 11** run fully on the VM. `run_examples_diff.sh` reports **0 fallbacks** over the 9 it can compare; the other 2 open a window and are checked by hand. `UI Project` — the largest, 60 files — is the last to arrive, and getting it there closed seven gaps and **three** cross-module correctness bugs |
 
 The project row is the one Phase 4 turned into a headline: it is the fraction
 of real programs for which the new default engine is the engine that actually
@@ -2645,12 +2645,9 @@ that coverage grows.
       reporting **0 fallbacks**, as do all **10** benchmarks and all **20**
       `www/` samples.
 
-      **One deliberate refusal, and one thing that is worse than a gap.**
-      The deliberate refusal is `tests/compound_assign.sau`, where refusing
-      is what *fixes* a miscompile. `UI Project` no longer refuses anywhere:
-      it compiles end to end and then **fails at run time**, on a typed
-      opcode reading `nil` in `AnimatedBuilder.body`. A gap costs speed; this
-      costs correctness, and it is the one open item on this page that does.
+      **One deliberate refusal left**, `tests/compound_assign.sau`, where
+      refusing is what *fixes* a miscompile. Every example project now runs
+      on the VM, `UI Project` included.
 
       **Stop treating this line as a list of what is left.** It has said
       "every remaining refusal is deliberate" three times and been wrong
@@ -3844,39 +3841,98 @@ four-file case, and it *runs*: `C.who()` answered `nil` before the fix.
 Three single-file differential tests cover the same-module shapes that were
 always correct, so a future change cannot fix one by breaking the other.
 
-### `UI Project` compiles — and that is not the same as working
+### `field_init` called the wrong module's proto — and how the error lied
 
-With all of the above, `UI Project` no longer falls back anywhere. It
-compiles end to end and then fails at **run** time:
+With everything above, `UI Project` compiled end to end and then failed at
+**run** time:
 
 ```
 type error: internal: typed opcode in `AnimatedBuilder.body` expected
-`instance` but the register held `nil` — the chunk disagrees with the types
-it was compiled against
+`instance` but the register held `nil`
 ```
 
-`fn body(context) -> View?  return self.content(self.controller.value) end`,
-on a class four levels down a cross-module hierarchy with a `self.super(key)`
-constructor. **Not diagnosed.** The reduced shape — a function-valued field
-called with an argument read through another field — agrees under both
-engines, so `field_call_to` is not implicated on its own.
+Every word of that is true and none of it is the bug. `AnimatedBuilder` is
+never constructed anywhere in the project — it appears only in comments.
 
-This is the one open item that costs **correctness rather than speed**, and
-it is worth being blunt about the trade it represents: before this work the
-project fell back at its first `import` and ran correctly on the tree-walker.
-It now compiles and runs wrong. Each individual change here is tested and
-right; what they did collectively was carry a 60-file program far enough to
-reach a latent miscompile that no fixture reaches. That is the same thing the
-vtable bug above was — one of them was found, this one is not yet.
+**Read the error's span, not its message.** It carried `offset: 12125`, which
+the CLI could not render because it attaches the *entry* file's source to a
+span from an imported module. Resolved by hand against `Animation.sau` it
+lands on `self.controller.value` — the *argument*, not the field call this
+work had just added. And `AnimatedBuilder.body`'s disassembly is correct:
 
-- [ ] **Diagnose the `AnimatedBuilder.body` miscompile.** Start by bisecting
-      which construct produces the bad register: the class sits under
-      `View` → `AnimatedBuilder` with `self.super(key)`, a `fn(float) -> View`
-      field, and a nullable return. Given what the vtable bug turned out to
-      be, suspect the interaction of inheritance with something laid out
-      before its codegen rather than the opcode that faults. Blocking:
-      `UI Project` should fall back rather than miscompile until this is
-      understood.
+```
+0000  MOVE 3 0      ; receiver
+0001  GETF 5 0 1    ; self.controller
+0002  GETF 4 5 1    ; .value          <- faults, so R5 was nil
+0003  GETF 3 3 2    ; self.content
+0004  CALL 3 2
+```
+
+So the frame was real and the code was right, which leaves only "how did we
+get here". A temporary dump of `self.frames`' proto labels at the fault gave
+the answer in one run:
+
+```
+… TextField.borderColor <- motionOn <- AnimationController.init <- AnimatedBuilder.body
+```
+
+`AnimationController.init` does not call `AnimatedBuilder.body`. It
+constructs a `Tween`, and its disassembly says:
+
+```
+0037  NEW   8  63       ; Tween
+0039  CALLK 9  2  1     ; Tween's field_init
+0040    | extra 786459  ; = module 12, proto 27
+```
+
+Module 12 is `Animation.sau` — the module doing the *constructing*. `Tween`
+is declared in another one. `construct_to` built its `CALLK` target with
+`own_call_target`, stamping the current module onto a `ProtoIdx` that belongs
+to the declaring module, so constructing any imported class with a
+non-constant field default ran whatever function happened to sit at that
+index in the caller's chunk — with the fresh instance as its receiver.
+
+The fix is one line and the same rule as the two bugs above it: `field_init`
+is the declaring class's proto, so it needs the declaring class's module.
+`own_call_target`'s other two callers resolve out of `fn_protos`, which only
+ever holds this module's own functions, so they were right all along; this
+was the one site that borrowed a foreign index.
+
+`constructing_an_imported_class_calls_its_own_field_initializer` pins it, and
+it carries three padding functions on purpose — with the two modules numbering
+their protos identically the wrong index still lands on the right function and
+the bug hides.
+
+**`UI Project` runs on the VM.** All 11 example projects do.
+
+#### What this run says about the three bugs together
+
+`vowner`, the un-cleared override slot, and this are one bug wearing three
+hats: **a `ProtoIdx` is meaningless outside its own chunk, and three separate
+places forgot to carry the module with it.** `smindex` has carried its
+declaring class since Phase 1 precisely because someone thought this through
+once for statics; nothing generalised it.
+
+None of the three is reachable from a single-file fixture, and none was
+reachable at all until a program large enough to have deep cross-module class
+hierarchies compiled end to end. The differential suite is 285 tests and did
+not contain one. That is the honest lesson from this stretch: **`tests/*.sau`
+cannot find a class-identity bug, because it takes two modules to have one.**
+The three regression tests added here all live in `tests/program.rs` and all
+of them *run* the program rather than inspecting the chunk — the pre-existing
+cross-module test compiled the same shape and asserted on layout, and would
+never have caught any of them.
+
+- [ ] Sweep for the fourth. Anywhere a `ProtoIdx` is paired with a module,
+      the pairing should come from the structure that *owns* the proto, not
+      from context. `vtable`+`vowner`, `smindex`, `field_init` and
+      `fn_protos` are the four known kinds; `statics_init` is declared on
+      `ClassProto` and never read, which is its own small smell.
+- [ ] Attach the **defining module's** source to a runtime error. The span in
+      the report above pointed into `Animation.sau` while the renderer held
+      `main.sau`, so it printed `OutOfBounds` instead of the line. Every
+      cross-module runtime error is currently this unreadable, and the frame
+      already knows its chunk.
 - [ ] Dispatch threading experiments (worth 5–15%, cost real readability) —
       **read the item above first.** Splitting the grouped arms was a
       down-payment on this and it already found the ceiling: the branchy
