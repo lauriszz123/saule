@@ -1,4 +1,4 @@
-import * from UIKit
+import * from "uikit"
 import * from Home
 
 -- The app itself: what window it opens, and what goes in it.

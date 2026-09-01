@@ -87,6 +87,13 @@ skip_reason() {
     # Covered by the UI Project's own manual workflow instead.
     */UI\ Project) echo "interactive: opens a window and loops until closed" ;;
     */toying) echo "interactive: opens a window and loops until closed" ;;
+    # Libraries have no entry point, so `saule run` refuses them — identically
+    # under both engines. Left unskipped they would be counted as two projects
+    # that agree, which is the green-run-that-tested-nothing this harness
+    # exists to avoid. `uikit` is exercised through the UI Project instead.
+    */uikit) echo "library: no entry point to run" ;;
+    */markdown) echo "library: no entry point to run" ;;
+    */md-viewer) echo "interactive: opens a window and loops until closed" ;;
     *) return 1 ;;
   esac
 }

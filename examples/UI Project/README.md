@@ -6,9 +6,10 @@ A Saule project. Run with:
 saule run
 ```
 
-`src/UIKit` is a declarative, SwiftUI-flavoured view toolkit — see
-[its README](src/UIKit/README.md). `src/Test.sau` is the demo the entry point
-renders.
+The declarative, SwiftUI-flavoured view toolkit this renders with lives in its
+own package, [`../uikit`](../uikit/README.md), listed in this project's
+`dependencies:` and imported as `import * from "uikit"`. `src/Test.sau` is the
+demo the entry point renders.
 
 The whole kit leans on one Saule feature, the **trailing block**: when the last
 argument to a call is a function, it can be written after the closing
@@ -40,4 +41,4 @@ end
 * `src/main.sau` — the `App`, its window, and `Main.main`
 * `src/Test.sau` — the demo panel: controls, tabs, overlays, a live canvas
 * `src/Counter.sau` — the smallest stateful view, using `context.state`
-* `src/UIKit/` — the toolkit itself
+* [`../uikit/`](../uikit/) — the toolkit itself, as a `kind: "library"` package
