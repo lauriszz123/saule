@@ -1,4 +1,4 @@
-import * from UIKit
+import * from "uikit"
 import * from Shared
 
 -- One row of the table. A plain value: the screen's state owns the list, and

@@ -1054,7 +1054,7 @@ Painting happens every frame regardless of rebuilds, so a view that keeps its
 state in `el.data` and draws from it costs **zero rebuilds** — the right shape
 for a game world with UI layered on top. Call `el.markNeedsBuild()` from `tick`
 only when the *view tree* needs to change, not merely the pixels.
-`BouncingBall` in [Test.sau](../Test.sau) is a worked example.
+`BouncingBall` in [Test.sau](../UI%20Project/src/Test.sau) is a worked example.
 
 ## Images and sprites
 
