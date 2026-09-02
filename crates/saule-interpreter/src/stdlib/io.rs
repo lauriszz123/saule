@@ -77,7 +77,7 @@ fn io_builtins() -> saule_semantic::builtins::Builtins {
     ] {
         let mut info = EnumInfo::default();
         for (v, _) in variants {
-            info.variants.insert((*v).to_string(), VariantInfo::default());
+            info.add_variant(*v, VariantInfo::default());
         }
         enums.insert(name.to_string(), info);
     }

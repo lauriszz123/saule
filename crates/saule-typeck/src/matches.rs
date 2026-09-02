@@ -129,9 +129,14 @@ pub(super) fn check_match(
     } else if let Some(en) = &active_enum {
         with_enums(|e| {
             if let Some(info) = e.get(en) {
+                // Declaration order: this list is joined straight into
+                // the diagnostic, and the map's own order would word
+                // the same missing-variant error differently run to
+                // run.
                 let missing: Vec<String> = info
-                    .variants
-                    .keys()
+                    .in_order()
+                    .into_iter()
+                    .map(|(v, _)| v)
                     .filter(|v| !covered_variants.contains(*v))
                     .cloned()
                     .collect();

@@ -294,9 +294,14 @@ pub(crate) fn collect_import_seed_inner(
             continue;
         };
 
-        let (reg, ifaces, enums, iface_methods, _iface_params) =
+        let (mut reg, ifaces, enums, iface_methods, _iface_params) =
             saule_semantic::build_registry(&imported);
-        let funcs = saule_semantic::build_function_registry(&imported);
+        let mut funcs = saule_semantic::build_function_registry(&imported);
+        // An imported accessor's return type is inferred here, on the way
+        // in. Doing it only in `analyze_inner` would infer it for the file
+        // that declares the class and not for the files that use it, which
+        // is the wrong way round: the declaring file can read the body.
+        saule_semantic::infer_missing_returns(&imported, &mut reg, &mut funcs);
         let vars = saule_semantic::build_variable_registry(&imported);
 
         // For each top-level decl in the imported module, decide which

@@ -362,7 +362,7 @@ static fn render(block: Block, style: MarkdownStyle) -> View
                 alignment: StackAlignment.Leading
             )
 
-        case Block.Code(language, source) then
+        case Block.Code(source, language) then
             CodeBlockView(language: language, source: source)
 
         case Block.Quote(children) then

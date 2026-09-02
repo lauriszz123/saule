@@ -144,7 +144,7 @@ fn render_type(ty: &Type) -> String {
 
 /// `true` if every reachable execution path through `block` ends in a
 /// `return` or `throw`.
-fn block_returns(block: &[Spanned<Stmt>]) -> bool {
+pub(crate) fn block_returns(block: &[Spanned<Stmt>]) -> bool {
     block.iter().any(|s| stmt_returns(&s.value))
 }
 

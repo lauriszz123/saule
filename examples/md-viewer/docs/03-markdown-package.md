@@ -73,7 +73,7 @@ export enum Inline
     Strong(children: table<Inline>),
     Strike(children: table<Inline>),
     Link(href: string, title: string?, children: table<Inline>),
-    Image(src: string, alt: string, title: string?),
+    Image(src: string, alt: string?, title: string?),
     SoftBreak,
     HardBreak
 end
@@ -81,7 +81,7 @@ end
 export enum Block
     Heading(level: integer, slug: string, children: table<Inline>),
     Paragraph(children: table<Inline>),
-    Code(language: string?, source: string),
+    Code(src: string, language: string?),
     Quote(children: table<Block>),
     List(ordered: boolean, start: integer, tight: boolean, items: table<ListItem>),
     Table(align: table<ColumnAlign>, head: table<TableCell>, rows: table<table<TableCell>>),
@@ -513,7 +513,7 @@ export class Markdown
         local parser: BlockParser = BlockParser(LineScanner(source), slugger)
         local blocks: table<Block> = parser.run()
 
-        return Document(blocks, parser.title(), parser.headings())
+        return Document(blocks, parser.headings(), parser.title())
     end
 
     -- Exposed because the renderer's tests want it, and because a one-line

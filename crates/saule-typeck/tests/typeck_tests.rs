@@ -2165,3 +2165,129 @@ mod unknown_types {
         rejects("local f: function = 1\n", "`function` is not a type");
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Inferred return types
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A method that declares no return type is typed from its body, and that
+/// type is a guarantee at the call site like any written one.
+#[test]
+fn rejects_a_call_site_that_disagrees_with_an_inferred_return_type() {
+    rejects(
+        "\
+class Counter
+  n: integer
+
+  fn init(n: integer)
+    self.n = n
+  end
+
+  fn get()
+    return self.n
+  end
+end
+
+fn go(c: Counter)
+  local s: string = c.get()
+end
+",
+        "string",
+    );
+}
+
+/// The same type is accepted, so the inference is a real type and not just
+/// a blanket rejection.
+#[test]
+fn accepts_a_call_site_that_agrees_with_an_inferred_return_type() {
+    accepts(
+        "\
+class Counter
+  n: integer
+
+  fn init(n: integer)
+    self.n = n
+  end
+
+  fn get()
+    return self.n
+  end
+end
+
+fn go(c: Counter)
+  local n: integer = c.get()
+end
+",
+    );
+}
+
+/// A body that can fall off the end also hands back nil, so the inferred
+/// type is nullable and a non-nullable binding must reject it.
+#[test]
+fn rejects_a_non_nullable_binding_of_a_fall_through_body() {
+    rejects(
+        "\
+class Finder
+  fn first(ok: boolean)
+    if ok then
+      return 1
+    end
+  end
+end
+
+fn go(f: Finder)
+  local n: integer = f.first(true)
+end
+",
+        "integer",
+    );
+}
+
+/// Returns that disagree infer nothing, so the call site is left exactly
+/// as it was before this pass existed: a call whose type can't be
+/// determined, reported as such rather than as a mismatch against a type
+/// the inference made up.
+#[test]
+fn a_function_whose_returns_disagree_is_left_undetermined() {
+    rejects(
+        "\
+class Odd
+  fn pick(flag: boolean)
+    if flag then
+      return 1
+    else
+      return 'one'
+    end
+  end
+end
+
+fn go(o: Odd)
+  local s: string = o.pick(true)
+end
+",
+        "cannot determine the type",
+    );
+}
+
+/// A top-level `fn` is inferred the same way, and an unannotated one whose
+/// body returns a constructor call really does produce that class.
+#[test]
+fn rejects_a_call_site_that_disagrees_with_an_inferred_free_function() {
+    rejects(
+        "\
+class Doc
+  fn init()
+  end
+end
+
+fn make()
+  return Doc()
+end
+
+fn go()
+  local n: integer = make()
+end
+",
+        "integer",
+    );
+}

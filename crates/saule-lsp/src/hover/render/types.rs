@@ -312,9 +312,10 @@ pub(crate) fn render_enum_head(name: &str, variants: &[Spanned<EnumVariant>]) ->
         s.push_str("  ");
         match &v.value {
             EnumVariant::Bare(n) => s.push_str(n),
-            EnumVariant::Valued(n, _) => {
+            EnumVariant::Valued(n, value) => {
                 s.push_str(n);
-                s.push_str(" = …");
+                s.push_str(" = ");
+                s.push_str(&render_default(&value.value));
             }
             EnumVariant::Tuple { name, fields } => {
                 s.push_str(name);
@@ -335,17 +336,47 @@ pub(crate) fn render_enum_head(name: &str, variants: &[Spanned<EnumVariant>]) ->
     s
 }
 
-pub(crate) fn render_enum_from_registry(name: &str, variants: &[(String, usize)]) -> String {
-    let mut s = format!("```saule\nenum {name} {{\n");
-    for (vn, arity) in variants {
+/// Blurb for an enum reached through the semantic registry — the path
+/// every *reference* to an enum takes, including every reference to one
+/// declared in another file.
+///
+/// Renders what [`render_enum_head`] gives the declaration itself:
+/// generic parameters, and each variant's payload named and typed as it
+/// was written. This used to spend the registry's `VariantInfo` down to
+/// a bare arity and print one `_` per slot, so `Heading(level: integer,
+/// slug: string, children: table<Inline>)` hovered as `Heading(_, _,
+/// _)` — reporting the count of payload fields, the one thing about
+/// them the reader can already see, and dropping the names and types,
+/// which are the reason to open a hover on an enum at all. The fields
+/// were in the registry the whole time.
+pub(crate) fn render_enum_from_registry(name: &str, info: &saule_semantic::EnumInfo) -> String {
+    let mut s = String::from("```saule\nenum ");
+    s.push_str(name);
+    if !info.type_params.is_empty() {
+        s.push('<');
+        s.push_str(&info.type_params.join(", "));
+        s.push('>');
+    }
+    s.push_str(" {\n");
+    // Declaration order, not the map's — see `EnumInfo::in_order`.
+    for (vn, variant) in info.in_order() {
         s.push_str("  ");
         s.push_str(vn);
-        if *arity > 0 {
+        if !variant.fields.is_empty() {
             s.push('(');
-            s.push_str(&"_, ".repeat(*arity));
-            // Trim trailing ", "
-            s.truncate(s.len() - 2);
+            s.push_str(
+                &variant
+                    .fields
+                    .iter()
+                    .map(render_param_inline)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
             s.push(')');
+        }
+        if let Some(value) = &variant.discriminant {
+            s.push_str(" = ");
+            s.push_str(&render_default(&value.value));
         }
         s.push('\n');
     }
@@ -361,9 +392,10 @@ pub(crate) fn render_enum_variant_decl(owner: &str, v: &EnumVariant) -> String {
     s.push('.');
     match v {
         EnumVariant::Bare(n) => s.push_str(n),
-        EnumVariant::Valued(n, _) => {
+        EnumVariant::Valued(n, value) => {
             s.push_str(n);
-            s.push_str(" = …");
+            s.push_str(" = ");
+            s.push_str(&render_default(&value.value));
         }
         EnumVariant::Tuple { name, fields } => {
             s.push_str(name);
