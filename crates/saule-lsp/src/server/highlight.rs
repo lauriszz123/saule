@@ -38,9 +38,7 @@ impl Backend {
             .and_then(|p| canonical(&p))
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
         let _guard = self.analysis_lock.lock().await;
-        if let Some(info) = self.project_info.lock().await.clone() {
-            saule_project::set(info);
-        }
+        self.install_project_for(module_dir.as_deref()).await;
         let seed = match &module_dir {
             Some(d) => self.import_seed(uri, &module, d),
             None => saule_semantic::ModuleSeed::default(),

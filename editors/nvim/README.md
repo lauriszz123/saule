@@ -121,8 +121,18 @@ Editor-side, without the server:
   `end`, `until`, `else`, `elseif`, `catch` and `case` snap to the right level
   the moment they are finished, because Saule closes blocks with words rather
   than braces and there is no `}` for the usual dedent to hook onto.
-* **Two-space indentation** — matching `FmtOptions::default()` in `saule-fmt`,
-  so typing and `saule fmt` agree.
+* **Indentation that matches what the file will be saved as** — two spaces by
+  default, matching `FmtOptions::default()` in `saule-fmt`, but resolved per
+  buffer through the same chain the printer uses: the canonical default, then
+  what the file is already written with, then `indent_style` / `indent_width`
+  from the nearest `saule.config`. That last one wins for `saule fmt` and for
+  the server's formatting *on purpose* — the style belongs to the project, not
+  to whoever opened the file — so the editor has to agree or every Enter, `>>`
+  and `=` is at odds with the next save, and the first format rewrites the
+  whole file. Reading the file's existing indentation covers the projects that
+  declare nothing, the way VS Code's `editor.detectIndentation` does.
+  `vim.g.saule_project_indent = false` opts out and keeps the two-space
+  default.
 * **`%` between block delimiters** — `class`/`fn`/`if`/… ↔ `else`/`case`/… ↔
   `end`/`until`, via the bundled matchit plugin. A trailing block's `do`
   (`Canvas() do … end`) counts as an opener; the `do` ending a `for`/`while`
@@ -133,6 +143,29 @@ Editor-side, without the server:
   feature but leaves it off until something enables it, so the ftplugin does,
   the way IntelliJ and VS Code do out of the box. `:SauleInlayHints` toggles
   the current buffer; `vim.g.saule_inlay_hints = false` opts out entirely.
+* **No word-scraped completions** — completion plugins ship a source that
+  harvests words out of the open buffers (`buffer` for nvim-cmp) and offers
+  them independently of the server. That lands hardest where `saule-lsp`
+  deliberately answers with nothing: a declaration name. Naming a new `fn`,
+  `class`, `local`, parameter, field or enum variant is you *inventing* a
+  name, so the names already in scope are exactly the wrong suggestions —
+  and a word scraper puts them straight back. Saule buffers drop those
+  sources; every other source you have configured is kept, in order, and no
+  other filetype is touched. VS Code does the same with
+  `editor.wordBasedSuggestions: "off"`. `vim.g.saule_word_completion = true`
+  keeps them.
+* **The server's ranking, honoured** — nvim-cmp sorts by LSP *kind* before it
+  looks at `sortText`, and kinds are compared by their protocol number, so a
+  method (2) always outranks a field (5) however irrelevant it is: at
+  `VStack(ali…)` the inherited `aligned()` came out above the `alignment:`
+  parameter being asked for. `saule-lsp` ranks by what the cursor is actually
+  doing — the parameters of the call you are inside, then whatever fits the
+  *type* of the slot you are filling (`alignment: ⟨caret⟩` puts
+  `StackAlignment` first), then locals, members, module functions, classes,
+  the stdlib, keywords — and carries all of it in `sortText`. Saule buffers
+  move `sortText` ahead of `kind` and leave the rest of the chain alone, so
+  `offset` and `exact` still win and the fuzzy `score` still orders whatever
+  the server ranked equally.
 * **Signature help follows the cursor** — the hint pops whenever the cursor is
   inside a call's parens, not only when `(` is typed. Turn it off with
   `vim.g.saule_auto_signature_help = false`.
@@ -170,6 +203,14 @@ change one, change all of them and re-run every suite:
 
 ```bash
 lua tests/indent_spec.lua
+```
+
+`lua/saule/style.lua` is the other half of the same agreement — it is a port of
+`ConfigIndent` in `crates/saule-fmt/src/config.rs`, so the editor resolves a
+project's declared indentation exactly as the printer does:
+
+```bash
+lua tests/style_spec.lua
 ```
 
 ## Future: tree-sitter

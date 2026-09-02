@@ -1,0 +1,20 @@
+import * from uikit
+import * from Screen
+
+class MainApp extends App
+    fn body() -> Scene
+        local theme = ThemeData.light()
+
+        return WindowGroup(title: "MD Viewer") do
+            Theme(data: theme) do
+                Screen()
+            end
+        end
+    end
+end
+
+class Main
+    static fn main()
+        MainApp().run()
+    end
+end

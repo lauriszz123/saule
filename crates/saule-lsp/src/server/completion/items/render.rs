@@ -134,3 +134,9 @@ pub(crate) const STATEMENT_KEYWORDS: &[&str] = &[
     "match",
     "do",
 ];
+
+/// The declarations `export` can introduce.
+pub(crate) const EXPORT_KEYWORDS: &[&str] = &["fn", "class", "interface", "enum"];
+
+/// An interface body holds signatures and nothing else.
+pub(crate) const INTERFACE_KEYWORDS: &[&str] = &["fn"];

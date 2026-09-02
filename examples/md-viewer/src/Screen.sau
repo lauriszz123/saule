@@ -1,0 +1,49 @@
+import * from uikit
+
+local fn markdownFiles(dir: string) -> table<string>
+    local out: table<string> = {}
+
+    for name: string in Os.list(dir) do
+        if String.ends(name, ".md") then
+            out[#out + 1] = name
+        end
+    end
+
+    return out
+end
+
+local fn fileRow(name: string, selected: Binding)
+    local label = Text(name)
+
+    if selected.text() == name then
+        label = label.foregroundStyle(Colors.primary)
+    end
+
+    return label.onTapGesture(() => selected.set(name))
+end
+
+export class Screen extends View
+    fn init(key: string? = nil)
+        self.super(key)
+    end
+
+    fn body(bc: BuildContext) -> View
+        local dir = Assets.resolve("docs")
+        local rows: table<View> = {}
+        local selected = bc.state("selected", "")
+
+        for name in markdownFiles(dir) do
+            rows[#rows + 1] = fileRow(name, selected)
+        end
+
+        return HStack(sizing: StackSize.Fill, alignment: StackAlignment.Fill) do
+            VStack(alignment: StackAlignment.Leading, spacing: 6f, children: rows)
+
+            VerticalDivider()
+
+            VStack(alignment: StackAlignment.Leading, spacing: 12f) do
+                Text("Pick a file on the left").font(20f)
+            end.padding(24f).expanded()
+        end
+    end
+end

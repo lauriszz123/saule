@@ -34,6 +34,15 @@ pub(crate) enum Ctx {
     /// A value position. `stmt_start` is true when the caret begins a
     /// statement, which is the only place statement keywords make sense.
     Value { stmt_start: bool },
+    /// A class body, where a member is beginning. The modifiers already
+    /// written are excluded — `static <caret>` has no second `static` to
+    /// offer.
+    ClassMember { is_static: bool, is_private: bool },
+    /// `export <caret>` — only the four declaration keywords `export` can
+    /// introduce. A bare identifier there parses as the start of an exported
+    /// module variable, which is a name the author is inventing, so nothing
+    /// else is worth offering.
+    AfterExport,
     /// `import * from <caret>` — offer importable modules. `quoted` mirrors
     /// how the author spelled the path so suggestions match their style.
     ImportPath { quoted: bool },
@@ -53,6 +62,11 @@ pub(crate) struct Found {
     /// `f(child: ca…)` the caret is past a `name:` and is typing a
     /// value, where parameter names are the wrong suggestion.
     pub(crate) named_params: Vec<Param>,
+    /// The type the slot under the caret is declared to hold, when the caret
+    /// is filling an argument. What the author writes there has to *be* one
+    /// of these, so it is the strongest ordering signal completion has —
+    /// stronger than how close the name is to what has been typed.
+    pub(crate) expected: Option<Type>,
 }
 
 /// Descends the tree to the sentinel, maintaining the scope stack.
@@ -70,9 +84,41 @@ pub(crate) struct Walk {
     /// shadows its parent — in `outer(a, inner(b…))` the caret is
     /// offered `inner`'s parameters, not `outer`'s.
     named_params: Vec<Param>,
+    /// Declared type of the argument slot currently being descended into.
+    /// Saved and restored around each argument the same way, so a nested
+    /// call's slot shadows its parent's.
+    expected: Option<Type>,
 }
 
 impl Walk {
+    /// Is `offset` inside an interface body?
+    ///
+    /// An interface body takes `fn` and nothing else, so a half-typed member
+    /// is not a name the parser can keep — it is recorded as an error and
+    /// synchronised past, leaving no sentinel in the tree for [`Walk`] to
+    /// find. What does survive is the interface itself, spanning the body it
+    /// was dropped from, and that is enough to place the caret.
+    ///
+    /// Only consulted when the walk found nothing, so a caret in a signature
+    /// — a parameter's type, a return type — still resolves as itself.
+    pub(crate) fn in_interface_body(module: &Module, offset: usize) -> bool {
+        module.stmts.iter().any(|s| {
+            let Stmt::Decl(d) = &s.value else { return false };
+            let Decl::Interface {
+                name, type_params, ..
+            } = &d.value
+            else {
+                return false;
+            };
+            // The header, not the body: the name and the type parameters are
+            // the author's to invent.
+            if name == SENTINEL || type_params.iter().any(|p| p == SENTINEL) {
+                return false;
+            }
+            d.span.contains(&offset)
+        })
+    }
+
     pub(crate) fn run(module: &Module) -> Option<Found> {
         let mut w = Walk {
             scope: Vec::new(),
@@ -80,6 +126,7 @@ impl Walk {
             found: None,
             user_fns: crate::server::sighelp::walk::collect_user_fns(module),
             named_params: Vec::new(),
+            expected: None,
         };
         w.block(&module.stmts);
         w.found
@@ -101,6 +148,7 @@ impl Walk {
                     .collect(),
                 class: self.class.clone(),
                 named_params: std::mem::take(&mut self.named_params),
+                expected: self.expected.clone(),
             });
         }
     }
@@ -297,7 +345,25 @@ impl Walk {
                 let prev = self.class.replace(name.clone());
                 for m in members {
                     match &m.value {
-                        ClassMember::Field { ty, default, .. } => {
+                        ClassMember::Field {
+                            is_static,
+                            is_private,
+                            name,
+                            ty,
+                            default,
+                        } => {
+                            // A member that is still only a bare word: the
+                            // parser read it as a field name, but it is just
+                            // as likely to be a modifier or `fn` the author
+                            // hasn't finished typing. The modifiers already
+                            // consumed say which are still available.
+                            if name == SENTINEL {
+                                self.record(Ctx::ClassMember {
+                                    is_static: *is_static,
+                                    is_private: *is_private,
+                                });
+                                continue;
+                            }
                             self.ty(Some(ty));
                             self.opt_expr(default.as_ref());
                         }
@@ -342,8 +408,20 @@ impl Walk {
             // name before walking on — completion inside a later function
             // body should offer it.
             Decl::Variable {
-                name, ty, value, ..
+                exported,
+                name,
+                ty,
+                value,
+                ..
             } => {
+                // `export en…` parses as an exported variable being named,
+                // because an identifier is all that distinguishes one from a
+                // `fn` / `class` / `interface` / `enum` that hasn't been typed
+                // yet. Nothing followed it, so the keyword is what's wanted.
+                if *exported && name == SENTINEL && ty.is_none() && value.is_none() {
+                    self.record(Ctx::AfterExport);
+                    return;
+                }
                 self.ty(ty.as_ref());
                 self.opt_expr(value.as_ref());
                 self.bind_init(
@@ -507,16 +585,22 @@ impl Walk {
             .collect();
 
         let outer = std::mem::replace(&mut self.named_params, unfilled);
+        let outer_expected = self.expected.take();
         for (a, slot) in args.iter().zip(slots.iter()) {
             let (CallArg::Positional(e) | CallArg::Named { value: e, .. }) = a;
             let want = slot.and_then(|i| params.get(i)).map(|p| &p.ty);
+            // What this slot is declared to hold, for as long as we are
+            // inside it. A positional caret past the last declared parameter
+            // has no slot and so no expectation, which is the honest answer.
+            self.expected = want.cloned();
             match (&e.value, want) {
                 (Expr::Lambda { params, body, .. }, Some(Type::Function { params: want, .. })) => {
                     self.lambda(params, body, Some(want))
                 }
                 // A named argument's value is a value position — the
                 // keyword is already written, so parameter names are
-                // not what the caret wants next.
+                // not what the caret wants next. Its *type* still is:
+                // `alignment: ⟨caret⟩` wants an `Alignment`.
                 _ if matches!(a, CallArg::Named { .. }) => {
                     let inner = std::mem::take(&mut self.named_params);
                     self.expr(e);
@@ -524,8 +608,10 @@ impl Walk {
                 }
                 _ => self.expr(e),
             }
+            self.expected = None;
         }
         self.named_params = outer;
+        self.expected = outer_expected;
     }
 
     /// The callee's declared parameters, for the callee shapes a lambda
