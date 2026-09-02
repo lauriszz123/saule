@@ -39,37 +39,67 @@ pub static IO_PACKAGE: NativePackage = NativePackage {
     install,
     exports: &["Io", "File", "IoMode", "IoSeek"],
     register_sigs,
-    builtins: empty_builtins,
+    builtins: io_builtins,
     auto_prelude: true,
 };
 
-fn empty_builtins() -> saule_semantic::builtins::Builtins {
-    saule_semantic::builtins::Builtins::default()
+/// `IoMode`'s variants, paired with the mode string each stands for.
+/// Shared by [`install`] and [`io_builtins`] so the runtime enum and the
+/// type the checker knows about can never drift apart.
+const IO_MODE_VARIANTS: [(&str, &str); 9] = [
+    ("Read", "r"),
+    ("Write", "w"),
+    ("Append", "a"),
+    ("ReadWrite", "r+"),
+    ("WriteRead", "w+"),
+    ("AppendRead", "a+"),
+    ("ReadBinary", "rb"),
+    ("WriteBinary", "wb"),
+    ("AppendBinary", "ab"),
+];
+
+/// `IoSeek`'s variants. See [`IO_MODE_VARIANTS`].
+const IO_SEEK_VARIANTS: [(&str, &str); 3] = [("Set", "set"), ("Cur", "cur"), ("End", "end")];
+
+/// The types this package contributes to the semantic registries.
+///
+/// `install` defines `IoMode`, `IoSeek` and `File` as runtime *values*, which
+/// is what makes `IoMode.Read` evaluate — but a value is not a type, and
+/// without these entries `local f: File` and `local m: IoMode` named types
+/// the checker had never heard of, so the annotations constrained nothing.
+fn io_builtins() -> saule_semantic::builtins::Builtins {
+    use saule_semantic::{EnumInfo, VariantInfo};
+
+    let mut enums = saule_semantic::EnumRegistry::new();
+    for (name, variants) in [
+        ("IoMode", &IO_MODE_VARIANTS[..]),
+        ("IoSeek", &IO_SEEK_VARIANTS[..]),
+    ] {
+        let mut info = EnumInfo::default();
+        for (v, _) in variants {
+            info.variants.insert((*v).to_string(), VariantInfo::default());
+        }
+        enums.insert(name.to_string(), info);
+    }
+
+    // `File` is deliberately *not* a class here. Its methods are dispatched
+    // off a `Value::File` through the native signature table
+    // (`File.read`, `File.write`, …), and a class entry with no members
+    // would make the checker take the class path instead and reject every
+    // one of them. It is nameable as a type through `sigs::is_value_type`,
+    // which `register_sigs` populates.
+    saule_semantic::builtins::Builtins {
+        classes: saule_semantic::ClassRegistry::new(),
+        interfaces: saule_semantic::InterfaceRegistry::new(),
+        enums,
+    }
 }
 
 // ─── installation ──────────────────────────────────────────────────────────
 
 pub fn install(env: &Rc<RefCell<Environment>>) {
-    install_enum(
-        env,
-        "IoMode",
-        &[
-            ("Read", "r"),
-            ("Write", "w"),
-            ("Append", "a"),
-            ("ReadWrite", "r+"),
-            ("WriteRead", "w+"),
-            ("AppendRead", "a+"),
-            ("ReadBinary", "rb"),
-            ("WriteBinary", "wb"),
-            ("AppendBinary", "ab"),
-        ],
-    );
-    install_enum(
-        env,
-        "IoSeek",
-        &[("Set", "set"), ("Cur", "cur"), ("End", "end")],
-    );
+    install_enum(env, "IoMode", &IO_MODE_VARIANTS);
+    install_enum(env, "IoSeek", &IO_SEEK_VARIANTS);
 
     // Phantom `File` class — only needed so the typechecker recognises
     // `File` as a type name in `local f: File = ...`. Method dispatch

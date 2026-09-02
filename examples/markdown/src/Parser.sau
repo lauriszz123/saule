@@ -1,0 +1,8 @@
+export class Markdown
+    static fn parse(source: string)
+        local blocks: table<Block> = {}
+
+        local normalized = String.replace(source, '\r', '')
+        local lines = String.split(normalized, '\n')
+    end
+end

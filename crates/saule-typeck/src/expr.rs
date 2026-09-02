@@ -291,6 +291,7 @@ fn check_lambda_return_ty(
     errors: &mut Vec<TypeCheckError>,
 ) {
     if let Some(rt) = return_ty {
+        super::stmt::reject_unknown_types(rt, span.clone(), errors);
         super::stmt::reject_non_types(rt, span, errors);
     }
 }
