@@ -535,6 +535,17 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("unknown type `{name}`")]
+    #[diagnostic(help(
+        "check the spelling, or import it — a type declared in another module is only in scope \
+         once that module is imported (`import {name} from some.module`)"
+    ))]
+    UnknownType {
+        name: String,
+        #[label("no type by this name is in scope")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`number` is not a type — Saule has `integer` and `float`")]
     #[diagnostic(help(
         "pick the one you mean: `integer` for whole numbers, `float` for decimals. The two never \

@@ -59,7 +59,7 @@ fn rejects(src: &str, needle: &str) {
 #[test]
 fn undefined_name_is_reported() {
     rejects(
-        "fn main() -> nothing\n  println(nope)\n  return\nend\n",
+        "fn main() -> nil\n  println(nope)\n  return\nend\n",
         "nope",
     );
 }
@@ -81,11 +81,11 @@ fn parameters_are_in_scope_in_the_body() {
 fn a_local_does_not_escape_its_function() {
     rejects(
         "\
-fn a() -> nothing
+fn a() -> nil
   local secret: integer = 1
   return
 end
-fn b() -> nothing
+fn b() -> nil
   println(secret)
   return
 end
@@ -136,7 +136,7 @@ end
 #[test]
 fn self_outside_a_class_is_rejected() {
     rejects(
-        "fn f() -> nothing\n  println(self)\n  return\nend\n",
+        "fn f() -> nil\n  println(self)\n  return\nend\n",
         "self",
     );
 }
@@ -230,14 +230,14 @@ end
 
 #[test]
 fn break_outside_a_loop_is_rejected() {
-    rejects("fn f() -> nothing\n  break\n  return\nend\n", "loop");
+    rejects("fn f() -> nil\n  break\n  return\nend\n", "loop");
 }
 
 #[test]
 fn break_inside_a_loop_is_fine() {
     accepts(
         "\
-fn f() -> nothing
+fn f() -> nil
   while true do
     break
   end
@@ -252,7 +252,7 @@ end
 #[test]
 fn variadic_must_come_last() {
     rejects(
-        "fn f(...rest: integer, tail: integer) -> nothing\n  return\nend\n",
+        "fn f(...rest: integer, tail: integer) -> nil\n  return\nend\n",
         "variadic",
     );
 }
@@ -260,7 +260,7 @@ fn variadic_must_come_last() {
 #[test]
 fn only_one_variadic_parameter_is_allowed() {
     rejects(
-        "fn f(...a: integer, ...b: integer) -> nothing\n  return\nend\n",
+        "fn f(...a: integer, ...b: integer) -> nil\n  return\nend\n",
         "variadic",
     );
 }
@@ -272,7 +272,7 @@ fn inheritance_and_interfaces_analyse() {
     accepts(
         "\
 interface Drawable
-  fn draw() -> nothing
+  fn draw() -> nil
 end
 
 class Shape
@@ -283,7 +283,7 @@ class Square extends Shape implements Drawable
   fn init()
     self.sides = 4
   end
-  fn draw() -> nothing
+  fn draw() -> nil
     return
   end
 end

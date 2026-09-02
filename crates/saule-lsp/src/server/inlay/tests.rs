@@ -312,7 +312,7 @@ fn parameter_hint_suppressed_for_println() {
 /// the `?` is why the result still has to be unwrapped.
 #[test]
 fn type_hint_for_a_checked_cast() {
-    let src = "fn pick(bag: any) -> nothing\n  local n = bag as integer\nend\n";
+    let src = "fn pick(bag: any) -> nil\n  local n = bag as integer\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -329,9 +329,9 @@ fn type_hint_for_a_checked_cast() {
 #[test]
 fn type_hint_for_a_conversion_has_no_question_mark() {
     for (src, want) in [
-        ("fn f(x: float) -> nothing\n  local n = x as integer\nend\n", ": integer"),
-        ("fn f(i: integer) -> nothing\n  local n = i as float\nend\n", ": float"),
-        ("fn f(i: integer) -> nothing\n  local n = i as string\nend\n", ": string"),
+        ("fn f(x: float) -> nil\n  local n = x as integer\nend\n", ": integer"),
+        ("fn f(i: integer) -> nil\n  local n = i as float\nend\n", ": float"),
+        ("fn f(i: integer) -> nil\n  local n = i as string\nend\n", ": string"),
     ] {
         let hints = raw_hints(src);
         assert!(
@@ -347,7 +347,7 @@ fn type_hint_for_a_conversion_has_no_question_mark() {
 /// the checker gives it.
 #[test]
 fn type_hint_for_a_parse_keeps_the_question_mark() {
-    let src = "fn f(s: string) -> nothing\n  local n = s as integer\nend\n";
+    let src = "fn f(s: string) -> nil\n  local n = s as integer\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -361,7 +361,7 @@ fn type_hint_for_a_parse_keeps_the_question_mark() {
 /// concrete type, which is how a generic body has to do it.
 #[test]
 fn type_hint_for_a_cast_from_a_type_param() {
-    let src = "fn firstInt<T>(items: table<T>) -> nothing\n  for item: T in items do\n    local n = item as integer\n  end\nend\n";
+    let src = "fn firstInt<T>(items: table<T>) -> nil\n  for item: T in items do\n    local n = item as integer\n  end\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -374,7 +374,7 @@ fn type_hint_for_a_cast_from_a_type_param() {
 /// `!` asserts the nullability away, so the hint must not keep it.
 #[test]
 fn type_hint_for_a_force_unwrap_drops_nullability() {
-    let src = "fn pick(bag: any) -> nothing\n  local n = (bag as integer)!\nend\n";
+    let src = "fn pick(bag: any) -> nil\n  local n = (bag as integer)!\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -387,7 +387,7 @@ fn type_hint_for_a_force_unwrap_drops_nullability() {
 /// A field read carries the field's declared type.
 #[test]
 fn type_hint_from_a_field_read() {
-    let src = "class Point\n  x: integer = 0\nend\n\nfn use() -> nothing\n  local p = Point()\n  local got = p.x\nend\n";
+    let src = "class Point\n  x: integer = 0\nend\n\nfn use() -> nil\n  local p = Point()\n  local got = p.x\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -401,7 +401,7 @@ fn type_hint_from_a_field_read() {
 /// nullable however the field is declared.
 #[test]
 fn type_hint_from_a_safe_chain_is_nullable() {
-    let src = "class Point\n  x: integer = 0\nend\n\nfn use() -> nothing\n  local p = Point()\n  local got = p?.x\nend\n";
+    let src = "class Point\n  x: integer = 0\nend\n\nfn use() -> nil\n  local p = Point()\n  local got = p?.x\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -414,7 +414,7 @@ fn type_hint_from_a_safe_chain_is_nullable() {
 /// Indexing a table gives its element type.
 #[test]
 fn type_hint_from_indexing_a_table() {
-    let src = "fn use(names: table<string>) -> nothing\n  local first = names[1]\nend\n";
+    let src = "fn use(names: table<string>) -> nil\n  local first = names[1]\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -428,7 +428,7 @@ fn type_hint_from_indexing_a_table() {
 /// for the whole expression.
 #[test]
 fn type_hint_from_a_match_expression() {
-    let src = "fn label(n: integer) -> nothing\n  local text = match n\n    case 0 then \"zero\"\n    case v then \"many\"\n  end\nend\n";
+    let src = "fn label(n: integer) -> nil\n  local text = match n\n    case 0 then \"zero\"\n    case v then \"many\"\n  end\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -473,7 +473,7 @@ end
 /// and the slot is the only place its real type comes from.
 #[test]
 fn type_hint_inside_a_lambda_uses_the_slots_param_type() {
-    let src = "fn apply(items: table<string>, f: fn(string) -> integer) -> integer\n  return 0\nend\n\nfn main() -> nothing\n  local n = apply({\"a\"}, fn(s)\n    local size = #s\n    return size\n  end)\nend\n";
+    let src = "fn apply(items: table<string>, f: fn(string) -> integer) -> integer\n  return 0\nend\n\nfn main() -> nil\n  local n = apply({\"a\"}, fn(s)\n    local size = #s\n    return size\n  end)\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -487,7 +487,7 @@ fn type_hint_inside_a_lambda_uses_the_slots_param_type() {
 /// so the predicate's parameter is concrete inside the body.
 #[test]
 fn type_hint_inside_a_generic_pipe_stage_lambda() {
-    let src = "fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>\n  return items\nend\n\nfn main() -> nothing\n  local evens = when({1, 2}):filter(fn(x)\n    local doubled = x * 2\n    return doubled > 2\n  end)\nend\n";
+    let src = "fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>\n  return items\nend\n\nfn main() -> nil\n  local evens = when({1, 2}):filter(fn(x)\n    local doubled = x * 2\n    return doubled > 2\n  end)\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints
@@ -502,7 +502,7 @@ fn type_hint_inside_a_generic_pipe_stage_lambda() {
 /// initialised from a captured variable got no hint at all.
 #[test]
 fn type_hint_inside_a_lambda_sees_the_enclosing_scope() {
-    let src = "fn run(f: fn() -> integer) -> integer\n  return 0\nend\n\nfn main() -> nothing\n  local factor: integer = 3\n  local n = run(fn()\n    local scaled = factor\n    return scaled\n  end)\nend\n";
+    let src = "fn run(f: fn() -> integer) -> integer\n  return 0\nend\n\nfn main() -> nil\n  local factor: integer = 3\n  local n = run(fn()\n    local scaled = factor\n    return scaled\n  end)\nend\n";
     let hints = raw_hints(src);
     assert!(
         hints

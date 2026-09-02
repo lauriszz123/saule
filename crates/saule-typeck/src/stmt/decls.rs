@@ -91,6 +91,11 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             body,
             ..
         } => {
+            // The declaration's own `<T, U>` are in scope for its signature
+            // as much as for its body — `fn id<T>(v: T) -> T` names `T`
+            // three times before the body starts — so they go in first or
+            // every mention reads as an undeclared type.
+            let prev_generics = push_generics(type_params);
             check_param_types(params, errors);
             // `Decl::Function` carries no span of its own, so a bad return
             // type is pointed at the nearest node that does.
@@ -100,9 +105,9 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                     .map(|p| p.span.clone())
                     .or_else(|| body.first().map(|s| s.span.clone()))
                     .unwrap_or(0..0);
+                reject_unknown_types(rt, span.clone(), errors);
                 reject_non_types(rt, span, errors);
             }
-            let prev_generics = push_generics(type_params);
             let mut scope = Scope::default();
             check_default_params(params, &scope, errors);
             seed_params(&mut scope, params);
@@ -163,6 +168,7 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                 let prev_method = push_generics(&sig.type_params);
                 check_param_types(&sig.params, errors);
                 if let Some(rt) = &sig.return_ty {
+                    reject_unknown_types(rt, sig.span.clone(), errors);
                     reject_non_types(rt, sig.span.clone(), errors);
                 }
                 pop_generics(prev_method);
@@ -386,11 +392,15 @@ pub(crate) fn check_class(
     let prev = set_current_class(Some(class_name.to_string()));
     for m in members {
         if let ClassMember::Method(meth) = &m.value {
+            // As for a top-level `fn`: the method's own `<T>` belong to its
+            // signature too. The class's are already in scope, pushed around
+            // this whole walk by the caller.
+            let prev_generics = push_generics(&meth.type_params);
             check_param_types(&meth.params, errors);
             if let Some(rt) = &meth.return_ty {
+                reject_unknown_types(rt, meth.span.clone(), errors);
                 reject_non_types(rt, meth.span.clone(), errors);
             }
-            let prev_generics = push_generics(&meth.type_params);
             let mut scope = Scope::default();
             // `self` resolves to the class itself in `static fn` and to an
             // instance otherwise. Seed it as the class name so member-existence

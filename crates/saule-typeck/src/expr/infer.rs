@@ -62,7 +62,13 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             // `Direction.North` — a variant of a known enum has that enum's
             // type. Checked before the general member path because the
             // receiver here is a type name, not a value.
+            //
+            // A binding of the same name shadows it: `local FsKind = {…}`
+            // makes `FsKind.File` an ordinary member read off that table,
+            // and answering from the prelude's enum instead would type the
+            // program as something it does not run as.
             if let Expr::Ident(enum_name) = &obj.value
+                && scope.lookup(enum_name).is_none()
                 && with_enums(|reg| {
                     reg.get(enum_name)
                         .is_some_and(|e| e.variants.contains_key(name))
@@ -263,6 +269,7 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             // class registry, so nothing below would answer for it.
             if let Expr::Member { obj, name } = &callee.value
                 && let Expr::Ident(enum_name) = &obj.value
+                && scope.lookup(enum_name).is_none()
                 && with_enums(|reg| {
                     reg.get(enum_name)
                         .is_some_and(|e| e.variants.contains_key(name))

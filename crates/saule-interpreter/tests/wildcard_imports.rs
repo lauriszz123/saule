@@ -63,7 +63,7 @@ fn glob_over_a_file_module_still_reports_undefined_names() {
         "\
 import * from \"shapes\"
 
-fn run() -> nothing
+fn run() -> nil
   local a = Circle.area(2.0)
   local b = describe()
   local c = Tween(1.5)
@@ -86,7 +86,7 @@ fn glob_does_not_expose_unexported_declarations() {
         "\
 import * from \"shapes\"
 
-fn run() -> nothing
+fn run() -> nil
   local h = Hidden()
 end
 ",
@@ -112,7 +112,7 @@ fn glob_over_a_barrel_sees_reexported_names() {
         "\
 import * from \"lib\"
 
-fn run() -> nothing
+fn run() -> nil
   local a = Circle.area(2.0)
   local c = Missing()
 end
@@ -137,7 +137,7 @@ fn unenumerable_glob_suppresses_undefined_names() {
         "\
 import * from \"no_such_module\"
 
-fn run() -> nothing
+fn run() -> nil
   local c = Whatever()
 end
 ",
@@ -163,7 +163,7 @@ fn named_import_alongside_a_glob_still_reports_undefined_names() {
         "\
 import Circle as Round from \"shapes\"
 
-fn run() -> nothing
+fn run() -> nil
   local a = Round.area(2.0)
   local b = describe()
 end

@@ -1039,12 +1039,24 @@ pub fn builtin_registries() -> (
 
     // FsKind ────────────────────────────────────────────────────────────
     let mut fskind = EnumInfo::default();
-    for v in ["File", "Dir", "Symlink", "Other"] {
+    for (v, _) in FS_KIND_VARIANTS {
         fskind
             .variants
             .insert(v.to_string(), saule_semantic::VariantInfo::default());
     }
     enums.insert("FsKind".to_string(), fskind);
+
+    // OsPlatform ────────────────────────────────────────────────────────
+    // `Os.platform()` is declared to return one of these, so an annotation
+    // naming it has to resolve — without the entry `local p: OsPlatform`
+    // named a type the checker had never heard of.
+    let mut platform = EnumInfo::default();
+    for (v, _) in OS_PLATFORM_VARIANTS {
+        platform
+            .variants
+            .insert(v.to_string(), saule_semantic::VariantInfo::default());
+    }
+    enums.insert("OsPlatform".to_string(), platform);
 
     // FsInfo ────────────────────────────────────────────────────────────
     let mut info = ClassInfo {
