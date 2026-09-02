@@ -274,12 +274,7 @@ impl<'a> Cx<'a> {
         }
         if with_enums(|r| r.contains_key(name)) {
             let info = with_enums(|r| r.get(name).cloned())?;
-            let variants: Vec<(String, usize)> = info
-                .variants
-                .iter()
-                .map(|(n, v)| (n.clone(), v.arity()))
-                .collect();
-            return Some(with_doc(render_enum_from_registry(name, &variants), doc));
+            return Some(with_doc(render_enum_from_registry(name, &info), doc));
         }
         // Free function declared at top level in *this* module. Checked
         // ahead of the native signatures because a local declaration

@@ -3,7 +3,8 @@
 //! or a bare identifier).
 
 use saule_ast::{
-    CallArg, ClassMember, Decl, Expr, LambdaBody, MatchBody, Module, Param, Spanned, Stmt, Type,
+    CallArg, ClassMember, Decl, EnumVariant, Expr, LambdaBody, MatchBody, Module, Param, Spanned,
+    Stmt, Type,
 };
 
 use super::*;
@@ -397,7 +398,26 @@ impl Walk {
                     self.ty(m.return_ty.as_ref());
                 }
             }
-            Decl::Enum { methods, .. } => {
+            Decl::Enum {
+                variants, methods, ..
+            } => {
+                // The payload of a tuple variant is a parameter list like any
+                // other, and its annotations are type positions like any
+                // other — `Text(value: str…)` wants the same names
+                // `local x: str…` does. Walking only `methods` left the
+                // variant list as the one place in the language where a type
+                // annotation offered nothing: the sentinel landed in a
+                // `Param` no arm visited, `Walk::run` found no context, and
+                // the request answered `None`.
+                for v in variants {
+                    match &v.value {
+                        EnumVariant::Tuple { fields, .. } => self.params(fields),
+                        // `Alive = "aliv…"` — a discriminant is an ordinary
+                        // expression, so the caret in one completes values.
+                        EnumVariant::Valued(_, value) => self.expr(value),
+                        EnumVariant::Bare(_) => {}
+                    }
+                }
                 for m in methods {
                     self.params(&m.params);
                     self.ty(m.return_ty.as_ref());

@@ -6,7 +6,7 @@ use crate::hover::render::{
     render_param, with_doc, with_param_doc,
 };
 use crate::hover::util::{contains, locate_word_in};
-use saule_ast::{ClassMember, Decl, Method, Spanned};
+use saule_ast::{ClassMember, Decl, Method, Spanned, Type};
 use saule_semantic::with_classes;
 
 use super::*;
@@ -38,7 +38,12 @@ impl<'a> Cx<'a> {
                 self.record(
                     name_span,
                     with_doc(
-                        render_function_sig(name, type_params, params, return_ty.as_ref()),
+                        render_function_sig(
+                            name,
+                            type_params,
+                            params,
+                            function_return_ty(name, return_ty.as_ref()).as_ref(),
+                        ),
                         doc.as_ref(),
                     ),
                 );
@@ -311,9 +316,13 @@ impl<'a> Cx<'a> {
             .or_else(|| m.body.first().map(|s| s.span.start))
             .unwrap_or(m.span.end);
         let name_span = self.decl_name_span(&m.span, &m.name, head_end);
+        let resolved_ret = method_return_ty(owner, m);
         self.record(
             name_span,
-            with_doc(render_method_head(owner, m), doc.as_ref()),
+            with_doc(
+                render_method_head(owner, m, resolved_ret.as_ref()),
+                doc.as_ref(),
+            ),
         );
         for p in &m.params {
             self.record(
@@ -331,9 +340,27 @@ impl<'a> Cx<'a> {
             self.record_type_idents_in(rt, &(after..before));
         }
         let params = m.params.clone();
-        let return_ty = m.return_ty.clone();
-        self.enter_function_with_return(&params, return_ty.as_ref(), |this| {
+        self.enter_function_with_return(&params, resolved_ret.as_ref(), |this| {
             this.visit_block(&m.body)
         });
     }
+}
+
+/// The return type to *show* for a method: the one it declared, or the one
+/// the semantic pass inferred from its body when it declared none.
+///
+/// The declaration blurb renders from the AST, which carries only what was
+/// written — so without this lookup an inferred type reached every call
+/// site and inlay but not the signature the author is looking straight at.
+fn method_return_ty(owner: &str, m: &Method) -> Option<Type> {
+    m.return_ty
+        .clone()
+        .or_else(|| saule_semantic::lookup_method(owner, &m.name)?.return_ty)
+}
+
+/// [`method_return_ty`] for a top-level `fn`.
+fn function_return_ty(name: &str, declared: Option<&Type>) -> Option<Type> {
+    declared
+        .cloned()
+        .or_else(|| saule_semantic::lookup_function(name)?.return_ty)
 }

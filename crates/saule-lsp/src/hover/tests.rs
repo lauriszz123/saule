@@ -1075,6 +1075,100 @@ local s: Storage = Storage()
     assert!(md.contains("class Storage"), "got: {md}");
 }
 
+/// A local's annotation is not always a bare name: `table<Block>` puts
+/// the interesting half *inside* the generic, and matching only the
+/// outermost head left it with no hover at all.
+#[test]
+fn hovers_a_nested_type_inside_a_local_ascription() {
+    let src = "enum Block
+  Rule
+end
+
+local blocks: table<Block> = {}
+";
+    let md = hover_src_at(src, "table<Block>", "table<".len()).expect("hover");
+    assert!(md.contains("enum Block"), "got: {md}");
+}
+
+/// A reference to an enum renders its variants' payloads named and
+/// typed, in the order they were declared — not one `_` per slot, which
+/// told the reader only the arity they could already count.
+#[test]
+fn an_enum_reference_renders_its_variant_payloads() {
+    let src = "enum Inline
+  Text(value: string)
+end
+
+enum Block
+  Heading(level: integer, slug: string, children: table<Inline>),
+  Paragraph(children: table<Inline>),
+  Rule
+end
+
+local blocks: table<Block> = {}
+";
+    let md = hover_src_at(src, "table<Block>", "table<".len()).expect("hover");
+    assert_eq!(
+        md,
+        "```saule\nenum Block {\n  \
+         Heading(level: integer, slug: string, children: table<Inline>)\n  \
+         Paragraph(children: table<Inline>)\n  \
+         Rule\n}\n```"
+    );
+}
+
+/// The generic parameters of an enum reached through the registry
+/// belong in its blurb — `Result` alone doesn't say what `Ok` carries.
+#[test]
+fn an_enum_reference_renders_its_type_params() {
+    let src = "enum Result<T>
+  Ok(value: T),
+  Err(message: string)
+end
+
+local r: Result<integer> = Result.Err('boom')
+";
+    let md = hover_src_at(src, "Result<integer>", 0).expect("hover");
+    assert_eq!(
+        md,
+        "```saule\nenum Result<T> {\n  Ok(value: T)\n  Err(message: string)\n}\n```"
+    );
+}
+
+/// A `Valued` variant's discriminant survives the trip through the
+/// registry. It used to be dropped on the way in, so a reference to the
+/// enum rendered `Alive` and `Dead` as bare names — indistinguishable
+/// from an enum that gives its variants no values at all.
+#[test]
+fn an_enum_reference_renders_its_discriminants() {
+    let src = "enum Status
+  Alive = 'alive',
+  Dead = 'dead',
+  Unknown
+end
+
+local s: Status = Status.Alive
+";
+    let md = hover_src_at(src, ": Status = ", 2).expect("hover");
+    assert_eq!(
+        md,
+        "```saule\nenum Status {\n  Alive = \"alive\"\n  Dead = \"dead\"\n  Unknown\n}\n```"
+    );
+}
+
+/// …and reaches the hover on a single variant too.
+#[test]
+fn a_valued_variant_hovers_with_its_value() {
+    let src = "enum Status
+  Alive = 1
+end
+
+local s: Status = Status.Alive
+";
+    let md = hover_src_at(src, "Status.Alive", "Status.".len()).expect("hover");
+    assert_eq!(md, "```saule\n(variant) Status.Alive = 1\n```");
+}
+
 #[test]
 fn hovers_chained_method_inference() {
     // The parser doesn't support `a.b().c()` directly, but the
@@ -3043,3 +3137,175 @@ end
 }
 
 
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Inferred return types
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// An accessor that declares no return type is typed from what it returns,
+/// so the hover names the field's type instead of falling back to nothing.
+#[test]
+fn an_unannotated_method_infers_its_return_type() {
+    let src = "\
+enum Block
+  Rule
+end
+
+class ListItem
+  blocks: table<Block>
+
+  fn init(blocks: table<Block>)
+    self.blocks = blocks
+  end
+
+  fn getBlocks()
+    return self.blocks
+  end
+end
+";
+    let md = hover_src_at(src, "fn getBlocks()", "fn ".len()).expect("hover");
+    assert!(
+        md.contains("fn ListItem.getBlocks() -> table<Block>"),
+        "got: {md}"
+    );
+}
+
+/// The inferred type reaches call sites too, not just the declaration —
+/// that is the whole point of inferring it in the registry.
+#[test]
+fn an_inferred_return_type_types_the_call_site() {
+    let src = "\
+class ListItem
+  checked: boolean?
+
+  fn init()
+    self.checked = nil
+  end
+
+  fn isChecked()
+    return self.checked
+  end
+end
+
+fn go(item: ListItem)
+  local c = item.isChecked()
+end
+";
+    assert_eq!(
+        hover_src_at(src, "local c =", "local ".len()).as_deref(),
+        Some("```saule\n(local) c: boolean?\n```")
+    );
+}
+
+/// A declared return type is the author's word and is never second-guessed,
+/// even when the body would infer something narrower.
+#[test]
+fn a_declared_return_type_wins_over_the_body() {
+    let src = "\
+class Box
+  fn get() -> any
+    return 1
+  end
+end
+";
+    let md = hover_src_at(src, "fn get()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Box.get() -> any"), "got: {md}");
+}
+
+/// A body that can also fall off the end reaches the caller as nil on that
+/// path, so the inferred type is nullable however sure the `return` is.
+#[test]
+fn a_body_that_can_fall_through_infers_a_nullable() {
+    let src = "\
+class Finder
+  fn first(ok: boolean)
+    if ok then
+      return 1
+    end
+  end
+end
+";
+    let md = hover_src_at(src, "fn first(", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Finder.first(ok: boolean) -> integer?"), "got: {md}");
+}
+
+/// Returns that disagree on more than nullability are left alone — a guess
+/// there would put a type on a program this pass cannot read.
+#[test]
+fn disagreeing_returns_infer_nothing() {
+    let src = "\
+class Odd
+  fn pick(flag: boolean)
+    if flag then
+      return 1
+    else
+      return 'one'
+    end
+  end
+end
+";
+    let md = hover_src_at(src, "fn pick(", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Odd.pick(flag: boolean)"), "got: {md}");
+    assert!(!md.contains("->"), "should not have inferred a type: {md}");
+}
+
+/// `T` on one path and `nil` on another is the accessor shape, and does
+/// reconcile — to `T?`.
+#[test]
+fn a_nil_return_widens_the_inferred_type() {
+    let src = "\
+class Cache
+  hit: string
+
+  fn init(hit: string)
+    self.hit = hit
+  end
+
+  fn find(ok: boolean)
+    if ok then
+      return self.hit
+    else
+      return nil
+    end
+  end
+end
+";
+    let md = hover_src_at(src, "fn find(", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Cache.find(ok: boolean) -> string?"), "got: {md}");
+}
+
+/// A top-level `fn` is inferred the same way a method is.
+#[test]
+fn an_unannotated_free_function_infers_its_return_type() {
+    let src = "\
+class Doc
+  fn init()
+  end
+end
+
+fn make()
+  return Doc()
+end
+
+local d = make()
+";
+    assert_eq!(
+        hover_src_at(src, "local d =", "local ".len()).as_deref(),
+        Some("```saule\n(local) d: Doc\n```")
+    );
+}
+
+/// A body whose returns this pass cannot type keeps the `any` it had — the
+/// failure mode is silence, not a wrong answer.
+#[test]
+fn an_untypeable_return_infers_nothing() {
+    let src = "\
+class Odd
+  fn compute(a: integer, b: integer)
+    return a + b * 2
+  end
+end
+";
+    let md = hover_src_at(src, "fn compute(", "fn ".len()).expect("hover");
+    assert!(!md.contains("->"), "should not have inferred a type: {md}");
+}

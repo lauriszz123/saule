@@ -16,7 +16,7 @@ use saule_ast::{CallArg, Decl, Expr, Module, Param, Spanned, Stmt, Type};
 
 use super::ImportContext;
 use super::render::{collect_enum_variant_fields, render_function_sig, render_type};
-use super::util::{locate_word_in, named_type};
+use super::util::locate_word_in;
 
 /// Collapse an inferred type to the single value it yields in a
 /// single-value context: a multi-return tuple becomes its first
@@ -165,15 +165,23 @@ fn collect_module_fns(module: &Module) -> HashMap<String, ModuleFn> {
                 ..
             } = &d.value
         {
+            // The written return type, or the one the semantic pass
+            // inferred from the body. This map is consulted ahead of the
+            // registry for a call to a sibling function, so reading only
+            // the AST here would hide an inferred type behind the very
+            // shortcut that exists to make sibling calls resolve.
+            let resolved = return_ty
+                .clone()
+                .or_else(|| saule_semantic::lookup_function(name)?.return_ty);
             out.entry(name.clone()).or_insert_with(|| ModuleFn {
-                md: render_function_sig(name, type_params, params, return_ty.as_ref()),
+                md: render_function_sig(name, type_params, params, resolved.as_ref()),
                 params: params.clone(),
                 sig: saule_typeck::sigs::NativeSig {
                     type_params: type_params.clone(),
                     bounds: Vec::new(),
                     params: params.iter().map(|p| p.ty.clone()).collect(),
                     variadic: None,
-                    returns: return_ty.clone().into_iter().collect(),
+                    returns: resolved.clone().into_iter().collect(),
                 },
             });
         }
@@ -254,14 +262,15 @@ impl<'a> Cx<'a> {
                 );
                 // Cursor on the type ascription itself
                 // (`local s: Storage = …` -> hover on `Storage`):
-                // resolve the head named type through the same
-                // identifier path that handles bare class / interface
-                // / enum references in expressions.
-                if let (Some(span), Some(t)) = (ty_span, ty.as_ref())
-                    && let Some(head) = named_type(t)
-                    && let Some(md) = self.resolve_ident(&head)
-                {
-                    self.record(span.clone(), md);
+                // resolve through the same identifier path that handles
+                // bare class / interface / enum references in
+                // expressions. Every named head reachable from the
+                // annotation counts, not just its outermost one —
+                // `local blocks: table<Block>` spells `Block` inside a
+                // `table`, and matching only the head meant that name
+                // (the interesting half) had no hover at all.
+                if let (Some(span), Some(t)) = (ty_span, ty.as_ref()) {
+                    self.record_type_idents_in(t, span);
                 }
                 self.locals.push(LocalVar {
                     name: name.clone(),

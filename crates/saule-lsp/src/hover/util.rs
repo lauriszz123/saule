@@ -159,13 +159,14 @@ pub(super) fn resolve_member(
 }
 
 /// Render `Enum.Variant` when `owner` is an enum that declares
-/// `variant`, carrying the payload arity for a tuple-style one.
+/// `variant`, carrying the payload of a tuple-style one or the `= value`
+/// of a valued one.
 ///
 /// `None` when `owner` isn't an enum, or doesn't have that variant —
 /// the latter still being a real miss worth reporting as such.
 fn enum_variant(owner: &str, variant: &str) -> Option<String> {
     let info = saule_semantic::with_enums(|r| r.get(owner).cloned())?;
-    let (_, shape) = info.variants.iter().find(|(n, _)| n.as_str() == variant)?;
+    let shape = info.variants.get(variant)?;
 
     let mut s = format!("```saule\n(variant) {owner}.{variant}");
     if shape.arity() > 0 {
@@ -179,6 +180,13 @@ fn enum_variant(owner: &str, variant: &str) -> Option<String> {
         s.push('(');
         s.push_str(&fields.join(", "));
         s.push(')');
+    }
+    // `Alive = "alive"` — the value the variant stands for is the whole
+    // reason to give one a discriminant, so a hover that omits it
+    // answers a question nobody asked.
+    if let Some(value) = &shape.discriminant {
+        s.push_str(" = ");
+        s.push_str(&super::render::render_default(&value.value));
     }
     s.push_str("\n```");
     Some(s)

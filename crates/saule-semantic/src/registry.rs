@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use saule_ast::{ClassMember, Decl, EnumVariant, Module, Param, Stmt, Type};
+use saule_ast::{ClassMember, Decl, EnumVariant, Expr, Module, Param, Spanned, Stmt, Type};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Registry types
@@ -97,6 +97,14 @@ pub type InterfaceMethodRegistry = HashMap<String, HashMap<String, MethodSig>>;
 #[derive(Default, Clone, Debug)]
 pub struct VariantInfo {
     pub fields: Vec<Param>,
+    /// The `= expr` of a `Valued` variant, `None` for every other shape.
+    ///
+    /// Carried so a reference to the enum can render `Alive = "alive"`
+    /// the way the declaration spells it. Without it the registry
+    /// recorded a `Valued` variant as indistinguishable from a `Bare`
+    /// one, and every hover on the enum from another file quietly
+    /// dropped the half that says what the variant is worth.
+    pub discriminant: Option<Spanned<Expr>>,
 }
 
 impl VariantInfo {
@@ -120,8 +128,48 @@ pub struct EnumInfo {
     /// the point of the whole feature: matching `Result<integer>` binds an
     /// `integer`, because `T` is substituted for the value's own argument.
     pub type_params: Vec<String>,
+    /// Variant name -> payload shape, for lookup. Iterating this
+    /// directly gives an order that is neither the source's nor stable
+    /// between runs — anything that *lists* variants wants
+    /// [`EnumInfo::in_order`] instead. Write through
+    /// [`EnumInfo::add_variant`] so the two stay in step.
     pub variants: HashMap<String, VariantInfo>,
+    /// The variant names in declaration order, which is the order a
+    /// reader wrote them in and the only one worth showing back.
+    order: Vec<String>,
 }
+
+impl EnumInfo {
+    /// Register `variant`, remembering where it appeared so
+    /// [`EnumInfo::in_order`] can hand it back in source order. A
+    /// redeclared name keeps its original position, matching how the
+    /// map treats the second entry.
+    pub fn add_variant(&mut self, name: impl Into<String>, info: VariantInfo) {
+        let name = name.into();
+        if self.variants.insert(name.clone(), info).is_none() {
+            self.order.push(name);
+        }
+    }
+
+    /// The variants in declaration order.
+    ///
+    /// Falls back to the map's own iteration order for an [`EnumInfo`]
+    /// whose variants were inserted into `variants` directly rather
+    /// than through [`EnumInfo::add_variant`]: scrambled is what that
+    /// caller had before, and is a better answer than an enum that
+    /// renders with no variants at all.
+    pub fn in_order(&self) -> Vec<(&String, &VariantInfo)> {
+        if self.order.len() == self.variants.len() {
+            return self
+                .order
+                .iter()
+                .filter_map(|n| self.variants.get_key_value(n))
+                .collect();
+        }
+        self.variants.iter().collect()
+    }
+}
+
 pub type EnumRegistry = HashMap<String, EnumInfo>;
 
 /// Full signature of a top-level `fn`. The typechecker keeps its own copy
@@ -448,12 +496,20 @@ pub fn build_registry(
                         ..Default::default()
                     };
                     for v in variants {
-                        let (vname, fields) = match &v.value {
-                            EnumVariant::Bare(n) => (n.clone(), Vec::new()),
-                            EnumVariant::Valued(n, _) => (n.clone(), Vec::new()),
-                            EnumVariant::Tuple { name, fields } => (name.clone(), fields.clone()),
+                        let (vname, fields, discriminant) = match &v.value {
+                            EnumVariant::Bare(n) => (n.clone(), Vec::new(), None),
+                            EnumVariant::Valued(n, e) => (n.clone(), Vec::new(), Some(e.clone())),
+                            EnumVariant::Tuple { name, fields } => {
+                                (name.clone(), fields.clone(), None)
+                            }
                         };
-                        info.variants.insert(vname, VariantInfo { fields });
+                        info.add_variant(
+                            vname,
+                            VariantInfo {
+                                fields,
+                                discriminant,
+                            },
+                        );
                     }
                     enums.insert(name.clone(), info);
                 }

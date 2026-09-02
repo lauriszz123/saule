@@ -71,7 +71,7 @@ classDiagram
         <<enumeration>>
         Heading(level, slug, children)
         Paragraph(children)
-        Code(language, source)
+        Code(src, language)
         Quote(children: table~Block~)
         List(ordered, start, tight, items)
         Table(align, head, rows)

@@ -31,13 +31,16 @@ pub(crate) fn render_function_sig(
     )
 }
 
-pub(crate) fn render_method_head(owner: &str, m: &Method) -> String {
+/// `return_ty` is passed in rather than read off `m` so the caller can
+/// supply the type the semantic pass inferred for a method that declared
+/// none. Pass `m.return_ty.as_ref()` for the written one.
+pub(crate) fn render_method_head(owner: &str, m: &Method, return_ty: Option<&Type>) -> String {
     let sig = MethodSig {
         is_static: m.is_static,
         is_private: m.is_private,
         type_params: m.type_params.clone(),
         params: m.params.clone(),
-        return_ty: m.return_ty.clone(),
+        return_ty: return_ty.cloned(),
     };
     render_method_sig(owner, &m.name, &sig)
 }
@@ -107,7 +110,7 @@ pub(crate) fn render_default_suffix(p: &Param) -> String {
 /// Anything with sub-expressions (a call, a table constructor,
 /// arithmetic) falls back to `…`. Those have no length bound, and a
 /// hover line that wraps costs the reader more than the value is worth.
-fn render_default(e: &Expr) -> String {
+pub(crate) fn render_default(e: &Expr) -> String {
     const ELIDED: &str = "…";
     match e {
         Expr::Int(i) => i.to_string(),

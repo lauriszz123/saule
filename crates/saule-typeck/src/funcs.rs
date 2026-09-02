@@ -85,9 +85,21 @@ pub(super) fn install(module: &Module) {
                 ..
             } = &d.value
         {
+            // The annotation when there is one; otherwise whatever the
+            // semantic pass inferred from the body. Reading `return_ty`
+            // alone would overwrite that inference with the `None` the
+            // author wrote, and only for the module's *own* functions —
+            // imported ones, which come from the registry above, would
+            // keep theirs. Same function, two answers, depending on which
+            // file you called it from.
+            let declared = return_ty.clone().or_else(|| {
+                map.get(name)
+                    .filter(|_| return_ty.is_none())
+                    .and_then(|prev| prev.return_ty.clone())
+            });
             map.insert(
                 name.clone(),
-                info_from_params(params, type_params, return_ty),
+                info_from_params(params, type_params, &declared),
             );
         }
     }
