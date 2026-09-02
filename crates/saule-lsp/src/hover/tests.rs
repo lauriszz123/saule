@@ -209,11 +209,11 @@ class Point
   x: integer = 0
   y: integer = 0
   local secret: integer = 0
-  fn move(dx: integer, dy: integer) -> nothing
+  fn move(dx: integer, dy: integer) -> nil
 self.x = self.x + dx
 self.y = self.y + dy
   end
-  local fn _hidden() -> nothing
+  local fn _hidden() -> nil
   end
 end
 ";
@@ -499,7 +499,7 @@ end
 #[test]
 fn hovers_stdlib_free_function() {
     // `print` is a prelude name with a registered native sig.
-    let src = "fn main() -> nothing\n  print(\"hi\")\nend\n";
+    let src = "fn main() -> nil\n  print(\"hi\")\nend\n";
     let md = hover_at_offset(src, "print(", 1).unwrap();
     assert!(md.contains("fn print"), "got: {md}");
 }
@@ -576,7 +576,7 @@ fn hovers_imported_class_from_disk() {
         "\
 class Storage
   name: string = \"\"
-  fn save(payload: string) -> nothing
+  fn save(payload: string) -> nil
   end
 end
 ",
@@ -586,7 +586,7 @@ end
     let app_src = "\
 import Storage from \"storage\"
 
-fn run() -> nothing
+fn run() -> nil
   local s: Storage = Storage()
 end
 ";
@@ -645,7 +645,7 @@ end
     let app_src = "\
 import greet from \"util\"
 
-fn main() -> nothing
+fn main() -> nil
   print(greet(\"world\"))
 end
 ";
@@ -677,12 +677,12 @@ fn hovers_local_inferred_from_constructor() {
 class Entry
   todo: string = \"\"
   done: boolean = false
-  fn setDone(value: boolean) -> nothing
+  fn setDone(value: boolean) -> nil
 self.done = value
   end
 end
 
-fn use_it() -> nothing
+fn use_it() -> nil
   local newEntry = Entry()
   newEntry.setDone(true)
 end
@@ -711,11 +711,11 @@ end
 fn hovers_local_bound_to_a_cast() {
     for (src, want) in [
         // Conversions cannot fail: no `?`.
-        ("fn run(x: float) -> nothing\n  local n = x as integer\n  println(n)\nend\n", "n: integer"),
-        ("fn run(i: integer) -> nothing\n  local n = i as string\n  println(n)\nend\n", "n: string"),
+        ("fn run(x: float) -> nil\n  local n = x as integer\n  println(n)\nend\n", "n: integer"),
+        ("fn run(i: integer) -> nil\n  local n = i as string\n  println(n)\nend\n", "n: string"),
         // A parse can, and a test on an `any` can.
-        ("fn run(s: string) -> nothing\n  local n = s as integer\n  println(n)\nend\n", "n: integer?"),
-        ("fn run(a: any) -> nothing\n  local n = a as integer\n  println(n)\nend\n", "n: integer?"),
+        ("fn run(s: string) -> nil\n  local n = s as integer\n  println(n)\nend\n", "n: integer?"),
+        ("fn run(a: any) -> nil\n  local n = a as integer\n  println(n)\nend\n", "n: integer?"),
     ] {
         let md = hover(src, "n)").unwrap_or_else(|| panic!("no hover for `{src}`"));
         assert!(md.contains(want), "wanted `{want}` for `{src}`, got: {md}");
@@ -728,11 +728,11 @@ fn hovers_local_bound_to_a_cast() {
 fn hovers_local_with_annotation() {
     let src = "\
 class Storage
-  fn save() -> nothing
+  fn save() -> nil
   end
 end
 
-fn run() -> nothing
+fn run() -> nil
   local s: Storage = Storage()
   s.save()
 end
@@ -763,7 +763,7 @@ return nil
   end
 end
 
-fn run() -> nothing
+fn run() -> nil
   local storage = Storage()
   match storage.remove(1)
 case nil then print(\"missing\")
@@ -1399,7 +1399,7 @@ fn wildcard_import_blurb_lists_only_exported_names() {
         dir.join("json.sau"),
         "\
 class JsonParser
-  fn parse(s: string) -> nothing
+  fn parse(s: string) -> nil
   end
 end
 
@@ -1409,7 +1409,7 @@ export class Json
   end
 end
 
-fn helper() -> nothing
+fn helper() -> nil
 end
 
 export fn encode(v: table) -> string
@@ -1419,7 +1419,7 @@ end
     )
     .unwrap();
 
-    let app_src = "import * from \"json\"\n\nfn run() -> nothing\nend\n";
+    let app_src = "import * from \"json\"\n\nfn run() -> nil\nend\n";
     let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
     let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
@@ -1688,7 +1688,7 @@ fn a_declaration_still_hovers_across_its_whole_head() {
 /// fires while the cursor rests in the middle of a sentence of prose.
 #[test]
 fn a_string_literal_hovers_nothing() {
-    let src = "fn f() -> nothing\n  local s: string = \"some prose here\"\nend\n";
+    let src = "fn f() -> nil\n  local s: string = \"some prose here\"\nend\n";
     assert_eq!(hover_src_at(src, "prose", 1), None);
 }
 
@@ -1709,7 +1709,7 @@ class Frame
   end
 end
 
-fn build() -> nothing
+fn build() -> nil
   local a = Box(child: \"x\", pad: 2)
   local b = Frame(child: \"y\")
 end
@@ -1740,7 +1740,7 @@ class Box
   end
 end
 
-fn build() -> nothing
+fn build() -> nil
   local a = Box(chidl: \"x\")
 end
 ";
@@ -1759,7 +1759,7 @@ fn wrap(child: string) -> string
   return child
 end
 
-fn build() -> nothing
+fn build() -> nil
   local a = wrap(child: \"x\")
 end
 ";
@@ -1779,7 +1779,7 @@ end
 #[test]
 fn a_numeric_loop_variable_hovers_at_its_binding_site() {
     let src = "\
-fn f() -> nothing
+fn f() -> nil
   for i: integer = 1, 10 do
 print(i)
   end
@@ -1794,7 +1794,7 @@ end
 #[test]
 fn a_for_in_loop_variable_hovers_at_its_binding_site() {
     let src = "\
-fn f(names: table<string>) -> nothing
+fn f(names: table<string>) -> nil
   for name: string in names do
 print(name)
   end
@@ -1821,7 +1821,7 @@ fn named_arg_resolves_through_a_re_export_barrel() {
 
     std::fs::write(
         dir.join("kit").join("overlay.sau"),
-        "export fn showToast(context: integer, message: string = \"\") -> nothing\nend\n",
+        "export fn showToast(context: integer, message: string = \"\") -> nil\nend\n",
     )
     .unwrap();
     // The barrel: re-exports, declares nothing.
@@ -1830,7 +1830,7 @@ fn named_arg_resolves_through_a_re_export_barrel() {
     let app = "\
 import * from kit
 
-fn main() -> nothing
+fn main() -> nil
   showToast(1, message: \"hi\")
 end
 ";
@@ -1862,12 +1862,12 @@ fn a_barrel_does_not_forward_a_private_function() {
 
     std::fs::write(
         dir.join("kit").join("impl.sau"),
-        "fn helper(seed: integer = 0) -> nothing\nend\n",
+        "fn helper(seed: integer = 0) -> nil\nend\n",
     )
     .unwrap();
     std::fs::write(dir.join("kit").join("init.sau"), "import * from impl\n").unwrap();
 
-    let app = "import * from kit\n\nfn main() -> nothing\n  helper(seed: 1)\nend\n";
+    let app = "import * from kit\n\nfn main() -> nil\n  helper(seed: 1)\nend\n";
     let tokens = saule_lexer::Lexer::new(app).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
     let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
@@ -1895,7 +1895,7 @@ fn a_barrel_does_not_forward_a_private_function() {
 fn a_lambda_body_sees_the_enclosing_scope() {
     let src = "\
 class Panel
-  fn build(scratch: table) -> nothing
+  fn build(scratch: table) -> nil
     local rebuild: fn() -> nil = fn()
       print(1)
     end
@@ -1906,7 +1906,7 @@ class Panel
       print(count)
     end)
   end
-  fn each(f: fn(boolean) -> nil) -> nothing
+  fn each(f: fn(boolean) -> nil) -> nil
   end
 end
 ";
@@ -1935,10 +1935,10 @@ end
 fn a_method_body_does_not_see_a_siblings_locals() {
     let src = "\
 class Panel
-  fn a() -> nothing
+  fn a() -> nil
     local secret: integer = 1
   end
-  fn b() -> nothing
+  fn b() -> nil
     print(secret)
   end
 end
@@ -1968,7 +1968,7 @@ enum Event
   Click(x: integer, y: integer)
 end
 
-fn probe() -> nothing
+fn probe() -> nil
   local a = Align.Stretch
   local e = Event.Click(1, 2)
 end
@@ -1992,7 +1992,7 @@ end
 /// statement about correct code.
 #[test]
 fn a_key_on_an_untyped_table_is_not_an_unknown_member() {
-    let src = "fn probe(scratch: table) -> nothing\n  scratch.sound = true\nend\n";
+    let src = "fn probe(scratch: table) -> nil\n  scratch.sound = true\nend\n";
     let md = hover_src_at(src, "scratch.sound", "scratch.".len() + 1).expect("hover");
     assert!(md.contains("(key) sound: any"), "got: {md}");
     assert!(!md.contains("No member"), "got: {md}");
@@ -2006,19 +2006,19 @@ fn a_key_on_an_untyped_table_is_not_an_unknown_member() {
 #[test]
 fn a_loop_variable_is_typed_by_what_it_iterates() {
     let src = "\
-fn filter<T>(items: table<T>) -> nothing
+fn filter<T>(items: table<T>) -> nil
   for item in items do
     print(item)
   end
 end
 
-fn pairs(scores: table<string, integer>) -> nothing
+fn pairs(scores: table<string, integer>) -> nil
   for name, score in scores do
     print(name)
   end
 end
 
-fn indexed(names: table<string>) -> nothing
+fn indexed(names: table<string>) -> nil
   for i, n in names do
     print(i)
   end
@@ -2060,13 +2060,13 @@ end
 #[test]
 fn loop_variable_inference_defers_to_annotations() {
     let src = "\
-fn annotated(names: table<string>) -> nothing
+fn annotated(names: table<string>) -> nil
   for n: any in names do
     print(n)
   end
 end
 
-fn untyped(bag: table) -> nothing
+fn untyped(bag: table) -> nil
   for v in bag do
     print(v)
   end
@@ -2091,7 +2091,7 @@ end
 #[test]
 fn a_lambda_parameter_hovers_at_its_binding_and_its_uses() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   local double: fn(integer) -> integer = fn(x: integer)
     return x * 2
   end
@@ -2114,12 +2114,12 @@ end
 fn a_lambda_param_type_ascription_resolves() {
     let src = "\
 class Storage
-  fn put(v: integer) -> nothing
+  fn put(v: integer) -> nil
   end
 end
 
-fn main() -> nothing
-  local save: fn(Storage) -> nothing = fn(s: Storage)
+fn main() -> nil
+  local save: fn(Storage) -> nil = fn(s: Storage)
     s.put(1)
   end
 end
@@ -2137,7 +2137,7 @@ class Storage
   end
 end
 
-fn main() -> nothing
+fn main() -> nil
   local make: fn() -> Storage = fn() -> Storage
     return Storage()
   end
@@ -2152,7 +2152,7 @@ end
 #[test]
 fn a_lambda_param_shadows_an_enclosing_local() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   local value: string = \"outer\"
   local f: fn(integer) -> integer = fn(value: integer)
     return value + 1
@@ -2178,10 +2178,10 @@ end
 #[test]
 fn a_lambda_argument_binds_its_own_parameters() {
     let src = "\
-fn apply(items: table<integer>, f: fn(integer) -> integer) -> nothing
+fn apply(items: table<integer>, f: fn(integer) -> integer) -> nil
 end
 
-fn main() -> nothing
+fn main() -> nil
   apply({1, 2}, fn(n: integer)
     return n * 2
   end)
@@ -2197,7 +2197,7 @@ end
 #[test]
 fn a_lambda_body_local_does_not_leak_out() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   local run: fn() -> integer = fn()
     local scratch: integer = 1
     return scratch
@@ -2254,7 +2254,7 @@ fn shout(msg: string) -> string
   return msg .. \"!\"
 end
 
-fn main() -> nothing
+fn main() -> nil
   print(when(\"hi\"):shout())
 end
 ";
@@ -2271,7 +2271,7 @@ fn repeatStr(msg: string, times: integer) -> string
   return msg
 end
 
-fn main() -> nothing
+fn main() -> nil
   local count: integer = 3
   print(when(\"hi\"):repeatStr(count))
 end
@@ -2291,7 +2291,7 @@ end
 #[test]
 fn a_catch_variable_hovers_at_its_binding_site() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   try
     throw \"boom\"
   catch err: string
@@ -2320,7 +2320,7 @@ class ParseError
   end
 end
 
-fn main() -> nothing
+fn main() -> nil
   try
     throw ParseError()
   catch e: ParseError
@@ -2336,7 +2336,7 @@ end
 #[test]
 fn a_catch_variable_does_not_leak_past_the_block() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   try
     throw \"boom\"
   catch err: string
@@ -2369,7 +2369,7 @@ fn make() -> (Point, Point)
   return Point(), Point()
 end
 
-fn main() -> nothing
+fn main() -> nil
   local a: Point, b: Point = make()
   print(a)
 end
@@ -2438,7 +2438,7 @@ end
 class Child extends Base
 end
 
-fn main() -> nothing
+fn main() -> nil
   local c: Child = Child()
   print(c.greet())
 end
@@ -2533,7 +2533,7 @@ fn a_method_param_shadows_a_field_of_the_same_name() {
 class Box
   size: integer = 0
 
-  fn resize(size: integer) -> nothing
+  fn resize(size: integer) -> nil
     self.size = size
   end
 end
@@ -2552,7 +2552,7 @@ end
 #[test]
 fn an_inner_block_local_shadows_and_then_restores() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   local n: integer = 1
   if n > 0 then
     local n: string = \"inner\"
@@ -2576,7 +2576,7 @@ end
 #[test]
 fn a_repeat_until_condition_sees_the_body_locals() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   repeat
     local done: boolean = true
   until done
@@ -2601,7 +2601,7 @@ class Storage
   end
 end
 
-fn pick(bag: any) -> nothing
+fn pick(bag: any) -> nil
   local s: Storage? = bag as Storage
 end
 ";
@@ -2651,7 +2651,7 @@ fn double(n: integer) -> integer
   return n * 2
 end
 
-fn main() -> nothing
+fn main() -> nil
   local seed: integer = 2
   print(double(double(seed)))
 end
@@ -2666,7 +2666,7 @@ end
 #[test]
 fn a_table_literal_entry_hovers_as_itself() {
     let src = "\
-fn main() -> nothing
+fn main() -> nil
   local n: integer = 1
   local t: table<integer> = {n, n + 1}
 end
@@ -2717,7 +2717,7 @@ end
 #[test]
 fn an_undeclared_name_is_not_reported_as_a_binding() {
     let src = "\
-fn build() -> nothing
+fn build() -> nil
   print(mysteryValue)
 end
 ";
@@ -2742,7 +2742,7 @@ fn keep(items: table<integer>, f: fn(integer) -> boolean) -> table<integer>
   return items
 end
 
-fn main() -> nothing
+fn main() -> nil
   local evens = when({1, 2, 3}):keep(x => x > 1)
 end
 ";
@@ -2761,7 +2761,7 @@ fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
   return items
 end
 
-fn main() -> nothing
+fn main() -> nil
   local evens = when({1, 2, 3}):filter(x => x > 1)
 end
 ";
@@ -2779,7 +2779,7 @@ fn apply(items: table<string>, f: fn(string) -> integer) -> integer
   return 0
 end
 
-fn main() -> nothing
+fn main() -> nil
   local n = apply({\"a\"}, s => #s)
 end
 ";
@@ -2799,7 +2799,7 @@ fn apply(items: table<string>, f: fn(string) -> integer) -> integer
   return 0
 end
 
-fn main() -> nothing
+fn main() -> nil
   local n = apply({\"a\"}, (s: integer) => s)
 end
 ";
@@ -2818,7 +2818,7 @@ fn build<T>(seed: integer, make: fn(T) -> T) -> integer
   return seed
 end
 
-fn main() -> nothing
+fn main() -> nil
   local n = build(1, x => x)
 end
 ";
@@ -2843,7 +2843,7 @@ fn map<T, U>(items: table<T>, f: fn(T) -> U) -> table<U>
   return out
 end
 
-fn main() -> nothing
+fn main() -> nil
   local doubled = when({1, 2, 3})
                   :filter(x => x % 2 == 0)
                   :map(x => x * 2)

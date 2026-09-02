@@ -61,7 +61,7 @@ fn rejects(src: &str, needle: &str) {
 
 /// Wrap `body` in a function so statements can be written directly.
 fn in_fn(body: &str) -> String {
-    format!("fn t() -> nothing\n{body}\n  return\nend\n")
+    format!("fn t() -> nil\n{body}\n  return\nend\n")
 }
 
 // ─── primitive assignability ────────────────────────────────────────────
@@ -176,12 +176,12 @@ fn overriding_with_a_narrower_parameter_is_rejected() {
         &format!(
             "{HIERARCHY}\
 class Handler
-  fn handle(a: Animal) -> nothing
+  fn handle(a: Animal) -> nil
     return
   end
 end
 class DogHandler extends Handler
-  fn handle(d: Dog) -> nothing
+  fn handle(d: Dog) -> nil
     return
   end
 end
@@ -196,12 +196,12 @@ fn overriding_with_an_identical_signature_is_accepted() {
     accepts(&format!(
         "{HIERARCHY}\
 class Handler
-  fn handle(a: Animal) -> nothing
+  fn handle(a: Animal) -> nil
     return
   end
 end
 class Sub extends Handler
-  fn handle(a: Animal) -> nothing
+  fn handle(a: Animal) -> nil
     return
   end
 end
@@ -501,7 +501,7 @@ fn casting_to_a_class_type_is_allowed() {
 #[test]
 fn argument_types_are_checked() {
     rejects(
-        "fn f(n: integer) -> nothing\n  return\nend\nfn t() -> nothing\n  f(\"x\")\n  return\nend\n",
+        "fn f(n: integer) -> nil\n  return\nend\nfn t() -> nil\n  f(\"x\")\n  return\nend\n",
         "integer",
     );
 }
@@ -509,7 +509,7 @@ fn argument_types_are_checked() {
 #[test]
 fn too_many_arguments_are_rejected() {
     rejects(
-        "fn f(n: integer) -> nothing\n  return\nend\nfn t() -> nothing\n  f(1, 2)\n  return\nend\n",
+        "fn f(n: integer) -> nil\n  return\nend\nfn t() -> nil\n  f(1, 2)\n  return\nend\n",
         "argument",
     );
 }
@@ -559,7 +559,7 @@ fn default_parameters_may_be_omitted() {
 fn a_generic_identity_function_preserves_its_argument_type() {
     accepts(
         "fn id<T>(v: T) -> T\n  return v\nend\n\
-         fn t() -> nothing\n  local n: integer = id(1)\n  return\nend\n",
+         fn t() -> nil\n  local n: integer = id(1)\n  return\nend\n",
     );
 }
 
@@ -567,7 +567,7 @@ fn a_generic_identity_function_preserves_its_argument_type() {
 fn a_generic_return_is_checked_against_the_binding() {
     rejects(
         "fn id<T>(v: T) -> T\n  return v\nend\n\
-         fn t() -> nothing\n  local s: string = id(1)\n  return\nend\n",
+         fn t() -> nil\n  local s: string = id(1)\n  return\nend\n",
         "string",
     );
 }
@@ -580,8 +580,8 @@ fn a_generic_return_is_checked_against_the_binding() {
 #[test]
 fn a_type_parameter_binds_to_a_nullable_element_type() {
     accepts(
-        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
-         fn t() -> nothing\n  local a: table<any?> = {}\n  local v: any? = nil\n  \
+        "fn push<V>(t: table<V>, v: V) -> nil\n  return\nend\n\
+         fn t() -> nil\n  local a: table<any?> = {}\n  local v: any? = nil\n  \
          push(a, v)\n  return\nend\n",
     );
 }
@@ -589,8 +589,8 @@ fn a_type_parameter_binds_to_a_nullable_element_type() {
 #[test]
 fn a_nullable_element_type_still_constrains_later_arguments() {
     rejects(
-        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
-         fn t() -> nothing\n  local a: table<string?> = {}\n  push(a, 42)\n  return\nend\n",
+        "fn push<V>(t: table<V>, v: V) -> nil\n  return\nend\n\
+         fn t() -> nil\n  local a: table<string?> = {}\n  push(a, 42)\n  return\nend\n",
         "string?",
     );
 }
@@ -602,8 +602,8 @@ fn a_nullable_element_type_still_constrains_later_arguments() {
 #[test]
 fn an_unbound_type_parameter_accepts_an_any_argument() {
     accepts(
-        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
-         fn t() -> nothing\n  local a: table<any> = {}\n  local x: any = 1\n  \
+        "fn push<V>(t: table<V>, v: V) -> nil\n  return\nend\n\
+         fn t() -> nil\n  local a: table<any> = {}\n  local x: any = 1\n  \
          push(a, x)\n  return\nend\n",
     );
 }
@@ -613,8 +613,8 @@ fn an_unbound_type_parameter_accepts_an_any_argument() {
 #[test]
 fn an_unbound_type_parameter_still_checks_the_surrounding_shape() {
     rejects(
-        "fn push<V>(t: table<V>, v: V) -> nothing\n  return\nend\n\
-         fn t() -> nothing\n  local n: integer = 1\n  push(n, 1)\n  return\nend\n",
+        "fn push<V>(t: table<V>, v: V) -> nil\n  return\nend\n\
+         fn t() -> nil\n  local n: integer = 1\n  push(n, 1)\n  return\nend\n",
         "table<V>",
     );
 }
@@ -626,14 +626,14 @@ fn a_class_is_assignable_to_an_interface_it_implements() {
     accepts(
         "\
 interface Drawable
-  fn draw() -> nothing
+  fn draw() -> nil
 end
 class Square implements Drawable
-  fn draw() -> nothing
+  fn draw() -> nil
     return
   end
 end
-fn t() -> nothing
+fn t() -> nil
   local d: Drawable = Square()
   return
 end
@@ -646,11 +646,11 @@ fn a_class_is_not_assignable_to_an_unimplemented_interface() {
     rejects(
         "\
 interface Drawable
-  fn draw() -> nothing
+  fn draw() -> nil
 end
 class Blob
 end
-fn t() -> nothing
+fn t() -> nil
   local d: Drawable = Blob()
   return
 end
@@ -934,9 +934,9 @@ fn a_cast_on_a_concrete_value_converts_instead_of_narrowing() {
 #[test]
 fn an_unbound_param_of_a_called_signature_stays_permissive() {
     accepts(
-        "fn insert<V>(into: table<V>, item: V) -> nothing\n\
+        "fn insert<V>(into: table<V>, item: V) -> nil\n\
         end\n\
-        fn fill(bag: table<any>, x: any) -> nothing\n\
+        fn fill(bag: table<any>, x: any) -> nil\n\
         \x20 insert(bag, x)\n\
         end\n",
     );
@@ -1322,28 +1322,28 @@ end
     // Wrong parameter type.
     rejects(
         &format!(
-            "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(n: integer)\n    print(n)\n  end\n  return\nend\n"
+            "{field}fn t() -> nil\n  local f: Field = Field()\n  f.onChanged = fn(n: integer)\n    print(n)\n  end\n  return\nend\n"
         ),
         "(fn(string) -> nil)?",
     );
     // Wrong arity.
     rejects(
         &format!(
-            "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(a: string, b: string)\n    print(a)\n  end\n  return\nend\n"
+            "{field}fn t() -> nil\n  local f: Field = Field()\n  f.onChanged = fn(a: string, b: string)\n    print(a)\n  end\n  return\nend\n"
         ),
         "(fn(string) -> nil)?",
     );
     // Wrong return type.
     rejects(
         &format!(
-            "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = fn(s: string) -> integer\n    return 1\n  end\n  return\nend\n"
+            "{field}fn t() -> nil\n  local f: Field = Field()\n  f.onChanged = fn(s: string) -> integer\n    return 1\n  end\n  return\nend\n"
         ),
         "(fn(string) -> nil)?",
     );
     // And the matching one still passes, with the parameter type supplied by
     // the slot rather than written out.
     accepts(&format!(
-        "{field}fn t() -> nothing\n  local f: Field = Field()\n  f.onChanged = s => print(s)\n  return\nend\n"
+        "{field}fn t() -> nil\n  local f: Field = Field()\n  f.onChanged = s => print(s)\n  return\nend\n"
     ));
 }
 
@@ -1358,7 +1358,7 @@ fn apply(f: fn(integer) -> integer) -> integer
   return f(1)
 end
 
-fn t() -> nothing
+fn t() -> nil
   apply(fn(n) -> integer
     return \"nope\"
   end)
@@ -1379,7 +1379,7 @@ fn apply(f: fn(integer) -> integer) -> integer
   return f(1)
 end
 
-fn t() -> nothing
+fn t() -> nil
   apply() do (n) -> integer
     return \"nope\"
   end
@@ -1410,7 +1410,7 @@ fn apply(f: fn(integer) -> integer) -> integer
   return f(1)
 end
 
-fn t() -> nothing
+fn t() -> nil
   apply(fn(n)
     return \"nope\"
   end)
@@ -1431,7 +1431,7 @@ fn apply(f: fn(integer) -> integer) -> integer
   return f(1)
 end
 
-fn t() -> nothing
+fn t() -> nil
   apply(fn(n) -> integer
     return n * 2
   end)
@@ -1464,7 +1464,7 @@ class MenuItem
   end
 end
 
-fn t() -> nothing
+fn t() -> nil
   local a: MenuItem = MenuItem(\"Open\") do
     print(\"open\")
   end
@@ -1490,7 +1490,7 @@ class MenuItem
   end
 end
 
-fn t() -> nothing
+fn t() -> nil
   local a: MenuItem = MenuItem(label: \"Open\", fn()
     print(\"open\")
   end)
@@ -1512,7 +1512,7 @@ class MenuItem
   end
 end
 
-fn t() -> nothing
+fn t() -> nil
   local a: MenuItem = MenuItem(\"Open\", () => nil) do
     print(\"open\")
   end
@@ -2098,4 +2098,70 @@ fn a_generic_interface_is_implemented_at_a_concrete_instantiation() {
          fn init()\n    self.items = {}\n  end\n  \
          fn find(id: integer) -> integer?\n    return self.items[id]\n  end\nend\n",
     );
+}
+
+// ── §Unknown type names ─────────────────────────────────────────────────
+
+/// An annotation naming a type that isn't there is the whole point of the
+/// annotation failing: nothing declares it, so nothing can be checked
+/// against it, and every later use of the binding was silently unconstrained.
+mod unknown_types {
+    use super::*;
+
+    /// The shape that started this: a type declared in a sibling module and
+    /// used without the `import` that brings it into scope.
+    #[test]
+    fn an_unimported_type_is_rejected() {
+        rejects("local blocks: table<Block> = {}\n", "Block");
+    }
+
+    /// Every position an annotation can occupy, not just the ones that
+    /// happened to trip an assignment mismatch on the way past.
+    #[test]
+    fn every_annotation_position_is_checked() {
+        rejects("local a: Nope = 1\n", "Nope");
+        rejects("fn f(x: Nope) end\n", "Nope");
+        rejects("fn g() -> Nope\n  return 1\nend\n", "Nope");
+        rejects("class C\n  field: Nope\nend\n", "Nope");
+        rejects("local h: Nope? = nil\n", "Nope");
+        rejects("local t: table<string, Nope> = {}\n", "Nope");
+        rejects("local fnv: fn(Nope) -> nil = fn(x: any) end\n", "Nope");
+        rejects("fn k(cb: fn() -> Nope) end\n", "Nope");
+    }
+
+    /// Declared types resolve — including the ones a class or enum brings.
+    #[test]
+    fn declared_types_are_accepted() {
+        accepts("class Thing end\nlocal t: Thing? = nil\n");
+        accepts("enum Colour Red, Green end\nlocal c: Colour? = nil\n");
+        accepts("interface Shape\n  fn area() -> integer\nend\nfn f(s: Shape) end\n");
+        accepts("class Box\nend\nlocal b: table<Box> = {}\n");
+    }
+
+    /// A type parameter is a real type inside the declaration that binds it
+    /// — in the signature as much as in the body.
+    #[test]
+    fn type_parameters_are_not_unknown() {
+        accepts("fn id<T>(v: T) -> T\n  return v\nend\n");
+        accepts("fn wrap<T>(x: T) -> table<T>\n  local out: table<T> = {}\n  return out\nend\n");
+        accepts("class Box<T>\n  item: T\n  fn init(item: T)\n    self.item = item\n  end\nend\n");
+        accepts("fn hof<T>(f: fn(T) -> T) end\n");
+        accepts("enum Result<T> Ok(value: T), Err end\n");
+        accepts("class Holder<T>\n  fn map<U>(f: fn(T) -> U) -> U?\n    return nil\n  end\nend\n");
+    }
+
+    /// `self` is the parser's placeholder for an explicit `self` parameter,
+    /// not a name anything declares.
+    #[test]
+    fn an_explicit_self_parameter_is_not_unknown() {
+        accepts("class P\n  fn greet(self) -> string\n    return \"hi\"\n  end\nend\n");
+    }
+
+    /// The two names that look like types and aren't keep their own, more
+    /// useful, diagnostics rather than being lumped in as unknown.
+    #[test]
+    fn the_non_types_keep_their_own_message() {
+        rejects("local n: number = 1\n", "`number` is not a type");
+        rejects("local f: function = 1\n", "`function` is not a type");
+    }
 }

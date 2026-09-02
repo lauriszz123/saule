@@ -20,7 +20,102 @@ pub(crate) fn check_binding_type(
 ) {
     reject_nil_in_binding_type(ty, span.clone(), errors);
     check_generic_arity(ty, span.clone(), errors);
+    reject_unknown_types(ty, span.clone(), errors);
     reject_non_types(ty, span, errors);
+}
+
+/// The type names that stand on their own, with no declaration to find.
+///
+/// `function` and `number` are deliberately absent: both are spellings a
+/// reader reaches for and neither is a type, and [`reject_non_types`] has a
+/// better answer for each than "unknown".
+const PRIMITIVES: &[&str] = &[
+    "integer", "float", "string", "boolean", "table", "userdata", "thread", "any", "nil",
+];
+
+/// Report every name in `ty` that no declaration in scope answers to.
+///
+/// Without this an annotation naming a type that isn't there simply does
+/// nothing: `local blocks: table<Block> = {}` with no `import` for `Block`
+/// checked clean, and every later use of `blocks` was compared against a
+/// type the checker had never heard of — so the annotation constrained
+/// nothing, and the missing import surfaced only at runtime, if at all.
+///
+/// Deliberately quiet about anything it cannot judge. A generic parameter in
+/// scope is a real type, a name the registries do know is a real type, and
+/// the argument list of a generic is walked so `table<Block>` and
+/// `Result<Block>` report as precisely as a bare `Block` does.
+pub(crate) fn reject_unknown_types(
+    ty: &Type,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    for name in unknown_names(ty) {
+        errors.push(TypeCheckError::UnknownType {
+            name,
+            span: to_source_span(span.clone()),
+        });
+    }
+}
+
+/// Names inside `ty` that nothing in scope declares, outermost first.
+fn unknown_names(ty: &Type) -> Vec<String> {
+    fn known(name: &str) -> bool {
+        let bare = crate::expr::unfreshen_name(name);
+        PRIMITIVES.contains(&bare)
+            // `function` / `number` are reported by `reject_non_types`, which
+            // says something useful about each; two errors for one word is
+            // worse than one.
+            || bare == "function"
+            || bare == "number"
+            // The parser's placeholder for an explicit `self` parameter —
+            // `fn greet(self) -> string`. It stands for the enclosing class,
+            // which the parser has no way to name from where it sits.
+            || bare == "self"
+            // A type parameter of the declaration being checked, or an
+            // inference variable of a signature being called into.
+            || is_type_param(bare)
+            || crate::state::is_sig_param(bare)
+            // A stdlib value type — `File`. Its methods live in the native
+            // signature table rather than the class registry, so the class
+            // registry is the wrong place to ask.
+            || crate::sigs::is_value_type(bare)
+            || with_classes(|r| r.contains_key(bare))
+            || with_enums(|r| r.contains_key(bare))
+            || is_interface(bare)
+    }
+
+    fn walk(ty: &Type, out: &mut Vec<String>) {
+        match ty {
+            Type::Named(n) => {
+                if !known(n) {
+                    out.push(n.clone());
+                }
+            }
+            Type::Nullable(inner) => walk(inner, out),
+            Type::Table { key, value } => {
+                if let Some(k) = key {
+                    walk(k, out);
+                }
+                walk(value, out);
+            }
+            Type::Tuple(items) => items.iter().for_each(|t| walk(t, out)),
+            Type::Function { params, ret } => {
+                params.iter().for_each(|t| walk(t, out));
+                walk(ret, out);
+            }
+            Type::Generic(g) => {
+                if !known(&g.name) {
+                    out.push(g.name.clone());
+                }
+                g.args.iter().for_each(|t| walk(t, out));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(ty, &mut out);
+    out
 }
 
 /// Check every generic application inside `ty` against the declaration it

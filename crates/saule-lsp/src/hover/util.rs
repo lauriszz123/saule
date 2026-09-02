@@ -249,7 +249,8 @@ pub(super) fn collect_named_heads(ty: &Type, out: &mut Vec<String>) {
 pub(super) fn is_primitive(name: &str) -> bool {
     matches!(
         name,
-        "integer" | "float" | "string" | "boolean" | "nil" | "any" | "table" | "nothing"
+        "integer" | "float" | "string" | "boolean" | "nil" | "any" | "table" | "userdata"
+            | "thread"
     )
 }
 

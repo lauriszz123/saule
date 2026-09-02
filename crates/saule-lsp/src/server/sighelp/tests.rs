@@ -1311,7 +1311,7 @@ fn an_imported_free_function_reports_its_signature() {
     std::fs::create_dir_all(dir.join("kit")).unwrap();
     std::fs::write(
         dir.join("kit").join("overlay.sau"),
-        "export fn showToast(context: integer, message: string = \"\") -> nothing\nend\n",
+        "export fn showToast(context: integer, message: string = \"\") -> nil\nend\n",
     )
     .unwrap();
     std::fs::write(dir.join("kit").join("init.sau"), "import * from overlay\n").unwrap();
