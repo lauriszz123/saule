@@ -81,8 +81,13 @@ features need the compiled `out/extension.js` (`npm run compile`).
 | `saule.server.extraArgs` | `[]` | Extra CLI args for the server. |
 | `saule.trace.server` | `"off"` | LSP message tracing (`off` / `messages` / `verbose`). |
 
-The extension also sets `editor.tabSize: 2`, `editor.insertSpaces: true` and
-`editor.formatOnType: true` for `[saule]` files. These are defaults — your own
+The extension also sets `editor.tabSize: 2`, `editor.insertSpaces: true`,
+`editor.formatOnType: true` and `editor.wordBasedSuggestions: "off"` for
+`[saule]` files. The last one leaves completion to `saule-lsp`: VS Code's
+word-based provider otherwise scrapes identifiers out of the open document
+and offers them everywhere, including the declaration positions where the
+server deliberately stays quiet — so naming a new `fn` suggested every
+similar-looking word already in the file. These are defaults — your own
 settings still win.
 
 ## Commands

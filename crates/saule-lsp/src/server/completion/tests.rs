@@ -6,11 +6,27 @@ fn complete(marked: &str) -> Vec<String> {
     let offset = marked.find('@').expect("no `@` caret marker");
     let src = marked.replace('@', "");
     let (patched, prefix) = splice_sentinel(&src, offset).expect("splice");
+    let header = header_keywords(&src, offset);
+    if !header.is_empty() {
+        return filter(keyword_items(&header, "class header"), &prefix)
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+    }
     let Some(module) = parse_tolerant(&patched, None) else {
         return Vec::new();
     };
     let _ = saule_semantic::analyze(&module);
     let Some(found) = Walk::run(&module) else {
+        if Walk::in_interface_body(&module, offset - prefix.len()) {
+            return filter(
+                keyword_items(INTERFACE_KEYWORDS, "interface member"),
+                &prefix,
+            )
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
+        }
         return Vec::new();
     };
     let items = match &found.ctx {
@@ -18,6 +34,11 @@ fn complete(marked: &str) -> Vec<String> {
         Ctx::Interfaces { exclude } => interface_items(exclude),
         Ctx::TypeName => type_items(),
         Ctx::Value { stmt_start } => value_items(&found, &module, *stmt_start),
+        Ctx::AfterExport => export_items(),
+        Ctx::ClassMember {
+            is_static,
+            is_private,
+        } => class_member_items(*is_static, *is_private),
         _ => Vec::new(),
     };
     filter(items, &prefix)
@@ -47,6 +68,27 @@ fn complete_detailed(marked: &str) -> Vec<(String, Option<String>)> {
         .into_iter()
         .map(|i| (i.label, i.detail))
         .collect()
+}
+
+/// Complete at `@` and return the labels in the order a client that honours
+/// `sortText` puts them in — which is the order the author actually sees.
+fn complete_ranked(marked: &str) -> Vec<String> {
+    let offset = marked.find('@').expect("no `@` caret marker");
+    let src = marked.replace('@', "");
+    let (patched, prefix) = splice_sentinel(&src, offset).expect("splice");
+    let Some(module) = parse_tolerant(&patched, None) else {
+        return Vec::new();
+    };
+    let _ = saule_semantic::analyze(&module);
+    let Some(found) = Walk::run(&module) else {
+        return Vec::new();
+    };
+    let Ctx::Value { stmt_start } = &found.ctx else {
+        return Vec::new();
+    };
+    let mut items = filter(value_items(&found, &module, *stmt_start), &prefix);
+    items.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
+    items.into_iter().map(|i| i.label).collect()
 }
 
 /// The detail string a completion offers for `name`, or `None` when the name
@@ -141,10 +183,156 @@ fn works_with_a_complete_class_body() {
     assert!(got.contains(&"Actor".to_string()));
 }
 
-/// The header keywords themselves are never suggested.
+/// The header keywords themselves, before either has been typed.
+#[test]
+fn a_class_header_offers_extends_and_implements() {
+    assert_eq!(
+        complete(&format!("{DECLS}class Player @")),
+        vec!["extends", "implements"]
+    );
+    assert_eq!(
+        complete(&format!("{DECLS}class Player ext@")),
+        vec!["extends"]
+    );
+    assert_eq!(
+        complete(&format!("{DECLS}export class Player impl@")),
+        vec!["implements"]
+    );
+    // `extends` comes first in the header, so a parent still has a place.
+    assert_eq!(
+        complete(&format!("{DECLS}class Player extends Entity @")),
+        vec!["implements"]
+    );
+    // …and once `implements` is written, it does not — the header is done,
+    // and what follows is the body.
+    let got = complete(&format!("{DECLS}class Player implements Drawable @"));
+    assert!(!got.iter().any(|i| i == "extends" || i == "implements"), "{got:?}");
+}
+
+/// An interface has no `implements`.
+#[test]
+fn an_interface_header_offers_only_extends() {
+    assert_eq!(
+        complete(&format!("{DECLS}interface Shape ext@")),
+        vec!["extends"]
+    );
+}
+
+/// The class name itself is the author's to invent — nothing is offered
+/// while it is being typed, and nothing inside a generic list either.
 #[test]
 fn nothing_before_the_keyword() {
-    assert!(complete(&format!("{DECLS}class Player @")).is_empty());
+    assert!(complete(&format!("{DECLS}class Play@")).is_empty());
+    assert!(complete(&format!("{DECLS}class Player<T@")).is_empty());
+    assert!(complete(&format!("{DECLS}-- class Player @")).is_empty());
+}
+
+/// A type position after the keyword still belongs to the tree, which knows
+/// which names would close a cycle — the header check must not steal it.
+#[test]
+fn the_header_check_leaves_type_positions_alone() {
+    let got = complete(&format!("{DECLS}class Player extends En@\nend\n"));
+    assert_eq!(got, vec!["Entity"]);
+    let got = complete(&format!("{DECLS}class Player implements Dr@\nend\n"));
+    assert_eq!(got, vec!["Drawable"]);
+}
+
+/// A name the author is inventing gets no suggestions — offering the names
+/// already in scope where a *new* one is being declared is pure noise. The
+/// keyword positions added around these must not leak into them.
+#[test]
+fn a_declaration_name_is_never_completed() {
+    // Each of these has something in scope that shares the typed prefix.
+    for src in [
+        "fn hop() end\nfn ho@\n",
+        "class Hop end\nclass Ho@\n",
+        "class Hop end\ninterface Ho@\n",
+        "class Hop end\nenum Ho@\n",
+        "fn hop() end\nfn f()\n    local ho@ = 1\nend\n",
+        "fn hop() end\nexport ho@\n",
+        "fn hop() end\nfn f(ho@)\nend\n",
+        "fn hop() end\nfn f(a: integer, ho@)\nend\n",
+        "fn hop() end\nfor ho@ in items do end\n",
+        "fn hop() end\ntry\ncatch ho@\nend\n",
+        "fn hop() end\nclass A\n    fn ho@()\n    end\nend\n",
+        "fn hop() end\nclass A\n    ho@: integer\nend\n",
+        "fn hop() end\ninterface A\n    fn ho@()\nend\n",
+        "class Hop end\nenum Colour\n    Ho@\nend\n",
+    ] {
+        assert!(complete(src).is_empty(), "{src:?}: {:?}", complete(src));
+    }
+}
+
+/// An interface body takes signatures and nothing else.
+#[test]
+fn an_interface_body_offers_fn() {
+    assert_eq!(complete("interface Drawable\n    @\nend\n"), vec!["fn"]);
+    assert_eq!(complete("interface Drawable\n    f@\nend\n"), vec!["fn"]);
+    assert_eq!(
+        complete("interface Drawable\n    fn draw()\n    @\nend\n"),
+        vec!["fn"]
+    );
+    // Same line as the header, once the header itself is finished.
+    assert_eq!(
+        complete(&format!("{DECLS}interface Shape extends Drawable @\nend\n")),
+        vec!["fn"]
+    );
+}
+
+/// The interface fallback only answers where the tree found nothing — a
+/// signature's own positions still resolve as themselves.
+#[test]
+fn an_interface_signature_is_not_a_member_position() {
+    let got = complete(&format!(
+        "{DECLS}interface Shape\n    fn draw(c: @)\nend\n"
+    ));
+    assert!(got.iter().any(|i| i == "string"), "{got:?}");
+    let got = complete(&format!(
+        "{DECLS}interface Shape\n    fn draw() -> @\nend\n"
+    ));
+    assert!(got.iter().any(|i| i == "Colour"), "{got:?}");
+    // …and neither is the interface's own name.
+    assert!(complete(&format!("{DECLS}interface Sh@")).is_empty());
+}
+
+/// A class body offers what can begin a member.
+#[test]
+fn a_class_body_offers_the_member_keywords() {
+    assert_eq!(
+        complete("class Player\n    @\nend\n"),
+        vec!["static", "local", "fn"]
+    );
+    assert_eq!(
+        complete("class Player\n    name: string\n    f@\nend\n"),
+        vec!["fn"]
+    );
+}
+
+/// A modifier already written is not offered a second time, and the ones it
+/// rules out go with it.
+#[test]
+fn a_class_member_modifier_is_not_repeated() {
+    assert_eq!(complete("class Player\n    static @\nend\n"), vec!["local", "fn"]);
+    assert_eq!(complete("class Player\n    local @\nend\n"), vec!["static", "fn"]);
+    assert_eq!(complete("class Player\n    static local @\nend\n"), vec!["fn"]);
+    assert_eq!(complete("class Player\n    local static @\nend\n"), vec!["fn"]);
+}
+
+/// The member keywords stay inside the class body — a method body is
+/// ordinary statement territory.
+#[test]
+fn a_method_body_is_not_a_member_position() {
+    let got = complete("class Player\n    fn go()\n        @\n    end\nend\n");
+    assert!(got.iter().any(|i| i == "local"), "{got:?}");
+    assert!(got.iter().any(|i| i == "self"), "{got:?}");
+    assert!(got.iter().any(|i| i == "if"), "{got:?}");
+}
+
+/// A field being named on the line *below* the header is not a header.
+#[test]
+fn a_field_name_is_not_a_header_position() {
+    let got = complete(&format!("{DECLS}class Player\n    ext@\nend\n"));
+    assert!(!got.iter().any(|i| i == "extends"), "{got:?}");
 }
 
 /// Type positions are unaffected — they still see enums and primitives.
@@ -628,4 +816,147 @@ end
 ";
     let items = complete(src);
     assert!(items.iter().any(|i| i == "speed"), "{items:?}");
+}
+
+/// A half-typed declaration keyword at the start of a statement completes to
+/// the keyword — the very first thing you write in an empty file.
+#[test]
+fn a_statement_start_completes_declaration_keywords() {
+    for (src, want) in [
+        ("en@", "enum"),
+        ("cl@", "class"),
+        ("class A\nend\n\nen@\n", "enum"),
+        ("fn main()\n  cl@\nend\n", "class"),
+    ] {
+        let items = complete(src);
+        assert!(items.iter().any(|i| i == want), "{src:?}: {items:?}");
+    }
+}
+
+/// `export en…` is still a declaration keyword position, even though a bare
+/// identifier there parses as an exported variable being named.
+#[test]
+fn export_completes_the_declaration_keywords() {
+    assert_eq!(complete("export en@\n"), vec!["enum"]);
+    assert_eq!(complete("export cl@\n"), vec!["class"]);
+    assert_eq!(
+        complete("export @\n"),
+        vec!["fn", "class", "interface", "enum"]
+    );
+}
+
+/// …but only while nothing follows it. Once the variable has a type or a
+/// value, the author is naming it and keywords are the wrong suggestion.
+#[test]
+fn a_named_export_is_not_a_keyword_position() {
+    assert!(complete("export cl@: integer = 1\n").is_empty());
+}
+
+// ── ranking by the slot being filled ────────────────────────────────────────
+
+/// The corpus for argument ranking: a call whose parameters have real class
+/// and enum types, and same-prefixed names of the wrong type to lose to them.
+const SLOTS: &str = "\
+class Alignment
+    static fn center() -> Alignment
+        return Alignment()
+    end
+end
+class Align end
+enum Axis Horizontal, Vertical end
+class View
+    fn aligned(alignment: Alignment) -> View
+        return self
+    end
+end
+fn stack(alignment: Alignment, axis: Axis, title: string) end
+";
+
+/// A named argument's value is ranked by the type that parameter holds — the
+/// slot is the strongest signal there is, stronger than how close a name
+/// looks to what has been typed.
+#[test]
+fn a_named_argument_ranks_the_expected_type_first() {
+    let got = complete_ranked(&format!("{SLOTS}fn go()\n    stack(alignment: Ali@)\nend\n"));
+    assert_eq!(got.first().map(String::as_str), Some("Alignment"), "{got:?}");
+    // `Align` shares the prefix and is a class, but no `Align` fits the slot.
+    let alignment = got.iter().position(|i| i == "Alignment");
+    let align = got.iter().position(|i| i == "Align");
+    assert!(alignment < align, "{got:?}");
+}
+
+/// …and an enum slot ranks the enum, not a same-prefixed anything else.
+#[test]
+fn an_enum_slot_ranks_the_enum_first() {
+    let got = complete_ranked(&format!("{SLOTS}fn go()\n    stack(axis: A@)\nend\n"));
+    assert_eq!(got.first().map(String::as_str), Some("Axis"), "{got:?}");
+}
+
+/// A local of the right type beats every global of the wrong one.
+#[test]
+fn a_local_of_the_expected_type_ranks_first() {
+    let got = complete_ranked(&format!(
+        "{SLOTS}fn go()\n    local a: Align = Align()\n    local al: Alignment = Alignment()\n    stack(alignment: a@)\nend\n"
+    ));
+    assert_eq!(got.first().map(String::as_str), Some("al"), "{got:?}");
+}
+
+/// Inside a method, a member ranks on what it yields: `aligned()` returns a
+/// `View`, so it wins a `View` slot and loses an `Alignment` one.
+#[test]
+fn a_member_ranks_on_what_it_yields() {
+    let src = "\
+class Alignment end
+class View
+    fn aligned(a: Alignment) -> View
+        return self
+    end
+    fn alignment() -> Alignment
+        return Alignment()
+    end
+    fn go()
+        self.aligned(a: ali@)
+    end
+end
+";
+    let got = complete_ranked(src);
+    let alignment = got.iter().position(|i| i == "alignment");
+    let aligned = got.iter().position(|i| i == "aligned");
+    assert!(alignment.is_some() && alignment < aligned, "{got:?}");
+}
+
+/// A positional argument still offers the parameter *names* ahead of
+/// everything — that is what is most likely being written there.
+#[test]
+fn parameter_names_outrank_values_at_a_positional_argument() {
+    let got = complete_ranked(&format!("{SLOTS}fn go()\n    stack(al@)\nend\n"));
+    assert_eq!(got.first().map(String::as_str), Some("alignment:"), "{got:?}");
+}
+
+/// Outside any argument there is no slot, so the order is untouched: a local
+/// still beats a class, whatever the types are.
+#[test]
+fn no_slot_leaves_the_order_alone() {
+    let got = complete_ranked(&format!(
+        "{SLOTS}fn go()\n    local align: Align = Align()\n    local x = Al@\nend\n"
+    ));
+    assert_eq!(got.first().map(String::as_str), Some("align"), "{got:?}");
+}
+
+/// A slot declared `any` accepts everything, so it is no signal at all and
+/// must not reshuffle the list.
+#[test]
+fn an_any_slot_is_not_a_signal() {
+    let src = "\
+class Alignment end
+fn log(value: any) end
+fn go()
+    local always: Alignment = Alignment()
+    log(al@)
+end
+";
+    // The local first, then the class — the ordinary order. Were `any`
+    // treated as a signal, `Alignment` would fit it and jump the queue.
+    let got = complete_ranked(src);
+    assert_eq!(got, vec!["always", "Alignment"], "{got:?}");
 }
