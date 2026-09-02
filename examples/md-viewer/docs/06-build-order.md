@@ -109,21 +109,30 @@ Everything downstream is identical.
    tables. Emit `Inline.Text(rawLine)` as the only inline for now.
 5. `Parser.sau` + `init.sau` — [the facade and barrel](03-markdown-package.md#the-barrel).
 
-**Verify** with a scratch app, because a library cannot be run:
+**Verify** with a dump script *inside the package*. A library project refuses
+`saule run`, but a single **file** runs on its own — and because imports resolve
+relative to the importing file's directory, a file sitting beside the parser
+sees it with no `dependencies:` entry and no second project to maintain:
 
 ```
-examples/md-dump/
-├── saule.config      name: "md-dump", entry: "main.sau",
-│                     dependencies: ["../markdown"]
-└── main.sau
+examples/markdown/
+├── saule.config
+└── src/
+    ├── Ast.sau
+    ├── …
+    └── dump.sau      ← a `class Main`; `init.sau` does not re-export it
 ```
 
-`main.sau` reads a file, parses it, and prints the tree with indentation —
+`dump.sau` reads a file, parses it, and prints the tree with indentation —
 a `match` over `Block` with a depth parameter, ~50 lines. Then:
 
 ```bash
-saule run examples/md-dump -- examples/md-viewer/docs/01-scope.md
+saule run examples/markdown/src/dump.sau -- examples/md-viewer/docs/01-scope.md
 ```
+
+It has to live **inside `src/`**. A `dump.sau` at the package root does not
+fall back to `src_dirs` in single-file mode, and every import fails with
+`unknown type Block`.
 
 **Done when** the dump of [`01-scope.md`](01-scope.md) shows the right nesting:
 headings at the right levels, the big feature table as a `Table`, the bullet
@@ -131,7 +140,7 @@ lists as `List` with the right item counts, and the fenced diagram as one
 `Code` block. Check `03-markdown-package.md` too — it has nested lists and
 tables with pipes in them.
 
-Keep `md-dump`. It stays useful all the way through
+Keep `dump.sau`. It stays useful all the way through
 [Milestone 9](#milestone-9--tests).
 
 ---
@@ -154,7 +163,7 @@ cases before you write the rule, not after.
 **Verify:** the dump now shows `Link(href=…)` nodes. Grep your own output:
 
 ```bash
-saule run examples/md-dump -- examples/md-viewer/docs/README.md | grep -c "Link("
+saule run examples/markdown/src/dump.sau -- examples/md-viewer/docs/README.md | grep -c "Link("
 ```
 
 [`README.md`](README.md) has a known number of links in it. That count is your

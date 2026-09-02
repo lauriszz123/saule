@@ -51,7 +51,7 @@ examples/markdown/tests/
 └── run.sh
 ```
 
-The dump format is whatever [`md-dump`](06-build-order.md#milestone-1--blocks-headless)
+The dump format is whatever [`dump.sau`](06-build-order.md#milestone-1--blocks-headless)
 prints — one node per line, two spaces per depth:
 
 ```
@@ -73,7 +73,7 @@ a real review rather than a rubber stamp.
 ```bash
 for case in cases/*.md; do
   expected="${case%.md}.expected"
-  actual=$("$SAULE_BIN" run ../md-dump -- "$case")
+  actual=$("$SAULE_BIN" run ../src/dump.sau -- "$case")
   if ! diff -u "$expected" <(printf '%s\n' "$actual"); then
     failures=$((failures + 1))
   fi
@@ -154,9 +154,10 @@ A recursive-descent parser built on
 [enums with payloads and nested `match`](03-markdown-package.md#the-ast),
 running across seven modules, is close to the ideal input for that harness.
 
-**Add `md-dump`** — it is a terminating CLI that exercises the whole parser.
-Give it a fixed default input so a bare `saule run examples/md-dump` produces
-deterministic output with no arguments.
+**Add `dump.sau`** — it is a terminating CLI that exercises the whole parser.
+Give it a fixed default input so a bare
+`saule run examples/markdown/src/dump.sau` produces deterministic output with
+no arguments.
 
 **Skips for the other three are already in `skip_reason()`** — added in
 [Milestone 0](06-build-order.md#milestone-0--make-uikit-a-package):

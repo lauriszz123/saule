@@ -960,3 +960,52 @@ end
     let got = complete_ranked(src);
     assert_eq!(got, vec!["always", "Alignment"], "{got:?}");
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Enum variant payloads
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A tuple variant's payload is a type position like any other. The walker
+/// used to descend into an enum's `methods` and nothing else, so the whole
+/// variant list offered no suggestions at all.
+#[test]
+fn an_enum_variant_payload_offers_type_names() {
+    let got = complete("enum Inline\n    Text(value: str@)\nend\n");
+    assert!(got.contains(&"string".to_string()), "{got:?}");
+}
+
+/// …including the classes and enums declared alongside it, not just the
+/// primitives.
+#[test]
+fn an_enum_variant_payload_offers_declared_types() {
+    let src = "\
+class Span end
+
+enum Inline
+    Text(value: string),
+    Emph(children: Sp@)
+end
+";
+    assert!(complete(src).contains(&"Span".to_string()));
+}
+
+/// A payload beyond the first is reached the same way.
+#[test]
+fn a_later_enum_variant_payload_field_offers_types() {
+    let got = complete("enum Block\n    Heading(level: integer, slug: str@)\nend\n");
+    assert!(got.contains(&"string".to_string()), "{got:?}");
+}
+
+/// A discriminant is an ordinary expression, so the caret in one completes
+/// values rather than types.
+#[test]
+fn an_enum_discriminant_offers_values() {
+    let src = "\
+class Marker end
+
+enum Status
+    Alive = Mark@
+end
+";
+    assert!(complete(src).contains(&"Marker".to_string()));
+}

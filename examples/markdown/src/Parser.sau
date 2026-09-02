@@ -1,3 +1,5 @@
+import * from Ast
+
 export class Markdown
     static fn parse(source: string)
         local blocks: table<Block> = {}

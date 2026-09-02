@@ -1,0 +1,9 @@
+import * from Ast
+
+class Main
+    static fn main()
+        local doc = Document({Block.Rule}, {}, nil)
+
+        println(#doc.getBlocks())
+    end
+end

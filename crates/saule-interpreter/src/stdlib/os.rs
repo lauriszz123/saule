@@ -1040,9 +1040,7 @@ pub fn builtin_registries() -> (
     // FsKind ────────────────────────────────────────────────────────────
     let mut fskind = EnumInfo::default();
     for (v, _) in FS_KIND_VARIANTS {
-        fskind
-            .variants
-            .insert(v.to_string(), saule_semantic::VariantInfo::default());
+        fskind.add_variant(v, saule_semantic::VariantInfo::default());
     }
     enums.insert("FsKind".to_string(), fskind);
 
@@ -1052,9 +1050,7 @@ pub fn builtin_registries() -> (
     // named a type the checker had never heard of.
     let mut platform = EnumInfo::default();
     for (v, _) in OS_PLATFORM_VARIANTS {
-        platform
-            .variants
-            .insert(v.to_string(), saule_semantic::VariantInfo::default());
+        platform.add_variant(v, saule_semantic::VariantInfo::default());
     }
     enums.insert("OsPlatform".to_string(), platform);
 

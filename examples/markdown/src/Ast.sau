@@ -1,12 +1,105 @@
+export enum ColumnAlign
+    Left,
+    Center,
+    Right
+end
+
+export enum Inline
+    Text(value: string),
+    Code(value: string),
+    Emph(children: table<Inline>),
+    Strong(children: table<Inline>),
+    Strike(children: table<Inline>),
+    Link(href: string, title: string?, children: table<Inline>),
+    Image(src: string, alt: string?, title: string?),
+    SoftBreak,
+    HardBreak
+end
+
 export enum Block
-    Heading(level: integer, text: string),
-    Paragraph(text: string)
+    Heading(level: integer, slug: string, children: table<Inline>),
+    Paragraph(children: table<Inline>),
+    Code(src: string, language: string?),
+    Quote(children: table<Block>),
+    List(ordered: boolean, start: integer, tight: boolean, items: table<ListItem>),
+    Table(align: table<ColumnAlign>, head: table<TableCell>, rows: table<table<TableCell>>),
+    Rule
+end
+
+export class HeadingRef
+    local level: integer
+    local slug: string
+    local text: string
+
+    fn init(level: integer, slug: string, text: string)
+        self.level = level
+        self.slug = slug
+        self.text = text
+    end
+
+    fn getLevel()
+        return self.level
+    end
+
+    fn getSlug()
+        return self.slug
+    end
+
+    fn getText()
+        return self.text
+    end
+end
+
+export class ListItem
+    local blocks: table<Block>
+    local checked: boolean?
+
+    fn init(blocks: table<Block>, checked: boolean?)
+        self.blocks = blocks
+        self.checked = checked
+    end
+
+    fn getBlocks()
+        return self.blocks
+    end
+
+    fn isChecked()
+        return self.checked
+    end
+end
+
+export class TableCell
+    local children: table<Inline>
+
+    fn init(children: table<Inline>)
+        self.children = children
+    end
+
+    fn getChildren()
+        return self.children
+    end
 end
 
 export class Document
     local blocks: table<Block>
+    local title: string?
+    local headings: table<HeadingRef>
 
-    fn init(blocks: table<Block>)
+    fn init(blocks: table<Block>, headings: table<HeadingRef>, title: string?)
         self.blocks = blocks
+        self.title = title
+        self.headings = headings
+    end
+
+    fn getTitle()
+        return self.title
+    end
+
+    fn getHeadings()
+        return self.headings
+    end
+
+    fn getBlocks()
+        return self.blocks
     end
 end
