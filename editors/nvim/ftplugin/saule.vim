@@ -10,6 +10,13 @@ setlocal shiftwidth=2
 setlocal softtabstop=2
 setlocal tabstop=2
 
+" …unless the project says otherwise. `indent_style` / `indent_width` in
+" `saule.config` win over the editor for `saule fmt` and for the server's
+" formatting, on purpose — so the editor has to follow, or every Enter and
+" every `>>` disagrees with the next save. `vim.g.saule_project_indent = false`
+" keeps the defaults above.
+lua require("saule.style").apply(vim.api.nvim_get_current_buf())
+
 " `MAX_WIDTH` in `crates/saule-fmt/src/lib.rs`.
 setlocal textwidth=0
 setlocal colorcolumn=100
@@ -41,6 +48,13 @@ let b:match_skip = "v:lua.require'saule.match'.skip()"
 " inside a call's parens, not only when `(` is typed. Set
 " `vim.g.saule_auto_signature_help = false` to opt out.
 lua require("saule.signature").attach(vim.api.nvim_get_current_buf())
+
+" Completion stays with what the server knows: the word-scraping sources
+" completion plugins ship (nvim-cmp's `buffer`) offer the names already in
+" scope where you are declaring a *new* one, which is exactly where
+" `saule-lsp` deliberately answers with nothing. The VS Code extension
+" turns the same thing off. `vim.g.saule_word_completion = true` keeps them.
+lua require("saule.completion").attach(vim.api.nvim_get_current_buf())
 
 " Inlay hints (inferred types, parameter names) on as soon as the server
 " attaches, as in IntelliJ and VS Code. `vim.g.saule_inlay_hints = false` opts

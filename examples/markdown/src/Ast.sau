@@ -1,0 +1,12 @@
+export enum Block
+    Heading(level: integer, text: string),
+    Paragraph(text: string)
+end
+
+export class Document
+    local blocks: table<Block>
+
+    fn init(blocks: table<Block>)
+        self.blocks = blocks
+    end
+end

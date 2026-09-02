@@ -71,6 +71,77 @@ pub(crate) fn splice_sentinel(source: &str, offset: usize) -> Option<(String, St
     Some((patched, prefix))
 }
 
+/// The header keywords still available at `offset`, or empty when the caret
+/// isn't in a `class` / `interface` header.
+///
+/// This is the one position the tree cannot answer. Until `extends` is typed
+/// the parser has already entered the class body, so `class Foo ext…` leaves
+/// the sentinel as a malformed member — the very same shape a field being
+/// named on the *next* line produces, and `ClassMember::Field` carries no
+/// span to tell the two apart. The line the caret sits on is what separates
+/// them, so that is what this reads.
+///
+/// Only the keywords are decided here. `extends Ent…` is a type position and
+/// stays with the walk, which knows which classes would close a cycle.
+pub(crate) fn header_keywords(source: &str, offset: usize) -> Vec<&'static str> {
+    let Some(before) = source.get(..offset) else {
+        return Vec::new();
+    };
+    let line = &before[before.rfind('\n').map(|i| i + 1).unwrap_or(0)..];
+    // A commented-out header is not a header.
+    if line.contains("--") {
+        return Vec::new();
+    }
+
+    // The word under the caret is still being typed; everything ahead of it
+    // is what the author has committed to.
+    let mut words: Vec<&str> = line.split_whitespace().collect();
+    if !line.ends_with(char::is_whitespace) {
+        words.pop();
+    }
+
+    let mut words = words.as_slice();
+    if words.first() == Some(&"export") {
+        words = &words[1..];
+    }
+    let is_class = match words.first() {
+        Some(&"class") => true,
+        Some(&"interface") => false,
+        _ => return Vec::new(),
+    };
+
+    // The name has to be there already — in `class F…` the author is
+    // inventing it, and no suggestion can help with that.
+    let Some(name) = words.get(1) else {
+        return Vec::new();
+    };
+    // An unclosed generic list means the caret is naming a type parameter.
+    if name.matches('<').count() != name.matches('>').count() {
+        return Vec::new();
+    }
+
+    let rest = &words[2..];
+    let has = |kw: &str| rest.iter().any(|w| *w == kw);
+    // Straight after `extends` / `implements` / a comma a *type* is wanted.
+    if rest
+        .last()
+        .is_some_and(|w| *w == "extends" || *w == "implements" || w.ends_with(','))
+    {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    // `extends` comes first in the header, so once `implements` is written
+    // there is no longer a place to put it.
+    if !has("extends") && !has("implements") {
+        out.push("extends");
+    }
+    if is_class && !has("implements") {
+        out.push("implements");
+    }
+    out
+}
+
 // ─── what the caret can see ─────────────────────────────────────────────────
 
 /// The names in a header list the author has already committed to.

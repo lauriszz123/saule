@@ -135,12 +135,10 @@ impl Backend {
         // Both use a shared thread-local registry; serialise the pair.
         let _guard = self.analysis_lock.lock().await;
 
-        // Install cached project info on whatever tokio worker we landed
-        // on — `project::set` is thread-local and the multi-thread
-        // runtime can dispatch us anywhere. Cheap clone, idempotent.
-        if let Some(info) = self.project_info.lock().await.clone() {
-            saule_project::set(info);
-        }
+        // Install this file's own project on whatever tokio worker we landed
+        // on — `project::set` is thread-local and the multi-thread runtime
+        // can dispatch us anywhere.
+        self.install_project_for(module_dir.as_deref()).await;
 
         // Refresh the reverse-import graph so future edits to imported
         // modules know to re-check this file.

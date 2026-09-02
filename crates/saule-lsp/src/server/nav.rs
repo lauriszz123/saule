@@ -96,9 +96,7 @@ impl Backend {
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
 
         let _guard = self.analysis_lock.lock().await;
-        if let Some(info) = self.project_info.lock().await.clone() {
-            saule_project::set(info);
-        }
+        self.install_project_for(module_dir.as_deref()).await;
         let seed = match &module_dir {
             Some(d) => self.import_seed(uri, &module, d),
             None => saule_semantic::ModuleSeed::default(),
@@ -158,9 +156,6 @@ impl Backend {
     /// receiver-class lookups work cross-file.
     async fn collect_in_workspace(&self, ctx: &ResolvedCtx, defs_only: bool) -> Vec<Location> {
         let _guard = self.analysis_lock.lock().await;
-        if let Some(info) = self.project_info.lock().await.clone() {
-            saule_project::set(info);
-        }
 
         let files: Vec<PathBuf> = self
             .workspace_files
@@ -182,8 +177,11 @@ impl Backend {
             let module = self.syntax(&uri, &source);
 
             // Reseed registries from this file's own imports so
-            // receiver-class resolution sees imported classes.
+            // receiver-class resolution sees imported classes — against
+            // this file's project, since the workspace can hold several and
+            // an import only resolves under the right one.
             let module_dir = abs.parent().map(|d| d.to_path_buf());
+            self.install_project_for(module_dir.as_deref()).await;
             let seed = match &module_dir {
                 Some(d) => self.import_seed(&uri, &module, d),
                 None => saule_semantic::ModuleSeed::default(),

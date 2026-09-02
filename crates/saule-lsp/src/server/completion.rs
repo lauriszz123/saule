@@ -53,6 +53,14 @@ impl Backend {
         let offset = line_index.offset(&source, pos);
         let (patched, prefix) = splice_sentinel(&source, offset)?;
 
+        // `class Foo ext…` — the only position the tree can't resolve, and
+        // the only one nothing else can be meant at, so it answers alone.
+        let header = header_keywords(&source, offset);
+        if !header.is_empty() {
+            let items = keyword_items(&header, "class header");
+            return Some(CompletionResponse::Array(filter(items, &prefix)));
+        }
+
         let module_dir = uri
             .to_file_path()
             .ok()
@@ -61,9 +69,7 @@ impl Backend {
 
         // The semantic passes write thread-local registries; serialise them.
         let _guard = self.analysis_lock.lock().await;
-        if let Some(info) = self.project_info.lock().await.clone() {
-            saule_project::set(info);
-        }
+        self.install_project_for(module_dir.as_deref()).await;
 
         // The sentinel only renames an identifier, so the document's
         // remembered shape still describes this text. Asked of the database
@@ -85,7 +91,15 @@ impl Backend {
         };
         let _ = saule_semantic::analyze_with_seed(&module, seed);
 
-        let found = Walk::run(&module)?;
+        let Some(found) = Walk::run(&module) else {
+            // Nothing in the tree stands for the caret. An interface body is
+            // the one position where that is itself the answer.
+            if Walk::in_interface_body(&module, offset - prefix.len()) {
+                let items = keyword_items(INTERFACE_KEYWORDS, "interface member");
+                return Some(CompletionResponse::Array(filter(items, &prefix)));
+            }
+            return None;
+        };
 
         let items = match &found.ctx {
             Ctx::Member(recv) => member_items(recv, &found),
@@ -93,6 +107,11 @@ impl Backend {
             Ctx::BaseClass { exclude } => class_items(exclude),
             Ctx::Interfaces { exclude } => interface_items(exclude),
             Ctx::Value { stmt_start } => value_items(&found, &module, *stmt_start),
+            Ctx::AfterExport => export_items(),
+            Ctx::ClassMember {
+                is_static,
+                is_private,
+            } => class_member_items(*is_static, *is_private),
             Ctx::ImportPath { quoted } => self.import_path_items(module_dir.as_deref(), *quoted),
             Ctx::ImportName { path } => import_name_items(path, module_dir.as_deref()),
         };

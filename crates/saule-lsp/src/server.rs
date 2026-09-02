@@ -78,6 +78,13 @@ pub struct Backend {
     /// it on whatever tokio worker happens to be running each analysis
     /// — `saule_project` keeps the current project in thread-local state.
     pub(crate) project_info: Mutex<Option<saule_project::ProjectInfo>>,
+    /// Project info per `saule.config` root, for the projects a document
+    /// belongs to rather than the one the workspace root names. A
+    /// repository commonly holds several — every folder under `examples/`
+    /// here is its own — and `saule_project::load` re-reads the config and
+    /// re-resolves every dependency, which is far too much to redo on each
+    /// keystroke. Emptied whenever a `saule.config` changes.
+    pub(crate) projects: DashMap<PathBuf, Option<saule_project::ProjectInfo>>,
     /// Serialises the analyze→typeck phase across all documents — the
     /// thread-local registries those passes use are global per thread,
     /// so concurrent runs would race even on different files.
@@ -247,11 +254,51 @@ impl Backend {
         }
     }
 
+    /// Install the project that *`dir` itself* belongs to, on whatever tokio
+    /// worker this request landed on — `saule_project` keeps the current
+    /// project in thread-local state, so every entry point has to do this.
+    ///
+    /// The config is found by walking up from the file, not from the
+    /// workspace root. A repository is very often not a single Saule
+    /// project: open this one at its root and `examples/UI Project` has no
+    /// config above it, so `import * from "uikit"` resolves to nothing and
+    /// every name that package brings in — `App`, `Theme`, `Scene` — is
+    /// missing from completion, hover and go-to-definition alike.
+    ///
+    /// The workspace project remains the fallback, for a file that sits
+    /// outside any project of its own.
+    pub(crate) async fn install_project_for(&self, dir: Option<&Path>) {
+        if let Some(root) = dir.and_then(saule_project::find_root) {
+            let info = match self.projects.get(&root) {
+                Some(cached) => cached.clone(),
+                None => {
+                    let loaded = saule_project::load(&root);
+                    self.projects.insert(root, loaded.clone());
+                    loaded
+                }
+            };
+            if let Some(info) = info {
+                saule_project::set(info);
+                return;
+            }
+        }
+        match self.project_info.lock().await.clone() {
+            Some(info) => saule_project::set(info),
+            // Whatever this worker was left holding belongs to another
+            // file's project; resolving against it would be worse than
+            // resolving against nothing.
+            None => saule_project::clear(),
+        }
+    }
+
     /// Re-read `saule.config` from the workspace roots.
     ///
     /// The config names the source directories imports resolve against,
     /// so a stale copy silently misroutes every cross-file lookup.
     async fn reload_project_info(&self) {
+        // Every per-document project was resolved against a config that has
+        // just changed — including which dependencies exist at all.
+        self.projects.clear();
         let roots: Vec<PathBuf> = self.workspace_roots.lock().await.clone();
         for root in &roots {
             if let Some(project_root) = saule_project::find_root(root)
@@ -274,6 +321,7 @@ impl Backend {
             rev_imports: DashMap::new(),
             workspace_roots: Mutex::new(Vec::new()),
             project_info: Mutex::new(None),
+            projects: DashMap::new(),
             analysis_lock: Mutex::new(()),
             db: std::sync::Mutex::new(saule_db::Db::new()),
             watched_files_dynamic: Mutex::new(false),
