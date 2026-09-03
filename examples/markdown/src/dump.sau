@@ -1,4 +1,26 @@
 import * from Ast
+import * from Parser
+
+local fn flag(b: boolean?) -> string
+    if b == nil then
+        return '-'
+    end
+
+    if b! then
+        return 'yes'
+    end
+
+    return 'no'
+end
+
+local fn dump(blocks: table<Block>, depth: integer)
+    local pad: string = String.rep(" ", depth)
+    for block in blocks do
+        match block
+            case _ then println()
+        end
+    end
+end
 
 class Main
     static fn main()

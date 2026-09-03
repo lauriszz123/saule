@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::server::sighelp::render_type;
-use saule_ast::{Decl, Module, Stmt, Type};
+use saule_ast::{Decl, Expr, Module, Spanned, Stmt, Type};
 use saule_semantic::registry::{
     ClassRegistry, interface_extends, is_subtype_named, lookup_field_type, lookup_method,
     with_classes, with_enums, with_interfaces,
@@ -148,6 +148,84 @@ pub(crate) fn class_member_items(is_static: bool, is_private: bool) -> Vec<Compl
     }
     keywords.push("fn");
     keyword_items(&keywords, "class member")
+}
+
+/// What can stand as a `case` pattern.
+///
+/// The variants of the scrutinee's own enum lead, spelled the way they are
+/// written (`Colour.Red`) so accepting one leaves a complete pattern —
+/// matching on a `Colour` and being offered some other enum's variants first
+/// is the noise this exists to avoid. Then the literal patterns, then every
+/// enum by name, for a `match` over something completion cannot resolve.
+///
+/// A bare binding name (`case value then …`) is the author's to invent, so
+/// nothing is offered for it.
+pub(crate) fn pattern_items(
+    scrutinee: Option<&Spanned<Expr>>,
+    found: &Found,
+) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    if let Some(name) = scrutinee.and_then(|s| scrutinee_enum(&s.value, found)) {
+        for v in enum_variants(&name) {
+            let label = format!("{name}.{}", v.label);
+            items.push(sorted(
+                item(
+                    label,
+                    CompletionItemKind::ENUM_MEMBER,
+                    Some(format!("variant of `{name}`")),
+                ),
+                "0",
+            ));
+        }
+    }
+
+    for (kw, detail) in [
+        ("_", "matches anything"),
+        ("nil", "matches only nil"),
+        ("true", "matches only true"),
+        ("false", "matches only false"),
+    ] {
+        items.push(sorted(
+            item(
+                kw.to_string(),
+                CompletionItemKind::KEYWORD,
+                Some(detail.into()),
+            ),
+            "1",
+        ));
+    }
+
+    with_enums(|r| {
+        for n in r.keys() {
+            items.push(sorted(
+                item(n.clone(), CompletionItemKind::ENUM, Some("enum".into())),
+                "2",
+            ));
+        }
+    });
+
+    dedup(items)
+}
+
+/// The enum a `match`'s scrutinee holds, when completion can work it out.
+///
+/// Weaker than the checker on purpose — an annotated binding and a name that
+/// *is* an enum cover the shapes worth ranking for, and anything else simply
+/// leaves the variants unranked rather than guessing wrong.
+fn scrutinee_enum(expr: &Expr, found: &Found) -> Option<String> {
+    if let Expr::Ident(n) = expr
+        && let Some(v) = found.scope.iter().rev().find(|v| &v.name == n)
+        && let Some(name) = v.ty.as_ref().and_then(base_type_name)
+        && with_enums(|r| r.contains_key(&name))
+    {
+        return Some(name);
+    }
+    match infer(expr, found) {
+        Some(Recv::Enum(e)) => Some(e),
+        Some(Recv::Instance(c)) if with_enums(|r| r.contains_key(&c)) => Some(c),
+        _ => None,
+    }
 }
 
 /// The bare name a type ranks under: `Alignment`, `Alignment?` and
@@ -348,6 +426,18 @@ pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> V
     // Keywords only where a statement can begin — offering `end` or `then`
     // in the middle of an expression is just noise.
     if stmt_start {
+        // Inside a `match`, the next thing written is far more often the
+        // next arm than another statement, so `case` leads.
+        if found.match_arm {
+            items.push(sorted(
+                item(
+                    "case".into(),
+                    CompletionItemKind::KEYWORD,
+                    Some("match arm".into()),
+                ),
+                "!",
+            ));
+        }
         for kw in STATEMENT_KEYWORDS {
             items.push(sorted(
                 item((*kw).to_string(), CompletionItemKind::KEYWORD, None),

@@ -6,9 +6,8 @@ fn complete(marked: &str) -> Vec<String> {
     let offset = marked.find('@').expect("no `@` caret marker");
     let src = marked.replace('@', "");
     let (patched, prefix) = splice_sentinel(&src, offset).expect("splice");
-    let header = header_keywords(&src, offset);
-    if !header.is_empty() {
-        return filter(keyword_items(&header, "class header"), &prefix)
+    if let Some((keywords, detail)) = line_keywords(&src, offset) {
+        return filter(keyword_items(&keywords, detail), &prefix)
             .into_iter()
             .map(|i| i.label)
             .collect();
@@ -35,6 +34,8 @@ fn complete(marked: &str) -> Vec<String> {
         Ctx::TypeName => type_items(),
         Ctx::Value { stmt_start } => value_items(&found, &module, *stmt_start),
         Ctx::AfterExport => export_items(),
+        Ctx::Pattern { scrutinee } => pattern_items(scrutinee.as_ref(), &found),
+        Ctx::VariantName { enum_name } => enum_variants(enum_name),
         Ctx::ClassMember {
             is_static,
             is_private,
@@ -83,10 +84,13 @@ fn complete_ranked(marked: &str) -> Vec<String> {
     let Some(found) = Walk::run(&module) else {
         return Vec::new();
     };
-    let Ctx::Value { stmt_start } = &found.ctx else {
-        return Vec::new();
+    let items = match &found.ctx {
+        Ctx::Value { stmt_start } => value_items(&found, &module, *stmt_start),
+        Ctx::Pattern { scrutinee } => pattern_items(scrutinee.as_ref(), &found),
+        Ctx::VariantName { enum_name } => enum_variants(enum_name),
+        _ => return Vec::new(),
     };
-    let mut items = filter(value_items(&found, &module, *stmt_start), &prefix);
+    let mut items = filter(items, &prefix);
     items.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
     items.into_iter().map(|i| i.label).collect()
 }
@@ -1008,4 +1012,290 @@ enum Status
 end
 ";
     assert!(complete(src).contains(&"Marker".to_string()));
+}
+
+// ── match ───────────────────────────────────────────────────────────────────
+
+const MATCH_DECLS: &str = "\
+enum Colour Red, Green, Blue end
+enum Event Click(x: integer, y: integer), Key(code: integer) end
+";
+
+/// `case` is what comes next inside a `match`, so it leads the list — and it
+/// is offered at all, which it was not.
+#[test]
+fn a_match_body_offers_case() {
+    // No arm typed yet: the parser stops at the missing `case` and the caret
+    // lands after the `match` rather than inside it.
+    let got = complete_ranked(&format!(
+        "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    @\n    end\nend\n"
+    ));
+    assert_eq!(got.first().map(String::as_str), Some("case"), "{got:?}");
+
+    assert_eq!(
+        complete(&format!(
+            "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    ca@\n    end\nend\n"
+        )),
+        vec!["case"]
+    );
+
+    // …and again after an arm, where the next one begins.
+    assert_eq!(
+        complete(&format!(
+            "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    case Colour.Red then 1\n    ca@\n    end\nend\n"
+        )),
+        vec!["case"]
+    );
+}
+
+/// Outside a `match`, `case` is not a statement that can begin anywhere.
+#[test]
+fn case_is_not_offered_outside_a_match() {
+    let got = complete(&format!("{MATCH_DECLS}fn go()\n    ca@\nend\n"));
+    assert!(!got.iter().any(|i| i == "case"), "{got:?}");
+}
+
+/// The pattern position: the scrutinee's own variants first, spelled the way
+/// they are written, so accepting one leaves a complete pattern.
+#[test]
+fn a_case_pattern_offers_the_scrutinees_variants() {
+    let got = complete_ranked(&format!(
+        "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    case @\n    end\nend\n"
+    ));
+    assert_eq!(
+        got.iter().take(3).cloned().collect::<Vec<_>>(),
+        vec!["Colour.Blue", "Colour.Green", "Colour.Red"],
+        "{got:?}"
+    );
+    // Then the literal patterns, and the other enums by name.
+    for expected in ["_", "nil", "true", "false", "Event"] {
+        assert!(got.iter().any(|i| i == expected), "{expected}: {got:?}");
+    }
+}
+
+/// A payload variant is offered the same way — the fields are written after.
+#[test]
+fn a_payload_variant_is_offered_in_a_pattern() {
+    let got = complete(&format!(
+        "{MATCH_DECLS}fn go(e: Event)\n    match e\n    case Event.@\n    end\nend\n"
+    ));
+    assert_eq!(got, vec!["Click", "Key"]);
+}
+
+/// Once the enum is named, only its variants belong there.
+#[test]
+fn a_qualified_pattern_offers_only_that_enums_variants() {
+    assert_eq!(
+        complete(&format!(
+            "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    case Colour.@\n    end\nend\n"
+        )),
+        vec!["Blue", "Green", "Red"]
+    );
+    assert_eq!(
+        complete(&format!(
+            "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    case Colour.R@\n    end\nend\n"
+        )),
+        vec!["Red"]
+    );
+}
+
+/// A scrutinee completion cannot resolve still gets the literal patterns and
+/// the enum names — just not a ranked set of variants.
+#[test]
+fn an_unresolvable_scrutinee_still_offers_the_rest() {
+    let got = complete(&format!(
+        "{MATCH_DECLS}fn go(n: integer)\n    match n\n    case @\n    end\nend\n"
+    ));
+    assert!(got.iter().any(|i| i == "_"), "{got:?}");
+    assert!(got.iter().any(|i| i == "Colour"), "{got:?}");
+    assert!(!got.iter().any(|i| i.contains('.')), "{got:?}");
+}
+
+/// A payload sub-pattern binds a name the author is inventing — the one
+/// pattern position that should stay quiet.
+#[test]
+fn a_payload_binding_is_not_completed() {
+    let got = complete(&format!(
+        "{MATCH_DECLS}fn go(e: Event)\n    match e\n    case Event.Click(x, y@) then 1\n    end\nend\n"
+    ));
+    assert!(got.is_empty(), "{got:?}");
+}
+
+/// The arm body is an expression position, not an arm start: `then` requires
+/// a body, so `case` has no place directly after it.
+#[test]
+fn an_arm_body_is_not_an_arm_start() {
+    let got = complete(&format!(
+        "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    case Colour.Red then @\n    end\nend\n"
+    ));
+    assert!(!got.iter().any(|i| i == "case"), "{got:?}");
+    assert!(got.iter().any(|i| i == "c"), "{got:?}");
+}
+
+/// A finished pattern is waiting for a guard or a body, and both are still
+/// open until one of them is written.
+#[test]
+fn a_finished_pattern_offers_when_and_then() {
+    let arm = |tail: &str| {
+        complete(&format!(
+            "{MATCH_DECLS}fn go(c: Colour, n: integer)\n    match c\n    case {tail}\n    end\nend\n"
+        ))
+    };
+    assert_eq!(arm("Colour.Red @"), vec!["when", "then"]);
+    assert_eq!(arm("Colour.Red th@"), vec!["then"]);
+    assert_eq!(arm("Colour.Red wh@"), vec!["when"]);
+    // A guard is written, so only the body is still to come.
+    assert_eq!(arm("Colour.Red when n > 1 @"), vec!["then"]);
+    // A payload pattern is finished once its brackets close.
+    assert_eq!(arm("Colour.Red, Colour.Green @"), vec!["when", "then"]);
+}
+
+/// …and neither is offered where the arm has moved on.
+#[test]
+fn an_arm_past_its_keyword_offers_neither() {
+    let arm = |tail: &str| {
+        complete(&format!(
+            "{MATCH_DECLS}fn go(c: Colour, n: integer)\n    match c\n    case {tail}\n    end\nend\n"
+        ))
+    };
+    // `when <caret>` wants the guard expression itself.
+    let got = arm("Colour.Red when @");
+    assert!(!got.iter().any(|i| i == "when" || i == "then"), "{got:?}");
+    assert!(got.iter().any(|i| i == "n"), "{got:?}");
+    // Past `then` the body has started.
+    let got = arm("Colour.Red then @");
+    assert!(!got.iter().any(|i| i == "when" || i == "then"), "{got:?}");
+    // The pattern itself is still the pattern.
+    let got = arm("@");
+    assert!(!got.iter().any(|i| i == "when" || i == "then"), "{got:?}");
+    // An unclosed payload puts the caret inside a sub-pattern.
+    assert!(arm("Event.Click(x, @").is_empty());
+}
+
+/// A condition takes `then` — and never `when`, which guards a match arm and
+/// nothing else.
+#[test]
+fn a_condition_offers_then_but_never_when() {
+    let body = |tail: &str| {
+        complete(&format!(
+            "{MATCH_DECLS}fn go(n: integer)\n    {tail}\n    end\nend\n"
+        ))
+    };
+    assert_eq!(body("if n > 1 @"), vec!["then"]);
+    assert_eq!(body("if n > 1 th@"), vec!["then"]);
+    assert_eq!(body("if n > 1 then\n    elseif n > 2 @"), vec!["then"]);
+    assert!(body("if n > 1 wh@").is_empty(), "`when` is not a condition keyword");
+    // Past `then`, and inside an unclosed condition, the line is not waiting
+    // for a keyword at all.
+    let got = body("if n > 1 then @");
+    assert!(!got.iter().any(|i| i == "then"), "{got:?}");
+    let got = body("if (n > 1 @");
+    assert!(!got.iter().any(|i| i == "then"), "{got:?}");
+}
+
+/// `when` also *starts a pipeline*, which is a statement — so it belongs
+/// where statements begin, alongside `while`.
+#[test]
+fn when_is_offered_where_a_pipeline_can_start() {
+    let got = complete(&format!("{MATCH_DECLS}fn go(n: integer)\n    wh@\nend\n"));
+    assert_eq!(got, vec!["while", "when"]);
+}
+
+/// The line is read, so quoting and commenting have to be respected: a
+/// `then` inside a string is not the keyword, and a caret inside a comment
+/// or a string is not a keyword position at all.
+#[test]
+fn the_line_reader_respects_strings_and_comments() {
+    let body = |tail: &str| {
+        complete(&format!("{MATCH_DECLS}fn go(s: string)\n    {tail}\n    end\nend\n"))
+    };
+    // The string is blanked, so this line is still waiting for its `then`.
+    assert_eq!(body("if s == \"then\" @"), vec!["then"]);
+    assert!(body("-- case Colour.Red @").is_empty());
+    assert!(body("local t = \"case x @").is_empty());
+}
+
+/// A loop header takes `do`, once it is actually complete.
+#[test]
+fn a_loop_header_offers_do() {
+    let body = |tail: &str| {
+        complete(&format!(
+            "{MATCH_DECLS}fn go(n: integer, items: table<integer>)\n    {tail}\n    end\nend\n"
+        ))
+    };
+    assert_eq!(body("while n > 1 @"), vec!["do"]);
+    assert_eq!(body("while n > 1 d@"), vec!["do"]);
+    assert_eq!(body("for x in items @"), vec!["do"]);
+    assert_eq!(body("for x, y in items @"), vec!["do"]);
+    // The key/value form reaches its `do` the same way, through a call and
+    // all — the brackets have to close first.
+    assert_eq!(body("for k, v in Table.pairs(items) @"), vec!["do"]);
+    assert_ne!(body("for k, v in Table.pairs(items @"), vec!["do"]);
+    // The numeric form, with and without a step.
+    assert_eq!(body("for i = 1, 10 @"), vec!["do"]);
+    assert_eq!(body("for i = 1, 10, 2 @"), vec!["do"]);
+}
+
+/// …and not while the header is still being written, or once it is past.
+#[test]
+fn an_incomplete_loop_header_offers_no_do() {
+    let body = |tail: &str| {
+        complete(&format!(
+            "{MATCH_DECLS}fn go(n: integer, items: table<integer>)\n    {tail}\n    end\nend\n"
+        ))
+    };
+    // The line answers alone when it fires, so "the header keyword did not
+    // fire" is exactly "the answer is not the keyword by itself". Inside a
+    // loop *body* a bare `do … end` block is a legal statement, and still
+    // shows up among the statement keywords — that is a different `do`.
+    let no_do = |tail: &str| {
+        let got = body(tail);
+        assert_ne!(got, vec!["do"], "{tail:?}");
+    };
+    // A dangling `in` / `=` / comma wants an expression, not a keyword.
+    no_do("for x in @");
+    no_do("for i = @");
+    no_do("for i = 1, @");
+    // The numeric form still owes its upper bound.
+    no_do("for i = 1 @");
+    // Nothing to loop over yet.
+    no_do("while @");
+    // Past `do`, the body has started.
+    no_do("while n > 1 do @");
+    no_do("for x in items do @");
+    // `then` and `when` belong to other constructs, not to a loop header.
+    let got = body("while n > 1 @");
+    assert!(!got.iter().any(|i| i == "then" || i == "when"), "{got:?}");
+}
+
+/// A `for` that has named its variables but committed to neither form is
+/// waiting for the `in` that says what to loop over.
+#[test]
+fn a_for_header_offers_in() {
+    let body = |tail: &str| {
+        complete(&format!(
+            "{MATCH_DECLS}fn go(n: integer, items: table<integer>)\n    {tail}\n    end\nend\n"
+        ))
+    };
+    assert_eq!(body("for x @"), vec!["in"]);
+    assert_eq!(body("for x i@"), vec!["in"]);
+    // The key/value form, bare and annotated.
+    assert_eq!(body("for k, v @"), vec!["in"]);
+    assert_eq!(body("for k, v i@"), vec!["in"]);
+    assert_eq!(body("for k: string, v: integer @"), vec!["in"]);
+    // An annotated single loop variable is still a named one.
+    assert_eq!(body("for x: integer @"), vec!["in"]);
+
+    // …and not before there is a variable, nor once a form is chosen.
+    let not_in = |tail: &str| {
+        let got = body(tail);
+        assert_ne!(got, vec!["in"], "{tail:?}");
+    };
+    not_in("for @");
+    // Still naming the next variable, or still writing the type.
+    not_in("for x, @");
+    not_in("for x: @");
+    // Committed: `in` has no second place to go, and neither form wants it.
+    not_in("for x in items @");
+    not_in("for i = 1, 10 @");
 }

@@ -53,11 +53,11 @@ impl Backend {
         let offset = line_index.offset(&source, pos);
         let (patched, prefix) = splice_sentinel(&source, offset)?;
 
-        // `class Foo ext…` — the only position the tree can't resolve, and
-        // the only one nothing else can be meant at, so it answers alone.
-        let header = header_keywords(&source, offset);
-        if !header.is_empty() {
-            let items = keyword_items(&header, "class header");
+        // A construct still waiting for its next keyword — `class Foo ext…`,
+        // `case P th…`, `if c th…`. The tree cannot resolve these, and nothing
+        // else can be meant at them, so they answer alone.
+        if let Some((keywords, detail)) = line_keywords(&source, offset) {
+            let items = keyword_items(&keywords, detail);
             return Some(CompletionResponse::Array(filter(items, &prefix)));
         }
 
@@ -108,6 +108,8 @@ impl Backend {
             Ctx::Interfaces { exclude } => interface_items(exclude),
             Ctx::Value { stmt_start } => value_items(&found, &module, *stmt_start),
             Ctx::AfterExport => export_items(),
+            Ctx::Pattern { scrutinee } => pattern_items(scrutinee.as_ref(), &found),
+            Ctx::VariantName { enum_name } => enum_variants(enum_name),
             Ctx::ClassMember {
                 is_static,
                 is_private,

@@ -133,6 +133,10 @@ pub(crate) const STATEMENT_KEYWORDS: &[&str] = &[
     "import",
     "match",
     "do",
+    // `when(x):stage()` — a pipeline is a statement like any other. The
+    // *other* `when`, a match arm's guard, is offered from the line rather
+    // than from here, because it is not a statement at all.
+    "when",
 ];
 
 /// The declarations `export` can introduce.
