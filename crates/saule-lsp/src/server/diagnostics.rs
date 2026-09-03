@@ -43,6 +43,13 @@ impl Backend {
                 if &importer == a {
                     continue;
                 }
+                // Only the ones an edit can actually have changed. The
+                // database knows whether anything this file reads came out
+                // different; when nothing did, its diagnostics are the ones
+                // already on screen.
+                if !self.analysis_inputs_moved(&importer).await {
+                    continue;
+                }
                 if let Some(dep_uri) = path_to_uri(&importer) {
                     self.refresh_path(&importer, dep_uri).await;
                 }
@@ -56,11 +63,26 @@ impl Backend {
             let source = entry.source.clone();
             let version = entry.version;
             drop(entry);
-            let diagnostics = self.collect_diagnostics(&uri, &source, None, None).await;
+            let (diagnostics, _) = self.collect_diagnostics(&uri, &source, None, None).await;
             self.client
                 .publish_diagnostics(uri, diagnostics, Some(version))
                 .await;
         }
+    }
+
+    /// Has anything `path`'s analysis reads changed value since its
+    /// diagnostics were last published?
+    ///
+    /// A path with nothing published yet answers `true` — there are no
+    /// diagnostics on screen for it to still be right.
+    async fn analysis_inputs_moved(&self, path: &Path) -> bool {
+        let Some(previous) = self.analysed_at.get(path).map(|r| *r) else {
+            return true;
+        };
+        // Same window the analysis itself runs in — see `collect_diagnostics`.
+        let _guard = self.analysis_lock.lock().await;
+        self.install_project_for(path.parent()).await;
+        previous != self.with_db(|db| db.analysis_revision(path))
     }
 
     /// Analyse a single file by absolute path. Source is taken from the
@@ -78,12 +100,22 @@ impl Backend {
             }
         };
         let module_dir = abs.parent().map(|d| d.to_path_buf());
-        let diagnostics = self
+        let (diagnostics, revision) = self
             .collect_diagnostics(&uri, &source, module_dir, Some(abs))
             .await;
         self.client
             .publish_diagnostics(uri, diagnostics, version)
             .await;
+        // What is recorded is what is on screen. A file that did not get as
+        // far as analysis records nothing, so the next edit re-checks it.
+        match revision {
+            Some(rev) => {
+                self.analysed_at.insert(abs.to_path_buf(), rev);
+            }
+            None => {
+                self.analysed_at.remove(abs);
+            }
+        }
     }
 
     async fn collect_diagnostics(
@@ -92,7 +124,7 @@ impl Backend {
         source: &str,
         module_dir: Option<PathBuf>,
         abs_path: Option<&Path>,
-    ) -> Vec<Diagnostic> {
+    ) -> (Vec<Diagnostic>, Option<u64>) {
         let line_index = LineIndex::new(source);
         let mut out = Vec::new();
 
@@ -119,7 +151,7 @@ impl Backend {
                     .iter()
                     .map(|e| diag_from(e, source, &line_index)),
             );
-            return out;
+            return (out, None);
         }
         let module = &parsed.module;
 
@@ -172,6 +204,12 @@ impl Backend {
             Some(d) => self.import_seed_at(abs_path, module, d),
             None => saule_semantic::ModuleSeed::default(),
         };
+        // Read here and nowhere else. The seed walk resolves import paths
+        // against the *project*, which lives in thread-local state, so a
+        // revision asked for outside this window — different worker, whatever
+        // project it was last handed — would be derived from a seed built
+        // against the wrong `src_dirs`, and the memo would keep it.
+        let revision = abs_path.map(|p| self.with_db(|db| db.analysis_revision(p)));
         for e in saule_semantic::analyze_with_seed(module, seed) {
             out.push(diag_from(&e, source, &line_index));
         }
@@ -182,7 +220,7 @@ impl Backend {
         for e in saule_typeck::check(module) {
             out.push(diag_from(&e, source, &line_index));
         }
-        out
+        (out, revision)
     }
 
     /// Replace this file's outgoing-import edges in the reverse graph.

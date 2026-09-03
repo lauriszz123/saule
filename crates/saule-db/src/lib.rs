@@ -188,6 +188,13 @@ impl Db {
         if let Some((rev, tree)) = self.trees.borrow().get(abs)
             && *rev >= self.rt.file_changed_at(abs)
         {
+            // A hit still has to record the read. This cache is shared
+            // across queries, so returning early without recording gave the
+            // edge to whichever seed happened to parse the module first and
+            // to no one else — every *other* importer of it then had no
+            // dependency on it at all, and went on serving the answer it
+            // computed before the module changed.
+            self.rt.record(Query::File(abs.to_path_buf()));
             return tree.clone();
         }
         // Through `text`, so the read is recorded as a dependency of
@@ -261,8 +268,35 @@ impl Db {
             Query::Seed,
             |db| &mut db.seeds,
             |db, p| Arc::new(db.compute_seed(p)),
-            |_, _| false,
+            // The cutoff that matters most, because it is the one the
+            // *editor* feels. A seed's dependencies include the text of
+            // every module the walk read, so editing a function body in a
+            // widely-imported file invalidates the seed of every importer —
+            // and every one of them rebuilds to exactly the value it had,
+            // because a body is not part of anything a seed collects.
+            // Comparing costs a walk over the collected declarations; not
+            // comparing costs re-analysing each of those importers on every
+            // keystroke, which is two orders of magnitude more.
+            |old, new| old.same_surface(new),
         )
+    }
+
+    /// The revision at which anything `path`'s analysis depends on last
+    /// *changed value*: its own text, and what its imports declare.
+    ///
+    /// A caller that has already analysed `path` at some revision can
+    /// compare against this and skip the work entirely — which is how the
+    /// language server avoids re-checking a file whose inputs are all
+    /// unchanged. Validating the seed is the cheap path when nothing moved;
+    /// this is deliberately the same query the analysis itself would ask
+    /// for, so asking costs nothing extra.
+    pub fn analysis_revision(&mut self, path: &Path) -> u64 {
+        // Ask for the seed rather than reach into the memo, so it is
+        // validated (and, if a dependency really moved, recomputed) before
+        // its revision is read.
+        let _ = self.seed(path);
+        let seed_at = self.seeds.get(path).map(|m| m.changed_at).unwrap_or(0);
+        seed_at.max(self.rt.file_changed_at(path))
     }
 
     /// [`Db::seed`] for a module that is not a file on disk — an unsaved

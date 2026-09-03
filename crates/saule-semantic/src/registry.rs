@@ -17,7 +17,7 @@ use saule_ast::{ClassMember, Decl, EnumVariant, Expr, Module, Param, Spanned, St
 /// Full signature of a class method as collected from the AST. Stored so
 /// `saule-typeck` can infer the return type of `obj.method(args)` and
 /// validate arg counts/types without a separate scan.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MethodSig {
     pub is_static: bool,
     pub is_private: bool,
@@ -31,7 +31,7 @@ pub struct MethodSig {
 
 /// Class info collected so member-access checks can consult member
 /// visibility, parent classes, etc.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct ClassInfo {
     /// Generic type parameters declared with `<T, U>` after the name.
     ///
@@ -94,7 +94,7 @@ pub type InterfaceMethodRegistry = HashMap<String, HashMap<String, MethodSig>>;
 /// fields in order. Keeping the whole [`Param`] rather than just its type is
 /// what lets a match arm bind `case Shape.Rect(w, h)` at the declared types
 /// instead of `any`, and leaves the names available for diagnostics.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct VariantInfo {
     pub fields: Vec<Param>,
     /// The `= expr` of a `Valued` variant, `None` for every other shape.
@@ -120,7 +120,7 @@ impl VariantInfo {
 }
 
 /// Enum info: variant name -> payload shape.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct EnumInfo {
     /// Generic type parameters declared with `<T, U>` after the name.
     ///
@@ -177,7 +177,7 @@ pub type EnumRegistry = HashMap<String, EnumInfo>;
 /// ones have a signature too. Without it `atLeast(a, b)` — declared in
 /// another file — infers as "no type at all", and every checked position
 /// it feeds fails with `UndeterminedType`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FunctionSig {
     /// Generic type parameters declared with `<T, U>` after the name.
     pub type_params: Vec<String>,
