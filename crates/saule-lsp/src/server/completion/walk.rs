@@ -44,6 +44,12 @@ pub(crate) enum Ctx {
     /// module variable, which is a name the author is inventing, so nothing
     /// else is worth offering.
     AfterExport,
+    /// `case <caret>` — a match arm's pattern. `scrutinee` is what the
+    /// `match` is over, so the variants of *its* enum can lead the list.
+    Pattern { scrutinee: Option<Spanned<Expr>> },
+    /// `case Colour.<caret>` — the enum is already named, so only its own
+    /// variants belong here.
+    VariantName { enum_name: String },
     /// `import * from <caret>` — offer importable modules. `quoted` mirrors
     /// how the author spelled the path so suggestions match their style.
     ImportPath { quoted: bool },
@@ -68,6 +74,11 @@ pub(crate) struct Found {
     /// of these, so it is the strongest ordering signal completion has —
     /// stronger than how close the name is to what has been typed.
     pub(crate) expected: Option<Type>,
+    /// True where a `case` can begin: inside a `match`, at the start of a
+    /// statement. An arm body is ordinary statement territory *and* the
+    /// place the next arm starts, and the tree cannot tell which one is
+    /// being written — so both are offered.
+    pub(crate) match_arm: bool,
 }
 
 /// Descends the tree to the sentinel, maintaining the scope stack.
@@ -89,6 +100,9 @@ pub(crate) struct Walk {
     /// Saved and restored around each argument the same way, so a nested
     /// call's slot shadows its parent's.
     expected: Option<Type>,
+    /// Whether the statement position currently being walked sits inside a
+    /// `match`. Saved and restored around each arm body.
+    match_arm: bool,
 }
 
 impl Walk {
@@ -128,6 +142,7 @@ impl Walk {
             user_fns: crate::server::sighelp::walk::collect_user_fns(module),
             named_params: Vec::new(),
             expected: None,
+            match_arm: false,
         };
         w.block(&module.stmts);
         w.found
@@ -150,6 +165,7 @@ impl Walk {
                 class: self.class.clone(),
                 named_params: std::mem::take(&mut self.named_params),
                 expected: self.expected.clone(),
+                match_arm: self.match_arm,
             });
         }
     }
@@ -174,14 +190,27 @@ impl Walk {
     /// declared later in the block are not offered at the caret.
     fn block(&mut self, stmts: &[Spanned<Stmt>]) {
         let mark = self.scope.len();
+        let mut after_match = false;
         for s in stmts {
             // A bare sentinel statement means the caret starts a statement.
             if let Stmt::Expr(e) = &s.value
                 && matches!(&e.value, Expr::Ident(n) if n == SENTINEL)
             {
+                // `match c` with no arm typed yet is not a `match` the parser
+                // could finish: it stops at the missing `case` and the caret
+                // lands here, as the statement *after* the match rather than
+                // inside it. It is still an arm position, and `case` is still
+                // the word being reached for.
+                let outer = self.match_arm;
+                self.match_arm = outer || after_match;
                 self.record(Ctx::Value { stmt_start: true });
+                self.match_arm = outer;
                 continue;
             }
+            after_match = matches!(
+                &s.value,
+                Stmt::Expr(e) if matches!(&e.value, Expr::Match { .. })
+            );
             self.stmt(&s.value);
             self.declare(&s.value);
         }
@@ -543,15 +572,31 @@ impl Walk {
             Expr::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
                 for arm in arms {
+                    // The pattern is written before anything binds, so this
+                    // comes first: `case Col…` is choosing what to match, not
+                    // naming something.
+                    match pattern_sentinel(&arm.pattern.value) {
+                        Some(PatternHole::Whole) => self.record(Ctx::Pattern {
+                            scrutinee: Some((**scrutinee).clone()),
+                        }),
+                        Some(PatternHole::Variant(enum_name)) => {
+                            self.record(Ctx::VariantName { enum_name })
+                        }
+                        None => {}
+                    }
                     let mark = self.scope.len();
                     bind_pattern(self, &arm.pattern.value);
                     if let Some(g) = &arm.guard {
                         self.expr(g);
                     }
+                    // An arm body is also where the *next* arm starts, so a
+                    // statement position inside one can be a `case`.
+                    let outer = std::mem::replace(&mut self.match_arm, true);
                     match &arm.body {
                         MatchBody::Expr(e) => self.expr(e),
                         MatchBody::Block(b) => self.block(b),
                     }
+                    self.match_arm = outer;
                     self.scope.truncate(mark);
                 }
             }
@@ -720,6 +765,29 @@ impl Walk {
 }
 
 /// Patterns bind names inside their arm (`case Event.Key(code) then …`).
+/// Where a sentinel turned up inside a match pattern.
+pub(crate) enum PatternHole {
+    /// `case <caret>` — the whole pattern is still to be chosen.
+    Whole,
+    /// `case Colour.<caret>` — the enum is named, the variant is not.
+    Variant(String),
+}
+
+/// Locate the sentinel in `pattern`, if it is there.
+///
+/// Only the two positions a suggestion can help with. A payload sub-pattern
+/// (`case Event.Click(x, <caret>)`) binds a name the author is inventing,
+/// which is exactly where completion should stay quiet.
+pub(crate) fn pattern_sentinel(pattern: &saule_ast::Pattern) -> Option<PatternHole> {
+    match pattern {
+        saule_ast::Pattern::Bind(n) if n == SENTINEL => Some(PatternHole::Whole),
+        saule_ast::Pattern::Variant {
+            enum_name, variant, ..
+        } if variant == SENTINEL => Some(PatternHole::Variant(enum_name.clone())),
+        _ => None,
+    }
+}
+
 pub(crate) fn bind_pattern(w: &mut Walk, p: &saule_ast::Pattern) {
     use saule_ast::Pattern as P;
     match p {
