@@ -57,6 +57,91 @@ pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
     (r.start, r.end.saturating_sub(r.start)).into()
 }
 
+/// Comparing two seeds for the thing that actually matters: whether an
+/// importer would analyse any differently against one than the other.
+///
+/// Not `PartialEq`, because that is not the question. A seed carries
+/// [`saule_ast::Param`]s, and a `Param` carries the span it occupied in the
+/// file it was declared in — so editing a function body shifts the spans of
+/// every declaration below it and makes two otherwise identical seeds
+/// compare unequal. Nothing reads those spans through a registry (they point
+/// into a *different* file's text than the one being analysed), and the
+/// difference between "the same" and "the same but three characters further
+/// down" is the difference between an editor that re-checks one file per
+/// keystroke and one that re-checks twenty.
+///
+/// Deliberately conservative wherever it cannot be exact: a variant's
+/// discriminant expression is compared with its span included, so an edit
+/// above a valued enum reports a change that isn't one. That costs work;
+/// the other kind of mistake would show stale diagnostics.
+impl ModuleSeed {
+    pub fn same_surface(&self, other: &ModuleSeed) -> bool {
+        same_map(&self.classes, &other.classes, same_class)
+            && self.interfaces == other.interfaces
+            && same_map(&self.interface_methods, &other.interface_methods, |a, b| {
+                same_map(a, b, same_method)
+            })
+            && same_map(&self.enums, &other.enums, same_enum)
+            && same_map(&self.functions, &other.functions, same_function)
+            && self.variables == other.variables
+            && self.wildcard_names == other.wildcard_names
+    }
+}
+
+fn same_map<V>(
+    a: &std::collections::HashMap<String, V>,
+    b: &std::collections::HashMap<String, V>,
+    eq: impl Fn(&V, &V) -> bool,
+) -> bool {
+    a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| eq(v, w)))
+}
+
+/// A parameter as an importer sees it: its name, its type, whether it is
+/// variadic, and whether it may be omitted. The default's *value* is the
+/// declaring file's business — every cross-file reader asks only whether
+/// there is one.
+fn same_params(a: &[saule_ast::Param], b: &[saule_ast::Param]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.name == y.name
+                && x.ty == y.ty
+                && x.variadic == y.variadic
+                && x.default.is_some() == y.default.is_some()
+        })
+}
+
+fn same_method(a: &MethodSig, b: &MethodSig) -> bool {
+    a.is_static == b.is_static
+        && a.is_private == b.is_private
+        && a.type_params == b.type_params
+        && a.return_ty == b.return_ty
+        && same_params(&a.params, &b.params)
+}
+
+fn same_function(a: &FunctionSig, b: &FunctionSig) -> bool {
+    a.type_params == b.type_params
+        && a.return_ty == b.return_ty
+        && same_params(&a.params, &b.params)
+}
+
+fn same_class(a: &ClassInfo, b: &ClassInfo) -> bool {
+    a.type_params == b.type_params
+        && a.parent == b.parent
+        && a.parent_args == b.parent_args
+        && a.implements == b.implements
+        && a.implements_args == b.implements_args
+        && a.members == b.members
+        && a.field_types == b.field_types
+        && same_map(&a.methods, &b.methods, same_method)
+}
+
+fn same_enum(a: &EnumInfo, b: &EnumInfo) -> bool {
+    a.type_params == b.type_params
+        && same_map(&a.variants, &b.variants, |x, y| {
+            same_params(&x.fields, &y.fields) && x.discriminant == y.discriminant
+        })
+}
+
 /// Pre-built class / interface / enum metadata to splice into the
 /// registry before analysing the current module. Used by embedders that
 /// can resolve `import` statements (the interpreter's module loader)
@@ -69,7 +154,12 @@ pub(crate) fn to_source_span(r: Range<usize>) -> miette::SourceSpan {
 /// `Clone` so embedders can memoise a seed across requests: building one
 /// means reading and parsing every reachable module, which the language
 /// server was doing on every keystroke.
-#[derive(Default, Debug, Clone)]
+/// `PartialEq` so the database can tell a rebuilt seed that came out the
+/// same from one that actually changed. Editing a function body in a
+/// widely-imported module rebuilds every importer's seed to an identical
+/// value; without the comparison every one of those importers would be
+/// re-analysed on every keystroke.
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct ModuleSeed {
     pub classes: ClassRegistry,
     pub interfaces: InterfaceRegistry,
