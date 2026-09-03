@@ -85,6 +85,17 @@ pub struct Backend {
     /// re-resolves every dependency, which is far too much to redo on each
     /// keystroke. Emptied whenever a `saule.config` changes.
     pub(crate) projects: DashMap<PathBuf, Option<saule_project::ProjectInfo>>,
+    /// The revision each path's diagnostics were last computed at, from
+    /// [`saule_db::Db::analysis_revision`].
+    ///
+    /// Editing a widely-imported file re-publishes every importer, because
+    /// a change there really can change what they say. Usually it does not:
+    /// the edit was inside a function body, and the importers' inputs come
+    /// out identical. This is what lets those be skipped — the database
+    /// already knows whether anything they read changed *value*, and
+    /// re-running semantic analysis and typechecking on 20 files per
+    /// keystroke to find out is the thing worth avoiding.
+    pub(crate) analysed_at: DashMap<PathBuf, u64>,
     /// Serialises the analyze→typeck phase across all documents — the
     /// thread-local registries those passes use are global per thread,
     /// so concurrent runs would race even on different files.
@@ -322,6 +333,7 @@ impl Backend {
             workspace_roots: Mutex::new(Vec::new()),
             project_info: Mutex::new(None),
             projects: DashMap::new(),
+            analysed_at: DashMap::new(),
             analysis_lock: Mutex::new(()),
             db: std::sync::Mutex::new(saule_db::Db::new()),
             watched_files_dynamic: Mutex::new(false),
