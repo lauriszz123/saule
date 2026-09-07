@@ -4,8 +4,8 @@
 #   curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
 #
 # Downloads the release archive for this machine from the Saule project's
-# GitLab package registry, verifies it against SHA256SUMS, and installs both
-# binaries into ~/.saule/bin.
+# GitHub releases, verifies it against SHA256SUMS, and installs both binaries
+# into ~/.saule/bin.
 #
 # POSIX sh throughout — no bash, no jq. It runs under dash, busybox ash and
 # whatever /bin/sh is on macOS, because `curl | sh` picks the shell and the
@@ -20,16 +20,14 @@
 
 set -eu
 
-# The one line to change if the project ever moves namespace. It is needed in
-# two spellings: the API addresses a project by an id or a *URL-encoded* path,
-# while anything a human is meant to click needs the ordinary slash.
-GITLAB_HOST="https://gitlab.com"
-GITLAB_PROJECT="lauriszz12313/saule"
-PACKAGE_NAME="saule"
+# The one line to change if the project ever moves namespace. Release assets
+# hang off the web host, not the API — `github.com/.../releases/download/...`
+# is a plain anonymous download with no rate limit on it.
+GITHUB_HOST="https://github.com"
+GITHUB_REPO="lauriszz123/saule"
 
-GITLAB_PROJECT_ENC="$(printf '%s' "$GITLAB_PROJECT" | sed 's|/|%2F|g')"
-API="$GITLAB_HOST/api/v4/projects/$GITLAB_PROJECT_ENC"
-WEB="$GITLAB_HOST/$GITLAB_PROJECT"
+WEB="$GITHUB_HOST/$GITHUB_REPO"
+API="https://api.github.com/repos/$GITHUB_REPO"
 
 say() { printf 'saule: %s\n' "$*"; }
 err() { printf 'saule: error: %s\n' "$*" >&2; exit 1; }
@@ -43,12 +41,20 @@ need() {
 # Both are told to fail loudly on a 404: the default for wget is to happily
 # write the error page to disk, which would then fail checksum verification
 # with a baffling message instead of a clear one.
+#
+# `fetch_final_url` reports where a redirect landed without downloading the
+# body — see `resolve_tag`. Only curl can do it portably, so the wget branch
+# declines and the caller falls back to the API.
 if command -v curl >/dev/null 2>&1; then
     fetch()  { curl -fsSL --proto '=https' --tlsv1.2 "$1" -o "$2"; }
     fetch_stdout() { curl -fsSL --proto '=https' --tlsv1.2 "$1"; }
+    fetch_final_url() {
+        curl -fsSL --proto '=https' --tlsv1.2 -o /dev/null -w '%{url_effective}' "$1"
+    }
 elif command -v wget >/dev/null 2>&1; then
     fetch()  { wget -q "$1" -O "$2"; }
     fetch_stdout() { wget -q "$1" -O -; }
+    fetch_final_url() { return 1; }
 else
     err "neither curl nor wget is available"
 fi
@@ -104,27 +110,42 @@ detect_triple() {
 }
 
 # ─── Which version? ─────────────────────────────────────────────────────────
-resolve_version() {
+# Releases are tagged `v26.7`, while the archives inside them carry the bare
+# `26.7`. Both spellings are needed, so this resolves the tag and `main`
+# strips the `v` off it.
+resolve_tag() {
     if [ -n "${SAULE_VERSION:-}" ]; then
-        printf '%s' "${SAULE_VERSION#v}"
+        printf 'v%s' "${SAULE_VERSION#v}"
         return
     fi
 
-    # The `permalink/latest` endpoint returns the newest release as JSON. The
-    # tag is pulled out with sed rather than jq so the installer has no
-    # dependencies beyond a downloader and tar.
-    #
-    # GitLab's unauthenticated API limit is per-IP but generous (hundreds per
-    # minute), unlike GitHub's 60/hour — which is how a whole office behind
-    # one NAT used to discover an installer was broken.
-    json="$(fetch_stdout "$API/releases/permalink/latest" 2>/dev/null || true)"
-    [ -n "$json" ] || err "could not reach $API/releases/permalink/latest — is the project public, and are you online?"
+    # `/releases/latest` is a redirect to `/releases/tag/vX.Y`, so the tag can
+    # be read straight out of the URL it settles on. That is deliberately not
+    # api.github.com: the API allows 60 unauthenticated requests an hour per
+    # IP, and a whole office behind one NAT can spend them between them — at
+    # which point the installer looks broken to everybody there. The redirect
+    # is served by the web host and is not rate limited.
+    url="$(fetch_final_url "$WEB/releases/latest" 2>/dev/null || true)"
+    tag="${url##*/tag/}"
+    case "$tag" in
+        v[0-9]*)
+            printf '%s' "$tag"
+            return
+            ;;
+    esac
 
-    v="$(printf '%s' "$json" \
-        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' \
+    # wget cannot report where a redirect went, so it pays the API's limit.
+    # sed rather than jq, so the installer needs nothing but a downloader.
+    json="$(fetch_stdout "$API/releases/latest" 2>/dev/null || true)"
+    [ -n "$json" ] || err "could not resolve the latest release from $WEB/releases.
+    Are you online, and does the project have a published release yet?
+    Set SAULE_VERSION to install a specific one."
+
+    tag="$(printf '%s' "$json" \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         | head -1)"
-    [ -n "$v" ] || err "could not parse a version out of the latest release. Set SAULE_VERSION to install a specific one."
-    printf '%s' "$v"
+    [ -n "$tag" ] || err "could not read a tag from the latest release. Set SAULE_VERSION to install a specific one."
+    printf '%s' "$tag"
 }
 
 # ─── Verification ───────────────────────────────────────────────────────────
@@ -187,11 +208,12 @@ add_to_rc() {
 # ─── Install ────────────────────────────────────────────────────────────────
 main() {
     triple="$(detect_triple)"
-    version="$(resolve_version)"
+    tag="$(resolve_tag)"
+    version="${tag#v}"
     saule_home="${SAULE_HOME:-$HOME/.saule}"
 
     archive="saule-$version-$triple.tar.gz"
-    base="$API/packages/generic/$PACKAGE_NAME/$version"
+    base="$WEB/releases/download/$tag"
 
     say "installing Saule $version for $triple"
 
@@ -205,7 +227,7 @@ main() {
     say "downloading $archive"
     fetch "$base/$archive" "$archive" \
         || err "could not download $archive.
-    Is $version a published release for $triple? See $WEB/-/releases"
+    Is $version a published release for $triple? See $WEB/releases"
     fetch "$base/SHA256SUMS" SHA256SUMS \
         || err "could not download SHA256SUMS — refusing to install unverified binaries"
 

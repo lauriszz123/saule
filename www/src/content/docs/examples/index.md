@@ -24,10 +24,10 @@ clone and run.
 
 ## Also in the repository
 
-- [`examples/UI Project`](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/UI%20Project)
-- [`examples/json`](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/json)
-- [`examples/json_usage`](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/json_usage)
-- [`examples/markdown`](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/markdown)
-- [`examples/md-viewer`](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/md-viewer)
-- [`examples/native-package`](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/native-package)
-- [`examples/uikit`](https://gitlab.com/lauriszz12313/saule/-/tree/main/examples/uikit)
+- [`examples/UI Project`](https://github.com/lauriszz123/saule/tree/main/examples/UI%20Project)
+- [`examples/json`](https://github.com/lauriszz123/saule/tree/main/examples/json)
+- [`examples/json_usage`](https://github.com/lauriszz123/saule/tree/main/examples/json_usage)
+- [`examples/markdown`](https://github.com/lauriszz123/saule/tree/main/examples/markdown)
+- [`examples/md-viewer`](https://github.com/lauriszz123/saule/tree/main/examples/md-viewer)
+- [`examples/native-package`](https://github.com/lauriszz123/saule/tree/main/examples/native-package)
+- [`examples/uikit`](https://github.com/lauriszz123/saule/tree/main/examples/uikit)
