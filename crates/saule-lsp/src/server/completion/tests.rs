@@ -29,6 +29,7 @@ fn complete(marked: &str) -> Vec<String> {
         return Vec::new();
     };
     let items = match &found.ctx {
+        Ctx::Member(recv) => member_items(recv, &found),
         Ctx::BaseClass { exclude } => class_items(exclude),
         Ctx::Interfaces { exclude } => interface_items(exclude),
         Ctx::TypeName => type_items(),
@@ -1298,4 +1299,120 @@ fn a_for_header_offers_in() {
     // Committed: `in` has no second place to go, and neither form wants it.
     not_in("for x in items @");
     not_in("for i = 1, 10 @");
+}
+
+// ── loop variables and match payloads ───────────────────────────────────────
+
+/// A class with members worth offering, reached only through a loop variable
+/// bound from a match arm's payload — the chain from `examples/markdown`.
+const PAYLOAD: &str = "\
+class ListItem
+    local blocks: table<string>
+    fn init(blocks: table<string>)
+        self.blocks = blocks
+    end
+    fn getBlocks() -> table<string>
+        return self.blocks
+    end
+end
+enum Block
+    List(ordered: boolean, items: table<ListItem>),
+    Rule
+end
+";
+
+/// A `for` binding takes its type from what the iterable yields. The
+/// annotation is optional and almost never written, so without this every
+/// loop variable is untyped and `item.` answers nothing.
+#[test]
+fn a_loop_variable_is_typed_by_its_iterable() {
+    let src = format!(
+        "{PAYLOAD}fn go(items: table<ListItem>)\n    for item in items do\n        item.@\n    end\nend\n"
+    );
+    assert_eq!(complete(&src), vec!["getBlocks"]);
+
+    // …and is *named* with that type, so the rest of the arm can use it.
+    let src = format!(
+        "{PAYLOAD}fn go(items: table<ListItem>)\n    for item in items do\n        ite@\n    end\nend\n"
+    );
+    assert_eq!(
+        detail_of(&src, "item"),
+        Some(Some("loop variable: ListItem".into()))
+    );
+}
+
+/// A `table<K, V>` with two bindings yields both, and an array's implicit key
+/// is an `integer` — the same rule the checker applies.
+#[test]
+fn a_two_variable_loop_yields_key_and_value() {
+    let both = format!(
+        "{PAYLOAD}fn go(m: table<string, ListItem>)\n    for k, v in m do\n        @\n    end\nend\n"
+    );
+    assert_eq!(
+        detail_of(&both, "k"),
+        Some(Some("loop variable: string".into()))
+    );
+    assert_eq!(
+        detail_of(&both, "v"),
+        Some(Some("loop variable: ListItem".into()))
+    );
+
+    let array = format!(
+        "{PAYLOAD}fn go(items: table<ListItem>)\n    for i, item in items do\n        @\n    end\nend\n"
+    );
+    assert_eq!(
+        detail_of(&array, "i"),
+        Some(Some("loop variable: integer".into()))
+    );
+    assert_eq!(
+        detail_of(&array, "item"),
+        Some(Some("loop variable: ListItem".into()))
+    );
+}
+
+/// A written annotation still wins over what the iterable yields.
+#[test]
+fn an_annotated_loop_variable_keeps_its_annotation() {
+    let src = format!(
+        "{PAYLOAD}fn go(items: table<ListItem>)\n    for item: string in items do\n        @\n    end\nend\n"
+    );
+    assert_eq!(
+        detail_of(&src, "item"),
+        Some(Some("loop variable: string".into()))
+    );
+}
+
+/// A match arm's payload bindings are typed by the variant that declares
+/// them — which is what makes the loop above have anything to iterate.
+#[test]
+fn a_match_payload_binding_is_typed_by_its_variant() {
+    let src = format!(
+        "{PAYLOAD}fn go(b: Block)\n    match b\n        case Block.List(ordered, items) then\n            @\n    end\nend\n"
+    );
+    assert_eq!(
+        detail_of(&src, "items"),
+        Some(Some("pattern binding: table<ListItem>".into()))
+    );
+    assert_eq!(
+        detail_of(&src, "ordered"),
+        Some(Some("pattern binding: boolean".into()))
+    );
+}
+
+/// The whole chain, as reported: a payload binding, iterated, and a member
+/// off the loop variable.
+#[test]
+fn a_payload_binding_can_be_looped_over() {
+    let src = format!(
+        "{PAYLOAD}fn go(b: Block)\n    match b\n        case Block.List(ordered, items) then\n            for item in items do\n                item.@\n            end\n    end\nend\n"
+    );
+    assert_eq!(complete(&src), vec!["getBlocks"]);
+}
+
+/// An iterable nothing can resolve leaves the binding untyped rather than
+/// guessing — the previous behaviour, kept for everything else.
+#[test]
+fn an_unresolvable_iterable_leaves_the_binding_untyped() {
+    let src = format!("{PAYLOAD}fn go(x: any)\n    for item in x do\n        @\n    end\nend\n");
+    assert_eq!(detail_of(&src, "item"), Some(Some("loop variable".into())));
 }

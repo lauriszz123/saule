@@ -5,8 +5,7 @@ import sauleGrammar from './src/lib/saule-grammar.mjs';
 // GitHub Pages serves this site at https://lauriszz123.github.io/saule/, so
 // every generated URL needs the `/saule` prefix. Both this config and the
 // `sync-docs` script read it from one place — see site.config.mjs for what
-// changes if a custom domain is added later. Note that the *code* lives on
-// GitLab; only the published site is still served from GitHub.
+// changes if a custom domain is added later.
 import { site, base, repo, editBase } from './site.config.mjs';
 
 export default defineConfig({
@@ -24,7 +23,7 @@ export default defineConfig({
 				replacesTitle: false,
 			},
 			favicon: '/favicon.svg',
-			social: [{ icon: 'gitlab', label: 'GitLab', href: repo }],
+			social: [{ icon: 'github', label: 'GitHub', href: repo }],
 			editLink: {
 				baseUrl: editBase,
 			},

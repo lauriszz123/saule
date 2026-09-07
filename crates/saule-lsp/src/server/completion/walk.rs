@@ -174,6 +174,58 @@ impl Walk {
         self.bind_init(name, ty, None, kind);
     }
 
+    /// What `for … in iter` hands each of its `count` loop variables.
+    ///
+    /// The same rule the checker applies: a `table<V>` yields `V`, and with
+    /// two variables a `table<K, V>` yields `K` and `V` — an array's implicit
+    /// key being `integer`. Anything else yields nothing rather than a guess.
+    fn yielded_by(&self, iter: &Spanned<Expr>, count: usize) -> Vec<Option<Type>> {
+        let none = vec![None; count];
+        let Some(Type::Table { key, value }) = self.type_of(&iter.value) else {
+            return none;
+        };
+        match count {
+            1 => vec![Some(*value)],
+            2 => vec![
+                Some(key.map(|k| *k).unwrap_or(Type::Named("integer".into()))),
+                Some(*value),
+            ],
+            _ => none,
+        }
+    }
+
+    /// The declared type of an expression, for the shapes a loop iterates
+    /// over in practice: a binding in scope, and `self.field` inside a
+    /// method. Deliberately narrow — this exists to name a container so its
+    /// element type can be read out, not to re-implement inference.
+    fn type_of(&self, expr: &Expr) -> Option<Type> {
+        let ty = match expr {
+            Expr::Ident(n) => self
+                .scope
+                .iter()
+                .rev()
+                .find(|v| &v.name == n)
+                .and_then(|v| v.ty.clone()),
+            Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
+                let class = match &obj.value {
+                    Expr::Self_ => self.class.clone(),
+                    _ => match self.type_of(&obj.value) {
+                        Some(Type::Named(c)) => Some(c),
+                        _ => None,
+                    },
+                }?;
+                saule_semantic::registry::lookup_field_type(&class, name)
+            }
+            _ => None,
+        }?;
+        // A nullable iterable is a bug the checker reports; completion still
+        // has to answer for what is inside it.
+        Some(match ty {
+            Type::Nullable(inner) => *inner,
+            other => other,
+        })
+    }
+
     fn bind_init(&mut self, name: &str, ty: Option<Type>, init: Option<Expr>, kind: &'static str) {
         if name != SENTINEL {
             self.scope.push(Visible {
@@ -314,8 +366,14 @@ impl Walk {
                 }
                 self.expr(iter);
                 let mark = self.scope.len();
-                for (n, ty) in vars {
-                    self.bind(n, ty.clone(), "loop variable");
+                // An annotation is optional and almost never written, so
+                // without this a loop variable has no type at all and
+                // `item.` offers nothing. What the loop yields is decided by
+                // the iterable, exactly as the checker decides it.
+                let yielded = self.yielded_by(iter, vars.len());
+                for (i, (n, ty)) in vars.iter().enumerate() {
+                    let ty = ty.clone().or_else(|| yielded.get(i).cloned().flatten());
+                    self.bind(n, ty, "loop variable");
                 }
                 self.block(body);
                 self.scope.truncate(mark);
@@ -792,8 +850,24 @@ pub(crate) fn bind_pattern(w: &mut Walk, p: &saule_ast::Pattern) {
     use saule_ast::Pattern as P;
     match p {
         P::Bind(n) => w.bind(n, None, "pattern binding"),
-        P::Variant { fields, .. } => {
-            for f in fields {
+        P::Variant {
+            enum_name,
+            variant,
+            fields,
+        } => {
+            // A payload binding is typed by the variant that declares it:
+            // `case Block.List(ordered, start, tight, items)` binds `items`
+            // at `table<ListItem>`. Without this the whole arm's bindings are
+            // untyped, and nothing derived from them — a loop over `items`,
+            // a member off one of them — can be answered either.
+            for (i, f) in fields.iter().enumerate() {
+                if let P::Bind(n) = &f.value {
+                    let ty = saule_semantic::registry::with_enums(|r| {
+                        r.get(enum_name)?.variants.get(variant)?.field_ty(i).cloned()
+                    });
+                    w.bind(n, ty, "pattern binding");
+                    continue;
+                }
                 bind_pattern(w, &f.value);
             }
         }

@@ -6,7 +6,7 @@
  * an optimisation — it is the only way to stop a running program, because a
  * wasm module cannot be interrupted from the outside. See `saule-worker.ts`.
  *
- * The module is ~1.1 MB (~333 KB gzipped) and is fetched lazily: the worker
+ * The module is ~1.9 MB (~590 KB gzipped) and is fetched lazily: the worker
  * is not spawned until the first run, so opening `/play/` costs nothing extra
  * until someone presses Run.
  */
