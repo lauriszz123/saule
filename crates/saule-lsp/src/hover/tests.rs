@@ -3295,6 +3295,25 @@ local d = make()
     );
 }
 
+/// A safe call on a stdlib value type is typed by the method it reaches,
+/// with the chain's own nullability on top — `File.read` is `string?`, and
+/// `?.` cannot make it any more nullable than it already is.
+#[test]
+fn a_safe_call_is_typed_by_the_method_it_reaches() {
+    let src = "\
+class Main
+  static fn main()
+    local file = Io.open(\"x\", IoMode.Read)
+    local content = file?.read()
+  end
+end
+";
+    assert_eq!(
+        hover_src_at(src, "local content =", "local ".len()).as_deref(),
+        Some("```saule\n(local) content: string?\n```")
+    );
+}
+
 /// A body whose returns this pass cannot type keeps the `any` it had — the
 /// failure mode is silence, not a wrong answer.
 #[test]

@@ -2269,6 +2269,47 @@ end
     );
 }
 
+/// `recv?.method()` is typed by the method it reaches, with the chain's
+/// own nullability on top. Before this the call inferred as "no type",
+/// which meant nothing downstream of a safe call was checked at all.
+#[test]
+fn a_safe_call_is_typed_by_the_method_it_reaches() {
+    accepts(
+        "\
+class Box
+  fn name() -> string
+    return \"b\"
+  end
+end
+
+fn go(b: Box?)
+  local n: string? = b?.name()
+end
+",
+    );
+}
+
+/// The other half of that: the `?` is not decoration. A safe call can
+/// yield nil however total the method is, so its result does not satisfy
+/// a non-nullable annotation.
+#[test]
+fn rejects_a_safe_call_assigned_to_a_non_nullable() {
+    rejects(
+        "\
+class Box
+  fn name() -> string
+    return \"b\"
+  end
+end
+
+fn go(b: Box?)
+  local n: string = b?.name()
+end
+",
+        "string",
+    );
+}
+
 /// A top-level `fn` is inferred the same way, and an unannotated one whose
 /// body returns a constructor call really does produce that class.
 #[test]
