@@ -638,3 +638,22 @@ end
         );
     }
 }
+
+/// A call on a nullable receiver is typed by the method it reaches —
+/// through `.` on an unwrapped value and through `?.` on the nullable
+/// itself, which only adds back the nullability the chain already has.
+#[test]
+fn type_hint_for_a_call_on_a_stdlib_value_type() {
+    init_stdlib();
+    let src = "class Main\n  static fn main()\n    local file = Io.open(\"x\", IoMode.Read)\n    local content = file?.read()\n    local forced = file!.read()\n  end\nend\n";
+    let hints = raw_hints(src);
+    let types: Vec<&String> = hints
+        .iter()
+        .filter(|(k, _, _)| *k == InlayHintKind::TYPE)
+        .map(|(_, _, l)| l)
+        .collect();
+    assert!(
+        types.iter().filter(|l| *l == &": string?").count() == 2,
+        "expected both reads hinted `: string?`, got {hints:?}"
+    );
+}

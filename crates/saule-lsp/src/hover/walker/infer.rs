@@ -118,18 +118,15 @@ impl<'a> Cx<'a> {
                 // module. Resolve the receiver's class, then chase the
                 // method's registered return type.
                 if let Expr::Member { obj, name } = &callee.value {
-                    let class = self.receiver_class(&obj.value)?;
-                    if let Some(sig) = lookup_method(&class, name) {
-                        let arg_types = self.positional_arg_types(args);
-                        return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
-                    }
-                    let qname = format!("{class}.{name}");
-                    if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
-                        let arg_types = self.positional_arg_types(args);
-                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
-                            .into_iter()
-                            .next();
-                    }
+                    return self.member_call_type(&obj.value, name, args);
+                }
+                // `recv?.method(args)` — the same lookup, made nullable
+                // because the whole chain yields nil when the receiver
+                // does. Without this arm a safe call resolved to nothing
+                // and the binding it initialised fell back to `any`.
+                if let Expr::SafeMember { obj, name } = &callee.value {
+                    let inner = self.member_call_type(&obj.value, name, args)?;
+                    return Some(Type::Nullable(Box::new(strip_nullable_type(inner))));
                 }
                 None
             }
@@ -217,6 +214,28 @@ impl<'a> Cx<'a> {
             Expr::Bool(_) => Some(Type::Named("boolean".into())),
             Expr::Nil => Some(Type::Nullable(Box::new(Type::Named("any".into())))),
         }
+    }
+
+    /// Return type of `recv.method(args)` — a user class method first,
+    /// then the native signature registry, which is where a stdlib value
+    /// type like `File` keeps its instance methods. Shared by the plain
+    /// and safe call arms so `?.` cannot drift from `.`.
+    pub(crate) fn member_call_type(
+        &self,
+        obj: &Expr,
+        name: &str,
+        args: &[CallArg],
+    ) -> Option<Type> {
+        let class = self.receiver_class(obj)?;
+        if let Some(sig) = lookup_method(&class, name) {
+            let arg_types = self.positional_arg_types(args);
+            return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
+        }
+        let sig = saule_typeck::sigs::lookup(&format!("{class}.{name}"))?;
+        let arg_types = self.positional_arg_types(args);
+        saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+            .into_iter()
+            .next()
     }
 
     /// Best-effort return type of an unannotated expression-bodied

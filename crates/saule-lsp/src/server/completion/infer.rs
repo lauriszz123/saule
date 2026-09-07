@@ -85,19 +85,27 @@ pub(crate) fn infer_d(expr: &Expr, found: &Found, depth: usize) -> Option<Recv> 
             Expr::Ident(n) => sig_return(&sigs::lookup(n)?)
                 .and_then(named)
                 .map(Recv::Instance),
-            Expr::Member { obj, name } => match infer_d(&obj.value, found, depth + 1)? {
-                Recv::Module(m) => sig_return(&sigs::lookup(&format!("{m}.{name}"))?)
-                    .and_then(named)
-                    .map(Recv::Instance),
-                Recv::Instance(c) | Recv::Static(c) | Recv::SelfClass(c) => {
-                    lookup_method(&c, name)?
-                        .return_ty
-                        .as_ref()
-                        .and_then(class_of)
-                        .map(Recv::Instance)
+            // `recv.method().` and `recv?.method().` chase the same
+            // return type — a safe call only adds nullability, and
+            // `class_of` looks straight through that.
+            Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
+                match infer_d(&obj.value, found, depth + 1)? {
+                    Recv::Module(m) => sig_return(&sigs::lookup(&format!("{m}.{name}"))?)
+                        .and_then(named)
+                        .map(Recv::Instance),
+                    Recv::Instance(c) | Recv::Static(c) | Recv::SelfClass(c) => {
+                        match lookup_method(&c, name) {
+                            Some(m) => m.return_ty.as_ref().and_then(class_of).map(Recv::Instance),
+                            // A stdlib value type keeps its instance
+                            // methods in the native registry instead.
+                            None => sig_return(&sigs::lookup(&format!("{c}.{name}"))?)
+                                .and_then(named)
+                                .map(Recv::Instance),
+                        }
+                    }
+                    Recv::Enum(_) => None,
                 }
-                Recv::Enum(_) => None,
-            },
+            }
             _ => None,
         },
         // `maybe!.` — force-unwrap keeps the underlying type.
