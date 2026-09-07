@@ -7,6 +7,14 @@ export class Markdown
         local normalized = String.replace(source, '\r', '')
         local lines = String.split(normalized, '\n')
 
+        for line in lines do
+            if String.trim(line) == '' then
+                continue
+            end
+
+            Table.insert(blocks, Block.Paragraph({Inline.Text(String.trim(line))}))
+        end
+
         return Document(blocks, {})
     end
 end

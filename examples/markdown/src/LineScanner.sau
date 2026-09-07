@@ -1,0 +1,26 @@
+export class LineScanner
+    local lines: table<string>
+    local pos: integer
+
+    fn init(source: string)
+        local normalized = String.replace(source, '\r', '')
+        self.lines = String.split(normalized, '\n')
+        self.pos = 1
+    end
+
+    fn eof()
+        return self.pos > #self.lines
+    end
+
+    fn peek(offset: integer = 0) -> string?
+        local at = self.pos + offset
+
+        if at < 1 or at > #self
+    end
+
+    fn next()
+    end
+
+    fn skipBlank()
+    end
+end
