@@ -49,7 +49,7 @@ end
 
 class Main
     static fn main()
-        local path = Os.args()[1] ?? "README.md"
+        local path = Os.args()[1] ?? "../../md-viewer/docs/README.md"
         local file = Io.open(path, IoMode.Read)
         local content = file?.read('a')
         file?.close()

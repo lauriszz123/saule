@@ -120,13 +120,14 @@ pub(crate) struct CheckArgs {
     pub dump_type_coverage: bool,
 }
 
-/// `saule run [TARGET] [-- ARGS...]`
+/// `saule run [TARGET] [ARGS...] [-- ARGS...]`
 ///
 /// Exactly one thing decides project mode from single-file mode: whether
-/// `TARGET` is a directory. Everything after `--` is script argv and is
-/// never interpreted by the CLI, which is what lets a project take a
-/// filename of its own (`saule run -- input.bf`) without the CLI trying to
-/// parse it as Saule.
+/// `TARGET` is a directory. The first positional is that target and every
+/// one after it is script argv. Everything after `--` is script argv too
+/// and is never interpreted by the CLI, which is what lets a project take
+/// a filename of its own (`saule run -- input.bf`) without the CLI trying
+/// to parse it as the target.
 #[derive(Debug, Args)]
 #[command(
     about = "Run a project or a single source file",
@@ -136,19 +137,38 @@ Run a project or a single source file.
   saule run                  the project in the current directory
   saule run <dir>            the project rooted at <dir>
   saule run <file.sau>       that file, on its own
+  saule run <file> a b       that file, with Os.args() = [\"a\", \"b\"]
   saule run -- a b           the current project, with Os.args() = [\"a\", \"b\"]
-  saule run <file> -- a b    that file, with Os.args() = [\"a\", \"b\"]
+  saule run <file> -- -v     that file, with a script argument starting `-`
 
 TARGET picks project mode when it is a directory (or absent) and single-file
-mode when it is a file. Arguments for the script go after `--`, are passed
-through verbatim, and may start with `-`."
+mode when it is a file. The first positional is the target; every positional
+after it is script argv. Use `--` to give argv to the project in the current
+directory, or to pass an argument that starts with `-`."
 )]
 pub(crate) struct RunArgs {
     /// Project directory or `.sau` file. Defaults to the current directory.
     #[arg(value_name = "TARGET", value_parser = path_arg)]
     pub target: Option<PathBuf>,
 
-    /// Arguments forwarded to the script's `Os.args()`.
+    /// Arguments written straight after the target, without a `--`.
+    ///
+    /// The first positional is the target and every one after it is script
+    /// argv, which is unambiguous and is how `python`, `node` and `lua` all
+    /// read their own command lines. Requiring the separator for the
+    /// ordinary case — `saule run tool.sau input.md` — turned the common
+    /// invocation into an error and the rare one into the only spelling.
+    ///
+    /// An argument that starts with `-` still needs `--` before it, since
+    /// otherwise it is this command's own flag.
+    #[arg(value_name = "ARGS")]
+    pub trailing: Vec<String>,
+
+    /// Arguments forwarded to the script's `Os.args()`, after a `--`.
+    ///
+    /// Still the way to give argv to the *project* in the current directory
+    /// (`saule run -- input.bf`, where the filename must not be read as the
+    /// target), and the only way to pass one that begins with `-`.
     #[arg(last = true, allow_hyphen_values = true, value_name = "ARGS")]
     pub args: Vec<String>,
 
@@ -189,6 +209,18 @@ pub(crate) struct RunArgs {
     /// optimisation is aimed at.
     #[arg(long = "profile-bytecode", conflicts_with = "interp")]
     pub profile_bytecode: bool,
+}
+
+impl RunArgs {
+    /// Everything the script sees as `Os.args()`.
+    ///
+    /// The two spellings concatenate in the order they were written, so
+    /// `saule run t.sau a -- -v` reaches the script as `["a", "-v"]`.
+    pub fn script_args(&self) -> Vec<String> {
+        let mut out = self.trailing.clone();
+        out.extend(self.args.iter().cloned());
+        out
+    }
 }
 
 /// `saule init <name>`

@@ -1,0 +1,80 @@
+local fn isProsePunctuation(code: integer)
+    if code == 171 or code == 187 then
+        return true
+    end
+    if code == 183 or code == 8226 then
+        return true
+    end
+    if code == 8211 or code == 8212 then
+        return true
+    end
+    if code >= 8216 and code <= 8221 then
+        return true
+    end
+    if code == 8230 then
+        return true
+    end
+
+    return false
+end
+
+local fn keeps(code: integer)
+    if code >= 97 and code <= 122 then
+        return true
+    end
+    if code >= 48 and code <= 57 then
+        return true
+    end
+    if code == 45 or code == 95 then
+        return true
+    end
+
+    if code > 127 then
+        return not isProsePunctuation(code)
+    end
+
+    return false
+end
+
+local fn normalize(text: string)
+    local lowered: string = String.lower(String.trim(text))
+    local out: string = ""
+
+    for ch in String.iter(lowered) do
+        local code = String.byte(ch, 1) ?? 0
+
+        if code == 32 or code == 9 then
+            out = out .. '-'
+        elseif keeps(code) then
+            out = out .. ch
+        end
+    end
+
+    return out
+end
+
+export class Slugger
+    local seen: table<string, integer>
+
+    fn init()
+        self.seen = {}
+    end
+
+    fn slug(text: string)
+        local base = normalize(text)
+
+        if base == '' then
+            base = "section"
+        end
+
+        local hits = self.seen[base] ?? 0
+
+        self.seen[base] = hits + 1
+
+        if hits == 0 then
+            return base
+        end
+
+        return base .. '-' .. hits
+    end
+end

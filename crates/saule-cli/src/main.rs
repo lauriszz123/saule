@@ -112,8 +112,8 @@ fn real_main() {
 ///
 /// The only question asked is whether the target is a directory. Nothing
 /// sniffs file extensions and nothing probes for a `saule.config` to guess
-/// the user's intent — script arguments have their own place, after `--`,
-/// so there is nothing left to disambiguate.
+/// the user's intent: the first positional is the target and every one
+/// after it is script argv, so there is nothing left to disambiguate.
 fn cmd_run(args: RunArgs) {
     // `--profile-bytecode` selects the VM explicitly, not merely by
     // default: a profile of a program that fell back to the tree-walker is
@@ -130,7 +130,7 @@ fn cmd_run(args: RunArgs) {
         }
         saule_vm::profile::enable();
     }
-    saule_interpreter::stdlib::os::set_script_args(args.args);
+    saule_interpreter::stdlib::os::set_script_args(args.script_args());
 
     match args.target {
         None => project::run_project(Path::new(".")),
@@ -222,7 +222,7 @@ mod tests {
         // that takes a filename of its own must not have it parsed as Saule.
         let parsed = run_args(&["saule", "run", "--", "input.bf"]);
         assert_eq!(parsed.target, None);
-        assert_eq!(parsed.args, vec!["input.bf"]);
+        assert_eq!(parsed.script_args(), vec!["input.bf"]);
     }
 
     #[test]
@@ -240,10 +240,30 @@ mod tests {
     }
 
     #[test]
-    fn a_second_bare_positional_is_an_error_not_a_guess() {
-        // Previously this silently became "run the project, forward both
-        // words". Ambiguity is now reported instead of resolved by heuristic.
-        assert!(Cli::try_parse_from(["saule", "run", "a", "b"]).is_err());
+    fn positionals_after_the_target_are_script_argv() {
+        // `saule run tool.sau input.md`, the way every other script runner
+        // is invoked. The first positional is the target and the rest are
+        // argv, so nothing is guessed — an older heuristic that ignored the
+        // target and forwarded *both* words is what this replaced.
+        let parsed = run_args(&["saule", "run", "tool.sau", "input.md"]);
+        assert_eq!(parsed.target, Some(PathBuf::from("tool.sau")));
+        assert_eq!(parsed.script_args(), vec!["input.md"]);
+    }
+
+    #[test]
+    fn both_argv_spellings_concatenate_in_order() {
+        let parsed = run_args(&["saule", "run", "t.sau", "a", "--", "-v"]);
+        assert_eq!(parsed.target, Some(PathBuf::from("t.sau")));
+        assert_eq!(parsed.script_args(), vec!["a", "-v"]);
+    }
+
+    #[test]
+    fn a_flag_after_the_target_is_still_this_commands_flag() {
+        // Without a `--` a leading `-` belongs to `saule run`, so selecting
+        // the engine keeps working wherever it is written.
+        let parsed = run_args(&["saule", "run", "t.sau", "--interp"]);
+        assert!(parsed.interp);
+        assert!(parsed.script_args().is_empty());
     }
 
     #[test]

@@ -21,6 +21,45 @@ pub(crate) struct Visible {
     pub(crate) kind: &'static str,
 }
 
+/// The block a statement position sits directly inside, which decides
+/// which keywords can continue or close it.
+///
+/// `else` is only a word inside an `if`, `until` only inside a `repeat`,
+/// `catch` only inside a `try`. Offering them from the flat statement list
+/// would put them everywhere they are invalid; leaving them out, as it did,
+/// means the block keywords are the one part of the language completion
+/// never helps with — and they are among the most-typed words in it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Block {
+    /// The module's top level, closed by nothing.
+    Module,
+    /// An `if` or `elseif` branch: both `elseif` and `else` may still follow.
+    IfBranch,
+    /// A `repeat` body, closed by `until` rather than `end`.
+    Repeat,
+    /// A `try` body, which continues into its `catch`.
+    Try,
+    /// Everything else that `end` closes — `else`, a loop body, a `catch`,
+    /// a function, a method, a `match` arm.
+    Ended,
+}
+
+impl Block {
+    /// The keywords that can be written where this block's statements go,
+    /// each with what it does to the block.
+    pub(crate) fn keywords(self) -> &'static [(&'static str, &'static str)] {
+        const CONT: &str = "continues this block";
+        const CLOSE: &str = "closes this block";
+        match self {
+            Block::Module => &[],
+            Block::IfBranch => &[("elseif", CONT), ("else", CONT), ("end", CLOSE)],
+            Block::Repeat => &[("until", CLOSE)],
+            Block::Try => &[("catch", CONT)],
+            Block::Ended => &[("end", CLOSE)],
+        }
+    }
+}
+
 pub(crate) enum Ctx {
     /// `receiver.<caret>` — the receiver expression.
     Member(Spanned<Expr>),
@@ -79,6 +118,10 @@ pub(crate) struct Found {
     /// place the next arm starts, and the tree cannot tell which one is
     /// being written — so both are offered.
     pub(crate) match_arm: bool,
+    /// The block the caret's statement sits directly inside, so the
+    /// keywords that continue or close it can be offered alongside the
+    /// ones that begin a fresh statement.
+    pub(crate) block: Block,
 }
 
 /// Descends the tree to the sentinel, maintaining the scope stack.
@@ -103,6 +146,9 @@ pub(crate) struct Walk {
     /// Whether the statement position currently being walked sits inside a
     /// `match`. Saved and restored around each arm body.
     match_arm: bool,
+    /// The block currently being walked. Saved and restored around each
+    /// one the same way, so a nested block's keywords shadow its parent's.
+    block: Block,
 }
 
 impl Walk {
@@ -143,6 +189,7 @@ impl Walk {
             named_params: Vec::new(),
             expected: None,
             match_arm: false,
+            block: Block::Module,
         };
         w.block(&module.stmts);
         w.found
@@ -166,6 +213,7 @@ impl Walk {
                 named_params: std::mem::take(&mut self.named_params),
                 expected: self.expected.clone(),
                 match_arm: self.match_arm,
+                block: self.block,
             });
         }
     }
@@ -240,6 +288,14 @@ impl Walk {
     /// Walk a block, adding each statement's bindings only *after* visiting it
     /// — so a `local` is not visible inside its own initialiser, and names
     /// declared later in the block are not offered at the caret.
+    /// Walk `stmts` as the body of a `kind` block, restoring the enclosing
+    /// block afterwards so a nested one cannot leak its keywords outward.
+    fn block_of(&mut self, kind: Block, stmts: &[Spanned<Stmt>]) {
+        let outer = std::mem::replace(&mut self.block, kind);
+        self.block(stmts);
+        self.block = outer;
+    }
+
     fn block(&mut self, stmts: &[Spanned<Stmt>]) {
         let mark = self.scope.len();
         let mut after_match = false;
@@ -326,21 +382,23 @@ impl Walk {
                 else_block,
             } => {
                 self.expr(cond);
-                self.block(then_block);
+                // A branch that `else`/`elseif` can still follow; the final
+                // `else` cannot be followed by either, only closed.
+                self.block_of(Block::IfBranch, then_block);
                 for (c, b) in elseifs {
                     self.expr(c);
-                    self.block(b);
+                    self.block_of(Block::IfBranch, b);
                 }
                 if let Some(b) = else_block {
-                    self.block(b);
+                    self.block_of(Block::Ended, b);
                 }
             }
             Stmt::While { cond, body } => {
                 self.expr(cond);
-                self.block(body);
+                self.block_of(Block::Ended, body);
             }
             Stmt::Repeat { body, cond } => {
-                self.block(body);
+                self.block_of(Block::Repeat, body);
                 self.expr(cond);
             }
             Stmt::ForNumeric {
@@ -357,7 +415,7 @@ impl Walk {
                 self.opt_expr(step.as_ref());
                 let mark = self.scope.len();
                 self.bind(var, var_ty.clone(), "loop variable");
-                self.block(body);
+                self.block_of(Block::Ended, body);
                 self.scope.truncate(mark);
             }
             Stmt::ForIn { vars, iter, body } => {
@@ -375,7 +433,7 @@ impl Walk {
                     let ty = ty.clone().or_else(|| yielded.get(i).cloned().flatten());
                     self.bind(n, ty, "loop variable");
                 }
-                self.block(body);
+                self.block_of(Block::Ended, body);
                 self.scope.truncate(mark);
             }
             Stmt::Try {
@@ -384,11 +442,11 @@ impl Walk {
                 catch_ty,
                 catch_body,
             } => {
-                self.block(body);
+                self.block_of(Block::Try, body);
                 self.ty(Some(catch_ty));
                 let mark = self.scope.len();
                 self.bind(catch_var, Some(catch_ty.clone()), "caught error");
-                self.block(catch_body);
+                self.block_of(Block::Ended, catch_body);
                 self.scope.truncate(mark);
             }
             Stmt::Decl(d) => self.decl(&d.value),
@@ -410,7 +468,7 @@ impl Walk {
                 for p in params {
                     self.bind(&p.name, Some(p.ty.clone()), "parameter");
                 }
-                self.block(body);
+                self.block_of(Block::Ended, body);
                 self.scope.truncate(mark);
             }
             Decl::Class {
@@ -462,7 +520,7 @@ impl Walk {
                             for p in &method.params {
                                 self.bind(&p.name, Some(p.ty.clone()), "parameter");
                             }
-                            self.block(&method.body);
+                            self.block_of(Block::Ended, &method.body);
                             self.scope.truncate(mark);
                         }
                     }
@@ -508,7 +566,7 @@ impl Walk {
                 for m in methods {
                     self.params(&m.params);
                     self.ty(m.return_ty.as_ref());
-                    self.block(&m.body);
+                    self.block_of(Block::Ended, &m.body);
                 }
             }
             // Module variables are in scope for the whole file, so bind the
@@ -652,7 +710,7 @@ impl Walk {
                     let outer = std::mem::replace(&mut self.match_arm, true);
                     match &arm.body {
                         MatchBody::Expr(e) => self.expr(e),
-                        MatchBody::Block(b) => self.block(b),
+                        MatchBody::Block(b) => self.block_of(Block::Ended, b),
                     }
                     self.match_arm = outer;
                     self.scope.truncate(mark);
@@ -816,7 +874,7 @@ impl Walk {
         }
         match body {
             LambdaBody::Expr(e) => self.expr(e),
-            LambdaBody::Block(b) => self.block(b),
+            LambdaBody::Block(b) => self.block_of(Block::Ended, b),
         }
         self.scope.truncate(mark);
     }

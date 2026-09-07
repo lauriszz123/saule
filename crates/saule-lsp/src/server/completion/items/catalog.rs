@@ -438,6 +438,22 @@ pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> V
                 "!",
             ));
         }
+        // The words that continue or close the block the caret is in —
+        // `elseif` / `else` in an `if`, `until` in a `repeat`, `catch` in a
+        // `try`, `end` in anything. Ranked with the statement keywords
+        // rather than ahead of them: at the top of a branch a fresh
+        // statement is the likelier thing, and only the prefix the author
+        // types tells the two apart.
+        for (kw, detail) in found.block.keywords() {
+            items.push(sorted(
+                item(
+                    (*kw).to_string(),
+                    CompletionItemKind::KEYWORD,
+                    Some((*detail).into()),
+                ),
+                &slot.rank(None, "5"),
+            ));
+        }
         for kw in STATEMENT_KEYWORDS {
             items.push(sorted(
                 item((*kw).to_string(), CompletionItemKind::KEYWORD, None),

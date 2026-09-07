@@ -15,12 +15,28 @@ export class LineScanner
     fn peek(offset: integer = 0) -> string?
         local at = self.pos + offset
 
-        if at < 1 or at > #self
+        if at < 1 or at > #self.lines then
+            return nil
+        end
+
+        return self.lines[at]
     end
 
     fn next()
+        if self.peek() != nil then
+            self.pos += 1
+            return self.lines[self.pos - 1]
+        end
     end
 
     fn skipBlank()
+        local counter = 0
+
+        while not self.eof() and String.trim(self.lines[self.pos]) == '' do
+            self.pos += 1
+            counter += 1
+        end
+
+        return counter
     end
 end
