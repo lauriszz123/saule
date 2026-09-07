@@ -20,26 +20,35 @@ saule --version | -v | -V
 ### `run`: project mode vs single-file mode
 
 ```text
-saule run [TARGET] [-- ARGS...]
+saule run [TARGET] [ARGS...] [-- ARGS...]
 ```
 
 One thing decides the mode: **whether `TARGET` is a directory.** Absent or a
 directory → project mode; a file → single-file mode. Nothing inspects file
 extensions and nothing probes for a `saule.config` to guess.
 
-Everything after `--` is the script's own `Os.args()`, passed through verbatim
-and never interpreted by the CLI. That is what lets a project take a filename
-of its own without the CLI trying to parse it as Saule:
+The **first** positional is the target and **every one after it** is the
+script's own `Os.args()` — the way `python`, `node` and `lua` are all
+invoked:
+
+```sh
+saule run tool.sau input.md    # single file, Os.args() = ["input.md"]
+saule run bf/ input.bf         # project in ./bf, Os.args() = ["input.bf"]
+```
+
+Everything after `--` is script argv too, passed through verbatim and never
+interpreted by the CLI. Two cases still need it: giving argv to the project
+in the *current* directory, where the first positional would otherwise be
+read as the target, and passing an argument that begins with `-`, which
+would otherwise be one of this command's own flags:
 
 ```sh
 saule run -- input.bf          # project in the cwd, Os.args() = ["input.bf"]
-saule run bf/ -- input.bf      # project in ./bf, same argv
 saule run tool.sau -- -v file  # single file; script args may start with `-`
 ```
 
-Because arguments have their own place, there is nothing left to
-disambiguate, and a stray second positional (`saule run a b`) is reported as
-an error rather than silently resolved.
+The two spellings concatenate in the order written, so `saule run t.sau a --
+-v` reaches the script as `["a", "-v"]`.
 
 ### `fmt` indentation
 

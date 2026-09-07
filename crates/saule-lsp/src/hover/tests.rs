@@ -3328,3 +3328,136 @@ end
     let md = hover_src_at(src, "fn compute(", "fn ".len()).expect("hover");
     assert!(!md.contains("->"), "should not have inferred a type: {md}");
 }
+
+/// A local without an annotation is typed from its initializer, so a
+/// counter-shaped body infers. Tracking only *annotated* locals left the
+/// commonest accumulator idiom in the language returning `any`.
+#[test]
+fn an_unannotated_local_carries_its_initializer_type() {
+    let src = "\
+class Scanner
+  pos: integer
+
+  fn init()
+    self.pos = 1
+  end
+
+  fn skipBlank()
+    local counter = 0
+    self.pos += 1
+    return counter
+  end
+end
+";
+    let md = hover_src_at(src, "fn skipBlank()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Scanner.skipBlank() -> integer"), "got: {md}");
+}
+
+/// Indexing a table returns its element type, so `return self.lines[i]` is
+/// a `string` — and nullable here because the body can fall through.
+#[test]
+fn an_index_read_infers_the_element_type() {
+    let src = "\
+class Scanner
+  lines: table<string>
+  pos: integer
+
+  fn init()
+    self.lines = {}
+    self.pos = 1
+  end
+
+  fn next()
+    if self.pos > 0 then
+      return self.lines[self.pos]
+    end
+  end
+end
+";
+    let md = hover_src_at(src, "fn next()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Scanner.next() -> string?"), "got: {md}");
+}
+
+/// A comparison is a boolean whatever it compares, and `#` counts a table.
+#[test]
+fn a_comparison_infers_boolean() {
+    let src = "\
+class Scanner
+  lines: table<string>
+  pos: integer
+
+  fn init()
+    self.lines = {}
+    self.pos = 1
+  end
+
+  fn eof()
+    return self.pos > #self.lines
+  end
+end
+";
+    let md = hover_src_at(src, "fn eof()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Scanner.eof() -> boolean"), "got: {md}");
+}
+
+/// `not` is a boolean too, with no overload able to redirect it.
+#[test]
+fn a_negation_infers_boolean() {
+    let src = "\
+class Flag
+  on: boolean
+
+  fn init()
+    self.on = true
+  end
+
+  fn off()
+    return not self.on
+  end
+end
+";
+    let md = hover_src_at(src, "fn off()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Flag.off() -> boolean"), "got: {md}");
+}
+
+/// Arithmetic follows its operands and can be redirected by an `Op*`
+/// overload the typechecker resolves, so it still declines rather than
+/// guessing from this side of the dependency edge.
+#[test]
+fn arithmetic_still_declines() {
+    let src = "\
+class Odd
+  fn total(a: integer, b: integer)
+    return a + b
+  end
+end
+";
+    let md = hover_src_at(src, "fn total(", "fn ".len()).expect("hover");
+    assert!(!md.contains("->"), "should not have inferred: {md}");
+}
+
+/// `#` on a class dispatches to its `OpLen` overload, whose result this
+/// pass cannot see — so only the primitives answer.
+#[test]
+fn length_of_a_class_declines() {
+    let src = "\
+class Bag
+  fn init()
+  end
+end
+
+class Holder
+  bag: Bag
+
+  fn init(bag: Bag)
+    self.bag = bag
+  end
+
+  fn size()
+    return #self.bag
+  end
+end
+";
+    let md = hover_src_at(src, "fn size()", "fn ".len()).expect("hover");
+    assert!(!md.contains("->"), "should not have inferred: {md}");
+}
