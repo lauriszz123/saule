@@ -37,14 +37,22 @@
 //!
 //! # What it types
 //!
-//! Literals, `self`, parameters, annotated locals and loop/catch bindings,
-//! field reads off any of those, constructor calls, and calls to methods
-//! that *declare* a return type. That covers accessor-shaped bodies, which
-//! is where unannotated returns overwhelmingly live. It deliberately does
-//! not re-implement the typechecker: operators, un-annotated locals, casts
-//! and free calls all decline, and the function keeps the `any` it has now.
+//! Literals, `self`, parameters, locals and loop/catch bindings, field and
+//! index reads off any of those, constructor calls, calls to methods that
+//! *declare* a return type, comparisons, `not` and `#`. A local without an
+//! annotation is typed from its initializer by these same rules, so it can
+//! only carry a type this pass would have committed to anyway.
+//!
+//! It deliberately does not re-implement the typechecker. Arithmetic,
+//! concatenation and the bitwise operators all follow their operands or an
+//! `Op*` overload, and the contract table that resolves one lives in
+//! `saule-typeck`, downstream of this crate. Casts and free calls need the
+//! native signature table, which is downstream too. All of them decline,
+//! and the function keeps the `any` it has now.
 
-use saule_ast::{ClassMember, Decl, Expr, Method, Module, Param, Spanned, Stmt, Type};
+use saule_ast::{
+    BinOp, ClassMember, Decl, Expr, Method, Module, Param, Spanned, Stmt, Type, UnaryOp,
+};
 
 use crate::registry::{ClassRegistry, FunctionRegistry};
 
@@ -181,10 +189,10 @@ struct Cx<'a> {
     /// The class whose instance `self` names, absent in a static method or
     /// a free function.
     self_class: Option<&'a str>,
-    /// Name -> declared type, innermost last. Only bindings that carry a
-    /// written annotation are tracked: inferring the type of `local x = …`
-    /// is the typechecker's job, and guessing at it here would be the one
-    /// way this pass could produce a type the checker disagrees with.
+    /// Name -> type, innermost last. A binding's written annotation when it
+    /// has one, and otherwise whatever [`Cx::type_of`] makes of its
+    /// initializer — the same rules that type a `return`, so a local never
+    /// carries a type this pass would have declined to infer directly.
     scope: Vec<(String, Type)>,
 }
 
@@ -208,10 +216,23 @@ impl Cx<'_> {
                 _ => out.multi = true,
             },
             Stmt::Local {
-                name,
-                ty: Some(t),
-                ..
-            } => self.scope.push((name.clone(), t.clone())),
+                name, ty, value, ..
+            } => {
+                // An annotation is the author's word. Failing that, take
+                // what the initializer produces — by the same rules that
+                // type a `return`, so a local can only carry a type this
+                // pass would have committed to anyway. `local counter = 0`
+                // followed by `return counter` is the ordinary shape of a
+                // function that counts something, and tracking only
+                // annotated locals left every one of them untyped.
+                let resolved = match ty {
+                    Some(t) => Some(t.clone()),
+                    None => value.as_ref().and_then(|v| self.type_of(&v.value)),
+                };
+                if let Some(t) = resolved {
+                    self.scope.push((name.clone(), t));
+                }
+            }
             Stmt::LocalMulti { names, .. } => {
                 for (name, _, ty) in names {
                     if let Some(t) = ty {
@@ -299,7 +320,40 @@ impl Cx<'_> {
             Expr::SafeMember { obj, name } => Some(nullable(self.field(&obj.value, name)?)),
             Expr::ForceUnwrap(inner) => Some(strip_nullable(self.type_of(&inner.value)?)),
             Expr::Call { callee, .. } => self.call(&callee.value),
+            // `t[i]` on a table is its element type. Indexing anything else
+            // is a question for the checker.
+            Expr::Index { obj, .. } => match strip_nullable(self.type_of(&obj.value)?) {
+                Type::Table { value, .. } => Some(*value),
+                _ => None,
+            },
+            Expr::Unary { op, rhs } => self.unary(*op, &rhs.value),
+            // A comparison is a boolean whatever it compares — the checker
+            // types these unconditionally, and no overload redirects them.
+            // The other operators follow their operands, or an overload the
+            // contract table in the typechecker resolves, and that table is
+            // downstream of this crate. They decline.
+            Expr::Binary { op, .. } => matches!(
+                op,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+            )
+            .then(|| named("boolean")),
             _ => None,
+        }
+    }
+
+    fn unary(&self, op: UnaryOp, rhs: &Expr) -> Option<Type> {
+        match op {
+            // No contract overloads `not`, so this one is always a boolean.
+            UnaryOp::Not => Some(named("boolean")),
+            // `#` counts a table or a string. On a class it dispatches to an
+            // `OpLen` overload that names its own result, so only the
+            // primitives — which cannot be overloaded — answer here.
+            UnaryOp::Len => match strip_nullable(self.type_of(rhs)?) {
+                Type::Table { .. } => Some(named("integer")),
+                Type::Named(n) if n == "table" || n == "string" => Some(named("integer")),
+                _ => None,
+            },
+            UnaryOp::Neg | UnaryOp::BNot => None,
         }
     }
 

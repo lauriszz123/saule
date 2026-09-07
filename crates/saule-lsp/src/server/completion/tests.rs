@@ -1552,3 +1552,95 @@ fn a_variant_position_is_not_an_arm_keyword_position() {
     assert!(!got.iter().any(|i| i == "when" || i == "then"), "{got:?}");
     assert!(got.iter().any(|i| i == "Red"), "{got:?}");
 }
+
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Block keywords
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// The keywords that continue or close a block used to be offered nowhere:
+/// `STATEMENT_KEYWORDS` holds only the words that *begin* a statement, and
+/// `else` is not one of them. Inside an `if` branch, both it and `elseif`
+/// are what comes next.
+#[test]
+fn an_if_branch_offers_elseif_and_else() {
+    let got = complete(
+        "fn width(ch: string)\n    if ch == ' ' then\n        local w = 1\n    els@\n",
+    );
+    assert_eq!(got, vec!["elseif", "else"], "{got:?}");
+}
+
+/// …and `end`, which closes it.
+#[test]
+fn an_if_branch_offers_end() {
+    let got = complete("fn go()\n    if true then\n        local w = 1\n    en@\n");
+    assert!(got.contains(&"end".to_string()), "{got:?}");
+}
+
+/// A final `else` has nothing left to continue into — only `end`.
+#[test]
+fn an_else_branch_offers_only_end() {
+    let got = complete(
+        "fn go()\n    if true then\n        local a = 1\n    else\n        local b = 2\n    el@\n",
+    );
+    assert!(!got.contains(&"else".to_string()), "{got:?}");
+    assert!(!got.contains(&"elseif".to_string()), "{got:?}");
+}
+
+/// A `repeat` is closed by `until`, not by `end`.
+#[test]
+fn a_repeat_body_offers_until_not_end() {
+    let got = complete("fn go()\n    repeat\n        local a = 1\n    un@\n");
+    assert_eq!(got, vec!["until"], "{got:?}");
+
+    let got = complete("fn go()\n    repeat\n        local a = 1\n    en@\n");
+    assert!(!got.contains(&"end".to_string()), "{got:?}");
+}
+
+/// A `try` body continues into `catch`.
+#[test]
+fn a_try_body_offers_catch() {
+    let got = complete("fn go()\n    try\n        local a = 1\n    ca@\n");
+    assert!(got.contains(&"catch".to_string()), "{got:?}");
+}
+
+/// A loop body is closed by `end` and continues into nothing.
+#[test]
+fn a_loop_body_offers_end_alone() {
+    let got = complete("fn go()\n    while true do\n        local a = 1\n    e@\n");
+    assert!(got.contains(&"end".to_string()), "{got:?}");
+    assert!(!got.contains(&"elseif".to_string()), "{got:?}");
+}
+
+/// The module's top level closes with nothing, so none of them are offered
+/// there — the point of tracking the block rather than listing the keywords
+/// flat.
+#[test]
+fn the_top_level_offers_no_block_keywords() {
+    let got = complete("cl@");
+    assert!(got.contains(&"class".to_string()), "{got:?}");
+    for absent in ["end", "else", "elseif", "until", "catch"] {
+        assert!(!got.contains(&absent.to_string()), "{absent} offered: {got:?}");
+    }
+}
+
+/// A block's keywords do not leak past it: the statement after a closed
+/// `if` is back at the enclosing function's block.
+#[test]
+fn a_nested_block_does_not_leak_its_keywords() {
+    let got = complete(
+        "fn go()\n    if true then\n        local a = 1\n    end\n    el@\nend\n",
+    );
+    assert!(!got.contains(&"else".to_string()), "{got:?}");
+    assert!(!got.contains(&"elseif".to_string()), "{got:?}");
+}
+
+/// An `elseif` branch is still a branch — a second `elseif` and an `else`
+/// may both follow it.
+#[test]
+fn an_elseif_branch_offers_them_again() {
+    let got = complete(
+        "fn go()\n    if true then\n        local a = 1\n    elseif false then\n        local b = 2\n    els@\n",
+    );
+    assert_eq!(got, vec!["elseif", "else"], "{got:?}");
+}

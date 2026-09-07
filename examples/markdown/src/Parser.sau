@@ -1,18 +1,17 @@
 import * from Ast
+import * from LineScanner
 
 export class Markdown
     static fn parse(source: string) -> Document
         local blocks: table<Block> = {}
+        local scanner = LineScanner(source)
 
-        local normalized = String.replace(source, '\r', '')
-        local lines = String.split(normalized, '\n')
-
-        for line in lines do
-            if String.trim(line) == '' then
-                continue
+        while not scanner.eof() do
+            local blanks = scanner.skipBlank()
+            local line = scanner.next()
+            if line != nil then
+                Table.insert(blocks, Block.Paragraph({Inline.Text(String.trim(line))}))
             end
-
-            Table.insert(blocks, Block.Paragraph({Inline.Text(String.trim(line))}))
         end
 
         return Document(blocks, {})
