@@ -2,8 +2,8 @@
 #
 #   irm https://lauriszz123.github.io/saule/install.ps1 | iex
 #
-# Downloads the release archive from the Saule project's GitLab package
-# registry, verifies it against SHA256SUMS, and installs both binaries into
+# Downloads the release archive from the Saule project's GitHub releases,
+# verifies it against SHA256SUMS, and installs both binaries into
 # %USERPROFILE%\.saule\bin.
 #
 # Because `iex` runs this as an expression rather than as a script file, there
@@ -16,22 +16,21 @@
 
 $ErrorActionPreference = 'Stop'
 
-# Windows PowerShell 5.1 still negotiates TLS 1.0 by default, which gitlab.com
+# Windows PowerShell 5.1 still negotiates TLS 1.0 by default, which github.com
 # refuses. PowerShell 7 ignores this because it already defaults higher.
 try {
     [Net.ServicePointManager]::SecurityProtocol =
         [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch {}
 
-# The one line to change if the project ever moves namespace. The API addresses
-# a project by its URL-encoded path; anything a human clicks needs real slashes.
-$GitLabHost    = 'https://gitlab.com'
-$GitLabProject = 'lauriszz12313/saule'
-$PackageName   = 'saule'
+# The one line to change if the project ever moves namespace. Release assets
+# are served from the web host; the API is only consulted to find out which
+# release is the latest one.
+$GitHubHost = 'https://github.com'
+$GitHubRepo = 'lauriszz123/saule'
 
-$ProjectEnc = $GitLabProject -replace '/', '%2F'
-$Api        = "$GitLabHost/api/v4/projects/$ProjectEnc"
-$Web        = "$GitLabHost/$GitLabProject"
+$Web = "$GitHubHost/$GitHubRepo"
+$Api = "https://api.github.com/repos/$GitHubRepo"
 
 function Say  { param($m) Write-Host "saule: $m" }
 function Fail { param($m) Write-Host "saule: error: $m" -ForegroundColor Red; exit 1 }
@@ -52,23 +51,32 @@ switch ($arch) {
 }
 
 # ─── Which version? ─────────────────────────────────────────────────────────
+# Releases are tagged `v26.7`; the archives inside them carry the bare `26.7`.
+# Both spellings are needed below.
 if ($env:SAULE_VERSION) {
     $version = $env:SAULE_VERSION -replace '^v', ''
+    $tag     = "v$version"
 } else {
     try {
         # Invoke-RestMethod parses the JSON, so unlike install.sh there is no
         # hand-rolled parsing to get wrong.
-        $latest = Invoke-RestMethod -UseBasicParsing "$Api/releases/permalink/latest"
+        #
+        # This is the one call that costs an API request. Anonymous callers get
+        # 60 an hour per IP, so a large office that shares one address can run
+        # the limit down between them; setting $env:SAULE_VERSION skips the
+        # call entirely and installs that version directly.
+        $latest = Invoke-RestMethod -UseBasicParsing "$Api/releases/latest"
     } catch {
-        Fail "could not reach $Api — is the project public, and are you online?"
+        Fail "could not resolve the latest release from $Web/releases.`n    Are you online, and does the project have a published release yet?`n    Set `$env:SAULE_VERSION to install a specific one."
     }
-    $version = $latest.tag_name -replace '^v', ''
+    $tag     = $latest.tag_name
+    $version = $tag -replace '^v', ''
     if (-not $version) { Fail 'could not read a version from the latest release. Set $env:SAULE_VERSION to install a specific one.' }
 }
 
 $sauleHome = if ($env:SAULE_HOME) { $env:SAULE_HOME } else { Join-Path $env:USERPROFILE '.saule' }
 $archive   = "saule-$version-$triple.zip"
-$base      = "$Api/packages/generic/$PackageName/$version"
+$base      = "$Web/releases/download/$tag"
 
 Say "installing Saule $version for $triple"
 
@@ -79,7 +87,7 @@ try {
     try {
         Invoke-WebRequest -UseBasicParsing "$base/$archive" -OutFile (Join-Path $tmp $archive)
     } catch {
-        Fail "could not download $archive.`n    Is $version a published release? See $Web/-/releases"
+        Fail "could not download $archive.`n    Is $version a published release? See $Web/releases"
     }
     try {
         Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile (Join-Path $tmp 'SHA256SUMS')

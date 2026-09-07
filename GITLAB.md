@@ -11,8 +11,14 @@ The short version:
 | CI (`cargo test`, fixtures, lints) | **GitLab**, hosted Linux runners | Free, no machine of yours involved |
 | Release builds — Linux | **GitLab**, hosted Linux runners | Including the aarch64 cross build |
 | Release builds — macOS, Windows | **GitLab**, *your* self-hosted runners | No free hosted runners for either |
-| Release archives | **GitLab** package registry + Releases | What `install.sh` downloads |
+| Release archives | **GitHub** Releases | What `install.sh` downloads |
 | Docs site + `install.sh` URL | **GitHub Pages**, unchanged | Keeps the installer URL stable forever |
+
+> **The publish job has not caught up.** `.gitlab/ci/release.yml` still uploads
+> the six archives and `SHA256SUMS` to GitLab's generic package registry, while
+> both installers now read from `github.com/lauriszz123/saule/releases`. Until
+> the archives are published to GitHub too, `install.sh` has nothing to
+> download.
 
 > **Migration status: partly done.** The GitLab CI config is in place, but the
 > repository itself has never been pushed there — `origin` has no SSH key (see
@@ -29,11 +35,13 @@ every release a second time.
 
 ## 1. Create the project and push
 
-The project lives at `gitlab.com/lauriszz12313/saule`. If it ever moves,
-that path is written down in three places: `www/site.config.mjs` (`repo`),
-`www/public/install.sh` (`GITLAB_PROJECT`) and `www/public/install.ps1`
-(`$GitLabProject`). The CI config needs no change — it addresses the project
-through `$CI_PROJECT_ID`.
+The GitLab project lives at `gitlab.com/lauriszz12313/saule`, and the CI config
+needs no change if it moves — it addresses the project through
+`$CI_PROJECT_ID`.
+
+Everything a user sees points at GitHub instead, and that path is written down
+in three places: `www/site.config.mjs` (`repo`), `www/public/install.sh`
+(`GITHUB_REPO`) and `www/public/install.ps1` (`$GitHubRepo`).
 
 Remotes: `origin` is GitLab, and `github` is pushed directly.
 
@@ -55,10 +63,10 @@ Pushing the tags matters: `scripts/next-version.sh` derives the next build
 number from them, so without them the next release would restart at `.1` and
 collide with a version you already published.
 
-Then set **Settings → General → Visibility** to **Public**. This is not
-optional: `install.sh` downloads from the package registry with no token, so on
-a private project every user's install fails with a 401. It is also what lets
-anyone read the project without an account.
+Then set **Settings → General → Visibility** to **Public**, so anyone can read
+the project without an account. (The equivalent constraint now applies to the
+GitHub project: `install.sh` downloads release assets with no token, so a
+private repository fails every user's install.)
 
 ## 2. The release token
 

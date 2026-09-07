@@ -9,17 +9,17 @@ export const site = 'https://lauriszz123.github.io';
 export const base = '/saule';
 
 /**
- * Source of truth for the code. The site is still *hosted* on GitHub Pages —
- * that is what keeps the installer URL stable — but development, CI and
- * releases all live on GitLab, so every link out of the docs points there.
+ * Source of truth for the code, and where every link out of the docs points.
+ * The site is hosted on GitHub Pages from the same project, which is what
+ * keeps the installer URL stable.
+ *
+ * CI and release builds still run on GitLab (see GITLAB.md) — that mirror is
+ * infrastructure, not something the docs link to.
  */
-export const repo = 'https://gitlab.com/lauriszz12313/saule';
+export const repo = 'https://github.com/lauriszz123/saule';
 
-/**
- * Where a "edit this page" link goes. GitLab puts `/-/` in front of the verb,
- * so this cannot be derived from `repo` with the same suffix GitHub uses.
- */
-export const editBase = `${repo}/-/edit/main/www/`;
+/** Where an "edit this page" link goes. Starlight appends the file's path. */
+export const editBase = `${repo}/edit/main/www/`;
 
 /** Join `base` with a site-absolute path, avoiding a doubled slash. */
 export function withBase(path) {

@@ -100,10 +100,11 @@ function yamlString(value) {
 }
 
 /**
- * A `-/tree/main/...` URL into the repository, with each path segment percent-
- * encoded. The `-/` is GitLab's separator between the project path and the
- * thing being viewed; without it the URL is read as a subgroup name. The "Also in the repository" list is built from `readdirSync`, so
- * the segments are whatever the directories are actually called — and
+ * A `tree/main/...` URL into the repository, with each path segment percent-
+ * encoded.
+ *
+ * The "Also in the repository" list is built from `readdirSync`, so the
+ * segments are whatever the directories are actually called — and
  * `examples/UI Project` produced a link with a raw space in it, which stops
  * being a link at all once a Markdown parser reaches the space.
  *
@@ -111,7 +112,7 @@ function yamlString(value) {
  */
 function repoUrl(path) {
 	const encoded = path.split('/').map(encodeURIComponent).join('/');
-	return `${repo}/-/tree/main/${encoded}`;
+	return `${repo}/tree/main/${encoded}`;
 }
 
 /**
@@ -434,7 +435,7 @@ function writeExamples() {
 			'',
 			example.blurb,
 			'',
-			`[Browse this example on GitLab](${repoUrl(`examples/${example.dir}`)})`,
+			`[Browse this example on GitHub](${repoUrl(`examples/${example.dir}`)})`,
 			'',
 		];
 

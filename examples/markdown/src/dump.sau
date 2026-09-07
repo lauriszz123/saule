@@ -13,11 +13,36 @@ local fn flag(b: boolean?) -> string
     return 'no'
 end
 
-local fn dump(blocks: table<Block>, depth: integer)
+local fn dump(blocks: table<Block>, depth: integer = 0)
     local pad: string = String.rep(" ", depth)
     for block in blocks do
         match block
-            case _ then println()
+            case Block.Heading(level, slug, children) then println(
+                pad .. "Heading h" .. level .. " #" .. slug .. " inlines=" .. #children
+            )
+
+            case Block.Paragraph(children) then println(pad .. "Paragraph inlines=" .. #children)
+
+            case Block.Code(src, language) then println(
+                pad .. "Code(" .. ((language ?? '-') .. ") " .. #String.split(src, "\n") .. " lines")
+            )
+
+            case Block.Quote(children) then
+                println(pad .. "Quote")
+                dump(children, depth + 2)
+
+            case Block.List(ordered, start, tight, items) then
+                println(
+                    pad .. "List ordered=" .. ((ordered and "yes" or "no") .. " start=" .. start .. " tight=" .. ((tight and "yes" or "no") .. " items=" .. #items))
+                )
+                for item in items do
+                end
+
+            case Block.Table(align, head, rows) then println(
+                pad .. "Table cols=" .. #head .. " rows=" .. #rows
+            )
+
+            case Block.Rule then println(pad .. "Rule")
         end
     end
 end
