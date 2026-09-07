@@ -51,9 +51,14 @@ class Main
     static fn main()
         local path = Os.args()[1] ?? "README.md"
         local file = Io.open(path, IoMode.Read)
-        local content = file?.read()
-        local doc = Document({Block.Rule}, {}, nil)
+        local content = file?.read('a')
+        file?.close()
 
-        println(#doc.getBlocks())
+        if content != nil then
+            local doc = Markdown.parse(content)
+            dump(doc.getBlocks())
+        else
+            println("No content...")
+        end
     end
 end
