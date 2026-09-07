@@ -91,12 +91,15 @@ pub(crate) fn line_keywords(
 ) -> Option<(Vec<&'static str>, &'static str)> {
     let line = caret_line(source, offset)?;
 
-    // The word under the caret is still being typed; everything ahead of it
-    // is what the author has committed to.
-    let mut words: Vec<&str> = line.split_whitespace().collect();
-    if !line.ends_with(char::is_whitespace) {
-        words.pop();
-    }
+    // The identifier under the caret is still being typed; everything before
+    // it is what the author has committed to. Cut at the same boundary
+    // [`splice_sentinel`] uses — the trailing run of identifier characters —
+    // rather than at whitespace, so the two agree about where the partial
+    // token starts even when it sits flush against what precedes it.
+    // Dropping a whole whitespace-word instead swallowed the operator in
+    // `at >#self.li`, leaving a condition that looked complete.
+    let committed = line.trim_end_matches(|c: char| c == '_' || c.is_alphanumeric());
+    let words: Vec<&str> = committed.split_whitespace().collect();
 
     if let Some(kws) = header_keywords(&words) {
         return Some((kws, "class header"));
@@ -117,12 +120,19 @@ pub(crate) fn line_keywords(
 /// The caret's line, with strings and a trailing comment removed, or `None`
 /// when the caret is somewhere no keyword can be suggested.
 ///
-/// Quoted text is blanked rather than dropped so a `"then"` inside a string
+/// Quoted text is masked rather than dropped so a `"then"` inside a string
 /// can't be mistaken for the keyword, and so brackets inside one don't
 /// unbalance the count. An unclosed bracket means the caret is inside a
 /// sub-expression — a payload pattern, a parenthesised condition — where the
 /// construct's own next keyword is not what comes next.
+///
+/// The mask is an identifier character rather than a space, so the literal
+/// still reads as *one word*: it is an operand, and blanking it to spaces
+/// left `if s == "x" ` looking like a condition that still owed its
+/// right-hand side. `--` inside a literal is masked out with everything
+/// else, so a string mentioning one is not mistaken for a comment either.
 fn caret_line(source: &str, offset: usize) -> Option<String> {
+    const MASK: char = '_';
     let before = source.get(..offset)?;
     let raw = &before[before.rfind('\n').map(|i| i + 1).unwrap_or(0)..];
 
@@ -132,7 +142,7 @@ fn caret_line(source: &str, offset: usize) -> Option<String> {
     for c in raw.chars() {
         match quote {
             Some(q) => {
-                out.push(' ');
+                out.push(MASK);
                 if escaped {
                     escaped = false;
                 } else if c == '\\' {
@@ -143,7 +153,7 @@ fn caret_line(source: &str, offset: usize) -> Option<String> {
             }
             None if c == '"' || c == '\'' => {
                 quote = Some(c);
-                out.push(' ');
+                out.push(MASK);
             }
             None => out.push(c),
         }
@@ -188,7 +198,7 @@ fn header_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
     }
 
     let rest = &words[2..];
-    let has = |kw: &str| rest.iter().any(|w| *w == kw);
+    let has = |kw: &str| rest.contains(&kw);
     // Straight after `extends` / `implements` / a comma a *type* is wanted.
     if rest
         .last()
@@ -219,14 +229,17 @@ fn arm_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
     }
     // Past `then` the arm's body has started, and neither keyword has a
     // second place to go.
-    if words.iter().any(|w| *w == "then") {
+    if words.contains(&"then") {
+        return None;
+    }
+    // `when <caret>`, and any later point in the guard where an operand is
+    // still owed, want the expression rather than a keyword.
+    if owes_operand(words) {
         return None;
     }
     match words.last() {
-        // `when <caret>` wants the guard expression, not another keyword.
-        Some(&"when") => None,
         // A guard is already written, so only the body is still to come.
-        _ if words.iter().any(|w| *w == "when") => Some(vec!["then"]),
+        _ if words.contains(&"when") => Some(vec!["then"]),
         _ => Some(vec!["when", "then"]),
     }
 }
@@ -247,7 +260,7 @@ fn arm_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
 /// rather than for the line.
 fn loop_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
     // Past `do` the body has started.
-    if words.iter().any(|w| *w == "do") {
+    if words.contains(&"do") {
         return None;
     }
     // Something has to have been written to loop over.
@@ -256,14 +269,12 @@ fn loop_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
     }
     // A dangling `in` / `=` / `,` means the next thing is an expression, and
     // a dangling `:` means the next thing is the loop variable's type.
-    if words.last().is_some_and(|w| {
-        *w == "in" || *w == "=" || w.ends_with(',') || w.ends_with('=') || w.ends_with(':')
-    }) {
+    if owes_operand(words) {
         return None;
     }
     if words[0] == "for" {
         let numeric = words.iter().any(|w| w.contains('='));
-        let for_in = words.iter().any(|w| *w == "in");
+        let for_in = words.contains(&"in");
         // Neither form has committed yet: the variables are named, so what
         // comes next is the `in` that says what to loop over. (`= from, to`
         // is the other way through, but that is punctuation rather than a
@@ -283,10 +294,52 @@ fn loop_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
 /// branch. `when` has no place here: it guards a match arm, nothing else.
 fn condition_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
     // The condition has to be there, and `then` not already written.
-    if words.len() < 2 || words.iter().any(|w| *w == "then") {
+    if words.len() < 2 || words.contains(&"then") {
+        return None;
+    }
+    // A condition still owing an operand isn't finished, so `then` is not
+    // what comes next: `if at < 1 or at > #self.li…` is a *member* position
+    // that happens to sit on an `if` line.
+    if owes_operand(words) {
         return None;
     }
     Some(vec!["then"])
+}
+
+/// Words after which an expression is still owed, so whatever the caret is
+/// on is an operand rather than the enclosing construct's next keyword.
+///
+/// Every binary and prefix operator the lexer knows, plus the punctuation
+/// that separates or introduces an operand. `..` is here as concatenation;
+/// so is `:`, which introduces a loop variable's type rather than a value,
+/// and is a position with a real node either way.
+const OPERAND_OWED_AFTER: &[&str] = &[
+    "and", "or", "not", "in", "when", "+", "-", "*", "/", "%", "^", "..", "&", "|", "~", "<<",
+    ">>", "==", "!=", "<", "<=", ">", ">=", "=",
+];
+
+/// Whether the last word the author has committed to leaves an operand
+/// outstanding.
+///
+/// This is what separates "the caret is writing this construct's keyword"
+/// from "the caret is writing a value inside it". Two operands cannot sit
+/// side by side, so a bare word after a *complete* operand can only be the
+/// keyword — but a word after an operator is the operand that operator is
+/// waiting for, and belongs to the tree walk, which resolves it against
+/// real scope. Getting this wrong is not a missing keyword but a silent
+/// one: [`line_keywords`] answers the request alone, so a keyword claimed
+/// here suppresses every member and value suggestion on the line.
+fn owes_operand(words: &[&str]) -> bool {
+    words.last().is_some_and(|w| {
+        OPERAND_OWED_AFTER.contains(w)
+            // A trailing operator written flush against its left operand
+            // (`at >`, `n +`, `x =`) — the same position, spelled without
+            // the space. A trailing `.` owes a *member* name, which is the
+            // walk's answer (`case Colour.…`, `#self.…`), never a keyword.
+            || w.ends_with(',')
+            || w.ends_with(':')
+            || w.chars().last().is_some_and(|c| "+-*/%^&|~<>=.".contains(c))
+    })
 }
 
 // ─── what the caret can see ─────────────────────────────────────────────────

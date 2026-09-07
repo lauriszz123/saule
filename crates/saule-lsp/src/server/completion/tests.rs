@@ -1462,3 +1462,93 @@ fn an_unresolvable_iterable_leaves_the_binding_untyped() {
     let src = format!("{PAYLOAD}fn go(x: any)\n    for item in x do\n        @\n    end\nend\n");
     assert_eq!(detail_of(&src, "item"), Some(Some("loop variable".into())));
 }
+
+
+// ──────────────────────────────────────────────────────────────────────────────
+// A keyword position is not an operand position
+// ──────────────────────────────────────────────────────────────────────────────
+
+const SCANNER: &str = "\
+class LineScanner
+    lines: table<string>
+    pos: integer
+
+    fn peek(offset: integer = 0)
+";
+
+/// A member access part-way through an `if` condition is a member position,
+/// not the `then` the line will eventually want. `line_keywords` answers a
+/// request alone, so claiming the line here didn't merely add `then` — it
+/// suppressed every field on `self`.
+#[test]
+fn a_member_inside_an_unfinished_condition_still_completes() {
+    let got = complete(&format!(
+        "{SCANNER}        local at = self.pos + offset\n        if at < 1 or at > #self.li@\n"
+    ));
+    assert_eq!(got, vec!["lines"], "{got:?}");
+}
+
+/// The same with no space before the operator, which splits into words
+/// differently but is the same position.
+#[test]
+fn a_member_after_a_flush_operator_still_completes() {
+    let got = complete(&format!("{SCANNER}        if self.pos >#self.li@\n"));
+    assert_eq!(got, vec!["lines"], "{got:?}");
+}
+
+/// A loop header owes its operand too — `do` is not what comes after `<`.
+#[test]
+fn a_member_inside_an_unfinished_loop_header_still_completes() {
+    let got = complete(&format!("{SCANNER}        while self.pos < #self.li@\n"));
+    assert_eq!(got, vec!["lines"], "{got:?}");
+}
+
+/// And so does a match arm's guard.
+#[test]
+fn a_member_inside_an_unfinished_guard_still_completes() {
+    let got = complete(&format!(
+        "{SCANNER}        match offset\n        case n when n > #self.li@\n"
+    ));
+    assert_eq!(got, vec!["lines"], "{got:?}");
+}
+
+/// A condition that owes nothing still offers its keyword — the fix must
+/// not cost the suggestion it was guarding.
+#[test]
+fn a_finished_condition_still_offers_then() {
+    assert_eq!(
+        complete(&format!("{SCANNER}        if self.pos > 1 @\n")),
+        vec!["then"]
+    );
+    assert_eq!(
+        complete(&format!("{SCANNER}        if self.pos > 1 th@\n")),
+        vec!["then"]
+    );
+}
+
+/// A string literal is an operand, and masking it must leave it looking
+/// like one: `if s == "x" ` is a finished condition.
+#[test]
+fn a_string_operand_finishes_a_condition() {
+    let got = complete("fn go(s: string)\n    if s == 'done' @\n");
+    assert_eq!(got, vec!["then"], "{got:?}");
+}
+
+/// A `--` inside a string is not a comment, so the line is still read.
+#[test]
+fn a_dash_pair_inside_a_string_is_not_a_comment() {
+    let got = complete("fn go(s: string)\n    if s == '--' @\n");
+    assert_eq!(got, vec!["then"], "{got:?}");
+}
+
+/// `case Colour.<caret>` is a variant position, which the walk answers with
+/// real variants. The arm's own keywords used to be offered here too, on a
+/// line where a member name is plainly what's owed.
+#[test]
+fn a_variant_position_is_not_an_arm_keyword_position() {
+    let got = complete(&format!(
+        "{MATCH_DECLS}fn go(c: Colour)\n    match c\n    case Colour.@\n    end\nend\n"
+    ));
+    assert!(!got.iter().any(|i| i == "when" || i == "then"), "{got:?}");
+    assert!(got.iter().any(|i| i == "Red"), "{got:?}");
+}

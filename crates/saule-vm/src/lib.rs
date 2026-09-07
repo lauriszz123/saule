@@ -144,8 +144,8 @@ pub fn run_program(program: program::Program) -> Result<bool, RuntimeError> {
         .map(|c| c.dynamic_imports.clone())
         .collect();
     let mut vm = Vm::for_chunks(program.modules);
-    for i in 0..=entry {
-        for (package, span) in &dynamic[i] {
+    for (i, imports) in dynamic.iter().enumerate().take(entry + 1) {
+        for (package, span) in imports {
             saule_interpreter::dynamic_packages::preload(package, span.clone())?;
         }
         vm.run_module(i)?;
