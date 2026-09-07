@@ -259,6 +259,30 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             args,
             type_args,
         } => {
+            // `obj?.method(args)` — every rule below dispatches on a plain
+            // `Member` callee, so a safe call used to match none of them and
+            // inferred as "no type at all", which then defaulted the binding
+            // it initialised to `any`. Re-infer it as the plain call and put
+            // the chain's own nullability back: the result is `nil` whenever
+            // the receiver is, whatever the method returns. Mirrors the
+            // `SafeMember` arm above, which does the same for field reads.
+            if let Expr::SafeMember { obj, name } = &callee.value {
+                let plain = Spanned::new(
+                    Expr::Call {
+                        callee: Box::new(Spanned::new(
+                            Expr::Member {
+                                obj: obj.clone(),
+                                name: name.clone(),
+                            },
+                            callee.span.clone(),
+                        )),
+                        args: args.clone(),
+                        type_args: type_args.clone(),
+                    },
+                    expr.span.clone(),
+                );
+                return Some(safe_call_result(infer(&plain, scope)?));
+            }
             if let Expr::Ident(n) = &callee.value
                 && with_classes(|reg| reg.contains_key(n))
             {
@@ -742,6 +766,22 @@ pub(crate) fn strip_nullable(ty: Type) -> Type {
     match ty {
         Type::Nullable(t) => *t,
         other => other,
+    }
+}
+
+/// The type a safe call (`recv?.method(...)`) yields: the method's own
+/// result, plus the nil the chain produces when the receiver is nil.
+///
+/// A multi-return distributes that over its components rather than
+/// wrapping the tuple. `fn twin() -> (integer?, integer?)` called through
+/// `?.` is still a two-value return — a nil receiver just makes every
+/// value nil — so `return b?.twin()` from a `-> (integer?, integer?)`
+/// function has to keep matching. Wrapping the tuple instead would type
+/// it `(integer?, integer?)?`, which is a shape no return list has.
+pub(crate) fn safe_call_result(ty: Type) -> Type {
+    match ty {
+        Type::Tuple(parts) => Type::Tuple(parts.into_iter().map(safe_call_result).collect()),
+        other => Type::Nullable(Box::new(strip_nullable(other))),
     }
 }
 

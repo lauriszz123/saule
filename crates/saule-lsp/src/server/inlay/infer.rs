@@ -90,29 +90,16 @@ impl<'a> Cx<'a> {
                 // falls through to the module-qualified native lookup
                 // rather than giving up — mirrors `callee_params`.
                 if let Expr::Member { obj, name } = &callee.value {
-                    if let Some(class) = self.receiver_class(&obj.value) {
-                        if let Some(sig) = lookup_method(&class, name) {
-                            let arg_types = self.positional_arg_types(args);
-                            return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
-                        }
-                        let qname = format!("{class}.{name}");
-                        if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
-                            let arg_types = self.positional_arg_types(args);
-                            return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
-                                .into_iter()
-                                .next();
-                        }
-                    }
-                    // Stdlib module call: `Os.fsInfo(path)` — receiver is a
-                    // bare identifier registered as a module, not a class.
-                    if let Expr::Ident(recv) = &obj.value
-                        && let Some(sig) = saule_typeck::sigs::lookup(&format!("{recv}.{name}"))
-                    {
-                        let arg_types = self.positional_arg_types(args);
-                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
-                            .into_iter()
-                            .next();
-                    }
+                    return self.member_call_type(&obj.value, name, args);
+                }
+                // `recv?.method(args)` — the same lookup, made nullable
+                // because the chain yields nil when the receiver does.
+                // Without this arm a safe call resolved to nothing and the
+                // binding it initialised was recorded as `any`, which then
+                // spread to every hint downstream of it.
+                if let Expr::SafeMember { obj, name } = &callee.value {
+                    let inner = self.member_call_type(&obj.value, name, args)?;
+                    return Some(Type::Nullable(Box::new(strip_nullable(inner))));
                 }
                 None
             }
@@ -288,17 +275,56 @@ impl<'a> Cx<'a> {
             .collect()
     }
 
+    /// Return type of `recv.method(args)` — a user class method, then a
+    /// qualified native signature (which is where a stdlib value type like
+    /// `File` keeps its instance methods), then a bare module call whose
+    /// receiver names no class at all (`Os.fsInfo(p)`). Shared by the plain
+    /// and safe call arms so `?.` cannot drift from `.`.
+    pub(crate) fn member_call_type(
+        &self,
+        obj: &Expr,
+        name: &str,
+        args: &[CallArg],
+    ) -> Option<Type> {
+        if let Some(class) = self.receiver_class(obj) {
+            if let Some(sig) = lookup_method(&class, name) {
+                let arg_types = self.positional_arg_types(args);
+                return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
+            }
+            if let Some(sig) = saule_typeck::sigs::lookup(&format!("{class}.{name}")) {
+                let arg_types = self.positional_arg_types(args);
+                return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                    .into_iter()
+                    .next();
+            }
+        }
+        // Stdlib module call: `Os.fsInfo(path)` — receiver is a bare
+        // identifier registered as a module, not a class.
+        let Expr::Ident(recv) = obj else { return None };
+        let sig = saule_typeck::sigs::lookup(&format!("{recv}.{name}"))?;
+        let arg_types = self.positional_arg_types(args);
+        saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+            .into_iter()
+            .next()
+    }
+
     /// Best-effort: figure out which class a member-access receiver
     /// refers to. Mirrors the hover walker's `receiver_class` but
     /// limited to the cases inlay hints actually need.
     pub(crate) fn receiver_class(&self, obj: &Expr) -> Option<String> {
         match obj {
             Expr::Self_ => self.enclosing_class.clone(),
+            // `x!.foo` — the unwrap changes the nullability, not which
+            // type the receiver names.
+            Expr::ForceUnwrap(inner) => self.receiver_class(&inner.value),
             Expr::Ident(name) => {
+                // Seeing through `T?` is what makes a call on a nullable
+                // receiver resolve at all: `Io.open` hands back `File?`,
+                // and every method reached off it lives on `File`.
                 if let Some(local) = self.locals.iter().rev().find(|l| l.name == *name)
-                    && let Type::Named(n) = &local.ty
+                    && let Type::Named(n) = strip_nullable(local.ty.clone())
                 {
-                    return Some(n.clone());
+                    return Some(n);
                 }
                 if with_classes(|r| r.contains_key(name)) {
                     return Some(name.clone());
