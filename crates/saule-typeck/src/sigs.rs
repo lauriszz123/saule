@@ -576,10 +576,14 @@ fn ensure_registered() {
     if INIT_DONE.with(Cell::get) {
         return;
     }
+    // Latch only once there is something to run. A thread that reaches a
+    // lookup before the embedder installs the initializer would otherwise
+    // mark itself registered while holding an empty registry, and stay
+    // empty for its whole life — on an LSP worker that means every stdlib
+    // completion and signature on that thread silently disappears.
+    let Some(f) = INITIALIZER.get() else { return };
     INIT_DONE.with(|d| d.set(true));
-    if let Some(f) = INITIALIZER.get() {
-        f();
-    }
+    f();
 }
 
 // ─── Type-builder shorthands for callers ────────────────────────────────────
