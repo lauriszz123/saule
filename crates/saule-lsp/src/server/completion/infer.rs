@@ -63,11 +63,19 @@ pub(crate) fn infer_d(expr: &Expr, found: &Found, depth: usize) -> Option<Recv> 
         }
         // `a.b.` / `self.player.` — the field's declared type carries on.
         Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
-            let owner = owner_class_d(&obj.value, found, depth + 1)?;
-            lookup_field_type(&owner, name)
-                .as_ref()
-                .and_then(class_of)
-                .map(Recv::Instance)
+            match infer_d(&obj.value, found, depth + 1)? {
+                // `Io.stdout.` — a module *constant* carries its own type.
+                Recv::Module(m) => sigs::lookup_const(&format!("{m}.{name}"))
+                    .and_then(named)
+                    .map(Recv::Instance),
+                Recv::Instance(c) | Recv::Static(c) | Recv::SelfClass(c) => {
+                    lookup_field_type(&c, name)
+                        .as_ref()
+                        .and_then(class_of)
+                        .map(Recv::Instance)
+                }
+                Recv::Enum(_) => None,
+            }
         }
         // `Player("x").` / `make().` — the callee's return type.
         Expr::Call { callee, .. } => match &callee.value {
@@ -94,14 +102,6 @@ pub(crate) fn infer_d(expr: &Expr, found: &Found, depth: usize) -> Option<Recv> 
         },
         // `maybe!.` — force-unwrap keeps the underlying type.
         Expr::ForceUnwrap(inner) => infer_d(&inner.value, found, depth + 1),
-        _ => None,
-    }
-}
-
-/// The class that owns members reached through `expr`.
-pub(crate) fn owner_class_d(expr: &Expr, found: &Found, depth: usize) -> Option<String> {
-    match infer_d(expr, found, depth)? {
-        Recv::Instance(c) | Recv::Static(c) | Recv::SelfClass(c) => Some(c),
         _ => None,
     }
 }

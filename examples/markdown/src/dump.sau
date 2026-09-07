@@ -49,6 +49,8 @@ end
 
 class Main
     static fn main()
+        local path = Os.args()[1] ?? "README.md"
+        local file = Io.open(path, IoMode.Read)
         local doc = Document({Block.Rule}, {}, nil)
 
         println(#doc.getBlocks())

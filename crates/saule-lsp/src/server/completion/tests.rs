@@ -1409,6 +1409,52 @@ fn a_payload_binding_can_be_looped_over() {
     assert_eq!(complete(&src), vec!["getBlocks"]);
 }
 
+/// Stdlib signatures are registered lazily behind an initializer the
+/// interpreter installs; without it every `sigs::` lookup comes back empty.
+fn with_stdlib() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(saule_interpreter::init);
+}
+
+/// `Io.open` returns `File?`, and `File` is a stdlib *value* type — its
+/// members live in the native signature registry, not the class registry.
+#[test]
+fn a_native_value_type_offers_its_instance_methods() {
+    with_stdlib();
+    let src = "class Main\n    static fn main()\n        local file = Io.open(\"x\", IoMode.Read)\n        file.@\n    end\nend\n";
+    let got = complete(src);
+    for want in ["close", "flush", "lines", "read", "seek", "write"] {
+        assert!(got.contains(&want.to_string()), "missing {want} in {got:?}");
+    }
+}
+
+/// A prefix already typed still narrows the native members — `file.re` is
+/// the shape the report actually complained about.
+#[test]
+fn a_native_value_type_member_narrows_by_prefix() {
+    with_stdlib();
+    let src = "class Main\n    static fn main()\n        local file = Io.open(\"x\", IoMode.Read)\n        file.re@\n    end\nend\n";
+    assert_eq!(complete(src), vec!["read"]);
+}
+
+/// `Io.stdout` is a module *constant* typed `File`, not a call — its type
+/// has to carry through the member chain the same way.
+#[test]
+fn a_module_constant_offers_the_members_of_its_type() {
+    with_stdlib();
+    let src = "class Main\n    static fn main()\n        Io.stdout.wr@\n    end\nend\n";
+    assert_eq!(complete(src), vec!["write"]);
+}
+
+/// Force-unwrapping the optional `Io.open` hands back keeps the members.
+#[test]
+fn a_force_unwrapped_native_value_type_keeps_its_members() {
+    with_stdlib();
+    let src = "class Main\n    static fn main()\n        local file = Io.open(\"x\", IoMode.Read)\n        file!.cl@\n    end\nend\n";
+    assert_eq!(complete(src), vec!["close"]);
+}
+
 /// An iterable nothing can resolve leaves the binding untyped rather than
 /// guessing — the previous behaviour, kept for everything else.
 #[test]

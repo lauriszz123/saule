@@ -19,6 +19,11 @@ use super::*;
 pub(crate) fn member_items(recv: &Spanned<Expr>, found: &Found) -> Vec<CompletionItem> {
     match infer(&recv.value, found) {
         Some(Recv::SelfClass(c)) => class_members(&c, Visibility::IncludePrivate, MemberSet::All),
+        // A stdlib *value* type (`File`) or a native-package class has no
+        // entry in the class registry — an instance of one gets its members
+        // from the native signature registry instead. A user class of the
+        // same name still wins, so shadowing behaves as it reads.
+        Some(Recv::Instance(c)) if !with_classes(|r| r.contains_key(&c)) => module_members(&c),
         Some(Recv::Instance(c)) => class_members(&c, Visibility::PublicOnly, MemberSet::Instance),
         Some(Recv::Static(c)) => class_members(&c, Visibility::PublicOnly, MemberSet::Static),
         Some(Recv::Module(m)) => module_members(&m),
