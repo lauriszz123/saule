@@ -639,6 +639,36 @@ end
     }
 }
 
+/// A method call whose receiver is a *field* (`self.scanner.peek()`)
+/// resolves through the field's declared class. The receiver here is a
+/// member expression, which `receiver_class` used not to match, so
+/// every call reached through a field went unhinted.
+#[test]
+fn type_hint_for_a_call_on_a_field_receiver() {
+    let src = "\
+class Scanner
+  fn peek() -> string?
+    return nil
+  end
+end
+
+class Parser
+  local scanner: Scanner
+
+  fn nextBlock()
+    local line = self.scanner.peek()
+  end
+end
+";
+    let hints = raw_hints(src);
+    assert!(
+        hints
+            .iter()
+            .any(|(k, _, l)| *k == InlayHintKind::TYPE && l == ": string?"),
+        "{hints:?}"
+    );
+}
+
 /// A call on a nullable receiver is typed by the method it reaches —
 /// through `.` on an unwrapped value and through `?.` on the nullable
 /// itself, which only adds back the nullability the chain already has.
