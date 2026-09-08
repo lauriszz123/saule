@@ -315,7 +315,7 @@ fn condition_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
 /// and is a position with a real node either way.
 const OPERAND_OWED_AFTER: &[&str] = &[
     "and", "or", "not", "in", "when", "+", "-", "*", "/", "%", "^", "..", "&", "|", "~", "<<",
-    ">>", "==", "!=", "<", "<=", ">", ">=", "=",
+    ">>", "==", "!=", "<", "<=", ">", ">=", "=", "#",
 ];
 
 /// Whether the last word the author has committed to leaves an operand
