@@ -32,6 +32,33 @@ local fn runLength(s: string, ch: string)
     return n
 end
 
+local fn atxLevel(line: string)
+    local t = String.trimStart(line)
+    local n = runLength(t, '#')
+
+    local rest = String.sub(t, n + 1)
+
+    if n < 1 or String.starts(rest, ' ') then
+        return n
+    end
+
+    return 0
+end
+
+local fn fenceCharOf(line: string)
+    local t = String.trimStart(line)
+
+    if String.starts(t, '```') then
+        return '`'
+    end
+
+    if String.starts(t, '~~~') then
+        return '~'
+    end
+
+    return nil
+end
+
 export class BlockParser
     local scanner: LineScanner
     local slugger: Slugger
@@ -68,19 +95,6 @@ export class BlockParser
         return blocks
     end
 
-    local fn atxLevel(line: string)
-        local t = String.trimStart(line)
-        local n = runLength(t, '#')
-
-        local rest = String.sub(t, n + 1)
-
-        if n < 1 or String.starts(rest, ' ') then
-            return n
-        end
-
-        return 0
-    end
-
     local fn starterKind()
         local line = self.scanner.peek()
 
@@ -88,7 +102,11 @@ export class BlockParser
             return ''
         end
 
-        if self.atxLevel(line) > 0 then
+        if fenceCharOf(line) != nil then
+            return 'fence'
+        end
+
+        if atxLevel(line) > 0 then
             return 'heading'
         end
 
@@ -124,5 +142,24 @@ export class BlockParser
     end
 
     local fn paragraph()
+        local lines: table<string> = {}
+
+        while not self.scanner.eof() do
+            local line = String.trim(self.scanner.peek() ?? '')
+
+            if line == '' then
+                break
+            end
+
+            if #lines > 0 and self.starterKind() != '' then
+                break
+            end
+
+            self.scanner.next()
+
+            Table.insert(lines, line)
+        end
+
+        return Block.Paragraph({Inline.Text(String.join('\n', lines))})
     end
 end

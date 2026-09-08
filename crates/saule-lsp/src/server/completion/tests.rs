@@ -1644,3 +1644,78 @@ fn an_elseif_branch_offers_them_again() {
     );
     assert_eq!(got, vec!["elseif", "else"], "{got:?}");
 }
+
+
+// ──────────────────────────────────────────────────────────────────────────────
+// The `#` operand
+// ──────────────────────────────────────────────────────────────────────────────
+
+const COUNT: &str = "\
+class Bag implements OpLen
+    fn init()
+    end
+
+    fn len() -> integer
+        return 0
+    end
+end
+
+class BlockParser
+    local fn paragraph()
+        local lines: table<string> = {}
+        local limit: integer = 3
+        local label: string = ''
+        local bag: Bag = Bag()
+
+        while true do
+";
+
+/// `#` is a prefix operator, so a condition holding one is not finished and
+/// `then` is not what comes next. Leaving it out of the operand-owed set
+/// meant `line_keywords` claimed the line, answered `then`, and suppressed
+/// every name in scope — including the local two lines up.
+#[test]
+fn a_member_after_a_length_operator_still_completes() {
+    let got = complete(&format!("{COUNT}            if #li@\n"));
+    assert!(got.contains(&"lines".to_string()), "{got:?}");
+}
+
+/// …and the enclosing `while`/`fn` bodies do not hide it either.
+#[test]
+fn a_length_operand_sees_the_whole_enclosing_scope() {
+    let got = complete(&format!("{COUNT}            local n = #li@\n"));
+    assert!(got.contains(&"lines".to_string()), "{got:?}");
+}
+
+/// Only a table, a string or an `OpLen` class can be counted, so those rank
+/// first — the rest stay on the list, just below.
+#[test]
+fn countable_values_rank_first_after_a_length_operator() {
+    let got = complete_ranked(&format!("{COUNT}            local n = #l@\n"));
+    let pos = |name: &str| got.iter().position(|i| i == name);
+    let (lines, label, limit) = (pos("lines"), pos("label"), pos("limit"));
+    assert!(lines.is_some() && label.is_some(), "{got:?}");
+    // `limit` is an integer and cannot be counted, so it ranks below both
+    // the table and the string — but it is still offered.
+    assert!(limit.is_some(), "a non-match should still be listed: {got:?}");
+    assert!(lines < limit, "table should outrank integer: {got:?}");
+    assert!(label < limit, "string should outrank integer: {got:?}");
+}
+
+/// A class implementing `OpLen` counts too, so it ranks with the tables.
+#[test]
+fn an_oplen_class_ranks_as_countable() {
+    let got = complete_ranked(&format!("{COUNT}            local n = #@\n"));
+    let pos = |name: &str| got.iter().position(|i| i == name);
+    assert!(pos("bag") < pos("limit"), "OpLen class should outrank: {got:?}");
+}
+
+/// Outside a `#` the order is untouched — the signal must not leak into the
+/// next expression.
+#[test]
+fn the_countable_signal_does_not_leak() {
+    let got = complete_ranked(&format!("{COUNT}            local n = #lines + l@\n"));
+    let pos = |name: &str| got.iter().position(|i| i == name);
+    // Back in ordinary territory, declaration order decides, not countability.
+    assert!(pos("limit").is_some() && pos("lines").is_some(), "{got:?}");
+}
