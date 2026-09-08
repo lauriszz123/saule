@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 saule-ast = { path = "../saule-ast" }
+saule-sigs = { path = "../saule-sigs" }
 miette = "7.6.0"
 thiserror = "2.0.18"
 

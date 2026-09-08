@@ -27,6 +27,7 @@ use std::ops::Range;
 use saule_ast::{Decl, Module, Stmt};
 
 pub mod binding;
+pub mod ops;
 pub mod builtins;
 mod control_flow;
 mod error;
@@ -261,7 +262,7 @@ fn analyze_inner(
     // declarations, the seed's imports, the embedder's builtins — so this
     // is the first point at which an unannotated `return self.field` can be
     // typed, and the last before the registries are handed downstream.
-    return_infer::infer_missing_returns(module, &mut reg, &mut funcs);
+    return_infer::infer_missing_returns(module, &mut reg, &ifaces, &enums, &mut funcs);
 
     install_registries(reg, ifaces, enums, iface_methods, iface_params);
     install_functions(funcs);
