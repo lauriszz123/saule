@@ -6,6 +6,16 @@ use saule_semantic::{lookup_field_type, lookup_method, with_classes};
 
 use super::*;
 
+/// The class a type names, seen through any nullability: `Scanner?`
+/// names `Scanner`, and whether the value can be nil is the caller's
+/// problem, not the lookup's.
+fn class_name(ty: Type) -> Option<String> {
+    match strip_nullable(ty) {
+        Type::Named(n) => Some(n),
+        _ => None,
+    }
+}
+
 /// A semantic method signature in the shape the generic-instantiation
 /// helpers take.
 fn method_sig_as_native(sig: saule_semantic::MethodSig) -> saule_typeck::sigs::NativeSig {
@@ -317,6 +327,26 @@ impl<'a> Cx<'a> {
             // `x!.foo` — the unwrap changes the nullability, not which
             // type the receiver names.
             Expr::ForceUnwrap(inner) => self.receiver_class(&inner.value),
+            // `self.scanner.peek()` — the receiver is itself a field
+            // read, so its class is that field's declared type. The
+            // hover walker has always resolved this shape; without it
+            // here, every call reached through a field resolved to
+            // nothing and the local it initialised went unhinted — the
+            // common case in any class that holds its collaborators as
+            // fields.
+            Expr::Member { obj: inner, name } | Expr::SafeMember { obj: inner, name } => {
+                let inner_class = self.receiver_class(&inner.value)?;
+                class_name(lookup_field_type(&inner_class, name)?)
+            }
+            // `(x as T).foo` — the cast names the class outright, which
+            // is the whole reason to have written it.
+            Expr::Cast { ty, .. } => class_name(ty.clone()),
+            // `blocks[i].kind` — the receiver's class is the element
+            // type of the indexed `table<…>`.
+            Expr::Index { obj: inner, .. } => match strip_nullable(self.infer_type(&inner.value)?) {
+                Type::Table { value, .. } => class_name(*value),
+                _ => None,
+            },
             Expr::Ident(name) => {
                 // Seeing through `T?` is what makes a call on a nullable
                 // receiver resolve at all: `Io.open` hands back `File?`,

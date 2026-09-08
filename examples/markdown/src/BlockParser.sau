@@ -1,3 +1,7 @@
+import * from LineScanner
+import * from Slugger
+import * from Ast
+
 local fn indentOf(line: string)
     local width = 0
 
@@ -29,6 +33,42 @@ local fn runLength(s: string, ch: string)
 end
 
 export class BlockParser
-    fn init()
+    local scanner: LineScanner
+    local slugger: Slugger
+    local refs: table<HeadingRef>
+    local docTitle: string?
+
+    fn init(scanner: LineScanner, slugger: Slugger)
+        self.scanner = scanner
+        self.slugger = slugger
+        self.refs = {}
+    end
+
+    fn headings()
+        return self.refs
+    end
+
+    fn title()
+        return self.docTitle
+    end
+
+    fn run()
+        local blocks: table<Block> = {}
+
+        while not self.scanner.eof() do
+            self.scanner.skipBlank()
+
+            if self.scanner.eof() then
+                break
+            end
+
+            Table.insert(blocks, self.nextBlock())
+        end
+
+        return blocks
+    end
+
+    local fn nextBlock()
+        local line = self.scanner.peek()
     end
 end
