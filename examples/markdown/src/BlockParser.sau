@@ -68,7 +68,61 @@ export class BlockParser
         return blocks
     end
 
-    local fn nextBlock()
+    local fn atxLevel(line: string)
+        local t = String.trimStart(line)
+        local n = runLength(t, '#')
+
+        local rest = String.sub(t, n + 1)
+
+        if n < 1 or String.starts(rest, ' ') then
+            return n
+        end
+
+        return 0
+    end
+
+    local fn starterKind()
         local line = self.scanner.peek()
+
+        if line == nil then
+            return ''
+        end
+
+        if self.atxLevel(line) > 0 then
+            return 'heading'
+        end
+
+        return ''
+    end
+
+    local fn nextBlock()
+        if self.starterKind() == 'heading' then
+            return self.heading()
+        end
+
+        return self.paragraph()
+    end
+
+    local fn recordHeading(level: integer, text: string)
+        local slug = self.slugger.slug(text)
+
+        Table.insert(self.refs, HeadingRef(level, slug, text))
+
+        if level == 1 and self.docTitle == nil then
+            self.docTitle = text
+        end
+
+        return Block.Heading(level, slug, {Inline.Text(text)})
+    end
+
+    local fn heading()
+        local t = String.trimStart(self.scanner.next() ?? '')
+        local level = runLength(t, '#')
+        local text = String.trim(String.sub(t, level + 1))
+
+        return self.recordHeading(level, text)
+    end
+
+    local fn paragraph()
     end
 end

@@ -5,14 +5,17 @@
 -- a parameter type, so it works against anything that satisfies it —
 -- not just the concrete `PlayerRepository`.
 --
--- (The `<T>` type list is currently erased at parse time, so generics
--- act mostly as documentation. The interface contract itself, the
--- `implements` check, and the interface-typed parameter are all enforced.)
+-- This fixture predates generic interfaces working. It used to declare a
+-- bare `interface Repository` while using `T` in its methods, and noted
+-- that "the `<T>` type list is currently erased at parse time". It is not
+-- erased any more: `T` has to be declared, and a method body naming an
+-- undeclared one is now the `unknown type` error it should always have
+-- been. Declaring `<T>` is what the file was describing all along.
 interface Greetable
 	fn greet()
 end
 
-interface Repository
+interface Repository<T>
 	fn save(item: T)
 	fn findById(id: integer) -> T?
 	fn count() -> integer
@@ -30,7 +33,7 @@ class Player implements Greetable
 	end
 end
 
-class PlayerRepository implements Repository
+class PlayerRepository implements Repository<Player>
 	local items: table<Player>
 
 	fn init()

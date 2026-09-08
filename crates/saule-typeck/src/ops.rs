@@ -22,45 +22,20 @@ use saule_ast::{BinOp, Expr, Spanned, Type, UnaryOp};
 
 use super::TypeCheckError;
 use super::expr::{infer, is_any, strip_nullable, type_to_string, types_compatible};
-use super::state::{Scope, class_implements, with_classes};
-use super::to_source_span;
+use super::state::Scope;
 
-/// The class a *type* denotes, when it denotes one. Operator overloading
-/// applies to class instances only — a `table`, an `any`, or a primitive
-/// keeps the built-in behaviour.
-fn class_of(ty: &Type) -> Option<String> {
-    let Type::Named(name) = strip_nullable(ty.clone()) else {
-        return None;
-    };
-    with_classes(|reg| reg.contains_key(&name)).then_some(name)
-}
+// The half of this module that only reads the class registry lives in
+// `saule-semantic`, so passes upstream of the checker can consult an
+// overload too. Re-exported here because `saule_typeck::ops::…` is the
+// path the LSP already spells.
+pub use saule_semantic::ops::{
+    class_of, honours, operand_ty, overload_binary_result, overload_unary_result, result_ty,
+};
+use super::to_source_span;
 
 /// The class an operand denotes, when it denotes one.
 pub(super) fn operand_class(expr: &Spanned<Expr>, scope: &Scope) -> Option<String> {
     class_of(&infer(expr, scope)?)
-}
-
-/// Can `class` be the receiver of `contract`'s operator? It must both
-/// declare the interface — the opt-in the language asks for — and define
-/// the method, which is what dispatch actually calls. Either half may come
-/// from a parent class.
-fn honours(class: &str, contract: &OperatorContract) -> bool {
-    class_implements(class, contract.interface)
-        && saule_semantic::lookup_method(class, contract.method).is_some()
-}
-
-/// Declared return type of `class`'s contract method, e.g. the `Vec2` in
-/// `fn add(other: Vec2) -> Vec2`.
-fn result_ty(class: &str, contract: &OperatorContract) -> Option<Type> {
-    saule_semantic::lookup_method(class, contract.method)?.return_ty
-}
-
-/// Declared type of the contract method's single parameter.
-fn operand_ty(class: &str, contract: &OperatorContract) -> Option<Type> {
-    saule_semantic::lookup_method(class, contract.method)?
-        .params
-        .first()
-        .map(|p| p.ty.clone())
 }
 
 fn not_implemented(
@@ -275,18 +250,6 @@ pub(super) fn check_unary(
 /// that already know the operand's type and have no [`Scope`] — the LSP's
 /// hover and inlay walkers — apply exactly the same rule instead of
 /// re-deriving a weaker one.
-pub fn overload_binary_result(op: BinOp, lhs_ty: &Type) -> Option<Type> {
-    let contract = binary_contract(op)?;
-    if matches!(
-        op,
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
-    ) {
-        return None;
-    }
-    let class = class_of(lhs_ty)?;
-    honours(&class, &contract).then(|| result_ty(&class, &contract))?
-}
-
 /// Check `obj[key]` where `obj` is a class instance.
 ///
 /// Two things can be wrong: the class may support no indexing at all, and
@@ -361,12 +324,6 @@ pub fn new_index_operands(obj_ty: &Type) -> Option<(Type, Type)> {
 
 /// Result type of `op rhs` when `rhs`'s **type** resolves to a class that
 /// overloads `op`. Scope-free counterpart of [`infer_unary`].
-pub fn overload_unary_result(op: UnaryOp, rhs_ty: &Type) -> Option<Type> {
-    let contract = unary_contract(op)?;
-    let class = class_of(rhs_ty)?;
-    honours(&class, &contract).then(|| result_ty(&class, &contract))?
-}
-
 /// Result type of `lhs op rhs` when it resolves to an operator overload.
 pub(super) fn infer_binary(op: BinOp, lhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
     overload_binary_result(op, &infer(lhs, scope)?)

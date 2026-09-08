@@ -301,7 +301,7 @@ pub(crate) fn collect_import_seed_inner(
         // in. Doing it only in `analyze_inner` would infer it for the file
         // that declares the class and not for the files that use it, which
         // is the wrong way round: the declaring file can read the body.
-        saule_semantic::infer_missing_returns(&imported, &mut reg, &mut funcs);
+        saule_semantic::infer_missing_returns(&imported, &mut reg, &ifaces, &enums, &mut funcs);
         let vars = saule_semantic::build_variable_registry(&imported);
 
         // For each top-level decl in the imported module, decide which

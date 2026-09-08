@@ -26,6 +26,17 @@ on this machine (macOS 25.6, arm64), not estimated.
 > of each. Crate LOC counts and the language benchmark table still predate
 > `197ef4f`.
 
+> **Revised 2026-09-08.** Counts refreshed against the working tree: the crate
+> table in [§9.1](#91-the-current-20-crates) had drifted badly — it was headed
+> "16 crates" while listing 18, and omitted `saule-vm` entirely, which is now
+> the third-largest crate in the workspace. It is 20 crates today. Test and LOC
+> figures in [§1](#1-the-verdict-in-one-page), [§2](#2-what-was-measured) and
+> [Appendix A](#appendix-a--raw-measurements) are re-run rather than estimated.
+> `tests/generic_interface.sau`, which had been failing since before `e66ecc0`,
+> is repaired — it was a stale fixture rather than a broken checker; see §2.
+> The judgements in this document are otherwise unrevised: nothing since the
+> last revision has moved a Tier 0 or Tier 1 item.
+
 > **Scope note.** This document does not repeat [RELEASE_PLAN.md](RELEASE_PLAN.md),
 > which already sequences distribution and the package manager in detail and is
 > largely correct. This is the layer above that plan: what the plan does *not*
@@ -60,9 +71,9 @@ on this machine (macOS 25.6, arm64), not estimated.
 
 **Saule is a well-built language implementation and not yet a product.**
 
-The engineering quality is genuinely high, and that is not a courtesy: 74k lines
-of Rust across 16 crates, 847 passing Rust tests plus 224 `.sau` fixtures, zero
-failures, near-zero `TODO`/`FIXME` markers, blocking `clippy -D warnings` and
+The engineering quality is genuinely high, and that is not a courtesy: 96.8k
+lines of Rust across 20 crates, 1,665 passing Rust tests plus 254 `.sau`
+fixtures with zero failures, zero `TODO`/`FIXME` markers, blocking `clippy -D warnings` and
 `rustfmt` gates in CI, and module-level documentation that explains *why* rather
 than restating the code. The type system is more coherent than most hobby
 languages — no bare `function` type, invariant table elements, an `any` you must
@@ -122,13 +133,13 @@ The three things that most change Saule's trajectory, in order:
 
 | Measurement | Command | Result |
 |---|---|---|
-| Rust test suite | `cargo test --workspace --exclude saule-engine-lib` | **847 passed, 0 failed, 5 ignored** |
-| Language fixtures | `./run_tests.sh` | **224/224 behaved as expected** (positive + `ui/` negative) |
+| Rust test suite | `cargo test --workspace --exclude saule-engine-lib` | **1,665 passed, 0 failed, 5 ignored** (1,795 including `saule-engine-lib`) |
+| Language fixtures | `./run_tests.sh` | **254/254 behaved as expected** (97 positive + 157 `ui/` negative) |
 | Benchmarks | `REPS=3 python3 benchmarks/bench.py` | see [Appendix A](#appendix-a--raw-measurements) |
-| Source size | `wc -l` over `crates/*/src` | **~66k LOC of Rust** across 16 crates |
-| Test density | `grep -rn '#\[test\]' crates` | **919** test functions |
+| Source size | `wc -l` over `crates/*/src` | **96.8k LOC of Rust** across 20 crates |
+| Test density | `grep -rn '#\[test\]' crates` | **1,784** test functions |
 | Debt markers | `grep -rn 'TODO\|FIXME\|HACK'` | **0** genuine markers in `crates/*/src` |
-| Release history | `git tag` | **1 tag** (`v26.1`, 2026-07-30), 131 commits |
+| Release history | `git tag` | **1 tag** (`v26.1`, 2026-07-30), 195 commits |
 | Memory behaviour | peak RSS over 3M closure allocations | **7.6 MB, level with the control** (was 2,468.7 MB) — see [Appendix A](#appendix-a--raw-measurements) |
 
 The `.sau` fixture suite is worth calling out specifically: `tests/*.sau` must
@@ -136,6 +147,28 @@ run and exit 0, and `tests/ui/*.sau` must *fail*, each one pinning a specific
 diagnostic. That is a real conformance harness in embryo and it is the right
 shape — see [§6](#6-how-to-know-it-is-stable) for how to grow it into a stability
 gate.
+
+**One fixture had to be repaired to reach 254/254.**
+`tests/generic_interface.sau` had been failing since before `e66ecc0` with
+`unknown type 'T'`. It was written when generic interfaces did not exist — it
+declared a bare `interface Repository` while using `T` in its methods, and
+said so in a comment: *"the `<T>` type list is currently erased at parse time,
+so generics act mostly as documentation."* Erasure is gone, so `T` is now
+correctly rejected as undeclared; the fixture was stale, not the checker.
+Declaring `interface Repository<T>` and `implements Repository<Player>` is
+what the file was describing all along, and it now exercises generic
+interfaces for real rather than relying on erasure to ignore them.
+
+It went unnoticed because **nothing gates on `run_tests.sh`** — that is the
+finding worth keeping, not the fixture. A conformance suite nobody runs
+documents what used to be true. §6.2 proposes the gate.
+
+Two adjacent gaps surfaced while repairing it, both pre-existing and neither
+fixed here: `implements Repository<Player>` does not check that `save`'s
+parameter is the substituted `T`, and omitting a required interface method
+entirely is caught only at the call site, as "no member `count`", rather than
+as a failure to implement the interface. The `implements` clause is currently
+closer to documentation than to a contract.
 
 ---
 
@@ -872,34 +905,76 @@ people mention when they recommend Saule.
 
 ## 9. Crate and repository topology
 
-### 9.1 The current 16 crates
+### 9.1 The current 20 crates
+
+LOC is `wc -l` over each crate's `src/`, re-measured 2026-09-08. The previous
+revision of this table was headed "16 crates", listed 18, and omitted
+`saule-vm` — by then already the third-largest crate in the workspace. Treat
+that as the standing warning about hand-maintained inventories.
 
 | Crate | LOC | Role | Assessment |
 |---|---:|---|---|
-| `saule-ast` | 865 | Shared AST | Correct. Foundation for everything. |
-| `saule-lexer` | 1,103 | Tokeniser | Correct. |
-| `saule-parser` | 2,995 | Recursive descent + error recovery | Correct. Recovery landed in `197ef4f`; LOC is now higher than shown. |
-| `saule-semantic` | 2,565 | Resolution, registries, flow, field-init | Correct. |
-| `saule-typeck` | 8,043 | Types, nullability, generics, exhaustiveness | Correct. |
-| `saule-interpreter` | 15,046 | Tree-walker, stdlib, modules, native hosting | **Too broad — see 9.2.** |
-| `saule-fmt` | 2,943 | Formatter | Correct, well-isolated. |
+| `saule-ast` | 1,866 | Shared AST, operator contracts | Correct. Foundation for everything. |
+| `saule-lexer` | 1,084 | Tokeniser | Correct. |
+| `saule-parser` | 3,670 | Recursive descent + error recovery | Correct. |
+| `saule-sigs` | 954 | Native signature table + generic instantiation | New in this pass — see 9.2. |
+| `saule-semantic` | 3,964 | Resolution, registries, flow, field-init, return inference, operator lookup | Correct. |
+| `saule-typeck` | 7,697 | Types, nullability, generics, exhaustiveness | Correct. |
+| `saule-interpreter` | 17,286 | Tree-walker, stdlib, modules, native hosting | **Too broad — see 9.2.** |
+| `saule-vm` | 16,688 | Bytecode compiler + VM, now the default engine | Correct, and the reason §5.9 moved down the list. |
+| `saule-fmt` | 2,389 | Formatter | Correct, well-isolated. |
 | `saule-docs` | 1,015 | `---` doc-comment extraction | Correct; under-used (§5.13). |
-| `saule-cli` | 1,514 | `saule` binary | Correct. |
-| `saule-lsp` | 20,754 | Language server | **Largest crate; see 9.3.** |
-| `saule-db` | 938 | Incremental query layer | New in this pass — see 9.2. |
+| `saule-cli` | 1,811 | `saule` binary | Correct. |
+| `saule-lsp` | 24,149 | Language server | **Largest crate; see 9.3.** |
+| `saule-db` | 1,080 | Incremental query layer | See 9.2. |
 | `saule-native-abi` | 314 | Frozen C ABI | Correct. **Must be published.** |
 | `saule-sdk` | 1,268 | Package-authoring SDK | Correct. **Must be published.** |
-| `saule-export-macro` | 502 | `#[saule_export]` | Correct. **Must be published.** |
-| `saule-project` | 813 | `saule.config`, discovery, deps, `ProjectInfo` | New in this pass — see 9.2. |
-| `saule-version` | 417 | Build-time version resolution | Correct, clever, self-contained. |
-| `saule-wasm` | 446 | Playground bindings | Correct. Candidate for its own repo. |
-| `saule-engine-lib` | 6,583 | Graphics engine example | **Does not belong here — see 9.5.** |
+| `saule-export-macro` | 501 | `#[saule_export]` | Correct. **Must be published.** |
+| `saule-project` | 916 | `saule.config`, discovery, deps, `ProjectInfo` | See 9.2. |
+| `saule-version` | 201 | Build-time version resolution | Correct, clever, self-contained. |
+| `saule-wasm` | 530 | Playground bindings | Correct. Candidate for its own repo. |
+| `saule-engine-lib` | 9,373 | Graphics engine example | **Does not belong here — see 9.5.** |
 
 The split is, on the whole, better than most language projects manage. The
 pipeline crates are cleanly layered and the dependency graph flows one way. What
 follows are the changes worth making.
 
 ### 9.2 New crates to extract
+
+**`saule-sigs` — extracted 2026-09-08, forced by a layering inversion.**
+The native signature table (`String.trim` is `(string) -> string`, and so on
+for every stdlib function) lived in `saule-typeck`, which was fine while the
+typechecker was its only reader. It stopped being fine when `saule-semantic`
+grew return-type inference: a body that returns `String.trim(x)` cannot be
+typed without that table, and `saule-semantic` sits *upstream* of
+`saule-typeck`. The dependency ran the wrong way, so the pass simply declined
+on every native call.
+
+Splitting the table into its own crate below `saule-semantic` fixes the
+direction. It took the pure half of generic instantiation with it — `unify`,
+`substitute`, `instantiate_param_types`, `mentions_unbound_param`,
+`Freshened` — because instantiating a signature's return type is what the
+table is *for*, and those are plain functions over `Type` with no checker
+state behind them. `saule_typeck::sigs` re-exports the crate wholesale and
+adds back the one entry point that takes a `saule_semantic::MethodSig`, which
+cannot move down without re-inverting the same edge. All ninety-odd
+`saule_typeck::sigs::…` call sites across the LSP and the interpreter were
+unchanged by the move.
+
+The same pressure produced a second, smaller move that is *not* a new crate:
+the half of `saule_typeck::ops` that only reads the class registry —
+`overload_binary_result`, `overload_unary_result` and their helpers — now
+lives in `saule_semantic::ops`, re-exported from its old path. Note this went
+the opposite way from `saule-sigs`: the signature table could move *below*
+`saule-semantic` because it reads nothing but its own tables, while operator
+lookup reads the class registry, so below is precisely where it cannot go.
+The diagnostics for a missing or ill-typed contract stayed in the checker,
+where the scope and the error type are.
+
+**The general lesson for §9.2's remaining candidates:** the thing that decides
+where code belongs is which *registries* it reads, not which pass currently
+calls it. Both moves above were invisible from the call sites and neither
+changed behaviour — the suite was identical either side.
 
 **~~`saule-project` — extract now, highest value.~~ Done.**
 Owns `saule.config` parsing, project discovery, `src_dirs`/`dependencies`
@@ -1442,9 +1517,11 @@ is a good boundary and it should be stated as a policy so it stays true.
 
 ### Test inventory
 
-- 847 passing Rust tests (workspace minus `saule-engine-lib`), 0 failures, 5 ignored
-- 919 `#[test]` functions across all crates
-- 224 `.sau` fixtures: positives must run and exit 0, `tests/ui/*` must fail
+- 1,665 passing Rust tests (workspace minus `saule-engine-lib`), 0 failures, 5 ignored — 1,795 with it
+- 1,784 `#[test]` functions across all crates
+- 254 `.sau` fixtures (97 positive, 157 `tests/ui/*`): positives must run and
+  exit 0, `ui` must fail. **All 254 behave as expected** — `generic_interface.sau`
+  had been failing and was repaired, see [§2](#2-what-was-measured)
 - Doctests: 1 running (`output::capture`), 3 marked `ignore` in the ABI/SDK docs
 
 The doctest count is the one weak spot in an otherwise strong test story — the
