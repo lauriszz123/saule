@@ -253,15 +253,37 @@ pub(crate) fn base_type_name(ty: &Type) -> Option<String> {
 /// Outside an argument — and for a slot declared `any`, which everything
 /// fits — there is no signal, and the order is exactly what it was.
 pub(crate) struct Slot {
-    want: Option<String>,
+    want: Want,
+}
+
+/// What the caret's position accepts.
+enum Want {
+    /// Nothing to judge by — outside an argument, or a slot declared `any`.
+    Nothing,
+    /// An argument slot's declared type.
+    Named(String),
+    /// The operand of `#`: a table, a string, or a class implementing
+    /// `OpLen`. Unlike [`Want::Named`] this is a *set* of shapes rather
+    /// than one name, which is why the check works on the whole `Type`
+    /// rather than the name it heads — `table<string>` heads no name at
+    /// all, and is the commonest thing anyone counts.
+    Countable,
 }
 
 impl Slot {
     pub(crate) fn new(expected: Option<&Type>) -> Slot {
         let want = expected
             .and_then(base_type_name)
-            .filter(|n| n != "any" && n != "nil");
+            .filter(|n| n != "any" && n != "nil")
+            .map_or(Want::Nothing, Want::Named);
         Slot { want }
+    }
+
+    /// The slot after a `#`.
+    pub(crate) fn countable() -> Slot {
+        Slot {
+            want: Want::Countable,
+        }
     }
 
     /// The sort bucket for an item of type `have`, given the item's own
@@ -269,19 +291,44 @@ impl Slot {
     /// keyword, or a binding with no annotation to read.
     fn rank(&self, have: Option<&str>, bucket: &str) -> String {
         let fits = match (&self.want, have) {
-            (Some(want), Some(have)) => is_subtype_named(have, want),
+            (Want::Named(want), Some(have)) => is_subtype_named(have, want),
+            (Want::Countable, Some(have)) => countable_name(have),
             _ => false,
         };
         format!("{}{bucket}", if fits { "0" } else { "1" })
     }
 
     /// [`Self::rank`] for an item whose type is a `Type`.
+    ///
+    /// Not simply `rank(base_type_name(have))`: a `table<V>` heads no name,
+    /// so reducing first would throw away the one shape `#` most wants.
     fn rank_ty(&self, have: Option<&Type>, bucket: &str) -> String {
-        self.rank(
-            have.and_then(base_type_name).as_deref(),
-            bucket,
-        )
+        if let Want::Countable = self.want {
+            let fits = have.is_some_and(countable);
+            return format!("{}{bucket}", if fits { "0" } else { "1" });
+        }
+        self.rank(have.and_then(base_type_name).as_deref(), bucket)
     }
+}
+
+/// Can `#` be applied to a value of this type?
+fn countable(ty: &Type) -> bool {
+    match ty {
+        Type::Table { .. } => true,
+        // `#maybeList` needs a `!` first, but the name is still the one the
+        // author is reaching for — rank it as the match it is and let the
+        // checker ask for the unwrap.
+        Type::Nullable(inner) => countable(inner),
+        Type::Named(n) => countable_name(n),
+        Type::Generic(g) => countable_name(&g.name),
+        _ => false,
+    }
+}
+
+fn countable_name(name: &str) -> bool {
+    name == "string"
+        || name == "table"
+        || saule_semantic::class_implements(name, saule_ast::ops::OP_LEN.interface)
 }
 
 /// Values usable at the caret: bindings in scope first, then the enclosing
@@ -289,7 +336,11 @@ impl Slot {
 pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     // What the argument slot under the caret is declared to hold, if any.
-    let slot = Slot::new(found.expected.as_ref());
+    let slot = if found.count_operand {
+        Slot::countable()
+    } else {
+        Slot::new(found.expected.as_ref())
+    };
 
     // Argument keywords for the call the caret is inside, ahead of
     // everything else — at `Widget(back…)` the author is far more likely

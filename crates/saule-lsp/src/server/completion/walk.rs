@@ -122,6 +122,11 @@ pub(crate) struct Found {
     /// keywords that continue or close it can be offered alongside the
     /// ones that begin a fresh statement.
     pub(crate) block: Block,
+    /// True when the caret is filling the operand of `#`. Only a table, a
+    /// string or a class implementing `OpLen` can go there, which is as
+    /// strong a signal as an argument slot's declared type — and the same
+    /// kind of signal, so it feeds the same ranking.
+    pub(crate) count_operand: bool,
 }
 
 /// Descends the tree to the sentinel, maintaining the scope stack.
@@ -149,6 +154,8 @@ pub(crate) struct Walk {
     /// The block currently being walked. Saved and restored around each
     /// one the same way, so a nested block's keywords shadow its parent's.
     block: Block,
+    /// Whether the expression currently being walked is the operand of `#`.
+    count_operand: bool,
 }
 
 impl Walk {
@@ -190,6 +197,7 @@ impl Walk {
             expected: None,
             match_arm: false,
             block: Block::Module,
+            count_operand: false,
         };
         w.block(&module.stmts);
         w.found
@@ -214,6 +222,7 @@ impl Walk {
                 expected: self.expected.clone(),
                 match_arm: self.match_arm,
                 block: self.block,
+                count_operand: self.count_operand,
             });
         }
     }
@@ -655,7 +664,18 @@ impl Walk {
                     self.expr(obj);
                 }
             }
-            Expr::Unary { rhs, .. } => self.expr(rhs),
+            Expr::Unary { op, rhs } => {
+                // `#⟨caret⟩` takes a table, a string or an `OpLen` class and
+                // nothing else — worth saying so, since the list is otherwise
+                // every name in scope. Saved and restored so it cannot leak
+                // out of the operand into a sibling expression.
+                let outer = std::mem::replace(
+                    &mut self.count_operand,
+                    matches!(op, saule_ast::UnaryOp::Len),
+                );
+                self.expr(rhs);
+                self.count_operand = outer;
+            }
             Expr::ForceUnwrap(inner) => self.expr(inner),
             // `x as T` — both halves can hold the caret. The target is a
             // type annotation like any other, so `v as <caret>` wants type
