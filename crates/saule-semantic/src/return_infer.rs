@@ -38,23 +38,33 @@
 //! # What it types
 //!
 //! Literals, `self`, parameters, locals and loop/catch bindings, field and
-//! index reads off any of those, constructor calls, calls to methods that
-//! *declare* a return type, comparisons, `not` and `#`. A local without an
-//! annotation is typed from its initializer by these same rules, so it can
-//! only carry a type this pass would have committed to anyway.
+//! index reads off any of those, constructor calls, enum variants, calls to
+//! sibling methods and top-level `fn`s, calls to natives (`String.trim`,
+//! `Math.floor`, `print`), and every operator the language has. A local
+//! without an annotation is typed from its initializer by these same rules,
+//! so it can only carry a type this pass would have committed to anyway.
 //!
-//! It deliberately does not re-implement the typechecker. Arithmetic,
-//! concatenation and the bitwise operators all follow their operands or an
-//! `Op*` overload, and the contract table that resolves one lives in
-//! `saule-typeck`, downstream of this crate. Casts and free calls need the
-//! native signature table, which is downstream too. All of them decline,
-//! and the function keeps the `any` it has now.
+//! Helpers that hand back what other helpers built resolve too — see the
+//! rounds in [`infer_missing_returns`], which is what lets `heading()`
+//! reach the `Block` that `recordHeading()` returns.
+//!
+//! The operator rules mirror the checker's own, reached through two tables
+//! that had to move before this pass could see them: natives come from
+//! [`saule_sigs`], now a crate *below* this one, and operator overloads from
+//! [`crate::ops`], moved *up* out of `saule-typeck`. Where the checker must
+//! answer with `any`, this declines instead — an inferred `any` is worth
+//! nothing and costs the chance to be right later.
+//!
+//! It still does not re-implement the typechecker. `x as T` declines: the
+//! cast-result rule reads the generics in scope during checking, which is
+//! checker state and not a table that can move.
 
 use saule_ast::{
-    BinOp, ClassMember, Decl, Expr, Method, Module, Param, Spanned, Stmt, Type, UnaryOp,
+    BinOp, CallArg, ClassMember, Decl, Expr, Method, Module, Param, Spanned, Stmt, Type, UnaryOp,
 };
 
-use crate::registry::{ClassRegistry, FunctionRegistry};
+use crate::ops::Decls;
+use crate::registry::{ClassRegistry, EnumRegistry, FunctionRegistry, InterfaceRegistry};
 
 /// Fill in the return type of every method and top-level `fn` in `module`
 /// that declared none, in place.
@@ -65,16 +75,12 @@ use crate::registry::{ClassRegistry, FunctionRegistry};
 pub fn infer_missing_returns(
     module: &Module,
     classes: &mut ClassRegistry,
+    interfaces: &InterfaceRegistry,
+    enums: &EnumRegistry,
     funcs: &mut FunctionRegistry,
 ) {
-    // Every inference is computed against the registry as it stands on
-    // entry, then applied. Inferring in place instead would let one
-    // method's result feed another's, and since methods are held in a
-    // `HashMap` the order that happened in — and so the types the module
-    // ended up with — would vary between runs.
-    let mut method_results: Vec<(String, String, Type)> = Vec::new();
-    let mut fn_results: Vec<(String, Type)> = Vec::new();
-
+    let mut methods: Vec<Candidate<'_>> = Vec::new();
+    let mut functions: Vec<Candidate<'_>> = Vec::new();
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
         match &d.value {
@@ -86,10 +92,13 @@ pub fn infer_missing_returns(
                     if !wants_inference(meth) {
                         continue;
                     }
-                    let self_class = (!meth.is_static).then_some(name.as_str());
-                    if let Some(ty) = infer_body(&meth.body, &meth.params, self_class, classes) {
-                        method_results.push((name.clone(), meth.name.clone(), ty));
-                    }
+                    methods.push(Candidate {
+                        owner: name,
+                        name: &meth.name,
+                        params: &meth.params,
+                        body: &meth.body,
+                        self_class: (!meth.is_static).then_some(name.as_str()),
+                    });
                 }
             }
             Decl::Function {
@@ -98,27 +107,119 @@ pub fn infer_missing_returns(
                 return_ty: None,
                 body,
                 ..
-            } => {
-                if let Some(ty) = infer_body(body, params, None, classes) {
-                    fn_results.push((name.clone(), ty));
-                }
-            }
+            } => functions.push(Candidate {
+                owner: name,
+                name,
+                params,
+                body,
+                self_class: None,
+            }),
             _ => {}
         }
     }
 
-    for (class, method, ty) in method_results {
-        if let Some(sig) = classes
-            .get_mut(&class)
-            .and_then(|info| info.methods.get_mut(&method))
-        {
-            sig.return_ty = Some(ty);
+    // Settle by repeated rounds rather than in one pass, because a helper
+    // very often hands back what another helper built: `heading()` returns
+    // `self.recordHeading(…)`, which returns a `Block`. Reading only
+    // *declared* return types left every such caller untyped, and reading
+    // inferred ones as they land would make the answer depend on the order
+    // methods happen to sit in a `HashMap`.
+    //
+    // Each round reads the registries as they stood when it began and
+    // applies its results at the end, so a round can only ever see types
+    // settled by *earlier* rounds. The fixed point that reaches is the same
+    // whatever order the candidates are visited in. A round that settles
+    // nothing ends the loop, so a recursive helper — whose type depends on
+    // itself and can never settle — simply keeps no type, as before.
+    for _ in 0..MAX_ROUNDS {
+        let mut method_results: Vec<(String, String, Type)> = Vec::new();
+        let mut fn_results: Vec<(String, Type)> = Vec::new();
+        for c in &methods {
+            if let Some(ty) = c.infer(classes, interfaces, enums, funcs) {
+                method_results.push((c.owner.clone(), c.name.clone(), ty));
+            }
+        }
+        for c in &functions {
+            if let Some(ty) = c.infer(classes, interfaces, enums, funcs) {
+                fn_results.push((c.name.clone(), ty));
+            }
+        }
+        if method_results.is_empty() && fn_results.is_empty() {
+            break;
+        }
+        for (class, method, ty) in method_results {
+            if let Some(sig) = classes
+                .get_mut(&class)
+                .and_then(|info| info.methods.get_mut(&method))
+            {
+                sig.return_ty = Some(ty);
+            }
+        }
+        for (name, ty) in fn_results {
+            if let Some(sig) = funcs.get_mut(&name) {
+                sig.return_ty = Some(ty);
+            }
+        }
+        // Anything that settled is done; the next round retries only what
+        // is still undecided, so a chain of depth d costs d passes over a
+        // shrinking list rather than d passes over all of it.
+        methods.retain(|c| c.unsettled_method(classes));
+        functions.retain(|c| c.unsettled_fn(funcs));
+        if methods.is_empty() && functions.is_empty() {
+            break;
         }
     }
-    for (name, ty) in fn_results {
-        if let Some(sig) = funcs.get_mut(&name) {
-            sig.return_ty = Some(ty);
-        }
+}
+
+/// How many times [`infer_missing_returns`] will re-examine what is still
+/// undecided.
+///
+/// One round settles a helper, the next settles its caller, and so on, so
+/// this is the longest chain of unannotated helpers that resolves. Real
+/// chains are two or three deep; the cap is what keeps a pathological file
+/// from turning this into quadratic work on every keystroke.
+const MAX_ROUNDS: usize = 16;
+
+/// One function or method whose return type is still to be decided.
+struct Candidate<'a> {
+    /// The class a method belongs to; its own name for a free function.
+    owner: &'a String,
+    name: &'a String,
+    params: &'a [Param],
+    body: &'a [Spanned<Stmt>],
+    self_class: Option<&'a str>,
+}
+
+impl Candidate<'_> {
+    fn infer(
+        &self,
+        classes: &ClassRegistry,
+        interfaces: &InterfaceRegistry,
+        enums: &EnumRegistry,
+        funcs: &FunctionRegistry,
+    ) -> Option<Type> {
+        infer_body(
+            self.body,
+            self.params,
+            self.self_class,
+            classes,
+            interfaces,
+            enums,
+            funcs,
+        )
+    }
+
+    fn unsettled_method(&self, classes: &ClassRegistry) -> bool {
+        classes
+            .get(self.owner)
+            .and_then(|info| info.methods.get(self.name))
+            .is_some_and(|sig| sig.return_ty.is_none())
+    }
+
+    fn unsettled_fn(&self, funcs: &FunctionRegistry) -> bool {
+        funcs
+            .get(self.name)
+            .is_some_and(|sig| sig.return_ty.is_none())
     }
 }
 
@@ -137,9 +238,18 @@ fn infer_body(
     params: &[Param],
     self_class: Option<&str>,
     classes: &ClassRegistry,
+    interfaces: &InterfaceRegistry,
+    enums: &EnumRegistry,
+    funcs: &FunctionRegistry,
 ) -> Option<Type> {
     let mut cx = Cx {
         classes,
+        decls: Decls::Pending {
+            classes,
+            interfaces,
+        },
+        enums,
+        funcs,
         self_class,
         scope: params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
     };
@@ -186,6 +296,18 @@ struct Returns {
 
 struct Cx<'a> {
     classes: &'a ClassRegistry,
+    /// The same declarations, in the shape operator-overload lookup wants.
+    /// It must be told to read *these* rather than the installed
+    /// thread-locals: this pass runs while the registries are still being
+    /// built, so the installed ones still describe the previous module.
+    decls: Decls<'a>,
+    /// Enums are a separate registry from classes, and a variant reaches
+    /// this pass as an ordinary member access on the enum's name.
+    enums: &'a EnumRegistry,
+    /// Top-level `fn`s, so a call to a sibling helper resolves. These are
+    /// the file's own functions; the *native* signature table is in
+    /// `saule-typeck` and out of reach, so `String.trim(…)` still declines.
+    funcs: &'a FunctionRegistry,
     /// The class whose instance `self` names, absent in a static method or
     /// a free function.
     self_class: Option<&'a str>,
@@ -319,7 +441,7 @@ impl Cx<'_> {
             // the field's own type says.
             Expr::SafeMember { obj, name } => Some(nullable(self.field(&obj.value, name)?)),
             Expr::ForceUnwrap(inner) => Some(strip_nullable(self.type_of(&inner.value)?)),
-            Expr::Call { callee, .. } => self.call(&callee.value),
+            Expr::Call { callee, args, .. } => self.call(&callee.value, args),
             // `t[i]` on a table is its element type. Indexing anything else
             // is a question for the checker.
             Expr::Index { obj, .. } => match strip_nullable(self.type_of(&obj.value)?) {
@@ -332,42 +454,124 @@ impl Cx<'_> {
             // The other operators follow their operands, or an overload the
             // contract table in the typechecker resolves, and that table is
             // downstream of this crate. They decline.
-            Expr::Binary { op, .. } => matches!(
-                op,
-                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
-            )
-            .then(|| named("boolean")),
+            Expr::Binary { op, lhs, rhs } => match op {
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                    Some(named("boolean"))
+                }
+                // `a ?? b` drops the left side's nullability — that is what
+                // the operator is for — and is nullable again only when the
+                // fallback is. No contract overloads it, so the rule holds
+                // whatever the operands are.
+                BinOp::Coalesce => {
+                    let base = strip_nullable(self.type_of(&lhs.value)?);
+                    Some(match &rhs.value {
+                        Expr::Nil => nullable(base),
+                        other => match self.type_of(other) {
+                            Some(Type::Nullable(_)) => nullable(base),
+                            _ => base,
+                        },
+                    })
+                }
+                // Lua semantics: `and` / `or` evaluate to one of their
+                // *operands*, not to a boolean. Operands that disagree are a
+                // genuine union — decline rather than pick a side.
+                BinOp::And | BinOp::Or => {
+                    let (l, r) = (self.type_of(&lhs.value)?, self.type_of(&rhs.value)?);
+                    let (lb, rb) = (strip_nullable(l), strip_nullable(r));
+                    (lb == rb).then_some(lb)
+                }
+                // `..` yields whatever an `OpConcat` overload returns, and a
+                // plain `string` otherwise.
+                BinOp::Concat => self
+                    .binary_overload(*op, &lhs.value)
+                    .or_else(|| Some(named("string"))),
+                // Arithmetic dispatches on the left operand's overload, else
+                // takes whichever side can be typed — `integer + integer` is
+                // an `integer`, `float + integer` a `float`.
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => self
+                    .binary_overload(*op, &lhs.value)
+                    .or_else(|| self.type_of(&lhs.value))
+                    .or_else(|| self.type_of(&rhs.value)),
+                // Bitwise operands and results are both `integer`, so unlike
+                // arithmetic there is no operand kind to follow.
+                BinOp::BAnd | BinOp::BOr | BinOp::BXor | BinOp::Shl | BinOp::Shr => self
+                    .binary_overload(*op, &lhs.value)
+                    .or_else(|| Some(named("integer"))),
+            },
             _ => None,
         }
     }
 
+    /// Result of `lhs op …` when `lhs` is a class that overloads `op`.
+    fn binary_overload(&self, op: BinOp, lhs: &Expr) -> Option<Type> {
+        crate::ops::overload_binary_result_in(self.decls, op, &self.type_of(lhs)?)
+    }
+
+    /// Type of `op rhs`, mirroring the checker.
+    ///
+    /// An `OpNeg` / `OpLen` / `OpBNot` overload names its own result and
+    /// wins; otherwise `-x` keeps the operand's type with any nullability
+    /// stripped, `#x` and `~x` count, and `not x` is a boolean.
     fn unary(&self, op: UnaryOp, rhs: &Expr) -> Option<Type> {
+        if let Some(ty) = self
+            .type_of(rhs)
+            .and_then(|t| crate::ops::overload_unary_result_in(self.decls, op, &t))
+        {
+            return Some(ty);
+        }
         match op {
-            // No contract overloads `not`, so this one is always a boolean.
             UnaryOp::Not => Some(named("boolean")),
-            // `#` counts a table or a string. On a class it dispatches to an
-            // `OpLen` overload that names its own result, so only the
-            // primitives — which cannot be overloaded — answer here.
-            UnaryOp::Len => match strip_nullable(self.type_of(rhs)?) {
-                Type::Table { .. } => Some(named("integer")),
-                Type::Named(n) if n == "table" || n == "string" => Some(named("integer")),
-                _ => None,
-            },
-            UnaryOp::Neg | UnaryOp::BNot => None,
+            UnaryOp::Len | UnaryOp::BNot => Some(named("integer")),
+            UnaryOp::Neg => self.type_of(rhs).map(strip_nullable),
         }
     }
 
     fn field(&self, obj: &Expr, name: &str) -> Option<Type> {
+        // `Colour.Red` — a payload-free variant used as a value is the enum
+        // it belongs to, not a field of anything.
+        if let Some(en) = self.variant_owner(obj, name) {
+            return Some(named(&en));
+        }
         let class = self.class_of(obj)?;
         self.classes.get(&class)?.field_types.get(name).cloned()
     }
 
-    fn call(&self, callee: &Expr) -> Option<Type> {
+    fn call(&self, callee: &Expr, args: &[CallArg]) -> Option<Type> {
         match callee {
-            // `Player()` — a constructor call is the one free call whose
-            // result is knowable without a signature table.
+            // `Player()` — a constructor call.
             Expr::Ident(n) if self.classes.contains_key(n) => Some(named(n)),
+            Expr::Ident(n) if self.lookup(n).is_none() => {
+                // `runLength(t, '#')` — a sibling top-level `fn`, whose own
+                // return type may itself have been inferred in an earlier
+                // round. A local of the same name shadows it, hence the
+                // scope check above.
+                if let Some(sig) = self.funcs.get(n) {
+                    return sig.return_ty.clone();
+                }
+                // `print(x)`, `tostring(v)` — a prelude native.
+                self.native(n, args)
+            }
             Expr::Member { obj, name } => {
+                // `Block.Heading(level, slug, …)` — constructing a tuple
+                // variant produces the *enum*. Enums live in their own
+                // registry, so the class lookup below misses them entirely,
+                // and a body whose whole job is to build one variant —
+                // which is most of what a parser's helpers do — inferred
+                // nothing at all.
+                if let Some(en) = self.variant_owner(&obj.value, name) {
+                    return Some(named(&en));
+                }
+                // `String.trim(s)`, `Math.floor(n)` — a stdlib module's
+                // native. Tried before the class path because these modules
+                // are not classes and would miss it entirely; a user class
+                // or a local of the same name takes precedence.
+                if let Expr::Ident(m) = &obj.value
+                    && self.lookup(m).is_none()
+                    && !self.classes.contains_key(m)
+                    && let Some(ty) = self.native(&format!("{m}.{name}"), args)
+                {
+                    return Some(ty);
+                }
                 let class = self.class_of(&obj.value)?;
                 // Only a *declared* return type. A method whose own return
                 // type this pass is inferring is not consulted: results are
@@ -377,6 +581,44 @@ impl Cx<'_> {
             }
             _ => None,
         }
+    }
+
+    /// The return type of the native `qname`, with its generics bound from
+    /// whatever the arguments turn out to be.
+    ///
+    /// A type parameter the arguments never pinned down comes back as its
+    /// own bare name — `table<U>` rather than a type anyone wrote — so that
+    /// is treated as unknown and declines, the same guard the checker and
+    /// the LSP apply to the same table.
+    fn native(&self, qname: &str, args: &[CallArg]) -> Option<Type> {
+        let sig = saule_sigs::lookup(qname)?;
+        let arg_types: Vec<Option<Type>> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(self.type_of(&e.value)),
+                // Named arguments bind no generics here, mirroring the
+                // checker. A non-generic native is unaffected, and a generic
+                // one simply goes unpinned and declines below.
+                CallArg::Named { .. } => None,
+            })
+            .collect();
+        let ret = saule_sigs::instantiate_returns(&sig, &arg_types)
+            .into_iter()
+            .next()?;
+        (!saule_sigs::mentions_unbound_param(&ret, &sig.type_params)).then_some(ret)
+    }
+
+    /// The enum `obj.name` names a variant of, when `obj` is a bare enum
+    /// name that nothing in scope shadows and `name` is one of its variants.
+    fn variant_owner(&self, obj: &Expr, name: &str) -> Option<String> {
+        let Expr::Ident(n) = obj else { return None };
+        if self.lookup(n).is_some() {
+            return None;
+        }
+        self.enums
+            .get(n)
+            .filter(|info| info.variants.contains_key(name))
+            .map(|_| n.clone())
     }
 
     /// The class an expression is an instance of, for a field or method

@@ -3315,13 +3315,15 @@ end
 }
 
 /// A body whose returns this pass cannot type keeps the `any` it had — the
-/// failure mode is silence, not a wrong answer.
+/// failure mode is silence, not a wrong answer. A cast is the remaining
+/// case: its result rule reads the generics in scope during checking, which
+/// is checker state rather than a table this pass can consult.
 #[test]
 fn an_untypeable_return_infers_nothing() {
     let src = "\
 class Odd
-  fn compute(a: integer, b: integer)
-    return a + b * 2
+  fn compute(a: any)
+    return a as integer
   end
 end
 ";
@@ -3420,36 +3422,97 @@ end
     assert!(md.contains("fn Flag.off() -> boolean"), "got: {md}");
 }
 
-/// Arithmetic follows its operands and can be redirected by an `Op*`
-/// overload the typechecker resolves, so it still declines rather than
-/// guessing from this side of the dependency edge.
+/// Arithmetic follows its operands. This used to decline, because the
+/// `Op*` contract table that can redirect it sat downstream in
+/// `saule-typeck`; the lookup half now lives in `saule_semantic::ops`.
 #[test]
-fn arithmetic_still_declines() {
+fn arithmetic_follows_its_operands() {
     let src = "\
 class Odd
   fn total(a: integer, b: integer)
-    return a + b
+    return a + b * 2
   end
 end
 ";
     let md = hover_src_at(src, "fn total(", "fn ".len()).expect("hover");
-    assert!(!md.contains("->"), "should not have inferred: {md}");
+    assert!(md.contains("-> integer"), "got: {md}");
 }
 
-/// `#` on a class dispatches to its `OpLen` overload, whose result this
-/// pass cannot see — so only the primitives answer.
+/// The left operand decides the flavour, exactly as the checker reads it.
 #[test]
-fn length_of_a_class_declines() {
+fn arithmetic_follows_the_left_operand() {
     let src = "\
-class Bag
+class Odd
+  fn scale(a: float, b: integer)
+    return a * b
+  end
+end
+";
+    let md = hover_src_at(src, "fn scale(", "fn ".len()).expect("hover");
+    assert!(md.contains("-> float"), "got: {md}");
+}
+
+/// Concatenation is a string, and the bitwise operators are integers.
+#[test]
+fn concat_and_bitwise_infer() {
+    let src = "\
+class Odd
+  fn join(a: string, b: string)
+    return a .. b
+  end
+
+  fn mask(a: integer, b: integer)
+    return a & b
+  end
+end
+";
+    let cat = hover_src_at(src, "fn join(", "fn ".len()).expect("hover");
+    assert!(cat.contains("-> string"), "got: {cat}");
+    let mask = hover_src_at(src, "fn mask(", "fn ".len()).expect("hover");
+    assert!(mask.contains("-> integer"), "got: {mask}");
+}
+
+/// `and` / `or` evaluate to an *operand*, not a boolean — so they infer only
+/// when both sides agree, and decline on a genuine union.
+#[test]
+fn logical_operators_take_an_operand_type() {
+    let src = "\
+class Odd
+  fn pick(a: integer, b: integer)
+    return a or b
+  end
+
+  fn mixed(a: integer, b: string)
+    return a or b
+  end
+end
+";
+    let same = hover_src_at(src, "fn pick(", "fn ".len()).expect("hover");
+    assert!(same.contains("-> integer"), "got: {same}");
+    let union = hover_src_at(src, "fn mixed(", "fn ".len()).expect("hover");
+    assert!(!union.contains("->"), "a union should decline: {union}");
+}
+
+/// `#` on a class dispatches to its `OpLen` overload, and the overload's own
+/// declared result is what the expression produces. Reaching that is the
+/// whole reason the operator-lookup half of `saule_typeck::ops` moved into
+/// `saule_semantic::ops`.
+#[test]
+fn length_uses_an_oplen_overload() {
+    let src = "\
+class Weird implements OpLen
   fn init()
+  end
+
+  fn len() -> string
+    return 'lots'
   end
 end
 
 class Holder
-  bag: Bag
+  bag: Weird
 
-  fn init(bag: Bag)
+  fn init(bag: Weird)
     self.bag = bag
   end
 
@@ -3459,5 +3522,302 @@ class Holder
 end
 ";
     let md = hover_src_at(src, "fn size()", "fn ".len()).expect("hover");
-    assert!(!md.contains("->"), "should not have inferred: {md}");
+    assert!(md.contains("fn Holder.size() -> string"), "got: {md}");
+}
+
+/// Without an overload `#` counts, which is what the checker says too.
+#[test]
+fn length_without_an_overload_counts() {
+    let src = "\
+class Scanner
+  lines: table<string>
+
+  fn init()
+    self.lines = {}
+  end
+
+  fn size()
+    return #self.lines
+  end
+end
+";
+    let md = hover_src_at(src, "fn size()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Scanner.size() -> integer"), "got: {md}");
+}
+
+/// Building an enum variant produces the enum. Enums live in a registry of
+/// their own, so the class lookup missed them and a helper whose whole job
+/// is to construct one variant inferred nothing.
+#[test]
+fn an_enum_variant_construction_infers_the_enum() {
+    let src = "\
+enum Inline
+  Text(value: string)
+end
+
+enum Block
+  Heading(level: integer, slug: string, children: table<Inline>),
+  Rule
+end
+
+class Parser
+  fn recordHeading(level: integer, slug: string, text: string)
+    return Block.Heading(level, slug, {Inline.Text(text)})
+  end
+end
+";
+    let md = hover_src_at(src, "fn recordHeading(", "fn ".len()).expect("hover");
+    assert!(
+        md.contains("text: string) -> Block"),
+        "got: {md}"
+    );
+}
+
+/// A payload-free variant used as a value is the enum too.
+#[test]
+fn a_bare_variant_value_infers_the_enum() {
+    let src = "\
+enum Block
+  Rule
+end
+
+class Parser
+  fn rule()
+    return Block.Rule
+  end
+end
+";
+    let md = hover_src_at(src, "fn rule()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Parser.rule() -> Block"), "got: {md}");
+}
+
+/// A local shadowing an enum's name is the local, not the enum.
+#[test]
+fn a_local_shadowing_an_enum_is_not_a_variant() {
+    let src = "\
+enum Block
+  Rule
+end
+
+class Parser
+  fn go(Block: string)
+    return Block.Rule
+  end
+end
+";
+    let md = hover_src_at(src, "fn go(", "fn ".len()).expect("hover");
+    assert!(!md.contains("-> Block"), "got: {md}");
+}
+
+/// A private method written `local fn` inside a class body is inferred the
+/// same as a public one — that is how the markdown example spells its
+/// helpers, and they are exactly the bodies worth inferring.
+#[test]
+fn a_local_fn_method_infers_its_return_type() {
+    let src = "\
+enum Block
+  Heading(level: integer, slug: string),
+  Rule
+end
+
+class BlockParser
+  local fn recordHeading(level: integer, slug: string)
+    return Block.Heading(level, slug)
+  end
+end
+";
+    let md = hover_src_at(src, "local fn recordHeading(", "local fn ".len()).expect("hover");
+    assert!(md.contains("-> Block"), "got: {md}");
+}
+
+/// A helper that returns what another helper built resolves too. Reading
+/// only *declared* return types stopped the chain at the first inferred
+/// link, which is where these bodies actually get their types.
+#[test]
+fn an_inferred_return_type_chains_through_a_helper() {
+    let src = "\
+enum Block
+  Heading(level: integer),
+  Rule
+end
+
+class Parser
+  local fn recordHeading(level: integer)
+    return Block.Heading(level)
+  end
+
+  local fn heading()
+    return self.recordHeading(1)
+  end
+end
+";
+    let md = hover_src_at(src, "local fn heading()", "local fn ".len()).expect("hover");
+    assert!(md.contains("fn Parser.heading() -> Block"), "got: {md}");
+}
+
+/// Three links deep, to show the rounds are not a single extra hop.
+#[test]
+fn an_inferred_return_type_chains_three_deep() {
+    let src = "\
+class Chain
+  local fn a()
+    return 1
+  end
+
+  local fn b()
+    return self.a()
+  end
+
+  local fn c()
+    return self.b()
+  end
+end
+";
+    let md = hover_src_at(src, "local fn c()", "local fn ".len()).expect("hover");
+    assert!(md.contains("fn Chain.c() -> integer"), "got: {md}");
+}
+
+/// A call to a sibling top-level `fn` resolves, and its own type may have
+/// been inferred a round earlier.
+#[test]
+fn a_sibling_free_function_call_resolves() {
+    let src = "\
+local fn runLength(s: string)
+  return 1
+end
+
+class Parser
+  local fn level()
+    return runLength('#')
+  end
+end
+";
+    let md = hover_src_at(src, "local fn level()", "local fn ".len()).expect("hover");
+    assert!(md.contains("fn Parser.level() -> integer"), "got: {md}");
+}
+
+/// A helper whose type depends on itself can never settle, so the rounds
+/// end and it keeps no type — the same answer as before, not a hang.
+#[test]
+fn a_recursive_helper_infers_nothing() {
+    let src = "\
+class Loop
+  local fn spin()
+    return self.spin()
+  end
+end
+";
+    let md = hover_src_at(src, "local fn spin()", "local fn ".len()).expect("hover");
+    assert!(!md.contains("->"), "got: {md}");
+}
+
+/// Mutual recursion is the same story, and must not loop forever either.
+#[test]
+fn mutually_recursive_helpers_infer_nothing() {
+    let src = "\
+class Loop
+  local fn ping()
+    return self.pong()
+  end
+
+  local fn pong()
+    return self.ping()
+  end
+end
+";
+    let md = hover_src_at(src, "local fn ping()", "local fn ".len()).expect("hover");
+    assert!(!md.contains("->"), "got: {md}");
+}
+
+/// A body returning a native's result infers it. The signature table used
+/// to live in `saule-typeck`, downstream of the pass that needed it, so
+/// every one of these declined however plainly the type was written.
+#[test]
+fn a_native_call_return_infers() {
+    let src = "\
+class Parser
+  fn clean(raw: string)
+    return String.trim(raw)
+  end
+end
+";
+    let md = hover_src_at(src, "fn clean(", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Parser.clean(raw: string) -> string"), "got: {md}");
+}
+
+/// …including through an unannotated local, which is where most of them
+/// actually sit.
+#[test]
+fn a_local_from_a_native_call_infers() {
+    let src = "\
+class Parser
+  fn clean(raw: string)
+    local t = String.trim(raw)
+    return t
+  end
+end
+";
+    let md = hover_src_at(src, "fn clean(", "fn ".len()).expect("hover");
+    assert!(md.contains("-> string"), "got: {md}");
+}
+
+/// A native called with named arguments still resolves, since a
+/// non-generic signature's return type does not depend on them.
+#[test]
+fn a_native_called_with_named_args_infers() {
+    let src = "\
+class Parser
+  fn head(raw: string)
+    return String.sub(s: raw, i: 1)
+  end
+end
+";
+    let md = hover_src_at(src, "fn head(", "fn ".len()).expect("hover");
+    assert!(md.contains("-> string"), "got: {md}");
+}
+
+/// `??` drops the left side's nullability, so a nullable native result
+/// with a plain fallback is not nullable.
+#[test]
+fn a_coalesce_drops_nullability() {
+    let src = "\
+class Scanner
+  lines: table<string>
+
+  fn init()
+    self.lines = {}
+  end
+
+  fn peek()
+    return self.lines[1]
+  end
+
+  fn text()
+    return self.peek() ?? ''
+  end
+end
+";
+    let md = hover_src_at(src, "fn text()", "fn ".len()).expect("hover");
+    assert!(md.contains("fn Scanner.text() -> string"), "got: {md}");
+}
+
+/// A user class or a local shadowing a stdlib module name wins over the
+/// native table — the module is only reached when nothing else claims it.
+#[test]
+fn a_user_class_shadows_a_stdlib_module_name() {
+    let src = "\
+class String
+  fn trim(s: string) -> integer
+    return 1
+  end
+end
+
+class Parser
+  fn clean(raw: string)
+    return String.trim(raw)
+  end
+end
+";
+    let md = hover_src_at(src, "fn clean(", "fn ".len()).expect("hover");
+    assert!(md.contains("-> integer"), "got: {md}");
 }
