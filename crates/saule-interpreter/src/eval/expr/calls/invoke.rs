@@ -38,7 +38,7 @@ pub(crate) fn call_value_multi(
                     EvaluatedArg::Positional(v) | EvaluatedArg::TrailingBlock(v) => {
                         positional.push(v.clone())
                     }
-                    EvaluatedArg::Named { name: _, .. } => {
+                    EvaluatedArg::Named { .. } => {
                         return Err(RuntimeError::TypeError {
                             message: format!(
                                 "named arguments are not supported for built-in function `{}` — use positional arguments instead",

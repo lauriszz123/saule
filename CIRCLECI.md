@@ -268,9 +268,31 @@ Two knobs if it ever matters:
   that had not changed in months.
 
   Bumping it is a deliberate commit: change the tag and the two
-  `--default-toolchain` lines, run
-  `cargo clippy --workspace --all-targets -- -D warnings` under that toolchain
-  locally, fix what the new release found, push to `develop`, dry-run.
+  `--default-toolchain` lines, run CI's clippy locally (below), fix what the
+  new release found, push to `develop`, dry-run.
+
+### Running CI's exact clippy locally
+
+Worth getting right — the alternative is discovering one lint per pipeline
+run, and each run is ten minutes.
+
+```bash
+rustup toolchain install 1.98.0 --profile minimal --component clippy
+TC="$HOME/.rustup/toolchains/1.98.0-$(rustc -vV | sed -n 's/host: //p')/bin"
+PATH="$TC:$PATH" cargo clippy --workspace --all-targets --exclude saule-engine-lib -- -D warnings
+PATH="$TC:$PATH" cargo clippy -p saule-engine-lib --all-targets -- -D warnings
+```
+
+**`rustup run 1.98.0 cargo clippy` does not do this**, which is a trap worth
+knowing about. `cargo clippy` is a subcommand: cargo resolves it by looking
+for `cargo-clippy` on `PATH`, and a Homebrew Rust puts one in
+`/opt/homebrew/bin`. So `rustup run` reports the pinned cargo while silently
+linting with the Homebrew clippy — clean runs locally, failures in CI, and
+nothing in the output says which clippy spoke. `cargo clippy --version` is the
+check: it must print the pinned version, not the system one.
+
+Note also that a repeated `cargo clippy` replays cached results instead of
+re-linting. Point it at a scratch `--target-dir` when you need a real answer.
 
 - **`cargo fmt --all --check` does not fail the build.** The tree carries
   formatting drift that predates any CI, and `main` publishes — a blocking
