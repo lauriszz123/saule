@@ -260,6 +260,18 @@ Two knobs if it ever matters:
 
 ## 7. Things the pipeline deliberately does not do
 
+- **The Rust toolchain does not float.** Every job pins **1.98** — the Docker
+  image tag on Linux, `--default-toolchain` on macOS and Windows. A floating
+  `rust:1-bookworm` means a new stable can turn `main` red without a commit,
+  and `main` is the branch that publishes. It happened on the first dry run:
+  1.98 added `chunks_exact_to_as_chunks`, and `test-engine` failed on code
+  that had not changed in months.
+
+  Bumping it is a deliberate commit: change the tag and the two
+  `--default-toolchain` lines, run
+  `cargo clippy --workspace --all-targets -- -D warnings` under that toolchain
+  locally, fix what the new release found, push to `develop`, dry-run.
+
 - **`cargo fmt --all --check` does not fail the build.** The tree carries
   formatting drift that predates any CI, and `main` publishes — a blocking
   gate would mean no release could be cut until the entire backlog was cleared
