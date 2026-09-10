@@ -24,14 +24,14 @@ manager. Design detail that would clutter a step lives in the appendices.
 | Area | State today |
 |---|---|
 | Versioning | **Done.** `26.<build>`, generated on release, readable from the CLI, the LSP, and the language. See step 0. |
-| CI | `ci.yml` added in step 0 (fmt, clippy, tests, `.sau` fixtures, version agreement). The two website workflows predate it. |
-| Releases | **`release.yml` exists but has never run.** No tags, no published artifacts. |
-| Toolchain install | [scripts/install_path.sh](scripts/install_path.sh) symlinks `target/release/saule` — requires a clone plus a Rust toolchain. Unix only. |
+| CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. Runs on `main` only; `develop` runs nothing. There are no GitHub Actions workflows and no GitLab pipeline; GitHub keeps the code, the Releases, and Pages. |
+| Releases | **The pipeline exists and publishes to GitHub Releases on every push to `main`.** Not yet run for real: no published artifacts. |
+| Toolchain install | **Written and live**: [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site, and the install page is rewritten around them. They have nothing to download until the first release exists. |
 | Package manager | **Does not exist.** `saule` has three subcommands: `run`, `fmt`, `init`. |
 | Dependencies | Local relative paths only (`dependencies: ["../json"]`). No versions, no remote fetch, no lockfile. |
 | Native packages | Work, but install via per-platform shell scripts needing a full Rust build. |
 | Editor plugins | All three exist and all three fall back to `saule-lsp` on `$PATH`. **None are published** anywhere. |
-| Licensing | **No LICENSE file**, no `license` in any `Cargo.toml` — but `vscode/package.json` claims MIT. |
+| Licensing | **Done.** MIT: [LICENSE](LICENSE) at the root, `license = "MIT"` in `[workspace.package]`, and every archive ships a copy. See step 1. |
 
 Four things are already right and shape everything below:
 
@@ -142,15 +142,17 @@ runs can't be one the language disagrees about.
 
 ### Cutting a release
 
-```bash
-gh workflow run release.yml
-```
+**Merge to `main`.** That is the whole procedure — see
+[CIRCLECI.md](CIRCLECI.md).
 
-That's it: the workflow picks the number, creates the tag, builds all six
-triples, verifies each binary reports the version the tag claims, and publishes
-the archives with a `SHA256SUMS`. `--field dry_run=true` builds without tagging
-or publishing. Pushing a `v26.7` tag by hand is the escape hatch for re-cutting
-a release whose build failed for an infrastructure reason.
+CircleCI picks the number (one past the highest existing tag), builds all six
+triples, verifies each binary reports the version the release claims, creates
+the tag, and publishes the archives with a `SHA256SUMS` to GitHub Releases.
+Triggering a pipeline with `dry-run: true` builds and verifies everything
+without publishing; the `release-version` parameter is the escape hatch for
+re-cutting a release whose build failed for an infrastructure reason.
+
+Work happens on `develop`, where no pipeline runs at all.
 
 Before publishing the editor plugins, run `scripts/stamp-version.sh <version>`
 and commit — their manifests are read by marketplaces long before any Rust runs.
@@ -164,7 +166,7 @@ and commit — their manifests are read by marketplaces long before any Rust run
 else: without an explicit license the code was "all rights reserved" by
 default, which flatly contradicted the MIT claim already published in
 [vscode/package.json](editors/vscode/package.json). A release archive with no
-license is also not redistributable — `release.yml` warns when it packages
+license is also not redistributable — the release build warns when it packages
 without one.
 
 - [LICENSE](LICENSE) at the repo root.
@@ -178,62 +180,54 @@ at it. Not verifiable from this machine — `gh` is not installed.
 
 ## Step 2 — Prove the release pipeline
 
-### Blocked: the GitHub account is locked for billing
+### The billing lock is routed around, not fixed
 
-**Nothing in CI can run until this is fixed.** Every job on the repository
-fails before its first step with:
+GitHub Actions on this account was locked for billing — *"The job was not
+started because your account is locked due to a billing issue"* — and every run
+of `Check website` and `Deploy website` failed from the day they were added on
+2026-07-29. That lock is account and payment work; it is not something this plan
+can automate.
 
-```
-The job was not started because your account is locked due to a billing issue.
-```
-
-This is not specific to the new workflows. `Check website` and `Deploy website`
-have failed on **every run since they were added on 2026-07-29** — they have
-never once succeeded. The site is live only because
+It no longer blocks anything, because **GitHub Actions is gone from the
+repository.** The compute moved to CircleCI and only the artifacts stay on
+GitHub: creating a Release through the API costs no Actions minutes, so a locked
+Actions account cannot stop a release. The site keeps the path it already used —
 `www/scripts/deploy-gh-pages.sh` pushes the built output to the `gh-pages`
-branch by hand (`deploy-gh-pages.ps1` is the same thing for PowerShell), and
-GitHub's own managed "pages build and deployment" job is billed differently, so
-it still runs.
+branch (`deploy-gh-pages.ps1` for PowerShell), and GitHub's own managed "pages
+build and deployment" job is billed differently, so it still runs. **Settings →
+Pages → Source must stay on "Deploy from a branch" / `gh-pages`**; there are no
+workflows left to serve the "GitHub Actions" mode.
 
-The repository is public, so Actions minutes are free — this is an
-account-level lock (payment method, spending limit, or an unpaid invoice), not
-a minutes overage. Fix it under **GitHub → Settings → Billing**. That is
-account and payment work, so it has to be done by hand; it is not something
-this plan can automate.
+The pipeline is [.circleci/config.yml](.circleci/config.yml); the one-time
+setup is [CIRCLECI.md](CIRCLECI.md).
 
-`v26.1` **is already tagged and pushed**, and the build never started, so no
-release was published and nothing is half-done. Once billing is unlocked, just
-re-run the failed `Release` run — the tag-push path reads the version from the
-existing tag, so the number does not need to be burned or re-cut.
+### Proving it
 
-### Then, once it runs
-
-`release.yml` and `ci.yml` have still never executed a single step. Everything
-downstream assumes they work.
+Nothing here has executed a single step yet. Everything downstream assumes it
+works.
 
 **Do:**
 
-1. Push, and confirm `ci.yml` goes green.
-2. **Clear the pre-existing lint drift, then make the lint steps blocking.**
-   `cargo fmt --all --check` reports roughly 190 hunks and clippy reports a
-   handful of warnings, none of it from step 0's work — it predates the
-   existence of any CI to catch it. Run `cargo fmt --all`, clear the clippy
-   warnings, commit that on its own, then delete the two `continue-on-error:
-   true` lines in `ci.yml`. Until that happens the two steps report drift
-   without failing the build, because a CI that is red on arrival is a CI
-   everyone learns to ignore.
-3. `gh workflow run release.yml --field dry_run=true`. Confirm all six triples
-   build and each one's version self-check passes.
-4. Fix whatever the first real run surfaces. The two known unknowns:
-   - The `actions/upload-artifact` / `download-artifact` major versions are set
-     to match the era of the actions already used by `deploy-www.yml`. A wrong
-     major fails immediately and obviously.
-   - `ubuntu-24.04-arm` runners are free for public repositories; if the repo
-     is private this entry needs `cross` instead.
-5. Consider adding `[profile.release]` with `lto = "thin"` and
-   `strip = "symbols"` before the first real release — these binaries embed a
-   whole interpreter and the workspace sets no release profile today.
-6. `gh workflow run release.yml` for real. That publishes `v26.1`.
+1. Connect the project on CircleCI and create the `saule-release` context
+   holding a `GITHUB_TOKEN` with `Contents: read and write`
+   ([CIRCLECI.md](CIRCLECI.md) §1–2).
+2. Delete the stale `v26.1` tag — `git tag -d v26.1 && git push github --delete
+   v26.1`. It was pushed on 2026-07-30, was never built, and while it exists
+   the first release would be numbered `26.2`.
+3. Create `develop` and move day-to-day work there. Nothing runs on it, which
+   is the point: `main` is the release branch and every push to it publishes.
+4. Trigger a pipeline with `dry-run: true`. Confirm all six triples build and
+   each one's version self-check passes. The known unknowns are all in the two
+   platforms that are not Linux:
+   - the macOS image needs Rosetta for the `x86_64-apple-darwin` version
+     check; without it the archive ships with a loud warning rather than
+     failing the release;
+   - the Windows executor installs rustup itself, so a change in CircleCI's
+     image contents shows up there first.
+5. Consider `strip = "symbols"` in `[profile.release]` before the first real
+   release — these binaries embed a whole interpreter, and the profile
+   currently optimises only for speed (`lto = "fat"`, `codegen-units = 1`).
+6. Merge to `main`. That publishes `26.1`.
 
 **Done when** a GitHub Release exists with six archives and a `SHA256SUMS`.
 
@@ -255,9 +249,8 @@ irm https://lauriszz123.github.io/saule/install.ps1 | iex
 **Serve the scripts from the site, not from `raw.githubusercontent.com`.** Put
 them in `www/public/install.sh` and `www/public/install.ps1`. Astro copies
 `public/` verbatim into `dist/`, which deploys to `/saule/`, so they land at
-exactly those URLs — and `deploy-www.yml`'s existing `www/**` path filter
-already redeploys them. No new workflow, and no second copy of the script to
-drift.
+exactly those URLs — and `www/scripts/deploy-gh-pages.sh` publishes them along
+with the rest of the site. No second copy of the script to drift.
 
 ### `install.sh`, in order
 
@@ -464,7 +457,7 @@ whether the flow is actually seamless.
 
 **`examples/json_usage` currently fails to typecheck** (`Json.decode` returns
 `any?` assigned to a `table?`). Pre-existing, unrelated to versioning, but
-`ci.yml` runs the fixtures now, so it will show up as a red build.
+CI runs the fixtures now, so it will show up as a red build.
 
 ---
 
@@ -500,7 +493,7 @@ min_saule_version: "26.1"
 dependencies: [
   "../json",                        -- local path (unchanged, still works)
   "lauriszz123/uikit@1.2.0",        -- GitHub shorthand
-  "gitlab.com/team/thing@0.4.0",    -- any git host
+  "git.sr.ht/~team/thing@0.4.0",    -- any git host
   "codeberg.org/x/y@main",          -- a branch: a deliberate escape hatch
 ]
 ```

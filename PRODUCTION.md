@@ -643,8 +643,8 @@ part (a coherent, working implementation) is done.
 16. **`tower-lsp 0.20`** — verify its maintenance status before 1.0; the
     ecosystem has been consolidating on a maintained fork
     (`tower-lsp-server`). A dead LSP framework is a slow-motion problem.
-17. **CI tests one platform.** `ci.yml` runs on `ubuntu-24.04` only, deliberately
-    ("the release workflow builds all six triples"). But the release workflow
+17. **CI tests one platform.** The test jobs run on Linux only, deliberately
+    ("the release pipeline builds all six triples"). But the release pipeline
     *builds*, it does not *test*. Nothing has ever run the test suite on Windows
     or macOS. Given filesystem, path-separator, and DPI code that is explicitly
     platform-conditional, that is a real risk.
@@ -1143,7 +1143,7 @@ test:
 | **`editors/vscode` → own repo** | Marketplace publishing, npm toolchain, independent cadence, its own CI. | With RELEASE_PLAN step 4 |
 | **`editors/intellij` → own repo** | Gradle/JVM build; nothing shared with the Rust workspace. | Same |
 | **`editors/nvim` → own repo** | Plugin managers install from a repo root. | Same |
-| **`www` → own repo (or keep, deliberately)** | Node toolchain, `node_modules` and `dist` inside the language repo, and two of the four CI workflows exist to serve it. Counter-argument: `check-www.yml` verifies documented samples compile against the compiler *from that commit*, which is a genuinely valuable coupling and would become a cross-repo dance. **Keep it, but move the sample-verification corpus into `tests/` so the guarantee survives a later split.** | Deliberate decision |
+| **`www` → own repo (or keep, deliberately)** | Node toolchain, `node_modules` and `dist` inside the language repo, and a CI job exists to serve it. Counter-argument: the `check-www` job verifies documented samples compile against the compiler *from that commit*, which is a genuinely valuable coupling and would become a cross-repo dance. **Keep it, but move the sample-verification corpus into `tests/` so the guarantee survives a later split.** | Deliberate decision |
 | **A minimal `saule-package-template` repo** | The example an author actually copies. 200 lines, one class, CI producing all six binaries + manifest as release assets. | With the SDK publish |
 | **`awesome-saule`** | RELEASE_PLAN's answer to discovery without an index. | With the package manager |
 

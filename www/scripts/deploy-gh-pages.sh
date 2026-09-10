@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build the site locally and publish it to the `gh-pages` branch.
 #
-# This is the fallback for when GitHub Actions cannot run — an account billing
-# lock, a self-hosted setup, or simply wanting to ship without CI. It produces
-# exactly the same site the workflow would; the only difference is that your
-# machine does the building.
+# This is how the site is published. There is no CI path: the repository has no
+# GitHub Actions workflows, and CircleCI checks the site (samples compile,
+# generated docs are in sync, Astro builds) without publishing it — see
+# CIRCLECI.md. Your machine does the building, and `gh-pages` is the result.
 #
 # Usage:
 #   www/scripts/deploy-gh-pages.sh            # build, commit, and push
@@ -14,10 +14,10 @@
 #   Settings > Pages > Build and deployment > Source > "Deploy from a branch"
 #   Branch: gh-pages / (root)
 #
-# Note this is the *other* Pages mode from the workflow in
-# .github/workflows/deploy-www.yml — pick one. If you later fix billing and go
-# back to Actions, switch the Source back to "GitHub Actions"; leaving it on
-# the branch means pushes to main stop updating the site.
+# That setting is load-bearing: "GitHub Actions" is the other Pages mode, and
+# with no workflows in the repository it would serve nothing. The installer
+# URLs (install.sh, install.ps1) are served from this site, so a site that
+# stops updating is a broken install path.
 set -euo pipefail
 
 DRY_RUN=false
@@ -60,10 +60,12 @@ cd "$REPO_ROOT"
 git worktree remove --force "$WORKTREE" 2>/dev/null || true
 rm -rf "$WORKTREE"
 
-# The site is published to GitHub Pages, so the deploy target is the `github`
-# remote — *not* `origin`, which has pointed at GitLab since the move (see
-# GITLAB.md). Getting this wrong is not a harmless failure: `ls-remote` against
-# a remote you cannot read fails identically to "the branch does not exist", so
+# The site is published to GitHub Pages, so the deploy target is the remote
+# that hosts the GitHub repository. It defaults to `github` because that is
+# what the remote is called in this checkout; set `PAGES_REMOTE=origin` if
+# yours only has one. Getting this wrong is not a harmless failure: `ls-remote`
+# against a remote you cannot read fails identically to "the branch does not
+# exist", so
 # the fallback below would quietly rebuild `gh-pages` from HEAD and bury the
 # published site under the entire source history.
 PAGES_REMOTE="${PAGES_REMOTE:-github}"

@@ -58,12 +58,19 @@ export class Storage
 			return false
 		end
 
-		local file = Io.open(self.path, IoMode.Read)
+		local file = Io.open(self.path, IoMode.Read)!
+		local source: string? = file.read()
+		file.close()
+
+		-- `read` is `string?`: an unreadable file is not a crash here, it is
+		-- an empty todo list.
+		if not source then
+			return false
+		end
 
 		-- Decoded JSON is plain tables, not `Entry` instances — the rows
 		-- below are validated field by field and fed through `Entry(...)`.
-		local data = Json.decode(file?.read()) as table<any>
-		file?.close()
+		local data = Json.decode(source!) as table<any>
 
 		if not data then
 			return false
