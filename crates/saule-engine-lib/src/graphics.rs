@@ -47,7 +47,7 @@ fn points_from(table: &STable, func: &str) -> Result<Vec<Point>, String> {
         ));
     }
     let mut out = Vec::with_capacity(values.len() / 2);
-    for (i, pair) in values.chunks_exact(2).enumerate() {
+    for (i, pair) in values.as_chunks::<2>().0.iter().enumerate() {
         let (Some(x), Some(y)) = (number(&pair[0]), number(&pair[1])) else {
             return Err(format!(
                 "{func}: coordinate table must contain only numbers (point {} is not)",
@@ -801,7 +801,7 @@ fn stops_from(table: &STable, func: &str) -> Result<Vec<Stop>, String> {
     }
 
     let mut out = Vec::with_capacity(values.len() / 5);
-    for (i, stop) in values.chunks_exact(5).enumerate() {
+    for (i, stop) in values.as_chunks::<5>().0.iter().enumerate() {
         let mut parsed = [0.0f64; 5];
         for (slot, value) in parsed.iter_mut().zip(stop) {
             *slot = number(value).ok_or_else(|| {

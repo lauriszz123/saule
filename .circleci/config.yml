@@ -48,9 +48,19 @@ parameters:
     default: ""
 
 executors:
+  # Pinned, not `rust:1-bookworm`. A floating tag means a new stable Rust can
+  # turn this branch red without a commit — and this is the branch that
+  # publishes, so a surprise clippy lint on a Tuesday is a release that does
+  # not happen. It cost exactly that once already: 1.98 added
+  # `chunks_exact_to_as_chunks`, which failed `test-engine` on code that had
+  # not changed in months.
+  #
+  # Bumping is a deliberate commit: change the tag, run
+  # `cargo clippy --workspace --all-targets -- -D warnings` under that
+  # toolchain locally, fix what the new release found, push to `develop`.
   rust:
     docker:
-      - image: rust:1-bookworm
+      - image: rust:1.98-bookworm
     environment:
       CARGO_TERM_COLOR: always
 
@@ -438,12 +448,17 @@ jobs:
           name: Rust toolchain
           command: |
             set -eu
+            # 1.98 rather than `stable`, matching the `rust` executor's pinned
+            # image — see the comment there. All six archives in a release are
+            # built by one compiler version, and which one is a commit.
             if ! command -v rustup >/dev/null 2>&1; then
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-                | sh -s -- -y --profile minimal --default-toolchain stable
+                | sh -s -- -y --profile minimal --default-toolchain 1.98
             fi
             echo '. "$HOME/.cargo/env"' >> "$BASH_ENV"
             . "$HOME/.cargo/env"
+            rustup toolchain install 1.98 --profile minimal
+            rustup default 1.98
             rustup target add "$TRIPLE"
             case "$TRIPLE" in
               x86_64-apple-darwin) echo 'export EMULATOR="arch -x86_64"' >> "$BASH_ENV" ;;
@@ -473,11 +488,15 @@ jobs:
           shell: powershell.exe
           command: |
             $ErrorActionPreference = 'Stop'
+            # 1.98, matching the `rust` executor's pinned image and the macOS
+            # job — one compiler version across all six archives.
             if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
               Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
-              ./rustup-init.exe -y --profile minimal --default-toolchain stable
+              ./rustup-init.exe -y --profile minimal --default-toolchain 1.98
             }
             $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            rustup toolchain install 1.98 --profile minimal
+            rustup default 1.98
             rustup target add $env:TRIPLE
       - run:
           name: Build, verify and archive
