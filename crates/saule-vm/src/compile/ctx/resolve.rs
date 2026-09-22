@@ -8,7 +8,7 @@
 use std::ops::Range;
 
 use saule_ast::NodeId;
-use saule_interpreter::Value;
+use saule_runtime::Value;
 use saule_semantic::Binding;
 
 use crate::compile::CompileError;
@@ -53,8 +53,8 @@ impl Compiler<'_> {
     pub fn prelude_value(&self, name: &str) -> Option<Value> {
         let mut slot = self.prelude.borrow_mut();
         if slot.is_none() {
-            saule_interpreter::init();
-            *slot = Some(saule_interpreter::Environment::with_prelude());
+            saule_runtime::init();
+            *slot = Some(saule_runtime::Prelude::with_std());
         }
         let env = slot.as_ref().expect("just installed");
         env.borrow().get(name)
@@ -97,28 +97,8 @@ impl Compiler<'_> {
     /// `fn_protos` knows the proto regardless of position. Right exit
     /// status, invented value.
     ///
-    /// Returning `false` makes the call site refuse, which hands the whole
-    /// module to the tree-walker. That is the right trade twice over: the
-    /// program is one the language rejects, so nothing correct is lost, and
-    /// the tree-walker is the engine that *defines* the diagnostic, so the
-    /// two agree by construction rather than by matching message text.
-    /// Whether every top-level `fn`/`class`/`enum` is declared by now.
-    ///
-    /// Once it is, a call the module body makes cannot reach a *callable*
-    /// that does not exist yet, and the conservative guard switches off.
-    ///
-    /// Module-level `local`s are not counted here — see `module_type_decls`
-    /// — so a callee reaching a `local` declared further down is the one
-    /// shape this does not cover. It is narrow (the callee must be invoked
-    /// from the module body *and* read a value declared below that call),
-    /// and the direct case is caught precisely by the read guard in
-    /// `ident_to`, which needs no approximation at all.
-    pub fn module_callables_declared(&self) -> bool {
-        self.module_type_decls
-            .iter()
-            .all(|n| self.module_decls_seen.contains(n))
-    }
-
+    /// Returning `false` makes the call site report it: the program is one
+    /// the language rejects, and the front end does not catch it yet.
     pub fn callk_resolvable(&self, name: &str) -> bool {
         !self.enclosing.is_empty() || self.module_decls_seen.contains(name)
     }
@@ -148,7 +128,7 @@ impl Compiler<'_> {
                 continue;
             };
             for r in refs {
-                if self.module_type_decls.contains(r) && !self.module_decls_seen.contains(r) {
+                if self.module_decls.contains(r) && !self.module_decls_seen.contains(r) {
                     return true;
                 }
                 queue.push(r.clone());

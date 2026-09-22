@@ -25,11 +25,14 @@ impl Compiler<'_> {
         // module body, so the declaration statement itself emits nothing.
         if matches!(
             &d.value,
-            saule_ast::Decl::Class { .. }
-                | saule_ast::Decl::Enum { .. }
-                | saule_ast::Decl::Interface { .. }
+            saule_ast::Decl::Class { .. } | saule_ast::Decl::Interface { .. }
         ) {
             return Ok(());
+        }
+        // An enum's layout is done too, but a variant whose value is an
+        // expression gets it here, where the declaration runs.
+        if matches!(&d.value, saule_ast::Decl::Enum { .. }) {
+            return self.enum_values(d);
         }
         // An `import` a program driver already resolved emits nothing: the
         // names it binds are types, and a type is a compile-time index
@@ -40,7 +43,7 @@ impl Compiler<'_> {
                 Ok(())
             } else {
                 Err(CompileError::unsupported(
-                    "an import declaration",
+                    "an import in a program with no file behind it",
                     span.clone(),
                 ))
             };
@@ -103,9 +106,21 @@ impl Compiler<'_> {
             ));
         };
 
+        // A `fn` declared inside a body is never bound: the resolver gives
+        // it no binding, so no name can reach it and calling it is an
+        // `undefined name` error before anything runs. The declaration is
+        // dead code, and compiles to none — which is also what the
+        // tree-walker's binding of it amounted to.
+        //
+        // Decided by *position*, not by looking the name up: `fn_protos`
+        // is keyed by name, so a nested `fn` sharing a top-level one's name
+        // would otherwise compile its body over the top-level proto.
+        if !self.at_module_top() {
+            return Ok(());
+        }
         let Some(&idx) = self.fn_protos.get(name.as_str()) else {
             return Err(CompileError::unsupported(
-                "a nested function declaration",
+                "a function declaration the pre-pass did not reserve",
                 span.clone(),
             ));
         };

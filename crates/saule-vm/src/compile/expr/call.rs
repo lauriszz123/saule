@@ -5,7 +5,7 @@
 //! this is about register placement rather than about the call itself.
 
 use saule_ast::{Expr, Spanned};
-use saule_interpreter::Value;
+use saule_runtime::Value;
 use saule_semantic::Binding;
 
 use super::CompileError;
@@ -71,16 +71,17 @@ impl Compiler<'_> {
         // skips over; `positional` borrows from it, so it has to outlive the
         // borrow.
         let gap_fill;
-        let positional: Vec<&Spanned<Expr>> = if args
-            .iter()
-            .any(|a| matches!(a, saule_ast::CallArg::Named { .. }) || a.is_trailing_block())
-        {
-            let Some(params) = self.callee_param_list(callee).cloned() else {
-                return Err(CompileError::unsupported(
-                    "a named argument to a callee the compiler cannot identify",
-                    span.clone(),
-                ));
-            };
+        let has_named = args.iter().any(|a| matches!(a, saule_ast::CallArg::Named { .. }));
+        let declared = if has_named || args.last().is_some_and(|a| a.is_trailing_block()) {
+            let params = self.callee_param_list(callee).cloned();
+            if params.is_none() {
+                self.check_unbound_trailing_block(callee, args, has_named, span)?;
+            }
+            params
+        } else {
+            None
+        };
+        let positional: Vec<&Spanned<Expr>> = if let Some(params) = declared {
             let (order, fill) = self.reorder_args(args, &params, span)?;
             gap_fill = fill;
             order
@@ -128,13 +129,10 @@ impl Compiler<'_> {
             // it is not. An imported class has no declaration in *this*
             // module, so it is only checked when this module declares it.
             if self.enclosing.is_empty()
-                && self.module_type_decls.contains(name)
+                && self.module_decls.contains(name)
                 && !self.module_decls_seen.contains(name)
             {
-                return Err(CompileError::unsupported(
-                    "a module-level use of a class declared further down",
-                    span.clone(),
-                ));
+                return Err(crate::compile::declared_later(name, false, span.clone()));
             }
             self.construct_to(class, &positional, dst, span)?;
             return self.one_result(dst, want, span);
@@ -214,19 +212,13 @@ impl Compiler<'_> {
                 // rather than the resolver's. `SAULE_DIFF` compares error
                 // text, so "also fails" is not the same as "agrees".
                 if !self.callk_resolvable(name) {
-                    return Err(CompileError::unsupported(
-                        "a module-level call to a function declared further down",
-                        span.clone(),
-                    ));
+                    return Err(crate::compile::declared_later(name, false, span.clone()));
                 }
                 // Declared above, but its *body* may still reach something
-                // that is not. The tree-walker errors when the callee runs;
-                // the VM would resolve the proto and return a value.
+                // that is not — which would otherwise resolve the proto and
+                // return a value where the program is an error.
                 if self.reaches_undeclared(name) {
-                    return Err(CompileError::unsupported(
-                        "a module-level call whose callee reaches a declaration further down",
-                        span.clone(),
-                    ));
+                    return Err(crate::compile::declared_later(name, true, span.clone()));
                 }
                 let proto = self.fn_protos[name];
                 let m = self.mark();
@@ -285,6 +277,51 @@ impl Compiler<'_> {
                 );
                 self.finish_call(base, dst, want, m, span)
             }
+        }
+    }
+
+    /// A call with a trailing block or a named argument, to a callee with
+    /// no declared parameter list: a native, a stdlib member, a local
+    /// holding a function value. `Ok` means the arguments bind positionally.
+    ///
+    /// A named argument needs the parameter *names*, which only a
+    /// declaration has. A trailing block alone needs no names — only which
+    /// parameters take a function, and the callee's static type says that
+    /// much. When the rule lands it on the next positional slot, as it does
+    /// for every native, binding it is positional; landing further on would
+    /// skip a parameter whose default only the callee's declaration knows.
+    fn check_unbound_trailing_block(
+        &self,
+        callee: &Spanned<Expr>,
+        args: &[saule_ast::CallArg],
+        has_named: bool,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        if has_named {
+            return Err(CompileError::unsupported(
+                "a named argument to a callee the compiler cannot identify",
+                span.clone(),
+            ));
+        }
+        let fn_params = match self.types.get(&callee.id) {
+            Some(saule_ast::Type::Function { params, .. }) => Some(params),
+            Some(saule_ast::Type::Nullable(inner)) => match &**inner {
+                saule_ast::Type::Function { params, .. } => Some(params),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(ps) = fn_params else {
+            return Ok(());
+        };
+        let last = args.len() - 1;
+        let slots: Vec<_> = ps.iter().map(|t| saule_ast::ParamSlot::new("", t)).collect();
+        match saule_ast::trailing_block_slot(&slots, |i| i < last) {
+            Some(s) if s != last => Err(CompileError::unsupported(
+                "a trailing block that skips a parameter of a function value",
+                span.clone(),
+            )),
+            _ => Ok(()),
         }
     }
 
@@ -376,8 +413,9 @@ impl Compiler<'_> {
             if let Expr::Ident(cn) = &obj.value
                 && self.reaches_undeclared(cn)
             {
-                return Err(CompileError::unsupported(
-                    "a module-level call whose callee reaches a declaration further down",
+                return Err(crate::compile::declared_later(
+                    &format!("{cn}.{name}"),
+                    true,
                     span.clone(),
                 ));
             }
@@ -482,7 +520,7 @@ impl Compiler<'_> {
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
             }
-            let key = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(name.to_string())), span)?;
+            let key = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
             let a = self.reg8(base, span)?;
             self.emit(
                 Instruction::abc(Op::CALLMX, a, args.len() as u8 + 1, want.c()),

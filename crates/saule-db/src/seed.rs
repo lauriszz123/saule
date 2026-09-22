@@ -2,7 +2,7 @@
 //!
 //! The walk lives in `saule-interpreter` (it is the same code that seeds the
 //! checker for a real run) and reads every module it reaches through a
-//! [`SourceOverlay`](saule_interpreter::module::SourceOverlay) hook. Feeding
+//! [`SourceOverlay`](saule_runtime::module::SourceOverlay) hook. Feeding
 //! it [`Db::text`] does two things at once: an unsaved editor buffer is what
 //! the walk sees, and every module it reads becomes a recorded dependency of
 //! the seed, so editing any file in the import graph invalidates exactly the
@@ -28,10 +28,10 @@ pub(crate) fn collect(
 ) -> saule_semantic::ModuleSeed {
     let overlay = |path: &Path| db.text(path).map(|t| t.to_string());
     let modules = |path: &Path| db.walk_tree(path);
-    saule_interpreter::module::collect_import_seed_io(
+    saule_runtime::module::collect_import_seed_io(
         module,
         dir,
-        saule_interpreter::module::SeedIo {
+        saule_runtime::module::SeedIo {
             overlay: &overlay,
             modules: Some(&modules),
         },

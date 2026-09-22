@@ -1,0 +1,11 @@
+  × cannot use `+` on a `Point`
+    ╭─[operator_not_overloaded.sau:19:20]
+ 18 │         local p: Point = Point(1)
+ 19 │         local q: Point = p + Point(2)
+    ·                          ┬
+    ·                          ╰── operator not overloaded for this class
+ 20 │         println(q.x)
+    ╰────
+  help: overload the operator: add `implements OpAdd` to `Point` and define
+        `fn add(...)`
+

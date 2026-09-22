@@ -1,0 +1,12 @@
+  × cannot iterate over a `Thing` — it does not implement `Iterable` or
+  │ `Iterable2`
+    ╭─[iter_not_iterable.sau:10:14]
+  9 │     local t: Thing = Thing()
+ 10 │     for v in t do
+    ·              ┬
+    ·              ╰── class is not iterable
+ 11 │       println(v)
+    ╰────
+  help: add `implements Iterable<T>` (or `Iterable2<K, V>`) to `Thing` and
+        define `fn iter() -> fn(): T?` returning a step closure
+

@@ -38,7 +38,7 @@ pub(crate) fn check_assignment_compat(
 
 /// [`check_assignment_compat`] at a site where `Assignable` conversion applies.
 ///
-/// Used only where `saule_interpreter::eval::coerce` actually converts —
+/// Used only where `saule_runtime::eval::coerce` actually converts —
 /// see [`crate::coerce_sites`] for why the two lists must match exactly.
 pub(crate) fn check_assignment_compat_coercing(
     decl_ty: &Type,

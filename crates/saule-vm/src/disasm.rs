@@ -155,9 +155,9 @@ fn annotate(c: &Chunk, p: &Proto, op: Op, ins: Instruction, pc: usize) -> Option
     }
 }
 
-fn quote(v: &saule_interpreter::Value) -> String {
+fn quote(v: &saule_runtime::Value) -> String {
     match v {
-        saule_interpreter::Value::Str(s) => format!("{:?}", s.as_str()),
+        saule_runtime::Value::Str(s) => format!("{:?}", s.as_str()),
         other => other.to_display_string(),
     }
 }

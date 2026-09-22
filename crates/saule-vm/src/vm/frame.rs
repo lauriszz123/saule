@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use saule_interpreter::value::{VmFunction, VmFunctionRef};
-use saule_interpreter::{RuntimeError, Value};
+use saule_runtime::value::{VmFunction, VmFunctionRef};
+use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::Proto;
 
@@ -14,7 +14,7 @@ use super::VmShared;
 /// A bytecode function plus the upvalues it captured.
 ///
 /// Implements [`VmFunction`] so it can sit in a register as an ordinary
-/// [`Value`](saule_interpreter::Value) without `saule-interpreter` having to
+/// [`Value`](saule_runtime::Value) without `saule-interpreter` having to
 /// know this type exists — which is what keeps the dependency arrow pointing
 /// one way (§22.1).
 #[derive(Debug)]

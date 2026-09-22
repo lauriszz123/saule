@@ -1,0 +1,7 @@
+alice=	30
+bob=	25
+missing=	nil
+alice	 -> 	30
+bob	 -> 	25
+charlie	 -> 	41
+hundred	 / 	two-hundred

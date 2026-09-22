@@ -1,0 +1,22 @@
+-- building from a value --
+printed   = hello wrapped world
+length    = 19
+upper     = HELLO WRAPPED WORLD
+slice     = hello
+starts    = true
+words     = 3
+describe  = 2 word(s), 9 chars
+
+-- dynamic get / set --
+theme     = solarized
+editor    = vim
+font      = mono
+unknown   = ''
+writes    = 2
+explicit? = true / false
+font      = monospace
+
+-- boundaries --
+a wrapper exposes only what it declares
+conversion is limited to sites that really convert
+[exit 0]

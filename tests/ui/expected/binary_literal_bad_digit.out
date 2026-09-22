@@ -1,0 +1,9 @@
+  × invalid number literal
+   ╭─[binary_literal_bad_digit.sau:5:13]
+ 4 │   static fn main()
+ 5 │     println(0b1012)
+   ·             ───┬──
+   ·                ╰── here
+ 6 │   end
+   ╰────
+

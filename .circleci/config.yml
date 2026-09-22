@@ -149,32 +149,20 @@ jobs:
           name: Build the CLI for the fixture suite
           command: cargo build --locked -p saule-cli
       - run:
-          name: .sau fixtures — both engines, and differentially
+          name: .sau fixtures and example projects, against their recorded output
           no_output_timeout: 30m
           command: |
             # The fixtures under tests/ are the language's real regression
-            # suite and are not reachable from `cargo test`.
-            #
-            # Since Phase 4 a bare run uses the bytecode VM, so the first of
-            # these means something different than it used to and the other
-            # three are no longer optional. Without them CI would gate on one
-            # engine and stop noticing the other, which is the one thing the
-            # differential design cannot survive: the tree-walker is the
-            # oracle.
+            # suite and are not reachable from `cargo test`. Each one's
+            # output — values and diagnostics — is compared with the
+            # recording in tests/**/expected/, so a bug that prints the wrong
+            # thing and still exits 0 fails here.
             ./run_tests.sh
-            SAULE_ENGINE=interp ./run_tests.sh
-            # Not redundant with the first: a fallback is silent under the
-            # default and reported here, and this is the run whose notes the
-            # harness counts.
-            SAULE_ENGINE=vm ./run_tests.sh
-            # The one that catches wrong *values*. Exit status cannot see a VM
-            # bug that prints the wrong thing and still exits 0.
-            SAULE_DIFF=1 ./run_tests.sh
             # Multi-module programs with imports and file IO, which is a
-            # different question from the single-file fixtures above and the
-            # one that has actually caught divergences. Through `bash` because
-            # this one is not chmod +x in git, unlike run_tests.sh.
-            bash run_examples_diff.sh
+            # different question from the single-file fixtures above. Through
+            # `bash` because this one is not chmod +x in git, unlike
+            # run_tests.sh.
+            bash run_examples.sh
       - run:
           name: saule and saule-lsp agree on the version
           command: |

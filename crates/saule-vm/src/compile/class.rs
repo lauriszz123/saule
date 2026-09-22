@@ -109,6 +109,56 @@ impl Compiler<'_> {
         Ok(())
     }
 
+    /// The declaration statement of an enum: set each variant whose value is
+    /// an expression rather than a literal.
+    ///
+    /// Emitted where the declaration stands in the module body, because
+    /// that is when the expression may be evaluated — it can call a
+    /// function or read a module variable declared above it. A literal
+    /// value was baked into the singleton when the program was built, and
+    /// needs nothing here.
+    ///
+    /// The store is a call to a native rather than an opcode of its own: it
+    /// runs once per variant per program, and a new arm in the dispatch loop
+    /// would cost every program that never declares such an enum.
+    pub fn enum_values(&mut self, d: &Spanned<Decl>) -> Result<(), CompileError> {
+        let Decl::Enum { name, variants, .. } = &d.value else {
+            unreachable!("enum_values called with a non-enum");
+        };
+        let Some(idx) = self.layouts.enum_of(name) else {
+            return Err(CompileError::unsupported(
+                "an enum the compiler did not lay out",
+                d.span.clone(),
+            ));
+        };
+        for (tag, v) in variants.iter().enumerate() {
+            let saule_ast::EnumVariant::Valued(_, expr) = &v.value else {
+                continue;
+            };
+            if crate::compile::literal_value(&expr.value).is_some() {
+                continue;
+            }
+            let span = &v.span;
+            let m = self.mark();
+            // `CALLNAT`'s window: `A` is the result, arguments from `A+1`.
+            let base = self.alloc_n(3, span)?;
+            self.variant_ref_to(idx, tag as u32, base + 1, span)?;
+            self.expr_to(expr, base + 2)?;
+            let setter = saule_runtime::Value::Native(std::rc::Rc::new(
+                saule_runtime::NativeFn {
+                    name: "<enum variant value>",
+                    func: set_variant_value,
+                },
+            ));
+            let k = self.constant(setter, span)?;
+            let a = self.reg8(base, span)?;
+            self.emit(Instruction::abc(Op::CALLNAT, a, 3, 1), span);
+            self.emit(Instruction::ax_of(Op::EXTRAARG, k as u32), span);
+            self.free_to(m);
+        }
+        Ok(())
+    }
+
     /// One enum method body. Shaped like [`Self::method_proto`] with
     /// `has_self` set and no owning class — `self` is a variant, not an
     /// instance, so there is no `current_class` for a static or a field slot
@@ -416,7 +466,7 @@ impl Compiler<'_> {
                 if self.layouts.interface_of(iname).is_some() {
                     continue;
                 }
-                let Some(saule_interpreter::Value::Interface(iface)) = self.prelude_value(iname)
+                let Some(saule_runtime::Value::Interface(iface)) = self.prelude_value(iname)
                 else {
                     // An interface from another module, or none at all. The
                     // tree-walker errors on the second and this compiler
@@ -431,14 +481,19 @@ impl Compiler<'_> {
                 // parent chain, so a method satisfied by inheritance counts —
                 // which is what the tree-walker's flattened `methods` map
                 // does too.
-                let satisfied = iface.methods.keys().all(|m| {
-                    cls.vindex.contains_key(m.as_str()) || cls.smindex.contains_key(m.as_str())
-                });
-                if !satisfied {
-                    return Err(CompileError::unsupported(
-                        "a class that does not implement every method of its interface",
-                        d.span.clone(),
-                    ));
+                let mut missing: Vec<(String, String)> = iface
+                    .methods
+                    .keys()
+                    .filter(|m| {
+                        !cls.vindex.contains_key(m.as_str()) && !cls.smindex.contains_key(m.as_str())
+                    })
+                    .map(|m| (iname.to_string(), m.clone()))
+                    .collect();
+                if !missing.is_empty() {
+                    // A map: sorted, so the message does not change between
+                    // runs.
+                    missing.sort();
+                    return Err(crate::compile::missing_methods(name, &missing, d.span.clone()));
                 }
             }
         }
@@ -484,4 +539,15 @@ impl Compiler<'_> {
             _ => None,
         }
     }
+}
+
+/// `(variant, value)`: give a valued variant the value its declaration
+/// computed. See [`Compiler::enum_values`].
+fn set_variant_value(args: &[saule_runtime::Value]) -> Result<saule_runtime::Value, String> {
+    if let [saule_runtime::Value::EnumVariant(v), value] = args {
+        // Set once, and a module body runs once — a second call has nothing
+        // to change.
+        let _ = v.value.set(value.clone());
+    }
+    Ok(saule_runtime::Value::Nil)
 }

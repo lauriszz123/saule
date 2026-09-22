@@ -1,0 +1,10 @@
+  × `Table.insert` expects 2 argument(s), got 1
+   ╭─[table_insert_arity.sau:5:5]
+ 4 │     local xs: table<integer> = {1, 2, 3}
+ 5 │     Table.insert(xs)
+   ·     ────────┬───────
+   ·             ╰── wrong number of arguments
+ 6 │   end
+   ╰────
+  help: check the signature of `Table.insert`
+

@@ -1,0 +1,10 @@
+  × cannot assign value of type `T` to variable of type `U`
+   ╭─[type_param_assigned_to_other_type_param.sau:5:15]
+ 4 │ fn convert<T, U>(a: T) -> U
+ 5 │     local x: U = a
+   ·                  ┬
+   ·                  ╰── incompatible type
+ 6 │     return x
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

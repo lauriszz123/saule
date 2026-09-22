@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use saule_interpreter::Value;
+use saule_runtime::Value;
 
 use crate::chunk::LineEntry;
 use crate::compile::CompileError;

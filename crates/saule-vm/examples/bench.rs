@@ -36,7 +36,7 @@ fn main() {
     // Before `compile`, not after: the resolver classifies prelude names
     // against the stdlib this registers, and without it every program fails
     // to compile with "a name the resolver could not classify".
-    saule_interpreter::init();
+    saule_runtime::init();
     let program = match saule_vm::program::compile(Path::new(path)) {
         Ok(p) => p,
         Err(e) => {

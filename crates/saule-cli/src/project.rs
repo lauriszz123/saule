@@ -1,4 +1,4 @@
-//! Project-mode bootstrap: read `saule.config`, configure the interpreter's
+//! Project-mode bootstrap: read `saule.config`, configure the runtime's
 //! project context, then hand off to [`crate::run::run_file`] on the entry
 //! point.
 //!
@@ -54,7 +54,7 @@ pub(crate) fn run_project(dir: &Path) {
     run_file(entry, true);
 }
 
-/// Read `saule.config`, validate it, install the interpreter's project
+/// Read `saule.config`, validate it, install the runtime's project
 /// context, and report where the sources live.
 ///
 /// `require_entry` distinguishes the two callers: `run` cannot proceed without

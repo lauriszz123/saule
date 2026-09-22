@@ -60,18 +60,31 @@ use crate::op::{Instruction, Op};
 /// complex" must be a clean diagnostic.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
 pub enum CompileError {
-    /// The compiler has no codegen for this construct yet. The CLI treats
-    /// this as "run it on the tree-walker instead".
-    #[error("`{thing}` is not supported by the bytecode compiler yet")]
+    /// A construct the compiler cannot compile.
+    ///
+    /// Most of these are programs the language rejects that the front end
+    /// does not yet catch — a module-level call to a function declared
+    /// further down, say — and the rest are limits: a function with over 255
+    /// parameters. There is no other engine to hand the program to, so it
+    /// is an error like any other.
+    #[error("cannot compile {thing}")]
     #[diagnostic(help(
-        "the bytecode compiler is still under construction; \
-         the tree-walking interpreter runs this construct today"
+        "if `saule check` accepts this program, the compiler is missing \
+         something — please report it"
     ))]
     Unsupported {
         thing: &'static str,
-        #[label("not yet compiled")]
+        #[label("here")]
         span: Range<usize>,
     },
+
+    /// A program the language rejects but the front end lets through,
+    /// reported with the language's own diagnostic — the one the
+    /// tree-walking interpreter raised when it reached the construct. Now
+    /// it is raised before anything runs.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Rejected(saule_runtime::RuntimeError),
 
     /// A function body needed more than 256 registers (§5.2, §24.4).
     #[error("function `{name}` is too complex: it needs {needed} registers, the limit is 256")]
@@ -115,14 +128,55 @@ impl CompileError {
 /// The runtime value of a literal expression, for the places a chunk needs a
 /// constant rather than code — enum variant values, and eventually constant
 /// field templates.
-pub(crate) fn literal_value(e: &saule_ast::Expr) -> Option<saule_interpreter::Value> {
+/// The module body using `name` before a declaration further down the file
+/// has run. The body runs top to bottom, so at this point the name does not
+/// exist yet — the language rejects the program, and the front end does not
+/// catch it yet. `reached` means `name` itself is declared above, but using
+/// it reaches one that is not.
+pub(crate) fn declared_later(name: &str, reached: bool, span: Range<usize>) -> CompileError {
+    let message = if reached {
+        format!(
+            "`{name}` is used here, but it reaches a declaration further down the file, \
+             which has not run yet — the module body runs from top to bottom"
+        )
+    } else {
+        format!(
+            "`{name}` is used here, before its declaration further down the file — the \
+             module body runs from top to bottom"
+        )
+    };
+    CompileError::Rejected(saule_runtime::RuntimeError::TypeError { message, span })
+}
+
+/// `class X implements I` where `X` lacks some of `I`'s methods: `missing` is
+/// `(interface, method)` pairs, in the order to report them.
+pub(crate) fn missing_methods(
+    class: &str,
+    missing: &[(String, String)],
+    span: Range<usize>,
+) -> CompileError {
+    let list = missing
+        .iter()
+        .map(|(iface, method)| format!("`{method}` from interface `{iface}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    CompileError::Rejected(saule_runtime::RuntimeError::TypeError {
+        message: format!(
+            "class `{class}` is missing method{}: {list}",
+            if missing.len() == 1 { "" } else { "s" }
+        ),
+        span,
+    })
+}
+
+pub(crate) fn literal_value(e: &saule_ast::Expr) -> Option<saule_runtime::Value> {
     use saule_ast::Expr;
-    use saule_interpreter::Value;
+    use saule_runtime::Value;
     Some(match e {
         Expr::Int(n) => Value::Int(*n),
         Expr::Float(f) => Value::Float(*f),
         Expr::Bool(b) => Value::Bool(*b),
-        Expr::Str(s) => Value::Str(saule_interpreter::value::SauleStr::new(s.clone())),
+        Expr::Str(s) => Value::Str(saule_runtime::value::SauleStr::new(s.clone())),
         Expr::Nil => Value::Nil,
         _ => return None,
     })
@@ -263,7 +317,7 @@ pub(crate) fn compile_into(
     // This module's position in its program.
     module_index: usize,
     // Names bound to a native package's exports, folded at compile time.
-    native_imports: std::collections::HashMap<String, saule_interpreter::Value>,
+    native_imports: std::collections::HashMap<String, saule_runtime::Value>,
 ) -> Result<(Chunk, layout::Layouts), CompileError> {
     let mut c = ctx::Compiler::new(name, source, bindings, types);
     c.imports_bound = imports_bound;
@@ -332,6 +386,27 @@ pub(crate) fn compile_into(
     layout::build_enums(module, &mut c.chunk, &mut layouts)?;
     c.layouts = layouts.clone();
     c.check_interface_conformance(module)?;
+
+    // The module slot each class and enum this module declares is bound to,
+    // for the VM to fill with the runtime object — see `Chunk::type_slots`.
+    for s in &module.stmts {
+        let saule_ast::Stmt::Decl(d) = &s.value else { continue };
+        let (name, ty) = match &d.value {
+            saule_ast::Decl::Class { name, .. } => {
+                (name, c.layouts.get(name).map(crate::chunk::TypeSlot::Class))
+            }
+            saule_ast::Decl::Enum { name, .. } => {
+                (name, c.layouts.enum_of(name).map(crate::chunk::TypeSlot::Enum))
+            }
+            _ => continue,
+        };
+        if let Some(ty) = ty
+            && let Some(local) = c.module_slot_of(name)
+            && let Ok(global) = u16::try_from(c.module_slot_base + local as usize)
+        {
+            c.chunk.type_slots.push((global, ty));
+        }
+    }
 
     // Pass 1a: reserve a proto index for every top-level `fn` before any
     // body is compiled, so a forward call resolves — `fn a() b() end`
@@ -494,23 +569,18 @@ pub(crate) fn compile_into(
     }
 
     // The module body's value is the last expression statement's — the same
-    // rule `saule_interpreter::run_in` follows, which is what lets a
+    // rule `saule_runtime::run_in` follows, which is what lets a
     // differential test compare the two engines by value.
-    // Every distinct name the module declares at top level. The body is
-    // walked below in the same order it will *run*, so the count and the
-    // running set together say whether a call made here could still reach a
-    // name that does not exist yet.
+    // Every distinct name the module *declares* at top level — functions,
+    // classes, interfaces, enums, and module variables alike, but not the
+    // names an `import` binds, which the prologue writes before the body
+    // starts. The body is walked below in the same order it will *run*, so
+    // this set and `module_decls_seen` together say whether a call made
+    // here could still reach a name that does not exist yet.
     for s in &module.stmts {
-        if let saule_ast::Stmt::Decl(d) = &s.value {
-            match &d.value {
-                saule_ast::Decl::Function { name, .. }
-                | saule_ast::Decl::Class { name, .. }
-                | saule_ast::Decl::Interface { name, .. }
-                | saule_ast::Decl::Enum { name, .. } => {
-                    c.module_type_decls.insert(name.clone());
-                }
-                _ => {}
-            }
+        if !matches!(&s.value, saule_ast::Stmt::Decl(d) if matches!(&d.value, saule_ast::Decl::Import { .. }))
+        {
+            c.module_decls.extend(top_level_declared_names(s));
         }
     }
 
@@ -533,12 +603,15 @@ pub(crate) fn compile_into(
                 }
                 _ => continue,
             };
-            let mut names = NameRefs::default();
+            let mut names = NameRefs {
+                bindings,
+                names: Default::default(),
+            };
             saule_ast::visit_stmts(&body, &mut names);
             c.module_refs
                 .entry(name.clone())
                 .or_default()
-                .extend(names.0);
+                .extend(names.names);
         }
     }
 
@@ -595,29 +668,41 @@ pub(crate) fn compile_into(
 /// fallback on every call it makes; one added here that the resolver does
 /// not treat as a module slot would do the reverse and let a forward
 /// reference through.
-/// Every bare identifier a body mentions.
+/// Every **module-scope** name a body mentions.
 ///
-/// Deliberately crude: it does not distinguish a local named `later` from
-/// the top-level `fn later`, so a body with a local of the same name is
-/// counted as reaching it. The caller filters against
-/// `module_type_decls`, and an over-count costs a fallback rather than a
-/// wrong answer — which is the right side to err on for a guard whose whole
-/// job is to refuse programs the tree-walker rejects.
-#[derive(Default)]
-struct NameRefs(std::collections::HashSet<String>);
+/// Read off the resolver's answer rather than off the spelling, so a body
+/// with a local of its own named `count` does not count as reaching a
+/// module-level `local count`. That precision is what lets the guard cover
+/// module variables at all: over-counting them would refuse ordinary
+/// programs, since a short name like `i` or `count` is used in both places
+/// all the time.
+///
+/// A pipe stage is the one thing still matched by spelling: it is a bare
+/// `String` in the AST with no node of its own, so there is no binding to
+/// ask about. Over-counting one costs a refusal on a program that names a
+/// module declaration below it, which is a program the language rejects
+/// anyway.
+struct NameRefs<'a> {
+    bindings: &'a saule_semantic::Bindings,
+    names: std::collections::HashSet<String>,
+}
 
-impl saule_ast::Visitor for NameRefs {
+impl saule_ast::Visitor for NameRefs<'_> {
     fn expr(&mut self, e: &saule_ast::Spanned<saule_ast::Expr>) {
         match &e.value {
             saule_ast::Expr::Ident(n) => {
-                self.0.insert(n.clone());
+                if let Some(saule_semantic::Binding::Module { slot }) = self.bindings.get(e.id)
+                    && self.bindings.module_slots.get(*slot as usize).is_some()
+                {
+                    self.names.insert(n.clone());
+                }
             }
             // `C.go()` names `C`, which the flattened walk would otherwise
             // only see as the receiver expression it already visits — but a
             // pipe stage is a bare `String` with no expression node at all.
             saule_ast::Expr::Pipe { stages, .. } => {
                 for st in stages {
-                    self.0.insert(st.name.clone());
+                    self.names.insert(st.name.clone());
                 }
             }
             _ => {}

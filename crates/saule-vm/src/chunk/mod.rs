@@ -34,13 +34,13 @@ pub use proto::{Handler, InlineCache, LineEntry, Proto, UpvalDesc};
 
 use std::rc::Rc;
 
-use saule_interpreter::Value;
+use saule_runtime::Value;
 // **The** field layout, not a copy of it. `saule-interpreter` owns the type
 // and the runtime `ClassObject` holds the very same `Rc`, so the compiler and
 // the runtime cannot disagree about which slot a field lives in — the failure
 // §24.2 calls out as the worst this project could ship. A second definition
 // here would reintroduce exactly that risk.
-pub use saule_interpreter::value::FieldLayout;
+pub use saule_runtime::value::FieldLayout;
 
 
 pub type ProtoIdx = u32;
@@ -128,6 +128,15 @@ pub struct Chunk {
     /// the same `import`, so a package that fails to load fails at the same
     /// place under both engines.
     pub dynamic_imports: Vec<(String, std::ops::Range<usize>)>,
+    /// The module slots that hold a class or an enum this module declares,
+    /// as `(global slot, type)`.
+    ///
+    /// A type is a compile-time index to the compiler, so nothing it emits
+    /// ever writes one of these slots — yet the name is still an ordinary
+    /// value to a program: `local k = Counter`, `return self` in a
+    /// `static fn`. The VM fills them when it builds the program, from the
+    /// class and enum objects it builds at the same time.
+    pub type_slots: Vec<(u16, TypeSlot)>,
     /// This module's position in its program, and so the row of the VM's
     /// per-module closure cache it owns. Proto indices are per chunk, so one
     /// flat cache would have index 5 mean two different functions.
@@ -135,6 +144,13 @@ pub struct Chunk {
     /// The module body.
     pub main: ProtoIdx,
     pub source: Rc<miette::NamedSource<String>>,
+}
+
+/// What a [`Chunk::type_slots`] entry holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeSlot {
+    Class(ClassIdx),
+    Enum(EnumIdx),
 }
 
 impl Chunk {
@@ -155,6 +171,7 @@ impl Chunk {
             module_slots: 0,
             module_slot_base: 0,
             dynamic_imports: Vec::new(),
+            type_slots: Vec::new(),
             module_index: 0,
             main: 0,
             source: Rc::new(miette::NamedSource::new(name, String::new())),

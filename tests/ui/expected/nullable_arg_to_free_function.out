@@ -1,0 +1,10 @@
+  × argument 1 of `shout` expects `string`, got `string?`
+    ╭─[nullable_arg_to_free_function.sau:16:17]
+ 15 │         local maybe: string? = "hi"
+ 16 │         println(shout(maybe))
+    ·                       ──┬──
+    ·                         ╰── wrong argument type
+ 17 │     end
+    ╰────
+  help: pass a value of type `string` here — check the signature of `shout`
+

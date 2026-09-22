@@ -1,0 +1,11 @@
+  × argument 1 of `filter` expects `table<string>`, got `table<integer>`
+    ╭─[generic_explicit_type_arg_mismatch.sau:23:30]
+ 22 │ local nums: table<integer> = {1, 2, 3, 4, 5, 6}
+ 23 │ local evens = filter<string>(nums, x => x % 2 == 0)
+    ·                              ──┬─
+    ·                                ╰── wrong argument type
+ 24 │ println(evens)
+    ╰────
+  help: pass a value of type `table<string>` here — check the signature of
+        `filter`
+

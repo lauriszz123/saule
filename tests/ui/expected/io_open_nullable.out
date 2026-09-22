@@ -1,0 +1,11 @@
+  × cannot assign a nullable value of type `File?` to non-nullable type `File`
+   ╭─[io_open_nullable.sau:5:21]
+ 4 │   static fn main()
+ 5 │     local f: File = Io.open("/tmp/nope.txt", IoMode.Read)
+   ·                     ──────────────────┬──────────────────
+   ·                                       ╰── this expression may be `nil`
+ 6 │     f.close()
+   ╰────
+  help: guard with `if x != nil then ... end`, use `??` to provide a fallback,
+        or force-unwrap with `!`
+

@@ -1,0 +1,10 @@
+  × cannot assign value of type `any` to variable of type `integer`
+   ╭─[any_to_concrete_needs_cast.sau:6:22]
+ 5 │         local a: any = "i am a string"
+ 6 │         local n: integer = a
+   ·                            ┬
+   ·                            ╰── incompatible type
+ 7 │         println(n)
+   ╰────
+  help: the value's type isn't compatible with the declared type
+
