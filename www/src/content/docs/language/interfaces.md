@@ -363,7 +363,7 @@ local t: Text = "a"
 t = "b"                           -- ERROR: only the declaration converts
 ```
 
-That boundary is soundness rather than an unfinished edge. The interpreter
+That boundary is soundness rather than an unfinished edge. The compiler
 converts at those sites and only those, so relaxing the checker anywhere else
 would typecheck a value that never gets built — leaving a raw `string` inside
 a `table<Text>` for the first `Text` member call to trip over.

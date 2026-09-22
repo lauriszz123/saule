@@ -87,35 +87,13 @@ saule run -- input.bf          # project in the cwd, Os.args() = ["input.bf"]
 saule run tool.sau -- -v file  # single file; script args may start with `-`
 ```
 
-### Execution Engines
+### Execution
 
-Saule ships two engines that run the same language, and `saule run` picks the
-bytecode VM by default:
-
-```sh
-saule run app.sau              # the bytecode VM (default)
-saule run --interp app.sau     # the tree-walking interpreter
-saule run --vm app.sau         # the VM, stated explicitly
-```
-
-`SAULE_ENGINE=vm` and `SAULE_ENGINE=interp` do the same thing for a whole test
-run or benchmark sweep without touching call sites.
-
-The two are held to identical observable behaviour — output, exit status and
-error text — by a differential harness that runs every fixture and every
-example project under both. **`--interp` is an escape hatch, not a tuning
-knob**: if a program needs it, that is a bug worth reporting along with the
-program.
-
-The bytecode compiler is still learning parts of the language. A module it
-cannot compile yet runs on the tree-walking interpreter instead, silently and
-with the same result — so the only thing a gap costs is speed. Pass `--vm`
-to hear about it:
-
-```
-$ saule run --vm .
-note: the bytecode compiler does not handle `a tuple pattern` yet — running on the tree-walking interpreter
-```
+`saule run` compiles the whole program — the entry file and every module it
+imports — to bytecode, then runs it on a register-based virtual machine.
+Everything is checked before anything runs: a type error in an imported
+module is reported against the `import` that led to it, and so is a module
+that cannot be found or parsed.
 
 A typical project-mode entry file:
 
