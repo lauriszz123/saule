@@ -1,0 +1,10 @@
+  × type error: duplicate argument for parameter `body` — a trailing block
+  │ binds to that parameter, which was already supplied
+    ╭─[trailing_block_duplicate_argument.sau:8:1]
+  7 │     
+  8 │ ╭─▶ view(spacing: 1, body: fn() end) do
+  9 │ │     println("hi")
+ 10 │ ├─▶ end
+    · ╰──── type mismatch or invalid operation
+    ╰────
+

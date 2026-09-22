@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `string`
+   ╭─[string_nil_assignment.sau:6:26]
+ 5 │   static fn main()
+ 6 │     local name: string = nil
+   ·                          ─┬─
+   ·                           ╰── `nil` not allowed here
+ 7 │     println(name)
+   ╰────
+  help: mark the type nullable with `?` (e.g. `string?`) or initialize it with
+        a non-nil value
+

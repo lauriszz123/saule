@@ -1,0 +1,10 @@
+  × cannot assign value of type `integer` to variable of type `string`
+    ╭─[generic_call_return_mismatch.sau:9:19]
+  8 │ 
+  9 │ local s: string = identity(5)
+    ·                   ─────┬─────
+    ·                        ╰── incompatible type
+ 10 │ println(s)
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

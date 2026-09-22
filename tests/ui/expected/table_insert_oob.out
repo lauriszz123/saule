@@ -1,0 +1,9 @@
+  × type error: Table.insert: position 99 out of range for length 3
+   ╭─[table_insert_oob.sau:5:5]
+ 4 │     local xs: table<integer> = {1, 2, 3}
+ 5 │     Table.insert(xs, 7, 99)
+   ·     ───────────┬───────────
+   ·                ╰── type mismatch or invalid operation
+ 6 │   end
+   ╰────
+

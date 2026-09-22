@@ -1,0 +1,11 @@
+  × force-unwrapped a `nil` value
+   ╭─[force_unwrap_return_nil.sau:8:11]
+ 7 │   static fn main()
+ 8 │     print(maybe()!)
+   ·           ────┬───
+   ·               ╰── this expression was `nil` when `!` was applied
+ 9 │   end
+   ╰────
+  help: use `??` to provide a fallback, or check with `if x != nil` before
+        unwrapping
+

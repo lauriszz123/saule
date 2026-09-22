@@ -1,0 +1,11 @@
+  × operator `+` cannot be applied to type `string` (expected `integer` or
+  │ `float`)
+   ╭─[compound_assign_wrong_operand.sau:6:3]
+ 5 │         local s: string = "a"
+ 6 │         s += 1
+   ·         ┬
+   ·         ╰── incompatible operand
+ 7 │         println(s)
+   ╰────
+  help: change the operand so it has a compatible type
+

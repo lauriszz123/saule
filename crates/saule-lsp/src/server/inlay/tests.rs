@@ -223,7 +223,7 @@ fn init_stdlib() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        saule_interpreter::init();
+        saule_runtime::init();
     });
 }
 

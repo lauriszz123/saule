@@ -1,0 +1,9 @@
+  × `Math.random` expects 0, 1, or 2 argument(s), got 3
+   ╭─[math_random_overload_arity.sau:5:9]
+ 4 │ 
+ 5 │ println(Math.random(1, 2, 3))
+   ·         ──────────┬─────────
+   ·                   ╰── wrong number of arguments
+   ╰────
+  help: check the signature of `Math.random`
+

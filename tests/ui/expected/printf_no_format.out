@@ -1,0 +1,10 @@
+  × argument 1 of `printf` expects `string`, got `integer`
+   ╭─[printf_no_format.sau:2:8]
+ 1 │ -- printf requires a format string as the first argument.
+ 2 │ printf(42, "x")
+   ·        ─┬
+   ·         ╰── wrong argument type
+ 3 │ 
+   ╰────
+  help: pass a value of type `string` here — check the signature of `printf`
+

@@ -1,0 +1,10 @@
+  × operator `&` cannot be applied to type `float` (expected `integer`)
+   ╭─[bitwise_float_operand.sau:8:11]
+ 7 │         local f: float = 6.0
+ 8 │         println(f & 1)
+   ·                 ┬
+   ·                 ╰── incompatible operand
+ 9 │     end
+   ╰────
+  help: change the operand so it has a compatible type
+

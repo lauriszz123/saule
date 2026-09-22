@@ -83,16 +83,10 @@ impl Compiler<'_> {
             // Same guard as the ordinary call path: a pipe into a `fn` the
             // module body has not reached yet is the same forward call.
             if !self.callk_resolvable(name) {
-                return Err(CompileError::unsupported(
-                    "a module-level call to a function declared further down",
-                    span.clone(),
-                ));
+                return Err(crate::compile::declared_later(name, false, span.clone()));
             }
             if self.reaches_undeclared(name) {
-                return Err(CompileError::unsupported(
-                    "a module-level call whose callee reaches a declaration further down",
-                    span.clone(),
-                ));
+                return Err(crate::compile::declared_later(name, true, span.clone()));
             }
             let m = self.mark();
             let base = self.alloc_n(n_args, span)?;

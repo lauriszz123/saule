@@ -233,7 +233,7 @@ impl Compiler<'_> {
         // neither operand is an instance — which is what lets this run
         // before `binary_to`'s contract lookup rather than after it.
         let imm8 = |e: &Spanned<Expr>| match crate::compile::literal_value(&e.value) {
-            Some(saule_interpreter::Value::Int(v)) => i8::try_from(v).ok(),
+            Some(saule_runtime::Value::Int(v)) => i8::try_from(v).ok(),
             _ => None,
         };
         let (value, imm) = match imm8(rhs) {

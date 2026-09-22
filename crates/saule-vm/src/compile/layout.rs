@@ -44,7 +44,7 @@ type ClassDecl<'a> = (
 use std::rc::Rc;
 
 use saule_ast::{ClassMember, Decl, Module, Stmt};
-use saule_interpreter::value::FieldLayout;
+use saule_runtime::value::FieldLayout;
 
 use crate::chunk::{ClassIdx, ClassProto};
 use crate::compile::CompileError;
@@ -193,17 +193,14 @@ pub fn build_enums(
         for (tag, v) in variants.iter().enumerate() {
             let (vname, arity, value) = match &v.value {
                 EnumVariant::Bare(n) => (n.clone(), 0u8, None),
+                // A literal is known now and baked into the singleton. Any
+                // other expression can only be evaluated when the
+                // declaration runs — it may call a function or read a
+                // module variable — so it has no value here, and
+                // `Compiler::enum_values` emits the code that sets it.
                 EnumVariant::Valued(n, expr) => {
-                    let k = match crate::compile::literal_value(&expr.value) {
-                        Some(val) => chunk.add_constant(val),
-                        None => {
-                            return Err(CompileError::unsupported(
-                                "an enum variant whose value is not a literal",
-                                v.span.clone(),
-                            ));
-                        }
-                    };
-                    (n.clone(), 0, Some(k))
+                    let k = crate::compile::literal_value(&expr.value).map(|val| chunk.add_constant(val));
+                    (n.clone(), 0, k)
                 }
                 EnumVariant::Tuple { name, fields } => (name.clone(), fields.len() as u8, None),
             };
@@ -327,15 +324,14 @@ pub fn build(
         // An itable per implemented interface: interface slot -> this
         // class's vtable slot. Built once here, so a `CALLIF` is a small-map
         // probe and an indexed load rather than a name lookup (§8.4).
+        let mut missing: Vec<(String, String)> = Vec::new();
         for iname in implements.get(*name).into_iter().flat_map(|v| v.iter()) {
             let Some(&ii) = iface_index.get(*iname) else {
                 continue;
             };
-            let slots: Option<Vec<u16>> = ifaces[ii as usize]
-                .methods
-                .iter()
-                .map(|m| proto.vindex.get(m).copied())
-                .collect();
+            let iface = &ifaces[ii as usize];
+            let slots: Option<Vec<u16>> =
+                iface.methods.iter().map(|m| proto.vindex.get(m).copied()).collect();
             match slots {
                 Some(s) => {
                     proto.itables.insert(ii, s);
@@ -344,17 +340,19 @@ pub fn build(
                 // Nothing before this point rejects that — `saule-semantic`
                 // does not, and the typechecker does not either
                 // (`tests/ui/implements_missing_method.sau` records the gap)
-                // — the *tree-walker* catches it, when it declares the
-                // class. So refuse the module and let the oracle produce
-                // the diagnostic, rather than compiling a class whose
-                // itable silently has a hole in it.
-                None => {
-                    return Err(CompileError::unsupported(
-                        "a class that does not implement every method of its interface",
-                        span.clone(),
-                    ));
-                }
+                // — so it is reported here, before anything runs, rather
+                // than compiling a class whose itable has a hole in it.
+                None => missing.extend(
+                    iface
+                        .methods
+                        .iter()
+                        .filter(|m| !proto.vindex.contains_key(&**m))
+                        .map(|m| ((*iname).to_string(), m.to_string())),
+                ),
             }
+        }
+        if !missing.is_empty() {
+            return Err(crate::compile::missing_methods(name, &missing, span.clone()));
         }
         let proto = proto;
         index.insert((*name).to_string(), classes.len() as ClassIdx);
@@ -451,14 +449,12 @@ fn build_one(
     // Fields: the parent's slots, then this class's own. A redeclared name
     // keeps the parent's slot so the prefix invariant survives shadowing.
     let parent_proto = parent.map(|p| &built[p as usize]);
-    // Built through `FieldLayout::build`, the same call the tree-walker uses
-    // when it constructs a class — so the two produce identical slots by
-    // construction rather than by agreement (§24.2).
-    let own_defs: Vec<saule_interpreter::value::FieldDef> = own_fields
+    // Built through `FieldLayout::build`, the runtime's own rule for laying
+    // out a subclass over its parent (§24.2).
+    let own_defs: Vec<saule_runtime::value::FieldDef> = own_fields
         .iter()
-        .map(|n| saule_interpreter::value::FieldDef {
+        .map(|n| saule_runtime::value::FieldDef {
             name: n.to_string(),
-            default: None,
         })
         .collect();
     let layout = FieldLayout::build(parent_proto.map(|p| p.layout.as_ref()), &own_defs);

@@ -1,0 +1,10 @@
+  × cannot assign value of type `string` to variable of type `integer`
+   ╭─[compound_assign_result_type.sau:6:3]
+ 5 │         local n: integer = 1
+ 6 │         n ..= "x"
+   ·         ────┬────
+   ·             ╰── incompatible type
+ 7 │         println(n)
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

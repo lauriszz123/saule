@@ -433,7 +433,7 @@ impl Compiler<'_> {
                 });
         }
         if self.not_shadowed(enum_name)
-            && let Some(saule_interpreter::Value::Enum(e)) = self.prelude_value(enum_name)
+            && let Some(saule_runtime::Value::Enum(e)) = self.prelude_value(enum_name)
         {
             // The enum *is* known; a name it does not declare is a different
             // complaint, and reporting it as an unknown enum sent me looking
@@ -594,12 +594,12 @@ impl Compiler<'_> {
         dst: u16,
         span: &Range<usize>,
     ) -> Result<(), CompileError> {
-        use saule_interpreter::Value;
+        use saule_runtime::Value;
         let v = match p {
             Pattern::Int(n) => Value::Int(*n),
             Pattern::Float(f) => Value::Float(*f),
             Pattern::Bool(b) => Value::Bool(*b),
-            Pattern::Str(s) => Value::Str(saule_interpreter::value::SauleStr::new(s.clone())),
+            Pattern::Str(s) => Value::Str(saule_runtime::value::SauleStr::new(s.clone())),
             Pattern::Nil => Value::Nil,
             _ => unreachable!("only literal patterns reach here"),
         };

@@ -7,9 +7,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_interpreter::fxhash::FxHashMap;
-use saule_interpreter::value::VmFunctionRef;
-use saule_interpreter::Value;
+use saule_runtime::fxhash::FxHashMap;
+use saule_runtime::value::VmFunctionRef;
+use saule_runtime::Value;
 
 use crate::chunk::Chunk;
 
@@ -36,17 +36,17 @@ pub(crate) fn build_classes(
     chunks: &[Rc<Chunk>],
     weak: &std::rc::Weak<VmShared>,
 ) -> (
-    Vec<Rc<saule_interpreter::value::ClassObject>>,
+    Vec<Rc<saule_runtime::value::ClassObject>>,
     FxHashMap<usize, u32>,
-    Vec<RefCell<Vec<Value>>>,
+    Vec<Rc<RefCell<Vec<Value>>>>,
 ) {
-    use saule_interpreter::value::{ClassObject, MethodRef};
+    use saule_runtime::value::{ClassObject, MethodRef, SlotStatics};
 
     // Every chunk of a program shares one class table, so reading it through
     // the first is not a choice of module.
     let table = Rc::clone(&chunks[0].classes);
     let mut classes: Vec<Rc<ClassObject>> = Vec::with_capacity(table.len());
-    let mut class_of = saule_interpreter::fxhash::fxmap();
+    let mut class_of = saule_runtime::fxhash::fxmap();
     let mut statics = Vec::with_capacity(table.len());
 
     // A method proto captures nothing — it reaches module slots through
@@ -83,7 +83,7 @@ pub(crate) fn build_classes(
                 // chunk. See `ClassProto::vowner`.
                 let owner = *proto.vowner.get(slot as usize)?;
                 let module = table.get(owner as usize)?.module;
-                Some((name.to_string(), MethodRef::Vm(bind(module, target)?)))
+                Some((name.to_string(), MethodRef(bind(module, target)?)))
             })
             .collect();
         let static_methods = proto
@@ -95,23 +95,39 @@ pub(crate) fn build_classes(
             .filter_map(|(name, &s)| {
                 let owner = &table[s.class as usize];
                 let target = owner.static_methods.get(s.slot as usize).copied()?;
-                Some((name.to_string(), MethodRef::Vm(bind(owner.module, target)?)))
+                Some((name.to_string(), MethodRef(bind(owner.module, target)?)))
             })
+            .collect();
+
+        // The statics `GETSTAT`/`SETSTAT` index, shared with the class
+        // object so a read by name — `k.count` on a class held in a local,
+        // which is `GETFX` — sees the same cell. Only this class's *own*
+        // statics: `sindex` is flattened, and an inherited entry is found
+        // on the parent, whose object carries it.
+        let own = statics.len() as u32;
+        let values = Rc::new(RefCell::new(vec![Value::Nil; proto.n_statics as usize]));
+        let index = proto
+            .sindex
+            .iter()
+            .filter(|(_, s)| s.class == own)
+            .map(|(name, s)| (name.to_string(), s.slot))
             .collect();
 
         let class = Rc::new(ClassObject {
             name: proto.name.to_string(),
             parent,
-            field_defs: Vec::new(),
             layout: Rc::clone(&proto.layout),
             methods,
             static_fields: RefCell::new(Default::default()),
+            slot_statics: Some(SlotStatics {
+                index,
+                values: Rc::clone(&values),
+            }),
             static_methods,
-            constructor: None,
         });
         class_of.insert(Rc::as_ptr(&class) as usize, classes.len() as u32);
         classes.push(class);
-        statics.push(RefCell::new(vec![Value::Nil; proto.n_statics as usize]));
+        statics.push(values);
     }
 
     (classes, class_of, statics)
@@ -126,18 +142,18 @@ pub(crate) fn build_classes(
 pub(crate) fn build_enums(
     chunks: &[Rc<Chunk>],
     weak: &std::rc::Weak<VmShared>,
-) -> Vec<Rc<saule_interpreter::value::EnumObject>> {
-    use saule_interpreter::value::{EnumObject, EnumVariantObject, MethodRef};
+) -> Vec<Rc<saule_runtime::value::EnumObject>> {
+    use saule_runtime::value::{EnumObject, EnumVariantObject, MethodRef};
     let table = Rc::clone(&chunks[0].enums);
     let mut enums = Vec::with_capacity(table.len());
     {
         for proto in table.iter() {
             // A variant's value indexes the *declaring* module's pool.
             let chunk = &chunks[proto.module];
-            let mut variants = saule_interpreter::fxhash::FxHashMap::default();
+            let mut variants = saule_runtime::fxhash::FxHashMap::default();
             let mut by_tag = Vec::with_capacity(proto.variants.len());
-            let mut tags = saule_interpreter::fxhash::FxHashMap::default();
-            let mut tuple_variants = saule_interpreter::fxhash::FxHashMap::default();
+            let mut tags = saule_runtime::fxhash::FxHashMap::default();
+            let mut tuple_variants = saule_runtime::fxhash::FxHashMap::default();
 
             for (tag, v) in proto.variants.iter().enumerate() {
                 tags.insert(v.name.to_string(), tag as u32);
@@ -150,7 +166,12 @@ pub(crate) fn build_enums(
                     enum_name: proto.name.to_string().into(),
                     variant_name: v.name.to_string().into(),
                     tag: tag as u32,
-                    value: v.value.map(|k| chunk.constants[k as usize].clone()),
+                    // A variant whose value is an expression has none yet;
+                    // its declaration sets it when it runs.
+                    value: v
+                        .value
+                        .map(|k| std::cell::OnceCell::from(chunk.constants[k as usize].clone()))
+                        .unwrap_or_default(),
                     enum_obj: RefCell::new(None),
                 });
                 variants.insert(v.name.to_string(), Rc::clone(&obj));
@@ -170,7 +191,7 @@ pub(crate) fn build_enums(
                 .map(|(name, &target)| {
                     (
                         name.to_string(),
-                        MethodRef::Vm(VmFunctionRef::new(Closure {
+                        MethodRef(VmFunctionRef::new(Closure {
                             proto: Rc::clone(chunk.proto(target)),
                             chunk: Rc::clone(chunk),
                             upvals: Vec::new(),

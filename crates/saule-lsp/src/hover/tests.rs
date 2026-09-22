@@ -13,7 +13,7 @@ use std::sync::Once;
 /// and stdlib hover tests can't find anything.
 fn init_stdlib() {
     static ONCE: Once = Once::new();
-    ONCE.call_once(saule_interpreter::init);
+    ONCE.call_once(saule_runtime::init);
 }
 
 /// Lex + parse + analyse `src` (so the registries are populated)
@@ -595,7 +595,7 @@ end
 
     // Mirror what `Backend::hover_at` does: collect the seed,
     // analyse, build the import context, then hover.
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
     let imports = build_import_context(&module, app_src, Some(&dir));
 
@@ -652,7 +652,7 @@ end
     let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
 
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
     let imports = build_import_context(&module, app_src, Some(&dir));
 
@@ -869,7 +869,7 @@ end
     let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
 
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
     let imports = build_import_context(&module, app_src, Some(&dir));
 
@@ -923,7 +923,7 @@ end
     let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
 
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
     let imports = build_import_context(&module, app_src, Some(&dir));
 
@@ -1516,7 +1516,7 @@ end
     let app_src = "import * from \"json\"\n\nfn run() -> nil\nend\n";
     let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
     let imports = build_import_context(&module, app_src, Some(&dir));
 
@@ -1930,7 +1930,7 @@ end
 ";
     let tokens = saule_lexer::Lexer::new(app).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
     let ctx = build_import_context(&module, app, Some(&dir));
 
@@ -1964,7 +1964,7 @@ fn a_barrel_does_not_forward_a_private_function() {
     let app = "import * from kit\n\nfn main() -> nil\n  helper(seed: 1)\nend\n";
     let tokens = saule_lexer::Lexer::new(app).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
     // A wildcard binds only what its target exports, at every hop.
     assert!(

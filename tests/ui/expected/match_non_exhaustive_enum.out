@@ -1,0 +1,13 @@
+  × non-exhaustive `match`: missing variant(s) of `Color`: Blue
+    ╭─[match_non_exhaustive_enum.sau:12:30]
+ 11 │             local c: Color = Color.Red
+ 12 │ ╭─▶         local name: string = match c
+ 13 │ │               case Color.Red then "red"
+ 14 │ │               case Color.Green then "green"
+ 15 │ ├─▶         end
+    · ╰──── not all cases covered
+ 16 │             println(name)
+    ╰────
+  help: add a wildcard arm `case _ then ...` or cover the remaining cases
+        explicitly
+

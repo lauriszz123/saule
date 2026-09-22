@@ -1,0 +1,10 @@
+  × argument 1 of `Os.sleep` expects `float`, got `string`
+   ╭─[os_sleep_wrong_type.sau:2:10]
+ 1 │ -- Os.sleep expects a number, not a string.
+ 2 │ Os.sleep("a while")
+   ·          ────┬────
+   ·              ╰── wrong argument type
+ 3 │ 
+   ╰────
+  help: pass a value of type `float` here — check the signature of `Os.sleep`
+

@@ -1,0 +1,6 @@
+test.json:
+Failed to parse test.json
+
+kitchen_sink.json:
+Failed to parse!
+[exit 0]

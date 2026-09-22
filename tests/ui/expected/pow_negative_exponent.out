@@ -1,0 +1,10 @@
+  × type error: `^` on integers requires a non-negative exponent, got -3 — use
+  │ floats (`(base as float) ^ -3.0`) for a fractional result
+   ╭─[pow_negative_exponent.sau:5:22]
+ 4 │     static fn main()
+ 5 │         local n: integer = 2 ^ -3
+   ·                            ───┬──
+   ·                               ╰── type mismatch or invalid operation
+ 6 │         println(n)
+   ╰────
+

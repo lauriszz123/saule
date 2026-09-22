@@ -1,0 +1,12 @@
+  × cannot assign a nullable value of type `integer?` to non-nullable type
+  │ `integer`
+   ╭─[table_remove_nullable.sau:6:24]
+ 5 │     local xs: table<integer> = {1, 2, 3}
+ 6 │     local v: integer = Table.remove(xs)
+   ·                        ────────┬───────
+   ·                                ╰── this expression may be `nil`
+ 7 │     println(v)
+   ╰────
+  help: guard with `if x != nil then ... end`, use `??` to provide a fallback,
+        or force-unwrap with `!`
+

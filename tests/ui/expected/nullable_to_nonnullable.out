@@ -1,0 +1,12 @@
+  × cannot assign a nullable value of type `string?` to non-nullable type
+  │ `string`
+   ╭─[nullable_to_nonnullable.sau:5:26]
+ 4 │     local maybe: string? = "x"
+ 5 │     local name: string = maybe
+   ·                          ──┬──
+   ·                            ╰── this expression may be `nil`
+ 6 │     println(name)
+   ╰────
+  help: guard with `if x != nil then ... end`, use `??` to provide a fallback,
+        or force-unwrap with `!`
+

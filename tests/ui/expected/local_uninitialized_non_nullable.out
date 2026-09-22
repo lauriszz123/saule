@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `table<integer>`
+   ╭─[local_uninitialized_non_nullable.sau:6:9]
+ 5 │     static fn main()
+ 6 │         local tape: table<integer>
+   ·         ─────┬────
+   ·              ╰── `nil` not allowed here
+ 7 │         tape[1] = 42
+   ╰────
+  help: mark the type nullable with `?` (e.g. `table<integer>?`) or initialize
+        it with a non-nil value
+

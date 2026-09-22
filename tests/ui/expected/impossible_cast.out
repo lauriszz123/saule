@@ -1,0 +1,13 @@
+  × there is no cast from `integer` to `boolean`
+   ╭─[impossible_cast.sau:7:13]
+ 6 │         local n: integer = 5
+ 7 │         local b = n as boolean
+   ·                   ──────┬─────
+   ·                         ╰── this conversion is not defined
+ 8 │         println(b)
+   ╰────
+  help: `as` converts between `integer` and `float`, renders `integer` /
+        `float` / `boolean` as `string`, and parses a `string` into
+        `integer` / `float`. Anything else has no single obvious answer, so
+        write the conversion you mean
+

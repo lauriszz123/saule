@@ -1,0 +1,10 @@
+  × `<>` is not an operator
+   ╭─[lt_gt_is_not_an_operator.sau:8:6]
+ 7 │ 
+ 8 │ if a <> b then
+   ·      ─┬
+   ·       ╰── here
+ 9 │   println("different")
+   ╰────
+  help: Saule writes not-equal as `!=`
+

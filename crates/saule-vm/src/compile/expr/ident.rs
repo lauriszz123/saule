@@ -57,10 +57,7 @@ impl Compiler<'_> {
                         // Exact, not conservative: the declaration either
                         // has been passed or it has not.
                         if self.enclosing.is_empty() && !self.module_decls_seen.contains(name) {
-                            return Err(CompileError::unsupported(
-                                "a module-level read of a name declared further down",
-                                span.clone(),
-                            ));
+                            return Err(crate::compile::declared_later(name, false, span.clone()));
                         }
                         let g = self.mod_slot(slot, span)?;
                         self.emit(Instruction::abx(Op::GETMOD, a, g), span)

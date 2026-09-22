@@ -4,16 +4,14 @@
 > this one is the *speed* checklist, and every item on it is justified by a
 > profile rather than by intuition.
 >
-> **Ground rule, inherited from `VM_TASKS.md` and absolute:** all four test
-> modes pass at every commit, and the tree-walker stays green — it is the
-> differential oracle.
+> **Ground rule, inherited from `VM_TASKS.md` and absolute:** all of these
+> pass at every commit. (The tree-walking interpreter this file used to keep
+> green has been removed; its answers live on as the recorded outputs the
+> first two compare against — see `VM_TASKS.md`.)
 >
 > ```
-> ./run_tests.sh                       # the VM, the default engine
-> SAULE_ENGINE=interp ./run_tests.sh   # the tree-walker still works
-> SAULE_ENGINE=vm ./run_tests.sh       # the VM runs or cleanly falls back
-> SAULE_DIFF=1 ./run_tests.sh          # the two agree on *output*
-> ./run_examples_diff.sh               # multi-module projects, both engines
+> ./run_tests.sh                       # every fixture prints what it recorded
+> bash run_examples.sh                 # multi-module projects, likewise
 > python3 benchmarks/bench.py check    # still agrees with Lua
 > ```
 

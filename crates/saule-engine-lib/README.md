@@ -3,10 +3,10 @@
 A small Love2D-style graphics engine compiled as a Saule **native package**,
 and the reference consumer of `saule-sdk`.
 
-This crate is **not** linked into the interpreter. It builds as a `cdylib`
+This crate is **not** linked into the toolchain. It builds as a `cdylib`
 (`saule_engine_lib.so` / `.dll` / `.dylib`), is dropped into
 `~/.saule/native_packages/`, and is described by a TOML manifest in
-`~/.saule/native_manifests/`. At runtime the interpreter loads the shared
+`~/.saule/native_manifests/`. At runtime `saule` loads the shared
 library and calls the `extern "C"` symbols named in the manifest.
 
 All ABI plumbing is handled by `saule-sdk`: each module exposes plain safe

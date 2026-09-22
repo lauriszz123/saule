@@ -10,8 +10,8 @@
 
 use std::rc::Rc;
 
-use saule_interpreter::Value;
-use saule_interpreter::value::SauleStr;
+use saule_runtime::Value;
+use saule_runtime::value::SauleStr;
 use saule_vm::chunk::{Chunk, Proto, UpvalDesc};
 use saule_vm::op::{Instruction as I, Op};
 use saule_vm::{disasm, run_chunk};
@@ -211,7 +211,7 @@ fn integer_division_by_zero_is_a_runtime_error() {
 
     let err = run_chunk(Rc::new(c)).expect_err("division by zero must fail");
     assert!(
-        matches!(err, saule_interpreter::RuntimeError::DivisionByZero { .. }),
+        matches!(err, saule_runtime::RuntimeError::DivisionByZero { .. }),
         "got {err:?}"
     );
 }
@@ -231,7 +231,7 @@ fn unimplemented_opcodes_report_rather_than_panic() {
 
     let err = run_chunk(Rc::new(c)).expect_err("SUPER has no body yet");
     assert!(
-        matches!(err, saule_interpreter::RuntimeError::Unsupported { thing: "SUPER", .. }),
+        matches!(err, saule_runtime::RuntimeError::Unsupported { thing: "SUPER", .. }),
         "got {err:?}"
     );
 }

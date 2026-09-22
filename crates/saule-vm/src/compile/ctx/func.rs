@@ -28,7 +28,7 @@ fn capture_in(stack: &mut [FuncCtx], level: usize, name: &str) -> Option<u16> {
             // The owning frame must close this register when its block ends,
             // or the next loop iteration would overwrite a value the closure
             // still points at (§7.2).
-            stack[parent].regs.note_capture();
+            stack[parent].regs.note_capture(slot);
             UpvalDesc {
                 from_parent_stack: true,
                 index: slot as u8,
@@ -160,6 +160,12 @@ pub struct FuncCtx {
     /// Per function, not per compiler: a lambda written inside a `try` body
     /// gets a frame of its own, and its own `return` is in no handler's way.
     pub try_depth: u32,
+    /// Whether this is the module body rather than a function in it.
+    ///
+    /// A flag, not the name: the module body's proto is called `main`, and
+    /// so is any `fn main()` a program declares — which used to make every
+    /// `local` in such a function compile as a module slot.
+    pub is_module_body: bool,
     /// Lexical scopes, innermost last: `name -> register`. The compiler's
     /// own map, authoritative for register numbers.
     scopes: Vec<Vec<(Rc<str>, u16)>>,
@@ -185,7 +191,16 @@ impl FuncCtx {
             variadic_param: None,
             self_fn_name: None,
             max_patch_target: 0,
+            is_module_body: false,
             scopes: vec![Vec::new()],
+        }
+    }
+
+    /// The module body's context: the proto every module's top level runs as.
+    pub fn module_body() -> FuncCtx {
+        FuncCtx {
+            is_module_body: true,
+            ..FuncCtx::new(Some("main"))
         }
     }
 

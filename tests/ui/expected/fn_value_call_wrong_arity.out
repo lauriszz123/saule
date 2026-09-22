@@ -1,0 +1,11 @@
+  × `f` expects 1 argument(s), got 2
+   ╭─[fn_value_call_wrong_arity.sau:6:9]
+ 5 │ fn apply(f: fn(integer) -> integer) -> integer
+ 6 │     return f(1, 2)
+   ·            ───┬───
+   ·               ╰── wrong number of arguments
+ 7 │ end
+   ╰────
+  help: check the signature of `f` — pass exactly the right number of
+        arguments (or rely on declared defaults)
+
