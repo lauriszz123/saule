@@ -172,32 +172,18 @@ pub(crate) struct RunArgs {
     #[arg(last = true, allow_hyphen_values = true, value_name = "ARGS")]
     pub args: Vec<String>,
 
-    /// Execute with the bytecode VM. This is the default; the flag remains
-    /// so a script can state the engine it means rather than rely on it.
-    ///
-    /// Passing it also restores the `note:` line the fallback prints, which
-    /// is suppressed when the VM is merely the default.
-    #[arg(long, conflicts_with = "interp")]
+    /// Accepted and ignored: the bytecode VM is the only engine. Kept so a
+    /// script that stated the engine it meant, back when there were two,
+    /// still runs.
+    #[arg(long, hide = true)]
     pub vm: bool,
-
-    /// Execute with the tree-walking interpreter instead of the bytecode VM.
-    ///
-    /// The escape hatch for the Phase 4 default flip: the two engines are
-    /// held to identical observable behaviour by the differential harness,
-    /// so this should never be needed — and if it ever is, that is a bug
-    /// worth reporting, with the program that needs it. Also selected by
-    /// `SAULE_ENGINE=interp`.
-    #[arg(long, conflicts_with = "vm")]
-    pub interp: bool,
 
     /// Count what the bytecode VM executes and print an opcode and
     /// opcode-pair histogram to stderr when the program finishes.
     ///
     /// The collector `VM_DESIGN.md` §16 requires before a superinstruction
     /// is added: it reports which opcodes dominate a run and which
-    /// *statically adjacent* pairs are worth fusing. Implies `--vm`, so a
-    /// program the compiler cannot handle says so rather than producing an
-    /// empty profile without explanation.
+    /// *statically adjacent* pairs are worth fusing.
     ///
     /// Needs a binary built with the `profile` feature — the counting loop
     /// is not compiled otherwise, and this flag says so rather than
@@ -207,7 +193,7 @@ pub(crate) struct RunArgs {
     ///
     /// Measure a release build. A debug build's costs are not the costs the
     /// optimisation is aimed at.
-    #[arg(long = "profile-bytecode", conflicts_with = "interp")]
+    #[arg(long = "profile-bytecode")]
     pub profile_bytecode: bool,
 }
 

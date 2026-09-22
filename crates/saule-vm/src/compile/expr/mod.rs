@@ -46,7 +46,7 @@ pub(crate) use results::{Results, Want};
 
 
 use saule_ast::{BinOp, CastKind, Expr, Spanned};
-use saule_interpreter::Value;
+use saule_runtime::Value;
 
 use super::CompileError;
 use super::ctx::{Compiler, Num, num_of};
@@ -57,6 +57,15 @@ impl Compiler<'_> {
     pub fn expr_to(&mut self, e: &Spanned<Expr>, dst: u16) -> Result<(), CompileError> {
         let span = &e.span;
         let a = self.reg8(dst, span)?;
+
+        // Already evaluated once — see `Compiler::pinned`.
+        if let Some(&r) = self.pinned.get(&e.id) {
+            let b = self.reg8(r, span)?;
+            if a != b {
+                self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
+            }
+            return Ok(());
+        }
 
         match &e.value {
             Expr::Nil => self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span),
@@ -83,7 +92,7 @@ impl Compiler<'_> {
                 self.emit(Instruction::abx(Op::LOADK, a, k), span);
             }
             Expr::Str(s) => {
-                let k = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(s.clone())), span)?;
+                let k = self.constant(Value::Str(saule_runtime::value::SauleStr::new(s.clone())), span)?;
                 self.emit(Instruction::abx(Op::LOADK, a, k), span);
             }
 
@@ -122,12 +131,20 @@ impl Compiler<'_> {
                     // name like anything else.
                     let b = self.reg8(idx, span)?;
                     self.emit(Instruction::abc(Op::GETUPVAL, a, b, 0), span);
-                } else {
+                } else if let Some(class) = self.f.current_class.or(self.f.self_class)
+                    && let Some(slot) =
+                        self.module_slot_of(&self.chunk.classes[class as usize].name.clone())
+                {
                     // Nothing enclosing declares it: a `static fn`, where
                     // `self` denotes the class rather than an instance.
                     // `member_to` folds `self.x` there at compile time; bare
-                    // `self` would need a class in a register, which no
-                    // opcode produces.
+                    // `self` is the class *value*, which lives in the slot
+                    // its name is bound to (`Chunk::type_slots`). A method
+                    // is compiled in the module that declares its class, so
+                    // that slot is this module's.
+                    let g = self.mod_slot(slot, span)?;
+                    self.emit(Instruction::abx(Op::GETMOD, a, g), span);
+                } else {
                     return Err(CompileError::unsupported("`self` outside a method", span.clone()));
                 }
             }

@@ -1,0 +1,7 @@
+TODO App Usage:
+	todo list
+	todo add [task] [optional-due-date YYYY-MM-DD]
+	todo remove [number-of-task]
+	todo done [number-of-task]
+	todo due [number-of-task] [due-date YYYY-MM-DD]
+[exit 0]

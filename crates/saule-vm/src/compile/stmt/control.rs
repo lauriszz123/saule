@@ -24,7 +24,8 @@ impl Compiler<'_> {
         cond: &Spanned<Expr>,
     ) -> Result<(), CompileError> {
         let top = self.f.label_here();
-        self.loops.push(Default::default());
+        let first = self.f.regs.top();
+        self.begin_loop(first);
         self.f.enter_scope();
         for st in body {
             self.stmt(st)?;
@@ -36,23 +37,44 @@ impl Compiler<'_> {
         let m = self.mark();
         let r = self.expr_tmp(cond)?;
         let a = self.reg8(r, &cond.span)?;
-        // `C = 0` skips the next instruction when the condition is truthy —
-        // and the next instruction is the back edge, so a true `until` exits.
-        self.emit(Instruction::abc(Op::TEST, a, 0, 0), &cond.span);
-        self.free_to(m);
-        self.emit_jump_back(Op::JMP, 0, top, &cond.span)?;
-
-        if let Some(reg) = self.f.leave_scope() {
-            let a = self.reg8(reg, &cond.span)?;
-            self.emit(Instruction::abc(Op::CLOSEUP, a, 0, 0), &cond.span);
+        // Asked only now, so a closure built by the condition itself counts.
+        let captured = {
+            let l = self.loops.last().expect("pushed above");
+            self.f.regs.captured_since(l.captures_at, l.first_reg)
+        };
+        if captured {
+            // The close has to come *after* the test — closing moves each
+            // captured value out of its register, and `until` reads the
+            // body's locals — and only on the way back round. So the test
+            // is inverted: `C = 1` skips the exit jump when the condition
+            // is falsy, straight into the close and the back edge.
+            self.emit(Instruction::abc(Op::TEST, a, 0, 1), &cond.span);
+            self.free_to(m);
+            let exit = self.emit_jump(Op::JMP, 0, &cond.span);
+            let f = self.reg8(first, &cond.span)?;
+            self.emit(Instruction::abc(Op::CLOSEUP, f, 0, 0), &cond.span);
+            self.emit_jump_back(Op::JMP, 0, top, &cond.span)?;
+            self.patch_here(exit)?;
+        } else {
+            // `C = 0` skips the next instruction when the condition is
+            // truthy — and the next instruction is the back edge, so a true
+            // `until` exits.
+            self.emit(Instruction::abc(Op::TEST, a, 0, 0), &cond.span);
+            self.free_to(m);
+            self.emit_jump_back(Op::JMP, 0, top, &cond.span)?;
         }
-        let l = self.loops.pop().expect("pushed above");
-        for c in l.continues {
+
+        // The scope's own close is subsumed by the loop's, which also
+        // covers a `break` — that lands after this point.
+        let _ = self.f.leave_scope();
+        let mut l = self.loops.pop().expect("pushed above");
+        for c in std::mem::take(&mut l.continues) {
             self.patch_to(c, test_at)?;
         }
-        for b in l.breaks {
+        for b in std::mem::take(&mut l.breaks) {
             self.patch_here(b)?;
         }
+        self.close_loop_captures(&l, &cond.span)?;
         Ok(())
     }
 
@@ -114,21 +136,26 @@ impl Compiler<'_> {
     ) -> Result<(), CompileError> {
         let top = self.f.label_here();
         let exits = self.cond_jumps_if_false(cond)?;
-        self.loops.push(Default::default());
+        let first = self.f.regs.top();
+        self.begin_loop(first);
         self.block(body)?;
-        let l = self.loops.pop().expect("pushed above");
-        // `continue` re-tests the condition, so it lands where the back edge
-        // goes.
-        for c in l.continues {
-            self.patch_to(c, top)?;
+        let mut l = self.loops.pop().expect("pushed above");
+        // `continue` re-tests the condition, so it lands on the back edge —
+        // after the close, which the body block's own `CLOSEUP` does not
+        // cover for a `continue` that jumped past it.
+        let back = self.f.label_here();
+        self.close_loop_captures(&l, &cond.span)?;
+        for c in std::mem::take(&mut l.continues) {
+            self.patch_to(c, back)?;
         }
         self.emit_jump_back(Op::JMP, 0, top, &cond.span)?;
         for exit in exits {
             self.patch_here(exit)?;
         }
-        for b in l.breaks {
+        for b in std::mem::take(&mut l.breaks) {
             self.patch_here(b)?;
         }
+        self.close_loop_captures(&l, &cond.span)?;
         Ok(())
     }
 
@@ -358,12 +385,12 @@ impl Compiler<'_> {
                         // `-i64::MIN` has no positive counterpart; it is far
                         // outside `i8` either way, so declining is the same
                         // answer as overflowing would have been.
-                        Some(saule_interpreter::Value::Int(v)) => v.checked_neg()?,
+                        Some(saule_runtime::Value::Int(v)) => v.checked_neg()?,
                         _ => return None,
                     }
                 }
                 _ => match crate::compile::literal_value(&e.value) {
-                    Some(saule_interpreter::Value::Int(v)) => v,
+                    Some(saule_runtime::Value::Int(v)) => v,
                     _ => return None,
                 },
             };

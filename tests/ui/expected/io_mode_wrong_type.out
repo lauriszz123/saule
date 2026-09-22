@@ -1,0 +1,10 @@
+  × argument 2 of `Io.open` expects `IoMode`, got `string`
+   ╭─[io_mode_wrong_type.sau:5:44]
+ 4 │   static fn main()
+ 5 │     local f: File? = Io.open("/tmp/x.txt", "r")
+   ·                                            ─┬─
+   ·                                             ╰── wrong argument type
+ 6 │     if f != nil then
+   ╰────
+  help: pass a value of type `IoMode` here — check the signature of `Io.open`
+

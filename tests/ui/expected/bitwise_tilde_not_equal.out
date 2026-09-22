@@ -1,0 +1,9 @@
+  × expected an expression after `~`, found `=`
+    ╭─[bitwise_tilde_not_equal.sau:11:9]
+ 10 │         local b: integer = 2
+ 11 │         if a ~= b then
+    ·               ┬
+    ·               ╰── here
+ 12 │             println("different")
+    ╰────
+

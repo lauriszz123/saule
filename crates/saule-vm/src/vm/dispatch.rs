@@ -38,8 +38,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_interpreter::value::{SauleStr, TableObject, VmFunctionRef};
-use saule_interpreter::{RuntimeError, Value};
+use saule_runtime::value::{SauleStr, TableObject, VmFunctionRef};
+use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::{Chunk, Proto};
 use crate::op::{Instruction, Op};
@@ -80,11 +80,11 @@ impl Vm {
         // exactly once" rule survives having a sizing pass in front of it.
         let mut len = 0usize;
         for i in from..=to {
-            len += saule_interpreter::eval::ops::display_hint(&self.stack[i]);
+            len += saule_runtime::ops::display_hint(&self.stack[i]);
         }
         let mut s = String::with_capacity(len);
         for i in from..=to {
-            saule_interpreter::eval::ops::display_into(&self.stack[i], span.clone(), &mut s)?;
+            saule_runtime::ops::display_into(&self.stack[i], span.clone(), &mut s)?;
         }
         *self.reg_mut(dst) = Value::Str(SauleStr::new(s));
         Ok(())
@@ -153,19 +153,19 @@ impl Vm {
             });
         };
         let name = chunk.enums[e_idx].variants[tag as usize].name.to_string();
-        let v = saule_interpreter::value::EnumVariantObject {
+        let v = saule_runtime::value::EnumVariantObject {
             enum_name: e.name.clone().into(),
             variant_name: name.into(),
             tag,
-            value: Some(payload),
+            value: std::cell::OnceCell::from(payload),
             enum_obj: RefCell::new(Some(Rc::clone(e))),
         };
         *self.reg_mut(base + a) = Value::EnumVariant(Rc::new(v));
         Ok(())
     }
 
-    /// `CALLMX`: a method call whose name is only known at run time, handed
-    /// to the tree-walker's dynamic member dispatch.
+    /// `CALLMX`: a method call on a receiver the compiler could not prove,
+    /// handed to the runtime's dynamic method dispatch.
     #[inline(never)]
     fn call_member_by_name(
         &mut self,
@@ -190,7 +190,7 @@ impl Vm {
         let recv = (*self.reg(base + a)).clone();
         let args: Vec<Value> =
             (0..n_args).map(|i| (*self.reg(base + a + 1 + i)).clone()).collect();
-        let vs = saule_interpreter::call_member_dynamic(&recv, name, &args, site.span())?;
+        let vs = saule_runtime::call::call_method(&recv, name, &args, site.span())?;
         let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
         self.store_results(base + a, &vs, n_ret);
         Ok(())
@@ -233,9 +233,55 @@ impl Vm {
         self.execute_loop::<false>()
     }
 
-    /// [`execute`](Self::execute), handing the results over as a `Vec`.
+    /// Anchor an error in the module whose code raised it.
+    ///
+    /// An error's span is an offset into *some* file, and nothing but the
+    /// frame it was raised in says which. Left alone, a failure inside an
+    /// imported module's function was drawn against the entry file's
+    /// source — a snippet from the wrong file, or none at all when the
+    /// offset ran past its end. The entry file needs nothing: the caller
+    /// renders against it already.
+    ///
+    /// Called by the entry points, not by [`execute`](Self::execute):
+    /// wrapping the dispatch loop's own return, even in a `#[cold]` call on
+    /// the error path, cost ~7% on `loop_arith` and `mandel` — the usual
+    /// sensitivity of that function to anything around it. The frames are
+    /// still there to ask by then: an error leaves the loop without popping
+    /// them.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn attribute(&self, e: RuntimeError) -> RuntimeError {
+        match e {
+            // A `throw` has to stay itself for an enclosing `catch`; the
+            // others are anchored already.
+            RuntimeError::Thrown { .. }
+            | RuntimeError::ImportFailed { .. }
+            | RuntimeError::InModule { .. } => return e,
+            _ => {}
+        }
+        let Some(frame) = self.frames.last() else {
+            return e;
+        };
+        // Post-order: the entry is the program's last module.
+        if frame.chunk.module_index + 1 >= self.shared.chunks.len() {
+            return e;
+        }
+        let src = &frame.chunk.source;
+        let label = src.name().to_string();
+        RuntimeError::InModule {
+            module_label: label.clone(),
+            inner: Box::new(saule_runtime::error::ImportedDiagnostic::from_inner(
+                &e,
+                label,
+                src.inner().clone(),
+            )),
+        }
+    }
+
+    /// [`execute`](Self::execute), handing the results over as a `Vec` and
+    /// anchoring an error in the module that raised it.
     pub(crate) fn execute_collecting(&mut self) -> Result<Vec<Value>, RuntimeError> {
-        self.execute()?;
+        self.execute().map_err(|e| self.attribute(e))?;
         Ok(std::mem::take(&mut self.results))
     }
 
@@ -588,7 +634,7 @@ impl Vm {
                         };
                         let l = (*self.reg(base + ins.b() as usize)).clone();
                         let r = (*self.reg(base + ins.c() as usize)).clone();
-                        let v = saule_interpreter::eval::ops::binary(
+                        let v = saule_runtime::ops::binary(
                             op,
                             l,
                             r,
@@ -606,7 +652,7 @@ impl Vm {
                         };
                         let v = (*self.reg(base + ins.b() as usize)).clone();
                         *self.reg_mut(base + a) =
-                            saule_interpreter::eval::ops::unary(op, v, proto.span_at(here))?;
+                            saule_runtime::ops::unary(op, v, proto.span_at(here))?;
                     }
 
                     // ---- §15.7 comparison and branching ------------------
@@ -859,15 +905,8 @@ impl Vm {
                                     pc = jump(pc, ins.bx() as i32);
                                 }
                             }
-                            // `VmFunction` joins the tree-walker's three
-                            // callable variants here: a compiled closure is
-                            // the *usual* driver under this engine, and
-                            // `exec_for_in` omits it only because the
-                            // tree-walker never constructs one.
-                            Value::Function(_)
-                            | Value::Native(_)
-                            | Value::NativeClosure(_)
-                            | Value::VmFunction(_) => {
+                            // A callable is the driver itself.
+                            Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_) => {
                                 *self.reg_mut(base + a + 1) = Value::Nil;
                                 *self.reg_mut(base + a + 2) = Value::Bool(true);
                             }
@@ -875,10 +914,9 @@ impl Vm {
                                 // `iter()` runs once per *loop*, not once
                                 // per step, so the re-entrant call costs
                                 // nothing measurable. Routed through the
-                                // tree-walker's own dynamic dispatcher so
-                                // an `Iterable` cannot behave differently
-                                // under the two engines.
-                                let vs = saule_interpreter::call_member_dynamic(
+                                // runtime's dynamic method dispatch, the
+                                // same one `CALLMX` uses.
+                                let vs = saule_runtime::call::call_method(
                                     &src,
                                     "iter",
                                     &[],
@@ -895,10 +933,7 @@ impl Vm {
                                 };
                                 if !matches!(
                                     driver,
-                                    Value::Function(_)
-                                        | Value::Native(_)
-                                        | Value::NativeClosure(_)
-                                        | Value::VmFunction(_)
+                                    Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
                                 ) {
                                     return Err(RuntimeError::TypeError {
                                         message: format!(
@@ -1033,7 +1068,7 @@ impl Vm {
                             // engines report `#` on an integer differently —
                             // caught by `SAULE_DIFF=1 ./run_tests.sh`, which
                             // compares diagnostics as well as values.
-                            other => saule_interpreter::eval::ops::unary(
+                            other => saule_runtime::ops::unary(
                                 saule_ast::UnaryOp::Len,
                                 other.clone(),
                                 proto.span_at(here),
@@ -1066,7 +1101,7 @@ impl Vm {
                         self.concat(from, to, base + a, span)?;
                     }
                     Op::TOSTR => {
-                        let s = saule_interpreter::eval::ops::display_value(
+                        let s = saule_runtime::ops::display_value(
                             self.reg(base + ins.b() as usize),
                             proto.span_at(here),
                         )?;
@@ -1287,7 +1322,7 @@ impl Vm {
                         // One allocation of a `Vec<Value>` sized from the
                         // layout — replacing the per-field `String` clone
                         // plus hash insert the tree-walker pays (§8.6).
-                        let inst = saule_interpreter::value::InstanceObject::new(Rc::clone(class));
+                        let inst = saule_runtime::value::InstanceObject::new(Rc::clone(class));
                         *self.reg_mut(base + a) = Value::Instance(Rc::new(RefCell::new(inst)));
                     }
                     Op::GETF => {
@@ -1312,8 +1347,8 @@ impl Vm {
                         let slot = ins.b() as usize;
                         let v = (*self.reg(base + ins.c() as usize)).clone();
                         // The VM's instance write, the counterpart of
-                        // `InstanceObject::set_field`. See `saule_interpreter::gc`.
-                        saule_interpreter::gc::on_store(&v);
+                        // `InstanceObject::set_field`. See `saule_runtime::gc`.
+                        saule_runtime::gc::on_store(&v);
                         match self.reg(base + a) {
                             Value::Instance(i) => {
                                 let mut i = i.borrow_mut();
@@ -1537,7 +1572,7 @@ impl Vm {
                             // `Direction.North.value` is `"North"`. This
                             // read nil until `GETFX` let `enums.sau` compile
                             // and `SAULE_DIFF=1` put the two side by side.
-                            Value::EnumVariant(v) => v.value.clone().unwrap_or_else(|| {
+                            Value::EnumVariant(v) => v.value.get().cloned().unwrap_or_else(|| {
                                 Value::Str(v.variant_name.clone())
                             }),
                             other => return Err(operand_err(other, "enum", &proto, here)),
@@ -1558,12 +1593,11 @@ impl Vm {
                     // ---- §8.5 dynamic member dispatch --------------------
                     //
                     // The escape hatch that makes an unproved receiver safe.
-                    // Both defer to the tree-walker's own member logic —
-                    // reused rather than reimplemented, the same rule
-                    // `ARITHX` follows with `ops::binary` — so instance
+                    // Both defer to the runtime's member logic
+                    // (`saule_runtime::members`), the one place instance
                     // fields, methods, statics, enum variants, file handles
-                    // and every error message are identical by construction
-                    // instead of by care.
+                    // and their error messages are decided by name — the
+                    // same rule `ARITHX` follows with `ops::binary`.
                     //
                     // §8.5's inline cache would collapse the common
                     // monomorphic case to a slot load; that is Phase 5, with
@@ -1577,7 +1611,7 @@ impl Vm {
                             });
                         };
                         let recv = (*self.reg(base + ins.b() as usize)).clone();
-                        let v = saule_interpreter::read_member_dynamic(
+                        let v = saule_runtime::members::read_member(
                             &recv,
                             name,
                             proto.span_at(here),
@@ -1586,11 +1620,9 @@ impl Vm {
                     }
                     Op::SETFX => {
                         // The write counterpart of `GETFX`, deferring to
-                        // the tree-walker's own `assign_member` for the
-                        // same reason: an instance field, a class static
-                        // and a table key are three different writes, and
-                        // the compiler learning each one separately is how
-                        // the engines diverge.
+                        // `members::write_member` for the same reason: an
+                        // instance field, a class static and a table key are
+                        // three different writes, decided in one place.
                         let key = chunk.constants[ins.b() as usize].clone();
                         let Value::Str(name) = &key else {
                             return Err(RuntimeError::TypeError {
@@ -1600,7 +1632,7 @@ impl Vm {
                         };
                         let recv = (*self.reg(base + a)).clone();
                         let v = (*self.reg(base + ins.c() as usize)).clone();
-                        saule_interpreter::write_member_dynamic(
+                        saule_runtime::members::write_member(
                             &recv,
                             name,
                             v,

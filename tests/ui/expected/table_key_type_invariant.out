@@ -1,0 +1,11 @@
+  × cannot assign value of type `table<string, integer>` to variable of type
+  │ `table<integer, integer>`
+   ╭─[table_key_type_invariant.sau:5:42]
+ 4 │ local byName: table<string, integer> = {alice: 1}
+ 5 │ local byIndex: table<integer, integer> = byName
+   ·                                          ───┬──
+   ·                                             ╰── incompatible type
+ 6 │ println(#byIndex)
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

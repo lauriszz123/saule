@@ -1,0 +1,11 @@
+  × cannot use `[]` on a `Plain`
+    ╭─[index_without_contract.sau:10:11]
+  9 │         local p: Plain = Plain()
+ 10 │         println(p["anything"])
+    ·                 ┬
+    ·                 ╰── operator not overloaded for this class
+ 11 │     end
+    ╰────
+  help: overload the operator: add `implements OpIndex` to `Plain` and define
+        `fn index(...)`
+

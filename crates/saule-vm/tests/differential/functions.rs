@@ -165,6 +165,222 @@ fn two_closures_share_one_captured_binding() {
     );
 }
 
+// ── per-iteration capture ─────────────────────────────────────────────────
+//
+// Each iteration's closure keeps the value *it* saw. The VM closes a loop's
+// registers before the next iteration writes them; before that was done
+// per loop rather than per body block, a numeric `for` never closed its own
+// variable, and `continue` / `break` jumped past the body's close — so a
+// closure read whatever reused the register next, a function in one case.
+
+/// Collect one closure per iteration of `loop_head … end`, whose body is
+/// `body`, then call them all. Every closure returns `captured`.
+fn captures_in(loop_head: &str, prelude: &str, body: &str, captured: &str) -> String {
+    format!(
+        "fn build() -> string\n\
+         \x20 local fns: table<fn() -> integer> = {{}}\n\
+         \x20 {prelude}\n\
+         \x20 {loop_head}\n\
+         \x20   {body}\n\
+         \x20   Table.insert(fns, fn() -> integer\n\
+         \x20     return {captured}\n\
+         \x20   end)\n\
+         \x20 end\n\
+         \x20 local out: string = \"\"\n\
+         \x20 for _, f in fns do\n\
+         \x20   out ..= tostring(f()) .. \",\"\n\
+         \x20 end\n\
+         \x20 return out\n\
+         end\n\
+         build()"
+    )
+}
+
+#[test]
+fn a_numeric_for_variable_is_captured_per_iteration() {
+    must_agree(&captures_in("for i = 1, 3 do", "", "", "i"));
+    must_agree(&captures_in("for i = 1, 3 do", "", "local d: integer = i * 2", "d"));
+}
+
+#[test]
+fn a_for_in_variable_is_captured_per_iteration() {
+    let src = captures_in(
+        "for _, v in src do",
+        "local src: table<integer> = {10, 20, 30}",
+        "",
+        "v",
+    );
+    must_agree(&src);
+}
+
+#[test]
+fn a_while_body_local_is_captured_per_iteration() {
+    must_agree(&captures_in(
+        "while n < 3 do",
+        "local n: integer = 0",
+        "n += 1\n    local k: integer = n * 7",
+        "k",
+    ));
+}
+
+#[test]
+fn continue_does_not_skip_closing_what_the_iteration_captured() {
+    // The closure is built *before* the `continue`, so the body's own close
+    // at its end is exactly what the jump skips.
+    must_agree(
+        "fn build() -> string\n\
+         \x20 local fns: table<fn() -> integer> = {}\n\
+         \x20 for i = 1, 4 do\n\
+         \x20   local sq: integer = i * i\n\
+         \x20   Table.insert(fns, fn() -> integer\n\
+         \x20     return sq + i\n\
+         \x20   end)\n\
+         \x20   if i % 2 == 0 then\n\
+         \x20     continue\n\
+         \x20   end\n\
+         \x20   local pad: integer = 0\n\
+         \x20 end\n\
+         \x20 local out: string = \"\"\n\
+         \x20 for _, f in fns do\n\
+         \x20   out ..= tostring(f()) .. \",\"\n\
+         \x20 end\n\
+         \x20 return out\n\
+         end\n\
+         build()",
+    );
+}
+
+#[test]
+fn break_does_not_leave_a_captured_loop_register_open() {
+    // After `break`, the loop's registers go to the next statement. A
+    // closure still pointing at one would read the new occupant.
+    must_agree(
+        "fn build() -> integer\n\
+         \x20 local keep: fn() -> integer = fn() -> integer\n\
+         \x20   return 0\n\
+         \x20 end\n\
+         \x20 for i = 5, 9 do\n\
+         \x20   keep = fn() -> integer\n\
+         \x20     return i\n\
+         \x20   end\n\
+         \x20   break\n\
+         \x20 end\n\
+         \x20 local a: integer = 100\n\
+         \x20 local b: integer = 200\n\
+         \x20 local c: integer = 300\n\
+         \x20 local d: integer = 400\n\
+         \x20 return keep() + a + b + c + d\n\
+         end\n\
+         build()",
+    );
+}
+
+#[test]
+fn a_repeat_body_local_is_captured_per_iteration() {
+    must_agree(
+        "fn build() -> string\n\
+         \x20 local fns: table<fn() -> integer> = {}\n\
+         \x20 local n: integer = 0\n\
+         \x20 repeat\n\
+         \x20   n += 1\n\
+         \x20   local k: integer = n * 3\n\
+         \x20   Table.insert(fns, fn() -> integer\n\
+         \x20     return k\n\
+         \x20   end)\n\
+         \x20 until k >= 9\n\
+         \x20 local out: string = \"\"\n\
+         \x20 for _, f in fns do\n\
+         \x20   out ..= tostring(f()) .. \",\"\n\
+         \x20 end\n\
+         \x20 return out\n\
+         end\n\
+         build()",
+    );
+}
+
+#[test]
+fn an_outer_local_captured_in_a_nested_block_is_closed_with_its_own_block() {
+    // `x` belongs to the `if` block; the lambda capturing it sits one block
+    // deeper. The `if` block's exit hands `x`'s register to `y`, so it is
+    // that exit which has to close it — not the inner block's.
+    must_agree(
+        "fn build() -> integer\n\
+         \x20 local f: fn() -> integer = fn() -> integer\n\
+         \x20   return 0\n\
+         \x20 end\n\
+         \x20 if true then\n\
+         \x20   local x: integer = 42\n\
+         \x20   if true then\n\
+         \x20     f = fn() -> integer\n\
+         \x20       return x\n\
+         \x20     end\n\
+         \x20   end\n\
+         \x20 end\n\
+         \x20 if true then\n\
+         \x20   local y: integer = 7\n\
+         \x20   return f() + y\n\
+         \x20 end\n\
+         \x20 return -1\n\
+         end\n\
+         build()",
+    );
+}
+
+#[test]
+fn a_user_fn_named_main_keeps_its_locals_in_registers() {
+    // The module body's proto is called `main`; the compiler used to tell
+    // them apart by that name, so this function's `local`s compiled as
+    // module slots and the module fell back to the tree-walker.
+    let src = "local x: integer = 3\n\
+               fn main() -> integer\n\
+               \x20 local x: integer = 41\n\
+               \x20 return x + 1\n\
+               end\n\
+               main() * 10 + x";
+    must_agree(src);
+}
+
+#[test]
+fn an_unreachable_nested_fn_declaration_compiles_to_nothing() {
+    // The resolver binds no name for a `fn` declared inside a body, so it
+    // cannot be called — `helper()` below resolves to the top-level one.
+    // Declaring it is dead code, and it must not replace the top-level
+    // function either, which the compiler finds by name.
+    //
+    // Pinned to the VM's answer, not agreement: the tree-walker bound the
+    // nested `fn` by name at run time and answered 99, contradicting the
+    // resolver that had already checked the call against the top-level
+    // `helper`'s signature.
+    let src = "fn helper() -> integer\n\
+               \x20 return 1\n\
+               end\n\
+               fn outer() -> integer\n\
+               \x20 fn helper() -> integer\n\
+               \x20   return 99\n\
+               \x20 end\n\
+               \x20 return helper()\n\
+               end\n\
+               outer()";
+    assert_eq!(
+        vm(&front_end(src), src),
+        Some(Outcome::Value("integer:1".into()))
+    );
+}
+
+#[test]
+fn a_trailing_block_to_a_native_binds_positionally() {
+    // A block-bodied lambda as the last argument is a trailing block by
+    // shape. A native has no declared parameter list to bind it against;
+    // it is simply the next argument.
+    must_agree(
+        "local fns: table<fn() -> integer> = {}\n\
+         Table.insert(fns, fn() -> integer\n\
+         \x20 return 5\n\
+         end)\n\
+         fns[1]!()",
+    );
+}
+
 
 // ── §6.4 tail calls ───────────────────────────────────────────────────────
 //

@@ -1,0 +1,10 @@
+  × cannot assign value of type `integer` to variable of type `T`
+   ╭─[concrete_assigned_to_type_param.sau:6:17]
+ 5 │ fn seed<T>() -> T
+ 6 │     local acc: T = 0
+   ·                    ┬
+   ·                    ╰── incompatible type
+ 7 │ 
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

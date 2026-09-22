@@ -1,0 +1,10 @@
+  × `add` expects 2 argument(s), got 1
+   ╭─[wrong_arity.sau:7:9]
+ 6 │ 
+ 7 │ println(add(1))
+   ·         ───┬──
+   ·            ╰── wrong number of arguments
+   ╰────
+  help: check the signature of `add` — pass exactly the right number of
+        arguments (or rely on declared defaults)
+

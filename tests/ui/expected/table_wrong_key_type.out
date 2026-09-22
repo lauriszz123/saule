@@ -1,0 +1,12 @@
+  × table key of type `integer` is incompatible with declared key type
+  │ `string`
+   ╭─[table_wrong_key_type.sau:5:7]
+ 4 │     local m: table<string, integer> = {}
+ 5 │     m[1] = 42
+   ·       ┬
+   ·       ╰── wrong key type
+ 6 │     println(m[1])
+   ╰────
+  help: this table is declared with key type `string` — pass an index of that
+        type
+

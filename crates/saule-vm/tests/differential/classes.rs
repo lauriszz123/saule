@@ -714,3 +714,53 @@ fn a_field_read_inside_a_lambda_is_still_a_field_read() {
          Box(21).run()",
     );
 }
+
+// ── classes as values ─────────────────────────────────────────────────────
+//
+// A class is a compile-time index to the compiler, so nothing it emitted
+// wrote the module slot a class's name is bound to — `local k = Counter`
+// read `nil`, silently. And the VM kept statics in slots the class object
+// could not see, so a read by name through such a value found nothing.
+
+#[test]
+fn a_class_held_in_a_local_reads_and_writes_its_statics() {
+    must_agree(
+        "class Counter\n\
+         \x20 static count: integer = 4\n\
+         end\n\
+         class Sub extends Counter\n\
+         end\n\
+         local k = Counter\n\
+         local s = Sub\n\
+         s.count = k.count + 10\n\
+         tostring(k) .. \":\" .. Counter.count .. \":\" .. Sub.count",
+    );
+}
+
+#[test]
+fn bare_self_in_a_static_method_is_the_class() {
+    must_agree(
+        "class Reg\n\
+         \x20 static count: integer = 0\n\
+         \x20 static fn bump() -> Reg\n\
+         \x20   self.count += 1\n\
+         \x20   local me = self\n\
+         \x20   me.count = me.count + 10\n\
+         \x20   return self\n\
+         \x20 end\n\
+         end\n\
+         local r = Reg.bump()\n\
+         r.count",
+    );
+    let src = "class C\n  static fn me() -> C\n    return self\n  end\nend\ntostring(C.me())";
+    must_agree(src);
+}
+
+#[test]
+fn an_enum_held_in_a_local_reaches_its_variants() {
+    must_agree(
+        "enum Color\n  Red\n  Green\nend\n\
+         local e = Color\n\
+         e.Green.name",
+    );
+}

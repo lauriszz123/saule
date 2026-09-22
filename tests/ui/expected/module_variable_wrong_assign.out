@@ -1,0 +1,10 @@
+  × cannot assign value of type `string` to variable of type `integer`
+   ╭─[module_variable_wrong_assign.sau:7:11]
+ 6 │     static fn main()
+ 7 │         count = "not a number"
+   ·                 ───────┬──────
+   ·                        ╰── incompatible type
+ 8 │         println(count)
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

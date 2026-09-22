@@ -6,7 +6,7 @@
 
 use std::rc::Rc;
 
-use saule_interpreter::{RuntimeError, Value};
+use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::{Chunk, Proto};
 
@@ -91,7 +91,7 @@ impl Vm {
             TypeDesc::Table => matches!(v, Value::Table(_)),
             TypeDesc::Function => matches!(
                 v,
-                Value::Native(_) | Value::NativeClosure(_) | Value::Function(_) | Value::VmFunction(_)
+                Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
             ),
             TypeDesc::Class(idx) => match v {
                 Value::Instance(i) => self.is_a(&i.borrow().class, *idx),
@@ -118,7 +118,7 @@ impl Vm {
     }
 
     /// Whether `class` is `want` or descends from it.
-    pub(crate) fn is_a(&self, class: &Rc<saule_interpreter::value::ClassObject>, want: u32) -> bool {
+    pub(crate) fn is_a(&self, class: &Rc<saule_runtime::value::ClassObject>, want: u32) -> bool {
         let Some(target) = self.shared.classes.get(want as usize) else {
             return false;
         };

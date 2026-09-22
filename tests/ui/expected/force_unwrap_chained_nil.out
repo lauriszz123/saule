@@ -1,0 +1,11 @@
+  × force-unwrapped a `nil` value
+    ╭─[force_unwrap_chained_nil.sau:9:11]
+  8 │     local b: Box? = nil
+  9 │     print(b?.label!)
+    ·           ────┬────
+    ·               ╰── this expression was `nil` when `!` was applied
+ 10 │   end
+    ╰────
+  help: use `??` to provide a fallback, or check with `if x != nil` before
+        unwrapping
+

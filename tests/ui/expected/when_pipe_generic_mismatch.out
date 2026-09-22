@@ -1,0 +1,12 @@
+  × pipeline stage `filter` expects `table<T>` as first argument, got `string`
+    ╭─[when_pipe_generic_mismatch.sau:19:26]
+ 18 │ 
+ 19 │ local err = when("hello"):filter(x => true)
+    ·                          ─────────┬────────
+    ·                                   ╰── piped value has the wrong type for this stage
+ 20 │ -- COMPILE ERROR: pipeline stage `filter` expects `table<T>`, got `string`
+    ╰────
+  help: the value flowing through `when(...):filter(...)` must match the
+        function's first parameter — adjust the upstream stage or call
+        `filter` directly
+

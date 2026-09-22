@@ -1,0 +1,9 @@
+  × invalid number literal
+   ╭─[hex_literal_bad_digit.sau:5:13]
+ 4 │   static fn main()
+ 5 │     println(0xGG)
+   ·             ──┬─
+   ·               ╰── here
+ 6 │   end
+   ╰────
+

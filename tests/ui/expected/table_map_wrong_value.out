@@ -1,0 +1,11 @@
+  × table value of type `string` is incompatible with declared element type
+  │ `integer`
+   ╭─[table_map_wrong_value.sau:5:14]
+ 4 │     local m: table<string, integer> = {}
+ 5 │     m["a"] = "not-an-integer"
+   ·              ────────┬───────
+   ·                      ╰── wrong value type
+ 6 │     println(m["a"])
+   ╰────
+  help: every value stored in this table must be a `integer`
+

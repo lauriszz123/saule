@@ -1,0 +1,11 @@
+  × argument 2 of `String.char` expects `integer`, got `string`
+   ╭─[string_char_non_int.sau:2:35]
+ 1 │ -- String.char(...integer) — passing a string is rejected.
+ 2 │ local s: string = String.char(72, "i")
+   ·                                   ─┬─
+   ·                                    ╰── wrong argument type
+ 3 │ println(s)
+   ╰────
+  help: pass a value of type `integer` here — check the signature of
+        `String.char`
+

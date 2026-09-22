@@ -1,0 +1,11 @@
+  × return value of type `integer` is incompatible with declared return type
+  │ `string`
+   ╭─[lambda_return_mismatch.sau:7:10]
+ 6 │ local describe: fn(integer) -> string = fn(x)
+ 7 │   return x
+   ·          ┬
+   ·          ╰── returned `integer` here
+ 8 │ end
+   ╰────
+  help: this function must return a `string`
+

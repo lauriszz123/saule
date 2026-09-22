@@ -1,0 +1,12 @@
+  × cannot assign a nullable value of type `integer?` to non-nullable type
+  │ `integer`
+   ╭─[cast_result_is_nullable.sau:5:22]
+ 4 │         local a: any = 5
+ 5 │         local n: integer = a as integer
+   ·                            ──────┬─────
+   ·                                  ╰── this expression may be `nil`
+ 6 │         println(n)
+   ╰────
+  help: guard with `if x != nil then ... end`, use `??` to provide a fallback,
+        or force-unwrap with `!`
+

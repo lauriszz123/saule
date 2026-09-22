@@ -1,0 +1,11 @@
+  × type error: class `Broken` is missing method: `iter` from interface
+  │ `Iterable`
+   ╭─[iter_missing_iter_method.sau:3:1]
+ 2 │     -- the implements-validation should catch the missing method.
+ 3 │ ╭─▶ class Broken implements Iterable<integer>
+ 4 │ │     fn init() end
+ 5 │ ├─▶ end
+   · ╰──── type mismatch or invalid operation
+ 6 │     
+   ╰────
+

@@ -1,0 +1,11 @@
+  × cannot access `hi` on nullable type `Greeter?`
+    ╭─[method_on_nullable.sau:11:5]
+ 10 │     local g: Greeter? = Greeter()
+ 11 │     g.hi()
+    ·     ┬
+    ·     ╰── receiver may be `nil`
+ 12 │   end
+    ╰────
+  help: use `?.` for safe access, `!` to force-unwrap, or guard with `if x !=
+        nil then ... end`
+

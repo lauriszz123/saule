@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `string`
+   ╭─[nil_func.sau:2:21]
+ 1 │ fn bad()
+ 2 │   local s: string = nil
+   ·                     ─┬─
+   ·                      ╰── `nil` not allowed here
+ 3 │ end
+   ╰────
+  help: mark the type nullable with `?` (e.g. `string?`) or initialize it with
+        a non-nil value
+

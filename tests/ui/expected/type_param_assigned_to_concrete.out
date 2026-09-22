@@ -1,0 +1,10 @@
+  × cannot assign value of type `T` to variable of type `integer`
+   ╭─[type_param_assigned_to_concrete.sau:8:22]
+ 7 │     for item: T in items do
+ 8 │         local n: integer = item
+   ·                            ──┬─
+   ·                              ╰── incompatible type
+ 9 │         return n * 2
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

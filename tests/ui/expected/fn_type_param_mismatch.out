@@ -1,0 +1,12 @@
+  × cannot assign value of type `fn(string) -> any` to variable of type
+  │ `fn(integer) -> integer`
+   ╭─[fn_type_param_mismatch.sau:6:40]
+ 5 │     
+ 6 │ ╭─▶ local double: fn(integer) -> integer = fn(x: string)
+ 7 │ │     return 1
+ 8 │ ├─▶ end
+   · ╰──── incompatible type
+ 9 │     
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

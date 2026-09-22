@@ -149,7 +149,7 @@ pub(crate) fn enum_variants(name: &str) -> Vec<CompletionItem> {
 /// offers exactly what `x` provides, and nothing else.
 pub(crate) fn import_name_items(path: &str, dir: Option<&std::path::Path>) -> Vec<CompletionItem> {
     // Native packages describe their surface directly.
-    if let Some(pkg) = saule_interpreter::native_packages::lookup(path) {
+    if let Some(pkg) = saule_runtime::native_packages::lookup(path) {
         return pkg
             .exports
             .iter()
@@ -162,8 +162,8 @@ pub(crate) fn import_name_items(path: &str, dir: Option<&std::path::Path>) -> Ve
             })
             .collect();
     }
-    if saule_interpreter::dynamic_packages::is_dynamic_package(path) {
-        return saule_interpreter::dynamic_packages::export_names(path)
+    if saule_runtime::dynamic_packages::is_dynamic_package(path) {
+        return saule_runtime::dynamic_packages::export_names(path)
             .into_iter()
             .map(|n| {
                 item(
@@ -176,7 +176,7 @@ pub(crate) fn import_name_items(path: &str, dir: Option<&std::path::Path>) -> Ve
     }
 
     let Some(dir) = dir else { return Vec::new() };
-    let Some(abs) = saule_interpreter::module::resolve_import_path(dir, path) else {
+    let Some(abs) = saule_runtime::module::resolve_import_path(dir, path) else {
         return Vec::new();
     };
 
@@ -243,7 +243,7 @@ pub(crate) fn collect_exports(
             Decl::Import { path, .. } => {
                 if abs.file_stem().and_then(|s| s.to_str()) == Some("init")
                     && let Some(parent) = abs.parent()
-                    && let Some(next) = saule_interpreter::module::resolve_import_path(parent, path)
+                    && let Some(next) = saule_runtime::module::resolve_import_path(parent, path)
                 {
                     collect_exports(&next, depth + 1, out, seen);
                 }
