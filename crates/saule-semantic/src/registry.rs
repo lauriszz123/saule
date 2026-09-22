@@ -316,14 +316,13 @@ pub fn lookup_member(class: &str, member: &str) -> Option<(String, bool)> {
     with_classes(|reg| {
         let mut cur = Some(class.to_string());
         while let Some(name) = cur {
-            if let Some(info) = reg.get(&name) {
-                if let Some(&priv_) = info.members.get(member) {
-                    return Some((name, priv_));
-                }
-                cur = info.parent.clone();
-            } else {
-                return None;
+            // A parent naming a class that was never registered ends the walk
+            // with `None`, the same as running off the top of the chain.
+            let info = reg.get(&name)?;
+            if let Some(&priv_) = info.members.get(member) {
+                return Some((name, priv_));
             }
+            cur = info.parent.clone();
         }
         None
     })

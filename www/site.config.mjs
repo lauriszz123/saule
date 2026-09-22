@@ -13,7 +13,7 @@ export const base = '/saule';
  * The site is hosted on GitHub Pages from the same project, which is what
  * keeps the installer URL stable.
  *
- * CI and release builds still run on GitLab (see GITLAB.md) — that mirror is
+ * CI and release builds run on CircleCI (see CIRCLECI.md) — that is
  * infrastructure, not something the docs link to.
  */
 export const repo = 'https://github.com/lauriszz123/saule';

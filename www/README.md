@@ -105,16 +105,19 @@ closures, `String`/`Math`/`Table` — behaves exactly as it does locally.
 
 ## Deployment
 
-There are two paths, and GitHub's **Settings → Pages → Source** picks between
-them. Use one or the other — the setting cannot serve both.
+The site is published from your machine to the `gh-pages` branch. There are no
+GitHub Actions workflows in this repository, and CI does not deploy: CircleCI
+*checks* the site on every push to `main` — the hand-written samples compile
+against the compiler from that commit, the generated pages are in sync with
+their sources, and Astro builds — but publishing stays a deliberate act. See
+[CIRCLECI.md](../CIRCLECI.md).
 
-### Via GitHub Actions (preferred)
+Set **Settings → Pages → Source → "Deploy from a branch"**, branch `gh-pages`,
+folder `/ (root)`, once. The installer scripts are served from this site, so
+this is also the deploy path for a change to `public/install.sh` or
+`public/install.ps1`.
 
-`.github/workflows/deploy-www.yml` builds and publishes on every push to `main`
-that touches the site or any of its sources. Set **Source → GitHub Actions**
-once, and that is the whole setup.
-
-### Locally, to a `gh-pages` branch (no CI required)
+### Publishing
 
 ```sh
 www/scripts/deploy-gh-pages.sh --dry-run   # build and stage, don't push
@@ -134,16 +137,11 @@ still has to exist somewhere because `npm run build` shells out to
 `scripts/build-wasm.sh`; the script finds the one Git for Windows installs and
 puts it on `PATH` for the build, so a normal Git install needs no setup.
 
-Then set **Source → Deploy from a branch → `gh-pages` / (root)**.
+Note it builds from your **working tree**, not from `HEAD`, so uncommitted
+edits get published (the script warns when the tree is dirty).
 
-Use this when Actions cannot run — an account billing lock, or just shipping
-without CI. It produces the identical site; your machine does the building
-instead of a runner. Note it builds from your **working tree**, not from
-`HEAD`, so uncommitted edits get published (the script warns when the tree is
-dirty).
-
-One thing this path needs that the Actions path does not: a `.nojekyll` file.
-Branch-based Pages runs the published files through Jekyll, which silently
+Branch-based Pages needs a `.nojekyll` file: it runs the published files
+through Jekyll, which silently
 drops directories whose names begin with an underscore — and Astro puts all of
 its CSS and JS in `_astro/`. Without it the site loads as unstyled HTML with
 dead scripts. The script creates the file itself, which is why it is not
