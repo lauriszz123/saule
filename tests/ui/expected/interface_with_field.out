@@ -1,0 +1,9 @@
+  × expected `fn` in interface body, found identifier `name`
+   ╭─[interface_with_field.sau:4:3]
+ 3 │ interface Greetable
+ 4 │   name: string
+   ·   ──┬─
+   ·     ╰── here
+ 5 │ 
+   ╰────
+

@@ -1,0 +1,11 @@
+  × cannot access private member `secretId` of class `Entity` from outside the
+  │ class
+    ╭─[private_inherited_access.sau:17:17]
+ 16 │   fn leak()
+ 17 │     println(self.secretId)    -- ERROR: private to Entity
+    ·                 ────┬────
+    ·                     ╰── private
+ 18 │   end
+    ╰────
+  help: `local` fields and methods are only accessible from within `Entity`
+

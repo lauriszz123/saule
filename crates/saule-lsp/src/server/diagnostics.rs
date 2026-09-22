@@ -191,7 +191,7 @@ impl Backend {
                 let Decl::Import { path, .. } = &d.value else {
                     continue;
                 };
-                if saule_interpreter::module::resolve_import_path(dir, path).is_none() {
+                if saule_runtime::module::resolve_import_path(dir, path).is_none() {
                     out.push(import_error_diag(path, d.span.clone(), source, &line_index));
                 }
             }
@@ -235,7 +235,7 @@ impl Backend {
             let Decl::Import { path, .. } = &d.value else {
                 continue;
             };
-            let Some(target) = saule_interpreter::module::resolve_import_path(dir, path) else {
+            let Some(target) = saule_runtime::module::resolve_import_path(dir, path) else {
                 continue;
             };
             let target = canonical(&target).unwrap_or(target);

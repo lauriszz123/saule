@@ -1,0 +1,12 @@
+  × argument 2 of `Table.sort` expects `fn(integer, integer) -> boolean`, got
+  │ `integer`
+   ╭─[table_sort_bad_comp.sau:5:20]
+ 4 │     local xs: table<integer> = {3, 1, 2}
+ 5 │     Table.sort(xs, 42)
+   ·                    ─┬
+   ·                     ╰── wrong argument type
+ 6 │   end
+   ╰────
+  help: pass a value of type `fn(integer, integer) -> boolean` here — check
+        the signature of `Table.sort`
+

@@ -1,0 +1,9 @@
+  × cannot assign value of type `integer` to variable of type `string`
+    ╭─[field_assign_wrong_external.sau:13:11]
+ 12 │ local h: Holder = Holder()
+ 13 │ h.label = 42
+    ·           ─┬
+    ·            ╰── incompatible type
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

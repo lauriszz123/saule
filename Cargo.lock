@@ -1105,10 +1105,10 @@ dependencies = [
  "saule-ast",
  "saule-db",
  "saule-fmt",
- "saule-interpreter",
  "saule-lexer",
  "saule-parser",
  "saule-project",
+ "saule-runtime",
  "saule-semantic",
  "saule-version",
  "saule-vm",
@@ -1119,9 +1119,9 @@ name = "saule-db"
 version = "26.0.0"
 dependencies = [
  "saule-ast",
- "saule-interpreter",
  "saule-lexer",
  "saule-parser",
+ "saule-runtime",
  "saule-semantic",
 ]
 
@@ -1165,24 +1165,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "saule-interpreter"
-version = "26.0.0"
-dependencies = [
- "libloading",
- "miette",
- "saule-ast",
- "saule-lexer",
- "saule-native-abi",
- "saule-parser",
- "saule-project",
- "saule-semantic",
- "saule-typeck",
- "saule-version",
- "thiserror",
- "toml",
-]
-
-[[package]]
 name = "saule-lexer"
 version = "26.0.0"
 dependencies = [
@@ -1201,10 +1183,10 @@ dependencies = [
  "saule-db",
  "saule-docs",
  "saule-fmt",
- "saule-interpreter",
  "saule-lexer",
  "saule-parser",
  "saule-project",
+ "saule-runtime",
  "saule-semantic",
  "saule-typeck",
  "saule-version",
@@ -1230,6 +1212,24 @@ dependencies = [
 [[package]]
 name = "saule-project"
 version = "26.0.0"
+
+[[package]]
+name = "saule-runtime"
+version = "26.0.0"
+dependencies = [
+ "libloading",
+ "miette",
+ "saule-ast",
+ "saule-lexer",
+ "saule-native-abi",
+ "saule-parser",
+ "saule-project",
+ "saule-semantic",
+ "saule-typeck",
+ "saule-version",
+ "thiserror",
+ "toml",
+]
 
 [[package]]
 name = "saule-sdk"
@@ -1282,9 +1282,9 @@ version = "26.0.0"
 dependencies = [
  "miette",
  "saule-ast",
- "saule-interpreter",
  "saule-lexer",
  "saule-parser",
+ "saule-runtime",
  "saule-semantic",
  "saule-typeck",
  "thiserror",
@@ -1296,9 +1296,9 @@ version = "26.0.0"
 dependencies = [
  "js-sys",
  "miette",
- "saule-interpreter",
  "saule-lexer",
  "saule-parser",
+ "saule-runtime",
  "saule-semantic",
  "saule-typeck",
  "saule-version",

@@ -1,0 +1,10 @@
+  × argument 1 of `f` expects `integer`, got `string`
+   ╭─[fn_value_call_wrong_arg_type.sau:6:11]
+ 5 │ fn apply(f: fn(integer) -> integer) -> integer
+ 6 │     return f("nope")
+   ·              ───┬──
+   ·                 ╰── wrong argument type
+ 7 │ end
+   ╰────
+  help: pass a value of type `integer` here — check the signature of `f`
+

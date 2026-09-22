@@ -1,0 +1,12 @@
+  × cannot assign a nullable value of type `string?` to non-nullable type
+  │ `string`
+    ╭─[safe_chain_no_fallback.sau:10:23]
+  9 │     local b: Box? = Box()
+ 10 │     local s: string = b?.label
+    ·                       ────┬───
+    ·                           ╰── this expression may be `nil`
+ 11 │     println(s)
+    ╰────
+  help: guard with `if x != nil then ... end`, use `??` to provide a fallback,
+        or force-unwrap with `!`
+

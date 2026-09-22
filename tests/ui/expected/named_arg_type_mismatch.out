@@ -1,0 +1,11 @@
+  × argument 1 of `Box.init` expects `integer`, got `string`
+    ╭─[named_arg_type_mismatch.sau:14:27]
+ 13 │   static fn main()
+ 14 │     local b: Box = Box(w: "wide")
+    ·                           ───┬──
+    ·                              ╰── wrong argument type
+ 15 │     println(b.w)
+    ╰────
+  help: pass a value of type `integer` here — check the signature of
+        `Box.init`
+

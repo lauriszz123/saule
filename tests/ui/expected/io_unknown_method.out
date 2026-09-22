@@ -1,0 +1,10 @@
+  × no member `flop` on `File`
+   ╭─[io_unknown_method.sau:5:6]
+ 4 │     local f: File = Io.open("/tmp/saule_io_unknown.txt", IoMode.Write)!
+ 5 │     f.flop()
+   ·      ──┬──
+   ·        ╰── unknown member
+ 6 │   end
+   ╰────
+  help: check the spelling, or add `flop` as a field / method to `File`
+

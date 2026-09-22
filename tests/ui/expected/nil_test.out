@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `string`
+   ╭─[nil_test.sau:3:26]
+ 2 │   static fn main()
+ 3 │     local test: string = nil
+   ·                          ─┬─
+   ·                           ╰── `nil` not allowed here
+ 4 │   end
+   ╰────
+  help: mark the type nullable with `?` (e.g. `string?`) or initialize it with
+        a non-nil value
+

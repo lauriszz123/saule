@@ -1,0 +1,10 @@
+  × pattern of type `integer` cannot match scrutinee of type `string`
+   ╭─[match_pattern_wrong_type.sau:7:18]
+ 6 │         local result: string = match cmd
+ 7 │             case 0 then "zero"
+   ·                  ┬
+   ·                  ╰── incompatible pattern
+ 8 │             case "quit" then "bye"
+   ╰────
+  help: change the pattern to match the scrutinee's type
+

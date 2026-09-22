@@ -23,7 +23,7 @@ fn workspace_root() -> PathBuf {
 /// Every diagnostic the language server would publish for `path`, rendered as
 /// strings. Mirrors `Backend::analyse` minus the LSP plumbing.
 fn diagnostics(path: &Path) -> Vec<String> {
-    saule_interpreter::init();
+    saule_runtime::init();
 
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
     let tokens = saule_lexer::Lexer::new(&src)
@@ -32,7 +32,7 @@ fn diagnostics(path: &Path) -> Vec<String> {
     let module = saule_parser::parse(tokens).unwrap_or_else(|e| panic!("parse {path:?}: {e:?}"));
 
     let dir = path.parent().expect("file has a parent directory");
-    let seed = saule_interpreter::module::collect_import_seed(&module, dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, dir);
 
     let mut out: Vec<String> = saule_semantic::analyze_with_seed(&module, seed)
         .iter()

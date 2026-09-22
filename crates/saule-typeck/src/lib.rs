@@ -58,7 +58,7 @@ pub use table::TypeTable;
 /// **Precondition**: `saule_semantic::analyze` (or an equivalent) must have
 /// installed the class / interface / enum registries already — typeck reads
 /// them through `saule-semantic`'s thread-local accessors. The standard
-/// pipeline (`saule_interpreter::pipeline` or the CLI) guarantees this.
+/// pipeline (`saule_runtime::pipeline` or the CLI) guarantees this.
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
     check_inner(module)
 }
@@ -92,7 +92,7 @@ pub fn check_with_types(module: &Module) -> (Vec<TypeCheckError>, TypeTable) {
 /// typed that as `integer` while the runtime hands back `nil`.
 ///
 /// Run it *before* anything keys off the identity of a lambda body (in the
-/// standard pipeline, `saule_interpreter::prepare_captures`): resolving a
+/// standard pipeline, `saule_runtime::prepare_captures`): resolving a
 /// cast inside a lambda body reallocates that body if its `Arc` is already
 /// shared.
 pub fn check_and_resolve(module: &mut Module) -> Vec<TypeCheckError> {

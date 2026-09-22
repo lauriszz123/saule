@@ -10,4 +10,4 @@ saule-ast = { path = "../saule-ast" }
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
-saule-interpreter = { path = "../saule-interpreter" }
+saule-runtime = { path = "../saule-runtime" }

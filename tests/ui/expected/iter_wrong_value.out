@@ -1,0 +1,11 @@
+  × type error: cannot iterate over a `integer` with `for ... in` — use a
+  │ table, a function, or a class that implements `Iterable`
+   ╭─[iter_wrong_value.sau:5:5]
+ 4 │       static fn main()
+ 5 │ ╭─▶     for v in 42 do
+ 6 │ │         println(v)
+ 7 │ ├─▶     end
+   · ╰──── type mismatch or invalid operation
+ 8 │       end
+   ╰────
+

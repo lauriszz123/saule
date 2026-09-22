@@ -1,0 +1,10 @@
+  × `Plain` is not generic, but was given 1 type argument(s)
+    ╭─[generic_args_on_non_generic.sau:13:1]
+ 12 │ 
+ 13 │ local p: Plain<integer> = Plain(1)
+    · ─────────────────┬────────────────
+    ·                  ╰── unexpected type arguments
+ 14 │ println(p.x)
+    ╰────
+  help: drop the `<...>` — `Plain` declares no type parameters
+

@@ -1,0 +1,11 @@
+  × argument 1 of `Math.floor` expects `integer or float`, got `string`
+   ╭─[math_non_numeric.sau:2:31]
+ 1 │ -- Math.floor expects a number; passing a string must be caught at typecheck.
+ 2 │ local x: integer = Math.floor("3.14")
+   ·                               ───┬──
+   ·                                  ╰── wrong argument type
+ 3 │ println(x)
+   ╰────
+  help: pass a value of type `integer or float` here — check the signature of
+        `Math.floor`
+

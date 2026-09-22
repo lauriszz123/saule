@@ -1,0 +1,12 @@
+  × `filter` expects 1 type argument(s), got 2
+    ╭─[generic_explicit_type_arg_arity.sau:11:19]
+ 10 │ local nums: table<integer> = {1, 2, 3}
+ 11 │ local out = filter<integer, string>(nums, x => x % 2 == 0)
+    ·                   ────────┬────────
+    ·                           ╰── wrong number of type arguments
+ 12 │ println(out)
+    ╰────
+  help: the `<...>` at a call site supplies one type per type parameter the
+        function declares — write them all, or none and let them be inferred
+        from the arguments
+

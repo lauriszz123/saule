@@ -5,21 +5,21 @@ edition.workspace = true
 description = "Saule — register-based bytecode compiler and virtual machine."
 license.workspace = true
 
-# Dependency direction is load-bearing (VM_DESIGN.md §22.1): `saule-vm`
-# depends on `saule-interpreter`, never the reverse. The tree-walker must
-# stay buildable — and testable — with this crate deleted from the
-# workspace, because it is the differential oracle for every VM bug.
+# Dependency direction is load-bearing: `saule-vm` depends on
+# `saule-runtime`, never the reverse. The runtime is what a running program
+# is made of — values, the standard library, native packages — and knows
+# nothing about how the program was compiled; a bytecode closure reaches it
+# only as the opaque `Value::VmFunction`.
 [dependencies]
 saule-ast = { path = "../saule-ast" }
 # `default-features = false` here, and re-exported as this crate's own
 # `native-packages`, so `saule-wasm` can depend on the VM without dragging
 # `libloading` in. Cargo unifies features across the graph, so the CLI --
-# which asks for the interpreter's defaults directly -- still gets them.
-saule-interpreter = { path = "../saule-interpreter", default-features = false }
+# which asks for the runtime's defaults directly -- still gets them.
+saule-runtime = { path = "../saule-runtime", default-features = false }
 # The front end, for `program.rs`: compiling a program means resolving the
 # import graph here rather than at run time, so this crate reads and parses
-# the imported files itself. Both sit *below* `saule-interpreter` in the
-# graph, so §22.1's one-way arrow is untouched.
+# the imported files itself. Both sit *below* `saule-runtime` in the graph.
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
@@ -29,9 +29,9 @@ thiserror = "2.0.18"
 
 [features]
 default = ["native-packages"]
-# Passthrough to `saule-interpreter`'s feature of the same name. See the
+# Passthrough to `saule-runtime`'s feature of the same name. See the
 # comment on the dependency above.
-native-packages = ["saule-interpreter/native-packages"]
+native-packages = ["saule-runtime/native-packages"]
 # Bytecode profiling (`VM_DESIGN.md` §16), off by default and off in every
 # shipped binary. The collector itself costs nothing at run time, but the
 # dispatch loop has to exist twice for it — once counting, once not — and

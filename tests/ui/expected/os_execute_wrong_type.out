@@ -1,0 +1,11 @@
+  × argument 1 of `Os.execute` expects `string`, got `integer`
+   ╭─[os_execute_wrong_type.sau:2:34]
+ 1 │ -- Os.execute requires a string command.
+ 2 │ local code: integer = Os.execute(42)
+   ·                                  ─┬
+   ·                                   ╰── wrong argument type
+ 3 │ println(code)
+   ╰────
+  help: pass a value of type `string` here — check the signature of
+        `Os.execute`
+
