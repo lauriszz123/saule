@@ -1,0 +1,11 @@
+  × cannot assign value of type `table<integer>` to variable of type
+  │ `table<any>`
+   ╭─[table_any_aliasing.sau:6:28]
+ 5 │         local nums: table<integer> = {1}
+ 6 │         local anys: table<any> = nums
+   ·                                  ──┬─
+   ·                                    ╰── incompatible type
+ 7 │         println(#anys)
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

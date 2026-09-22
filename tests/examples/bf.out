@@ -1,0 +1,6 @@
+Usage:
+bf <file> -- Runs the BF program.
+bf -d     -- Runs a hello world embeeded in this program.
+bf -h     -- Shows this screen.
+bf -v     -- Prints the version.
+[exit 0]

@@ -6,7 +6,7 @@
 //!
 //! The interpreter converts only where it can see a declared type — an
 //! annotated `local` or module variable, and a user function's parameters
-//! and return type (`saule_interpreter::eval::coerce`). If the checker
+//! and return type (`saule_runtime::eval::coerce`). If the checker
 //! relaxed everywhere instead, the two would disagree and the difference
 //! would be unsound rather than merely inconsistent:
 //!

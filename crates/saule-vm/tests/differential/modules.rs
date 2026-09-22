@@ -10,13 +10,14 @@ use saule_parser::parse;
 ///
 /// `front_end` refuses to hand back a module carrying semantic errors,
 /// which is the right default. The forward-reference programs below are
-/// ones the *tree-walker* rejects at run time rather than at analysis, so
-/// they analyse clean and still need to reach the compiler.
+/// ones the language rejects that analysis does not catch yet — the
+/// compiler reports them — so they analyse clean and still need to reach
+/// the compiler.
 fn front_end_unchecked(src: &str) -> saule_ast::Module {
-    saule_interpreter::init();
+    saule_runtime::init();
     let toks = Lexer::new(src).tokenize().expect("lex");
     let module = parse(toks).expect("parse");
-    let _ = saule_interpreter::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default());
+    let _ = saule_runtime::analyze_with_bindings(&module, saule_semantic::ModuleSeed::default());
     module
 }
 
@@ -29,21 +30,27 @@ fn a_module_level_forward_call_is_refused_not_miscompiled() {
     // still undefined and errors; the VM used to answer 105 from the proto
     // table. Right exit status, invented value.
     //
-    // Refusing hands the module to the tree-walker, which is what *defines*
-    // the behaviour. Reproducing its diagnostic instead would mean keeping
-    // two error strings in step forever; falling back makes them agree by
-    // construction.
+    // It is an error, reported before anything runs — the program the
+    // language rejects, which the front end does not catch yet.
     let src = "local r = later(5)\n\
                println(tostring(r))\n\
                fn later(x: integer) -> integer\n\
                \x20 return x + 100\n\
                end";
     let module = front_end_unchecked(src);
-    match saule_vm::compile(&module, "x.sau", src) {
-        Err(saule_vm::CompileError::Unsupported { span, .. }) => {
-            assert!(span.start < span.end, "the refusal must point somewhere");
-        }
-        other => panic!("expected a refusal, got {other:?}"),
+    let (message, span) = rejected(saule_vm::compile(&module, "x.sau", src));
+    assert!(message.contains("`later` is used here, before its declaration"), "{message}");
+    assert!(span.start < span.end, "the error must point somewhere");
+}
+
+/// The language's diagnostic from a program the compiler rejects.
+fn rejected(r: Result<saule_vm::Chunk, saule_vm::CompileError>) -> (String, std::ops::Range<usize>) {
+    match r {
+        Err(saule_vm::CompileError::Rejected(saule_runtime::RuntimeError::TypeError {
+            message,
+            span,
+        })) => (message, span),
+        other => panic!("expected the program to be rejected, got {other:?}"),
     }
 }
 
@@ -77,18 +84,8 @@ fn a_forward_reference_reached_through_a_callee_is_refused() {
                \x20 return x + 100\n\
                end\nr";
     let module = front_end_unchecked(src);
-    match saule_vm::compile(&module, "diff.sau", src) {
-        Err(saule_vm::CompileError::Unsupported { thing, .. }) => assert_eq!(
-            thing,
-            "a module-level call whose callee reaches a declaration further down"
-        ),
-        other => panic!(
-            "expected a refusal so the tree-walker defines the diagnostic, got {other:?}"
-        ),
-    }
-    // And the fallback really does reproduce the oracle: the tree-walker is
-    // what reports it, so the two agree by construction.
-    assert!(matches!(tree_walker(&module), Outcome::Error(_)));
+    let (message, _) = rejected(saule_vm::compile(&module, "diff.sau", src));
+    assert!(message.contains("`C.go` is used here, but it reaches a declaration"), "{message}");
 }
 
 #[test]
@@ -124,31 +121,16 @@ fn a_forward_call_inside_a_function_body_still_compiles() {
 
 
 #[test]
-fn deep_recursion_hits_the_same_limit_under_both_engines() {
-    // A limit is observable behaviour, not an implementation detail.
-    //
-    // §6.4 argues the VM's frame cap can be two orders of magnitude above
-    // the tree-walker's, and the argument is sound in isolation: a call is a
-    // `Vec` push here, not a native stack frame, so `MAX_EVAL_DEPTH`'s
-    // reason for existing (a SIGSEGV that cannot be caught) does not apply.
-    // Set to 1_000_000 on that reasoning, it made `depth(50_000)` return
-    // `50000` under `--vm` and raise `StackOverflow` without it.
-    //
-    // While the tree-walker is the default and the VM is an opt-in
-    // accelerator behind a silent fallback, "works with `--vm`, crashes
-    // without it" is exactly what that fallback exists to prevent. The
-    // raise belongs with Phase 4, where flipping the default makes it an
-    // announced improvement rather than a disagreement.
-    //
-    // Asserted on the constants rather than by actually recursing: the
-    // tree-walker needs ~10_000 *native* frames to reach its limit, which
-    // is more stack than libtest's test thread has — the same reason
-    // `tests/ui/stack_overflow_reentrant.sau` runs `saule` as a process.
+fn deep_recursion_hits_the_same_limit_as_re_entrant_calls() {
+    // A limit is observable behaviour, not an implementation detail: the
+    // depth at which a program reports a stack overflow should not depend
+    // on whether its recursion happens to pass through a native. See
+    // `DEFAULT_MAX_FRAMES` for why raising it is a deliberate change of its
+    // own.
     assert_eq!(
         saule_vm::vm::DEFAULT_MAX_FRAMES,
-        saule_interpreter::eval::MAX_EVAL_DEPTH as usize,
-        "the VM's frame cap drifted from the tree-walker's depth limit — \
-         the two engines would then disagree about how deep is too deep"
+        saule_runtime::call::MAX_CALL_DEPTH as usize,
+        "the VM's frame cap drifted from the re-entrant call limit"
     );
 }
 
@@ -183,13 +165,56 @@ fn a_module_body_call_reaching_a_later_class_is_refused() {
                \x20 fn init()\n    self.v = 5\n  end\n\
                end\nr";
     let module = front_end_unchecked(src);
-    match saule_vm::compile(&module, "diff.sau", src) {
-        Err(saule_vm::CompileError::Unsupported { thing, .. }) => assert_eq!(
-            thing,
-            "a module-level call whose callee reaches a declaration further down"
-        ),
-        other => panic!("expected a refusal, got {other:?}"),
-    }
+    let (message, _) = rejected(saule_vm::compile(&module, "diff.sau", src));
+    assert!(message.contains("`run` is used here, but it reaches a declaration"), "{message}");
+}
+
+#[test]
+fn a_module_body_call_reaching_a_later_module_variable_is_rejected() {
+    // The shape the guard used to miss, because it counted only `fn`,
+    // `class` and `enum` declarations: `show()` runs before `local x`, so
+    // `x` does not exist yet. The compiler read the module slot anyway and
+    // the program printed `nil` — a wrong value, exit status 0.
+    let src = "fn show() -> integer\n  return x\nend\n\
+               local r: integer = show()\n\
+               local x: integer = 3\n\
+               r";
+    let module = front_end_unchecked(src);
+    let (message, _) = rejected(saule_vm::compile(&module, "diff.sau", src));
+    assert!(message.contains("`show` is used here, but it reaches a declaration"), "{message}");
+}
+
+#[test]
+fn a_callees_own_local_is_not_a_module_variable_of_the_same_name() {
+    // The over-refusal the guard has to avoid now that it covers module
+    // variables: short names like `count` are used inside functions and at
+    // module level constantly, and `count` here is the callee's own local.
+    // Read off the resolver's binding rather than the spelling, so the two
+    // are not confused.
+    must_agree(
+        "fn tally() -> integer\n\
+         \x20 local count: integer = 2\n\
+         \x20 return count * 3\n\
+         end\n\
+         local r: integer = tally()\n\
+         local count: integer = 9\n\
+         r + count",
+    );
+}
+
+#[test]
+fn a_module_variable_declared_above_the_call_still_compiles() {
+    // The other half: a callee reading a module variable declared *before*
+    // the call is ordinary Saule, and must not be refused.
+    let src = "local base: integer = 10\n\
+               fn bump() -> integer\n  return base + 1\nend\n\
+               local r: integer = bump()\n\
+               r";
+    must_agree(src);
+    assert!(
+        !disasm_of(src).is_empty(),
+        "a module variable declared above the call must compile"
+    );
 }
 
 #[test]
@@ -248,8 +273,8 @@ fn a_skipped_middle_default_still_runs_in_the_callee_when_it_is_not_a_literal() 
                f(a: 3, t: \"!\")";
     must_agree(src);
     assert_eq!(
-        tree_walker(&front_end(src)),
-        Outcome::Value("string:6!".into())
+        vm(&front_end(src), src),
+        Some(Outcome::Value("string:6!".into()))
     );
 }
 
@@ -318,8 +343,8 @@ fn two_skipped_defaults_are_filled_in_parameter_order() {
     // Spelled out: `123!` is the chain resolved against the callee's own
     // parameters. `1201!` would be `b` from module scope.
     assert_eq!(
-        tree_walker(&front_end(&src)),
-        Outcome::Value("string:123!".into())
+        vm(&front_end(&src), &src),
+        Some(Outcome::Value("string:123!".into()))
     );
 }
 
@@ -405,8 +430,8 @@ fn a_constructor_fills_a_skipped_default() {
     must_agree(&src);
     // `T5`, from the constructor's own `a` — not `T100` from module scope.
     assert_eq!(
-        tree_walker(&front_end(&src)),
-        Outcome::Value("string:5T5!".into())
+        vm(&front_end(&src), &src),
+        Some(Outcome::Value("string:5T5!".into()))
     );
 }
 

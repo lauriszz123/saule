@@ -53,7 +53,7 @@ impl Compiler<'_> {
                 // Even then it is a *request*: only the shapes that can
                 // replace a frame honour it, and the rest hand back an
                 // ordinary result run to return.
-                let tail_ok = self.f.try_depth == 0 && self.f.name.as_deref() != Some("main");
+                let tail_ok = self.f.try_depth == 0 && !self.f.is_module_body;
                 let want = if tail_ok { Want::Tail } else { Want::All };
                 let r = self.expr_results(&values[0], dst, want)?;
                 if r.terminated {

@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `string`
+   ╭─[nil_field.sau:2:24]
+ 1 │ class Main
+ 2 │   local test: string = nil
+   ·                        ─┬─
+   ·                         ╰── `nil` not allowed here
+ 3 │ 
+   ╰────
+  help: mark the type nullable with `?` (e.g. `string?`) or initialize it with
+        a non-nil value
+

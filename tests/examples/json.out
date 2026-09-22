@@ -1,0 +1,6 @@
+error: `json` is a library and has no entry point
+
+Libraries are imported by other projects rather than run. Add it to a 
+project's `dependencies:` and `import` it, or set `kind: "app"` and an 
+`entry:` in saule.config to make it runnable.
+[exit 1]

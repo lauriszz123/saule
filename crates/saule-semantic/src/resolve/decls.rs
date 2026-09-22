@@ -47,7 +47,18 @@ impl Resolver {
                 }
                 self.in_class = prev_class;
             }
-            Decl::Enum { methods, .. } => {
+            Decl::Enum {
+                variants, methods, ..
+            } => {
+                // A valued variant's expression runs where the declaration
+                // stands, in module scope — it may call a function or read
+                // a module variable, and those references need bindings like
+                // any other.
+                for v in variants {
+                    if let saule_ast::EnumVariant::Valued(_, e) = &v.value {
+                        self.expr(e);
+                    }
+                }
                 for meth in methods {
                     self.check_variadic_shape(&meth.params);
                     let prev_method = std::mem::replace(&mut self.in_method, true);

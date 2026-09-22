@@ -12,7 +12,7 @@
 //! iteration reuses the register under a fresh open upvalue. No allocation
 //! when nothing captures, and no `strong_count` probe.
 
-use saule_interpreter::Value;
+use saule_runtime::Value;
 
 #[derive(Debug)]
 pub enum Upvalue {

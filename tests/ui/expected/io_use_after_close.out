@@ -1,0 +1,9 @@
+  × type error: file is closed
+    ╭─[io_use_after_close.sau:21:3]
+ 20 │         f.close()
+ 21 │         f.write("oops")
+    ·         ───────┬───────
+    ·                ╰── type mismatch or invalid operation
+ 22 │     end
+    ╰────
+

@@ -1,0 +1,16 @@
+  × type error: class `Rock` is missing methods: `damage` from interface
+  │ `Damageable`, `isAlive` from interface `Damageable`
+    ╭─[implements_missing_method.sau:11:1]
+ 10 │     
+ 11 │ ╭─▶ class Rock implements Damageable
+ 12 │ │     -- intentionally missing both methods
+ 13 │ │     hardness: integer
+ 14 │ │   
+ 15 │ │     fn init(h: integer)
+ 16 │ │       self.hardness = h
+ 17 │ │     end
+ 18 │ ├─▶ end
+    · ╰──── type mismatch or invalid operation
+ 19 │     
+    ╰────
+

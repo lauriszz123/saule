@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `integer`
+   ╭─[local_multi_missing_value.sau:6:3]
+ 5 │     static fn main()
+ 6 │         local host: string, port: integer = "localhost"
+   ·         ───────────────────────┬───────────────────────
+   ·                                ╰── `nil` not allowed here
+ 7 │         println(host .. ":" .. port)
+   ╰────
+  help: mark the type nullable with `?` (e.g. `integer?`) or initialize it
+        with a non-nil value
+

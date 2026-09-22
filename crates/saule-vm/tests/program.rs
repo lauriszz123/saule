@@ -27,7 +27,7 @@ fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 fn compile(entry: &Path) -> saule_vm::program::Program {
-    saule_interpreter::init();
+    saule_runtime::init();
     match saule_vm::program::compile(entry) {
         Ok(p) => p,
         Err(e) => panic!("expected `{}` to compile: {e}", entry.display()),
@@ -123,12 +123,20 @@ fn an_import_cycle_is_refused_rather_than_looping() {
             ("b.sau", "import A from a\nexport class B\nend\n"),
         ],
     );
-    saule_interpreter::init();
+    saule_runtime::init();
+    // Reported against the entry's `import` that led into the cycle, with
+    // the module that closes it named inside — the language's diagnostic,
+    // since there is no other engine to hand the program to.
     match saule_vm::program::compile(&dir.join("a.sau")) {
-        Err(e @ saule_vm::program::ProgramError::Circular { .. }) => {
-            assert!(e.is_fallback(), "a cycle must fall back, not fail the run");
+        Err(saule_vm::program::ProgramError::Import(
+            saule_runtime::RuntimeError::ImportFailed {
+                module_label, inner, ..
+            },
+        )) => {
+            assert!(module_label.ends_with("b.sau"), "{module_label}");
+            assert!(inner.to_string().contains("circular import"), "{inner}");
         }
-        other => panic!("expected a circular-import refusal, got {other:?}"),
+        other => panic!("expected a circular-import error, got {other:?}"),
     }
 }
 
@@ -171,7 +179,7 @@ fn an_imported_function_is_copied_into_the_importing_module_slot() {
 
 /// Run a program and capture what it printed.
 fn run_capturing(program: saule_vm::program::Program) -> String {
-    let (sink, ()) = saule_interpreter::output::capture(|| {
+    let (sink, ()) = saule_runtime::output::capture(|| {
         saule_vm::run_program(program).expect("the program must run");
     });
     sink.text()
@@ -566,11 +574,10 @@ fn a_named_re_export_publishes_the_alias() {
 
 #[test]
 fn a_plain_module_does_not_re_export_what_it_imported() {
-    // Re-export is `init.sau`'s alone — `module::is_init_module`, the same
-    // rule the tree-walker applies, called rather than restated. A plain
-    // module that imports `Base` does not republish it, so the compiler must
-    // refuse rather than invent a layout, and let the tree-walker produce
-    // the diagnostic.
+    // Re-export is `init.sau`'s alone — `module::is_init_module`, called
+    // rather than restated. A plain module that imports `Base` does not
+    // republish it, so `Base` is not in scope in `main.sau`: an error, and
+    // never an invented layout.
     let dir = project(
         "barrel_only_init",
         &[
@@ -589,13 +596,8 @@ fn a_plain_module_does_not_re_export_what_it_imported() {
             ),
         ],
     );
-    assert!(
-        matches!(
-            saule_vm::program::compile(&dir.join("main.sau")),
-            Err(saule_vm::program::ProgramError::Compile(
-                saule_vm::CompileError::Unsupported { .. }
-            ))
-        ),
-        "only an `init.sau` re-exports; a plain module must not"
-    );
+    match saule_vm::program::compile(&dir.join("main.sau")) {
+        Err(e) => assert!(e.to_string().contains("Base"), "{e}"),
+        Ok(_) => panic!("only an `init.sau` re-exports; a plain module must not"),
+    }
 }

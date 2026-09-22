@@ -1,0 +1,12 @@
+  × static field `scores` of class `Main` is never initialized
+   ╭─[static_field_uninitialized.sau:5:2]
+ 4 │ class Main
+ 5 │     static local scores: table<integer>
+   ·     ─────────────────┬─────────────────
+   ·                      ╰── declared without a value
+ 6 │ 
+   ╰────
+  help: give it a value in the declaration (`static local scores: ... = ...`)
+        or mark the type nullable with `?` — a static has no `init` to assign
+        it in
+

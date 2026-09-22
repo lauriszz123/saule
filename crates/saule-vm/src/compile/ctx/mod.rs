@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-use saule_interpreter::Value;
+use saule_runtime::Value;
 use saule_semantic::Bindings;
 use saule_typeck::TypeTable;
 
@@ -82,10 +82,18 @@ pub enum CalleeKey {
 /// one. `continue` targets differ per loop kind — a `while` re-tests its
 /// condition, a numeric `for` runs its `FORLOOP` — so the target is recorded
 /// rather than assumed.
-#[derive(Default)]
+///
+/// It also knows which registers the loop owns — everything from
+/// `first_reg` up — so the loop can close what a closure captured from them
+/// before the next iteration writes them again (§7.2).
 pub struct LoopCtx {
     pub breaks: Vec<Label>,
     pub continues: Vec<Label>,
+    /// The first register the loop allocated: its control registers, its
+    /// variables and its body all live at or above it.
+    pub first_reg: u16,
+    /// Where the frame's capture log stood when the loop began.
+    pub captures_at: usize,
 }
 
 pub struct Compiler<'a> {
@@ -115,14 +123,16 @@ pub struct Compiler<'a> {
     /// `CALLK` resolved from `fn_protos` alone would cheerfully jump to the
     /// proto and return a value. See [`Compiler::callk_resolvable`].
     pub module_decls_seen: std::collections::HashSet<String>,
-    /// Top-level `fn`/`class`/`interface`/`enum` names, from the pre-pass.
+    /// Every name this module declares at top level, from the pre-pass:
+    /// `fn`, `class`, `interface`, `enum` and module variables alike.
     ///
-    /// Only these count toward the call guard. A module-level `local` is
-    /// deliberately excluded: `local doubled = when(...)` declares a name
-    /// *as* it makes a call, so counting locals left the module body never
-    /// "fully declared" and refused every call in a file that ends in a
-    /// declaration — which is most of them.
-    pub module_type_decls: std::collections::HashSet<String>,
+    /// Not the names an `import` binds — the prologue writes those before
+    /// the body runs, so they exist from the first statement.
+    ///
+    /// Paired with `module_decls_seen`: in it but not yet seen means "the
+    /// declaration is further down the file", which is what the forward
+    /// reference guards test.
+    pub module_decls: std::collections::HashSet<String>,
     /// Top-level declaration name → the top-level names its body mentions.
     ///
     /// The direct guards above are exact but *local*: they fire when the
@@ -200,9 +210,18 @@ pub struct Compiler<'a> {
     /// before any body is compiled, because a method may call another
     /// declared further down the file.
     pub callee_params: HashMap<CalleeKey, Vec<saule_ast::Param>>,
-    /// A prelude scope, consulted at *compile* time to turn `print` into the
+    /// Sub-expressions already evaluated into a register, which every later
+    /// compilation of the same node reads instead of evaluating again.
+    ///
+    /// `t[f()] += 1` is the reason: it compiles as `t[f()] = t[f()] + 1`,
+    /// the target appearing once as a read and once as a write, and `f`
+    /// must still run once. `compound_assign` evaluates such a
+    /// sub-expression up front, pins it here by `NodeId` (unique within a
+    /// module), and unpins it once the statement is compiled.
+    pub pinned: HashMap<saule_ast::NodeId, u16>,
+    /// The prelude, consulted at *compile* time to turn `print` into the
     /// actual `NativeFn` value a `CALLNAT` constant points at.
-    prelude: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<saule_interpreter::Environment>>>>,
+    prelude: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<saule_runtime::Prelude>>>>,
 }
 
 impl<'a> Compiler<'a> {
@@ -214,11 +233,11 @@ impl<'a> Compiler<'a> {
             chunk,
             bindings,
             types,
-            f: FuncCtx::new(Some("main")),
+            f: FuncCtx::module_body(),
             enclosing: Vec::new(),
             fn_protos: HashMap::new(),
             module_decls_seen: std::collections::HashSet::new(),
-            module_type_decls: std::collections::HashSet::new(),
+            module_decls: std::collections::HashSet::new(),
             module_refs: HashMap::new(),
             loops: Vec::new(),
             layouts: Default::default(),
@@ -230,6 +249,7 @@ impl<'a> Compiler<'a> {
             import_bindings: Vec::new(),
             native_imports: HashMap::new(),
             callee_params: HashMap::new(),
+            pinned: HashMap::new(),
             prelude: std::cell::RefCell::new(None),
         }
     }

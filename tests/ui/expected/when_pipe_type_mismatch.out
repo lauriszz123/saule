@@ -1,0 +1,12 @@
+  × pipeline stage `square` expects `integer` as first argument, got `string`
+    ╭─[when_pipe_type_mismatch.sau:15:29]
+ 14 │ 
+ 15 │ local err = when(5):to_str():square()
+    ·                             ────┬────
+    ·                                 ╰── piped value has the wrong type for this stage
+ 16 │ -- COMPILE ERROR: pipeline stage `square` expects `integer`, got `string`
+    ╰────
+  help: the value flowing through `when(...):square(...)` must match the
+        function's first parameter — adjust the upstream stage or call
+        `square` directly
+

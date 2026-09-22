@@ -1,0 +1,11 @@
+  × `Config.index` expects `string`, got `integer`
+   ╭─[index_wrong_key_type.sau:8:13]
+ 7 │         local c: Config = Config()
+ 8 │         println(c[42])
+   ·                   ─┬
+   ·                    ╰── wrong operand type for this operator
+ 9 │     end
+   ╰────
+  help: `[]` on a `Config` calls `index`, so the other operand must be
+        `string`
+

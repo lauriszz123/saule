@@ -59,13 +59,13 @@ impl Compiler<'_> {
         let mut filled: Vec<Option<usize>> = vec![None; params.len()];
         for (arg_i, slot) in assigned.iter().enumerate() {
             // An argument the resolver could not place, or one that fills a
-            // slot twice. The typechecker reports both; refusing keeps this
-            // from inventing a position.
+            // slot twice. The typechecker reports most of these; what it
+            // lets through is reported here, in the language's words,
+            // rather than compiled into an invented position.
             let Some(slot) = slot.filter(|s| filled[*s].is_none()) else {
-                return Err(CompileError::unsupported(
-                    "an argument that fills no parameter, or fills one twice",
-                    span.clone(),
-                ));
+                return Err(CompileError::Rejected(misplaced_argument(
+                    args, arg_i, *slot, params, span,
+                )));
             };
             filled[slot] = Some(arg_i);
         }
@@ -79,8 +79,8 @@ impl Compiler<'_> {
         //    nothing from its module scope, and has no side effect to
         //    happen in the wrong place or at the wrong time, so evaluating
         //    it at the call site is observationally identical. The same
-        //    argument, and the same restriction, is why a valued enum
-        //    variant's value must be a literal.
+        //    argument is why a valued enum variant's literal value is baked
+        //    in when the program is built.
         //
         //  * anything else — a call, a name, `Distribution.Start` — has to
         //    run in the callee. `Distribution` may not even be in scope
@@ -289,4 +289,51 @@ fn literal_default(d: &Expr, span: &Range<usize>) -> Option<Expr> {
         }
         _ => return None,
     })
+}
+
+/// Why argument `arg_i` has no parameter of its own: the language's
+/// diagnostic for it, worded as the tree-walker worded it when it bound the
+/// call. `slot` is where the resolver put it, if anywhere — which, for an
+/// argument that has one, means another argument got there first.
+fn misplaced_argument(
+    args: &[saule_ast::CallArg],
+    arg_i: usize,
+    slot: Option<usize>,
+    params: &[saule_ast::Param],
+    span: &Range<usize>,
+) -> saule_runtime::RuntimeError {
+    let is_trailing = arg_i + 1 == args.len() && args[arg_i].is_trailing_block();
+    let message = match (&args[arg_i], slot) {
+        (_, Some(s)) if is_trailing => format!(
+            "duplicate argument for parameter `{}` — a trailing block binds to that parameter, \
+             which was already supplied",
+            params[s].name
+        ),
+        (saule_ast::CallArg::Named { name, .. }, Some(_)) => {
+            format!("duplicate argument for parameter `{name}` — this parameter was already provided")
+        }
+        (saule_ast::CallArg::Named { name, .. }, None) => {
+            let valid: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+            format!(
+                "unknown named argument `{name}` — valid parameters: {}",
+                valid.join(", ")
+            )
+        }
+        _ if is_trailing && params.is_empty() => {
+            "this function takes no parameters, so it cannot take a trailing block".to_string()
+        }
+        (_, Some(s)) => format!(
+            "duplicate argument for parameter `{}` — this parameter was already provided",
+            params[s].name
+        ),
+        (_, None) => format!(
+            "too many arguments: expected at most {}, got {}",
+            params.len(),
+            args.len()
+        ),
+    };
+    saule_runtime::RuntimeError::TypeError {
+        message,
+        span: span.clone(),
+    }
 }

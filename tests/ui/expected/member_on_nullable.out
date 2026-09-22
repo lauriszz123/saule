@@ -1,0 +1,11 @@
+  × cannot access `label` on nullable type `Box?`
+    ╭─[member_on_nullable.sau:9:13]
+  8 │     local b: Box? = Box()
+  9 │     println(b.label)
+    ·             ┬
+    ·             ╰── receiver may be `nil`
+ 10 │   end
+    ╰────
+  help: use `?.` for safe access, `!` to force-unwrap, or guard with `if x !=
+        nil then ... end`
+

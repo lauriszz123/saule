@@ -1,0 +1,10 @@
+  × cannot assign value of type `integer` to variable of type `string`
+    ╭─[call_return_to_wrong_field.sau:12:18]
+ 11 │   fn init()
+ 12 │     self.label = number()
+    ·                  ────┬───
+    ·                      ╰── incompatible type
+ 13 │   end
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

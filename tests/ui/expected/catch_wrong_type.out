@@ -1,0 +1,11 @@
+  × uncaught exception: oops
+   ╭─[catch_wrong_type.sau:7:7]
+ 6 │     try
+ 7 │       throw "oops"
+   ·       ──────┬─────
+   ·             ╰── uncaught `throw`
+ 8 │     catch e: integer
+   ╰────
+  help: wrap the throwing code in `try ... catch e: <Type> ... end` to handle
+        it
+

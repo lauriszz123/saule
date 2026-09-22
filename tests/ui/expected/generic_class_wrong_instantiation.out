@@ -1,0 +1,11 @@
+  × cannot assign value of type `Box<string>` to variable of type
+  │ `Box<integer>`
+    ╭─[generic_class_wrong_instantiation.sau:13:25]
+ 12 │ 
+ 13 │ local b: Box<integer> = Box("nope")
+    ·                         ─────┬─────
+    ·                              ╰── incompatible type
+ 14 │ println(b.value)
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

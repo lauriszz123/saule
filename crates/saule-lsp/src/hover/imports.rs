@@ -57,7 +57,7 @@ pub(super) fn aliases_for_dynamic(
 /// stays private to its module.
 ///
 /// This must agree with the module loader's own `exported_name`
-/// ([`saule_interpreter::module`]) — that function is what actually
+/// ([`saule_runtime::module`]) — that function is what actually
 /// decides which bindings a wildcard import produces. Matching on the
 /// name alone made the hover blurb advertise private declarations that
 /// then failed to resolve at the use site.

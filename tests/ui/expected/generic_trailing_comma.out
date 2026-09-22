@@ -1,0 +1,9 @@
+  × expected generic parameter name, found `>`
+   ╭─[generic_trailing_comma.sau:3:13]
+ 2 │ -- trailing comma with no following identifier is invalid.
+ 3 │ fn broken<T,>(value: T) -> T
+   ·             ┬
+   ·             ╰── here
+ 4 │     return value
+   ╰────
+

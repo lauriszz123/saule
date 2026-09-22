@@ -1,0 +1,13 @@
+  × `Derived.go` does not match `Base.go`: the parent takes 1 parameter(s),
+  │ this takes 2
+    ╭─[override_arity.sau:14:3]
+ 13 │ 
+ 14 │   fn go(a: integer, b: integer) -> nil end
+    ·   ────────────────────┬───────────────────
+    ·                       ╰── incompatible override
+ 15 │ end
+    ╰────
+  help: an override has to be usable everywhere the parent's version is — same
+        parameter types, same arity, and a return type the parent's callers
+        can accept. Rename the method if it isn't meant to override.
+

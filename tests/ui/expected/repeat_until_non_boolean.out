@@ -1,0 +1,11 @@
+  × `until` condition must be a `boolean`, got `string?`
+   ╭─[repeat_until_non_boolean.sau:8:11]
+ 7 │       input = nil
+ 8 │     until input    -- ERROR: condition must be boolean, got string?
+   ·           ──┬──
+   ·             ╰── not a boolean
+ 9 │   end
+   ╰────
+  help: compare with `==`, `!=`, `<`, `>` etc., or use `?? false` / `!= nil`
+        to coerce a nullable to a `boolean`
+

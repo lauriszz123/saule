@@ -1,0 +1,9 @@
+  × argument 1 of `add` expects `integer`, got `string`
+   ╭─[wrong_arg_type.sau:7:13]
+ 6 │ 
+ 7 │ println(add("one", "two"))
+   ·             ──┬──
+   ·               ╰── wrong argument type
+   ╰────
+  help: pass a value of type `integer` here — check the signature of `add`
+

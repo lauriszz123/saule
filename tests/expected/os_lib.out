@@ -1,0 +1,28 @@
+time > 0: true
+clock >= 0.0: true
+difftime: 60
+date epoch 0: 1970-01-01 00:00:00
+date %c     : 1970-01-01 00:00:00
+date %x %X  : 1970-01-01 00:00:00
+date weekday: 4
+slept
+getenv set : hello-saule
+getenv miss: true
+cwd absolute: true
+tmpname under tmp dir: true
+tmpname ends .tmp    : true
+mkdir          : true
+exists after   : true
+listed count   : 1
+rename         : true
+exists renamed : true
+remove file    : true
+remove dir     : true
+exists after rm: false
+pid > 0      : true
+platform value: macos
+execute true : 0
+argv count >= 0: true
+sep is / or \: true
+lineSep ok   : true
+done

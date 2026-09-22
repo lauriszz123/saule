@@ -1,0 +1,12 @@
+  × `Amount` overloads `+`, but `+` dispatches on its left operand — which is
+  │ `integer`
+    ╭─[operator_dispatches_on_left.sau:19:21]
+ 18 │         local a: Amount = Amount(1)
+ 19 │         local b: Amount = 5 + a
+    ·                           ──┬──
+    ·                             ╰── left operand cannot drive this operator
+ 20 │         println(b.n)
+    ╰────
+  help: put the `Amount` value on the left, or give the left operand's type
+        its own `+` overload
+

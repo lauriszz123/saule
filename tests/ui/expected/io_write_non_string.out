@@ -1,0 +1,10 @@
+  × argument 2 of `Io.write` expects `string`, got `integer`
+   ╭─[io_write_non_string.sau:2:20]
+ 1 │ -- Io.write expects strings only; passing an integer is rejected.
+ 2 │ Io.write("hello ", 42)
+   ·                    ─┬
+   ·                     ╰── wrong argument type
+ 3 │ 
+   ╰────
+  help: pass a value of type `string` here — check the signature of `Io.write`
+

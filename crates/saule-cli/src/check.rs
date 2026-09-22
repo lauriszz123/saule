@@ -30,7 +30,7 @@ struct FileReport {
     /// Display name, only needed when reporting per-file coverage.
     name: String,
     /// `Some` only under `--dump-type-coverage`.
-    coverage: Option<saule_interpreter::typeck::Coverage>,
+    coverage: Option<saule_runtime::typeck::Coverage>,
 }
 
 /// `saule check [TARGET]` — dispatch on whether `TARGET` is a directory,
@@ -38,7 +38,7 @@ struct FileReport {
 pub(crate) fn cmd_check(target: Option<PathBuf>, dump_type_coverage: bool) {
     // Wire the stdlib's native signatures into `saule-typeck`. Idempotent,
     // but it has to have happened before typeck runs on the first file.
-    saule_interpreter::init();
+    saule_runtime::init();
 
     // One database for the whole run. Every file in a project imports some
     // of the same modules, and without this each one walks the shared part
@@ -164,22 +164,22 @@ fn check_file(db: &mut saule_db::Db, path: &Path, dump_type_coverage: bool) -> F
     // both passes report their full error list, and typeck runs even when
     // semantic found something: the two families rarely mask each other and a
     // developer would rather see both in one go.
-    for e in saule_interpreter::semantic::analyze_with_seed(&parsed.module, seed) {
+    for e in saule_runtime::semantic::analyze_with_seed(&parsed.module, seed) {
         diagnostics.push(Report::new(e).with_source_code(make_src()));
     }
     // Same walk either way — `check_with_types` is `check` plus a sink, so
     // asking for coverage cannot change which diagnostics are produced.
     let coverage = if dump_type_coverage {
-        let (errors, table) = saule_interpreter::typeck::check_with_types(&parsed.module);
+        let (errors, table) = saule_runtime::typeck::check_with_types(&parsed.module);
         for e in errors {
             diagnostics.push(Report::new(e).with_source_code(make_src()));
         }
-        Some(saule_interpreter::typeck::coverage::measure(
+        Some(saule_runtime::typeck::coverage::measure(
             &parsed.module,
             &table,
         ))
     } else {
-        for e in saule_interpreter::typeck::check(&parsed.module) {
+        for e in saule_runtime::typeck::check(&parsed.module) {
             diagnostics.push(Report::new(e).with_source_code(make_src()));
         }
         None
@@ -199,7 +199,7 @@ fn check_file(db: &mut saule_db::Db, path: &Path, dump_type_coverage: bool) -> F
 /// or `float`, so that percentage is what `VM_DESIGN.md` §24.1 sets its ~90%
 /// bar against. Everything else is context.
 fn report_coverage(reports: &[FileReport]) {
-    let mut total = saule_interpreter::typeck::Coverage::default();
+    let mut total = saule_runtime::typeck::Coverage::default();
     println!("type coverage:");
     for r in reports {
         let Some(c) = &r.coverage else { continue };

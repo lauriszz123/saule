@@ -246,7 +246,7 @@ impl Compiler<'_> {
     /// Whether a declaration here is a module slot rather than a register:
     /// the module body, outside any block.
     fn at_module_top(&self) -> bool {
-        self.f.name.as_deref() == Some("main") && self.f.regs.block_depth() == 0
+        self.f.is_module_body && self.f.regs.block_depth() == 0
     }
 
 }

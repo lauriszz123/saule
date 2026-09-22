@@ -1,0 +1,11 @@
+  × `double` expects 0 type argument(s), got 1
+    ╭─[generic_type_args_on_non_generic.sau:10:15]
+  9 │ 
+ 10 │ println(double<integer>(21))
+    ·               ────┬────
+    ·                   ╰── wrong number of type arguments
+    ╰────
+  help: the `<...>` at a call site supplies one type per type parameter the
+        function declares — write them all, or none and let them be inferred
+        from the arguments
+

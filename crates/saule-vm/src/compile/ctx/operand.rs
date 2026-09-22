@@ -30,6 +30,11 @@ impl Compiler<'_> {
     /// different question than the one asked.
     pub fn in_place_operand(&self, e: &saule_ast::Spanned<saule_ast::Expr>) -> Option<u16> {
         use saule_ast::Expr;
+        // A pinned sub-expression is a register by definition, and one
+        // nothing else writes until the statement that pinned it is done.
+        if let Some(&r) = self.pinned.get(&e.id) {
+            return Some(r);
+        }
         match &e.value {
             // `self` is parameter 0 by construction (§6.2); a static method
             // has no receiver, and `in_method` is exactly that distinction.
@@ -59,6 +64,9 @@ impl Compiler<'_> {
     /// there is no "in between" at all.
     pub fn operand_is_pure(&self, e: &saule_ast::Spanned<saule_ast::Expr>) -> bool {
         use saule_ast::{BinOp, Expr};
+        if self.pinned.contains_key(&e.id) {
+            return true;
+        }
         match &e.value {
             Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Nil => true,
             // Arithmetic on pure operands is itself pure — but **only** with

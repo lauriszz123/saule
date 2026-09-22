@@ -35,10 +35,13 @@
 //! post-order, and the two engines have to agree.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use saule_ast::{Decl, ImportNames, Module, Stmt};
+use saule_runtime::RuntimeError;
+use saule_runtime::error::ImportedDiagnostic;
 
 use crate::chunk::{Chunk, ClassIdx, EnumIdx, InterfaceIdx};
 use crate::compile::CompileError;
@@ -54,6 +57,10 @@ pub struct Program {
     pub modules: Vec<Rc<Chunk>>,
     /// Index into `modules` of the file the user asked to run.
     pub entry: usize,
+    /// Per module, the span of the entry file's `import` that first reached
+    /// it — `None` for the entry itself. An error raised while a module's
+    /// top level runs is reported against that `import`.
+    pub via: Vec<Option<Range<usize>>>,
 }
 
 impl Program {
@@ -69,7 +76,7 @@ impl Program {
 /// and `Button(...)` compiles to a plain `NEW`. Values are different: they
 /// need the exporting module to have *run*, so they travel through module
 /// slots (§14, "exported names land in the importing chunk's module slots").
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Export {
     Class(ClassIdx),
     Enum(EnumIdx),
@@ -77,6 +84,10 @@ pub enum Export {
     /// An exported `fn` or module variable, as a slot in the program's flat
     /// slot space — already rebased, so an importer can read it directly.
     Value { slot: u16 },
+    /// A native package's export that a barrel re-publishes. Native exports
+    /// are Rust-built values fixed before the program runs, so it travels
+    /// as the value itself and folds into a constant wherever it lands.
+    Native(saule_runtime::Value),
 }
 
 /// One module on its way from a path to a chunk.
@@ -88,6 +99,9 @@ pub struct Unit {
     pub ast: Module,
     /// Resolved import edges, in source order.
     pub imports: Vec<Edge>,
+    /// The entry file's `import` that first reached this module; `None` for
+    /// the entry. See [`Program::via`].
+    pub via: Option<Range<usize>>,
 }
 
 /// One `import` statement, with its target already resolved.
@@ -95,6 +109,8 @@ pub struct Edge {
     pub target: Target,
     pub names: ImportNames,
     pub span: std::ops::Range<usize>,
+    /// The path as the `import` wrote it, for naming it in a diagnostic.
+    pub raw: String,
 }
 
 /// What an `import` points at.
@@ -104,7 +120,7 @@ pub enum Target {
     /// A native package: Rust-built values with no Saule source behind
     /// them. Nothing to compile and nothing to run, so its exports are
     /// resolved at compile time like prelude names.
-    Native(std::collections::HashMap<String, saule_interpreter::Value>),
+    Native(std::collections::HashMap<String, saule_runtime::Value>),
     /// A dynamic native package: a TOML manifest plus a shared library.
     ///
     /// Folded at compile time like [`Native`](Target::Native), because the
@@ -116,7 +132,7 @@ pub enum Target {
     Dynamic {
         /// Import name, e.g. `engine`.
         package: String,
-        exports: std::collections::HashMap<String, saule_interpreter::Value>,
+        exports: std::collections::HashMap<String, saule_runtime::Value>,
     },
 }
 
@@ -127,32 +143,97 @@ pub enum ProgramError {
     #[diagnostic(transparent)]
     Compile(#[from] CompileError),
 
-    /// A module could not be read, parsed, or resolved.
+    /// A module the entry file imports is wrong — it could not be found,
+    /// read or parsed, it failed the front end, it names something another
+    /// module does not export, or it is part of an import cycle.
     ///
-    /// Deliberately *not* a hard error at the CLI: the tree-walker resolves
-    /// imports its own way and may well succeed where this does. Treated the
-    /// same as `Unsupported` — fall back and let the oracle produce the
-    /// user-facing diagnostic, so the two engines never disagree about
-    /// whether a program is valid.
-    #[error("cannot build a program from `{path}`: {detail}")]
-    Unreadable { path: String, detail: String },
+    /// Reported the way the language has always reported an import problem:
+    /// against the `import` in the entry file that led to it
+    /// (`RuntimeError::ImportFailed`), carrying the offending module's own
+    /// snippet inside — or, for a problem with one of the entry file's own
+    /// `import`s, as a plain `RuntimeError::ImportError` at that `import`.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Import(#[from] RuntimeError),
 
-    /// An import cycle. The tree-walker reports one at run time; refusing
-    /// here means the VM never tries to lay out a class whose parent is
-    /// still being laid out.
-    #[error("circular import involving `{path}`")]
-    Circular { path: String },
+    /// The entry file itself failed the front end. Only reachable through
+    /// [`compile`] on a file nobody checked first — `saule run` checks the
+    /// entry before it gets here — and carries its own snippet.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Entry(Box<ImportedDiagnostic>),
 }
 
-impl ProgramError {
-    /// Whether the CLI should fall back to the tree-walker rather than
-    /// surface this. True for everything except a genuine compiler bug.
-    pub fn is_fallback(&self) -> bool {
+/// A module that failed to load, on its way up the import graph.
+///
+/// Each level re-anchors it at the `import` that named the module below, so
+/// by the time it reaches the entry file it points at the entry's own
+/// `import` — the one line the user can see from where they are.
+enum Failure {
+    /// Wrong in the module that returned it, with that module's snippet
+    /// already attached.
+    Local {
+        diag: Box<ImportedDiagnostic>,
+        label: String,
+    },
+    /// Already an `ImportFailed` about a module further down, anchored at
+    /// an `import` in the module that returned it.
+    Nested(RuntimeError),
+    /// The file behind an `import` could not be read. Reported at that
+    /// `import`, so it belongs to the module that has one.
+    Unreadable(String),
+}
+
+impl Failure {
+    /// The failure as the module whose `import` at `span` named the failing
+    /// one sees it.
+    fn at_import(self, span: Range<usize>) -> Failure {
         match self {
-            ProgramError::Compile(CompileError::Unsupported { .. }) => true,
-            ProgramError::Compile(_) => false,
-            ProgramError::Unreadable { .. } | ProgramError::Circular { .. } => true,
+            Failure::Local { diag, label } => Failure::Nested(RuntimeError::ImportFailed {
+                module_label: label,
+                import_span: span,
+                inner: diag,
+            }),
+            Failure::Nested(RuntimeError::ImportFailed {
+                module_label,
+                inner,
+                ..
+            }) => Failure::Nested(RuntimeError::ImportFailed {
+                module_label,
+                import_span: span,
+                inner,
+            }),
+            Failure::Nested(other) => Failure::Nested(other),
+            Failure::Unreadable(message) => {
+                Failure::Nested(RuntimeError::ImportError { message, span })
+            }
         }
+    }
+
+    /// The failure as the whole program's result.
+    fn into_error(self) -> ProgramError {
+        match self {
+            Failure::Local { diag, .. } => ProgramError::Entry(diag),
+            Failure::Nested(e) => ProgramError::Import(e),
+            Failure::Unreadable(message) => {
+                ProgramError::Import(RuntimeError::ImportError { message, span: 0..0 })
+            }
+        }
+    }
+}
+
+/// `diag` as a problem in `unit`: plain for the entry file, whose snippet
+/// the caller already has, and otherwise anchored at the entry's `import`
+/// that reached `unit`.
+fn in_unit(unit: &Unit, diag: &dyn miette::Diagnostic) -> ProgramError {
+    let local = ImportedDiagnostic::from_inner(diag, unit.label.clone(), unit.source.clone());
+    match &unit.via {
+        None => ProgramError::Entry(Box::new(local)),
+        Some(span) => ProgramError::Import(RuntimeError::ImportFailed {
+            module_label: unit.label.clone(),
+            import_span: span.clone(),
+            inner: Box::new(local),
+        }),
     }
 }
 
@@ -167,6 +248,9 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
     let mut tables = crate::compile::Tables::default();
     let mut exports: Vec<HashMap<String, Export>> = vec![HashMap::new(); units.len()];
     let mut chunks: Vec<Chunk> = Vec::with_capacity(units.len());
+    // For naming the module an `import` asked for, in a diagnostic.
+    let paths: Vec<PathBuf> = units.iter().map(|u| u.path.clone()).collect();
+    let via: Vec<Option<Range<usize>>> = units.iter().map(|u| u.via.clone()).collect();
 
     for (i, unit) in units.iter_mut().enumerate() {
         let dir = unit
@@ -178,18 +262,27 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
         // The front end runs **per module**, and its two side tables cannot
         // be shared: `NodeId`s are per module and every module numbers from
         // zero, so one module's `TypeTable` entry would answer another
-        // module's question. Diagnostics are discarded — this function's
-        // precondition is that the program already checked clean, and the
-        // tree-walker is the engine that reports.
-        let seed = saule_interpreter::module::collect_import_seed(&unit.ast, &dir);
-        let (_, bindings) = saule_semantic::analyze_with_bindings(&unit.ast, seed);
+        // module's question.
+        //
+        // Its diagnostics are the only report an imported module gets:
+        // `saule run` checks the entry file, and nothing else reads the
+        // files it imports. The first one is reported, semantic before
+        // type, because the type pass assumes a structurally valid module.
+        let seed = saule_runtime::module::collect_import_seed(&unit.ast, &dir);
+        let (errors, bindings) = saule_semantic::analyze_with_bindings(&unit.ast, seed);
+        if let Some(e) = errors.first() {
+            return Err(in_unit(unit, e));
+        }
         // Resolving, not just checking: these units were parsed here, from
         // disk, so their `as` nodes have never met a typechecker. Compiling
-        // them unresolved would emit `CASTCHK` where the program — and the
-        // tree-walker running the same source — means a conversion.
-        let (_, types) = saule_typeck::check_and_resolve_with_types(&mut unit.ast);
+        // them unresolved would emit `CASTCHK` where the program means a
+        // conversion.
+        let (errors, types) = saule_typeck::check_and_resolve_with_types(&mut unit.ast);
+        if let Some(e) = errors.first() {
+            return Err(in_unit(unit, e));
+        }
 
-        let imported = imported_layouts(unit, &exports, &bindings)?;
+        let imported = imported_layouts(unit, &paths, &exports, &bindings)?;
         let (mut chunk, layouts) = crate::compile::compile_into(
             &unit.ast,
             &unit.label,
@@ -204,6 +297,13 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
             imported.natives,
         )?;
         chunk.dynamic_imports = imported.dynamic;
+        // An imported class or enum named as a value reads this module's
+        // own slot for it — see `Chunk::type_slots`.
+        for (local, ty) in imported.type_slots {
+            if let Ok(global) = u16::try_from(chunk.module_slot_base + local as usize) {
+                chunk.type_slots.push((global, ty));
+            }
+        }
         let exported =
             collect_exports(unit, chunk.module_slot_base, &layouts, &bindings, &exports)?;
         // A re-exported `fn` answers about its parameters at its new slot
@@ -236,6 +336,7 @@ pub fn compile(entry: &Path) -> Result<Program, ProgramError> {
     Ok(Program {
         modules,
         entry: entry_idx,
+        via,
     })
 }
 
@@ -258,10 +359,28 @@ struct Imported {
     /// Value bindings to copy in before the body runs.
     values: Vec<ImportBinding>,
     /// Native-package exports, folded at compile time.
-    natives: HashMap<String, saule_interpreter::Value>,
+    natives: HashMap<String, saule_runtime::Value>,
     /// Dynamic packages this module imports, in source order — see
     /// [`Chunk::dynamic_imports`], which this becomes.
     dynamic: Vec<(String, std::ops::Range<usize>)>,
+    /// Imported classes and enums, by this module's *local* slot for the
+    /// name — see [`Chunk::type_slots`].
+    type_slots: Vec<(u16, crate::chunk::TypeSlot)>,
+}
+
+/// The language's error for `import { name } from x` when `x` exports no
+/// `name` — the tree-walker's wording, reported in the importing module.
+fn not_exported(unit: &Unit, name: &str, from: &str, span: &Range<usize>) -> ProgramError {
+    let e = RuntimeError::ImportError {
+        message: format!("`{name}` is not exported from `{from}`"),
+        span: span.clone(),
+    };
+    // In the entry file it stays plain, so it renders against the source
+    // and name the caller already has.
+    match unit.via {
+        None => ProgramError::Import(e),
+        Some(_) => in_unit(unit, &e),
+    }
 }
 
 /// Bind a native package's exports into `natives` under the names the
@@ -269,20 +388,17 @@ struct Imported {
 /// exports exist, the two are the same thing to the compiler — a fixed set
 /// of values, resolved before the program runs.
 fn fold_native(
-    vals: &HashMap<String, saule_interpreter::Value>,
-    names: &ImportNames,
-    span: &std::ops::Range<usize>,
-    natives: &mut HashMap<String, saule_interpreter::Value>,
+    unit: &Unit,
+    edge: &Edge,
+    vals: &HashMap<String, saule_runtime::Value>,
+    natives: &mut HashMap<String, saule_runtime::Value>,
 ) -> Result<(), ProgramError> {
-    match names {
+    match &edge.names {
         ImportNames::All => natives.extend(vals.iter().map(|(k, v)| (k.clone(), v.clone()))),
         ImportNames::List(items) => {
             for (orig, alias) in items {
                 let Some(v) = vals.get(orig) else {
-                    return Err(ProgramError::Compile(CompileError::unsupported(
-                        "an import of a name the package does not export",
-                        span.clone(),
-                    )));
+                    return Err(not_exported(unit, orig, &edge.raw, &edge.span));
                 };
                 natives.insert(alias.clone().unwrap_or_else(|| orig.clone()), v.clone());
             }
@@ -293,19 +409,28 @@ fn fold_native(
 
 fn imported_layouts(
     unit: &Unit,
+    paths: &[PathBuf],
     exports: &[HashMap<String, Export>],
     bindings: &saule_semantic::Bindings,
 ) -> Result<Imported, ProgramError> {
     let mut out = crate::compile::layout::Layouts::default();
     let mut values: Vec<ImportBinding> = Vec::new();
-    let mut natives: HashMap<String, saule_interpreter::Value> = HashMap::new();
+    let mut natives: HashMap<String, saule_runtime::Value> = HashMap::new();
     let mut dynamic: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+    let mut type_slots = Vec::new();
+    let slot_of = |name: &str| {
+        bindings
+            .module_slots
+            .iter()
+            .position(|s| s.as_ref() == name)
+            .and_then(|i| u16::try_from(i).ok())
+    };
     for edge in &unit.imports {
         // A native package's exports fold at compile time, so they never
         // reach a module slot at all.
-        let from = match &edge.target {
+        let (from, from_path) = match &edge.target {
             Target::Native(vals) => {
-                fold_native(vals, &edge.names, &edge.span, &mut natives)?;
+                fold_native(unit, edge, vals, &mut natives)?;
                 continue;
             }
             // The same fold, plus a note to load the library at run time.
@@ -313,11 +438,11 @@ fn imported_layouts(
             // importing one package each load it where *they* would have,
             // and the cache in `load_library` makes the second a no-op.
             Target::Dynamic { package, exports } => {
-                fold_native(exports, &edge.names, &edge.span, &mut natives)?;
+                fold_native(unit, edge, exports, &mut natives)?;
                 dynamic.push((package.clone(), edge.span.clone()));
                 continue;
             }
-            Target::Module(i) => &exports[*i],
+            Target::Module(i) => (&exports[*i], &paths[*i]),
         };
         // `import * from x` binds every export; a named list binds the ones
         // it asks for, under the alias when there is one.
@@ -331,21 +456,28 @@ fn imported_layouts(
         for (orig, local) in wanted {
             match from.get(orig) {
                 Some(Export::Class(i)) => {
+                    if let Some(s) = slot_of(&local) {
+                        type_slots.push((s, crate::chunk::TypeSlot::Class(*i)));
+                    }
                     out.index.insert(local, *i);
                 }
                 Some(Export::Enum(i)) => {
+                    if let Some(s) = slot_of(&local) {
+                        type_slots.push((s, crate::chunk::TypeSlot::Enum(*i)));
+                    }
                     out.enums.insert(local, *i);
                 }
                 Some(Export::Interface(i)) => {
                     out.interfaces.insert(local, *i);
                 }
+                // A native package's export, re-published by a barrel: a
+                // constant, folded like any other native import.
+                Some(Export::Native(v)) => {
+                    natives.insert(local, v.clone());
+                }
                 Some(Export::Value { slot: from }) => {
                     let from = *from;
-                    let Some(local) = bindings
-                        .module_slots
-                        .iter()
-                        .position(|s| s.as_ref() == local.as_str())
-                    else {
+                    let Some(local) = slot_of(&local) else {
                         // No slot for a name the resolver did bind is a
                         // compiler bug, not a user error — refuse rather
                         // than drop the copy on the floor.
@@ -354,22 +486,11 @@ fn imported_layouts(
                             edge.span.clone(),
                         )));
                     };
-                    let Ok(local) = u16::try_from(local) else {
-                        return Err(ProgramError::Compile(CompileError::unsupported(
-                            "a program with over 65536 top-level names",
-                            edge.span.clone(),
-                        )));
-                    };
                     values.push(ImportBinding { local, from });
                 }
-                // A named import of something the target does not export.
-                // The tree-walker reports this at run time; refusing keeps
-                // the two engines agreeing about which programs are valid.
                 None => {
-                    return Err(ProgramError::Compile(CompileError::unsupported(
-                        "an import of a name the module does not export",
-                        edge.span.clone(),
-                    )));
+                    let from = from_path.display().to_string();
+                    return Err(not_exported(unit, orig, &from, &edge.span));
                 }
             }
         }
@@ -379,6 +500,7 @@ fn imported_layouts(
         values,
         natives,
         dynamic,
+        type_slots,
     })
 }
 
@@ -474,7 +596,7 @@ fn collect_exports(
     bindings: &saule_semantic::Bindings,
     exports: &[HashMap<String, Export>],
 ) -> Result<Exported, ProgramError> {
-    let barrel = saule_interpreter::module::is_init_module(&unit.path);
+    let barrel = saule_runtime::module::is_init_module(&unit.path);
     let mut out = HashMap::new();
     let mut value_aliases = Vec::new();
     // `unit.imports` is one edge per `Decl::Import`, in source order, so a
@@ -502,17 +624,26 @@ fn collect_exports(
                     Target::Module(i) => &exports[*i],
                     // A native package's exports are folded into constants
                     // at compile time — they reach no module slot and no
-                    // layout table, so there is no `Export` to forward. The
-                    // tree-walker's barrel *would* republish them, and
-                    // dropping them here would be a silent divergence, so
-                    // this refuses and lets the tree-walker run the program.
-                    // No example does it; the refusal is stated rather than
-                    // discovered.
-                    Target::Native(_) | Target::Dynamic { .. } => {
-                        return Err(ProgramError::Compile(CompileError::unsupported(
-                            "a barrel module re-exporting a native package",
-                            this.span.clone(),
-                        )));
+                    // layout table — so the barrel republishes the values
+                    // themselves, and each importer folds them in turn. A
+                    // dynamic package's library is loaded when the barrel
+                    // runs, which post-order puts before any importer.
+                    Target::Native(vals) | Target::Dynamic { exports: vals, .. } => {
+                        let pairs: Vec<(String, &String)> = match names {
+                            ImportNames::All => vals.keys().map(|k| (k.clone(), k)).collect(),
+                            ImportNames::List(items) => items
+                                .iter()
+                                .map(|(orig, alias)| {
+                                    (alias.clone().unwrap_or_else(|| orig.clone()), orig)
+                                })
+                                .collect(),
+                        };
+                        for (local, orig) in pairs {
+                            if let Some(v) = vals.get(orig) {
+                                out.insert(local, Export::Native(v.clone()));
+                            }
+                        }
+                        continue;
                     }
                 };
                 // The names this import bound *locally* — under their
@@ -554,39 +685,61 @@ fn collect_exports(
 /// imports has been pushed, so `units[i]` never depends on `units[j]` for
 /// `j > i`.
 pub fn load_units(entry: &Path) -> Result<(Vec<Unit>, usize), ProgramError> {
+    load_units_inner(entry).map_err(Failure::into_error)
+}
+
+fn load_units_inner(entry: &Path) -> Result<(Vec<Unit>, usize), Failure> {
     let mut units: Vec<Unit> = Vec::new();
     let mut index: HashMap<PathBuf, usize> = HashMap::new();
     let mut in_flight: HashSet<PathBuf> = HashSet::new();
-    let entry_idx = load_one(entry, &mut units, &mut index, &mut in_flight)?;
+    let entry_idx = load_one(entry, None, &mut units, &mut index, &mut in_flight)?;
     Ok((units, entry_idx))
 }
 
+/// Load the module at `path` and, first, everything it imports.
+///
+/// `via` is the span of the entry file's `import` this module was reached
+/// through — `None` for the entry. A failure comes back anchored in the
+/// module that has the problem (see [`Failure`]); each caller re-anchors it
+/// at its own `import` on the way up.
 fn load_one(
     path: &Path,
+    via: Option<Range<usize>>,
     units: &mut Vec<Unit>,
     index: &mut HashMap<PathBuf, usize>,
     in_flight: &mut HashSet<PathBuf>,
-) -> Result<usize, ProgramError> {
+) -> Result<usize, Failure> {
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Some(&i) = index.get(&abs) {
         return Ok(i);
     }
-    if !in_flight.insert(abs.clone()) {
-        return Err(ProgramError::Circular {
-            path: abs.display().to_string(),
-        });
-    }
+    in_flight.insert(abs.clone());
 
-    let unreadable = |detail: String| ProgramError::Unreadable {
-        path: abs.display().to_string(),
-        detail,
+    let source = std::fs::read_to_string(&abs).map_err(|e| {
+        Failure::Unreadable(format!("could not read `{}`: {e}", abs.display()))
+    })?;
+    let label = saule_runtime::project::pretty_path(&abs);
+    // A problem in this module, reported with its own snippet.
+    let here = |e: &dyn miette::Diagnostic| Failure::Local {
+        diag: Box::new(ImportedDiagnostic::from_inner(e, label.clone(), source.clone())),
+        label: label.clone(),
+    };
+    // A problem with one of this module's own `import`s. In the entry file
+    // it stays plain, so it renders against the source and name the caller
+    // already has.
+    let import_error = |message: String, span: &Range<usize>| {
+        let e = RuntimeError::ImportError {
+            message,
+            span: span.clone(),
+        };
+        match via {
+            None => Failure::Nested(e),
+            Some(_) => here(&e),
+        }
     };
 
-    let source = std::fs::read_to_string(&abs).map_err(|e| unreadable(e.to_string()))?;
-    let tokens = saule_lexer::Lexer::new(&source)
-        .tokenize()
-        .map_err(|e| unreadable(e.to_string()))?;
-    let ast = saule_parser::parse(tokens).map_err(|e| unreadable(e.to_string()))?;
+    let tokens = saule_lexer::Lexer::new(&source).tokenize().map_err(|e| here(&e))?;
+    let ast = saule_parser::parse(tokens).map_err(|e| here(&e))?;
 
     let dir = abs
         .parent()
@@ -601,19 +754,24 @@ fn load_one(
         let Decl::Import { names, path: raw, .. } = &d.value else {
             continue;
         };
-        let Some(target_path) = saule_interpreter::module::resolve_import_path(&dir, raw) else {
-            return Err(unreadable(format!("could not resolve import `{raw}`")));
+        let Some(target_path) = saule_runtime::module::resolve_import_path(&dir, raw) else {
+            return Err(import_error(
+                format!(
+                    "could not find module `{raw}` (looked for `.sau` / `.saule` / `init.sau`)"
+                ),
+                &d.span,
+            ));
         };
         // A native package is a bag of Rust-built values with no Saule
         // source behind it, so there is nothing to compile: its exports are
         // known before the program starts, exactly like the prelude.
         let target = if let Some(pkg) =
-            saule_interpreter::native_packages::name_from_sentinel(&target_path)
-                .and_then(saule_interpreter::native_packages::lookup)
+            saule_runtime::native_packages::name_from_sentinel(&target_path)
+                .and_then(saule_runtime::native_packages::lookup)
         {
-            Target::Native(saule_interpreter::native_packages::build_exports(pkg).values)
+            Target::Native(saule_runtime::native_packages::build_exports(pkg).values)
         } else if let Some(pkg) =
-            saule_interpreter::dynamic_packages::name_from_sentinel(&target_path)
+            saule_runtime::dynamic_packages::name_from_sentinel(&target_path)
         {
             // A manifest-described shared library. The manifest is the part
             // the compiler needs — class names, method names, parameter
@@ -625,40 +783,61 @@ fn load_one(
             // The `dlopen` remains a runtime side effect that compiling must
             // not perform. It is recorded on the chunk instead and performed
             // by `run_program` just before this module's body runs.
-            match saule_interpreter::dynamic_packages::build_exports_deferred(pkg) {
+            match saule_runtime::dynamic_packages::build_exports_deferred(pkg) {
                 Some(e) => Target::Dynamic {
                     package: pkg.to_string(),
                     exports: e.values,
                 },
                 // No manifest behind the sentinel, or a build without
-                // dynamic loading at all (wasm). Refuse and let the
-                // tree-walker produce the diagnostic.
+                // dynamic loading at all (wasm). The eager loader says which
+                // — without loading anything, since both cases fail before
+                // it reaches a library.
                 None => {
-                    return Err(ProgramError::Compile(CompileError::unsupported(
-                        "an import of a dynamic native package",
-                        d.span.clone(),
-                    )));
+                    let e = saule_runtime::dynamic_packages::build_exports(pkg, d.span.clone())
+                        .err()
+                        .unwrap_or_else(|| RuntimeError::ImportError {
+                            message: format!("native package `{pkg}` could not be loaded"),
+                            span: d.span.clone(),
+                        });
+                    return Err(here(&e));
                 }
             }
         } else {
-            Target::Module(load_one(&target_path, units, index, in_flight)?)
+            let child = target_path
+                .canonicalize()
+                .unwrap_or_else(|_| target_path.clone());
+            // Still loading: this `import` closes a cycle, and it is this
+            // module's `import` that does it.
+            if in_flight.contains(&child) && !index.contains_key(&child) {
+                return Err(import_error(
+                    format!("circular import detected at `{}`", child.display()),
+                    &d.span,
+                ));
+            }
+            // The entry file's own `import`s are where a failure below it is
+            // reported; deeper modules inherit the one that reached them.
+            let child_via = via.clone().or_else(|| Some(d.span.clone()));
+            let i = load_one(&target_path, child_via, units, index, in_flight)
+                .map_err(|f| f.at_import(d.span.clone()))?;
+            Target::Module(i)
         };
         imports.push(Edge {
             target,
             names: names.clone(),
             span: d.span.clone(),
+            raw: raw.clone(),
         });
     }
 
     in_flight.remove(&abs);
 
-    let label = saule_interpreter::project::pretty_path(&abs);
     units.push(Unit {
         path: abs.clone(),
         label,
         source,
         ast,
         imports,
+        via,
     });
     let i = units.len() - 1;
     index.insert(abs, i);

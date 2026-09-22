@@ -1,0 +1,14 @@
+  × `Derived.get` does not match `Base.get`: the parent returns `integer`,
+  │ this returns `string`
+    ╭─[override_return_type.sau:17:3]
+ 16 │     
+ 17 │ ╭─▶   fn get() -> string
+ 18 │ │       return "not an integer"
+ 19 │ ├─▶   end
+    · ╰──── incompatible override
+ 20 │     end
+    ╰────
+  help: an override has to be usable everywhere the parent's version is — same
+        parameter types, same arity, and a return type the parent's callers
+        can accept. Rename the method if it isn't meant to override.
+

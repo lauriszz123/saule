@@ -1,0 +1,11 @@
+  × default value for parameter `times` is incompatible with declared type
+  │ `integer`
+   ╭─[default_param_type_mismatch.sau:4:27]
+ 3 │ 
+ 4 │ fn greet(times: integer = "hi") -> string
+   ·                           ──┬─
+   ·                             ╰── default here
+ 5 │   return tostring(times)
+   ╰────
+  help: the default expression must produce a value of type `integer`
+

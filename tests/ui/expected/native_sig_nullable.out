@@ -1,0 +1,12 @@
+  × cannot assign a nullable value of type `integer?` to non-nullable type
+  │ `integer`
+   ╭─[native_sig_nullable.sau:5:27]
+ 4 │   static fn main()
+ 5 │     local code: integer = String.byte("a")
+   ·                           ────────┬───────
+   ·                                   ╰── this expression may be `nil`
+ 6 │     println(code)
+   ╰────
+  help: guard with `if x != nil then ... end`, use `??` to provide a fallback,
+        or force-unwrap with `!`
+

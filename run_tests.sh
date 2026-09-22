@@ -4,20 +4,33 @@
 #   tests/*.sau      must run and exit 0
 #   tests/ui/*.sau   must fail — each one exists to pin a specific diagnostic
 #
-# Exits non-zero if any fixture is on the wrong side of that line, so CI can
-# gate on it. `SAULE_BIN` overrides the binary (e.g. to test a release build).
+# and in both cases print exactly what `expected/<name>.out` beside it says —
+# stdout and stderr together, diagnostics included. Exit status alone is a
+# weak check, and weak in exactly the place that matters: a bug that prints
+# the wrong value while still exiting 0 passes silently.
 #
-# SAULE_DIFF=1 runs every fixture under **both** engines and requires the
-# output to be identical, not just the exit status.
+# The expected outputs were recorded from the tree-walking interpreter, the
+# engine that defined the language until it was removed; every one was also
+# the bytecode VM's output then, so they still say what the language means.
 #
-#   Exit status alone is a weak check, and it is weak in exactly the place
-#   that matters: a VM bug that prints the wrong value while still exiting 0
-#   passes silently. `OpToString` did precisely that — `<instance of Money>`
-#   where the tree-walker prints `300c`, no error anywhere. This mode turns
-#   all 235 fixtures into conformance tests at no authoring cost, which is
-#   what `VM_TASKS.md` asks for under "Cross-cutting: testing".
-SAULE_BIN="${SAULE_BIN:-./target/debug/saule}"
-SAULE_DIFF="${SAULE_DIFF:-}"
+# Exits non-zero if any fixture is on the wrong side of either line, so CI
+# can gate on it. `SAULE_BIN` overrides the binary (e.g. to test a release
+# build).
+#
+# SAULE_BLESS=1 writes each fixture's output to its expected file instead of
+# comparing — for a new fixture, or a deliberate change in behaviour. Read
+# the resulting diff before committing it: it is the specification.
+SAULE_BIN="${SAULE_BIN:-}"
+SAULE_BLESS="${SAULE_BLESS:-}"
+
+# Default to whichever of the two names exists: Windows builds `saule.exe`.
+if [ -z "$SAULE_BIN" ]; then
+  if [ -x ./target/debug/saule ]; then
+    SAULE_BIN=./target/debug/saule
+  else
+    SAULE_BIN=./target/debug/saule.exe
+  fi
+fi
 
 if [ ! -x "$SAULE_BIN" ]; then
   echo "error: $SAULE_BIN not found — run 'cargo build -p saule-cli' first" >&2
@@ -27,62 +40,58 @@ fi
 failures=0
 total=0
 
-# A fallback note is the VM *declining* to compile something, which is a
-# designed outcome and not a behavioural difference. Everything else must
-# match character for character.
-strip_notes() {
-  grep -v '^note: the bytecode compiler does not handle ' || true
-}
-
-# Fixtures whose engines are *meant* to disagree. Each needs a reason, and
-# the count is reported at the end so this list cannot grow unnoticed —
-# an exemption you cannot see is just a failing test you stopped reading.
-diff_exempt() {
+# Fixtures whose output cannot be pinned, each with a reason. Their exit
+# status is still checked. Counted at the end, so this list cannot grow
+# unnoticed — an exemption you cannot see is a failing test you stopped
+# reading.
+output_exempt() {
   case "$1" in
-    # VM_DESIGN.md §6.4: the VM counts *frames* and deliberately allows two
-    # orders of magnitude more nesting than the tree-walker's eval depth, so
-    # the limit named in the message differs by design. Both still report a
-    # stack overflow, which is the behaviour this fixture pins.
-    tests/ui/stack_overflow_recursion.sau) return 0 ;;
-    # Same rule, reached through the re-entrancy path: a comparator that
-    # sorts with itself. Each level crosses the engine boundary, so the VM
-    # bounds it with the interpreter's shared depth guard rather than with
-    # `max_frames` — and the limit each engine names still differs by design.
+    # Both profiles report, but not the same way: a level of re-entrant
+    # nesting costs several times more stack in a debug build, so it runs
+    # out of the thread's stack where a release build reaches the level
+    # count first. The message differs accordingly — and so does how many
+    # times `Table.sort: comparator failed:` is wrapped around it. That the
+    # run *reports* rather than dying is what this fixture pins.
     tests/ui/stack_overflow_reentrant.sau) return 0 ;;
     *) return 1 ;;
   esac
 }
 exempted=0
 
-# Run one fixture under both engines and compare. Echoes a diff and returns
-# non-zero when they disagree.
-compare_engines() {
-  local f="$1" interp vm
-  interp=$(SAULE_ENGINE=interp "$SAULE_BIN" run "$f" 2>&1 | strip_notes)
-  vm=$(SAULE_ENGINE=vm "$SAULE_BIN" run "$f" 2>&1 | strip_notes)
-  if [ "$interp" = "$vm" ]; then
+# Compare (or, when blessing, record) one fixture's output. Echoes a diff
+# and returns non-zero when it differs.
+check_output() {
+  local f="$1" out="$2" expected
+  expected="$(dirname "$f")/expected/$(basename "$f" .sau).out"
+  if [ -n "$SAULE_BLESS" ]; then
+    printf '%s\n' "$out" > "$expected"
     return 0
   fi
-  diff <(printf '%s\n' "$interp") <(printf '%s\n' "$vm") | head -12 | sed 's/^/     /'
+  if [ ! -f "$expected" ]; then
+    echo "     no expected output — run with SAULE_BLESS=1 to record it"
+    return 1
+  fi
+  if [ "$out" = "$(cat "$expected")" ]; then
+    return 0
+  fi
+  diff "$expected" <(printf '%s\n' "$out") | head -12 | sed 's/^/     /'
   return 1
 }
 
 echo '== positive tests =='
 for f in tests/*.sau; do
   total=$((total + 1))
-  if ! out=$("$SAULE_BIN" run "$f" 2>&1); then
+  if ! out=$("$SAULE_BIN" run "$f" 2>&1 </dev/null); then
     printf 'FAIL %s\n' "$f"
     echo "$out" | head -5 | sed 's/^/     /'
     failures=$((failures + 1))
     continue
   fi
-  if [ -n "$SAULE_DIFF" ] && ! diff_exempt "$f"; then
-    if ! d=$(compare_engines "$f"); then
-      printf 'FAIL %s (engines disagree)\n' "$f"
-      printf '%s\n' "$d"
-      failures=$((failures + 1))
-      continue
-    fi
+  if ! output_exempt "$f" && ! d=$(check_output "$f" "$out"); then
+    printf 'FAIL %s (output differs)\n' "$f"
+    printf '%s\n' "$d"
+    failures=$((failures + 1))
+    continue
   fi
   printf 'OK   %s\n' "$f"
 done
@@ -91,39 +100,34 @@ echo
 echo '== ui tests (expected to error) =='
 for f in tests/ui/*.sau; do
   total=$((total + 1))
-  if "$SAULE_BIN" run "$f" >/dev/null 2>&1; then
+  if out=$("$SAULE_BIN" run "$f" 2>&1 </dev/null); then
     printf 'FAIL %s (did not error)\n' "$f"
     failures=$((failures + 1))
     continue
   fi
-  # These exist to pin a specific *diagnostic*, so under SAULE_DIFF the
-  # message itself has to match too — a VM that errors for a different
-  # reason is not the same behaviour.
-  if [ -n "$SAULE_DIFF" ] && ! diff_exempt "$f"; then
-    if ! d=$(compare_engines "$f"); then
-      printf 'FAIL %s (engines disagree)\n' "$f"
-      printf '%s\n' "$d"
-      failures=$((failures + 1))
-      continue
-    fi
+  # These exist to pin a specific *diagnostic*, so the message itself has to
+  # match too — erroring for a different reason is not the same behaviour.
+  if ! output_exempt "$f" && ! d=$(check_output "$f" "$out"); then
+    printf 'FAIL %s (diagnostic differs)\n' "$f"
+    printf '%s\n' "$d"
+    failures=$((failures + 1))
+    continue
   fi
   printf 'OK   %s\n' "$f"
 done
 
 echo
-if [ -n "$SAULE_DIFF" ]; then
-  for f in tests/*.sau tests/ui/*.sau; do
-    diff_exempt "$f" && exempted=$((exempted + 1))
-  done
-  if [ "$exempted" -gt 0 ]; then
-    echo "note: $exempted fixture(s) exempt from the engine diff — see diff_exempt()"
-  fi
+for f in tests/*.sau tests/ui/*.sau; do
+  output_exempt "$f" && exempted=$((exempted + 1))
+done
+if [ "$exempted" -gt 0 ]; then
+  echo "note: $exempted fixture(s) exempt from the output check — see output_exempt()"
+fi
+if [ -n "$SAULE_BLESS" ]; then
+  echo "recorded the output of $total fixtures — review the diff"
+  exit 0
 fi
 if [ "$failures" -eq 0 ]; then
-  if [ -n "$SAULE_DIFF" ]; then
-    echo "all $total fixtures behaved as expected, and both engines agree on their output"
-    exit 0
-  fi
   echo "all $total fixtures behaved as expected"
   exit 0
 fi

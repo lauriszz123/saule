@@ -1,0 +1,31 @@
+-- permissions --
+read      = r--
+rw        = rw-
+rwx       = rwx
+rwx & rw  = rw-
+rwx ~ rw  = --x
+~rw       = --x
+rw == r|w? true
+rwx has rw? true
+rw has x?   false
+rwx drop w = r-x
+octal 6   = rw-
+octal 5   = r-x
+
+-- colours --
+packed    = #FF8C00FF
+r,g,b,a   = 255, 140, 0, 255
+swapped   = #008CFFFF
+half alpha = #FF8C0080
+
+-- two rules --
+-8 >> 1           = 9223372036854775804
+-8 / 2            = -4
+1 << -1           = 0
+16 >> -2          = 64
+1 << 64           = 0
+1 | 2 & 3         = 3  (1 | (2 & 3))
+1 | 1 << 3        = 9  (1 | (1 << 3))
+1 << 2 + 1        = 8  (1 << (2 + 1))
+6 & 4 != 0        = true  ((6 & 4) != 0)
+[exit 0]

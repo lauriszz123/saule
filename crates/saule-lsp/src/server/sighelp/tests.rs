@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::{ParameterLabel, SignatureInformation};
 
 fn init_stdlib() {
     static ONCE: Once = Once::new();
-    ONCE.call_once(saule_interpreter::init);
+    ONCE.call_once(saule_runtime::init);
 }
 
 fn help(src: &str, cursor_at: &str, offset_into: usize) -> Option<SignatureHelp> {
@@ -1319,7 +1319,7 @@ fn an_imported_free_function_reports_its_signature() {
     let src = "import * from kit\n\nfn build()\n  showToast(1, \"hi\")\nend\n";
     let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
     let module = saule_parser::parse(tokens).expect("parse");
-    let seed = saule_interpreter::module::collect_import_seed(&module, &dir);
+    let seed = saule_runtime::module::collect_import_seed(&module, &dir);
     let _ = saule_semantic::analyze_with_seed(&module, seed);
 
     let at = src.find("showToast(1").expect("call") + "showToast(".len();

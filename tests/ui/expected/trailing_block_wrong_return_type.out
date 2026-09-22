@@ -1,0 +1,11 @@
+  × return value of type `string` is incompatible with declared return type
+  │ `integer`
+    ╭─[trailing_block_wrong_return_type.sau:13:10]
+ 12 │ local doubled: table<integer> = mapEach({1, 2}) do (n) -> integer
+ 13 │   return "not an integer"
+    ·          ────────┬───────
+    ·                  ╰── returned `string` here
+ 14 │ end
+    ╰────
+  help: this function must return a `integer`
+

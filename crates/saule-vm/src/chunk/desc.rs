@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use saule_interpreter::value::FieldLayout;
+use saule_runtime::value::FieldLayout;
 
 use super::{ClassIdx, ConstIdx, EnumIdx, InterfaceIdx, ProtoIdx};
 
@@ -200,7 +200,7 @@ pub enum TypeDesc {
 /// dispatch loop can answer with a tag compare.
 ///
 /// **Why this exists.** Both opcodes called
-/// `saule_interpreter::eval::expr::cast::cast`, which walks a
+/// `saule_runtime::eval::expr::cast::cast`, which walks a
 /// [`saule_ast::Type`] and ends in `matches_named` — a `match` on a `&str`.
 /// So proving that an `Int` is an `integer` meant string comparisons, every
 /// time the instruction ran: measured at **10.3ns per `CASTUNWRAP`**, and
@@ -274,8 +274,8 @@ impl CastFast {
 
     /// Answer the test, or `None` when only `cast::cast` can.
     #[inline(always)]
-    pub fn eval(self, v: &saule_interpreter::Value) -> Option<bool> {
-        use saule_interpreter::Value;
+    pub fn eval(self, v: &saule_runtime::Value) -> Option<bool> {
+        use saule_runtime::Value;
         if self.test == CastTest::Deep {
             return None;
         }

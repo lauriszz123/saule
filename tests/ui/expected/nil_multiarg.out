@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `string`
+   ╭─[nil_multiarg.sau:3:34]
+ 2 │   static fn main()
+ 3 │     local a: string, b: string = nil, "this is bad"
+   ·                                  ─┬─
+   ·                                   ╰── `nil` not allowed here
+ 4 │   end
+   ╰────
+  help: mark the type nullable with `?` (e.g. `string?`) or initialize it with
+        a non-nil value
+

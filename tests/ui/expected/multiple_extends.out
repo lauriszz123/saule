@@ -1,0 +1,10 @@
+  × expected a class member (`[local] name: type`, `fn`, or `static`), found
+  │ `,`
+    ╭─[multiple_extends.sau:11:18]
+ 10 │ 
+ 11 │ class C extends A, B
+    ·                  ┬
+    ·                  ╰── here
+ 12 │   fn init()
+    ╰────
+

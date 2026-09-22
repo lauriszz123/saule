@@ -1,0 +1,13 @@
+  × `match` arms produce incompatible types: `string` vs `integer`
+    ╭─[match_arm_type_mismatch.sau:12:31]
+ 11 │             local s: Status = Status.Ok
+ 12 │ ╭─▶         local value: string = match s
+ 13 │ │               case Status.Ok then "fine"
+ 14 │ │               case Status.Warn then 42
+ 15 │ │               case Status.Error then "oops"
+ 16 │ ├─▶         end
+    · ╰──── arms disagree on result type
+ 17 │             println(value)
+    ╰────
+  help: every arm of a `match` expression must evaluate to the same type
+

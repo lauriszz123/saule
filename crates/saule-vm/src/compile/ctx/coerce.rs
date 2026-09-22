@@ -134,7 +134,7 @@ impl Compiler<'_> {
         let (bitr, testr) = (self.reg8(bit, span)?, self.reg8(test, span)?);
         for (k, p) in params.iter().enumerate() {
             let Some(d) = &p.default else { continue };
-            let kbit = self.constant(saule_interpreter::Value::Int(1i64 << k), span)?;
+            let kbit = self.constant(saule_runtime::Value::Int(1i64 << k), span)?;
             self.emit(Instruction::abx(Op::LOADK, bitr, kbit), span);
             self.emit(Instruction::abc(Op::BAND, testr, maskr, bitr), span);
             // `JNEII` skips the next instruction when the bit is set, so the

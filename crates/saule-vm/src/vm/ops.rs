@@ -8,8 +8,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_interpreter::value::TableObject;
-use saule_interpreter::{RuntimeError, Value};
+use saule_runtime::value::TableObject;
+use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::Proto;
 use crate::op::Instruction;
@@ -187,7 +187,7 @@ fn cast_holds_deep(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> bool {
     chunk
         .cast_types
         .get(idx)
-        .is_some_and(|t| saule_interpreter::eval::expr::cast::cast(v, t))
+        .is_some_and(|t| saule_runtime::cast::cast(v, t))
 }
 
 /// Convert the value in `v` to `cast_types[idx]`.
@@ -199,7 +199,7 @@ fn cast_holds_deep(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> bool {
 /// panicking is the choice `cast_holds_deep` makes for the same situation.
 pub(crate) fn convert_to(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> Value {
     match chunk.cast_types.get(idx) {
-        Some(t) => saule_interpreter::eval::expr::cast::convert(v, t),
+        Some(t) => saule_runtime::cast::convert(v, t),
         None => Value::Nil,
     }
 }
@@ -250,7 +250,7 @@ pub(crate) fn snapshot_pairs(t: &TableObject) -> Vec<Value> {
         out.push(Value::Int(i as i64 + 1));
         out.push(v.clone());
     }
-    let mut entries: Vec<(&saule_interpreter::value::TableKey, &Value)> = t.map.iter().collect();
+    let mut entries: Vec<(&saule_runtime::value::TableKey, &Value)> = t.map.iter().collect();
     // `TableKey`'s own order, which is the tree-walker's order too — see the
     // comment on its `Ord`. This used to sort on `k.display()`, which built a
     // `String` per *comparison* (`sort_by_key` re-runs its key function, it

@@ -1,0 +1,11 @@
+  × stack overflow: evaluation nested more than 10000 levels deep
+    ╭─[stack_overflow_recursion.sau:13:26]
+ 12 │ local fn forever(n: integer) -> integer
+ 13 │     local deeper: integer = forever(n + 1)
+    ·                             ───────┬──────
+    ·                                    ╰── while evaluating this
+ 14 │     return deeper
+    ╰────
+  help: this is usually unbounded recursion — check that the recursive call
+        has a base case
+

@@ -1,0 +1,11 @@
+  × uncaught exception: boom
+   ╭─[throw_uncaught.sau:5:5]
+ 4 │   static fn main()
+ 5 │     throw "boom"
+   ·     ──────┬─────
+   ·           ╰── uncaught `throw`
+ 6 │   end
+   ╰────
+  help: wrap the throwing code in `try ... catch e: <Type> ... end` to handle
+        it
+

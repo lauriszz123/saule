@@ -1,0 +1,10 @@
+  × `break` is only valid inside a loop
+   ╭─[break_outside_loop.sau:5:5]
+ 4 │   static fn main()
+ 5 │     break
+   ·     ──┬──
+   ·       ╰── not inside a loop
+ 6 │   end
+   ╰────
+  help: move this inside a `for`, `while`, or `repeat` loop
+

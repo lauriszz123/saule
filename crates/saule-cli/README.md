@@ -67,7 +67,7 @@ lines up with the options an editor sends the language server.
 | Module    | Responsibility                                         |
 |-----------|--------------------------------------------------------|
 | `cli`     | The `clap` command surface — definitions only          |
-| `run`     | File / project execution (lex → parse → typeck → `Main`) |
+| `run`     | File / project execution (lex → parse → typeck → compile → run → `Main`) |
 | `project` | `saule.config` parsing and project-mode bootstrap      |
 | `init`    | Project scaffolding                                    |
 | `fmt`     | `saule fmt` front-end over `saule-fmt`                 |
@@ -78,4 +78,4 @@ it. Trailing args are exposed to scripts via `Os.args()`.
 ## Dependencies
 
 `saule-ast`, `saule-lexer`, `saule-parser`, `saule-semantic`,
-`saule-interpreter`, `saule-fmt`.
+`saule-runtime`, `saule-vm`, `saule-fmt`.

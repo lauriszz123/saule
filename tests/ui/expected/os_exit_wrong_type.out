@@ -1,0 +1,11 @@
+  × argument 1 of `Os.exit` expects `integer?`, got `string`
+   ╭─[os_exit_wrong_type.sau:2:9]
+ 1 │ -- Os.exit expects an integer, not a string.
+ 2 │ Os.exit("bye")
+   ·         ──┬──
+   ·           ╰── wrong argument type
+ 3 │ 
+   ╰────
+  help: pass a value of type `integer?` here — check the signature of
+        `Os.exit`
+

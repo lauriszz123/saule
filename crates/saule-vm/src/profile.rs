@@ -124,8 +124,8 @@ pub fn record(prev: Option<Op>, op: Op) {
 ///
 /// `None` when [`enable`] was never called, which is how the CLI tells "the
 /// program ran without profiling" from "the program ran no bytecode" — the
-/// second happens whenever the compiler falls back to the tree-walker, and
-/// an empty report is the honest answer there rather than a missing one.
+/// second happens when a program fails before it starts, and an empty
+/// report is the honest answer there rather than a missing one.
 pub fn take() -> Option<Report> {
     let counters = COUNTERS.with(|c| c.borrow_mut().take())?;
     let mut ops: Vec<(Op, u64)> = Op::ALL
@@ -176,9 +176,7 @@ impl Report {
         let mut s = String::new();
 
         if self.total == 0 {
-            return "bytecode profile: no instructions executed — \
-                    the program ran on the tree-walker\n"
-                .into();
+            return "bytecode profile: no instructions executed\n".into();
         }
 
         let _ = writeln!(
@@ -294,11 +292,11 @@ mod tests {
     }
 
     #[test]
-    fn a_report_with_no_instructions_says_the_tree_walker_ran_it() {
+    fn a_report_with_no_instructions_says_so() {
         enable();
         let r = take().expect("enabled");
         assert_eq!(r.total, 0);
-        assert!(r.render(10).contains("tree-walker"));
+        assert!(r.render(10).contains("no instructions executed"));
     }
 
     #[test]

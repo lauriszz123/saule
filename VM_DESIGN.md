@@ -1,11 +1,13 @@
 # Saule Bytecode VM — Design and Implementation Plan
 
-> **Status:** in progress. `crates/saule-vm` exists and runs — the instruction
-> encoding, chunk model, disassembler, and the core dispatch loop are
-> implemented (§21.2 and most of §21.3's runtime half). There is no compiler
-> yet, and Phase 0 is untouched. **`VM_TASKS.md` is the live checklist**;
-> this document remains the specification.
-> **Audience:** anyone working on `crates/saule-vm`, `crates/saule-interpreter`,
+> **Status:** done, and the only engine. The VM compiles and runs the whole
+> language; the tree-walking interpreter it was designed alongside has been
+> removed, and the runtime the two shared is its own crate,
+> `crates/saule-runtime`. This document is kept as the design record: its
+> references to the tree-walker, to falling back, and to `saule-interpreter`
+> describe how the VM was built, not how Saule is structured now (§22 in
+> particular). **`VM_TASKS.md` is the live checklist.**
+> **Audience:** anyone working on `crates/saule-vm`, `crates/saule-runtime`,
 > `crates/saule-typeck`, or `crates/saule-semantic`.
 > **Companion documents:** `PRODUCTION.md` §"How fast is it?" and Appendix A for
 > the measurements this design is arguing against; `README.md` for language

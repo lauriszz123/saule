@@ -1,0 +1,12 @@
+  × module variable `appName` is never initialized
+   ╭─[module_variable_uninitialized.sau:4:8]
+ 3 │ -- or mark the type `string?`.
+ 4 │ export appName: string
+   ·        ───┬───
+   ·           ╰── declared without a value
+ 5 │ 
+   ╰────
+  help: give it a value (`export appName: string = ...`) or mark the type
+        nullable with `?` — a module variable has no constructor to assign it
+        in
+

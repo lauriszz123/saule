@@ -1,0 +1,11 @@
+  × field `name` of class `Player` is never initialized
+   ╭─[field_uninitialized_no_ctor.sau:5:2]
+ 4 │ class Player
+ 5 │     local name: string
+   ·     ─────────┬────────
+   ·              ╰── declared here
+ 6 │ 
+   ╰────
+  help: assign `self.name = ...` in `init`, give the field a default value, or
+        mark it nullable with `?`
+

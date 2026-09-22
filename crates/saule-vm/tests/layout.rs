@@ -18,7 +18,7 @@ fn build(src: &str) -> (Vec<saule_vm::chunk::ClassProto>, layout::Layouts) {
 fn try_build(
     src: &str,
 ) -> Result<(Vec<saule_vm::chunk::ClassProto>, layout::Layouts), saule_vm::CompileError> {
-    saule_interpreter::init();
+    saule_runtime::init();
     let toks = Lexer::new(src).tokenize().expect("lex");
     let module = parse(toks).expect("parse");
     let mut classes = Vec::new();
@@ -178,7 +178,7 @@ fn an_imported_parent_resolves_to_the_index_its_own_module_assigned() {
     // first, then hand its index to the child's module as an import. The
     // child's field slots must extend the parent's *real* ones — the whole
     // point of a program-global class table.
-    saule_interpreter::init();
+    saule_runtime::init();
     let mut classes = Vec::new();
     let mut interfaces = Vec::new();
 

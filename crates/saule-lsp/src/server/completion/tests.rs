@@ -1414,7 +1414,7 @@ fn a_payload_binding_can_be_looped_over() {
 fn with_stdlib() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
-    ONCE.call_once(saule_interpreter::init);
+    ONCE.call_once(saule_runtime::init);
 }
 
 /// `Io.open` returns `File?`, and `File` is a stdlib *value* type — its

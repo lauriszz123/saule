@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_interpreter::value::ClassObject;
+use saule_runtime::value::ClassObject;
 
 use crate::op::Instruction;
 

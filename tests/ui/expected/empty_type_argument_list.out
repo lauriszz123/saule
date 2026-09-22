@@ -1,0 +1,10 @@
+  × empty type argument list
+    ╭─[empty_type_argument_list.sau:10:14]
+  9 │ local nums: table = {1, 2, 3}
+ 10 │ println(first<>(nums))
+    ·              ─┬
+    ·               ╰── nothing between `<` and `>`
+    ╰────
+  help: name the type between the brackets — `f<integer>(...)`,
+        `table<string>` — or drop `<>` and let it be inferred
+

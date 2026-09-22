@@ -3,53 +3,36 @@
 > The execution plan for `VM_DESIGN.md`. That document is the *specification*;
 > this one is the *checklist*. Section references (§) point back into it.
 >
-> **Ground rule, absolute:** `./run_tests.sh` passes at every commit, and the
-> tree-walker stays in-tree and green. It was the default engine until Phase 4
-> flipped that; it is still the differential oracle, which is the harder
-> requirement of the two.
+> **The tree-walking interpreter has been removed.** It was the default
+> engine until Phase 4, and the differential oracle after that; everything
+> below that says "both engines", "falls back" or "the oracle" describes how
+> the VM was built, not how it is tested now. Its answers were kept: every
+> fixture's output (`tests/**/expected/`), every example project's
+> (`tests/examples/`) and every differential test's outcome
+> (`crates/saule-vm/tests/differential/expected.txt`) was recorded from it,
+> in the last commit that had both engines, where they agreed.
 >
-> That means **all four modes**, because each catches what the others
-> cannot:
->
-> ```
-> ./run_tests.sh                       # the default engine — the VM, since Phase 4
-> SAULE_ENGINE=interp ./run_tests.sh   # the tree-walker still works
-> SAULE_ENGINE=vm ./run_tests.sh       # the VM runs or cleanly falls back
-> SAULE_DIFF=1 ./run_tests.sh          # the two agree on *output*, not just exit status
-> ```
->
-> The last was added late and immediately found bugs the others had been
-> passing over for months — exit status alone cannot see a wrong value.
->
-> The first two swapped meaning at the flip: a bare `run_tests.sh` used to be
-> the tree-walker's run and is now the VM's, so `SAULE_ENGINE=interp` is what
-> keeps the oracle covered. Losing that would not fail anything — it would
-> just quietly stop testing half of what this file is about.
+> **Ground rule, absolute:** all of the below pass at every commit.
 
 ## Verifying a change
 
-Five commands. The last three are the ones that catch VM bugs; the first two
-catch everything else.
-
 ```
 cargo test --workspace                                  # fully green, nothing excluded
-SAULE_BIN=./target/debug/saule.exe bash run_tests.sh    # 236/236, on the VM by default
-SAULE_ENGINE=interp SAULE_BIN=... bash run_tests.sh     # 236/236, the oracle
-SAULE_ENGINE=vm SAULE_BIN=... bash run_tests.sh         # 236/236
-SAULE_DIFF=1  SAULE_BIN=... bash run_tests.sh           # 236/236 + engines agree on output
-```
-
-Plus two more:
-
-```
-SAULE_BIN=./target/debug/saule.exe bash run_examples_diff.sh   # 9/9 agree, 4 fall back
+SAULE_BIN=./target/debug/saule.exe bash run_tests.sh    # every fixture prints what it recorded
+SAULE_BIN=./target/debug/saule.exe bash run_examples.sh # every example project likewise
 cargo run --release -p saule-vm --example bench -- FILE.sau    # in-process timing
 ```
 
-`run_examples_diff.sh` runs the *example projects* under both engines —
+`run_tests.sh` compares each fixture's output — values and diagnostics —
+with its recording, so a wrong value fails even when the exit status is
+right. `run_examples.sh` does the same for the *example projects* —
 multi-module, with imports and file IO — which is a different question from
-`run_tests.sh`'s single-file fixtures, and the one that has actually caught
-things.
+the single-file fixtures, and the one that has actually caught things.
+
+A deliberate change in behaviour re-records: `SAULE_BLESS=1` on either
+script, or on `cargo test -p saule-vm --test differential` for a new
+differential test. The recordings are the specification now, so the diff
+they produce gets reviewed like any other.
 
 ### Per-platform notes
 
@@ -65,7 +48,7 @@ bite that do not on Windows:
   `HEAD`, so it is a platform floor, not a regression. Its own comment
   already says the guard needs more real stack than libtest gives; macOS is
   simply where that bill comes due. Check `HEAD` before blaming a change.
-- **`run_examples_diff.sh` needs no GNU `timeout`.** Stock macOS has
+- **`run_examples.sh` needs no GNU `timeout`.** Stock macOS has
   neither `timeout` nor `gtimeout`, and without one every project failed
   identically — which the harness faithfully reported as *"9 of 9 projects
   disagreed"*. A divergence that large and that sudden is far more likely
@@ -74,19 +57,22 @@ bite that do not on Windows:
 
 ## Working conventions that have paid off — please keep them
 
-- **Differential testing is the discipline.**
-  `crates/saule-vm/tests/differential.rs` runs every program under both
-  engines and compares results *including error text*. Add cases there first.
-- **Refuse rather than guess.** Anything codegen cannot handle returns
-  `CompileError::Unsupported` naming the construct, and the CLI falls back to
-  the tree-walker. A wrong slot reads different data and nothing notices;
-  a refusal costs speed, never correctness.
+- **Recorded outcomes are the discipline.**
+  `crates/saule-vm/tests/differential/` runs every program on the VM and
+  compares results *including error text* with the recorded outcome. Add
+  cases there first.
+- **Refuse rather than guess.** Anything codegen cannot handle returns a
+  `CompileError` naming the construct. A wrong slot reads different data
+  and nothing notices; a refusal is a clear error. A program the language
+  rejects but the checker lets through is `CompileError::Rejected`, worded
+  the way the language words it.
 - **Reuse rather than reimplement.** `ARITHX` calls `ops::binary`, `CASTCHK`
-  calls `cast`, `GETFX` calls `read_member`, `CALLMX` calls
-  `dispatch_member_call_multi`, `CONCAT` calls `display_value`, `LEN` defers
-  to `ops::unary`, and `ITERPREPX` calls `call_member_dynamic` for an
-  instance's `iter()`. Every time this rule was broken the engines diverged.
-  (But read trap 5 — reuse the *logic*, not the *type tests*.)
+  calls `cast`, `GETFX` calls `members::read_member`, `CALLMX` calls
+  `call::call_method`, `CONCAT` calls `display_value`, `LEN` defers to
+  `ops::unary`, and `ITERPREPX` calls `call::call_method` for an instance's
+  `iter()` — all in `saule-runtime`. Every time this rule was broken the
+  answers diverged. (But read trap 5 — reuse the *logic*, not the *type
+  tests*.)
 - **A missing type is never a wrong opcode** — it selects the dynamic form.
   The `X` suffix is that convention: `ARITHX`, `UNARYX`, `GETFX`, `CALLMX`,
   `ITERPREPX`.

@@ -1,0 +1,13 @@
+body=[hello
+world
+saule
+]
+line=hello
+line=world
+line=saule
+path-line=hello
+path-line=world
+path-line=saule
+count=4
+via-stdout
+via-io-write

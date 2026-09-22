@@ -1,0 +1,11 @@
+  × cannot assign value of type `table<Animal>` to variable of type
+  │ `table<Dog>`
+    ╭─[table_contravariance.sau:16:26]
+ 15 │ local animals: table<Animal> = {}
+ 16 │ local dogs: table<Dog> = animals
+    ·                          ───┬───
+    ·                             ╰── incompatible type
+ 17 │ println(#dogs)
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

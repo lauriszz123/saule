@@ -1,0 +1,10 @@
+  × argument 1 of `takesStr` expects `string`, got `integer`
+    ╭─[lambda_param_from_slot_type.sau:17:69]
+ 16 │     static fn main()
+ 17 │         local kept: table<integer> = when({1, 2, 3}):filter(x => takesStr(x))
+    ·                                                                           ┬
+    ·                                                                           ╰── wrong argument type
+ 18 │ 
+    ╰────
+  help: pass a value of type `string` here — check the signature of `takesStr`
+
