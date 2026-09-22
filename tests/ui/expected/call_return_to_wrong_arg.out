@@ -1,0 +1,9 @@
+  × argument 1 of `want` expects `string`, got `integer`
+    ╭─[call_return_to_wrong_arg.sau:13:6]
+ 12 │ 
+ 13 │ want(source())
+    ·      ────┬───
+    ·          ╰── wrong argument type
+    ╰────
+  help: pass a value of type `string` here — check the signature of `want`
+

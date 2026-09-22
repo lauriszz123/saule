@@ -1,0 +1,11 @@
+  × `Box` expects 1 type argument(s), got 2
+    ╭─[generic_wrong_arg_count.sau:14:1]
+ 13 │ 
+ 14 │ local b: Box<integer, string> = Box(1)
+    · ───────────────────┬──────────────────
+    ·                    ╰── wrong number of type arguments
+ 15 │ println(b.value)
+    ╰────
+  help: `Box` is declared with 1 type parameter(s) — supply one type for each,
+        or name it bare to leave the instantiation unspecified
+

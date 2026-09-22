@@ -1,0 +1,12 @@
+  × this cast does nothing: the value is already `integer`
+   ╭─[redundant_cast.sau:6:13]
+ 5 │         local n: integer = 5
+ 6 │         local m = n as integer
+   ·                   ┬
+   ·                   ╰── already has this type
+ 7 │         println(m)
+   ╰────
+  help: on an `any` `as` is a checked type test, and on a typed value it
+        converts (`10f as integer`, `n as string`) — casting to the type it
+        already has is neither, so drop the cast
+

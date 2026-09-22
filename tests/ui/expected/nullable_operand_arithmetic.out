@@ -1,0 +1,11 @@
+  × operator `+` cannot be applied to a nullable `integer?`
+    ╭─[nullable_operand_arithmetic.sau:11:11]
+ 10 │         local count: integer? = 1
+ 11 │         println(count + 1)
+    ·                 ──┬──
+    ·                   ╰── this may be `nil`
+ 12 │     end
+    ╰────
+  help: check for nil first (`if x != nil then`), supply a fallback with `??`,
+        or force-unwrap with `!`
+

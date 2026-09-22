@@ -135,7 +135,7 @@ impl Backend {
         // Only packages that actually require an import. Anything with
         // `auto_prelude` (the stdlib: `table`, `math`, `io`, …) is already
         // installed into every scope, so importing it is meaningless.
-        for pkg in saule_interpreter::native_packages::all() {
+        for pkg in saule_runtime::native_packages::all() {
             if pkg.auto_prelude {
                 continue;
             }
@@ -148,8 +148,8 @@ impl Backend {
                 "0",
             ));
         }
-        for name in saule_interpreter::dynamic_packages::package_names() {
-            let n = saule_interpreter::dynamic_packages::export_names(&name).len();
+        for name in saule_runtime::dynamic_packages::package_names() {
+            let n = saule_runtime::dynamic_packages::export_names(&name).len();
             items.push(sorted(
                 item(
                     name,

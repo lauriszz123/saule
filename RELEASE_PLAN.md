@@ -36,7 +36,7 @@ manager. Design detail that would clutter a step lives in the appendices.
 Four things are already right and shape everything below:
 
 - **`SAULE_HOME` is a well-defined install root**
-  ([dynamic_packages.rs:100](crates/saule-interpreter/src/dynamic_packages.rs:100))
+  ([dynamic_packages.rs:100](crates/saule-runtime/src/dynamic_packages.rs:100))
   — the natural home for packages, binaries, and docs.
 - **Dependencies are resolved in the CLI, not the interpreter.**
   [project.rs:resolve_dependencies](crates/saule-cli/src/project.rs:140) turns
@@ -53,7 +53,7 @@ Four things are already right and shape everything below:
 The middle two are the key lever: **installed packages need no interpreter
 changes at all.** `saule add` puts source in `SAULE_HOME` and `project.rs`
 resolves it into the same `Dependency` a relative path produces today.
-[module.rs](crates/saule-interpreter/src/module.rs) is untouched.
+[module.rs](crates/saule-runtime/src/module.rs) is untouched.
 
 The third point is what makes an index unnecessary. *Where* a package lives
 (`github.com/lauriszz123/uikit`) is decoupled from *what you type to import it*
@@ -116,7 +116,7 @@ components; its copy is internal metadata that nothing user-facing prints.
 | Editor plugin manifests | `26.7` / `26.7.0` | written by `scripts/stamp-version.sh` |
 
 `Saule.*` lives in
-[stdlib/version.rs](crates/saule-interpreter/src/stdlib/version.rs), documented
+[stdlib/version.rs](crates/saule-runtime/src/stdlib/version.rs), documented
 in [DOCS.md](DOCS.md#saule). It is auto-prelude'd, so no import is needed, and
 its members are registered with the typechecker — `Saule.verzion` is a compile
 error, and `Saule.atLeast` is known to return `boolean`.
@@ -282,7 +282,7 @@ POSIX `sh` throughout — no bash, no `jq`.
    works for `saule-lsp` too — and tell the user to `exec $SHELL -l`.
 
 `$SAULE_HOME` must be honoured verbatim when set, matching
-[dynamic_packages.rs:100](crates/saule-interpreter/src/dynamic_packages.rs:100):
+[dynamic_packages.rs:100](crates/saule-runtime/src/dynamic_packages.rs:100):
 it *is* the directory, not a parent to append `.saule` to.
 
 `install.ps1` mirrors this with `%USERPROFILE%\.saule\bin`,
@@ -743,7 +743,7 @@ engine.toml
 `saule add` picks the asset matching the host triple, verifies it against the
 `SHA256SUMS` asset, and drops it into `native_packages/` + `native_manifests/`
 — the exact layout the install scripts produce today, so
-[dynamic_packages.rs](crates/saule-interpreter/src/dynamic_packages.rs)
+[dynamic_packages.rs](crates/saule-runtime/src/dynamic_packages.rs)
 discovery works unchanged.
 
 If no asset matches the host triple: fall back to building from source **only

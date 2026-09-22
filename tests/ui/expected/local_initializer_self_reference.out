@@ -1,0 +1,10 @@
+  × undefined name `x` — it is not declared in this scope
+   ╭─[local_initializer_self_reference.sau:6:22]
+ 5 │     static fn main()
+ 6 │         local x: integer = x + 1
+   ·                            ┬
+   ·                            ╰── not defined
+ 7 │         println(x)
+   ╰────
+  help: declare it with `local x = ...`, import it, or check the spelling
+

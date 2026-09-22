@@ -1,0 +1,11 @@
+  × return value of type `integer` is incompatible with declared return type
+  │ `string`
+   ╭─[wrong_return_type.sau:5:10]
+ 4 │ fn greet(name: string) -> string
+ 5 │   return 42
+   ·          ─┬
+   ·           ╰── returned `integer` here
+ 6 │ end
+   ╰────
+  help: this function must return a `string`
+

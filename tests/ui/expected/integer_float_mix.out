@@ -1,0 +1,11 @@
+  × cannot mix `integer` and `float` in arithmetic — type mismatch
+   ╭─[integer_float_mix.sau:8:20]
+ 7 │ 
+ 8 │     local result = health - dmg    -- ERROR: cannot mix integer and float
+   ·                    ──────┬─────
+   ·                          ╰── incompatible numeric kinds
+ 9 │     println(result)
+   ╰────
+  help: Saule never auto-promotes numeric types; cast one operand with `as
+        integer` or `as float` to make the kinds match
+

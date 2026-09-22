@@ -1,0 +1,9 @@
+  × expected an expression, found keyword `do`
+   ╭─[trailing_block_needs_a_call.sau:8:6]
+ 7 │ 
+ 8 │ view do
+   ·      ─┬
+   ·       ╰── here
+ 9 │   println("hi")
+   ╰────
+

@@ -1,0 +1,10 @@
+  × type error: cannot take length of a `integer` — only strings, tables, and
+  │ classes implementing `OpLen` have a length
+    ╭─[trailing_block_wrong_param_type.sau:11:11]
+ 10 │ each({1, 2}) do (v)
+ 11 │   println(#v)
+    ·           ─┬
+    ·            ╰── type mismatch or invalid operation
+ 12 │ end
+    ╰────
+

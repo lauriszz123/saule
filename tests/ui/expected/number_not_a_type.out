@@ -1,0 +1,13 @@
+  × `number` is not a type — Saule has `integer` and `float`
+    ╭─[number_not_a_type.sau:12:1]
+ 11 │ 
+ 12 │ local uninitialized: number
+    · ─────────┬─────────
+    ·          ╰── no such type
+ 13 │ local annotated: number = 5
+    ╰────
+  help: pick the one you mean: `integer` for whole numbers, `float` for
+        decimals. The two never convert implicitly, so a value that could be
+        either has to be narrowed with `as integer` / `as float`, or converted
+        with `int(...)` / `float(...)`.
+

@@ -1,0 +1,10 @@
+  × cannot access private member `secret` of class `Vault` from outside the
+  │ class
+    ╭─[private_method_access.sau:15:2]
+ 14 │ local v = Vault()
+ 15 │ v.secret() -- should be a compile error: `secret` is private
+    ·  ───┬───
+    ·     ╰── private
+    ╰────
+  help: `local` fields and methods are only accessible from within `Vault`
+

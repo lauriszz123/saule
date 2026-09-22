@@ -410,4 +410,23 @@ fn an_enum_method_runs_on_the_variant_that_received_it() {
     );
 }
 
+#[test]
+fn a_variant_value_can_be_any_expression() {
+    // Evaluated where the declaration stands, so it may call a function or
+    // read a module variable declared above it. A literal is baked in when
+    // the program is built; anything else is set by the declaration.
+    must_agree(
+        "local base: integer = 10\n\
+         fn five() -> integer\n  return 5\nend\n\
+         enum E\n\
+         \x20 A = base + 1\n\
+         \x20 B = five() * 2\n\
+         \x20 C = -3\n\
+         \x20 D = \"x\" .. \"y\"\n\
+         \x20 F = 7\n\
+         end\n\
+         E.A.value .. \":\" .. E.B.value .. \":\" .. E.C.value .. \":\" .. E.D.value .. \":\" .. E.F.value",
+    );
+}
+
 

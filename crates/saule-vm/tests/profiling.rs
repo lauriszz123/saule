@@ -23,10 +23,10 @@ use saule_vm::profile;
 
 /// Compile and run `src` with the histogram on, and return it.
 fn profile_of(src: &str) -> profile::Report {
-    saule_interpreter::init();
+    saule_runtime::init();
     let toks = Lexer::new(src).tokenize().expect("lex");
     let module = parse(toks).expect("parse");
-    let errs = saule_interpreter::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default());
+    let errs = saule_runtime::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default());
     assert!(errs.is_empty(), "semantic errors: {errs:?}");
     let chunk = saule_vm::compile(&module, "prof.sau", src).expect("compiles");
     profile::enable();

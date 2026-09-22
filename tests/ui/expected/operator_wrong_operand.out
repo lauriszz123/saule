@@ -1,0 +1,10 @@
+  × `Amount.add` expects `Amount`, got `integer`
+    ╭─[operator_wrong_operand.sau:17:25]
+ 16 │         local a: Amount = Amount(1)
+ 17 │         local b: Amount = a + 5
+    ·                               ┬
+    ·                               ╰── wrong operand type for this operator
+ 18 │         println(b.n)
+    ╰────
+  help: `+` on a `Amount` calls `add`, so the other operand must be `Amount`
+

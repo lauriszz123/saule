@@ -1,0 +1,10 @@
+  × cannot assign value of type `string` to variable of type `Str`
+    ╭─[assignable_reassignment.sau:13:7]
+ 12 │         local s: Str = "first"
+ 13 │         s = "second"
+    ·             ────┬───
+    ·                 ╰── incompatible type
+ 14 │         println(s)
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

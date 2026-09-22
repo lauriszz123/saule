@@ -1,0 +1,14 @@
+  × `Derived.go` does not match `Base.go`: the parent's is an instance method,
+  │ this one is `static`
+    ╭─[override_static_mismatch.sau:16:10]
+ 15 │     
+ 16 │ ╭─▶   static fn go() -> integer
+ 17 │ │       return 2
+ 18 │ ├─▶   end
+    · ╰──── incompatible override
+ 19 │     end
+    ╰────
+  help: an override has to be usable everywhere the parent's version is — same
+        parameter types, same arity, and a return type the parent's callers
+        can accept. Rename the method if it isn't meant to override.
+

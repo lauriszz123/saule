@@ -77,6 +77,11 @@ pub struct RegAlloc {
     high_water: u16,
     /// Per-block entry state.
     blocks: Vec<BlockState>,
+    /// Every register a closure captured, in the order it happened.
+    ///
+    /// A loop reads this to learn whether anything it owns was captured
+    /// while its body compiled — see [`RegAlloc::captured_since`].
+    captures: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -179,11 +184,31 @@ impl RegAlloc {
         b.captured.then_some(b.entry)
     }
 
-    /// Record that a closure captured a register owned by the current block.
-    pub fn note_capture(&mut self) {
-        if let Some(b) = self.blocks.last_mut() {
+    /// Record that a closure captured register `reg`.
+    ///
+    /// Marks the block that **owns** `reg` — the innermost one it was
+    /// allocated in — not the block the capture was written in. The two
+    /// differ whenever a lambda in a nested block captures an outer local,
+    /// and closing from the inner block's entry would leave the outer
+    /// register open when *its* block ends and hands it to the next one.
+    pub fn note_capture(&mut self, reg: u16) {
+        self.captures.push(reg);
+        if let Some(b) = self.blocks.iter_mut().rev().find(|b| b.entry <= reg) {
             b.captured = true;
         }
+    }
+
+    /// A position in the capture log, for [`captured_since`](Self::captured_since).
+    pub fn capture_mark(&self) -> usize {
+        self.captures.len()
+    }
+
+    /// Whether any register at or above `from` was captured since `mark`.
+    ///
+    /// A loop's registers are all at or above the first one it allocated,
+    /// so this is "did a closure capture anything this loop owns".
+    pub fn captured_since(&self, mark: usize, from: u16) -> bool {
+        self.captures[mark..].iter().any(|&r| r >= from)
     }
 
     /// Whether the current block has anything a closure captured.
@@ -295,7 +320,7 @@ mod tests {
         r.reserve_params(1).unwrap();
         r.enter_block();
         let first = r.alloc().unwrap();
-        r.note_capture();
+        r.note_capture(first);
         assert_eq!(
             r.leave_block(),
             Some(first),
@@ -307,11 +332,28 @@ mod tests {
     fn capture_is_per_block() {
         let mut r = RegAlloc::new();
         r.enter_block();
+        r.alloc().unwrap();
         r.enter_block();
-        r.note_capture();
+        let inner = r.alloc().unwrap();
+        r.note_capture(inner);
         assert!(r.leave_block().is_some());
         // The outer block captured nothing of its own.
         assert!(r.leave_block().is_none());
+    }
+
+    #[test]
+    fn capturing_an_outer_local_marks_the_block_that_owns_it() {
+        // A lambda in an inner block capturing a local of the outer one:
+        // it is the *outer* block's exit that must close the register,
+        // because that is when the register is handed back for reuse.
+        let mut r = RegAlloc::new();
+        r.enter_block();
+        let outer = r.alloc().unwrap();
+        r.enter_block();
+        r.alloc().unwrap();
+        r.note_capture(outer);
+        assert!(r.leave_block().is_none(), "the inner block owns nothing captured");
+        assert_eq!(r.leave_block(), Some(outer));
     }
 
     #[test]

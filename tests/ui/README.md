@@ -15,10 +15,16 @@ not all. `throw_uncaught`, `io_use_after_close`, `force_unwrap_*`,
 fixtures are **runtime** errors, and are here for the same reason: the
 message and its span are the behaviour being pinned.
 
-## The trap this directory has already fallen into twice
+Each fixture's full output is recorded in `expected/<name>.out`, and
+`run_tests.sh` compares against it — so the diagnostic, not just the failure,
+is what a fixture pins. `SAULE_BLESS=1 ./run_tests.sh` re-records every one;
+read the diff before committing it.
 
-**The harness gates on exit status, so a fixture that fails for the wrong
-reason passes.** Two did, silently, for a long time:
+## The trap this directory fell into twice
+
+**Before outputs were recorded, the harness gated on exit status alone, so a
+fixture that failed for the wrong reason passed.** Two did, silently, for a
+long time:
 
 * `unknown_field.sau` was written with `constructor(label)`, which is not
   Saule syntax. It failed in the *parser* and never reached a member check —
@@ -29,20 +35,24 @@ reason passes.** Two did, silently, for a long time:
   Windows. `Io.open` returned nil, the `!` unwrapped it, and the run died on
   line 4 — never reaching `close()`, let alone the use after it.
 
-So when adding or editing a fixture: **run it and read the message.** "It
-fails" is not the assertion; "it fails with *this* diagnostic, at *this*
-span" is.
+So when adding or editing a fixture: **run it and read the message** before
+recording it. "It fails" is not the assertion; "it fails with *this*
+diagnostic, at *this* span" is — and the recording only pins whatever it was
+given.
 
 A fixture whose message is the generic `cannot determine the type of this
 expression` is a signal, not a pass — it usually means the precise check the
 fixture is named for does not exist yet. `match_variant_arity_mismatch.sau`
 is the current example, and it is recorded as a gap in `VM_TASKS.md`.
 
-## Two are exempt from the engine diff
+## One is exempt from the output check
 
-`SAULE_DIFF=1 ./run_tests.sh` compares tree-walker and VM output character
-for character. `stack_overflow_recursion.sau` and
-`stack_overflow_reentrant.sau` are exempted in `diff_exempt()` because the
-two engines deliberately name different limits (VM_DESIGN.md §6.4). Both
-still *report*, which is what those fixtures pin. The exemption count is
-printed on every run so the list cannot grow unnoticed.
+`stack_overflow_reentrant.sau` is exempted in `output_exempt()`: both
+profiles report a stack overflow, but not the same one. A level of
+re-entrant nesting (a comparator that sorts with itself) costs several times
+more stack in a debug build, so it exhausts the thread's stack where a
+release build reaches the 10,000-level count first — and the message, plus
+how many `Table.sort: comparator failed:` wrappings surround it, differs
+with it. That the run *reports* rather than dying is what the fixture pins,
+and that is still checked. The exemption count is printed on every run so
+the list cannot grow unnoticed.

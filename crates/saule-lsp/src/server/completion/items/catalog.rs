@@ -445,7 +445,7 @@ pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> V
     // Names the auto-prelude packages contribute (`Math`, `Io`, `IoMode`, …).
     // Taken from the packages themselves rather than a hardcoded list, so this
     // can't drift as the stdlib grows.
-    for pkg in saule_interpreter::native_packages::all() {
+    for pkg in saule_runtime::native_packages::all() {
         if !pkg.auto_prelude {
             continue;
         }
@@ -461,7 +461,7 @@ pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> V
         }
     }
 
-    for name in saule_interpreter::stdlib::all_prelude_names() {
+    for name in saule_runtime::stdlib::all_prelude_names() {
         let detail = sigs::lookup(name)
             .map(|s| render_native_sig(name, &s))
             .unwrap_or_else(|| "prelude".into());

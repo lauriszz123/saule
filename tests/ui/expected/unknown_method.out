@@ -1,0 +1,9 @@
+  × no member `bye` on `Greeter`
+    ╭─[unknown_method.sau:10:10]
+  9 │ local g = Greeter()
+ 10 │ println(g.bye())
+    ·          ──┬─
+    ·            ╰── unknown member
+    ╰────
+  help: check the spelling, or add `bye` as a field / method to `Greeter`
+

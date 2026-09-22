@@ -463,7 +463,7 @@ mod tests {
         // chunks. This pins the shape that broke, so the next person
         // extending the table above has a reason not to add it back.
         let mut c = Chunk::empty("v.sau");
-        c.constants.push(saule_interpreter::Value::Int(0));
+        c.constants.push(saule_runtime::Value::Int(0));
         c.main = c.add_proto(Proto::new(
             Some("main"),
             0,

@@ -24,14 +24,9 @@
 //! keep building for every other target unchanged, and it is why the JSON
 //! shaping below can be unit-tested natively with no browser involved.
 //!
-//! ## Which engine runs the program
+//! ## How the program runs
 //!
-//! The bytecode VM, since Phase 4 of `VM_TASKS.md`, on the same terms as the
-//! CLI: a module the compiler has not learned yet falls back to the
-//! tree-walking interpreter, silently, because the two engines are held to
-//! identical observable behaviour by the differential harness. The
-//! playground therefore never has an engine to choose — there is no flag
-//! here and no `SAULE_ENGINE` in a browser.
+//! Compiled to bytecode and run on the VM, exactly as `saule run` does.
 //!
 //! ## Sandbox
 //!
@@ -40,13 +35,13 @@
 //! filesystem — a program that tries gets a plain `import error` diagnostic
 //! rather than a crash.
 //!
-//! [`output::Sink`]: saule_interpreter::output::Sink
-//! [`platform::Platform`]: saule_interpreter::platform::Platform
+//! [`output::Sink`]: saule_runtime::output::Sink
+//! [`platform::Platform`]: saule_runtime::platform::Platform
 
 use serde::Serialize;
 
-use saule_interpreter::output::{self, Stream};
-use saule_interpreter::platform;
+use saule_runtime::output::{self, Stream};
+use saule_runtime::platform;
 
 // ─── the JSON contract ─────────────────────────────────────────────────────
 
@@ -66,9 +61,9 @@ pub enum Phase {
     Parse,
     Semantic,
     Type,
-    /// The bytecode compiler. Only ever produced by a compiler *fault*: a
-    /// construct it has not learned yet is not an error, it is a fall-back
-    /// to the tree-walker, and never reaches a diagnostic.
+    /// The bytecode compiler: a program the language rejects that the
+    /// checker lets through, an `import` (there is no filesystem here), or a
+    /// compiler limit.
     Compile,
     Runtime,
 }
@@ -143,14 +138,14 @@ const PLAYGROUND_NAME: &str = "playground.sau";
 
 /// Compile and run `source`, returning the structured result.
 ///
-/// Unlike `saule_interpreter::check_and_run`, which stops at the first
+/// Unlike `saule_runtime::check_and_run`, which stops at the first
 /// diagnostic, this reports **every** semantic and type error in one pass —
 /// a playground that fixes one error at a time and re-runs is a poor way to
 /// learn a type system.
 pub fn run(source: &str) -> RunResult {
     // Registers the stdlib's type signatures and prelude names. `check_and_run`
     // does this internally; running the phases by hand means doing it here.
-    saule_interpreter::init();
+    saule_runtime::init();
 
     let tokens = match saule_lexer::Lexer::new(source).tokenize() {
         Ok(tokens) => tokens,
@@ -162,15 +157,15 @@ pub fn run(source: &str) -> RunResult {
         Err(err) => return failed(vec![to_diagnostic(&err, Phase::Parse)], Vec::new()),
     };
 
-    // The three static passes by hand, in the order `analyze_and_check`
-    // enforces — analyse, typecheck-and-resolve, then publish captures.
-    // Spelled out here rather than delegated because that helper stops at
-    // the first diagnostic and this one must report them all.
+    // The two static passes by hand, in the order `analyze_and_check`
+    // enforces — analyse, then typecheck-and-resolve. Spelled out here
+    // rather than delegated because that helper stops at the first
+    // diagnostic and this one must report them all.
     //
     // No import seed: resolving imports needs a filesystem, and there isn't
-    // one. A program that imports gets a normal diagnostic from the loader.
-    let (sem_errors, bindings) =
-        saule_interpreter::analyze_with_bindings(&module, saule_semantic::ModuleSeed::default());
+    // one. A program that imports gets a compile error.
+    let (sem_errors, _) =
+        saule_runtime::analyze_with_bindings(&module, saule_semantic::ModuleSeed::default());
     let semantic: Vec<Diagnostic> = sem_errors
         .iter()
         .map(|e| to_diagnostic(e, Phase::Semantic))
@@ -187,34 +182,22 @@ pub fn run(source: &str) -> RunResult {
         return failed(type_errors, Vec::new());
     }
 
-    saule_interpreter::prepare_captures(&module, &bindings);
-
-    // The bytecode engine, default since Phase 4, with the same fall-back
-    // discipline as the CLI (VM_DESIGN.md §21.3): `Unsupported` means "the
-    // compiler has not learned this yet", so the tree-walker runs it and the
-    // user sees nothing. Anything else is a compiler fault and is surfaced.
-    //
-    // Compiling happens *outside* the capture: a program that emitted output
-    // and then fell back would print it twice. This is the single-module
-    // route rather than `program::compile`, because there is no filesystem
-    // here for an import graph to live in.
+    // The bytecode engine — the only one. This is the single-module route
+    // rather than `program::compile`, because there is no filesystem here
+    // for an import graph to live in; an `import` is a compile error.
     let chunk = match saule_vm::compile(&module, PLAYGROUND_NAME, source) {
-        Ok(chunk) => Some(std::rc::Rc::new(chunk)),
-        Err(saule_vm::CompileError::Unsupported { .. }) => None,
+        Ok(chunk) => std::rc::Rc::new(chunk),
         Err(err) => return failed(vec![to_diagnostic(&err, Phase::Compile)], Vec::new()),
     };
 
     // Anything the program prints is captured rather than written to a stdout
     // that does not exist on this target.
-    let (sink, outcome) = output::capture(|| match &chunk {
-        Some(chunk) => saule_vm::run_chunk(std::rc::Rc::clone(chunk)).map(|vs| {
+    let (sink, outcome) = output::capture(|| {
+        saule_vm::run_chunk(chunk).map(|vs| {
             vs.into_iter()
                 .next()
-                .unwrap_or(saule_interpreter::Value::Nil)
-        }),
-        // Deliberately `run`, not `check_and_run`: the phases above have
-        // already run, one at a time, so every diagnostic is reported.
-        None => saule_interpreter::run(&module),
+                .unwrap_or(saule_runtime::Value::Nil)
+        })
     });
 
     let output: Vec<OutputChunk> = sink
@@ -282,7 +265,7 @@ mod browser {
         start_ms: f64,
     }
 
-    impl saule_interpreter::platform::Platform for BrowserPlatform {
+    impl saule_runtime::platform::Platform for BrowserPlatform {
         fn unix_time_secs(&self) -> Option<f64> {
             Some(js_sys::Date::now() / 1000.0)
         }
@@ -302,7 +285,7 @@ mod browser {
         let platform = BrowserPlatform {
             start_ms: js_sys::Date::now(),
         };
-        saule_interpreter::platform::with_platform(Box::new(platform), || {
+        saule_runtime::platform::with_platform(Box::new(platform), || {
             super::run_to_json(source)
         })
     }
@@ -329,11 +312,11 @@ mod tests {
     /// down with them. That the native build really does terminate is correct
     /// behaviour; it just isn't the behaviour under test.
     struct Sandbox;
-    impl saule_interpreter::platform::Platform for Sandbox {}
+    impl saule_runtime::platform::Platform for Sandbox {}
 
     fn json(source: &str) -> serde_json::Value {
         let raw =
-            saule_interpreter::platform::with_platform(Box::new(Sandbox), || run_to_json(source));
+            saule_runtime::platform::with_platform(Box::new(Sandbox), || run_to_json(source));
         serde_json::from_str(&raw).expect("valid JSON")
     }
 
@@ -487,11 +470,9 @@ println(area(Shape.Rect(3.0, 4.0)))
     }
 
     #[test]
-    fn the_playground_actually_reaches_the_vm() {
-        // Every test in this module passes either way, because the fall-back
-        // is behaviour-preserving by design - which is exactly what would let
-        // the wiring rot back to "always the tree-walker" unnoticed. So pin
-        // the compile step itself on the program above.
+    fn the_playground_showcase_compiles() {
+        // The program the playground opens with must compile — pinned on the
+        // compile step itself, so a failure says where it broke.
         let source = r#"
 enum Shape
     Circle(radius: float),
@@ -507,11 +488,12 @@ end
 
 println(area(Shape.Rect(3.0, 4.0)))
 "#;
-        saule_interpreter::init();
+        saule_runtime::init();
         let tokens = saule_lexer::Lexer::new(source).tokenize().expect("lexes");
         let module = saule_parser::parse(tokens).expect("parses");
         assert!(
-            saule_interpreter::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default())
+            saule_runtime::analyze_with_bindings(&module, saule_semantic::ModuleSeed::default())
+                .0
                 .is_empty()
         );
         assert!(

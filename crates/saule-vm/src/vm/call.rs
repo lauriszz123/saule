@@ -6,8 +6,8 @@
 
 use std::rc::Rc;
 
-use saule_interpreter::value::VmFunctionRef;
-use saule_interpreter::{RuntimeError, Value};
+use saule_runtime::value::VmFunctionRef;
+use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::{Chunk, InlineCache, Proto};
 use crate::op::{Instruction, Op};

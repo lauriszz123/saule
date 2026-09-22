@@ -1,0 +1,11 @@
+  × empty type parameter list
+   ╭─[generic_empty_params.sau:2:11]
+ 1 │ -- ERROR: empty generic parameter list — `fn name<>()` is a syntax error.
+ 2 │ fn nothing<>()
+   ·           ─┬
+   ·            ╰── nothing between `<` and `>`
+ 3 │ end
+   ╰────
+  help: name a type parameter — `fn map<T>(...)`, `class Box<T>` — or drop
+        `<>` if this is not generic
+

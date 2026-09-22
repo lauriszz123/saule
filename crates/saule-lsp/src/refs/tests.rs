@@ -10,7 +10,7 @@ use std::sync::Once;
 
 fn init_stdlib() {
     static ONCE: Once = Once::new();
-    ONCE.call_once(saule_interpreter::init);
+    ONCE.call_once(saule_runtime::init);
 }
 
 fn parse_src(src: &str) -> Module {

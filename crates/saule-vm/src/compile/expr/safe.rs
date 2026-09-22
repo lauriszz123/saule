@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use saule_ast::{Expr, Spanned};
-use saule_interpreter::Value;
+use saule_runtime::Value;
 
 use super::CompileError;
 use super::super::ctx::Compiler;
@@ -56,7 +56,7 @@ impl Compiler<'_> {
         let key = match access {
             Some(_) => None,
             None => {
-                let k = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(name.to_string())), span)?;
+                let k = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
                 let Ok(kc) = u8::try_from(k) else {
                     return Err(CompileError::unsupported(
                         "a dynamic member name past the 256-constant window",
@@ -212,7 +212,7 @@ impl Compiler<'_> {
         // if anything more likely to be unproved than a plain one, so
         // refusing here was the odd one out — and it was `todo-app`'s first
         // refusal.
-        let k = self.constant(Value::Str(saule_interpreter::value::SauleStr::new(name.to_string())), span)?;
+        let k = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
         Ok(SafeCall::Dynamic(k))
     }
 

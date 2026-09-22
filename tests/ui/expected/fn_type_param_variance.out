@@ -1,0 +1,12 @@
+  × cannot assign value of type `fn(Dog) -> string` to variable of type
+  │ `fn(Animal) -> string`
+    ╭─[fn_type_param_variance.sau:20:36]
+ 19 │     
+ 20 │ ╭─▶ local take: fn(Animal) -> string = fn(d: Dog) -> string
+ 21 │ │     return d.fetch()
+ 22 │ ├─▶ end
+    · ╰──── incompatible type
+ 23 │     
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

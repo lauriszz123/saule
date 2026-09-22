@@ -1,0 +1,12 @@
+  × `self.super(...)` is only valid inside the `init` constructor of a
+  │ subclass
+   ╭─[super_outside_init.sau:7:5]
+ 6 │   fn ping()
+ 7 │     self.super()    -- ERROR: super call outside of init
+   ·     ──────┬─────
+   ·           ╰── not inside `init`
+ 8 │   end
+   ╰────
+  help: call the parent constructor from `fn init(...)` — not from a regular
+        method
+

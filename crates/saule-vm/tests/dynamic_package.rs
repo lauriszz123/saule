@@ -56,7 +56,7 @@ fn install_manifest() {
         // SAFETY: single-threaded, before any other thread in this test
         // binary has started and before the first `init()` reads it.
         unsafe { std::env::set_var("SAULE_HOME", &home) };
-        saule_interpreter::init();
+        saule_runtime::init();
     });
 }
 
@@ -148,7 +148,16 @@ fn running_reports_the_missing_library_at_the_import() {
     // folding a package's names at compile time must not let a program with
     // no library behind it run partway and fail at the first call instead.
     let err = saule_vm::run_program(program).expect_err("no library is installed");
-    let text = err.to_string();
+    // `lib.sau` is the module whose `import` failed, so the error is about
+    // it — anchored at `main.sau`'s import of `lib` — with the package's
+    // own failure inside.
+    let text = match &err {
+        saule_runtime::RuntimeError::ImportFailed { module_label, inner, .. } => {
+            assert!(module_label.ends_with("lib.sau"), "{module_label}");
+            inner.to_string()
+        }
+        other => other.to_string(),
+    };
     assert!(
         text.contains("testpkg"),
         "the failure should name the package: {text}"

@@ -1,0 +1,11 @@
+  × table value of type `string` is incompatible with declared element type
+  │ `integer`
+   ╭─[table_wrong_value_type.sau:4:36]
+ 3 │   static fn main()
+ 4 │     local xs: table<integer> = {1, "two", 3}
+   ·                                    ──┬──
+   ·                                      ╰── wrong value type
+ 5 │     println(xs[2])
+   ╰────
+  help: every value stored in this table must be a `integer`
+

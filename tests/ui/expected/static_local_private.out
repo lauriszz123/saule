@@ -1,0 +1,10 @@
+  × cannot access private member `secret` of class `Bank` from outside the
+  │ class
+   ╭─[static_local_private.sau:8:13]
+ 7 │ 
+ 8 │ println(Bank.secret)
+   ·             ───┬───
+   ·                ╰── private
+   ╰────
+  help: `local` fields and methods are only accessible from within `Bank`
+

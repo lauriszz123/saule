@@ -39,7 +39,7 @@ impl Backend {
                 let Some(dir) = importer.parent() else {
                     return Vec::new();
                 };
-                let Some(target) = saule_interpreter::module::resolve_import_path(dir, path) else {
+                let Some(target) = saule_runtime::module::resolve_import_path(dir, path) else {
                     return Vec::new();
                 };
                 let Some(target_uri) = path_to_uri(&target) else {

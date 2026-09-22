@@ -1,0 +1,10 @@
+  × enum `Direction` has no variant `Up`
+    ╭─[match_unknown_variant.sau:16:18]
+ 15 │             case Direction.East then "e"
+ 16 │             case Direction.Up then "?"     -- not a real variant
+    ·                  ──────┬─────
+    ·                        ╰── unknown variant
+ 17 │         end
+    ╰────
+  help: check the spelling of the variant or add it to the enum
+

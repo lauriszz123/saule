@@ -1,0 +1,13 @@
+  × `Derived.set` does not match `Base.set`: parameter 1 is `integer` in the
+  │ parent but `string` here
+    ╭─[override_param_type.sau:14:3]
+ 13 │ 
+ 14 │   fn set(value: string) -> nil end
+    ·   ────────────────┬───────────────
+    ·                   ╰── incompatible override
+ 15 │ end
+    ╰────
+  help: an override has to be usable everywhere the parent's version is — same
+        parameter types, same arity, and a return type the parent's callers
+        can accept. Rename the method if it isn't meant to override.
+

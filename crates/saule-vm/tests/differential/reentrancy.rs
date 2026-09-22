@@ -1,17 +1,16 @@
-//! The tree-walker calling into compiled bytecode, and back.
+//! A native calling into compiled bytecode, and back.
 
 use crate::harness::*;
 
-// ── Re-entrancy: the tree-walker calling into bytecode ───────────────────
+// ── Re-entrancy ──────────────────────────────────────────────────────────
 //
 // One root cause with several symptoms. `Value::VmFunction` used to be
-// uncallable from `saule-interpreter` and a VM-built `ClassObject` used to
-// carry an empty method map, so every path where the tree-walker's *own*
-// code has to call a user function on a value hit a wall. Each test below
-// is one of those paths. All of them were guarded by a compile-time refusal
-// before; a refusal makes the engines agree by not running the VM at all,
-// which is why `must_agree` — which fails if the compiler declines — is the
-// right assertion here rather than `agree`.
+// uncallable from the runtime and a VM-built `ClassObject` used to carry an
+// empty method map, so every path where a native has to call a user
+// function on a value hit a wall — a sort comparator, an operator overload,
+// a `toString`. Each test below is one of those paths, and `must_agree`
+// fails if the compiler declines, which is the point: a refusal used to
+// hide these.
 
 #[test]
 fn a_native_invokes_a_bytecode_comparator() {
@@ -202,6 +201,45 @@ fn the_recursion_guard_still_unwinds_after_re_entrant_calls() {
              depth(60)",
         );
     });
+}
+
+#[test]
+fn nesting_that_outruns_the_stack_reports_rather_than_dying() {
+    // The half of the limit a level *count* cannot express. A comparator
+    // that sorts with itself nests forever, and each level costs native
+    // stack — tens of kilobytes, several times more in a debug build than a
+    // release one. Counted alone, 10 000 levels of it needs more stack than
+    // a thread may have, and running off the end is a `SIGSEGV`: no span,
+    // no message, no `catch`, and in the language server no session either.
+    //
+    // The budget is deliberately far below this thread's real stack, so the
+    // guard is what stops the recursion and the test cannot depend on the
+    // profile it was built in.
+    const STACK: usize = 16 << 20;
+    const BUDGET: usize = 2 << 20;
+    std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(|| {
+            saule_runtime::call::set_stack_budget(BUDGET);
+            let src = "local data: table<integer, integer> = {2, 1}\n\
+                       local fn forever(a: integer, b: integer) -> boolean\n\
+                       \x20 Table.sort(data, forever)\n\
+                       \x20 return a < b\n\
+                       end\n\
+                       Table.sort(data, forever)\n\
+                       1";
+            let module = front_end(src);
+            match vm(&module, src) {
+                Some(Outcome::Error(e)) => assert!(
+                    e.contains("ran out of stack"),
+                    "expected the stack guard to stop it, got: {e}"
+                ),
+                other => panic!("expected an error, got {other:?}"),
+            }
+        })
+        .expect("spawn")
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e));
 }
 
 

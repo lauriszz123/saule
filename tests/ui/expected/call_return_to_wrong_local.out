@@ -1,0 +1,10 @@
+  × cannot assign value of type `integer` to variable of type `string`
+    ╭─[call_return_to_wrong_local.sau:10:23]
+  9 │ 
+ 10 │ local label: string = count()
+    ·                       ───┬───
+    ·                          ╰── incompatible type
+ 11 │ println(label)
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

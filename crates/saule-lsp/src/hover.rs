@@ -152,7 +152,7 @@ pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -
         // registered globally with `saule_typeck::sigs`, so the
         // identifier resolver will find them via the native-sig path
         // without needing per-alias entries here.
-        if let Some(pkg) = saule_interpreter::native_packages::lookup(path) {
+        if let Some(pkg) = saule_runtime::native_packages::lookup(path) {
             let exports: Vec<&'static str> = pkg.exports.to_vec();
             let aliases = aliases_for_native(&exports, names);
             ctx.import_blurbs
@@ -165,8 +165,8 @@ pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -
         // with a synthetic sentinel path that is *not* a real file, so they
         // must be handled here — otherwise the `read_to_string` below fails
         // and the import gets mislabelled "unresolved".
-        if saule_interpreter::dynamic_packages::is_dynamic_package(path) {
-            let exports = saule_interpreter::dynamic_packages::export_names(path);
+        if saule_runtime::dynamic_packages::is_dynamic_package(path) {
+            let exports = saule_runtime::dynamic_packages::export_names(path);
             let aliases = aliases_for_dynamic(&exports, names);
             ctx.import_blurbs
                 .push((d.span.clone(), render_native_import_blurb(path, &aliases)));
@@ -174,7 +174,7 @@ pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -
         }
 
         let Some(dir) = dir else { continue };
-        let Some(abs) = saule_interpreter::module::resolve_import_path(dir, path) else {
+        let Some(abs) = saule_runtime::module::resolve_import_path(dir, path) else {
             ctx.import_blurbs
                 .push((d.span.clone(), render_unresolved_import(path)));
             continue;

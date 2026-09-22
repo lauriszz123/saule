@@ -6,9 +6,8 @@
 //! first. Every construct codegen learns to emit becomes visible here the
 //! same day, with no change to this file.
 //!
-//! Until then, anything the compiler cannot handle yet is reported as a
-//! `CompileError::Unsupported` naming the construct — which is also exactly
-//! how `--vm` will decide to fall back to the tree-walker in Phase 2.
+//! Anything the compiler cannot handle is reported as a compile error naming
+//! the construct, the same one `saule run` reports.
 
 use std::path::Path;
 use std::process;
@@ -17,7 +16,7 @@ use miette::{NamedSource, Report};
 
 /// `saule disasm <file.sau>`
 pub(crate) fn cmd_disasm(path: &Path) {
-    saule_interpreter::init();
+    saule_runtime::init();
 
     if !path.exists() {
         eprintln!("error: file '{}' does not exist", path.display());
@@ -49,10 +48,10 @@ pub(crate) fn cmd_disasm(path: &Path) {
     // and been clean before a chunk is built.
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
     let seed = match dir {
-        Some(d) => saule_interpreter::module::collect_import_seed(&module, d),
+        Some(d) => saule_runtime::module::collect_import_seed(&module, d),
         None => saule_semantic::ModuleSeed::default(),
     };
-    if let Err(e) = saule_interpreter::analyze_and_check(&mut module, seed) {
+    if let Err(e) = saule_runtime::analyze_and_check(&mut module, seed) {
         fail(Report::new(e).with_source_code(make_src()));
     }
 

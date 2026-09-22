@@ -1,0 +1,10 @@
+  × type error: cannot take length of a `integer` — only strings, tables, and
+  │ classes implementing `OpLen` have a length
+   ╭─[lambda_param_inferred_from_target.sau:7:10]
+ 6 │ local double: fn(integer) -> integer = fn(x)
+ 7 │   return #x
+   ·          ─┬
+   ·           ╰── type mismatch or invalid operation
+ 8 │ end
+   ╰────
+

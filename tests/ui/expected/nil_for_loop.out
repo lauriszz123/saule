@@ -1,0 +1,11 @@
+  × cannot assign `nil` to non-nullable type `string`
+   ╭─[nil_for_loop.sau:4:25]
+ 3 │     for i: integer = 1, 3 do
+ 4 │       local s: string = nil
+   ·                         ─┬─
+   ·                          ╰── `nil` not allowed here
+ 5 │     end
+   ╰────
+  help: mark the type nullable with `?` (e.g. `string?`) or initialize it with
+        a non-nil value
+

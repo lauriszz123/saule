@@ -1,0 +1,11 @@
+  × cannot access private member `done` of class `Entry` from outside the
+  │ class
+    ╭─[for_in_guarded_private_field.sau:25:18]
+ 24 │   for _, entry in data do
+ 25 │     println(entry.done)
+    ·                  ──┬──
+    ·                    ╰── private
+ 26 │   end
+    ╰────
+  help: `local` fields and methods are only accessible from within `Entry`
+

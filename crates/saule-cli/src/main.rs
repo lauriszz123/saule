@@ -23,25 +23,20 @@ mod run;
 /// platform except macOS (see [`main`] for why macOS stays on the first
 /// thread and how it gets its stack instead).
 ///
-/// The interpreter is a recursive tree-walker: one Saule call costs a chain of
-/// native frames, and those frames are large (they carry `Result<Vec<Value>,
-/// RuntimeError>` temporaries, and `RuntimeError` is a wide enum). Measured on
-/// the default 8 MiB main-thread stack, a debug build aborts at roughly 300
-/// Saule frames — far too shallow for ordinary recursive code, and the abort
-/// is an uncatchable `SIGABRT` rather than an error.
+/// A Saule call made inside one VM is a frame push and costs no native
+/// stack, but a *re-entrant* one does: a native that calls back into
+/// bytecode — `Table.sort`'s comparator, an operator overload, a
+/// `toString` — runs a fresh VM on the native stack, several large Rust
+/// frames per level. A comparator that sorts with itself nests like that
+/// without bound, and on the default 8 MiB stack the abort is an
+/// uncatchable `SIGABRT` rather than an error.
 ///
 /// Reserving a large stack here is what makes
-/// [`saule_interpreter::eval::MAX_EVAL_DEPTH`] the binding limit instead of
-/// the OS, so deep-but-bounded recursion runs and unbounded recursion gets a
+/// [`saule_runtime::call::MAX_CALL_DEPTH`] the binding limit instead of
+/// the OS, so deep-but-bounded nesting runs and unbounded nesting gets a
 /// real diagnostic. This is address space, not committed memory — pages are
 /// faulted in only as the stack actually grows. rustc does the same thing for
 /// the same reason.
-/// Sized against the measured worst case. With this stack a debug build —
-/// the pessimistic one, since its frames are much larger than release's —
-/// reaches roughly 24k Saule frames before the OS gives out, against a
-/// default limit of 10k. That ~2x margin is deliberate: a frame's cost varies
-/// with how much expression nesting and how many arguments each call carries,
-/// so the limit has to hold for heavier frames than this measurement used.
 const RUN_STACK_SIZE: usize = 1024 * 1024 * 1024;
 
 fn main() {
@@ -49,11 +44,11 @@ fn main() {
     // menu work from anywhere else — `Window.create` on a spawned thread dies
     // in `-[NSApplication setMainMenu:]` with an uncatchable
     // `NSInternalInconsistencyException` — and minifb pumps the event queue
-    // from whichever thread opened the window, so the whole interpreter has to
-    // live here. The stack this thread gets is set by the linker in
+    // from whichever thread opened the window, so the whole program has to
+    // run here. The stack this thread gets is set by the linker in
     // `build.rs`, because a thread's stack cannot be resized after exec.
     if cfg!(target_os = "macos") {
-        real_main();
+        real_main(MACOS_MAIN_STACK_SIZE);
         return;
     }
 
@@ -63,7 +58,7 @@ fn main() {
     let spawned = std::thread::Builder::new()
         .name("saule-main".into())
         .stack_size(RUN_STACK_SIZE)
-        .spawn(real_main);
+        .spawn(|| real_main(RUN_STACK_SIZE));
 
     match spawned {
         // A panic in the child has already printed its message; propagate it
@@ -75,13 +70,27 @@ fn main() {
         }
         // A platform that won't give us the reservation (32-bit address
         // space, a restrictive ulimit) still runs — just with whatever the
-        // main thread has. The depth guard is what keeps that safe; it simply
-        // becomes the less generous of the two limits.
-        Err(_) => real_main(),
+        // main thread has, which is what the conservative figure here says.
+        // Nesting then reports a stack overflow much sooner, which is the
+        // honest answer: the stack really is that small.
+        Err(_) => real_main(DEFAULT_MAIN_STACK_SIZE),
     }
 }
 
-fn real_main() {
+/// What the linker gives the macOS main thread — see `build.rs`, which must
+/// say the same number.
+const MACOS_MAIN_STACK_SIZE: usize = 512 * 1024 * 1024;
+
+/// What a main thread has when we could not spawn our own: the usual 8 MiB
+/// default, assumed rather than measured, and deliberately not generous.
+const DEFAULT_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn real_main(stack_size: usize) {
+    // How much stack nested calls may spend before the runtime reports a
+    // stack overflow instead of walking off the end of it. Only this
+    // function knows the answer: it is the thread `main` just arranged.
+    saule_runtime::call::set_stack_budget(stack_size);
+
     let cli = Cli::parse();
 
     if cli.version {
@@ -115,10 +124,6 @@ fn real_main() {
 /// the user's intent: the first positional is the target and every one
 /// after it is script argv, so there is nothing left to disambiguate.
 fn cmd_run(args: RunArgs) {
-    // `--profile-bytecode` selects the VM explicitly, not merely by
-    // default: a profile of a program that fell back to the tree-walker is
-    // empty, and the fallback `note:` is the only thing that says why.
-    run::select_engine(args.vm || args.profile_bytecode, args.interp);
     if args.profile_bytecode {
         if !saule_vm::profile::SUPPORTED {
             eprintln!(
@@ -130,7 +135,7 @@ fn cmd_run(args: RunArgs) {
         }
         saule_vm::profile::enable();
     }
-    saule_interpreter::stdlib::os::set_script_args(args.script_args());
+    saule_runtime::stdlib::os::set_script_args(args.script_args());
 
     match args.target {
         None => project::run_project(Path::new(".")),
@@ -259,10 +264,10 @@ mod tests {
 
     #[test]
     fn a_flag_after_the_target_is_still_this_commands_flag() {
-        // Without a `--` a leading `-` belongs to `saule run`, so selecting
-        // the engine keeps working wherever it is written.
-        let parsed = run_args(&["saule", "run", "t.sau", "--interp"]);
-        assert!(parsed.interp);
+        // Without a `--` a leading `-` belongs to `saule run`, wherever it
+        // is written.
+        let parsed = run_args(&["saule", "run", "t.sau", "--profile-bytecode"]);
+        assert!(parsed.profile_bytecode);
         assert!(parsed.script_args().is_empty());
     }
 
@@ -297,21 +302,14 @@ mod tests {
     }
 
     #[test]
-    fn neither_engine_flag_is_the_default_and_that_default_is_the_vm() {
-        // Phase 4's flip lives in `run::engine`, not here: both flags absent
-        // must reach it as "no opinion" so `SAULE_ENGINE` still gets a say.
-        let parsed = run_args(&["saule", "run"]);
-        assert!(!parsed.vm);
-        assert!(!parsed.interp);
+    fn the_old_vm_flag_is_still_accepted() {
+        // There is one engine now; a script that named it keeps running.
+        assert!(run_args(&["saule", "run", "--vm"]).vm);
     }
 
     #[test]
-    fn each_engine_flag_parses_and_the_pair_is_rejected() {
-        assert!(run_args(&["saule", "run", "--vm"]).vm);
-        assert!(run_args(&["saule", "run", "--interp"]).interp);
-        // Asking for both is a mistake worth an error rather than a
-        // silently-picked winner.
-        assert!(Cli::try_parse_from(["saule", "run", "--vm", "--interp"]).is_err());
+    fn the_tree_walker_flag_is_gone() {
+        assert!(Cli::try_parse_from(["saule", "run", "--interp"]).is_err());
     }
 
     #[test]

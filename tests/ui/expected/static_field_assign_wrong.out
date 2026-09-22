@@ -1,0 +1,9 @@
+  × cannot assign value of type `string` to variable of type `integer`
+    ╭─[static_field_assign_wrong.sau:10:17]
+  9 │ 
+ 10 │ Counter.total = "not a number"
+    ·                 ───────┬──────
+    ·                        ╰── incompatible type
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

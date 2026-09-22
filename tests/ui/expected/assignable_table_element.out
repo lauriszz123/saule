@@ -1,0 +1,11 @@
+  × table value of type `string` is incompatible with declared element type
+  │ `Str`
+    ╭─[assignable_table_element.sau:13:28]
+ 12 │     static fn main()
+ 13 │         local all: table<Str> = {"a", "b"}
+    ·                                  ─┬─
+    ·                                   ╰── wrong value type
+ 14 │         println(#all)
+    ╰────
+  help: every value stored in this table must be a `Str`
+

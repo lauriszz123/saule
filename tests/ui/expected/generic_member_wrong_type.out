@@ -1,0 +1,10 @@
+  × cannot assign value of type `integer` to variable of type `string`
+    ╭─[generic_member_wrong_type.sau:19:19]
+ 18 │ local b: Box<integer> = Box(5)
+ 19 │ local s: string = b.get()
+    ·                   ───┬───
+    ·                      ╰── incompatible type
+ 20 │ println(s)
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

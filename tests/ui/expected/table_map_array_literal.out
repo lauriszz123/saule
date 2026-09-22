@@ -1,0 +1,11 @@
+  × cannot initialise `table<string, integer>` with an array-style literal
+   ╭─[table_map_array_literal.sau:4:39]
+ 3 │   static fn main()
+ 4 │     local m: table<string, integer> = {1, 2, 3}
+   ·                                       ────┬────
+   ·                                           ╰── array literal not allowed for a map-typed table
+ 5 │     println(m["a"])
+   ╰────
+  help: array-style `{ ... }` literals can only fill `table<T>` (integer-
+        keyed); start from `{}` and assign by key instead
+

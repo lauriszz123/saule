@@ -12,6 +12,41 @@ use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
 
+    /// Open a loop whose registers start at `first_reg`.
+    pub(crate) fn begin_loop(&mut self, first_reg: u16) {
+        self.loops.push(crate::compile::ctx::LoopCtx {
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            first_reg,
+            captures_at: self.f.regs.capture_mark(),
+        });
+    }
+
+    /// Close the loop's registers if a closure captured any of them.
+    ///
+    /// Emitted twice per loop that needs it. Once at the point **every**
+    /// iteration passes through before the next begins — where `continue`
+    /// lands too — because the next iteration rewrites the loop variable and
+    /// reuses the body's registers, and a closure from this one must keep
+    /// the value it saw: that is what makes each closure's `i` its own. And
+    /// once at the exit, where `break` lands, because the registers are
+    /// then handed to whatever follows the loop.
+    ///
+    /// A body block closes its own registers at its end, but only on the
+    /// path that reaches its end: `continue` and `break` jump past it, and
+    /// the loop variable is not the body's to close at all.
+    pub(crate) fn close_loop_captures(
+        &mut self,
+        l: &crate::compile::ctx::LoopCtx,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        if self.f.regs.captured_since(l.captures_at, l.first_reg) {
+            let a = self.reg8(l.first_reg, span)?;
+            self.emit(Instruction::abc(Op::CLOSEUP, a, 0, 0), span);
+        }
+        Ok(())
+    }
+
     pub(crate) fn for_numeric(
         &mut self,
         var: &str,
@@ -49,7 +84,7 @@ impl Compiler<'_> {
                 let ins = match kind {
                     Num::Int => Instruction::asbx(Op::LOADI, a, 1),
                     Num::Float => {
-                        let k = self.constant(saule_interpreter::Value::Float(1.0), span)?;
+                        let k = self.constant(saule_runtime::Value::Float(1.0), span)?;
                         Instruction::abx(Op::LOADK, a, k)
                     }
                 };
@@ -68,21 +103,23 @@ impl Compiler<'_> {
         // The user-visible loop variable is the fourth control register;
         // `FORPREP`/`FORLOOP` write it, the body reads it like any local.
         self.f.declare(var, base + 3);
-        self.loops.push(Default::default());
+        self.begin_loop(base);
         self.block(body)?;
-        let l = self.loops.pop().expect("pushed above");
+        let mut l = self.loops.pop().expect("pushed above");
         // `continue` in a numeric `for` must still *step* the loop, so it
         // targets the `FORLOOP` about to be emitted. Sending it to the body
         // top instead would spin forever.
         let step_at = self.f.label_here();
-        for c in l.continues {
+        self.close_loop_captures(&l, span)?;
+        for c in std::mem::take(&mut l.continues) {
             self.patch_to(c, step_at)?;
         }
         self.emit_jump_back(loop_op, a, body_start, span)?;
         self.patch_here(exit)?;
-        for b in l.breaks {
+        for b in std::mem::take(&mut l.breaks) {
             self.patch_here(b)?;
         }
+        self.close_loop_captures(&l, span)?;
 
         self.f.leave_scope();
         Ok(())
@@ -168,19 +205,23 @@ impl Compiler<'_> {
         // entered through it rather than falling into the body.
         let enter = self.emit_jump(Op::JMP, 0, span);
         let body_start = self.f.label_here();
-        self.loops.push(Default::default());
+        self.begin_loop(base);
         self.block(body)?;
-        let l = self.loops.pop().expect("pushed above");
+        let mut l = self.loops.pop().expect("pushed above");
         let step_at = self.f.label_here();
-        for c in l.continues {
+        // Before the step: `ITERNEXT` writes the next key and value into
+        // the loop-variable registers.
+        self.close_loop_captures(&l, span)?;
+        for c in std::mem::take(&mut l.continues) {
             self.patch_to(c, step_at)?;
         }
         self.patch_to(enter, step_at)?;
         self.emit_jump_back(Op::ITERNEXT, a, body_start, span)?;
         self.patch_here(prep)?;
-        for b in l.breaks {
+        for b in std::mem::take(&mut l.breaks) {
             self.patch_here(b)?;
         }
+        self.close_loop_captures(&l, span)?;
         let _ = top;
         self.f.leave_scope();
         Ok(())
@@ -245,19 +286,23 @@ impl Compiler<'_> {
             self.f.declare(name, c + i as u16);
         }
 
-        self.loops.push(Default::default());
+        self.begin_loop(base);
         self.block(body)?;
-        let l = self.loops.pop().expect("pushed above");
+        let mut l = self.loops.pop().expect("pushed above");
         // `continue` re-enters at the call: the next step is what advances
-        // this loop, there is no separate increment.
-        for k in l.continues {
-            self.patch_to(k, top)?;
+        // this loop, there is no separate increment. It passes through the
+        // close first, since the call writes the loop variables.
+        let step_at = self.f.label_here();
+        self.close_loop_captures(&l, span)?;
+        for k in std::mem::take(&mut l.continues) {
+            self.patch_to(k, step_at)?;
         }
         self.emit_jump_back(Op::JMP, 0, top, span)?;
         self.patch_here(exit)?;
-        for b in l.breaks {
+        for b in std::mem::take(&mut l.breaks) {
             self.patch_here(b)?;
         }
+        self.close_loop_captures(&l, span)?;
         self.f.leave_scope();
         Ok(())
     }
@@ -315,12 +360,15 @@ impl Compiler<'_> {
         // binds the variables, so it has to run before the first body pass.
         let enter = self.emit_jump(Op::JMP, 0, span);
         let body_start = self.f.label_here();
-        self.loops.push(Default::default());
+        self.begin_loop(base);
         self.block(body)?;
-        let l = self.loops.pop().expect("pushed above");
+        let mut l = self.loops.pop().expect("pushed above");
 
         let step_at = self.f.label_here();
-        for c in l.continues {
+        // Both steps write the loop variables, so the close comes before
+        // the mode test that picks one.
+        self.close_loop_captures(&l, span)?;
+        for c in std::mem::take(&mut l.continues) {
             self.patch_to(c, step_at)?;
         }
         self.patch_to(enter, step_at)?;
@@ -351,9 +399,10 @@ impl Compiler<'_> {
         self.patch_here(prep)?;
         self.patch_here(table_done)?;
         self.patch_here(drv_done)?;
-        for b in l.breaks {
+        for b in std::mem::take(&mut l.breaks) {
             self.patch_here(b)?;
         }
+        self.close_loop_captures(&l, span)?;
         self.f.leave_scope();
         Ok(())
     }

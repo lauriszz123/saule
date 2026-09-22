@@ -1,0 +1,10 @@
+  × `Math.huge` is a constant, not a function
+   ╭─[math_huge_extra_arg.sau:2:18]
+ 1 │ -- Math.huge takes no arguments — passing one is rejected.
+ 2 │ local h: float = Math.huge(1.0)
+   ·                  ───────┬──────
+   ·                         ╰── not callable
+ 3 │ println(h)
+   ╰────
+  help: drop the parentheses — write `Math.huge` to read its value
+

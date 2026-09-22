@@ -1,0 +1,10 @@
+  × cannot assign value of type `integer` to variable of type `string`
+    ╭─[generic_enum_payload_wrong_type.sau:14:21]
+ 13 │     case Result.Ok(v) then
+ 14 │         local s: string = v
+    ·                           ┬
+    ·                           ╰── incompatible type
+ 15 │         println(s)
+    ╰────
+  help: the value's type isn't compatible with the declared type
+

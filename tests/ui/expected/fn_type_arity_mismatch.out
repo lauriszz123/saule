@@ -1,0 +1,11 @@
+  × cannot assign value of type `fn(integer, integer) -> any` to variable of
+  │ type `fn(integer) -> integer`
+   ╭─[fn_type_arity_mismatch.sau:4:40]
+ 3 │ 
+ 4 │ local double: fn(integer) -> integer = (a: integer, b: integer) => a + b
+   ·                                        ────────────────┬────────────────
+   ·                                                        ╰── incompatible type
+ 5 │ println(double(5))
+   ╰────
+  help: the value's type isn't compatible with the declared type
+

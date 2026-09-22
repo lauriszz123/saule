@@ -305,7 +305,7 @@ impl Compiler<'_> {
                 let m = self.mark();
                 let o = self.expr_tmp(obj)?;
                 let key = self.constant(
-                    saule_interpreter::Value::Str(saule_interpreter::value::SauleStr::new(name.clone())),
+                    saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(name.clone())),
                     span,
                 )?;
                 let v = self.rhs_tmp(value)?;
@@ -366,7 +366,7 @@ impl Compiler<'_> {
                 Some(slot) => self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span),
                 None => {
                     let k = self.constant(
-                        saule_interpreter::Value::Str(saule_interpreter::value::SauleStr::new(name.clone())),
+                        saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(name.clone())),
                         span,
                     )?;
                     let Ok(kb) = u8::try_from(k) else {
@@ -484,10 +484,13 @@ impl Compiler<'_> {
         // file to the oracle. A refusal hiding a miscompile beside it is
         // trap 3.
         //
-        // The rule now: a target may be compiled here only if re-reading it
-        // is unobservable. `self`, a bare name and a literal all qualify;
-        // a call, a nested index or a chain does not, and refuses so the
-        // module falls back to the engine that evaluates it once.
+        // The rule now: a sub-expression that is observable to re-read — a
+        // call, a nested index, a chain — is evaluated **once**, up front,
+        // and pinned (`Compiler::pinned`), so both the read and the write
+        // below take the register instead of compiling it again. `self`, a
+        // bare name and a literal cost nothing to re-read, and are left
+        // alone so the paths that recognise them by shape (a class static,
+        // a local read in place) still do.
         fn rereadable(e: &Expr) -> bool {
             matches!(
                 e,
@@ -500,18 +503,41 @@ impl Compiler<'_> {
                     | Expr::Nil
             )
         }
-        let ok = match &target.value {
-            Expr::Member { obj, .. } => rereadable(&obj.value),
-            Expr::Index { obj, index } => rereadable(&obj.value) && rereadable(&index.value),
+        let subs: Vec<&Spanned<Expr>> = match &target.value {
+            Expr::Member { obj, .. } => vec![obj],
+            // Source order — receiver, then key — which is the order the
+            // tree-walker evaluated them in.
+            Expr::Index { obj, index } => vec![obj, index],
             // A bare local or module slot has no sub-expression at all.
-            _ => true,
+            _ => Vec::new(),
         };
-        if !ok {
-            return Err(CompileError::unsupported(
-                "a compound assignment whose target cannot be evaluated only once",
-                span.clone(),
-            ));
+        let m = self.mark();
+        let mut pinned = Vec::new();
+        for sub in subs {
+            if rereadable(&sub.value) || sub.id.is_none() {
+                continue;
+            }
+            let r = self.expr_tmp(sub)?;
+            self.pinned.insert(sub.id, r);
+            pinned.push(sub.id);
         }
+        let out = self.compound_assign_to(target, op, value, span);
+        for id in pinned {
+            self.pinned.remove(&id);
+        }
+        self.free_to(m);
+        out
+    }
+
+    /// [`compound_assign`](Self::compound_assign) once the target's
+    /// sub-expressions are safe to mention twice.
+    fn compound_assign_to(
+        &mut self,
+        target: &Spanned<Expr>,
+        op: saule_ast::BinOp,
+        value: &Spanned<Expr>,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
         // A synthetic `target op value` node, carrying the target's id so
         // the type table still answers for the operands.
         let combined = Spanned {

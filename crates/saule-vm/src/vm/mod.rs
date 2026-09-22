@@ -59,8 +59,8 @@ pub mod upval;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_interpreter::value::VmFunctionRef;
-use saule_interpreter::{RuntimeError, Value};
+use saule_runtime::value::VmFunctionRef;
+use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::Chunk;
 
@@ -71,29 +71,18 @@ pub use upval::Upvalue;
 use build::{build_classes, build_enums};
 use ops::max_frames_from_env;
 
-/// Frame-depth limit, deliberately **equal to the tree-walker's**
-/// `MAX_EVAL_DEPTH`.
+/// Frame-depth limit, equal to the runtime's re-entrant call limit
+/// ([`saule_runtime::call::MAX_CALL_DEPTH`]), which is the depth at which
+/// Saule programs have always reported a stack overflow.
 ///
 /// §6.4 argues this can be two orders of magnitude higher, and the argument
-/// is sound: `MAX_EVAL_DEPTH = 10_000` exists because a Saule call is a
-/// *native* stack frame in the tree-walker, where an overflow is a `SIGSEGV`
-/// rather than a catchable error, while here a call is a `Vec` push and the
-/// limit is pure policy.
-///
-/// It was set to `1_000_000` on that reasoning, and that made the engines
-/// disagree: `depth(50_000)` returned `50000` under `--vm` and raised
-/// `StackOverflow` without it. While the tree-walker is the default engine
-/// and the VM is an opt-in accelerator behind a silent fallback, "works with
-/// `--vm`, crashes without it" is precisely the surprise that fallback
-/// exists to prevent — and a limit is observable behaviour, not an
-/// implementation detail.
-///
-/// *Deviation from §6.4, argued rather than accidental:* the raise is
-/// deferred to Phase 4, where flipping the default makes the VM the
-/// definition of the language and the new limit an announced improvement
-/// rather than a difference between two engines that are supposed to agree.
-/// Pinned by `deep_recursion_hits_the_same_limit_under_both_engines`.
-pub const DEFAULT_MAX_FRAMES: usize = saule_interpreter::eval::MAX_EVAL_DEPTH as usize;
+/// is sound: a call within one `Vm` is a `Vec` push, not a native stack
+/// frame, so the limit is pure policy. It was held at the old value while a
+/// second engine with a native-stack limit had to agree with this one. That
+/// constraint is gone, so raising it is now a plain language change — and an
+/// observable one, since a program recursing past 10 000 frames stops
+/// failing — to be made deliberately rather than as a side effect.
+pub const DEFAULT_MAX_FRAMES: usize = saule_runtime::call::MAX_CALL_DEPTH as usize;
 
 /// Registers kept allocated **above** the active frame at all times.
 ///
@@ -135,7 +124,7 @@ pub struct VmShared {
     /// a path every statically-resolved call takes.
     closure_cache: Vec<Vec<std::cell::OnceCell<Rc<VmFunctionRef>>>>,
     /// One runtime class per `ClassProto`, built once at start-up.
-    classes: Vec<Rc<saule_interpreter::value::ClassObject>>,
+    classes: Vec<Rc<saule_runtime::value::ClassObject>>,
     /// Class identity -> index, so `CALLM` can find a receiver's vtable.
     ///
     /// A hash probe per dynamic dispatch, which is what §8.5's inline cache
@@ -144,13 +133,15 @@ pub struct VmShared {
     /// same `FxHashMap` the interpreter's other hot maps do — the key is an
     /// `Rc::as_ptr`, so SipHash's resistance bought nothing and cost ~4% of
     /// the `oop` benchmark.
-    class_of: saule_interpreter::fxhash::FxHashMap<usize, u32>,
+    class_of: saule_runtime::fxhash::FxHashMap<usize, u32>,
     /// Static fields, flat per class — the `GETSTAT`/`SETSTAT` form. Kept
     /// beside the class rather than inside it because a static is a slot,
-    /// not a named entry, once the compiler has resolved it.
-    statics: Vec<RefCell<Vec<Value>>>,
+    /// not a named entry, once the compiler has resolved it. Each vector is
+    /// shared with its class object's `slot_statics`, which is how a read by
+    /// name reaches the same cell.
+    statics: Vec<Rc<RefCell<Vec<Value>>>>,
     /// One runtime enum per `EnumProto`, built once at start-up.
-    enums: Vec<Rc<saule_interpreter::value::EnumObject>>,
+    enums: Vec<Rc<saule_runtime::value::EnumObject>>,
     max_frames: usize,
     /// Register files parked for reuse by the next re-entrant call.
     ///
@@ -248,9 +239,22 @@ impl Vm {
         // which does not exist until the `Rc` does.
         let shared = Rc::new_cyclic(|weak: &std::rc::Weak<VmShared>| {
             let (classes, class_of, statics) = build_classes(&chunks, weak);
+            let enums = build_enums(&chunks, weak);
+            // A class or enum named as a value reads its module slot, which
+            // no instruction writes — see `Chunk::type_slots`.
+            let mut modules = vec![Value::Nil; module_slots];
+            for (slot, ty) in chunks.iter().flat_map(|c| c.type_slots.iter()) {
+                let v = match *ty {
+                    crate::chunk::TypeSlot::Class(i) => classes.get(i as usize).cloned().map(Value::Class),
+                    crate::chunk::TypeSlot::Enum(i) => enums.get(i as usize).cloned().map(Value::Enum),
+                };
+                if let (Some(v), Some(dst)) = (v, modules.get_mut(*slot as usize)) {
+                    *dst = v;
+                }
+            }
             VmShared {
-                enums: build_enums(&chunks, weak),
-                modules: RefCell::new(vec![Value::Nil; module_slots]),
+                enums,
+                modules: RefCell::new(modules),
                 closure_cache: cache,
                 chunks,
                 classes,
@@ -373,7 +377,7 @@ impl Vm {
     /// Run `handle` over `args` on this VM's own register file.
     ///
     /// The body of both [`Vm::call`] and the re-entrant
-    /// [`VmFunction::call`](saule_interpreter::value::VmFunction::call).
+    /// [`VmFunction::call`](saule_runtime::value::VmFunction::call).
     ///
     /// **Guarded by the tree-walker's depth counter, not `max_frames`.**
     /// Each re-entrant call is a fresh `Vm` with `frames` of its own, so
@@ -388,7 +392,7 @@ impl Vm {
         args: &[Value],
         span: std::ops::Range<usize>,
     ) -> Result<Vec<Value>, RuntimeError> {
-        let _depth = saule_interpreter::enter_call_depth(&span)?;
+        let _depth = saule_runtime::enter_call_depth(&span)?;
         self.enter_invocation(handle, args, span)?;
         self.execute_collecting()
     }
@@ -429,9 +433,9 @@ impl Vm {
         args: &[Value],
         span: std::ops::Range<usize>,
     ) -> Result<Value, RuntimeError> {
-        let _depth = saule_interpreter::enter_call_depth(&span)?;
+        let _depth = saule_runtime::enter_call_depth(&span)?;
         self.enter_invocation(handle, args, span)?;
-        self.execute()?;
+        self.execute().map_err(|e| self.attribute(e))?;
         let first = if self.results.is_empty() {
             Value::Nil
         } else {
@@ -446,7 +450,7 @@ impl Vm {
     ///
     /// This is the project entry point — `class Main` with a
     /// `static fn main()`. The tree-walker's equivalent is
-    /// `saule_interpreter::call_class_static_method`, and the CLI needs the
+    /// `saule_runtime::call_class_static_method`, and the CLI needs the
     /// same thing from this engine: running the module body only *declares*
     /// the class, it does not start the program.
     ///

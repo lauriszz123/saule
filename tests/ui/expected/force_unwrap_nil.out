@@ -1,0 +1,11 @@
+  × force-unwrapped a `nil` value
+   ╭─[force_unwrap_nil.sau:5:11]
+ 4 │     local name: string? = nil
+ 5 │     print(name!)
+   ·           ──┬──
+   ·             ╰── this expression was `nil` when `!` was applied
+ 6 │   end
+   ╰────
+  help: use `??` to provide a fallback, or check with `if x != nil` before
+        unwrapping
+

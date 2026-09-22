@@ -1,0 +1,10 @@
+  × argument 1 of `f` expects `U`, got `T`
+    ╭─[generic_param_applied_to_wrong_type_param.sau:11:21]
+ 10 │     for item: T in items do
+ 11 │         out[#out + 1] = f(item)
+    ·                           ──┬─
+    ·                             ╰── wrong argument type
+ 12 │     end
+    ╰────
+  help: pass a value of type `U` here — check the signature of `f`
+

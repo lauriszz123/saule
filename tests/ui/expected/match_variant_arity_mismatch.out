@@ -1,0 +1,10 @@
+  × variant `Event.Click` expects 2 field(s), got 1
+    ╭─[match_variant_arity_mismatch.sau:12:18]
+ 11 │         local label: string = match e
+ 12 │             case Event.Click(x) then "click " .. x
+    ·                  ───────┬──────
+    ·                         ╰── wrong number of sub-patterns
+ 13 │             case Event.Quit then "bye"
+    ╰────
+  help: supply a sub-pattern for every payload field of the variant
+

@@ -1,0 +1,10 @@
+  × `Box.init` expects 2 argument(s), got 1
+    ╭─[named_arg_missing_required.sau:16:20]
+ 15 │   static fn main()
+ 16 │     local b: Box = Box(w: 5)
+    ·                    ────┬────
+    ·                        ╰── wrong number of arguments
+ 17 │     println(b.w, b.h)
+    ╰────
+  help: check the signature of `Box.init`
+

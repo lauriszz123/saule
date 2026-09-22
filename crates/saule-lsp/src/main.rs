@@ -67,7 +67,7 @@ fn serve() {
     // Seed the stdlib's prelude names and native typeck signatures so
     // references like `print`, `Math.sqrt`, `Iterable`, etc. don't get
     // flagged as undefined. Idempotent; safe to call once at startup.
-    saule_interpreter::init();
+    saule_runtime::init();
 
     // Built by hand rather than via `#[tokio::main]` so that worker and
     // blocking threads inherit the same large stack. Analysis runs inline on

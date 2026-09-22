@@ -1,0 +1,12 @@
+  × non-exhaustive `match`: no unguarded wildcard / binding arm
+    ╭─[match_non_exhaustive_nullable.sau:8:31]
+  7 │         static fn main()
+  8 │ ╭─▶         local label: string = match lookup(1)
+  9 │ │               case nil then "none"
+ 10 │ ├─▶         end
+    · ╰──── not all cases covered
+ 11 │             println(label)
+    ╰────
+  help: add a wildcard arm `case _ then ...` or cover the remaining cases
+        explicitly
+
