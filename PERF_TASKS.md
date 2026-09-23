@@ -31,9 +31,29 @@ Measured against Lua 5.5, min-of-9 interleaved, geomean excluding `startup`:
 | `fib` | 3.09x | 2.43x |
 
 Landed so far: table growth 2x→3x (`TableObject::grow_hint`), integer
-rendering without `core::fmt` (`saule_interpreter::itoa`), single-buffer
-concatenation (`display_into`/`display_hint`), and four fat dispatch arms
-moved out of line.
+rendering without `core::fmt` (`saule_runtime::itoa`), single-buffer
+concatenation (`display_into`/`display_hint`), four fat dispatch arms moved
+out of line, and the register write skipping `Value`'s drop glue
+(`Vm::set_reg`).
+
+### The drop glue on every register write ✓ DONE
+
+Found by disassembling `execute_loop` rather than by sampling it, which is
+why it survived this long: `sample` attributes the call to the arm that
+makes it, so the profile said "arithmetic" and looked reasonable.
+
+`*self.reg_mut(i) = Value::Int(x)` drops what the register held. The
+compiler cannot prove that what it held was an `Int`, so every `ADDII`,
+`SUBII`, `MULII`, `FORLOOP_I` and load ended in an unconditional
+`bl drop_in_place<Value>` — a call, on the hottest path there is, to run
+nothing. [`Value::is_scalar`] settles it inline instead, and
+[`Vm::set_reg`] keeps the real drop for the case that needs one. It is the
+mirror of the split `clone`/`clone_heap` already had on the copy side; only
+the drop side had been left out.
+
+Measured min-of-9 interleaved, against the same binary without it:
+`loop_arith` **0.75x**, `mandel` **0.90x**, `bintree` **0.91x**, the rest at
+parity. No fixture, example or benchmark output changed.
 
 ## The profiles these tasks are built on
 
@@ -481,6 +501,20 @@ next person should audit the remaining arms for anything outlinable — the
 four already moved were the ones that allocate, but they will not be the
 only ones — rather than adding superinstructions, replicating dispatch, or
 fusing pairs, all of which push the wrong way.
+
+> **Amended once, by `set_reg`.** The table above is a real pattern but it
+> was read too strongly. `set_reg` made `execute_loop` *bigger* (30 888 →
+> 31 140 bytes) and `loop_arith` 25% faster, because what it removed was a
+> **call** on the hot path, not work in general. So the rule is narrower
+> than "smaller is better": size costs when it displaces hot arms, and a
+> call costs more than the bytes that replace it. Both levers are real, and
+> a change that trades a few bytes for a removed call is worth measuring
+> rather than dismissing on the size argument.
+>
+> It also says something about method: this one was invisible to `sample`,
+> which attributed the call to the arm that made it. Disassembling the hot
+> arms found in an afternoon what profiling had not in a whole file of
+> tasks. Read the machine code before concluding an arm is at its floor.
 
 The corollary is that Saule's dispatch is at its architecture's floor.
 Getting past it means a design where the hot loop is not one enormous
