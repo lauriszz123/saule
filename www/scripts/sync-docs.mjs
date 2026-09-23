@@ -257,6 +257,23 @@ const ORDER = {
 	],
 };
 
+/**
+ * Turn ```luau fences back into ```saule.
+ *
+ * README.md and DOCS.md are read on GitHub first, and GitHub highlights a
+ * fence only when Linguist knows the language — it has no Saule entry, so
+ * ```saule renders as flat grey text there. The sources therefore tag their
+ * blocks `luau`, the nearest language Linguist *does* know (Lua plus `:`
+ * annotations, `->`, `?` and `<T>`), and this script swaps the tag back on the
+ * way into the site, where the real grammar is registered.
+ *
+ * Only the tag is touched; anything after it — Expressive Code's `title=`,
+ * line markers — is preserved.
+ */
+function restoreSauleFences(body) {
+	return body.replace(/^(\s*`{3,})luau\b/gm, '$1saule');
+}
+
 function planDocument({ file, dir, sourcePath }) {
 	const markdown = readFileSync(sourcePath, 'utf8');
 	const sections = splitSections(markdown)
@@ -296,10 +313,12 @@ function write(plans, index) {
 				.filter((l) => l !== null)
 				.join('\n');
 
-			const body = rewriteLinks(section.body, index, {
-				file: plan.file,
-				section: title,
-			});
+			const body = restoreSauleFences(
+				rewriteLinks(section.body, index, {
+					file: plan.file,
+					section: title,
+				})
+			);
 
 			const dir = join(docsRoot, section.dir);
 			mkdirSync(dir, { recursive: true });

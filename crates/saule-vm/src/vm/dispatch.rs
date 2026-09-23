@@ -403,7 +403,7 @@ impl Vm {
                 macro_rules! int_arith {
                     (|$l:ident, $r:ident| $e:expr) => {{
                         let ($l, $r) = self.int_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Int($e);
+                        self.set_reg(base + a, Value::Int($e));
                     }};
                 }
 
@@ -412,7 +412,7 @@ impl Vm {
                     (|$l:ident, $r:ident| $e:expr) => {{
                         let $l = self.int_at(base + ins.b() as usize, &proto, here)?;
                         let $r = ins.sc();
-                        *self.reg_mut(base + a) = Value::Int($e);
+                        self.set_reg(base + a, Value::Int($e));
                     }};
                 }
 
@@ -420,7 +420,7 @@ impl Vm {
                 macro_rules! float_arith {
                     (|$l:ident, $r:ident| $e:expr) => {{
                         let ($l, $r) = self.float_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Float($e);
+                        self.set_reg(base + a, Value::Float($e));
                     }};
                 }
 
@@ -462,14 +462,16 @@ impl Vm {
                 match op {
                     // ---- §15.1 moves and constants -----------------------
                     Op::MOVE => {
-                        *self.reg_mut(base + a) = (*self.reg(base + ins.b() as usize)).clone();
+                        let v = (*self.reg(base + ins.b() as usize)).clone();
+                        self.set_reg(base + a, v);
                     }
                     Op::LOADK => {
-                        *self.reg_mut(base + a) = chunk.constants[ins.bx() as usize].clone();
+                        let v = chunk.constants[ins.bx() as usize].clone();
+                        self.set_reg(base + a, v);
                     }
-                    Op::LOADI => *self.reg_mut(base + a) = Value::Int(ins.sbx() as i64),
-                    Op::LOADF => *self.reg_mut(base + a) = Value::Float(ins.sbx() as f64),
-                    Op::LOADBOOL => *self.reg_mut(base + a) = Value::Bool(ins.b() != 0),
+                    Op::LOADI => self.set_reg(base + a, Value::Int(ins.sbx() as i64)),
+                    Op::LOADF => self.set_reg(base + a, Value::Float(ins.sbx() as f64)),
+                    Op::LOADBOOL => self.set_reg(base + a, Value::Bool(ins.b() != 0)),
                     Op::LOADNIL => {
                         for i in 0..=ins.b() as usize {
                             *self.reg_mut(base + a + i) = Value::Nil;
@@ -560,11 +562,11 @@ impl Vm {
                                 l.wrapping_pow(exp)
                             }
                         };
-                        *self.reg_mut(base + a) = Value::Int(out);
+                        self.set_reg(base + a, Value::Int(out));
                     }
                     Op::NEGI => {
                         let v = self.int_at(base + ins.b() as usize, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Int(v.wrapping_neg());
+                        self.set_reg(base + a, Value::Int(v.wrapping_neg()));
                     }
                     Op::ADDII => int_arith_imm!(|l, imm| l.wrapping_add(imm)),
                     Op::SUBII => int_arith_imm!(|l, imm| l.wrapping_sub(imm)),
@@ -585,11 +587,11 @@ impl Vm {
                             Op::MODF => l % r,
                             _ => l.powf(r),
                         };
-                        *self.reg_mut(base + a) = Value::Float(out);
+                        self.set_reg(base + a, Value::Float(out));
                     }
                     Op::NEGF => {
                         let v = self.float_at(base + ins.b() as usize, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Float(-v);
+                        self.set_reg(base + a, Value::Float(-v));
                     }
 
                     // ---- §15.5 bitwise -----------------------------------
@@ -609,11 +611,11 @@ impl Vm {
                             // which `shift` already reads as "all bits out".
                             _ => shift(l, r.wrapping_neg()),
                         };
-                        *self.reg_mut(base + a) = Value::Int(out);
+                        self.set_reg(base + a, Value::Int(out));
                     }
                     Op::BNOT => {
                         let v = self.int_at(base + ins.b() as usize, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Int(!v);
+                        self.set_reg(base + a, Value::Int(!v));
                     }
 
                     // ---- §15.6 dynamic arithmetic fallback ---------------
@@ -744,28 +746,34 @@ impl Vm {
                     // it displaces still costs. Grouped.
                     Op::LTI | Op::LEI | Op::EQI => {
                         let (l, r) = self.int_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Bool(match op {
-                            Op::LTI => l < r,
-                            Op::LEI => l <= r,
-                            _ => l == r,
-                        });
+                        self.set_reg(
+                            base + a,
+                            Value::Bool(match op {
+                                Op::LTI => l < r,
+                                Op::LEI => l <= r,
+                                _ => l == r,
+                            }),
+                        );
                     }
                     Op::LTF | Op::LEF | Op::EQF => {
                         let (l, r) = self.float_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Bool(match op {
-                            Op::LTF => l < r,
-                            Op::LEF => l <= r,
-                            _ => l == r,
-                        });
+                        self.set_reg(
+                            base + a,
+                            Value::Bool(match op {
+                                Op::LTF => l < r,
+                                Op::LEF => l <= r,
+                                _ => l == r,
+                            }),
+                        );
                     }
                     Op::EQV => {
                         let eq = (*self.reg(base + ins.b() as usize))
                             == (*self.reg(base + ins.c() as usize));
-                        *self.reg_mut(base + a) = Value::Bool(eq);
+                        self.set_reg(base + a, Value::Bool(eq));
                     }
                     Op::NOT => {
                         let t = (*self.reg(base + ins.b() as usize)).is_truthy();
-                        *self.reg_mut(base + a) = Value::Bool(!t);
+                        self.set_reg(base + a, Value::Bool(!t));
                     }
 
                     // ---- §15.8 numeric loops ------------------------------
@@ -777,7 +785,7 @@ impl Vm {
                             return Err(RuntimeError::ZeroStep { span: proto.span_at(here) });
                         }
                         if int_in_range(from, limit, step) {
-                            *self.reg_mut(base + a + 3) = Value::Int(from);
+                            self.set_reg(base + a + 3, Value::Int(from));
                         } else {
                             pc = jump(pc, ins.sbx());
                         }
@@ -790,8 +798,8 @@ impl Vm {
                         // forever — the guard `run_numeric_loop_int` has.
                         let (next, overflow) = i.overflowing_add(step);
                         if !overflow && int_in_range(next, limit, step) {
-                            *self.reg_mut(base + a) = Value::Int(next);
-                            *self.reg_mut(base + a + 3) = Value::Int(next);
+                            self.set_reg(base + a, Value::Int(next));
+                            self.set_reg(base + a + 3, Value::Int(next));
                             pc = jump(pc, ins.sbx());
                         }
                     }
@@ -803,7 +811,7 @@ impl Vm {
                             return Err(RuntimeError::ZeroStep { span: proto.span_at(here) });
                         }
                         if float_in_range(from, limit, step) {
-                            *self.reg_mut(base + a + 3) = Value::Float(from);
+                            self.set_reg(base + a + 3, Value::Float(from));
                         } else {
                             pc = jump(pc, ins.sbx());
                         }
@@ -814,8 +822,8 @@ impl Vm {
                         let step = self.float_at(base + a + 2, &proto, here)?;
                         let next = i + step;
                         if float_in_range(next, limit, step) {
-                            *self.reg_mut(base + a) = Value::Float(next);
-                            *self.reg_mut(base + a + 3) = Value::Float(next);
+                            self.set_reg(base + a, Value::Float(next));
+                            self.set_reg(base + a + 3, Value::Float(next));
                             pc = jump(pc, ins.sbx());
                         }
                     }
@@ -871,9 +879,9 @@ impl Vm {
                             _ => (Value::Nil, Value::Nil, false),
                         };
                         if more {
-                            *self.reg_mut(base + a + 1) = Value::Int(i as i64 + 1);
-                            *self.reg_mut(base + a + 3) = k;
-                            *self.reg_mut(base + a + 4) = v;
+                            self.set_reg(base + a + 1, Value::Int(i as i64 + 1));
+                            self.set_reg(base + a + 3, k);
+                            self.set_reg(base + a + 4, v);
                             pc = jump(pc, ins.sbx());
                         }
                     }
