@@ -64,7 +64,14 @@ check_output() {
   local f="$1" out="$2" expected
   expected="$(dirname "$f")/expected/$(basename "$f" .sau).out"
   if [ -n "$SAULE_BLESS" ]; then
-    printf '%s\n' "$out" > "$expected"
+    # Only write when the recording would actually differ. `$(…)` strips
+    # trailing newlines on capture, and the comparison below strips them
+    # from the file too, so a golden that ends in a blank line already
+    # passes — rewriting it regardless would mean blessing one fixture
+    # churns every other golden in the tree, burying the real change.
+    if [ ! -f "$expected" ] || [ "$out" != "$(cat "$expected")" ]; then
+      printf '%s\n' "$out" > "$expected"
+    fi
     return 0
   fi
   if [ ! -f "$expected" ]; then
