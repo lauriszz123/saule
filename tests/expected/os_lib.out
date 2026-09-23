@@ -20,7 +20,7 @@ remove file    : true
 remove dir     : true
 exists after rm: false
 pid > 0      : true
-platform value: macos
+platform known: true
 execute true : 0
 argv count >= 0: true
 sep is / or \: true

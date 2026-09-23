@@ -75,8 +75,13 @@ println("exists after rm: " .. tostring(Os.exists(dir)))
 
 println("pid > 0      : " .. tostring(Os.pid() > 0))
 
+-- The value names the machine this runs on, so printing it would record
+-- whoever blessed it and fail everywhere else. What is worth pinning is
+-- that it is one of the four Saule knows about.
 local plat: OsPlatform = Os.platform()
-println("platform value: " .. plat.value)  -- linux/macos/windows/other
+local known: boolean = plat.value == "linux" or plat.value == "macos"
+  or plat.value == "windows" or plat.value == "other"
+println("platform known: " .. tostring(known))
 
 local exitCode: integer = Os.execute("true")
 println("execute true : " .. tostring(exitCode))  -- 0 on unix
