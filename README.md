@@ -4,6 +4,20 @@ Saule is a statically typed, class-oriented language inspired by Lua's simplicit
 
 > 📚 Looking for the **standard library**? See **[DOCS.md](./DOCS.md)**.
 
+<!--
+  Code fences here say `luau`, not `saule`. GitHub highlights a fence only when
+  Linguist knows the language, and it has no entry for Saule — so a fence
+  tagged `saule` renders as flat grey text. Luau is the closest one it knows:
+  Lua's syntax plus `:` type annotations, `->` return types, `?` nullability
+  and `<T>` generics, which covers nearly all of Saule's surface. Keywords we
+  don't share (`fn`, `class`, `match`, `enum`) simply stay uncoloured.
+
+  The website is unaffected: `npm run sync-docs` rewrites these fences back to
+  `saule`, so the docs pages are highlighted by the real grammar in
+  `editors/vscode/syntaxes/saule.tmLanguage.json`.
+-->
+
+
 ---
 
 ## Table of Contents
@@ -49,7 +63,7 @@ Parameters and fields must declare their type; on a local or a return type the a
 
 A function value's type is its **signature**: the types it is called with and the type it hands back. There is no bare `function` type — a slot that holds a callable has to say which calls are legal against it.
 
-```saule
+```luau
 local onTick: fn(float) -> nil = fn(dt: float)
   advance(dt)
 end
@@ -59,7 +73,7 @@ local compare: fn(integer, integer) -> boolean = (a, b) => a < b
 
 The parts are the same ones a declaration writes: a parenthesised parameter-type list, then `->` and the return type. `-> nil` is the "returns nothing" spelling. Nullability wraps the whole type, so an optional callback needs parentheses — `(fn(string) -> nil)?`, not `fn(string) -> nil?`, which is a callback returning a nullable `nil`.
 
-```saule
+```luau
 class TextField
   -- Optional callbacks: absent until the caller supplies one.
   onSubmitted: (fn(string) -> nil)?
@@ -69,7 +83,7 @@ end
 
 The payoff is that anonymous functions assigned into such a slot are checked against it — arity, parameter types, and return type — instead of being accepted on the grounds that they are *some* function:
 
-```saule
+```luau
 local field = TextField()
 field.onChanged = fn(count: integer)   -- error: expected fn(string) -> nil
   print(count)
@@ -78,7 +92,7 @@ end
 
 It also means the parameters of a lambda written into a typed slot don't need annotations. The signature supplies them, and the body is checked with the real types:
 
-```saule
+```luau
 field.onChanged = text => print(text:upper())   -- `text` is a `string`
 ```
 
@@ -97,7 +111,7 @@ They are listed here so the omission is visible rather than surprising.
 
 Use `integer` for whole values like counts, indices, and health. Use `float` for precision values like position, speed, and ratios:
 
-```saule
+```luau
 local health: integer = 100
 local speed: float = 3.14
 local index: integer = 1
@@ -106,7 +120,7 @@ local ratio: float = 0.75
 
 Mixing `integer` and `float` directly is a **compile error**:
 
-```saule
+```luau
 local health: integer = 100
 local dmg: float = 10.5
 local result = health - dmg    -- ERROR: cannot mix integer and float
@@ -119,7 +133,7 @@ Saule never auto-promotes — the checker catches this at compile time, so a hid
 Because the two types never mix implicitly, a whole number that belongs in a
 `float` has to *say* it is one. There are two ways to write it:
 
-```saule
+```luau
 local ratio: float = 0.75
 local half: float = .5         -- the integer part may be omitted
 local speed: float = 10f       -- `f` / `F` suffix: this is 10.0
@@ -130,7 +144,7 @@ local exact: float = 2.5f      -- allowed, though the `.5` already decided it
 The suffix earns its keep in expressions, where `10f` is considerably easier to
 read than `10 as float`:
 
-```saule
+```luau
 local speed: float = 3.5
 println(speed * 2f)            -- 7.0
 ```
@@ -144,7 +158,7 @@ Write `1.0` or `1f` instead.
 Integers can be written in hex or binary, with `_` allowed anywhere as a digit
 separator:
 
-```saule
+```luau
 local mask: integer = 0xFF        -- 255
 local flags: integer = 0b1010     -- 10
 local colour: integer = 0xFF_80_00
@@ -162,7 +176,7 @@ Strings are written with either `"` or `'`, exactly as in Lua. The two are the
 same type and the same syntax — only the quote that opened a literal closes it,
 so each style lets the other appear unescaped:
 
-```saule
+```luau
 local plain: string = "hello"
 local same: string = 'hello'
 
@@ -195,14 +209,14 @@ literal, a pattern, a table key or an import path.
 
 `/` on two integers is **integer division** (Lua / C semantics) — the result is the truncated quotient, never a float:
 
-```saule
+```luau
 local q: integer = 7 / 2     -- 3 (truncated, not 3.5)
 local r: integer = 7 % 2     -- 1
 ```
 
 If you want the real-number quotient, convert one operand first:
 
-```saule
+```luau
 local q: float = (7 as float) / 2.0    -- 3.5
 ```
 
@@ -210,7 +224,7 @@ Because mixing kinds is a compile error, `7 / 2.0` won't silently produce `3.5` 
 
 Dividing by zero is a runtime error for both `/` and `%`, not a `nan` or an `inf`:
 
-```saule
+```luau
 local q: integer = 7 / 0     -- ERROR: division by zero
 ```
 
@@ -218,7 +232,7 @@ local q: integer = 7 / 0     -- ERROR: division by zero
 
 `integer` is a signed 64-bit value, spanning `-9223372036854775808` to `9223372036854775807`. Arithmetic that leaves that range **wraps around** rather than trapping — the same rule Lua 5.4 uses:
 
-```saule
+```luau
 local big: integer = 9223372036854775807
 println(big + 1)             -- -9223372036854775808, not an error
 ```
@@ -229,7 +243,7 @@ This is the one place Saule does not catch a numeric mistake for you. It is a de
 
 `^` raises a number to a power. It binds tighter than every other arithmetic operator — tighter than unary minus, too — and is right-associative:
 
-```saule
+```luau
 local squared: integer = 5 ^ 2      -- 25
 local tower: integer = 2 ^ 3 ^ 2    -- 512, i.e. 2 ^ (3 ^ 2)
 local neg: integer = -2 ^ 2         -- -4, i.e. -(2 ^ 2)
@@ -238,7 +252,7 @@ local root: float = 2.0 ^ 0.5       -- 1.4142135623730951
 
 Like `/`, `^` follows the type of its operands rather than promoting: `integer ^ integer` stays an `integer`. A negative exponent has no integer answer, so it is an error — convert first if you want one:
 
-```saule
+```luau
 local half: float = 2.0 ^ -1.0      -- 0.5
 local bad: integer = 2 ^ -1         -- ERROR: negative exponent on integers
 ```
@@ -258,7 +272,7 @@ Six operators work on the bits of an `integer`, spelled as in Lua 5.3:
 
 `~` carries xor because `^` is already exponentiation — the same trade Lua 5.3 made. It is unary complement in prefix position and binary xor in infix position, told apart by where it appears, exactly as `-` already is.
 
-```saule
+```luau
 local flags: integer = 0b1100 | 0b0011   -- 15
 local common: integer = 0b1100 & 0b1010  -- 8
 local toggled: integer = 0b1100 ~ 0b1010 -- 6
@@ -269,7 +283,7 @@ local halved: integer = 255 >> 4         -- 15
 
 **Integers only.** Unlike Lua 5.3, a `float` is rejected rather than converted when it happens to have no fractional part — Saule never mixes the two numeric kinds implicitly, and this is not the place to start:
 
-```saule
+```luau
 local f: float = 6.0
 local bad: integer = f & 1               -- ERROR: `&` expects `integer`
 local ok: integer = (f as integer) & 1   -- 0
@@ -277,7 +291,7 @@ local ok: integer = (f as integer) & 1   -- 0
 
 **Shifts fill with zeros in both directions**, which is Lua's rule and means `>>` is a *logical* shift, not an arithmetic one — the sign bit is not replicated. A negative shift count shifts the other way, and shifting by 64 or more shifts every bit out:
 
-```saule
+```luau
 local logical: integer = -1 >> 63        -- 1, not -1
 local flipped: integer = 16 >> -2        -- 64 — negative count reverses
 local gone: integer = 1 << 64            -- 0
@@ -285,7 +299,7 @@ local gone: integer = 1 << 64            -- 0
 
 **Precedence follows Lua**: `|` is loosest, then `~`, then `&`, then the shifts, and all of them bind looser than `..`, `+` and `*` but tighter than any comparison. So the mask-test idiom needs no parentheses:
 
-```saule
+```luau
 if flags & 0b0100 != 0 then              -- (flags & 0b0100) != 0
     println("bit set")
 end
@@ -293,7 +307,7 @@ end
 
 **Compound assignment** exists for four of the five: `&=`, `|=`, `<<=`, `>>=`.
 
-```saule
+```luau
 local bits: integer = 0b0001
 bits |= 0b0100                           -- 5
 bits <<= 2                               -- 20
@@ -307,7 +321,7 @@ Classes can overload all six through `OpBAnd`, `OpBOr`, `OpBXor`, `OpShl`, `OpSh
 
 `nil` exists only as the **value** that inhabits a nullable slot. Writing `: nil` as a binding type is rejected so the meaning of the type system stays "every variable has a real type, and `?` says whether it can be empty":
 
-```saule
+```luau
 local nothing: nil = nil       -- ERROR: `nil` is not a valid binding type
 local pending: string? = nil   -- ok — `string?` means "string or nil"
 ```
@@ -318,7 +332,7 @@ local pending: string? = nil   -- ok — `string?` means "string or nil"
 
 `as` converts between them, explicitly:
 
-```saule
+```luau
 local health: integer = 100
 local dmg: float = 10.5
 
@@ -357,7 +371,7 @@ that needs a way out. `x as T` there is a **checked** cast: it tests the
 value at runtime and evaluates to `T?` — the value when it really is a `T`,
 and `nil` when it isn't.
 
-```saule
+```luau
 fn describe(y: any) -> string
     match type(y)
         case "integer" then return "int " .. tostring(y as integer ?? 0)
@@ -370,7 +384,7 @@ end
 Because the result is nullable, the failure case cannot be ignored — combine
 it with `??` for a fallback or `!` to turn it back into a throw:
 
-```saule
+```luau
 local n: integer = value as integer ?? 0     -- default on mismatch
 local m: integer = (value as integer)!       -- throw on mismatch
 ```
@@ -390,7 +404,7 @@ through a test.
   value the checker already knows is a `float`.
 - Every cast is explicit — Saule **never** converts on its own.
 
-```saule
+```luau
 local x: float = 7.9
 print(x as integer)          -- 7, not 8: truncation, not rounding
 
@@ -408,7 +422,7 @@ Saule follows Lua's scoping model with one deliberate departure: `local` makes a
 
 `local` is the workhorse — same lifetime as the surrounding block, no leak into the rest of the program:
 
-```saule
+```luau
 local name: string = "Arthur"
 local health: integer = 100
 local speed: float = 1.5
@@ -419,7 +433,7 @@ local alive: boolean = true
 
 `export name: T = value` declares a variable at module scope — the file-level counterpart of a class's public field. It is visible to every function in the file and importable by name from other modules:
 
-```saule
+```luau
 -- config.sau
 export appName: string = "MyGame"
 export version = 1                  -- inferred integer
@@ -429,7 +443,7 @@ export fn showHeader()
 end
 ```
 
-```saule
+```luau
 -- main.sau
 import appName, showHeader from "config"
 
@@ -438,7 +452,7 @@ print(appName)
 
 Module variables are mutable, and every write is checked against the declared type:
 
-```saule
+```luau
 version = version + 1        -- ok
 version = "two"              -- ERROR: `string` into `integer`
 ```
@@ -447,7 +461,7 @@ Use them sparingly — mutable state reachable from anywhere is the usual source
 
 There is no implicit-global form. Assigning to a name that was never declared is an error, so a misspelled target is reported instead of silently creating a second variable:
 
-```saule
+```luau
 apName = "MyGame"            -- ERROR: cannot assign to undeclared variable
 ```
 
@@ -455,7 +469,7 @@ apName = "MyGame"            -- ERROR: cannot assign to undeclared variable
 
 When the right-hand side is unambiguous, drop the `: T`:
 
-```saule
+```luau
 local name = "Arthur"        -- inferred string
 local health = 100           -- inferred integer
 local speed = 1.5            -- inferred float
@@ -468,7 +482,7 @@ The explicit form is preferred for public APIs (function bodies, module-level co
 
 Declare and assign several names in one statement. Types can be mixed (each name carries its own optional annotation):
 
-```saule
+```luau
 local x: integer, y: integer = 10, 20
 local name, age = "Arthur", 36          -- both inferred
 local q, r = divmod(17, 5)              -- unpack multi-return
@@ -478,7 +492,7 @@ local q, r = divmod(17, 5)              -- unpack multi-return
 
 A `local` declaration with no initializer is implicitly `nil`, so the type must be nullable:
 
-```saule
+```luau
 local pending: string? = nil    -- ok
 local pending: string?          -- ok, same thing
 local pending: string           -- ERROR: `string` is never nil
@@ -486,7 +500,7 @@ local pending: string           -- ERROR: `string` is never nil
 
 The same applies to any name a multiple binding leaves without a value, and to a module variable:
 
-```saule
+```luau
 local host: string, port: integer = "localhost"   -- ERROR: `port` is nil
 export appName: string                            -- ERROR: `string` is never nil
 ```
@@ -495,7 +509,7 @@ export appName: string                            -- ERROR: `string` is never ni
 
 `local` introduces the binding once; subsequent writes use plain `name = expr` (no `local`):
 
-```saule
+```luau
 local hp: integer = 100
 hp = hp - 25                    -- reassign the local
 local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
@@ -509,7 +523,7 @@ local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
 There is one form per arithmetic operator, plus `..=` for concatenation and
 `&=` `|=` `<<=` `>>=` for the bitwise ones:
 
-```saule
+```luau
 local hp: integer = 100
 hp -= 25                        -- same as `hp = hp - 25`
 hp *= 2
@@ -536,7 +550,7 @@ a silent mutation. It is a syntax error instead — write `a = a ~ b`.
 The right-hand side is a **full expression**, so it is combined before the
 operator applies — `p *= 3 + 4` multiplies by 7, not by 3:
 
-```saule
+```luau
 local p: integer = 2
 p *= 3 + 4                      -- 14
 ```
@@ -544,7 +558,7 @@ p *= 3 + 4                      -- 14
 Any assignable target works — locals, module variables, table elements,
 instance fields, and statics:
 
-```saule
+```luau
 local scores: table<integer> = {10, 20}
 scores[2] += 5                  -- 25
 
@@ -571,7 +585,7 @@ Typing follows `target = target op value` exactly: the operator's own operand
 rules apply, and the *result* has to fit the target's declared type. Both of
 these are compile errors:
 
-```saule
+```luau
 local n: integer = 1
 n /= 2.0                        -- ERROR: cannot mix integer and float
 n ..= "x"                       -- ERROR: `..` yields a string, `n` is an integer
@@ -581,7 +595,7 @@ Compound assignment is a **statement**, not an expression — `local x = (y += 1
 does not parse. It also routes through operator overloads, so a class that
 implements `OpAdd` supports `+=` with no extra work:
 
-```saule
+```luau
 local v: Vec = Vec(1, 2)
 v += Vec(10, 20)                -- calls Vec.add
 ```
@@ -609,7 +623,7 @@ A table type is written in one of two forms:
 `table<V>` and `table<integer, V>` are the **same type**; the array form just
 leaves the implicit integer key unwritten.
 
-```saule
+```luau
 local names: table<string> = {"alice", "bob"}          -- array of string
 local same: table<integer, string> = names             -- identical type
 local ages: table<string, integer> = {alice: 30}       -- string-keyed map
@@ -622,7 +636,7 @@ Tables are mutable, so a `table<Dog>` is **not** a `table<Animal>` — in
 either direction. Writing through the wider name would put an `Animal` into
 a table the narrower name still believes holds only `Dog`s:
 
-```saule
+```luau
 local dogs: table<Dog> = {}
 local animals: table<Animal> = dogs    -- ERROR: table<Dog> is not table<Animal>
 Table.insert(animals, Animal())        -- ...this is why
@@ -636,7 +650,7 @@ and a bare `table` annotation accepts anything.
 
 ### Literals
 
-```saule
+```luau
 -- Array part (positional entries — auto-indexed from 1).
 local nums: table<integer> = {10, 20, 30}
 print(nums[1])     -- 10
@@ -655,7 +669,7 @@ Keys in `{ key: value }` literals can be bare identifiers or quoted strings — 
 
 `t[k]` accepts any value as a key:
 
-```saule
+```luau
 local scores: table = {}
 scores["arthur"] = 50
 scores["merlin"] = 80
@@ -666,7 +680,7 @@ scores[1] = "first place"
 
 `t.foo` is equivalent to `t["foo"]` — both read and write, in any combination:
 
-```saule
+```luau
 local cfg: table = {}
 cfg.title = "My Game"        -- same as cfg["title"] = "My Game"
 cfg["width"] = 1920          -- same as cfg.width = 1920
@@ -682,7 +696,7 @@ This is plain map sugar, so it only applies to **tables**. Class instances and s
 
 `#t` returns the array length — the count of contiguous integer keys starting at `1`. Map entries don't contribute to `#`:
 
-```saule
+```luau
 local t: table = {10, 20, 30, name: "tags"}
 print(#t)    -- 3
 ```
@@ -691,7 +705,7 @@ print(#t)    -- 3
 
 Assigning `nil` does **not** delete a map entry (so JSON-style `{"x": null}` round-trips faithfully). Use `Table.remove(t, key)` to actually drop a key:
 
-```saule
+```luau
 local user: table = { name: "Arthur", draft: true }
 Table.remove(user, "draft")
 print(user.draft)    -- nil
@@ -711,7 +725,7 @@ Functions are declared with `fn`, take typed parameters, and state what they ret
 
 ### Basic Functions
 
-```saule
+```luau
 fn add(a: integer, b: integer) -> integer
     return a + b
 end
@@ -727,7 +741,7 @@ end
 
 ### Default Parameters
 
-```saule
+```luau
 fn createPlayer(name: string, health: integer = 100, score: integer = 0) -> Player
     return Player(name, health, score)
 end
@@ -738,7 +752,7 @@ local p: Player = createPlayer("Arthur", 50)     -- health=50, score=0
 
 ### Named Parameters
 
-```saule
+```luau
 fn setupGame(width: integer, height: integer, title: string, fullscreen: boolean = false) -> nil
     -- ...
 end
@@ -748,7 +762,7 @@ setupGame(width: 1920, height: 1080, title: "My Game", fullscreen: true)
 
 ### Multiple Return Values
 
-```saule
+```luau
 fn minMax(items: table<integer>) -> (integer, integer)
     local min: integer = items[1]
     local max: integer = items[1]
@@ -764,7 +778,7 @@ local min: integer, max: integer = minMax({3, 1, 7, 2, 9})
 
 ### Variadic Functions
 
-```saule
+```luau
 fn sum(...values: integer) -> integer
     local total: integer = 0
 
@@ -780,7 +794,7 @@ print(sum(1, 2, 3, 4, 5))    -- 15
 
 ### Generic Functions
 
-```saule
+```luau
 fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
     local result: table<T> = {}
 
@@ -799,7 +813,7 @@ local evens: table<integer> = filter<integer>(nums, x => x % 2 == 0)
 
 Inside the body a type parameter is **rigid**: `T` stands for whatever the caller picked, so it matches only itself. Widening into `any` is free, but narrowing to a concrete type is a downcast and goes through the checked `as` — the same escape `any` uses:
 
-```saule
+```luau
 fn onlyInts<T>(items: table<T>) -> table<integer>
     local result: table<integer> = {}
 
@@ -824,14 +838,14 @@ Classes, interfaces and enums take type parameters the same way — see [Generic
 
 The `when(...)` keyword starts a **colon-based pipeline** ("Saule style"). It wraps a value, and every subsequent `:func(args)` calls `func` with the upstream value threaded in as the **first argument**:
 
-```saule
+```luau
 local result: string = when("Hello, "):pipe()
 -- equivalent to:  pipe("Hello, ")
 ```
 
 Each stage feeds its result into the next, so a chain reads top-to-bottom even though every step is an ordinary free-function call:
 
-```saule
+```luau
 local size: integer = when({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
     :filter<integer>(x => x % 2 == 0)
     :map(x => x * x)
@@ -844,7 +858,7 @@ That's exactly the same as `length_of(map(filter<integer>({...}, x => x % 2 == 0
 
 The type of the upstream value must match the **first parameter** of the next stage, otherwise the typechecker rejects the chain at compile time:
 
-```saule
+```luau
 fn to_str(n: integer) -> string ... end
 fn square(n: integer) -> integer ... end
 
@@ -866,7 +880,7 @@ Rules:
 
 Single expression, most common form:
 
-```saule
+```luau
 local double: fn(integer) -> integer = x => x * 2
 local square: fn(integer) -> integer = x => x * x
 local greet: fn(string) -> nil       = name => print("Hi " .. name)
@@ -877,7 +891,7 @@ A single parameter needs no parentheses. Wrap them when there are none, when
 there are several, or when a parameter carries a type — and an explicit return
 type may follow the list:
 
-```saule
+```luau
 local now: fn() -> integer                  = () => 0
 local add: fn(integer, integer) -> integer  = (a, b) => a + b
 local scale: fn(float) -> float             = (x: float) -> float => x * 2.0
@@ -888,7 +902,7 @@ local pack: fn(integer) -> table<integer>   = (n: integer) -> table<integer> => 
 
 Multi-line anonymous function:
 
-```saule
+```luau
 local double: fn(integer) -> integer = fn(x)
     return x * 2
 end
@@ -900,7 +914,7 @@ Lambda parameters may omit `: T`. The type comes from the function type the
 lambda is being assigned to, so `x` below is a real `integer` inside the body
 — using it as anything else is a compile error, not a silent `any`:
 
-```saule
+```luau
 local double: fn(integer) -> integer = fn(x)
     return #x            -- ERROR: cannot take length of an `integer`
 end
@@ -908,7 +922,7 @@ end
 
 This works in all three lambda forms, and an explicit annotation still wins:
 
-```saule
+```luau
 local add: fn(integer, integer) -> integer = (a, b) => a + b
 local negate: fn(integer) -> integer       = x => -x
 local shout: fn(string) -> string          = fn(s: string) return s .. "!" end
@@ -920,7 +934,7 @@ is no target to infer it from.
 
 ### Functions as Parameters
 
-```saule
+```luau
 fn map(items: table<integer>, transform: fn(integer) -> integer) -> table<integer>
     local result: table<integer> = {}
     for i: integer, val: integer in items do
@@ -934,7 +948,7 @@ local doubled: table<integer> = map(nums, x => x * 2)
 
 ### Functions as Return Values
 
-```saule
+```luau
 fn multiplier(factor: integer) -> fn(integer) -> integer
     return x => x * factor
 end
@@ -947,7 +961,7 @@ print(triple(5))    -- 15
 
 Lambdas capture their surrounding scope:
 
-```saule
+```luau
 fn makeCounter(start: integer = 0) -> fn() -> integer
     local count: integer = start
 
@@ -968,7 +982,7 @@ print(counter())    -- 3
 When the last argument to a call is a function, it can be written after the
 closing parenthesis as a `do ... end` block:
 
-```saule
+```luau
 fn view(spacing: integer, body: fn() -> nil) -> nil
     Layout.push(spacing)
     body()
@@ -984,7 +998,7 @@ end
 That is sugar, nothing more — it produces the same call as writing the lambda
 out in full:
 
-```saule
+```luau
 view(spacing: 10, fn()
     text("Hello")
     button(label: "OK")
@@ -1002,7 +1016,7 @@ A trailing block takes parameters and a return type in parentheses after `do`,
 with the same rules as any other lambda — types are optional and inferred from
 the callee's signature:
 
-```saule
+```luau
 fn mapEach(items: table<integer>, transform: fn(integer) -> integer) -> table<integer>
     local out: table<integer> = {}
     for i, v in items do
@@ -1026,7 +1040,7 @@ other argument claimed**, wherever the arguments before it landed. This is also
 what lets it follow named arguments, even though a normal positional argument
 cannot:
 
-```saule
+```luau
 view(spacing: 10) do    -- `spacing` is named, so the block fills `body`
     text("Hello")
 end
@@ -1035,7 +1049,7 @@ end
 Binding to the callback slot — rather than to the next unfilled one — is what
 makes the form work with defaults in between:
 
-```saule
+```luau
 fn panel(title: string, spacing: integer = 0, body: fn() -> nil) -> nil
     body()
 end
@@ -1053,7 +1067,7 @@ The callback does not have to come last. A parameter that cannot hold a
 function is skipped over, so a trailing `enabled: boolean` doesn't get in the
 way:
 
-```saule
+```luau
 fn menuItem(label: string, onSelected: fn() -> nil, enabled: boolean = true) -> nil
     onSelected()
 end
@@ -1069,7 +1083,7 @@ error you asked for rather than a silently misplaced argument — which is also
 how supplying the callback *and* a trailing block reads as a duplicate-argument
 error:
 
-```saule
+```luau
 menuItem("Open", () => nil) do    -- error: a function where `enabled` wants a boolean
     showToast("Open")
 end
@@ -1080,7 +1094,7 @@ end
 `while` and `for` end their header with `do`, so a `do` there always belongs to
 the loop, never to a call in the condition:
 
-```saule
+```luau
 while queue.pop() do    -- the loop's `do`, not a trailing block on `pop()`
     ...
 end
@@ -1088,7 +1102,7 @@ end
 
 Parenthesise the call if you really want a trailing block inside a loop header:
 
-```saule
+```luau
 while (frame() do return true end) do
     ...
 end
@@ -1103,7 +1117,7 @@ A trailing block holds statements, so ordinary control flow works inside it.
 That is the practical reason to reach for one instead of passing a table of
 values:
 
-```saule
+```luau
 panel(title: "Stats") do
     for _, p in players do
         row(p.name)
@@ -1122,7 +1136,7 @@ end
 
 Each class lives in its own `.sau` file. Fields are declared at the top, followed by an `fn init` method (the constructor) and the rest of the methods.
 
-```saule
+```luau
 export class Player
     local name: string
     local health: integer
@@ -1163,7 +1177,7 @@ end
 ### Instantiation
 
 Call the class as if it were a function:
-```saule
+```luau
 local p: Player = Player("Arthur", 100, 5)
 
 p.greet()
@@ -1175,7 +1189,7 @@ Inside a method body, `self` is always in scope if it is a non `static` and in a
 
 In addition, every class member — static fields, static methods, instance methods — is reachable by its **bare name** from inside any method of the same class. Local variables and parameters can shadow them, which is what you want.
 
-```saule
+```luau
 class Counter
     local count: integer = 0
 
@@ -1211,7 +1225,7 @@ end
 
 The rule for [locals](#nullable-without-initializer) holds for fields too: a non-nullable field is never allowed to start out `nil`. Every field must therefore get its value from one of three places — a default in the declaration, an assignment in `init`, or a `?` on its type:
 
-```saule
+```luau
 class Player
     local name: string = "anon"     -- ok: default
     local level: integer            -- ok: `init` assigns it
@@ -1225,7 +1239,7 @@ end
 
 Leave all three off and the field is reported at compile time:
 
-```saule
+```luau
 class Player
     local level: integer            -- ERROR: never initialized
 end
@@ -1235,7 +1249,7 @@ That covers a class with no `init` at all (there is nowhere to assign the field)
 
 Static fields are stricter — nothing runs before the first read of a static, so `init` is not an option and the value has to be in the declaration:
 
-```saule
+```luau
 static local scores: table<integer> = {}    -- ok
 static local scores: table<integer>?        -- ok, starts nil
 static local scores: table<integer>         -- ERROR: never initialized
@@ -1245,20 +1259,20 @@ static local scores: table<integer>         -- ERROR: never initialized
 
 Static fields and methods belong to the class itself, not to instances. They are accessed via the class name from the outside, or by bare name (or `self.name` in a `static fn`) from inside:
 
-```saule
+```luau
 print(Player.maxHealth)         -- 100
 print(Player.getMaxHealth())    -- 100
 ```
 
 Static fields are shared across all instances. Modifying them affects the class globally:
 
-```saule
+```luau
 Player.maxHealth = 200
 ```
 
 A class with **no** `fn init` promotes every `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
 
-```saule
+```luau
 class Main
     static local lauris: Person = Person("Laurynas")
 
@@ -1272,7 +1286,7 @@ end
 
 Use `extends` to inherit from another class. Call the parent's `init` with `self.super(...)` from inside `init`:
 
-```saule
+```luau
 export class Entity
     name: string
 
@@ -1320,7 +1334,7 @@ cannot know which one it will get. The checker enforces:
   something unrelated is a compile error.
 - **Instance stays instance, static stays static.**
 
-```saule
+```luau
 class Base
     fn get() -> integer
         return 1
@@ -1344,7 +1358,7 @@ If a method wasn't meant to override anything, give it a different name.
 
 A class takes type parameters after its name, and they are in scope for every field, method signature and body inside it:
 
-```saule
+```luau
 class Box<T>
     value: T
 
@@ -1366,7 +1380,7 @@ local s: string = words.get()       -- and `string` here
 
 The argument is **inferred from the constructor** when you don't write it, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
 
-```saule
+```luau
 class Pair<A, B>
     left: A
     right: B
@@ -1387,14 +1401,14 @@ local n: integer = p.first()
 
 Type arguments are **invariant**, the same rule [table elements](#element-types-are-invariant) follow and for the same reason: a `Box<string>` accepted into a `Box<integer>` slot would be an alias through which the wrong type could be written back.
 
-```saule
+```luau
 local b: Box<integer> = Box("no")   -- ERROR: Box<string> is not Box<integer>
 local c: Box<integer, string> = ... -- ERROR: `Box` expects 1 type argument
 ```
 
 Naming the class **without** its arguments means "some instantiation, unknown which", and is accepted against any of them:
 
-```saule
+```luau
 local any: Box = Box(1)             -- ok
 local back: Box<integer> = any      -- ok
 ```
@@ -1409,7 +1423,7 @@ Interfaces define a contract — method signatures only, no fields, no bodies.
 
 ### Declaring an Interface
 
-```saule
+```luau
 interface Greetable
     fn greet() -> nil
 end
@@ -1424,7 +1438,7 @@ end
 
 A class can implement multiple interfaces:
 
-```saule
+```luau
 export class Player extends Entity implements Greetable, Damageable
     local health: integer
 
@@ -1452,7 +1466,7 @@ end
 
 Interfaces can extend other interfaces:
 
-```saule
+```luau
 interface Combatant extends Damageable
     fn attack(target: Damageable) -> nil
 end
@@ -1462,7 +1476,7 @@ end
 
 This is the main power — use interfaces as parameter and variable types:
 
-```saule
+```luau
 fn processEntity(target: Damageable, amount: integer) -> nil
     if target.isAlive() then
         target.damage(amount)
@@ -1475,7 +1489,7 @@ processEntity(p, 30)    -- works, Player implements Damageable
 
 ### Generic Interfaces
 
-```saule
+```luau
 interface Repository<T>
     fn save(item: T) -> nil
     fn findById(id: integer) -> T
@@ -1509,7 +1523,7 @@ The argument is real, not decoration: `Repository<Player>` substitutes `Player` 
 
 Any class implementing `Iterable<T>` works inside a `for-in` loop automatically. The contract is a single method `iter()` that returns a **step closure**: each call returns the next element, or `nil` to signal the end. The loop stops on the first `nil`.
 
-```saule
+```luau
 interface Iterable<T>
     fn iter() -> fn() -> T?
 end
@@ -1551,7 +1565,7 @@ end
 
 For iteration that yields **pairs** (key + value, index + value, etc.), implement `Iterable2<K, V>` whose `iter()` returns a closure with two return values:
 
-```saule
+```luau
 interface Iterable2<K, V>
     fn iter() -> fn() -> (K?, V?)
 end
@@ -1598,7 +1612,7 @@ Four more are **behaviour** contracts rather than operators — no symbol trigge
 
 They are always in scope — no import needed, like `Iterable`.
 
-```saule
+```luau
 export class Vec2 implements OpAdd<Vec2, Vec2>, OpMul<Vec2, Vec2>, OpEq<Vec2>, OpToString
     local x: float
     local y: float
@@ -1645,7 +1659,7 @@ The result type comes from the method's own return type, so `a + b` above is a `
 
 **One `compare` covers all four ordering operators.** It returns an `integer`: negative when `self` sorts first, zero when the two are equivalent, positive when `self` sorts last.
 
-```saule
+```luau
 export class Version implements OpCompare<Version>
     local major: integer
     local minor: integer
@@ -1692,7 +1706,7 @@ Saule's `__index` / `__newindex`, with one deliberate difference from Lua's:
 they are **not** miss handlers over a stored key space. A class instance has
 no keys of its own, so the method *is* the lookup and runs on every access.
 
-```saule
+```luau
 class Settings implements OpIndex<string, string>, OpNewIndex<string, string>
     local data: table<string, string>
     fn init() self.data = {} end
@@ -1724,7 +1738,7 @@ naming the class rather than a hang.
 
 #### `Assignable<T>` — build from an assigned value
 
-```saule
+```luau
 class Text implements Assignable<string>, OpToString
     local raw: string
     fn init(raw: string)  self.raw = raw end
@@ -1755,7 +1769,7 @@ asked for accepts it.
 module variable, and a user function's or method's parameters. Everywhere
 else the ordinary rule stands:
 
-```saule
+```luau
 local all: table<Text> = {"a"}   -- ERROR: table elements do not convert
 local t: Text = "a"
 t = "b"                           -- ERROR: only the declaration converts
@@ -1775,7 +1789,7 @@ working together.
 
 ### Simple Enum
 
-```saule
+```luau
 enum Direction
     North
     South
@@ -1788,7 +1802,7 @@ local d: Direction = Direction.North
 
 ### Valued Enum
 
-```saule
+```luau
 enum Status
     Alive = "alive"
     Dead = "dead"
@@ -1805,7 +1819,7 @@ print(s.describe())    -- "Status is: alive"
 
 ### Enums as Types
 
-```saule
+```luau
 fn move(self, dir: Direction) -> nil
     if dir == Direction.North then
         self.y = self.y + 1
@@ -1817,7 +1831,7 @@ end
 
 An enum takes type parameters the same way, and a variant's payload may be typed by one. This is what makes a `Result` worth writing: the arm that matches `Ok` binds a real `T`, not an `any` you have to cast:
 
-```saule
+```luau
 enum Result<T>
     Ok(value: T),
     Err(message: string)
@@ -1833,7 +1847,7 @@ end
 
 The instantiation comes from the construction where the payload pins it down, and from the annotation where it doesn't — `Result.Err("boom")` says nothing about `T`, so it fits any `Result`:
 
-```saule
+```luau
 local inferred = Result.Ok("hi")            -- Result<string>
 local failed: Result<integer> = Result.Err("boom")
 ```
@@ -1850,7 +1864,7 @@ Exhaustiveness is unaffected: type arguments say what the payloads hold, never w
 
 ### Basic Match
 
-```saule
+```luau
 local label: string = match status
     case Status.Ok then "fine"
     case Status.Warn then "watch out"
@@ -1864,7 +1878,7 @@ Each arm is `case <pattern> then <expression-or-block>`. The block runs until th
 
 When a variant carries data, the pattern binds those fields into locals visible inside the arm:
 
-```saule
+```luau
 enum Event
     Click(x: integer, y: integer),
     Key(code: string),
@@ -1884,7 +1898,7 @@ end
 
 `match` is the cleanest way to consume a `T?` — `nil` is just another pattern:
 
-```saule
+```luau
 match repo.findById(id)
     case nil then println("not found")
     case user then println("hi " .. user.name)
@@ -1897,7 +1911,7 @@ The bare name `user` here is a **binding pattern**: it captures the non-nil valu
 
 Use `_` to ignore a value and any identifier to bind it:
 
-```saule
+```luau
 match n
     case 0 then println("zero")
     case 1 then println("one")
@@ -1917,7 +1931,7 @@ A pattern that starts with a lowercase identifier (and isn't an enum variant) bi
 
 Add a condition that must also hold for the arm to fire:
 
-```saule
+```luau
 match n
     case x when x < 0 then println("negative")
     case 0 then println("zero")
@@ -1931,7 +1945,7 @@ Guards are evaluated **after** the pattern matches. If the guard is false, match
 
 Numbers, strings, booleans, and `nil` are all valid patterns:
 
-```saule
+```luau
 match command
     case "quit" then exit()
     case "help" then showHelp()
@@ -1943,7 +1957,7 @@ end
 
 Match destructures tuples returned by multi-value functions:
 
-```saule
+```luau
 fn divmod(a: integer, b: integer) -> (integer, integer)
     return a / b, a % b
 end
@@ -1958,7 +1972,7 @@ end
 
 The typechecker verifies that **every possible value** of the scrutinee is covered:
 
-```saule
+```luau
 enum Color
     Red, Green, Blue
 end
@@ -1976,7 +1990,7 @@ Add the missing variant or a wildcard arm to fix it. For nullables, both `nil` a
 
 Because `match` produces a value, it composes naturally with `local`, `return`, and arguments:
 
-```saule
+```luau
 fn priceFor(tier: Tier) -> integer
     return match tier
         case Tier.Free then 0
@@ -1994,7 +2008,7 @@ If used as a statement, the result is simply discarded — same rule as any othe
 
 Saule enforces null safety at compile time. A type is only nullable if declared with `?`.
 
-```saule
+```luau
 local name: string? = nil       -- ok, nullable
 local name: string = nil        -- ERROR, string is never nil
 ```
@@ -2003,14 +2017,14 @@ local name: string = nil        -- ERROR, string is never nil
 
 Use `?.` to access a member that may be nil. Returns nil instead of crashing:
 
-```saule
+```luau
 local player: Player? = repo.findById(id)
 local name: string? = player?.name      -- nil if `player` was nil
 ```
 
 For lengths of strings and tables, use `#`:
 
-```saule
+```luau
 local greeting: string? = nil
 local len: integer = #(greeting ?? "")     -- 0 when nil
 ```
@@ -2019,7 +2033,7 @@ local len: integer = #(greeting ?? "")     -- 0 when nil
 
 Use `??` to provide a fallback when a value is nil:
 
-```saule
+```luau
 local display: string = name ?? "Unknown"
 ```
 
@@ -2027,13 +2041,13 @@ local display: string = name ?? "Unknown"
 
 Use `!` to assert a value is not nil. Crashes at runtime if it is:
 
-```saule
+```luau
 local forced: string = name!
 ```
 
 ### Combining Operators
 
-```saule
+```luau
 local players: table<Player?> = getPlayers()
 
 for player: Player? in players do
@@ -2051,7 +2065,7 @@ Saule uses `try / catch` for unexpected runtime errors. For expected, recoverabl
 
 ### Throwing Errors
 
-```saule
+```luau
 fn damage(amount: integer)
     if amount < 0 then
         throw "Damage cannot be negative"
@@ -2063,7 +2077,7 @@ end
 
 ### Try / Catch
 
-```saule
+```luau
 try
     local p: Player = Player("Arthur", 100)
     p.damage(-10)
@@ -2076,7 +2090,7 @@ The `catch` clause names the thrown value and its expected type. Inside the catc
 
 ### Nullable returns for expected failures
 
-```saule
+```luau
 fn findPlayer(id: integer) -> Player?
     if id < 0 then
         return nil
@@ -2095,7 +2109,7 @@ Reserve `try / catch` for truly unexpected runtime errors — bad data from an e
 
 ### Numeric For
 
-```saule
+```luau
 for i: integer = 1, 10 do
     print(i)
 end
@@ -2113,7 +2127,7 @@ end
 
 ### For Each
 
-```saule
+```luau
 local names: table<string> = {"Arthur", "Merlin", "Lancelot"}
 
 for name: string in names do
@@ -2133,7 +2147,7 @@ end
 
 ### While
 
-```saule
+```luau
 local hp: integer = 100
 
 while hp > 0 do
@@ -2145,7 +2159,7 @@ end
 
 Runs at least once, checks the condition at the end:
 
-```saule
+```luau
 local input: string? = nil
 
 repeat
@@ -2155,7 +2169,7 @@ until input != nil
 
 ### Break and Continue
 
-```saule
+```luau
 for i: integer = 1, 10 do
     if i == 5 then continue end
     if i == 8 then break end
@@ -2171,7 +2185,7 @@ end
 
 An import names either a single `.sau` file or a folder module (a directory with an `init.sau` — see [Folder Modules](#folder-modules-initsau)). The path is relative to the importing file's directory, then the project's `src_dirs`.
 
-```saule
+```luau
 -- single import
 import Player from "entities/Player"
 
@@ -2187,7 +2201,7 @@ import * from "entities/Player"
 
 The path may be written **with or without quotes**. Unquoted, `.` separates folders — the two lines below mean exactly the same thing:
 
-```saule
+```luau
 import * from "some/folder/module"
 import * from some.folder.module
 ```
@@ -2217,7 +2231,7 @@ rather than failing on a missing entry file.
 A project listed in `dependencies:` is reachable by its `name:`. Naming the
 dependency on its own imports **the package itself**:
 
-```saule
+```luau
 import Json from "json"          -- the `json` package
 import Parser from "json/lexer"  -- a specific module inside it
 ```
@@ -2239,7 +2253,7 @@ json/
 
 A folder becomes a single importable **module** by giving it an `init.sau`. That file is a *barrel*: whatever it imports becomes the module's public surface, so a folder of files can be consumed as one unit.
 
-```saule
+```luau
 -- some/folder/module/init.sau
 -- Paths are relative to this file. This is all the barrel does: it lists
 -- the files whose exports should be visible to importers of the module.
@@ -2249,7 +2263,7 @@ import * from button
 
 Consumers then import the folder itself and get everything the barrel pulled in:
 
-```saule
+```luau
 import * from some.folder.module
 
 local view: View = View("Name")
@@ -2258,7 +2272,7 @@ local b: Button = Button()
 
 Named and aliased imports work against a barrel too:
 
-```saule
+```luau
 import View from some.folder.module
 import View as V, Button from some.folder.module
 ```
@@ -2269,7 +2283,7 @@ Re-exporting is **only** done by `init.sau` / `init.saule`. Any other file keeps
 
 Add `export` before a class, interface, enum, function, or variable to make it accessible from other files:
 
-```saule
+```luau
 export class Player
     -- ...
 end
@@ -2292,7 +2306,7 @@ A file without `export` is private to itself — even sibling files in the same 
 
 Not everything needs a class. Export standalone functions from a utility file:
 
-```saule
+```luau
 -- utils/Math.sau
 
 export fn clamp(value: integer, min: integer, max: integer) -> integer
@@ -2306,7 +2320,7 @@ export fn lerp(a: float, b: float, t: float) -> float
 end
 ```
 
-```saule
+```luau
 import Math from "utils/Math"
 
 local clamped: integer = Math.clamp(150, 0, 100)   -- 100
@@ -2398,7 +2412,7 @@ There are two ways to run Saule code, with different rules about what the entry 
 
 **Project mode** — `saule run` in a directory containing `saule.config`, or `saule run <dir>` naming one. The file pointed to by `entry:` must declare:
 
-```saule
+```luau
 class Main
     static fn main()
         -- your code here
@@ -2427,7 +2441,7 @@ that cannot be found or parsed.
 
 A typical project-mode entry file:
 
-```saule
+```luau
 import Player from "entities/Player"
 import Math from "utils/Math"
 

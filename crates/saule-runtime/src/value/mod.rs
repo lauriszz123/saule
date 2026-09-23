@@ -103,6 +103,21 @@ impl Clone for Value {
 }
 
 impl Value {
+    /// Does this value own nothing — no `Rc`, so no destructor to run?
+    ///
+    /// [`clone_heap`](Self::clone_heap)'s split, for the drop side. Writing
+    /// a register is `*slot = v`, which drops what was there, and the
+    /// compiler cannot see that on the arithmetic path what was there is an
+    /// `Int` every time — so it emits a call to `Value`'s drop glue per
+    /// instruction, to run nothing. This lets the caller settle it inline.
+    #[inline(always)]
+    pub fn is_scalar(&self) -> bool {
+        matches!(
+            self,
+            Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        )
+    }
+
     /// The refcounting half of [`Clone`], deliberately out of line.
     ///
     /// Not `cold` — strings and tables are ordinary traffic. Just too big to

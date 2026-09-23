@@ -68,6 +68,29 @@ impl Vm {
         unsafe { self.stack.get_unchecked_mut(i) }
     }
 
+    /// Write `R[i]`, without the call to `Value`'s drop glue that a plain
+    /// `*reg_mut(i) = v` emits.
+    ///
+    /// That call is unconditional in the machine code — every `ADDII`,
+    /// `SUBII` and `MULII` ends in one — and on the path that runs it has
+    /// nothing to do: the register it overwrites held an `Int`. Testing
+    /// [`is_scalar`](Value::is_scalar) here keeps the common case to a tag
+    /// compare and a store, and leaves the real drop for the case that
+    /// needs it.
+    #[inline(always)]
+    pub(crate) fn set_reg(&mut self, i: usize, v: Value) {
+        let slot = self.reg_mut(i);
+        if slot.is_scalar() {
+            // SAFETY: the old value owns nothing, so there is no destructor
+            // to skip and nothing to leak — overwriting it is the whole of
+            // what dropping it would do. `slot` is a valid `&mut Value`, so
+            // it is aligned and initialised, which is all `write` asks.
+            unsafe { std::ptr::write(slot, v) };
+        } else {
+            *slot = v;
+        }
+    }
+
     // ---- typed operand reads -------------------------------------------
 
     /// Marked `#[inline]` so the error half never materialises on the hot
@@ -197,6 +220,13 @@ fn cast_holds_deep(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> bool {
 ///
 /// A missing entry is a malformed chunk. Yielding `nil` rather than
 /// panicking is the choice `cast_holds_deep` makes for the same situation.
+///
+/// Out of line for the same reason as [`cast_holds_deep`], and it matters
+/// more here: `convert` parses strings into numbers, so inlining this drags
+/// integer and float parsing into the dispatch loop — 4 KiB of cold code
+/// spreading the arithmetic arms apart, worth ~7% on a tight loop that
+/// never casts at all.
+#[inline(never)]
 pub(crate) fn convert_to(chunk: &crate::chunk::Chunk, idx: usize, v: &Value) -> Value {
     match chunk.cast_types.get(idx) {
         Some(t) => saule_runtime::cast::convert(v, t),
