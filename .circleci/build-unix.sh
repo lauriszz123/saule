@@ -41,7 +41,9 @@ cargo build --release --locked --target "$TRIPLE" -p saule-cli -p saule-lsp
 # when Rosetta is missing. This runs first so that case is covered too.
 case "$TRIPLE" in
 *-apple-darwin)
-    python3 "$(dirname "$0")/align_macho_strtab.py" \
+    # Repo-root-relative, like every other path here: this script is run as
+    # `.circleci/build-unix.sh` from the checkout root.
+    python3 scripts/align_macho_strtab.py \
         "target/$TRIPLE/release/saule" "target/$TRIPLE/release/saule-lsp"
     ;;
 esac
