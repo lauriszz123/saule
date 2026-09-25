@@ -93,10 +93,7 @@ impl Compiler<'_> {
             Instruction::abc(Op::NEWVAR, a, args.len() as u8 + 1, 0),
             span,
         );
-        self.emit(
-            Instruction::ax_of(Op::EXTRAARG, (e_idx << 16) | tag),
-            span,
-        );
+        self.emit(Instruction::ax_of(Op::EXTRAARG, (e_idx << 16) | tag), span);
         self.move_result(base, dst, span)?;
         self.free_to(m);
         Ok(())

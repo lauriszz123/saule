@@ -91,11 +91,7 @@ pub(crate) fn cmd_check(target: Option<PathBuf>, dump_type_coverage: bool) {
 
 /// Configure the project (so `src_dirs` and dependencies resolve), then check
 /// every `.sau` file it owns.
-fn check_project(
-    db: &mut saule_db::Db,
-    dir: &Path,
-    dump_type_coverage: bool,
-) -> Vec<FileReport> {
+fn check_project(db: &mut saule_db::Db, dir: &Path, dump_type_coverage: bool) -> Vec<FileReport> {
     let project = crate::project::configure_project(dir, /* require_entry */ false);
     let files = project.source_files();
     if files.is_empty() {
@@ -158,6 +154,19 @@ fn check_file(db: &mut saule_db::Db, path: &Path, dump_type_coverage: bool) -> F
         };
     }
 
+    // Unresolved imports first, each at its `import`. They also end the
+    // check before the type pass: every name such an import would have bound
+    // is unknown, and typeck would only restate that at each use, burying
+    // the one line to fix. The editor draws the same line.
+    let unresolved = abs
+        .parent()
+        .map(|dir| saule_runtime::module::unresolved_imports(&parsed.module, dir))
+        .unwrap_or_default();
+    let skip_types = !unresolved.is_empty();
+    for e in unresolved {
+        diagnostics.push(Report::new(e).with_source_code(make_src()));
+    }
+
     let seed = (*db.seed(&abs)).clone();
 
     // Semantic first — typeck reads the registries it installs. Unlike `run`,
@@ -169,7 +178,9 @@ fn check_file(db: &mut saule_db::Db, path: &Path, dump_type_coverage: bool) -> F
     }
     // Same walk either way — `check_with_types` is `check` plus a sink, so
     // asking for coverage cannot change which diagnostics are produced.
-    let coverage = if dump_type_coverage {
+    let coverage = if skip_types {
+        None
+    } else if dump_type_coverage {
         let (errors, table) = saule_runtime::typeck::check_with_types(&parsed.module);
         for e in errors {
             diagnostics.push(Report::new(e).with_source_code(make_src()));

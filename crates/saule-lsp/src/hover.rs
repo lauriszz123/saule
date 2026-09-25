@@ -168,6 +168,22 @@ pub fn build_import_context(module: &Module, source: &str, dir: Option<&Path>) -
         if saule_runtime::dynamic_packages::is_dynamic_package(path) {
             let exports = saule_runtime::dynamic_packages::export_names(path);
             let aliases = aliases_for_dynamic(&exports, names);
+            // The package's `///` comments, compiled into its library, under
+            // the names this file imports them by — so hover shows them the
+            // way it shows an imported Saule file's `---` comments.
+            for (qname, text) in saule_runtime::dynamic_packages::package_docs(path) {
+                let (head, member) = match qname.split_once('.') {
+                    Some((h, m)) => (h, Some(m)),
+                    None => (qname.as_str(), None),
+                };
+                for (_, alias) in aliases.iter().filter(|(orig, _)| orig == head) {
+                    let key = match member {
+                        Some(m) => format!("{alias}.{m}"),
+                        None => alias.clone(),
+                    };
+                    ctx.docs.insert_summary(key, text.clone());
+                }
+            }
             ctx.import_blurbs
                 .push((d.span.clone(), render_native_import_blurb(path, &aliases)));
             continue;

@@ -190,8 +190,9 @@ pub fn fill_paths_with(
             // Unstable for the same reason. Two crossings at the same x bound
             // a zero-width span, so which one is taken first cannot change the
             // coverage that comes out.
-            crossings
-                .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            crossings.sort_unstable_by(|a, b| {
+                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             let mut winding = 0;
             let mut span_start = 0.0f64;

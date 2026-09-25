@@ -198,6 +198,20 @@ impl DocIndex {
         }
     }
 
+    /// Record a plain Markdown description for `qname`, for a declaration
+    /// whose documentation comes from somewhere other than a `---` comment
+    /// — a native package's `///` comments, compiled into its library. An
+    /// entry already present is kept, as [`merge`](Self::merge) keeps one.
+    pub fn insert_summary(&mut self, qname: String, summary: String) {
+        if summary.trim().is_empty() {
+            return;
+        }
+        self.entries.entry(qname).or_insert(DocBlock {
+            summary,
+            ..Default::default()
+        });
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&String, &DocBlock)> {
         self.entries.iter()
     }

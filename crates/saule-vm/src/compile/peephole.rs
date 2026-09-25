@@ -101,9 +101,7 @@ fn pass(
     // register different from returning a copy of it — see the `MOVE`/`RET1`
     // rule. Only a `CLOSURE` binds a parent register into a cell, so its
     // absence is the whole test.
-    let captures = code
-        .iter()
-        .any(|i| i.op() == Some(Op::CLOSURE));
+    let captures = code.iter().any(|i| i.op() == Some(Op::CLOSURE));
 
     for pc in 0..n {
         if protected(code, &targets, pc) {
@@ -140,7 +138,9 @@ fn pass(
                 if captures {
                     continue;
                 }
-                let Some(next) = code.get(pc + 1).copied() else { continue };
+                let Some(next) = code.get(pc + 1).copied() else {
+                    continue;
+                };
                 // The `RET1` must not be reachable except by falling into
                 // it. Jumping straight to it skips the `MOVE`, so it returns
                 // whatever `d` held on that path — which is exactly what

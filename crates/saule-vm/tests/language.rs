@@ -2,10 +2,10 @@
 //!
 //! Written against the tree-walker, which was the only engine when most of
 //! these were; they now run on the bytecode VM, the only engine there is.
-use saule_runtime::value::SauleStr;
-use saule_runtime::{RuntimeError, Value};
 use saule_lexer::Lexer;
 use saule_parser::parse;
+use saule_runtime::value::SauleStr;
+use saule_runtime::{RuntimeError, Value};
 use saule_semantic::SemanticError;
 use saule_vm::PipelineError;
 
@@ -162,7 +162,10 @@ fn if_elseif_else_chain() {
         end
         kind
     "#;
-    assert_eq!(eval(src).unwrap(), Value::Str(SauleStr::new("small".into())));
+    assert_eq!(
+        eval(src).unwrap(),
+        Value::Str(SauleStr::new("small".into()))
+    );
 }
 
 #[test]
@@ -402,7 +405,10 @@ fn function_type_name_is_function() {
         fn id(x: integer) -> integer return x end
         type(id)
     "#;
-    assert_eq!(eval(src).unwrap(), Value::Str(SauleStr::new("function".into())));
+    assert_eq!(
+        eval(src).unwrap(),
+        Value::Str(SauleStr::new("function".into()))
+    );
 }
 
 #[test]
@@ -727,7 +733,6 @@ f(9.9)",
             9,
         );
     }
-
 }
 
 // ── §Tables ─────────────────────────────────────────────────────────────

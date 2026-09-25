@@ -62,7 +62,6 @@ fn a_loop_inside_a_try_still_works() {
     );
 }
 
-
 #[test]
 fn a_nullable_catch_type_does_not_catch_everything() {
     // A live silent divergence, not a gap: `TypeDesc` had no `Nullable`, so
@@ -77,5 +76,3 @@ fn a_nullable_catch_type_does_not_catch_everything() {
         "local out: string = \"\"\n         try\n           throw \"boom\"\n         catch e: string?\n           out = e ?? \"nil\"\n         end\n         try\n           throw nil\n         catch e: string?\n           out = out .. \"|\" .. (e ?? \"nil\")\n         end\n         out",
     );
 }
-
-

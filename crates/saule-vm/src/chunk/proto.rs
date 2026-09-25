@@ -150,4 +150,3 @@ pub enum InlineCache {
         target: u32,
     },
 }
-

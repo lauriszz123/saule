@@ -129,16 +129,19 @@ fn a_defaulted_field_becomes_a_static_when_there_is_no_init() {
     // engines disagreed here they would disagree about what `C.field` means.
     let (protos, idx) = build("class C\n  count: integer = 0\nend");
     let c = &protos[idx.get("C").unwrap() as usize];
-    assert_eq!(c.layout.len(), 0, "the field should not be an instance slot");
+    assert_eq!(
+        c.layout.len(),
+        0,
+        "the field should not be an instance slot"
+    );
     assert_eq!(c.n_statics, 1);
     assert!(c.sindex.contains_key("count"));
 }
 
 #[test]
 fn a_defaulted_field_stays_an_instance_field_when_there_is_an_init() {
-    let (protos, idx) = build(
-        "class C\n  fn init()\n    self.count = 1\n  end\n  count: integer = 0\nend",
-    );
+    let (protos, idx) =
+        build("class C\n  fn init()\n    self.count = 1\n  end\n  count: integer = 0\nend");
     let c = &protos[idx.get("C").unwrap() as usize];
     assert_eq!(c.layout.slot("count"), Some(0));
     assert_eq!(c.n_statics, 0);
@@ -185,9 +188,13 @@ fn an_imported_parent_resolves_to_the_index_its_own_module_assigned() {
     let parent_src = "class Base\n  fn init()\n    self.a = 1\n  end\n  a: integer\nend";
     let toks = Lexer::new(parent_src).tokenize().expect("lex");
     let parent_mod = parse(toks).expect("parse");
-    let parent_layouts =
-        layout::build(&parent_mod, &mut classes, &mut interfaces, &Default::default())
-            .expect("parent layout");
+    let parent_layouts = layout::build(
+        &parent_mod,
+        &mut classes,
+        &mut interfaces,
+        &Default::default(),
+    )
+    .expect("parent layout");
     let base_idx = parent_layouts.get("Base").expect("Base laid out");
 
     let child_src =

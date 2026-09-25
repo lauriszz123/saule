@@ -306,7 +306,11 @@ fn every_node_is_numbered_and_unique() {
     let m = parse_src(SOURCE);
     let ids = collect(&m);
 
-    assert!(ids.len() > 80, "test source got smaller: only {} nodes", ids.len());
+    assert!(
+        ids.len() > 80,
+        "test source got smaller: only {} nodes",
+        ids.len()
+    );
     assert!(
         !ids.iter().any(|i| i.is_none()),
         "{} node(s) were left at NodeId::NONE",

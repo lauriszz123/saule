@@ -40,11 +40,17 @@ fn emits(listing: &str, op: &str) -> bool {
 /// truncates the proto that mentions it.
 fn proto<'a>(listing: &'a str, name: &str) -> &'a str {
     listing
-        .split("
-proto[")
+        .split(
+            "
+proto[",
+        )
         .find(|p| p.lines().next().is_some_and(|h| h.contains(name)))
-        .unwrap_or_else(|| panic!("no proto named `{name}` in:
-{listing}"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no proto named `{name}` in:
+{listing}"
+            )
+        })
 }
 
 #[test]
@@ -66,9 +72,18 @@ fn a_comparison_feeding_an_if_becomes_a_fused_branch() {
     // the `LOADI` that materialised it is gone too. `JLTI` itself is
     // asserted by `every_ordering_operator_has_a_fused_form`, which
     // compares two locals and so has no immediate to fold.
-    assert!(emits(&l, "JLTII"), "expected a fused immediate branch:{NL}{l}");
-    assert!(!emits(&l, "LTI"), "the materialising form is still emitted:{NL}{l}");
-    assert!(!emits(&l, "TEST"), "the boolean is still being tested:{NL}{l}");
+    assert!(
+        emits(&l, "JLTII"),
+        "expected a fused immediate branch:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "LTI"),
+        "the materialising form is still emitted:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "TEST"),
+        "the boolean is still being tested:{NL}{l}"
+    );
     // No `LOADI` assertion here: `return 0` and `return 1` legitimately load
     // literals of their own, and `emits` reads the whole listing. That the
     // comparison's own `LOADI` is gone is what
@@ -223,7 +238,6 @@ fn concat_operands_stay_adjacent() {
     );
 }
 
-
 // -- Phase 5, slice 2 ------------------------------------------------------
 
 #[test]
@@ -242,11 +256,13 @@ fn a_small_integer_literal_folds_into_the_instruction() {
         // A *parameter*, not a local: `local x = 7` emits a `LOADI` of its
         // own initializer, which would make the "no literal was
         // materialised" assertion pass or fail for the wrong reason.
-        let program =
-            format!("fn f(x: integer) -> integer{NL} return {src}{NL}end{NL}f(7)");
+        let program = format!("fn f(x: integer) -> integer{NL} return {src}{NL}end{NL}f(7)");
         let l = listing(&program);
         let body = proto(&l, "f(");
-        assert!(emits(body, want), "`{src}` did not fold to {want}:{NL}{body}");
+        assert!(
+            emits(body, want),
+            "`{src}` did not fold to {want}:{NL}{body}"
+        );
         assert!(
             !emits(body, "LOADI"),
             "`{src}` still materialised the literal:{NL}{body}"
@@ -261,7 +277,10 @@ fn subtraction_does_not_fold_a_left_hand_literal() {
     // commutative fold must not reach it.
     let program = format!("local x: integer = 7{NL}local r: integer = 1 - x{NL}r");
     let l = listing(&program);
-    assert!(!emits(&l, "SUBII"), "`1 - x` folded as if it commuted:{NL}{l}");
+    assert!(
+        !emits(&l, "SUBII"),
+        "`1 - x` folded as if it commuted:{NL}{l}"
+    );
     must_agree(&program);
 }
 
@@ -286,7 +305,10 @@ fn a_literal_too_large_for_the_immediate_keeps_the_register_form() {
 fn float_arithmetic_has_no_immediate_form() {
     let program = format!("local x: float = 7.0{NL}local r: float = x + 1.0{NL}r");
     let l = listing(&program);
-    assert!(!emits(&l, "ADDII"), "a float folded into an integer immediate:{NL}{l}");
+    assert!(
+        !emits(&l, "ADDII"),
+        "a float folded into an integer immediate:{NL}{l}"
+    );
     must_agree(&program);
 }
 
@@ -300,7 +322,10 @@ fn arithmetic_over_pure_operands_is_itself_pure() {
          local r: integer = s + i * 2 - 1{NL}r"
     );
     let l = listing(&program);
-    assert!(!emits(&l, "MOVE"), "a pure arithmetic operand still copied:{NL}{l}");
+    assert!(
+        !emits(&l, "MOVE"),
+        "a pure arithmetic operand still copied:{NL}{l}"
+    );
     must_agree(&program);
 }
 
@@ -311,11 +336,12 @@ fn an_unproved_operand_is_not_treated_as_pure() {
     // i.e. user code, in the middle of what the purity rule promises runs
     // none. It must also not fold a literal into an immediate, because
     // `ADDII` is an integer instruction and `a` here need not be one.
-    let program = format!(
-        "local a: any = 7{NL}local r: any = a + 1{NL}tostring(r)"
-    );
+    let program = format!("local a: any = 7{NL}local r: any = a + 1{NL}tostring(r)");
     let l = listing(&program);
-    assert!(!emits(&l, "ADDII"), "an unproved `+` folded an immediate:{NL}{l}");
+    assert!(
+        !emits(&l, "ADDII"),
+        "an unproved `+` folded an immediate:{NL}{l}"
+    );
     assert!(emits(&l, "ARITHX"), "expected the dynamic form:{NL}{l}");
     must_agree(&program);
 }
@@ -401,9 +427,18 @@ fn a_cast_that_is_immediately_unwrapped_becomes_one_instruction() {
          t[1] .. \",\" .. t[3]",
     );
     let body = proto(&l, "<lambda>");
-    assert!(emits(body, "CASTUNWRAP"), "the pair did not fuse:{NL}{body}");
-    assert!(!emits(body, "CASTCHK"), "the cast is still separate:{NL}{body}");
-    assert!(!emits(body, "UNWRAPNIL"), "the unwrap is still separate:{NL}{body}");
+    assert!(
+        emits(body, "CASTUNWRAP"),
+        "the pair did not fuse:{NL}{body}"
+    );
+    assert!(
+        !emits(body, "CASTCHK"),
+        "the cast is still separate:{NL}{body}"
+    );
+    assert!(
+        !emits(body, "UNWRAPNIL"),
+        "the unwrap is still separate:{NL}{body}"
+    );
 }
 
 #[test]
@@ -413,8 +448,14 @@ fn a_cast_without_an_unwrap_keeps_the_nil_yielding_form() {
     // turn every failed cast in the language into an error.
     let program = "local x: any = \"no\"\nlocal r: integer? = x as integer\nr ?? -1";
     let l = listing(program);
-    assert!(emits(&l, "CASTCHK"), "expected the nil-yielding form:{NL}{l}");
-    assert!(!emits(&l, "CASTUNWRAP"), "a bare cast fused into the raising form:{NL}{l}");
+    assert!(
+        emits(&l, "CASTCHK"),
+        "expected the nil-yielding form:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "CASTUNWRAP"),
+        "a bare cast fused into the raising form:{NL}{l}"
+    );
     must_agree(program);
 }
 
@@ -423,7 +464,10 @@ fn an_unwrap_that_is_not_a_cast_keeps_its_own_opcode() {
     let program = "local x: integer? = 7\nx!";
     let l = listing(program);
     assert!(emits(&l, "UNWRAPNIL"), "expected a plain unwrap:{NL}{l}");
-    assert!(!emits(&l, "CASTUNWRAP"), "a plain unwrap fused with nothing:{NL}{l}");
+    assert!(
+        !emits(&l, "CASTUNWRAP"),
+        "a plain unwrap fused with nothing:{NL}{l}"
+    );
     must_agree(program);
 }
 
@@ -472,8 +516,6 @@ fn a_fused_cast_still_walks_the_type_it_was_given() {
     );
 }
 
-
-
 // -- Phase 5, slice 3: immediate compares and the peephole pass -------------
 
 #[test]
@@ -519,7 +561,10 @@ fn a_literal_on_the_left_mirrors_the_comparison() {
              local r: integer = 0{NL}if 2 {op} a then{NL} r = 1{NL}end{NL}r"
         );
         let l = listing(&src);
-        assert!(emits(&l, want), "`2 {op} a` did not mirror to {want}:{NL}{l}");
+        assert!(
+            emits(&l, want),
+            "`2 {op} a` did not mirror to {want}:{NL}{l}"
+        );
         must_agree(&src);
     }
 }
@@ -568,7 +613,10 @@ fn a_float_comparison_does_not_fold_a_literal() {
          if a < 2.0 then{NL} r = 1{NL}end{NL}r"
     );
     let l = listing(&src);
-    assert!(emits(&l, "JLTF"), "a float compare should still fuse:{NL}{l}");
+    assert!(
+        emits(&l, "JLTF"),
+        "a float compare should still fuse:{NL}{l}"
+    );
     assert!(
         !emits(&l, "JLTII"),
         "a float folded into an integer immediate:{NL}{l}"
@@ -703,7 +751,6 @@ fn a_fault_after_a_peephole_still_blames_the_right_line() {
     );
 }
 
-
 // -- Phase 5, slice 4: JEQK, and `and` in branch position -------------------
 
 #[test]
@@ -719,8 +766,14 @@ fn an_equality_against_a_constant_becomes_a_fused_branch() {
     );
     let l = listing(&src);
     assert!(emits(&l, "JEQK"), "a constant `==` did not fuse:{NL}{l}");
-    assert!(!emits(&l, "EQV"), "the materialising form is still emitted:{NL}{l}");
-    assert!(!emits(&l, "TEST"), "the boolean is still being tested:{NL}{l}");
+    assert!(
+        !emits(&l, "EQV"),
+        "the materialising form is still emitted:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "TEST"),
+        "the boolean is still being tested:{NL}{l}"
+    );
     must_agree(&src);
 }
 
@@ -734,7 +787,10 @@ fn a_constant_equality_folds_from_either_side() {
          if \"x\" == c then{NL} r = 1{NL}end{NL}r"
     );
     let l = listing(&src);
-    assert!(emits(&l, "JEQK"), "a left-hand constant did not fold:{NL}{l}");
+    assert!(
+        emits(&l, "JEQK"),
+        "a left-hand constant did not fold:{NL}{l}"
+    );
     must_agree(&src);
 }
 
@@ -749,7 +805,10 @@ fn an_inequality_against_a_constant_keeps_the_materialising_form() {
          if c != \"y\" then{NL} r = 1{NL}end{NL}r"
     );
     let l = listing(&src);
-    assert!(!emits(&l, "JEQK"), "`!=` must not fuse to an equality:{NL}{l}");
+    assert!(
+        !emits(&l, "JEQK"),
+        "`!=` must not fuse to an equality:{NL}{l}"
+    );
     must_agree(&src);
 }
 
@@ -801,9 +860,18 @@ fn an_and_in_branch_position_tests_each_conjunct() {
     );
     let l = listing(&src);
     assert!(emits(&l, "JLEI"), "the first conjunct did not fuse:{NL}{l}");
-    assert!(emits(&l, "JLEII"), "the second conjunct did not fuse:{NL}{l}");
-    assert!(!emits(&l, "TESTSET"), "the `and` still materialises:{NL}{l}");
-    assert!(!emits(&l, "LEI"), "a conjunct still materialises a bool:{NL}{l}");
+    assert!(
+        emits(&l, "JLEII"),
+        "the second conjunct did not fuse:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "TESTSET"),
+        "the `and` still materialises:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "LEI"),
+        "a conjunct still materialises a bool:{NL}{l}"
+    );
     must_agree(&src);
 }
 

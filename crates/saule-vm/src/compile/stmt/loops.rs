@@ -11,7 +11,6 @@ use super::super::ctx::{Compiler, Num};
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     /// Open a loop whose registers start at `first_reg`.
     pub(crate) fn begin_loop(&mut self, first_reg: u16) {
         self.loops.push(crate::compile::ctx::LoopCtx {
@@ -406,5 +405,4 @@ impl Compiler<'_> {
         self.f.leave_scope();
         Ok(())
     }
-
 }

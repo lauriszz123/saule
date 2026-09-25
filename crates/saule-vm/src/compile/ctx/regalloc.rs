@@ -35,9 +35,9 @@
 
 use std::ops::Range;
 
+use super::Compiler;
 use crate::compile::CompileError;
 use crate::op::MAX_REGS;
-use super::Compiler;
 
 /// A saved `free` position. Releasing back to one frees every register
 /// allocated since it was taken.
@@ -222,7 +222,6 @@ impl RegAlloc {
 }
 
 impl Compiler<'_> {
-
     // ---- registers -----------------------------------------------------
 
     pub fn alloc(&mut self, span: &Range<usize>) -> Result<u16, CompileError> {
@@ -232,7 +231,10 @@ impl Compiler<'_> {
 
     pub fn alloc_n(&mut self, n: u16, span: &Range<usize>) -> Result<u16, CompileError> {
         let name = self.func_label();
-        self.f.regs.alloc_n(n).map_err(|o| o.at(&name, span.clone()))
+        self.f
+            .regs
+            .alloc_n(n)
+            .map_err(|o| o.at(&name, span.clone()))
     }
 
     pub fn mark(&self) -> Mark {
@@ -243,7 +245,6 @@ impl Compiler<'_> {
         self.f.regs.free_to(m);
     }
 
-
     /// A register operand must fit in an 8-bit field.
     pub fn reg8(&self, r: u16, span: &Range<usize>) -> Result<u8, CompileError> {
         u8::try_from(r).map_err(|_| CompileError::TooManyRegisters {
@@ -252,7 +253,6 @@ impl Compiler<'_> {
             span: span.clone(),
         })
     }
-
 }
 
 #[cfg(test)]
@@ -352,7 +352,10 @@ mod tests {
         r.enter_block();
         r.alloc().unwrap();
         r.note_capture(outer);
-        assert!(r.leave_block().is_none(), "the inner block owns nothing captured");
+        assert!(
+            r.leave_block().is_none(),
+            "the inner block owns nothing captured"
+        );
         assert_eq!(r.leave_block(), Some(outer));
     }
 

@@ -36,9 +36,11 @@ fn arithmetic_on_an_any_typed_operand_matches() {
     // only `ops::binary` can decide what `+` means here. Calling it rather
     // than reimplementing it is what keeps the answer — and any diagnostic —
     // identical to the tree-walker by construction.
-    must_agree("local t: table<any> = {1, 2}
+    must_agree(
+        "local t: table<any> = {1, 2}
 local x = t[1]
-x");
+x",
+    );
 }
 
 #[test]
@@ -61,7 +63,6 @@ fn an_operator_overload_dispatches_through_the_fallback() {
          c.n",
     );
 }
-
 
 // ── §8.5 dynamic member dispatch ──────────────────────────────────────────
 //
@@ -120,7 +121,6 @@ fn an_enum_variants_value_falls_back_to_its_name() {
          local r: string = s.value .. \"/\" .. s.name\nr",
     );
 }
-
 
 // ── §8.5 the dynamic escape hatch, nullable and write sides ───────────────
 //
@@ -199,5 +199,3 @@ fn a_member_write_on_an_unproved_receiver_reports_the_same_error() {
          local r: string = \"done\"\nr",
     );
 }
-
-

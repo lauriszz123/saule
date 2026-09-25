@@ -199,7 +199,8 @@ pub fn build_enums(
                 // module variable — so it has no value here, and
                 // `Compiler::enum_values` emits the code that sets it.
                 EnumVariant::Valued(n, expr) => {
-                    let k = crate::compile::literal_value(&expr.value).map(|val| chunk.add_constant(val));
+                    let k = crate::compile::literal_value(&expr.value)
+                        .map(|val| chunk.add_constant(val));
                     (n.clone(), 0, k)
                 }
                 EnumVariant::Tuple { name, fields } => (name.clone(), fields.len() as u8, None),
@@ -330,8 +331,11 @@ pub fn build(
                 continue;
             };
             let iface = &ifaces[ii as usize];
-            let slots: Option<Vec<u16>> =
-                iface.methods.iter().map(|m| proto.vindex.get(m).copied()).collect();
+            let slots: Option<Vec<u16>> = iface
+                .methods
+                .iter()
+                .map(|m| proto.vindex.get(m).copied())
+                .collect();
             match slots {
                 Some(s) => {
                     proto.itables.insert(ii, s);
@@ -352,7 +356,11 @@ pub fn build(
             }
         }
         if !missing.is_empty() {
-            return Err(crate::compile::missing_methods(name, &missing, span.clone()));
+            return Err(crate::compile::missing_methods(
+                name,
+                &missing,
+                span.clone(),
+            ));
         }
         let proto = proto;
         index.insert((*name).to_string(), classes.len() as ClassIdx);

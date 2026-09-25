@@ -392,7 +392,11 @@ mod tests {
         let watch: Vec<Weak<RefCell<TableObject>>> = {
             let ring: Vec<_> = (0..5).map(|_| table()).collect();
             for i in 0..5 {
-                put(&ring[i], "next", Value::Table(Rc::clone(&ring[(i + 1) % 5])));
+                put(
+                    &ring[i],
+                    "next",
+                    Value::Table(Rc::clone(&ring[(i + 1) % 5])),
+                );
             }
             ring.iter().map(Rc::downgrade).collect()
         };

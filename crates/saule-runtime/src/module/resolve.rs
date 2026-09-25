@@ -77,6 +77,51 @@ pub fn resolve_import_path(dir: &Path, raw: &str) -> Option<PathBuf> {
     None
 }
 
+/// Why `import … from "<raw>"` does not resolve, in the words every tool
+/// reports it with — `saule run`, `saule check`, the program driver and the
+/// editor all call this, so one missing module reads the same everywhere.
+///
+/// When an installed library claims the name but could not be used — built
+/// against another ABI, installed the old way, not a Saule package — that is
+/// the answer, rather than a claim that nothing is there.
+pub fn unresolved_import_message(raw: &str) -> String {
+    match crate::dynamic_packages::rejection(raw) {
+        Some(why) => format!("`{raw}` cannot be imported: {why}"),
+        None => format!(
+            "could not find module `{raw}` (looked for `.sau` / `.saule` / `init.sau`, \
+             a project dependency, and an installed native package)"
+        ),
+    }
+}
+
+/// Every `import` in `module` that does not resolve from `dir`, as errors
+/// anchored at the `import` statement, in source order.
+///
+/// Worth running before anything type-checks the module: an import that
+/// does not resolve leaves every name it would have bound unknown, and the
+/// first thing to notice is otherwise a use of one of those names, far from
+/// the line that actually needs fixing.
+pub fn unresolved_imports(module: &saule_ast::Module, dir: &Path) -> Vec<crate::RuntimeError> {
+    module
+        .stmts
+        .iter()
+        .filter_map(|stmt| {
+            let saule_ast::Stmt::Decl(d) = &stmt.value else {
+                return None;
+            };
+            let saule_ast::Decl::Import { path, .. } = &d.value else {
+                return None;
+            };
+            resolve_import_path(dir, path)
+                .is_none()
+                .then(|| crate::RuntimeError::ImportError {
+                    message: unresolved_import_message(path),
+                    span: d.span.clone(),
+                })
+        })
+        .collect()
+}
+
 pub(crate) fn try_resolve_base(base: &Path) -> Option<PathBuf> {
     let candidates = [
         base.with_extension("sau"),

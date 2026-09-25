@@ -329,9 +329,18 @@ fn type_hint_for_a_checked_cast() {
 #[test]
 fn type_hint_for_a_conversion_has_no_question_mark() {
     for (src, want) in [
-        ("fn f(x: float) -> nil\n  local n = x as integer\nend\n", ": integer"),
-        ("fn f(i: integer) -> nil\n  local n = i as float\nend\n", ": float"),
-        ("fn f(i: integer) -> nil\n  local n = i as string\nend\n", ": string"),
+        (
+            "fn f(x: float) -> nil\n  local n = x as integer\nend\n",
+            ": integer",
+        ),
+        (
+            "fn f(i: integer) -> nil\n  local n = i as float\nend\n",
+            ": float",
+        ),
+        (
+            "fn f(i: integer) -> nil\n  local n = i as string\nend\n",
+            ": string",
+        ),
     ] {
         let hints = raw_hints(src);
         assert!(

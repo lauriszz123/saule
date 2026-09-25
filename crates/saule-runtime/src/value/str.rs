@@ -48,7 +48,10 @@ pub struct SauleStr(Rc<StrBox>);
 
 impl SauleStr {
     pub fn new(s: String) -> SauleStr {
-        SauleStr(Rc::new(StrBox { hash: Cell::new(UNHASHED), s }))
+        SauleStr(Rc::new(StrBox {
+            hash: Cell::new(UNHASHED),
+            s,
+        }))
     }
 
     pub fn as_str(&self) -> &str {
@@ -230,7 +233,10 @@ mod tests {
 
     #[test]
     fn orders_by_bytes() {
-        let mut v: Vec<SauleStr> = ["pear", "apple", "fig"].iter().map(|s| SauleStr::from(*s)).collect();
+        let mut v: Vec<SauleStr> = ["pear", "apple", "fig"]
+            .iter()
+            .map(|s| SauleStr::from(*s))
+            .collect();
         v.sort();
         let got: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
         assert_eq!(got, ["apple", "fig", "pear"]);

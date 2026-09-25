@@ -58,10 +58,7 @@ fn rejects(src: &str, needle: &str) {
 
 #[test]
 fn undefined_name_is_reported() {
-    rejects(
-        "fn main() -> nil\n  println(nope)\n  return\nend\n",
-        "nope",
-    );
+    rejects("fn main() -> nil\n  println(nope)\n  return\nend\n", "nope");
 }
 
 #[test]
@@ -135,10 +132,7 @@ end
 
 #[test]
 fn self_outside_a_class_is_rejected() {
-    rejects(
-        "fn f() -> nil\n  println(self)\n  return\nend\n",
-        "self",
-    );
+    rejects("fn f() -> nil\n  println(self)\n  return\nend\n", "self");
 }
 
 #[test]

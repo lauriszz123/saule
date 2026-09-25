@@ -11,12 +11,16 @@ fn repeat_matches() {
     must_agree("local i: integer = 99\nrepeat i = i + 1 until i >= 5\ni");
     // `until` sees a local the body declared — the reason the condition is
     // compiled inside the body's scope.
-    must_agree("local n: integer = 0\nrepeat\n  local step: integer = 2\n  n = n + step\nuntil n >= 10\nn");
+    must_agree(
+        "local n: integer = 0\nrepeat\n  local step: integer = 2\n  n = n + step\nuntil n >= 10\nn",
+    );
 }
 
 #[test]
 fn break_and_continue_work_in_repeat() {
-    must_agree("local i: integer = 0\nrepeat\n  i = i + 1\n  if i > 3 then break end\nuntil false\ni");
+    must_agree(
+        "local i: integer = 0\nrepeat\n  i = i + 1\n  if i > 3 then break end\nuntil false\ni",
+    );
 }
 
 #[test]
@@ -51,7 +55,6 @@ fn a_table_built_in_a_loop_matches() {
          t[1] + t[2] + t[3] + t[4] + t[5]",
     );
 }
-
 
 // ── stdlib constants and table dot access ─────────────────────────────────
 
@@ -156,7 +159,6 @@ fn table_dot_access_past_the_eight_bit_constant_window() {
     must_agree(&src);
 }
 
-
 #[test]
 fn a_prelude_name_in_a_value_position_folds() {
     // `Io.stdout` is an object, not one of the scalars `prelude_member`
@@ -175,5 +177,3 @@ fn a_shadowed_prelude_name_in_a_value_position_is_not_folded() {
         "local Math: table<string, float> = {pi: 3.0}\n         local m: table<string, float> = Math\n         m[\"pi\"]",
     );
 }
-
-

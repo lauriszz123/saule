@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Install the example `engine` native package into macOS' ~/.saule.
 #
-# Cargo names the macOS cdylib `libsaule_engine_lib.dylib`, but the manifest's
-# `binary` list uses the un-prefixed `saule_engine_lib.dylib`, so we rename on
-# copy. The manifest is written straight to its install location by the
-# `gen-manifest` binary, which renders it from the crate's `#[saule_export]`
-# declarations and is built alongside the library.
+# The package is one file: the library carries its own description (every
+# class, signature and doc comment is compiled into it by `saule-sdk`), so
+# installing is copying it into `native_packages/`. Any name works; this keeps
+# Cargo's.
 #
 # Build first:  cargo build --release -p saule-engine-lib
 set -euo pipefail
@@ -16,22 +15,21 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
-TARGET_DIR="target"
-DYLIB_SRC="$TARGET_DIR/release/libsaule_engine_lib.dylib"
-GEN_MANIFEST="$TARGET_DIR/release/gen-manifest"
+LIB="target/release/libsaule_engine_lib.dylib"
 SAULE_HOME="${SAULE_HOME:-$HOME/.saule}"
 
-for f in "$DYLIB_SRC" "$GEN_MANIFEST"; do
-    if [ ! -f "$f" ]; then
-        echo "error: $f not found — run 'cargo build --release -p saule-engine-lib' first" >&2
-        exit 1
-    fi
-done
+if [ ! -f "$LIB" ]; then
+    echo "error: $LIB not found — run 'cargo build --release -p saule-engine-lib' first" >&2
+    exit 1
+fi
 
-mkdir -p "$SAULE_HOME/native_packages" "$SAULE_HOME/native_manifests"
-cp "$DYLIB_SRC" "$SAULE_HOME/native_packages/saule_engine_lib.dylib"
-"$GEN_MANIFEST" "$SAULE_HOME/native_manifests/engine.toml"
+mkdir -p "$SAULE_HOME/native_packages"
+# An install from before packages carried their own description left a
+# second copy under another name, and a separate manifest. Neither is used
+# any more, and the old copy would claim the package a second time.
+rm -f "$SAULE_HOME/native_packages/saule_engine_lib.dylib" \
+      "$SAULE_HOME/native_manifests/engine.toml"
+rmdir "$SAULE_HOME/native_manifests" 2>/dev/null || true
+cp "$LIB" "$SAULE_HOME/native_packages/"
 
-echo "installed:"
-echo "  $SAULE_HOME/native_packages/saule_engine_lib.dylib"
-echo "  $SAULE_HOME/native_manifests/engine.toml"
+echo "installed: $SAULE_HOME/native_packages/$(basename "$LIB")"
