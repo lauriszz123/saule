@@ -15,6 +15,7 @@
 use std::rc::Rc;
 
 use crate::error::RuntimeError;
+use crate::value::foreign::NATIVE_CONSTRUCTOR;
 use crate::value::{ClassObject, MethodRef, Value};
 
 /// Maximum nesting depth of re-entrant calls.
@@ -210,6 +211,14 @@ pub fn call_value(
         // A bytecode function: the VM runs it on a fresh register file over
         // its existing shared state.
         Value::VmFunction(f) => f.invoke(args, span),
+        // `Image(…)` on a native class: its constructor. A Saule class is
+        // constructed by `NEW`, which the compiler emits for a class it can
+        // prove; a native class has no layout to prove, so its construction
+        // is an ordinary call of the class value, and lands here.
+        Value::Class(class) => match class.lookup_static_field(NATIVE_CONSTRUCTOR) {
+            Some(ctor) => call_value(&ctor, args, span),
+            None => Err(RuntimeError::not_callable(callee.type_name(), span)),
+        },
         other => Err(RuntimeError::not_callable(other.type_name(), span)),
     }
 }
@@ -315,6 +324,19 @@ pub fn call_method(
         }
         Value::File(handle) => crate::stdlib::io::dispatch_file_method(handle, name, args)
             .map_err(|message| RuntimeError::TypeError { message, span }),
+        // An object of a native class: its method takes the object as
+        // argument 0, the same shape a compiled method takes `self` in.
+        Value::Foreign(obj) => {
+            if let Some(m) = obj.class.methods.get(name) {
+                let mut all = Vec::with_capacity(args.len() + 1);
+                all.push(receiver.clone());
+                all.extend_from_slice(args);
+                return call_value(m, &all, span);
+            }
+            // A property whose value happens to be callable.
+            let v = crate::members::read_member(receiver, name, span.clone())?;
+            call_value(&v, args, span)
+        }
         _ => {
             let v = crate::members::read_member(receiver, name, span.clone())?;
             call_value(&v, args, span)

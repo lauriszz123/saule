@@ -349,6 +349,16 @@ impl Vm {
                 self.store_results(dst, &vs, n_ret);
                 Ok(())
             }
+            // `Image(…)` on a native package's class. A Saule class is built
+            // by `NEW`, which needs a layout the compiler can prove; a native
+            // class has none, so its construction compiles to a plain call of
+            // the class value, which runs the constructor it carries.
+            Value::Class(class) => {
+                match class.lookup_static_field(saule_runtime::value::foreign::NATIVE_CONSTRUCTOR) {
+                    Some(ctor) => self.call_native(&ctor, dst, n_args, n_ret, site),
+                    None => Err(RuntimeError::not_callable(callee.type_name(), site.span())),
+                }
+            }
             // The tree-walker's wording, from its own constructor: `CALL`
             // and `call_value_multi` compile the same source, so a value
             // that is not callable has to say so identically.

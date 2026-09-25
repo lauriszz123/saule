@@ -756,9 +756,7 @@ fn load_one(
         };
         let Some(target_path) = saule_runtime::module::resolve_import_path(&dir, raw) else {
             return Err(import_error(
-                format!(
-                    "could not find module `{raw}` (looked for `.sau` / `.saule` / `init.sau`)"
-                ),
+                saule_runtime::module::unresolved_import_message(raw),
                 &d.span,
             ));
         };

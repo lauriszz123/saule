@@ -13,9 +13,9 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-# The SDK does the ABI heavy lifting: `#[saule_export]` generates the C shim
-# and infers the Saule signature, `saule_package!` declares the manifest, and
-# `manifest::render` emits `<name>.toml`. Authors write only safe Rust.
+# The SDK does the ABI heavy lifting: `#[saule_export]` generates the C shim,
+# infers the Saule signature and compiles it into the library, and
+# `saule_package!` declares the package. Authors write only safe Rust.
 saule-sdk = { path = "../saule-sdk" }
 # X11-only on Linux: WSLg's Wayland compositor (Weston) lacks server-side
 # window decorations, so minifb's Wayland backend fails to map a visible
