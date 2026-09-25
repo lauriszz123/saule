@@ -44,11 +44,11 @@ use saule_runtime::{RuntimeError, Value};
 use crate::chunk::{Chunk, Proto};
 use crate::op::{Instruction, Op};
 
+use super::call::Site;
 use super::ops::{
     cast_holds, convert_to, field_slot_err, float_in_range, index_array, int_in_range, jump,
     operand_err, shift, snapshot_pairs,
 };
-use super::call::Site;
 use super::{ALL_RESULTS, Closure, Upvalue, Vm};
 
 impl Vm {
@@ -113,7 +113,12 @@ impl Vm {
         // sort comparator, an iterator step — can run itself when the
         // native calls it back. The one place the loop needs the chunk as
         // an owner rather than a borrow: the closure outlives this frame.
-        let cl = VmFunctionRef::new(Closure::bound(child, Rc::clone(chunk), upvals, &self.shared));
+        let cl = VmFunctionRef::new(Closure::bound(
+            child,
+            Rc::clone(chunk),
+            upvals,
+            &self.shared,
+        ));
         *self.reg_mut(base + a) = Value::VmFunction(cl);
     }
 
@@ -124,7 +129,9 @@ impl Vm {
     #[inline(never)]
     fn vararg(&mut self, base: usize, a: usize) {
         let n = self.frames.last().expect("frame").n_args as usize;
-        let items: Vec<Value> = (a..n.max(a)).map(|i| (*self.reg(base + i)).clone()).collect();
+        let items: Vec<Value> = (a..n.max(a))
+            .map(|i| (*self.reg(base + i)).clone())
+            .collect();
         *self.reg_mut(base + a) =
             Value::Table(Rc::new(RefCell::new(TableObject::from_array(items))));
     }
@@ -144,7 +151,9 @@ impl Vm {
         // The payload is an array-style table of the positional arguments,
         // matching what the tree-walker's tuple-variant constructor builds —
         // pattern destructuring reads it positionally.
-        let items: Vec<Value> = (0..n).map(|i| (*self.reg(base + a + 1 + i)).clone()).collect();
+        let items: Vec<Value> = (0..n)
+            .map(|i| (*self.reg(base + a + 1 + i)).clone())
+            .collect();
         let payload = Value::Table(Rc::new(RefCell::new(TableObject::from_array(items))));
         let Some(e) = self.shared.enums.get(e_idx) else {
             return Err(RuntimeError::TypeError {
@@ -188,10 +197,15 @@ impl Vm {
         // moving anything.
         let n_args = (ins.b() as usize).saturating_sub(1);
         let recv = (*self.reg(base + a)).clone();
-        let args: Vec<Value> =
-            (0..n_args).map(|i| (*self.reg(base + a + 1 + i)).clone()).collect();
+        let args: Vec<Value> = (0..n_args)
+            .map(|i| (*self.reg(base + a + 1 + i)).clone())
+            .collect();
         let vs = saule_runtime::call::call_method(&recv, name, &args, site.span())?;
-        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+        let n_ret = if ins.c() == 0 {
+            ALL_RESULTS
+        } else {
+            ins.c() - 1
+        };
         self.store_results(base + a, &vs, n_ret);
         Ok(())
     }
@@ -403,7 +417,7 @@ impl Vm {
                 macro_rules! int_arith {
                     (|$l:ident, $r:ident| $e:expr) => {{
                         let ($l, $r) = self.int_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Int($e);
+                        self.set_reg(base + a, Value::Int($e));
                     }};
                 }
 
@@ -412,7 +426,7 @@ impl Vm {
                     (|$l:ident, $r:ident| $e:expr) => {{
                         let $l = self.int_at(base + ins.b() as usize, &proto, here)?;
                         let $r = ins.sc();
-                        *self.reg_mut(base + a) = Value::Int($e);
+                        self.set_reg(base + a, Value::Int($e));
                     }};
                 }
 
@@ -420,7 +434,7 @@ impl Vm {
                 macro_rules! float_arith {
                     (|$l:ident, $r:ident| $e:expr) => {{
                         let ($l, $r) = self.float_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Float($e);
+                        self.set_reg(base + a, Value::Float($e));
                     }};
                 }
 
@@ -458,18 +472,19 @@ impl Vm {
                     }};
                 }
 
-
                 match op {
                     // ---- §15.1 moves and constants -----------------------
                     Op::MOVE => {
-                        *self.reg_mut(base + a) = (*self.reg(base + ins.b() as usize)).clone();
+                        let v = (*self.reg(base + ins.b() as usize)).clone();
+                        self.set_reg(base + a, v);
                     }
                     Op::LOADK => {
-                        *self.reg_mut(base + a) = chunk.constants[ins.bx() as usize].clone();
+                        let v = chunk.constants[ins.bx() as usize].clone();
+                        self.set_reg(base + a, v);
                     }
-                    Op::LOADI => *self.reg_mut(base + a) = Value::Int(ins.sbx() as i64),
-                    Op::LOADF => *self.reg_mut(base + a) = Value::Float(ins.sbx() as f64),
-                    Op::LOADBOOL => *self.reg_mut(base + a) = Value::Bool(ins.b() != 0),
+                    Op::LOADI => self.set_reg(base + a, Value::Int(ins.sbx() as i64)),
+                    Op::LOADF => self.set_reg(base + a, Value::Float(ins.sbx() as f64)),
+                    Op::LOADBOOL => self.set_reg(base + a, Value::Bool(ins.b() != 0)),
                     Op::LOADNIL => {
                         for i in 0..=ins.b() as usize {
                             *self.reg_mut(base + a + i) = Value::Nil;
@@ -560,11 +575,11 @@ impl Vm {
                                 l.wrapping_pow(exp)
                             }
                         };
-                        *self.reg_mut(base + a) = Value::Int(out);
+                        self.set_reg(base + a, Value::Int(out));
                     }
                     Op::NEGI => {
                         let v = self.int_at(base + ins.b() as usize, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Int(v.wrapping_neg());
+                        self.set_reg(base + a, Value::Int(v.wrapping_neg()));
                     }
                     Op::ADDII => int_arith_imm!(|l, imm| l.wrapping_add(imm)),
                     Op::SUBII => int_arith_imm!(|l, imm| l.wrapping_sub(imm)),
@@ -585,11 +600,11 @@ impl Vm {
                             Op::MODF => l % r,
                             _ => l.powf(r),
                         };
-                        *self.reg_mut(base + a) = Value::Float(out);
+                        self.set_reg(base + a, Value::Float(out));
                     }
                     Op::NEGF => {
                         let v = self.float_at(base + ins.b() as usize, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Float(-v);
+                        self.set_reg(base + a, Value::Float(-v));
                     }
 
                     // ---- §15.5 bitwise -----------------------------------
@@ -609,11 +624,11 @@ impl Vm {
                             // which `shift` already reads as "all bits out".
                             _ => shift(l, r.wrapping_neg()),
                         };
-                        *self.reg_mut(base + a) = Value::Int(out);
+                        self.set_reg(base + a, Value::Int(out));
                     }
                     Op::BNOT => {
                         let v = self.int_at(base + ins.b() as usize, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Int(!v);
+                        self.set_reg(base + a, Value::Int(!v));
                     }
 
                     // ---- §15.6 dynamic arithmetic fallback ---------------
@@ -634,12 +649,7 @@ impl Vm {
                         };
                         let l = (*self.reg(base + ins.b() as usize)).clone();
                         let r = (*self.reg(base + ins.c() as usize)).clone();
-                        let v = saule_runtime::ops::binary(
-                            op,
-                            l,
-                            r,
-                            proto.span_at(here),
-                        )?;
+                        let v = saule_runtime::ops::binary(op, l, r, proto.span_at(here))?;
                         *self.reg_mut(base + a) = v;
                     }
                     Op::UNARYX => {
@@ -744,28 +754,34 @@ impl Vm {
                     // it displaces still costs. Grouped.
                     Op::LTI | Op::LEI | Op::EQI => {
                         let (l, r) = self.int_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Bool(match op {
-                            Op::LTI => l < r,
-                            Op::LEI => l <= r,
-                            _ => l == r,
-                        });
+                        self.set_reg(
+                            base + a,
+                            Value::Bool(match op {
+                                Op::LTI => l < r,
+                                Op::LEI => l <= r,
+                                _ => l == r,
+                            }),
+                        );
                     }
                     Op::LTF | Op::LEF | Op::EQF => {
                         let (l, r) = self.float_pair(base, ins, &proto, here)?;
-                        *self.reg_mut(base + a) = Value::Bool(match op {
-                            Op::LTF => l < r,
-                            Op::LEF => l <= r,
-                            _ => l == r,
-                        });
+                        self.set_reg(
+                            base + a,
+                            Value::Bool(match op {
+                                Op::LTF => l < r,
+                                Op::LEF => l <= r,
+                                _ => l == r,
+                            }),
+                        );
                     }
                     Op::EQV => {
                         let eq = (*self.reg(base + ins.b() as usize))
                             == (*self.reg(base + ins.c() as usize));
-                        *self.reg_mut(base + a) = Value::Bool(eq);
+                        self.set_reg(base + a, Value::Bool(eq));
                     }
                     Op::NOT => {
                         let t = (*self.reg(base + ins.b() as usize)).is_truthy();
-                        *self.reg_mut(base + a) = Value::Bool(!t);
+                        self.set_reg(base + a, Value::Bool(!t));
                     }
 
                     // ---- §15.8 numeric loops ------------------------------
@@ -774,10 +790,12 @@ impl Vm {
                         let limit = self.int_at(base + a + 1, &proto, here)?;
                         let step = self.int_at(base + a + 2, &proto, here)?;
                         if step == 0 {
-                            return Err(RuntimeError::ZeroStep { span: proto.span_at(here) });
+                            return Err(RuntimeError::ZeroStep {
+                                span: proto.span_at(here),
+                            });
                         }
                         if int_in_range(from, limit, step) {
-                            *self.reg_mut(base + a + 3) = Value::Int(from);
+                            self.set_reg(base + a + 3, Value::Int(from));
                         } else {
                             pc = jump(pc, ins.sbx());
                         }
@@ -790,8 +808,8 @@ impl Vm {
                         // forever — the guard `run_numeric_loop_int` has.
                         let (next, overflow) = i.overflowing_add(step);
                         if !overflow && int_in_range(next, limit, step) {
-                            *self.reg_mut(base + a) = Value::Int(next);
-                            *self.reg_mut(base + a + 3) = Value::Int(next);
+                            self.set_reg(base + a, Value::Int(next));
+                            self.set_reg(base + a + 3, Value::Int(next));
                             pc = jump(pc, ins.sbx());
                         }
                     }
@@ -800,10 +818,12 @@ impl Vm {
                         let limit = self.float_at(base + a + 1, &proto, here)?;
                         let step = self.float_at(base + a + 2, &proto, here)?;
                         if step == 0.0 {
-                            return Err(RuntimeError::ZeroStep { span: proto.span_at(here) });
+                            return Err(RuntimeError::ZeroStep {
+                                span: proto.span_at(here),
+                            });
                         }
                         if float_in_range(from, limit, step) {
-                            *self.reg_mut(base + a + 3) = Value::Float(from);
+                            self.set_reg(base + a + 3, Value::Float(from));
                         } else {
                             pc = jump(pc, ins.sbx());
                         }
@@ -814,8 +834,8 @@ impl Vm {
                         let step = self.float_at(base + a + 2, &proto, here)?;
                         let next = i + step;
                         if float_in_range(next, limit, step) {
-                            *self.reg_mut(base + a) = Value::Float(next);
-                            *self.reg_mut(base + a + 3) = Value::Float(next);
+                            self.set_reg(base + a, Value::Float(next));
+                            self.set_reg(base + a + 3, Value::Float(next));
                             pc = jump(pc, ins.sbx());
                         }
                     }
@@ -842,9 +862,8 @@ impl Vm {
                         };
                         let empty = pairs.is_empty();
                         self.ensure_stack(base + a + 5);
-                        *self.reg_mut(base + a) = Value::Table(Rc::new(RefCell::new(
-                            TableObject::from_array(pairs),
-                        )));
+                        *self.reg_mut(base + a) =
+                            Value::Table(Rc::new(RefCell::new(TableObject::from_array(pairs))));
                         *self.reg_mut(base + a + 1) = Value::Int(0);
                         if empty {
                             pc = jump(pc, ins.bx() as i32);
@@ -859,11 +878,7 @@ impl Vm {
                             Value::Table(t) => {
                                 let t = t.borrow();
                                 if i * 2 + 1 < t.array.len() {
-                                    (
-                                        t.array[i * 2].clone(),
-                                        t.array[i * 2 + 1].clone(),
-                                        true,
-                                    )
+                                    (t.array[i * 2].clone(), t.array[i * 2 + 1].clone(), true)
                                 } else {
                                     (Value::Nil, Value::Nil, false)
                                 }
@@ -871,9 +886,9 @@ impl Vm {
                             _ => (Value::Nil, Value::Nil, false),
                         };
                         if more {
-                            *self.reg_mut(base + a + 1) = Value::Int(i as i64 + 1);
-                            *self.reg_mut(base + a + 3) = k;
-                            *self.reg_mut(base + a + 4) = v;
+                            self.set_reg(base + a + 1, Value::Int(i as i64 + 1));
+                            self.set_reg(base + a + 3, k);
+                            self.set_reg(base + a + 4, v);
                             pc = jump(pc, ins.sbx());
                         }
                     }
@@ -933,7 +948,9 @@ impl Vm {
                                 };
                                 if !matches!(
                                     driver,
-                                    Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
+                                    Value::Native(_)
+                                        | Value::NativeClosure(_)
+                                        | Value::VmFunction(_)
                                 ) {
                                     return Err(RuntimeError::TypeError {
                                         message: format!(
@@ -995,10 +1012,11 @@ impl Vm {
                         } else if idx == n + 1 {
                             t.array.push(v);
                         } else {
-                            t.set(&Value::Int(idx), v).map_err(|m| RuntimeError::TypeError {
-                                message: m,
-                                span: proto.span_at(here),
-                            })?;
+                            t.set(&Value::Int(idx), v)
+                                .map_err(|m| RuntimeError::TypeError {
+                                    message: m,
+                                    span: proto.span_at(here),
+                                })?;
                         }
                     }
                     // Both index forms borrow the table and the key in place.
@@ -1032,7 +1050,9 @@ impl Vm {
                             t.borrow().get(self.reg(base + ins.c() as usize))
                         };
                         if matches!(v, Value::Nil) {
-                            return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
+                            return Err(RuntimeError::ForceUnwrapNil {
+                                span: proto.span_at(here),
+                            });
                         }
                         *self.reg_mut(base + a) = v;
                     }
@@ -1119,7 +1139,9 @@ impl Vm {
                     Op::UNWRAPNIL => {
                         let v = (*self.reg(base + ins.b() as usize)).clone();
                         if matches!(v, Value::Nil) {
-                            return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
+                            return Err(RuntimeError::ForceUnwrapNil {
+                                span: proto.span_at(here),
+                            });
                         }
                         *self.reg_mut(base + a) = v;
                     }
@@ -1135,7 +1157,11 @@ impl Vm {
                         // it then threw away for a `nil`.
                         let src = base + ins.b() as usize;
                         let ok = cast_holds(&chunk, ins.c() as usize, self.reg(src));
-                        let v = if ok { (*self.reg(src)).clone() } else { Value::Nil };
+                        let v = if ok {
+                            (*self.reg(src)).clone()
+                        } else {
+                            Value::Nil
+                        };
                         *self.reg_mut(base + a) = v;
                     }
                     // `(x as T)!` — the two above, fused. See the opcode's
@@ -1151,7 +1177,9 @@ impl Vm {
                         let src = base + ins.b() as usize;
                         let ok = cast_holds(&chunk, ins.c() as usize, self.reg(src));
                         if !ok || matches!(*self.reg(src), Value::Nil) {
-                            return Err(RuntimeError::ForceUnwrapNil { span: proto.span_at(here) });
+                            return Err(RuntimeError::ForceUnwrapNil {
+                                span: proto.span_at(here),
+                            });
                         }
                         let v = (*self.reg(src)).clone();
                         *self.reg_mut(base + a) = v;
@@ -1172,7 +1200,11 @@ impl Vm {
                     Op::CALL => {
                         let callee_abs = base + a;
                         let n_args = self.arg_count(ins.b(), callee_abs + 1);
-                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+                        let n_ret = if ins.c() == 0 {
+                            ALL_RESULTS
+                        } else {
+                            ins.c() - 1
+                        };
                         let site = Site::Code(&proto, here);
                         if self.dispatch_call(callee_abs, n_args, n_ret, &site, pc)? {
                             continue 'reentry;
@@ -1186,10 +1218,22 @@ impl Vm {
                         let packed = self.extra_arg(code.as_ptr(), &mut pc);
                         let (tm, target) = ((packed >> 16) as usize, packed & 0xFFFF);
                         let n_args = self.arg_count(ins.b(), base + a);
-                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+                        let n_ret = if ins.c() == 0 {
+                            ALL_RESULTS
+                        } else {
+                            ins.c() - 1
+                        };
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         let dst = (base + a) as u32;
-                        self.enter_static(tm, target, dst, n_args, dst, n_ret, &Site::Code(&proto, here))?;
+                        self.enter_static(
+                            tm,
+                            target,
+                            dst,
+                            n_args,
+                            dst,
+                            n_ret,
+                            &Site::Code(&proto, here),
+                        )?;
                         continue 'reentry;
                     }
                     Op::CALLNAT => {
@@ -1334,7 +1378,10 @@ impl Vm {
                                     Some(v) => v.clone(),
                                     None => {
                                         return Err(field_slot_err(
-                                            slot, i.fields.len(), &proto, here,
+                                            slot,
+                                            i.fields.len(),
+                                            &proto,
+                                            here,
                                         ));
                                     }
                                 }
@@ -1364,9 +1411,7 @@ impl Vm {
                     Op::ISA => {
                         let want = ins.c() as u32;
                         let yes = match self.reg(base + ins.b() as usize) {
-                            Value::Instance(i) => {
-                                self.is_a(&i.borrow().class, want)
-                            }
+                            Value::Instance(i) => self.is_a(&i.borrow().class, want),
                             _ => false,
                         };
                         *self.reg_mut(base + a) = Value::Bool(yes);
@@ -1374,7 +1419,8 @@ impl Vm {
                     Op::GETSTAT => {
                         let (cls, slot) = (ins.b() as usize, ins.c() as usize);
                         let v = self
-                            .shared.statics
+                            .shared
+                            .statics
                             .get(cls)
                             .and_then(|s| s.borrow().get(slot).cloned());
                         match v {
@@ -1441,7 +1487,11 @@ impl Vm {
                         let slot = self.extra_arg(code.as_ptr(), &mut pc) as usize;
                         let recv = base + a;
                         let n_args = (ins.b() as usize).saturating_sub(1);
-                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+                        let n_ret = if ins.c() == 0 {
+                            ALL_RESULTS
+                        } else {
+                            ins.c() - 1
+                        };
                         let (tm, target) = self.vtable_lookup_cached(recv, slot, &proto, here)?;
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         self.enter_static(
@@ -1469,7 +1519,8 @@ impl Vm {
                         let slot = ins.c() as usize;
                         let n_args = (ins.b() as usize).saturating_sub(1);
                         let n_ret = if c == 0 { ALL_RESULTS } else { c - 1 };
-                        let (tm, target) = self.itable_lookup_cached(recv, iface, slot, &proto, here)?;
+                        let (tm, target) =
+                            self.itable_lookup_cached(recv, iface, slot, &proto, here)?;
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         self.enter_static(
                             tm,
@@ -1505,8 +1556,20 @@ impl Vm {
                         let n_args = (ins.b() as usize).saturating_sub(1);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         let dst = (base + a) as u32;
-                        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
-                        self.enter_static(tm, target, dst, n_args, dst, n_ret, &Site::Code(&proto, here))?;
+                        let n_ret = if ins.c() == 0 {
+                            ALL_RESULTS
+                        } else {
+                            ins.c() - 1
+                        };
+                        self.enter_static(
+                            tm,
+                            target,
+                            dst,
+                            n_args,
+                            dst,
+                            n_ret,
+                            &Site::Code(&proto, here),
+                        )?;
                         continue 'reentry;
                     }
 
@@ -1514,7 +1577,8 @@ impl Vm {
                     Op::VARIANT => {
                         let (e_idx, tag) = chunk.variant_refs[ins.bx() as usize];
                         let v = self
-                            .shared.enums
+                            .shared
+                            .enums
                             .get(e_idx as usize)
                             .and_then(|e| e.variant_by_tag(tag).cloned());
                         match v {
@@ -1572,9 +1636,11 @@ impl Vm {
                             // `Direction.North.value` is `"North"`. This
                             // read nil until `GETFX` let `enums.sau` compile
                             // and `SAULE_DIFF=1` put the two side by side.
-                            Value::EnumVariant(v) => v.value.get().cloned().unwrap_or_else(|| {
-                                Value::Str(v.variant_name.clone())
-                            }),
+                            Value::EnumVariant(v) => v
+                                .value
+                                .get()
+                                .cloned()
+                                .unwrap_or_else(|| Value::Str(v.variant_name.clone())),
                             other => return Err(operand_err(other, "enum", &proto, here)),
                         };
                         *self.reg_mut(base + a) = v;
@@ -1611,11 +1677,8 @@ impl Vm {
                             });
                         };
                         let recv = (*self.reg(base + ins.b() as usize)).clone();
-                        let v = saule_runtime::members::read_member(
-                            &recv,
-                            name,
-                            proto.span_at(here),
-                        )?;
+                        let v =
+                            saule_runtime::members::read_member(&recv, name, proto.span_at(here))?;
                         *self.reg_mut(base + a) = v;
                     }
                     Op::SETFX => {
@@ -1632,12 +1695,7 @@ impl Vm {
                         };
                         let recv = (*self.reg(base + a)).clone();
                         let v = (*self.reg(base + ins.c() as usize)).clone();
-                        saule_runtime::members::write_member(
-                            &recv,
-                            name,
-                            v,
-                            proto.span_at(here),
-                        )?;
+                        saule_runtime::members::write_member(&recv, name, v, proto.span_at(here))?;
                     }
                     Op::CALLMX => {
                         let k = self.extra_arg(code.as_ptr(), &mut pc);
@@ -1693,5 +1751,4 @@ impl Vm {
             }
         }
     }
-
 }

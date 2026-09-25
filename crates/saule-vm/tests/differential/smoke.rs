@@ -45,7 +45,6 @@ fn an_import_without_a_program_driver_still_refuses() {
     }
 }
 
-
 // ── everything together ───────────────────────────────────────────────────
 
 #[test]
@@ -71,5 +70,3 @@ fn a_program_with_functions_and_loops_matches() {
          sum * 1000 + count",
     );
 }
-
-

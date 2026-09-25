@@ -12,7 +12,6 @@ use super::super::expr::Want;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     pub(crate) fn ret(
         &mut self,
         values: &[Spanned<Expr>],
@@ -105,7 +104,10 @@ impl Compiler<'_> {
                 // Multi-return wants a contiguous range, which is what lets
                 // the caller take the values without allocating (§6.3).
                 if n > u8::MAX as usize - 1 {
-                    return Err(CompileError::unsupported("returning over 254 values", span.clone()));
+                    return Err(CompileError::unsupported(
+                        "returning over 254 values",
+                        span.clone(),
+                    ));
                 }
                 // `return a, f()` returns `a` followed by **all** of `f`'s
                 // results — `eval_expr_list` expands the last element and
@@ -153,5 +155,4 @@ impl Compiler<'_> {
             }
         }
     }
-
 }

@@ -237,10 +237,10 @@ main() {
     unpacked="saule-$version-$triple"
     [ -d "$unpacked" ] || err "$archive did not contain $unpacked"
 
-    # The directories the toolchain expects to exist. `native_manifests` and
-    # `native_packages` are what dynamic_packages/discovery.rs actually reads.
-    mkdir -p "$saule_home/bin" "$saule_home/native_manifests" \
-             "$saule_home/native_packages" "$saule_home/tmp"
+    # The directories the toolchain expects to exist. `native_packages` is what
+    # dynamic_packages/discovery.rs reads: each package is one library there,
+    # carrying its own description.
+    mkdir -p "$saule_home/bin" "$saule_home/native_packages" "$saule_home/tmp"
 
     # Staged inside SAULE_HOME rather than moved straight from /tmp, so the
     # final step is a rename within one filesystem. An interrupted install then

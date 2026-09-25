@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use std::thread_local;
 
-use crate::prelude::Prelude;
 use crate::native_packages::NativePackage;
+use crate::prelude::Prelude;
 use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::SauleStr;
 use crate::value::{ClassObject, Value};

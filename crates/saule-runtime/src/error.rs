@@ -173,7 +173,6 @@ impl RuntimeError {
     }
 }
 
-
 /// Convenience constructor — most non-`Local`/`Expr` statements still funnel
 /// through this until the matching phase lands.
 pub fn unsupported(thing: &'static str, span: std::ops::Range<usize>) -> RuntimeError {

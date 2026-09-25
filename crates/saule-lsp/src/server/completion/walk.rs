@@ -171,7 +171,9 @@ impl Walk {
     /// — a parameter's type, a return type — still resolves as itself.
     pub(crate) fn in_interface_body(module: &Module, offset: usize) -> bool {
         module.stmts.iter().any(|s| {
-            let Stmt::Decl(d) = &s.value else { return false };
+            let Stmt::Decl(d) = &s.value else {
+                return false;
+            };
             let Decl::Interface {
                 name, type_params, ..
             } = &d.value
@@ -941,7 +943,11 @@ pub(crate) fn bind_pattern(w: &mut Walk, p: &saule_ast::Pattern) {
             for (i, f) in fields.iter().enumerate() {
                 if let P::Bind(n) = &f.value {
                     let ty = saule_semantic::registry::with_enums(|r| {
-                        r.get(enum_name)?.variants.get(variant)?.field_ty(i).cloned()
+                        r.get(enum_name)?
+                            .variants
+                            .get(variant)?
+                            .field_ty(i)
+                            .cloned()
                     });
                     w.bind(n, ty, "pattern binding");
                     continue;

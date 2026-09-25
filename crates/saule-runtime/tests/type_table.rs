@@ -12,9 +12,9 @@
 //!   the language's contract and the VM is an implementation change.
 
 use saule_ast::{Module, NodeId, Type};
-use saule_runtime::typeck::{self, TypeTable};
 use saule_lexer::Lexer;
 use saule_parser::parse;
+use saule_runtime::typeck::{self, TypeTable};
 
 fn front_end(src: &str) -> Module {
     saule_runtime::init();
@@ -130,7 +130,10 @@ fn asking_for_types_does_not_change_diagnostics() {
         let seed = saule_semantic::ModuleSeed::default();
         let _ = saule_runtime::semantic::analyze_with_seed(&module, seed);
 
-        let plain: Vec<String> = typeck::check(&module).iter().map(|e| e.to_string()).collect();
+        let plain: Vec<String> = typeck::check(&module)
+            .iter()
+            .map(|e| e.to_string())
+            .collect();
         let (with_types, _) = typeck::check_with_types(&module);
         let collected: Vec<String> = with_types.iter().map(|e| e.to_string()).collect();
 
@@ -145,8 +148,14 @@ fn node_id_none_is_never_a_key() {
     // must be *dropped*, not all written to one shared key, which would turn
     // "no ids" into confident nonsense the compiler would act on.
     let (_, table) = table_of("local x: integer = 1 + 2\nlocal y: float = 1.5 - 0.5");
-    assert!(!table.is_empty(), "a numbered tree should populate the table");
-    assert!(!table.contains_key(&NodeId::NONE), "NONE must never be a key");
+    assert!(
+        !table.is_empty(),
+        "a numbered tree should populate the table"
+    );
+    assert!(
+        !table.contains_key(&NodeId::NONE),
+        "NONE must never be a key"
+    );
 }
 
 #[test]

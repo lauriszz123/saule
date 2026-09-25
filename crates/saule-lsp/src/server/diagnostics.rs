@@ -183,6 +183,7 @@ impl Backend {
         // `import "intrprtr"` show up in the editor instead of silently
         // becoming a missing-symbol pile-up downstream. Project info was
         // installed above, so src_dirs / dependency resolution works.
+        let mut unresolved_import = false;
         if let Some(dir) = module_dir.as_deref() {
             for stmt in &module.stmts {
                 let Stmt::Decl(d) = &stmt.value else {
@@ -193,6 +194,7 @@ impl Backend {
                 };
                 if saule_runtime::module::resolve_import_path(dir, path).is_none() {
                     out.push(import_error_diag(path, d.span.clone(), source, &line_index));
+                    unresolved_import = true;
                 }
             }
         }
@@ -213,12 +215,16 @@ impl Backend {
         for e in saule_semantic::analyze_with_seed(module, seed) {
             out.push(diag_from(&e, source, &line_index));
         }
-        // Run typeck unconditionally — even if semantic flagged issues, the
-        // type errors are usually still informative. Typeck reads the
-        // registries that `analyze_with_seed` just installed, so the order
-        // matters.
-        for e in saule_typeck::check(module) {
-            out.push(diag_from(&e, source, &line_index));
+        // Run typeck even if semantic flagged issues — the type errors are
+        // usually still informative. Not past an unresolved import, though:
+        // every name it would have bound is unknown, and the type pass would
+        // only restate that at each use, burying the one line to fix. `saule
+        // check` draws the same line. Typeck reads the registries that
+        // `analyze_with_seed` just installed, so the order matters.
+        if !unresolved_import {
+            for e in saule_typeck::check(module) {
+                out.push(diag_from(&e, source, &line_index));
+            }
         }
         (out, revision)
     }
@@ -312,9 +318,10 @@ fn doc_warning_diag(
     }
 }
 
-/// Diagnostic for an `import` whose path failed to resolve to a file on
-/// disk (typo, missing dep, wrong src_dir). Uses the whole import
-/// statement span so editors highlight the entire line.
+/// Diagnostic for an `import` whose path failed to resolve (typo, missing
+/// dep, wrong src_dir, or an installed native package that could not be
+/// used). Uses the whole import statement span so editors highlight the
+/// entire line, and the same words `saule check` prints.
 fn import_error_diag(
     path: &str,
     span: Range<usize>,
@@ -325,7 +332,7 @@ fn import_error_diag(
         range: line_index.range(source, span.start, span.end),
         severity: Some(DiagnosticSeverity::ERROR),
         source: Some("saule".to_string()),
-        message: format!("unresolved import: `{path}` — no matching file or dependency"),
+        message: saule_runtime::module::unresolved_import_message(path),
         ..Default::default()
     }
 }

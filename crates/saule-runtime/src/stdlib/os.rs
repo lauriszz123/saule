@@ -22,8 +22,8 @@ use crate::fxhash::fxmap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::prelude::Prelude;
 use crate::native_packages::NativePackage;
+use crate::prelude::Prelude;
 use crate::value::{
     ClassObject, EnumObject, EnumVariantObject, FieldDef, InstanceObject, NativeClosure, SauleStr,
     TableObject, Value,

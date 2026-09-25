@@ -12,9 +12,9 @@
 //! below is one where getting that set wrong produces a wrong answer rather
 //! than a crash.
 
-use saule_runtime::Value;
 use saule_lexer::Lexer;
 use saule_parser::parse;
+use saule_runtime::Value;
 
 fn eval(src: &str) -> Value {
     let toks = Lexer::new(src).tokenize().expect("lex");
@@ -263,7 +263,12 @@ outer()
     };
 
     let closure = saule_vm::vm::Closure::from_handle(&f).expect("a bytecode closure");
-    let captured: Vec<&str> = closure.proto.upvals.iter().map(|u| u.name.as_ref()).collect();
+    let captured: Vec<&str> = closure
+        .proto
+        .upvals
+        .iter()
+        .map(|u| u.name.as_ref())
+        .collect();
     assert!(
         captured.contains(&"wanted"),
         "the closure lost a binding its body needs: {captured:?}"
@@ -280,7 +285,8 @@ fn a_lambda_inside_a_method_captures_self() {
     // The resolver tracks it separately; if that were dropped, this would
     // fail to resolve `self` at all.
     assert_eq!(
-        text(r#"
+        text(
+            r#"
 class Greeter
   fn init(name: string)
     self.name = name
@@ -295,7 +301,8 @@ class Greeter
 end
 local g = Greeter("ada")
 g.greeter()()
-"#),
+"#
+        ),
         "hi ada"
     );
 }
@@ -305,7 +312,8 @@ fn self_reaches_through_two_nested_lambdas() {
     // Same rule as an ordinary upvalue: the middle closure must hold `self`
     // so the inner one can reach it.
     assert_eq!(
-        text(r#"
+        text(
+            r#"
 class Box
   fn init(v: string)
     self.v = v
@@ -321,7 +329,8 @@ class Box
   end
 end
 Box("deep").deep()()()
-"#),
+"#
+        ),
         "deep"
     );
 }

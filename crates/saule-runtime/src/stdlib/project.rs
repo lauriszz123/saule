@@ -13,8 +13,8 @@ use crate::fxhash::fxmap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::prelude::Prelude;
 use crate::native_packages::NativePackage;
+use crate::prelude::Prelude;
 use crate::value::{ClassObject, SauleStr, TableObject, Value};
 
 /// `import Project from "project"`. Auto-prelude'd so the existing bare
@@ -46,7 +46,10 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
         .collect();
 
     let mut static_fields = fxmap();
-    static_fields.insert("name".to_string(), Value::Str(SauleStr::new(info.name.clone())));
+    static_fields.insert(
+        "name".to_string(),
+        Value::Str(SauleStr::new(info.name.clone())),
+    );
     static_fields.insert(
         "version".to_string(),
         Value::Str(SauleStr::new(info.version.clone())),

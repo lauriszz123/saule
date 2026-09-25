@@ -122,5 +122,3 @@ fn a_variadic_parameter_follows_fixed_ones() {
          local r: string = tag(\"a\", 1, 2) .. \"|\" .. tag(\"b\")\nr",
     );
 }
-
-

@@ -68,5 +68,6 @@ pub(crate) fn begin() -> Option<TypeTable> {
 
 /// Take the collected table back out and restore `previous`.
 pub(crate) fn end(previous: Option<TypeTable>) -> TypeTable {
-    SINK.with(|s| std::mem::replace(&mut *s.borrow_mut(), previous)).unwrap_or_default()
+    SINK.with(|s| std::mem::replace(&mut *s.borrow_mut(), previous))
+        .unwrap_or_default()
 }

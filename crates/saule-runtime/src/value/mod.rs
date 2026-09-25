@@ -11,6 +11,7 @@
 //! | [`interface`]| `InterfaceObject`                              |
 //! | [`table`]    | `TableObject`, `TableKey`                      |
 //! | [`file`]     | `FileHandle`                                   |
+//! | [`foreign`]  | `ForeignObject`, `ForeignClass`                |
 //!
 //! When adding a new variant, remember to extend [`Value::type_name`],
 //! [`Value::is_truthy`], [`Value::to_display_string`], and the `PartialEq`
@@ -19,6 +20,7 @@
 pub mod class;
 pub mod enum_;
 pub mod file;
+pub mod foreign;
 pub mod function;
 pub mod interface;
 pub mod str;
@@ -30,6 +32,7 @@ use std::rc::Rc;
 pub use class::{ClassObject, FieldDef, FieldLayout, InstanceObject, MethodRef, SlotStatics};
 pub use enum_::{EnumObject, EnumVariantObject};
 pub use file::FileHandle;
+pub use foreign::{ForeignClass, ForeignObject};
 pub use function::{NativeClosure, NativeFn, VmFunction, VmFunctionRef};
 pub use interface::InterfaceObject;
 pub use str::{SauleStr, hash_str};
@@ -77,6 +80,10 @@ pub enum Value {
     /// `Io.stdin`/`stdout`/`stderr` statics. Methods are dispatched via a
     /// static table inside `stdlib::io`.
     File(Rc<RefCell<FileHandle>>),
+    /// An object of a class a native package defines. Its memory is the
+    /// package's; this holds one reference to it. To a program it is an
+    /// instance like any other.
+    Foreign(Rc<ForeignObject>),
 }
 
 /// Copying a value is the single most common thing the engines do — every
@@ -103,6 +110,21 @@ impl Clone for Value {
 }
 
 impl Value {
+    /// Does this value own nothing — no `Rc`, so no destructor to run?
+    ///
+    /// [`clone_heap`](Self::clone_heap)'s split, for the drop side. Writing
+    /// a register is `*slot = v`, which drops what was there, and the
+    /// compiler cannot see that on the arithmetic path what was there is an
+    /// `Int` every time — so it emits a call to `Value`'s drop glue per
+    /// instruction, to run nothing. This lets the caller settle it inline.
+    #[inline(always)]
+    pub fn is_scalar(&self) -> bool {
+        matches!(
+            self,
+            Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_)
+        )
+    }
+
     /// The refcounting half of [`Clone`], deliberately out of line.
     ///
     /// Not `cold` — strings and tables are ordinary traffic. Just too big to
@@ -121,6 +143,7 @@ impl Value {
             Value::Enum(e) => Value::Enum(Rc::clone(e)),
             Value::Interface(i) => Value::Interface(Rc::clone(i)),
             Value::File(h) => Value::File(Rc::clone(h)),
+            Value::Foreign(o) => Value::Foreign(Rc::clone(o)),
             // The scalars never reach here; `clone` answers them inline.
             other => match other {
                 Value::Nil => Value::Nil,
@@ -131,7 +154,6 @@ impl Value {
             },
         }
     }
-
 }
 
 impl Value {
@@ -147,7 +169,9 @@ impl Value {
             Value::Table(_) => "table",
             Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_) => "function",
             Value::Class(_) => "class",
-            Value::Instance(_) => "instance",
+            // A native class's object is an instance to the program; which
+            // side of the boundary its memory is on is not its concern.
+            Value::Instance(_) | Value::Foreign(_) => "instance",
             Value::EnumVariant(_) => "enum",
             Value::Enum(_) => "enum",
             Value::Interface(_) => "interface",
@@ -201,6 +225,7 @@ impl Value {
             },
             Value::Class(c) => format!("<class {}>", c.name),
             Value::Instance(i) => format!("<instance of {}>", i.borrow().class.name),
+            Value::Foreign(o) => format!("<instance of {}>", o.class.name),
             Value::File(h) => format!("{:?}", h.borrow()),
         }
     }
@@ -237,6 +262,9 @@ impl PartialEq for Value {
             (Value::Enum(a), Value::Enum(b)) => Rc::ptr_eq(a, b),
             (Value::Interface(a), Value::Interface(b)) => Rc::ptr_eq(a, b),
             (Value::File(a), Value::File(b)) => Rc::ptr_eq(a, b),
+            // By the package's object, not by our wrapper: the same object
+            // returned twice is two wrappers, each owning a reference.
+            (Value::Foreign(a), Value::Foreign(b)) => a.ptr() == b.ptr(),
             _ => false,
         }
     }

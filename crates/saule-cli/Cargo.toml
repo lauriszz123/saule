@@ -23,6 +23,11 @@ saule-fmt = { path = "../saule-fmt" }
 miette = { version = "7.6.0", features = ["fancy"] }
 clap = { version = "4.6.4", features = ["derive"] }
 
+[dev-dependencies]
+# `tests/native_package.rs` patches a package's declared ABI version, and
+# reads the current one from here rather than repeating the number.
+saule-native-abi = { path = "../saule-native-abi" }
+
 [features]
 # Passthrough for `--profile-bytecode` (`VM_DESIGN.md` §16). Off by
 # default, and deliberately so — see the comment on `saule-vm`'s feature of

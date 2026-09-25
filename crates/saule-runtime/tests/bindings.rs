@@ -118,12 +118,18 @@ end
     );
     let info = b.function(nth_lambda(&m, 0)).expect("lambda recorded");
     assert_eq!(
-        info.upval_names.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
+        info.upval_names
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>(),
         vec!["used"],
         "captured more than the body references"
     );
     assert_eq!(info.upvals, vec![UpvalRef::ParentLocal { slot: 0 }]);
-    assert_eq!(bindings_of(&m, &b, "used"), vec![Binding::Upvalue { index: 0 }]);
+    assert_eq!(
+        bindings_of(&m, &b, "used"),
+        vec![Binding::Upvalue { index: 0 }]
+    );
 }
 
 #[test]
@@ -154,7 +160,10 @@ end
     );
     let info = b.function(nth_lambda(&m, 0)).expect("lambda recorded");
     assert_eq!(
-        info.upval_names.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
+        info.upval_names
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>(),
         vec!["wanted"],
         "a nested declaration made the capture set over-approximate again"
     );
@@ -235,7 +244,10 @@ end
     );
     let info = b.function(nth_lambda(&m, 0)).expect("lambda recorded");
     assert_eq!(
-        info.upval_names.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
+        info.upval_names
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>(),
         vec!["fact"]
     );
     assert_eq!(info.upvals, vec![UpvalRef::ParentLocal { slot: 0 }]);
@@ -356,7 +368,9 @@ end
                 assert_eq!(class.as_ref(), "Counter");
                 assert_eq!(name.as_ref(), "total");
             }
-            other => panic!("a static read resolved to {other:?}, which would compile to a register"),
+            other => {
+                panic!("a static read resolved to {other:?}, which would compile to a register")
+            }
         }
     }
 }

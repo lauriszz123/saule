@@ -54,7 +54,6 @@ use saule_ast::Module;
 use crate::chunk::{Chunk, Proto};
 use crate::op::{Instruction, Op};
 
-
 /// A construct the compiler does not handle yet, or a program it cannot
 /// represent. Never a panic — §24.4 is explicit that even "function too
 /// complex" must be a clean diagnostic.
@@ -345,7 +344,8 @@ pub(crate) fn compile_into(
                 c.shadowed_names.insert(name.clone());
             }
             saule_ast::Stmt::LocalMulti { names, .. } => {
-                c.shadowed_names.extend(names.iter().map(|(n, _, _)| n.clone()));
+                c.shadowed_names
+                    .extend(names.iter().map(|(n, _, _)| n.clone()));
             }
             saule_ast::Stmt::Decl(d) => {
                 if let saule_ast::Decl::Variable { name, .. } = &d.value {
@@ -390,14 +390,17 @@ pub(crate) fn compile_into(
     // The module slot each class and enum this module declares is bound to,
     // for the VM to fill with the runtime object — see `Chunk::type_slots`.
     for s in &module.stmts {
-        let saule_ast::Stmt::Decl(d) = &s.value else { continue };
+        let saule_ast::Stmt::Decl(d) = &s.value else {
+            continue;
+        };
         let (name, ty) = match &d.value {
             saule_ast::Decl::Class { name, .. } => {
                 (name, c.layouts.get(name).map(crate::chunk::TypeSlot::Class))
             }
-            saule_ast::Decl::Enum { name, .. } => {
-                (name, c.layouts.enum_of(name).map(crate::chunk::TypeSlot::Enum))
-            }
+            saule_ast::Decl::Enum { name, .. } => (
+                name,
+                c.layouts.enum_of(name).map(crate::chunk::TypeSlot::Enum),
+            ),
             _ => continue,
         };
         if let Some(ty) = ty
@@ -416,7 +419,8 @@ pub(crate) fn compile_into(
         if let saule_ast::Stmt::Decl(d) = &s.value
             && let saule_ast::Decl::Function { name, .. } = &d.value
         {
-            let placeholder = Proto::new(Some(name), 0, 1, vec![Instruction::abc(Op::RET0, 0, 0, 0)]);
+            let placeholder =
+                Proto::new(Some(name), 0, 1, vec![Instruction::abc(Op::RET0, 0, 0, 0)]);
             let idx = c.chunk.add_proto(placeholder);
             c.fn_protos.insert(name.clone(), idx);
         }
@@ -453,7 +457,9 @@ pub(crate) fn compile_into(
         }
     }
     for s in &module.stmts {
-        let saule_ast::Stmt::Decl(d) = &s.value else { continue };
+        let saule_ast::Stmt::Decl(d) = &s.value else {
+            continue;
+        };
         match &d.value {
             saule_ast::Decl::Function { name, params, .. } => {
                 c.callee_params
@@ -469,7 +475,9 @@ pub(crate) fn compile_into(
                 }
             }
             saule_ast::Decl::Class { name, members, .. } => {
-                let Some(idx) = c.layouts.get(name) else { continue };
+                let Some(idx) = c.layouts.get(name) else {
+                    continue;
+                };
                 for m in members {
                     if let saule_ast::ClassMember::Method(me) = &m.value {
                         c.callee_params.insert(

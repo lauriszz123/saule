@@ -4,15 +4,14 @@ A small Love2D-style graphics engine compiled as a Saule **native package**,
 and the reference consumer of `saule-sdk`.
 
 This crate is **not** linked into the toolchain. It builds as a `cdylib`
-(`saule_engine_lib.so` / `.dll` / `.dylib`), is dropped into
-`~/.saule/native_packages/`, and is described by a TOML manifest in
-`~/.saule/native_manifests/`. At runtime `saule` loads the shared
-library and calls the `extern "C"` symbols named in the manifest.
+(`saule_engine_lib.so` / `.dll` / `.dylib`) and is dropped into
+`~/.saule/native_packages/`. That file is the whole package: its classes,
+signatures and doc comments are compiled into it, and `saule` reads them out
+of the file before it ever loads it.
 
 All ABI plumbing is handled by `saule-sdk`: each module exposes plain safe
 functions annotated with `#[saule_export]`, and the package is declared with
-`saule_package!`. The `gen-manifest` binary renders the manifest from those
-declarations.
+`saule_package!`.
 
 ## Exposed classes
 
@@ -406,26 +405,11 @@ stretching it would spread a short final line edge to edge.
 cargo build -p saule-engine-lib --release
 ```
 
-Then install with the script for your platform:
-
-| Platform    | Script                        | Regenerates the manifest? |
-|-------------|-------------------------------|---------------------------|
-| Windows     | `scripts\install_windows.ps1` | yes                       |
-| Linux / WSL | `scripts/install_wsl.sh`      | no — copies the checked-in one |
-| macOS       | `scripts/install_mac.sh`      | no — copies the checked-in one |
-
-The Unix scripts install `target/release/engine.toml`, which `build.rs` copies
-from the crate-root `engine.toml`. After changing any `#[saule_export]`
-signature, refresh that file so the two cannot drift — the
-`manifest_matches_the_checked_in_file` test fails until you do, so this is
-caught by `cargo test` rather than by a confusing runtime error in somebody's
-`.sau` program:
-
-```sh
-cargo run --release -p saule-engine-lib --bin gen-manifest -- crates/saule-engine-lib/engine.toml
-```
-
-Or copy the library plus the generated `target/release/engine.toml` into
-`~/.saule/native_packages/` and `~/.saule/native_manifests/` manually.
+Then install with the script for your platform — `scripts\install_windows.ps1`,
+`scripts/install_wsl.sh` or `scripts/install_mac.sh` — or copy the library into
+`~/.saule/native_packages/` yourself. There is nothing else to install and
+nothing to regenerate after changing a `#[saule_export]` signature: the
+package's description is compiled from the same declarations as its code, so
+the two cannot drift.
 
 See `examples/native-package/` for `.sau` programs that import this package.

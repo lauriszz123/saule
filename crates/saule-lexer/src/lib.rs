@@ -168,7 +168,7 @@ impl<'src> Lexer<'src> {
                         out.push(Spanned {
                             value: Token::BlockComment(text),
                             span: start..span_end,
-            id: saule_ast::NodeId::NONE,
+                            id: saule_ast::NodeId::NONE,
                         });
                     } else {
                         // Line comment: until end of line (or EOF).
@@ -185,7 +185,7 @@ impl<'src> Lexer<'src> {
                         out.push(Spanned {
                             value: Token::LineComment(text),
                             span: start..end,
-            id: saule_ast::NodeId::NONE,
+                            id: saule_ast::NodeId::NONE,
                         });
                     }
                     continue;

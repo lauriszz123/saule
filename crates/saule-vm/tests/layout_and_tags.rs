@@ -10,10 +10,10 @@
 
 use std::rc::Rc;
 
-use saule_runtime::Value;
-use saule_runtime::value::{ClassObject, EnumObject};
 use saule_lexer::Lexer;
 use saule_parser::parse;
+use saule_runtime::Value;
+use saule_runtime::value::{ClassObject, EnumObject};
 
 /// Run a program and hand back the value of its last expression.
 fn run(src: &str) -> Value {
@@ -25,8 +25,10 @@ fn run(src: &str) -> Value {
 /// The classes `names` denotes after running `src`, from one run — so a
 /// parent and its subclass are the very objects the program used.
 fn classes(src: &str, names: &[&str]) -> Vec<Rc<ClassObject>> {
-    let Value::Table(t) = run(&format!("{src}\nlocal all: table<any> = {{{}}}\nall", names.join(", ")))
-    else {
+    let Value::Table(t) = run(&format!(
+        "{src}\nlocal all: table<any> = {{{}}}\nall",
+        names.join(", ")
+    )) else {
         panic!("expected a table");
     };
     let t = t.borrow();
@@ -122,7 +124,9 @@ fn method_tables_are_flattened() {
 fn overridden_methods_still_dispatch_dynamically() {
     // The behaviour flattening must not change, checked through the
     // language rather than the data structure — the nearest override wins.
-    match run(&format!("{HIERARCHY}\nLeaf().describe() .. \"/\" .. Leaf().shared()")) {
+    match run(&format!(
+        "{HIERARCHY}\nLeaf().describe() .. \"/\" .. Leaf().shared()"
+    )) {
         Value::Str(s) => assert_eq!(s.as_str(), "mid/from base"),
         other => panic!("expected a string, got {other:?}"),
     }
@@ -152,7 +156,10 @@ end
     // Singletons carry their tag and are reachable by it.
     assert_eq!(e.variants["Quit"].tag, 0);
     assert_eq!(e.variants["Code"].tag, 1);
-    assert!(Rc::ptr_eq(e.variant_by_tag(0).unwrap(), &e.variants["Quit"]));
+    assert!(Rc::ptr_eq(
+        e.variant_by_tag(0).unwrap(),
+        &e.variants["Quit"]
+    ));
 
     // A tuple variant has a tag but no singleton — each call builds a fresh
     // object, so there is nothing to hand back by tag.

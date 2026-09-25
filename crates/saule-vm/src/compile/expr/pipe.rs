@@ -8,12 +8,11 @@ use std::ops::Range;
 
 use saule_ast::{Expr, Spanned};
 
-use super::CompileError;
 use super::super::ctx::Compiler;
+use super::CompileError;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     /// A call leaves its single result in the first register of its window;
     /// move it where the caller wanted it.
     /// `when(source):a(x):b(y)` — the colon pipeline (§21.4 item 9).
@@ -50,11 +49,7 @@ impl Compiler<'_> {
     /// shadows a top-level `fn`, which shadows a module slot, which shadows
     /// the prelude. Getting that order wrong is the `local String = {…}`
     /// bug this compiler has already shipped once.
-    fn pipe_stage(
-        &mut self,
-        cur: u16,
-        stage: &saule_ast::PipeStage,
-    ) -> Result<(), CompileError> {
+    fn pipe_stage(&mut self, cur: u16, stage: &saule_ast::PipeStage) -> Result<(), CompileError> {
         let span = &stage.span;
         let name = stage.name.as_str();
 

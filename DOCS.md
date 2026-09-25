@@ -11,6 +11,13 @@ errors / pattern matching / generics see the corresponding README sections.
 > `T?` is nullable, `(A, B)` is a multi-return tuple, `...T` is variadic, and
 > `fn(A) -> R` is a callback slot — there is no bare `function` type.
 
+<!--
+  Code fences say `luau`, not `saule`: GitHub's Linguist has no Saule entry, so
+  a fence tagged `saule` renders unhighlighted there. See the note at the top of
+  README.md. `npm run sync-docs` rewrites them back to `saule` for the website.
+-->
+
+
 ---
 
 ## Table of Contents
@@ -40,7 +47,7 @@ These names are bound at the top of every module — no import required.
 | `assert<T>(v: T?, msg: string?) -> T` | If `v` is truthy, returns it with its nullability stripped; otherwise throws `msg` (default `"assertion failed"`). |
 | `error(msg: string) -> nil` | Throws `msg` as a runtime error. Equivalent to `throw msg`. |
 
-```saule
+```luau
 local n: integer = "42" as integer ?? 0
 printf("got %d\n", n)
 ```
@@ -120,7 +127,7 @@ Saule has no pattern language. These operate on **literal text** — the `.` in
 | `String.padStart(s: string, width: integer, fill: string?) -> string` | Pad on the left to `width` characters; `fill` defaults to `" "` and repeats if longer than one character. Never truncates. |
 | `String.padEnd(s: string, width: integer, fill: string?) -> string` | The same, padding on the right. |
 
-```saule
+```luau
 for ch, i in String.iter("hey") do
     printf("%d:%s ", i, ch)
 end
@@ -204,7 +211,7 @@ the stdlib does not get a private exemption. Cast one side with `as float`.
 | `Math.randomseed(seed: integer) -> nil` | Reset the PRNG. |
 | `Math.ult(a: integer, b: integer) -> boolean` | Unsigned less-than. |
 
-```saule
+```luau
 Math.randomseed(42)
 local roll: integer = Math.random(1, 6)
 println(Math.sqrt(2), Math.log(8, 2))           -- 1.414…  3.0
@@ -252,7 +259,7 @@ two different things across the two.
 | `Table.copy<V>(t: table<V>) -> table<V>` | Shallow copy of both halves. Elements are shared, so copying a table of instances gives a new table pointing at the same instances. |
 | `Table.concat<V>(t: table<V>, sep: string?, from: integer?, to: integer?) -> string` | Join the elements with `sep` (default `""`), each rendered as `tostring` would. `String.join(sep, t)` is the same operation with the arguments the other way round. |
 
-```saule
+```luau
 local xs: table<integer> = {3, 1, 4, 1, 5}
 Table.sort(xs, (a, b) => a < b)
 println(Table.concat(xs, ", "))                 -- 1, 1, 3, 4, 5
@@ -279,7 +286,7 @@ them typed — `Iter.map<V, U>(t: table<V>, f: fn(V) -> U)` binds `V` from the
 receiver, so a lambda written without annotations still gets real parameter
 types, and the result is a real `table<U>`:
 
-```saule
+```luau
 local names: table<string> = Iter.map(users, u => u.name)
 local adults: table<User>  = Iter.filter(users, u => u.age >= 18)
 local total: integer       = Iter.reduce(users, 0, (acc, u) => acc + u.age)
@@ -290,7 +297,7 @@ local total: integer       = Iter.reduce(users, 0, (acc, u) => acc + u.age)
 A **step closure** or an **`Iterable`** reaches the combinators through
 `Iter.collect`, which drains it into a table:
 
-```saule
+```luau
 Iter.map(Iter.collect(step), f)          -- a bare step closure
 Iter.map(Iter.collect(list.iter()), f)   -- anything Iterable
 ```
@@ -350,7 +357,7 @@ and a pair has no representation here: a two-element table holding an
 combines at the point the two elements meet instead, and a `for i, v in t do`
 loop already gives you indices alongside values.
 
-```saule
+```luau
 local scores: table<integer> = {84, 17, 96, 42}
 
 println(Iter.count(scores, s => s >= 50))                   -- 2
@@ -414,7 +421,7 @@ Saule enums (`IoMode`, `IoSeek`) so the typechecker can catch typos.
 | `f.flush() -> nil` | Force buffered writes to disk. |
 | `f.close() -> nil` | Release the underlying handle. |
 
-```saule
+```luau
 local f: File = Io.open("/tmp/notes.txt", IoMode.Write)!
 f.write("hello\n")
 f.close()
@@ -501,7 +508,7 @@ long* something took.
 
 `Linux` (`"linux"`), `Macos` (`"macos"`), `Windows` (`"windows"`), `Other` (`"other"`).
 
-```saule
+```luau
 local started: float = Os.clock()
 Os.sleep(0.05)
 printf("elapsed: %.3fs\n", Os.clock() - started)
@@ -558,7 +565,7 @@ because the year leads: `27.1` is newer than `26.412`.
 | --- | --- |
 | `Saule.atLeast(version: string) -> boolean` | Is this toolchain `version` or newer? Compares dotted numeric components, so `"26.7"` satisfies `"26"` and `"26.7"` but not `"26.8"`. |
 
-```saule
+```luau
 if Saule.atLeast("26.4") then
     println("running on " .. Saule.version)
 end

@@ -7,7 +7,9 @@ use crate::harness::*;
 #[test]
 fn a_static_method_call_matches() {
     // The shape every file in `benchmarks/sau/` uses.
-    must_agree("class C\n  static fn twice(n: integer) -> integer\n    return n * 2\n  end\nend\nC.twice(21)");
+    must_agree(
+        "class C\n  static fn twice(n: integer) -> integer\n    return n * 2\n  end\nend\nC.twice(21)",
+    );
 }
 
 #[test]
@@ -104,19 +106,14 @@ fn inheritance_and_overrides_dispatch_dynamically() {
     );
 }
 
-
 // ── interfaces ────────────────────────────────────────────────────────────
 
 #[test]
 fn a_call_through_an_interface_matches() {
     // The receiver's declared type is the *interface*, so the concrete class
     // is unknown at the call site and dispatch goes through the itable.
-    must_agree(&format!(
-        "{SHAPES}local s: Shape = Square(5)\ns.area()"
-    ));
-    must_agree(&format!(
-        "{SHAPES}local s: Shape = Rect(3, 4)\ns.area()"
-    ));
+    must_agree(&format!("{SHAPES}local s: Shape = Square(5)\ns.area()"));
+    must_agree(&format!("{SHAPES}local s: Shape = Rect(3, 4)\ns.area()"));
 }
 
 #[test]
@@ -135,11 +132,8 @@ fn one_call_site_dispatches_to_two_implementations() {
 
 #[test]
 fn a_second_interface_method_resolves_to_its_own_slot() {
-    must_agree(&format!(
-        "{SHAPES}local s: Shape = Rect(2, 3)\ns.name()"
-    ));
+    must_agree(&format!("{SHAPES}local s: Shape = Rect(2, 3)\ns.name()"));
 }
-
 
 // ── inherited vtable slots and operator overloads ─────────────────────────
 
@@ -224,7 +218,6 @@ fn index_overloads_read_and_write() {
          r",
     );
 }
-
 
 // ── class statics by bare name ────────────────────────────────────────────
 //
@@ -326,7 +319,6 @@ fn a_private_static_fn_is_callable_by_bare_name_from_a_sibling() {
     );
 }
 
-
 // ── interface method return types (front end) ─────────────────────────────
 
 #[test]
@@ -390,9 +382,6 @@ fn an_extended_interfaces_method_is_found_through_the_extends_chain() {
          describe(Square(3))",
     );
 }
-
-
-
 
 // ── calling a function-valued field ───────────────────────────────────────
 //
@@ -539,7 +528,6 @@ fn a_non_callable_field_fails_the_same_way() {
     );
 }
 
-
 // ── an override, inherited one level further down ─────────────────────────
 
 #[test]
@@ -615,7 +603,6 @@ fn an_override_and_a_further_override_both_dispatch() {
          out",
     );
 }
-
 
 // ── `self`'s class survives into a lambda ─────────────────────────────────
 //

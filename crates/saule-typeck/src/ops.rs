@@ -28,10 +28,10 @@ use super::state::Scope;
 // `saule-semantic`, so passes upstream of the checker can consult an
 // overload too. Re-exported here because `saule_typeck::ops::…` is the
 // path the LSP already spells.
+use super::to_source_span;
 pub use saule_semantic::ops::{
     class_of, honours, operand_ty, overload_binary_result, overload_unary_result, result_ty,
 };
-use super::to_source_span;
 
 /// The class an operand denotes, when it denotes one.
 pub(super) fn operand_class(expr: &Spanned<Expr>, scope: &Scope) -> Option<String> {

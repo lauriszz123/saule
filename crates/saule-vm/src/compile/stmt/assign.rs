@@ -9,13 +9,12 @@ use saule_ast::{Expr, Spanned};
 use saule_semantic::Binding;
 
 use super::super::CompileError;
-use super::Rhs;
 use super::super::ctx::Compiler;
 use super::super::expr::Want;
+use super::Rhs;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     pub(crate) fn local(
         &mut self,
         name: &str,
@@ -29,7 +28,12 @@ impl Compiler<'_> {
         // The two have to agree, because reads are classified by the
         // resolver and written by the compiler.
         if self.at_module_top() {
-            let slot = match self.bindings.module_slots.iter().position(|n| n.as_ref() == name) {
+            let slot = match self
+                .bindings
+                .module_slots
+                .iter()
+                .position(|n| n.as_ref() == name)
+            {
                 Some(i) => i as u16,
                 None => {
                     return Err(CompileError::unsupported(
@@ -366,7 +370,9 @@ impl Compiler<'_> {
                 Some(slot) => self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span),
                 None => {
                     let k = self.constant(
-                        saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(name.clone())),
+                        saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(
+                            name.clone(),
+                        )),
                         span,
                     )?;
                     let Ok(kb) = u8::try_from(k) else {
@@ -400,17 +406,20 @@ impl Compiler<'_> {
                         let r = self.rhs_tmp(value)?;
                         let a = self.reg8(r, span)?;
                         let g = self.mod_slot(slot, span)?;
-            self.emit(Instruction::abx(Op::SETMOD, a, g), span);
+                        self.emit(Instruction::abx(Op::SETMOD, a, g), span);
                         self.free_to(m);
                         Ok(())
                     }
                 }
             }
             Some(Binding::Local { .. }) => {
-                let reg = self.f.lookup(name).ok_or_else(|| CompileError::Unsupported {
-                    thing: "assignment to a local the compiler has not seen declared",
-                    span: span.clone(),
-                })?;
+                let reg = self
+                    .f
+                    .lookup(name)
+                    .ok_or_else(|| CompileError::Unsupported {
+                        thing: "assignment to a local the compiler has not seen declared",
+                        span: span.clone(),
+                    })?;
                 self.rhs_to(value, reg, span)
             }
             Some(Binding::Upvalue { .. }) => {
@@ -418,10 +427,12 @@ impl Compiler<'_> {
                 // the live-binding half of closure semantics.
                 let m = self.mark();
                 let r = self.rhs_tmp(value)?;
-                let idx = self.capture_upvalue(name).ok_or_else(|| CompileError::Unsupported {
-                    thing: "assignment to a captured variable the compiler could not locate",
-                    span: span.clone(),
-                })?;
+                let idx = self
+                    .capture_upvalue(name)
+                    .ok_or_else(|| CompileError::Unsupported {
+                        thing: "assignment to a captured variable the compiler could not locate",
+                        span: span.clone(),
+                    })?;
                 let (a, b) = (self.reg8(r, span)?, self.reg8(idx, span)?);
                 self.emit(Instruction::abc(Op::SETUPVAL, a, b, 0), span);
                 self.free_to(m);
@@ -455,7 +466,6 @@ impl Compiler<'_> {
             )),
         }
     }
-
 
     /// `target op= value`.
     ///
@@ -551,5 +561,4 @@ impl Compiler<'_> {
         };
         self.assign(target, Rhs::Expr(&combined))
     }
-
 }

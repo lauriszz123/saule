@@ -403,7 +403,10 @@ mod tests {
         else {
             unreachable!()
         };
-        assert!(!b[0].id.is_none(), "lambda body statement was left unnumbered");
+        assert!(
+            !b[0].id.is_none(),
+            "lambda body statement was left unnumbered"
+        );
         let Stmt::Return(rs) = &b[0].value else {
             unreachable!()
         };

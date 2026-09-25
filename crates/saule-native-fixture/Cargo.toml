@@ -1,0 +1,17 @@
+[package]
+name = "saule-native-fixture"
+version.workspace = true
+edition.workspace = true
+description = "A small native package that uses every kind of export saule-sdk offers. Built by the test suites and loaded by them; never shipped."
+license.workspace = true
+publish = false
+
+[lib]
+name = "saule_fixture"
+# A cdylib only: the tests load it the way a user's program would, from a
+# library file in `native_packages/`, reading its metadata out of the file.
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+saule-sdk = { path = "../saule-sdk" }

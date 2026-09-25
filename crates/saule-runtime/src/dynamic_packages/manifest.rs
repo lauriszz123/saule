@@ -1,142 +1,327 @@
-//! The package manifest format and the signature-string grammar
-//! (`fn<T>(a: T) -> R`) its entries are written in.
+//! A package's description — assembled from the metadata records compiled
+//! into its library — and the signature-string grammar (`fn<T>(a: T) -> R`)
+//! its members are written in.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use saule_ast::Type;
 
-/// A single exported method of a class, resolved from the manifest.
+use super::embedded::RawRecord;
+
+/// How a member is reached from Saule. Mirrors the receiver kinds the SDK's
+/// macros write into each record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Receiver {
+    /// `Class.member(args)`.
+    Static,
+    /// `object.member(args)` — the object is passed as argument 0.
+    Instance,
+    /// `Class(args)` — builds an object.
+    Constructor,
+    /// `object.member` — a property read; the object is argument 0.
+    Getter,
+    /// `object.member = value` — a property write; the object is argument 0.
+    Setter,
+}
+
+impl Receiver {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "static" => Receiver::Static,
+            "instance" => Receiver::Instance,
+            "constructor" => Receiver::Constructor,
+            "getter" => Receiver::Getter,
+            "setter" => Receiver::Setter,
+            _ => return None,
+        })
+    }
+}
+
+/// A single exported member of a class.
 #[derive(Debug, Clone)]
 pub(crate) struct MethodSpec {
-    /// Saule-visible name (`circle`).
+    /// Saule-visible name (`circle`). `init` for a constructor.
     pub(crate) name: String,
-    /// Symbol exported by the shared library (`saule_engine_graphics_circle`).
-    /// Still parsed without `native-packages` so manifests round-trip
+    /// Symbol exported by the shared library (`saule_export_Graphics_circle`).
+    /// Kept without `native-packages` too, so a package describes itself
     /// identically on every target; there is just nothing to resolve it in.
     #[cfg_attr(not(feature = "native-packages"), allow(dead_code))]
     pub(crate) symbol: String,
+    pub(crate) receiver: Receiver,
     /// Generic type-parameter names from the sig's `fn<...>` prefix.
     pub(crate) type_params: Vec<String>,
-    /// Parameter types parsed from the manifest `sig`.
+    /// Parameter types parsed from the sig, *excluding* the receiver.
     pub(crate) params: Vec<Type>,
-    /// Parameter names parsed from the manifest `sig`.
+    /// Parameter names parsed from the sig.
     pub(crate) param_names: Vec<String>,
-    /// Return types parsed from the manifest `sig`.
+    /// Return types parsed from the sig.
     pub(crate) returns: Vec<Type>,
+    /// The author's doc comment, shown by the editor.
+    pub(crate) doc: Option<String>,
 }
 
-/// A class (static module) exposed by a package.
+/// A class exposed by a package: a namespace of static functions, or — when
+/// `instantiable` — a type whose objects programs hold.
 #[derive(Debug, Clone)]
 pub(crate) struct ClassSpec {
     pub(crate) name: String,
-    #[allow(dead_code)]
     pub(crate) doc: Option<String>,
+    /// Declared with `#[saule_class]`: it has objects, so it may have a
+    /// constructor, instance methods and properties.
+    pub(crate) instantiable: bool,
+    /// Sorted by name, so everything built from a manifest is deterministic.
     pub(crate) methods: Vec<MethodSpec>,
 }
 
-/// A parsed package manifest.
+impl ClassSpec {
+    pub(crate) fn members(&self, receiver: Receiver) -> impl Iterator<Item = &MethodSpec> {
+        self.methods.iter().filter(move |m| m.receiver == receiver)
+    }
+
+    #[cfg_attr(not(feature = "native-packages"), allow(dead_code))]
+    pub(crate) fn constructor(&self) -> Option<&MethodSpec> {
+        self.members(Receiver::Constructor).next()
+    }
+}
+
+/// A fieldless enum exposed by a package.
+#[derive(Debug, Clone)]
+pub(crate) struct EnumSpec {
+    pub(crate) name: String,
+    pub(crate) doc: Option<String>,
+    pub(crate) variants: Vec<String>,
+    /// One per variant; empty where a variant has no doc comment.
+    pub(crate) variant_docs: Vec<String>,
+}
+
+/// An installed package, as described by its embedded metadata.
 #[derive(Debug, Clone)]
 pub(crate) struct Manifest {
     /// Import name (`engine`).
     pub(crate) name: String,
     #[allow(dead_code)]
     pub(crate) version: String,
-    /// Candidate binary filenames in preference-neutral order, e.g.
-    /// `["engine.so", "engine.dll", "engine.dylib"]`. [`pick_binary`]
-    /// chooses the OS-appropriate one that actually exists.
+    #[allow(dead_code)]
+    pub(crate) doc: Option<String>,
+    /// The library file the metadata was read from — and the one to load.
     #[cfg_attr(not(feature = "native-packages"), allow(dead_code))]
-    pub(crate) binaries: Vec<String>,
+    pub(crate) path: PathBuf,
+    /// Sorted by name.
     pub(crate) exports: Vec<ClassSpec>,
+    /// Sorted by name.
+    pub(crate) enums: Vec<EnumSpec>,
 }
 
-// ─── Global state ───────────────────────────────────────────────────────────
+/// Assemble and check a package from the records read out of `path`.
+///
+/// Every inconsistency is an error rather than something to paper over: a
+/// package whose description contradicts itself would otherwise type-check
+/// programs against a surface that does not exist.
+pub(crate) fn manifest_from_records(
+    records: &[RawRecord],
+    path: &Path,
+) -> Result<Manifest, String> {
+    let mut package: Option<(String, String, Option<String>)> = None;
+    let mut classes: BTreeMap<String, ClassSpec> = BTreeMap::new();
+    let mut enums: BTreeMap<String, EnumSpec> = BTreeMap::new();
+    let mut methods: Vec<(String, MethodSpec)> = Vec::new();
 
-pub(crate) fn parse_manifest(text: &str) -> Result<Manifest, String> {
-    let value: toml::Value = text.parse().map_err(|e| format!("invalid TOML: {e}"))?;
-
-    let pkg = value
-        .get("package")
-        .and_then(|v| v.as_table())
-        .ok_or("missing [package] table")?;
-    let name = pkg
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or("`package.name` is required")?
-        .to_string();
-    let version = pkg
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0.0.0")
-        .to_string();
-    let binaries: Vec<String> = pkg
-        .get("binary")
-        .and_then(|v| v.as_str())
-        .ok_or("`package.binary` is required")?
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if binaries.is_empty() {
-        return Err("`package.binary` lists no filenames".into());
+    for rec in records {
+        let table: toml::Table = rec.payload.parse().map_err(|e| {
+            format!(
+                "has a metadata record `{}` that is not valid TOML: {e}",
+                rec.symbol
+            )
+        })?;
+        let field = |key: &str| table.get(key).and_then(|v| v.as_str()).map(str::to_string);
+        let required = |key: &str| {
+            field(key)
+                .ok_or_else(|| format!("has a metadata record `{}` with no `{key}`", rec.symbol))
+        };
+        match required("kind")?.as_str() {
+            "package" => {
+                if package.is_some() {
+                    return Err(
+                        "declares the package twice (`saule_package!` more than once)".to_string(),
+                    );
+                }
+                check_abi(table.get("abi_version").and_then(|v| v.as_integer()))?;
+                package = Some((required("name")?, required("version")?, field("doc")));
+            }
+            "class" => {
+                let name = required("name")?;
+                let instantiable = table
+                    .get("instantiable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if classes.contains_key(&name) {
+                    return Err(format!("declares class `{name}` twice"));
+                }
+                classes.insert(
+                    name.clone(),
+                    ClassSpec {
+                        name,
+                        doc: field("doc"),
+                        instantiable,
+                        methods: Vec::new(),
+                    },
+                );
+            }
+            "enum" => {
+                let name = required("name")?;
+                let strings = |key: &str| -> Vec<String> {
+                    table
+                        .get(key)
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let variants = strings("variants");
+                if variants.is_empty() {
+                    return Err(format!("declares enum `{name}` with no variants"));
+                }
+                enums.insert(
+                    name.clone(),
+                    EnumSpec {
+                        name,
+                        doc: field("doc"),
+                        variants,
+                        variant_docs: strings("variant_docs"),
+                    },
+                );
+            }
+            "method" => {
+                let class = required("class")?;
+                let name = required("name")?;
+                let receiver_str = required("receiver")?;
+                let receiver = Receiver::parse(&receiver_str).ok_or_else(|| {
+                    format!(
+                        "declares `{class}.{name}` with an unknown receiver kind `{receiver_str}`"
+                    )
+                })?;
+                let sig = required("sig")?;
+                let (type_params, param_names, params, returns) = parse_sig(&sig).map_err(|e| {
+                    format!("declares `{class}.{name}` with an invalid signature: {e}")
+                })?;
+                methods.push((
+                    class,
+                    MethodSpec {
+                        name,
+                        symbol: required("symbol")?,
+                        receiver,
+                        type_params,
+                        params,
+                        param_names,
+                        returns,
+                        doc: field("doc"),
+                    },
+                ));
+            }
+            // A kind a newer SDK writes and this toolchain does not know.
+            // Ignoring it keeps an old toolchain able to use the parts of a
+            // newer package it does understand; the ABI check above is what
+            // guards against the parts it would get *wrong*.
+            _ => {}
+        }
     }
 
-    let mut exports = Vec::new();
-    if let Some(exports_tbl) = value.get("exports").and_then(|v| v.as_table()) {
-        for (class_name, class_val) in exports_tbl {
-            let class_tbl = class_val
-                .as_table()
-                .ok_or_else(|| format!("`exports.{class_name}` must be a table"))?;
-            let doc = class_tbl
-                .get("doc")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+    let (name, version, doc) = package.ok_or(
+        "has no package record — declare the package with `saule_package!` in the crate root",
+    )?;
 
-            let mut methods = Vec::new();
-            if let Some(arr) = class_tbl.get("methods").and_then(|v| v.as_array()) {
-                for entry in arr {
-                    let mt = entry.as_table().ok_or_else(|| {
-                        format!("`exports.{class_name}.methods` entries must be tables")
-                    })?;
-                    let mname = mt
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| format!("a method in `{class_name}` is missing `name`"))?
-                        .to_string();
-                    let sig = mt
-                        .get("sig")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| format!("`{class_name}.{mname}` is missing `sig`"))?;
-                    let symbol = mt
-                        .get("native_symbol")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            format!("`{class_name}.{mname}` is missing `native_symbol`")
-                        })?
-                        .to_string();
-                    let (type_params, param_names, params, returns) = parse_sig(sig)
-                        .map_err(|e| format!("`{class_name}.{mname}` has an invalid sig: {e}"))?;
-                    methods.push(MethodSpec {
-                        name: mname,
-                        symbol,
-                        type_params,
-                        param_names,
-                        params,
-                        returns,
-                    });
-                }
-            }
-            exports.push(ClassSpec {
-                name: class_name.clone(),
-                doc,
-                methods,
-            });
+    for (class, method) in methods {
+        // A function in a namespace nobody listed in `saule_package!` is
+        // still a member of that namespace; it just has no doc comment.
+        let spec = classes.entry(class.clone()).or_insert_with(|| ClassSpec {
+            name: class.clone(),
+            doc: None,
+            instantiable: false,
+            methods: Vec::new(),
+        });
+        if method.receiver != Receiver::Static && !spec.instantiable {
+            return Err(format!(
+                "declares `{class}.{}` as needing an object, but `{class}` is not a \
+                 `#[saule_class]`",
+                method.name
+            ));
+        }
+        spec.methods.push(method);
+    }
+
+    for spec in classes.values_mut() {
+        spec.methods.sort_by(|a, b| a.name.cmp(&b.name));
+        check_members(spec)?;
+        if enums.contains_key(&spec.name) {
+            return Err(format!(
+                "declares `{}` as both a class and an enum",
+                spec.name
+            ));
         }
     }
 
     Ok(Manifest {
         name,
         version,
-        binaries,
-        exports,
+        doc,
+        path: path.to_path_buf(),
+        exports: classes.into_values().collect(),
+        enums: enums.into_values().collect(),
     })
+}
+
+/// A package's declared ABI must be this toolchain's.
+///
+/// The early half of the ABI check. The authoritative one is the
+/// `saule_abi_version` symbol, which cannot drift from the code because the
+/// compiler put it there. This one runs without loading anything, so a
+/// stale package is refused before a program is type-checked against it —
+/// rather than after the user has written code against signatures that were
+/// never going to run.
+fn check_abi(declared: Option<i64>) -> Result<(), String> {
+    let ours = saule_native_abi::ABI_VERSION;
+    match declared {
+        Some(v) if v == i64::from(ours) => Ok(()),
+        Some(v) => Err(format!(
+            "was built against native ABI version {v}, but this toolchain speaks \
+             version {ours}. Rebuild the package against a matching `saule-sdk`."
+        )),
+        None => Err(format!(
+            "declares no ABI version, so it predates native ABI version {ours}. \
+             Rebuild the package against the current `saule-sdk`."
+        )),
+    }
+}
+
+/// A class's members must not collide, and it has at most one constructor.
+fn check_members(spec: &ClassSpec) -> Result<(), String> {
+    let class = &spec.name;
+    if spec.members(Receiver::Constructor).count() > 1 {
+        return Err(format!("declares more than one constructor for `{class}`"));
+    }
+    // What `object.name` could mean: an instance method or a property. A
+    // getter and a setter of the same name are one property.
+    let mut seen: BTreeMap<&str, Receiver> = BTreeMap::new();
+    for m in &spec.methods {
+        let slot = match m.receiver {
+            Receiver::Instance => Receiver::Instance,
+            Receiver::Getter | Receiver::Setter => Receiver::Getter,
+            _ => continue,
+        };
+        if let Some(prev) = seen.insert(&m.name, slot)
+            && prev != slot
+        {
+            return Err(format!(
+                "declares `{class}.{}` as both a method and a property",
+                m.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A parsed signature: `(type_params, param_names, params, returns)`.
@@ -211,12 +396,12 @@ pub(crate) fn parse_sig(sig: &str) -> Result<ParsedSig, String> {
 ///
 /// A callback's type is its signature — `fn(T) -> T` — and `parse_type` builds
 /// exactly that from an `fn(...)` token. Nothing constructs the bare name, so
-/// reaching it means the manifest spells one out, which is a manifest written
+/// reaching it means the signature spells one out, which is a package written
 /// against a language that no longer exists: it predates `SFunction` having to
 /// declare what it accepts. Registering it would put a type that unifies with
-/// no lambda in front of every call into the package, so the manifest is
-/// rejected instead — the package fails to load with a message that says what
-/// to write, rather than type-checking wrongly forever.
+/// no lambda in front of every call into the package, so the package is
+/// rejected instead — it fails to load with a message that says what to
+/// write, rather than type-checking wrongly forever.
 fn names_function(ty: &Type) -> bool {
     match ty {
         Type::Named(n) => n == "function",

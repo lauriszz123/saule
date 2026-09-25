@@ -3,8 +3,8 @@
 use crate::fxhash::FxHashMap as HashMap;
 use std::rc::Rc;
 
-use super::{SauleStr, Value};
 use super::class::MethodRef;
+use super::{SauleStr, Value};
 
 #[derive(Debug)]
 pub struct EnumVariantObject {

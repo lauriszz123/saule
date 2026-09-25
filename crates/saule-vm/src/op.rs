@@ -768,7 +768,9 @@ impl Instruction {
             return None;
         }
         let biased = (sbx + SBX_BIAS) as u32 & 0xffff;
-        Some(Instruction(((op as u32) << 24) | ((a as u32) << 16) | biased))
+        Some(Instruction(
+            ((op as u32) << 24) | ((a as u32) << 16) | biased,
+        ))
     }
 
     pub const fn ax_of(op: Op, ax: u32) -> Instruction {

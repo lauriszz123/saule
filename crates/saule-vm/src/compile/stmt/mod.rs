@@ -90,7 +90,12 @@ impl Compiler<'_> {
                 // `finish_call` emits to land it in a register the program
                 // never looks at again. `p.move(1.0, 2.0)` in a loop was
                 // one sixth `MOVE`.
-                Stmt::Expr(e @ Spanned { value: Expr::Call { callee, args, .. }, .. }) => {
+                Stmt::Expr(
+                    e @ Spanned {
+                        value: Expr::Call { callee, args, .. },
+                        ..
+                    },
+                ) => {
                     let m = self.mark();
                     let dst = self.alloc(&s.span)?;
                     self.call_to_want(e, callee, args, dst, Want::Fixed(0))?;
@@ -120,7 +125,9 @@ impl Compiler<'_> {
     pub fn stmt(&mut self, s: &Spanned<Stmt>) -> Result<Option<u16>, CompileError> {
         let span = &s.span;
         match &s.value {
-            Stmt::Local { name, value, ty, .. } => {
+            Stmt::Local {
+                name, value, ty, ..
+            } => {
                 self.local(name, value.as_ref(), ty.as_ref(), span)?;
                 Ok(None)
             }
@@ -242,13 +249,11 @@ impl Compiler<'_> {
         }
     }
 
-
     /// Whether a declaration here is a module slot rather than a register:
     /// the module body, outside any block.
     fn at_module_top(&self) -> bool {
         self.f.is_module_body && self.f.regs.block_depth() == 0
     }
-
 }
 
 fn stmt_label(s: &Stmt) -> &'static str {

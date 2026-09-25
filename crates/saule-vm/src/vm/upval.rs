@@ -36,7 +36,6 @@ use std::rc::Rc;
 use super::Vm;
 
 impl Vm {
-
     // ---- upvalues ------------------------------------------------------
 
     /// The upvalue cell at `i` of the running closure.
@@ -95,5 +94,4 @@ impl Vm {
             *cell.borrow_mut() = Upvalue::Closed(v);
         }
     }
-
 }
