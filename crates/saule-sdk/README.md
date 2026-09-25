@@ -142,5 +142,31 @@ it is type-checked — and the editor completes and documents it — before any
 of your code runs. A package built against a different `saule-sdk` ABI is
 refused at its `import`, with both versions named.
 
+### One macOS caveat
+
+Apple's linker (`ld-27037.1`, Xcode 26) sometimes leaves a release build's
+symbol string table 4-byte aligned, and macOS 27's dyld then refuses to load
+the library at all:
+
+```
+mis-aligned LINKEDIT string pool, fileOffset=0x000FAEE4
+```
+
+This is a linker bug, not anything about your code: it happens when the
+library's indirect symbol table has an odd number of entries, so whether a
+build is affected changes with any edit. Saule says so explicitly if it hits
+one. Repair the library after building it, with
+[`scripts/align_macho_strtab.py`](../../scripts/align_macho_strtab.py) from
+the Saule repository:
+
+```sh
+cargo build --release
+python3 align_macho_strtab.py target/release/libgfx.dylib   # no-op if fine
+```
+
+Run it over every macOS artifact you publish — it pads the string table and
+re-signs ad-hoc, and does nothing to a library that came out aligned or to a
+non-Mach-O file. `--check` reports without changing anything, for a CI gate.
+
 See `crates/saule-native-fixture` for every feature in one small package,
 and `crates/saule-engine-lib` for a large one.

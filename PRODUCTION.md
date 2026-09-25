@@ -888,7 +888,22 @@ is ever loaded.** Very few scripting languages do this.
 5. **No cross-compilation help.** A package author must produce six binaries. A
    reusable GitHub Actions workflow shipped as a template would remove most of
    that work.
-6. **`saule-engine-lib` is a poor exemplar.** It is the reference example for
+6. **Apple's linker emits Mach-Os macOS will not load, and we work around it.**
+   `ld-27037.1` (Xcode 26) sometimes leaves `LC_SYMTAB.stroff` 4-byte aligned;
+   macOS 27's dyld requires 8 and refuses the file (*mis-aligned LINKEDIT
+   string pool*). It happens when the indirect symbol table has an odd number
+   of 4-byte entries, and it padded correctly in a debug build of the same
+   crate — so whether a link is loadable turns on a symbol count that changes
+   with any edit. Release builds of `saule-engine-lib` were affected;
+   `saule`/`saule-lsp` were not, by luck.
+   [scripts/align_macho_strtab.py](scripts/align_macho_strtab.py) repairs a
+   built file (pad, fix the offsets, re-sign) and is run by
+   `scripts/install_mac.sh` and by the macOS release builds in
+   [build-unix.sh](.circleci/build-unix.sh); `--check` gates. The loader
+   explains the dyld message when a package still hits it. **This should be
+   removed when Apple fixes the linker** — the marker is the repair reporting
+   that it changed nothing across several releases.
+7. **`saule-engine-lib` is a poor exemplar.** It is the reference example for
    native packages, and it is 6.5k lines of graphics engine, excluded from clippy,
    living inside the compiler workspace. An author looking for "how do I write a
    package" has to filter a rasterizer, a font engine, and a PNG decoder out of
