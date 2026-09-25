@@ -11,7 +11,6 @@ use super::super::ctx::Compiler;
 use crate::op::Op;
 
 impl Compiler<'_> {
-
     /// `try … catch e: T … end`.
     ///
     /// Entering the `try` emits **no instructions at all** (§12.1): the
@@ -97,5 +96,4 @@ impl Compiler<'_> {
         self.chunk.type_descs.push(desc);
         (self.chunk.type_descs.len() - 1) as u32
     }
-
 }

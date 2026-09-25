@@ -2,12 +2,11 @@
 
 use saule_ast::{Expr, Spanned};
 
-use super::CompileError;
 use super::super::ctx::Compiler;
+use super::CompileError;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     /// A lambda.
     ///
     /// Compiles the body into a nested proto, then emits `CLOSURE`, which
@@ -128,10 +127,7 @@ impl Compiler<'_> {
             // `SETLIST` reads `R[A+1]..R[A+B]`, so the run has to sit
             // directly above the table register.
             debug_assert_eq!(run, t + 1, "SETLIST needs its values above the table");
-            self.emit(
-                Instruction::abc(Op::SETLIST, ta, n_array as u8, 0),
-                span,
-            );
+            self.emit(Instruction::abc(Op::SETLIST, ta, n_array as u8, 0), span);
         }
 
         for entry in entries {

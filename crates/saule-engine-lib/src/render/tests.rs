@@ -95,7 +95,8 @@ fn a_translate_moves_what_is_drawn() {
     let mut r = renderer(8, 8);
     opaque_red(&mut r);
     r.translate(4.0, 4.0);
-    r.rectangle("fill", 0.0, 0.0, 2.0, 2.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 2.0, 2.0, 0.0, 0.0)
+        .expect("fill");
 
     assert_eq!(r.pixel(0, 0) >> 24, 0, "the origin must stay untouched");
     assert_eq!(r.pixel(4, 4), 0xFFFF_0000);
@@ -110,7 +111,8 @@ fn a_scissor_is_transformed_with_the_geometry() {
     opaque_red(&mut r);
     r.translate(4.0, 0.0);
     r.set_scissor(Some((0.0, 0.0, 2.0, 8.0)));
-    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0)
+        .expect("fill");
 
     // The clip landed at device x = 4..6, not 0..2.
     assert_eq!(r.pixel(0, 0) >> 24, 0);
@@ -125,7 +127,8 @@ fn intersect_scissor_narrows_an_existing_clip() {
     opaque_red(&mut r);
     r.set_scissor(Some((0.0, 0.0, 6.0, 8.0)));
     r.intersect_scissor(2.0, 0.0, 6.0, 8.0);
-    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0)
+        .expect("fill");
 
     // Only the overlap, 2..6, survives.
     assert_eq!(r.pixel(1, 0) >> 24, 0);
@@ -152,7 +155,8 @@ fn a_resize_drops_a_clip_that_would_outlive_its_surface() {
     // following frame would silently draw nothing.
     assert!(r.st.scissor.is_none());
     opaque_red(&mut r);
-    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0)
+        .expect("fill");
     assert_eq!(r.written(), 64);
 }
 
@@ -167,7 +171,8 @@ fn drawing_into_a_canvas_leaves_the_screen_alone() {
 
     r.set_canvas(Some(canvas)).expect("bind");
     opaque_red(&mut r);
-    r.rectangle("fill", 0.0, 0.0, 4.0, 4.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 4.0, 4.0, 0.0, 0.0)
+        .expect("fill");
     r.set_canvas(None).expect("unbind");
 
     assert_eq!(r.written(), 0, "the screen must be untouched");
@@ -181,7 +186,8 @@ fn a_canvas_composites_back_onto_the_screen() {
 
     r.set_canvas(Some(canvas)).expect("bind");
     opaque_red(&mut r);
-    r.rectangle("fill", 0.0, 0.0, 2.0, 2.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 2.0, 2.0, 0.0, 0.0)
+        .expect("fill");
     r.set_canvas(None).expect("unbind");
 
     r.set_color(1.0, 1.0, 1.0, 1.0);
@@ -323,7 +329,8 @@ fn a_reused_scratch_draws_the_same_pixels_as_a_fresh_one() {
     reused
         .rectangle("fill", 0.0, 18.0, 24.0, 4.0, 0.0, 0.0)
         .expect("wide");
-    reused.polygon("fill", &[(0.0, 20.0), (23.0, 20.0), (12.0, 23.0)])
+    reused
+        .polygon("fill", &[(0.0, 20.0), (23.0, 20.0), (12.0, 23.0)])
         .expect("wide scanline shape");
     reused.clear(Some((0.0, 0.0, 0.0, 0.0)));
     shape(&mut reused);
@@ -383,7 +390,8 @@ fn a_linear_gradient_runs_along_its_axis() {
     .expect("gradient");
 
     r.set_gradient(gradient);
-    r.rectangle("fill", 0.0, 0.0, 16.0, 4.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 16.0, 4.0, 0.0, 0.0)
+        .expect("fill");
 
     let left = r.pixel(0, 2) & 0xFF;
     let middle = r.pixel(8, 2) & 0xFF;
@@ -407,7 +415,8 @@ fn a_gradient_is_constant_across_its_axis() {
     .expect("gradient");
 
     r.set_gradient(gradient);
-    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0)
+        .expect("fill");
 
     // Every row is the same ramp: the parameter ignores y.
     for y in 1..8 {
@@ -431,7 +440,8 @@ fn a_radial_gradient_is_symmetric_about_its_centre() {
     .expect("gradient");
 
     r.set_gradient(gradient);
-    r.rectangle("fill", 0.0, 0.0, 16.0, 16.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 16.0, 16.0, 0.0, 0.0)
+        .expect("fill");
 
     for offset in 1..8 {
         assert_eq!(r.pixel(8 - offset, 8), r.pixel(8 + offset - 1, 8));
@@ -457,11 +467,15 @@ fn a_gradient_is_anchored_when_it_is_set() {
 
     moved.translate(8.0, 0.0);
     moved.set_gradient(gradient);
-    moved.rectangle("fill", 0.0, 0.0, 8.0, 4.0, 0.0, 0.0).expect("fill");
+    moved
+        .rectangle("fill", 0.0, 0.0, 8.0, 4.0, 0.0, 0.0)
+        .expect("fill");
 
     let mut plain = renderer(16, 4);
     plain.set_gradient(gradient);
-    plain.rectangle("fill", 0.0, 0.0, 8.0, 4.0, 0.0, 0.0).expect("fill");
+    plain
+        .rectangle("fill", 0.0, 0.0, 8.0, 4.0, 0.0, 0.0)
+        .expect("fill");
 
     // The translated ramp is the untranslated one, shifted by 8 px.
     for x in 0..8 {
@@ -489,7 +503,8 @@ fn clearing_the_gradient_restores_the_flat_colour() {
     assert!(!r.has_gradient());
 
     opaque_red(&mut r);
-    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0).expect("fill");
+    r.rectangle("fill", 0.0, 0.0, 8.0, 8.0, 0.0, 0.0)
+        .expect("fill");
     assert_eq!(r.pixel(0, 0), 0xFFFF_0000);
     assert_eq!(r.pixel(7, 7), 0xFFFF_0000);
 }
@@ -633,7 +648,8 @@ fn steady_text_allocates_nothing() {
 
     let draw = |r: &mut Renderer| {
         r.print("a label", 4.0, 4.0).expect("print");
-        r.printf(paragraph, 4.0, 24.0, 300.0, "left").expect("printf");
+        r.printf(paragraph, 4.0, 24.0, 300.0, "left")
+            .expect("printf");
         r.text_width("a label").expect("measure");
     };
 
@@ -643,5 +659,3 @@ fn steady_text_allocates_nothing() {
     let steady = crate::counting_allocator::count(|| draw(&mut r));
     assert_eq!(steady, 0, "steady text allocated {steady} time(s)");
 }
-
-

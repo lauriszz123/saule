@@ -7,9 +7,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use saule_runtime::Value;
 use saule_runtime::fxhash::FxHashMap;
 use saule_runtime::value::VmFunctionRef;
-use saule_runtime::Value;
 
 use crate::chunk::Chunk;
 
@@ -217,4 +217,3 @@ pub(crate) fn build_enums(
     }
     enums
 }
-

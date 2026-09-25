@@ -58,7 +58,12 @@ fn assembles_a_package_from_its_records() {
     let m = assemble(&[
         package_rec(),
         class_rec("Image", true),
-        method_rec("Image", "init", "constructor", "fn(w: integer, h: integer) -> Image"),
+        method_rec(
+            "Image",
+            "init",
+            "constructor",
+            "fn(w: integer, h: integer) -> Image",
+        ),
         method_rec("Image", "width", "getter", "fn() -> integer"),
         method_rec("Image", "fill", "instance", "fn(color: integer) -> nil"),
         method_rec("Image", "load", "static", "fn(path: string) -> Image"),
@@ -86,7 +91,10 @@ fn assembles_a_package_from_its_records() {
     let graphics = &m.exports[0];
     assert!(!graphics.instantiable);
     assert_eq!(graphics.doc, None);
-    assert_eq!(graphics.methods[0].param_names, ["mode", "x", "y", "radius"]);
+    assert_eq!(
+        graphics.methods[0].param_names,
+        ["mode", "x", "y", "radius"]
+    );
 
     let image = &m.exports[1];
     assert!(image.instantiable);
@@ -111,17 +119,25 @@ fn a_package_built_for_another_abi_is_refused() {
     let theirs = saule_native_abi::ABI_VERSION + 1;
     let record = rec(
         "PACKAGE",
-        &format!("kind = \"package\"\nname = \"gfx\"\nversion = \"0.1.0\"\nabi_version = {theirs}\n"),
+        &format!(
+            "kind = \"package\"\nname = \"gfx\"\nversion = \"0.1.0\"\nabi_version = {theirs}\n"
+        ),
     );
     let err = assemble(&[record]).expect_err("a mismatched ABI must be refused");
     // Both numbers, so the reader can tell which side is stale.
     assert!(err.contains(&theirs.to_string()), "{err}");
-    assert!(err.contains(&saule_native_abi::ABI_VERSION.to_string()), "{err}");
+    assert!(
+        err.contains(&saule_native_abi::ABI_VERSION.to_string()),
+        "{err}"
+    );
 }
 
 #[test]
 fn a_package_that_declares_no_abi_is_refused() {
-    let record = rec("PACKAGE", "kind = \"package\"\nname = \"gfx\"\nversion = \"0.1.0\"\n");
+    let record = rec(
+        "PACKAGE",
+        "kind = \"package\"\nname = \"gfx\"\nversion = \"0.1.0\"\n",
+    );
     let err = assemble(&[record]).expect_err("an unversioned package must be refused");
     assert!(err.contains("ABI version"), "{err}");
 }
@@ -377,7 +393,10 @@ fn class_info_describes_objects_like_a_saule_class() {
     assert!(!info.methods["fill"].is_static);
     assert!(info.methods["load"].is_static);
     assert_eq!(info.field_types["width"], Type::Named("integer".into()));
-    assert!(!info.methods.contains_key("width"), "a property is not a method");
+    assert!(
+        !info.methods.contains_key("width"),
+        "a property is not a method"
+    );
 }
 
 /// `preload` is the side-effecting half `saule-vm` calls at run time. Its

@@ -18,7 +18,9 @@ fn if_else_matches() {
 #[test]
 fn while_matches() {
     must_agree("local i: integer = 0\nwhile i < 5 do i = i + 1 end\ni");
-    must_agree("local i: integer = 0\nlocal s: integer = 0\nwhile i < 10 do i = i + 1 s = s + i end\ns");
+    must_agree(
+        "local i: integer = 0\nlocal s: integer = 0\nwhile i < 10 do i = i + 1 s = s + i end\ns",
+    );
     // Never taken.
     must_agree("local i: integer = 9\nwhile i < 5 do i = i + 1 end\ni");
 }
@@ -64,7 +66,6 @@ fn block_scoping_matches() {
     );
 }
 
-
 // ── short-circuiting ──────────────────────────────────────────────────────
 
 #[test]
@@ -72,9 +73,15 @@ fn and_or_and_coalesce_match() {
     // Lua semantics: `and`/`or` evaluate to one of their *operands*, not to a
     // boolean, so the result's type matters as much as its truthiness.
     for src in [
-        "true and false", "false and true", "true or false", "false or true",
-        "1 < 2 and 3 < 4", "1 < 2 or 3 > 4", "2 > 3 and 4 > 5",
-        "nil ?? 5", "7 ?? 5",
+        "true and false",
+        "false and true",
+        "true or false",
+        "false or true",
+        "1 < 2 and 3 < 4",
+        "1 < 2 or 3 > 4",
+        "2 > 3 and 4 > 5",
+        "nil ?? 5",
+        "7 ?? 5",
     ] {
         must_agree(src);
     }
@@ -89,13 +96,16 @@ fn short_circuit_really_short_circuits() {
     must_agree("local d: integer = 0\nlocal ok: boolean = d == 0 or 10 / d > 1\nok");
 }
 
-
 // ── break and continue ────────────────────────────────────────────────────
 
 #[test]
 fn break_matches() {
-    must_agree("local s: integer = 0\nfor i = 1, 100 do\n  if i > 5 then break end\n  s = s + i\nend\ns");
-    must_agree("local i: integer = 0\nwhile true do\n  i = i + 1\n  if i >= 7 then break end\nend\ni");
+    must_agree(
+        "local s: integer = 0\nfor i = 1, 100 do\n  if i > 5 then break end\n  s = s + i\nend\ns",
+    );
+    must_agree(
+        "local i: integer = 0\nwhile true do\n  i = i + 1\n  if i >= 7 then break end\nend\ni",
+    );
 }
 
 #[test]
@@ -124,5 +134,3 @@ fn break_leaves_only_the_inner_loop() {
          s",
     );
 }
-
-

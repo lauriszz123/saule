@@ -251,7 +251,10 @@ impl ClassObject {
             s.values.borrow_mut()[slot as usize] = value;
             return true;
         }
-        owner.static_fields.borrow_mut().insert(name.to_string(), value);
+        owner
+            .static_fields
+            .borrow_mut()
+            .insert(name.to_string(), value);
         true
     }
 
@@ -266,7 +269,9 @@ impl ClassObject {
     }
 
     fn declares_static(&self, name: &str) -> bool {
-        self.slot_statics.as_ref().is_some_and(|s| s.index.contains_key(name))
+        self.slot_statics
+            .as_ref()
+            .is_some_and(|s| s.index.contains_key(name))
             || self.static_fields.borrow().contains_key(name)
     }
 }

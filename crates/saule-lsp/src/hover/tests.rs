@@ -711,11 +711,23 @@ end
 fn hovers_local_bound_to_a_cast() {
     for (src, want) in [
         // Conversions cannot fail: no `?`.
-        ("fn run(x: float) -> nil\n  local n = x as integer\n  println(n)\nend\n", "n: integer"),
-        ("fn run(i: integer) -> nil\n  local n = i as string\n  println(n)\nend\n", "n: string"),
+        (
+            "fn run(x: float) -> nil\n  local n = x as integer\n  println(n)\nend\n",
+            "n: integer",
+        ),
+        (
+            "fn run(i: integer) -> nil\n  local n = i as string\n  println(n)\nend\n",
+            "n: string",
+        ),
         // A parse can, and a test on an `any` can.
-        ("fn run(s: string) -> nil\n  local n = s as integer\n  println(n)\nend\n", "n: integer?"),
-        ("fn run(a: any) -> nil\n  local n = a as integer\n  println(n)\nend\n", "n: integer?"),
+        (
+            "fn run(s: string) -> nil\n  local n = s as integer\n  println(n)\nend\n",
+            "n: integer?",
+        ),
+        (
+            "fn run(a: any) -> nil\n  local n = a as integer\n  println(n)\nend\n",
+            "n: integer?",
+        ),
     ] {
         let md = hover(src, "n)").unwrap_or_else(|| panic!("no hover for `{src}`"));
         assert!(md.contains(want), "wanted `{want}` for `{src}`, got: {md}");
@@ -3136,8 +3148,6 @@ end
     );
 }
 
-
-
 // ──────────────────────────────────────────────────────────────────────────────
 // Inferred return types
 // ──────────────────────────────────────────────────────────────────────────────
@@ -3226,7 +3236,10 @@ class Finder
 end
 ";
     let md = hover_src_at(src, "fn first(", "fn ".len()).expect("hover");
-    assert!(md.contains("fn Finder.first(ok: boolean) -> integer?"), "got: {md}");
+    assert!(
+        md.contains("fn Finder.first(ok: boolean) -> integer?"),
+        "got: {md}"
+    );
 }
 
 /// Returns that disagree on more than nullability are left alone — a guess
@@ -3271,7 +3284,10 @@ class Cache
 end
 ";
     let md = hover_src_at(src, "fn find(", "fn ".len()).expect("hover");
-    assert!(md.contains("fn Cache.find(ok: boolean) -> string?"), "got: {md}");
+    assert!(
+        md.contains("fn Cache.find(ok: boolean) -> string?"),
+        "got: {md}"
+    );
 }
 
 /// A top-level `fn` is inferred the same way a method is.
@@ -3352,7 +3368,10 @@ class Scanner
 end
 ";
     let md = hover_src_at(src, "fn skipBlank()", "fn ".len()).expect("hover");
-    assert!(md.contains("fn Scanner.skipBlank() -> integer"), "got: {md}");
+    assert!(
+        md.contains("fn Scanner.skipBlank() -> integer"),
+        "got: {md}"
+    );
 }
 
 /// Indexing a table returns its element type, so `return self.lines[i]` is
@@ -3567,10 +3586,7 @@ class Parser
 end
 ";
     let md = hover_src_at(src, "fn recordHeading(", "fn ".len()).expect("hover");
-    assert!(
-        md.contains("text: string) -> Block"),
-        "got: {md}"
-    );
+    assert!(md.contains("text: string) -> Block"), "got: {md}");
 }
 
 /// A payload-free variant used as a value is the enum too.
@@ -3742,7 +3758,10 @@ class Parser
 end
 ";
     let md = hover_src_at(src, "fn clean(", "fn ".len()).expect("hover");
-    assert!(md.contains("fn Parser.clean(raw: string) -> string"), "got: {md}");
+    assert!(
+        md.contains("fn Parser.clean(raw: string) -> string"),
+        "got: {md}"
+    );
 }
 
 /// …including through an unannotated local, which is where most of them

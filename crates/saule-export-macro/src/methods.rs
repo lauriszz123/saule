@@ -98,13 +98,17 @@ pub(crate) fn expand(mut item: ItemImpl) -> syn::Result<TokenStream> {
                 .clone()
                 .flatten()
                 .or_else(|| attrs.name.clone())
-                .unwrap_or_else(|| camel_case(rust_name.strip_prefix("get_").unwrap_or(&rust_name))),
+                .unwrap_or_else(|| {
+                    camel_case(rust_name.strip_prefix("get_").unwrap_or(&rust_name))
+                }),
             Receiver::Setter { .. } => attrs
                 .setter
                 .clone()
                 .flatten()
                 .or_else(|| attrs.name.clone())
-                .unwrap_or_else(|| camel_case(rust_name.strip_prefix("set_").unwrap_or(&rust_name))),
+                .unwrap_or_else(|| {
+                    camel_case(rust_name.strip_prefix("set_").unwrap_or(&rust_name))
+                }),
             _ => attrs.name.clone().unwrap_or_else(|| camel_case(&rust_name)),
         };
         if !is_saule_ident(&name) {
@@ -175,7 +179,10 @@ fn decide_receiver(
     if attrs.getter.is_some() {
         return match recv_kind {
             Some(_) => Ok(Receiver::Getter),
-            None => Err(syn::Error::new(span, "a getter reads a property, so it takes `&self`")),
+            None => Err(syn::Error::new(
+                span,
+                "a getter reads a property, so it takes `&self`",
+            )),
         };
     }
     if attrs.setter.is_some() {

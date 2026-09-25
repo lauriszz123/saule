@@ -39,12 +39,17 @@ fn a_module_level_forward_call_is_refused_not_miscompiled() {
                end";
     let module = front_end_unchecked(src);
     let (message, span) = rejected(saule_vm::compile(&module, "x.sau", src));
-    assert!(message.contains("`later` is used here, before its declaration"), "{message}");
+    assert!(
+        message.contains("`later` is used here, before its declaration"),
+        "{message}"
+    );
     assert!(span.start < span.end, "the error must point somewhere");
 }
 
 /// The language's diagnostic from a program the compiler rejects.
-fn rejected(r: Result<saule_vm::Chunk, saule_vm::CompileError>) -> (String, std::ops::Range<usize>) {
+fn rejected(
+    r: Result<saule_vm::Chunk, saule_vm::CompileError>,
+) -> (String, std::ops::Range<usize>) {
     match r {
         Err(saule_vm::CompileError::Rejected(saule_runtime::RuntimeError::TypeError {
             message,
@@ -85,7 +90,10 @@ fn a_forward_reference_reached_through_a_callee_is_refused() {
                end\nr";
     let module = front_end_unchecked(src);
     let (message, _) = rejected(saule_vm::compile(&module, "diff.sau", src));
-    assert!(message.contains("`C.go` is used here, but it reaches a declaration"), "{message}");
+    assert!(
+        message.contains("`C.go` is used here, but it reaches a declaration"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -119,7 +127,6 @@ fn a_forward_call_inside_a_function_body_still_compiles() {
     );
 }
 
-
 #[test]
 fn deep_recursion_hits_the_same_limit_as_re_entrant_calls() {
     // A limit is observable behaviour, not an implementation detail: the
@@ -133,7 +140,6 @@ fn deep_recursion_hits_the_same_limit_as_re_entrant_calls() {
         "the VM's frame cap drifted from the re-entrant call limit"
     );
 }
-
 
 // ── forward references through a callee ───────────────────────────────────
 
@@ -166,7 +172,10 @@ fn a_module_body_call_reaching_a_later_class_is_refused() {
                end\nr";
     let module = front_end_unchecked(src);
     let (message, _) = rejected(saule_vm::compile(&module, "diff.sau", src));
-    assert!(message.contains("`run` is used here, but it reaches a declaration"), "{message}");
+    assert!(
+        message.contains("`run` is used here, but it reaches a declaration"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -181,7 +190,10 @@ fn a_module_body_call_reaching_a_later_module_variable_is_rejected() {
                r";
     let module = front_end_unchecked(src);
     let (message, _) = rejected(saule_vm::compile(&module, "diff.sau", src));
-    assert!(message.contains("`show` is used here, but it reaches a declaration"), "{message}");
+    assert!(
+        message.contains("`show` is used here, but it reaches a declaration"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -278,7 +290,6 @@ fn a_skipped_middle_default_still_runs_in_the_callee_when_it_is_not_a_literal() 
     );
 }
 
-
 #[test]
 fn an_exported_module_variable_is_read_and_written() {
     // `export name: T = value` is the module-scope counterpart of a class
@@ -289,7 +300,6 @@ fn an_exported_module_variable_is_read_and_written() {
         "export appName: string = \"Saule\"\n         export version: integer = 26\n         export pending: string?\n         version = version + 1\n         appName .. \" v\" .. version .. \" \" .. (pending ?? \"none\")",
     );
 }
-
 
 // ── §19 the gap mask ──────────────────────────────────────────────────────
 //
@@ -480,5 +490,3 @@ fn a_full_arity_call_does_not_take_the_gap_entry() {
          f(1, 500, \"!\") .. f(a: 2, d: 600, t: \"?\")"
     ));
 }
-
-

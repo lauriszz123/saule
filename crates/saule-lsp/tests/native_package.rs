@@ -30,7 +30,13 @@ fn fixture_home(test: &str) -> PathBuf {
     // hold the workspace's.
     let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
     let status = Command::new(env!("CARGO"))
-        .args(["build", "--quiet", "-p", "saule-native-fixture", "--target-dir"])
+        .args([
+            "build",
+            "--quiet",
+            "-p",
+            "saule-native-fixture",
+            "--target-dir",
+        ])
         .arg(&target)
         .current_dir(workspace_root())
         .status()
@@ -225,7 +231,10 @@ local r: Rounding = Rounding.Up
 fn a_native_package_is_clean_completes_and_hovers() {
     let home = fixture_home("editor");
     let (mut server, uri, diags) = open(&home, PROGRAM);
-    assert!(diags.is_empty(), "a correct program has no diagnostics: {diags:#?}");
+    assert!(
+        diags.is_empty(),
+        "a correct program has no diagnostics: {diags:#?}"
+    );
 
     // Hover shows the Rust doc comment compiled into the library.
     let hover = server.request(
@@ -236,7 +245,10 @@ fn a_native_package_is_clean_completes_and_hovers() {
         }),
     );
     let text = hover.to_string();
-    assert!(text.contains("Add the step, and return the new value."), "{text}");
+    assert!(
+        text.contains("Add the step, and return the new value."),
+        "{text}"
+    );
 
     let hover = server.request(
         "textDocument/hover",
@@ -276,7 +288,10 @@ fn a_native_package_is_clean_completes_and_hovers() {
         .unwrap_or_default();
     let labels: Vec<&str> = items.iter().filter_map(|i| i["label"].as_str()).collect();
     for member in ["bump", "value", "step", "fork", "absorb", "doubled"] {
-        assert!(labels.contains(&member), "`c.` should offer `{member}`: {labels:?}");
+        assert!(
+            labels.contains(&member),
+            "`c.` should offer `{member}`: {labels:?}"
+        );
     }
     for static_fn in ["live", "parse"] {
         assert!(

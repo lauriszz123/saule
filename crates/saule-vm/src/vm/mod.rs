@@ -232,7 +232,11 @@ impl Vm {
             .unwrap_or(0);
         let cache: Vec<Vec<std::cell::OnceCell<Rc<VmFunctionRef>>>> = chunks
             .iter()
-            .map(|c| (0..c.protos.len()).map(|_| std::cell::OnceCell::new()).collect())
+            .map(|c| {
+                (0..c.protos.len())
+                    .map(|_| std::cell::OnceCell::new())
+                    .collect()
+            })
             .collect();
         // `new_cyclic` because the classes built here carry method closures,
         // and a closure needs a `Weak<VmShared>` to be able to run itself —
@@ -245,8 +249,12 @@ impl Vm {
             let mut modules = vec![Value::Nil; module_slots];
             for (slot, ty) in chunks.iter().flat_map(|c| c.type_slots.iter()) {
                 let v = match *ty {
-                    crate::chunk::TypeSlot::Class(i) => classes.get(i as usize).cloned().map(Value::Class),
-                    crate::chunk::TypeSlot::Enum(i) => enums.get(i as usize).cloned().map(Value::Enum),
+                    crate::chunk::TypeSlot::Class(i) => {
+                        classes.get(i as usize).cloned().map(Value::Class)
+                    }
+                    crate::chunk::TypeSlot::Enum(i) => {
+                        enums.get(i as usize).cloned().map(Value::Enum)
+                    }
                 };
                 if let (Some(v), Some(dst)) = (v, modules.get_mut(*slot as usize)) {
                     *dst = v;
@@ -333,7 +341,11 @@ impl Vm {
     /// on every re-entrant call, which with a recycled `Vm` meant a sort
     /// comparator started higher on every comparison.
     fn free_base(&self) -> u32 {
-        if self.frames.is_empty() { 0 } else { self.stack.len() as u32 }
+        if self.frames.is_empty() {
+            0
+        } else {
+            self.stack.len() as u32
+        }
     }
 
     /// Execute the entry module's `main` proto.
@@ -360,11 +372,7 @@ impl Vm {
 
     /// Call an already-built closure value with `args`. The entry point an
     /// embedder uses to invoke a Saule function it got hold of.
-    pub fn call(
-        &mut self,
-        callee: Value,
-        args: &[Value],
-    ) -> Result<Vec<Value>, RuntimeError> {
+    pub fn call(&mut self, callee: Value, args: &[Value]) -> Result<Vec<Value>, RuntimeError> {
         let Value::VmFunction(handle) = callee else {
             return Err(RuntimeError::TypeError {
                 message: format!("attempt to call a `{}`", callee.type_name()),
@@ -487,5 +495,4 @@ impl Vm {
         }
         Some(self.execute_collecting())
     }
-
 }

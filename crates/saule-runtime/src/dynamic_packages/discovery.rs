@@ -157,7 +157,11 @@ pub(crate) fn scan(dir: &Path, legacy_dir: &Path) -> Scan {
 
     // Packages installed the old way: a TOML manifest in its own directory.
     // Only worth a word if the name is otherwise unaccounted for.
-    for entry in std::fs::read_dir(legacy_dir).into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir(legacy_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("toml") {
             continue;
@@ -165,12 +169,7 @@ pub(crate) fn scan(dir: &Path, legacy_dir: &Path) -> Scan {
         let name = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| t.parse::<toml::Table>().ok())
-            .and_then(|t| {
-                t.get("package")?
-                    .get("name")?
-                    .as_str()
-                    .map(str::to_string)
-            });
+            .and_then(|t| t.get("package")?.get("name")?.as_str().map(str::to_string));
         let Some(name) = name else { continue };
         if found.contains_key(&name) || rejected.contains_key(&name) {
             continue;

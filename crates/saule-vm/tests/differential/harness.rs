@@ -121,7 +121,10 @@ fn unescape(line: &str) -> Option<Outcome> {
     }
 }
 
-const EXPECTED_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/differential/expected.txt");
+const EXPECTED_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/differential/expected.txt"
+);
 
 /// Every recorded outcome, by program hash.
 fn recorded() -> &'static HashMap<u64, String> {
@@ -203,7 +206,8 @@ pub(crate) fn agree(src: &str) -> bool {
         Some(got) => {
             let expected = expected(src, &got);
             assert_eq!(
-                got, expected,
+                got,
+                expected,
                 "the VM disagreed with the recorded outcome\n--- source ---{src}\n--- disassembly ---\n{}",
                 saule_vm::compile(&module, "diff.sau", src)
                     .map(|c| saule_vm::disasm::chunk(&c))
@@ -223,9 +227,11 @@ pub(crate) fn must_agree(src: &str) {
             .err()
             .map(|e| e.to_string())
             .unwrap_or_else(|| "compiled fine on the retry?".into());
-        panic!("the compiler refused a program it should handle:
+        panic!(
+            "the compiler refused a program it should handle:
 {src}
-  -> {why}");
+  -> {why}"
+        );
     }
 }
 

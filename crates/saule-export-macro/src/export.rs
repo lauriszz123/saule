@@ -300,10 +300,7 @@ fn decode_param(
     };
     match decode {
         Decode::Owned(ty) => (from(quote! { #ty }), quote! { #local }),
-        Decode::StrRef => (
-            from(quote! { ::std::string::String }),
-            quote! { &#local },
-        ),
+        Decode::StrRef => (from(quote! { ::std::string::String }), quote! { &#local }),
         Decode::OptStrRef => (
             from(quote! { ::core::option::Option<::std::string::String> }),
             quote! { #local.as_deref() },

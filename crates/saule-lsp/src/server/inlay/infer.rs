@@ -343,10 +343,12 @@ impl<'a> Cx<'a> {
             Expr::Cast { ty, .. } => class_name(ty.clone()),
             // `blocks[i].kind` — the receiver's class is the element
             // type of the indexed `table<…>`.
-            Expr::Index { obj: inner, .. } => match strip_nullable(self.infer_type(&inner.value)?) {
-                Type::Table { value, .. } => class_name(*value),
-                _ => None,
-            },
+            Expr::Index { obj: inner, .. } => {
+                match strip_nullable(self.infer_type(&inner.value)?) {
+                    Type::Table { value, .. } => class_name(*value),
+                    _ => None,
+                }
+            }
             Expr::Ident(name) => {
                 // Seeing through `T?` is what makes a call on a nullable
                 // receiver resolve at all: `Io.open` hands back `File?`,

@@ -13,8 +13,13 @@ use crate::op::{Fmt, Instruction, Op};
 pub fn chunk(c: &Chunk) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "; chunk from {}", c.source.name());
-    let _ = writeln!(out, "; {} proto(s), {} constant(s), {} module slot(s)",
-        c.protos.len(), c.constants.len(), c.module_slots);
+    let _ = writeln!(
+        out,
+        "; {} proto(s), {} constant(s), {} module slot(s)",
+        c.protos.len(),
+        c.constants.len(),
+        c.module_slots
+    );
 
     if !c.constants.is_empty() {
         let _ = writeln!(out, "\nconstants:");
@@ -59,7 +64,11 @@ pub fn proto(c: &Chunk, p: &Proto, idx: u32) -> String {
             out,
             "  ; upval[{i}] {} <- parent {} {}",
             u.name,
-            if u.from_parent_stack { "register" } else { "upvalue" },
+            if u.from_parent_stack {
+                "register"
+            } else {
+                "upvalue"
+            },
             u.index
         );
     }
@@ -137,20 +146,28 @@ fn annotate(c: &Chunk, p: &Proto, op: Op, ins: Instruction, pc: usize) -> Option
             let target = c.protos.get(idx as usize)?;
             Some(format!("proto[{idx}] {}", target.label()))
         }
-        Op::NEW => c.classes.get(ins.bx() as usize).map(|cl| cl.name.to_string()),
+        Op::NEW => c
+            .classes
+            .get(ins.bx() as usize)
+            .map(|cl| cl.name.to_string()),
         Op::VARIANT => c.enums.get(ins.bx() as usize).map(|e| e.name.to_string()),
         Op::SWITCH => {
             let t = c.jump_tables.get(ins.bx() as usize)?;
-            Some(format!("{} arm(s), default -> {:04}", t.targets.len(), t.default))
+            Some(format!(
+                "{} arm(s), default -> {:04}",
+                t.targets.len(),
+                t.default
+            ))
         }
         // Resolving a displacement to an absolute target is the difference
         // between a readable listing and an unreadable one — but only for
         // opcodes whose sBx *is* a displacement. `LOADI` shares the layout
         // and carries a literal.
-        _ if op.is_jump() => Some(format!("-> {:04}", (pc as i64 + 1 + ins.sbx() as i64).max(0))),
-        Op::ITERPREP | Op::ITERPREPX => {
-            Some(format!("-> {:04}", pc + 1 + ins.bx() as usize))
-        }
+        _ if op.is_jump() => Some(format!(
+            "-> {:04}",
+            (pc as i64 + 1 + ins.sbx() as i64).max(0)
+        )),
+        Op::ITERPREP | Op::ITERPREPX => Some(format!("-> {:04}", pc + 1 + ins.bx() as usize)),
         _ => None,
     }
 }
