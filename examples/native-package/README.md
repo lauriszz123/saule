@@ -1,15 +1,22 @@
-# Native packages — dynamically-loaded engine modules
+# Native packages — dynamically-loaded Rust modules
 
 This folder demonstrates Saule's **native package** system: compile a Rust
 library to a shared object, drop it into `~/.saule/native_packages/`, and
 `import` it from Saule with full type-checking and LSP support — **no
 interpreter rebuild, and no manifest**.
 
+The `.sau` programs here import **Shine2D**, the Love2D-style engine that used
+to live in this repository as `crates/saule-engine-lib`. It now has a
+repository of its own — <https://github.com/lauriszz123/saule-shine> — which is
+the point: a native package is built and installed from outside the language,
+against the published SDK, exactly as anyone else's would be. Install it first
+and these examples run.
+
 ## How it works
 
 ```
 ~/.saule/
-  native_packages/libsaule_engine_lib.dylib  ← the whole package (.dll/.so/.dylib)
+  native_packages/libsaule_shine.dylib        ← the whole package (.dll/.so/.dylib)
 ```
 
 A package is one file. `saule-sdk`'s macros compile a description of the
@@ -21,7 +28,7 @@ exported symbol, and your `///` doc comments.
    method's signature is registered, so `Graphics.circle(...)` type-checks —
    and the editor completes it and shows its docs — before any of the
    package's code runs.
-2. When a program reaches `import Graphics from "engine"`, the interpreter
+2. When a program reaches `import Graphics from "shine"`, the interpreter
    loads the library, checks that it was built against the same native ABI,
    and binds each export to its symbol.
 3. Calls cross a small, frozen C ABI ([`saule-native-abi`](../../crates/saule-native-abi))
@@ -63,27 +70,30 @@ type.
 > - **Linux / WSL** — the default `stable-x86_64-unknown-linux-gnu` builds
 >   everything. minifb loads X11/Wayland via `dlopen`, so no `-dev` headers are
 >   needed. (In WSL, make sure you use the rustup `cargo`, not the old apt one —
->   `source ~/.cargo/env`. The helper `scripts/build_wsl.sh` does this and uses a
->   separate target dir so Linux and Windows artifacts don't collide.)
+>   `source ~/.cargo/env`.)
 > - **Windows** — use the **MSVC** toolchain; the GNU toolchain can't link the
 >   `cdylib`/`libloading` (missing `dlltool.exe`). Pin it for this folder once:
 >   `rustup override set stable-x86_64-pc-windows-msvc`.
 
 ```sh
-# 1. Build the example engine as a shared library
-cargo build -p saule-engine-lib --release
+# 1. Clone and build Shine2D — a separate repository, not part of this one
+git clone https://github.com/lauriszz123/saule-shine
+cd saule-shine && cargo build --release
 
-# 2. Copy the library into the packages directory (any file name works)
-#    Linux:   cp target/release/libsaule_engine_lib.so    ~/.saule/native_packages/
-#    macOS:   cp target/release/libsaule_engine_lib.dylib ~/.saule/native_packages/
+# 2. Copy the library into the packages directory (any file name works —
+#    Saule reads the package's real name out of the file)
+#    Linux:   cp target/release/libsaule_shine.so    ~/.saule/native_packages/
+#    macOS:   cp target/release/libsaule_shine.dylib ~/.saule/native_packages/
 #    Windows (PowerShell):
 mkdir $env:USERPROFILE\.saule\native_packages -Force
-copy target\release\saule_engine_lib.dll $env:USERPROFILE\.saule\native_packages\
+copy target\release\saule_shine.dll $env:USERPROFILE\.saule\native_packages\
 ```
 
-> `scripts/install_mac.sh`, `scripts/install_wsl.sh` and
-> `scripts/install_windows.ps1` do step 2 for you, and tidy away the separate
-> manifest an older install left in `~/.saule/native_manifests/`.
+> **macOS.** Apple's linker can leave a release build's symbol string table
+> misaligned, and macOS then refuses to load it. Run
+> `python3 scripts/align_macho_strtab.py <the .dylib>` from this repository
+> afterwards; it is a no-op when the build came out fine. Shine2D's README has
+> the details.
 
 ## Run
 
@@ -94,9 +104,9 @@ saule examples/native-package/demo.sau
 ## Import forms
 
 ```saule
-import Graphics from "engine"                 -- single class
-import Graphics, Window, Timer from "engine"  -- several classes
-import * from "engine"                        -- everything the package exports
+import Graphics from "shine"                 -- single class
+import Graphics, Window, Timer from "shine"  -- several classes
+import * from "shine"                        -- everything the package exports
 ```
 
 ## Game loop
@@ -162,14 +172,23 @@ wheel-driven zoom, mouse edges, and a canvas used as a pre-rendered backdrop.
 
 ## Adding your own functions
 
-1. Write a plain, safe Rust function in `crates/saule-engine-lib/src/`.
+In Shine2D's `src/`, or in a package of your own — the steps are the same, and
+neither needs a checkout of the language:
+
+1. Write a plain, safe Rust function.
 2. Annotate it with `#[saule_export(class = "<Class>", name = "<method>")]`.
    The Saule signature is inferred from the Rust types, and the function's
    `///` comment becomes its hover text — both compiled into the library.
    (To document a brand-new class, add it to the `classes { … }` list in
-   `saule_package!` in `crates/saule-engine-lib/src/lib.rs`.)
-3. Rebuild and reinstall (`scripts/install_*`). No interpreter changes, and
-   nothing to regenerate.
+   `saule_package!` in the crate root.)
+3. `cargo build --release` and copy the library over the installed one. No
+   interpreter changes, and nothing to regenerate.
+
+For a class whose *objects* Saule programs hold — a texture, a socket — use
+`#[saule_class]` and `#[saule_methods]` instead. See
+[the SDK's README](../../crates/saule-sdk/README.md) for the whole surface, and
+[`crates/saule-native-fixture`](../../crates/saule-native-fixture) for a small
+package that exercises every part of it.
 
 ## Note on the toolchain (Windows)
 
