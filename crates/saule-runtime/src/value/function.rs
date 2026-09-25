@@ -55,7 +55,11 @@ pub trait VmFunction: fmt::Debug {
         args: &[Value],
         span: std::ops::Range<usize>,
     ) -> Result<Value, crate::error::RuntimeError> {
-        Ok(self.call(handle, args, span)?.into_iter().next().unwrap_or(Value::Nil))
+        Ok(self
+            .call(handle, args, span)?
+            .into_iter()
+            .next()
+            .unwrap_or(Value::Nil))
     }
 }
 

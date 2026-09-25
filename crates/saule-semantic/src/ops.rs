@@ -25,8 +25,7 @@ use saule_ast::Type;
 use saule_ast::ops::OperatorContract;
 
 use crate::registry::{
-    ClassRegistry, InterfaceRegistry, MethodSig, class_implements, lookup_method,
-    with_classes,
+    ClassRegistry, InterfaceRegistry, MethodSig, class_implements, lookup_method, with_classes,
 };
 
 /// Where an overload lookup reads its declarations from.

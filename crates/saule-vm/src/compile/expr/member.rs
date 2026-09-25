@@ -10,8 +10,8 @@ use std::ops::Range;
 use saule_ast::{Expr, Spanned};
 use saule_runtime::Value;
 
-use super::CompileError;
 use super::super::ctx::Compiler;
+use super::CompileError;
 use crate::op::{Instruction, Op};
 
 /// What `obj.name` turned out to be, once resolved against a proved class.
@@ -26,7 +26,6 @@ pub(crate) enum MemberAccess {
 }
 
 impl Compiler<'_> {
-
     /// `obj.name` — a field read, or a static read off a class name.
     pub(crate) fn member_to(
         &mut self,
@@ -123,7 +122,10 @@ impl Compiler<'_> {
         if matches!(self.types.get(&obj.id), Some(saule_ast::Type::Table { .. })) {
             let m = self.mark();
             let r = self.expr_tmp(obj)?;
-            let key = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
+            let key = self.constant(
+                Value::Str(saule_runtime::value::SauleStr::new(name.to_string())),
+                span,
+            )?;
             self.map_key_read(dst, r, key, span)?;
             self.free_to(m);
             return Ok(());
@@ -135,7 +137,10 @@ impl Compiler<'_> {
         let Some(class) = self.class_of_expr(obj) else {
             let m = self.mark();
             let r = self.expr_tmp(obj)?;
-            let key = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
+            let key = self.constant(
+                Value::Str(saule_runtime::value::SauleStr::new(name.to_string())),
+                span,
+            )?;
             let Ok(kc) = u8::try_from(key) else {
                 return Err(CompileError::unsupported(
                     "a dynamic member name past the 256-constant window",
@@ -262,7 +267,11 @@ impl Compiler<'_> {
         })
     }
 
-    fn descends_from(&self, mut who: crate::chunk::ClassIdx, ancestor: crate::chunk::ClassIdx) -> bool {
+    fn descends_from(
+        &self,
+        mut who: crate::chunk::ClassIdx,
+        ancestor: crate::chunk::ClassIdx,
+    ) -> bool {
         while let Some(p) = self.chunk.classes[who as usize].parent {
             if p == ancestor {
                 return true;

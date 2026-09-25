@@ -44,7 +44,6 @@ pub mod safe;
 
 pub(crate) use results::{Results, Want};
 
-
 use saule_ast::{BinOp, CastKind, Expr, Spanned};
 use saule_runtime::Value;
 
@@ -77,9 +76,10 @@ impl Compiler<'_> {
             // the check whose absence silently truncated a literal in
             // Phase 1.
             Expr::Int(n) => {
-                match i32::try_from(*n).ok().and_then(|small| {
-                    Instruction::try_asbx(Op::LOADI, a, small)
-                }) {
+                match i32::try_from(*n)
+                    .ok()
+                    .and_then(|small| Instruction::try_asbx(Op::LOADI, a, small))
+                {
                     Some(ins) => self.emit(ins, span),
                     None => {
                         let k = self.constant(Value::Int(*n), span)?;
@@ -92,7 +92,10 @@ impl Compiler<'_> {
                 self.emit(Instruction::abx(Op::LOADK, a, k), span);
             }
             Expr::Str(s) => {
-                let k = self.constant(Value::Str(saule_runtime::value::SauleStr::new(s.clone())), span)?;
+                let k = self.constant(
+                    Value::Str(saule_runtime::value::SauleStr::new(s.clone())),
+                    span,
+                )?;
                 self.emit(Instruction::abx(Op::LOADK, a, k), span);
             }
 
@@ -145,7 +148,10 @@ impl Compiler<'_> {
                     let g = self.mod_slot(slot, span)?;
                     self.emit(Instruction::abx(Op::GETMOD, a, g), span);
                 } else {
-                    return Err(CompileError::unsupported("`self` outside a method", span.clone()));
+                    return Err(CompileError::unsupported(
+                        "`self` outside a method",
+                        span.clone(),
+                    ));
                 }
             }
 
@@ -169,9 +175,7 @@ impl Compiler<'_> {
                 // yields `T?`, so this is not a niche shape — it is how a
                 // typed element read is spelled, and the pair was 17.7% of
                 // every instruction `matrix` executed.
-                Expr::Index { obj, index } => {
-                    self.index_to(inner, obj, index, dst, Some(span))?
-                }
+                Expr::Index { obj, index } => self.index_to(inner, obj, index, dst, Some(span))?,
                 _ => {
                     let m = self.mark();
                     let r = self.operand_to_reg(inner, self.operand_is_pure(inner))?;
@@ -244,7 +248,6 @@ impl Compiler<'_> {
             }
         }
     }
-
 
     /// The numeric kind the typechecker proved for a node, if any.
     pub fn num_of_node(&self, e: &Spanned<Expr>) -> Option<Num> {

@@ -195,7 +195,6 @@ pub enum TypeDesc {
     Nullable(u32),
 }
 
-
 /// A `CASTCHK` / `CASTUNWRAP` type test, pre-resolved to something the
 /// dispatch loop can answer with a tag compare.
 ///
@@ -249,9 +248,15 @@ impl CastFast {
                 // A nested `Deep` cannot be lifted: `cast` has to see the
                 // whole `T?` to apply its own nil rule.
                 if inner.test == CastTest::Deep {
-                    CastFast { test: CastTest::Deep, nullable: false }
+                    CastFast {
+                        test: CastTest::Deep,
+                        nullable: false,
+                    }
                 } else {
-                    CastFast { test: inner.test, nullable: true }
+                    CastFast {
+                        test: inner.test,
+                        nullable: true,
+                    }
                 }
             }
             Type::Named(name) => {
@@ -266,9 +271,15 @@ impl CastFast {
                     // A class or enum name: the chain walk stays in `cast`.
                     _ => CastTest::Deep,
                 };
-                CastFast { test, nullable: false }
+                CastFast {
+                    test,
+                    nullable: false,
+                }
             }
-            _ => CastFast { test: CastTest::Deep, nullable: false },
+            _ => CastFast {
+                test: CastTest::Deep,
+                nullable: false,
+            },
         }
     }
 

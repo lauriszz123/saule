@@ -79,7 +79,10 @@ fn a_subclass_extends_a_parent_from_another_module() {
     // Post-order: the imported module is compiled — and will be run —
     // before the module that imports it.
     assert_eq!(program.modules.len(), 2);
-    assert_eq!(program.entry, 1, "the entry module comes last in post-order");
+    assert_eq!(
+        program.entry, 1,
+        "the entry module comes last in post-order"
+    );
 
     // One table, seen identically through either chunk. `Rc::ptr_eq` is the
     // assertion that matters: two equal-looking tables would still be the
@@ -91,7 +94,11 @@ fn a_subclass_extends_a_parent_from_another_module() {
         "every module of a program must share one class table"
     );
 
-    let base = a.classes.iter().position(|c| c.name.as_ref() == "Base").expect("Base");
+    let base = a
+        .classes
+        .iter()
+        .position(|c| c.name.as_ref() == "Base")
+        .expect("Base");
     let derived = a
         .classes
         .iter()
@@ -106,7 +113,11 @@ fn a_subclass_extends_a_parent_from_another_module() {
     assert_eq!(a.classes[derived].layout.slot("a"), Some(0));
     assert_eq!(a.classes[derived].layout.slot("b"), Some(1));
     // And the inherited method is reachable through the subclass's vtable.
-    let slot = a.classes[derived].vindex.get("describe").copied().expect("describe slot");
+    let slot = a.classes[derived]
+        .vindex
+        .get("describe")
+        .copied()
+        .expect("describe slot");
     assert_ne!(
         a.classes[derived].vtable[slot as usize],
         u32::MAX,
@@ -130,7 +141,9 @@ fn an_import_cycle_is_refused_rather_than_looping() {
     match saule_vm::program::compile(&dir.join("a.sau")) {
         Err(saule_vm::program::ProgramError::Import(
             saule_runtime::RuntimeError::ImportFailed {
-                module_label, inner, ..
+                module_label,
+                inner,
+                ..
             },
         )) => {
             assert!(module_label.ends_with("b.sau"), "{module_label}");
@@ -148,7 +161,10 @@ fn an_imported_function_is_copied_into_the_importing_module_slot() {
     let dir = project(
         "import_value",
         &[
-            ("lib.sau", "export fn double(n: integer) -> integer\n  return n * 2\nend\n"),
+            (
+                "lib.sau",
+                "export fn double(n: integer) -> integer\n  return n * 2\nend\n",
+            ),
             (
                 "main.sau",
                 "import double from lib\n\
@@ -193,7 +209,10 @@ fn a_module_top_level_runs_before_the_module_that_imports_it() {
     let dir = project(
         "module_init_order",
         &[
-            ("first.sau", "println(\"first\")\nexport class Marker\nend\n"),
+            (
+                "first.sau",
+                "println(\"first\")\nexport class Marker\nend\n",
+            ),
             (
                 "main.sau",
                 "import Marker from first\n\
@@ -405,7 +424,10 @@ fn an_override_of_an_imported_method_is_inherited_by_its_own_subclass() {
 
     // `BB`, not `BA`: `C` inherits `B`'s override, not `A`'s original. And
     // `tag`, itself inherited from `A`, must dispatch back down to it.
-    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "BB\n<B>");
+    assert_eq!(
+        run_capturing(compile(&dir.join("main.sau"))).trim(),
+        "BB\n<B>"
+    );
 }
 
 #[test]
@@ -514,7 +536,10 @@ fn a_barrel_module_re_exports_a_type_and_a_value() {
     // same source. `Derived`'s slots extend `Base`'s real ones — §24.2's
     // worst-bug case, reached through a barrel.
     let cls = &program.entry_chunk().classes;
-    let base = cls.iter().position(|c| c.name.as_ref() == "Base").expect("Base");
+    let base = cls
+        .iter()
+        .position(|c| c.name.as_ref() == "Base")
+        .expect("Base");
     let derived = cls
         .iter()
         .position(|c| c.name.as_ref() == "Derived")
@@ -536,7 +561,10 @@ fn a_barrel_re_exports_through_another_barrel() {
     let dir = project(
         "barrel_nested",
         &[
-            ("outer/inner/leaf.sau", "export fn leaf() -> string\n  return \"leaf\"\nend\n"),
+            (
+                "outer/inner/leaf.sau",
+                "export fn leaf() -> string\n  return \"leaf\"\nend\n",
+            ),
             ("outer/inner/init.sau", "import * from leaf\n"),
             ("outer/init.sau", "import * from inner\n"),
             (
@@ -558,7 +586,10 @@ fn a_named_re_export_publishes_the_alias() {
     let dir = project(
         "barrel_alias",
         &[
-            ("kit/thing.sau", "export fn ping() -> string\n  return \"pong\"\nend\n"),
+            (
+                "kit/thing.sau",
+                "export fn ping() -> string\n  return \"pong\"\nend\n",
+            ),
             ("kit/init.sau", "import ping as knock from thing\n"),
             (
                 "main.sau",

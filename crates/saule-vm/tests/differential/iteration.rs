@@ -6,7 +6,9 @@ use crate::harness::*;
 
 #[test]
 fn iterating_an_array_matches() {
-    must_agree("local t: table<integer> = {10, 20, 30}\nlocal s: integer = 0\nfor v in t do s = s + v end\ns");
+    must_agree(
+        "local t: table<integer> = {10, 20, 30}\nlocal s: integer = 0\nfor v in t do s = s + v end\ns",
+    );
     must_agree(
         "local t: table<integer> = {10, 20, 30}\nlocal s: integer = 0\n\
          for i, v in t do s = s + i * v end\ns",
@@ -37,7 +39,6 @@ fn nested_for_in_matches() {
          for a in t do\n  for b in t do\n    s = s + a * b\n  end\nend\ns",
     );
 }
-
 
 // ── `for … in` over a closure driver (§15.8) ──────────────────────────────
 //
@@ -132,7 +133,6 @@ fn driver_loops_nest() {
          out",
     );
 }
-
 
 // ── §15.8 iteration over an unproved source ───────────────────────────────
 //
@@ -363,8 +363,6 @@ fn an_unproved_iter_returning_a_non_function_reports_the_same_error() {
          n",
     ));
 }
-
-
 
 #[test]
 fn map_keys_iterate_in_the_same_order_under_both_engines() {

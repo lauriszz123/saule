@@ -35,6 +35,7 @@ use saule_native_abi::{CValue, Handle, tag};
 
 use crate::convert::{FromSaule, IntoSaule, require};
 use crate::host;
+use crate::object::{NativeClass, SAnyObject, SObject};
 
 /// Hash an already-hashable value with the standard hasher.
 fn hash_of<T: Hash>(v: &T) -> u64 {
@@ -205,12 +206,16 @@ pub enum SValue {
     Table(STable),
     /// A host-owned callable.
     Func(SFunction),
+    /// An object of one of this package's `#[saule_class]`es.
+    Object(SAnyObject),
 }
 
 impl SValue {
-    /// Build a borrowed [`CValue`]. String payloads point into `self`, so the
-    /// returned value is only valid while `self` is alive — fine for the
-    /// synchronous host callbacks this crate makes.
+    /// Build a [`CValue`] to hand the host in a callback. String payloads
+    /// point into `self`, so the result is only valid while `self` is alive —
+    /// fine for the synchronous host callbacks this crate makes. An object
+    /// carries a new reference, which the host takes over (see
+    /// `saule_native_abi::ObjectPtr`).
     fn to_cvalue(&self) -> CValue {
         match self {
             SValue::Nil => CValue::nil(),
@@ -220,10 +225,12 @@ impl SValue {
             SValue::Str(s) => CValue::string_borrowed(s.as_bytes()),
             SValue::Table(t) => CValue::table_handle(t.handle),
             SValue::Func(f) => CValue::func_handle(f.handle),
+            SValue::Object(o) => o.to_owned_cvalue(),
         }
     }
 
-    /// Decode a [`CValue`] into an owned value (copying strings).
+    /// Decode a [`CValue`] into an owned value (copying strings, and taking a
+    /// reference to an object).
     fn from_cvalue(c: &CValue) -> SValue {
         match c.tag {
             tag::BOOL => SValue::Bool(c.boolean != 0),
@@ -238,7 +245,16 @@ impl SValue {
             tag::FUNC => SValue::Func(SFunction {
                 handle: c.integer as Handle,
             }),
+            tag::OBJECT => crate::object::any_from_cvalue(c).map_or(SValue::Nil, SValue::Object),
             _ => SValue::Nil,
+        }
+    }
+
+    /// The object, if this is one. Narrow it with [`SAnyObject::downcast`].
+    pub fn as_object(&self) -> Option<&SAnyObject> {
+        match self {
+            SValue::Object(o) => Some(o),
+            _ => None,
         }
     }
 
@@ -347,6 +363,18 @@ impl<T> From<STable<T>> for SValue {
 impl From<SFunction> for SValue {
     fn from(v: SFunction) -> Self {
         SValue::Func(v)
+    }
+}
+
+impl From<SAnyObject> for SValue {
+    fn from(v: SAnyObject) -> Self {
+        SValue::Object(v)
+    }
+}
+
+impl<C: NativeClass> From<SObject<C>> for SValue {
+    fn from(v: SObject<C>) -> Self {
+        SValue::Object(v.into())
     }
 }
 
@@ -677,6 +705,9 @@ impl IntoSaule for SValue {
             SValue::Str(s) => saule_native_abi::return_string(&s),
             SValue::Table(t) => CValue::table_handle(t.handle),
             SValue::Func(f) => CValue::func_handle(f.handle),
+            // The host gets a reference of its own; this one is dropped with
+            // `o`, so the count comes out even.
+            SValue::Object(o) => o.to_owned_cvalue(),
         }
     }
 }

@@ -11,7 +11,6 @@ use super::super::ctx::Compiler;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     /// `repeat … until cond`.
     ///
     /// Two things separate it from `while`. The body always runs once, and
@@ -77,7 +76,6 @@ impl Compiler<'_> {
         self.close_loop_captures(&l, &cond.span)?;
         Ok(())
     }
-
 
     pub(crate) fn if_chain(
         &mut self,
@@ -380,7 +378,10 @@ impl Compiler<'_> {
         // `integer`, so there is no `OpNeg` overload to run.
         let imm8 = |e: &Spanned<Expr>| {
             let v = match &e.value {
-                Expr::Unary { op: saule_ast::UnaryOp::Neg, rhs } => {
+                Expr::Unary {
+                    op: saule_ast::UnaryOp::Neg,
+                    rhs,
+                } => {
                     match crate::compile::literal_value(&rhs.value) {
                         // `-i64::MIN` has no positive counterpart; it is far
                         // outside `i8` either way, so declining is the same
@@ -485,7 +486,12 @@ impl Compiler<'_> {
         &mut self,
         cond: &Spanned<Expr>,
     ) -> Result<Vec<crate::compile::ctx::Label>, CompileError> {
-        if let Expr::Binary { op: saule_ast::BinOp::And, lhs, rhs } = &cond.value {
+        if let Expr::Binary {
+            op: saule_ast::BinOp::And,
+            lhs,
+            rhs,
+        } = &cond.value
+        {
             let mut out = self.cond_jumps_if_false(lhs)?;
             out.extend(self.cond_jumps_if_false(rhs)?);
             return Ok(out);
@@ -519,5 +525,4 @@ impl Compiler<'_> {
         self.free_to(m);
         Ok(label)
     }
-
 }

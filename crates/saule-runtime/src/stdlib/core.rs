@@ -1,11 +1,10 @@
 //! Core prelude functions.
 
-
-use crate::prelude::Prelude;
 use crate::native_packages::NativePackage;
+use crate::prelude::Prelude;
 use crate::stdlib::define_native;
-use crate::value::Value;
 use crate::value::SauleStr;
+use crate::value::Value;
 
 /// `import { print, println, … } from "core"`. Also auto-installed so
 /// these names are visible without an explicit import (the common
@@ -15,13 +14,7 @@ pub static CORE_PACKAGE: NativePackage = NativePackage {
     version: saule_version::VERSION,
     install,
     exports: &[
-        "print",
-        "println",
-        "printf",
-        "tostring",
-        "type",
-        "assert",
-        "error",
+        "print", "println", "printf", "tostring", "type", "assert", "error",
     ],
     register_sigs,
     builtins: empty_builtins,
@@ -93,10 +86,8 @@ fn builtin_println(args: &[Value]) -> Result<Value, String> {
 
 /// Tab-join the arguments, honouring any `OpToString` overload.
 fn display_all(args: &[Value]) -> Result<String, String> {
-    let parts: Result<Vec<String>, String> = args
-        .iter()
-        .map(crate::ops::display_value_native)
-        .collect();
+    let parts: Result<Vec<String>, String> =
+        args.iter().map(crate::ops::display_value_native).collect();
     Ok(parts?.join("\t"))
 }
 
@@ -110,13 +101,18 @@ fn builtin_printf(args: &[Value]) -> Result<Value, String> {
 
 fn builtin_tostring(args: &[Value]) -> Result<Value, String> {
     let v = args.first().cloned().unwrap_or(Value::Nil);
-    Ok(Value::Str(SauleStr::new(crate::ops::display_value_native(&v)?)))
+    Ok(Value::Str(SauleStr::new(crate::ops::display_value_native(
+        &v,
+    )?)))
 }
 
 fn builtin_type(args: &[Value]) -> Result<Value, String> {
     let v = args.first().cloned().unwrap_or(Value::Nil);
     let name = match &v {
         Value::Instance(inst) => inst.borrow().class.name.clone(),
+        // A native package's object answers the same way a Saule instance
+        // does: with its class.
+        Value::Foreign(obj) => obj.class.name.clone(),
         _ => v.type_name().to_string(),
     };
     Ok(Value::Str(SauleStr::new(name)))

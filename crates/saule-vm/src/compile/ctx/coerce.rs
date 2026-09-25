@@ -14,7 +14,6 @@ use crate::op::{Instruction, Op};
 use super::Compiler;
 
 impl Compiler<'_> {
-
     /// Emit per-arity entry stubs for a callee's defaulted parameters
     /// (§19), and hand back the `entries` table.
     ///
@@ -174,7 +173,6 @@ impl Compiler<'_> {
         Ok(entries)
     }
 
-
     /// Coerce every parameter whose declared type asks for it (§`coerce.rs`).
     ///
     /// **Emitted after the default entry stubs, and that placement is the
@@ -300,5 +298,4 @@ impl Compiler<'_> {
         self.patch_here(keep_isa)?;
         Ok(())
     }
-
 }

@@ -139,7 +139,17 @@ impl Renderer {
     ) -> Result<(), String> {
         let idx = self.canvas_index(handle, "Graphics.draw")?;
         let (w, h) = self.canvas_size(idx, "Graphics.draw")?;
-        self.blit(idx, Rect::new(0.0, 0.0, w as f64, h as f64), x, y, angle, sx, sy, ox, oy)
+        self.blit(
+            idx,
+            Rect::new(0.0, 0.0, w as f64, h as f64),
+            x,
+            y,
+            angle,
+            sx,
+            sy,
+            ox,
+            oy,
+        )
     }
 
     /// Composite one cell of an image onto the current target — the
@@ -205,11 +215,7 @@ impl Renderer {
     /// loaded image is simply a canvas that started life with pixels in it.
     pub(crate) fn new_image(&mut self, path: &str) -> Result<i64, String> {
         let surface = crate::image::load(path)?;
-        Ok(insert(
-            &mut self.canvases,
-            &mut self.free_canvases,
-            surface,
-        ))
+        Ok(insert(&mut self.canvases, &mut self.free_canvases, surface))
     }
 
     /// [`Renderer::new_image`], reporting failure as `None` rather than an

@@ -55,7 +55,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn instantiate_method_return_substitutes_nullable() {
         // find<T>(t: table<T>, f: fn(T) -> boolean) -> T?

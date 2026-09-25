@@ -67,6 +67,3 @@ fn a_pipeline_over_a_table_matches() {
          local r: integer = when(t):total()\nr",
     );
 }
-
-
-

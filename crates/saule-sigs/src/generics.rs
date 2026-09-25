@@ -121,7 +121,10 @@ pub fn substitute(
         // not a variable — only its arguments.
         Type::Generic(g) => Type::generic(
             g.name.clone(),
-            g.args.iter().map(|t| substitute(t, subst, params)).collect(),
+            g.args
+                .iter()
+                .map(|t| substitute(t, subst, params))
+                .collect(),
         ),
     }
 }

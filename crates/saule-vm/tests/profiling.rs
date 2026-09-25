@@ -26,7 +26,8 @@ fn profile_of(src: &str) -> profile::Report {
     saule_runtime::init();
     let toks = Lexer::new(src).tokenize().expect("lex");
     let module = parse(toks).expect("parse");
-    let errs = saule_runtime::analyze_and_prepare(&module, saule_semantic::ModuleSeed::default());
+    let (errs, _) =
+        saule_runtime::analyze_with_bindings(&module, saule_semantic::ModuleSeed::default());
     assert!(errs.is_empty(), "semantic errors: {errs:?}");
     let chunk = saule_vm::compile(&module, "prof.sau", src).expect("compiles");
     profile::enable();
@@ -35,7 +36,11 @@ fn profile_of(src: &str) -> profile::Report {
 }
 
 fn count(r: &profile::Report, op: Op) -> u64 {
-    r.ops.iter().find(|(o, _)| *o == op).map(|(_, n)| *n).unwrap_or(0)
+    r.ops
+        .iter()
+        .find(|(o, _)| *o == op)
+        .map(|(_, n)| *n)
+        .unwrap_or(0)
 }
 
 fn pair(r: &profile::Report, first: Op, second: Op) -> u64 {

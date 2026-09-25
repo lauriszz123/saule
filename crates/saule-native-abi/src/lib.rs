@@ -4,9 +4,12 @@
 //!
 //! The interpreter never links a native package directly. Instead it loads
 //! the package's shared library at runtime (via `libloading`) and calls
-//! exported `extern "C"` symbols whose names are declared in a TOML manifest.
+//! exported `extern "C"` symbols whose names the package describes in
+//! metadata embedded in the library itself (see [Package metadata]).
 //! This crate is the *only* thing both sides agree on, so its layout is
 //! frozen: changing [`CValue`] is a breaking ABI change.
+//!
+//! [Package metadata]: #package-metadata
 //!
 //! ## Calling convention
 //!
@@ -41,8 +44,51 @@
 //!   them in a thread-local buffer (see [`return_string`]) that stays valid
 //!   until that thread's *next* native call. The interpreter copies the
 //!   bytes immediately on return, so this contract is sufficient.
+//!
+//! ## Package metadata
+//!
+//! A package describes itself — its name, its classes, every method's
+//! signature and exported symbol, its doc comments — in **records compiled
+//! into the library**, one per declaration. The interpreter reads them out
+//! of the file on disk *without loading it*: type-checking a program that
+//! imports a package, and every editor feature built on that, must never run
+//! a line of the package's code. Reading bytes out of a file is as safe as
+//! reading a text file; `dlopen` is not, because it runs the library's
+//! initialisers.
+//!
+//! Each record is an exported static whose symbol name starts with
+//! [`META_SYMBOL_PREFIX`]. Being exported is what makes this portable: the
+//! linker never discards an exported symbol, and every object format lists
+//! them — so the reader needs no platform-specific section names, and a
+//! record cannot be dropped by dead-code elimination. The static's bytes
+//! are:
+//!
+//! ```text
+//! META_MAGIC (8 bytes) | payload length (u32, little-endian) | payload
+//! ```
+//!
+//! The payload is UTF-8 TOML with a `kind` key saying what it declares.
+//! TOML rather than a binary layout so that `strings` on a package shows
+//! what it exports, and so that adding a key is not a format break. The
+//! record kinds and their keys are defined by `saule-export-macro`, which
+//! writes them, and by the interpreter, which reads them. Neither side
+//! parses the other's Rust.
+//!
+//! A record's layout is versioned by the magic, not by [`ABI_VERSION`]:
+//! the records describe the calling convention, they are not part of it.
 
 use std::cell::RefCell;
+
+/// The prefix of every exported metadata symbol. On Mach-O the object file
+/// spells it with the platform's leading underscore; readers strip that.
+pub const META_SYMBOL_PREFIX: &str = "SAULE_META_";
+
+/// The first eight bytes of every metadata record. The trailing digit is the
+/// record-layout version: bump it if the header after the magic changes.
+pub const META_MAGIC: [u8; 8] = *b"SAULEMD1";
+
+/// Bytes before a record's payload: [`META_MAGIC`] plus the `u32` length.
+pub const META_HEADER_LEN: usize = META_MAGIC.len() + 4;
 
 /// Discriminant for [`CValue::tag`].
 pub mod tag {
@@ -63,7 +109,41 @@ pub mod tag {
     /// The package holds a [`Handle`] and invokes it via
     /// [`HostApi::func_call`].
     pub const FUNC: u8 = 7;
+    /// An instance of a class the *package* defines — a texture, a socket,
+    /// a parser. The inverse of [`TABLE`]: the memory lives in the package
+    /// and the host holds an opaque pointer to it. See
+    /// [`CValue::object`] for the fields and the "Objects" section at the
+    /// top of this crate for who owns what.
+    pub const OBJECT: u8 = 8;
 }
+
+/// An opaque pointer to a package-owned object ([`tag::OBJECT`]).
+///
+/// The host never dereferences it. It only hands it back to the package
+/// that produced it — as an argument, or to [`OBJECT_RELEASE_SYMBOL`] when
+/// the last Saule reference goes away.
+///
+/// ## Objects
+///
+/// A package-defined object is reference counted *by the package*, and the
+/// host owns some of those references:
+///
+/// * **Package → host** — a return value, a value written into a table with
+///   [`HostApi::table_set`] / [`HostApi::table_push`], or an argument to
+///   [`HostApi::func_call`]. Every `OBJECT` travelling this way **carries one
+///   reference, which the host takes over** and later gives back by calling
+///   [`OBJECT_RELEASE_SYMBOL`] exactly once. So a package returning an object
+///   it also keeps (the current canvas, a cached font) must count one extra
+///   reference for the host first.
+/// * **Host → package** — an argument, or a value read back through
+///   [`HostApi::table_get`] / [`HostApi::func_call`]. The `OBJECT` is
+///   **borrowed**: valid until the outermost native call returns, like a
+///   [`Handle`]. A package that keeps it past that takes its own reference.
+///
+/// The host only ever passes a package its *own* objects. An object from
+/// another package is refused before it reaches the boundary, so a package
+/// may assume every pointer it receives is one it created.
+pub type ObjectPtr = *mut core::ffi::c_void;
 
 /// An opaque reference to a host-owned value (a `table` or a callable).
 ///
@@ -74,6 +154,53 @@ pub mod tag {
 /// any nested host callbacks); the host reclaims them when the outermost
 /// call returns. `0` is the never-valid sentinel.
 pub type Handle = u64;
+
+/// The version of this ABI: the layout of [`CValue`], the layout and member
+/// order of [`HostApi`], the [`tag`] discriminants, and the calling
+/// convention documented at the top of this file.
+///
+/// **Bump this whenever any of those change in a way a package compiled
+/// against the old definition would get wrong.** That includes adding a
+/// field to [`HostApi`] (the struct is `#[repr(C)]`, so a package built
+/// against a shorter one reads past its end), adding a [`tag`] constant a
+/// package would not know to handle, and changing what a return code means.
+/// Adding a *new exported symbol* the host looks up optionally is not a
+/// break, because an old package simply does not export it.
+///
+/// There is no minimum-compatible range and no negotiation: the host and the
+/// package agree exactly, or the package does not load. A range would be a
+/// promise to keep old layouts working, and at this stage that promise would
+/// be broken by accident. When the ABI is worth stabilising, this is where
+/// the policy changes.
+///
+/// History: `2` added [`tag::OBJECT`] and [`OBJECT_RELEASE_SYMBOL`].
+pub const ABI_VERSION: u32 = 2;
+
+/// The symbol through which the host gives back its reference to a package
+/// object (see [`ObjectPtr`]). Called exactly once per reference the host
+/// was handed, and never with a pointer the package did not produce.
+///
+/// Required for a package that returns objects; `saule-sdk` always emits it.
+pub const OBJECT_RELEASE_SYMBOL: &str = "saule_object_release";
+
+/// Signature of [`OBJECT_RELEASE_SYMBOL`]. Must not unwind.
+pub type ObjectReleaseFn = unsafe extern "C" fn(ObjectPtr);
+
+/// The symbol every package must export so the interpreter can check
+/// [`ABI_VERSION`] before it touches anything else in the library.
+///
+/// Required, unlike [`SET_HOST_SYMBOL`]: a library that does not export it
+/// was built against an ABI that predates versioning, which is exactly the
+/// case this check exists to catch. `saule-sdk` emits it for you.
+pub const ABI_VERSION_SYMBOL: &str = "saule_abi_version";
+
+/// Signature of [`ABI_VERSION_SYMBOL`] — returns the [`ABI_VERSION`] the
+/// package was compiled against.
+///
+/// A plain `u32` return and no arguments, deliberately: this is the one call
+/// made into a library whose ABI is not yet known to match, so it must use
+/// only the part of the calling convention that cannot itself be versioned.
+pub type AbiVersionFn = unsafe extern "C" fn() -> u32;
 
 /// The symbol an interpreter looks up (optionally) right after loading a
 /// package's shared library, to hand the package its [`HostApi`]. A package
@@ -241,6 +368,56 @@ impl CValue {
             integer: h as i64,
             ..Self::nil()
         }
+    }
+
+    /// A package-owned object: the opaque pointer in [`CValue::integer`] and
+    /// the name of its class in the string fields.
+    ///
+    /// The class name is how the host finds the class to dispatch methods
+    /// on when an object first crosses to it, so it must be the name the
+    /// package's metadata declares. A package writes a `'static` name here;
+    /// the host, passing an object back, writes one that lives for the call.
+    /// Ownership of the reference follows the direction of travel — see
+    /// [`ObjectPtr`].
+    pub fn object(ptr: ObjectPtr, class: &'static str) -> Self {
+        Self {
+            tag: tag::OBJECT,
+            integer: ptr as usize as i64,
+            str_ptr: class.as_ptr(),
+            str_len: class.len(),
+            ..Self::nil()
+        }
+    }
+
+    /// [`CValue::object`] with a class name that is only borrowed. For the
+    /// host, which hands an object back to its package for one call.
+    pub fn object_borrowed(ptr: ObjectPtr, class: &[u8]) -> Self {
+        Self {
+            tag: tag::OBJECT,
+            integer: ptr as usize as i64,
+            str_ptr: class.as_ptr(),
+            str_len: class.len(),
+            ..Self::nil()
+        }
+    }
+
+    /// The pointer carried by a [`tag::OBJECT`] value, or `None` for any
+    /// other tag.
+    pub fn as_object(&self) -> Option<ObjectPtr> {
+        (self.tag == tag::OBJECT).then_some(self.integer as usize as ObjectPtr)
+    }
+
+    /// The class name carried by a [`tag::OBJECT`] value.
+    ///
+    /// # Safety
+    /// The string fields must be valid, as for [`CValue::as_str`].
+    pub unsafe fn object_class(&self) -> Option<&str> {
+        if self.tag != tag::OBJECT || self.str_ptr.is_null() {
+            return None;
+        }
+        // SAFETY: caller guarantees `str_ptr` is valid for `str_len` bytes.
+        let slice = unsafe { std::slice::from_raw_parts(self.str_ptr, self.str_len) };
+        std::str::from_utf8(slice).ok()
     }
 
     /// The [`Handle`] carried by a [`tag::TABLE`] or [`tag::FUNC`] value, or

@@ -115,10 +115,10 @@ pub fn init() {
         // lives behind an `import "..."`. Third-party packages call
         // `native_packages::register` themselves.
         stdlib::register_builtin_packages();
-        // Discover externally-installed native packages described by
-        // manifests under `~/.saule/native_manifests/`. This only parses
-        // manifests and records their type signatures — the shared
-        // libraries themselves are loaded lazily on first import.
+        // Discover externally-installed native packages under
+        // `~/.saule/native_packages/`. This only reads the description each
+        // library carries, out of the file — the libraries themselves are
+        // loaded lazily, at the `import` that needs one.
         dynamic_packages::discover();
     });
 }
