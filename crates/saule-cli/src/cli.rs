@@ -61,6 +61,9 @@ pub(crate) enum Command {
     Check(CheckArgs),
     Fmt(FmtArgs),
     Init(InitArgs),
+    Install(InstallArgs),
+    Remove(RemoveArgs),
+    List(ListArgs),
     Disasm(DisasmArgs),
 }
 
@@ -220,4 +223,71 @@ pub(crate) struct InitArgs {
     /// Scaffold a library — importable by other projects, with no entry point.
     #[arg(long)]
     pub lib: bool,
+}
+
+/// `saule install [<package>]`
+#[derive(Debug, Args)]
+#[command(
+    about = "Install a package from GitHub, or everything this project needs",
+    long_about = "\
+Install a package from GitHub, or everything this project needs.
+
+    saule install gh:lauriszz123/saule-shine        -- the default branch
+    saule install gh:lauriszz123/saule-shine@v0.1.0 -- a tag or branch
+    saule install lauriszz123/saule-shine           -- `gh:` may be left off
+    saule install                                   -- everything in saule.config
+
+A package is installed once, globally, and shared by every project; the
+project records which ones it uses in `dependencies:`, alongside any relative
+paths, which keep working unchanged.
+
+What the repository holds decides how it installs: a Saule project (it has a
+saule.config) has its source installed, and a Rust crate is built with cargo
+and its library installed."
+)]
+pub(crate) struct InstallArgs {
+    /// `gh:<owner>/<repo>[@<tag-or-branch>]`. Omit to install what this
+    /// project's `dependencies:` already name.
+    #[arg(value_name = "PACKAGE")]
+    pub package: Option<String>,
+}
+
+/// `saule remove <package>`
+#[derive(Debug, Args)]
+#[command(
+    about = "Remove a package from this project",
+    long_about = "\
+Remove a package from this project's `dependencies:`.
+
+The installed copy is kept, because other projects on this machine may be
+using it. `--purge` deletes it as well.
+
+The package may be named however is convenient: `gh:owner/repo@v1`,
+`owner/repo`, or just `repo`."
+)]
+pub(crate) struct RemoveArgs {
+    /// The package, or a relative path exactly as it appears in the config.
+    #[arg(value_name = "PACKAGE")]
+    pub package: String,
+
+    /// Also delete the globally installed copy, not just this project's
+    /// reference to it.
+    #[arg(long)]
+    pub purge: bool,
+}
+
+/// `saule list`
+#[derive(Debug, Args)]
+#[command(
+    about = "List this project's dependencies, and what is installed for them",
+    long_about = "\
+List this project's dependencies and what is installed for each.
+
+Packages are installed globally and shared, so `--global` shows everything on
+this machine rather than what one project asked for."
+)]
+pub(crate) struct ListArgs {
+    /// Every package installed on this machine, whichever project asked for it.
+    #[arg(long)]
+    pub global: bool,
 }

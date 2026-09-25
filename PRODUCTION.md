@@ -71,8 +71,8 @@ on this machine (macOS 25.6, arm64), not estimated.
 
 **Saule is a well-built language implementation and not yet a product.**
 
-The engineering quality is genuinely high, and that is not a courtesy: 96.8k
-lines of Rust across 20 crates, 1,665 passing Rust tests plus 254 `.sau`
+The engineering quality is genuinely high, and that is not a courtesy: 87.5k
+lines of Rust across 20 crates, 1,705 passing Rust tests plus 254 `.sau`
 fixtures with zero failures, zero `TODO`/`FIXME` markers, blocking `clippy -D warnings` and
 `rustfmt` gates in CI, and module-level documentation that explains *why* rather
 than restating the code. The type system is more coherent than most hobby
@@ -133,10 +133,10 @@ The three things that most change Saule's trajectory, in order:
 
 | Measurement | Command | Result |
 |---|---|---|
-| Rust test suite | `cargo test --workspace --exclude saule-engine-lib` | **1,665 passed, 0 failed, 5 ignored** (1,795 including `saule-engine-lib`) |
+| Rust test suite | `cargo test --workspace` | **1,705 passed, 0 failed** |
 | Language fixtures | `./run_tests.sh` | **254/254 behaved as expected** (97 positive + 157 `ui/` negative) |
 | Benchmarks | `REPS=3 python3 benchmarks/bench.py` | see [Appendix A](#appendix-a--raw-measurements) |
-| Source size | `wc -l` over `crates/*/src` | **96.8k LOC of Rust** across 20 crates |
+| Source size | `wc -l` over `crates/*/src` | **87.5k LOC of Rust** across 20 crates |
 | Test density | `grep -rn '#\[test\]' crates` | **1,784** test functions |
 | Debt markers | `grep -rn 'TODO\|FIXME\|HACK'` | **0** genuine markers in `crates/*/src` |
 | Release history | `git tag` | **1 tag** (`v26.1`, 2026-07-30), 195 commits |
@@ -648,8 +648,10 @@ part (a coherent, working implementation) is done.
     *builds*, it does not *test*. Nothing has ever run the test suite on Windows
     or macOS. Given filesystem, path-separator, and DPI code that is explicitly
     platform-conditional, that is a real risk.
-18. **`saule-engine-lib` is excluded from clippy and from release builds.** It is
-    6.5k lines of unlinted code sitting in the toolchain workspace.
+18. ~~**`saule-engine-lib` is excluded from clippy and from release builds.**~~
+    **Done.** It is now [Shine2D](https://github.com/lauriszz123/saule-shine),
+    its own repository built against the SDK from git, so nothing in this
+    workspace is exempt from the clippy and test gates any more.
 19. **The LSP re-derives types.** *(Unchanged by the query-layer pass, and now
     with a named blocker — see [§9.2.1](#921-what-blocks-the-rest-of-the-query-layer).)*
     `exprty.rs` was written specifically to
@@ -880,11 +882,11 @@ is ever loaded.** Very few scripting languages do this.
    version 2): a package's `#[saule_class]` objects cross as package-owned,
    reference-counted pointers, typed by their class on the Saule side, with the
    package's destructor run when the last reference goes. Objects from one
-   package are refused at another's boundary. **Not done:** the engine itself
-   still hands out `integer` handles — `Graphics.newImage(path) -> integer`
-   ([graphics.rs](crates/saule-engine-lib/src/graphics.rs)) — for images, fonts
-   and canvases. Moving those to classes is a change to the engine's Saule API
-   (and `examples/uikit`), so it is its own piece of work.
+   package are refused at another's boundary. **Not taken up yet:** Shine2D
+   still hands out `integer` handles — `Graphics.newImage(path) -> integer` —
+   for images, fonts and canvases. Moving those to classes changes its Saule
+   API (and `examples/uikit`), and is now work in
+   [that repository](https://github.com/lauriszz123/saule-shine).
 5. **No cross-compilation help.** A package author must produce six binaries. A
    reusable GitHub Actions workflow shipped as a template would remove most of
    that work.
@@ -894,7 +896,8 @@ is ever loaded.** Very few scripting languages do this.
    string pool*). It happens when the indirect symbol table has an odd number
    of 4-byte entries, and it padded correctly in a debug build of the same
    crate — so whether a link is loadable turns on a symbol count that changes
-   with any edit. Release builds of `saule-engine-lib` were affected;
+   with any edit. Release builds of the graphics engine were affected — both in
+   this workspace and, after the split, in Shine2D's own — while
    `saule`/`saule-lsp` were not, by luck.
    [scripts/align_macho_strtab.py](scripts/align_macho_strtab.py) repairs a
    built file (pad, fix the offsets, re-sign) and is run by
@@ -903,14 +906,13 @@ is ever loaded.** Very few scripting languages do this.
    explains the dyld message when a package still hits it. **This should be
    removed when Apple fixes the linker** — the marker is the repair reporting
    that it changed nothing across several releases.
-7. **`saule-engine-lib` is a poor exemplar.** It is the reference example for
-   native packages, and it is 6.5k lines of graphics engine, excluded from clippy,
-   living inside the compiler workspace. An author looking for "how do I write a
-   package" has to filter a rasterizer, a font engine, and a PNG decoder out of
-   the answer. [`saule-native-fixture`](crates/saule-native-fixture) is now a
-   ~250-line package using every kind of export, driven by the CLI, VM and LSP
-   test suites — but it lives in the workspace, not in a repository an author
-   would copy.
+7. ~~**`saule-engine-lib` is a poor exemplar.**~~ **Done.** The 6.5k-line
+   graphics engine no longer sits in this workspace: it is
+   [Shine2D](https://github.com/lauriszz123/saule-shine), which doubles as the
+   proof that a package builds from outside the language against the SDK from
+   git. For "how do I write a package" there is now
+   [`crates/saule-native-fixture`](crates/saule-native-fixture) — ~250 lines
+   using every kind of export, driven by the CLI, VM and LSP suites.
 
 ### Verdict
 
@@ -952,7 +954,7 @@ that as the standing warning about hand-maintained inventories.
 | `saule-project` | 916 | `saule.config`, discovery, deps, `ProjectInfo` | See 9.2. |
 | `saule-version` | 201 | Build-time version resolution | Correct, clever, self-contained. |
 | `saule-wasm` | 530 | Playground bindings | Correct. Candidate for its own repo. |
-| `saule-engine-lib` | 9,373 | Graphics engine example | **Does not belong here — see 9.5.** |
+| `saule-native-fixture` | ~250 | A package using every kind of export, for the test suites | Correct. The example an author reads. |
 
 The split is, on the whole, better than most language projects manage. The
 pipeline crates are cleanly layered and the dependency graph flows one way. What
@@ -1158,7 +1160,7 @@ test:
 
 | Move out | Why | When |
 |---|---|---|
-| **`saule-engine-lib` → `saule-lang/saule-engine`** | It is an application, not toolchain. Excluded from clippy and from release builds — it is already half-out. Making it a standalone repo consuming the *published* SDK **dogfoods the entire native-package path**: if the engine can't be built and installed by an outsider, neither can anyone else's package. | With the SDK publish |
+| ~~**`saule-engine-lib` → its own repo**~~ | **Done**, as [Shine2D](https://github.com/lauriszz123/saule-shine). It takes `saule-sdk` from git rather than a path, which **dogfoods the whole native-package path**: it is built and installed from outside the language exactly as anyone else's package would be. | Done |
 | **`editors/vscode` → own repo** | Marketplace publishing, npm toolchain, independent cadence, its own CI. | With RELEASE_PLAN step 4 |
 | **`editors/intellij` → own repo** | Gradle/JVM build; nothing shared with the Rust workspace. | Same |
 | **`editors/nvim` → own repo** | Plugin managers install from a repo root. | Same |
@@ -1225,8 +1227,10 @@ who is not you can run `saule`.**
 - Publish `saule-native-abi`, `saule-export-macro`, `saule-sdk` with semver.
 - ~~Add `abi_version` to the manifest **and** a load-time check.~~ **Done.**
 - ~~Extract `saule-project`; delete the duplicate config parser.~~ **Done.**
-- Split `saule-engine-lib` into its own repo and rebuild it against the published
-  SDK — the acid test that the path works for outsiders.
+- ~~Split `saule-engine-lib` into its own repo and rebuild it against the
+  published SDK — the acid test that the path works for outsiders.~~ **Done**
+  as [Shine2D](https://github.com/lauriszz123/saule-shine), against the SDK
+  from git; it becomes a version requirement when the SDK is published.
 - Ship `saule-package-template`.
 
 ### Phase 4 — Make it a platform
@@ -1509,7 +1513,6 @@ unchanged, which is why the rest sits in the noise.
 | saule-lsp | 20,754 | 55 |
 | saule-interpreter | 15,046 | 61 |
 | saule-typeck | 8,043 | 20 |
-| saule-engine-lib | 6,583 | 26 |
 | saule-parser | 2,995 | 13 |
 | saule-fmt | 2,943 | 7 |
 | saule-semantic | 2,565 | 13 |
@@ -1536,7 +1539,8 @@ is a good boundary and it should be stated as a policy so it stays true.
 
 ### Test inventory
 
-- 1,665 passing Rust tests (workspace minus `saule-engine-lib`), 0 failures, 5 ignored — 1,795 with it
+- 1,705 passing Rust tests across the workspace, 0 failures (the graphics
+  engine's 129 moved out with it to Shine2D)
 - 1,784 `#[test]` functions across all crates
 - 254 `.sau` fixtures (97 positive, 157 `tests/ui/*`): positives must run and
   exit 0, `ui` must fail. **All 254 behave as expected** — `generic_interface.sau`

@@ -52,8 +52,8 @@ executors:
   # turn this branch red without a commit — and this is the branch that
   # publishes, so a surprise clippy lint on a Tuesday is a release that does
   # not happen. It cost exactly that once already: 1.98 added
-  # `chunks_exact_to_as_chunks`, which failed `test-engine` on code that had
-  # not changed in months.
+  # `chunks_exact_to_as_chunks`, which failed the graphics package (since split
+  # out to its own repository) on code that had not changed in months.
   #
   # Bumping is a deliberate commit: change the tag, run
   # `cargo clippy --workspace --all-targets -- -D warnings` under that
@@ -135,16 +135,11 @@ jobs:
           name: clippy
           command: |
             rustup component add clippy
-            # `saule-engine-lib` is excluded from the *toolchain* gate and
-            # covered by `test-engine` instead. It is an example native package
-            # rather than something the release workflow builds
-            # (`-p saule-cli -p saule-lsp`), so a break there should not read
-            # as a break in the compiler — but it is not unchecked either.
-            cargo clippy --workspace --all-targets --exclude saule-engine-lib -- -D warnings
+            cargo clippy --workspace --all-targets -- -D warnings
       - run:
           name: cargo test
           no_output_timeout: 30m
-          command: cargo test --workspace --locked --exclude saule-engine-lib
+          command: cargo test --workspace --locked
       - run:
           name: Build the CLI for the fixture suite
           command: cargo build --locked -p saule-cli
@@ -180,30 +175,6 @@ jobs:
             fi
       - save-cargo:
           prefix: test
-
-  # The graphics package, gated separately from the toolchain.
-  #
-  # Nothing here needs a display: minifb's x11 path and `arboard` both dlopen
-  # their libraries at *runtime*, the rasterizer tests operate on plain pixel
-  # buffers, and the font tests skip themselves when the image has no typeface
-  # installed. There is no manifest to check: the package's description is
-  # compiled into the library from the same declarations as its code, so the
-  # two cannot disagree.
-  test-engine:
-    executor: rust
-    steps:
-      - checkout
-      - restore-cargo:
-          prefix: engine
-      - run:
-          name: clippy and tests for saule-engine-lib
-          no_output_timeout: 30m
-          command: |
-            rustup component add clippy
-            cargo clippy -p saule-engine-lib --all-targets -- -D warnings
-            cargo test -p saule-engine-lib --locked
-      - save-cargo:
-          prefix: engine
 
   # Two guarantees, both easy to break by editing prose:
   #
@@ -362,11 +333,9 @@ jobs:
   # The three Linux triples, all on CircleCI's x86_64 Docker executor.
   #
   # aarch64 is cross-compiled rather than built on an Arm executor: `saule-cli`
-  # and `saule-lsp` are pure Rust over libc — the SDL and minifb dependencies
-  # in Cargo.lock belong to `saule-engine-lib`, which is an example package and
-  # is not built here — so the cross build needs a linker and nothing else. It
-  # is still *executed* before being shipped, under qemu-user, so it gets the
-  # same version check as every other archive.
+  # and `saule-lsp` are pure Rust over libc, so the cross build needs a linker
+  # and nothing else. It is still *executed* before being shipped, under
+  # qemu-user, so it gets the same version check as every other archive.
   build-linux:
     executor: rust
     parameters:
@@ -667,10 +636,9 @@ workflows:
       # archives are built and no release is created — the tests are what
       # stands between a push to `main` and a published version.
       - test
-      - test-engine
       - check-www
       - version:
-          requires: [test, test-engine, check-www]
+          requires: [test, check-www]
       - build-linux:
           requires: [version]
           matrix:

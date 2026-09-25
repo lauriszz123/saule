@@ -169,4 +169,5 @@ re-signs ad-hoc, and does nothing to a library that came out aligned or to a
 non-Mach-O file. `--check` reports without changing anything, for a CI gate.
 
 See `crates/saule-native-fixture` for every feature in one small package,
-and `crates/saule-engine-lib` for a large one.
+and [Shine2D](https://github.com/lauriszz123/saule-shine) for a large one built
+against this SDK from its own repository.
