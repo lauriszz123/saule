@@ -30,6 +30,22 @@ echo "Building Saule $SAULE_VERSION for $TRIPLE"
 
 cargo build --release --locked --target "$TRIPLE" -p saule-cli -p saule-lsp
 
+# Apple's linker sometimes leaves a binary's symbol string table 4-byte
+# aligned, and macOS 27's dyld then refuses to load it at all ("mis-aligned
+# LINKEDIT string pool"). Which side of that a link lands on depends on a
+# symbol count that changes with any edit, so every Mach-O in a release is
+# repaired rather than left to chance — a no-op for one that came out aligned.
+#
+# The version check below would catch it for a binary this runner can execute,
+# but not for the x86_64 archive built on arm64, which is shipped on a warning
+# when Rosetta is missing. This runs first so that case is covered too.
+case "$TRIPLE" in
+*-apple-darwin)
+    python3 "$(dirname "$0")/align_macho_strtab.py" \
+        "target/$TRIPLE/release/saule" "target/$TRIPLE/release/saule-lsp"
+    ;;
+esac
+
 # Every archive is executed here rather than shipped unverified: natively where
 # the runner matches, under qemu-user for the aarch64 Linux cross build, and
 # under Rosetta for the x86_64 Apple build. A dev-marked or misnumbered binary

@@ -449,8 +449,13 @@ pub(crate) fn load_library(manifest: &Manifest) -> Result<Arc<Library>, String> 
     let path = &manifest.path;
     // SAFETY: loading arbitrary native code is inherently unsafe; the user
     // opted in by placing the binary under ~/.saule/native_packages.
-    let lib = unsafe { Library::new(path) }
-        .map_err(|e| format!("failed to load `{}`: {e}", path.display()))?;
+    let lib = unsafe { Library::new(path) }.map_err(|e| {
+        format!(
+            "failed to load `{}`: {}",
+            path.display(),
+            explain_load_error(&e)
+        )
+    })?;
 
     // Before anything else touches this library. Every later step — installing
     // the host table, resolving a method symbol, making a call — assumes the
@@ -475,6 +480,29 @@ pub(crate) fn load_library(manifest: &Manifest) -> Result<Arc<Library>, String> 
         .get_or_insert_with(HashMap::new)
         .insert(manifest.name.clone(), lib.clone());
     Ok(lib)
+}
+
+/// The operating system's reason a library would not load, plus what to do
+/// about it where we know.
+///
+/// Only one case so far, and it is worth the detour because the message is
+/// otherwise unreadable and the cause is nothing the user did: Apple's linker
+/// sometimes leaves a release build's symbol string table 4-byte aligned, and
+/// macOS 27's dyld refuses such a file outright. Which side of that a link
+/// lands on depends on a symbol count that changes with any edit, so a package
+/// author can hit it without changing anything that looks relevant.
+#[cfg(feature = "native-packages")]
+fn explain_load_error(e: &libloading::Error) -> String {
+    let text = e.to_string();
+    if text.contains("mis-aligned LINKEDIT") {
+        return format!(
+            "{text}\n\nThis is a bug in Apple's linker, not in the package: it left the \
+             library's symbol string table 4-byte aligned and macOS requires 8. The \
+             package has to be repaired after it is built — `scripts/align_macho_strtab.py` \
+             in the Saule repository does it, and `scripts/install_mac.sh` runs it for you."
+        );
+    }
+    text
 }
 
 /// Check that a freshly-loaded library was compiled against the ABI this
