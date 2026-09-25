@@ -620,13 +620,13 @@ part (a coherent, working implementation) is done.
 ### Tier 2 — blocks the ecosystem
 
 11. **SDK crates unpublished on crates.io.** See [§8](#8-is-it-easy-to-write-a-native-library).
-12. **No ABI version check when loading a native package.** The interpreter
-    `dlopen`s the library and transmutes symbols to `NativeSymbolFn` with the
-    comment *"a mismatch is the package author's bug"*
-    ([bind.rs:266](crates/saule-interpreter/src/dynamic_packages/bind.rs:266)).
-    A `.dylib` built against an older `CValue` layout is undefined behaviour, not
-    an error message. With a package manager shipping prebuilt binaries, this
-    stops being theoretical.
+12. ~~**No ABI version check when loading a native package.**~~ **Done.**
+    `saule_native_abi::ABI_VERSION` is exported by every package as
+    `saule_abi_version` (emitted by `saule_package!`) and checked in
+    [`load_library`](crates/saule-runtime/src/dynamic_packages/bind.rs) before
+    any other symbol is touched; the manifest carries `abi_version` too, so a
+    mismatch is reported at discovery, before type-checking, without a
+    `dlopen`. Exact match only — no compatible ranges yet.
 13. **No documentation generator.** `saule-docs` extracts `---` doc comments and
     is consumed only by the LSP. There is no `saule doc` producing HTML for a
     library's users, which is table stakes for a package ecosystem.
@@ -835,10 +835,18 @@ fn graphics_circle(mode: String, x: f64, y: f64, r: f64) -> Result<(), String> {
 
 `#[saule_export]` generates the `extern "C"` shim, the arity check, argument
 decoding, and error marshalling — and, critically, **infers the Saule signature
-from the Rust types**, so the manifest cannot drift from the code. The manifest
-is *generated* by a `gen-manifest` binary walking the `inventory` registrations,
-not hand-maintained. An `Err(e)` becomes a Saule runtime error at the call site.
-Tuple returns become Saule multi-returns.
+from the Rust types** and compiles it, with the doc comment, into the library as
+a metadata record. There is no manifest file: the package is one library that
+describes itself, so its description cannot drift from its code. An `Err(e)`
+becomes a Saule runtime error at the call site, and so does a panic. Tuple
+returns become Saule multi-returns.
+
+`#[saule_class]` + `#[saule_methods]` make a struct a real Saule class — a
+constructor (`Image(…)`), instance and static methods, properties — whose
+objects programs hold. The package owns their memory and reference-counts them;
+the interpreter holds references and gives each back, so a `Drop` runs when the
+last Saule value holding the object goes away. `#[saule_enum]` does the same for
+fieldless enums.
 
 The ABI itself ([saule-native-abi/src/lib.rs](crates/saule-native-abi/src/lib.rs))
 is 314 lines, `#[repr(C)]`, and documents its string-ownership contract precisely
@@ -850,9 +858,10 @@ parameters must declare their Saule signature in the attribute, and *omitting it
 is a compile error* rather than a silently untyped parameter. That is the kind of
 detail that separates a designed ABI from an evolved one.
 
-And the payoff is real: **manifests are parsed at startup, so a native package's
-methods type-check and appear in LSP completion before the shared library is ever
-loaded.** Very few scripting languages do this.
+And the payoff is real: **each library's description is read out of the file at
+startup, without loading it, so a native package's classes and methods
+type-check, complete and show their docs in the editor before the shared library
+is ever loaded.** Very few scripting languages do this.
 
 ### The problems
 
@@ -861,28 +870,21 @@ loaded.** Very few scripting languages do this.
    native package today you must clone the Saule compiler and add your crate to
    its workspace. **This is a hard stop on third-party native packages**, and it
    is the cheapest high-value fix available: publish three small crates.
-2. **Installation is manual file copying.** From the example README: build, `mkdir`
-   two directories, copy the `.so`/`.dll`/`.dylib` (renaming to strip the `lib`
-   prefix on Unix, because the manifest lists an unprefixed name), then run
-   `gen-manifest` with an output path. Four steps, platform-specific, with a
-   naming trap. Users will get this wrong. RELEASE_PLAN Appendix F fixes it via
-   `saule add` pulling GitHub release assets — that plan is right and should
-   land.
-3. **No ABI version check.** Covered in §5 item 12. The manifest has `name`,
-   `version`, and `binary`, but no `abi_version`, and nothing is verified at load.
-   Add `abi_version` to the manifest **and** a required `saule_abi_version`
-   symbol, and refuse to load on mismatch with a message naming both versions.
-   Do this before the package manager ships prebuilt binaries.
-4. **No opaque handle type.** The ABI's tags are nil/bool/int/float/str/err/table/func.
-   A package that owns a resource — a texture, a socket, a database connection —
-   must hand Saule an `i64` index into its own registry. The engine does exactly
-   this: `Graphics.newImage(path) -> i64`
-   ([graphics.rs:485](crates/saule-engine-lib/src/graphics.rs:485)). It works, but
-   it means no type safety (every handle is `integer`, interchangeable with any
-   other), and **no destructor** — nothing tells the package when Saule drops the
-   last reference, so resources live until the package clears its registry. This
-   is precisely what `userdata` is reserved for (§3.1), and it is the main reason
-   to implement it.
+2. **Installation is manual file copying.** Now one copy: the library into
+   `~/.saule/native_packages/`, under any name — the separate manifest, the
+   `gen-manifest` step and the `lib`-prefix renaming trap are gone. Still
+   manual, though; RELEASE_PLAN Appendix F's `saule add` pulling GitHub release
+   assets is the real fix and should land.
+3. ~~**No ABI version check.**~~ **Done** — see §5 item 12.
+4. ~~**No opaque handle type.**~~ **Done.** The ABI has an `OBJECT` tag (ABI
+   version 2): a package's `#[saule_class]` objects cross as package-owned,
+   reference-counted pointers, typed by their class on the Saule side, with the
+   package's destructor run when the last reference goes. Objects from one
+   package are refused at another's boundary. **Not done:** the engine itself
+   still hands out `integer` handles — `Graphics.newImage(path) -> integer`
+   ([graphics.rs](crates/saule-engine-lib/src/graphics.rs)) — for images, fonts
+   and canvases. Moving those to classes is a change to the engine's Saule API
+   (and `examples/uikit`), so it is its own piece of work.
 5. **No cross-compilation help.** A package author must produce six binaries. A
    reusable GitHub Actions workflow shipped as a template would remove most of
    that work.
@@ -890,16 +892,18 @@ loaded.** Very few scripting languages do this.
    native packages, and it is 6.5k lines of graphics engine, excluded from clippy,
    living inside the compiler workspace. An author looking for "how do I write a
    package" has to filter a rasterizer, a font engine, and a PNG decoder out of
-   the answer. A 200-line example package in its own repository would teach far
-   more.
+   the answer. [`saule-native-fixture`](crates/saule-native-fixture) is now a
+   ~250-line package using every kind of export, driven by the CLI, VM and LSP
+   test suites — but it lives in the workspace, not in a repository an author
+   would copy.
 
 ### Verdict
 
 The design is a genuine strength — better than Lua's raw C API and comparable to
-the ergonomics of `pyo3` or `napi-rs` for the subset it covers. Everything
-blocking it is packaging. **Publish the three crates, add an ABI version check,
-add `userdata`, and ship a minimal example repo**, and this becomes the feature
-people mention when they recommend Saule.
+the ergonomics of `pyo3` or `napi-rs`. Everything blocking it is packaging.
+**Publish the three crates and ship a minimal example repo** — the ABI version
+check and package-defined objects are done — and this becomes the feature people
+mention when they recommend Saule.
 
 ---
 
@@ -1204,7 +1208,7 @@ who is not you can run `saule`.**
 
 ### Phase 3 — Make it extensible
 - Publish `saule-native-abi`, `saule-export-macro`, `saule-sdk` with semver.
-- Add `abi_version` to the manifest **and** a load-time check.
+- ~~Add `abi_version` to the manifest **and** a load-time check.~~ **Done.**
 - ~~Extract `saule-project`; delete the duplicate config parser.~~ **Done.**
 - Split `saule-engine-lib` into its own repo and rebuild it against the published
   SDK — the acid test that the path works for outsiders.

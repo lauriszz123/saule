@@ -1,130 +1,93 @@
-//! `saule-sdk` — build Saule native packages without writing ABI boilerplate.
+//! `saule-sdk` — write a Saule native package in ordinary Rust.
 //!
-//! A native package is a `cdylib` the Saule interpreter loads at runtime. The
-//! interpreter calls `extern "C"` symbols across a small, frozen C ABI
-//! ([`saule_native_abi`]) and discovers them through a TOML manifest. Writing
-//! those shims and the manifest by hand is repetitive and easy to get out of
-//! sync — this SDK does that heavy lifting so you write only safe Rust:
+//! A native package is a `cdylib` the Saule interpreter loads at runtime.
+//! Everything Saule needs to know about it — its classes, every method's
+//! signature, the doc comments the editor shows — is compiled *into the
+//! library* by the macros here, so the one file you build is the whole
+//! package. There is no manifest to generate or keep in sync.
 //!
 //! ```ignore
 //! use saule_sdk::prelude::*;
 //!
 //! saule_package! {
-//!     name = "engine",
+//!     name = "gfx",
 //!     version = "0.1.0",
-//!     binary = ["saule_engine_lib.so", "saule_engine_lib.dll", "saule_engine_lib.dylib"],
-//!     classes {
-//!         Window = "Window management.",
-//!     }
+//!     classes { Gfx = "Loading and saving images." }
 //! }
 //!
-//! #[saule_export(class = "Window", name = "create")]
-//! fn window_create(width: i64, height: i64, title: Option<String>) -> Result<(), String> {
-//!     // ... your logic; no `unsafe`, no CValue, no manifest entry ...
-//!     Ok(())
+//! /// An RGBA image held in memory.
+//! #[saule_class]
+//! pub struct Image { w: i64, h: i64, pixels: Vec<u32> }
+//!
+//! #[saule_methods]
+//! impl Image {
+//!     /// A blank image: `Image(64, 64)` in Saule.
+//!     pub fn new(w: i64, h: i64) -> Self {
+//!         Image { w, h, pixels: vec![0; (w * h) as usize] }
+//!     }
+//!     /// Width in pixels, read as `img.width`.
+//!     #[saule(getter)]
+//!     pub fn width(&self) -> i64 { self.w }
+//!     /// Paint every pixel: `img.fill(0xff0000ff)`.
+//!     pub fn fill(&mut self, color: i64) { self.pixels.fill(color as u32) }
 //! }
+//!
+//! /// Decode a PNG: `Gfx.load("a.png")` returns an `Image`.
+//! #[saule_export(class = "Gfx")]
+//! fn load(path: &str) -> Result<Image, String> { /* … */ }
 //! ```
 //!
-//! The `#[saule_export]` macro:
-//! - generates the `extern "C"` shim (all the `unsafe` pointer handling,
-//!   arity checking, argument decoding, and error/return marshalling),
-//! - **infers the Saule signature from the Rust types** (so the manifest can
-//!   never drift), and
-//! - registers the method in the manifest registry.
+//! Saule then sees `Image` as a real class: `local img: Image = Gfx.load(p)`
+//! type-checks, `img.fill("red")` does not, `img.` completes in the editor,
+//! and each `///` comment shows on hover. When the last Saule value holding
+//! an `Image` goes away, the `Image` is dropped.
 //!
-//! A small generator binary then calls [`manifest::render`] to emit the
-//! `<package>.toml`. See the `saule-engine-lib` crate for a complete example.
+//! ## The pieces
 //!
-//! ## Type mapping
+//! - [`saule_package!`] — the package's name and version. Exactly one.
+//! - [`#[saule_export]`](saule_export) — a free function as a static member
+//!   of a class (`Gfx.load`). Great for namespaces of functions.
+//! - [`#[saule_class]`](saule_class) + [`#[saule_methods]`](saule_methods) —
+//!   a struct as a class with a constructor, methods, static functions and
+//!   properties.
+//! - [`#[saule_enum]`](saule_enum) — a fieldless enum as a Saule enum.
+//! - [`SObject<T>`] — a shared handle to an object, to keep one beyond a
+//!   call or return one you also keep.
+//! - The `S*` [`types`] — Saule tables and callbacks, worked on in place.
 //!
-//! See [`convert`] for the supported Rust ⇄ Saule type mappings. A function
-//! may return `T`, `()`, `Result<T, E>` (where `E: Display`; an `Err` becomes
-//! a Saule runtime error at the call site), or a tuple `(A, B, …)` for a
-//! multi-value return that the caller can destructure
-//! (`local a, b = Class.method()`).
+//! See [`convert`] for how Rust types map to Saule types. A function may
+//! return `T`, `()`, `Result<T, E>` (where `E: Display`; an `Err` becomes a
+//! Saule runtime error at the call site), or a tuple `(A, B, …)` for a
+//! multi-value return. A panic becomes a runtime error too.
 
 pub mod convert;
 pub mod host;
-pub mod manifest;
+pub mod object;
 pub mod types;
 
-/// Re-export of the `#[saule_export]` attribute macro.
-pub use saule_export_macro::saule_export;
+pub use object::{NativeClass, SAnyObject, SObject};
+pub use saule_export_macro::{saule_class, saule_enum, saule_export, saule_methods, saule_package};
 
-/// The common imports for writing a package: the export macro, the
-/// `saule_package!` declaration macro, the conversion traits, and the
-/// Saule-typed `S*` bridge types.
+/// Everything a package usually needs, in one import.
 pub mod prelude {
     pub use crate::convert::{FromSaule, IntoSaule};
-    pub use crate::saule_export;
-    pub use crate::saule_package;
+    pub use crate::object::{NativeClass, SAnyObject, SObject};
     pub use crate::types::{
         SBool, SElem, SFloat, SFunction, SInteger, SString, STable, SValue, T, U, Untyped, V, W,
     };
+    pub use saule_export_macro::{
+        saule_class, saule_enum, saule_export, saule_methods, saule_package,
+    };
 }
 
-/// Implementation details referenced by the generated code from
-/// `#[saule_export]` and `saule_package!`. Not a stable API — do not use
-/// these paths directly.
+/// Implementation details referenced by generated code. Not a stable API —
+/// do not use these paths directly.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::convert::{FromSaule, IntoSaule};
+    pub use crate::convert::{FromSaule, IntoSaule, run_export};
     pub use crate::host::__set_host;
-    pub use crate::manifest::{ExportedClass, ExportedMethod, PackageInfo};
-    pub use inventory;
-    pub use saule_native_abi::{CValue, HostApi, NativeSymbolFn, return_error};
-}
-
-/// Declare the package and its classes for manifest generation.
-///
-/// Registers a single [`PackageInfo`](manifest::PackageInfo) and one
-/// [`ExportedClass`](manifest::ExportedClass) per class. Methods are
-/// registered separately by `#[saule_export]`.
-///
-/// ```ignore
-/// saule_package! {
-///     name = "engine",
-///     version = "0.1.0",
-///     binary = ["saule_engine_lib.so", "saule_engine_lib.dll", "saule_engine_lib.dylib"],
-///     classes {
-///         Graphics = "2D graphics rendering.",
-///         Window   = "Window management.",
-///     }
-/// }
-/// ```
-#[macro_export]
-macro_rules! saule_package {
-    (
-        name = $name:literal,
-        version = $version:literal,
-        binary = [ $($bin:literal),+ $(,)? ],
-        classes { $( $class:ident = $doc:literal ),* $(,)? } $(,)?
-    ) => {
-        $crate::__private::inventory::submit! {
-            $crate::__private::PackageInfo {
-                name: $name,
-                version: $version,
-                binary: &[ $($bin),+ ],
-            }
-        }
-        $(
-            $crate::__private::inventory::submit! {
-                $crate::__private::ExportedClass {
-                    name: ::core::stringify!($class),
-                    doc: $doc,
-                }
-            }
-        )*
-
-        // Receive the host callback table so `STable` / `SFunction` can
-        // operate on host-owned reference values. The interpreter calls this
-        // right after loading the library; packages that only use scalars
-        // simply never touch the stored pointer.
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn saule_set_host(
-            api: *const $crate::__private::HostApi,
-        ) {
-            unsafe { $crate::__private::__set_host(api) };
-        }
+    pub use crate::object::{ClassDescriptor, release_object};
+    pub use saule_native_abi::{
+        ABI_VERSION, CValue, HostApi, NativeSymbolFn, ObjectPtr, return_error,
     };
 }

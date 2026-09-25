@@ -245,14 +245,18 @@ pub(crate) fn collect_import_seed_inner(
             continue;
         }
 
-        // Dynamic (manifest-described) native package seed — synthesize a
-        // semantic `ClassInfo` per exported class so member access like
-        // `Window.create(...)` resolves. Without this the loop below would
-        // try to read the synthetic sentinel path as a file and silently
-        // skip the package, leaving its classes undefined.
+        // Dynamic (shared-library) native package seed — synthesize a
+        // semantic `ClassInfo` per exported class and an `EnumInfo` per enum,
+        // so `Window.create(...)`, `img.width` and `BlendMode.Add` resolve.
+        // Without this the loop below would try to read the synthetic
+        // sentinel path as a file and silently skip the package, leaving
+        // its types undefined.
         if crate::dynamic_packages::is_dynamic_package(path) {
             for (alias, info) in crate::dynamic_packages::seed_classes(path, names) {
                 seed.classes.entry(alias).or_insert(info);
+            }
+            for (alias, info) in crate::dynamic_packages::seed_enums(path, names) {
+                seed.enums.entry(alias).or_insert(info);
             }
             continue;
         }
