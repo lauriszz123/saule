@@ -264,8 +264,9 @@ Two knobs if it ever matters:
   image tag on Linux, `--default-toolchain` on macOS and Windows. A floating
   `rust:1-bookworm` means a new stable can turn `main` red without a commit,
   and `main` is the branch that publishes. It happened on the first dry run:
-  1.98 added `chunks_exact_to_as_chunks`, and `test-engine` failed on code
-  that had not changed in months.
+  1.98 added `chunks_exact_to_as_chunks`, and the graphics package — since
+  split out to its own repository — failed on code that had not changed in
+  months.
 
   Bumping it is a deliberate commit: change the tag and the two
   `--default-toolchain` lines, run CI's clippy locally (below), fix what the
@@ -279,8 +280,7 @@ run, and each run is ten minutes.
 ```bash
 rustup toolchain install 1.98.0 --profile minimal --component clippy
 TC="$HOME/.rustup/toolchains/1.98.0-$(rustc -vV | sed -n 's/host: //p')/bin"
-PATH="$TC:$PATH" cargo clippy --workspace --all-targets --exclude saule-engine-lib -- -D warnings
-PATH="$TC:$PATH" cargo clippy -p saule-engine-lib --all-targets -- -D warnings
+PATH="$TC:$PATH" cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 **`rustup run 1.98.0 cargo clippy` does not do this**, which is a trap worth

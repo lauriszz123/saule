@@ -1,4 +1,4 @@
-import * from engine
+import * from shine
 
 export class Color
 	r: float

@@ -23,17 +23,22 @@
 
 mod config;
 mod deps;
+pub mod home;
 mod info;
 mod scan;
+pub mod spec;
 
 use std::path::{Path, PathBuf};
 
 pub use config::{Config, Kind};
 pub use deps::{
     expand_tilde, resolve_dependencies, resolve_dependencies_lenient, resolve_dependency,
+    resolve_entry,
 };
+pub use home::{Receipt, ReceiptKind};
 pub use info::{Dependency, ProjectInfo, clear, get, pretty_path, set, user_path};
 pub use scan::{SOURCE_EXTENSIONS, find_root, is_source_file, scan_all, scan_sources};
+pub use spec::{Host, PackageSpec};
 
 /// The one filename this crate is about.
 pub const CONFIG_FILE: &str = "saule.config";

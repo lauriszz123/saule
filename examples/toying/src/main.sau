@@ -1,4 +1,4 @@
-import * from "engine"
+import * from "shine"
 
 class Main
 	static fn main()
