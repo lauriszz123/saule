@@ -19,9 +19,15 @@ pub fn resolve_dependencies(
     project_root: &Path,
     deps: &[String],
 ) -> Result<Vec<Dependency>, String> {
-    deps.iter()
-        .map(|raw| resolve_dependency(project_root, raw))
-        .collect()
+    let mut out = Vec::with_capacity(deps.len());
+    for raw in deps {
+        // `None` is a compiled package: installed and usable, but reached by
+        // the loader's own scan rather than through a source root.
+        if let Some(dep) = resolve_entry(project_root, raw)? {
+            out.push(dep);
+        }
+    }
+    Ok(out)
 }
 
 /// Resolve every entry, dropping the ones that fail.
@@ -32,14 +38,66 @@ pub fn resolve_dependencies(
 /// rather than by the language server declining to load the project.
 pub fn resolve_dependencies_lenient(project_root: &Path, deps: &[String]) -> Vec<Dependency> {
     deps.iter()
-        .filter_map(|raw| resolve_dependency(project_root, raw).ok())
+        .filter_map(|raw| resolve_entry(project_root, raw).ok().flatten())
         .collect()
 }
 
 /// Resolve one `dependencies:` entry by reading the target project's own
 /// config for its name and source roots.
+///
+/// A `gh:` entry resolves to its globally installed copy under `SAULE_HOME`
+/// instead of to a path in the project — see [`crate::spec`]. A package that
+/// turned out to be a *compiled* one contributes no source roots at all: the
+/// loader finds it by scanning `native_packages/`, so there is nothing here
+/// for imports to resolve against, and [`Ok(None)`] says so.
 pub fn resolve_dependency(project_root: &Path, raw: &str) -> Result<Dependency, String> {
-    let expanded = expand_tilde(raw);
+    match resolve_entry(project_root, raw)? {
+        Some(dep) => Ok(dep),
+        None => Err(format!(
+            "dependency `{raw}` is a compiled package and has no source roots"
+        )),
+    }
+}
+
+/// [`resolve_dependency`], but a compiled package answers `None` rather than
+/// an error — it is installed and working, it just contributes nothing to
+/// import resolution.
+pub fn resolve_entry(project_root: &Path, raw: &str) -> Result<Option<Dependency>, String> {
+    match crate::spec::Dependency::parse(raw)? {
+        crate::spec::Dependency::Path(path) => resolve_path(project_root, &path, raw).map(Some),
+        crate::spec::Dependency::Package(spec) => {
+            let Some(receipt) = crate::home::Receipt::read(&spec) else {
+                return Err(format!(
+                    "package `{}` is not installed — run `saule install {}`",
+                    spec.slug(),
+                    spec.to_entry()
+                ));
+            };
+            match receipt.kind {
+                // Discovered by the loader from `native_packages/`, not by
+                // path. Nothing to add here.
+                crate::home::ReceiptKind::Native { .. } => Ok(None),
+                crate::home::ReceiptKind::Source => {
+                    let root = crate::home::source_package_path(&spec, &receipt.reference);
+                    if !root.is_dir() {
+                        return Err(format!(
+                            "package `{}` is recorded as installed but `{}` is missing — \
+                             run `saule install {}`",
+                            spec.slug(),
+                            root.display(),
+                            spec.to_entry()
+                        ));
+                    }
+                    read_project_at(root, raw).map(Some)
+                }
+            }
+        }
+    }
+}
+
+/// Resolve a path entry against the project root.
+fn resolve_path(project_root: &Path, raw_path: &str, raw: &str) -> Result<Dependency, String> {
+    let expanded = expand_tilde(raw_path);
     // Relative paths resolve against the project root, not the process's
     // cwd, so `saule run` behaves the same from any directory.
     let dep_root = if expanded.is_absolute() {
@@ -50,7 +108,12 @@ pub fn resolve_dependency(project_root: &Path, raw: &str) -> Result<Dependency, 
     let dep_root = dep_root
         .canonicalize()
         .map_err(|e| format!("dependency `{raw}`: {e}"))?;
+    read_project_at(dep_root, raw)
+}
 
+/// Read a resolved directory as a Saule project: its import name and the
+/// source roots it exposes.
+fn read_project_at(dep_root: PathBuf, raw: &str) -> Result<Dependency, String> {
     let config_path = dep_root.join(crate::CONFIG_FILE);
     if !config_path.is_file() {
         return Err(format!(

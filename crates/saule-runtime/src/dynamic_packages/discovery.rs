@@ -29,29 +29,17 @@ pub(crate) static DISCOVER_ONCE: Once = Once::new();
 
 // ─── Filesystem layout ──────────────────────────────────────────────────────
 
-/// The Saule home directory — the root of everything the toolchain installs
-/// per-user: native packages, and (in future) the LSP server, docs, editor
-/// plugins and the SDK/API surface.
-///
-/// `SAULE_HOME`, when set, **is** that directory — it is used verbatim, not
-/// treated as a parent to append `.saule` to. This matches how the install
-/// scripts (`scripts/install_*.sh`, `scripts/install_windows.ps1`) interpret
-/// the variable. Unset, it defaults to `.saule` under the user's home.
+/// The Saule home directory. Defined by `saule-project`, which both this
+/// crate and the installer read, so there is one answer to where a package
+/// lives rather than two that can drift.
 pub(crate) fn saule_home() -> PathBuf {
-    if let Some(explicit) = std::env::var_os("SAULE_HOME") {
-        return PathBuf::from(explicit);
-    }
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".saule")
+    saule_project::home::saule_home()
 }
 
 /// Where packages are installed: one library file per package, which is the
 /// whole package — its description is compiled into it.
 pub fn packages_dir() -> PathBuf {
-    saule_home().join("native_packages")
+    saule_project::home::native_packages_dir()
 }
 
 /// Where packages used to keep a separate TOML manifest. Nothing reads a
@@ -219,7 +207,7 @@ fn declared_name(records: &[embedded::RawRecord]) -> Option<String> {
 
 /// The names a program might use for a library whose metadata could not be
 /// read: its file stem, with and without the `lib` prefix Unix toolchains
-/// add (`libsaule_engine_lib.so` → `saule_engine_lib`).
+/// add (`libsaule_shine.so` → `saule_shine`).
 fn names_for_file(path: &Path) -> Vec<String> {
     let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
         return Vec::new();
@@ -324,6 +312,12 @@ pub fn export_names(name: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The library file a discovered package was read from. What the installer
+/// uses to ask "which package is this file I just installed?".
+pub fn package_path(name: &str) -> Option<PathBuf> {
+    lookup(name).map(|m| m.path.clone())
 }
 
 /// Every doc comment package `name` carries, as `(qualified name, text)`
