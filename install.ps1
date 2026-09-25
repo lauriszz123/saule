@@ -118,9 +118,10 @@ try {
     $unpacked = Join-Path $tmp "saule-$version-$triple"
     if (-not (Test-Path $unpacked)) { Fail "$archive did not contain saule-$version-$triple" }
 
-    # The directories the toolchain expects to exist. `native_manifests` and
-    # `native_packages` are what dynamic_packages/discovery.rs actually reads.
-    foreach ($d in 'bin', 'native_manifests', 'native_packages', 'tmp') {
+    # The directories the toolchain expects to exist. `native_packages` is what
+    # dynamic_packages/discovery.rs reads: each package is one library there,
+    # carrying its own description.
+    foreach ($d in 'bin', 'native_packages', 'tmp') {
         New-Item -ItemType Directory -Force -Path (Join-Path $sauleHome $d) | Out-Null
     }
 
