@@ -144,7 +144,6 @@ fn an_inherited_static_reads_the_slot_its_parent_declared() {
     );
 }
 
-
 // ── `return x?.m()` and `return a, f()` ───────────────────────────────────
 
 #[test]
@@ -181,5 +180,3 @@ fn a_returned_safe_call_still_yields_one_value_where_it_should() {
          local r: string = tostring(a) .. \"/\" .. tostring(b)\nr",
     );
 }
-
-

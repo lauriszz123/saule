@@ -42,7 +42,6 @@ use saule_runtime::Value;
 // here would reintroduce exactly that risk.
 pub use saule_runtime::value::FieldLayout;
 
-
 pub type ProtoIdx = u32;
 pub type ClassIdx = u32;
 pub type EnumIdx = u32;
@@ -249,8 +248,16 @@ mod tests {
     fn span_lookup_picks_the_covering_entry() {
         let mut p = Proto::new(Some("f"), 0, 1, vec![Instruction::abc(Op::RET0, 0, 0, 0)]);
         p.lines = vec![
-            LineEntry { pc: 0, span_start: 10, span_end: 20 },
-            LineEntry { pc: 4, span_start: 30, span_end: 40 },
+            LineEntry {
+                pc: 0,
+                span_start: 10,
+                span_end: 20,
+            },
+            LineEntry {
+                pc: 4,
+                span_start: 30,
+                span_end: 40,
+            },
         ];
         assert_eq!(p.span_at(0), 10..20);
         assert_eq!(p.span_at(3), 10..20);

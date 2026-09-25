@@ -12,8 +12,8 @@ use clap::{CommandFactory, Parser};
 use cli::{Cli, Command, RunArgs};
 
 mod check;
-mod disasm;
 mod cli;
+mod disasm;
 mod fmt;
 mod init;
 mod project;

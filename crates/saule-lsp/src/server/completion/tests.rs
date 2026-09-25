@@ -211,7 +211,10 @@ fn a_class_header_offers_extends_and_implements() {
     // …and once `implements` is written, it does not — the header is done,
     // and what follows is the body.
     let got = complete(&format!("{DECLS}class Player implements Drawable @"));
-    assert!(!got.iter().any(|i| i == "extends" || i == "implements"), "{got:?}");
+    assert!(
+        !got.iter().any(|i| i == "extends" || i == "implements"),
+        "{got:?}"
+    );
 }
 
 /// An interface has no `implements`.
@@ -288,9 +291,7 @@ fn an_interface_body_offers_fn() {
 /// signature's own positions still resolve as themselves.
 #[test]
 fn an_interface_signature_is_not_a_member_position() {
-    let got = complete(&format!(
-        "{DECLS}interface Shape\n    fn draw(c: @)\nend\n"
-    ));
+    let got = complete(&format!("{DECLS}interface Shape\n    fn draw(c: @)\nend\n"));
     assert!(got.iter().any(|i| i == "string"), "{got:?}");
     let got = complete(&format!(
         "{DECLS}interface Shape\n    fn draw() -> @\nend\n"
@@ -317,10 +318,22 @@ fn a_class_body_offers_the_member_keywords() {
 /// rules out go with it.
 #[test]
 fn a_class_member_modifier_is_not_repeated() {
-    assert_eq!(complete("class Player\n    static @\nend\n"), vec!["local", "fn"]);
-    assert_eq!(complete("class Player\n    local @\nend\n"), vec!["static", "fn"]);
-    assert_eq!(complete("class Player\n    static local @\nend\n"), vec!["fn"]);
-    assert_eq!(complete("class Player\n    local static @\nend\n"), vec!["fn"]);
+    assert_eq!(
+        complete("class Player\n    static @\nend\n"),
+        vec!["local", "fn"]
+    );
+    assert_eq!(
+        complete("class Player\n    local @\nend\n"),
+        vec!["static", "fn"]
+    );
+    assert_eq!(
+        complete("class Player\n    static local @\nend\n"),
+        vec!["fn"]
+    );
+    assert_eq!(
+        complete("class Player\n    local static @\nend\n"),
+        vec!["fn"]
+    );
 }
 
 /// The member keywords stay inside the class body — a method body is
@@ -882,8 +895,14 @@ fn stack(alignment: Alignment, axis: Axis, title: string) end
 /// looks to what has been typed.
 #[test]
 fn a_named_argument_ranks_the_expected_type_first() {
-    let got = complete_ranked(&format!("{SLOTS}fn go()\n    stack(alignment: Ali@)\nend\n"));
-    assert_eq!(got.first().map(String::as_str), Some("Alignment"), "{got:?}");
+    let got = complete_ranked(&format!(
+        "{SLOTS}fn go()\n    stack(alignment: Ali@)\nend\n"
+    ));
+    assert_eq!(
+        got.first().map(String::as_str),
+        Some("Alignment"),
+        "{got:?}"
+    );
     // `Align` shares the prefix and is a class, but no `Align` fits the slot.
     let alignment = got.iter().position(|i| i == "Alignment");
     let align = got.iter().position(|i| i == "Align");
@@ -935,7 +954,11 @@ end
 #[test]
 fn parameter_names_outrank_values_at_a_positional_argument() {
     let got = complete_ranked(&format!("{SLOTS}fn go()\n    stack(al@)\nend\n"));
-    assert_eq!(got.first().map(String::as_str), Some("alignment:"), "{got:?}");
+    assert_eq!(
+        got.first().map(String::as_str),
+        Some("alignment:"),
+        "{got:?}"
+    );
 }
 
 /// Outside any argument there is no slot, so the order is untouched: a local
@@ -1185,7 +1208,10 @@ fn a_condition_offers_then_but_never_when() {
     assert_eq!(body("if n > 1 @"), vec!["then"]);
     assert_eq!(body("if n > 1 th@"), vec!["then"]);
     assert_eq!(body("if n > 1 then\n    elseif n > 2 @"), vec!["then"]);
-    assert!(body("if n > 1 wh@").is_empty(), "`when` is not a condition keyword");
+    assert!(
+        body("if n > 1 wh@").is_empty(),
+        "`when` is not a condition keyword"
+    );
     // Past `then`, and inside an unclosed condition, the line is not waiting
     // for a keyword at all.
     let got = body("if n > 1 then @");
@@ -1208,7 +1234,9 @@ fn when_is_offered_where_a_pipeline_can_start() {
 #[test]
 fn the_line_reader_respects_strings_and_comments() {
     let body = |tail: &str| {
-        complete(&format!("{MATCH_DECLS}fn go(s: string)\n    {tail}\n    end\nend\n"))
+        complete(&format!(
+            "{MATCH_DECLS}fn go(s: string)\n    {tail}\n    end\nend\n"
+        ))
     };
     // The string is blanked, so this line is still waiting for its `then`.
     assert_eq!(body("if s == \"then\" @"), vec!["then"]);
@@ -1463,7 +1491,6 @@ fn an_unresolvable_iterable_leaves_the_binding_untyped() {
     assert_eq!(detail_of(&src, "item"), Some(Some("loop variable".into())));
 }
 
-
 // ──────────────────────────────────────────────────────────────────────────────
 // A keyword position is not an operand position
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1553,7 +1580,6 @@ fn a_variant_position_is_not_an_arm_keyword_position() {
     assert!(got.iter().any(|i| i == "Red"), "{got:?}");
 }
 
-
 // ──────────────────────────────────────────────────────────────────────────────
 // Block keywords
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1564,9 +1590,8 @@ fn a_variant_position_is_not_an_arm_keyword_position() {
 /// are what comes next.
 #[test]
 fn an_if_branch_offers_elseif_and_else() {
-    let got = complete(
-        "fn width(ch: string)\n    if ch == ' ' then\n        local w = 1\n    els@\n",
-    );
+    let got =
+        complete("fn width(ch: string)\n    if ch == ' ' then\n        local w = 1\n    els@\n");
     assert_eq!(got, vec!["elseif", "else"], "{got:?}");
 }
 
@@ -1620,7 +1645,10 @@ fn the_top_level_offers_no_block_keywords() {
     let got = complete("cl@");
     assert!(got.contains(&"class".to_string()), "{got:?}");
     for absent in ["end", "else", "elseif", "until", "catch"] {
-        assert!(!got.contains(&absent.to_string()), "{absent} offered: {got:?}");
+        assert!(
+            !got.contains(&absent.to_string()),
+            "{absent} offered: {got:?}"
+        );
     }
 }
 
@@ -1628,9 +1656,7 @@ fn the_top_level_offers_no_block_keywords() {
 /// `if` is back at the enclosing function's block.
 #[test]
 fn a_nested_block_does_not_leak_its_keywords() {
-    let got = complete(
-        "fn go()\n    if true then\n        local a = 1\n    end\n    el@\nend\n",
-    );
+    let got = complete("fn go()\n    if true then\n        local a = 1\n    end\n    el@\nend\n");
     assert!(!got.contains(&"else".to_string()), "{got:?}");
     assert!(!got.contains(&"elseif".to_string()), "{got:?}");
 }
@@ -1644,7 +1670,6 @@ fn an_elseif_branch_offers_them_again() {
     );
     assert_eq!(got, vec!["elseif", "else"], "{got:?}");
 }
-
 
 // ──────────────────────────────────────────────────────────────────────────────
 // The `#` operand
@@ -1697,7 +1722,10 @@ fn countable_values_rank_first_after_a_length_operator() {
     assert!(lines.is_some() && label.is_some(), "{got:?}");
     // `limit` is an integer and cannot be counted, so it ranks below both
     // the table and the string — but it is still offered.
-    assert!(limit.is_some(), "a non-match should still be listed: {got:?}");
+    assert!(
+        limit.is_some(),
+        "a non-match should still be listed: {got:?}"
+    );
     assert!(lines < limit, "table should outrank integer: {got:?}");
     assert!(label < limit, "string should outrank integer: {got:?}");
 }
@@ -1707,7 +1735,10 @@ fn countable_values_rank_first_after_a_length_operator() {
 fn an_oplen_class_ranks_as_countable() {
     let got = complete_ranked(&format!("{COUNT}            local n = #@\n"));
     let pos = |name: &str| got.iter().position(|i| i == name);
-    assert!(pos("bag") < pos("limit"), "OpLen class should outrank: {got:?}");
+    assert!(
+        pos("bag") < pos("limit"),
+        "OpLen class should outrank: {got:?}"
+    );
 }
 
 /// Outside a `#` the order is untouched — the signal must not leak into the

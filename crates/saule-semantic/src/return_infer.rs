@@ -251,7 +251,10 @@ fn infer_body(
         enums,
         funcs,
         self_class,
-        scope: params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+        scope: params
+            .iter()
+            .map(|p| (p.name.clone(), p.ty.clone()))
+            .collect(),
     };
     let mut found = Returns::default();
     cx.block(body, &mut found);
@@ -577,7 +580,12 @@ impl Cx<'_> {
                 // type this pass is inferring is not consulted: results are
                 // applied together precisely so one cannot depend on
                 // another's.
-                self.classes.get(&class)?.methods.get(name)?.return_ty.clone()
+                self.classes
+                    .get(&class)?
+                    .methods
+                    .get(name)?
+                    .return_ty
+                    .clone()
             }
             _ => None,
         }

@@ -170,8 +170,8 @@ pub(crate) fn saule_type(
     let ident = seg.ident.to_string();
     let plain = |s: &str| Ok((s.to_string(), false));
     match ident.as_str() {
-        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
-        | "u128" | "usize" => plain("integer"),
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" => plain("integer"),
         "f32" | "f64" => plain("float"),
         "bool" => plain("boolean"),
         "String" | "str" => plain("string"),
@@ -271,9 +271,37 @@ pub(crate) fn named_class(ty: &Type) -> Option<String> {
     }
     let name = seg.ident.to_string();
     let reserved = [
-        "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
-        "f32", "f64", "bool", "String", "str", "SInteger", "SFloat", "SBool", "SString",
-        "STable", "SFunction", "SValue", "SElem", "SObject", "T", "U", "V", "W", "Self",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        "f32",
+        "f64",
+        "bool",
+        "String",
+        "str",
+        "SInteger",
+        "SFloat",
+        "SBool",
+        "SString",
+        "STable",
+        "SFunction",
+        "SValue",
+        "SElem",
+        "SObject",
+        "T",
+        "U",
+        "V",
+        "W",
+        "Self",
     ];
     (!reserved.contains(&name.as_str())).then_some(name)
 }

@@ -193,11 +193,8 @@ pub fn run(source: &str) -> RunResult {
     // Anything the program prints is captured rather than written to a stdout
     // that does not exist on this target.
     let (sink, outcome) = output::capture(|| {
-        saule_vm::run_chunk(chunk).map(|vs| {
-            vs.into_iter()
-                .next()
-                .unwrap_or(saule_runtime::Value::Nil)
-        })
+        saule_vm::run_chunk(chunk)
+            .map(|vs| vs.into_iter().next().unwrap_or(saule_runtime::Value::Nil))
     });
 
     let output: Vec<OutputChunk> = sink
@@ -285,9 +282,7 @@ mod browser {
         let platform = BrowserPlatform {
             start_ms: js_sys::Date::now(),
         };
-        saule_runtime::platform::with_platform(Box::new(platform), || {
-            super::run_to_json(source)
-        })
+        saule_runtime::platform::with_platform(Box::new(platform), || super::run_to_json(source))
     }
 
     /// The toolchain version this module was built from, so the playground can
@@ -315,8 +310,7 @@ mod tests {
     impl saule_runtime::platform::Platform for Sandbox {}
 
     fn json(source: &str) -> serde_json::Value {
-        let raw =
-            saule_runtime::platform::with_platform(Box::new(Sandbox), || run_to_json(source));
+        let raw = saule_runtime::platform::with_platform(Box::new(Sandbox), || run_to_json(source));
         serde_json::from_str(&raw).expect("valid JSON")
     }
 

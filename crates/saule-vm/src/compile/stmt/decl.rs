@@ -11,7 +11,6 @@ use super::super::ctx::Compiler;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     /// A declaration. Only `fn` for now.
     ///
     /// The proto index was reserved by the pre-pass in `compile_with`, so a
@@ -128,7 +127,10 @@ impl Compiler<'_> {
         // Compile-time argument binding is §19's own slice of work; until it
         // lands, refuse the shapes that need it rather than mis-bind them.
         if params.len() > u8::MAX as usize {
-            return Err(CompileError::unsupported("a function with over 255 parameters", span.clone()));
+            return Err(CompileError::unsupported(
+                "a function with over 255 parameters",
+                span.clone(),
+            ));
         }
 
         self.push_function(Some(name));
@@ -180,5 +182,4 @@ impl Compiler<'_> {
 
         Ok(())
     }
-
 }

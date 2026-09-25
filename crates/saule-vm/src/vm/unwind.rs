@@ -13,7 +13,6 @@ use crate::chunk::{Chunk, Proto};
 use super::{Closure, Vm};
 
 impl Vm {
-
     /// Find a handler for `value`, unwinding frames until one matches.
     ///
     /// The happy path pays **nothing** for this: entering a `try` emits no
@@ -45,7 +44,11 @@ impl Vm {
                 .proto
                 .handlers
                 .iter()
-                .find(|h| at >= h.pc_start && at < h.pc_end && self.value_matches(&hchunk, &value, h.catch_ty))
+                .find(|h| {
+                    at >= h.pc_start
+                        && at < h.pc_end
+                        && self.value_matches(&hchunk, &value, h.catch_ty)
+                })
                 .map(|h| (h.target, h.err_reg));
 
             if let Some((target, err_reg)) = found {
@@ -63,7 +66,10 @@ impl Vm {
             self.frames.pop();
         }
 
-        Err(RuntimeError::Thrown { value: value.to_display_string(), span })
+        Err(RuntimeError::Thrown {
+            value: value.to_display_string(),
+            span,
+        })
     }
 
     pub(crate) fn type_matches(&self, chunk: &Chunk, reg: usize, ty: u32) -> bool {
@@ -131,5 +137,4 @@ impl Vm {
         }
         false
     }
-
 }

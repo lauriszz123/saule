@@ -65,7 +65,6 @@ fn a_function_used_as_a_value_matches() {
     must_agree("fn f() -> integer\n  return 1\nend\nlocal g = f\n2");
 }
 
-
 // ── lambdas and closures ──────────────────────────────────────────────────
 
 #[test]
@@ -199,7 +198,12 @@ fn captures_in(loop_head: &str, prelude: &str, body: &str, captured: &str) -> St
 #[test]
 fn a_numeric_for_variable_is_captured_per_iteration() {
     must_agree(&captures_in("for i = 1, 3 do", "", "", "i"));
-    must_agree(&captures_in("for i = 1, 3 do", "", "local d: integer = i * 2", "d"));
+    must_agree(&captures_in(
+        "for i = 1, 3 do",
+        "",
+        "local d: integer = i * 2",
+        "d",
+    ));
 }
 
 #[test]
@@ -380,7 +384,6 @@ fn a_trailing_block_to_a_native_binds_positionally() {
          fns[1]!()",
     );
 }
-
 
 // ── §6.4 tail calls ───────────────────────────────────────────────────────
 //
@@ -643,7 +646,6 @@ fn a_tail_call_with_defaulted_and_variadic_parameters_binds_them() {
     );
 }
 
-
 #[test]
 fn a_lambda_in_a_method_body_reaches_self() {
     // `self` is an ordinary local of the enclosing frame -- `method_proto`
@@ -666,9 +668,6 @@ fn a_self_recursive_local_lambda_does_not_capture_itself() {
         "fn fact(n: integer) -> integer\n           local go: fn(integer) -> integer = fn(k: integer)\n             if k <= 1 then\n               return 1\n             end\n             return k * go(k - 1)\n           end\n           return go(n)\n         end\n         fact(6)",
     );
 }
-
-
-
 
 #[test]
 fn calling_a_non_callable_value_fails_the_same_way() {

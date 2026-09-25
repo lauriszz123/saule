@@ -13,19 +13,23 @@ end
 
 #[test]
 fn a_bare_variant_is_a_stable_singleton() {
-    must_agree(&format!("{ENUM}local a = Status.Ok
+    must_agree(&format!(
+        "{ENUM}local a = Status.Ok
 local b = Status.Ok
-a == b"));
+a == b"
+    ));
     must_agree(&format!("{ENUM}Status.Ok == Status.Failed"));
 }
 
 #[test]
 fn a_valued_variant_carries_its_value() {
-    must_agree("enum E
+    must_agree(
+        "enum E
   A = \"alpha\"
   B = \"beta\"
 end
-E.A.value");
+E.A.value",
+    );
 }
 
 #[test]
@@ -120,7 +124,6 @@ end"
     ));
 }
 
-
 // ── `match` guards ────────────────────────────────────────────────────────
 //
 // Two bugs lived here, and only one of them announced itself. The compiler
@@ -209,7 +212,6 @@ fn a_guard_can_read_a_variant_payload_binding() {
          \x20 .. describe(Event.Click(4, 2)) .. \"|\" .. describe(Event.Key(\"a\"))\nr",
     );
 }
-
 
 // ── tuple patterns and nested payload patterns ────────────────────────────
 
@@ -397,7 +399,6 @@ fn a_shadowed_prelude_enum_is_not_read_from_the_prelude() {
     );
 }
 
-
 #[test]
 fn an_enum_method_runs_on_the_variant_that_received_it() {
     // The refusal was structural: `EnumObject::methods` could only hold a
@@ -428,5 +429,3 @@ fn a_variant_value_can_be_any_expression() {
          E.A.value .. \":\" .. E.B.value .. \":\" .. E.C.value .. \":\" .. E.D.value .. \":\" .. E.F.value",
     );
 }
-
-

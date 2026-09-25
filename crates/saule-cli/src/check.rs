@@ -91,11 +91,7 @@ pub(crate) fn cmd_check(target: Option<PathBuf>, dump_type_coverage: bool) {
 
 /// Configure the project (so `src_dirs` and dependencies resolve), then check
 /// every `.sau` file it owns.
-fn check_project(
-    db: &mut saule_db::Db,
-    dir: &Path,
-    dump_type_coverage: bool,
-) -> Vec<FileReport> {
+fn check_project(db: &mut saule_db::Db, dir: &Path, dump_type_coverage: bool) -> Vec<FileReport> {
     let project = crate::project::configure_project(dir, /* require_entry */ false);
     let files = project.source_files();
     if files.is_empty() {

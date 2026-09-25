@@ -59,8 +59,8 @@ use crate::fxhash::fxmap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::prelude::Prelude;
 use crate::native_packages::NativePackage;
+use crate::prelude::Prelude;
 use crate::value::{InterfaceObject, Value};
 
 /// `import OpAdd, OpCompare from "ops"`. Auto-prelude'd so operators can

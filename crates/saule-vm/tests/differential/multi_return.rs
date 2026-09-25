@@ -290,5 +290,3 @@ fn passed_through_results_may_outnumber_the_frame_that_carries_them() {
 r",
     );
 }
-
-

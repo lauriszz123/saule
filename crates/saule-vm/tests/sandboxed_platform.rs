@@ -32,9 +32,8 @@ fn run(src: &str) -> Result<String, String> {
         .tokenize()
         .map_err(|e| e.to_string())?;
     let mut module = saule_parser::parse(tokens).map_err(|e| e.to_string())?;
-    let (sink, result) = saule_runtime::output::capture(|| {
-        saule_vm::check_and_run(&mut module, "test.sau", src)
-    });
+    let (sink, result) =
+        saule_runtime::output::capture(|| saule_vm::check_and_run(&mut module, "test.sau", src));
     match result {
         Ok(_) => Ok(sink.text()),
         Err(e) => Err(e.to_string()),

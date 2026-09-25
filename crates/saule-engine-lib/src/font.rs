@@ -391,8 +391,8 @@ fn break_units(text: &str, out: &mut Vec<(usize, usize)>) {
         // A break may fall here when the previous character ended a unit, or
         // this one starts a new wide unit.
         let after_space = previous == ' ';
-        let wide_boundary = (is_wide(ch) || is_wide(previous)) && !no_break_before(ch)
-            && !no_break_after(previous);
+        let wide_boundary =
+            (is_wide(ch) || is_wide(previous)) && !no_break_before(ch) && !no_break_after(previous);
 
         if after_space || wide_boundary {
             out.push((start, i));
@@ -426,18 +426,30 @@ fn is_wide(ch: char) -> bool {
 fn no_break_before(ch: char) -> bool {
     matches!(
         ch,
-        '。' | '、' | '，' | '．' | '！' | '？' | '：' | '；'
-            | '」' | '』' | '）' | '】' | '〕' | '》' | '〉' | '〞'
-            | 'ー' | '～' | '…'
+        '。' | '、'
+            | '，'
+            | '．'
+            | '！'
+            | '？'
+            | '：'
+            | '；'
+            | '」'
+            | '』'
+            | '）'
+            | '】'
+            | '〕'
+            | '》'
+            | '〉'
+            | '〞'
+            | 'ー'
+            | '～'
+            | '…'
     )
 }
 
 /// Opening punctuation, which may not end a line.
 fn no_break_after(ch: char) -> bool {
-    matches!(
-        ch,
-        '「' | '『' | '（' | '【' | '〔' | '《' | '〈' | '〝'
-    )
+    matches!(ch, '「' | '『' | '（' | '【' | '〔' | '《' | '〈' | '〝')
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +598,11 @@ impl Align {
             return 0.0;
         }
         let slack = limit - line_width;
-        if slack <= 0.0 { 0.0 } else { slack / gaps as f64 }
+        if slack <= 0.0 {
+            0.0
+        } else {
+            slack / gaps as f64
+        }
     }
 }
 

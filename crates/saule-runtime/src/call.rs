@@ -232,7 +232,10 @@ pub fn call_value_first(
 ) -> Result<Value, RuntimeError> {
     match callee {
         Value::VmFunction(f) => f.invoke_first(args, span),
-        _ => Ok(call_value(callee, args, span)?.into_iter().next().unwrap_or(Value::Nil)),
+        _ => Ok(call_value(callee, args, span)?
+            .into_iter()
+            .next()
+            .unwrap_or(Value::Nil)),
     }
 }
 

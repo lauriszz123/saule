@@ -75,7 +75,11 @@ struct Counters {
 
 impl Counters {
     fn new() -> Self {
-        Self { ops: [0; N], pairs: vec![0; N * N].into_boxed_slice(), total: 0 }
+        Self {
+            ops: [0; N],
+            pairs: vec![0; N * N].into_boxed_slice(),
+            total: 0,
+        }
     }
 }
 
@@ -149,7 +153,11 @@ pub fn take() -> Option<Report> {
             .then_with(|| a.1.name().cmp(b.1.name()))
     });
 
-    Some(Report { total: counters.total, ops, pairs })
+    Some(Report {
+        total: counters.total,
+        ops,
+        pairs,
+    })
 }
 
 /// A finished histogram, sorted hottest first.
@@ -185,7 +193,10 @@ impl Report {
             group(self.total)
         );
 
-        let _ = writeln!(s, "\n  opcode                    executions    share    cum");
+        let _ = writeln!(
+            s,
+            "\n  opcode                    executions    share    cum"
+        );
         let mut cum = 0u64;
         for (op, n) in self.ops.iter().take(top) {
             cum += n;
@@ -258,7 +269,10 @@ mod tests {
     fn nothing_is_collected_until_enabled() {
         assert!(!is_enabled());
         record(None, Op::MOVE);
-        assert!(take().is_none(), "recording without enabling must not start collection");
+        assert!(
+            take().is_none(),
+            "recording without enabling must not start collection"
+        );
     }
 
     #[test]
@@ -270,7 +284,10 @@ mod tests {
         let r = take().expect("enabled");
         assert_eq!(r.total, 3);
         assert_eq!(r.ops, vec![(Op::ADDII, 2), (Op::MOVE, 1)]);
-        assert_eq!(r.pairs, vec![(Op::ADDII, Op::ADDII, 1), (Op::MOVE, Op::ADDII, 1)]);
+        assert_eq!(
+            r.pairs,
+            vec![(Op::ADDII, Op::ADDII, 1), (Op::MOVE, Op::ADDII, 1)]
+        );
     }
 
     #[test]

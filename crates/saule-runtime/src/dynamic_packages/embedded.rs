@@ -75,7 +75,9 @@ fn bytes_at<'d>(file: &object::File<'d>, address: u64, len: u64) -> Result<&'d [
         }
         return match section.data_range(address, len) {
             Ok(Some(bytes)) => Ok(bytes),
-            Ok(None) => Err(format!("{len} bytes at {address:#x} run past the end of their section")),
+            Ok(None) => Err(format!(
+                "{len} bytes at {address:#x} run past the end of their section"
+            )),
             Err(e) => Err(format!("its section could not be read ({e})")),
         };
     }

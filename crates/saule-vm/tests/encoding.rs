@@ -99,7 +99,11 @@ fn operands_never_bleed_into_the_opcode() {
                 Fmt::AsBx => Instruction::asbx(op, 0xFF, SBX_BIAS - 1),
                 Fmt::Ax => Instruction::ax_of(op, 0x00ff_ffff),
             };
-            assert_eq!(ins.raw_op(), op as u8, "{op}: operands overwrote the opcode");
+            assert_eq!(
+                ins.raw_op(),
+                op as u8,
+                "{op}: operands overwrote the opcode"
+            );
             let _ = rng.next();
         }
     }

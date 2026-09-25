@@ -241,6 +241,3 @@ fn nesting_that_outruns_the_stack_reports_rather_than_dying() {
         .join()
         .unwrap_or_else(|e| std::panic::resume_unwind(e));
 }
-
-
-

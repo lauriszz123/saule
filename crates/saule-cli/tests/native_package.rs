@@ -28,7 +28,13 @@ fn fixture_library() -> &'static Path {
         // still hold the workspace's.
         let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
         let status = Command::new(env!("CARGO"))
-            .args(["build", "--quiet", "-p", "saule-native-fixture", "--target-dir"])
+            .args([
+                "build",
+                "--quiet",
+                "-p",
+                "saule-native-fixture",
+                "--target-dir",
+            ])
             .arg(&target)
             .current_dir(workspace_root())
             .status()
@@ -224,7 +230,10 @@ end))
         err.contains("this Counter is in use by a call that has not returned yet"),
         "{err}"
     );
-    assert!(!err.contains("type error: type error"), "doubled prefix: {err}");
+    assert!(
+        !err.contains("type error: type error"),
+        "doubled prefix: {err}"
+    );
 }
 
 #[test]
@@ -289,13 +298,19 @@ fn a_panic_is_a_saule_runtime_error() {
     let err = run_err(&home, "import * from \"fixture\"\nprintln(Util.boom())\n");
     assert!(err.contains("Util.boom panicked at"), "{err}");
     assert!(err.contains("kaboom"), "{err}");
-    assert!(!err.contains("thread '"), "Rust's panic report leaked: {err}");
+    assert!(
+        !err.contains("thread '"),
+        "Rust's panic report leaked: {err}"
+    );
 }
 
 #[test]
 fn an_integer_that_does_not_fit_is_refused() {
     let home = fixture_home("narrow");
-    let err = run_err(&home, "import * from \"fixture\"\nprintln(Util.narrow(5000000000))\n");
+    let err = run_err(
+        &home,
+        "import * from \"fixture\"\nprintln(Util.narrow(5000000000))\n",
+    );
     assert!(
         err.contains("argument `x` is 5000000000, which does not fit a i32"),
         "{err}"
@@ -310,8 +325,14 @@ fn an_integer_that_does_not_fit_is_refused() {
 fn the_checker_types_native_classes_and_enums() {
     let home = fixture_home("checker");
     let cases = [
-        ("local c = Counter(1)\nc.bump(\"x\")", "`Counter.bump` expects 0 argument(s), got 1"),
-        ("local c = Counter(1)\nc.nope()", "no member `nope` on `Counter`"),
+        (
+            "local c = Counter(1)\nc.bump(\"x\")",
+            "`Counter.bump` expects 0 argument(s), got 1",
+        ),
+        (
+            "local c = Counter(1)\nc.nope()",
+            "no member `nope` on `Counter`",
+        ),
         ("println(Counter.bump())", "no member `bump` on `Counter`"),
         (
             "local c = Counter(\"ten\")",
@@ -329,13 +350,23 @@ fn the_checker_types_native_classes_and_enums() {
             "local c = Counter(1)\nlocal s: string = c.value",
             "cannot assign value of type `integer` to variable of type `string`",
         ),
-        ("local m = Rounding.Sideways", "enum `Rounding` has no variant `Sideways`"),
+        (
+            "local m = Rounding.Sideways",
+            "enum `Rounding` has no variant `Sideways`",
+        ),
     ];
     for (snippet, expected) in cases {
-        let out = saule(&home, "check", &format!("import * from \"fixture\"\n{snippet}\n"));
+        let out = saule(
+            &home,
+            "check",
+            &format!("import * from \"fixture\"\n{snippet}\n"),
+        );
         let err = stderr(&out);
         assert!(!out.status.success(), "`{snippet}` should not check");
-        assert!(err.contains(expected), "`{snippet}`: expected `{expected}` in:\n{err}");
+        assert!(
+            err.contains(expected),
+            "`{snippet}`: expected `{expected}` in:\n{err}"
+        );
     }
 
     // And the well-typed program checks clean.
@@ -361,9 +392,18 @@ fn a_missing_module_is_reported_at_the_import() {
             "import Timer from \"nosuchthing\"\nlocal t: float = Timer.getTime()\n",
         );
         let err = stderr(&out);
-        assert!(err.contains("could not find module `nosuchthing`"), "{cmd}: {err}");
-        assert!(err.contains("import Timer from"), "{cmd}: not at the import: {err}");
-        assert!(!err.contains("type unknown"), "{cmd}: the knock-on error won: {err}");
+        assert!(
+            err.contains("could not find module `nosuchthing`"),
+            "{cmd}: {err}"
+        );
+        assert!(
+            err.contains("import Timer from"),
+            "{cmd}: not at the import: {err}"
+        );
+        assert!(
+            !err.contains("type unknown"),
+            "{cmd}: the knock-on error won: {err}"
+        );
     }
 }
 
@@ -402,10 +442,17 @@ fn a_package_for_another_abi_is_refused_before_loading() {
     let file = fixture_library().file_name().expect("file name");
     std::fs::write(home.join("native_packages").join(file), bytes).expect("install");
 
-    let out = saule(&home, "run", "import * from \"fixture\"\nprintln(Counter.live())\n");
+    let out = saule(
+        &home,
+        "run",
+        "import * from \"fixture\"\nprintln(Counter.live())\n",
+    );
     let err = stderr(&out);
     assert!(!out.status.success());
-    assert!(err.contains(&format!("native ABI version {theirs}")), "{err}");
+    assert!(
+        err.contains(&format!("native ABI version {theirs}")),
+        "{err}"
+    );
     assert!(err.contains(&format!("speaks version {ours}")), "{err}");
 }
 

@@ -254,9 +254,12 @@ impl<'a> Compiler<'a> {
         }
     }
 
-
     /// Finish the module body and hand back the chunk.
-    pub fn finish(mut self, result: Option<u16>, span: &Range<usize>) -> Result<Chunk, CompileError> {
+    pub fn finish(
+        mut self,
+        result: Option<u16>,
+        span: &Range<usize>,
+    ) -> Result<Chunk, CompileError> {
         match result {
             Some(r) => {
                 let a = self.reg8(r, span)?;
@@ -279,7 +282,6 @@ impl<'a> Compiler<'a> {
         Ok(chunk)
     }
 }
-
 
 /// Numeric kind of an operand, as proved by the typechecker. `None` means
 /// the compiler must fall back to a dynamic form.

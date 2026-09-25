@@ -26,8 +26,8 @@ use crate::fxhash::fxmap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::prelude::Prelude;
 use crate::native_packages::NativePackage;
+use crate::prelude::Prelude;
 use crate::value::{ClassObject, NativeClosure, SauleStr, Value};
 
 /// `import Saule from "saule"`. Auto-prelude'd, like every other stdlib

@@ -8,8 +8,8 @@ use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::Proto;
 
-use super::upval::Upvalue;
 use super::VmShared;
+use super::upval::Upvalue;
 
 /// A bytecode function plus the upvalues it captured.
 ///
@@ -54,7 +54,12 @@ impl Closure {
     /// be *called back into* from the tree-walker — use
     /// [`Closure::bound`] for anything a running VM creates.
     pub fn new(proto: Rc<Proto>, chunk: Rc<crate::chunk::Chunk>) -> Closure {
-        Closure { proto, chunk, upvals: Vec::new(), shared: Weak::new() }
+        Closure {
+            proto,
+            chunk,
+            upvals: Vec::new(),
+            shared: Weak::new(),
+        }
     }
 
     /// A closure that can run itself, over `shared`.
@@ -64,7 +69,12 @@ impl Closure {
         upvals: Vec<Rc<RefCell<Upvalue>>>,
         shared: &Rc<VmShared>,
     ) -> Closure {
-        Closure { proto, chunk, upvals, shared: Rc::downgrade(shared) }
+        Closure {
+            proto,
+            chunk,
+            upvals,
+            shared: Rc::downgrade(shared),
+        }
     }
 
     /// Recover a `&Closure` from the erased handle a register holds.

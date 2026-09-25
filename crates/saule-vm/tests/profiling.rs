@@ -36,7 +36,11 @@ fn profile_of(src: &str) -> profile::Report {
 }
 
 fn count(r: &profile::Report, op: Op) -> u64 {
-    r.ops.iter().find(|(o, _)| *o == op).map(|(_, n)| *n).unwrap_or(0)
+    r.ops
+        .iter()
+        .find(|(o, _)| *o == op)
+        .map(|(_, n)| *n)
+        .unwrap_or(0)
 }
 
 fn pair(r: &profile::Report, first: Op, second: Op) -> u64 {

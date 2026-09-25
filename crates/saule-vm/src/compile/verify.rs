@@ -98,8 +98,17 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
         }
         expect_extra = matches!(
             op,
-            Op::CALLK | Op::CALLNAT | Op::CALLM_MR | Op::CALLMX | Op::CALLIF | Op::CALLSTAT | Op::NEWVAR | Op::ARITHX | Op::UNARYX
-                | Op::TAILCALLK | Op::TAILCALLS
+            Op::CALLK
+                | Op::CALLNAT
+                | Op::CALLM_MR
+                | Op::CALLMX
+                | Op::CALLIF
+                | Op::CALLSTAT
+                | Op::NEWVAR
+                | Op::ARITHX
+                | Op::UNARYX
+                | Op::TAILCALLK
+                | Op::TAILCALLS
         );
 
         // Register operands. `A` is a register for every format that has
@@ -235,8 +244,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
     };
     match terminator {
         Some(
-            Op::RET | Op::RET0 | Op::RET1 | Op::JMP
-            | Op::TAILCALL | Op::TAILCALLK | Op::TAILCALLS,
+            Op::RET | Op::RET0 | Op::RET1 | Op::JMP | Op::TAILCALL | Op::TAILCALLK | Op::TAILCALLS,
         ) => Ok(()),
         _ => Err(bad(
             name,
@@ -306,7 +314,10 @@ mod tests {
     fn a_missing_extraarg_is_caught() {
         // `CALLK` without its operand would make the VM read the next
         // instruction as a proto index.
-        let c = chunk_with(vec![I::abc(Op::CALLK, 0, 1, 2), I::abc(Op::RET0, 0, 0, 0)], 1);
+        let c = chunk_with(
+            vec![I::abc(Op::CALLK, 0, 1, 2), I::abc(Op::RET0, 0, 0, 0)],
+            1,
+        );
         let e = verify(&c).unwrap_err();
         assert!(e.problem.contains("EXTRAARG"), "{e}");
     }
@@ -339,10 +350,7 @@ mod tests {
         // §17 says a cached chunk must always be verified.
         let unassigned = Op::ALL.len() as u32;
         assert!(unassigned <= u8::MAX as u32, "the opcode space is full");
-        let c = chunk_with(
-            vec![I(unassigned << 24), I::abc(Op::RET0, 0, 0, 0)],
-            1,
-        );
+        let c = chunk_with(vec![I(unassigned << 24), I::abc(Op::RET0, 0, 0, 0)], 1);
         let e = verify(&c).unwrap_err();
         assert!(e.problem.contains("is not an opcode"), "{e}");
     }
@@ -512,7 +520,10 @@ mod tests {
             Some("main"),
             0,
             1,
-            vec![I::abc(Op::TAILCALLK, 0, 1, 0), I::ax_of(Op::EXTRAARG, target)],
+            vec![
+                I::abc(Op::TAILCALLK, 0, 1, 0),
+                I::ax_of(Op::EXTRAARG, target),
+            ],
         ));
         assert_eq!(verify(&c), Ok(()));
     }
@@ -522,10 +533,7 @@ mod tests {
         // `JMP`'s `A` is a close-upvalues threshold, not a register to read,
         // and 0 means "nothing to close" — the common case. Treating it as a
         // register would reject almost every real proto.
-        let c = chunk_with(
-            vec![I::asbx(Op::JMP, 0, 0), I::abc(Op::RET0, 0, 0, 0)],
-            1,
-        );
+        let c = chunk_with(vec![I::asbx(Op::JMP, 0, 0), I::abc(Op::RET0, 0, 0, 0)], 1);
         assert_eq!(verify(&c), Ok(()));
     }
 }
