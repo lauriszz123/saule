@@ -73,6 +73,9 @@ fn saule(home: &Path, cmd: &str, source: &str) -> Output {
         .arg(cmd)
         .arg(&script)
         .env("SAULE_HOME", home)
+        // With `RUST_BACKTRACE` set a package's panic report is printed on
+        // purpose, for its author; the tests check what a user sees.
+        .env_remove("RUST_BACKTRACE")
         .output()
         .expect("run saule")
 }
