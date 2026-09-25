@@ -36,6 +36,10 @@ static HOST: AtomicPtr<HostApi> = AtomicPtr::new(core::ptr::null_mut());
 #[doc(hidden)]
 pub unsafe fn __set_host(api: *const HostApi) {
     HOST.store(api as *mut HostApi, Ordering::Release);
+    // Being loaded by the interpreter is the moment to take over panic
+    // reporting — and only then, so a package's own `cargo test` keeps the
+    // usual output.
+    crate::convert::install_panic_hook();
 }
 
 /// Borrow the installed host API, panicking with a clear message if the

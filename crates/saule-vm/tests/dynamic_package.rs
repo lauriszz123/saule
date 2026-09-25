@@ -1,57 +1,57 @@
 //! Compiling an `import` of a dynamic native package.
 //!
-//! A dynamic package is a TOML manifest plus a shared library loaded with
-//! `dlopen`. The manifest carries everything the *compiler* needs — class
-//! names, method names, parameter names, arities — and is parsed without
-//! touching the binary, so a package's exports fold into constants exactly
-//! like a statically-linked one's. The `dlopen` is a runtime side effect and
-//! stays one: it is recorded on the chunk and performed by `run_program`
-//! immediately before the body of the module that imported it, which is
-//! where the tree-walker resolves the same `import`.
+//! A dynamic package is a shared library whose description — class names,
+//! method names, parameter names, arities — is compiled into it as data and
+//! read out of the file without loading it. That is everything the
+//! *compiler* needs, so a package's exports fold into constants exactly like
+//! a statically-linked one's. The `dlopen` is a runtime side effect and stays
+//! one: it is recorded on the chunk and performed by `run_program`
+//! immediately before the body of the module that imported it.
 //!
 //! These tests need their own `SAULE_HOME`, and `discover()` runs once per
 //! process, so this is a test *file* of its own rather than a module of the
 //! differential suite.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-/// A manifest naming a binary that is deliberately **not** installed.
-///
-/// That absence is the load-bearing part of every test here: compiling this
-/// package's import has to succeed anyway, which it can only do if nothing
-/// tried to open the library.
-const MANIFEST: &str = r#"
-[package]
-name = "testpkg"
-version = "0.1.0"
-binary = "testpkg-not-installed.so, testpkg-not-installed.dll, testpkg-not-installed.dylib"
-
-[exports.Graphics]
-type = "class"
-doc = "A package that is described but not installed."
-
-  [[exports.Graphics.methods]]
-  name = "circle"
-  sig = "fn(mode: string, x: float, y: float, radius: float) -> nil"
-  native_symbol = "testpkg_graphics_circle"
-"#;
-
-/// The `SAULE_HOME` these tests run under.
-fn home() -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("dynpkg_home")
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate is two levels below the workspace root")
+        .to_path_buf()
 }
 
-/// Point `SAULE_HOME` at a manifest directory holding [`MANIFEST`], then run
-/// discovery. Idempotent, and every test calls it first.
-fn install_manifest() {
+/// Build `saule-native-fixture` and install its library as the only file in
+/// a fresh `SAULE_HOME`, then run discovery. Idempotent, and every test
+/// calls it first.
+fn install_fixture() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let home = home();
-        let manifests = home.join("native_manifests");
-        std::fs::create_dir_all(&manifests).expect("create manifest dir");
-        std::fs::write(manifests.join("testpkg.toml"), MANIFEST).expect("write manifest");
-        // No `native_packages/` directory at all — nothing to load, by design.
+        // A target directory of its own: this runs while `cargo test` may
+        // still hold the workspace's.
+        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
+        let status = Command::new(env!("CARGO"))
+            .args(["build", "--quiet", "-p", "saule-native-fixture", "--target-dir"])
+            .arg(&target)
+            .current_dir(workspace_root())
+            .status()
+            .expect("run cargo to build the fixture package");
+        assert!(status.success(), "building saule-native-fixture failed");
+        let file = format!(
+            "{}saule_fixture{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        );
+
+        let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("dynpkg_home");
+        let packages = home.join("native_packages");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&packages).expect("create the packages directory");
+        std::fs::copy(target.join("debug").join(&file), packages.join(&file))
+            .expect("install the fixture library");
 
         // SAFETY: single-threaded, before any other thread in this test
         // binary has started and before the first `init()` reads it.
@@ -74,22 +74,21 @@ fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 /// A two-module program: the package is imported by `lib`, not by the entry,
-/// so the tests can tell *which* chunk records the load.
-///
-/// `name` per caller: `project` clears the directory it writes into, and
-/// these tests run in parallel.
+/// so the test can tell *which* chunk records the load.
 fn two_module_program(name: &str) -> PathBuf {
     project(
         name,
         &[
             (
                 "lib.sau",
-                "import * from testpkg\n\
-                 export fn draw()\n\
-                 \x20 Graphics.circle(\"fill\", 1.0, 2.0, 3.0)\n\
+                "import * from fixture\n\
+                 export fn total() -> integer\n\
+                 \x20 local c = Counter(40)\n\
+                 \x20 c.bump()\n\
+                 \x20 return c.value + Util.sum({1})\n\
                  end\n",
             ),
-            ("main.sau", "import draw from lib\ndraw()\n"),
+            ("main.sau", "import total from lib\nprintln(total())\n"),
         ],
     )
 }
@@ -97,69 +96,45 @@ fn two_module_program(name: &str) -> PathBuf {
 fn compile(entry: &Path) -> saule_vm::program::Program {
     match saule_vm::program::compile(entry) {
         Ok(p) => p,
-        Err(e) => panic!("expected `{}` to compile: {e}", entry.display()),
+        Err(e) => panic!("expected `{}` to compile: {e:?}", entry.display()),
     }
 }
 
+/// Compiling folds the package's exports without loading it, records the
+/// load on the importing module's chunk, and running performs it.
+///
+/// One test, in order, because the loaded-library cache is process-wide: a
+/// test running a program in parallel would load the library and make
+/// "compiling loaded nothing" unobservable.
 #[test]
-fn an_import_of_a_dynamic_package_compiles() {
-    install_manifest();
-    // The gap this closes. Until the manifest became the compiler's source
-    // of truth this was a deliberate `CompileError::Unsupported`, and every
-    // program importing a package fell back to the tree-walker whole.
-    let dir = two_module_program("dynpkg_compiles");
-    let program = compile(&dir.join("main.sau"));
-    assert_eq!(program.modules.len(), 2, "lib and main");
-}
-
-#[test]
-fn compiling_records_the_load_without_performing_it() {
-    install_manifest();
-    let dir = two_module_program("dynpkg_records");
+fn compiling_records_the_load_and_running_performs_it() {
+    install_fixture();
+    let dir = two_module_program("dynpkg_compile_then_run");
     let program = compile(&dir.join("main.sau"));
 
     // Post-order: an imported module precedes its importer.
+    assert_eq!(program.modules.len(), 2, "lib and main");
     let lib = &program.modules[0];
     let main = program.entry_chunk();
-
     let packages: Vec<&str> = lib.dynamic_imports.iter().map(|(p, _)| p.as_str()).collect();
-    assert_eq!(packages, ["testpkg"], "the importing module records the load");
+    assert_eq!(packages, ["fixture"], "the importing module records the load");
     assert!(
         main.dynamic_imports.is_empty(),
         "a module that imports no package records no load"
     );
 
-    // And compiling got this far with no binary on disk — which is the whole
-    // property. A compile that had opened the library could not have.
+    // The whole property: the program compiled — constructor, method,
+    // property and static call included — and no library was opened.
     assert!(
-        !home().join("native_packages").exists(),
-        "this fixture must not have an installed binary"
+        !saule_runtime::dynamic_packages::is_loaded("fixture"),
+        "compiling must not load a package"
     );
-}
 
-#[test]
-fn running_reports_the_missing_library_at_the_import() {
-    install_manifest();
-    let dir = two_module_program("dynpkg_runs");
-    let program = compile(&dir.join("main.sau"));
-
-    // Compiling deferred the load; running performs it, and here it fails.
-    // The point is *that it is reported at all*, and as an import error —
-    // folding a package's names at compile time must not let a program with
-    // no library behind it run partway and fail at the first call instead.
-    let err = saule_vm::run_program(program).expect_err("no library is installed");
-    // `lib.sau` is the module whose `import` failed, so the error is about
-    // it — anchored at `main.sau`'s import of `lib` — with the package's
-    // own failure inside.
-    let text = match &err {
-        saule_runtime::RuntimeError::ImportFailed { module_label, inner, .. } => {
-            assert!(module_label.ends_with("lib.sau"), "{module_label}");
-            inner.to_string()
-        }
-        other => other.to_string(),
-    };
+    let (printed, ran) = saule_runtime::output::capture(|| saule_vm::run_program(program));
+    ran.expect("the program runs");
+    assert_eq!(printed.text(), "42\n");
     assert!(
-        text.contains("testpkg"),
-        "the failure should name the package: {text}"
+        saule_runtime::dynamic_packages::is_loaded("fixture"),
+        "running performs the load"
     );
 }

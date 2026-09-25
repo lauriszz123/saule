@@ -2,13 +2,18 @@
 name = "saule-export-macro"
 version.workspace = true
 edition.workspace = true
-description = "Attribute macro that registers a native package's exported methods for manifest generation."
+description = "Attribute macros that turn Rust functions, structs, impls and enums into a Saule native package, with the package's metadata compiled into the library."
 license.workspace = true
 
 [lib]
 proc-macro = true
 
 [dependencies]
-syn = { version = "2", features = ["full"] }
+syn = { version = "2", features = ["full", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
+# The metadata record format (magic, symbol prefix) and the ABI version a
+# package declares. Pinned to the same version as `saule-sdk`'s copy: the
+# version written into a package's metadata has to be the one its shims were
+# compiled against, and in this workspace they are the same crate.
+saule-native-abi = { path = "../saule-native-abi" }

@@ -654,8 +654,11 @@ broken is the worst failure mode there is.
 
 ## Appendix D — `SAULE_HOME` layout
 
-Additive — the two existing directories keep their names and meaning, so
-current installs stay valid.
+Additive — the existing directory keeps its name and meaning, so current
+installs stay valid. (`native_manifests/` is gone: a native package's
+description is compiled into its library, so a package is one file in
+`native_packages/`. A package still installed the old way is reported at its
+`import` with what to do.)
 
 ```
 ~/.saule/
@@ -664,8 +667,7 @@ current installs stay valid.
 │   └── github.com/
 │       └── lauriszz123/uikit/
 │           └── 1.2.0/            unpacked, immutable, read-only
-├── native_packages/              compiled cdylibs                    (exists)
-├── native_manifests/             TOML manifests                      (exists)
+├── native_packages/              compiled cdylibs, self-describing   (exists)
 ├── cache/                        downloaded tarballs, git metadata   (step 6)
 ├── tmp/                          staging for atomic installs         (step 3)
 ├── docs/                         offline docs                        (later)
@@ -737,14 +739,16 @@ uikit-engine-1.2.0-aarch64-apple-darwin.dylib
 uikit-engine-1.2.0-x86_64-unknown-linux-gnu.so
 uikit-engine-1.2.0-x86_64-pc-windows-msvc.dll
 uikit-engine-1.2.0-SHA256SUMS
-engine.toml
 ```
 
-`saule add` picks the asset matching the host triple, verifies it against the
-`SHA256SUMS` asset, and drops it into `native_packages/` + `native_manifests/`
-— the exact layout the install scripts produce today, so
+No manifest asset: each library carries its own description (see
+`saule_native_abi`, "Package metadata"). `saule add` picks the asset matching
+the host triple, verifies it against the `SHA256SUMS` asset, and drops it into
+`native_packages/` — the exact layout the install scripts produce today, so
 [dynamic_packages.rs](crates/saule-runtime/src/dynamic_packages.rs)
-discovery works unchanged.
+discovery works unchanged. It can also read the package's name, version and
+ABI out of the downloaded file before installing it, and refuse one built for
+another ABI with both versions named.
 
 If no asset matches the host triple: fall back to building from source **only
 when a Rust toolchain is present and the user passes `--build`**, otherwise fail

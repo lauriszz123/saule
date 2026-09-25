@@ -1,35 +1,40 @@
 # Native packages — dynamically-loaded engine modules
 
 This folder demonstrates Saule's **native package** system: compile a Rust
-library to a shared object, describe it with a TOML manifest, and `import` it
-from Saule with full type-checking and LSP support — **no interpreter rebuild
-required**.
+library to a shared object, drop it into `~/.saule/native_packages/`, and
+`import` it from Saule with full type-checking and LSP support — **no
+interpreter rebuild, and no manifest**.
 
 ## How it works
 
 ```
 ~/.saule/
-  native_manifests/engine.toml          ← describes exports + symbol names
-  native_packages/saule_engine_lib.dll  ← the compiled code (.dll/.so/.dylib)
+  native_packages/libsaule_engine_lib.dylib  ← the whole package (.dll/.so/.dylib)
 ```
 
-1. At startup the interpreter scans `~/.saule/native_manifests/`, parses every
-   manifest, and registers each method's type signature. `Graphics.circle(...)`
-   now type-checks **before** any binary is loaded.
-2. The first time your code runs `import Graphics from "engine"`, the
-   interpreter loads the shared library named in the manifest (preferring the
-   one matching your OS) and binds each export to its native symbol.
+A package is one file. `saule-sdk`'s macros compile a description of the
+package **into the library**: every class, every method's Saule signature and
+exported symbol, and your `///` doc comments.
+
+1. At startup the interpreter scans `~/.saule/native_packages/` and reads each
+   library's description **out of the file, without loading it**. Each
+   method's signature is registered, so `Graphics.circle(...)` type-checks —
+   and the editor completes it and shows its docs — before any of the
+   package's code runs.
+2. When a program reaches `import Graphics from "engine"`, the interpreter
+   loads the library, checks that it was built against the same native ABI,
+   and binds each export to its symbol.
 3. Calls cross a small, frozen C ABI ([`saule-native-abi`](../../crates/saule-native-abi))
    — Saule values in, a Saule value out.
 
-The contract is entirely declarative: the manifest says which symbols exist and
-what their Saule signatures are. There is **no** `get_package()` entry point to
-implement — just plain `extern "C"` functions.
+A library that cannot be used — built for another ABI, not a Saule package,
+or installed the old two-file way — is reported at the `import` that names
+it, with the reason.
 
-The manifest itself is **generated from the code**: each exported function
-carries a `#[saule_export(class = ..., name = ...)]` attribute, and a small
-`gen-manifest` binary (built alongside the library) walks those declarations to
-emit `engine.toml`. There is no hand-maintained manifest to keep in sync.
+Beyond namespaces of functions like `Graphics`, a package can define real
+classes (`#[saule_class]` + `#[saule_methods]`), whose objects Saule programs
+hold, call methods on, and read properties of, and enums (`#[saule_enum]`).
+See [`saule-sdk`'s README](../../crates/saule-sdk/README.md).
 
 ### Callback parameters
 
@@ -43,8 +48,8 @@ declared in the attribute, keyed by the Rust parameter's name:
 fn signal_on_each(t: STable<T>, f: SFunction) -> Result<(), String> { /* ... */ }
 ```
 
-That renders as `fn<T>(t: table<T>, f: fn(T) -> nil) -> nil` in the manifest,
-which is what the type checker and the LSP check call sites against — so
+That renders as `fn<T>(t: table<T>, f: fn(T) -> nil) -> nil` in the package's
+metadata, which is what the type checker and the LSP check call sites against — so
 `Signal.onEach(nums, x => println(x))` type-checks and the lambda's parameter
 is inferred. Omitting `sig(...)` for an `SFunction` is a compile error rather
 than a silently untyped parameter. `sig(return = "...")` types an `SFunction`
@@ -65,33 +70,20 @@ type.
 >   `rustup override set stable-x86_64-pc-windows-msvc`.
 
 ```sh
-# 1. Build the example engine as a shared library (also builds gen-manifest)
+# 1. Build the example engine as a shared library
 cargo build -p saule-engine-lib --release
 
-# 2. Create the package directories
-#    (Windows PowerShell)
+# 2. Copy the library into the packages directory (any file name works)
+#    Linux:   cp target/release/libsaule_engine_lib.so    ~/.saule/native_packages/
+#    macOS:   cp target/release/libsaule_engine_lib.dylib ~/.saule/native_packages/
+#    Windows (PowerShell):
 mkdir $env:USERPROFILE\.saule\native_packages -Force
-mkdir $env:USERPROFILE\.saule\native_manifests -Force
-
-# 3. Copy the compiled binary (pick your platform's file)
-#    Windows:
-copy target\release\saule_engine_lib.dll   $env:USERPROFILE\.saule\native_packages\
-#    Linux:   target/release/libsaule_engine_lib.so   → ~/.saule/native_packages/saule_engine_lib.so
-#    macOS:   target/release/libsaule_engine_lib.dylib → ~/.saule/native_packages/saule_engine_lib.dylib
-
-# 4. Generate and install the manifest (it is emitted from the code, not
-#    checked in). Pass an output path, or run it with none to write
-#    engine.toml next to the binary.
-.\target\release\gen-manifest.exe $env:USERPROFILE\.saule\native_manifests\engine.toml
+copy target\release\saule_engine_lib.dll $env:USERPROFILE\.saule\native_packages\
 ```
 
-> On Linux/WSL, `scripts/install_wsl.sh` does steps 3–4 for you: it runs
-> `gen-manifest` and copies both the `lib`-stripped `.so` and the manifest into
-> `~/.saule/`.
-
-> The manifest's `binary = "..."` field lists the candidate filenames. On Linux
-> and macOS, Cargo prefixes the output with `lib`, so either rename the file to
-> match the manifest or update the manifest to the `lib`-prefixed name.
+> `scripts/install_mac.sh`, `scripts/install_wsl.sh` and
+> `scripts/install_windows.ps1` do step 2 for you, and tidy away the separate
+> manifest an older install left in `~/.saule/native_manifests/`.
 
 ## Run
 
@@ -104,7 +96,7 @@ saule examples/native-package/demo.sau
 ```saule
 import Graphics from "engine"                 -- single class
 import Graphics, Window, Timer from "engine"  -- several classes
-import * from "engine"                        -- everything the manifest exports
+import * from "engine"                        -- everything the package exports
 ```
 
 ## Game loop
@@ -170,14 +162,14 @@ wheel-driven zoom, mouse edges, and a canvas used as a pre-rendered backdrop.
 
 ## Adding your own functions
 
-1. Add an `extern "C"` symbol in `crates/saule-engine-lib/src/` following the
-   `(args, argc, out) -> i32` ABI (use the `Args` helper to read arguments).
-2. Annotate it with `#[saule_export(class = "<Class>", name = "<method>", sig =
-   "fn(...) -> ...")]`. The manifest entry is generated from this — no TOML to
-   edit. (For a brand-new class, also add an `ExportedClass` registration in
-   `crates/saule-engine-lib/src/lib.rs`.)
-3. Rebuild and reinstall (`scripts/install_wsl.sh`, or rerun `gen-manifest`).
-   No interpreter changes.
+1. Write a plain, safe Rust function in `crates/saule-engine-lib/src/`.
+2. Annotate it with `#[saule_export(class = "<Class>", name = "<method>")]`.
+   The Saule signature is inferred from the Rust types, and the function's
+   `///` comment becomes its hover text — both compiled into the library.
+   (To document a brand-new class, add it to the `classes { … }` list in
+   `saule_package!` in `crates/saule-engine-lib/src/lib.rs`.)
+3. Rebuild and reinstall (`scripts/install_*`). No interpreter changes, and
+   nothing to regenerate.
 
 ## Note on the toolchain (Windows)
 

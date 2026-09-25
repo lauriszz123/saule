@@ -1,10 +1,8 @@
 # Install the `engine` native package into Windows' %USERPROFILE%\.saule.
 #
-# Unlike the Unix scripts, Cargo already names the Windows cdylib
-# `saule_engine_lib.dll` — matching the manifest's `binary` list — so nothing
-# is renamed on copy. The manifest is written straight to its install location
-# by the `gen-manifest` binary, which renders it from the crate's
-# `#[saule_export]` declarations and is built alongside the library.
+# The package is one file: the library carries its own description (every
+# class, signature and doc comment is compiled into it by `saule-sdk`), so
+# installing is copying `saule_engine_lib.dll` into `native_packages\`.
 #
 # Usage:
 #   pwsh -File scripts\install_windows.ps1            # build, then install
@@ -28,23 +26,22 @@ if (-not $SkipBuild) {
 }
 
 $dll = Join-Path $release 'saule_engine_lib.dll'
-$genManifest = Join-Path $release 'gen-manifest.exe'
-foreach ($f in @($dll, $genManifest)) {
-    if (-not (Test-Path $f)) {
-        throw "$f not found - run 'cargo build --release -p saule-engine-lib' first"
-    }
+if (-not (Test-Path $dll)) {
+    throw "$dll not found - run 'cargo build --release -p saule-engine-lib' first"
 }
 
 $sauleHome = if ($env:SAULE_HOME) { $env:SAULE_HOME } else { Join-Path $env:USERPROFILE '.saule' }
 $packages = Join-Path $sauleHome 'native_packages'
+New-Item -ItemType Directory -Force -Path $packages | Out-Null
+
+# An install from before packages carried their own description left a
+# separate manifest beside the library. It is not used any more.
 $manifests = Join-Path $sauleHome 'native_manifests'
-New-Item -ItemType Directory -Force -Path $packages, $manifests | Out-Null
+Remove-Item (Join-Path $manifests 'engine.toml') -ErrorAction SilentlyContinue
+if ((Test-Path $manifests) -and -not (Get-ChildItem $manifests)) {
+    Remove-Item $manifests
+}
 
 Copy-Item $dll (Join-Path $packages 'saule_engine_lib.dll') -Force
 
-& $genManifest (Join-Path $manifests 'engine.toml')
-if ($LASTEXITCODE -ne 0) { throw 'gen-manifest failed' }
-
-Write-Host 'installed:'
-Write-Host "  $(Join-Path $packages 'saule_engine_lib.dll')"
-Write-Host "  $(Join-Path $manifests 'engine.toml')"
+Write-Host "installed: $(Join-Path $packages 'saule_engine_lib.dll')"

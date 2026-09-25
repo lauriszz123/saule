@@ -117,6 +117,9 @@ fn builtin_type(args: &[Value]) -> Result<Value, String> {
     let v = args.first().cloned().unwrap_or(Value::Nil);
     let name = match &v {
         Value::Instance(inst) => inst.borrow().class.name.clone(),
+        // A native package's object answers the same way a Saule instance
+        // does: with its class.
+        Value::Foreign(obj) => obj.class.name.clone(),
         _ => v.type_name().to_string(),
     };
     Ok(Value::Str(SauleStr::new(name)))

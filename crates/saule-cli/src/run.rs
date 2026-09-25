@@ -58,6 +58,18 @@ fn run_source(
     let mut module =
         saule_parser::parse(tokens).map_err(|e| Report::new(e).with_source_code(make_src()))?;
 
+    // An import that does not resolve is reported at the import, before
+    // anything type-checks the module: otherwise the first sign of it is a
+    // use of a name it would have bound, reported as an unknown type far from
+    // the line that needs fixing.
+    if let Some(d) = &module_dir
+        && let Some(e) = saule_runtime::module::unresolved_imports(&module, d)
+            .into_iter()
+            .next()
+    {
+        return Err(Report::new(e).with_source_code(make_src()));
+    }
+
     // Pre-collect class/interface/enum metadata from each direct import
     // so the typechecker can see imported method signatures (e.g. the
     // return type of `Json.decode(...)` from an imported `json` module).

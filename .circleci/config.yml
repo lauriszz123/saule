@@ -186,10 +186,9 @@ jobs:
   # Nothing here needs a display: minifb's x11 path and `arboard` both dlopen
   # their libraries at *runtime*, the rasterizer tests operate on plain pixel
   # buffers, and the font tests skip themselves when the image has no typeface
-  # installed. It also runs the manifest check — `engine.toml` is checked in
-  # and copied verbatim by the install scripts, so a signature edited without
-  # regenerating it would ship a package whose declared types disagree with
-  # its code.
+  # installed. There is no manifest to check: the package's description is
+  # compiled into the library from the same declarations as its code, so the
+  # two cannot disagree.
   test-engine:
     executor: rust
     steps:

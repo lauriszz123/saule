@@ -196,6 +196,25 @@ pub fn read_member(
         // produce `nil` (Lua semantics) rather than a runtime error, so
         // `t.maybe` is a safe probe.
         Value::Table(items) => Ok(items.borrow().get_str(name)),
+        // An object of a native class: a property runs its getter; a method
+        // reads as the method itself, taking the object first — what an
+        // instance of a Saule class gives back for the same read.
+        Value::Foreign(obj) => {
+            if let Some(getter) = obj.class.getters.get(name) {
+                let vs = crate::call::call_value(getter, std::slice::from_ref(receiver), span)?;
+                return Ok(vs.into_iter().next().unwrap_or(Value::Nil));
+            }
+            if let Some(m) = obj.class.methods.get(name) {
+                return Ok(m.clone());
+            }
+            Err(RuntimeError::TypeError {
+                message: format!(
+                    "no property or method `{name}` on instance of class `{}`",
+                    obj.class.name
+                ),
+                span,
+            })
+        }
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "cannot read field `{name}` on value of type `{}` — only instances, classes, enums, and tables have members",
@@ -252,6 +271,22 @@ pub fn write_member(
                 .borrow_mut()
                 .set(&key, value)
                 .map_err(|message| RuntimeError::TypeError { message, span })
+        }
+        // An object of a native class: a property with a setter.
+        Value::Foreign(obj) => {
+            if let Some(setter) = obj.class.setters.get(name) {
+                crate::call::call_value(setter, &[receiver.clone(), value], span)?;
+                return Ok(());
+            }
+            let class = &obj.class.name;
+            Err(RuntimeError::TypeError {
+                message: if obj.class.getters.contains_key(name) {
+                    format!("`{class}.{name}` is read-only: the class defines no setter for it")
+                } else {
+                    format!("class `{class}` has no property `{name}` to assign")
+                },
+                span,
+            })
         }
         other => Err(RuntimeError::TypeError {
             message: format!(

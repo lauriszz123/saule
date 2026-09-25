@@ -1,39 +1,200 @@
+use super::embedded::RawRecord;
 use super::*;
 use crate::error::RuntimeError;
 use crate::value::{TableObject, Value};
 use saule_ast::Type;
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 
+// ─── Metadata records → a package ───────────────────────────────────────────
+//
+// The records here are spelled the way `saule-export-macro` writes them, so
+// these tests hold the two ends of the format to the same contract.
+
+fn rec(symbol: &str, payload: &str) -> RawRecord {
+    RawRecord {
+        symbol: symbol.to_string(),
+        payload: payload.to_string(),
+    }
+}
+
+fn package_rec() -> RawRecord {
+    rec(
+        "PACKAGE",
+        &format!(
+            "kind = \"package\"\nname = \"gfx\"\nversion = \"0.1.0\"\nabi_version = {}\n",
+            saule_native_abi::ABI_VERSION
+        ),
+    )
+}
+
+fn method_rec(class: &str, name: &str, receiver: &str, sig: &str) -> RawRecord {
+    rec(
+        &format!("M_{class}_{name}"),
+        &format!(
+            "kind = \"method\"\nclass = \"{class}\"\nname = \"{name}\"\nreceiver = \
+             \"{receiver}\"\nsig = \"{sig}\"\nsymbol = \"saule_export_{class}_{name}\"\n"
+        ),
+    )
+}
+
+fn class_rec(name: &str, instantiable: bool) -> RawRecord {
+    rec(
+        &format!("C_{name}"),
+        &format!(
+            "kind = \"class\"\nname = \"{name}\"\ndoc = \"The {name} class.\"\n\
+             instantiable = {instantiable}\n"
+        ),
+    )
+}
+
+fn assemble(records: &[RawRecord]) -> Result<Manifest, String> {
+    manifest_from_records(records, Path::new("/pkgs/libgfx.so"))
+}
+
 #[test]
-fn parses_a_manifest() {
-    let text = r#"
-            [package]
-            name = "engine"
-            version = "0.1.0"
-            binary = "engine.so, engine.dll, engine.dylib"
+fn assembles_a_package_from_its_records() {
+    let m = assemble(&[
+        package_rec(),
+        class_rec("Image", true),
+        method_rec("Image", "init", "constructor", "fn(w: integer, h: integer) -> Image"),
+        method_rec("Image", "width", "getter", "fn() -> integer"),
+        method_rec("Image", "fill", "instance", "fn(color: integer) -> nil"),
+        method_rec("Image", "load", "static", "fn(path: string) -> Image"),
+        // A namespace nobody declared: synthesised, with no doc.
+        method_rec(
+            "Graphics",
+            "circle",
+            "static",
+            "fn(mode: string, x: float, y: float, radius: float) -> nil",
+        ),
+        rec(
+            "E_Blend",
+            "kind = \"enum\"\nname = \"Blend\"\nvariants = [\"Alpha\", \"Add\"]\n\
+             variant_docs = [\"\", \"Additive.\"]\n",
+        ),
+    ])
+    .expect("the package should assemble");
 
-            [exports.Graphics]
-            type = "class"
-            doc = "2D graphics"
+    assert_eq!(m.name, "gfx");
+    assert_eq!(m.path, Path::new("/pkgs/libgfx.so"));
+    // Sorted by name, so everything built from it is deterministic.
+    let names: Vec<&str> = m.exports.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Graphics", "Image"]);
 
-              [[exports.Graphics.methods]]
-              name = "circle"
-              sig = "fn(mode: string, x: float, y: float, radius: float) -> nil"
-              native_symbol = "saule_engine_graphics_circle"
-        "#;
-    let m = parse_manifest(text).expect("manifest should parse");
-    assert_eq!(m.name, "engine");
-    assert_eq!(m.binaries, ["engine.so", "engine.dll", "engine.dylib"]);
-    assert_eq!(m.exports.len(), 1);
-    let g = &m.exports[0];
-    assert_eq!(g.name, "Graphics");
-    assert_eq!(g.methods.len(), 1);
-    assert_eq!(g.methods[0].name, "circle");
-    assert_eq!(g.methods[0].symbol, "saule_engine_graphics_circle");
-    assert_eq!(g.methods[0].param_names, ["mode", "x", "y", "radius"]);
-    assert_eq!(g.methods[0].params.len(), 4);
-    assert_eq!(g.methods[0].returns.len(), 1);
+    let graphics = &m.exports[0];
+    assert!(!graphics.instantiable);
+    assert_eq!(graphics.doc, None);
+    assert_eq!(graphics.methods[0].param_names, ["mode", "x", "y", "radius"]);
+
+    let image = &m.exports[1];
+    assert!(image.instantiable);
+    assert_eq!(image.doc.as_deref(), Some("The Image class."));
+    assert_eq!(image.constructor().map(|c| c.params.len()), Some(2));
+    assert_eq!(image.members(Receiver::Instance).count(), 1);
+    assert_eq!(image.members(Receiver::Getter).count(), 1);
+    assert_eq!(image.members(Receiver::Static).count(), 1);
+
+    assert_eq!(m.enums[0].variants, ["Alpha", "Add"]);
+}
+
+#[test]
+fn a_package_with_no_package_record_is_refused() {
+    let err = assemble(&[method_rec("Util", "f", "static", "fn() -> nil")])
+        .expect_err("records without a package are not a package");
+    assert!(err.contains("saule_package!"), "{err}");
+}
+
+#[test]
+fn a_package_built_for_another_abi_is_refused() {
+    let theirs = saule_native_abi::ABI_VERSION + 1;
+    let record = rec(
+        "PACKAGE",
+        &format!("kind = \"package\"\nname = \"gfx\"\nversion = \"0.1.0\"\nabi_version = {theirs}\n"),
+    );
+    let err = assemble(&[record]).expect_err("a mismatched ABI must be refused");
+    // Both numbers, so the reader can tell which side is stale.
+    assert!(err.contains(&theirs.to_string()), "{err}");
+    assert!(err.contains(&saule_native_abi::ABI_VERSION.to_string()), "{err}");
+}
+
+#[test]
+fn a_package_that_declares_no_abi_is_refused() {
+    let record = rec("PACKAGE", "kind = \"package\"\nname = \"gfx\"\nversion = \"0.1.0\"\n");
+    let err = assemble(&[record]).expect_err("an unversioned package must be refused");
+    assert!(err.contains("ABI version"), "{err}");
+}
+
+/// An object's member on a class that has no objects is a contradiction the
+/// checker would otherwise take at face value.
+#[test]
+fn an_instance_member_needs_an_instantiable_class() {
+    let err = assemble(&[
+        package_rec(),
+        class_rec("Util", false),
+        method_rec("Util", "size", "instance", "fn() -> integer"),
+    ])
+    .expect_err("an instance method on a namespace is refused");
+    assert!(err.contains("Util.size"), "{err}");
+}
+
+#[test]
+fn a_class_has_one_constructor() {
+    let mut second = method_rec("Image", "init", "constructor", "fn(path: string) -> Image");
+    second.symbol = "N_Image_2".to_string();
+    let err = assemble(&[
+        package_rec(),
+        class_rec("Image", true),
+        method_rec("Image", "init", "constructor", "fn() -> Image"),
+        second,
+    ])
+    .expect_err("two constructors are refused");
+    assert!(err.contains("constructor"), "{err}");
+}
+
+#[test]
+fn a_member_cannot_be_both_a_method_and_a_property() {
+    let err = assemble(&[
+        package_rec(),
+        class_rec("Image", true),
+        method_rec("Image", "width", "getter", "fn() -> integer"),
+        method_rec("Image", "width", "instance", "fn() -> integer"),
+    ])
+    .expect_err("a name is either a method or a property");
+    assert!(err.contains("Image.width"), "{err}");
+}
+
+/// A getter and a setter of one name are one property, not a clash.
+#[test]
+fn a_getter_and_setter_share_a_name() {
+    let m = assemble(&[
+        package_rec(),
+        class_rec("Image", true),
+        method_rec("Image", "width", "getter", "fn() -> integer"),
+        method_rec("Image", "width", "setter", "fn(value: integer) -> nil"),
+    ])
+    .expect("a readable, writable property");
+    assert_eq!(m.exports[0].methods.len(), 2);
+}
+
+/// A kind a newer SDK writes is skipped, so an older toolchain can still use
+/// the parts of a newer package it understands.
+#[test]
+fn an_unknown_record_kind_is_ignored() {
+    let m = assemble(&[
+        package_rec(),
+        rec("X_future", "kind = \"interface\"\nname = \"Drawable\"\n"),
+    ])
+    .expect("an unknown kind is not an error");
+    assert!(m.exports.is_empty());
+}
+
+#[test]
+fn a_record_that_is_not_toml_names_itself() {
+    let err = assemble(&[package_rec(), rec("M_Util_f", "kind = = broken")])
+        .expect_err("garbage is refused");
+    assert!(err.contains("M_Util_f"), "{err}");
 }
 
 #[test]
@@ -177,63 +338,46 @@ fn parses_param_names_with_fallback_for_unnamed() {
 }
 
 #[test]
-fn class_info_uses_manifest_param_names() {
-    let text = r#"
-            [package]
-            name = "engine"
-            version = "0.1.0"
-            binary = "engine.so"
-
-            [exports.Graphics]
-              [[exports.Graphics.methods]]
-              name = "circle"
-              sig = "fn(mode: string, x: float, y: float, radius: float) -> nil"
-              native_symbol = "saule_engine_graphics_circle"
-        "#;
-    let m = parse_manifest(text).expect("manifest should parse");
+fn class_info_uses_the_signatures_param_names() {
+    let m = assemble(&[
+        package_rec(),
+        method_rec(
+            "Graphics",
+            "circle",
+            "static",
+            "fn(mode: string, x: float, y: float, radius: float) -> nil",
+        ),
+    ])
+    .expect("the package should assemble");
     let info = class_info(&m.exports[0]);
     let sig = info.methods.get("circle").expect("circle method");
     let names: Vec<&str> = sig.params.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["mode", "x", "y", "radius"]);
 }
 
-/// Building a package's surface for the *compiler* must not touch the
-/// binary. The proof is that this manifest names one that does not exist and
-/// building still succeeds — if a `dlopen` had happened it could not have.
-///
-/// This is what lets a dynamic package be folded into constants at compile
-/// time, which is the whole reason `saule-vm` can compile an import of one
-/// (`VM_TASKS.md`, "an import of a dynamic native package").
-#[cfg(feature = "native-packages")]
+/// What the checker is told about a class with objects: a constructor named
+/// `init` (as a Saule class's is), instance methods that are not static, and
+/// properties as typed fields.
 #[test]
-fn a_deferred_binding_loads_nothing_until_it_is_called() {
-    let text = r#"
-            [package]
-            name = "nosuchpkg"
-            version = "0.1.0"
-            binary = "nosuchpkg-not-installed.so"
+fn class_info_describes_objects_like_a_saule_class() {
+    let m = assemble(&[
+        package_rec(),
+        class_rec("Image", true),
+        method_rec("Image", "init", "constructor", "fn(w: integer) -> Image"),
+        method_rec("Image", "fill", "instance", "fn(color: integer) -> nil"),
+        method_rec("Image", "load", "static", "fn(path: string) -> Image"),
+        method_rec("Image", "width", "getter", "fn() -> integer"),
+    ])
+    .expect("the package should assemble");
+    let info = class_info(&m.exports[0]);
 
-            [exports.Graphics]
-              [[exports.Graphics.methods]]
-              name = "circle"
-              sig = "fn(mode: string, x: float, y: float, radius: float) -> nil"
-              native_symbol = "nosuchpkg_graphics_circle"
-        "#;
-    let m = parse_manifest(text).expect("manifest should parse");
-    let class = Rc::new(build_class_deferred(&m.exports[0], &m.name));
-
-    let Some(Value::NativeClosure(f)) = class.lookup_static_field("circle") else {
-        panic!("`circle` should bind to a native closure");
-    };
-    // The manifest's parameter names ride along, so named arguments work
-    // exactly as they do on the eager path.
-    assert_eq!(f.param_names, ["mode", "x", "y", "radius"]);
-
-    // Calling is where the load is attempted — and where it fails, because
-    // nothing ever registered this package. A deferred binding that could
-    // not resolve reports; it does not dangle.
-    let err = (f.func)(&[]).expect_err("an unregistered package cannot resolve");
-    assert!(err.contains("nosuchpkg"), "got: {err}");
+    let init = info.methods.get("init").expect("a constructor");
+    assert!(!init.is_static);
+    assert_eq!(init.return_ty, None, "`init` returns nothing, as in Saule");
+    assert!(!info.methods["fill"].is_static);
+    assert!(info.methods["load"].is_static);
+    assert_eq!(info.field_types["width"], Type::Named("integer".into()));
+    assert!(!info.methods.contains_key("width"), "a property is not a method");
 }
 
 /// `preload` is the side-effecting half `saule-vm` calls at run time. Its

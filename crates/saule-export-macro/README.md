@@ -1,32 +1,29 @@
 # saule-export-macro
 
-Procedural macro behind `#[saule_export]`, re-exported by `saule-sdk`.
-Authors normally depend on `saule-sdk`, not this crate directly.
+The procedural macros behind `saule-sdk`: `#[saule_export]`,
+`saule_package!`, `#[saule_class]`, `#[saule_methods]` and `#[saule_enum]`.
+Authors depend on `saule-sdk`, which re-exports them, not on this crate.
 
-Annotate a plain, safe Rust function with the owning class and method name:
+For each declaration the macros:
 
-```rust
-#[saule_export(class = "Window", name = "create")]
-fn window_create(width: i64, height: i64, title: Option<String>) -> Result<(), String> {
-    /* ... */
-    Ok(())
-}
-```
+- **infer the Saule type** from the Rust one — see the mapping in
+  `saule-sdk`'s README;
+- **generate the `extern "C"` shim** — arity checks, per-argument decoding,
+  borrowing objects for the call, return and error marshalling, and turning
+  a panic into a Saule error;
+- **compile a metadata record** into the library: an exported static holding
+  the member's name, signature, symbol and doc comment as TOML. The
+  interpreter reads these out of the library file without loading it; the
+  format is defined in `saule-native-abi` ("Package metadata").
 
-From the signature above the macro:
+Because the record is generated from the same declaration as the shim, a
+package's description cannot drift from its code, and there is nothing to
+regenerate or keep in sync.
 
-- **infers the Saule type** — `i64 → integer`, `f64 → float`,
-  `bool → boolean`, `String → string`, `Option<T> → T?`, `() → nil`, and
-  `Result<T, E>` marks the export as fallible;
-- **generates the `extern "C"` shim** — null / arity checks, per-argument
-  decoding, return marshalling, and error surfacing;
-- **registers the method** in the manifest via `inventory`, and emits a
-  `#[used]` anchor so the registration survives static linking.
-
-The original function is left intact and unit-testable. Generated code
-references `::saule_sdk::__private::*`, so the annotated crate must depend on
-`saule-sdk`.
+Generated code refers to `::saule_sdk`, so the annotated crate must depend
+on `saule-sdk`.
 
 ## Dependencies
 
-`syn`, `quote`, `proc-macro2`.
+`syn`, `quote`, `proc-macro2`, and `saule-native-abi` for the record format
+and the ABI version a package declares.
