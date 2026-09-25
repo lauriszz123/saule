@@ -181,7 +181,7 @@ fn parses_import() {
 #[test]
 fn parses_glob_import_with_from() {
     // The explicit glob spelling stays supported.
-    let m = parse_src(r#"import * from "engine""#);
+    let m = parse_src(r#"import * from "shine""#);
     match &m.stmts[0].value {
         Stmt::Decl(d) => match &d.value {
             Decl::Import {
@@ -190,7 +190,7 @@ fn parses_glob_import_with_from() {
                 quoted,
             } => {
                 assert_eq!(names, &ImportNames::All);
-                assert_eq!(path, "engine");
+                assert_eq!(path, "shine");
                 assert!(quoted);
             }
             _ => panic!("expected import"),
@@ -222,14 +222,14 @@ fn parses_unquoted_dotted_module_path() {
 
 #[test]
 fn unquoted_import_does_not_swallow_next_statement() {
-    // No statement can begin with `.`, so the bare path stops at `engine`
+    // No statement can begin with `.`, so the bare path stops at `shine`
     // and the following call parses as its own statement.
-    let m = parse_src("import * from engine\nGraphics.present()");
+    let m = parse_src("import * from shine\nGraphics.present()");
     assert_eq!(m.stmts.len(), 2);
     match &m.stmts[0].value {
         Stmt::Decl(d) => match &d.value {
             Decl::Import { path, quoted, .. } => {
-                assert_eq!(path, "engine");
+                assert_eq!(path, "shine");
                 assert!(!quoted);
             }
             _ => panic!("expected import"),

@@ -20,7 +20,7 @@ clone and run.
 | [Todo App](/saule/examples/todo-app/) | A complete command-line application: argument parsing with Os.args(), JSON persistence through the json library declared in dependencies:, match over subcommands, and rendering split into its own module. |
 | [Brainfuck Interpreter](/saule/examples/bf/) | An interpreter for another language, in about 240 lines. Tables as a tape, a dispatch loop, and a program that takes its source file from Os.args(). |
 | [Declarative UI](/saule/examples/ui-blocks/) | A miniature SwiftUI-shaped toolkit drawn to the terminal: every widget is a class, constructing one draws it, and containers take their children as a trailing block (Panel(title: "…") do … end). Shows an immediate-mode layout engine that builds no widget tree, and why a block beats a table of children — if and for work inside one. |
-| [Graphics Window](/saule/examples/toying/) | Opens a window and draws a rectangle that follows the mouse, using the Love2D-style engine native package. Shows how Saule calls into a dynamically-loaded Rust library. |
+| [Graphics Window](/saule/examples/toying/) | Opens a window and draws a rectangle that follows the mouse, using the Love2D-style Shine2D native package. Shows how Saule calls into a dynamically-loaded Rust library. |
 
 ## Also in the repository
 
