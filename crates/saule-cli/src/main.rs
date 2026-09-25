@@ -16,6 +16,7 @@ mod cli;
 mod disasm;
 mod fmt;
 mod init;
+mod pkg;
 mod project;
 mod run;
 
@@ -113,6 +114,9 @@ fn real_main(stack_size: usize) {
         Command::Check(args) => check::cmd_check(args.target, args.dump_type_coverage),
         Command::Fmt(args) => fmt::cmd_fmt(&args),
         Command::Init(args) => init::cmd_init(&args.name, args.lib),
+        Command::Install(args) => pkg::cmd_install(args.package),
+        Command::Remove(args) => pkg::cmd_remove(&args.package, args.purge),
+        Command::List(args) => pkg::cmd_list(args.global),
         Command::Disasm(args) => disasm::cmd_disasm(&args.file),
     }
 }

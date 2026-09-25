@@ -55,6 +55,13 @@ LINKEDIT_DATA_CMDS = {
 # LC_DYLD_INFO / LC_DYLD_INFO_ONLY: five (off, size) pairs after cmd/cmdsize.
 LC_DYLD_INFO_CMDS = {0x22, 0x80000022}
 
+# Byte offsets, within an LC_DYSYMTAB command, of the fields holding a file
+# offset into __LINKEDIT: tocoff, modtaboff, extrefsymoff, indirectsymoff,
+# extreloff, locreloff. The command interleaves each offset with its count,
+# so walking it with a fixed stride reads the counts instead — and runs off
+# the end of the command into the next one.
+DYSYMTAB_OFFSETS = (32, 40, 48, 56, 64, 72)
+
 
 class Unsupported(Exception):
     """The file is something this script should not touch."""
@@ -105,11 +112,10 @@ def align_file(path: str, verbose: bool = False) -> bool:
             offsets.append((pos + 8, symoff))
             stroff_field = pos + 16
         elif cmd == LC_DYSYMTAB:
-            # Only the four offsets that are non-zero in practice; a zero
-            # offset means "no such table" and must stay zero.
-            for i, field in enumerate(("tocoff", "modtaboff", "extrefsymoff", "indirectsymoff",
-                                       "extreloff", "locreloff")):
-                at = pos + 8 + 32 + i * 8
+            # The command interleaves offsets with counts, so these are
+            # spelled out rather than strided. A zero offset means "no such
+            # table" and must stay zero.
+            for at in (pos + o for o in DYSYMTAB_OFFSETS):
                 value = struct.unpack_from("<I", data, at)[0]
                 if value:
                     offsets.append((at, value))

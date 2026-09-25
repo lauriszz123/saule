@@ -1907,7 +1907,8 @@ compiler means rewriting codegen, so the 2–4 weeks are not optional.
 `value/table.rs`, `value/file.rs`, `value/interface.rs`, `module/`,
 `saule-lexer`, `saule-parser`, `saule-fmt`, `saule-docs`, `saule-lsp`,
 `saule-db`, `saule-sdk`, `saule-native-abi`, `saule-export-macro`,
-`saule-project`, `saule-version`, `saule-engine-lib`.
+`saule-project`, `saule-version`, and the graphics engine (since split out to
+[Shine2D](https://github.com/lauriszz123/saule-shine)).
 
 ### New
 

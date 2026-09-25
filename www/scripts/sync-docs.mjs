@@ -419,9 +419,9 @@ const EXAMPLES = [
 		dir: 'toying',
 		title: 'Graphics Window',
 		blurb:
-			'Opens a window and draws a rectangle that follows the mouse, using the Love2D-style `engine` native package. Shows how Saule calls into a dynamically-loaded Rust library.',
+			'Opens a window and draws a rectangle that follows the mouse, using the Love2D-style Shine2D native package. Shows how Saule calls into a dynamically-loaded Rust library.',
 		note:
-			'This one needs the `engine` native package installed first — run the `install_mac.sh` / `install_wsl.sh` / `install_windows.ps1` script for your platform from `scripts/`.',
+			'This one needs the `shine` native package installed first. Shine2D lives in its own repository — clone [saule-shine](https://github.com/lauriszz123/saule-shine), run `cargo build --release`, and copy the built library into `~/.saule/native_packages/`.',
 		run: 'saule run',
 		files: ['src/main.sau'],
 	},
