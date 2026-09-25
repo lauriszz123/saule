@@ -96,12 +96,12 @@ fn recursive_fib_through_callk() {
         6,
         vec![
             I::asbx(Op::LOADI, 1, 2),
-            I::abc(Op::JGEI, 0, 1, 0),     // n >= 2? skip the return
+            I::abc(Op::JGEI, 0, 1, 0), // n >= 2? skip the return
             I::abc(Op::RET1, 0, 0, 0),
-            I::abc(Op::SUBII, 2, 0, 1),    // r2 = n - 1
+            I::abc(Op::SUBII, 2, 0, 1), // r2 = n - 1
             I::abc(Op::CALLK, 2, 2, 2),
             I::ax_of(Op::EXTRAARG, fib_idx),
-            I::abc(Op::SUBII, 3, 0, 2),    // r3 = n - 2
+            I::abc(Op::SUBII, 3, 0, 2), // r3 = n - 2
             I::abc(Op::CALLK, 3, 2, 2),
             I::ax_of(Op::EXTRAARG, fib_idx),
             I::abc(Op::ADDI, 2, 2, 3),
@@ -134,11 +134,16 @@ fn closure_captures_a_live_register_then_closes_over_it() {
     // register directly — the live-binding semantics of §7.1.
     let mut c = Chunk::empty("closure.sau");
 
-    let mut inner = Proto::new(Some("bump"), 0, 2, vec![
-        I::abc(Op::GETUPVAL, 0, 0, 0),
-        I::abc(Op::ADDII, 0, 0, 1),
-        I::abc(Op::RET1, 0, 0, 0),
-    ]);
+    let mut inner = Proto::new(
+        Some("bump"),
+        0,
+        2,
+        vec![
+            I::abc(Op::GETUPVAL, 0, 0, 0),
+            I::abc(Op::ADDII, 0, 0, 1),
+            I::abc(Op::RET1, 0, 0, 0),
+        ],
+    );
     inner.upvals.push(UpvalDesc {
         from_parent_stack: true,
         index: 0,
@@ -153,7 +158,7 @@ fn closure_captures_a_live_register_then_closes_over_it() {
         vec![
             I::asbx(Op::LOADI, 0, 40),
             I::abx(Op::CLOSURE, 1, 0),
-            I::asbx(Op::LOADI, 0, 41),  // written *after* capture
+            I::asbx(Op::LOADI, 0, 41), // written *after* capture
             I::abc(Op::CALL, 1, 1, 2),
             I::abc(Op::RET1, 1, 0, 0),
         ],
@@ -178,10 +183,10 @@ fn tables_and_concat() {
             I::asbx(Op::LOADI, 2, 20),
             I::abc(Op::SETLIST, 0, 2, 0),
             I::asbx(Op::LOADI, 3, 2),
-            I::abc(Op::GETARR, 4, 0, 3),   // r4 = t[2] = 20
+            I::abc(Op::GETARR, 4, 0, 3), // r4 = t[2] = 20
             I::abc(Op::TOSTR, 4, 4, 0),
             I::abx(Op::LOADK, 5, k as u16),
-            I::abc(Op::CONCAT, 4, 4, 5),   // "20" .. "!"
+            I::abc(Op::CONCAT, 4, 4, 5), // "20" .. "!"
             I::abc(Op::RET1, 4, 0, 0),
         ],
     );
@@ -223,15 +228,20 @@ fn unimplemented_opcodes_report_rather_than_panic() {
     // an unimplemented instruction must report by name, never panic and
     // never silently do nothing.
     let mut c = Chunk::empty("todo.sau");
-    let main = Proto::new(Some("main"), 0, 2, vec![
-        I::abc(Op::SUPER, 0, 1, 0),
-        I::abc(Op::RET1, 0, 0, 0),
-    ]);
+    let main = Proto::new(
+        Some("main"),
+        0,
+        2,
+        vec![I::abc(Op::SUPER, 0, 1, 0), I::abc(Op::RET1, 0, 0, 0)],
+    );
     c.main = c.add_proto(main);
 
     let err = run_chunk(Rc::new(c)).expect_err("SUPER has no body yet");
     assert!(
-        matches!(err, saule_runtime::RuntimeError::Unsupported { thing: "SUPER", .. }),
+        matches!(
+            err,
+            saule_runtime::RuntimeError::Unsupported { thing: "SUPER", .. }
+        ),
         "got {err:?}"
     );
 }

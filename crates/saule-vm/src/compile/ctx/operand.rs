@@ -10,7 +10,6 @@ use crate::compile::CompileError;
 use super::Compiler;
 
 impl Compiler<'_> {
-
     // ---- operands already in a register --------------------------------
 
     /// The register `e` **already** lives in, if reusing it as an operand

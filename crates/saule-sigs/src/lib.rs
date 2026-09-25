@@ -620,7 +620,6 @@ pub fn t_function(params: Vec<Type>, ret: Type) -> Type {
 mod tests {
     use super::*;
 
-
     #[test]
     fn instantiate_returns_binds_table_element() {
         // fn<T>(t: table<T>, f: fn(T) -> T) -> table<T>

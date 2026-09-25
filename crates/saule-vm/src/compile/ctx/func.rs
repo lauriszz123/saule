@@ -268,7 +268,6 @@ impl FuncCtx {
 }
 
 impl Compiler<'_> {
-
     /// Begin compiling a nested function body.
     pub fn push_function(&mut self, name: Option<&str>) {
         let mut inner = FuncCtx::new(name);
@@ -281,7 +280,6 @@ impl Compiler<'_> {
         let outer = std::mem::replace(&mut self.f, inner);
         self.enclosing.push(outer);
     }
-
 
     /// Finish the current function body into a `Proto`, restoring the
     /// enclosing one.
@@ -321,10 +319,12 @@ impl Compiler<'_> {
         proto.upvals = std::mem::take(&mut self.f.upvals);
         proto.entries = std::mem::take(&mut self.f.entries);
         proto.source = Some(Rc::clone(&self.chunk.source));
-        self.f = self.enclosing.pop().expect("push_function/pop_function pair");
+        self.f = self
+            .enclosing
+            .pop()
+            .expect("push_function/pop_function pair");
         proto
     }
-
 
     /// Make `name` reachable from the function being compiled as an
     /// upvalue, returning its index.
@@ -348,13 +348,7 @@ impl Compiler<'_> {
         found
     }
 
-
     pub fn func_label(&self) -> String {
-        self.f
-            .name
-            .as_deref()
-            .unwrap_or("<lambda>")
-            .to_string()
+        self.f.name.as_deref().unwrap_or("<lambda>").to_string()
     }
-
 }

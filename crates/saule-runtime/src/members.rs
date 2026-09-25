@@ -260,7 +260,10 @@ pub fn write_member(
             // class so the change is visible to every sibling — and failing
             // that, define a fresh static on the most-derived class.
             if !class.set_static_field(name, value.clone()) {
-                class.static_fields.borrow_mut().insert(name.to_string(), value);
+                class
+                    .static_fields
+                    .borrow_mut()
+                    .insert(name.to_string(), value);
             }
             Ok(())
         }

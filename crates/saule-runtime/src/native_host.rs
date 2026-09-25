@@ -151,7 +151,10 @@ pub fn refusal(v: &Value) -> Option<String> {
                 "a {} belongs to package `{}` and cannot be handed to package `{}`",
                 o.class.name, o.class.package, ctx.name
             )),
-            None => Some(format!("a {} cannot leave the interpreter here", o.class.name)),
+            None => Some(format!(
+                "a {} cannot leave the interpreter here",
+                o.class.name
+            )),
         },
         Value::EnumVariant(ev) if ev.value.get().is_some_and(|v| matches!(v, Value::Table(_))) => {
             Some(format!(
@@ -205,7 +208,9 @@ pub fn cvalue_to_value(c: &CValue) -> Value {
         tag::INT => Value::Int(c.integer),
         tag::FLOAT => Value::Float(c.float),
         // SAFETY: a STR tag implies a valid `(ptr, len)` pair from the peer.
-        tag::STR => Value::Str(SauleStr::new(unsafe { c.as_str() }.unwrap_or("").to_string())),
+        tag::STR => Value::Str(SauleStr::new(
+            unsafe { c.as_str() }.unwrap_or("").to_string(),
+        )),
         tag::TABLE | tag::FUNC => resolve(c.as_handle().unwrap_or(0)).unwrap_or(Value::Nil),
         tag::OBJECT => adopt_object(c).unwrap_or(Value::Nil),
         _ => Value::Nil,

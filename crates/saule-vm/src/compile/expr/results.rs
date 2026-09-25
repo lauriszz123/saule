@@ -7,8 +7,8 @@
 
 use std::ops::Range;
 
-use super::CompileError;
 use super::super::ctx::Compiler;
+use super::CompileError;
 use crate::op::{Instruction, Op};
 
 /// How many values a call site wants back (§6.2's `C` operand).
@@ -83,7 +83,6 @@ pub(crate) struct Results {
 }
 
 impl Compiler<'_> {
-
     pub(crate) fn move_result(
         &mut self,
         from: u16,
@@ -118,7 +117,11 @@ impl Compiler<'_> {
             // A `Tail` that reached here is one of the shapes that cannot
             // replace a frame, so it behaves as `All` and says `terminated: false`
             // — the caller then emits the `RET` it would have anyway.
-            Want::All | Want::Tail => Ok(Results { base, count: None, terminated: false }),
+            Want::All | Want::Tail => Ok(Results {
+                base,
+                count: None,
+                terminated: false,
+            }),
             Want::Fixed(n) => {
                 for i in 0..n as u16 {
                     self.move_result(base + i, dst + i, span)?;
@@ -136,7 +139,11 @@ impl Compiler<'_> {
     /// The frame was replaced; there is nothing to return and nothing to
     /// move. See [`Results::terminated`].
     pub(crate) fn tail_result(base: u16) -> Results {
-        Results { base, count: None, terminated: true }
+        Results {
+            base,
+            count: None,
+            terminated: true,
+        }
     }
 
     /// A call shape that yields exactly one value, already written to `dst`.
@@ -154,7 +161,11 @@ impl Compiler<'_> {
         let n = match want {
             Want::Fixed(n) => n,
             Want::All | Want::Tail => {
-                return Ok(Results { base: dst, count: Some(1), terminated: false });
+                return Ok(Results {
+                    base: dst,
+                    count: Some(1),
+                    terminated: false,
+                });
             }
         };
         for i in 1..n as u16 {
@@ -167,5 +178,4 @@ impl Compiler<'_> {
             terminated: false,
         })
     }
-
 }

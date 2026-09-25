@@ -45,7 +45,6 @@ impl Site<'_> {
 }
 
 impl Vm {
-
     /// [`vtable_lookup`](Self::vtable_lookup) behind a per-call-site
     /// monomorphic inline cache (§8.5).
     ///
@@ -76,8 +75,11 @@ impl Vm {
                 return Err(operand_err(&self.stack[recv], "instance", proto, here));
             };
             let inst = inst.borrow();
-            if let Some(InlineCache::Mono { class, module, target }) =
-                proto.caches.borrow().get(site)
+            if let Some(InlineCache::Mono {
+                class,
+                module,
+                target,
+            }) = proto.caches.borrow().get(site)
                 && Rc::ptr_eq(class, &inst.class)
             {
                 return Ok((*module as usize, *target));
@@ -95,7 +97,11 @@ impl Vm {
             if caches.len() < proto.code.len() {
                 caches.resize(proto.code.len(), InlineCache::Empty);
             }
-            caches[site] = InlineCache::Mono { class, module: module16, target };
+            caches[site] = InlineCache::Mono {
+                class,
+                module: module16,
+                target,
+            };
         }
         Ok((module, target))
     }
@@ -116,17 +122,18 @@ impl Vm {
         // dynamic dispatch. The borrow ends with the statement; the error
         // path re-borrows, because it is the path that is allowed to be slow.
         let key = Rc::as_ptr(&inst.borrow().class) as usize;
-        let idx = self
-            .shared.class_of
-            .get(&key)
-            .copied()
-            .ok_or_else(|| RuntimeError::TypeError {
-                message: format!(
-                    "internal: `{}` was not built from this chunk",
-                    inst.borrow().class.name
-                ),
-                span: proto.span_at(here),
-            })?;
+        let idx =
+            self.shared
+                .class_of
+                .get(&key)
+                .copied()
+                .ok_or_else(|| RuntimeError::TypeError {
+                    message: format!(
+                        "internal: `{}` was not built from this chunk",
+                        inst.borrow().class.name
+                    ),
+                    span: proto.span_at(here),
+                })?;
         // The prefix invariant at work: a slot resolved against a parent's
         // vtable indexes the subclass's override, because a subclass's
         // vtable extends its parent's rather than reordering it (§8.3).
@@ -170,8 +177,11 @@ impl Vm {
                 return Err(operand_err(&self.stack[recv], "instance", proto, here));
             };
             let inst = inst.borrow();
-            if let Some(InlineCache::Mono { class, module, target }) =
-                proto.caches.borrow().get(site)
+            if let Some(InlineCache::Mono {
+                class,
+                module,
+                target,
+            }) = proto.caches.borrow().get(site)
                 && Rc::ptr_eq(class, &inst.class)
             {
                 return Ok((*module as usize, *target));
@@ -186,7 +196,11 @@ impl Vm {
             if caches.len() < proto.code.len() {
                 caches.resize(proto.code.len(), InlineCache::Empty);
             }
-            caches[site] = InlineCache::Mono { class, module: module16, target };
+            caches[site] = InlineCache::Mono {
+                class,
+                module: module16,
+                target,
+            };
         }
         Ok((module, target))
     }
@@ -207,17 +221,18 @@ impl Vm {
             return Err(operand_err(&self.stack[recv], "instance", proto, here));
         };
         let key = Rc::as_ptr(&inst.borrow().class) as usize;
-        let idx = self
-            .shared.class_of
-            .get(&key)
-            .copied()
-            .ok_or_else(|| RuntimeError::TypeError {
-                message: format!(
-                    "internal: `{}` was not built from this chunk",
-                    inst.borrow().class.name
-                ),
-                span: proto.span_at(here),
-            })?;
+        let idx =
+            self.shared
+                .class_of
+                .get(&key)
+                .copied()
+                .ok_or_else(|| RuntimeError::TypeError {
+                    message: format!(
+                        "internal: `{}` was not built from this chunk",
+                        inst.borrow().class.name
+                    ),
+                    span: proto.span_at(here),
+                })?;
         let table = &self.shared.chunks[0].classes;
         let cp = &table[idx as usize];
         let vslot = cp
@@ -252,7 +267,6 @@ impl Vm {
                 span: proto.span_at(here),
             })
     }
-
 
     // ---- calls ---------------------------------------------------------
 
@@ -309,7 +323,11 @@ impl Vm {
         here: u32,
     ) -> Result<(), RuntimeError> {
         let n_args = self.arg_count(ins.b(), base + a + 1);
-        let n_ret = if ins.c() == 0 { ALL_RESULTS } else { ins.c() - 1 };
+        let n_ret = if ins.c() == 0 {
+            ALL_RESULTS
+        } else {
+            ins.c() - 1
+        };
         self.call_native(
             &chunk.constants[k as usize],
             base + a,
@@ -333,8 +351,12 @@ impl Vm {
         let args_from = dst + 1;
         match callee {
             Value::Native(nf) => {
-                let v = (nf.func)(&self.stack[args_from..args_from + n_args])
-                    .map_err(|m| RuntimeError::TypeError { message: m, span: site.span() })?;
+                let v = (nf.func)(&self.stack[args_from..args_from + n_args]).map_err(|m| {
+                    RuntimeError::TypeError {
+                        message: m,
+                        span: site.span(),
+                    }
+                })?;
                 // **Moved**, not cloned. `store_results` takes a slice, so
                 // the one value a `Native` returns went in by reference and
                 // came back out through `cloned()` — a refcount pair per
@@ -344,8 +366,12 @@ impl Vm {
                 Ok(())
             }
             Value::NativeClosure(nc) => {
-                let vs = (nc.func)(&self.stack[args_from..args_from + n_args])
-                    .map_err(|m| RuntimeError::TypeError { message: m, span: site.span() })?;
+                let vs = (nc.func)(&self.stack[args_from..args_from + n_args]).map_err(|m| {
+                    RuntimeError::TypeError {
+                        message: m,
+                        span: site.span(),
+                    }
+                })?;
                 self.store_results(dst, &vs, n_ret);
                 Ok(())
             }
@@ -547,7 +573,11 @@ impl Vm {
         // `dst < src` always — the callee's base is the caller's `A + 1` at
         // the lowest — so a forward move never clobbers an unread source.
         debug_assert!(dst <= src);
-        let wanted = if frame.n_ret == ALL_RESULTS { count } else { frame.n_ret as usize };
+        let wanted = if frame.n_ret == ALL_RESULTS {
+            count
+        } else {
+            frame.n_ret as usize
+        };
         self.ensure_stack(dst + wanted);
         for i in 0..wanted {
             self.stack[dst + i] = if i < count {
@@ -569,7 +599,11 @@ impl Vm {
     /// what `top` becomes and what happens when the call site wants zero
     /// results (the value is dropped) or more than one (the rest are nil).
     pub(crate) fn store_one(&mut self, dst: usize, v: Value, n_ret: u8) {
-        let wanted = if n_ret == ALL_RESULTS { 1 } else { n_ret as usize };
+        let wanted = if n_ret == ALL_RESULTS {
+            1
+        } else {
+            n_ret as usize
+        };
         self.ensure_stack(dst + wanted);
         if wanted > 0 {
             self.stack[dst] = v;
@@ -577,18 +611,26 @@ impl Vm {
                 self.stack[dst + i] = Value::Nil;
             }
         }
-        if n_ret == ALL_RESULTS && let Some(f) = self.frames.last_mut() {
+        if n_ret == ALL_RESULTS
+            && let Some(f) = self.frames.last_mut()
+        {
             f.top = (dst + 1) as u32;
         }
     }
 
     pub(crate) fn store_results(&mut self, dst: usize, vals: &[Value], n_ret: u8) {
-        let wanted = if n_ret == ALL_RESULTS { vals.len() } else { n_ret as usize };
+        let wanted = if n_ret == ALL_RESULTS {
+            vals.len()
+        } else {
+            n_ret as usize
+        };
         self.ensure_stack(dst + wanted);
         for i in 0..wanted {
             self.stack[dst + i] = vals.get(i).cloned().unwrap_or(Value::Nil);
         }
-        if n_ret == ALL_RESULTS && let Some(f) = self.frames.last_mut() {
+        if n_ret == ALL_RESULTS
+            && let Some(f) = self.frames.last_mut()
+        {
             f.top = (dst + vals.len()) as u32;
         }
     }
@@ -615,7 +657,11 @@ impl Vm {
         // SAFETY: the word exists because it was verified to exist — a
         // proto can never end on an opcode that needs an `EXTRAARG`.
         let ins = unsafe { *code.add(*pc) };
-        debug_assert_eq!(ins.op(), Some(Op::EXTRAARG), "verify_proto guarantees an EXTRAARG here");
+        debug_assert_eq!(
+            ins.op(),
+            Some(Op::EXTRAARG),
+            "verify_proto guarantees an EXTRAARG here"
+        );
         *pc += 1;
         ins.ax()
     }
@@ -663,5 +709,4 @@ impl Vm {
             ))
         }))
     }
-
 }

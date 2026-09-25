@@ -8,7 +8,6 @@
 //! and call it if present. The `implements OpAdd<…>` clause is what
 //! `saule-typeck` enforces statically; the runtime only needs the method.
 
-
 use saule_ast::ops::{binary_contract, binop_symbol, unary_contract};
 use saule_ast::{BinOp, UnaryOp};
 
@@ -98,7 +97,9 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
             }),
         },
         UnaryOp::Len => match v {
-            Value::Str(s) => Ok(Value::Int(crate::stdlib::string::char_len(s.as_str()) as i64)),
+            Value::Str(s) => Ok(Value::Int(
+                crate::stdlib::string::char_len(s.as_str()) as i64
+            )),
             Value::Table(items) => Ok(Value::Int(items.borrow().array_len() as i64)),
             other => Err(RuntimeError::TypeError {
                 message: format!(

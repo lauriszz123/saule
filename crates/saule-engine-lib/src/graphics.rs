@@ -805,7 +805,10 @@ fn stops_from(table: &STable, func: &str) -> Result<Vec<Stop>, String> {
         let mut parsed = [0.0f64; 5];
         for (slot, value) in parsed.iter_mut().zip(stop) {
             *slot = number(value).ok_or_else(|| {
-                format!("{func}: stop {} contains a value that is not a number", i + 1)
+                format!(
+                    "{func}: stop {} contains a value that is not a number",
+                    i + 1
+                )
             })?;
         }
         out.push(Stop {

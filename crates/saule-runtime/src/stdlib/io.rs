@@ -22,8 +22,8 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::rc::Rc;
 
-use crate::prelude::Prelude;
 use crate::native_packages::NativePackage;
+use crate::prelude::Prelude;
 use crate::value::{
     ClassObject, EnumObject, EnumVariantObject, FileHandle, NativeClosure, SauleStr, Value,
 };

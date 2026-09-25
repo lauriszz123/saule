@@ -8,12 +8,11 @@
 use saule_ast::{Expr, Spanned};
 use saule_semantic::Binding;
 
-use super::CompileError;
 use super::super::ctx::Compiler;
+use super::CompileError;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     pub(crate) fn ident_to(
         &mut self,
         e: &Spanned<Expr>,
@@ -26,10 +25,13 @@ impl Compiler<'_> {
         // decides which register holds it (see `ctx`'s module docs).
         match self.binding(e.id) {
             Some(Binding::Local { .. }) => {
-                let src = self.f.lookup(name).ok_or_else(|| CompileError::Unsupported {
-                    thing: "a local the compiler has not seen declared",
-                    span: span.clone(),
-                })?;
+                let src = self
+                    .f
+                    .lookup(name)
+                    .ok_or_else(|| CompileError::Unsupported {
+                        thing: "a local the compiler has not seen declared",
+                        span: span.clone(),
+                    })?;
                 let b = self.reg8(src, span)?;
                 if a != b {
                     self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
@@ -122,10 +124,12 @@ impl Compiler<'_> {
                 // The resolver proved this crosses a function boundary; the
                 // index is ours to assign, and asking for it builds the
                 // capture chain lazily.
-                let idx = self.capture_upvalue(name).ok_or_else(|| CompileError::Unsupported {
-                    thing: "a captured variable the compiler could not locate",
-                    span: span.clone(),
-                })?;
+                let idx = self
+                    .capture_upvalue(name)
+                    .ok_or_else(|| CompileError::Unsupported {
+                        thing: "a captured variable the compiler could not locate",
+                        span: span.clone(),
+                    })?;
                 let b = self.reg8(idx, span)?;
                 self.emit(Instruction::abc(Op::GETUPVAL, a, b, 0), span);
                 Ok(())
@@ -153,9 +157,7 @@ impl Compiler<'_> {
                 );
                 Ok(())
             }
-            Some(Binding::SelfRef) => {
-                Err(CompileError::unsupported("`self`", span.clone()))
-            }
+            Some(Binding::SelfRef) => Err(CompileError::unsupported("`self`", span.clone())),
             Some(Binding::WildcardImport) | None => Err(CompileError::unsupported(
                 "a name the resolver could not classify",
                 span.clone(),

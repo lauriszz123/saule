@@ -144,12 +144,10 @@ impl Compiler<'_> {
             let base = self.alloc_n(3, span)?;
             self.variant_ref_to(idx, tag as u32, base + 1, span)?;
             self.expr_to(expr, base + 2)?;
-            let setter = saule_runtime::Value::Native(std::rc::Rc::new(
-                saule_runtime::NativeFn {
-                    name: "<enum variant value>",
-                    func: set_variant_value,
-                },
-            ));
+            let setter = saule_runtime::Value::Native(std::rc::Rc::new(saule_runtime::NativeFn {
+                name: "<enum variant value>",
+                func: set_variant_value,
+            }));
             let k = self.constant(setter, span)?;
             let a = self.reg8(base, span)?;
             self.emit(Instruction::abc(Op::CALLNAT, a, 3, 1), span);
@@ -466,8 +464,7 @@ impl Compiler<'_> {
                 if self.layouts.interface_of(iname).is_some() {
                     continue;
                 }
-                let Some(saule_runtime::Value::Interface(iface)) = self.prelude_value(iname)
-                else {
+                let Some(saule_runtime::Value::Interface(iface)) = self.prelude_value(iname) else {
                     // An interface from another module, or none at all. The
                     // tree-walker errors on the second and this compiler
                     // cannot see the first, so neither is ours to compile.
@@ -485,7 +482,8 @@ impl Compiler<'_> {
                     .methods
                     .keys()
                     .filter(|m| {
-                        !cls.vindex.contains_key(m.as_str()) && !cls.smindex.contains_key(m.as_str())
+                        !cls.vindex.contains_key(m.as_str())
+                            && !cls.smindex.contains_key(m.as_str())
                     })
                     .map(|m| (iname.to_string(), m.clone()))
                     .collect();
@@ -493,7 +491,11 @@ impl Compiler<'_> {
                     // A map: sorted, so the message does not change between
                     // runs.
                     missing.sort();
-                    return Err(crate::compile::missing_methods(name, &missing, d.span.clone()));
+                    return Err(crate::compile::missing_methods(
+                        name,
+                        &missing,
+                        d.span.clone(),
+                    ));
                 }
             }
         }

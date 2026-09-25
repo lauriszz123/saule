@@ -20,7 +20,6 @@ use super::Compiler;
 pub struct Label(usize);
 
 impl Compiler<'_> {
-
     // ---- emission ------------------------------------------------------
 
     /// Emit one instruction, recording the span it came from.
@@ -38,7 +37,8 @@ impl Compiler<'_> {
         };
         // Only record a change: consecutive instructions from one expression
         // share an entry, which is most of them.
-        if self.f.lines.last().map(|l| (l.span_start, l.span_end)) != Some((entry.span_start, entry.span_end))
+        if self.f.lines.last().map(|l| (l.span_start, l.span_end))
+            != Some((entry.span_start, entry.span_end))
         {
             self.f.lines.push(entry);
         }

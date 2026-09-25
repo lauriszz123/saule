@@ -9,8 +9,8 @@ use std::ops::Range;
 use saule_ast::{Expr, Spanned};
 use saule_runtime::Value;
 
-use super::CompileError;
 use super::super::ctx::Compiler;
+use super::CompileError;
 use super::results::{Results, Want};
 use crate::op::{Instruction, Op};
 
@@ -25,7 +25,6 @@ pub(crate) enum SafeCall {
 }
 
 impl Compiler<'_> {
-
     /// `obj?.name` — a member read that yields `nil` when the receiver is
     /// nil instead of faulting on it.
     pub(crate) fn safe_member_to(
@@ -56,7 +55,10 @@ impl Compiler<'_> {
         let key = match access {
             Some(_) => None,
             None => {
-                let k = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
+                let k = self.constant(
+                    Value::Str(saule_runtime::value::SauleStr::new(name.to_string())),
+                    span,
+                )?;
                 let Ok(kc) = u8::try_from(k) else {
                     return Err(CompileError::unsupported(
                         "a dynamic member name past the 256-constant window",
@@ -116,7 +118,9 @@ impl Compiler<'_> {
         if !matches!(want, Want::Fixed(_)) {
             return self.safe_method_call_returning(obj, args, dispatch, span);
         }
-        let Want::Fixed(nret) = want else { unreachable!("checked above") };
+        let Want::Fixed(nret) = want else {
+            unreachable!("checked above")
+        };
 
         let m = self.mark();
         let base = self.alloc_n((args.len() as u16 + 1).max(want.slots()), span)?;
@@ -212,7 +216,10 @@ impl Compiler<'_> {
         // if anything more likely to be unproved than a plain one, so
         // refusing here was the odd one out — and it was `todo-app`'s first
         // refusal.
-        let k = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
+        let k = self.constant(
+            Value::Str(saule_runtime::value::SauleStr::new(name.to_string())),
+            span,
+        )?;
         Ok(SafeCall::Dynamic(k))
     }
 
@@ -232,7 +239,10 @@ impl Compiler<'_> {
     ) {
         match dispatch {
             SafeCall::Vtable(slot) if c == 2 => {
-                self.emit(Instruction::abc(Op::CALLM, recv, n_args + 1, slot as u8), span);
+                self.emit(
+                    Instruction::abc(Op::CALLM, recv, n_args + 1, slot as u8),
+                    span,
+                );
             }
             SafeCall::Vtable(slot) => {
                 self.emit(Instruction::abc(Op::CALLM_MR, recv, n_args + 1, c), span);

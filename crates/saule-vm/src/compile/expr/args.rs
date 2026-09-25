@@ -10,8 +10,8 @@ use std::ops::Range;
 use saule_ast::{Expr, Spanned};
 use saule_semantic::Binding;
 
-use super::CompileError;
 use super::super::ctx::Compiler;
+use super::CompileError;
 
 /// Where one argument slot's value comes from, after §19's reordering.
 pub(crate) enum ArgSlot {
@@ -23,7 +23,6 @@ pub(crate) enum ArgSlot {
 }
 
 impl Compiler<'_> {
-
     /// Put a call's arguments into **parameter order** (§19).
     ///
     /// The slot assignment is `saule_ast::resolve_arg_slots` — the very
@@ -91,7 +90,10 @@ impl Compiler<'_> {
         // bitmask instead: one bit per slot the caller is *not* supplying,
         // read by the gap entry `param_entries` emits. See there for why an
         // absent slot cannot simply be detected as `nil`.
-        let truncated = filled.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
+        let truncated = filled
+            .iter()
+            .rposition(Option::is_some)
+            .map_or(0, |i| i + 1);
         let needs_callee = |i: usize| {
             filled[i].is_none()
                 && params[i]
@@ -181,7 +183,10 @@ impl Compiler<'_> {
     /// can identify it — a top-level `fn`, a class's constructor, a static
     /// or instance method. `None` for a callee that is only a value, where
     /// there is no declaration to read names from.
-    pub(crate) fn callee_param_list(&self, callee: &Spanned<Expr>) -> Option<&Vec<saule_ast::Param>> {
+    pub(crate) fn callee_param_list(
+        &self,
+        callee: &Spanned<Expr>,
+    ) -> Option<&Vec<saule_ast::Param>> {
         use crate::compile::ctx::CalleeKey;
         match &callee.value {
             Expr::Ident(n) => {
@@ -198,7 +203,9 @@ impl Compiler<'_> {
                 self.callee_params.get(&CalleeKey::Function(n.clone()))
             }
             Expr::Member { obj, name } => {
-                let c = self.class_named_by(obj).or_else(|| self.class_of_expr(obj))?;
+                let c = self
+                    .class_named_by(obj)
+                    .or_else(|| self.class_of_expr(obj))?;
                 self.method_param_list(c, name)
             }
             // `obj?.m(...)`. The receiver's proved type is *nullable*, so
@@ -274,9 +281,10 @@ fn literal_default(d: &Expr, span: &Range<usize>) -> Option<Expr> {
         // it would be an arbitrary wart. Rebuilt rather than folded, so the
         // operand keeps whatever overflow behaviour the ordinary unary path
         // already has for `i64::MIN`.
-        Expr::Unary { op: saule_ast::UnaryOp::Neg, rhs }
-            if matches!(rhs.value, Expr::Int(_) | Expr::Float(_)) =>
-        {
+        Expr::Unary {
+            op: saule_ast::UnaryOp::Neg,
+            rhs,
+        } if matches!(rhs.value, Expr::Int(_) | Expr::Float(_)) => {
             let inner = match &rhs.value {
                 Expr::Int(n) => Expr::Int(*n),
                 Expr::Float(f) => Expr::Float(*f),
@@ -310,7 +318,9 @@ fn misplaced_argument(
             params[s].name
         ),
         (saule_ast::CallArg::Named { name, .. }, Some(_)) => {
-            format!("duplicate argument for parameter `{name}` — this parameter was already provided")
+            format!(
+                "duplicate argument for parameter `{name}` — this parameter was already provided"
+            )
         }
         (saule_ast::CallArg::Named { name, .. }, None) => {
             let valid: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();

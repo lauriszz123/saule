@@ -8,12 +8,11 @@ use std::ops::Range;
 
 use saule_ast::{BinOp, Expr, Spanned, UnaryOp};
 
-use super::CompileError;
 use super::super::ctx::{Compiler, Num};
+use super::CompileError;
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     pub(crate) fn unary_to(
         &mut self,
         e: &Spanned<Expr>,
@@ -177,9 +176,8 @@ impl Compiler<'_> {
         // Not for `..`: `CONCAT` is n-ary over a register *range*, so its
         // operands have to be adjacent temporaries and reusing a local's
         // register would break the range rather than shorten it.
-        let in_place = op != BinOp::Concat
-            && self.operand_is_pure(lhs)
-            && self.operand_is_pure(rhs);
+        let in_place =
+            op != BinOp::Concat && self.operand_is_pure(lhs) && self.operand_is_pure(rhs);
 
         let m = self.mark();
         let lr = self.operand_to_reg(lhs, in_place)?;

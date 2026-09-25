@@ -16,7 +16,6 @@ use crate::compile::CompileError;
 use super::Compiler;
 
 impl Compiler<'_> {
-
     /// A stdlib *value* member — `Math.pi`, `Os.sep`, `IoMode.Write`.
     ///
     /// The same compile-time resolution `CALLNAT` does for `String.len`,
@@ -81,7 +80,6 @@ impl Compiler<'_> {
         }
         None
     }
-
 
     /// Whether a `CALLK` to top-level `fn` `name` is sound *at this point*.
     ///
@@ -155,7 +153,10 @@ impl Compiler<'_> {
         span: &Range<usize>,
     ) -> Result<u32, CompileError> {
         if module > 0xFF {
-            return Err(CompileError::unsupported("a program with over 256 modules", span.clone()));
+            return Err(CompileError::unsupported(
+                "a program with over 256 modules",
+                span.clone(),
+            ));
         }
         if proto > 0xFFFF {
             return Err(CompileError::unsupported(
@@ -170,7 +171,6 @@ impl Compiler<'_> {
     pub fn own_call_target(&self, proto: u32, span: &Range<usize>) -> Result<u32, CompileError> {
         self.call_target(self.chunk.module_index, proto, span)
     }
-
 
     /// The static `field` as seen from inside class `class`, by name.
     ///
@@ -201,7 +201,6 @@ impl Compiler<'_> {
         // vector of the class that declared it.
         Some((s.class, s.slot))
     }
-
 
     /// This module's slot for `name`, by name.
     ///
@@ -247,5 +246,4 @@ impl Compiler<'_> {
             _ => None,
         }
     }
-
 }

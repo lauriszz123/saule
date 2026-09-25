@@ -19,7 +19,6 @@ use super::DEFAULT_MAX_FRAMES;
 use super::Vm;
 
 impl Vm {
-
     // ---- register file -------------------------------------------------
 
     pub(crate) fn ensure_stack(&mut self, len: usize) {
@@ -105,7 +104,6 @@ impl Vm {
         }
     }
 
-
     #[inline]
     pub(crate) fn float_at(&self, i: usize, proto: &Proto, here: u32) -> Result<f64, RuntimeError> {
         match self.reg(i) {
@@ -113,7 +111,6 @@ impl Vm {
             other => Err(operand_err(other, "float", proto, here)),
         }
     }
-
 
     #[inline]
     pub(crate) fn table_at(
@@ -127,7 +124,6 @@ impl Vm {
             other => Err(operand_err(other, "table", proto, here)),
         }
     }
-
 
     #[inline]
     pub(crate) fn int_pair(
@@ -143,7 +139,6 @@ impl Vm {
         ))
     }
 
-
     #[inline]
     pub(crate) fn float_pair(
         &self,
@@ -157,7 +152,6 @@ impl Vm {
             self.float_at(base + ins.c() as usize, proto, here)?,
         ))
     }
-
 }
 
 // ---- free helpers ------------------------------------------------------

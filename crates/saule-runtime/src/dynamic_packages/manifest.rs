@@ -118,7 +118,10 @@ pub(crate) struct Manifest {
 /// Every inconsistency is an error rather than something to paper over: a
 /// package whose description contradicts itself would otherwise type-check
 /// programs against a surface that does not exist.
-pub(crate) fn manifest_from_records(records: &[RawRecord], path: &Path) -> Result<Manifest, String> {
+pub(crate) fn manifest_from_records(
+    records: &[RawRecord],
+    path: &Path,
+) -> Result<Manifest, String> {
     let mut package: Option<(String, String, Option<String>)> = None;
     let mut classes: BTreeMap<String, ClassSpec> = BTreeMap::new();
     let mut enums: BTreeMap<String, EnumSpec> = BTreeMap::new();
@@ -126,7 +129,10 @@ pub(crate) fn manifest_from_records(records: &[RawRecord], path: &Path) -> Resul
 
     for rec in records {
         let table: toml::Table = rec.payload.parse().map_err(|e| {
-            format!("has a metadata record `{}` that is not valid TOML: {e}", rec.symbol)
+            format!(
+                "has a metadata record `{}` that is not valid TOML: {e}",
+                rec.symbol
+            )
         })?;
         let field = |key: &str| table.get(key).and_then(|v| v.as_str()).map(str::to_string);
         let required = |key: &str| {
@@ -136,8 +142,9 @@ pub(crate) fn manifest_from_records(records: &[RawRecord], path: &Path) -> Resul
         match required("kind")?.as_str() {
             "package" => {
                 if package.is_some() {
-                    return Err("declares the package twice (`saule_package!` more than once)"
-                        .to_string());
+                    return Err(
+                        "declares the package twice (`saule_package!` more than once)".to_string(),
+                    );
                 }
                 check_abi(table.get("abi_version").and_then(|v| v.as_integer()))?;
                 package = Some((required("name")?, required("version")?, field("doc")));
@@ -167,7 +174,11 @@ pub(crate) fn manifest_from_records(records: &[RawRecord], path: &Path) -> Resul
                     table
                         .get(key)
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
                         .unwrap_or_default()
                 };
                 let variants = strings("variants");
@@ -194,10 +205,9 @@ pub(crate) fn manifest_from_records(records: &[RawRecord], path: &Path) -> Resul
                     )
                 })?;
                 let sig = required("sig")?;
-                let (type_params, param_names, params, returns) =
-                    parse_sig(&sig).map_err(|e| {
-                        format!("declares `{class}.{name}` with an invalid signature: {e}")
-                    })?;
+                let (type_params, param_names, params, returns) = parse_sig(&sig).map_err(|e| {
+                    format!("declares `{class}.{name}` with an invalid signature: {e}")
+                })?;
                 methods.push((
                     class,
                     MethodSpec {
@@ -247,7 +257,10 @@ pub(crate) fn manifest_from_records(records: &[RawRecord], path: &Path) -> Resul
         spec.methods.sort_by(|a, b| a.name.cmp(&b.name));
         check_members(spec)?;
         if enums.contains_key(&spec.name) {
-            return Err(format!("declares `{}` as both a class and an enum", spec.name));
+            return Err(format!(
+                "declares `{}` as both a class and an enum",
+                spec.name
+            ));
         }
     }
 

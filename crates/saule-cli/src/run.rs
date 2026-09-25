@@ -105,8 +105,8 @@ fn run_source(
     // project entry point. When required (project mode), missing it is a
     // hard error. For single-file mode it's invoked when present as a
     // convenience.
-    let had_main = saule_vm::run_program(program)
-        .map_err(|e| Report::new(e).with_source_code(make_src()))?;
+    let had_main =
+        saule_vm::run_program(program).map_err(|e| Report::new(e).with_source_code(make_src()))?;
     if !had_main && require_main {
         eprintln!(
             "error: `{name}` must declare `class Main` with a `static fn main()` entry point"

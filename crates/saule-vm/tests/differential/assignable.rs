@@ -207,6 +207,3 @@ fn a_compound_assignment_to_a_simple_member_compiles() {
         "a compound assignment to `self.f` and `Class.f` must compile, not fall back"
     );
 }
-
-
-

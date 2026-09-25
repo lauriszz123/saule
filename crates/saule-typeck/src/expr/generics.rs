@@ -10,8 +10,8 @@ use crate::state::{pop_sig_params, push_sig_params};
 // `saule-semantic`. Re-exported under the same paths the rest of this
 // crate already spells.
 pub(crate) use saule_sigs::generics::{
-    Freshened, instantiate_param_types, is_any, is_unbound_type_param,
-    mentions_unbound_param, substitute, unfreshen_name, unify,
+    Freshened, instantiate_param_types, is_any, is_unbound_type_param, mentions_unbound_param,
+    substitute, unfreshen_name, unify,
 };
 
 use super::*;
@@ -85,4 +85,3 @@ pub(crate) fn seed_explicit_type_args(
     }
     subst
 }
-

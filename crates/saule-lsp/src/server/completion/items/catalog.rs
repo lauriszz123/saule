@@ -468,7 +468,9 @@ pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> V
         items.push(sorted(
             item(name.to_string(), CompletionItemKind::FUNCTION, Some(detail)),
             &slot.rank_ty(
-                sigs::lookup(name).and_then(|s| s.returns.first().cloned()).as_ref(),
+                sigs::lookup(name)
+                    .and_then(|s| s.returns.first().cloned())
+                    .as_ref(),
                 "4",
             ),
         ));

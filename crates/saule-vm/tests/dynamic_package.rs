@@ -34,7 +34,13 @@ fn install_fixture() {
         // still hold the workspace's.
         let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
         let status = Command::new(env!("CARGO"))
-            .args(["build", "--quiet", "-p", "saule-native-fixture", "--target-dir"])
+            .args([
+                "build",
+                "--quiet",
+                "-p",
+                "saule-native-fixture",
+                "--target-dir",
+            ])
             .arg(&target)
             .current_dir(workspace_root())
             .status()
@@ -116,8 +122,16 @@ fn compiling_records_the_load_and_running_performs_it() {
     assert_eq!(program.modules.len(), 2, "lib and main");
     let lib = &program.modules[0];
     let main = program.entry_chunk();
-    let packages: Vec<&str> = lib.dynamic_imports.iter().map(|(p, _)| p.as_str()).collect();
-    assert_eq!(packages, ["fixture"], "the importing module records the load");
+    let packages: Vec<&str> = lib
+        .dynamic_imports
+        .iter()
+        .map(|(p, _)| p.as_str())
+        .collect();
+    assert_eq!(
+        packages,
+        ["fixture"],
+        "the importing module records the load"
+    );
     assert!(
         main.dynamic_imports.is_empty(),
         "a module that imports no package records no load"

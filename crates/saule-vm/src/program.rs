@@ -83,7 +83,9 @@ pub enum Export {
     Interface(InterfaceIdx),
     /// An exported `fn` or module variable, as a slot in the program's flat
     /// slot space — already rebased, so an importer can read it directly.
-    Value { slot: u16 },
+    Value {
+        slot: u16,
+    },
     /// A native package's export that a barrel re-publishes. Native exports
     /// are Rust-built values fixed before the program runs, so it travels
     /// as the value itself and folds into a constant wherever it lands.
@@ -215,9 +217,10 @@ impl Failure {
         match self {
             Failure::Local { diag, .. } => ProgramError::Entry(diag),
             Failure::Nested(e) => ProgramError::Import(e),
-            Failure::Unreadable(message) => {
-                ProgramError::Import(RuntimeError::ImportError { message, span: 0..0 })
-            }
+            Failure::Unreadable(message) => ProgramError::Import(RuntimeError::ImportError {
+                message,
+                span: 0..0,
+            }),
         }
     }
 }
@@ -537,7 +540,9 @@ fn export_of(
         .position(|s| s.as_ref() == name)?;
     // Rebased on the way out, so an importer never has to know which module
     // a value came from.
-    u16::try_from(slot_base + slot).ok().map(|slot| Export::Value { slot })
+    u16::try_from(slot_base + slot)
+        .ok()
+        .map(|slot| Export::Value { slot })
 }
 
 /// What this module publishes to its importers.
@@ -605,17 +610,39 @@ fn collect_exports(
     for stmt in &unit.ast.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
         match &d.value {
-            Decl::Class { exported: true, name, .. }
-            | Decl::Interface { exported: true, name, .. }
-            | Decl::Enum { exported: true, name, .. }
-            | Decl::Function { exported: true, name, .. }
-            | Decl::Variable { exported: true, name, .. } => {
+            Decl::Class {
+                exported: true,
+                name,
+                ..
+            }
+            | Decl::Interface {
+                exported: true,
+                name,
+                ..
+            }
+            | Decl::Enum {
+                exported: true,
+                name,
+                ..
+            }
+            | Decl::Function {
+                exported: true,
+                name,
+                ..
+            }
+            | Decl::Variable {
+                exported: true,
+                name,
+                ..
+            } => {
                 if let Some(e) = export_of(name, slot_base, layouts, bindings) {
                     out.insert(name.clone(), e);
                 }
             }
             Decl::Import { names, .. } => {
-                let Some(this) = unit.imports.get(edge) else { continue };
+                let Some(this) = unit.imports.get(edge) else {
+                    continue;
+                };
                 edge += 1;
                 if !barrel {
                     continue;
@@ -715,13 +742,16 @@ fn load_one(
     }
     in_flight.insert(abs.clone());
 
-    let source = std::fs::read_to_string(&abs).map_err(|e| {
-        Failure::Unreadable(format!("could not read `{}`: {e}", abs.display()))
-    })?;
+    let source = std::fs::read_to_string(&abs)
+        .map_err(|e| Failure::Unreadable(format!("could not read `{}`: {e}", abs.display())))?;
     let label = saule_runtime::project::pretty_path(&abs);
     // A problem in this module, reported with its own snippet.
     let here = |e: &dyn miette::Diagnostic| Failure::Local {
-        diag: Box::new(ImportedDiagnostic::from_inner(e, label.clone(), source.clone())),
+        diag: Box::new(ImportedDiagnostic::from_inner(
+            e,
+            label.clone(),
+            source.clone(),
+        )),
         label: label.clone(),
     };
     // A problem with one of this module's own `import`s. In the entry file
@@ -738,7 +768,9 @@ fn load_one(
         }
     };
 
-    let tokens = saule_lexer::Lexer::new(&source).tokenize().map_err(|e| here(&e))?;
+    let tokens = saule_lexer::Lexer::new(&source)
+        .tokenize()
+        .map_err(|e| here(&e))?;
     let ast = saule_parser::parse(tokens).map_err(|e| here(&e))?;
 
     let dir = abs
@@ -751,7 +783,10 @@ fn load_one(
     let mut imports = Vec::new();
     for stmt in &ast.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
-        let Decl::Import { names, path: raw, .. } = &d.value else {
+        let Decl::Import {
+            names, path: raw, ..
+        } = &d.value
+        else {
             continue;
         };
         let Some(target_path) = saule_runtime::module::resolve_import_path(&dir, raw) else {
@@ -768,8 +803,7 @@ fn load_one(
                 .and_then(saule_runtime::native_packages::lookup)
         {
             Target::Native(saule_runtime::native_packages::build_exports(pkg).values)
-        } else if let Some(pkg) =
-            saule_runtime::dynamic_packages::name_from_sentinel(&target_path)
+        } else if let Some(pkg) = saule_runtime::dynamic_packages::name_from_sentinel(&target_path)
         {
             // A manifest-described shared library. The manifest is the part
             // the compiler needs — class names, method names, parameter

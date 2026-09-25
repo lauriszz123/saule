@@ -113,7 +113,10 @@ fn build_runtime(manifest: Arc<Manifest>, weak: &Weak<PackageRt>) -> PackageRt {
             statics.insert(m.name.clone(), make_native(weak, &spec.name, m));
         }
         if let Some(ctor) = spec.constructor() {
-            statics.insert(NATIVE_CONSTRUCTOR.to_string(), make_native(weak, &spec.name, ctor));
+            statics.insert(
+                NATIVE_CONSTRUCTOR.to_string(),
+                make_native(weak, &spec.name, ctor),
+            );
         }
         exports.insert(
             spec.name.clone(),
@@ -427,7 +430,9 @@ pub(crate) fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
 fn bind_library(rt: &PackageRt) -> Result<Arc<Library>, String> {
     let lib = load_library(&rt.manifest)?;
     if rt.ctx.release.get().is_none() {
-        rt.ctx.release.set(Some(release_symbol(&lib, &rt.manifest)?));
+        rt.ctx
+            .release
+            .set(Some(release_symbol(&lib, &rt.manifest)?));
     }
     Ok(lib)
 }
@@ -698,16 +703,16 @@ fn call_native(rt: &PackageRt, raw: NativeSymbolFn, args: &[Value]) -> Result<Va
     let result = (|| {
         let mut cargs = Vec::with_capacity(args.len());
         for (i, v) in args.iter().enumerate() {
-            cargs.push(native_host::value_to_cvalue(v).ok_or_else(|| {
-                match native_host::refusal(v) {
+            cargs.push(native_host::value_to_cvalue(v).ok_or_else(
+                || match native_host::refusal(v) {
                     Some(why) => format!("cannot pass argument #{}: {why}", i + 1),
                     None => format!(
                         "cannot pass argument #{} ({}) across the native boundary",
                         i + 1,
                         v.type_name()
                     ),
-                }
-            })?);
+                },
+            )?);
         }
 
         let mut out = CValue::nil();

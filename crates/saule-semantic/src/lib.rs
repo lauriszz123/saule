@@ -27,11 +27,11 @@ use std::ops::Range;
 use saule_ast::{Decl, Module, Stmt};
 
 pub mod binding;
-pub mod ops;
 pub mod builtins;
 mod control_flow;
 mod error;
 mod field_init;
+pub mod ops;
 pub mod prelude;
 pub mod registry;
 mod resolve;
@@ -40,7 +40,6 @@ mod return_infer;
 
 pub use binding::{Binding, Bindings, FunctionInfo, FunctionTable, ResolveTable, UpvalRef};
 pub use error::SemanticError;
-pub use return_infer::infer_missing_returns;
 pub use registry::{
     ClassInfo, ClassRegistry, EnumInfo, EnumRegistry, FunctionRegistry, FunctionSig,
     InterfaceMethodRegistry, InterfaceRegistry, InterfaceTypeParamRegistry, MethodSig,
@@ -51,6 +50,7 @@ pub use registry::{
     lookup_interface_method, lookup_member, lookup_method, super_init_target, with_classes,
     with_enums, with_functions, with_interfaces, with_variables,
 };
+pub use return_infer::infer_missing_returns;
 
 /// Shared span helper. Submodules emit `miette::SourceSpan`s through this
 /// so the conversion only lives in one place.

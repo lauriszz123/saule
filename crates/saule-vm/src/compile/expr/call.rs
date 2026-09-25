@@ -8,14 +8,13 @@ use saule_ast::{Expr, Spanned};
 use saule_runtime::Value;
 use saule_semantic::Binding;
 
+use super::super::ctx::Compiler;
 use super::CompileError;
 use super::args::ArgSlot;
-use super::super::ctx::Compiler;
 use super::results::{Results, Want};
 use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
-
     /// A call.
     ///
     /// Two forms are emitted today, both of which skip work the tree-walker
@@ -36,7 +35,8 @@ impl Compiler<'_> {
         args: &[saule_ast::CallArg],
         dst: u16,
     ) -> Result<(), CompileError> {
-        self.call_to_want(e, callee, args, dst, Want::Fixed(1)).map(|_| ())
+        self.call_to_want(e, callee, args, dst, Want::Fixed(1))
+            .map(|_| ())
     }
 
     /// [`call_to`](Self::call_to), asking for a specific number of results.
@@ -71,7 +71,9 @@ impl Compiler<'_> {
         // skips over; `positional` borrows from it, so it has to outlive the
         // borrow.
         let gap_fill;
-        let has_named = args.iter().any(|a| matches!(a, saule_ast::CallArg::Named { .. }));
+        let has_named = args
+            .iter()
+            .any(|a| matches!(a, saule_ast::CallArg::Named { .. }));
         let declared = if has_named || args.last().is_some_and(|a| a.is_trailing_block()) {
             let params = self.callee_param_list(callee).cloned();
             if params.is_none() {
@@ -151,8 +153,7 @@ impl Compiler<'_> {
                 // `CALLNAT` reads its arguments from `A+1..`, mirroring
                 // `CALL`, so the window has room for the callee slot even
                 // though the callee itself is a constant.
-                let base =
-                    self.alloc_n((positional.len() as u16 + 1).max(want.slots()), span)?;
+                let base = self.alloc_n((positional.len() as u16 + 1).max(want.slots()), span)?;
                 for (i, arg) in positional.iter().enumerate() {
                     self.expr_to(arg, base + 1 + i as u16)?;
                 }
@@ -253,8 +254,7 @@ impl Compiler<'_> {
             // typed ones above are specialisations of.
             _ => {
                 let m = self.mark();
-                let base =
-                    self.alloc_n((positional.len() as u16 + 1).max(want.slots()), span)?;
+                let base = self.alloc_n((positional.len() as u16 + 1).max(want.slots()), span)?;
                 self.expr_to(callee, base)?;
                 for (i, arg) in positional.iter().enumerate() {
                     self.expr_to(arg, base + 1 + i as u16)?;
@@ -315,7 +315,10 @@ impl Compiler<'_> {
             return Ok(());
         };
         let last = args.len() - 1;
-        let slots: Vec<_> = ps.iter().map(|t| saule_ast::ParamSlot::new("", t)).collect();
+        let slots: Vec<_> = ps
+            .iter()
+            .map(|t| saule_ast::ParamSlot::new("", t))
+            .collect();
         match saule_ast::trailing_block_slot(&slots, |i| i < last) {
             Some(s) if s != last => Err(CompileError::unsupported(
                 "a trailing block that skips a parameter of a function value",
@@ -365,7 +368,10 @@ impl Compiler<'_> {
         // `CALLK` is both correct and cheaper.
         if name == "super" && matches!(obj.value, Expr::Self_) {
             let Some(class) = self.f.current_class else {
-                return Err(CompileError::unsupported("`self.super` outside a method", span.clone()));
+                return Err(CompileError::unsupported(
+                    "`self.super` outside a method",
+                    span.clone(),
+                ));
             };
             let parent = self.chunk.classes[class as usize].parent.and_then(|p| {
                 let pc = &self.chunk.classes[p as usize];
@@ -392,7 +398,10 @@ impl Compiler<'_> {
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
             }
-            self.emit(Instruction::abc(Op::CALLK, a, args.len() as u8 + 2, 1), span);
+            self.emit(
+                Instruction::abc(Op::CALLK, a, args.len() as u8 + 2, 1),
+                span,
+            );
             let t = self.call_target(pmod, target, span)?;
             self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
             self.free_to(m);
@@ -520,7 +529,10 @@ impl Compiler<'_> {
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
             }
-            let key = self.constant(Value::Str(saule_runtime::value::SauleStr::new(name.to_string())), span)?;
+            let key = self.constant(
+                Value::Str(saule_runtime::value::SauleStr::new(name.to_string())),
+                span,
+            )?;
             let a = self.reg8(base, span)?;
             self.emit(
                 Instruction::abc(Op::CALLMX, a, args.len() as u8 + 1, want.c()),

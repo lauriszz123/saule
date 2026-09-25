@@ -16,8 +16,7 @@ fn run_capturing(src: &str) -> (String, Vec<(Stream, String)>) {
     let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
     let mut module = saule_parser::parse(tokens).expect("parse");
 
-    let (sink, result) =
-        output::capture(|| saule_vm::check_and_run(&mut module, "test.sau", src));
+    let (sink, result) = output::capture(|| saule_vm::check_and_run(&mut module, "test.sau", src));
     result.expect("program should run cleanly");
 
     let chunks = sink

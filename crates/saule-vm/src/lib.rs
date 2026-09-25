@@ -113,7 +113,11 @@ impl From<EngineError> for PipelineError {
 /// The in-memory counterpart of what `saule run` does to a file, and what
 /// the test suites and the playground use. A module with no file has no
 /// directory to resolve an `import` against, so one is a compile error.
-pub fn check_and_run(module: &mut Module, name: &str, source: &str) -> Result<Value, PipelineError> {
+pub fn check_and_run(
+    module: &mut Module,
+    name: &str,
+    source: &str,
+) -> Result<Value, PipelineError> {
     saule_runtime::init();
     saule_runtime::analyze_and_check(module, saule_semantic::ModuleSeed::default())?;
     Ok(run(module, name, source)?)
@@ -172,8 +176,16 @@ pub fn run_program(program: program::Program) -> Result<bool, RuntimeError> {
         .iter()
         .map(|c| c.dynamic_imports.clone())
         .collect();
-    let sources: Vec<_> = program.modules.iter().map(|c| Rc::clone(&c.source)).collect();
-    debug_assert_eq!(entry + 1, program.modules.len(), "post-order puts the entry last");
+    let sources: Vec<_> = program
+        .modules
+        .iter()
+        .map(|c| Rc::clone(&c.source))
+        .collect();
+    debug_assert_eq!(
+        entry + 1,
+        program.modules.len(),
+        "post-order puts the entry last"
+    );
     let mut vm = Vm::for_chunks(program.modules);
     for (i, imports) in dynamic.iter().enumerate().take(entry + 1) {
         // A failure while an imported module's top level runs is reported
@@ -184,8 +196,7 @@ pub fn run_program(program: program::Program) -> Result<bool, RuntimeError> {
             Some(span) => imported_failure(e, &sources[i], span.clone()),
         };
         for (package, span) in imports {
-            saule_runtime::dynamic_packages::preload(package, span.clone())
-                .map_err(at_import)?;
+            saule_runtime::dynamic_packages::preload(package, span.clone()).map_err(at_import)?;
         }
         vm.run_module(i).map_err(at_import)?;
     }

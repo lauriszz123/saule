@@ -51,7 +51,8 @@ impl Renderer {
         if i != 0 {
             return Err(format!("no font with handle {i}"));
         }
-        self.fonts[0].value = Some(font::load_default(font::DEFAULT_SIZE).ok_or_else(no_system_font)?);
+        self.fonts[0].value =
+            Some(font::load_default(font::DEFAULT_SIZE).ok_or_else(no_system_font)?);
         Ok(())
     }
 
@@ -202,8 +203,7 @@ pub(crate) fn draw_line(
         if glyph.mask.w == 0 || glyph.mask.h == 0 {
             continue; // whitespace carries advance but no pixels
         }
-        let placement =
-            Transform::translation(x + pen + spread + glyph.left, baseline + glyph.top);
+        let placement = Transform::translation(x + pen + spread + glyph.left, baseline + glyph.top);
         raster::blit_mask(surf, &glyph.mask, &xform.then(&placement), paint);
     }
 }
