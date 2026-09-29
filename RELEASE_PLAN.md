@@ -24,7 +24,7 @@ manager. Design detail that would clutter a step lives in the appendices.
 | Area | State today |
 |---|---|
 | Versioning | **Done.** `26.<build>`, generated on release, readable from the CLI, the LSP, and the language. See step 0. |
-| CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. Runs on `main` only; `develop` runs nothing. There are no GitHub Actions workflows and no GitLab pipeline; GitHub keeps the code, the Releases, and Pages. |
+| CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. Runs on `main` only; `develop` runs nothing. There are no GitHub Actions workflows; GitHub keeps the code, the Releases, and Pages. |
 | Releases | **The pipeline exists and publishes to GitHub Releases on every push to `main`.** Not yet run for real: no published artifacts. |
 | Toolchain install | **Written and live**: [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site, and the install page is rewritten around them. They have nothing to download until the first release exists. |
 | Package manager | **Does not exist.** `saule` has three subcommands: `run`, `fmt`, `init`. |
