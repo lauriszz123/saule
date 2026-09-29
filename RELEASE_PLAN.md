@@ -113,7 +113,7 @@ components; its copy is internal metadata that nothing user-facing prints.
 | `saule init` scaffold | short | never writes a `-dev` version into a new project |
 | Saule code | both | `Saule.version`, `Saule.full`, `Saule.year`, `Saule.build`, `Saule.isDev`, `Saule.commit`, `Saule.atLeast(v)` |
 | Playground (wasm) | long | `version()` export |
-| Editor plugin manifests | `26.7` / `26.7.0` | written by `scripts/stamp-version.sh` |
+| Editor plugin manifests | `26.7` / `26.7.0` | written by each plugin repository's own version stamp |
 
 `Saule.*` lives in
 [stdlib/version.rs](crates/saule-runtime/src/stdlib/version.rs), documented
@@ -154,9 +154,18 @@ re-cutting a release whose build failed for an infrastructure reason.
 
 Work happens on `develop`, where no pipeline runs at all.
 
-Before publishing the editor plugins, run `scripts/stamp-version.sh <version>`
-and commit — their manifests are read by marketplaces long before any Rust runs.
-`scripts/stamp-version.sh <version> --check` verifies without writing.
+The editor plugins release on their own cadence, from their own repositories.
+Their manifests are read by marketplaces long before any Rust runs, so each
+carries a stamp script that writes this release's number into them — run it
+and commit there before packaging:
+
+| Repository | Command |
+|---|---|
+| [saule-vscode](https://github.com/lauriszz123/saule-vscode) | `npm run stamp -- <version>` |
+| [saule-intellij](https://github.com/lauriszz123/saule-intellij) | `scripts/stamp-version.sh <version>` |
+| [saule-nvim](https://github.com/lauriszz123/saule-nvim) | — no manifest to stamp |
+
+Both take `--check`, which verifies without writing.
 
 ---
 
@@ -164,14 +173,15 @@ and commit — their manifests are read by marketplaces long before any Rust run
 
 **MIT**, copyright "Saule contributors". This was the blocker for everything
 else: without an explicit license the code was "all rights reserved" by
-default, which flatly contradicted the MIT claim already published in
-[vscode/package.json](editors/vscode/package.json). A release archive with no
-license is also not redistributable — the release build warns when it packages
-without one.
+default, which flatly contradicted the MIT claim already published in the VS
+Code extension's `package.json`. A release archive with no license is also not
+redistributable — the release build warns when it packages without one.
 
 - [LICENSE](LICENSE) at the repo root.
 - `license = "MIT"` in `[workspace.package]`, `license.workspace = true` in all
   16 crates.
+- A copy of the same LICENSE in each plugin repository, which no longer
+  inherits this one.
 
 **Still open:** confirm the GitHub repo is public before anything points users
 at it. Not verifiable from this machine — `gh` is not installed.
@@ -321,17 +331,23 @@ to a working `saule --version` with one command.
 
 ## Step 4 — Editor plugins
 
-All three plugins already fall back to `saule-lsp` on `$PATH`
-([SauleToolchain.kt:74](editors/intellij/src/main/kotlin/com/saule/lang/SauleToolchain.kt),
-[extension.ts:178](editors/vscode/src/extension.ts)), so **once step 3 puts the
-server on PATH, all three work as-is.** The gap is publication, not function.
+All three plugins now live in their own repositories —
+[saule-vscode](https://github.com/lauriszz123/saule-vscode),
+[saule-nvim](https://github.com/lauriszz123/saule-nvim),
+[saule-intellij](https://github.com/lauriszz123/saule-intellij) — split out of
+`editors/` with `git subtree split`, so each is a root a marketplace or plugin
+manager can install from and each releases on its own cadence. All three fall
+back to `saule-lsp` on `$PATH` (`SauleToolchain.kt`, `extension.ts`,
+`toolchain.lua`), so **once step 3 puts the server on PATH, all three work
+as-is.** The gap is publication, not function.
 
-**Neovim** — one code change needed first.
-[lsp.lua:27](editors/nvim/lua/saule/lsp.lua) resolves the server by walking up
-from its own file to a repo checkout. Change the default to plain `saule-lsp`,
-keeping repo detection as an opt-in for contributors. Then it installs cleanly
-via lazy.nvim or packer pointing at the repo. Longer term, upstream the
-filetype and LSP config into `nvim-lspconfig`.
+**Neovim** — done. `saule.lsp.setup()` used to resolve the server by walking
+up from its own file to a repo checkout, which only worked while the plugin
+lived inside one; it now starts from the buffer's own directory, the same
+place `lsp/saule.lua` and the other two editors start, and `setup({ repo })`
+is the opt-in for anything else. It installs via lazy.nvim or packer pointing
+at `lauriszz123/saule-nvim`. Longer term, upstream the filetype and LSP config
+into `nvim-lspconfig`.
 
 **VS Code** — needs a real Marketplace publisher ID (`package.json` says
 `"publisher": "saule"`, which must be claimed or changed), a PAT in CI, and
@@ -339,12 +355,12 @@ filetype and LSP config into `nvim-lspconfig`.
 
 **IntelliJ** — needs a JetBrains Marketplace account and token plus the
 `publishPlugin` Gradle task. One open question: the platform wants
-`sourceCompatibility=21` while
-[gradle.properties](editors/intellij/gradle.properties) pins `javaVersion=17`.
+`sourceCompatibility=21` while `gradle.properties` pins `javaVersion=17`.
 The LSP4IJ runtime dependency is already declared correctly, and the
 previously-noted non-executable `gradlew` is already fixed (mode `100755`).
 
-Run `scripts/stamp-version.sh <version>` before packaging either plugin.
+Stamp the release version into each plugin's manifests before packaging it —
+see *Cutting a release* above for the per-repository command.
 
 **Done when** all three install from their normal channel and give diagnostics
 in a project outside this repo.
