@@ -14,7 +14,7 @@ Saule is a statically typed, class-oriented language inspired by Lua's simplicit
 
   The website is unaffected: `npm run sync-docs` rewrites these fences back to
   `saule`, so the docs pages are highlighted by the real grammar in
-  `editors/vscode/syntaxes/saule.tmLanguage.json`.
+  `grammar/saule.tmLanguage.json`.
 -->
 
 

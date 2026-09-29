@@ -1161,9 +1161,9 @@ test:
 | Move out | Why | When |
 |---|---|---|
 | ~~**`saule-engine-lib` → its own repo**~~ | **Done**, as [Shine2D](https://github.com/lauriszz123/saule-shine). It takes `saule-sdk` from git rather than a path, which **dogfoods the whole native-package path**: it is built and installed from outside the language exactly as anyone else's package would be. | Done |
-| **`editors/vscode` → own repo** | Marketplace publishing, npm toolchain, independent cadence, its own CI. | With RELEASE_PLAN step 4 |
-| **`editors/intellij` → own repo** | Gradle/JVM build; nothing shared with the Rust workspace. | Same |
-| **`editors/nvim` → own repo** | Plugin managers install from a repo root. | Same |
+| ~~**`editors/vscode` → own repo**~~ | **Done**, as [saule-vscode](https://github.com/lauriszz123/saule-vscode). Marketplace publishing, npm toolchain, independent cadence, its own CI. It carries its own version stamp, and a copy of the TextMate grammar synced from `grammar/`. | Done |
+| ~~**`editors/intellij` → own repo**~~ | **Done**, as [saule-intellij](https://github.com/lauriszz123/saule-intellij). Gradle/JVM build; nothing shared with the Rust workspace, so the build needed no change at all. | Done |
+| ~~**`editors/nvim` → own repo**~~ | **Done**, as [saule-nvim](https://github.com/lauriszz123/saule-nvim). Plugin managers install from a repo root. | Done |
 | **`www` → own repo (or keep, deliberately)** | Node toolchain, `node_modules` and `dist` inside the language repo, and a CI job exists to serve it. Counter-argument: the `check-www` job verifies documented samples compile against the compiler *from that commit*, which is a genuinely valuable coupling and would become a cross-repo dance. **Keep it, but move the sample-verification corpus into `tests/` so the guarantee survives a later split.** | Deliberate decision |
 | **A minimal `saule-package-template` repo** | The example an author actually copies. 200 lines, one class, CI producing all six binaries + manifest as release assets. | With the SDK publish |
 | **`awesome-saule`** | RELEASE_PLAN's answer to discovery without an index. | With the package manager |

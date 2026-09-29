@@ -313,7 +313,9 @@ re-linting. Point it at a scratch `--target-dir` when you need a real answer.
   publish it. Automating that needs a git-push credential in CI, which is a
   bigger blast radius than the release token, and the installer URL only
   changes when the scripts do.
-- **No editor plugin publishing.** VS Code, IntelliJ and Neovim are
-  RELEASE_PLAN step 4, and all three need marketplace accounts and tokens
-  before CI can do anything for them. Run `scripts/stamp-version.sh <version>`
-  and commit before packaging either of the first two.
+- **No editor plugin publishing.** VS Code, IntelliJ and Neovim now live in
+  their own repositories and are RELEASE_PLAN step 4; all three need
+  marketplace accounts and tokens before any CI can do anything for them.
+  Stamp the release version into a plugin's manifests, in its own repository,
+  before packaging it — `npm run stamp -- <version>` for saule-vscode,
+  `scripts/stamp-version.sh <version>` for saule-intellij.

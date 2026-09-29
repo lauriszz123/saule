@@ -125,8 +125,10 @@ Applications launched from the Dock or Finder do not read `~/.zshrc` or
 
 ## Editor support
 
-Plugins for VS Code, Neovim, and IntelliJ live in
-[`editors/`](https://github.com/lauriszz123/saule/tree/main/editors). See
+Each editor plugin has its own repository —
+[saule-vscode](https://github.com/lauriszz123/saule-vscode),
+[saule-nvim](https://github.com/lauriszz123/saule-nvim) and
+[saule-intellij](https://github.com/lauriszz123/saule-intellij). See
 [Editor Support](/saule/reference/editors/) for per-editor setup.
 
 ## Next steps

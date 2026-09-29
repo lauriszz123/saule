@@ -19,7 +19,7 @@ cannot drift from the thing it documents.
 | Standard Library | `DOCS.md` | `npm run sync-docs` |
 | Quick Reference | `README.md` § Quick Reference | `npm run sync-docs` |
 | Examples | `examples/*/` — real source, read verbatim | `npm run sync-docs` |
-| Code highlighting | `editors/vscode/syntaxes/saule.tmLanguage.json` | read at build time |
+| Code highlighting | `grammar/saule.tmLanguage.json` | read at build time |
 | CLI reference, guides, landing page | hand-written in `src/content/docs/` | — |
 
 **Never hand-edit** anything under `src/content/docs/{language,stdlib,examples}`
@@ -27,10 +27,12 @@ or `src/content/docs/reference/quick-reference.md` — those directories are wip
 and regenerated. Edit `README.md`, `DOCS.md`, or the example project instead,
 then re-run the sync.
 
-Highlighting deserves a note: Shiki reads the VS Code extension's TextMate
-grammar directly (see `src/lib/saule-grammar.mjs`), so the website and the
-editor can never disagree about what a keyword is. Adding a keyword to
-`saule.tmLanguage.json` updates both.
+Highlighting deserves a note: Shiki reads the repository's TextMate grammar
+directly (see `src/lib/saule-grammar.mjs`), so the website can never disagree
+with the editors about what a keyword is. `grammar/saule.tmLanguage.json` is
+the one copy that is written; the VS Code extension ships a copy of it, pulled
+by `npm run sync:grammar` in the
+[saule-vscode](https://github.com/lauriszz123/saule-vscode) repository.
 
 ## Scripts
 
