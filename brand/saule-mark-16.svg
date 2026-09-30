@@ -7,19 +7,13 @@
     two bands. The crescent is deliberately fatter than scale would suggest —
     at true proportion its lit edge is under a pixel and disappears.
   -->
-  <defs>
-    <mask id="crescent16">
-      <circle cx="12.1" cy="3.6" r="3.4" fill="#fff"/>
-      <circle cx="13.9" cy="1.9" r="3.0" fill="#000"/>
-    </mask>
-  </defs>
-
   <path d="M1.6 10.4a6.4 6.4 0 0 1 12.8 0Z" fill="#F7A224"/>
   <ellipse cx="8" cy="11.1" rx="7.1" ry="0.85" fill="#F7A224"/>
   <ellipse cx="8" cy="13.2" rx="4.2" ry="0.8" fill="#F7A224" opacity="0.72"/>
   <ellipse cx="8" cy="15" rx="2" ry="0.6" fill="#F7A224" opacity="0.5"/>
 
-  <g mask="url(#crescent16)">
-    <circle cx="12.1" cy="3.6" r="3.4" fill="#FFE3A0"/>
-  </g>
+  <!-- Two arcs, not a mask: no ids at all in this file, so nothing can collide
+       when it is inlined next to the other two. -->
+  <path d="M11.3764 0.2779A3.4 3.4 0 1 0 15.3754 4.5121A3 3 0 0 1 11.3764 0.2779Z"
+        fill="#FFE3A0"/>
 </svg>
