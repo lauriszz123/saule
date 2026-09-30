@@ -1,14 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="Saule">
-  <!-- A sun: solid core, eight rays. "Saulė" is Lithuanian for sun. -->
-  <circle cx="16" cy="16" r="6.5" fill="#f0b429"/>
-  <g stroke="#f0b429" stroke-width="2.4" stroke-linecap="round">
-    <path d="M16 2.5v4"/>
-    <path d="M16 25.5v4"/>
-    <path d="M2.5 16h4"/>
-    <path d="M25.5 16h4"/>
-    <path d="M6.4 6.4l2.9 2.9"/>
-    <path d="M22.7 22.7l2.9 2.9"/>
-    <path d="M25.6 6.4l-2.9 2.9"/>
-    <path d="M9.3 22.7l-2.9 2.9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" role="img" aria-label="Saule">
+  <title>Saule</title>
+  <!--
+    The 16px form, for an editor's file-type gutter. Everything that cannot
+    survive at this size is gone: the orbit reads as a stray scratch and the
+    gradients band, so the ring is dropped, the fills are flat, and the sea is
+    two bands. The crescent is deliberately fatter than scale would suggest —
+    at true proportion its lit edge is under a pixel and disappears.
+  -->
+  <defs>
+    <mask id="crescent16">
+      <circle cx="12.1" cy="3.6" r="3.4" fill="#fff"/>
+      <circle cx="13.9" cy="1.9" r="3.0" fill="#000"/>
+    </mask>
+  </defs>
+
+  <path d="M1.6 10.4a6.4 6.4 0 0 1 12.8 0Z" fill="#F7A224"/>
+  <ellipse cx="8" cy="11.1" rx="7.1" ry="0.85" fill="#F7A224"/>
+  <ellipse cx="8" cy="13.2" rx="4.2" ry="0.8" fill="#F7A224" opacity="0.72"/>
+  <ellipse cx="8" cy="15" rx="2" ry="0.6" fill="#F7A224" opacity="0.5"/>
+
+  <g mask="url(#crescent16)">
+    <circle cx="12.1" cy="3.6" r="3.4" fill="#FFE3A0"/>
   </g>
 </svg>
