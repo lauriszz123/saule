@@ -1,3 +1,5 @@
+<img src="brand/png/saule-logo-512.png" alt="Saule" width="128" align="right">
+
 # Saule Programming Language
 
 Saule is a statically typed, class-oriented language inspired by Lua's simplicity and runtime model, designed to be minimal to write but powerful to use. It is structured around files, classes, interfaces, and scripts.
