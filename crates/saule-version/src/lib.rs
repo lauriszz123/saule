@@ -32,6 +32,8 @@
 //!   Never parse it; parse [`VERSION`].
 //! * [`IS_DEV`] — whether this build came from a tagged, clean tree.
 
+use std::cmp::Ordering;
+
 /// `"26.7"` — year and build number, nothing else. Stable enough to parse.
 pub const VERSION: &str = env!("SAULE_VERSION_STR");
 
@@ -85,30 +87,80 @@ pub fn at_least(required: &str) -> bool {
 /// [`at_least`] with an explicit left-hand side. Separate so it can be
 /// tested against versions this build doesn't happen to have.
 pub fn version_at_least(current: &str, required: &str) -> bool {
-    let components = |v: &str| -> Vec<u32> {
-        v.trim()
-            .strip_prefix('v')
-            .unwrap_or(v.trim())
-            .split('.')
-            .map(|part| {
-                part.chars()
-                    .take_while(char::is_ascii_digit)
-                    .collect::<String>()
-                    .parse()
-                    .unwrap_or(0)
-            })
-            .collect()
-    };
-    let have = components(current);
-    let want = components(required);
-    for i in 0..have.len().max(want.len()) {
-        let a = have.get(i).copied().unwrap_or(0);
-        let b = want.get(i).copied().unwrap_or(0);
-        if a != b {
-            return a > b;
+    compare(current, required) != Ordering::Less
+}
+
+/// Order two dotted version strings.
+///
+/// The one comparator for every version-shaped string the toolchain reads:
+/// `min_saule_version` and `Saule.atLeast` ask it a `>=` question through
+/// [`version_at_least`], and `saule install` / `saule update` sort a
+/// repository's git tags with it to decide which one is newest. Keeping the
+/// two uses on one implementation is the point — a package manager that
+/// disagreed with the language about whether `v26.10` beats `v26.9` would be
+/// a long afternoon.
+///
+/// Rules, in order:
+///
+/// * A leading `v` is ignored, so `v1.2.0` and `1.2.0` are the same version.
+/// * Dotted components compare numerically, left to right, and a missing
+///   component is `0` — so `1.2` equals `1.2.0`, and `1.10` beats `1.9`
+///   (which a string comparison gets backwards).
+/// * Non-numeric trailing text on a component is ignored (`26.8-dev` compares
+///   as `26.8`), which is what lets a development build satisfy a
+///   `min_saule_version` naming the release it is heading toward.
+///
+/// So this is a comparison of numbers and nothing else, and in particular
+/// `1.0.0-rc1` and `1.0.0` compare **equal**. That is deliberate, and it is
+/// why there is a separate [`is_prerelease`]: ranking a pre-release below its
+/// release here would read naturally but would also say `26.8-dev` is short
+/// of `26.8`, which would stop every development build from satisfying its own
+/// `min_saule_version`. Picking a release over a candidate is a policy
+/// question, and `saule install` answers it by filtering with
+/// [`is_prerelease`] rather than by sorting.
+pub fn compare(a: &str, b: &str) -> Ordering {
+    let left = components(a);
+    let right = components(b);
+    for i in 0..left.len().max(right.len()) {
+        let x = left.get(i).copied().unwrap_or(0);
+        let y = right.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x.cmp(&y);
         }
     }
-    true
+    Ordering::Equal
+}
+
+/// The dotted numeric components of a version, `v` stripped and non-digit
+/// trailing text on each component dropped.
+fn components(v: &str) -> Vec<u32> {
+    let v = v.trim();
+    v.strip_prefix('v')
+        .unwrap_or(v)
+        .split('.')
+        .map(|part| {
+            part.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+/// Whether a version carries a pre-release suffix — `-rc1`, `-beta.2`.
+///
+/// Only a `-` counts. A `+build` suffix is metadata that semver explicitly
+/// excludes from precedence, and a bare trailing letter (`1.2.0a`) is too
+/// rare a spelling to guess at.
+///
+/// Public because [`compare`] is the wrong place to act on it: ordering and
+/// *policy* are different questions. `v3.0.0-rc1` really is a newer version
+/// than `v2.0.0`, so `compare` says so — while `saule install` consults this
+/// to pass over a release candidate that nobody asked for.
+pub fn is_prerelease(v: &str) -> bool {
+    let v = v.trim();
+    v.strip_prefix('v').unwrap_or(v).contains('-')
 }
 
 /// Digits-only `const` parse, so the numeric constants above stay `const`.
@@ -136,6 +188,76 @@ mod tests {
 
     // The `YEAR >= 26` and "build 0 is never a release" invariants are
     // asserted at compile time above, so they have no test here.
+
+    /// The ordering `saule install` sorts git tags with. The numeric case is
+    /// the one a string sort gets wrong, and getting it wrong means a package
+    /// silently stops updating after its ninth release.
+    #[test]
+    fn compare_orders_versions_numerically() {
+        for (older, newer) in [
+            ("1.9.0", "1.10.0"),
+            ("v1.9.0", "v1.10.0"),
+            ("26.9", "26.412"),
+            ("26.412", "27.1"),
+            ("1.2.3", "1.3.0"),
+            ("0.1.0", "1.0.0"),
+        ] {
+            assert_eq!(compare(older, newer), Ordering::Less, "{older} < {newer}");
+            assert_eq!(
+                compare(newer, older),
+                Ordering::Greater,
+                "{newer} > {older}"
+            );
+        }
+    }
+
+    /// A leading `v` is decoration, and a missing component is zero — so the
+    /// three spellings of one version are one version.
+    #[test]
+    fn compare_ignores_a_leading_v_and_missing_components() {
+        for (a, b) in [("1.2.0", "v1.2.0"), ("1.2", "1.2.0"), ("v26", "26.0.0")] {
+            assert_eq!(compare(a, b), Ordering::Equal, "{a} == {b}");
+        }
+    }
+
+    /// `compare` counts numbers and nothing else, so a pre-release compares
+    /// *equal* to its release. The pair below is the reason: ranking it lower
+    /// would also rank `26.8-dev` below `26.8`, and every development build
+    /// would stop satisfying its own `min_saule_version`.
+    #[test]
+    fn compare_is_numeric_so_a_prerelease_equals_its_release() {
+        assert_eq!(compare("v1.0.0-rc1", "v1.0.0"), Ordering::Equal);
+        assert_eq!(compare("26.8-dev", "26.8"), Ordering::Equal);
+        // Across versions the numbers decide, which is why passing over a
+        // candidate is `is_prerelease`'s job and not this one's.
+        assert_eq!(compare("v3.0.0-rc1", "v2.0.0"), Ordering::Greater);
+    }
+
+    #[test]
+    fn a_prerelease_is_recognised_by_its_suffix() {
+        for v in ["v1.0.0-rc1", "1.0.0-beta.2", "v2.0.0-alpha"] {
+            assert!(is_prerelease(v), "{v}");
+        }
+        // `+build` is metadata that semver excludes from precedence.
+        for v in ["v1.0.0", "1.0.0", "26.7", "v1.0.0+build7"] {
+            assert!(!is_prerelease(v), "{v}");
+        }
+    }
+
+    /// `version_at_least` is the `>=` question `min_saule_version` and
+    /// `Saule.atLeast` ask, and it now asks it *through* `compare` — so this
+    /// pins the two together.
+    #[test]
+    fn at_least_is_compare_with_equality_allowed() {
+        assert!(version_at_least("26.7", "26.7"));
+        assert!(version_at_least("26.7", "26"));
+        assert!(version_at_least("26.7", "26.0"));
+        assert!(version_at_least("26.10", "26.9"));
+        assert!(!version_at_least("26.7", "26.8"));
+        assert!(!version_at_least("26.7", "27.1"));
+        // A development build satisfies the release it is heading toward.
+        assert!(version_at_least("26.8-dev", "26.8"));
+    }
 
     #[test]
     fn the_baked_in_version_is_year_dot_build() {

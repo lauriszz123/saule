@@ -2360,7 +2360,7 @@ name: "myproject"
 version: "1.0.0"
 entry: "main.sau"
 src_dirs: ["src"]
-dependencies: ["../shared-lib", "~/code/json"]
+dependencies: ["../shared-lib", "~/code/json", "lauriszz123@uikit:v1.2.0"]
 min_saule_version: "26.1"
 indent_style: "space"
 indent_width: 2
@@ -2375,12 +2375,51 @@ Recognised keys:
 | `entry` | Path to the entry `.sau` file, relative to the project root (apps only) |
 | `kind` | `"app"` (default) or `"library"` — a library has no entry point and is imported rather than run |
 | `src_dirs` | List of directories to search when resolving imports |
-| `dependencies` | List of paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory |
+| `dependencies` | Packages (`owner@repo`, pinned with `:version`) and paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory. Managed with `saule install` / `update` / `remove` — see [Packages](#packages) |
 | `min_saule_version` | Refuses to run if the toolchain reports a lower version |
 | `indent_style` | Formatting: `"tab"` or `"space"` (default `"space"`) |
 | `indent_width` | Formatting: columns per indent level, 1–16 (default `2`) |
 
 Unknown keys are ignored.
+
+#### Packages
+
+A `dependencies:` entry is one of two things, told apart by the `@`:
+
+```
+dependencies: ["lauriszz123@uikit:v1.2.0", "../shared-lib"]
+```
+
+A **package** is `owner@repo`, optionally pinned with `:version`, and is
+fetched from GitHub into `SAULE_HOME` where every project on the machine
+shares one copy. A **path** is anything else — absolute, `~`-prefixed, or
+relative to the project root — and is used *where it lies*, so nothing is
+copied and edits to it take effect immediately.
+
+```sh
+saule install lauriszz123@uikit          # the newest tagged version
+saule install lauriszz123@uikit:v1.2.0   # a specific tag or branch
+saule install ../shared-lib              # a project on this machine
+saule install                            # everything this project records
+saule update                             # move packages to their newest tag
+saule update --check                     # report what is behind, change nothing
+saule remove uikit                       # drop it from this project
+saule list                               # what this project uses
+```
+
+Leaving the version off installs the newest tag and then **records it**, so a
+fresh clone of the project gets that same version rather than whatever is
+newest that day. Pre-releases are passed over unless you pin one. A repository
+with no tags falls back to its default branch, and `saule update` compares such
+a package by commit.
+
+An entry always holds an exact version — there are no ranges, so `saule update`
+is the only thing that ever changes one. `--check` exits 1 when something is
+behind and 2 when a package could not be reached, so CI can tell the two apart.
+
+A package's **import name** comes from its own `name:`, not from its repository
+name, which is why Saule needs no central index. `saule install` prints the
+`import` line to use.
 
 The two `indent_*` keys are what `saule fmt` and the language server both read,
 so a project's declared style survives a Reformat in the IDE and a `saule fmt -w`

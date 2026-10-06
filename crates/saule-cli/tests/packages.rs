@@ -172,7 +172,8 @@ fn installing_a_source_package_records_it_and_makes_it_importable() {
     let slug = s.publish("uikit", &as_files(&files));
     let proj = s.project(&[]);
 
-    let out = s.saule(&proj, &["install", &format!("gh:{slug}@v1")]);
+    let _ = slug;
+    let out = s.saule(&proj, &["install", "acme@uikit:v1"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
         stdout(&out).contains("import * from \"uikit\""),
@@ -182,7 +183,7 @@ fn installing_a_source_package_records_it_and_makes_it_importable() {
 
     // Recorded, so a fresh clone of the project can reinstall it.
     assert!(
-        s.read("proj/saule.config").contains("gh:acme/uikit@v1"),
+        s.read("proj/saule.config").contains("acme@uikit:v1"),
         "{}",
         s.read("proj/saule.config")
     );
@@ -199,18 +200,117 @@ fn installing_a_source_package_records_it_and_makes_it_importable() {
     assert_eq!(stdout(&run), "uikit\n");
 }
 
-/// The prefix is optional where it is unambiguous, because typing it every
-/// time is friction with no payoff.
+/// Both older spellings still install, and both are *recorded* in the current
+/// one — so a project converges on one spelling rather than accumulating
+/// three.
 #[test]
-fn the_gh_prefix_may_be_left_off() {
+fn the_older_spellings_still_install() {
     let s = Scratch::new("bare-slug");
     let files = library("uikit");
     let slug = s.publish("uikit", &as_files(&files));
     let proj = s.project(&[]);
 
+    // `owner/repo@ref` — what GitHub itself shows.
     let out = s.saule(&proj, &["install", &format!("{slug}@v1")]);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(s.read("proj/saule.config").contains("gh:acme/uikit@v1"));
+    assert!(s.read("proj/saule.config").contains("acme@uikit:v1"));
+
+    // `gh:owner/repo@ref` — the spelling this replaced.
+    let out = s.saule(&proj, &["install", &format!("gh:{slug}@v1")]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let config = s.read("proj/saule.config");
+    assert!(config.contains("acme@uikit:v1"), "{config}");
+    assert!(
+        !config.contains("gh:"),
+        "one entry, current spelling: {config}"
+    );
+}
+
+/// No `:version` means the newest tag — the whole point of leaving it off.
+/// Recorded as the tag it resolved to, so a fresh clone gets the same version
+/// rather than whatever is newest that day.
+#[test]
+fn no_version_installs_the_newest_tag() {
+    let s = Scratch::new("newest-tag");
+    let files = library("uikit");
+    s.publish("uikit", &as_files(&files));
+    let dir = s.path("repos/uikit");
+    git(&dir, &["tag", "v2"]);
+    let proj = s.project(&[]);
+
+    let out = s.saule(&proj, &["install", "acme@uikit"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let config = s.read("proj/saule.config");
+    assert!(config.contains("acme@uikit:v2"), "{config}");
+    assert!(s.path("home/packages/github.com/acme/uikit/v2").is_dir());
+}
+
+/// Tags are ordered as versions, not as strings. Sorted as text `v10` comes
+/// before `v9`, so a package would silently stop updating after its ninth
+/// release — which is exactly the bug a shared comparator exists to prevent.
+#[test]
+fn the_newest_tag_is_the_highest_version_not_the_last_string() {
+    let s = Scratch::new("tag-order");
+    let files = library("uikit");
+    s.publish("uikit", &as_files(&files));
+    let dir = s.path("repos/uikit");
+    for tag in ["v2", "v9", "v10"] {
+        git(&dir, &["tag", tag]);
+    }
+    let proj = s.project(&[]);
+
+    assert!(s.saule(&proj, &["install", "acme@uikit"]).status.success());
+    let config = s.read("proj/saule.config");
+    assert!(config.contains("acme@uikit:v10"), "{config}");
+}
+
+/// A pre-release is not the newest release. Without this a repository that
+/// tags `v3.0.0-rc1` would hand every installer a release candidate.
+#[test]
+fn a_prerelease_tag_does_not_count_as_the_newest() {
+    let s = Scratch::new("prerelease");
+    let files = library("uikit");
+    s.publish("uikit", &as_files(&files));
+    let dir = s.path("repos/uikit");
+    for tag in ["v2.0.0", "v3.0.0-rc1"] {
+        git(&dir, &["tag", tag]);
+    }
+    let proj = s.project(&[]);
+
+    assert!(s.saule(&proj, &["install", "acme@uikit"]).status.success());
+    let config = s.read("proj/saule.config");
+    assert!(config.contains("acme@uikit:v2.0.0"), "{config}");
+}
+
+/// A repository that has never tagged a release still installs, from its
+/// default branch. Plenty of packages are developed that way.
+#[test]
+fn a_repository_with_no_tags_falls_back_to_its_branch() {
+    let s = Scratch::new("no-tags");
+    let files = library("uikit");
+    for (rel, body) in as_files(&files) {
+        s.write(&format!("repos/uikit/{rel}"), body);
+    }
+    let dir = s.path("repos/uikit");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(
+        &dir,
+        &[
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-qm",
+            "published",
+        ],
+    );
+    let proj = s.project(&[]);
+
+    let out = s.saule(&proj, &["install", "acme@uikit"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("has no tags"), "{}", stdout(&out));
 }
 
 /// The fresh-clone case: a project that records packages installs them all.
@@ -221,7 +321,9 @@ fn install_with_no_argument_installs_what_the_project_records() {
     let b = library("beta");
     s.publish("alpha", &as_files(&a));
     s.publish("beta", &as_files(&b));
-    let proj = s.project(&["gh:acme/alpha@v1", "gh:acme/beta@v1"]);
+    // One of each spelling: a config written against the older one must keep
+    // installing, which is the whole compatibility promise.
+    let proj = s.project(&["acme@alpha:v1", "gh:acme/beta@v1"]);
 
     let out = s.saule(&proj, &["install"]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -247,7 +349,7 @@ fn a_second_project_reuses_the_global_install() {
     s.publish("uikit", &as_files(&files));
     let first = s.project(&[]);
     assert!(
-        s.saule(&first, &["install", "gh:acme/uikit@v1"])
+        s.saule(&first, &["install", "acme@uikit:v1"])
             .status
             .success()
     );
@@ -278,7 +380,7 @@ fn paths_and_packages_coexist_in_one_list() {
     );
     let proj = s.project(&["../shared"]);
     assert!(
-        s.saule(&proj, &["install", "gh:acme/uikit@v1"])
+        s.saule(&proj, &["install", "acme@uikit:v1"])
             .status
             .success()
     );
@@ -302,20 +404,20 @@ fn installing_at_another_ref_replaces_the_entry() {
     let proj = s.project(&[]);
 
     assert!(
-        s.saule(&proj, &["install", "gh:acme/uikit@v1"])
+        s.saule(&proj, &["install", "acme@uikit:v1"])
             .status
             .success()
     );
     assert!(
-        s.saule(&proj, &["install", "gh:acme/uikit@v2"])
+        s.saule(&proj, &["install", "acme@uikit:v2"])
             .status
             .success()
     );
 
     let config = s.read("proj/saule.config");
-    assert!(config.contains("gh:acme/uikit@v2"), "{config}");
+    assert!(config.contains("acme@uikit:v2"), "{config}");
     assert!(
-        !config.contains("@v1"),
+        !config.contains(":v1"),
         "the old ref should be gone: {config}"
     );
 }
@@ -328,7 +430,7 @@ fn a_repository_that_is_not_a_package_is_refused() {
     s.publish("plain", &[("README.md", "nothing here")]);
     let proj = s.project(&[]);
 
-    let out = s.saule(&proj, &["install", "gh:acme/plain@v1"]);
+    let out = s.saule(&proj, &["install", "acme@plain:v1"]);
     assert!(!out.status.success());
     let err = stderr(&out);
     assert!(err.contains("not a Saule package"), "{err}");
@@ -344,7 +446,7 @@ fn a_missing_ref_says_so() {
     s.publish("uikit", &as_files(&files));
     let proj = s.project(&[]);
 
-    let out = s.saule(&proj, &["install", "gh:acme/uikit@v9"]);
+    let out = s.saule(&proj, &["install", "acme@uikit:v9"]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("no tag or branch `v9`"),
@@ -353,16 +455,113 @@ fn a_missing_ref_says_so() {
     );
 }
 
-/// A path is used where it lies; there is nothing to fetch. Saying that is
-/// more use than a parse error about a missing owner.
+/// A path that names nothing is neither a package nor a directory, and the
+/// error has to offer both readings — it is equally likely to be a typo in
+/// either.
 #[test]
-fn installing_a_path_explains_itself() {
-    let s = Scratch::new("install-path");
+fn installing_a_path_that_does_not_exist_explains_both_readings() {
+    let s = Scratch::new("install-path-absent");
     let proj = s.project(&[]);
     let out = s.saule(&proj, &["install", "../shared"]);
     assert!(!out.status.success());
+    let err = stderr(&out);
     assert!(
-        stderr(&out).contains("is a path, not a package"),
+        err.contains("neither a directory that exists nor a package"),
+        "{err}"
+    );
+    assert!(err.contains("<owner>@<repo>"), "{err}");
+}
+
+/// A directory that exists is a path dependency: recorded relative to the
+/// project root, used where it lies, and importable immediately.
+#[test]
+fn installing_a_path_records_it_relative_and_makes_it_importable() {
+    let s = Scratch::new("install-path");
+    s.write(
+        "shared/saule.config",
+        "name: \"shared\"\nkind: \"library\"\nsrc_dirs: [\"src\"]\n",
+    );
+    s.write(
+        "shared/src/init.sau",
+        "export fn hello() -> string\n  return \"hi\"\nend\n",
+    );
+    let proj = s.project(&[]);
+
+    let out = s.saule(&proj, &["install", "../shared"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("import * from \"shared\""), "{text}");
+    assert!(text.contains("nothing was copied"), "{text}");
+
+    // Relative to the project root, so the pair stays portable — and with `/`
+    // separators, which read the same on both platforms.
+    let config = s.read("proj/saule.config");
+    assert!(config.contains("\"../shared\""), "{config}");
+
+    // Nothing was copied into SAULE_HOME: a path is used where it lies.
+    assert!(
+        !s.path("home/packages").exists(),
+        "a path must not be fetched"
+    );
+
+    s.main_is("import hello from \"shared\"", "println(hello())");
+    let run = s.saule(&proj, &["run"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "hi\n");
+}
+
+/// Edits to a path dependency are live — that is the reason to use one over a
+/// package while developing the two together.
+#[test]
+fn a_path_dependency_picks_up_edits_without_reinstalling() {
+    let s = Scratch::new("install-path-live");
+    s.write(
+        "shared/saule.config",
+        "name: \"shared\"\nkind: \"library\"\nsrc_dirs: [\"src\"]\n",
+    );
+    s.write(
+        "shared/src/init.sau",
+        "export fn hello() -> string\n  return \"first\"\nend\n",
+    );
+    let proj = s.project(&[]);
+    assert!(s.saule(&proj, &["install", "../shared"]).status.success());
+
+    s.main_is("import hello from \"shared\"", "println(hello())");
+    assert_eq!(stdout(&s.saule(&proj, &["run"])), "first\n");
+
+    // No reinstall, no second command.
+    s.write(
+        "shared/src/init.sau",
+        "export fn hello() -> string\n  return \"second\"\nend\n",
+    );
+    assert_eq!(stdout(&s.saule(&proj, &["run"])), "second\n");
+}
+
+/// A directory that is not a Saule project is caught here rather than at the
+/// next `saule run`, where the error would name an import instead.
+#[test]
+fn installing_a_directory_that_is_not_a_project_is_refused() {
+    let s = Scratch::new("install-path-plain");
+    s.write("plain/README.md", "nothing here");
+    let proj = s.project(&[]);
+
+    let out = s.saule(&proj, &["install", "../plain"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("not a Saule project"), "{err}");
+    assert!(err.contains("saule.config"), "{err}");
+}
+
+/// A project cannot depend on itself, and the cycle is worth catching before
+/// it is written to the config.
+#[test]
+fn installing_the_project_itself_is_refused() {
+    let s = Scratch::new("install-self");
+    let proj = s.project(&[]);
+    let out = s.saule(&proj, &["install", "."]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("cannot depend on itself"),
         "{}",
         stderr(&out)
     );
@@ -392,7 +591,7 @@ fn remove_drops_the_entry_but_keeps_the_installed_copy() {
     s.publish("uikit", &as_files(&files));
     let proj = s.project(&[]);
     assert!(
-        s.saule(&proj, &["install", "gh:acme/uikit@v1"])
+        s.saule(&proj, &["install", "acme@uikit:v1"])
             .status
             .success()
     );
@@ -412,7 +611,7 @@ fn remove_purge_deletes_the_installed_copy() {
     s.publish("uikit", &as_files(&files));
     let proj = s.project(&[]);
     assert!(
-        s.saule(&proj, &["install", "gh:acme/uikit@v1"])
+        s.saule(&proj, &["install", "acme@uikit:v1"])
             .status
             .success()
     );
@@ -443,7 +642,7 @@ fn list_shows_paths_packages_and_what_is_missing() {
     );
     let proj = s.project(&["../shared", "gh:acme/absent@v1"]);
     assert!(
-        s.saule(&proj, &["install", "gh:acme/uikit@v1"])
+        s.saule(&proj, &["install", "acme@uikit:v1"])
             .status
             .success()
     );
@@ -453,10 +652,12 @@ fn list_shows_paths_packages_and_what_is_missing() {
     let text = stdout(&out);
     assert!(text.contains("path       ../shared"), "{text}");
     assert!(
-        text.contains("source     gh:acme/uikit@v1 (import \"uikit\")"),
+        text.contains("source     acme@uikit:v1 (import \"uikit\")"),
         "{text}"
     );
-    assert!(text.contains("missing    gh:acme/absent@v1"), "{text}");
+    // Written in the config with the older spelling, reported in the current
+    // one — the entry is the same package either way.
+    assert!(text.contains("missing    acme@absent:v1"), "{text}");
 }
 
 #[test]
@@ -466,7 +667,7 @@ fn list_global_shows_every_install_whichever_project_asked() {
     s.publish("alpha", &as_files(&a));
     let proj = s.project(&[]);
     assert!(
-        s.saule(&proj, &["install", "gh:acme/alpha@v1"])
+        s.saule(&proj, &["install", "acme@alpha:v1"])
             .status
             .success()
     );
@@ -481,6 +682,271 @@ fn list_global_shows_every_install_whichever_project_asked() {
 fn list_outside_a_project_says_so() {
     let s = Scratch::new("list-no-project");
     let out = s.saule(&s.root.clone(), &["list"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("not inside a Saule project"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+// ─── update ─────────────────────────────────────────────────────────────────
+
+/// `--check` is a report: it says what moved, changes nothing, and exits
+/// non-zero so CI can gate on it.
+#[test]
+fn update_check_reports_what_is_behind_and_changes_nothing() {
+    let s = Scratch::new("update-check");
+    let files = library("uikit");
+    s.publish("uikit", &as_files(&files));
+    let proj = s.project(&[]);
+    assert!(
+        s.saule(&proj, &["install", "acme@uikit:v1"])
+            .status
+            .success()
+    );
+
+    git(&s.path("repos/uikit"), &["tag", "v2"]);
+
+    let out = s.saule(&proj, &["update", "--check"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("v1 -> v2"), "{text}");
+    assert!(text.contains("1 package can be updated"), "{text}");
+
+    // A check installs nothing and rewrites nothing.
+    assert!(s.read("proj/saule.config").contains("acme@uikit:v1"));
+    assert!(!s.path("home/packages/github.com/acme/uikit/v2").exists());
+}
+
+/// Nothing behind is exit 0 and a plain sentence — the common case, and the
+/// one a CI log should be boring about.
+#[test]
+fn update_check_is_quiet_when_everything_is_current() {
+    let s = Scratch::new("update-current");
+    let files = library("uikit");
+    s.publish("uikit", &as_files(&files));
+    let proj = s.project(&[]);
+    assert!(
+        s.saule(&proj, &["install", "acme@uikit:v1"])
+            .status
+            .success()
+    );
+
+    let out = s.saule(&proj, &["update", "--check"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Everything is up to date"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// The entry records an exact version, so updating *is* rewriting it — in
+/// place, with the old version gone rather than listed beside the new one.
+#[test]
+fn update_installs_the_newest_tag_and_rewrites_the_entry() {
+    let s = Scratch::new("update-run");
+    let files = library("uikit");
+    s.publish("uikit", &as_files(&files));
+    let proj = s.project(&[]);
+    assert!(
+        s.saule(&proj, &["install", "acme@uikit:v1"])
+            .status
+            .success()
+    );
+
+    git(&s.path("repos/uikit"), &["tag", "v2"]);
+
+    let out = s.saule(&proj, &["update"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Updated 1 of 1"), "{}", stdout(&out));
+
+    let config = s.read("proj/saule.config");
+    assert!(config.contains("acme@uikit:v2"), "{config}");
+    assert!(
+        !config.contains(":v1"),
+        "the old version should be gone: {config}"
+    );
+    assert!(s.path("home/packages/github.com/acme/uikit/v2").is_dir());
+
+    // And the updated copy is what a program now imports.
+    s.main_is("import who from \"uikit\"", "println(who())");
+    let run = s.saule(&proj, &["run"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert_eq!(stdout(&run), "uikit\n");
+}
+
+/// Naming one package updates only it. The others are reported, so it is
+/// still clear what else is behind.
+#[test]
+fn update_can_name_one_package() {
+    let s = Scratch::new("update-one");
+    let a = library("alpha");
+    let b = library("beta");
+    s.publish("alpha", &as_files(&a));
+    s.publish("beta", &as_files(&b));
+    let proj = s.project(&[]);
+    assert!(
+        s.saule(&proj, &["install", "acme@alpha:v1"])
+            .status
+            .success()
+    );
+    assert!(
+        s.saule(&proj, &["install", "acme@beta:v1"])
+            .status
+            .success()
+    );
+
+    git(&s.path("repos/alpha"), &["tag", "v2"]);
+    git(&s.path("repos/beta"), &["tag", "v2"]);
+
+    let out = s.saule(&proj, &["update", "alpha"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let config = s.read("proj/saule.config");
+    assert!(config.contains("acme@alpha:v2"), "{config}");
+    assert!(
+        config.contains("acme@beta:v1"),
+        "beta must be untouched: {config}"
+    );
+}
+
+/// The import name is what `saule install` told you to type, so it has to be
+/// a way to name a package here too — the same rule `saule remove` follows.
+#[test]
+fn update_accepts_the_import_name() {
+    let s = Scratch::new("update-by-import-name");
+    let files = library("uikit");
+    s.publish("saule-uikit", &as_files(&files));
+    let proj = s.project(&[]);
+    assert!(
+        s.saule(&proj, &["install", "acme@saule-uikit:v1"])
+            .status
+            .success()
+    );
+    git(&s.path("repos/saule-uikit"), &["tag", "v2"]);
+
+    // `uikit` is the `name:` in its config, not its repository name.
+    let out = s.saule(&proj, &["update", "uikit"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(s.read("proj/saule.config").contains("acme@saule-uikit:v2"));
+}
+
+/// A package tracking a branch has a ref name that never changes, so the
+/// commit is the only thing that can say it moved.
+#[test]
+fn update_tracks_a_branch_by_commit() {
+    let s = Scratch::new("update-branch");
+    let files = library("uikit");
+    for (rel, body) in as_files(&files) {
+        s.write(&format!("repos/uikit/{rel}"), body);
+    }
+    let dir = s.path("repos/uikit");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    let commit = |msg: &str| {
+        git(
+            &dir,
+            &[
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qm",
+                msg,
+            ],
+        )
+    };
+    commit("first");
+
+    let proj = s.project(&[]);
+    // No tags, so this lands on the default branch.
+    assert!(s.saule(&proj, &["install", "acme@uikit"]).status.success());
+    assert!(
+        s.saule(&proj, &["update", "--check"]).status.success(),
+        "nothing has moved yet"
+    );
+
+    // Move the branch on.
+    s.write(
+        "repos/uikit/src/init.sau",
+        "export fn who() -> string\n  return \"moved\"\nend\n",
+    );
+    git(&dir, &["add", "-A"]);
+    commit("second");
+
+    let out = s.saule(&proj, &["update", "--check"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+
+    let out = s.saule(&proj, &["update"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    s.main_is("import who from \"uikit\"", "println(who())");
+    assert_eq!(stdout(&s.saule(&proj, &["run"])), "moved\n");
+}
+
+/// A path dependency is used where it lies, so there is nothing to update and
+/// saying so beats an empty report.
+#[test]
+fn update_leaves_path_dependencies_alone() {
+    let s = Scratch::new("update-paths-only");
+    s.write(
+        "shared/saule.config",
+        "name: \"shared\"\nkind: \"library\"\n",
+    );
+    let proj = s.project(&["../shared"]);
+
+    let out = s.saule(&proj, &["update"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("declares no packages"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// A recorded package that was never installed is not "up to date", and the
+/// report says which command fixes it.
+#[test]
+fn update_reports_a_package_that_is_not_installed() {
+    let s = Scratch::new("update-missing");
+    let proj = s.project(&["acme@absent:v1"]);
+
+    let out = s.saule(&proj, &["update", "--check"]);
+    let text = stdout(&out);
+    assert!(text.contains("missing"), "{text}");
+    assert!(text.contains("saule install"), "{text}");
+}
+
+/// A package that cannot be reached at all exits 2, distinct from the 1 an
+/// out-of-date package gets — a release script wants to tell "behind" from "I
+/// could not find out".
+#[test]
+fn update_check_exits_two_when_a_package_cannot_be_reached() {
+    let s = Scratch::new("update-unreachable");
+    let files = library("uikit");
+    s.publish("uikit", &as_files(&files));
+    let proj = s.project(&[]);
+    assert!(
+        s.saule(&proj, &["install", "acme@uikit:v1"])
+            .status
+            .success()
+    );
+
+    // The receipt still points at it, but the repository is gone.
+    std::fs::remove_dir_all(s.path("repos/uikit")).expect("remove the repository");
+
+    let out = s.saule(&proj, &["update", "--check"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(stdout(&out).contains("unknown"), "{}", stdout(&out));
+}
+
+/// Updating outside a project has no `dependencies:` to read or rewrite.
+#[test]
+fn update_outside_a_project_says_so() {
+    let s = Scratch::new("update-no-project");
+    let out = s.saule(&s.root.clone(), &["update"]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("not inside a Saule project"),
