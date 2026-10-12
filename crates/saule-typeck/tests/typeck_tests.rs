@@ -1013,6 +1013,86 @@ fn a_lambda_argument_body_checks_against_the_real_param_type() {
     );
 }
 
+// ─── a lambda body is inferred with its own parameters in scope ──────────
+//
+// `infer`'s lambda arm used to work out the body's type in the *enclosing*
+// scope, so the lambda's own parameters were unknown inside it. Anything
+// whose type depended on one came back unresolved: a generic call resolved
+// its type argument against a name that was not bound, and handed back the
+// type *variable*. `(x: float) => identity(x)` inferred `fn(float) -> T`,
+// which then failed against every `fn(float) -> float` slot it was written
+// into — naming a `T` the author never wrote.
+//
+// In the real stdlib this hit `Math.abs`, `Math.max` and `Math.min`, whose
+// signatures return the numeric-flavour variable `N`. `Math.fmod` and
+// `Math.clamp` escaped by luck: they take more than one argument, so a
+// concrete literal elsewhere in the call pinned `N` anyway.
+
+/// The reported bug, with a user-defined generic standing in for
+/// `Math.abs` — this suite has no stdlib signatures installed.
+#[test]
+fn a_generic_call_in_an_arrow_lambda_resolves_against_the_lambdas_parameter() {
+    accepts(
+        "fn identity<T>(v: T) -> T\n\
+        \x20 return v\n\
+        end\n\
+        local g: fn(float) -> float = (x: float) => identity(x)\n",
+    );
+}
+
+/// Argument position, the same shape — `array.map((x: float) => ...)`.
+#[test]
+fn a_generic_call_in_a_lambda_argument_resolves_against_its_parameter() {
+    accepts(
+        "fn identity<T>(v: T) -> T\n\
+        \x20 return v\n\
+        end\n\
+        fn apply(f: fn(float) -> float, v: float) -> float\n\
+        \x20 return f(v)\n\
+        end\n\
+        fn run() -> float\n\
+        \x20 return apply((x: float) => identity(x), 1.0)\n\
+        end\n",
+    );
+}
+
+/// An *unannotated* parameter resolves it too: the slot supplies the
+/// parameter's type, and the body is inferred with that in scope.
+#[test]
+fn a_generic_call_resolves_against_an_unannotated_lambda_parameter() {
+    accepts(
+        "fn identity<T>(v: T) -> T\n\
+        \x20 return v\n\
+        end\n\
+        local g: fn(float) -> float = x => identity(x)\n",
+    );
+}
+
+/// The same through a nullable callback slot, where the signature supplying
+/// the parameters sits inside the `?`.
+#[test]
+fn a_generic_call_resolves_through_a_nullable_callback_slot() {
+    accepts(
+        "fn identity<T>(v: T) -> T\n\
+        \x20 return v\n\
+        end\n\
+        local g: (fn(float) -> float)? = (x: float) => identity(x)\n",
+    );
+}
+
+/// Resolving the parameter must not make the check *permissive*: a lambda
+/// that really does return the wrong type is still rejected.
+#[test]
+fn a_resolved_lambda_body_is_still_checked_against_the_slot() {
+    rejects(
+        "fn identity<T>(v: T) -> T\n\
+        \x20 return v\n\
+        end\n\
+        local g: fn(float) -> string = (x: float) => identity(x)\n",
+        "string",
+    );
+}
+
 /// A pipeline stage binds its generics from the value flowing in, so the
 /// predicate's parameter is concrete by the time the body is checked.
 #[test]

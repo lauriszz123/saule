@@ -34,10 +34,21 @@ use crate::op::{Instruction, Op};
 
 impl Compiler<'_> {
     /// Compile every method of a `class` into the slots Pass 1 assigned.
-    pub fn class_decl(&mut self, d: &Spanned<Decl>) -> Result<(), CompileError> {
+    ///
+    /// Driven **parents-first**, by `ClassIdx` rather than by declaration
+    /// order, because a body may need an ancestor's compiled proto:
+    /// `self.super()` resolves the parent's `init` statically, out of the
+    /// vtable row of whichever ancestor declared it. Compiling in
+    /// declaration order meant a subclass written above its parent could not
+    /// find that proto — `saule check` accepted the program and codegen
+    /// refused it.
+    ///
+    /// Static field initialisers are *not* done here: they belong to the
+    /// module body, in declaration order. See [`Compiler::class_statics`].
+    pub fn class_bodies(&mut self, d: &Spanned<Decl>) -> Result<(), CompileError> {
         let span = &d.span;
         let Decl::Class { name, members, .. } = &d.value else {
-            unreachable!("class_decl called with a non-class");
+            unreachable!("class_bodies called with a non-class");
         };
         let Some(idx) = self.layouts.get(name) else {
             return Err(CompileError::unsupported("this class", span.clone()));
@@ -68,9 +79,26 @@ impl Compiler<'_> {
             self.chunk.classes_mut()[idx as usize].static_methods[slot] = proto;
         }
 
-        self.field_init_proto(idx, members, span)?;
-        self.static_defaults(idx, members, span)?;
         Ok(())
+    }
+
+    /// Evaluate a class's static field initialisers into the module body.
+    ///
+    /// Separate from [`Compiler::class_bodies`] precisely because the two
+    /// want different orders. These are *statements*, emitted into the
+    /// module body and run in declaration order, where one static may
+    /// reference another; the bodies above are compile-time table entries
+    /// and have to go parents-first.
+    pub fn class_statics(&mut self, d: &Spanned<Decl>) -> Result<(), CompileError> {
+        let span = &d.span;
+        let Decl::Class { name, members, .. } = &d.value else {
+            unreachable!("class_statics called with a non-class");
+        };
+        let Some(idx) = self.layouts.get(name) else {
+            return Err(CompileError::unsupported("this class", span.clone()));
+        };
+
+        self.static_defaults(idx, members, span)
     }
 
     /// Compile every method of an `enum` into a proto, and record its index.
@@ -247,7 +275,30 @@ impl Compiler<'_> {
     /// Runs the parent's first, mirroring `init_fields`'s recursion in the
     /// tree-walker, so a subclass's defaults can overwrite an inherited one
     /// and the ordering is observably the same.
-    fn field_init_proto(
+    ///
+    /// # Why this is a pass of its own
+    ///
+    /// [`Compiler::construct_to`] reads `classes[c].field_init` at the
+    /// moment a construction is *compiled*, and emits no call at all when
+    /// it is still `None`. So this proto has to exist before any body that
+    /// might construct the class — and that includes the class's own
+    /// methods.
+    ///
+    /// It used to be built at the end of [`Compiler::class_decl`], after
+    /// that class's method bodies. Every construction compiled before it
+    /// therefore skipped the defaults silently and left the fields nil:
+    ///
+    /// * `A()` inside a `static fn` of `A` — the factory pattern,
+    ///   `Tensor.node`, `Foo.of`;
+    /// * `A()` inside an instance method of `A` — the operator pattern,
+    ///   `fn add(other: Vec2) -> Vec2` returning a fresh `Vec2`;
+    /// * `Later()` inside a method of a class declared earlier in the
+    ///   module.
+    ///
+    /// None of them failed at construction. The first *typed* read of such
+    /// a field died instead, far away, as `expected `integer` but the
+    /// register held `nil`` inside an innocent accessor.
+    pub(super) fn field_init_proto(
         &mut self,
         class: ClassIdx,
         members: &[Spanned<ClassMember>],

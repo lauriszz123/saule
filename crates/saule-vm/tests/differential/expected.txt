@@ -479,3 +479,12 @@ febf2f3ee8866631	V string:escaped
 fedab25c30485dbb	V integer:6
 a2d33acd64ec5b5e	V integer:15
 05814c4e3953ab10	V integer:11
+8279779090d1138d	V string:child/1
+1f12b35a14550a99	V integer:7
+d7287f44f7f7fc36	V integer:7
+c8d6c838adb6ed17	V string:42 2.5 hi true 3
+aafea4856fc26159	V integer:7
+d134832975243817	V string:grandchild/2
+2d6f1ea159fe5604	V integer:20
+7afbebc0b9e727ca	V string:top
+5fef50b9a31b658f	V string:late

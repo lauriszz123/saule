@@ -41,6 +41,235 @@ fn field_defaults_are_applied() {
     );
 }
 
+// ── field defaults vs. compile order ──────────────────────────────────────
+//
+// `construct_to` reads `classes[c].field_init` when a construction is
+// *compiled*, and the proto used to be built at the end of `class_decl` —
+// after that class's own method bodies. Every construction compiled before
+// it skipped the defaults and left the fields nil, and nothing failed until
+// the first typed read, far away, inside an innocent accessor. The
+// tree-walker was right throughout, so `must_agree` is the test.
+
+/// The factory pattern: `A()` inside a `static fn` of `A`.
+#[test]
+fn field_defaults_are_applied_in_a_same_class_static_factory() {
+    must_agree(
+        "class A\n\
+         \x20 local mark: integer = 7\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 static fn make() -> A\n\
+         \x20   return A()\n\
+         \x20 end\n\
+         \x20 fn get() -> integer\n\
+         \x20   return self.mark\n\
+         \x20 end\n\
+         end\n\
+         A.make().get()",
+    );
+}
+
+/// The operator pattern: `A()` inside an *instance* method of `A`, which is
+/// how every `Op*` overload returns a fresh value.
+#[test]
+fn field_defaults_are_applied_when_a_class_constructs_itself_in_a_method() {
+    must_agree(
+        "class A\n\
+         \x20 local mark: integer = 7\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 fn clone() -> A\n\
+         \x20   return A()\n\
+         \x20 end\n\
+         \x20 fn get() -> integer\n\
+         \x20   return self.mark\n\
+         \x20 end\n\
+         end\n\
+         A().clone().get()",
+    );
+}
+
+/// A class constructed from a method of one declared *earlier*, so its
+/// field-init proto did not exist yet either.
+#[test]
+fn field_defaults_are_applied_through_a_forward_reference() {
+    must_agree(
+        "class First\n\
+         \x20 static fn make() -> Second\n\
+         \x20   return Second()\n\
+         \x20 end\n\
+         end\n\
+         class Second\n\
+         \x20 local mark: integer = 7\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 fn get() -> integer\n\
+         \x20   return self.mark\n\
+         \x20 end\n\
+         end\n\
+         First.make().get()",
+    );
+}
+
+/// Every primitive flavour of default, through the factory that used to
+/// skip them.
+#[test]
+fn field_defaults_of_every_flavour_survive_a_same_class_factory() {
+    must_agree(
+        "class F\n\
+         \x20 local i: integer = 42\n\
+         \x20 local f: float = 2.5\n\
+         \x20 local s: string = \"hi\"\n\
+         \x20 local b: boolean = true\n\
+         \x20 local t: table<integer> = {1, 2, 3}\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 static fn make() -> F\n\
+         \x20   return F()\n\
+         \x20 end\n\
+         \x20 fn show() -> string\n\
+         \x20   return self.i .. \" \" .. self.f .. \" \" .. self.s .. \" \"\n\
+         \x20     .. tostring(self.b) .. \" \" .. #self.t\n\
+         \x20 end\n\
+         end\n\
+         F.make().show()",
+    );
+}
+
+/// Parent-first ordering still holds when the construction is inside the
+/// subclass: `Child`'s own default has to win over the one it inherits.
+#[test]
+fn an_inherited_field_default_is_overridden_through_a_factory() {
+    must_agree(
+        "class Base\n\
+         \x20 local tag: string = \"base\"\n\
+         \x20 local depth: integer = 1\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 fn describe() -> string\n\
+         \x20   return self.tag .. \"/\" .. self.depth\n\
+         \x20 end\n\
+         end\n\
+         class Child extends Base\n\
+         \x20 local tag: string = \"child\"\n\
+         \x20 fn init()\n\
+         \x20   self.super()\n\
+         \x20 end\n\
+         \x20 static fn make() -> Child\n\
+         \x20   return Child()\n\
+         \x20 end\n\
+         end\n\
+         Child.make().describe()",
+    );
+}
+
+// ── declaration order vs. the class hierarchy ─────────────────────────────
+//
+// A subclass may be written above its parent, and `saule check` accepts it.
+// Codegen used to not: class bodies were compiled in declaration order, and
+// `self.super()` resolves the parent's `init` statically out of a vtable row
+// that the parent's own body fills — so a parent written below its child had
+// not filled it yet, and the compiler refused a program the checker had
+// passed. Bodies are now compiled parents-first, by `ClassIdx`.
+
+/// A subclass declared above its parent.
+#[test]
+fn super_resolves_when_the_parent_is_declared_later() {
+    must_agree(
+        "class Early extends Late\n\
+         \x20 fn init()\n\
+         \x20   self.super()\n\
+         \x20 end\n\
+         end\n\
+         class Late\n\
+         \x20 local tag: string = \"late\"\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 fn get() -> string\n\
+         \x20   return self.tag\n\
+         \x20 end\n\
+         end\n\
+         Early().get()",
+    );
+}
+
+/// A middle class that inherits `init` without overriding it. Its own vtable
+/// row holds the placeholder until Pass 2a sweeps it down — long after this
+/// is compiled — so `self.super()` has to read the proto out of the ancestor
+/// that actually declared the slot.
+#[test]
+fn super_reaches_an_init_the_parent_only_inherited() {
+    must_agree(
+        "class Top\n\
+         \x20 local tag: string = \"top\"\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 fn get() -> string\n\
+         \x20   return self.tag\n\
+         \x20 end\n\
+         end\n\
+         class Middle extends Top\n\
+         end\n\
+         class Bottom extends Middle\n\
+         \x20 fn init()\n\
+         \x20   self.super()\n\
+         \x20 end\n\
+         end\n\
+         Bottom().get()",
+    );
+}
+
+/// Both at once: a three-level chain declared bottom-up, where every
+/// `extends` and every `self.super()` names a class not yet seen, and each
+/// level has a field default the parent's initialiser must not clobber.
+#[test]
+fn a_reverse_declared_hierarchy_keeps_its_defaults_and_supers() {
+    must_agree(
+        "class Grandchild extends Child\n\
+         \x20 local tag: string = \"grandchild\"\n\
+         \x20 fn init()\n\
+         \x20   self.super()\n\
+         \x20 end\n\
+         \x20 static fn make() -> Grandchild\n\
+         \x20   return Grandchild()\n\
+         \x20 end\n\
+         end\n\
+         class Child extends Base\n\
+         \x20 local tag: string = \"child\"\n\
+         \x20 local depth: integer = 2\n\
+         \x20 fn init()\n\
+         \x20   self.super()\n\
+         \x20 end\n\
+         end\n\
+         class Base\n\
+         \x20 local tag: string = \"base\"\n\
+         \x20 local depth: integer = 1\n\
+         \x20 fn init()\n\
+         \x20 end\n\
+         \x20 fn describe() -> string\n\
+         \x20   return self.tag .. \"/\" .. self.depth\n\
+         \x20 end\n\
+         end\n\
+         Grandchild.make().describe()",
+    );
+}
+
+/// Static field initialisers still run in *declaration* order, which is why
+/// they were split out of the parents-first body pass: one static reads
+/// another declared above it.
+#[test]
+fn static_initialisers_keep_declaration_order() {
+    must_agree(
+        "class First\n\
+         \x20 static base: integer = 10\n\
+         end\n\
+         class Second\n\
+         \x20 static doubled: integer = First.base * 2\n\
+         end\n\
+         Second.doubled",
+    );
+}
+
 #[test]
 fn instance_methods_match() {
     must_agree(

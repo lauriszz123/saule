@@ -100,7 +100,7 @@ fn check_assignment_compat_inner(
                 types_compatible(decl_ty, vt)
             }
         };
-        if let Some(value_ty) = infer(value, scope)
+        if let Some(value_ty) = infer_into(value, decl_ty, scope)
             && !matches!(&value_ty, Type::Named(n) if n == "nil")
             && !ok(&value_ty)
         {
@@ -129,7 +129,7 @@ fn check_assignment_compat_inner(
     // skip the check. `infer` covers every expression form and answers `any`
     // for genuinely dynamic values, so reaching this arm means the type
     // really could not be worked out — which must not pass silently.
-    let Some(value_ty) = infer(value, scope).map(adjust_to_single) else {
+    let Some(value_ty) = infer_into(value, decl_ty, scope).map(adjust_to_single) else {
         errors.push(TypeCheckError::UndeterminedType {
             span: to_source_span(value.span.clone()),
         });
