@@ -121,6 +121,20 @@ pub(crate) struct CheckArgs {
     /// before that work is depended on. Diagnostics are unaffected.
     #[arg(long)]
     pub dump_type_coverage: bool,
+
+    /// Write the diagnostics to stdout as JSON instead of rendering them.
+    ///
+    /// For anything that has to *act* on the error list rather than read it:
+    /// a build script, an editor not using the LSP, a CI job, or a harness
+    /// running the compiler over a great many generated programs. The
+    /// rendered form is for a person and has to be screen-scraped otherwise,
+    /// which fails quietly the moment the layout changes.
+    ///
+    /// The shape is `saule-diagnostics`' published contract — the same one
+    /// the web playground already consumes. The exit status is unchanged, so
+    /// this stays usable as a CI gate.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `saule run [TARGET] [ARGS...] [-- ARGS...]`

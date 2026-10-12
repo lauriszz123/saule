@@ -1,0 +1,19 @@
+[package]
+name = "saule-diagnostics"
+version.workspace = true
+edition.workspace = true
+description = "The machine-readable form of a Saule diagnostic, shared by every front end."
+license.workspace = true
+
+[dependencies]
+# The whole point of this crate is that it needs nothing from the toolchain.
+# Every error in the pipeline derives `miette::Diagnostic`, so the span, help
+# and code come off the trait and the mapping is generic over it — which is
+# what keeps this a leaf crate that the lexer, parser, typechecker and VM can
+# all feed without any of them depending on each other.
+miette = "7.6.0"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+thiserror = "2.0.18"

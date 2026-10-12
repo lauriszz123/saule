@@ -750,6 +750,7 @@ dependencies = [
  "miette",
  "saule-ast",
  "saule-db",
+ "saule-diagnostics",
  "saule-fmt",
  "saule-lexer",
  "saule-native-abi",
@@ -759,6 +760,8 @@ dependencies = [
  "saule-semantic",
  "saule-version",
  "saule-vm",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -770,6 +773,16 @@ dependencies = [
  "saule-parser",
  "saule-runtime",
  "saule-semantic",
+]
+
+[[package]]
+name = "saule-diagnostics"
+version = "26.0.0"
+dependencies = [
+ "miette",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -939,6 +952,7 @@ version = "26.0.0"
 dependencies = [
  "js-sys",
  "miette",
+ "saule-diagnostics",
  "saule-lexer",
  "saule-parser",
  "saule-runtime",

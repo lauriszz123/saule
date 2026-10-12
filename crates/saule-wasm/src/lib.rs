@@ -45,41 +45,11 @@ use saule_runtime::platform;
 
 // ─── the JSON contract ─────────────────────────────────────────────────────
 
-/// Byte offsets into the source, so the editor can underline the exact range
-/// rather than printing a bare message.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-/// Which pass produced a diagnostic. Surfaced as a label in the output pane.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Phase {
-    Lex,
-    Parse,
-    Semantic,
-    Type,
-    /// The bytecode compiler: a program the language rejects that the
-    /// checker lets through, an `import` (there is no filesystem here), or a
-    /// compiler limit.
-    Compile,
-    Runtime,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct Diagnostic {
-    /// Always `"error"` today. The field exists because the shape allows
-    /// warnings and the front end already renders them differently.
-    pub severity: &'static str,
-    pub phase: Phase,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub span: Option<Span>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub help: Option<String>,
-}
+// The diagnostic half of the contract lives in `saule-diagnostics`, because
+// `saule check --json` and the training harnesses emit the same shape and a
+// second copy of it here would drift. Re-exported rather than merely used, so
+// a consumer of this crate still names these types through it.
+pub use saule_diagnostics::{Diagnostic, Phase, Severity, Span};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct OutputChunk {
@@ -96,31 +66,7 @@ pub struct RunResult {
 
 // ─── diagnostic mapping ────────────────────────────────────────────────────
 
-/// Turn any of the pipeline's error types into a [`Diagnostic`].
-///
-/// Every error in the toolchain derives `miette::Diagnostic` and carries a
-/// `#[label]`, so the span and help text come off the trait rather than out of
-/// a match over each enum. A new error variant therefore needs no change here.
-fn to_diagnostic<E>(err: &E, phase: Phase) -> Diagnostic
-where
-    E: std::error::Error + miette::Diagnostic,
-{
-    let span = err
-        .labels()
-        .and_then(|mut labels| labels.next())
-        .map(|label| Span {
-            start: label.offset(),
-            end: label.offset() + label.len(),
-        });
-
-    Diagnostic {
-        severity: "error",
-        phase,
-        message: err.to_string(),
-        span,
-        help: err.help().map(|h| h.to_string()),
-    }
-}
+use saule_diagnostics::to_diagnostic;
 
 fn failed(diagnostics: Vec<Diagnostic>, output: Vec<OutputChunk>) -> RunResult {
     RunResult {
