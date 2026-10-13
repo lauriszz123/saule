@@ -70,6 +70,49 @@
 //! Declaring a contract whose method is missing is an error at the use site
 //! rather than a surprise at run time.
 //!
+//! Indexing works too — `OpIndex<K, V>` by `index` and `OpNewIndex<K, V>` by
+//! `new_index` (`newIndex` to Saule), so `a[k]` and `a[k] = v` reach the
+//! package:
+//!
+//! ```ignore
+//! #[saule_class(implements(OpIndex<integer, float>, OpNewIndex<integer, float>))]
+//! pub struct Buffer { data: Vec<f64> }
+//!
+//! #[saule_methods]
+//! impl Buffer {
+//!     pub fn index(&self, key: i64) -> Result<f64, String> { /* `a[k]` */ }
+//!     pub fn new_index(&mut self, key: i64, value: f64) -> Result<(), String> { /* `a[k] = v` */ }
+//! }
+//! ```
+//!
+//! ## Chaining a mutating method
+//!
+//! `#[saule(chain)]` makes a method hand its receiver back, so a fluent API
+//! works from Saule:
+//!
+//! ```ignore
+//! #[saule_methods]
+//! impl Buffer {
+//!     /// `b.scale(2.0).offset(1.0)` — both land on the same buffer.
+//!     #[saule(chain)]
+//!     pub fn scale(&mut self, k: f64) { for x in &mut self.data { *x *= k } }
+//! }
+//! ```
+//!
+//! A method only ever takes `&self` or `&mut self`, so it holds a borrow and
+//! cannot produce a handle to its own object. The generated shim can: the
+//! receiver arrives as argument 0 and is decoded into an `SObject<Self>`,
+//! which is a counted reference, and `chain` returns **that** — the same
+//! object, not a copy. Returning a copy would take the mutation and leave the
+//! original behind, which is exactly the bug that makes a fluent API worth
+//! having support for rather than hand-rolling.
+//!
+//! The Rust function's own return value is discarded, so write `-> ()` or
+//! `-> Result<(), E>`; an `Err` still surfaces as a runtime error rather than
+//! looking like a success. Saule sees the method return the class, so a chain
+//! type-checks. It needs an instance receiver — a constructor already returns
+//! the object, and a property is not a call.
+//!
 //! Two things to know. `OpToString` wants a Saule method named `toString`,
 //! and an inherent Rust `to_string` shadows `Display`'s, which clippy
 //! rejects — so name it something else and map it with

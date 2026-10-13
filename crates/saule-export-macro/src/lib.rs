@@ -169,6 +169,9 @@ fn expand_export(attr: TokenStream, item: TokenStream) -> syn::Result<proc_macro
     }
     let fn_ident = &func.sig.ident;
     let exported = export::expand(Export {
+        // A free function has no receiver, so there is nothing to chain on;
+        // `#[saule(chain)]` is a `#[saule_methods]` attribute.
+        chain: false,
         class,
         name,
         receiver: Receiver::Static,

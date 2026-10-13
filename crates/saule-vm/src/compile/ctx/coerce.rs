@@ -244,7 +244,11 @@ impl Compiler<'_> {
             return Ok(());
         }
         let Some(idx) = self.layouts.get(name) else {
-            return Ok(());
+            // No compiled layout: a class from a native package. Its `of` is
+            // a symbol in a shared library rather than a proto in this chunk,
+            // so there is no static slot for `CALLSTAT` and the conversion
+            // goes out by name instead.
+            return self.coerce_via_named_of(r, name, span);
         };
         if !self.chunk.classes[idx as usize].assignable {
             return Ok(());
@@ -296,6 +300,85 @@ impl Compiler<'_> {
 
         self.patch_here(keep_nil)?;
         self.patch_here(keep_isa)?;
+        Ok(())
+    }
+
+    /// `Assignable` for a class the compiler has no layout for — a native
+    /// package's.
+    ///
+    /// Two differences from the compiled path above, both forced:
+    ///
+    /// * **The call goes out by name.** `CALLMX` with the class in the
+    ///   receiver slot reaches a static, because dispatching a member call on
+    ///   a `Value::Class` *is* the static lookup.
+    /// * **There is no `ISA` guard.** `ISA` takes a compiled class index and
+    ///   a native class has none, so "is it already one?" cannot be asked
+    ///   here. Instead `of` is called for every non-nil value and the package
+    ///   answers the question itself — which it must do by returning the
+    ///   *same object* when handed one, or `local b: C = a` would deep-copy
+    ///   where the language promises an alias.
+    ///
+    /// Emits nothing unless the class really declares `Assignable` and has an
+    /// `of` static, so a native class with an unrelated `of` is left alone.
+    fn coerce_via_named_of(
+        &mut self,
+        r: u16,
+        name: &str,
+        span: &Range<usize>,
+    ) -> Result<(), CompileError> {
+        let contract = saule_ast::ops::ASSIGNABLE;
+        if !saule_semantic::class_implements(name, contract.interface) {
+            return Ok(());
+        }
+        if saule_semantic::lookup_method(name, contract.method).is_none() {
+            return Ok(());
+        }
+        // The class value, as a compile-time constant.
+        //
+        // **Not** a module slot: a native package's exports are folded into
+        // constants at compile time and never reach one, so `GETMOD` here
+        // would read a slot nothing writes and quietly load `nil` — which it
+        // did, and `program.rs` warns about exactly that above `Imported`.
+        let Some(class_value) = self.native_imports.get(name).cloned() else {
+            return Ok(());
+        };
+
+        let ra = self.reg8(r, span)?;
+        // nil fills a nullable slot on its own terms, exactly as above.
+        self.emit(Instruction::abc(Op::JNIL, ra, 0, 0), span);
+        let not_nil = self.emit_jump(Op::JMP, 0, span);
+        let keep_nil = self.emit_jump(Op::JMP, 0, span);
+        self.patch_here(not_nil)?;
+
+        let m = self.mark();
+        // `CALLMX` lays out the receiver at `A` and the arguments after it.
+        let base = self.alloc_n(2, span)?;
+        let ba = self.reg8(base, span)?;
+        // Dispatching a member call on a `Value::Class` *is* the static
+        // lookup, so the class in the receiver slot reaches `of`.
+        let k = self.constant(class_value, span)?;
+        self.emit(Instruction::abx(Op::LOADK, ba, k), span);
+        self.move_result(r, base + 1, span)?;
+        let key = self.constant(
+            saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(
+                contract.method.to_string(),
+            )),
+            span,
+        )?;
+        self.emit(
+            Instruction::abc(
+                Op::CALLMX,
+                ba,
+                2,
+                crate::compile::expr::results::Want::Fixed(1).c(),
+            ),
+            span,
+        );
+        self.emit(Instruction::ax_of(Op::EXTRAARG, key as u32), span);
+        self.move_result(base, r, span)?;
+        self.free_to(m);
+
+        self.patch_here(keep_nil)?;
         Ok(())
     }
 }

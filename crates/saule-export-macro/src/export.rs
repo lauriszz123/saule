@@ -75,6 +75,16 @@ pub(crate) struct Export<'a> {
     /// Every parameter *except* the receiver.
     pub(crate) inputs: Vec<&'a PatType>,
     pub(crate) output: &'a ReturnType,
+    /// `#[saule(chain)]`: ignore the Rust return value and hand the receiver
+    /// back, so `a.mutate(x).mutate(y)` chains on the *same* object.
+    ///
+    /// A method only ever has `&self` / `&mut self`, so it holds a borrow and
+    /// cannot produce a Saule handle to itself. The shim can: the receiver
+    /// arrives as argument 0 and is already decoded into an `SObject<Self>`,
+    /// which is a counted reference. Returning that is the same object, not a
+    /// copy — which is the whole point, since a copy would take the mutation
+    /// and leave the original behind.
+    pub(crate) chain: bool,
     /// Where to point errors about the member as a whole.
     pub(crate) span: Span,
 }
@@ -174,9 +184,15 @@ pub(crate) fn expand(e: Export<'_>) -> syn::Result<TokenStream> {
 
     // ── Return type ────────────────────────────────────────────────────────
     let (ret_value_ty, is_result) = unwrap_return(e.output);
-    let ret_saule = match &ret_value_ty {
-        Some(ty) => types::return_type(ty, &mut ctx, sig_for("return"))?,
-        None => "nil".to_string(),
+    let ret_saule = if e.chain {
+        // The receiver's class, whatever the Rust function says it returns —
+        // the shim discards that value and hands back argument 0.
+        e.class.clone()
+    } else {
+        match &ret_value_ty {
+            Some(ty) => types::return_type(ty, &mut ctx, sig_for("return"))?,
+            None => "nil".to_string(),
+        }
     };
     check_shape(&e, &ret_saule, total)?;
 
@@ -226,7 +242,37 @@ pub(crate) fn expand(e: Export<'_>) -> syn::Result<TokenStream> {
     };
     let callee = &e.callee;
     let call = quote! { #callee( #( #call_args ),* ) };
-    let encode = if is_result {
+    let encode = if e.chain {
+        // The borrow has to end before `__self` is moved into the return, so
+        // it is dropped explicitly rather than left to the end of the block.
+        // An `Err` still propagates: a failed mutation must not look like a
+        // successful one that happens to return the receiver.
+        if is_result {
+            quote! {
+                {
+                    let __outcome = #call;
+                    ::core::mem::drop(__self_ref);
+                    match __outcome {
+                        ::core::result::Result::Ok(_) => ::core::result::Result::Ok(
+                            ::saule_sdk::__private::IntoSaule::into_saule(__self),
+                        ),
+                        ::core::result::Result::Err(__e) =>
+                            ::core::result::Result::Err(::std::string::ToString::to_string(&__e)),
+                    }
+                }
+            }
+        } else {
+            quote! {
+                {
+                    let _ = #call;
+                    ::core::mem::drop(__self_ref);
+                    ::core::result::Result::Ok(
+                        ::saule_sdk::__private::IntoSaule::into_saule(__self),
+                    )
+                }
+            }
+        }
+    } else if is_result {
         quote! {
             match #call {
                 ::core::result::Result::Ok(__t) =>

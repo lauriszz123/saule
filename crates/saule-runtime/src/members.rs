@@ -59,44 +59,6 @@ pub(crate) fn make_tuple_variant_ctor(
     }))
 }
 
-pub fn read_index(
-    receiver: &Value,
-    index: Value,
-    span: std::ops::Range<usize>,
-) -> Result<Value, RuntimeError> {
-    match receiver {
-        Value::Table(items) => Ok(items.borrow().get(&index)),
-        // `obj[key]` on a class instance is `OpIndex` — Saule's `__index`.
-        // Unlike Lua's, it is not a miss handler over stored keys: an
-        // instance has no key space of its own, so the method *is* the
-        // lookup and it runs on every read.
-        Value::Instance(_) if has_index_overload(receiver, saule_ast::ops::OP_INDEX.method) => {
-            crate::index_hooks::call_index(receiver, index, span)
-        }
-        other => Err(RuntimeError::TypeError {
-            message: format!(
-                "cannot index a `{}` — only tables and classes implementing `OpIndex` \
-                 support `[index]` access",
-                other.type_name()
-            ),
-            span,
-        }),
-    }
-}
-
-/// Does `v` carry `method` on its class chain? Mirrors `ops`' duck-typed
-/// dispatch: the `implements` clause is the static opt-in, and by the time a
-/// value reaches here the checker has already had its say.
-pub(crate) fn has_index_overload(v: &Value, method: &str) -> bool {
-    match v {
-        Value::Instance(inst) => {
-            let class = inst.borrow().class.clone();
-            class.lookup_method(method).is_some()
-        }
-        _ => false,
-    }
-}
-
 /// Read `receiver.name`.
 ///
 /// On an instance:
@@ -294,35 +256,6 @@ pub fn write_member(
         other => Err(RuntimeError::TypeError {
             message: format!(
                 "cannot assign field `{name}` on value of type `{}` — only instances and classes can have fields assigned",
-                other.type_name()
-            ),
-            span,
-        }),
-    }
-}
-
-/// Write `receiver[index] = value`.
-pub fn write_index(
-    receiver: &Value,
-    index: Value,
-    value: Value,
-    span: std::ops::Range<usize>,
-) -> Result<(), RuntimeError> {
-    match receiver {
-        Value::Table(items) => items
-            .borrow_mut()
-            .set(&index, value)
-            .map_err(|message| RuntimeError::TypeError { message, span }),
-        // `obj[key] = v` on a class instance is `OpNewIndex` — Saule's
-        // `__newindex`. As with `OpIndex`, it runs on every write rather
-        // than only on a miss: an instance has no key space to miss in.
-        Value::Instance(_) if has_index_overload(receiver, saule_ast::ops::OP_NEW_INDEX.method) => {
-            crate::index_hooks::call_new_index(receiver, index, value, span)
-        }
-        other => Err(RuntimeError::TypeError {
-            message: format!(
-                "cannot assign through `[index]` on a `{}` — only tables and classes \
-                 implementing `OpNewIndex` support indexed assignment",
                 other.type_name()
             ),
             span,
