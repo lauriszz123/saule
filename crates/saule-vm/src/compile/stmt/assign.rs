@@ -259,6 +259,42 @@ impl Compiler<'_> {
                 return Ok(());
             }
 
+            // A named type with no compiled layout: a native package's class.
+            // Dispatched by name, for the same reason the read side is — a
+            // native method is a symbol, not a proto in this chunk, so there
+            // is no vtable slot to call. A `table` is never a `Type::Named`,
+            // so the `SETIDX` path below keeps every table write it had.
+            if let Some(ty) = self.ty_name(obj.id)
+                && saule_semantic::lookup_method(ty, saule_ast::ops::OP_NEW_INDEX.method).is_some()
+            {
+                let contract = saule_ast::ops::OP_NEW_INDEX;
+                let m = self.mark();
+                let base = self.alloc_n(3, span)?;
+                self.expr_to(obj, base)?;
+                self.expr_to(index, base + 1)?;
+                self.rhs_to(value, base + 2, span)?;
+                let key = self.constant(
+                    saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(
+                        contract.method.to_string(),
+                    )),
+                    span,
+                )?;
+                let a = self.reg8(base, span)?;
+                // Receiver, key and value; the result is discarded.
+                self.emit(
+                    Instruction::abc(
+                        Op::CALLMX,
+                        a,
+                        3,
+                        crate::compile::expr::results::Want::Fixed(0).c(),
+                    ),
+                    span,
+                );
+                self.emit(Instruction::ax_of(Op::EXTRAARG, key as u32), span);
+                self.free_to(m);
+                return Ok(());
+            }
+
             // `t[i] = …` on operands already in registers is the write half
             // of the shape `index_to` already reads in place, and it emitted
             // two `MOVE`s per store: one for the table, one for the key. The

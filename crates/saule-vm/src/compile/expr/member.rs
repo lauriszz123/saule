@@ -347,6 +347,48 @@ impl Compiler<'_> {
             return Ok(());
         }
 
+        // A receiver whose type is *named* but has no compiled layout: a
+        // class from a native package. There is no vtable to resolve against
+        // — a native method is a symbol in a shared library, not a proto in
+        // this chunk — so dispatch by name with `CALLMX`, exactly as an
+        // ordinary method call on a native receiver already does (§8.5).
+        //
+        // Reached only for a `Type::Named`, and a `table` is never one, so
+        // the `GETIDX` path below keeps every table read it had. The registry
+        // lookup is what distinguishes a native class that really does
+        // declare `OpIndex` from one that does not: without it this would
+        // turn "no `OpIndex` overload" into a run-time "no method `index`"
+        // instead of the compile-time error that case deserves.
+        if let Some(ty) = self.ty_name(obj.id)
+            && saule_semantic::lookup_method(ty, saule_ast::ops::OP_INDEX.method).is_some()
+        {
+            let contract = saule_ast::ops::OP_INDEX;
+            let m = self.mark();
+            let base = self.alloc_n(2, span)?;
+            self.expr_to(obj, base)?;
+            self.expr_to(index, base + 1)?;
+            let key = self.constant(
+                saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(
+                    contract.method.to_string(),
+                )),
+                span,
+            )?;
+            let a = self.reg8(base, span)?;
+            // One receiver plus one argument; one result.
+            self.emit(
+                Instruction::abc(Op::CALLMX, a, 2, super::results::Want::Fixed(1).c()),
+                span,
+            );
+            self.emit(Instruction::ax_of(Op::EXTRAARG, key as u32), span);
+            self.move_result(base, dst, span)?;
+            self.free_to(m);
+            if let Some(bang) = unwrap_at {
+                let a = self.reg8(dst, bang)?;
+                self.emit(Instruction::abc(Op::UNWRAPNIL, a, a, 0), bang);
+            }
+            return Ok(());
+        }
+
         // `t[i]` on two things already in registers is the shape every
         // array-style loop is made of, and it emitted two `MOVE`s per read.
         let in_place = self.operand_is_pure(obj) && self.operand_is_pure(index);

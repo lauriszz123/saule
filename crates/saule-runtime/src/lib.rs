@@ -43,7 +43,6 @@ pub mod dynamic_packages;
 pub mod error;
 pub mod fxhash;
 pub mod gc;
-mod index_hooks;
 pub mod itoa;
 pub mod members;
 pub mod module;

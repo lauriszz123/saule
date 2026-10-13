@@ -70,6 +70,21 @@
 //! Declaring a contract whose method is missing is an error at the use site
 //! rather than a surprise at run time.
 //!
+//! Indexing works too — `OpIndex<K, V>` by `index` and `OpNewIndex<K, V>` by
+//! `new_index` (`newIndex` to Saule), so `a[k]` and `a[k] = v` reach the
+//! package:
+//!
+//! ```ignore
+//! #[saule_class(implements(OpIndex<integer, float>, OpNewIndex<integer, float>))]
+//! pub struct Buffer { data: Vec<f64> }
+//!
+//! #[saule_methods]
+//! impl Buffer {
+//!     pub fn index(&self, key: i64) -> Result<f64, String> { /* `a[k]` */ }
+//!     pub fn new_index(&mut self, key: i64, value: f64) -> Result<(), String> { /* `a[k] = v` */ }
+//! }
+//! ```
+//!
 //! Two things to know. `OpToString` wants a Saule method named `toString`,
 //! and an inherent Rust `to_string` shadows `Display`'s, which clippy
 //! rejects — so name it something else and map it with

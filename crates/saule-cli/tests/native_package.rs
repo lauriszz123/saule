@@ -608,3 +608,61 @@ fn a_native_overload_is_used_by_an_equality_branch_too() {
     );
     assert_eq!(out, "equal\nsame\n");
 }
+
+/// `OpIndex` / `OpNewIndex` on a native class: `a[k]` and `a[k] = v`.
+///
+/// Indexing is resolved by the compiler, not the runtime. A native class has
+/// no vtable in the chunk, so `index_to` and `assign` dispatch it by name
+/// with `CALLMX` — the same path an ordinary method call on a native receiver
+/// takes. Before that, the compiler fell through to `GETIDX`, the *table*
+/// read, and the program died with "expected `table` but the register held
+/// `instance`" after type-checking cleanly.
+#[test]
+fn a_native_class_can_overload_indexing() {
+    let home = fixture_home("ops-index");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local m: Money = Money(1234)\n\
+         println(m[1])\n\
+         println(m[2])\n\
+         m[1] = 7\n\
+         println(m.cents)\n\
+         m[2] = 5\n\
+         println(m.cents)\n",
+    );
+    assert_eq!(out, "12\n34\n734\n705\n");
+}
+
+/// An index the package rejects surfaces as its own error, at the use site.
+#[test]
+fn a_native_index_error_is_reported_where_it_happened() {
+    let home = fixture_home("ops-index-err");
+    let out = saule(
+        &home,
+        "run",
+        "import * from \"fixture\"\n\
+         local m: Money = Money(100)\n\
+         println(m[9])\n",
+    );
+    assert!(!out.status.success(), "index 9 must fail");
+    let err = stderr(&out);
+    assert!(err.contains("has no part 9"), "{err}");
+}
+
+/// A table index must still compile to the table opcode, not to a by-name
+/// call: `ty_name` answers only for a `Type::Named` and a table is not one,
+/// which is what keeps the two apart.
+#[test]
+fn table_indexing_is_untouched_by_the_native_path() {
+    let home = fixture_home("ops-index-table");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local t: table<integer> = {10, 20, 30}\n\
+         println(t[2])\n\
+         t[2] = 99\n\
+         println(t[2])\n",
+    );
+    assert_eq!(out, "20\n99\n");
+}

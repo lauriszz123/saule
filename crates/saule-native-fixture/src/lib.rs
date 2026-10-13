@@ -253,7 +253,9 @@ fn apply(counter: SObject<Counter>, f: SFunction) -> Result<i64, String> {
     OpEq<Money>,
     OpCompare<Money>,
     OpLen,
-    OpToString
+    OpToString,
+    OpIndex<integer, integer>,
+    OpNewIndex<integer, integer>
 ))]
 pub struct Money {
     cents: i64,
@@ -309,6 +311,34 @@ impl Money {
     /// Present because a `len` without an `is_empty` beside it is a lint.
     pub fn is_empty(&self) -> bool {
         self.cents == 0
+    }
+
+    /// `a[1]` is the pounds, `a[2]` the pence.
+    ///
+    /// A stand-in for "an index the class defines", which is what numsol's
+    /// `NDArray` needs for `a[2]`. A native receiver takes the by-name
+    /// dispatch path: there is no vtable in the chunk to resolve against.
+    pub fn index(&self, key: i64) -> Result<i64, String> {
+        match key {
+            1 => Ok(self.cents / 100),
+            2 => Ok((self.cents % 100).abs()),
+            other => Err(format!("Money has no part {other}; use 1 or 2")),
+        }
+    }
+
+    /// `a[1] = 3`
+    pub fn new_index(&mut self, key: i64, value: i64) -> Result<(), String> {
+        match key {
+            1 => {
+                self.cents = value * 100 + (self.cents % 100).abs();
+                Ok(())
+            }
+            2 => {
+                self.cents = (self.cents / 100) * 100 + value;
+                Ok(())
+            }
+            other => Err(format!("Money has no part {other}; use 1 or 2")),
+        }
     }
 
     /// `tostring(a)` and `print(a)`.
