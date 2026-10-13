@@ -70,6 +70,15 @@ pub(crate) struct ClassSpec {
     /// Declared with `#[saule_class]`: it has objects, so it may have a
     /// constructor, instance methods and properties.
     pub(crate) instantiable: bool,
+    /// Interfaces the class declares, each with its type arguments still
+    /// attached as written — `"OpAdd<Arr,Arr>"`.
+    ///
+    /// Unparsed here on purpose: this module's job is to read the record
+    /// faithfully, and splitting a type out of the string needs the type
+    /// grammar that `bind` already uses for signatures. Empty for a package
+    /// built before `implements(...)` existed, which is what keeps an older
+    /// library loadable.
+    pub(crate) implements: Vec<String>,
     /// Sorted by name, so everything built from a manifest is deterministic.
     pub(crate) methods: Vec<MethodSpec>,
 }
@@ -158,12 +167,22 @@ pub(crate) fn manifest_from_records(
                 if classes.contains_key(&name) {
                     return Err(format!("declares class `{name}` twice"));
                 }
+                let implements: Vec<String> = table
+                    .get("implements")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 classes.insert(
                     name.clone(),
                     ClassSpec {
                         name,
                         doc: field("doc"),
                         instantiable,
+                        implements,
                         methods: Vec::new(),
                     },
                 );
@@ -241,6 +260,9 @@ pub(crate) fn manifest_from_records(
             name: class.clone(),
             doc: None,
             instantiable: false,
+            // A namespace nobody declared implements nothing; only a
+            // `#[saule_class]` record can carry interfaces.
+            implements: Vec::new(),
             methods: Vec::new(),
         });
         if method.receiver != Receiver::Static && !spec.instantiable {

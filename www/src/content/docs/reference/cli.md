@@ -170,6 +170,67 @@ terminal.
 
 Exits with status 1 if any file failed to format.
 
+## `saule disasm`
+
+Compile to bytecode and print the disassembly.
+
+```sh
+saule disasm [OPTIONS] [TARGET]
+```
+
+| Argument | Description |
+|---|---|
+| `TARGET` | A project directory or a `.sau` file. Defaults to the current directory. |
+
+| Option | Description |
+|---|---|
+| `--deps` | Also disassemble the modules the target imports. Ignored in project mode, which emits every module either way. |
+
+`TARGET` follows the same rule as `run` and `check`: a directory, or no
+argument at all, means project mode; a file means that file.
+
+| Invocation | What is disassembled |
+|---|---|
+| `saule disasm` | Every module in the project in the current directory |
+| `saule disasm <dir>` | Every module in the project rooted at `<dir>` |
+| `saule disasm <file.sau>` | That file's chunk |
+| `saule disasm <file.sau> --deps` | That file, plus the modules it imports |
+
+A debugging aid for the bytecode compiler, not a user-facing format: the
+listing shows one line per instruction with registers, constants and resolved
+jump targets. Each chunk names its own source on its first line, so several
+chunks in one listing stay distinguishable:
+
+```
+; chunk from probe/src/base.sau
+; 2 proto(s), 0 constant(s), 1 module slot(s)
+...
+```
+
+Imports are resolved at **compile** time, so that a class declared in one
+module and extended in another has a single layout. A module that belongs to
+an import graph is therefore compiled together with that graph rather than on
+its own — which is what lets a file using `extends`, an imported name or an
+`import` be disassembled at all.
+
+Modules are emitted in post-order: every module appears after the ones it
+imports, which is the order they were compiled in.
+
+Project mode roots at **every** source file in turn rather than only at the
+entry, for the same reason `check` walks every file — a module nothing
+imports yet is precisely the one worth looking at. A consequence worth
+knowing: a library has no entry point, and disassembles like anything else.
+
+Inside a project, chunks are labelled with their project-relative path
+(`probe/src/base.sau`), so the listing is the same on any machine. A file
+outside any project is labelled by absolute path, as diagnostics label it.
+
+The compiler is under construction. Anything it cannot compile yet is reported
+by name rather than silently omitted, so the output is either a complete chunk
+or an explicit gap. In project mode one unusable file does not stop the rest:
+the chunks that compiled are printed, the failures go to stderr, and the exit
+status is 1.
+
 ## `saule init`
 
 Scaffold a new project in `./<name>`.

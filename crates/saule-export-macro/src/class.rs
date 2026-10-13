@@ -13,7 +13,60 @@ use crate::meta::{Record, doc_of};
 /// `NativeClass` impl the SDK's `SObject<T>` needs, an `IntoSaule` impl so a
 /// function can simply return a `T` (it is moved into a fresh object), and
 /// the class's metadata record.
-pub(crate) fn expand_class(item: ItemStruct) -> syn::Result<TokenStream> {
+/// The interface list from `#[saule_class(implements(A, B<C>))]`.
+///
+/// Each entry is stringified with its type arguments and whitespace removed —
+/// `OpAdd<Arr, Arr>` becomes `"OpAdd<Arr,Arr>"`. The reader splits and trims,
+/// so the exact spacing does not matter, and a canonical form keeps the
+/// record stable across rustfmt's opinions about the attribute.
+pub(crate) fn parse_class_args(attr: TokenStream) -> syn::Result<Vec<String>> {
+    if attr.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let meta: syn::Meta = syn::parse2(attr)?;
+    let list = match &meta {
+        syn::Meta::List(list) if list.path.is_ident("implements") => list,
+        other => {
+            return Err(syn::Error::new_spanned(
+                other,
+                "`#[saule_class]` takes only `implements(...)`: the Saule class has the \
+                 struct's name",
+            ));
+        }
+    };
+
+    let types = list.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated,
+    )?;
+    if types.is_empty() {
+        return Err(syn::Error::new_spanned(
+            list,
+            "`implements(...)` needs at least one interface",
+        ));
+    }
+
+    let mut out = Vec::with_capacity(types.len());
+    for ty in &types {
+        // A bare name or a generic one; anything else is not an interface.
+        let syn::Type::Path(path) = ty else {
+            return Err(syn::Error::new_spanned(
+                ty,
+                "an interface is a name, optionally with type arguments — \
+                 like `OpAdd<Arr, Arr>`",
+            ));
+        };
+        let rendered: String = quote!(#path)
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        out.push(rendered);
+    }
+    Ok(out)
+}
+
+pub(crate) fn expand_class(item: ItemStruct, implements: &[String]) -> syn::Result<TokenStream> {
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.generics,
@@ -29,6 +82,11 @@ pub(crate) fn expand_class(item: ItemStruct) -> syn::Result<TokenStream> {
         .str("name", &name)
         .opt_str("doc", doc_of(&item.attrs).as_deref())
         .bool("instantiable", true);
+    // Omitted entirely when empty, so a package that declares no interfaces
+    // produces the record it always did.
+    if !implements.is_empty() {
+        record.str_list("implements", implements);
+    }
     let meta = record.emit(&format!("C_{name}"));
 
     Ok(quote! {

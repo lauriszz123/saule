@@ -775,9 +775,32 @@ impl Vm {
                         );
                     }
                     Op::EQV => {
-                        let eq = (*self.reg(base + ins.b() as usize))
-                            == (*self.reg(base + ins.c() as usize));
-                        self.set_reg(base + a, Value::Bool(eq));
+                        let l = self.reg(base + ins.b() as usize);
+                        let r = self.reg(base + ins.c() as usize);
+                        // A class compiled into this chunk has its `OpEq`
+                        // resolved by the compiler, which emits a direct
+                        // `CALLM` and never reaches here. A *native* class
+                        // cannot be: it is not in `chunk.classes`, so there is
+                        // no vtable slot to call and the compiler falls back
+                        // to this opcode. Its overload therefore has to be
+                        // found at run time.
+                        //
+                        // Gated on the tag so the ordinary comparisons this
+                        // opcode exists for — tables, strings, `x == nil` —
+                        // pay one discriminant check and nothing else.
+                        if matches!(l, Value::Foreign(_)) || matches!(r, Value::Foreign(_)) {
+                            let (l, r) = ((*l).clone(), (*r).clone());
+                            let v = saule_runtime::ops::binary(
+                                saule_ast::BinOp::Eq,
+                                l,
+                                r,
+                                proto.span_at(here),
+                            )?;
+                            *self.reg_mut(base + a) = v;
+                        } else {
+                            let eq = *l == *r;
+                            self.set_reg(base + a, Value::Bool(eq));
+                        }
                     }
                     Op::NOT => {
                         let t = (*self.reg(base + ins.b() as usize)).is_truthy();

@@ -485,3 +485,126 @@ fn two_libraries_claiming_one_package_are_both_refused() {
     let err = stderr(&out);
     assert!(err.contains("is installed more than once"), "{err}");
 }
+
+// ─── operator overloading on a native class ────────────────────────────────
+
+/// Arithmetic contracts dispatch to the package's methods.
+///
+/// The whole path is exercised: the macro writes `implements` into the
+/// metadata, discovery reads it back out of the file, the checker registers
+/// the contracts so `a + b` type-checks, and the runtime finds `add` on the
+/// foreign class and calls it.
+#[test]
+fn a_native_class_can_overload_arithmetic() {
+    let home = fixture_home("ops-arith");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local a: Money = Money(250)\n\
+         local b: Money = Money(125)\n\
+         println((a + b).cents)\n\
+         println((a - b).cents)\n\
+         println((-a).cents)\n",
+    );
+    assert_eq!(out, "375\n125\n-250\n");
+}
+
+/// Chained operators, because each step has to hand a fresh foreign object
+/// to the next one rather than unwrapping to a number somewhere in between.
+#[test]
+fn native_overloads_chain() {
+    let home = fixture_home("ops-chain");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local a: Money = Money(100)\n\
+         local b: Money = Money(5)\n\
+         println((a + b + b - a).cents)\n",
+    );
+    assert_eq!(out, "10\n");
+}
+
+/// `OpEq` and `OpCompare` reach the class too. They take different paths
+/// through the runtime's dispatch than arithmetic does, so a test covering
+/// only `+` would not catch one of them being missed.
+#[test]
+fn a_native_class_can_overload_equality_and_ordering() {
+    let home = fixture_home("ops-cmp");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local a: Money = Money(250)\n\
+         local b: Money = Money(125)\n\
+         local c: Money = Money(250)\n\
+         println(a == c)\n\
+         println(a == b)\n\
+         println(a != b)\n\
+         println(b < a)\n\
+         println(a <= c)\n\
+         println(b >= a)\n",
+    );
+    assert_eq!(out, "true\nfalse\ntrue\ntrue\ntrue\nfalse\n");
+}
+
+/// `OpLen` and `OpToString`: `#a` and the rendering `print` and `..` use.
+#[test]
+fn a_native_class_can_overload_length_and_tostring() {
+    let home = fixture_home("ops-len");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local a: Money = Money(1234)\n\
+         println(#a)\n\
+         println(tostring(a))\n\
+         println(\"cost: \" .. a)\n",
+    );
+    assert_eq!(out, "12\n12.34\ncost: 12.34\n");
+}
+
+/// A contract the class does not declare stays an error, so the feature
+/// cannot be used by accident: `Counter` has no `implements`, and adding two
+/// of them must still be refused rather than silently finding a method.
+#[test]
+fn a_native_class_without_the_contract_still_refuses_the_operator() {
+    let home = fixture_home("ops-undeclared");
+    let out = saule(
+        &home,
+        "check",
+        "import * from \"fixture\"\n\
+         local a: Counter = Counter(1)\n\
+         local b: Counter = Counter(2)\n\
+         println(a + b)\n",
+    );
+    assert!(
+        !out.status.success(),
+        "adding two Counters must not type-check"
+    );
+    let err = stderr(&out);
+    assert!(err.contains("OpAdd"), "{err}");
+}
+
+/// `if a == b then` compiles to a jump opcode rather than to `EQV`, so it is
+/// a separate path through the engine and has to reach the overload too.
+/// Without this, a comparison answered one way in an expression and the other
+/// way in a condition.
+#[test]
+fn a_native_overload_is_used_by_an_equality_branch_too() {
+    let home = fixture_home("ops-branch");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local a: Money = Money(250)\n\
+         local c: Money = Money(250)\n\
+         if a == c then\n\
+         println(\"equal\")\n\
+         else\n\
+         println(\"not equal\")\n\
+         end\n\
+         if a != c then\n\
+         println(\"differs\")\n\
+         else\n\
+         println(\"same\")\n\
+         end\n",
+    );
+    assert_eq!(out, "equal\nsame\n");
+}

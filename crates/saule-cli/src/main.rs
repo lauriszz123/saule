@@ -117,7 +117,7 @@ fn real_main(stack_size: usize) {
         Command::Install(args) => pkg::cmd_install(args.package),
         Command::Remove(args) => pkg::cmd_remove(&args.package, args.purge),
         Command::List(args) => pkg::cmd_list(args.global),
-        Command::Disasm(args) => disasm::cmd_disasm(&args.file),
+        Command::Disasm(args) => disasm::cmd_disasm(args.target, args.deps),
     }
 }
 
@@ -351,6 +351,37 @@ mod tests {
         let parsed = check_args(&["saule", "check", "--json", "--dump-type-coverage"]);
         assert!(parsed.json);
         assert!(parsed.dump_type_coverage);
+    }
+
+    fn disasm_args(args: &[&str]) -> crate::cli::DisasmArgs {
+        match parse(args).command {
+            Some(Command::Disasm(d)) => d,
+            other => panic!("expected a disasm command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_disasm_is_the_current_directory() {
+        // Same target rule as `run` and `check`, so the three never disagree
+        // about what they are looking at.
+        let parsed = disasm_args(&["saule", "disasm"]);
+        assert_eq!(parsed.target, None);
+        assert!(!parsed.deps);
+    }
+
+    #[test]
+    fn disasm_takes_a_target_and_an_optional_deps_flag() {
+        let parsed = disasm_args(&["saule", "disasm", "src/main.sau"]);
+        assert_eq!(parsed.target, Some(PathBuf::from("src/main.sau")));
+        assert!(!parsed.deps);
+
+        let parsed = disasm_args(&["saule", "disasm", "src/main.sau", "--deps"]);
+        assert_eq!(parsed.target, Some(PathBuf::from("src/main.sau")));
+        assert!(parsed.deps);
+
+        let parsed = disasm_args(&["saule", "disasm", "--deps"]);
+        assert_eq!(parsed.target, None);
+        assert!(parsed.deps);
     }
 
     #[test]
