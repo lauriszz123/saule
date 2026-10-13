@@ -666,3 +666,134 @@ fn table_indexing_is_untouched_by_the_native_path() {
     );
     assert_eq!(out, "20\n99\n");
 }
+
+/// `#[saule(chain)]`: a mutating method hands the receiver back, so calls
+/// chain on the *same* object.
+///
+/// A method only ever has `&self` / `&mut self`, so it cannot produce a Saule
+/// handle to itself. The shim can — the receiver arrives as argument 0 — and
+/// returning it is the same object rather than a copy. A copy would take the
+/// mutation and leave the original behind, which is the bug this exists to
+/// make impossible.
+#[test]
+fn a_chaining_method_returns_the_same_object() {
+    let home = fixture_home("ops-chain-attr");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local m: Money = Money(100)\n\
+         m.plus(10).plus(5)\n\
+         println(m.cents)\n",
+    );
+    // 115, not 110: the second `plus` must have landed on the same object.
+    assert_eq!(out, "115\n");
+}
+
+/// The chained value is the receiver itself, not a copy — mutating what comes
+/// back must be visible through the original name.
+#[test]
+fn the_chained_value_is_the_receiver_itself() {
+    let home = fixture_home("ops-chain-identity");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local a: Money = Money(100)\n\
+         local b: Money = a.plus(1)\n\
+         b.plus(1)\n\
+         println(a.cents)\n\
+         println(a == b)\n",
+    );
+    assert_eq!(out, "102\ntrue\n");
+}
+
+/// A failing chained method reports its error instead of quietly returning
+/// the receiver.
+#[test]
+fn a_failing_chained_method_still_errors() {
+    let home = fixture_home("ops-chain-err");
+    let out = saule(
+        &home,
+        "run",
+        "import * from \"fixture\"\n\
+         local m: Money = Money(100)\n\
+         m.plusChecked(-5)\n",
+    );
+    assert!(!out.status.success(), "a negative amount must fail");
+    let err = stderr(&out);
+    assert!(err.contains("wants a positive amount"), "{err}");
+}
+
+/// The checker sees the method returning the class, so a chain type-checks.
+#[test]
+fn the_checker_sees_a_chaining_method_return_the_class() {
+    let home = fixture_home("ops-chain-typed");
+    let out = saule(
+        &home,
+        "check",
+        "import * from \"fixture\"\n\
+         local m: Money = Money(1)\n\
+         local n: Money = m.plus(1).plus(2)\n\
+         println(n.cents)\n",
+    );
+    assert!(
+        out.status.success(),
+        "a chain must type-check: {}",
+        stderr(&out)
+    );
+}
+
+/// `Assignable<T>` on a native class: a bare `T` fills a slot declared as the
+/// class, through the class's static `of`.
+///
+/// The conversion is emitted by the compiler, and for a native class it
+/// cannot use the compiled path: there is no layout to read the `assignable`
+/// flag from, no static slot for `CALLSTAT`, and no class index for the `ISA`
+/// guard. It folds the class to a constant and calls `of` by name instead.
+#[test]
+fn a_native_class_can_be_assignable_from_a_bare_value() {
+    let home = fixture_home("ops-assignable");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local m: Money = 250\n\
+         println(m.cents)\n\
+         println(tostring(m))\n",
+    );
+    assert_eq!(out, "250\n2.50\n");
+}
+
+/// The conversion must leave an object that is **already** the class alone.
+///
+/// Without an `ISA` guard — which a native class cannot have — `of` is called
+/// for every non-nil value, so the package has to return the same object when
+/// handed one. If it built a new one instead, this assignment would deep-copy
+/// where the language promises an alias, and `b` would stop tracking `a`.
+#[test]
+fn assigning_an_existing_native_object_aliases_rather_than_copies() {
+    let home = fixture_home("ops-assignable-alias");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local a: Money = Money(100)\n\
+         local b: Money = a\n\
+         b.plus(5)\n\
+         println(a.cents)\n\
+         println(a == b)\n",
+    );
+    // 105 and true: one object, two names.
+    assert_eq!(out, "105\ntrue\n");
+}
+
+/// `nil` fills a nullable slot on its own terms rather than going through
+/// `of`, exactly as it does for a Saule class.
+#[test]
+fn nil_is_not_converted_by_assignable() {
+    let home = fixture_home("ops-assignable-nil");
+    let out = run_ok(
+        &home,
+        "import * from \"fixture\"\n\
+         local m: Money? = nil\n\
+         println(m == nil)\n",
+    );
+    assert_eq!(out, "true\n");
+}

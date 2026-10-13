@@ -255,7 +255,8 @@ fn apply(counter: SObject<Counter>, f: SFunction) -> Result<i64, String> {
     OpLen,
     OpToString,
     OpIndex<integer, integer>,
-    OpNewIndex<integer, integer>
+    OpNewIndex<integer, integer>,
+    Assignable<integer>
 ))]
 pub struct Money {
     cents: i64,
@@ -311,6 +312,46 @@ impl Money {
     /// Present because a `len` without an `is_empty` beside it is a lint.
     pub fn is_empty(&self) -> bool {
         self.cents == 0
+    }
+
+    /// `Money.of(250)` — the `Assignable` contract, so `local m: Money = 250`
+    /// fills the slot.
+    ///
+    /// Returns an `SObject`, not a fresh `Money`, and deliberately: the
+    /// conversion is applied wherever the declared type is `Money`, including
+    /// `local b: Money = a` where `a` already is one. Handing the same counted
+    /// reference back keeps that an alias; building a new object would turn
+    /// every such assignment into a copy.
+    pub fn of(value: SValue) -> Result<SObject<Money>, String> {
+        match value {
+            SValue::Int(cents) => Ok(SObject::new(Money { cents })),
+            SValue::Object(obj) => obj.downcast::<Money>().ok_or_else(|| {
+                format!("Money.of: expected an integer, got a {}", obj.class_name())
+            }),
+            other => Err(format!("Money.of: expected an integer, got {other:?}")),
+        }
+    }
+
+    /// Add `cents`, and hand the same `Money` back so calls chain.
+    ///
+    /// `#[saule(chain)]` is what makes `m.plus(1).plus(2)` mutate one object:
+    /// without it the method would return `nil` and the second call would have
+    /// nothing to act on, and returning a *copy* would leave the first
+    /// mutation behind.
+    #[saule(chain)]
+    pub fn plus(&mut self, cents: i64) {
+        self.cents += cents;
+    }
+
+    /// The same, but fallible — an `Err` must still surface rather than
+    /// looking like a success that happens to return the receiver.
+    #[saule(chain)]
+    pub fn plus_checked(&mut self, cents: i64) -> Result<(), String> {
+        if cents < 0 {
+            return Err(format!("plusChecked wants a positive amount, got {cents}"));
+        }
+        self.cents += cents;
+        Ok(())
     }
 
     /// `a[1]` is the pounds, `a[2]` the pence.

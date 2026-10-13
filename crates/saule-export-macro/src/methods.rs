@@ -38,6 +38,9 @@ struct MethodAttrs {
     getter: Option<Option<String>>,
     setter: Option<Option<String>>,
     skip: bool,
+    /// `#[saule(chain)]`: the method mutates the receiver and Saule sees it
+    /// return the receiver, so calls chain.
+    chain: bool,
     sigs: SigOverrides,
     /// Whether the method carried any `#[saule]` attribute at all.
     present: bool,
@@ -117,6 +120,31 @@ pub(crate) fn expand(mut item: ItemImpl) -> syn::Result<TokenStream> {
                 format!("`{name}` is not a name Saule can call"),
             ));
         }
+        // `chain` hands the receiver back, so there has to be one. Rejected
+        // here rather than producing a shim that returns `nil` and leaves the
+        // author to work out why their fluent API stopped halfway.
+        if attrs.chain && receiver == Receiver::Static {
+            return Err(syn::Error::new_spanned(
+                fn_ident,
+                "`#[saule(chain)]` returns the receiver, so the method needs \
+                 `&self` or `&mut self`",
+            ));
+        }
+        // A getter or setter is a property access, not a call, so there is no
+        // call to chain onto.
+        if attrs.chain
+            && matches!(
+                receiver,
+                Receiver::Getter | Receiver::Setter { .. } | Receiver::Constructor
+            )
+        {
+            return Err(syn::Error::new_spanned(
+                fn_ident,
+                "`#[saule(chain)]` applies to a method; a constructor already \
+                 returns the object and a property is not a call",
+            ));
+        }
+
         if receiver == Receiver::Constructor {
             if let Some(prev) = &constructor_seen {
                 return Err(syn::Error::new_spanned(
@@ -139,6 +167,7 @@ pub(crate) fn expand(mut item: ItemImpl) -> syn::Result<TokenStream> {
             self_ty: Some(&self_ty),
             inputs,
             output: &method.sig.output,
+            chain: attrs.chain,
             span: fn_ident.span(),
         })?);
     }
@@ -250,6 +279,7 @@ fn take_attrs(method: &mut ImplItemFn) -> syn::Result<MethodAttrs> {
             match (key.as_str(), &meta) {
                 ("skip", Meta::Path(_)) => out.skip = true,
                 ("constructor", Meta::Path(_)) => out.constructor = true,
+                ("chain", Meta::Path(_)) => out.chain = true,
                 ("getter", Meta::Path(_)) => out.getter = Some(None),
                 ("setter", Meta::Path(_)) => out.setter = Some(None),
                 ("getter", Meta::NameValue(nv)) => out.getter = Some(Some(str_value(&nv.value)?)),
