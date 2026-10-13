@@ -232,3 +232,92 @@ fn apply(counter: SObject<Counter>, f: SFunction) -> Result<i64, String> {
         other => Err(format!("the callback returned {other:?}, not an integer")),
     }
 }
+
+// ─── operator overloading on a native class ────────────────────────────────
+
+/// An amount of money, to prove a native class can carry operator contracts.
+///
+/// Every contract below is satisfied by a method of the conventional name,
+/// exactly as a Saule class satisfies it — `OpAdd` by `add`, `OpEq` by
+/// `equals`, `OpCompare` by `compare`. The typechecker reads the list out of
+/// the package description without loading the library, so `a + b` on a
+/// `Money` type-checks before anything is bound.
+///
+/// `OpEq` and `OpCompare` are here because they take different paths through
+/// the runtime's operator dispatch than arithmetic does, and a test that
+/// covered only `+` would not have found it if one of them had been missed.
+#[saule_class(implements(
+    OpAdd<Money, Money>,
+    OpSub<Money, Money>,
+    OpNeg<Money>,
+    OpEq<Money>,
+    OpCompare<Money>,
+    OpLen,
+    OpToString
+))]
+pub struct Money {
+    cents: i64,
+}
+
+#[saule_methods]
+impl Money {
+    /// `Money(250)` — two pounds fifty.
+    pub fn new(cents: i64) -> Self {
+        Money { cents }
+    }
+
+    #[saule(getter)]
+    pub fn cents(&self) -> i64 {
+        self.cents
+    }
+
+    /// `a + b`
+    pub fn add(&self, other: &Money) -> Money {
+        Money {
+            cents: self.cents + other.cents,
+        }
+    }
+
+    /// `a - b`
+    pub fn sub(&self, other: &Money) -> Money {
+        Money {
+            cents: self.cents - other.cents,
+        }
+    }
+
+    /// `-a`
+    pub fn neg(&self) -> Money {
+        Money { cents: -self.cents }
+    }
+
+    /// `a == b` and `a != b`
+    pub fn equals(&self, other: &Money) -> bool {
+        self.cents == other.cents
+    }
+
+    /// `<`, `<=`, `>`, `>=` — negative, zero or positive, as a comparator.
+    pub fn compare(&self, other: &Money) -> i64 {
+        self.cents.cmp(&other.cents) as i64
+    }
+
+    /// `#a` — the number of whole units, which is a stand-in for "a length
+    /// the class gets to define" rather than a meaningful quantity.
+    pub fn len(&self) -> i64 {
+        self.cents / 100
+    }
+
+    /// Present because a `len` without an `is_empty` beside it is a lint.
+    pub fn is_empty(&self) -> bool {
+        self.cents == 0
+    }
+
+    /// `tostring(a)` and `print(a)`.
+    ///
+    /// Named `render` in Rust and mapped to `toString` for Saule: an inherent
+    /// `to_string` shadows the one `Display` provides, which clippy rejects
+    /// outright. The contract only cares about the Saule-visible name.
+    #[saule(name = "toString")]
+    pub fn render(&self) -> String {
+        format!("{}.{:02}", self.cents / 100, (self.cents % 100).abs())
+    }
+}

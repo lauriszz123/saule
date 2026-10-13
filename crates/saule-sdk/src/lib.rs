@@ -44,6 +44,39 @@
 //!
 //! ## The pieces
 //!
+//! ## Operators and interfaces
+//!
+//! A `#[saule_class]` may declare the interfaces it satisfies, including the
+//! built-in operator contracts, so `a + b` works on a native object exactly
+//! as it does on a Saule class:
+//!
+//! ```ignore
+//! #[saule_class(implements(OpAdd<Money, Money>, OpEq<Money>, OpToString))]
+//! pub struct Money { cents: i64 }
+//!
+//! #[saule_methods]
+//! impl Money {
+//!     pub fn add(&self, other: &Money) -> Money { /* `a + b` */ }
+//!     pub fn equals(&self, other: &Money) -> bool { /* `a == b` */ }
+//!     #[saule(name = "toString")]
+//!     pub fn render(&self) -> String { /* `tostring(a)` */ }
+//! }
+//! ```
+//!
+//! Each contract is satisfied by a method of the conventional name — `OpAdd`
+//! by `add`, `OpNeg` by `neg`, `OpLen` by `len`, `OpCompare` by `compare`.
+//! The list is compiled into the package description, so the checker sees it
+//! without loading the library and `a + b` type-checks before anything binds.
+//! Declaring a contract whose method is missing is an error at the use site
+//! rather than a surprise at run time.
+//!
+//! Two things to know. `OpToString` wants a Saule method named `toString`,
+//! and an inherent Rust `to_string` shadows `Display`'s, which clippy
+//! rejects — so name it something else and map it with
+//! `#[saule(name = "toString")]`. And a contract's type arguments are written
+//! as they would be in Saule: `implements(OpAdd<Money, Money>)`, not Rust
+//! turbofish.
+//!
 //! - [`saule_package!`] — the package's name and version. Exactly one.
 //! - [`#[saule_export]`](saule_export) — a free function as a static member
 //!   of a class (`Gfx.load`). Great for namespaces of functions.

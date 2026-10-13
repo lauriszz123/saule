@@ -529,7 +529,38 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             body,
         } => {
             let ret = return_ty.clone().or_else(|| match body {
-                LambdaBody::Expr(e) => infer(e, scope),
+                // In a scope seeded with the lambda's own *annotated*
+                // parameters. The body can mention them, and inferring it in
+                // the enclosing scope left them unknown — so a generic call
+                // whose type argument comes from a parameter had nothing to
+                // resolve against and handed back the type variable itself.
+                // `(x: float) => Math.abs(x)` inferred `fn(float) -> N`,
+                // which then failed against every `fn(float) -> float` slot
+                // it was written into, naming a type the author never wrote.
+                //
+                // An *unannotated* parameter is deliberately left unbound.
+                // It parses as `any`, and binding it to `any` is worse than
+                // leaving it unknown: the fallbacks that infer a body from
+                // its other operands stop firing, and a pipeline stage that
+                // binds `U` from `x => x * 2` loses the trail entirely. The
+                // real type of such a parameter comes from the slot being
+                // filled, which is [`infer_lambda_expecting`]'s job — it
+                // refines them first and then seeds all of them.
+                LambdaBody::Expr(e) => {
+                    let annotated: Vec<saule_ast::Param> = params
+                        .iter()
+                        .filter(|p| !crate::expr::is_any(&p.ty))
+                        .cloned()
+                        .collect();
+
+                    if annotated.is_empty() {
+                        infer(e, scope)
+                    } else {
+                        let mut lscope = scope.clone();
+                        crate::stmt::seed_params(&mut lscope, &annotated);
+                        infer(e, &lscope)
+                    }
+                }
                 LambdaBody::Block(_) => None,
             });
             Some(Type::Function {
@@ -760,6 +791,27 @@ pub(crate) fn infer_lambda_expecting(
         params: refined.into_iter().map(|p| p.ty).collect(),
         ret: Box::new(ret),
     })
+}
+
+/// [`infer`], with the slot the value is headed for in hand.
+///
+/// Exactly one expression form cares: a lambda. Its unannotated parameters
+/// take their types from the target signature, and its body then has to be
+/// inferred *with those types in scope* — otherwise a generic call in the
+/// body has nothing to resolve against and `x => Math.abs(x)` infers
+/// `fn(any) -> N` rather than the `fn(float) -> float` the slot asked for.
+/// Everything else ignores the slot and infers as usual.
+///
+/// The `?` comes off the slot first: a lambda written into a
+/// `(fn(string) -> nil)?` callback field is still a lambda, and the
+/// signature inside the nullable is the one that supplies its parameters.
+pub(crate) fn infer_into(value: &Spanned<Expr>, slot: &Type, scope: &Scope) -> Option<Type> {
+    let bare = match slot {
+        Type::Nullable(inner) => inner.as_ref(),
+        other => other,
+    };
+
+    infer_lambda_expecting(value, bare, scope).or_else(|| infer(value, scope))
 }
 
 pub(crate) fn strip_nullable(ty: Type) -> Type {

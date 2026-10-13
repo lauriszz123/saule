@@ -103,15 +103,11 @@ pub fn saule_package(input: TokenStream) -> TokenStream {
 /// with `#[saule_methods]` on its `impl`.
 #[proc_macro_attribute]
 pub fn saule_class(attr: TokenStream, item: TokenStream) -> TokenStream {
-    if !attr.is_empty() {
-        return syn::Error::new(
-            Span::call_site(),
-            "`#[saule_class]` takes no arguments: the Saule class has the struct's name",
-        )
-        .to_compile_error()
-        .into();
-    }
-    match syn::parse::<ItemStruct>(item).and_then(class::expand_class) {
+    let implements = match class::parse_class_args(attr.into()) {
+        Ok(list) => list,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    match syn::parse::<ItemStruct>(item).and_then(|item| class::expand_class(item, &implements)) {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
     }

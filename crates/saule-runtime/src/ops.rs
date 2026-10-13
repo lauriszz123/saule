@@ -22,6 +22,12 @@ fn has_overload(v: &Value, method: &str) -> bool {
             let class = inst.borrow().class.clone();
             class.lookup_method(method).is_some()
         }
+        // An object of a native class overloads the same way, by having the
+        // contract method. Its methods are a flat map rather than a class
+        // chain — a native class has no parent — so there is nothing to walk.
+        // `call_method` already dispatches a `Foreign` receiver, so finding
+        // the method here is all that was missing.
+        Value::Foreign(obj) => obj.class.methods.contains_key(method),
         _ => false,
     }
 }
@@ -30,6 +36,7 @@ fn has_overload(v: &Value, method: &str) -> bool {
 fn class_name(v: &Value) -> String {
     match v {
         Value::Instance(inst) => inst.borrow().class.name.clone(),
+        Value::Foreign(obj) => obj.class.name.clone(),
         other => other.type_name().to_string(),
     }
 }
@@ -124,12 +131,19 @@ pub fn binary(
 ) -> Result<Value, RuntimeError> {
     use BinOp::*;
 
-    // Only an instance can carry an operator overload — `has_overload` returns
-    // `false` for every other variant, so every `Some`/`Err` path inside
-    // `try_overload` is already gated on one. Checking here instead means the
-    // overwhelmingly common `int + int` / `float * float` shapes skip the
-    // contract lookup and the per-operator match entirely.
-    if (matches!(l, Value::Instance(_)) || matches!(r, Value::Instance(_)))
+    // Only an object can carry an operator overload — a Saule instance or an
+    // object of a native class. `has_overload` returns `false` for every other
+    // variant, so every `Some`/`Err` path inside `try_overload` is already
+    // gated on one. Checking here instead means the overwhelmingly common
+    // `int + int` / `float * float` shapes skip the contract lookup and the
+    // per-operator match entirely.
+    //
+    // `Foreign` belongs here for the same reason `Instance` does: a native
+    // class declares its contracts with `#[saule_class(implements(...))]`, the
+    // checker reads them off the package description, and leaving this gate
+    // instance-only would type-check `a + b` and then refuse to run it.
+    if (matches!(l, Value::Instance(_) | Value::Foreign(_))
+        || matches!(r, Value::Instance(_) | Value::Foreign(_)))
         && let Some(v) = try_overload(op, &l, &r, &span)?
     {
         return Ok(v);
@@ -483,6 +497,13 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Instance(x), Value::Instance(y)) => std::rc::Rc::ptr_eq(x, y),
         (Value::EnumVariant(x), Value::EnumVariant(y)) => std::rc::Rc::ptr_eq(x, y),
         (Value::Enum(x), Value::Enum(y)) => std::rc::Rc::ptr_eq(x, y),
+        // By the package's object, not by our wrapper, exactly as `Value`'s
+        // `PartialEq` does it: the same object returned twice is two
+        // wrappers, each owning a reference. Without this arm the two
+        // disagreed — `PartialEq` said identity and this said `false` — so
+        // `local x = (a == a)` and `if a == a then` answered differently,
+        // because they compile to different opcodes.
+        (Value::Foreign(x), Value::Foreign(y)) => x.ptr() == y.ptr(),
         // Cross-type comparisons are always false (Lua semantics).
         _ => false,
     }

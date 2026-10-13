@@ -80,26 +80,46 @@ pub(crate) enum Command {
     Disasm(DisasmArgs),
 }
 
-/// `saule disasm <file.sau>`
+/// `saule disasm [TARGET] [--deps]`
+///
+/// Mirrors `run`'s and `check`'s target rules — directory (or absent) means
+/// project mode, a file means that file — so the three never disagree about
+/// what they are looking at.
 #[derive(Debug, Args)]
 #[command(
-    about = "Compile a source file to bytecode and print the disassembly",
-    long_about = "Compile a source file to bytecode and print the disassembly.
+    about = "Compile to bytecode and print the disassembly",
+    long_about = "Compile to bytecode and print the disassembly.
 
-  saule disasm <file.sau>
+  saule disasm                 every module in the project in the current directory
+  saule disasm <dir>           every module in the project rooted at <dir>
+  saule disasm <file.sau>      that file's chunk
+  saule disasm <file> --deps   that file, plus the modules it imports
 
 A debugging aid for the bytecode compiler, not a user-facing format: the
 listing shows one line per instruction with registers, constants and
-resolved jump targets.
+resolved jump targets. Each chunk names its own source on its first line.
+
+Imports are resolved at compile time, so a file that is part of an import
+graph is compiled together with that graph rather than on its own — which is
+what lets a class declared in one module and extended in another have one
+layout. Project mode roots at every source file in turn, not only the entry,
+so a module nothing imports yet is disassembled too and a library needs no
+entry point.
 
 The compiler is under construction. Anything it cannot compile yet is
 reported by name rather than silently omitted, so the output is either a
 complete chunk or an explicit gap."
 )]
 pub(crate) struct DisasmArgs {
-    /// The `.sau` file to compile.
-    #[arg(value_name = "FILE", value_parser = path_arg)]
-    pub file: PathBuf,
+    /// Project directory or `.sau` file. Defaults to the current directory.
+    #[arg(value_name = "TARGET", value_parser = path_arg)]
+    pub target: Option<PathBuf>,
+
+    /// Also disassemble the modules the target imports.
+    ///
+    /// Ignored in project mode, which emits every module either way.
+    #[arg(long)]
+    pub deps: bool,
 }
 
 /// `saule check [TARGET]`
@@ -134,6 +154,20 @@ pub(crate) struct CheckArgs {
     /// before that work is depended on. Diagnostics are unaffected.
     #[arg(long)]
     pub dump_type_coverage: bool,
+
+    /// Write the diagnostics to stdout as JSON instead of rendering them.
+    ///
+    /// For anything that has to *act* on the error list rather than read it:
+    /// a build script, an editor not using the LSP, a CI job, or a harness
+    /// running the compiler over a great many generated programs. The
+    /// rendered form is for a person and has to be screen-scraped otherwise,
+    /// which fails quietly the moment the layout changes.
+    ///
+    /// The shape is `saule-diagnostics`' published contract — the same one
+    /// the web playground already consumes. The exit status is unchanged, so
+    /// this stays usable as a CI gate.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `saule run [TARGET] [ARGS...] [-- ARGS...]`

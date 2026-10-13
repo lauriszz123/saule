@@ -376,14 +376,23 @@ impl Compiler<'_> {
             let parent = self.chunk.classes[class as usize].parent.and_then(|p| {
                 let pc = &self.chunk.classes[p as usize];
                 let slot = pc.init? as usize;
-                let target = pc.vtable.get(slot).copied()?;
-                // Not `pc.module`: the parent may itself have *inherited*
-                // its `init`, in which case the proto index is the
-                // grandparent's chunk's (`ClassProto::vowner`). A class with
-                // no `init` of its own between two that have one is all it
-                // takes.
+                // `vowner` names the ancestor that *declares* this slot, and
+                // it is correct from layout time — an inherited slot clones
+                // the parent's entry, so it keeps pointing at whoever really
+                // declared the `init`. Read both the proto and the module
+                // out of *that* class.
+                //
+                // Not out of `pc`'s own row: the parent may have inherited
+                // its `init` without overriding it, and then `pc.vtable[slot]`
+                // is still the `u32::MAX` placeholder until Pass 2a sweeps it
+                // down — which happens after every body is compiled, far too
+                // late for this. The declaring ancestor's row, by contrast,
+                // was filled by its own codegen. A class with no `init` of
+                // its own between two that have one was all it took.
                 let owner = *pc.vowner.get(slot)?;
-                Some((self.chunk.classes[owner as usize].module, target))
+                let oc = &self.chunk.classes[owner as usize];
+                let target = oc.vtable.get(slot).copied()?;
+                Some((oc.module, target))
             });
             let Some((pmod, target)) = parent.filter(|(_, t)| *t != u32::MAX) else {
                 return Err(CompileError::unsupported(

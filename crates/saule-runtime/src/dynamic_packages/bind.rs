@@ -357,8 +357,45 @@ fn local_name(export: &str, names: &saule_ast::ImportNames) -> Option<String> {
     }
 }
 
+/// Split `"OpAdd<Arr,Arr>"` into its name and its type arguments.
+///
+/// The angle-bracketed part is parsed with the same helpers that read a
+/// method signature, so an interface argument accepts exactly the types a
+/// parameter does — including a nullable or a nested generic.
+fn split_interface(spelled: &str) -> (String, Vec<saule_ast::Type>) {
+    let s = spelled.trim();
+    match s.find('<') {
+        // No type arguments: `implements(OpToString)`.
+        None => (s.to_string(), Vec::new()),
+        Some(open) => {
+            let name = s[..open].trim().to_string();
+            let args = s[open..]
+                .strip_prefix('<')
+                .and_then(|r| r.strip_suffix('>'))
+                .map(|inner| {
+                    super::manifest::split_top_level(inner)
+                        .iter()
+                        .map(|t| super::manifest::parse_type(t))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (name, args)
+        }
+    }
+}
+
 pub(crate) fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
     let mut info = saule_semantic::ClassInfo::default();
+
+    // `implements` and `implements_args` are positional, so they are pushed
+    // together. Populating them is what makes `a + b` on a native object
+    // type-check: the checker reads the operator contract off the class the
+    // same way it does for a Saule class, and the runtime finds the method.
+    for spelled in &class.implements {
+        let (name, args) = split_interface(spelled);
+        info.implements.push(name);
+        info.implements_args.push(args);
+    }
     for m in &class.methods {
         info.members.insert(m.name.clone(), false); // public
         match m.receiver {

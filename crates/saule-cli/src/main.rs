@@ -111,14 +111,14 @@ fn real_main(stack_size: usize) {
 
     match command {
         Command::Run(args) => cmd_run(args),
-        Command::Check(args) => check::cmd_check(args.target, args.dump_type_coverage),
+        Command::Check(args) => check::cmd_check(args.target, args.dump_type_coverage, args.json),
         Command::Fmt(args) => fmt::cmd_fmt(&args),
         Command::Init(args) => init::cmd_init(&args.name, args.lib),
         Command::Install(args) => pkg::cmd_install(args.package),
         Command::Update(args) => pkg::cmd_update(args.package, args.check),
         Command::Remove(args) => pkg::cmd_remove(&args.package, args.purge),
         Command::List(args) => pkg::cmd_list(args.global),
-        Command::Disasm(args) => disasm::cmd_disasm(&args.file),
+        Command::Disasm(args) => disasm::cmd_disasm(args.target, args.deps),
     }
 }
 
@@ -320,6 +320,69 @@ mod tests {
     #[test]
     fn unknown_subcommands_are_rejected() {
         assert!(Cli::try_parse_from(["saule", "frobnicate"]).is_err());
+    }
+
+    fn check_args(args: &[&str]) -> crate::cli::CheckArgs {
+        match parse(args).command {
+            Some(Command::Check(c)) => c,
+            other => panic!("expected a check command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_defaults_to_rendered_output() {
+        let parsed = check_args(&["saule", "check"]);
+        assert_eq!(parsed.target, None);
+        assert!(!parsed.json, "--json must be opt-in");
+        assert!(!parsed.dump_type_coverage);
+    }
+
+    #[test]
+    fn check_json_is_independent_of_the_target_and_of_coverage() {
+        // The flag composes: it changes how diagnostics are emitted, not
+        // which ones are produced or what is examined.
+        let parsed = check_args(&["saule", "check", "--json"]);
+        assert!(parsed.json);
+        assert_eq!(parsed.target, None);
+
+        let parsed = check_args(&["saule", "check", "src/main.sau", "--json"]);
+        assert!(parsed.json);
+        assert_eq!(parsed.target, Some(PathBuf::from("src/main.sau")));
+
+        let parsed = check_args(&["saule", "check", "--json", "--dump-type-coverage"]);
+        assert!(parsed.json);
+        assert!(parsed.dump_type_coverage);
+    }
+
+    fn disasm_args(args: &[&str]) -> crate::cli::DisasmArgs {
+        match parse(args).command {
+            Some(Command::Disasm(d)) => d,
+            other => panic!("expected a disasm command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bare_disasm_is_the_current_directory() {
+        // Same target rule as `run` and `check`, so the three never disagree
+        // about what they are looking at.
+        let parsed = disasm_args(&["saule", "disasm"]);
+        assert_eq!(parsed.target, None);
+        assert!(!parsed.deps);
+    }
+
+    #[test]
+    fn disasm_takes_a_target_and_an_optional_deps_flag() {
+        let parsed = disasm_args(&["saule", "disasm", "src/main.sau"]);
+        assert_eq!(parsed.target, Some(PathBuf::from("src/main.sau")));
+        assert!(!parsed.deps);
+
+        let parsed = disasm_args(&["saule", "disasm", "src/main.sau", "--deps"]);
+        assert_eq!(parsed.target, Some(PathBuf::from("src/main.sau")));
+        assert!(parsed.deps);
+
+        let parsed = disasm_args(&["saule", "disasm", "--deps"]);
+        assert_eq!(parsed.target, None);
+        assert!(parsed.deps);
     }
 
     #[test]

@@ -20,13 +20,21 @@ saule-semantic = { path = "../saule-semantic" }
 saule-runtime = { path = "../saule-runtime" }
 saule-vm = { path = "../saule-vm" }
 saule-fmt = { path = "../saule-fmt" }
+# The diagnostic JSON contract for `check --json`, shared with the playground.
+saule-diagnostics = { path = "../saule-diagnostics" }
 miette = { version = "7.6.0", features = ["fancy"] }
 clap = { version = "4.6.4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 # `tests/native_package.rs` patches a package's declared ABI version, and
 # reads the current one from here rather than repeating the number.
 saule-native-abi = { path = "../saule-native-abi" }
+# `tests/check_json.rs` parses `check --json`'s output as JSON rather than
+# matching substrings — which is the point of the flag. An integration test is
+# its own crate and cannot see the binary's own dependencies.
+serde_json = "1"
 
 [features]
 # Passthrough for `--profile-bytecode` (`VM_DESIGN.md` §16). Off by

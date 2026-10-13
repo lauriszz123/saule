@@ -14,6 +14,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 saule-version = { path = "../saule-version" }
+# The diagnostic JSON contract, shared with `saule check --json` so the
+# playground and the CLI cannot drift apart.
+saule-diagnostics = { path = "../saule-diagnostics" }
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }

@@ -411,7 +411,9 @@ pub(crate) fn is_assignment_compatible(
     if matches!(value.value, Expr::Nil) {
         return is_nullable(decl_ty);
     }
-    let Some(value_ty) = infer(value, scope) else {
+    // Slot-aware, so a lambda's unannotated parameters are taken from
+    // `decl_ty` before its body is inferred — see `infer_into`.
+    let Some(value_ty) = crate::expr::infer::infer_into(value, decl_ty, scope) else {
         // Unknown value type — stay conservative.
         return true;
     };

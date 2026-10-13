@@ -497,13 +497,56 @@ pub(crate) fn compile_into(
         }
     }
 
+    // The module's classes in `ClassIdx` order — which `order_by_depth`
+    // has already made parents-before-children. Both class passes below
+    // need that order, and neither can use declaration order: a class
+    // written above its parent is legal, and `saule check` accepts it.
+    let mut classes: Vec<(crate::chunk::ClassIdx, &saule_ast::Spanned<saule_ast::Decl>)> =
+        Vec::new();
+    for s in &module.stmts {
+        if let saule_ast::Stmt::Decl(d) = &s.value
+            && let saule_ast::Decl::Class { name, .. } = &d.value
+            && let Some(idx) = c.layouts.get(name)
+        {
+            classes.push((idx, d));
+        }
+    }
+    classes.sort_by_key(|(idx, _)| *idx);
+
+    // Pass 1b: the field-default initialisers, before any body is compiled.
+    //
+    // `construct_to` reads `classes[c].field_init` at the point a
+    // construction is compiled and emits nothing when it is still `None`,
+    // so every one of these protos must exist before the first method body
+    // that could construct its class — including the class's own methods.
+    // See `Compiler::field_init_proto` for what skipping it looked like.
+    //
+    // Parents first, because a field initialiser calls its parent's.
+    for (idx, d) in &classes {
+        let saule_ast::Decl::Class { members, .. } = &d.value else {
+            unreachable!("filtered to classes above");
+        };
+        c.field_init_proto(*idx, members.as_slice(), &d.span)?;
+    }
+
     // Class bodies are compiled before the module body runs, so a
     // constructor called on line 1 finds a filled-in vtable.
+    //
+    // Parents first here too: `self.super()` resolves the parent's `init`
+    // statically out of the declaring ancestor's vtable row, so that
+    // ancestor's body has to be compiled already.
+    for (_, d) in &classes {
+        c.class_bodies(d)?;
+    }
+
+    // Static field initialisers, in *declaration* order: unlike the two
+    // passes above these are statements in the module body, and one static
+    // may read another.
     for s in &module.stmts {
         if let saule_ast::Stmt::Decl(d) = &s.value
             && matches!(&d.value, saule_ast::Decl::Class { .. })
         {
-            c.class_decl(d)?;
+            c.class_statics(d)?;
         }
     }
 
