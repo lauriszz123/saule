@@ -1,24 +1,25 @@
 ---
 title: "Types"
-description: "Saule has 9 primitive types, inherited from Lua's type system but statically declared. Lua's single number type is split into two distinct types in…"
+description: "Saule has 10 primitive types, inherited from Lua's type system but statically declared. Lua's single number type is split into two distinct types in…"
 sidebar:
   order: 1
 ---
 
 <!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
 
-Saule has 9 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule, and Lua's single `string` type is likewise split into text and bytes:
+Saule has 10 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule, and Lua's single `string` type is likewise split into text and bytes:
 
 | Type | Description |
 |---|---|
 | `integer` | Whole numbers, no decimal component. 64-bit signed; [overflow wraps](/saule/language/types/#integer-overflow) |
 | `float` | Decimal numbers, 64-bit precision |
+| `byte` | An `integer` restricted to `0..=255`. Widens to `integer` for free; narrowing needs a checked [`as byte`](/saule/language/types/#the-byte-type) |
 | `string` | Immutable text, always valid UTF-8. Measured and indexed in **codepoints** |
 | `bytes` | Immutable buffer of arbitrary bytes, no encoding promised. Measured and indexed in **bytes** — see [`bytes` vs `string`](/saule/language/types/#bytes-vs-string) |
 | `boolean` | `true` or `false` |
 | `nil` | Absence of value |
 | `fn(A, B) -> R` | First-class function values, typed by [signature](/saule/language/types/#function-types) |
-| `table<T>` | The only data structure, typed generically |
+| `table<T>` | The only data structure, typed generically. Also written `T[]` — see [Array Suffixes](/saule/language/tables/#array-suffixes) |
 | `any` | A value of unknown type. Anything may be assigned **to** an `any`; getting a value back **out** requires a checked [`as` cast](/saule/language/types/#escaping-any-with-as) |
 
 Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what you wrote. A variable cannot be `nil` unless its type is marked nullable with `?`.
@@ -66,6 +67,55 @@ instead. Equality is by contents, and a `bytes` is never equal to a `string`.
 Files follow the same split: `f.read()` hands back a `string` and
 `f.readBytes()` a `bytes`, with `f.write` / `f.writeBytes` to match. See
 [`Bytes`](/saule/stdlib/bytes/) for the full module.
+
+### The `byte` type
+
+`byte` is an `integer` restricted to `0..=255` — the type of one element of a
+`bytes`. It is the same value at run time; what the type adds is that nothing
+out of range can ever be in one.
+
+The two directions are deliberately not symmetric:
+
+```saule
+local b: byte = 200                  -- a literal in range: no cast needed
+local n: integer = b                 -- widening is free; a byte *is* an integer
+
+local computed: integer = readLength()
+local narrowed: byte? = computed as byte   -- checked: nil when out of range
+local oops: byte = computed          -- ERROR: needs `as byte`
+```
+
+Widening costs nothing because a `byte` already is an `integer`. Narrowing is
+the direction that can fail, so it goes through `as byte`, which yields
+`byte?` — `nil` for anything outside the range, rather than a wrap or a clamp
+that would silently corrupt the value. A `float` truncates toward zero first
+and then has to fit.
+
+A literal needs no cast because its range is visible where it is written, so
+`local b: byte = 200` is fine and `local b: byte = 300` is a compile error at
+the literal. A *computed* integer always needs the cast: nothing at the type
+level can know what it holds.
+
+**Arithmetic widens to `integer`.** `200 + 100` is 300, which is not a byte, so
+a result that stayed `byte` would be a lie:
+
+```saule
+local sum: integer = b + 100         -- integer, not byte
+local masked: integer = b & 0x0f     -- bit patterns work; a byte has them
+```
+
+That makes the overflow visible in the type instead of hidden in a wrap, and
+narrowing back is the `as byte` that checks.
+
+Where it shows up: `Bytes.byte(b, i)` returns `byte?`, so a byte read out of a
+buffer needs no re-checking, and `Bytes.of(...byte)` takes them — so
+`Bytes.of(0x89, 0x50)` is checked where it is written, and `Bytes.of(300)` is
+a compile error rather than a runtime one. `Bytes.toArray` / `Bytes.fromArray` convert
+between a `bytes` and a `byte[]` when a loop over elements is what you want —
+two functions rather than an implicit conversion, because the representations
+cost very differently: a `bytes` is one byte per byte, a `byte[]` a boxed
+value per byte. Reach for `bytes` to hold or move bytes, `byte[]` only to work
+through them one at a time.
 
 ### Function types
 
@@ -354,8 +404,10 @@ The pairs `as` converts, and nothing else:
 | --- | --- | --- |
 | `float as integer` | `integer` | truncates toward zero, no rounding |
 | `integer as float` | `float` | always safe, no precision loss |
-| `integer` / `float` / `boolean` `as string` | `string` | the text `tostring` gives |
+| `integer` / `float` / `byte` / `boolean` `as string` | `string` | the text `tostring` gives |
 | `string as integer` / `as float` | `integer?` / `float?` | parses; `nil` when the text is not a number |
+| `integer` / `float` `as byte` | `byte?` | range-checks `0..=255`; `nil` outside it, never a wrap or a clamp. A `float` truncates first |
+| `byte as integer` / `as float` | `integer` / `float` | always safe — a `byte` already is an `integer` |
 
 Two rules keep a cast from ever being decoration:
 

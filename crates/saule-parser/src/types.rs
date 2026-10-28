@@ -83,10 +83,67 @@ impl Parser {
 
     pub(crate) fn parse_type(&mut self) -> Result<Type, ParseError> {
         let mut ty = self.parse_base_type()?;
-        // Trailing `?` makes the type nullable. Allow chaining (`T??` though rare).
-        while self.check(&Token::Question) {
-            self.advance();
-            ty = Type::Nullable(Box::new(ty));
+        // Suffixes bind left to right, so `T?[]` is an array of nullable `T`
+        // and `T[]?` a nullable array. Both read the way they are written.
+        loop {
+            if self.check(&Token::Question) {
+                // Trailing `?` makes the type nullable. Allow chaining
+                // (`T??` though rare).
+                self.advance();
+                ty = Type::Nullable(Box::new(ty));
+            } else if self.at_array_suffix() {
+                ty = self.parse_array_suffix(ty)?;
+            } else {
+                break;
+            }
+        }
+        Ok(ty)
+    }
+
+    /// Is the cursor on an array suffix — `[`, then only commas, then `]`?
+    ///
+    /// Checked before consuming anything because `parse_type` is reachable
+    /// from `cast_expr`, where a `[` after the type belongs to the
+    /// expression rather than to the annotation. `x as Dog[1]` has to leave
+    /// its bracket alone; only an *empty* bracket group, or one holding
+    /// nothing but commas, is a suffix, and no expression can be either.
+    pub(crate) fn at_array_suffix(&self) -> bool {
+        if !self.check(&Token::LBracket) {
+            return false;
+        }
+        // `peek_at` clamps at the end of the stream, so an unterminated
+        // group runs into `Eof` and answers `false` rather than reading off
+        // the end.
+        let mut i = 1;
+        loop {
+            match self.peek_at(i).value {
+                Token::RBracket => return true,
+                Token::Comma => i += 1,
+                _ => return false,
+            }
+        }
+    }
+
+    /// `T[]` → `table<integer, T>`, and one more wrap per comma: `T[,]` is
+    /// `table<integer, table<integer, T>>`, the same type `T[][]` builds by
+    /// going round the suffix loop twice.
+    ///
+    /// The key is written out as `integer` rather than left implicit. Both
+    /// spellings are the same type — see `table_key` in `saule-typeck` — and
+    /// naming it keeps the sugar's meaning visible in the error messages
+    /// that print a type back.
+    fn parse_array_suffix(&mut self, mut ty: Type) -> Result<Type, ParseError> {
+        self.expect(&Token::LBracket, "`[`")?;
+        let mut dims = 1;
+        while self.eat(&Token::Comma) {
+            dims += 1;
+        }
+        self.expect_close(&Token::RBracket, "`]` to close an array type")?;
+        for _ in 0..dims {
+            ty = Type::Table {
+                key: Some(Box::new(Type::Named("integer".to_string()))),
+                value: Box::new(ty),
+            };
         }
         Ok(ty)
     }

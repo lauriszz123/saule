@@ -1,0 +1,134 @@
+-- `Os.spawn` and the `Process` handle.
+--
+-- The point of this one, against `Os.execute` and `Os.capture` in
+-- os_lib.sau: the child runs *while the program does*, so the program can
+-- write to it, read what came back, and carry on in between. Everything
+-- here is pinned as an invariant rather than a timing, because the
+-- scheduler decides when a child's output arrives and a fixture cannot.
+--
+-- Unix command names, as in os_lib.sau's `Os.execute("true")` — the fixture
+-- suite runs on Linux in CI.
+
+class Main
+	static fn main()
+		-- ── write, read back, exit ────────────────────────
+		local echo: Process = Os.spawn("cat")!
+		println("pid positive: " .. tostring(echo.pid() > 0))
+		println("wrote: " .. echo.write(Bytes.fromString("round trip\n")))
+		-- Closing stdin is what lets `cat` finish; without it both ends wait.
+		echo.closeStdin()
+		println("exit: " .. echo.wait())
+		println("read back: " .. String.trim(Bytes.toString(echo.read()) ?? "?"))
+		-- The code is remembered, so asking twice is allowed.
+		println("poll after exit: " .. (echo.poll() ?? -1))
+
+		-- ── reads do not block ───────────────────────────
+		-- A child that dribbles its output over time. A blocking read would
+		-- stall here; the loop below gets to run instead.
+		local slow: Process = Os.spawn("sh", {"-c", "for i in 1 2 3; do echo $i; sleep 0.05; done"})!
+		local text: string = ""
+		local reads: integer = 0
+		local deadline: float = Os.clock() + 20.0
+		while Os.clock() < deadline do
+			reads = reads + 1
+			local chunk: bytes = slow.read()
+			if #chunk > 0 then
+				text = text .. (Bytes.toString(chunk) ?? "")
+			end
+			-- Done only when it has exited *and* the buffer is drained;
+			-- either alone would lose the tail.
+			if slow.poll() != nil and slow.atEof() then
+				break
+			end
+		end
+		println("collected: " .. String.replace(String.trim(text), "\n", ","))
+		println("read more than once: " .. tostring(reads > 1))
+		println("eof once drained: " .. tostring(slow.atEof()))
+
+		-- ── bytes, not text ─────────────────────────────
+		-- Output that is not valid UTF-8 arrives intact. This is why `read`
+		-- is typed `bytes`: a `string` could not have carried it.
+		local raw: Process = Os.spawn("printf", {"\\x00\\x80\\xc3\\x28\\xff"})!
+		raw.wait()
+		local blob: bytes = raw.read()
+		println("binary hex: " .. Bytes.toHex(blob))
+		println("binary len: " .. #blob)
+		println("not text: " .. tostring(Bytes.toString(blob) == nil))
+
+		-- ── the two streams are separate ────────────────
+		local both: Process = Os.spawn("sh", {"-c", "echo out; echo err 1>&2"})!
+		both.wait()
+		println("stdout: " .. String.trim(Bytes.toString(both.read()) ?? "?"))
+		println("stderr: " .. String.trim(Bytes.toString(both.readErr()) ?? "?"))
+
+		-- ── argv, never a shell ─────────────────────────
+		-- `Os.execute("echo $HOME")` would expand that. Nothing re-parses an
+		-- argument here, so it arrives as written.
+		local literal: Process = Os.spawn("echo", {"$HOME not expanded"})!
+		literal.wait()
+		println("argv literal: " .. String.trim(Bytes.toString(literal.read()) ?? "?"))
+
+		-- A read limit caps one call; 0 or less reads nothing.
+		local capped: Process = Os.spawn("echo", {"abcdefgh"})!
+		capped.wait()
+		println("capped read: " .. (Bytes.toString(capped.read(3)) ?? "?"))
+		println("zero read: " .. #capped.read(0))
+
+		-- ── ending one early ────────────────────────────
+		local long: Process = Os.spawn("sleep", {"30"})!
+		println("running: " .. tostring(long.running()))
+		println("killed: " .. tostring(long.kill()))
+		-- Signalled rather than exited, which `Os.execute` also reports as -1.
+		println("code after kill: " .. long.wait())
+		println("running after kill: " .. tostring(long.running()))
+
+		-- ── placing the child: cwd and env ──────────────
+		-- `cwd` is where it runs.
+		local inDir: Process = Os.spawn("pwd", {}, "/tmp")!
+		inDir.wait()
+		println("cwd: " .. String.trim(Bytes.toString(inDir.read()) ?? "?"))
+
+		-- `env` overlays what it inherits rather than replacing it, so the
+		-- variable is there *and* so is the rest of the environment.
+		local withEnv: Process = Os.spawn(
+			"sh", {"-c", "echo $SAULE_FIXTURE_VAR; test -n \"$PATH\" && echo inherited"},
+			nil, {SAULE_FIXTURE_VAR: "overlaid"}
+		)!
+		withEnv.wait()
+		println("env: " .. String.replace(String.trim(Bytes.toString(withEnv.read()) ?? "?"), "\n", "|"))
+
+		-- A directory that does not exist is a spawn failure like any other.
+		println("bad cwd is nil: " .. tostring(Os.spawn("pwd", {}, "/no/such/dir/xyz") == nil))
+
+		-- ── unread output is bounded ────────────────────
+		-- A child that is never read stops at the buffer limit instead of
+		-- growing until the process dies. Nothing is dropped: the reader
+		-- stops taking from the pipe, so the child blocks on its next write.
+		local flood: Process = Os.spawn("sh", {"-c", "head -c 20000000 /dev/zero"})!
+		Os.sleep(1.0)
+		local held: integer = flood.available()
+		println("buffer is capped: " .. tostring(held > 0 and held <= 8388608))
+		flood.kill()
+
+		-- And across the limit nothing is lost, because the reader resumes.
+		local big: Process = Os.spawn("sh", {"-c", "head -c 12000000 /dev/zero"})!
+		local total: integer = 0
+		local deadline: float = Os.clock() + 120.0
+		while Os.clock() < deadline do
+			total = total + #big.read(1048576)
+			if big.poll() != nil and big.atEof() then
+				break
+			end
+		end
+		println("all 12000000 bytes arrived: " .. tostring(total == 12000000))
+
+		-- ── spawning something that is not there ────────
+		-- `nil`, the same condition `Os.execute` answers with -1.
+		println("missing is nil: " .. tostring(Os.spawn("saule-no-such-program") == nil))
+
+		-- An unknown method names the ones that exist.
+		local probe: Process = Os.spawn("true")!
+		probe.wait()
+		println("handle prints: " .. tostring(String.indexOf(tostring(probe), "process") != nil))
+	end
+end

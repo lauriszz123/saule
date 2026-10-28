@@ -12,6 +12,7 @@
 //! | [`table`]    | `TableObject`, `TableKey`                      |
 //! | [`bytes`]    | `SauleBytes`                                   |
 //! | [`file`]     | `FileHandle`                                   |
+//! | [`process`]  | `ProcessHandle`, `Stream`                      |
 //! | [`foreign`]  | `ForeignObject`, `ForeignClass`                |
 //!
 //! When adding a new variant, remember to extend [`Value::type_name`],
@@ -25,6 +26,7 @@ pub mod file;
 pub mod foreign;
 pub mod function;
 pub mod interface;
+pub mod process;
 pub mod str;
 pub mod table;
 
@@ -38,6 +40,7 @@ pub use file::FileHandle;
 pub use foreign::{ForeignClass, ForeignObject};
 pub use function::{NativeClosure, NativeFn, VmFunction, VmFunctionRef};
 pub use interface::InterfaceObject;
+pub use process::ProcessHandle;
 pub use str::{SauleStr, hash_str};
 pub use table::{TableKey, TableObject};
 
@@ -88,6 +91,9 @@ pub enum Value {
     /// `Io.stdin`/`stdout`/`stderr` statics. Methods are dispatched via a
     /// static table inside `stdlib::io`.
     File(Rc<RefCell<FileHandle>>),
+    /// A child process spawned by `Os.spawn`, still running or finished.
+    /// Methods are dispatched via `stdlib::process`, the way `File`'s are.
+    Process(Rc<RefCell<ProcessHandle>>),
     /// An object of a class a native package defines. Its memory is the
     /// package's; this holds one reference to it. To a program it is an
     /// instance like any other.
@@ -152,6 +158,7 @@ impl Value {
             Value::Enum(e) => Value::Enum(Rc::clone(e)),
             Value::Interface(i) => Value::Interface(Rc::clone(i)),
             Value::File(h) => Value::File(Rc::clone(h)),
+            Value::Process(h) => Value::Process(Rc::clone(h)),
             Value::Foreign(o) => Value::Foreign(Rc::clone(o)),
             // The scalars never reach here; `clone` answers them inline.
             other => match other {
@@ -186,6 +193,7 @@ impl Value {
             Value::Enum(_) => "enum",
             Value::Interface(_) => "interface",
             Value::File(_) => "file",
+            Value::Process(_) => "process",
         }
     }
 
@@ -241,6 +249,7 @@ impl Value {
             Value::Instance(i) => format!("<instance of {}>", i.borrow().class.name),
             Value::Foreign(o) => format!("<instance of {}>", o.class.name),
             Value::File(h) => format!("{:?}", h.borrow()),
+            Value::Process(h) => format!("{:?}", h.borrow()),
         }
     }
 }
@@ -281,6 +290,7 @@ impl PartialEq for Value {
             (Value::Enum(a), Value::Enum(b)) => Rc::ptr_eq(a, b),
             (Value::Interface(a), Value::Interface(b)) => Rc::ptr_eq(a, b),
             (Value::File(a), Value::File(b)) => Rc::ptr_eq(a, b),
+            (Value::Process(a), Value::Process(b)) => Rc::ptr_eq(a, b),
             // By the package's object, not by our wrapper: the same object
             // returned twice is two wrappers, each owning a reference.
             (Value::Foreign(a), Value::Foreign(b)) => a.ptr() == b.ptr(),

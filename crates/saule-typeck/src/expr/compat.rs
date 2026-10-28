@@ -68,7 +68,7 @@ fn check_assignment_compat_inner(
     {
         let expected_base = strip_nullable(decl_ty.clone());
         if !matches!(&expected_base, Type::Named(n) if n == "nil" || n == "any")
-            && let Some(rt) = infer(rhs, scope)
+            && let Some(rt) = infer_into(rhs, &expected_base, scope)
         {
             let rt_base = strip_nullable(rt.clone());
             let rt_is_nil = matches!(&rt_base, Type::Named(n) if n == "nil");
@@ -279,7 +279,10 @@ pub(crate) fn check_element_compat(
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
 ) {
-    if let Some(value_ty) = infer(value, scope)
+    // `infer_arg` rather than `infer`: an element fills a declared slot the
+    // same way an argument does, so `local bs: byte[] = {1, 2, 3}` reads its
+    // literals against `byte` instead of against their own widest type.
+    if let Some(value_ty) = crate::expr::infer::infer_arg(value, expected, scope)
         && !types_compatible(expected, &value_ty)
     {
         errors.push(TypeCheckError::TableElementTypeMismatch {
@@ -355,6 +358,15 @@ pub(crate) fn types_compatible(expected: &Type, value_ty: &Type) -> bool {
         // cast is checked at runtime and yields `integer?`.
         (Type::Named(a), Type::Named(b)) => {
             if a == b || a == "any" || b == "nil" {
+                return true;
+            }
+            // `byte` is an `integer` restricted to `0..=255`, and the same
+            // value at run time — so handing one to an `integer` slot is not
+            // a conversion, it is a subtype flowing into its base. The
+            // reverse is not free: an arbitrary `integer` may be out of
+            // range, so it needs `as byte`, which range-checks and yields
+            // `byte?`. That asymmetry is the whole point of the type.
+            if a == "integer" && b == "byte" {
                 return true;
             }
             // An inference variable from the signature being called into

@@ -187,6 +187,23 @@ pub fn convert(value: &Value, ty: &Type) -> Value {
         // one of those inputs.
         ("integer", Value::Float(f)) => Value::Int(f.trunc() as i64),
         ("integer", Value::Int(n)) => Value::Int(*n),
+        // Narrowing to `byte`: `nil` rather than a wrap or a clamp when the
+        // value does not fit, which is why the cast is typed `byte?`. A
+        // truncating `as byte` would be the silent corruption the type
+        // exists to prevent. A `byte` is an `integer` at run time, so there
+        // is nothing to convert once it is in range.
+        ("byte", Value::Int(n)) => match u8::try_from(*n) {
+            Ok(_) => Value::Int(*n),
+            Err(_) => Value::Nil,
+        },
+        ("byte", Value::Float(f)) => {
+            let t = f.trunc();
+            if (0.0..=255.0).contains(&t) {
+                Value::Int(t as i64)
+            } else {
+                Value::Nil
+            }
+        }
         ("float", Value::Int(n)) => Value::Float(*n as f64),
         ("float", Value::Float(f)) => Value::Float(*f),
 

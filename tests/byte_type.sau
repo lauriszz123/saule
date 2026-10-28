@@ -1,0 +1,66 @@
+-- The `byte` type: an `integer` restricted to 0..=255.
+--
+-- The asymmetry is the point. A `byte` widens into an `integer` for free,
+-- because it already is one; an `integer` narrowing the other way needs
+-- `as byte`, which range-checks and can say no. So a value typed `byte` is
+-- in range by construction, and nothing has to re-check it.
+
+class Main
+	static fn main()
+		-- ── producing one ────────────────────────────────
+		-- A literal in range needs no cast: the range is visible here.
+		local lit: byte = 200
+		println("literal: " .. lit)
+
+		-- Out of a buffer, where the range is guaranteed by the buffer.
+		local raw: bytes = Bytes.of(0x00, 0x80, 0xff)
+		local mid: byte? = Bytes.byte(raw, 2)
+		println("from buffer: " .. (mid ?? 0))
+		println("off the end is nil: " .. tostring(Bytes.byte(raw, 99) == nil))
+
+		-- ── widening is free ────────────────────────────
+		local widened: integer = lit
+		println("widened: " .. widened)
+		local nullableWidened: integer? = mid
+		println("nullable widens: " .. (nullableWidened ?? -1))
+
+		-- ── narrowing is checked ────────────────────────
+		local computed: integer = 100 + 44
+		println("in range: " .. ((computed as byte) ?? 0))
+		println("300 is nil: " .. tostring((300 as byte) == nil))
+		println("-5 is nil: " .. tostring(((-5) as byte) == nil))
+		-- A float truncates toward zero first, then has to fit.
+		println("7.9 truncates: " .. ((7.9 as byte) ?? 0))
+		println("300.0 is nil: " .. tostring((300.0 as byte) == nil))
+
+		-- ── arithmetic widens ───────────────────────────
+		-- `200 + 100` is not a byte, so the result is an `integer` and the
+		-- overflow is visible in the type rather than hidden in a wrap.
+		local sum: integer = lit + 100
+		println("sum: " .. sum)
+		local negated: integer = -lit
+		println("negated: " .. negated)
+		-- Bit patterns are an integer's property, and a byte has them.
+		println("masked: " .. (lit & 0x0f))
+		println("rendered: " .. (lit as string))
+
+		-- ── the elementwise bridge ──────────────────────
+		-- `byte[]` is `table<integer, byte>`, via the array sugar.
+		local arr: byte[] = Bytes.toArray(raw)
+		println("array len: " .. #arr)
+		println("first: " .. arr[1] .. " last: " .. arr[3])
+		local spelled: table<integer, byte> = arr
+		println("sugar is that type: " .. #spelled)
+
+		local packed: bytes? = Bytes.fromArray(arr)
+		println("round trip: " .. Bytes.toHex(packed!))
+		println("equal to source: " .. tostring(packed! == raw))
+
+		-- Summing elements goes through `integer`, as any byte sum must.
+		local total: integer = 0
+		for _, b in arr do
+			total = total + b
+		end
+		println("sum of bytes: " .. total)
+	end
+end

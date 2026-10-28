@@ -29,6 +29,54 @@ local ages: table<string, integer> = {alice: 30}       -- string-keyed map
 local nested: table<table<string>> = {names}           -- tables nest
 ```
 
+### Array Suffixes
+
+`T[]` is sugar for `table<integer, T>` — the integer-keyed array form, written
+the way most languages write an array:
+
+```saule
+local names: string[] = {"alice", "bob"}
+local same: table<integer, string> = names   -- the same type, spelled out
+local also: table<string> = names            -- and the same as the array form
+```
+
+It is **only** notation. There is no separate array type: `string[]`,
+`table<integer, string>` and `table<string>` are one type with three
+spellings, so they are mutually assignable, and all three print as
+`table<integer, string>` when a message reports a type back.
+
+Each suffix wraps the type once, so they stack:
+
+| Written | Means |
+|---|---|
+| `T[]` | `table<integer, T>` |
+| `T[][]` | `table<integer, table<integer, T>>` |
+| `T[,]` | `table<integer, table<integer, T>>` — a comma is another dimension |
+| `T[,,]` | three levels, the same as `T[][][]` |
+
+`T[,]` and `T[][]` are the same type. Saule's tables nest rather than being
+rectangular, so there is nothing for a comma to mean *other* than another
+level, and no dimension is checked: a `T[,]` can hold rows of different
+lengths.
+
+```saule
+local grid: integer[][] = {{1, 2}, {3, 4}}
+local same: integer[,] = grid               -- identical type
+println(grid[2][1])                         -- 3
+```
+
+Suffixes apply left to right, which is what makes `?` read correctly beside
+one:
+
+```saule
+local maybeList: Dog[]? = nil               -- a nullable array
+local maybeDogs: Dog?[] = {Dog(), nil}      -- an array of nullable Dog
+```
+
+There is no `[K]` form for map keys — a string-keyed table stays
+`table<string, V>`. A suffix only ever adds an integer-keyed level, because
+that is the one case with an implicit key to leave out.
+
 ### Element Types Are Invariant
 
 Tables are mutable, so a `table<Dog>` is **not** a `table<Animal>` — in

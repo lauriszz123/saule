@@ -102,7 +102,9 @@ supplies it, and on `self`, which is typed as the enclosing class.
 ### Types
 
 ```ebnf
-type      ::= baseType ['?']
+type      ::= baseType {suffix}
+suffix    ::= '?'
+            | '[' {','} ']'
 baseType  ::= Name [typeArgs]
             | 'table' '<' type [',' type] '>'
             | 'nil'
@@ -113,6 +115,12 @@ typeArgs   ::= '<' type {',' type} '>'
 typeParams ::= '<' Name {',' Name} '>'
 ```
 
+Suffixes are applied in the order written, so `T?[]` and `T[]?` differ. An
+`'[' {','} ']'` suffix is sugar: it wraps the type in `table<integer, …>` once
+per dimension, one more than the number of commas. Only an empty bracket
+group is a suffix — a `[` holding anything else opens an index expression,
+which is what keeps `x as T[1]` reading as a cast followed by an index.
+
 `typeParams` **declares** — each entry is a bare name that stands for whatever
 the user of the declaration picks. `typeArgs` **applies** — each entry is a
 type, filling one of those slots. `Name typeArgs` in a type position is a
@@ -122,7 +130,8 @@ is its own form rather than an application of a `table` declaration.
 
 A parenthesised list of one type is just grouping; two or more is a tuple,
 which is how a function returning multiple values states its return type.
-`table<V>` is the array form and `table<K, V>` the map form.
+`table<V>` is the array form and `table<K, V>` the map form; `V[]` is a third
+spelling of the array form — see [Array Suffixes](/saule/language/tables/#array-suffixes).
 
 ### Expressions
 

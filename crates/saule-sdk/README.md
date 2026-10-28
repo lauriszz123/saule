@@ -107,6 +107,7 @@ error, never aliased `&mut`.
 | `f32`, `f64` | `float` |
 | `bool` | `boolean` |
 | `String`, `&str` | `string` |
+| `SBytes` | `bytes` (copied) — the **only** spelling of it; see below |
 | `Option<T>`, `Option<&T>` | `T?` (and may be omitted as a trailing argument) |
 | `Vec<T>` | `table<T>` (copied) |
 | `HashMap<K, V>`, `BTreeMap<K, V>` | `table<K, V>` (copied) |
@@ -120,6 +121,27 @@ error, never aliased `&mut`.
 A function may return `Result<T, E>` (an `Err` becomes a Saule runtime error
 at the call) or a tuple `(A, B, …)` for multiple returns. A panic becomes a
 runtime error too, naming the member and where it panicked.
+
+### `bytes` is `SBytes`, and not `Vec<u8>`
+
+Note the row above: `Vec<u8>` is `table<integer>`, like every other `Vec<T>`.
+It is **not** `bytes`. That would box each byte into a 16-byte value, which is
+the cost `bytes` exists to avoid, so the one way to say `bytes` is `SBytes`:
+
+```rust
+#[saule_export(class = "Pipe")]
+fn read(&mut self, max: i64) -> SBytes {
+    SBytes::new(self.drain(max as usize))   // Saule sees `bytes`
+}
+```
+
+A `bytes` crosses as a `(ptr, len)` pair copied at the boundary — the same
+representation a `string` uses, minus the UTF-8 requirement. `SBytes` offers
+`as_slice`, `len`, `to_utf8` (fallible, as in Saule) and `to_hex`.
+
+A `bytes` parameter refuses a `string` and vice versa, in the checker before
+anything crosses: they are different Saule types, and accepting either would
+put the encoding question back where `bytes` exists to remove it.
 
 ## Building and installing
 

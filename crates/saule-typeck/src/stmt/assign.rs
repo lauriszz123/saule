@@ -30,7 +30,8 @@ pub(crate) fn check_binding_type(
 /// reader reaches for and neither is a type, and [`reject_non_types`] has a
 /// better answer for each than "unknown".
 const PRIMITIVES: &[&str] = &[
-    "integer", "float", "string", "bytes", "boolean", "table", "userdata", "thread", "any", "nil",
+    "integer", "float", "byte", "string", "bytes", "boolean", "table", "userdata", "thread", "any",
+    "nil",
 ];
 
 /// Report every name in `ty` that no declaration in scope answers to.

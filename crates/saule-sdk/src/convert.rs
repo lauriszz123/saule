@@ -255,6 +255,13 @@ impl IntoSaule for &str {
     }
 }
 
+// `bytes` crosses as `SBytes` and only as `SBytes` — see its impls in
+// `types.rs`. There is deliberately no `FromSaule for Vec<u8>`: the blanket
+// `Vec<T>` impls below already claim it for `table<integer>`, which is what
+// `#[saule_export]` writes into a signature for a `Vec<u8>` too, so a
+// special case here would make the declared type and the wire format
+// disagree for the one element type where it is easiest to miss.
+
 // ─── Option and unit ────────────────────────────────────────────────────────
 
 impl<T: FromSaule> FromSaule for Option<T> {

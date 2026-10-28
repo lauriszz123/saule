@@ -426,6 +426,23 @@ jobs:
               x86_64-apple-darwin) echo 'export EMULATOR="arch -x86_64"' >> "$BASH_ENV" ;;
             esac
       - run:
+          # `Os.spawn` is the one part of the stdlib whose behaviour is the
+          # operating system's rather than ours — pipes, child processes, and
+          # how a path or an environment is handed over. The Linux `test` job
+          # cannot speak for any of that, so the platform-portable half of
+          # its suite runs here too, before anything gets archived.
+          #
+          # Scoped to that one suite deliberately: everything else is
+          # platform-independent and already green in `test`, and this job
+          # has a release build to get through. It builds for the host arch
+          # rather than << parameters.triple >>, since the question is how
+          # macOS behaves and that does not differ between the two.
+          name: Platform-sensitive tests
+          no_output_timeout: 20m
+          command: |
+            set -eu
+            cargo test --locked -p saule-cli --test spawn
+      - run:
           name: Build, verify and archive
           no_output_timeout: 45m
           command: .circleci/build-unix.sh
@@ -460,6 +477,18 @@ jobs:
             rustup toolchain install 1.98 --profile minimal
             rustup default 1.98
             rustup target add $env:TRIPLE
+      - run:
+          # See the macOS job. This is the platform the portability had to be
+          # designed for rather than inherited: no `sh`, no `cat`, different
+          # pipe semantics, and a backslash in every path.
+          name: Platform-sensitive tests
+          shell: powershell.exe
+          no_output_timeout: 20m
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            cargo test --locked -p saule-cli --test spawn
+            if ($LASTEXITCODE -ne 0) { throw "platform tests failed" }
       - run:
           name: Build, verify and archive
           shell: powershell.exe

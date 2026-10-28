@@ -17,7 +17,7 @@ use std::rc::Rc;
 use crate::native_packages::NativePackage;
 use crate::prelude::Prelude;
 use crate::stdlib::{expect_arity, expect_min_arity};
-use crate::value::{ClassObject, SauleBytes, SauleStr};
+use crate::value::{ClassObject, SauleBytes, SauleStr, TableObject};
 use crate::value::{NativeFn, Value};
 
 /// `import Bytes from "bytes"`. Auto-prelude'd, like `String`, so a bare
@@ -51,6 +51,14 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     );
     static_fields.insert("len".to_string(), native("Bytes.len", bytes_len));
     static_fields.insert("byte".to_string(), native("Bytes.byte", bytes_byte));
+    static_fields.insert(
+        "toArray".to_string(),
+        native("Bytes.toArray", bytes_to_array),
+    );
+    static_fields.insert(
+        "fromArray".to_string(),
+        native("Bytes.fromArray", bytes_from_array),
+    );
     static_fields.insert("sub".to_string(), native("Bytes.sub", bytes_sub));
     static_fields.insert("concat".to_string(), native("Bytes.concat", bytes_concat));
     static_fields.insert(
@@ -79,19 +87,46 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, register_v, t_named, t_nullable};
+    use crate::stdlib::sigs::{register, register_v, t_named, t_nullable, t_table_map};
     let by = || t_named("bytes");
     let s = || t_named("string");
     let i = || t_named("integer");
 
-    // `of(...integer) -> bytes` — each argument is one byte, 0..=255.
-    register_v("Bytes.of", vec![], i(), vec![by()]);
+    // `of(...byte) -> bytes`. Typed `byte` rather than `integer`, so
+    // `Bytes.of(0x89, 0x50)` is checked where it is written instead of at
+    // run time: a literal out of range is now a compile error, and a
+    // computed value has to say `as byte` and handle the `nil`. The runtime
+    // check below stays as the backstop for a value arriving through `any`.
+    register_v("Bytes.of", vec![], t_named("byte"), vec![by()]);
     register("Bytes.empty", vec![], vec![by()]);
     register("Bytes.fromString", vec![s()], vec![by()]);
     // Nullable on purpose: not every buffer is text. See the module docs.
     register("Bytes.toString", vec![by()], vec![t_nullable(s())]);
     register("Bytes.len", vec![by()], vec![i()]);
-    register("Bytes.byte", vec![by(), i()], vec![t_nullable(i())]);
+    // `byte` rather than `integer`: a byte read out of a buffer is in
+    // `0..=255` by construction, and saying so in the type means a caller
+    // never has to re-check what the buffer already guarantees. It widens
+    // to `integer` on its own, so this is not a breaking change.
+    register(
+        "Bytes.byte",
+        vec![by(), i()],
+        vec![t_nullable(t_named("byte"))],
+    );
+    // The bridge to and from the elementwise form, for the times a loop
+    // over `byte[]` is what you want. Separate functions rather than an
+    // implicit conversion, because the two representations have very
+    // different costs: a `bytes` is one byte per byte, a `byte[]` is a
+    // boxed value per byte.
+    register(
+        "Bytes.toArray",
+        vec![by()],
+        vec![t_table_map(i(), t_named("byte"))],
+    );
+    register(
+        "Bytes.fromArray",
+        vec![t_table_map(i(), t_named("byte"))],
+        vec![t_nullable(by())],
+    );
     register("Bytes.sub", vec![by(), i(), t_nullable(i())], vec![by()]);
     register_v("Bytes.concat", vec![], by(), vec![by()]);
     register(
@@ -217,6 +252,49 @@ fn bytes_byte(args: &[Value]) -> Result<Value, String> {
         Some(byte) => Ok(Value::Int(*byte as i64)),
         None => Ok(Value::Nil),
     }
+}
+
+/// `Bytes.toArray(b)` — the buffer as a `byte[]`, one element per byte.
+///
+/// The expensive direction, and deliberately explicit about it: every byte
+/// becomes a boxed value, so the table costs many times what the buffer
+/// does. Worth it for a loop that genuinely wants elements; not worth it to
+/// move bytes around, which is what `bytes` is already for.
+fn bytes_to_array(args: &[Value]) -> Result<Value, String> {
+    expect_arity("Bytes.toArray", args, 1)?;
+    let b = expect_bytes("Bytes.toArray", args, 0)?;
+    let items: Vec<Value> = b.as_slice().iter().map(|n| Value::Int(*n as i64)).collect();
+    Ok(Value::Table(Rc::new(RefCell::new(
+        TableObject::from_array(items),
+    ))))
+}
+
+/// `Bytes.fromArray(a)` — pack a `byte[]` back into a buffer.
+///
+/// `nil` when an element is out of `0..=255`. A `byte[]` built by the
+/// checker cannot contain one, but a `table` that reached here through
+/// `any` can, and silently truncating is the corruption `byte` exists to
+/// prevent.
+fn bytes_from_array(args: &[Value]) -> Result<Value, String> {
+    expect_arity("Bytes.fromArray", args, 1)?;
+    let Some(Value::Table(t)) = args.first() else {
+        return Err(format!(
+            "Bytes.fromArray expects a table at argument 1, got `{}`",
+            args.first().map_or("nothing", |v| v.type_name())
+        ));
+    };
+    let t = t.borrow();
+    let mut out = Vec::with_capacity(t.array.len());
+    for v in &t.array {
+        match v {
+            Value::Int(n) => match u8::try_from(*n) {
+                Ok(b) => out.push(b),
+                Err(_) => return Ok(Value::Nil),
+            },
+            _ => return Ok(Value::Nil),
+        }
+    }
+    Ok(Value::Bytes(SauleBytes::new(out)))
 }
 
 /// `Bytes.sub(b, i, j)` — 1-based and inclusive, negatives counting from the

@@ -1,0 +1,20 @@
+literal: 200
+from buffer: 128
+off the end is nil: true
+widened: 200
+nullable widens: 128
+in range: 144
+300 is nil: true
+-5 is nil: true
+7.9 truncates: 7
+300.0 is nil: true
+sum: 300
+negated: -200
+masked: 8
+rendered: 200
+array len: 3
+first: 0 last: 255
+sugar is that type: 3
+round trip: 0080ff
+equal to source: true
+sum of bytes: 383
