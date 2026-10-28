@@ -1,8 +1,8 @@
 # Saule Standard Library
 
 This is the reference for everything Saule ships out of the box — the prelude
-(`print`, `assert`, …) plus the static-class modules (`String`, `Math`,
-`Table`, `Io` / `File`, `Os`, `Saule`).
+(`print`, `assert`, …) plus the static-class modules (`String`, `Bytes`,
+`Math`, `Table`, `Io` / `File`, `Os`, `Saule`).
 
 For language syntax see [README.md](./README.md). For the runtime side of
 errors / pattern matching / generics see the corresponding README sections.
@@ -24,6 +24,7 @@ errors / pattern matching / generics see the corresponding README sections.
 
 - [Prelude (always in scope)](#prelude-always-in-scope)
 - [`String`](#string)
+- [`Bytes`](#bytes)
 - [`Math`](#math)
 - [`Table`](#table)
 - [`Iter`](#iter)
@@ -139,6 +140,72 @@ println(String.join(" | ", fields))             -- id | name | score
 println(String.replace("a.b.c", ".", "/"))      -- a/b/c
 println(String.padStart("7", 3, "0"))           -- 007
 println(String.indexOf("hello", "ll") ?? 0)     -- 3
+```
+
+---
+
+## `Bytes`
+
+Byte-string utilities. `bytes` is a primitive type alongside `string`, and the
+two are **not interchangeable**: a `string` is text, always valid UTF-8, with
+`String.len` and `String.sub` measured in codepoints; a `bytes` is a buffer of
+arbitrary bytes with no encoding promised, measured and indexed in bytes.
+
+Reach for `bytes` whenever the data is not text — an image, a digest, a
+compressed blob, a wire protocol. Reach for `string` for everything else.
+
+Lua makes one type do both jobs, which is why `#s` there is a byte count and
+`s:sub(1, 1)` can cut a character in half. Saule keeps them apart and lets the
+typechecker enforce it, so a buffer can never be mistaken for text:
+
+```luau
+local b: bytes = Bytes.of(0x89, 0x50, 0x4e, 0x47)
+local s: string = b              -- error: cannot assign `bytes` to `string`
+println(String.len(b))           -- error: expects `string`, got `bytes`
+```
+
+Indices are **1-based**, as everywhere else in Saule, and `Bytes.sub` takes
+negatives the way `String.sub` does.
+
+| Signature | Description |
+| --- | --- |
+| `Bytes.of(...integer) -> bytes` | Build a buffer from byte values. Each must be `0..=255`; anything else is an error rather than a truncation. `Bytes.of(0x80)` is **one** byte, where `String.char(0x80)` is the two-byte UTF-8 encoding of U+0080. |
+| `Bytes.empty() -> bytes` | The empty buffer. |
+| `Bytes.fromString(s: string) -> bytes` | The string's UTF-8 bytes. Always succeeds — every Saule string is already valid UTF-8. |
+| `Bytes.toString(b: bytes) -> string?` | The buffer as text, or `nil` when it is not valid UTF-8. Nullable on purpose: there is no total function from bytes to text, and silently substituting U+FFFD would hide the problem. |
+| `Bytes.len(b: bytes) -> integer` | Byte count. `#b` is the same thing. |
+| `Bytes.byte(b: bytes, i: integer) -> integer?` | The byte at `i`, or `nil` out of range — so a scan can walk off the end and stop. |
+| `Bytes.sub(b: bytes, from: integer, to: integer?) -> bytes` | Slice; `to` defaults to the end, negatives count from the end, both ends clamp. |
+| `Bytes.concat(...bytes) -> bytes` | Join buffers in order. |
+| `Bytes.indexOf(b: bytes, needle: bytes, from: integer?) -> integer?` | 1-based position of the first occurrence, or `nil`. An empty needle matches at `from`. |
+| `Bytes.toHex(b: bytes) -> string` | Lowercase hex, two characters per byte. This is how a buffer gets looked at — `print` shows only a length — and how one becomes a table key, since `bytes` is not keyable itself. |
+| `Bytes.fromHex(s: string) -> bytes?` | Parse hex. `nil` for an odd length or any non-hex character, rather than a buffer that is quietly half right. |
+
+Two things `bytes` deliberately does **not** do:
+
+* **`..` does not accept it.** Concatenation builds a string, and a buffer that
+  is not text has no string form. Use `Bytes.concat`, or `Bytes.toHex` to show
+  one. `print(b)` writes `<bytes len=N>` for the same reason.
+* **It cannot be a table key.** Rare enough not to be worth the cost on the
+  table's hot path; key by `Bytes.toHex(b)` instead.
+
+Equality is by contents, and a `bytes` is never equal to a `string`.
+
+```luau
+local raw: bytes = Bytes.of(0x00, 0x7f, 0x80, 0xc3, 0x28, 0xff)
+
+println(#raw)                               -- 6
+println(Bytes.toHex(raw))                   -- 007f80c328ff
+println(Bytes.byte(raw, 3) ?? -1)           -- 128
+println(Bytes.toString(raw) ?? "not text")  -- not text
+
+-- The distinction the two types exist for:
+local sun: bytes = Bytes.fromString("saulė")
+println(#sun)                               -- 6 bytes
+println(String.len("saulė"))                -- 5 codepoints
+
+println(Bytes.toHex(Bytes.sub(raw, 2, 4)))  -- 7f80c3
+println(Bytes.indexOf(raw, Bytes.of(0x80)) ?? 0)  -- 3
 ```
 
 ---
@@ -414,8 +481,10 @@ Saule enums (`IoMode`, `IoSeek`) so the typechecker can catch typos.
 
 | Signature | Description |
 | --- | --- |
-| `f.read(...string) -> string?` | Same formats as `Io.read`. |
-| `f.write(...string) -> nil` | Append bytes. |
+| `f.read(...string) -> string?` | Same formats as `Io.read`. Returns a `string`, so it is for **text**; a file that is not valid UTF-8 needs `readBytes`. |
+| `f.readBytes(count: integer?) -> bytes?` | Raw [`bytes`](#bytes), no encoding assumed. No argument reads to end of file; a `count` reads up to that many and answers `nil` only at end of file, so a read loop terminates. |
+| `f.write(...string) -> nil` | Append text. A `bytes` passed here would be rendered as `<bytes len=N>` — use `writeBytes`. |
+| `f.writeBytes(data: bytes) -> nil` | Append the bytes themselves. Writing non-UTF-8 to stdout/stderr is an error rather than mojibake. |
 | `f.lines() -> fn() -> string?` | Per-line step closure. |
 | `f.seek(whence: IoSeek?, offset: integer?) -> integer?` | Defaults `(Cur, 0)`. Returns the new position, or `nil` when the handle can't seek (a pipe, a closed file). |
 | `f.flush() -> nil` | Force buffered writes to disk. |
@@ -600,7 +669,10 @@ A handful of patterns repeat across the stdlib:
 - **Conversion is a cast, not a call.** `as` converts between `integer` and
   `float`, renders either (and `boolean`) as a `string`, and parses a
   `string` back — and on an `any` it is the checked type test instead. It
-  refuses any pair with no obvious answer rather than inventing one.
+  refuses any pair with no obvious answer rather than inventing one. The one
+  pair that is deliberately a *call* is `bytes` ↔ `string`: `Bytes.toString`
+  can fail, and a cast has nowhere to put the failure, so it is
+  [`Bytes`](#bytes)' job and its return type is `string?`.
 - **Numeric flavour never mixes.** `integer` and `float` are separate types
   and nothing promotes between them silently — not the operators, and not the
   stdlib. `Math.*` is generic over the flavour (`<N>`), so a call takes either

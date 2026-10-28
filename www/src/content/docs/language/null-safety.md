@@ -23,7 +23,7 @@ local player: Player? = repo.findById(id)
 local name: string? = player?.name      -- nil if `player` was nil
 ```
 
-For lengths of strings and tables, use `#`:
+For lengths of strings, bytes and tables, use `#`:
 
 ```saule
 local greeting: string? = nil

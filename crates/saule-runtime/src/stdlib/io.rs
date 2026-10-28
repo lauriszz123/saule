@@ -25,7 +25,8 @@ use std::rc::Rc;
 use crate::native_packages::NativePackage;
 use crate::prelude::Prelude;
 use crate::value::{
-    ClassObject, EnumObject, EnumVariantObject, FileHandle, NativeClosure, SauleStr, Value,
+    ClassObject, EnumObject, EnumVariantObject, FileHandle, NativeClosure, SauleBytes, SauleStr,
+    Value,
 };
 
 // ─── native-package descriptor ─────────────────────────────────────────────
@@ -185,6 +186,18 @@ pub fn register_sigs() {
     register("File.read", vec![t_nullable(s())], vec![str_opt()]);
     // `file.write(...parts: string) -> nil`
     register_v("File.write", vec![], s(), vec![nil()]);
+    // `file.readBytes(count?: integer) -> bytes?`
+    //
+    // Separate from `read` rather than a format of it: `read` is typed
+    // `string?`, and a function whose return type depends on which string
+    // it was handed is not something the checker can express.
+    register(
+        "File.readBytes",
+        vec![int_opt()],
+        vec![t_nullable(t_named("bytes"))],
+    );
+    // `file.writeBytes(data: bytes) -> nil`
+    register("File.writeBytes", vec![t_named("bytes")], vec![nil()]);
     // `file.lines() -> fn(): string?`
     register("File.lines", vec![], vec![line_iter()]);
     // `file.seek(whence?: IoSeek, offset?: integer) -> integer?`
@@ -517,13 +530,16 @@ pub fn dispatch_file_method(
 ) -> Result<Vec<Value>, String> {
     match method {
         "read" => file_read(handle, args),
+        "readBytes" => file_read_bytes(handle, args),
         "write" => file_write(handle, args),
+        "writeBytes" => file_write_bytes(handle, args),
         "lines" => file_lines(handle, args),
         "seek" => file_seek(handle, args),
         "flush" => file_flush(handle, args),
         "close" => file_close(handle, args),
         other => Err(format!(
-            "no method `{other}` on file — valid: read / write / lines / seek / flush / close"
+            "no method `{other}` on file — valid: read / readBytes / write / \
+             writeBytes / lines / seek / flush / close"
         )),
     }
 }
@@ -589,6 +605,128 @@ fn file_write(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Va
             }
             Ok(vec![Value::Nil])
         }
+        FileHandle::Open { writer: None, .. } => Err("file is not opened for writing".to_string()),
+        FileHandle::Stdin(_) => Err("cannot write to stdin".to_string()),
+        FileHandle::Closed => unreachable!(),
+    }
+}
+
+/// `file.readBytes(count?)` — raw bytes, with no encoding assumed.
+///
+/// `read` cannot do this job: it returns a `string`, and a `string` is
+/// UTF-8 by construction, so the bytes of a PNG have nowhere to go. No
+/// argument reads to end of file; a count reads up to that many bytes and
+/// answers `nil` only at end of file, so a read loop terminates.
+fn file_read_bytes(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Value>, String> {
+    let limit: Option<usize> = match args.first() {
+        None | Some(Value::Nil) => None,
+        Some(Value::Int(n)) if *n >= 0 => Some(*n as usize),
+        Some(Value::Int(n)) => {
+            return Err(format!(
+                "File.readBytes expects a count of 0 or more, got {n}"
+            ));
+        }
+        Some(other) => {
+            return Err(format!(
+                "File.readBytes expects an integer at argument 1, got `{}`",
+                other.type_name()
+            ));
+        }
+    };
+
+    let mut h = handle.borrow_mut();
+    let h = require_open(&mut h)?;
+    match h {
+        FileHandle::Open {
+            reader: Some(r), ..
+        } => read_raw(r, limit),
+        FileHandle::Stdin(r) => read_raw(r, limit),
+        FileHandle::Open { reader: None, .. } => Err("file is not opened for reading".to_string()),
+        FileHandle::Stdout | FileHandle::Stderr => {
+            Err("cannot read from stdout/stderr".to_string())
+        }
+        FileHandle::Closed => unreachable!(),
+    }
+}
+
+/// Fill from `r`, either to the end or up to `limit` bytes.
+///
+/// A short read is not end of file — a pipe hands over what it has — so a
+/// bounded read loops until it has `limit` bytes or the source is done.
+fn read_raw<R: Read>(r: &mut R, limit: Option<usize>) -> Result<Vec<Value>, String> {
+    let mut buf = Vec::new();
+    match limit {
+        None => {
+            r.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        }
+        Some(n) => {
+            buf.resize(n, 0);
+            let mut filled = 0;
+            while filled < n {
+                match r.read(&mut buf[filled..]) {
+                    Ok(0) => break,
+                    Ok(k) => filled += k,
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            buf.truncate(filled);
+            // Only a bounded read reports end of file; reading "the rest"
+            // of an exhausted file is an empty buffer, as `read("a")` is an
+            // empty string.
+            if filled == 0 && n > 0 {
+                return Ok(vec![Value::Nil]);
+            }
+        }
+    }
+    Ok(vec![Value::Bytes(SauleBytes::new(buf))])
+}
+
+/// `file.writeBytes(data)` — the bytes themselves.
+///
+/// `write` runs its arguments through `to_display_string`, which turns a
+/// `bytes` into `<bytes len=N>`. That is the right thing for `print` and
+/// the wrong thing for a file, hence a second method.
+fn file_write_bytes(
+    handle: &Rc<RefCell<FileHandle>>,
+    args: &[Value],
+) -> Result<Vec<Value>, String> {
+    let data = match args.first() {
+        Some(Value::Bytes(b)) => b.clone(),
+        Some(other) => {
+            return Err(format!(
+                "File.writeBytes expects bytes at argument 1, got `{}`",
+                other.type_name()
+            ));
+        }
+        None => return Err("File.writeBytes missing argument 1".to_string()),
+    };
+
+    let mut h = handle.borrow_mut();
+    let h = require_open(&mut h)?;
+    match h {
+        FileHandle::Open {
+            writer: Some(w), ..
+        } => {
+            w.write_all(data.as_slice()).map_err(|e| e.to_string())?;
+            Ok(vec![Value::Nil])
+        }
+        // stdout/stderr go through `crate::output`, which takes text: a
+        // buffer that is not UTF-8 has no meaning on a terminal, so this
+        // says so rather than writing replacement characters.
+        FileHandle::Stdout | FileHandle::Stderr => match data.to_str() {
+            Some(text) => {
+                let stream = if matches!(h, FileHandle::Stdout) {
+                    crate::output::Stream::Stdout
+                } else {
+                    crate::output::Stream::Stderr
+                };
+                crate::output::write(stream, text);
+                Ok(vec![Value::Nil])
+            }
+            None => Err(
+                "cannot write non-UTF-8 bytes to stdout/stderr — open a file instead".to_string(),
+            ),
+        },
         FileHandle::Open { writer: None, .. } => Err("file is not opened for writing".to_string()),
         FileHandle::Stdin(_) => Err("cannot write to stdin".to_string()),
         FileHandle::Closed => unreachable!(),

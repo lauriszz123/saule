@@ -10,6 +10,7 @@
 //! | [`enum_`]    | `EnumObject`, `EnumVariantObject`              |
 //! | [`interface`]| `InterfaceObject`                              |
 //! | [`table`]    | `TableObject`, `TableKey`                      |
+//! | [`bytes`]    | `SauleBytes`                                   |
 //! | [`file`]     | `FileHandle`                                   |
 //! | [`foreign`]  | `ForeignObject`, `ForeignClass`                |
 //!
@@ -17,6 +18,7 @@
 //! [`Value::is_truthy`], [`Value::to_display_string`], and the `PartialEq`
 //! impl below.
 
+pub mod bytes;
 pub mod class;
 pub mod enum_;
 pub mod file;
@@ -29,6 +31,7 @@ pub mod table;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub use bytes::{SauleBytes, hash_bytes};
 pub use class::{ClassObject, FieldDef, FieldLayout, InstanceObject, MethodRef, SlotStatics};
 pub use enum_::{EnumObject, EnumVariantObject};
 pub use file::FileHandle;
@@ -48,6 +51,11 @@ pub enum Value {
     /// Shared by reference so cloning a value is cheap, and carrying its own
     /// hash so a table never walks the same bytes twice. See [`SauleStr`].
     Str(SauleStr),
+    /// A byte string: arbitrary bytes, with no encoding promised. Shared by
+    /// reference like [`Value::Str`], and kept a separate type from it so
+    /// that nothing converts between text and bytes implicitly. See
+    /// [`SauleBytes`].
+    Bytes(SauleBytes),
     /// Hybrid table storage: a dense array part plus a hashmap part. `table<T>`
     /// uses only the array; `table<K, V>` uses the map (and may also use the
     /// array when keys happen to be positive integers). Shared by reference so
@@ -133,6 +141,7 @@ impl Value {
     fn clone_heap(&self) -> Value {
         match self {
             Value::Str(s) => Value::Str(s.clone()),
+            Value::Bytes(b) => Value::Bytes(b.clone()),
             Value::Table(t) => Value::Table(Rc::clone(t)),
             Value::Native(f) => Value::Native(Rc::clone(f)),
             Value::NativeClosure(f) => Value::NativeClosure(Rc::clone(f)),
@@ -166,6 +175,7 @@ impl Value {
             Value::Int(_) => "integer",
             Value::Float(_) => "float",
             Value::Str(_) => "string",
+            Value::Bytes(_) => "bytes",
             Value::Table(_) => "table",
             Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_) => "function",
             Value::Class(_) => "class",
@@ -202,6 +212,10 @@ impl Value {
                 }
             }
             Value::Str(s) => (**s).clone(),
+            // Never the bytes themselves. `print` writes to a terminal and
+            // `..` builds a string, and a buffer that is not text has no
+            // business in either — `Bytes.toHex` is the way to look at one.
+            Value::Bytes(b) => format!("<bytes len={}>", b.len()),
             Value::Table(items) => {
                 let t = items.borrow();
                 let array_parts = t.array.iter().map(Value::to_display_string);
@@ -247,6 +261,11 @@ impl PartialEq for Value {
             // memcmp. Falling through to the content compare is what keeps
             // this correct for strings that were never interned.
             (Value::Str(a), Value::Str(b)) => a == b,
+            // By contents, like strings. A `bytes` is never equal to a
+            // `string`, even one holding the same UTF-8: the fallthrough
+            // below answers that, and the typechecker rejects the
+            // comparison before it is ever asked.
+            (Value::Bytes(a), Value::Bytes(b)) => a == b,
             (Value::Table(a), Value::Table(b)) => Rc::ptr_eq(a, b),
             (Value::Native(a), Value::Native(b)) => Rc::ptr_eq(a, b),
             (Value::NativeClosure(a), Value::NativeClosure(b)) => Rc::ptr_eq(a, b),

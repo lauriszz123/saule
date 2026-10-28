@@ -46,13 +46,14 @@ Saule is a statically typed, class-oriented language inspired by Lua's simplicit
 
 ## Types
 
-Saule has 8 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule:
+Saule has 9 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule, and Lua's single `string` type is likewise split into text and bytes:
 
 | Type | Description |
 |---|---|
 | `integer` | Whole numbers, no decimal component. 64-bit signed; [overflow wraps](#integer-overflow) |
 | `float` | Decimal numbers, 64-bit precision |
-| `string` | Immutable sequences of characters |
+| `string` | Immutable text, always valid UTF-8. Measured and indexed in **codepoints** |
+| `bytes` | Immutable buffer of arbitrary bytes, no encoding promised. Measured and indexed in **bytes** — see [`bytes` vs `string`](#bytes-vs-string) |
 | `boolean` | `true` or `false` |
 | `nil` | Absence of value |
 | `fn(A, B) -> R` | First-class function values, typed by [signature](#function-types) |
@@ -60,6 +61,50 @@ Saule has 8 primitive types, inherited from Lua's type system but statically dec
 | `any` | A value of unknown type. Anything may be assigned **to** an `any`; getting a value back **out** requires a checked [`as` cast](#escaping-any-with-as) |
 
 Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what you wrote. A variable cannot be `nil` unless its type is marked nullable with `?`.
+
+### `bytes` vs `string`
+
+A `string` is text. It is always valid UTF-8, `String.len` counts codepoints,
+and `String.sub` slices on codepoint boundaries. That is what application code
+wants, and it is why `String.char(0x80)` gives you the two-byte UTF-8 encoding
+of U+0080 rather than the single byte `0x80`.
+
+A `bytes` is everything else: an image, a digest, a compressed blob, a frame off
+a socket. It promises no encoding, `#b` counts bytes, and `Bytes.sub` slices on
+byte boundaries.
+
+Lua makes one type do both jobs — a Lua string is a counted byte array, with the
+`utf8` library layered on top. That is why `#s` in Lua is a byte count and
+`s:sub(1, 1)` can cut a character in half. Saule splits them so the typechecker
+can keep them apart:
+
+```luau
+local text: string = "saulė"
+local raw: bytes = Bytes.fromString(text)
+
+println(String.len(text))   -- 5 codepoints
+println(#raw)               -- 6 bytes
+
+local oops: string = raw    -- error: cannot assign `bytes` to `string`
+println(String.len(raw))    -- error: expects `string`, got `bytes`
+```
+
+Nothing converts between them implicitly, and `as` is not a way across
+either — there is no `bytes as string`, for the same reason there is no
+`integer as boolean`: the interesting case (a buffer that is not UTF-8) has no
+answer a cast could give. The conversion is a function call, and its type says
+so. `Bytes.fromString` always succeeds, since every Saule string is already
+valid UTF-8; `Bytes.toString` returns `string?`, because not every buffer is
+text and substituting replacement characters would hide that.
+
+`bytes` also stays out of two places a `string` is welcome: `..` does not accept
+one (concatenation builds text, so use `Bytes.concat`, and `print` shows
+`<bytes len=N>`), and it cannot be a table key — key by `Bytes.toHex(b)`
+instead. Equality is by contents, and a `bytes` is never equal to a `string`.
+
+Files follow the same split: `f.read()` hands back a `string` and
+`f.readBytes()` a `bytes`, with `f.write` / `f.writeBytes` to match. See
+[`Bytes`](./DOCS.md#bytes) for the full module.
 
 ### Function types
 
@@ -2024,7 +2069,7 @@ local player: Player? = repo.findById(id)
 local name: string? = player?.name      -- nil if `player` was nil
 ```
 
-For lengths of strings and tables, use `#`:
+For lengths of strings, bytes and tables, use `#`:
 
 ```luau
 local greeting: string? = nil
@@ -2559,7 +2604,7 @@ of every construct, see the [Grammar](#grammar).
 | `??` | Null coalescing fallback |
 | `!` | Force unwrap nullable |
 | `..` | String concatenation |
-| `#` | Length of table or string |
+| `#` | Length of a table, string (codepoints) or bytes (bytes) |
 | `==`, `!=` | Equality checks |
 | `>`, `<`, `>=`, `<=` | Comparisons |
 | `and`, `or`, `not` | Boolean logic |

@@ -260,6 +260,7 @@ pub(super) fn is_primitive(name: &str) -> bool {
         "integer"
             | "float"
             | "string"
+            | "bytes"
             | "boolean"
             | "nil"
             | "any"

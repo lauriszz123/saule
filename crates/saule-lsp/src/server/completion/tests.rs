@@ -1452,7 +1452,16 @@ fn a_native_value_type_offers_its_instance_methods() {
     with_stdlib();
     let src = "class Main\n    static fn main()\n        local file = Io.open(\"x\", IoMode.Read)\n        file.@\n    end\nend\n";
     let got = complete(src);
-    for want in ["close", "flush", "lines", "read", "seek", "write"] {
+    for want in [
+        "close",
+        "flush",
+        "lines",
+        "read",
+        "readBytes",
+        "seek",
+        "write",
+        "writeBytes",
+    ] {
         assert!(got.contains(&want.to_string()), "missing {want} in {got:?}");
     }
 }
@@ -1463,7 +1472,9 @@ fn a_native_value_type_offers_its_instance_methods() {
 fn a_native_value_type_member_narrows_by_prefix() {
     with_stdlib();
     let src = "class Main\n    static fn main()\n        local file = Io.open(\"x\", IoMode.Read)\n        file.re@\n    end\nend\n";
-    assert_eq!(complete(src), vec!["read"]);
+    // Both byte-reading and text-reading members start `re`; what the
+    // prefix has to do is keep `close` / `seek` / `write` out.
+    assert_eq!(complete(src), vec!["read", "readBytes"]);
 }
 
 /// `Io.stdout` is a module *constant* typed `File`, not a call — its type
@@ -1472,7 +1483,7 @@ fn a_native_value_type_member_narrows_by_prefix() {
 fn a_module_constant_offers_the_members_of_its_type() {
     with_stdlib();
     let src = "class Main\n    static fn main()\n        Io.stdout.wr@\n    end\nend\n";
-    assert_eq!(complete(src), vec!["write"]);
+    assert_eq!(complete(src), vec!["write", "writeBytes"]);
 }
 
 /// Force-unwrapping the optional `Io.open` hands back keeps the members.
