@@ -327,6 +327,9 @@ fn countable(ty: &Type) -> bool {
 
 fn countable_name(name: &str) -> bool {
     name == "string"
+        // `#` counts codepoints on a string and bytes on a buffer; both have
+        // a length, so both belong here. See `ops::unary`'s `UnaryOp::Len`.
+        || name == "bytes"
         || name == "table"
         || saule_semantic::class_implements(name, saule_ast::ops::OP_LEN.interface)
 }

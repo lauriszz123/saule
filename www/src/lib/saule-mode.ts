@@ -41,7 +41,7 @@ const CONSTANTS = new Set(['true', 'false', 'nil']);
 // No `function`: a function's type is its signature, written `fn(...) -> T`,
 // and `fn` is already a declaration keyword.
 const PRIMITIVES = new Set([
-	'integer', 'float', 'string', 'boolean', 'any', 'nil', 'table',
+	'integer', 'float', 'string', 'bytes', 'boolean', 'any', 'nil', 'table',
 	'userdata', 'thread',
 ]);
 

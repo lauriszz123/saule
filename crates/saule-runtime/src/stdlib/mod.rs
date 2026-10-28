@@ -24,6 +24,7 @@ use std::rc::Rc;
 use crate::prelude::Prelude;
 use crate::value::{NativeFn, Value};
 
+pub mod bytes;
 pub mod core;
 pub mod io;
 pub mod iter;
@@ -52,6 +53,7 @@ pub fn install_std(env: &Rc<RefCell<Prelude>>) {
 pub fn register_builtin_packages() {
     use crate::native_packages::register;
     register(&core::CORE_PACKAGE);
+    register(&bytes::BYTES_PACKAGE);
     register(&iter::ITER_PACKAGE);
     register(&ops::OPS_PACKAGE);
     register(&math::MATH_PACKAGE);
