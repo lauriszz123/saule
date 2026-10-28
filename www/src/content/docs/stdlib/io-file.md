@@ -50,8 +50,10 @@ Saule enums (`IoMode`, `IoSeek`) so the typechecker can catch typos.
 
 | Signature | Description |
 | --- | --- |
-| `f.read(...string) -> string?` | Same formats as `Io.read`. |
-| `f.write(...string) -> nil` | Append bytes. |
+| `f.read(...string) -> string?` | Same formats as `Io.read`. Returns a `string`, so it is for **text**; a file that is not valid UTF-8 needs `readBytes`. |
+| `f.readBytes(count: integer?) -> bytes?` | Raw [`bytes`](/saule/stdlib/bytes/), no encoding assumed. No argument reads to end of file; a `count` reads up to that many and answers `nil` only at end of file, so a read loop terminates. |
+| `f.write(...string) -> nil` | Append text. A `bytes` passed here would be rendered as `<bytes len=N>` — use `writeBytes`. |
+| `f.writeBytes(data: bytes) -> nil` | Append the bytes themselves. Writing non-UTF-8 to stdout/stderr is an error rather than mojibake. |
 | `f.lines() -> fn() -> string?` | Per-line step closure. |
 | `f.seek(whence: IoSeek?, offset: integer?) -> integer?` | Defaults `(Cur, 0)`. Returns the new position, or `nil` when the handle can't seek (a pipe, a closed file). |
 | `f.flush() -> nil` | Force buffered writes to disk. |

@@ -101,6 +101,13 @@ pub struct Receipt {
     /// The ref actually installed — never empty, even when the entry in
     /// `dependencies:` omitted one, so what is on disk is always known.
     pub reference: String,
+    /// The commit that ref was at when it was installed.
+    ///
+    /// The only way to tell whether a package installed from a *branch* has
+    /// moved: the ref name stays the same forever, so comparing names says
+    /// nothing. `None` on a receipt written before this was recorded, which
+    /// reads as "unknown" rather than as "unchanged".
+    pub commit: Option<String>,
     /// The Saule import name: a source package's `name:`, or the name a
     /// native library declares.
     pub name: Option<String>,
@@ -123,6 +130,7 @@ impl Receipt {
     /// same reason: one format to read, and a file a person can inspect.
     pub fn parse(text: &str) -> Option<Receipt> {
         let (mut reference, mut kind, mut file, mut name) = (None, None, None, None);
+        let mut commit = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once(':') else {
                 continue;
@@ -130,6 +138,7 @@ impl Receipt {
             let value = value.trim().trim_matches('"').to_string();
             match key.trim() {
                 "ref" => reference = Some(value),
+                "commit" => commit = Some(value),
                 "kind" => kind = Some(value),
                 "file" => file = Some(value),
                 "name" => name = Some(value),
@@ -143,6 +152,7 @@ impl Receipt {
         };
         Some(Receipt {
             reference: reference?,
+            commit,
             name,
             kind,
         })
@@ -151,6 +161,9 @@ impl Receipt {
     pub fn render(&self) -> String {
         let mut out = String::from("-- Written by `saule install`.\n");
         out.push_str(&format!("ref: \"{}\"\n", self.reference));
+        if let Some(commit) = &self.commit {
+            out.push_str(&format!("commit: \"{commit}\"\n"));
+        }
         match &self.kind {
             ReceiptKind::Native { file } => {
                 out.push_str("kind: \"native\"\n");
@@ -240,6 +253,7 @@ mod tests {
         for receipt in [
             Receipt {
                 reference: "v0.1.0".into(),
+                commit: Some("a1b2c3d".into()),
                 name: Some("shine".into()),
                 kind: ReceiptKind::Native {
                     file: "libsaule_shine.dylib".into(),
@@ -247,6 +261,7 @@ mod tests {
             },
             Receipt {
                 reference: "main".into(),
+                commit: None,
                 name: Some("uikit".into()),
                 kind: ReceiptKind::Source,
             },

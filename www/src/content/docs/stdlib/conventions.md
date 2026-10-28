@@ -21,7 +21,10 @@ A handful of patterns repeat across the stdlib:
 - **Conversion is a cast, not a call.** `as` converts between `integer` and
   `float`, renders either (and `boolean`) as a `string`, and parses a
   `string` back — and on an `any` it is the checked type test instead. It
-  refuses any pair with no obvious answer rather than inventing one.
+  refuses any pair with no obvious answer rather than inventing one. The one
+  pair that is deliberately a *call* is `bytes` ↔ `string`: `Bytes.toString`
+  can fail, and a cast has nowhere to put the failure, so it is
+  [`Bytes`](/saule/stdlib/bytes/)' job and its return type is `string?`.
 - **Numeric flavour never mixes.** `integer` and `float` are separate types
   and nothing promotes between them silently — not the operators, and not the
   stdlib. `Math.*` is generic over the flavour (`<N>`), so a call takes either

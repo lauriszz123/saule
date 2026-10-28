@@ -30,4 +30,3 @@ clone and run.
 - [`examples/markdown`](https://github.com/lauriszz123/saule/tree/main/examples/markdown)
 - [`examples/md-viewer`](https://github.com/lauriszz123/saule/tree/main/examples/md-viewer)
 - [`examples/native-package`](https://github.com/lauriszz123/saule/tree/main/examples/native-package)
-- [`examples/uikit`](https://github.com/lauriszz123/saule/tree/main/examples/uikit)

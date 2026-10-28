@@ -63,7 +63,7 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `??` | Null coalescing fallback |
 | `!` | Force unwrap nullable |
 | `..` | String concatenation |
-| `#` | Length of table or string |
+| `#` | Length of a table, string (codepoints) or bytes (bytes) |
 | `==`, `!=` | Equality checks |
 | `>`, `<`, `>=`, `<=` | Comparisons |
 | `and`, `or`, `not` | Boolean logic |

@@ -35,6 +35,18 @@ pub(crate) fn path_arg(raw: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(cleaned))
 }
 
+/// Parse an argument that may be either a package or a path.
+///
+/// `saule install` takes both, so an argument naming a directory arrives with
+/// the same Windows escaping artefact [`path_arg`] exists for — see there for
+/// why a trailing quote cannot be part of a real path. Kept as a `String`
+/// rather than a `PathBuf` because a package is not a path and reading
+/// `lauriszz123@uikit` through `Path` only to print it back would be a lie
+/// about what it is.
+pub(crate) fn package_arg(raw: &str) -> Result<String, String> {
+    Ok(path_arg(raw)?.to_string_lossy().into_owned())
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "saule",
@@ -62,6 +74,7 @@ pub(crate) enum Command {
     Fmt(FmtArgs),
     Init(InitArgs),
     Install(InstallArgs),
+    Update(UpdateArgs),
     Remove(RemoveArgs),
     List(ListArgs),
     Disasm(DisasmArgs),
@@ -262,28 +275,73 @@ pub(crate) struct InitArgs {
 /// `saule install [<package>]`
 #[derive(Debug, Args)]
 #[command(
-    about = "Install a package from GitHub, or everything this project needs",
+    about = "Install a package, or everything this project needs",
     long_about = "\
-Install a package from GitHub, or everything this project needs.
+Install a package, or everything this project needs.
 
-    saule install gh:lauriszz123/saule-shine        -- the default branch
-    saule install gh:lauriszz123/saule-shine@v0.1.0 -- a tag or branch
-    saule install lauriszz123/saule-shine           -- `gh:` may be left off
-    saule install                                   -- everything in saule.config
+    saule install lauriszz123@saule-shine         -- the newest tagged version
+    saule install lauriszz123@saule-shine:v0.1.0  -- a specific tag or branch
+    saule install ../uikit                        -- a project on this machine
+    saule install                                 -- everything in saule.config
 
-A package is installed once, globally, and shared by every project; the
-project records which ones it uses in `dependencies:`, alongside any relative
-paths, which keep working unchanged.
+A package is `<owner>@<repo>`, pinned to a version with `:<version>`. Without
+one, the newest tag is installed and then recorded — so a fresh clone of this
+project gets that same version rather than whatever is newest that day, and
+`saule update` is the one thing that moves it on. A repository with no tags
+falls back to its default branch.
 
-What the repository holds decides how it installs: a Saule project (it has a
-saule.config) has its source installed, and a Rust crate is built with cargo
-and its library installed."
+A package is installed once, globally, and shared by every project; this
+project records only which ones it uses, in `dependencies:`.
+
+A path is different in kind: it is used **where it lies**, so nothing is
+copied and your edits to it take effect immediately. That is what to reach for
+with a library you are developing alongside the project that uses it.
+
+What the repository holds decides how a package installs: a Saule project (it
+has a saule.config) has its source installed, and a Rust crate is built with
+cargo and its library installed."
 )]
 pub(crate) struct InstallArgs {
-    /// `gh:<owner>/<repo>[@<tag-or-branch>]`. Omit to install what this
-    /// project's `dependencies:` already name.
-    #[arg(value_name = "PACKAGE")]
+    /// `<owner>@<repo>[:<version>]`, or a path to a project on this machine.
+    /// Omit to install what this project's `dependencies:` already name.
+    #[arg(value_name = "PACKAGE", value_parser = package_arg)]
     pub package: Option<String>,
+}
+
+/// `saule update [<package>]`
+#[derive(Debug, Args)]
+#[command(
+    about = "Update packages to their newest version",
+    long_about = "\
+Update this project's packages to their newest tagged version.
+
+    saule update               -- every package this project depends on
+    saule update uikit         -- just that one
+    saule update --check       -- report what is behind, change nothing
+
+A `dependencies:` entry records an exact version rather than a range, so this
+is the only thing that ever rewrites one — and it rewrites it in place, next
+to the version it replaced.
+
+A package pinned to a tag moves to the newest tag. One tracking a *branch* is
+compared by commit instead, since the ref name never changes, and is
+reinstalled from that same branch.
+
+`--check` installs nothing and exits 1 when something is behind, or 2 when a
+package could not be reached at all — so CI can tell \"out of date\" from \"I
+could not find out\".
+
+Path dependencies are left alone: they are used where they lie, so there is
+nothing to update."
+)]
+pub(crate) struct UpdateArgs {
+    /// The package to update. Omit for every package in the project.
+    #[arg(value_name = "PACKAGE", value_parser = package_arg)]
+    pub package: Option<String>,
+
+    /// Report what is out of date and exit, installing nothing.
+    #[arg(long)]
+    pub check: bool,
 }
 
 /// `saule remove <package>`
@@ -296,8 +354,8 @@ Remove a package from this project's `dependencies:`.
 The installed copy is kept, because other projects on this machine may be
 using it. `--purge` deletes it as well.
 
-The package may be named however is convenient: `gh:owner/repo@v1`,
-`owner/repo`, or just `repo`."
+The package may be named however is convenient: `owner@repo:v1`, `owner@repo`,
+just `repo`, or the name you `import` it under."
 )]
 pub(crate) struct RemoveArgs {
     /// The package, or a relative path exactly as it appears in the config.

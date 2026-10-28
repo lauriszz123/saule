@@ -1,0 +1,61 @@
+-- Byte-string standard library functions.
+--
+-- `bytes` is the counterpart to `string`: every index here is a byte index,
+-- and nothing converts between the two without saying so.
+class Main
+	static fn main()
+		-- of: raw bytes, including ones no string can hold
+		local raw: bytes = Bytes.of(0x00, 0x7f, 0x80, 0xc3, 0x28, 0xff)
+
+		-- len, and `#`, count bytes
+		println(Bytes.len(raw))  -- 6
+		println(#raw)            -- 6
+
+		-- toHex: how a buffer gets looked at
+		println(Bytes.toHex(raw))  -- 007f80c328ff
+
+		-- byte: 1-based, nil past the end so a scan can stop
+		println(Bytes.byte(raw, 3))   -- 128
+		println(Bytes.byte(raw, 99))  -- nil
+
+		-- print shows a length, never the bytes
+		println(raw)
+
+		-- toString: nullable, because not every buffer is text
+		println(Bytes.toString(raw))  -- nil (0xc3 0x28 is invalid UTF-8)
+
+		-- fromString / toString round-trip real text. The counts differ:
+		-- six bytes for five codepoints.
+		local sun: bytes = Bytes.fromString("saulė")
+		println(Bytes.len(sun))      -- 6
+		println(String.len("saulė")) -- 5
+		println(Bytes.toString(sun)) -- saulė
+
+		-- sub: Lua's rules, on bytes
+		println(Bytes.toHex(Bytes.sub(raw, 2, 4)))  -- 7f80c3
+		println(Bytes.toHex(Bytes.sub(raw, -2)))    -- 28ff
+		println(Bytes.toHex(Bytes.sub(raw, 9, 12))) -- (empty)
+
+		-- concat
+		println(Bytes.toHex(Bytes.concat(Bytes.of(1, 2), Bytes.empty(), Bytes.of(3))))  -- 010203
+
+		-- indexOf: 1-based, nil when absent
+		println(Bytes.indexOf(raw, Bytes.of(0x80)))             -- 3
+		println(Bytes.indexOf(raw, Bytes.of(0x28), 5))          -- 5
+		println(Bytes.indexOf(raw, Bytes.of(0x99)))             -- nil
+
+		-- fromHex: nil rather than half a buffer
+		println(Bytes.toHex(Bytes.fromHex("deadbeef")!))  -- deadbeef
+		println(Bytes.fromHex("abc"))                     -- nil (odd length)
+		println(Bytes.fromHex("00zz"))                    -- nil (not hex)
+
+		-- Equality is by contents.
+		if Bytes.of(1, 2) == Bytes.of(1, 2) then
+			println("equal by contents")
+		end
+
+		-- Bytes compose with generics like any other type.
+		local list: table<bytes> = {Bytes.of(0xaa), Bytes.of(0xbb)}
+		println(Bytes.toHex(Bytes.concat(list[1], list[2])))  -- aabb
+	end
+end

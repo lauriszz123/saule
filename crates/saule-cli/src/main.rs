@@ -115,6 +115,7 @@ fn real_main(stack_size: usize) {
         Command::Fmt(args) => fmt::cmd_fmt(&args),
         Command::Init(args) => init::cmd_init(&args.name, args.lib),
         Command::Install(args) => pkg::cmd_install(args.package),
+        Command::Update(args) => pkg::cmd_update(args.package, args.check),
         Command::Remove(args) => pkg::cmd_remove(&args.package, args.purge),
         Command::List(args) => pkg::cmd_list(args.global),
         Command::Disasm(args) => disasm::cmd_disasm(args.target, args.deps),

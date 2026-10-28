@@ -108,9 +108,13 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
                 crate::stdlib::string::char_len(s.as_str()) as i64
             )),
             Value::Table(items) => Ok(Value::Int(items.borrow().array_len() as i64)),
+            // Bytes, deliberately: `#` on a string counts codepoints, and on
+            // a buffer there are none to count. The unit each type is
+            // measured in is the unit it is indexed by.
+            Value::Bytes(b) => Ok(Value::Int(b.len() as i64)),
             other => Err(RuntimeError::TypeError {
                 message: format!(
-                    "cannot take length of a `{}` — only strings, tables, and classes implementing `OpLen` have a length",
+                    "cannot take length of a `{}` — only strings, bytes, tables, and classes implementing `OpLen` have a length",
                     describe(&other)
                 ),
                 span,
