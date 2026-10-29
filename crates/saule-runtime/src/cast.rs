@@ -106,11 +106,21 @@ fn matches_named(value: &Value, name: &str) -> bool {
         "boolean" => matches!(value, Value::Bool(_)),
         "nil" => matches!(value, Value::Nil),
         "table" => matches!(value, Value::Table(_)),
+        "bytes" => matches!(value, Value::Bytes(_)),
+        // A `byte` is an `integer` at run time, so the test is the range.
+        // A top-level `x as byte` is a conversion and never gets here; this
+        // is the element test inside `table<byte>`.
+        "byte" => matches!(value, Value::Int(n) if (0..=255).contains(n)),
         // No `"function"` arm: the bare name is not a type. A callable is
         // narrowed with the `fn(...) -> T` form, handled above.
         // A user-declared type: an instance of that class (or of any
         // subclass — a `Dog` is an `Animal`), or a variant of that enum.
+        // The stdlib's handle types and a native package's classes are
+        // values of their own shape, matched by the name they are typed as.
         other => match value {
+            Value::File(_) => other == "File",
+            Value::Process(_) => other == "Process",
+            Value::Foreign(obj) => obj.class.name == other,
             Value::Instance(inst) => {
                 let inst = inst.borrow();
                 let mut cls = Some(inst.class.clone());

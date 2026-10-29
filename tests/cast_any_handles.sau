@@ -1,0 +1,32 @@
+-- `as` out of `any` for the types that are neither a primitive the cast
+-- tests by tag nor a class it walks: `bytes`, `byte`, and the stdlib's
+-- handle types. Each used to fail the test whatever the value was, so a
+-- `Process` put into a table could never be taken back out.
+class Main
+	static fn main()
+		local raw: any = Bytes.of(1, 2, 3)
+		println(raw as bytes != nil)  -- true
+		println(#((raw as bytes)!))  -- 3
+		local text: any = "text"
+		println(text as bytes == nil)  -- true
+
+		-- `byte` is tested by range, elementwise inside a table.
+		local small: any = {1, 2, 255}
+		local large: any = {1, 256}
+		println(small as table<byte> != nil)  -- true
+		println(large as table<byte> != nil)  -- false
+
+		local out: any = Io.stdout
+		println(out as File != nil)  -- true
+		println(out as Process == nil)  -- true
+
+		local bag: table = {}
+		-- `cat`, as in `spawn.sau`: on every runner, and `wait` closing its
+		-- stdin is what ends it.
+		bag.proc = Os.spawn("cat")
+		local proc: Process? = bag.proc as Process
+		println(proc != nil)  -- true
+		println(proc!.wait())  -- 0
+		println(bag.proc as File == nil)  -- true
+	end
+end
