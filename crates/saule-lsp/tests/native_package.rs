@@ -10,6 +10,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::Duration;
 
@@ -23,30 +24,43 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Build the fixture package and install its library as the only file in a
-/// fresh `SAULE_HOME` named for `test`. Returns the home.
+/// Build the fixture package, once per test process, and return its library.
+///
+/// Once rather than per test: the tests run in parallel, and two `cargo
+/// build`s into one target directory race — the second re-links the library
+/// while the first is copying it, and the copy finds no file.
+fn fixture_library() -> &'static Path {
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY.get_or_init(|| {
+        // A target directory of its own: this runs while `cargo test` may
+        // still hold the workspace's.
+        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
+        let status = Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "--quiet",
+                "-p",
+                "saule-native-fixture",
+                "--target-dir",
+            ])
+            .arg(&target)
+            .current_dir(workspace_root())
+            .status()
+            .expect("run cargo to build the fixture package");
+        assert!(status.success(), "building saule-native-fixture failed");
+        target.join("debug").join(format!(
+            "{}saule_fixture{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        ))
+    })
+}
+
+/// Install the fixture library as the only file in a fresh `SAULE_HOME`
+/// named for `test`. Returns the home.
 fn fixture_home(test: &str) -> PathBuf {
-    // A target directory of its own: this runs while `cargo test` may still
-    // hold the workspace's.
-    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
-    let status = Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "--quiet",
-            "-p",
-            "saule-native-fixture",
-            "--target-dir",
-        ])
-        .arg(&target)
-        .current_dir(workspace_root())
-        .status()
-        .expect("run cargo to build the fixture package");
-    assert!(status.success(), "building saule-native-fixture failed");
-    let file = format!(
-        "{}saule_fixture{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    );
+    let library = fixture_library();
+    let file = library.file_name().expect("a library file name");
 
     let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("lsp-native-homes")
@@ -54,8 +68,7 @@ fn fixture_home(test: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&home);
     let packages = home.join("native_packages");
     std::fs::create_dir_all(&packages).expect("create the packages directory");
-    std::fs::copy(target.join("debug").join(&file), packages.join(&file))
-        .expect("install the fixture library");
+    std::fs::copy(library, packages.join(file)).expect("install the fixture library");
     home
 }
 
