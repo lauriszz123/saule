@@ -195,7 +195,7 @@ commands:
             ./run_tests.sh
             bash run_examples.sh
 
-  # Skip a test job whose inputs already passed it.
+  # Within one pull request, skip a test job whose inputs already passed it.
   #
   # Every push is a new commit and GitHub wants all four checks on it, but a
   # push that touches only the website cannot change what the Rust suites
@@ -207,9 +207,18 @@ commands:
   # differs is a different fingerprint, so a change that could break a job
   # always runs it.
   #
+  # The fingerprint also carries the pull request's number, so a marker only
+  # ever helps the PR that earned it: a new PR — even one from a branch that
+  # had one before, like every `develop` → `main` release — starts with
+  # nothing and runs every job. CircleCI's trigger data has no PR number, so
+  # it comes from git: GitHub keeps `refs/pull/<n>/head` at each PR's latest
+  # commit, and the one at this commit is this PR. A run that is no PR's
+  # head (a release on `main`), or whose lookup fails, is scoped to its own
+  # workflow instead, which no marker can match — it always runs in full.
+  #
   # The key is exact, with no prefix fallback: a near match would be a
   # different tree, and restoring its marker would be skipping a test that
-  # never ran. Bump `v1` to force every job to run once.
+  # never ran.
   skip-if-passed:
     parameters:
       job:
@@ -225,10 +234,25 @@ commands:
       - run:
           name: Fingerprint the inputs
           shell: << parameters.shell >>
-          # `ls-files -s` rather than `ls-tree`, which has no exclude
-          # pathspec. Straight after checkout the index is the commit, so
-          # the two list the same paths and blob hashes.
-          command: git ls-files -s -- . << parameters.exclude >> > .ci-fingerprint
+          command: |
+            # `ls-files -s` rather than `ls-tree`, which has no exclude
+            # pathspec. Straight after checkout the index is the commit, so
+            # the two list the same paths and blob hashes.
+            git ls-files -s -- . << parameters.exclude >> > .ci-fingerprint
+
+            # Every PR whose head is this commit. Usually one; a closed PR
+            # keeps its ref, so a new PR at the same commit as an old one
+            # lists both — a scope the old one never had.
+            refs="$(git ls-remote origin 'refs/pull/*/head' 2>/dev/null || true)"
+            prs="$(printf '%s\n' "$refs" \
+              | awk -v sha="$(git rev-parse HEAD)" '$1 == sha { split($2, p, "/"); print p[3] }' \
+              | sort -n | tr '\n' ' ')"
+            if [ -n "$prs" ]; then
+              scope="pull request ${prs% }"
+            else
+              scope="workflow $CIRCLE_WORKFLOW_ID"
+            fi
+            echo "scope: $scope" | tee -a .ci-fingerprint
       - restore_cache:
           keys:
             - passed-v1-<< parameters.job >>-{{ checksum ".ci-fingerprint" }}
