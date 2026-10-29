@@ -162,7 +162,7 @@ fn output_that_is_not_text_survives_intact() {
         &dir,
         r#"class Main
 	static fn main()
-		local p: Process = Os.spawn("printf", {"\\x00\\x80\\xc3\\x28\\xff"})!
+		local p: Process = Os.spawn("printf", {"\\000\\200\\303\\050\\377"})!
 		p.wait()
 		local raw: bytes = p.read()
 		println("hex: " .. Bytes.toHex(raw))

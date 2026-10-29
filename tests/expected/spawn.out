@@ -18,7 +18,7 @@ running: true
 killed: true
 code after kill: -1
 running after kill: false
-cwd: /tmp
+cwd: /
 env: overlaid|inherited
 bad cwd is nil: true
 buffer is capped: true

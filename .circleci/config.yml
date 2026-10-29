@@ -6,17 +6,22 @@
 # anonymous download with no rate limit and a URL that never changes. Nothing
 # in the installer knows or cares which CI built the binary.
 #
-# **`main` is the release branch, and every push to it publishes.** Test, then
-# build all six platform archives, then create the GitHub Release — tag
-# included — in one pipeline. The version generates itself from the existing
+# **`main` is the release branch, and every push to it publishes.** Test on
+# Linux, macOS and Windows, then build all six platform archives, then create
+# the GitHub Release — tag included — in one pipeline. A red suite on any of
+# the three platforms means no version is cut. The version generates itself from the existing
 # tags (`scripts/next-version.sh`), so nobody types a version number, nobody
 # can reuse one, and `install.sh` picks the new release up as `latest` the
 # moment it exists.
 #
-# **Nothing runs on any other branch.** `develop` is yours to push to freely:
-# the workflow's `when` below excludes it, so a push there starts no jobs and
-# spends nothing. Two escape hatches for when you do want CI off `main`:
+# **Any other branch only gets tested, and only while it has an open pull
+# request** (the `pr-check` workflow, with the project's "Only build pull
+# requests" setting on). That is the required check GitHub waits for before
+# a PR can merge into `develop` or `main`. The escape hatches:
 #
+#   * `test-only: true` — the three test suites and nothing else. Trigger it
+#     on `develop` before merging, so a platform break turns up there rather
+#     than as a release that did not happen.
 #   * `dry-run: true` — build all six, verify every binary reports the version
 #     it claims and that the checksum set is complete, then stop without
 #     touching GitHub. Triggerable from any branch; this is the rehearsal.
@@ -39,6 +44,11 @@ parameters:
   dry-run:
     type: boolean
     default: false
+  # Run the test suites on all three platforms and stop. Builds nothing and
+  # publishes nothing, whatever branch it is triggered on.
+  test-only:
+    type: boolean
+    default: false
   # The escape hatch. Normally the version generates itself from the existing
   # tags (`scripts/next-version.sh`), so nobody types a version number and
   # nobody can fat-finger one or reuse one. Set this only to re-cut a release
@@ -58,7 +68,7 @@ executors:
   # Bumping is a deliberate commit: change the tag, run
   # `cargo clippy --workspace --all-targets -- -D warnings` under that
   # toolchain locally, fix what the new release found, push to `develop`.
-  rust:
+  rust-linux:
     docker:
       - image: rust:1.98-bookworm
     environment:
@@ -98,21 +108,210 @@ commands:
             - /usr/local/cargo/git
             - target
 
+  # The macOS and Windows images do not come with the pinned toolchain, so
+  # both the test and the build job on each install it the same way.
+  rust-macos:
+    steps:
+      - run:
+          name: Rust toolchain
+          command: |
+            set -eu
+            # 1.98 rather than `stable`, matching the `rust-linux` executor's
+            # pinned image — see the comment there. All six archives in a
+            # release are built by one compiler version, and which one is a
+            # commit.
+            if ! command -v rustup >/dev/null 2>&1; then
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain 1.98
+            fi
+            echo '. "$HOME/.cargo/env"' >> "$BASH_ENV"
+            . "$HOME/.cargo/env"
+            rustup toolchain install 1.98 --profile minimal
+            rustup default 1.98
+
+  rust-windows:
+    steps:
+      - run:
+          name: Rust toolchain
+          shell: powershell.exe
+          command: |
+            $ErrorActionPreference = 'Stop'
+            # 1.98, matching the `rust-linux` executor's pinned image and the
+            # macOS jobs — one compiler version across all six archives.
+            if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+              Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+              ./rustup-init.exe -y --profile minimal --default-toolchain 1.98
+            }
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            rustup toolchain install 1.98 --profile minimal
+            rustup default 1.98
+
+  # Git for Windows checks text out as CRLF by default. That would make
+  # `run_tests.sh` unrunnable under bash (`$'\r': command not found`) and
+  # every recorded output differ from what the binary prints. Turned off
+  # *before* `checkout`, so the tree is byte for byte what was committed —
+  # including the files that are committed as CRLF on purpose.
+  checkout-windows:
+    steps:
+      - run:
+          name: Check out without line-ending conversion
+          shell: powershell.exe
+          command: git config --global core.autocrlf false
+      - checkout
+
+  # Everything in `test-linux` that can differ between platforms:
+  # clippy (for `cfg`-gated code the Linux lint never sees), the Rust tests,
+  # and both fixture suites. Run through bash on every platform — Git Bash on
+  # Windows — because the fixture runners are bash scripts.
+  #
+  # Every step opens with `set -eo pipefail` itself rather than trusting the
+  # shell to: Windows' `bash.exe` runs without it, so a step's result there
+  # is its *last* command's, and a failing `run_tests.sh` followed by a
+  # passing `run_examples.sh` would report green.
+  portable-suite:
+    parameters:
+      shell:
+        type: string
+    steps:
+      - run:
+          name: clippy
+          shell: << parameters.shell >>
+          command: |
+            set -eo pipefail
+            export PATH="$HOME/.cargo/bin:$PATH"
+            rustup component add clippy
+            cargo clippy --workspace --all-targets -- -D warnings
+      - run:
+          name: cargo test
+          shell: << parameters.shell >>
+          no_output_timeout: 30m
+          command: |
+            set -eo pipefail
+            export PATH="$HOME/.cargo/bin:$PATH"
+            # `--no-fail-fast`: a platform break tends to hit several test
+            # binaries at once, and stopping at the first means finding
+            # them one pipeline at a time.
+            cargo test --workspace --locked --no-fail-fast
+      - run:
+          name: .sau fixtures and example projects, against their recorded output
+          shell: << parameters.shell >>
+          no_output_timeout: 30m
+          command: |
+            set -eo pipefail
+            export PATH="$HOME/.cargo/bin:$PATH"
+            # On Windows, `bash.exe` finds Windows' own `find.exe` and
+            # `sort.exe` before Git Bash's: `find examples -name …` then
+            # searches text instead of files, finds no projects, and
+            # `run_examples.sh` passes having run nothing.
+            case "$(uname -s)" in MINGW* | MSYS*) export PATH="/usr/bin:$PATH" ;; esac
+            cargo build --locked -p saule-cli
+            ./run_tests.sh
+            bash run_examples.sh
+
+  # Within one pull request, a test job runs until it passes, then never
+  # again: a later push reruns only the jobs that have not gone green yet.
+  #
+  # Every push is a new commit and GitHub wants all four checks on it. A job
+  # that already passed in this PR finds the marker `mark-passed` saved for
+  # it here and ends successfully, before installing or building anything,
+  # so the check goes green on the new commit without the minutes or the
+  # credits.
+  #
+  # The trade, chosen deliberately: a push that fixes one platform is not
+  # re-tested on the platforms that had already passed, so it could break
+  # one of them unseen. That is caught before it ships — the `develop` →
+  # `main` PR is a new PR and runs every job, and the release on `main`
+  # belongs to no PR and always runs in full — but it can reach `develop`.
+  #
+  # Scoped by pull request number, so a marker only ever helps the PR that
+  # earned it: a new PR — even from a branch that had one before — starts
+  # with nothing and runs every job. CircleCI's trigger data has no PR
+  # number, so it comes from git: GitHub keeps `refs/pull/<n>/head` at each
+  # PR's latest commit, and the one at this commit is this PR. A run that is
+  # no PR's head (a release on `main`), or whose lookup fails, is scoped to
+  # its own workflow instead, which no marker can match — it runs in full.
+  skip-if-passed:
+    parameters:
+      job:
+        type: string
+      shell:
+        type: string
+        default: /bin/bash -eo pipefail
+    steps:
+      - run:
+          name: Find the pull request
+          shell: << parameters.shell >>
+          command: |
+            set -eo pipefail
+            # Every PR whose head is this commit. Usually one; a closed PR
+            # keeps its ref, so a new PR at the same commit as an old one
+            # lists both — a scope the old one never had. `ls-remote` lists
+            # refs in a fixed order, so no `sort` (on Windows that can be
+            # Windows' own `sort.exe`).
+            #
+            # Through `origin` first, which is what checkout authenticated;
+            # then anonymously over HTTPS, which a public repository allows
+            # and which needs no key at all.
+            refs="$(git ls-remote origin 'refs/pull/*/head' 2>/dev/null \
+              || git ls-remote "<< pipeline.project.git_url >>" 'refs/pull/*/head' 2>/dev/null \
+              || true)"
+            echo "$(printf '%s\n' "$refs" | grep -c . || true) pull request ref(s) listed"
+            prs="$(printf '%s\n' "$refs" \
+              | awk -v sha="$(git rev-parse HEAD)" '$1 == sha { split($2, p, "/"); printf "%s ", p[3] }')"
+            if [ -n "$prs" ]; then
+              scope="pull request ${prs% }"
+            else
+              scope="workflow $CIRCLE_WORKFLOW_ID"
+            fi
+            echo "$scope" | tee .ci-scope
+      - restore_cache:
+          keys:
+            - passed-v2-<< parameters.job >>-{{ checksum ".ci-scope" }}
+      - run:
+          name: Skip if this already passed in this pull request
+          shell: << parameters.shell >>
+          command: |
+            if [ -f ".ci-passed/<< parameters.job >>" ]; then
+              echo "<< parameters.job >> already passed in this pull request — skipping."
+              circleci-agent step halt
+            fi
+
+  # The other half of `skip-if-passed`: runs only when every earlier step
+  # succeeded, so a marker exists only for a job that really went green.
+  mark-passed:
+    parameters:
+      job:
+        type: string
+      shell:
+        type: string
+        default: /bin/bash -eo pipefail
+    steps:
+      - run:
+          name: Record that this passed
+          shell: << parameters.shell >>
+          command: mkdir -p .ci-passed && touch ".ci-passed/<< parameters.job >>"
+      - save_cache:
+          key: passed-v2-<< parameters.job >>-{{ checksum ".ci-scope" }}
+          paths:
+            - .ci-passed
+
 jobs:
   # ---------------------------------------------------------------------------
   # Test
   # ---------------------------------------------------------------------------
 
-  # The gate on the Rust side of the repo. Deliberately one platform: the
-  # release workflow builds all six triples, and that is where a
-  # platform-specific break shows up. Running the full matrix on every push
-  # would cost minutes to catch almost nothing.
-  test:
-    executor: rust
+  # The gate on the Rust side of the repo, on Linux. `test-macos` and
+  # `test-windows` below run the platform-sensitive part of it again; the
+  # formatting check and the version handshake stay here, since neither can
+  # differ between platforms.
+  test-linux:
+    executor: rust-linux
     steps:
       - checkout
+      - skip-if-passed:
+          job: test-linux
       - restore-cargo:
-          prefix: test
+          prefix: test-linux
       - run:
           name: rustfmt — advisory
           command: |
@@ -174,7 +373,53 @@ jobs:
               exit 1
             fi
       - save-cargo:
-          prefix: test
+          prefix: test-linux
+      - mark-passed:
+          job: test-linux
+
+  # The suite again on macOS. `Os.spawn` is where the stdlib's behaviour is
+  # the operating system's rather than ours — pipes, child processes, how a
+  # path or an environment is handed over — and the BSD userland differs
+  # from Linux's in ways a fixture can trip over (`printf` has no `\x`,
+  # `/tmp` is a symlink). `test-linux` cannot speak for any of that.
+  test-macos:
+    macos:
+      xcode: 26.6.0
+    resource_class: m4pro.medium
+    environment:
+      CARGO_TERM_COLOR: always
+    steps:
+      - checkout
+      - skip-if-passed:
+          job: test-macos
+      - rust-macos
+      - portable-suite:
+          shell: /bin/bash -eo pipefail
+      - mark-passed:
+          job: test-macos
+
+  # The platform the portability had to be designed for rather than
+  # inherited: no `sh`, no `cat`, different pipe semantics, a backslash in
+  # every path, and `.exe` on every binary. `run_tests.sh` skips the one
+  # fixture that needs a Unix userland; `crates/saule-cli/tests/spawn.rs`
+  # covers the same ground here with `saule` itself as the child.
+  test-windows:
+    executor:
+      name: win/default
+      size: medium
+    environment:
+      CARGO_TERM_COLOR: always
+    steps:
+      - checkout-windows
+      - skip-if-passed:
+          job: test-windows
+          shell: bash.exe
+      - rust-windows
+      - portable-suite:
+          shell: bash.exe
+      - mark-passed:
+          job: test-windows
+          shell: bash.exe
 
   # Two guarantees, both easy to break by editing prose:
   #
@@ -184,9 +429,11 @@ jobs:
   #      README.md / DOCS.md / examples they come from, so a committed page can
   #      never contradict its source.
   check-www:
-    executor: rust
+    executor: rust-linux
     steps:
       - checkout
+      - skip-if-passed:
+          job: check-www
       - restore-cargo:
           prefix: www
       - run:
@@ -252,6 +499,8 @@ jobs:
             npm run build
       - save-cargo:
           prefix: www
+      - mark-passed:
+          job: check-www
 
   # ---------------------------------------------------------------------------
   # Release — decide the version once
@@ -337,7 +586,7 @@ jobs:
   # and nothing else. It is still *executed* before being shipped, under
   # qemu-user, so it gets the same version check as every other archive.
   build-linux:
-    executor: rust
+    executor: rust-linux
     parameters:
       triple:
         type: string
@@ -406,42 +655,15 @@ jobs:
       - checkout
       - attach_workspace:
           at: .
+      - rust-macos
       - run:
-          name: Rust toolchain
+          name: Release target
           command: |
             set -eu
-            # 1.98 rather than `stable`, matching the `rust` executor's pinned
-            # image — see the comment there. All six archives in a release are
-            # built by one compiler version, and which one is a commit.
-            if ! command -v rustup >/dev/null 2>&1; then
-              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-                | sh -s -- -y --profile minimal --default-toolchain 1.98
-            fi
-            echo '. "$HOME/.cargo/env"' >> "$BASH_ENV"
-            . "$HOME/.cargo/env"
-            rustup toolchain install 1.98 --profile minimal
-            rustup default 1.98
             rustup target add "$TRIPLE"
             case "$TRIPLE" in
               x86_64-apple-darwin) echo 'export EMULATOR="arch -x86_64"' >> "$BASH_ENV" ;;
             esac
-      - run:
-          # `Os.spawn` is the one part of the stdlib whose behaviour is the
-          # operating system's rather than ours — pipes, child processes, and
-          # how a path or an environment is handed over. The Linux `test` job
-          # cannot speak for any of that, so the platform-portable half of
-          # its suite runs here too, before anything gets archived.
-          #
-          # Scoped to that one suite deliberately: everything else is
-          # platform-independent and already green in `test`, and this job
-          # has a release build to get through. It builds for the host arch
-          # rather than << parameters.triple >>, since the question is how
-          # macOS behaves and that does not differ between the two.
-          name: Platform-sensitive tests
-          no_output_timeout: 20m
-          command: |
-            set -eu
-            cargo test --locked -p saule-cli --test spawn
       - run:
           name: Build, verify and archive
           no_output_timeout: 45m
@@ -451,44 +673,32 @@ jobs:
           paths:
             - dist
 
+  # One triple, but a parameter and a one-entry matrix like the others, so
+  # the job is named `build-windows-<triple>` the way theirs are.
   build-windows:
     executor:
       name: win/default
       size: medium
+    parameters:
+      triple:
+        type: string
     environment:
-      TRIPLE: x86_64-pc-windows-msvc
+      TRIPLE: << parameters.triple >>
       CARGO_TERM_COLOR: always
     steps:
-      - checkout
+      # The same checkout as `test-windows`, so the archive is built from the
+      # bytes that were tested — README.md included, which ships in it.
+      - checkout-windows
       - attach_workspace:
           at: .
+      - rust-windows
       - run:
-          name: Rust toolchain
+          name: Release target
           shell: powershell.exe
           command: |
             $ErrorActionPreference = 'Stop'
-            # 1.98, matching the `rust` executor's pinned image and the macOS
-            # job — one compiler version across all six archives.
-            if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
-              Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
-              ./rustup-init.exe -y --profile minimal --default-toolchain 1.98
-            }
             $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-            rustup toolchain install 1.98 --profile minimal
-            rustup default 1.98
             rustup target add $env:TRIPLE
-      - run:
-          # See the macOS job. This is the platform the portability had to be
-          # designed for rather than inherited: no `sh`, no `cat`, different
-          # pipe semantics, and a backslash in every path.
-          name: Platform-sensitive tests
-          shell: powershell.exe
-          no_output_timeout: 20m
-          command: |
-            $ErrorActionPreference = 'Stop'
-            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-            cargo test --locked -p saule-cli --test spawn
-            if ($LASTEXITCODE -ne 0) { throw "platform tests failed" }
       - run:
           name: Build, verify and archive
           shell: powershell.exe
@@ -648,26 +858,33 @@ jobs:
           destination: release
 
 workflows:
-  # One workflow, two entry points, and no third: a push to `main`, or a
-  # `dry-run: true` trigger from anywhere. Every other branch — `develop`
-  # included — matches neither, so its pipeline contains no jobs and runs
-  # nothing.
+  # Three workflows. `release` has two entry points: a push to `main`, or a
+  # `dry-run: true` trigger from anywhere. `test-only` has one: its own
+  # parameter. `pr-check` takes every other branch, and only those three
+  # exclude one another, so no pipeline runs the same suite twice.
   #
   # A tag pipeline is not part of this design either: the publish job creates
   # the tag itself, so there is exactly one publisher and nothing to race with.
   release:
     when:
-      or:
-        - equal: [main, << pipeline.git.branch >>]
-        - << pipeline.parameters.dry-run >>
+      and:
+        # `test-only` wins even on `main`, so triggering it there can never
+        # cut a release by accident.
+        - not: << pipeline.parameters.test-only >>
+        - or:
+            - equal: [main, << pipeline.git.branch >>]
+            - << pipeline.parameters.dry-run >>
     jobs:
-      # The gate. `version` requires all three, so a red test suite means no
-      # archives are built and no release is created — the tests are what
-      # stands between a push to `main` and a published version.
-      - test
+      # The gate. `version` requires every suite on every platform, so a red
+      # test anywhere means no archives are built and no release is created —
+      # the tests are what stands between a push to `main` and a published
+      # version.
+      - test-linux
+      - test-macos
+      - test-windows
       - check-www
       - version:
-          requires: [test, check-www]
+          requires: [test-linux, test-macos, test-windows, check-www]
       - build-linux:
           requires: [version]
           matrix:
@@ -685,9 +902,51 @@ workflows:
                 - x86_64-apple-darwin
       - build-windows:
           requires: [version]
+          matrix:
+            parameters:
+              triple:
+                - x86_64-pc-windows-msvc
       - publish:
           # Requiring the matrix alias waits on every triple in it.
           requires: [build-linux, build-macos, build-windows]
           # Holds GITHUB_TOKEN. Restrict it to this project, and ideally to a
           # protected branch — it is the only credential in the pipeline.
           context: saule-release
+
+  # The pre-merge check: all three platforms, then stop.
+  test-only:
+    when: << pipeline.parameters.test-only >>
+    jobs:
+      - test-linux
+      - test-macos
+      - test-windows
+
+  # The required check on pull requests. GitHub's rulesets on `develop` and
+  # `main` refuse a merge until every job here is green on the PR's head
+  # commit, so the four are exactly the release gate: a PR that can merge is
+  # a PR that can be released.
+  #
+  # It runs on pushes to any branch but `main` and `gh-pages`. What keeps
+  # that from billing every push is the project setting **Only build pull
+  # requests** (see CIRCLECI.md): with it on, CircleCI builds a branch only
+  # while it has an open PR. `develop` is included on purpose — its PR into
+  # `main` is checked the same way.
+  pr-check:
+    when:
+      and:
+        - not: << pipeline.parameters.test-only >>
+        - not: << pipeline.parameters.dry-run >>
+        # The project's trigger also fires on tag pushes, and the publish
+        # job creates one per release. A tag pipeline has no branch, so
+        # without this every release would re-run the whole suite on a
+        # commit that already passed it.
+        - not: << pipeline.git.tag >>
+        - not:
+            equal: [main, << pipeline.git.branch >>]
+        - not:
+            equal: [gh-pages, << pipeline.git.branch >>]
+    jobs:
+      - test-linux
+      - test-macos
+      - test-windows
+      - check-www

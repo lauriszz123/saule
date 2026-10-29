@@ -65,7 +65,9 @@ fn a_stdlib_constant_folds_to_the_same_value() {
     must_agree("local r: float = Math.pi\nr");
     must_agree("local r: float = Math.e\nr");
     must_agree("local r: float = Math.sin(Math.pi / 2.0)\nr");
-    must_agree("local r: string = Os.sep\nr");
+    // Not `Os.sep` on its own: it is `\` on Windows and `/` elsewhere, and a
+    // recorded outcome has one value for every platform.
+    must_agree("local r: boolean = Os.sep == \"/\" or Os.sep == \"\\\\\"\nr");
 }
 
 #[test]
