@@ -163,6 +163,11 @@ commands:
   # clippy (for `cfg`-gated code the Linux lint never sees), the Rust tests,
   # and both fixture suites. Run through bash on every platform — Git Bash on
   # Windows — because the fixture runners are bash scripts.
+  #
+  # Every step opens with `set -eo pipefail` itself rather than trusting the
+  # shell to: Windows' `bash.exe` runs without it, so a step's result there
+  # is its *last* command's, and a failing `run_tests.sh` followed by a
+  # passing `run_examples.sh` would report green.
   portable-suite:
     parameters:
       shell:
@@ -172,6 +177,7 @@ commands:
           name: clippy
           shell: << parameters.shell >>
           command: |
+            set -eo pipefail
             export PATH="$HOME/.cargo/bin:$PATH"
             rustup component add clippy
             cargo clippy --workspace --all-targets -- -D warnings
@@ -180,6 +186,7 @@ commands:
           shell: << parameters.shell >>
           no_output_timeout: 30m
           command: |
+            set -eo pipefail
             export PATH="$HOME/.cargo/bin:$PATH"
             # `--no-fail-fast`: a platform break tends to hit several test
             # binaries at once, and stopping at the first means finding
@@ -190,7 +197,13 @@ commands:
           shell: << parameters.shell >>
           no_output_timeout: 30m
           command: |
+            set -eo pipefail
             export PATH="$HOME/.cargo/bin:$PATH"
+            # On Windows, `bash.exe` finds Windows' own `find.exe` and
+            # `sort.exe` before Git Bash's: `find examples -name …` then
+            # searches text instead of files, finds no projects, and
+            # `run_examples.sh` passes having run nothing.
+            case "$(uname -s)" in MINGW* | MSYS*) export PATH="/usr/bin:$PATH" ;; esac
             cargo build --locked -p saule-cli
             ./run_tests.sh
             bash run_examples.sh
@@ -229,13 +242,22 @@ commands:
           name: Find the pull request
           shell: << parameters.shell >>
           command: |
+            set -eo pipefail
             # Every PR whose head is this commit. Usually one; a closed PR
             # keeps its ref, so a new PR at the same commit as an old one
-            # lists both — a scope the old one never had.
-            refs="$(git ls-remote origin 'refs/pull/*/head' 2>/dev/null || true)"
+            # lists both — a scope the old one never had. `ls-remote` lists
+            # refs in a fixed order, so no `sort` (on Windows that can be
+            # Windows' own `sort.exe`).
+            #
+            # Through `origin` first, which is what checkout authenticated;
+            # then anonymously over HTTPS, which a public repository allows
+            # and which needs no key at all.
+            refs="$(git ls-remote origin 'refs/pull/*/head' 2>/dev/null \
+              || git ls-remote "<< pipeline.project.git_url >>" 'refs/pull/*/head' 2>/dev/null \
+              || true)"
+            echo "$(printf '%s\n' "$refs" | grep -c . || true) pull request ref(s) listed"
             prs="$(printf '%s\n' "$refs" \
-              | awk -v sha="$(git rev-parse HEAD)" '$1 == sha { split($2, p, "/"); print p[3] }' \
-              | sort -n | tr '\n' ' ')"
+              | awk -v sha="$(git rev-parse HEAD)" '$1 == sha { split($2, p, "/"); printf "%s ", p[3] }')"
             if [ -n "$prs" ]; then
               scope="pull request ${prs% }"
             else
