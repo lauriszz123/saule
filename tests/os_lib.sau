@@ -42,9 +42,11 @@ println("cwd absolute: " .. tostring(String.starts(cwd, "/") or String.find(cwd,
 -- ── filesystem ────────────────────────────────────────
 
 local tmp: string = Os.tmpname()
+-- Absolute the same way `cwd` is above: `/…` on Unix, `C:\…` on Windows.
 println(
 	"tmpname under tmp dir: " .. tostring(
-		String.starts(tmp, "/") and String.find(tmp, "saule_") != nil
+		(String.starts(tmp, "/") or String.find(tmp, ":\\") != nil)
+			and String.find(tmp, "saule_") != nil
 	)
 )
 println("tmpname ends .tmp    : " .. tostring(String.ends(tmp, ".tmp")))
