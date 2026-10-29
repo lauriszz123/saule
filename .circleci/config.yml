@@ -195,51 +195,40 @@ commands:
             ./run_tests.sh
             bash run_examples.sh
 
-  # Within one pull request, skip a test job whose inputs already passed it.
+  # Within one pull request, a test job runs until it passes, then never
+  # again: a later push reruns only the jobs that have not gone green yet.
   #
-  # Every push is a new commit and GitHub wants all four checks on it, but a
-  # push that touches only the website cannot change what the Rust suites
-  # say. So each job fingerprints the committed files it depends on — paths
-  # and blob hashes from `git ls-files -s`, which include this config — and looks
-  # for a marker that `mark-passed` saved under that exact fingerprint. If
-  # there is one, the same inputs already went green and the job ends
-  # successfully here, before installing or building anything. Any byte that
-  # differs is a different fingerprint, so a change that could break a job
-  # always runs it.
+  # Every push is a new commit and GitHub wants all four checks on it. A job
+  # that already passed in this PR finds the marker `mark-passed` saved for
+  # it here and ends successfully, before installing or building anything,
+  # so the check goes green on the new commit without the minutes or the
+  # credits.
   #
-  # The fingerprint also carries the pull request's number, so a marker only
-  # ever helps the PR that earned it: a new PR — even one from a branch that
-  # had one before, like every `develop` → `main` release — starts with
-  # nothing and runs every job. CircleCI's trigger data has no PR number, so
-  # it comes from git: GitHub keeps `refs/pull/<n>/head` at each PR's latest
-  # commit, and the one at this commit is this PR. A run that is no PR's
-  # head (a release on `main`), or whose lookup fails, is scoped to its own
-  # workflow instead, which no marker can match — it always runs in full.
+  # The trade, chosen deliberately: a push that fixes one platform is not
+  # re-tested on the platforms that had already passed, so it could break
+  # one of them unseen. That is caught before it ships — the `develop` →
+  # `main` PR is a new PR and runs every job, and the release on `main`
+  # belongs to no PR and always runs in full — but it can reach `develop`.
   #
-  # The key is exact, with no prefix fallback: a near match would be a
-  # different tree, and restoring its marker would be skipping a test that
-  # never ran.
+  # Scoped by pull request number, so a marker only ever helps the PR that
+  # earned it: a new PR — even from a branch that had one before — starts
+  # with nothing and runs every job. CircleCI's trigger data has no PR
+  # number, so it comes from git: GitHub keeps `refs/pull/<n>/head` at each
+  # PR's latest commit, and the one at this commit is this PR. A run that is
+  # no PR's head (a release on `main`), or whose lookup fails, is scoped to
+  # its own workflow instead, which no marker can match — it runs in full.
   skip-if-passed:
     parameters:
       job:
         type: string
-      # A pathspec of what the job does not read, e.g. `':(exclude)www'`.
-      exclude:
-        type: string
-        default: ""
       shell:
         type: string
         default: /bin/bash -eo pipefail
     steps:
       - run:
-          name: Fingerprint the inputs
+          name: Find the pull request
           shell: << parameters.shell >>
           command: |
-            # `ls-files -s` rather than `ls-tree`, which has no exclude
-            # pathspec. Straight after checkout the index is the commit, so
-            # the two list the same paths and blob hashes.
-            git ls-files -s -- . << parameters.exclude >> > .ci-fingerprint
-
             # Every PR whose head is this commit. Usually one; a closed PR
             # keeps its ref, so a new PR at the same commit as an old one
             # lists both — a scope the old one never had.
@@ -252,21 +241,21 @@ commands:
             else
               scope="workflow $CIRCLE_WORKFLOW_ID"
             fi
-            echo "scope: $scope" | tee -a .ci-fingerprint
+            echo "$scope" | tee .ci-scope
       - restore_cache:
           keys:
-            - passed-v1-<< parameters.job >>-{{ checksum ".ci-fingerprint" }}
+            - passed-v2-<< parameters.job >>-{{ checksum ".ci-scope" }}
       - run:
-          name: Skip if these inputs already passed
+          name: Skip if this already passed in this pull request
           shell: << parameters.shell >>
           command: |
             if [ -f ".ci-passed/<< parameters.job >>" ]; then
-              echo "<< parameters.job >> already passed on identical inputs — skipping."
+              echo "<< parameters.job >> already passed in this pull request — skipping."
               circleci-agent step halt
             fi
 
   # The other half of `skip-if-passed`: runs only when every earlier step
-  # succeeded, so a marker exists only for inputs that really went green.
+  # succeeded, so a marker exists only for a job that really went green.
   mark-passed:
     parameters:
       job:
@@ -276,11 +265,11 @@ commands:
         default: /bin/bash -eo pipefail
     steps:
       - run:
-          name: Record that these inputs passed
+          name: Record that this passed
           shell: << parameters.shell >>
           command: mkdir -p .ci-passed && touch ".ci-passed/<< parameters.job >>"
       - save_cache:
-          key: passed-v1-<< parameters.job >>-{{ checksum ".ci-fingerprint" }}
+          key: passed-v2-<< parameters.job >>-{{ checksum ".ci-scope" }}
           paths:
             - .ci-passed
 
@@ -299,7 +288,6 @@ jobs:
       - checkout
       - skip-if-passed:
           job: test-linux
-          exclude: "':(exclude)www'"
       - restore-cargo:
           prefix: test-linux
       - run:
@@ -382,7 +370,6 @@ jobs:
       - checkout
       - skip-if-passed:
           job: test-macos
-          exclude: "':(exclude)www'"
       - rust-macos
       - portable-suite:
           shell: /bin/bash -eo pipefail
@@ -404,7 +391,6 @@ jobs:
       - checkout-windows
       - skip-if-passed:
           job: test-windows
-          exclude: "':(exclude)www'"
           shell: bash.exe
       - rust-windows
       - portable-suite:
@@ -424,8 +410,6 @@ jobs:
     executor: rust-linux
     steps:
       - checkout
-      # No exclusion: the site is built from the compiler, the README, DOCS.md
-      # and the examples as well as from www/, so any file can change it.
       - skip-if-passed:
           job: check-www
       - restore-cargo:

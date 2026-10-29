@@ -42,17 +42,16 @@ of this; the CircleCI side is below.
 - **Push to a branch with an open pull request** (`develop` included, through
   its PR into `main`) → the `pr-check` workflow runs the four test jobs on its
   head commit. That is the required check GitHub waits for.
-- **A later push to the same pull request** → each test job that already
-  passed on identical inputs is skipped in seconds and still reported green.
-  Each of the four fingerprints the committed files it reads (the three
-  platform suites ignore `www/`; `check-www` reads everything) plus the PR's
-  number, and saves a marker under that when it passes. A job that failed
-  saved nothing, so it always runs again; any change to what a job reads —
-  this config included — runs it too.
+- **A later push to the same pull request** → only the test jobs that have
+  not passed yet in this PR run. One that already passed is skipped in
+  seconds and still reported green; one that failed runs again until it
+  passes. The trade: a push that fixes one platform is not re-tested on the
+  others, so it can break one unseen and reach `develop` — but not a
+  release, because of the next two lines.
 - **A new pull request** → every job runs, even from a branch that had a PR
-  before: the PR number is part of the fingerprint, so an earlier PR's
-  markers never match. Runs that belong to no PR (the release on `main`)
-  always run in full.
+  before (every `develop` → `main` release PR is new): the markers are kept
+  per PR number, so an earlier PR's never match. Runs that belong to no PR
+  (the release on `main`) always run in full.
 - **Push to a branch with no pull request** → nothing runs. The project is on
   the GitHub App integration, and its one trigger (**Project Setup →
   build-and-test → Trigger on…**) is set to *PR opened or pushed to, default
