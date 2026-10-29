@@ -169,17 +169,32 @@ negatives the way `String.sub` does.
 
 | Signature | Description |
 | --- | --- |
-| `Bytes.of(...integer) -> bytes` | Build a buffer from byte values. Each must be `0..=255`; anything else is an error rather than a truncation. `Bytes.of(0x80)` is **one** byte, where `String.char(0x80)` is the two-byte UTF-8 encoding of U+0080. |
+| `Bytes.of(...byte) -> bytes` | Build a buffer from byte values. Typed [`byte`](../README.md#the-byte-type), so a literal outside `0..=255` is a **compile** error and a computed value must narrow with `as byte`. `Bytes.of(0x80)` is **one** byte, where `String.char(0x80)` is the two-byte UTF-8 encoding of U+0080. |
 | `Bytes.empty() -> bytes` | The empty buffer. |
 | `Bytes.fromString(s: string) -> bytes` | The string's UTF-8 bytes. Always succeeds — every Saule string is already valid UTF-8. |
 | `Bytes.toString(b: bytes) -> string?` | The buffer as text, or `nil` when it is not valid UTF-8. Nullable on purpose: there is no total function from bytes to text, and silently substituting U+FFFD would hide the problem. |
 | `Bytes.len(b: bytes) -> integer` | Byte count. `#b` is the same thing. |
-| `Bytes.byte(b: bytes, i: integer) -> integer?` | The byte at `i`, or `nil` out of range — so a scan can walk off the end and stop. |
+| `Bytes.byte(b: bytes, i: integer) -> byte?` | The byte at `i`, or `nil` out of range — so a scan can walk off the end and stop. Typed [`byte`](../README.md#the-byte-type), which is in `0..=255` by construction and widens to `integer` for free. |
 | `Bytes.sub(b: bytes, from: integer, to: integer?) -> bytes` | Slice; `to` defaults to the end, negatives count from the end, both ends clamp. |
 | `Bytes.concat(...bytes) -> bytes` | Join buffers in order. |
 | `Bytes.indexOf(b: bytes, needle: bytes, from: integer?) -> integer?` | 1-based position of the first occurrence, or `nil`. An empty needle matches at `from`. |
 | `Bytes.toHex(b: bytes) -> string` | Lowercase hex, two characters per byte. This is how a buffer gets looked at — `print` shows only a length — and how one becomes a table key, since `bytes` is not keyable itself. |
 | `Bytes.fromHex(s: string) -> bytes?` | Parse hex. `nil` for an odd length or any non-hex character, rather than a buffer that is quietly half right. |
+| `Bytes.toArray(b: bytes) -> byte[]` | The buffer as one element per byte. The expensive direction — every byte becomes a boxed value — and explicit about it. |
+| `Bytes.fromArray(a: byte[]) -> bytes?` | Pack elements back into a buffer. `nil` if an element is out of range, which the checker prevents but a table arriving through `any` does not. |
+
+### `bytes` and `byte[]`
+
+A `bytes` is the packed representation; a `byte[]` (that is,
+`table<integer, byte>`) is the elementwise one. `Bytes.toArray` and
+`Bytes.fromArray` convert between them, and they are two explicit functions
+rather than an implicit conversion because the costs are not comparable: a
+`bytes` is one byte per byte, while a table holds a boxed value per element.
+
+Reach for `bytes` to hold or move bytes — a file, a socket frame, a digest,
+anything crossing into a native package. Reach for `byte[]` only to work
+through bytes one at a time, where a loop over elements is clearer than
+repeated `Bytes.byte` calls.
 
 Two things `bytes` deliberately does **not** do:
 
@@ -570,12 +585,98 @@ long* something took.
 | `Os.args() -> table<string>` | CLI args passed to the script. |
 | `Os.execute(cmd: string) -> integer` | Run via the shell. Output goes to this process's own stdout/stderr; only the exit code comes back. |
 | `Os.capture(cmd: string) -> (integer, string, string)` | Run via the shell and capture it: `(code, stdout, stderr)`. Nothing reaches the terminal. `-1` with empty output when the command can't be spawned. |
+| `Os.spawn(program: string, args: table<string>?, cwd: string?, env: table<string, string>?) -> Process?` | Start `program` and return a handle **while it runs** — see [`Process` handles](#process-handles). No shell: `args` is passed as a vector. `cwd` sets the working directory; `env` adds to or overrides the inherited environment. `nil` when it can't be started. |
 | `Os.exit(code: integer?) -> nil` | Terminate the process. |
 | `Os.platform() -> OsPlatform` | Current OS as an enum (`.value` is `"linux"` / `"macos"` / `"windows"` / `"other"`). |
 
 ### `OsPlatform` variants
 
 `Linux` (`"linux"`), `Macos` (`"macos"`), `Windows` (`"windows"`), `Other` (`"other"`).
+
+### `Process` handles
+
+`Os.execute` and `Os.capture` both block until the child is finished, so
+neither can be used to *talk to* one. `Os.spawn` is for a child with a
+conversation in it — a language server, a formatter fed on stdin, an editor
+embedded in a window: it returns while the child runs, and the program
+writes, reads what came back, and carries on in between.
+
+| Signature | Description |
+| --- | --- |
+| `p.read(max: integer?) -> bytes` | Whatever has arrived on stdout, up to `max` (default 64 KiB). **Never blocks.** The empty buffer means "nothing yet", which is not the same as end of output — see `atEof`. |
+| `p.readErr(max: integer?) -> bytes` | The same for stderr, which is a separate stream. |
+| `p.write(data: bytes) -> integer` | Write to the child's stdin; returns the byte count. An error once stdin is closed. |
+| `p.closeStdin() -> nil` | Drop stdin so the child sees end of input. Idempotent. Needed by anything that reads until EOF. |
+| `p.poll() -> integer?` | The exit code if it has finished, `nil` while it runs. Remembered, so asking twice is fine. |
+| `p.wait() -> integer` | Block until it exits, and return the code. Closes stdin first — a child waiting for input and a parent waiting for the child is a deadlock, and this is the end that can tell. |
+| `p.kill() -> boolean` | End it. `false` if it had already exited, which is not an error. |
+| `p.running() -> boolean` | Is it still going? Asks the OS, so it is accurate without a prior `poll`. |
+| `p.pid() -> integer` | The child's PID. |
+| `p.available() -> integer` | Bytes waiting on stdout, without taking them — how far behind a reader is. |
+| `p.atEof() -> boolean` | Has stdout ended **and** been drained? Both halves matter: a child can exit with output still buffered, and reporting eof then would lose it. |
+
+Three things worth knowing:
+
+**Reads are typed `bytes`, not `string`.** A child's output is not promised to
+be text — it can be an image, a compressed stream, a binary wire protocol —
+and a `string` is always valid UTF-8. Use `Bytes.toString` where you expect
+text; it returns `string?` precisely because this is where that can fail.
+
+**No shell.** `args` is a vector, so nothing re-parses quoting and a path with
+a space in it stays one argument. `Os.execute("ls $HOME")` expands that
+variable; `Os.spawn("ls", {"$HOME"})` passes it through literally. Ask for a
+shell by name when you want one.
+
+**`cwd` and `env` are how you place the child.** `cwd` is its working
+directory, which is what you want for a tool that reads a config from the
+directory it starts in. `env` is an **overlay** on the environment the child
+inherits, not a replacement — a child handed an environment with no `PATH`
+usually cannot run at all, so there is deliberately no way to start it from
+an empty one. A `cwd` that does not exist is a spawn failure like any other,
+so the result is `nil`.
+
+```luau
+-- A language server, rooted in the project and told where to look.
+local lsp: Process = Os.spawn(
+    "saule-lsp", {"--stdio"},
+    projectRoot,
+    {SAULE_LOG: "debug"}
+)!
+```
+
+**The child outlives the handle.** Dropping the last reference does not kill
+it. Call `kill` or `wait`.
+
+**Each stream buffers at most 8 MiB of unread output.** At the limit the
+reader stops taking from the pipe, so the operating system's pipe buffer
+fills and the child blocks on its next write — nothing is ever dropped, which
+for a binary protocol would be unrecoverable. An interactive child deals in
+kilobytes per exchange, so a program that reads once a frame sits near zero;
+hitting the limit means nobody is reading, and `p.available()` is how you see
+it coming. `wait` lifts the limit for the rest of the child's life, since
+"run to completion" and "stop reading you" cannot both hold.
+
+```luau
+-- Drive a child that answers on stdout, without ever blocking.
+local p: Process = Os.spawn("nvim", {"--embed", "--headless"})!
+
+p.write(request)                -- a `bytes` you built
+
+local deadline: float = Os.clock() + 5.0
+local reply: bytes = Bytes.empty()
+while #reply == 0 and Os.clock() < deadline do
+    reply = p.read()
+    if #reply == 0 then
+        Os.sleep(0.01)          -- or: hand control back to a frame loop
+    end
+end
+
+println(Bytes.toHex(reply))
+p.kill()
+```
+
+Because `read` returns immediately, that loop is equally at home as one call
+per frame in a UI: read what arrived, draw, come back next frame.
 
 ```luau
 local started: float = Os.clock()

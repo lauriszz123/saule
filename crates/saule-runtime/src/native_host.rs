@@ -25,8 +25,8 @@ use saule_native_abi::{CValue, Handle, HostApi, ObjectReleaseFn, SET_HOST_SYMBOL
 
 use crate::call::call_value_first;
 use crate::fxhash::FxHashMap;
-use crate::value::SauleStr;
 use crate::value::{ForeignClass, ForeignObject, TableObject, Value};
+use crate::value::{SauleBytes, SauleStr};
 
 /// What converting values for one package needs to know about it: which
 /// classes its objects can be, and how to give an object back.
@@ -183,6 +183,7 @@ pub fn value_to_cvalue(v: &Value) -> Option<CValue> {
         Value::Int(i) => CValue::integer(*i),
         Value::Float(f) => CValue::float(*f),
         Value::Str(s) => CValue::string_borrowed(s.as_bytes()),
+        Value::Bytes(b) => CValue::bytes_borrowed(b.as_slice()),
         Value::Table(_) => CValue::table_handle(register(v.clone())),
         Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_) => {
             CValue::func_handle(register(v.clone()))
@@ -210,6 +211,11 @@ pub fn cvalue_to_value(c: &CValue) -> Value {
         // SAFETY: a STR tag implies a valid `(ptr, len)` pair from the peer.
         tag::STR => Value::Str(SauleStr::new(
             unsafe { c.as_str() }.unwrap_or("").to_string(),
+        )),
+        // SAFETY: as STR — a BYTES tag implies a valid `(ptr, len)` pair.
+        // No UTF-8 check on the way in; that is the point of the type.
+        tag::BYTES => Value::Bytes(SauleBytes::new(
+            unsafe { c.as_byte_slice() }.unwrap_or(&[]).to_vec(),
         )),
         tag::TABLE | tag::FUNC => resolve(c.as_handle().unwrap_or(0)).unwrap_or(Value::Nil),
         tag::OBJECT => adopt_object(c).unwrap_or(Value::Nil),
@@ -255,18 +261,12 @@ unsafe fn write_out(v: &Value, out: *mut CValue) -> i32 {
     if let Some(why) = refusal(v) {
         return unsafe { write_err(out, &why) };
     }
+    // A `(ptr, len)` payload cannot borrow from `v`, which is about to be
+    // dropped, so both tags that carry one are copied into the host-local
+    // buffer first. `value_to_cvalue` would hand back a pointer into `v`.
     let cv = match v {
-        Value::Str(s) => OUT_BUF.with(|b| {
-            let mut b = b.borrow_mut();
-            b.clear();
-            b.extend_from_slice(s.as_bytes());
-            CValue {
-                tag: tag::STR,
-                str_ptr: b.as_ptr(),
-                str_len: b.len(),
-                ..CValue::nil()
-            }
-        }),
+        Value::Str(s) => out_buf_cvalue(tag::STR, s.as_bytes()),
+        Value::Bytes(b) => out_buf_cvalue(tag::BYTES, b.as_slice()),
         other => value_to_cvalue(other).unwrap_or_else(CValue::nil),
     };
     unsafe { *out = cv };
@@ -278,19 +278,29 @@ unsafe fn write_out(v: &Value, out: *mut CValue) -> i32 {
 /// # Safety
 /// `out` must be a valid, writable `CValue` slot.
 unsafe fn write_err(out: *mut CValue, msg: &str) -> i32 {
-    let cv = OUT_BUF.with(|b| {
+    let cv = out_buf_cvalue(tag::ERR, msg.as_bytes());
+    unsafe { *out = cv };
+    1
+}
+
+/// A `(ptr, len)` [`CValue`] of `tag` whose payload is copied into the
+/// host-local buffer, valid until the next such write on this thread.
+///
+/// The three tags that carry a payload — `STR`, `BYTES` and `ERR` — share
+/// the one buffer because they are only ever written into an `out` slot, one
+/// value at a time, and the package copies it before control comes back.
+fn out_buf_cvalue(tag: u8, payload: &[u8]) -> CValue {
+    OUT_BUF.with(|b| {
         let mut b = b.borrow_mut();
         b.clear();
-        b.extend_from_slice(msg.as_bytes());
+        b.extend_from_slice(payload);
         CValue {
-            tag: tag::ERR,
+            tag,
             str_ptr: b.as_ptr(),
             str_len: b.len(),
             ..CValue::nil()
         }
-    });
-    unsafe { *out = cv };
-    1
+    })
 }
 
 // ─── HostApi callbacks ───────────────────────────────────────────────────────

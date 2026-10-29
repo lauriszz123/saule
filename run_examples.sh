@@ -150,6 +150,13 @@ done < <(find examples -name saule.config | sort)
 rm -rf "$(dirname "$SNAP")"
 
 echo
+# No projects at all means the search above broke, not that every example
+# passed — on Windows, a `find` that resolved to `find.exe` reported exactly
+# that as success.
+if [ "$total" -eq 0 ]; then
+  echo "error: found no projects under examples/ — is \`find\` the Unix one?" >&2
+  exit 1
+fi
 ran=$((total - skipped))
 if [ "$skipped" -gt 0 ]; then
   echo "note: $skipped project(s) skipped — see skip_reason()"

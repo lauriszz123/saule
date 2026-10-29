@@ -212,6 +212,46 @@ fn total(counters: Vec<SObject<Counter>>) -> Result<i64, String> {
     Ok(sum)
 }
 
+/// `bytes` in and back out, unchanged — the round trip the ABI's
+/// `tag::BYTES` exists for.
+#[saule_export(class = "Util")]
+fn echo_bytes(b: SBytes) -> SBytes {
+    b
+}
+
+/// Reading a `bytes` argument without copying it out.
+#[saule_export(class = "Util")]
+fn bytes_len(b: SBytes) -> i64 {
+    b.len() as i64
+}
+
+/// A buffer that is **not** valid UTF-8, built package-side. The point of a
+/// separate tag: this cannot be returned as a `string`.
+#[saule_export(class = "Util")]
+fn invalid_utf8() -> SBytes {
+    SBytes::new(vec![0x00, 0x80, 0xc3, 0x28, 0xff])
+}
+
+/// `bytes` crossing to `string`, via the one conversion that admits failure.
+#[saule_export(class = "Util")]
+fn bytes_hex(b: SBytes) -> String {
+    b.to_hex()
+}
+
+/// A `bytes` reaching the package inside a table, which goes through
+/// `SValue` and the host's `out` slot rather than an argument slot.
+#[saule_export(class = "Util")]
+fn total_bytes(items: STable<SBytes>) -> Result<i64, String> {
+    let mut sum = 0i64;
+    for i in 1..=items.len() as i64 {
+        match items.get(i)? {
+            SValue::Bytes(b) => sum += b.len() as i64,
+            other => return Err(format!("item {i} is {other:?}, not bytes")),
+        }
+    }
+    Ok(sum)
+}
+
 /// Optional borrowed parameters.
 #[saule_export(class = "Util")]
 fn greet(name: &str, punct: Option<&str>) -> String {

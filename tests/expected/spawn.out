@@ -1,0 +1,27 @@
+pid positive: true
+wrote: 11
+exit: 0
+read back: round trip
+poll after exit: 0
+collected: 1,2,3
+read more than once: true
+eof once drained: true
+binary hex: 0080c328ff
+binary len: 5
+not text: true
+stdout: out
+stderr: err
+argv literal: $HOME not expanded
+capped read: abc
+zero read: 0
+running: true
+killed: true
+code after kill: -1
+running after kill: false
+cwd: /
+env: overlaid|inherited
+bad cwd is nil: true
+buffer is capped: true
+all 12000000 bytes arrived: true
+missing is nil: true
+handle prints: true

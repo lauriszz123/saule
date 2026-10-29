@@ -109,9 +109,15 @@ pub fn resolve(source: Option<&Type>, target: &Type) -> CastRule {
         // at the `i64` ends rather than wrapping, matching what the old
         // `int()` did to the same values.
         ("integer", "float") | ("float", "integer") => CastRule::Convert,
+        // Narrowing to `byte` is the fallible direction — an `integer` or a
+        // `float` may be outside `0..=255` — so it yields `byte?` and the
+        // caller has to say what an out-of-range value means. Widening back
+        // out always succeeds, since every `byte` is an `integer`.
+        ("integer" | "float", "byte") => CastRule::TryConvert,
+        ("byte", "integer" | "float") => CastRule::Convert,
         // Rendering. The same text `tostring` produces, which is what a
         // reader of `n as string` expects to get.
-        ("integer" | "float" | "boolean", "string") => CastRule::Convert,
+        ("integer" | "float" | "byte" | "boolean", "string") => CastRule::Convert,
         // Parsing, which is the one direction that can fail.
         ("string", "integer" | "float") => CastRule::TryConvert,
         _ => CastRule::Impossible,

@@ -111,6 +111,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
         "capture".to_string(),
         native_multi("Os.capture", os_capture),
     );
+    static_fields.insert("spawn".to_string(), native_multi("Os.spawn", os_spawn));
     static_fields.insert("pid".to_string(), native_multi("Os.pid", os_pid));
     static_fields.insert(
         "platform".to_string(),
@@ -144,7 +145,12 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register, t_named, t_nullable};
+    // `Process` is produced by `Os.spawn` and by nothing else, so its
+    // method signatures go in alongside rather than in a registration of
+    // their own that could be forgotten.
+    crate::stdlib::process::register_sigs();
+
+    use crate::stdlib::sigs::{register, t_named, t_nullable, t_table, t_table_map};
     use saule_ast::Type;
     let s = || t_named("string");
     let i = || t_named("integer");
@@ -202,6 +208,21 @@ pub fn register_sigs() {
     // strongly-typed slots say as much as three fields would without adding
     // a type to the stdlib's surface.
     register("Os.capture", vec![s()], vec![i(), s(), s()]);
+    // `Os.spawn(program, args?) -> Process?` — the non-blocking counterpart
+    // to the two above, and the one that needs a type rather than a tuple:
+    // a running child is a thing with state, not three values read once.
+    // Nullable because spawning is the step that can fail (no such program,
+    // no permission) and a handle to nothing is not worth inventing.
+    register(
+        "Os.spawn",
+        vec![
+            s(),
+            t_nullable(t_table(s())),
+            t_nullable(s()),
+            t_nullable(t_table_map(s(), s())),
+        ],
+        vec![t_nullable(t_named("Process"))],
+    );
     register("Os.pid", vec![], vec![i()]);
     register("Os.platform", vec![], vec![t_named("OsPlatform")]);
     // `Os.args() -> table<string>` — process argv. Not generic: the
@@ -601,6 +622,119 @@ fn os_execute(args: &[Value]) -> Result<Vec<Value>, String> {
         Err(_) => -1,
     };
     Ok(vec![Value::Int(code)])
+}
+
+/// `Os.spawn(program, args?) -> Process?`
+///
+/// Starts `program` and hands back a handle while it runs, which is the one
+/// thing `Os.execute` and `Os.capture` cannot do: both block until the child
+/// is finished, so neither can be used to *talk to* one. This is for a child
+/// with a conversation in it — a language server, a formatter fed on stdin,
+/// an editor embedded in a window — where the program needs to write, read
+/// what came back, and carry on in between.
+///
+/// All three standard streams are captured. Reads never block: each stream
+/// is drained by a thread of its own, and `p.read()` takes whatever has
+/// arrived so far (see `value::process` for why a thread rather than a
+/// non-blocking fd). That is what lets a frame loop call it once a frame.
+///
+/// **No shell.** `args` is passed as a vector, so nothing re-parses quoting
+/// and a path with a space in it stays one argument. `Os.execute("ls $HOME")`
+/// expands that variable; `Os.spawn("ls", {"$HOME"})` passes it literally.
+/// Programs that want a shell can still ask for one by name.
+///
+/// `cwd` runs the child in that directory, and `env` adds to or overrides
+/// what it inherits — an overlay, not a replacement, since a child with no
+/// `PATH` usually cannot start.
+///
+/// `nil` when the child cannot be started at all — no such program, no
+/// permission, or a `cwd` that does not exist — which is the same condition
+/// `Os.execute` reports as `-1`.
+fn os_spawn(args: &[Value]) -> Result<Vec<Value>, String> {
+    let program = expect_string("Os.spawn", args, 0)?;
+    let argv = spawn_argv(args)?;
+    let cwd = match args.get(2) {
+        None | Some(Value::Nil) => None,
+        Some(Value::Str(s)) => Some((**s).clone()),
+        Some(other) => {
+            return Err(format!(
+                "Os.spawn expects a string at argument 3 (`cwd`), got `{}`",
+                other.type_name()
+            ));
+        }
+    };
+    let env = spawn_env(args)?;
+    match crate::value::ProcessHandle::spawn(&program, &argv, cwd.as_deref(), &env) {
+        Ok(handle) => Ok(vec![Value::Process(Rc::new(RefCell::new(handle)))]),
+        Err(_) => Ok(vec![Value::Nil]),
+    }
+}
+
+/// The `args` table of an `Os.spawn` call, as a vector of strings.
+fn spawn_argv(args: &[Value]) -> Result<Vec<String>, String> {
+    match args.get(1) {
+        None | Some(Value::Nil) => Ok(Vec::new()),
+        Some(Value::Table(t)) => {
+            let t = t.borrow();
+            let mut out = Vec::with_capacity(t.array.len());
+            for (i, v) in t.array.iter().enumerate() {
+                match v {
+                    Value::Str(s) => out.push((**s).clone()),
+                    other => {
+                        return Err(format!(
+                            "Os.spawn expects strings in `args`, but element {} is `{}`",
+                            i + 1,
+                            other.type_name()
+                        ));
+                    }
+                }
+            }
+            Ok(out)
+        }
+        Some(other) => Err(format!(
+            "Os.spawn expects a table of strings at argument 2 (`args`), got `{}`",
+            other.type_name()
+        )),
+    }
+}
+
+/// The `env` table of an `Os.spawn` call, as name/value pairs.
+///
+/// Read out of the map part, since the keys are names rather than indices.
+/// Order does not matter — each entry is applied on its own — so collecting
+/// into a vector loses nothing.
+fn spawn_env(args: &[Value]) -> Result<Vec<(String, String)>, String> {
+    match args.get(3) {
+        None | Some(Value::Nil) => Ok(Vec::new()),
+        Some(Value::Table(t)) => {
+            let t = t.borrow();
+            let mut out = Vec::with_capacity(t.map.len());
+            for (key, value) in t.map.iter() {
+                let name = match key {
+                    crate::value::TableKey::Str(s) => (**s).clone(),
+                    other => {
+                        return Err(format!(
+                            "Os.spawn expects string keys in `env`, got `{other:?}`"
+                        ));
+                    }
+                };
+                match value {
+                    Value::Str(s) => out.push((name, (**s).clone())),
+                    other => {
+                        return Err(format!(
+                            "Os.spawn expects string values in `env`, but `{name}` is `{}`",
+                            other.type_name()
+                        ));
+                    }
+                }
+            }
+            Ok(out)
+        }
+        Some(other) => Err(format!(
+            "Os.spawn expects a table of strings at argument 4 (`env`), got `{}`",
+            other.type_name()
+        )),
+    }
 }
 
 /// `Os.capture(cmd) -> (code, stdout, stderr)`

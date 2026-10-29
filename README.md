@@ -46,18 +46,19 @@ Saule is a statically typed, class-oriented language inspired by Lua's simplicit
 
 ## Types
 
-Saule has 9 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule, and Lua's single `string` type is likewise split into text and bytes:
+Saule has 10 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule, and Lua's single `string` type is likewise split into text and bytes:
 
 | Type | Description |
 |---|---|
 | `integer` | Whole numbers, no decimal component. 64-bit signed; [overflow wraps](#integer-overflow) |
 | `float` | Decimal numbers, 64-bit precision |
+| `byte` | An `integer` restricted to `0..=255`. Widens to `integer` for free; narrowing needs a checked [`as byte`](#the-byte-type) |
 | `string` | Immutable text, always valid UTF-8. Measured and indexed in **codepoints** |
 | `bytes` | Immutable buffer of arbitrary bytes, no encoding promised. Measured and indexed in **bytes** — see [`bytes` vs `string`](#bytes-vs-string) |
 | `boolean` | `true` or `false` |
 | `nil` | Absence of value |
 | `fn(A, B) -> R` | First-class function values, typed by [signature](#function-types) |
-| `table<T>` | The only data structure, typed generically |
+| `table<T>` | The only data structure, typed generically. Also written `T[]` — see [Array Suffixes](#array-suffixes) |
 | `any` | A value of unknown type. Anything may be assigned **to** an `any`; getting a value back **out** requires a checked [`as` cast](#escaping-any-with-as) |
 
 Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what you wrote. A variable cannot be `nil` unless its type is marked nullable with `?`.
@@ -105,6 +106,55 @@ instead. Equality is by contents, and a `bytes` is never equal to a `string`.
 Files follow the same split: `f.read()` hands back a `string` and
 `f.readBytes()` a `bytes`, with `f.write` / `f.writeBytes` to match. See
 [`Bytes`](./DOCS.md#bytes) for the full module.
+
+### The `byte` type
+
+`byte` is an `integer` restricted to `0..=255` — the type of one element of a
+`bytes`. It is the same value at run time; what the type adds is that nothing
+out of range can ever be in one.
+
+The two directions are deliberately not symmetric:
+
+```luau
+local b: byte = 200                  -- a literal in range: no cast needed
+local n: integer = b                 -- widening is free; a byte *is* an integer
+
+local computed: integer = readLength()
+local narrowed: byte? = computed as byte   -- checked: nil when out of range
+local oops: byte = computed          -- ERROR: needs `as byte`
+```
+
+Widening costs nothing because a `byte` already is an `integer`. Narrowing is
+the direction that can fail, so it goes through `as byte`, which yields
+`byte?` — `nil` for anything outside the range, rather than a wrap or a clamp
+that would silently corrupt the value. A `float` truncates toward zero first
+and then has to fit.
+
+A literal needs no cast because its range is visible where it is written, so
+`local b: byte = 200` is fine and `local b: byte = 300` is a compile error at
+the literal. A *computed* integer always needs the cast: nothing at the type
+level can know what it holds.
+
+**Arithmetic widens to `integer`.** `200 + 100` is 300, which is not a byte, so
+a result that stayed `byte` would be a lie:
+
+```luau
+local sum: integer = b + 100         -- integer, not byte
+local masked: integer = b & 0x0f     -- bit patterns work; a byte has them
+```
+
+That makes the overflow visible in the type instead of hidden in a wrap, and
+narrowing back is the `as byte` that checks.
+
+Where it shows up: `Bytes.byte(b, i)` returns `byte?`, so a byte read out of a
+buffer needs no re-checking, and `Bytes.of(...byte)` takes them — so
+`Bytes.of(0x89, 0x50)` is checked where it is written, and `Bytes.of(300)` is
+a compile error rather than a runtime one. `Bytes.toArray` / `Bytes.fromArray` convert
+between a `bytes` and a `byte[]` when a loop over elements is what you want —
+two functions rather than an implicit conversion, because the representations
+cost very differently: a `bytes` is one byte per byte, a `byte[]` a boxed
+value per byte. Reach for `bytes` to hold or move bytes, `byte[]` only to work
+through them one at a time.
 
 ### Function types
 
@@ -393,8 +443,10 @@ The pairs `as` converts, and nothing else:
 | --- | --- | --- |
 | `float as integer` | `integer` | truncates toward zero, no rounding |
 | `integer as float` | `float` | always safe, no precision loss |
-| `integer` / `float` / `boolean` `as string` | `string` | the text `tostring` gives |
+| `integer` / `float` / `byte` / `boolean` `as string` | `string` | the text `tostring` gives |
 | `string as integer` / `as float` | `integer?` / `float?` | parses; `nil` when the text is not a number |
+| `integer` / `float` `as byte` | `byte?` | range-checks `0..=255`; `nil` outside it, never a wrap or a clamp. A `float` truncates first |
+| `byte as integer` / `as float` | `integer` / `float` | always safe — a `byte` already is an `integer` |
 
 Two rules keep a cast from ever being decoration:
 
@@ -676,6 +728,54 @@ local same: table<integer, string> = names             -- identical type
 local ages: table<string, integer> = {alice: 30}       -- string-keyed map
 local nested: table<table<string>> = {names}           -- tables nest
 ```
+
+### Array Suffixes
+
+`T[]` is sugar for `table<integer, T>` — the integer-keyed array form, written
+the way most languages write an array:
+
+```luau
+local names: string[] = {"alice", "bob"}
+local same: table<integer, string> = names   -- the same type, spelled out
+local also: table<string> = names            -- and the same as the array form
+```
+
+It is **only** notation. There is no separate array type: `string[]`,
+`table<integer, string>` and `table<string>` are one type with three
+spellings, so they are mutually assignable, and all three print as
+`table<integer, string>` when a message reports a type back.
+
+Each suffix wraps the type once, so they stack:
+
+| Written | Means |
+|---|---|
+| `T[]` | `table<integer, T>` |
+| `T[][]` | `table<integer, table<integer, T>>` |
+| `T[,]` | `table<integer, table<integer, T>>` — a comma is another dimension |
+| `T[,,]` | three levels, the same as `T[][][]` |
+
+`T[,]` and `T[][]` are the same type. Saule's tables nest rather than being
+rectangular, so there is nothing for a comma to mean *other* than another
+level, and no dimension is checked: a `T[,]` can hold rows of different
+lengths.
+
+```luau
+local grid: integer[][] = {{1, 2}, {3, 4}}
+local same: integer[,] = grid               -- identical type
+println(grid[2][1])                         -- 3
+```
+
+Suffixes apply left to right, which is what makes `?` read correctly beside
+one:
+
+```luau
+local maybeList: Dog[]? = nil               -- a nullable array
+local maybeDogs: Dog?[] = {Dog(), nil}      -- an array of nullable Dog
+```
+
+There is no `[K]` form for map keys — a string-keyed table stays
+`table<string, V>`. A suffix only ever adds an integer-keyed level, because
+that is the one case with an implicit key to leave out.
 
 ### Element Types Are Invariant
 
@@ -2715,7 +2815,9 @@ supplies it, and on `self`, which is typed as the enclosing class.
 ### Types
 
 ```ebnf
-type      ::= baseType ['?']
+type      ::= baseType {suffix}
+suffix    ::= '?'
+            | '[' {','} ']'
 baseType  ::= Name [typeArgs]
             | 'table' '<' type [',' type] '>'
             | 'nil'
@@ -2726,6 +2828,12 @@ typeArgs   ::= '<' type {',' type} '>'
 typeParams ::= '<' Name {',' Name} '>'
 ```
 
+Suffixes are applied in the order written, so `T?[]` and `T[]?` differ. An
+`'[' {','} ']'` suffix is sugar: it wraps the type in `table<integer, …>` once
+per dimension, one more than the number of commas. Only an empty bracket
+group is a suffix — a `[` holding anything else opens an index expression,
+which is what keeps `x as T[1]` reading as a cast followed by an index.
+
 `typeParams` **declares** — each entry is a bare name that stands for whatever
 the user of the declaration picks. `typeArgs` **applies** — each entry is a
 type, filling one of those slots. `Name typeArgs` in a type position is a
@@ -2735,7 +2843,8 @@ is its own form rather than an application of a `table` declaration.
 
 A parenthesised list of one type is just grouping; two or more is a tuple,
 which is how a function returning multiple values states its return type.
-`table<V>` is the array form and `table<K, V>` the map form.
+`table<V>` is the array form and `table<K, V>` the map form; `V[]` is a third
+spelling of the array form — see [Array Suffixes](#array-suffixes).
 
 ### Expressions
 

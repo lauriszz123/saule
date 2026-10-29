@@ -181,6 +181,11 @@ pub(crate) fn saule_type(
         "SFloat" => plain("float"),
         "SBool" => plain("boolean"),
         "SString" => plain("string"),
+        // `bytes` has no plain-Rust spelling: `Vec<u8>` is claimed by the
+        // `Vec` arm below, which makes it `table<integer>`. `SBytes` is the
+        // only way to say `bytes`, so a signature and the wire format it
+        // describes cannot drift apart.
+        "SBytes" => plain("bytes"),
         // `STable<i64>` → `table<integer>`, `STable<T>` → `table<T>`,
         // bare `STable` → `table`. The element type is the table's own,
         // never a callback's, so `sig(...)` does not reach into it.
@@ -292,6 +297,7 @@ pub(crate) fn named_class(ty: &Type) -> Option<String> {
         "SFloat",
         "SBool",
         "SString",
+        "SBytes",
         "STable",
         "SFunction",
         "SValue",

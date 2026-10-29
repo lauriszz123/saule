@@ -797,3 +797,43 @@ fn nil_is_not_converted_by_assignable() {
     );
     assert_eq!(out, "true\n");
 }
+
+#[test]
+fn bytes_cross_the_abi_in_both_directions() {
+    let home = fixture_home("bytes_round_trip");
+    let out = run_ok(
+        &home,
+        r#"import * from "fixture"
+local b: bytes = Bytes.of(0x89, 0x50, 0x4e, 0x47)
+-- Out to the package and back, contents intact.
+local back: bytes = Util.echoBytes(b)
+println(Bytes.toHex(back), back == b)
+-- Read package-side without copying out.
+println(Util.bytesLen(b))
+-- Produced package-side: bytes that are not valid UTF-8, which is the
+-- case a `string` could not have carried.
+local raw: bytes = Util.invalidUtf8()
+println(Bytes.toHex(raw), #raw, Bytes.toString(raw) ?? "not text")
+-- And reaching the package inside a table, through the host's out slot.
+println(Util.totalBytes({b, raw, Bytes.empty()}))
+"#,
+    );
+    assert_eq!(out, "89504e47\ttrue\n4\n0080c328ff\t5\tnot text\n9\n");
+}
+
+#[test]
+fn a_bytes_parameter_refuses_a_string() {
+    let home = fixture_home("bytes_not_string");
+    // The two are different Saule types, so this never reaches the ABI —
+    // the checker stops it, which is the guarantee `bytes` is for.
+    let err = run_err(
+        &home,
+        r#"import * from "fixture"
+println(Util.bytesLen("not a buffer"))
+"#,
+    );
+    assert!(
+        err.contains("bytes"),
+        "the error should mention the expected type, got: {err}"
+    );
+}

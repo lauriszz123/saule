@@ -239,6 +239,7 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 crate::ops::infer_binary(*op, lhs, scope)
                     .or_else(|| infer(lhs, scope))
                     .or_else(|| infer(rhs, scope))
+                    .map(widen_byte)
             }
             // Bitwise operands are integers and so is the result — no need
             // to consult either side, unlike arithmetic where the operand
@@ -516,7 +517,7 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         // boolean — unless the operand is a class overloading `OpNeg` /
         // `OpLen` / `OpBNot`, which names its own result.
         Expr::Unary { op, rhs } => crate::ops::infer_unary(*op, rhs, scope).or_else(|| match op {
-            UnaryOp::Neg => infer(rhs, scope).map(strip_nullable),
+            UnaryOp::Neg => infer(rhs, scope).map(strip_nullable).map(widen_byte),
             UnaryOp::Len | UnaryOp::BNot => Some(Type::Named("integer".into())),
             UnaryOp::Not => Some(Type::Named("boolean".into())),
         }),
@@ -811,7 +812,63 @@ pub(crate) fn infer_into(value: &Spanned<Expr>, slot: &Type, scope: &Scope) -> O
         other => other,
     };
 
-    infer_lambda_expecting(value, bare, scope).or_else(|| infer(value, scope))
+    infer_byte_literal_expecting(value, bare)
+        .or_else(|| infer_lambda_expecting(value, bare, scope))
+        .or_else(|| infer(value, scope))
+}
+
+/// An integer literal filling a `byte` slot types as `byte`, when it fits.
+///
+/// Without this, `local b: byte = 200` would be rejected: the literal infers
+/// as `integer`, and an `integer` is deliberately not assignable to a `byte`.
+/// The range is knowable here, though, because the value is written right
+/// there — so a literal in `0..=255` needs no cast, and one outside it is
+/// reported as the ordinary type mismatch it is, at the literal rather than
+/// at some later runtime check.
+///
+/// Deliberately literals only. A computed `integer` still needs `as byte`,
+/// since nothing at this layer can know its range.
+pub(crate) fn infer_byte_literal_expecting(value: &Spanned<Expr>, slot: &Type) -> Option<Type> {
+    // A `byte?` slot wants the same reading — the `?` is about absence, not
+    // about range — so look through it.
+    let bare = match slot {
+        Type::Nullable(inner) => inner.as_ref(),
+        other => other,
+    };
+    if !matches!(bare, Type::Named(n) if n == "byte") {
+        return None;
+    }
+    match &value.value {
+        Expr::Int(n) if (0..=255).contains(n) => Some(Type::Named("byte".to_string())),
+        _ => None,
+    }
+}
+
+/// The type an argument supplies, for checking against the parameter it
+/// fills.
+///
+/// Plain [`infer`] plus the `byte`-literal rule, and deliberately *not*
+/// [`infer_into`]: that one also re-infers a lambda against the expected
+/// signature, which these call sites handle themselves. So the only
+/// behaviour this adds is for an integer literal meeting a `byte`
+/// parameter — a combination that was an error until now, which is what
+/// makes it safe to add everywhere arguments are checked.
+pub(crate) fn infer_arg(value: &Spanned<Expr>, expected: &Type, scope: &Scope) -> Option<Type> {
+    infer_byte_literal_expecting(value, expected).or_else(|| infer(value, scope))
+}
+
+/// Arithmetic on a `byte` yields an `integer`.
+///
+/// `200 + 100` is 300, which is not a byte — so a result that stayed `byte`
+/// would be a lie the moment either operand was near an end of the range.
+/// Widening instead makes the overflow visible in the type, and narrowing
+/// back is the explicit `as byte` that range-checks. Same reasoning as
+/// `-b`, which cannot be a `byte` for any `b` but zero.
+fn widen_byte(ty: Type) -> Type {
+    match ty {
+        Type::Named(n) if n == "byte" => Type::Named("integer".to_string()),
+        other => other,
+    }
 }
 
 pub(crate) fn strip_nullable(ty: Type) -> Type {
@@ -913,12 +970,12 @@ pub(crate) fn matches_base(a: &Type, b: &Type) -> bool {
             xs.len() == ys.len() && xs.iter().zip(ys).all(|(a, b)| matches_base(a, b))
         }
         (Type::Table { key: kx, value: vx }, Type::Table { key: ky, value: vy }) => {
-            let key_ok = match (kx, ky) {
-                (None, None) => true,
-                (Some(a), Some(b)) => matches_base(a, b),
-                _ => false,
-            };
-            key_ok && matches_base(vx, vy)
+            // An absent key *is* `integer` — `table<T>`, `table<integer, T>`
+            // and `T[]` are three spellings of one type, so normalise before
+            // comparing rather than calling the spellings different shapes.
+            // `compat.rs` already does this; matching on `(None, None)` here
+            // made two arms yielding the same table widen to `any`.
+            matches_base(&table_key(kx), &table_key(ky)) && matches_base(vx, vy)
         }
         (
             Type::Function {

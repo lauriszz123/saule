@@ -357,7 +357,7 @@ pub(crate) fn check_native_args(
         };
         // Substitute any already-bound type params before checking.
         let expected = substitute(&expected_raw, &subst, type_params);
-        let Some(found_ty) = infer(value_expr, scope) else {
+        let Some(found_ty) = infer_arg(value_expr, &expected, scope) else {
             // Even without an inferred type, try to refine the substitution
             // from sibling args downstream — but we have nothing to do here.
             continue;
@@ -531,7 +531,7 @@ pub(crate) fn check_user_method_args(
         if is_any(&expected) {
             continue;
         }
-        let Some(found_ty) = infer(value_expr, scope) else {
+        let Some(found_ty) = infer_arg(value_expr, &expected, scope) else {
             continue;
         };
         if !type_params.is_empty() {
@@ -885,7 +885,7 @@ pub(crate) fn report_if_function_value_call(
         if is_any(expected) {
             continue;
         }
-        let Some(found_ty) = infer(value_expr, scope) else {
+        let Some(found_ty) = infer_arg(value_expr, expected, scope) else {
             continue;
         };
         if !is_nullable(expected) && is_nullable(&found_ty) {
@@ -1004,7 +1004,7 @@ pub(crate) fn report_if_user_function_arity(
         if is_any(&expected) {
             continue;
         }
-        let Some(found_ty) = infer(value_expr, scope) else {
+        let Some(found_ty) = infer_arg(value_expr, &expected, scope) else {
             continue;
         };
         if !type_params.is_empty() {

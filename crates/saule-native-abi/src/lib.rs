@@ -36,8 +36,10 @@
 //!
 //! ## String ownership
 //!
-//! Strings cross the boundary as `(ptr, len)` pairs of UTF-8 bytes. The
-//! producer must keep the bytes alive until the consumer copies them:
+//! Strings cross the boundary as `(ptr, len)` pairs of UTF-8 bytes, and a
+//! [`tag::BYTES`] payload crosses the same way minus the UTF-8 requirement,
+//! so everything in this section governs both. The producer must keep the
+//! bytes alive until the consumer copies them:
 //!
 //! * **Arguments** (interpreter → package): valid until the call returns.
 //! * **Return / error strings** (package → interpreter): the package stores
@@ -115,6 +117,22 @@ pub mod tag {
     /// [`CValue::object`] for the fields and the "Objects" section at the
     /// top of this crate for who owns what.
     pub const OBJECT: u8 = 8;
+    /// A Saule `bytes` — arbitrary bytes, no encoding promised. Carried in
+    /// the same `(ptr, len)` fields as [`STR`] and under the same ownership
+    /// rules; the only difference is that nothing validates UTF-8, which is
+    /// the whole point of the type.
+    ///
+    /// Adding this tag deliberately did **not** bump [`ABI_VERSION`], because
+    /// no package built before it can reach the tag from either direction. A
+    /// package produces one only through [`CValue::bytes_borrowed`] or
+    /// [`return_bytes`], which an older SDK does not have; and it is handed
+    /// one only for a parameter its own compiled-in metadata declares as
+    /// `bytes`, which an older SDK cannot describe — so the typechecker
+    /// refuses such a call before anything crosses. The loader's version
+    /// check is an exact match, so a bump would have forced a rebuild of
+    /// every installed package in order to add a tag none of them can
+    /// observe.
+    pub const BYTES: u8 = 9;
 }
 
 /// An opaque pointer to a package-owned object ([`tag::OBJECT`]).
@@ -352,6 +370,24 @@ impl CValue {
         }
     }
 
+    /// A `bytes` value borrowing `bytes`. Same `(ptr, len)` representation
+    /// and the same lifetime rules as [`CValue::string_borrowed`] — see the
+    /// module-level string-ownership section, which governs both — except
+    /// that the payload is not required to be UTF-8. Prefer
+    /// [`return_bytes`] on the package side, which manages the lifetime.
+    ///
+    /// # Safety
+    /// `bytes` must remain valid and immutable for the duration of the
+    /// receiver's access.
+    pub fn bytes_borrowed(bytes: &[u8]) -> Self {
+        Self {
+            tag: tag::BYTES,
+            str_ptr: bytes.as_ptr(),
+            str_len: bytes.len(),
+            ..Self::nil()
+        }
+    }
+
     /// A host-owned `table` referenced by [`Handle`].
     pub fn table_handle(h: Handle) -> Self {
         Self {
@@ -447,6 +483,29 @@ impl CValue {
         let slice = unsafe { std::slice::from_raw_parts(self.str_ptr, self.str_len) };
         std::str::from_utf8(slice).ok()
     }
+
+    /// Read a [`tag::BYTES`] payload as a slice, or `None` if this value is
+    /// not a `bytes`.
+    ///
+    /// Deliberately separate from [`CValue::as_str`] rather than a
+    /// looser accessor that takes either: the two tags are different Saule
+    /// types, and a package that means to read one should not silently get
+    /// the other.
+    ///
+    /// # Safety
+    /// The pointer must be valid for `str_len` bytes — true for any
+    /// `CValue` the peer produced through this crate's constructors and not
+    /// yet invalidated.
+    pub unsafe fn as_byte_slice(&self) -> Option<&[u8]> {
+        if self.tag != tag::BYTES {
+            return None;
+        }
+        if self.str_ptr.is_null() {
+            return Some(&[]);
+        }
+        // SAFETY: caller guarantees `str_ptr` is valid for `str_len` bytes.
+        Some(unsafe { std::slice::from_raw_parts(self.str_ptr, self.str_len) })
+    }
 }
 
 thread_local! {
@@ -468,6 +527,28 @@ pub fn return_string(s: &str) -> CValue {
         buf.extend_from_slice(s.as_bytes());
         CValue {
             tag: tag::STR,
+            str_ptr: buf.as_ptr(),
+            str_len: buf.len(),
+            ..CValue::nil()
+        }
+    })
+}
+
+/// Build a `bytes` [`CValue`] whose payload lives in the same thread-local
+/// buffer [`return_string`] uses, with the same lifetime: valid until this
+/// thread's next native call, which is after the interpreter has copied it
+/// out. Use this when returning a `bytes` from an exported function.
+///
+/// Sharing the one buffer is what keeps the contract single-slot — a
+/// function returns one value, so a string and a `bytes` never need to be
+/// alive at the same moment.
+pub fn return_bytes(b: &[u8]) -> CValue {
+    RETURN_BUF.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        buf.clear();
+        buf.extend_from_slice(b);
+        CValue {
+            tag: tag::BYTES,
             str_ptr: buf.as_ptr(),
             str_len: buf.len(),
             ..CValue::nil()

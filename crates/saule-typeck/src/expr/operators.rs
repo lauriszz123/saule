@@ -20,10 +20,17 @@ pub(crate) fn check_coalesce_fallback(
     scope: &Scope,
     errors: &mut Vec<TypeCheckError>,
 ) {
-    let (Some(lt), Some(rt)) = (infer(lhs, scope), infer(rhs, scope)) else {
+    let Some(lt) = infer(lhs, scope) else {
         return;
     };
     let base = strip_nullable(lt);
+    // Inferred *into* the left side's base, so a literal that only fits a
+    // narrower slot — `aByte ?? 0` — types as that slot rather than as its
+    // own widest reading. Without this the fallback of every `byte?` would
+    // need a cast to say nothing.
+    let Some(rt) = crate::expr::infer::infer_into(rhs, &base, scope) else {
+        return;
+    };
     // `nil` fallback collapses to `T?` and is always fine.
     if matches!(&rt, Type::Named(n) if n == "nil") {
         return;
@@ -48,10 +55,13 @@ pub(crate) fn check_coalesce_fallback(
     }
 }
 
-/// True for numeric scalars: `integer`, `float`, the `number` sentinel, and
-/// `any` (which acts as a wildcard).
+/// True for numeric scalars: `integer`, `float`, `byte`, the `number`
+/// sentinel, and `any` (which acts as a wildcard).
+///
+/// `byte` is here because it *is* an `integer` — restricted to `0..=255`,
+/// but the same value, so every numeric operator applies to one.
 pub(crate) fn is_numeric_like(ty: &Type) -> bool {
-    matches!(ty, Type::Named(n) if n == "integer" || n == "float" || n == "any")
+    matches!(ty, Type::Named(n) if n == "integer" || n == "float" || n == "byte" || n == "any")
 }
 
 /// True for operands of the bitwise operators.
@@ -63,7 +73,7 @@ pub(crate) fn is_numeric_like(ty: &Type) -> bool {
 /// kind is not pinned down and `any` is the wildcard, so both pass — same
 /// conservatism the arithmetic rules use.
 pub(crate) fn is_bitwise_like(ty: &Type) -> bool {
-    matches!(ty, Type::Named(n) if n == "integer" || n == "any")
+    matches!(ty, Type::Named(n) if n == "integer" || n == "byte" || n == "any")
 }
 
 /// True for operands of `..` (string concatenation). Saule follows Lua and
@@ -298,7 +308,11 @@ pub(crate) fn check_numeric_kinds_match(
     let kind = |t: &Type| -> Option<&'static str> {
         if let Type::Named(n) = t {
             match n.as_str() {
-                "integer" => Some("integer"),
+                // `byte` counts as `integer` here, so `aByte + anInteger`
+                // is not a mixed-kind error. Mixing it with a `float`
+                // still is, which is the rule for `integer` and the reason
+                // this check exists.
+                "integer" | "byte" => Some("integer"),
                 "float" => Some("float"),
                 _ => None,
             }

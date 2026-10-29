@@ -2412,3 +2412,120 @@ end
         "integer",
     );
 }
+
+// ── `byte`: an integer restricted to 0..=255 ───────────────────────────────
+
+#[test]
+fn a_byte_literal_in_range_needs_no_cast() {
+    // The range is visible at the literal, so the checker can see it fits.
+    accepts("local b: byte = 200");
+    accepts("local lo: byte = 0");
+    accepts("local hi: byte = 255");
+}
+
+#[test]
+fn a_byte_literal_out_of_range_is_rejected_at_the_literal() {
+    rejects("local b: byte = 256", "byte");
+    rejects("local b: byte = 300", "byte");
+    rejects("local b: byte = -1", "byte");
+}
+
+#[test]
+fn a_byte_widens_into_an_integer_but_not_the_reverse() {
+    // Widening is free: a `byte` already *is* an `integer` at run time.
+    accepts("local b: byte = 7\nlocal n: integer = b");
+    accepts("local b: byte = 7\nlocal n: integer? = b");
+    // Narrowing is the direction that can fail, so it needs the cast.
+    rejects("local n: integer = someLength()\nlocal b: byte = n", "byte");
+}
+
+#[test]
+fn narrowing_to_byte_goes_through_a_checked_cast() {
+    // `as byte` is fallible, so its result is `byte?` and has to be treated
+    // as one — assigning it to a bare `byte` is the nullable error.
+    accepts("local n: integer = 7\nlocal b: byte? = n as byte");
+    rejects("local n: integer = 7\nlocal b: byte = n as byte", "byte");
+    accepts("local f: float = 7.9\nlocal b: byte? = f as byte");
+}
+
+#[test]
+fn a_byte_is_numeric_and_its_arithmetic_widens() {
+    // Every numeric operator applies, because a byte is an integer.
+    accepts("local b: byte = 7\nlocal s: string = \"n=\" .. b");
+    accepts("local b: byte = 7\nlocal m: integer = b & 0x0f");
+    // But the result is `integer`: `200 + 100` is not a byte, and a result
+    // that stayed `byte` would be a lie.
+    accepts("local b: byte = 200\nlocal sum: integer = b + 100");
+    rejects("local b: byte = 200\nlocal sum: byte = b + 100", "byte");
+    accepts("local b: byte = 200\nlocal neg: integer = -b");
+}
+
+#[test]
+fn byte_mixes_with_integer_but_not_with_float() {
+    // `byte` counts as `integer` for the mixed-kind rule, so this is fine…
+    accepts("local b: byte = 7\nlocal n: integer = 1\nlocal s: integer = b + n");
+    // …and mixing with a `float` is the error it is for any integer.
+    rejects(
+        "local b: byte = 7\nlocal f: float = 1.5\nlocal s: float = b + f",
+        "",
+    );
+}
+
+#[test]
+fn the_array_sugar_applies_to_byte() {
+    // `byte[]` is `table<integer, byte>`, interchangeably.
+    accepts("local a: byte[] = {}\nlocal b: table<integer, byte> = a");
+    accepts("local a: table<byte> = {}\nlocal b: byte[] = a");
+}
+
+#[test]
+fn a_byte_parameter_takes_a_literal_in_range() {
+    // The reason the type is worth having: a `byte` parameter is checked at
+    // the call, so the callee never re-validates what it was handed.
+    let decl = "\
+class Dev
+    static fn write(b: byte) -> integer
+        return b
+    end
+end
+";
+    accepts(&format!("{decl}local n: integer = Dev.write(200)"));
+    accepts(&format!("{decl}local n: integer = Dev.write(0)"));
+    accepts(&format!("{decl}local n: integer = Dev.write(255)"));
+    // Out of range is caught at the call site, not at run time.
+    rejects(&format!("{decl}local n: integer = Dev.write(256)"), "byte");
+    rejects(&format!("{decl}local n: integer = Dev.write(-1)"), "byte");
+    // And a computed integer has to narrow explicitly.
+    rejects(
+        &format!("{decl}local x: integer = 7\nlocal n: integer = Dev.write(x)"),
+        "byte",
+    );
+    // A `byte` variable is of course fine.
+    accepts(&format!(
+        "{decl}local b: byte = 9\nlocal n: integer = Dev.write(b)"
+    ));
+}
+
+#[test]
+fn a_nullable_byte_parameter_takes_a_literal_too() {
+    // The `?` is about absence, not range, so it does not change the
+    // reading of a literal that fits.
+    let decl = "\
+class Dev
+    static fn maybe(b: byte?) -> integer
+        return b ?? 0
+    end
+end
+";
+    accepts(&format!("{decl}local n: integer = Dev.maybe(200)"));
+    accepts(&format!("{decl}local n: integer = Dev.maybe(nil)"));
+    rejects(&format!("{decl}local n: integer = Dev.maybe(300)"), "byte");
+}
+
+#[test]
+fn byte_literals_fill_a_byte_table_literal() {
+    // An element fills a declared slot the same way an argument does.
+    accepts("local bs: byte[] = {1, 2, 255}");
+    rejects("local bs: byte[] = {1, 300}", "byte");
+    accepts("local bs: table<integer, byte> = {0}");
+}

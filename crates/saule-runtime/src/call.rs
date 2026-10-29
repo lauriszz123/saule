@@ -327,6 +327,10 @@ pub fn call_method(
         }
         Value::File(handle) => crate::stdlib::io::dispatch_file_method(handle, name, args)
             .map_err(|message| RuntimeError::TypeError { message, span }),
+        Value::Process(handle) => {
+            crate::stdlib::process::dispatch_process_method(handle, name, args)
+                .map_err(|message| RuntimeError::TypeError { message, span })
+        }
         // An object of a native class: its method takes the object as
         // argument 0, the same shape a compiled method takes `self` in.
         Value::Foreign(obj) => {

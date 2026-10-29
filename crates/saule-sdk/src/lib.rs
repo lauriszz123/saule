@@ -149,7 +149,8 @@ pub mod prelude {
     pub use crate::convert::{FromSaule, IntoSaule};
     pub use crate::object::{NativeClass, SAnyObject, SObject};
     pub use crate::types::{
-        SBool, SElem, SFloat, SFunction, SInteger, SString, STable, SValue, T, U, Untyped, V, W,
+        SBool, SBytes, SElem, SFloat, SFunction, SInteger, SString, STable, SValue, T, U, Untyped,
+        V, W,
     };
     pub use saule_export_macro::{
         saule_class, saule_enum, saule_export, saule_methods, saule_package,

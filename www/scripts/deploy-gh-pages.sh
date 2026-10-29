@@ -61,13 +61,21 @@ git worktree remove --force "$WORKTREE" 2>/dev/null || true
 rm -rf "$WORKTREE"
 
 # The site is published to GitHub Pages, so the deploy target is the remote
-# that hosts the GitHub repository. It defaults to `github` because that is
-# what the remote is called in this checkout; set `PAGES_REMOTE=origin` if
-# yours only has one. Getting this wrong is not a harmless failure: `ls-remote`
-# against a remote you cannot read fails identically to "the branch does not
-# exist", so
+# that hosts the GitHub repository. An explicit `PAGES_REMOTE` always wins;
+# otherwise prefer a remote named `github` and fall back to `origin`, which is
+# what a checkout with a single remote calls it. Getting this wrong is not a
+# harmless failure: `ls-remote` against a remote you cannot read fails
+# identically to "the branch does not exist", so
 # the fallback below would quietly rebuild `gh-pages` from HEAD and bury the
 # published site under the entire source history.
+if [[ -z "${PAGES_REMOTE:-}" ]]; then
+	for candidate in github origin; do
+		if git remote get-url "$candidate" >/dev/null 2>&1; then
+			PAGES_REMOTE="$candidate"
+			break
+		fi
+	done
+fi
 PAGES_REMOTE="${PAGES_REMOTE:-github}"
 
 if ! git remote get-url "$PAGES_REMOTE" >/dev/null 2>&1; then

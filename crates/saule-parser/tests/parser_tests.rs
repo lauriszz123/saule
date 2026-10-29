@@ -962,3 +962,116 @@ fn of_is_an_ordinary_name() {
         other => panic!("expected a decl, got {other:?}"),
     }
 }
+
+// ── Array type sugar: `T[]` ────────────────────────────────────────────────
+
+/// The type an annotation parsed to, for the array-sugar tests below.
+fn local_ty(src: &str) -> Type {
+    let m = parse_src(src);
+    match &m.stmts[0].value {
+        Stmt::Local { ty: Some(ty), .. } => ty.clone(),
+        other => panic!("expected an annotated local, got {other:?}"),
+    }
+}
+
+/// `table<integer, T>` nested `depth` times around a named leaf — what every
+/// array suffix is sugar for.
+fn assert_int_keyed_nest(ty: &Type, depth: usize, leaf: &str) {
+    let mut cur = ty;
+    for level in 0..depth {
+        match cur {
+            Type::Table {
+                key: Some(key),
+                value,
+            } => {
+                assert_eq!(
+                    **key,
+                    Type::Named("integer".to_string()),
+                    "level {level} should be integer-keyed"
+                );
+                cur = value;
+            }
+            other => panic!("level {level} should be a keyed table, got {other:?}"),
+        }
+    }
+    assert_eq!(*cur, Type::Named(leaf.to_string()), "leaf type");
+}
+
+#[test]
+fn array_sugar_desugars_to_an_integer_keyed_table() {
+    assert_int_keyed_nest(&local_ty("local x: Dog[] = {}"), 1, "Dog");
+}
+
+#[test]
+fn stacked_array_suffixes_nest_once_each() {
+    assert_int_keyed_nest(&local_ty("local x: integer[][] = {}"), 2, "integer");
+    assert_int_keyed_nest(&local_ty("local x: integer[][][] = {}"), 3, "integer");
+}
+
+#[test]
+fn commas_in_one_suffix_nest_the_same_as_stacking() {
+    // `T[,]` and `T[][]` are the same type; a comma is another dimension.
+    assert_eq!(
+        local_ty("local x: integer[,] = {}"),
+        local_ty("local x: integer[][] = {}")
+    );
+    assert_eq!(
+        local_ty("local x: integer[,,] = {}"),
+        local_ty("local x: integer[][][] = {}")
+    );
+}
+
+#[test]
+fn the_sugar_is_the_same_type_as_the_spelled_out_form() {
+    assert_eq!(
+        local_ty("local x: string[] = {}"),
+        local_ty("local x: table<integer, string> = {}")
+    );
+}
+
+#[test]
+fn array_and_nullable_suffixes_apply_in_writing_order() {
+    // `T[]?` is a nullable array: the `?` wraps the table.
+    match local_ty("local x: Dog[]? = nil") {
+        Type::Nullable(inner) => assert_int_keyed_nest(&inner, 1, "Dog"),
+        other => panic!("expected a nullable array, got {other:?}"),
+    }
+    // `T?[]` is an array of nullables: the `?` is inside the table.
+    match local_ty("local x: Dog?[] = {}") {
+        Type::Table {
+            key: Some(_),
+            value,
+        } => assert!(
+            matches!(&*value, Type::Nullable(_)),
+            "expected nullable elements, got {value:?}"
+        ),
+        other => panic!("expected an array of nullables, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_suffix_applies_to_a_table_type_too() {
+    // `table<string>[]` — the suffix wraps whatever base type precedes it.
+    match local_ty("local x: table<string>[] = {}") {
+        Type::Table {
+            key: Some(_),
+            value,
+        } => assert!(
+            matches!(&*value, Type::Table { key: None, .. }),
+            "expected an inner array-form table, got {value:?}"
+        ),
+        other => panic!("expected a keyed table, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_bracket_holding_an_expression_is_not_an_array_suffix() {
+    // `parse_type` is reachable from `cast_expr`, where the `[` after the
+    // type opens an index. Only an empty bracket group is a suffix, so this
+    // still parses as a cast followed by an index rather than failing on a
+    // malformed array type.
+    let m = parse_src("local n: integer = (a as table<integer, integer>)[1]");
+    assert_eq!(m.stmts.len(), 1);
+    let m = parse_src("local n: integer = (a as integer[])[1]");
+    assert_eq!(m.stmts.len(), 1);
+}

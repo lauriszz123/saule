@@ -13,6 +13,17 @@
 //! | [`SBool`]   | `bool` | `get`, `toggle`, `hash`                       |
 //! | [`SString`] | `String`| `as_str`, `len`, `bytes`, `hash`, `upper`, `split` |
 //!
+//! ## Buffers (cross the ABI as a `(ptr, len)` pair, copied in)
+//!
+//! | Type       | Wraps     | Helpers (selection)                        |
+//! |------------|-----------|--------------------------------------------|
+//! | [`SBytes`] | `Vec<u8>` | `as_slice`, `len`, `hash`, `to_utf8`, `to_hex` |
+//!
+//! [`SBytes`] is the only spelling of Saule's `bytes`. A plain `Vec<u8>` is
+//! *not* one: the blanket `Vec<T>` conversions make it `table<integer>`,
+//! boxing every byte into a 16-byte value, which is the whole cost `bytes`
+//! exists to avoid.
+//!
 //! ## Reference values (operated on by [`Handle`] via the host)
 //!
 //! | Type         | Saule kind | Helpers                                   |
@@ -183,6 +194,68 @@ impl SString {
     }
 }
 
+/// A Saule `bytes` — arbitrary bytes with no encoding promised.
+///
+/// Separate from [`SString`] because the Saule types are separate: a
+/// `string` is text and always valid UTF-8, a `bytes` is a buffer. Nothing
+/// converts between them implicitly here either, which is why
+/// [`SBytes::to_utf8`] is fallible and there is no `From<SString>`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SBytes(pub Vec<u8>);
+
+impl SBytes {
+    /// Wrap owned bytes.
+    pub fn new(b: impl Into<Vec<u8>>) -> Self {
+        Self(b.into())
+    }
+    /// Borrow as a slice.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+    /// Consume into the owned `Vec<u8>`.
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+    /// Length in bytes.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    /// Whether the buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    /// A stable 64-bit hash of the contents.
+    pub fn hash(&self) -> u64 {
+        hash_of(&self.0)
+    }
+    /// The buffer as text, or `None` when it is not valid UTF-8 — the same
+    /// partial function `Bytes.toString` is in Saule.
+    pub fn to_utf8(&self) -> Option<&str> {
+        std::str::from_utf8(&self.0).ok()
+    }
+    /// Lowercase hex, two characters per byte. Matches `Bytes.toHex`.
+    pub fn to_hex(&self) -> String {
+        use fmt::Write as _;
+        let mut s = String::with_capacity(self.0.len() * 2);
+        for b in &self.0 {
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    }
+}
+
+impl From<Vec<u8>> for SBytes {
+    fn from(b: Vec<u8>) -> Self {
+        Self(b)
+    }
+}
+
+impl From<&[u8]> for SBytes {
+    fn from(b: &[u8]) -> Self {
+        Self(b.to_vec())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SValue — an owned, decoded Saule value (used by table iteration / func args)
 // ---------------------------------------------------------------------------
@@ -202,6 +275,8 @@ pub enum SValue {
     Float(f64),
     /// A `string`.
     Str(String),
+    /// A `bytes` buffer.
+    Bytes(Vec<u8>),
     /// A host-owned `table`.
     Table(STable),
     /// A host-owned callable.
@@ -223,6 +298,7 @@ impl SValue {
             SValue::Int(i) => CValue::integer(*i),
             SValue::Float(f) => CValue::float(*f),
             SValue::Str(s) => CValue::string_borrowed(s.as_bytes()),
+            SValue::Bytes(b) => CValue::bytes_borrowed(b),
             SValue::Table(t) => CValue::table_handle(t.handle),
             SValue::Func(f) => CValue::func_handle(f.handle),
             SValue::Object(o) => o.to_owned_cvalue(),
@@ -238,6 +314,8 @@ impl SValue {
             tag::FLOAT => SValue::Float(c.float),
             // SAFETY: STR tag implies a valid `(ptr, len)` for the call.
             tag::STR => SValue::Str(unsafe { c.as_str() }.unwrap_or("").to_string()),
+            // SAFETY: as STR; no UTF-8 check, which is the point of `bytes`.
+            tag::BYTES => SValue::Bytes(unsafe { c.as_byte_slice() }.unwrap_or(&[]).to_vec()),
             tag::TABLE => SValue::Table(STable {
                 handle: c.integer as Handle,
                 _marker: PhantomData,
@@ -654,6 +732,25 @@ impl IntoSaule for SString {
     }
 }
 
+impl FromSaule for SBytes {
+    fn from_saule(args: &[CValue], idx: usize, func: &str, param: &str) -> Result<Self, String> {
+        let v = require(args, idx, func, param)?;
+        // SAFETY: an argument's payload is valid for the call's duration.
+        match unsafe { v.as_byte_slice() } {
+            Some(b) => Ok(SBytes(b.to_vec())),
+            // A `string` is deliberately refused. They are different Saule
+            // types, and accepting either would put the encoding question
+            // back where `bytes` exists to remove it.
+            None => Err(format!("{func}: argument `{param}` must be bytes")),
+        }
+    }
+}
+impl IntoSaule for SBytes {
+    fn into_saule(self) -> CValue {
+        saule_native_abi::return_bytes(&self.0)
+    }
+}
+
 impl<T> FromSaule for STable<T> {
     fn from_saule(args: &[CValue], idx: usize, func: &str, param: &str) -> Result<Self, String> {
         let v = require(args, idx, func, param)?;
@@ -700,9 +797,11 @@ impl IntoSaule for SValue {
             SValue::Bool(b) => CValue::boolean(b),
             SValue::Int(i) => CValue::integer(i),
             SValue::Float(f) => CValue::float(f),
-            // Copy the bytes into the thread-local return buffer so the
-            // returned `CValue` does not borrow `self` (which is dropped here).
+            // Copy the payload into the thread-local return buffer so the
+            // returned `CValue` does not borrow `self` (which is dropped
+            // here). Both tags that carry one need this.
             SValue::Str(s) => saule_native_abi::return_string(&s),
+            SValue::Bytes(b) => saule_native_abi::return_bytes(&b),
             SValue::Table(t) => CValue::table_handle(t.handle),
             SValue::Func(f) => CValue::func_handle(f.handle),
             // The host gets a reference of its own; this one is dropped with

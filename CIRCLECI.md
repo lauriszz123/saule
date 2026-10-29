@@ -23,31 +23,53 @@ touches knows which CI built the binary.
 
 ## The branch policy
 
-**`main` publishes. `develop` does nothing.**
+**`main` publishes. Pull requests get tested. Nothing else runs.**
 
-- **Push or merge to `main`** → tests run; if they pass, all six archives are
+The flow: branch off `develop`, push the branch, open a pull request into
+`develop`. It merges once CircleCI's `test-linux`, `test-macos`, `test-windows` and
+`check-www` are green on it **and** the code owner (`.github/CODEOWNERS`) has
+approved. The owner may also push to `develop` directly; nobody else can.
+`develop` reaches `main` the same way — by pull request, merged by the owner,
+which is the only way anyone can update `main`. GitHub's rulesets enforce all
+of this; the CircleCI side is below.
+
+- **Push or merge to `main`** → tests run on Linux, macOS and Windows; if all
+  three pass, all six archives are
   built and a GitHub Release is created, tag included. The version generates
   itself (`scripts/next-version.sh` takes the next build number after the
   highest existing `v26.*` tag), so nobody types a version number.
   `install.sh` sees the new release as `latest` the moment it exists.
-- **Push to `develop`** (or any other branch) → nothing runs. The single
-  workflow's `when:` matches only `main` and the `dry-run` parameter, so a
-  pipeline is created with no jobs in it and costs nothing.
-- **`[skip ci]` in a commit message** → not even a pipeline. This is the hatch
-  for a `main` push that should not cut a release: a typo in a comment, a
-  README tweak.
+- **Push to a branch with an open pull request** (`develop` included, through
+  its PR into `main`) → the `pr-check` workflow runs the four test jobs on its
+  head commit. That is the required check GitHub waits for.
+- **A later push to the same pull request** → only the test jobs that have
+  not passed yet in this PR run. One that already passed is skipped in
+  seconds and still reported green; one that failed runs again until it
+  passes. The trade: a push that fixes one platform is not re-tested on the
+  others, so it can break one unseen and reach `develop` — but not a
+  release, because of the next two lines.
+- **A new pull request** → every job runs, even from a branch that had a PR
+  before (every `develop` → `main` release PR is new): the markers are kept
+  per PR number, so an earlier PR's never match. Runs that belong to no PR
+  (the release on `main`) always run in full.
+- **Push to a branch with no pull request** → nothing runs. The project is on
+  the GitHub App integration, and its one trigger (**Project Setup →
+  build-and-test → Trigger on…**) is set to *PR opened or pushed to, default
+  branch and tag pushes*. Not *All pushes*: that would run `pr-check` on
+  every branch push and spend credits on it. The tag pushes it also catches
+  — one per release — start a pipeline in which `pr-check` declines to run.
+- **`[skip ci]` in the merge commit's message** → not even a pipeline. This is
+  the hatch for a merge into `main` that should not cut a release: a typo in a
+  comment, a README tweak. Put it in the title when merging the PR.
 
-Create `develop` and work there:
+Work on a branch of `develop`:
 
 ```bash
-git switch -c develop
-git push -u github develop
+git switch develop && git pull github develop
+git switch -c fix/whatever
+git push -u github fix/whatever
+gh pr create --base develop
 ```
-
-A push to `develop` still *creates* a pipeline, it just contains no jobs. If
-those empty entries in the dashboard annoy you, narrow the trigger itself:
-**Project Settings → Triggers →** edit the GitHub trigger to run on pushes to
-`main` only. That is cosmetic — an empty pipeline burns no credits.
 
 ---
 
@@ -141,15 +163,21 @@ labelled with a commit from weeks ago.
 
 ## 4. Cutting a release
 
-Merge to `main`. That is the whole procedure.
+Merge `develop` into `main` by pull request. That is the whole procedure —
+and the only one: the `main` ruleset refuses a direct push from anyone,
+owner included.
 
 ```bash
-git switch main
-git merge --no-ff develop
-git push github main
+gh pr create --base main --head develop --title "Release"
+# once the checks are green:
+gh pr merge --merge
 ```
 
-The pipeline then: runs the tests → resolves the version → builds six archives,
+Run the three test suites on `develop` first (next section), so a platform
+break turns up before the merge rather than as a release that did not happen.
+
+The pipeline then: runs the tests on Linux, macOS and Windows → resolves the
+version → builds six archives,
 each one *executed* to confirm it reports the version the release claims →
 checksums them and refuses a partial set → creates the tag and the Release and
 uploads seven assets.
@@ -180,6 +208,18 @@ January.
 Between releases a local build reports `26.4-dev+1a2b3c4` — the number it is
 heading toward, marked dev, so a development binary can never be mistaken for
 a release.
+
+### Testing every platform before merging
+
+**Trigger Pipeline** on `develop` with parameter `test-only` = `true`. That
+runs the Linux, macOS and Windows suites and nothing else — no version, no
+builds, no publish, even if triggered on `main`.
+
+```bash
+curl -X POST https://circleci.com/api/v2/project/gh/lauriszz123/saule/pipeline \
+  -H "Circle-Token: $CIRCLE_TOKEN" -H 'content-type: application/json' \
+  -d '{"branch":"develop","parameters":{"test-only":true}}'
+```
 
 ### Rehearsing first — do this before the first real one
 
