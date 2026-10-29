@@ -94,7 +94,6 @@
 2db99d8ea6c84003	V integer:3
 2e0348fcb4af6b82	V integer:4
 2e1535f7798b4810	V float:1024.0
-2fc6df131dab82a6	V string:/
 30630d1ed59477e4	V string:2,6,12,20,
 31d0ba97ed1222e1	V integer:0
 31e4d4c354249c87	V integer:3
@@ -488,3 +487,4 @@ d134832975243817	V string:grandchild/2
 2d6f1ea159fe5604	V integer:20
 7afbebc0b9e727ca	V string:top
 5fef50b9a31b658f	V string:late
+a2c60cdeaf9301cf	V boolean:true
