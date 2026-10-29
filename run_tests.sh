@@ -58,6 +58,24 @@ output_exempt() {
 }
 exempted=0
 
+# Fixtures that cannot run on this platform at all, each with a reason.
+# Counted at the end for the same reason as the exemptions above.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) on_windows=1 ;;
+  *) on_windows= ;;
+esac
+platform_skip() {
+  [ -n "$on_windows" ] || return 1
+  case "$1" in
+    # Spawns `sh`, `cat` and `printf` and reads `/dev/zero` — a Unix
+    # userland. `crates/saule-cli/tests/spawn.rs` pins the same behaviour
+    # on every platform, Windows included, with `saule` as the child.
+    tests/spawn.sau) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+skipped=0
+
 # Compare (or, when blessing, record) one fixture's output. Echoes a diff
 # and returns non-zero when it differs.
 check_output() {
@@ -87,6 +105,11 @@ check_output() {
 
 echo '== positive tests =='
 for f in tests/*.sau; do
+  if platform_skip "$f"; then
+    printf 'SKIP %s (not on this platform)\n' "$f"
+    skipped=$((skipped + 1))
+    continue
+  fi
   total=$((total + 1))
   if ! out=$("$SAULE_BIN" run "$f" 2>&1 </dev/null); then
     printf 'FAIL %s\n' "$f"
@@ -129,6 +152,9 @@ for f in tests/*.sau tests/ui/*.sau; do
 done
 if [ "$exempted" -gt 0 ]; then
   echo "note: $exempted fixture(s) exempt from the output check — see output_exempt()"
+fi
+if [ "$skipped" -gt 0 ]; then
+  echo "note: $skipped fixture(s) skipped on this platform — see platform_skip()"
 fi
 if [ -n "$SAULE_BLESS" ]; then
   echo "recorded the output of $total fixtures — review the diff"

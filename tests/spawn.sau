@@ -47,8 +47,10 @@ class Main
 
 		-- ── bytes, not text ─────────────────────────────
 		-- Output that is not valid UTF-8 arrives intact. This is why `read`
-		-- is typed `bytes`: a `string` could not have carried it.
-		local raw: Process = Os.spawn("printf", {"\\x00\\x80\\xc3\\x28\\xff"})!
+		-- is typed `bytes`: a `string` could not have carried it. Octal
+		-- escapes, not `\x`: those are a GNU extension that macOS's BSD
+		-- `printf` prints literally.
+		local raw: Process = Os.spawn("printf", {"\\000\\200\\303\\050\\377"})!
 		raw.wait()
 		local blob: bytes = raw.read()
 		println("binary hex: " .. Bytes.toHex(blob))
@@ -83,8 +85,9 @@ class Main
 		println("running after kill: " .. tostring(long.running()))
 
 		-- ── placing the child: cwd and env ──────────────
-		-- `cwd` is where it runs.
-		local inDir: Process = Os.spawn("pwd", {}, "/tmp")!
+		-- `cwd` is where it runs. `/` rather than `/tmp`, which macOS
+		-- symlinks to `/private/tmp` — and `pwd` prints the real path.
+		local inDir: Process = Os.spawn("pwd", {}, "/")!
 		inDir.wait()
 		println("cwd: " .. String.trim(Bytes.toString(inDir.read()) ?? "?"))
 
