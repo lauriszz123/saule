@@ -180,7 +180,10 @@ commands:
           no_output_timeout: 30m
           command: |
             export PATH="$HOME/.cargo/bin:$PATH"
-            cargo test --workspace --locked
+            # `--no-fail-fast`: a platform break tends to hit several test
+            # binaries at once, and stopping at the first means finding
+            # them one pipeline at a time.
+            cargo test --workspace --locked --no-fail-fast
       - run:
           name: .sau fixtures and example projects, against their recorded output
           shell: << parameters.shell >>

@@ -179,8 +179,16 @@ impl Drop for Server {
     }
 }
 
+/// `path` as a `file:` URI, built the way the server parses one.
+///
+/// Not `format!("file://{}", path.display())`: on Windows that gives
+/// `file://C:\…`, which is no URI at all. The server parses it into
+/// something else and publishes diagnostics under *that* spelling, so the
+/// test waits for its own and times out.
 fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+    tower_lsp::lsp_types::Url::from_file_path(path)
+        .expect("an absolute path")
+        .to_string()
 }
 
 /// Open `source` as `main.sau` in `dir` with a fresh server, and return the
