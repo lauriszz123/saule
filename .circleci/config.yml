@@ -195,6 +195,71 @@ commands:
             ./run_tests.sh
             bash run_examples.sh
 
+  # Skip a test job whose inputs already passed it.
+  #
+  # Every push is a new commit and GitHub wants all four checks on it, but a
+  # push that touches only the website cannot change what the Rust suites
+  # say. So each job fingerprints the committed files it depends on — paths
+  # and blob hashes from `git ls-files -s`, which include this config — and looks
+  # for a marker that `mark-passed` saved under that exact fingerprint. If
+  # there is one, the same inputs already went green and the job ends
+  # successfully here, before installing or building anything. Any byte that
+  # differs is a different fingerprint, so a change that could break a job
+  # always runs it.
+  #
+  # The key is exact, with no prefix fallback: a near match would be a
+  # different tree, and restoring its marker would be skipping a test that
+  # never ran. Bump `v1` to force every job to run once.
+  skip-if-passed:
+    parameters:
+      job:
+        type: string
+      # A pathspec of what the job does not read, e.g. `':(exclude)www'`.
+      exclude:
+        type: string
+        default: ""
+      shell:
+        type: string
+        default: /bin/bash -eo pipefail
+    steps:
+      - run:
+          name: Fingerprint the inputs
+          shell: << parameters.shell >>
+          # `ls-files -s` rather than `ls-tree`, which has no exclude
+          # pathspec. Straight after checkout the index is the commit, so
+          # the two list the same paths and blob hashes.
+          command: git ls-files -s -- . << parameters.exclude >> > .ci-fingerprint
+      - restore_cache:
+          keys:
+            - passed-v1-<< parameters.job >>-{{ checksum ".ci-fingerprint" }}
+      - run:
+          name: Skip if these inputs already passed
+          shell: << parameters.shell >>
+          command: |
+            if [ -f ".ci-passed/<< parameters.job >>" ]; then
+              echo "<< parameters.job >> already passed on identical inputs — skipping."
+              circleci-agent step halt
+            fi
+
+  # The other half of `skip-if-passed`: runs only when every earlier step
+  # succeeded, so a marker exists only for inputs that really went green.
+  mark-passed:
+    parameters:
+      job:
+        type: string
+      shell:
+        type: string
+        default: /bin/bash -eo pipefail
+    steps:
+      - run:
+          name: Record that these inputs passed
+          shell: << parameters.shell >>
+          command: mkdir -p .ci-passed && touch ".ci-passed/<< parameters.job >>"
+      - save_cache:
+          key: passed-v1-<< parameters.job >>-{{ checksum ".ci-fingerprint" }}
+          paths:
+            - .ci-passed
+
 jobs:
   # ---------------------------------------------------------------------------
   # Test
@@ -208,6 +273,9 @@ jobs:
     executor: rust-linux
     steps:
       - checkout
+      - skip-if-passed:
+          job: test-linux
+          exclude: "':(exclude)www'"
       - restore-cargo:
           prefix: test-linux
       - run:
@@ -272,6 +340,8 @@ jobs:
             fi
       - save-cargo:
           prefix: test-linux
+      - mark-passed:
+          job: test-linux
 
   # The suite again on macOS. `Os.spawn` is where the stdlib's behaviour is
   # the operating system's rather than ours — pipes, child processes, how a
@@ -286,9 +356,14 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - checkout
+      - skip-if-passed:
+          job: test-macos
+          exclude: "':(exclude)www'"
       - rust-macos
       - portable-suite:
           shell: /bin/bash -eo pipefail
+      - mark-passed:
+          job: test-macos
 
   # The platform the portability had to be designed for rather than
   # inherited: no `sh`, no `cat`, different pipe semantics, a backslash in
@@ -303,8 +378,15 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - checkout-windows
+      - skip-if-passed:
+          job: test-windows
+          exclude: "':(exclude)www'"
+          shell: bash.exe
       - rust-windows
       - portable-suite:
+          shell: bash.exe
+      - mark-passed:
+          job: test-windows
           shell: bash.exe
 
   # Two guarantees, both easy to break by editing prose:
@@ -318,6 +400,10 @@ jobs:
     executor: rust-linux
     steps:
       - checkout
+      # No exclusion: the site is built from the compiler, the README, DOCS.md
+      # and the examples as well as from www/, so any file can change it.
+      - skip-if-passed:
+          job: check-www
       - restore-cargo:
           prefix: www
       - run:
@@ -383,6 +469,8 @@ jobs:
             npm run build
       - save-cargo:
           prefix: www
+      - mark-passed:
+          job: check-www
 
   # ---------------------------------------------------------------------------
   # Release — decide the version once

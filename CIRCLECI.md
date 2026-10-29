@@ -42,6 +42,14 @@ of this; the CircleCI side is below.
 - **Push to a branch with an open pull request** (`develop` included, through
   its PR into `main`) → the `pr-check` workflow runs the four test jobs on its
   head commit. That is the required check GitHub waits for.
+- **A test job whose inputs already passed** → skipped in seconds, still
+  reported green. Each of the four test jobs fingerprints the committed files
+  it reads (the three platform suites ignore `www/`; `check-www` reads
+  everything) and saves a marker under that fingerprint when it passes. A
+  later push with the same fingerprint finds the marker and stops before
+  building. A job that failed saved nothing, so it always runs again; any
+  change to what a job reads — this config included — runs it too. To force
+  every job to run once, bump `passed-v1` in `.circleci/config.yml`.
 - **Push to a branch with no pull request** → nothing runs. The project is on
   the GitHub App integration, and its one trigger (**Project Setup →
   build-and-test → Trigger on…**) is set to *PR opened or pushed to, default
