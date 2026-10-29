@@ -21,7 +21,9 @@ class Main
 		println(out as Process == nil)  -- true
 
 		local bag: table = {}
-		bag.proc = Os.spawn("saule", {"--version"})
+		-- `cat`, as in `spawn.sau`: on every runner, and `wait` closing its
+		-- stdin is what ends it.
+		bag.proc = Os.spawn("cat")
 		local proc: Process? = bag.proc as Process
 		println(proc != nil)  -- true
 		println(proc!.wait())  -- 0
