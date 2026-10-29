@@ -42,13 +42,12 @@ of this; the CircleCI side is below.
 - **Push to a branch with an open pull request** (`develop` included, through
   its PR into `main`) → the `pr-check` workflow runs the four test jobs on its
   head commit. That is the required check GitHub waits for.
-- **Push to a branch with no pull request** → nothing runs, *provided*
-  **Project Settings → Advanced → Only build pull requests** is on. Without
-  it, every branch push runs `pr-check` and spends credits on it. Turn on
-  **Build forked pull requests** in the same place, or a PR from a
-  contributor's fork never gets its check and can never merge. Leave **Pass
-  secrets to builds from forked pull requests** off: no PR job needs a
-  secret, and the release token must never reach a fork's code.
+- **Push to a branch with no pull request** → nothing runs. The project is on
+  the GitHub App integration, and its one trigger (**Project Setup →
+  build-and-test → Trigger on…**) is set to *PR opened or pushed to, default
+  branch and tag pushes*. Not *All pushes*: that would run `pr-check` on
+  every branch push and spend credits on it. The tag pushes it also catches
+  — one per release — start a pipeline in which `pr-check` declines to run.
 - **`[skip ci]` in the merge commit's message** → not even a pipeline. This is
   the hatch for a merge into `main` that should not cut a release: a typo in a
   comment, a README tweak. Put it in the title when merging the PR.

@@ -805,6 +805,11 @@ workflows:
       and:
         - not: << pipeline.parameters.test-only >>
         - not: << pipeline.parameters.dry-run >>
+        # The project's trigger also fires on tag pushes, and the publish
+        # job creates one per release. A tag pipeline has no branch, so
+        # without this every release would re-run the whole suite on a
+        # commit that already passed it.
+        - not: << pipeline.git.tag >>
         - not:
             equal: [main, << pipeline.git.branch >>]
         - not:
