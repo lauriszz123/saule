@@ -26,7 +26,7 @@ touches knows which CI built the binary.
 **`main` publishes. Pull requests get tested. Nothing else runs.**
 
 The flow: branch off `develop`, push the branch, open a pull request into
-`develop`. It merges once CircleCI's `test`, `test-macos`, `test-windows` and
+`develop`. It merges once CircleCI's `test-linux`, `test-macos`, `test-windows` and
 `check-www` are green on it **and** the code owner (`.github/CODEOWNERS`) has
 approved. The owner may also push to `develop` directly; nobody else can.
 `develop` reaches `main` the same way — by pull request, merged by the owner,

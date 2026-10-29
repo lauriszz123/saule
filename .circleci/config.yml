@@ -68,7 +68,7 @@ executors:
   # Bumping is a deliberate commit: change the tag, run
   # `cargo clippy --workspace --all-targets -- -D warnings` under that
   # toolchain locally, fix what the new release found, push to `develop`.
-  rust:
+  rust-linux:
     docker:
       - image: rust:1.98-bookworm
     environment:
@@ -116,9 +116,10 @@ commands:
           name: Rust toolchain
           command: |
             set -eu
-            # 1.98 rather than `stable`, matching the `rust` executor's pinned
-            # image — see the comment there. All six archives in a release are
-            # built by one compiler version, and which one is a commit.
+            # 1.98 rather than `stable`, matching the `rust-linux` executor's
+            # pinned image — see the comment there. All six archives in a
+            # release are built by one compiler version, and which one is a
+            # commit.
             if ! command -v rustup >/dev/null 2>&1; then
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
                 | sh -s -- -y --profile minimal --default-toolchain 1.98
@@ -135,8 +136,8 @@ commands:
           shell: powershell.exe
           command: |
             $ErrorActionPreference = 'Stop'
-            # 1.98, matching the `rust` executor's pinned image and the macOS
-            # jobs — one compiler version across all six archives.
+            # 1.98, matching the `rust-linux` executor's pinned image and the
+            # macOS jobs — one compiler version across all six archives.
             if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
               Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
               ./rustup-init.exe -y --profile minimal --default-toolchain 1.98
@@ -158,7 +159,7 @@ commands:
           command: git config --global core.autocrlf false
       - checkout
 
-  # Everything in the Linux `test` job that can differ between platforms:
+  # Everything in `test-linux` that can differ between platforms:
   # clippy (for `cfg`-gated code the Linux lint never sees), the Rust tests,
   # and both fixture suites. Run through bash on every platform — Git Bash on
   # Windows — because the fixture runners are bash scripts.
@@ -203,12 +204,12 @@ jobs:
   # `test-windows` below run the platform-sensitive part of it again; the
   # formatting check and the version handshake stay here, since neither can
   # differ between platforms.
-  test:
-    executor: rust
+  test-linux:
+    executor: rust-linux
     steps:
       - checkout
       - restore-cargo:
-          prefix: test
+          prefix: test-linux
       - run:
           name: rustfmt — advisory
           command: |
@@ -270,13 +271,13 @@ jobs:
               exit 1
             fi
       - save-cargo:
-          prefix: test
+          prefix: test-linux
 
   # The suite again on macOS. `Os.spawn` is where the stdlib's behaviour is
   # the operating system's rather than ours — pipes, child processes, how a
   # path or an environment is handed over — and the BSD userland differs
   # from Linux's in ways a fixture can trip over (`printf` has no `\x`,
-  # `/tmp` is a symlink). The Linux job cannot speak for any of that.
+  # `/tmp` is a symlink). `test-linux` cannot speak for any of that.
   test-macos:
     macos:
       xcode: 26.6.0
@@ -314,7 +315,7 @@ jobs:
   #      README.md / DOCS.md / examples they come from, so a committed page can
   #      never contradict its source.
   check-www:
-    executor: rust
+    executor: rust-linux
     steps:
       - checkout
       - restore-cargo:
@@ -467,7 +468,7 @@ jobs:
   # and nothing else. It is still *executed* before being shipped, under
   # qemu-user, so it gets the same version check as every other archive.
   build-linux:
-    executor: rust
+    executor: rust-linux
     parameters:
       triple:
         type: string
@@ -554,12 +555,17 @@ jobs:
           paths:
             - dist
 
+  # One triple, but a parameter and a one-entry matrix like the others, so
+  # the job is named `build-windows-<triple>` the way theirs are.
   build-windows:
     executor:
       name: win/default
       size: medium
+    parameters:
+      triple:
+        type: string
     environment:
-      TRIPLE: x86_64-pc-windows-msvc
+      TRIPLE: << parameters.triple >>
       CARGO_TERM_COLOR: always
     steps:
       # The same checkout as `test-windows`, so the archive is built from the
@@ -755,12 +761,12 @@ workflows:
       # test anywhere means no archives are built and no release is created —
       # the tests are what stands between a push to `main` and a published
       # version.
-      - test
+      - test-linux
       - test-macos
       - test-windows
       - check-www
       - version:
-          requires: [test, test-macos, test-windows, check-www]
+          requires: [test-linux, test-macos, test-windows, check-www]
       - build-linux:
           requires: [version]
           matrix:
@@ -778,6 +784,10 @@ workflows:
                 - x86_64-apple-darwin
       - build-windows:
           requires: [version]
+          matrix:
+            parameters:
+              triple:
+                - x86_64-pc-windows-msvc
       - publish:
           # Requiring the matrix alias waits on every triple in it.
           requires: [build-linux, build-macos, build-windows]
@@ -789,7 +799,7 @@ workflows:
   test-only:
     when: << pipeline.parameters.test-only >>
     jobs:
-      - test
+      - test-linux
       - test-macos
       - test-windows
 
@@ -818,7 +828,7 @@ workflows:
         - not:
             equal: [gh-pages, << pipeline.git.branch >>]
     jobs:
-      - test
+      - test-linux
       - test-macos
       - test-windows
       - check-www
