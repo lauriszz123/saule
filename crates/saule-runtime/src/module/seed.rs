@@ -341,6 +341,14 @@ pub(crate) fn merge_barrel_seed(
             for (k, v) in sub.interfaces {
                 seed.interfaces.entry(k).or_insert(v);
             }
+            // Beside `interfaces` for the same reason the direct-import path
+            // carries them: an interface whose method signatures were dropped
+            // registers as a type, but every call through it resolves to an
+            // unknown return. Packages expose their names through a barrel,
+            // so without this no library can publish a usable interface.
+            for (k, v) in sub.interface_methods {
+                seed.interface_methods.entry(k).or_insert(v);
+            }
             for (k, v) in sub.enums {
                 seed.enums.entry(k).or_insert(v);
             }
@@ -359,6 +367,9 @@ pub(crate) fn merge_barrel_seed(
                 }
                 if let Some(v) = sub.interfaces.get(orig).cloned() {
                     seed.interfaces.entry(local.clone()).or_insert(v);
+                }
+                if let Some(v) = sub.interface_methods.get(orig).cloned() {
+                    seed.interface_methods.entry(local.clone()).or_insert(v);
                 }
                 if let Some(v) = sub.enums.get(orig).cloned() {
                     seed.enums.entry(local.clone()).or_insert(v);
