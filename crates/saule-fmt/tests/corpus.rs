@@ -352,6 +352,43 @@ end
     assert_eq!(out, twice, "verbatim literals are not idempotent:\n{out}");
 }
 
+/// Exponent literals keep their spelling too, which matters more here than
+/// anywhere else: `1e9` reprinted as its expansion is ten digits where the
+/// author wrote three, and `6.022e23` is unreadable written out.
+#[test]
+fn exponent_literals_keep_their_source_spelling() {
+    let src = "\
+class Main
+  static fn main()
+    local a = 1e9
+    local b = 1.5e3
+    local c = 2e-7
+    local d = 6.022E+23
+    local e = .5e2
+    local f = 1e3f
+    println(match a case 1e9 then 1 case _ then 2 end)
+  end
+end
+";
+    let out = format_with_comments(src).expect("format");
+    for needle in [
+        "= 1e9",
+        "= 1.5e3",
+        "= 2e-7",
+        "= 6.022E+23",
+        "= .5e2",
+        "= 1e3f",
+        "case 1e9",
+    ] {
+        assert!(
+            out.contains(needle),
+            "literal {needle:?} was rewritten:\n{out}"
+        );
+    }
+    let twice = format_with_comments(&out).expect("re-format");
+    assert_eq!(out, twice, "verbatim literals are not idempotent:\n{out}");
+}
+
 /// Without the original source there are no spans to quote, so literals fall
 /// back to the canonical rendering — and that rendering must still be a float.
 #[test]

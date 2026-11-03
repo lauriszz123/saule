@@ -2,7 +2,8 @@
 
 This is the reference for everything Saule ships out of the box — the prelude
 (`print`, `assert`, …) plus the static-class modules (`String`, `Bytes`,
-`Math`, `Table`, `Io` / `File`, `Os`, `Saule`).
+`Math`, `Table`, `Iter`, `Io` / `File`, `Os`, `Saule`, `Project`). Every one of
+them is in scope with no `import`.
 
 For language syntax see [README.md](./README.md). For the runtime side of
 errors / pattern matching / generics see the corresponding README sections.
@@ -31,6 +32,7 @@ errors / pattern matching / generics see the corresponding README sections.
 - [`Io` / `File`](#io--file)
 - [`Os`](#os)
 - [`Saule`](#saule)
+- [`Project`](#project)
 
 ---
 
@@ -279,9 +281,20 @@ the stdlib does not get a private exemption. Cast one side with `as float`.
 
 ### Trigonometry
 
-`sin`, `cos`, `tan`, `asin`, `acos`, `atan(y, x?)` (`atan2`-style),
-`deg(rad)`, `rad(deg)`. All take an `integer` or a `float` and return a
-`float`.
+All of these take an `integer` or a `float` and answer a `float` — an angle is
+a real number, so there is no integer-in / integer-out form the way there is
+for `abs` or `clamp`.
+
+| Signature | Description |
+| --- | --- |
+| `Math.sin<N>(n: N) -> float` | Sine of `n` radians. |
+| `Math.cos<N>(n: N) -> float` | Cosine of `n` radians. |
+| `Math.tan<N>(n: N) -> float` | Tangent of `n` radians. |
+| `Math.asin<N>(n: N) -> float` | Arcsine, in radians. |
+| `Math.acos<N>(n: N) -> float` | Arccosine, in radians. |
+| `Math.atan<N>(y: N, x: N?) -> float` | Arctangent of `y`, in radians. With `x`, the `atan2` form — the angle to the point `(x, y)`, with the quadrant right. |
+| `Math.deg<N>(radians: N) -> float` | Radians to degrees. |
+| `Math.rad<N>(degrees: N) -> float` | Degrees to radians. |
 
 ### Random & bit-ish
 
@@ -608,7 +621,7 @@ writes, reads what came back, and carries on in between.
 | `p.write(data: bytes) -> integer` | Write to the child's stdin; returns the byte count. An error once stdin is closed. |
 | `p.closeStdin() -> nil` | Drop stdin so the child sees end of input. Idempotent. Needed by anything that reads until EOF. |
 | `p.poll() -> integer?` | The exit code if it has finished, `nil` while it runs. Remembered, so asking twice is fine. |
-| `p.wait() -> integer` | Block until it exits, and return the code. Closes stdin first — a child waiting for input and a parent waiting for the child is a deadlock, and this is the end that can tell. |
+| `p.wait() -> integer` | Block until it exits **and its output has arrived**, and return the code. Closes stdin first — a child waiting for input and a parent waiting for the child is a deadlock, and this is the end that can tell. So `p.wait()` then `p.read()` sees all of it, where `read` on its own only ever sees what has arrived so far. |
 | `p.kill() -> boolean` | End it. `false` if it had already exited, which is not an error. |
 | `p.running() -> boolean` | Is it still going? Asks the OS, so it is accurate without a prior `poll`. |
 | `p.pid() -> integer` | The child's PID. |
@@ -646,6 +659,16 @@ local lsp: Process = Os.spawn(
 
 **The child outlives the handle.** Dropping the last reference does not kill
 it. Call `kill` or `wait`.
+
+**`wait` waits for the output too.** Output is collected on a thread of its
+own, so a child's exit says nothing about whether its last bytes have been
+picked up yet — a child as short-lived as `echo` can be gone before the
+collector has run once. `wait` therefore waits for both streams to end, which
+after the child has exited is a wait of microseconds, and that is what makes
+`wait` then `read` give you the whole of its output. The one case where a
+stream never ends is a child that leaves a grandchild holding the pipe
+(`sh -c "daemon &"`); rather than hang there, `wait` gives up after two
+seconds and returns the exit code.
 
 **Each stream buffers at most 8 MiB of unread output.** At the limit the
 reader stops taking from the pipe, so the operating system's pipe buffer
@@ -710,8 +733,8 @@ not a design.
 
 ## `Saule`
 
-The version of the toolchain running your code. Distinct from `Project.version`,
-which is the version of the code being run.
+The version of the toolchain running your code. Distinct from
+[`Project.version`](#project), which is the version of the code being run.
 
 Saule versions are `<two-digit year>.<build number>` — `26.7` is the seventh
 release cut in 2026. There is no patch component; a fix is simply the next
@@ -751,6 +774,56 @@ cannot work without a version, and `atLeast` when it can degrade.
 A development build reports the version it is *heading toward*, not the last
 one released — so `26.8-dev` satisfies `atLeast("26.8")`. That is deliberate:
 it lets you write and test code against a feature before its release exists.
+
+---
+
+## `Project`
+
+The `saule.config` of the code being run. Distinct from
+[`Saule`](#saule), which is the version of the *toolchain* running it: upgrade
+the compiler and `Saule.version` moves, while `Project.version` only moves
+when you edit your own config.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `Project.name` | `string` | The project's `name:`. |
+| `Project.version` | `string` | Its `version:` — the version of *your* code. |
+| `Project.root` | `string` | Absolute path of the directory holding `saule.config`. |
+| `Project.srcDirs` | `table<string>` | The `src_dirs:` roots, as absolute paths resolved against `root` — not the relative spellings the config used. |
+
+```luau
+-- saule.config:  name: "bf"   version: "0.1.0"   src_dirs: ["src"]
+println(Project.name .. " " .. Project.version)   -- bf 0.1.0
+println(Project.root)                             -- /home/you/code/bf
+println(#Project.srcDirs)                         -- 1
+```
+
+Three things worth knowing:
+
+**They are snapshots, taken at startup.** There is no setter, and writing to
+the `srcDirs` table changes your copy rather than anything the module loader
+will consult.
+
+**Every field is a plain `string`, never `string?`.** In **single-file mode**
+— `saule run script.sau`, with no `saule.config` above it — there is no
+project, and each field is the **empty string** with `srcDirs` an empty table.
+A nullable type would push a `??` onto every use of a value that is almost
+always there; an empty string is falsy enough to test directly:
+
+```luau
+if Project.name == "" then
+    println("running as a single file")
+end
+```
+
+Project mode is what `saule run .`, `saule run <dir>` and a bare `saule run`
+select; naming a file directly is single-file mode even when that file sits
+inside a project.
+
+**It needs no import.** Like every other stdlib module, `Project` is in scope
+everywhere — see [Prelude](#prelude-always-in-scope). For the config file's
+own keys, and which of them are required, see
+[README §Project Configuration](./README.md#project-configuration).
 
 ---
 

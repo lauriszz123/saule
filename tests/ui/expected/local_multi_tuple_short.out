@@ -1,0 +1,10 @@
+  × cannot assign `nil` to non-nullable type `integer`
+    ╭─[local_multi_tuple_short.sau:9:3]
+  8 │     static fn main()
+  9 │         local a: integer, b: integer, c: integer = pair()
+    ·         ────────────────────────┬────────────────────────
+    ·                                 ╰── `nil` not allowed here
+ 10 │         println(a + b + c)
+    ╰────
+  help: mark the type nullable with `?` (e.g. `integer?`) or initialize it
+        with a non-nil value

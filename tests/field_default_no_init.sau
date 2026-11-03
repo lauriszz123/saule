@@ -1,0 +1,59 @@
+-- What a defaulted field means in a class with **no** `init`.
+--
+-- Two different answers, decided by one word:
+--
+--   * a **public** field is an ordinary instance field whose default runs at
+--     construction — per instance, and writable like any other field;
+--   * a **private** one is promoted to a static, evaluated once when the
+--     class is declared, which is what lets a class stand in for a small
+--     module (`README.md` §Static Members).
+--
+-- Both halves used to be the second one, which made the plainest class there
+-- is — fields with defaults, no constructor — share its fields between
+-- instances and refuse a write to them, reported as "class `C` declares no
+-- instance field `n`" about a field declared one line above.
+
+class Counter
+	label: string = "anon"
+	n: integer = 0
+	-- Private, so this one is the shared cell.
+	local built: integer = 0
+
+	fn bump() -> integer
+		-- A write through `self` to each kind: an instance slot, and the
+		-- static the private default was promoted to.
+		self.n = self.n + 1
+		self.built = self.built + 1
+		return self.n
+	end
+
+	fn totalBuilt() -> integer
+		return self.built
+	end
+end
+
+local a: Counter = Counter()
+local b: Counter = Counter()
+
+-- Per instance: `a` counting does not move `b`.
+println("a: " .. a.bump() .. a.bump() .. a.bump())
+println("b: " .. b.bump())
+
+-- Writable from outside, too, and still per instance.
+a.label = "first"
+a.n = 100
+println("a.label=" .. a.label .. " b.label=" .. b.label)
+println("a.n=" .. a.n .. " b.n=" .. b.n)
+
+-- The private default, shared: four `bump`s across two instances.
+println("built: " .. a.totalBuilt() .. " " .. b.totalBuilt())
+
+-- An empty `init` must not change any of this.
+class Same
+	v: integer = 7
+	fn init()
+	end
+end
+local s: Same = Same()
+s.v = s.v + 1
+println("same: " .. s.v)

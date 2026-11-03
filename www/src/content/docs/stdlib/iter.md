@@ -1,6 +1,8 @@
 ---
 title: "Iter"
 description: "Combinators over sequences. Where Table mutates a table or answers a question about one, Iter derives a new sequence and never writes to its argument."
+sidebar:
+  order: 6
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

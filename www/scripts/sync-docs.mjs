@@ -248,11 +248,14 @@ const ORDER = {
 	stdlib: [
 		'prelude-always-in-scope',
 		'string',
+		'bytes',
 		'math',
 		'table',
+		'iter',
 		'io-file',
 		'os',
 		'saule',
+		'project',
 		'conventions',
 	],
 };

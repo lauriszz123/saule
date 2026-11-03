@@ -1,0 +1,12 @@
+-- The same rule one step along: the call really is a multi-return, but it
+-- returns two values for three names, so the third takes `nil`.
+fn pair() -> (integer, integer)
+	return 1, 2
+end
+
+class Main
+	static fn main()
+		local a: integer, b: integer, c: integer = pair()
+		println(a + b + c)
+	end
+end

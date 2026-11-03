@@ -189,7 +189,7 @@ Saule never auto-promotes — the checker catches this at compile time, so a hid
 ### Float Literals
 
 Because the two types never mix implicitly, a whole number that belongs in a
-`float` has to *say* it is one. There are two ways to write it:
+`float` has to *say* it is one. There are three ways to write it:
 
 ```saule
 local ratio: float = 0.75
@@ -197,6 +197,7 @@ local half: float = .5         -- the integer part may be omitted
 local speed: float = 10f       -- `f` / `F` suffix: this is 10.0
 local scale: float = 1.0       -- the same thing, written out
 local exact: float = 2.5f      -- allowed, though the `.5` already decided it
+local budget: float = 1e9      -- exponent: this is 1000000000.0
 ```
 
 The suffix earns its keep in expressions, where `10f` is considerably easier to
@@ -210,6 +211,30 @@ println(speed * 2f)            -- 7.0
 A trailing dot is **not** a float: `1.` lexes as `1` followed by `.`, which is
 what keeps `1..2` (concatenation) and `1.foo` (member access) unambiguous.
 Write `1.0` or `1f` instead.
+
+#### Exponents
+
+`e` (or `E`) followed by an optional sign and at least one digit multiplies the
+literal by that power of ten:
+
+```saule
+local budget: float = 1e9         -- 1000000000.0
+local milli: float = 1.5e3        -- 1500.0
+local tiny: float = 2e-7          -- 0.0000002
+local avogadro: float = 6.022E+23
+local half: float = .5e2          -- 50.0, leading dot and exponent together
+```
+
+An exponent always makes a **float**, with or without a fractional part in the
+mantissa. `1e9` is `1000000000.0`, not the `integer` `1000000000` — the
+notation is for real numbers, and letting the *value* decide the type would
+mean `1e9` and `1.0e9` were different types. Lua 5.3 draws the line in the
+same place, as Saule already does for `/` and `^`.
+
+The digits after `e` are required, and that is what keeps the near misses
+readable: `1e` is the number `1` followed by the name `e`, and `1end` is still
+`1` then `end`. A hex literal has no exponent form — `0x1e9` is one
+hexadecimal integer, since `e` is a hex digit there.
 
 ### Base Prefixes
 

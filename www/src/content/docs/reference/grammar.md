@@ -226,9 +226,11 @@ Numeral ::= integer | float
 integer ::= digit {digit}
           | '0' ('x' | 'X') hexDigit {'_' | hexDigit}
           | '0' ('b' | 'B') binDigit {'_' | binDigit}
-float   ::= digit {digit} '.' digit {digit} [fSuffix]
-          | '.' digit {digit} [fSuffix]
+float   ::= digit {digit} '.' digit {digit} [exponent] [fSuffix]
+          | '.' digit {digit} [exponent] [fSuffix]
+          | digit {digit} exponent [fSuffix]
           | digit {digit} fSuffix
+exponent::= ('e' | 'E') ['+' | '-'] digit {digit}
 fSuffix ::= 'f' | 'F'
 String  ::= '"' {stringChar | escape} '"'
           | "'" {stringChar | escape} "'"
@@ -250,9 +252,11 @@ Strings take either quote style, and only the delimiter that opened one closes
 it — so `'he said "hi"'` needs no escaping. The seven escapes above are the only
 ones recognised; anything else after a backslash is an error, and there is no
 hex or unicode escape. `_` groups digits in
-hex and binary literals only. There is no exponent notation, no octal form, and
-no `f` suffix on a hex literal (`0xFF_80f` is one hexadecimal integer, since
-`f` is a hex digit).
+hex and binary literals only. An `exponent` makes the literal a `float`
+whatever the mantissa looks like, and its digits are required, so `1e` is `1`
+followed by the name `e`. There is no octal form, and no exponent or `f`
+suffix on a hex literal (`0xFF_80f` and `0x1e9` are each one hexadecimal
+integer, since `f` and `e` are hex digits there).
 
 Whitespace and comments separate tokens and are otherwise insignificant. `;` is
 a separator, never a statement: it is accepted between statements, at the end of

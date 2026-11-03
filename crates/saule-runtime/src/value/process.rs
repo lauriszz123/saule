@@ -29,6 +29,7 @@ use std::fmt;
 use std::io::Read;
 use std::process::{Child, ChildStdin};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 /// How much unread output one stream will hold before the reader thread
 /// stops taking more.
@@ -43,6 +44,19 @@ use std::sync::{Arc, Condvar, Mutex};
 /// reads once a frame sits near zero; reaching 8 MiB means nobody is reading,
 /// and that is the case worth bounding.
 const MAX_BUFFERED: usize = 8 * 1024 * 1024;
+
+/// How long [`ProcessHandle::wait`] will wait for a reader thread to reach
+/// end of stream after the child has exited.
+///
+/// Once the child is gone, what is left to read is whatever is still sitting
+/// in the operating system's pipe buffer — bounded, and drained in
+/// microseconds. So this is not a timing the normal case comes anywhere
+/// near; it is a bound on the one case that would otherwise never finish.
+/// A child can leave a grandchild holding the write end of the pipe
+/// (`sh -c "daemon &"`), and then end of stream never comes at all. Waiting
+/// forever there would turn `wait` into a hang, so it gives up and returns
+/// the exit code it already has.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// What a reader thread has collected from one stream so far.
 #[derive(Default)]
@@ -95,6 +109,8 @@ impl Stream {
                 }
             }
             lock(&sink).eof = true;
+            // Wakes anyone in `drain` waiting for exactly this.
+            sink.1.notify_all();
         });
         Stream(state)
     }
@@ -150,6 +166,36 @@ impl Stream {
         let state = lock(&self.0);
         state.eof && state.data.is_empty()
     }
+
+    /// Block until the reader thread has reached end of stream, or
+    /// `deadline` passes.
+    ///
+    /// This is what makes `wait` then `read` mean anything. The reader lives
+    /// on a thread of its own, so a child exiting says nothing about whether
+    /// its last bytes have been *collected* yet: for a child as short-lived
+    /// as `echo`, the thread may not have run at all by the time the exit
+    /// status is in. Reading then returns empty, and the output is not lost
+    /// but arrives a moment after the program looked. Waiting for the
+    /// stream to end is the only thing that distinguishes "nothing yet"
+    /// from "nothing more", and after the child has exited it is a wait of
+    /// microseconds.
+    ///
+    /// Only the end of the *stream* is waited for, not an empty buffer: the
+    /// bytes are the program's to take whenever it likes.
+    fn drain(&self, deadline: Instant) {
+        let reader_ended = &self.0.1;
+        let mut state = lock(&self.0);
+        while !state.eof {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            let (next, _) = reader_ended
+                .wait_timeout(state, left)
+                .unwrap_or_else(|e| e.into_inner());
+            state = next;
+        }
+    }
 }
 
 /// Lock through a poisoned mutex rather than panicking.
@@ -175,6 +221,10 @@ pub struct ProcessHandle {
     /// The exit code, once known. Cached because a `Child` can only be
     /// waited on once, and a program may well ask twice.
     status: Option<i64>,
+    /// Whether [`ProcessHandle::wait`] has already waited on the readers, so
+    /// that waiting twice on a child whose stream never ends — see
+    /// [`DRAIN_GRACE`] — does not pay the grace twice.
+    drained: bool,
     /// How it was spawned, for `Debug` and error messages.
     program: String,
 }
@@ -229,6 +279,7 @@ impl ProcessHandle {
             stderr,
             pid,
             status: None,
+            drained: false,
             program: program.to_string(),
         })
     }
@@ -286,9 +337,19 @@ impl ProcessHandle {
         }
     }
 
-    /// Block until the child exits, and return its code.
+    /// Block until the child exits and its output has arrived, and return
+    /// its code.
+    ///
+    /// Both halves matter. A caller that waits does it to look at what the
+    /// child produced, and the exit status alone does not say the reader
+    /// threads have collected it — so this drains them too, and `wait` then
+    /// `read` sees the whole of a short child's output rather than however
+    /// much of it happened to be collected first.
     pub fn wait(&mut self) -> Result<i64, String> {
         if let Some(code) = self.status {
+            // Exited already — `poll` may have been what noticed, and then
+            // the output still has to be waited for.
+            self.drain_streams();
             return Ok(code);
         }
         // Dropping stdin first: a child that is waiting for end of input
@@ -310,10 +371,30 @@ impl ProcessHandle {
             Ok(status) => {
                 let code = exit_code(&status);
                 self.status = Some(code);
+                // Only now that the child is gone, so the wait is on a
+                // pipe nothing is still writing to.
+                self.drain_streams();
                 Ok(code)
             }
             Err(e) => Err(format!("waiting for `{}` failed: {e}", self.program)),
         }
+    }
+
+    /// Wait for both readers to reach end of stream, once.
+    ///
+    /// Called only where the child is known to have exited, so there is
+    /// nothing left to produce output and the wait is over bytes already in
+    /// the pipe.
+    fn drain_streams(&mut self) {
+        if self.drained {
+            return;
+        }
+        self.drained = true;
+        // One deadline across both, not one each: the grace bounds how long
+        // `wait` can take, and two streams is not a reason to double it.
+        let deadline = Instant::now() + DRAIN_GRACE;
+        self.stdout.drain(deadline);
+        self.stderr.drain(deadline);
     }
 
     /// Ask the OS to end the child. `true` if the signal was delivered;
@@ -344,5 +425,91 @@ impl fmt::Debug for ProcessHandle {
             Some(code) => write!(f, "<process {} {} exited {code}>", self.pid, self.program),
             None => write!(f, "<process {} {}>", self.pid, self.program),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    /// A reader that hands over `payload` after `delay`, then ends — a stand
+    /// in for a pipe whose last bytes are still in flight.
+    struct Slow {
+        delay: Duration,
+        payload: Option<Vec<u8>>,
+    }
+
+    impl Read for Slow {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.payload.take() {
+                Some(payload) => {
+                    std::thread::sleep(self.delay);
+                    buf[..payload.len()].copy_from_slice(&payload);
+                    Ok(payload.len())
+                }
+                None => Ok(0),
+            }
+        }
+    }
+
+    /// A reader that never ends, like a pipe a grandchild still holds open.
+    struct Endless;
+
+    impl Read for Endless {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            std::thread::sleep(Duration::from_secs(60));
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn drain_waits_for_output_still_on_its_way() {
+        let stream = Stream::spawn_reader(Slow {
+            delay: Duration::from_millis(200),
+            payload: Some(b"late".to_vec()),
+        });
+        // Nothing has arrived yet, and an unwaited read says so rather than
+        // claiming the stream is over.
+        assert_eq!(stream.take(64), b"");
+        assert!(!stream.at_eof());
+
+        stream.drain(Instant::now() + Duration::from_secs(10));
+        // Past the wait the stream has ended, so what it produced is all
+        // there is — which is what lets `wait` promise a whole answer.
+        assert!(lock(&stream.0).eof, "the wait should end at end of stream");
+        assert_eq!(stream.take(64), b"late");
+        assert!(stream.at_eof());
+    }
+
+    #[test]
+    fn drain_gives_up_at_the_deadline_rather_than_hanging() {
+        let stream = Stream::spawn_reader(Endless);
+        let start = Instant::now();
+        stream.drain(start + Duration::from_millis(150));
+        let waited = start.elapsed();
+        // Returned on its own terms: the stream has not ended and never
+        // will, and a `wait` that hung on that would be worse than one that
+        // reports the exit code it has.
+        assert!(!stream.at_eof());
+        assert!(
+            waited >= Duration::from_millis(150),
+            "it should wait the whole grace, waited {waited:?}"
+        );
+        assert!(
+            waited < Duration::from_secs(10),
+            "it should not wait for a stream that never ends, waited {waited:?}"
+        );
+    }
+
+    #[test]
+    fn drain_returns_at_once_on_a_stream_that_has_ended() {
+        let stream = Stream::closed();
+        let start = Instant::now();
+        stream.drain(start + Duration::from_secs(30));
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "an ended stream has nothing to wait for"
+        );
     }
 }

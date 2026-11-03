@@ -228,7 +228,7 @@ Saule never auto-promotes — the checker catches this at compile time, so a hid
 ### Float Literals
 
 Because the two types never mix implicitly, a whole number that belongs in a
-`float` has to *say* it is one. There are two ways to write it:
+`float` has to *say* it is one. There are three ways to write it:
 
 ```luau
 local ratio: float = 0.75
@@ -236,6 +236,7 @@ local half: float = .5         -- the integer part may be omitted
 local speed: float = 10f       -- `f` / `F` suffix: this is 10.0
 local scale: float = 1.0       -- the same thing, written out
 local exact: float = 2.5f      -- allowed, though the `.5` already decided it
+local budget: float = 1e9      -- exponent: this is 1000000000.0
 ```
 
 The suffix earns its keep in expressions, where `10f` is considerably easier to
@@ -249,6 +250,30 @@ println(speed * 2f)            -- 7.0
 A trailing dot is **not** a float: `1.` lexes as `1` followed by `.`, which is
 what keeps `1..2` (concatenation) and `1.foo` (member access) unambiguous.
 Write `1.0` or `1f` instead.
+
+#### Exponents
+
+`e` (or `E`) followed by an optional sign and at least one digit multiplies the
+literal by that power of ten:
+
+```luau
+local budget: float = 1e9         -- 1000000000.0
+local milli: float = 1.5e3        -- 1500.0
+local tiny: float = 2e-7          -- 0.0000002
+local avogadro: float = 6.022E+23
+local half: float = .5e2          -- 50.0, leading dot and exponent together
+```
+
+An exponent always makes a **float**, with or without a fractional part in the
+mantissa. `1e9` is `1000000000.0`, not the `integer` `1000000000` — the
+notation is for real numbers, and letting the *value* decide the type would
+mean `1e9` and `1.0e9` were different types. Lua 5.3 draws the line in the
+same place, as Saule already does for `/` and `^`.
+
+The digits after `e` are required, and that is what keeps the near misses
+readable: `1e` is the number `1` followed by the name `e`, and `1end` is still
+`1` then `end`. A hex literal has no exponent form — `0x1e9` is one
+hexadecimal integer, since `e` is a hex digit there.
 
 ### Base Prefixes
 
@@ -1417,7 +1442,7 @@ Static fields are shared across all instances. Modifying them affects the class 
 Player.maxHealth = 200
 ```
 
-A class with **no** `fn init` promotes every `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
+A class with **no** `fn init` promotes every **private** `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
 
 ```luau
 class Main
@@ -1428,6 +1453,25 @@ class Main
     end
 end
 ```
+
+The word `local` is doing the work there. A **public** defaulted field is an
+ordinary instance field whose default runs at construction, so it is per
+instance and writable like any other:
+
+```luau
+class Counter
+    n: integer = 0              -- one per instance
+    local built: integer = 0    -- one, shared, promoted to a static
+end
+
+local a: Counter = Counter()
+local b: Counter = Counter()
+a.n = 5                         -- ok; `b.n` is still 0
+```
+
+Adding or removing an `init` therefore changes nothing about the public
+fields — only about the private ones, which have nowhere else to be
+initialized.
 
 ### Inheritance
 
@@ -2692,6 +2736,7 @@ of every construct, see the [Grammar](#grammar).
 | `3.14` | `float` | |
 | `.5` | `float` | The integer part may be omitted |
 | `10f`, `10F` | `float` | Suffix form of `10.0` |
+| `1e9`, `2e-7`, `6.022E+23` | `float` | Exponent: ×10ⁿ, always a `float` |
 | `"text"` | `string` | |
 | `true`, `false` | `boolean` | |
 | `nil` | — | Only assignable to a nullable (`T?`) slot |
@@ -2939,9 +2984,11 @@ Numeral ::= integer | float
 integer ::= digit {digit}
           | '0' ('x' | 'X') hexDigit {'_' | hexDigit}
           | '0' ('b' | 'B') binDigit {'_' | binDigit}
-float   ::= digit {digit} '.' digit {digit} [fSuffix]
-          | '.' digit {digit} [fSuffix]
+float   ::= digit {digit} '.' digit {digit} [exponent] [fSuffix]
+          | '.' digit {digit} [exponent] [fSuffix]
+          | digit {digit} exponent [fSuffix]
           | digit {digit} fSuffix
+exponent::= ('e' | 'E') ['+' | '-'] digit {digit}
 fSuffix ::= 'f' | 'F'
 String  ::= '"' {stringChar | escape} '"'
           | "'" {stringChar | escape} "'"
@@ -2963,9 +3010,11 @@ Strings take either quote style, and only the delimiter that opened one closes
 it — so `'he said "hi"'` needs no escaping. The seven escapes above are the only
 ones recognised; anything else after a backslash is an error, and there is no
 hex or unicode escape. `_` groups digits in
-hex and binary literals only. There is no exponent notation, no octal form, and
-no `f` suffix on a hex literal (`0xFF_80f` is one hexadecimal integer, since
-`f` is a hex digit).
+hex and binary literals only. An `exponent` makes the literal a `float`
+whatever the mantissa looks like, and its digits are required, so `1e` is `1`
+followed by the name `e`. There is no octal form, and no exponent or `f`
+suffix on a hex literal (`0xFF_80f` and `0x1e9` are each one hexadecimal
+integer, since `f` and `e` are hex digits there).
 
 Whitespace and comments separate tokens and are otherwise insignificant. `;` is
 a separator, never a statement: it is accepted between statements, at the end of

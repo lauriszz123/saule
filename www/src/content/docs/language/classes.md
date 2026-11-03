@@ -145,7 +145,7 @@ Static fields are shared across all instances. Modifying them affects the class 
 Player.maxHealth = 200
 ```
 
-A class with **no** `fn init` promotes every `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
+A class with **no** `fn init` promotes every **private** `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
 
 ```saule
 class Main
@@ -156,6 +156,25 @@ class Main
     end
 end
 ```
+
+The word `local` is doing the work there. A **public** defaulted field is an
+ordinary instance field whose default runs at construction, so it is per
+instance and writable like any other:
+
+```saule
+class Counter
+    n: integer = 0              -- one per instance
+    local built: integer = 0    -- one, shared, promoted to a static
+end
+
+local a: Counter = Counter()
+local b: Counter = Counter()
+a.n = 5                         -- ok; `b.n` is still 0
+```
+
+Adding or removing an `init` therefore changes nothing about the public
+fields — only about the private ones, which have nowhere else to be
+initialized.
 
 ### Inheritance
 

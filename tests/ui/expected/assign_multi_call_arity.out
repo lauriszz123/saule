@@ -1,0 +1,10 @@
+  × cannot assign `nil` to non-nullable type `integer`
+    ╭─[assign_multi_call_arity.sau:12:3]
+ 11 │         local b: integer = 0
+ 12 │         a, b = one()
+    ·         ──────┬─────
+    ·               ╰── `nil` not allowed here
+ 13 │         println(a + b)
+    ╰────
+  help: mark the type nullable with `?` (e.g. `integer?`) or initialize it
+        with a non-nil value

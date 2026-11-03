@@ -148,6 +148,63 @@ len: 8
     );
 }
 
+/// `wait` means the output is *there*, not merely that the child is gone.
+///
+/// Output is collected on a thread of its own, so the exit status says
+/// nothing about how much of it has been picked up: a child that writes and
+/// exits at once can be gone before the collector has run even once, leaving
+/// its output in the pipe. A `wait` that returned then would make
+/// `wait` + `read` a race — and one an idle machine wins and a loaded one
+/// loses, which is the worst shape a bug can have, since it shows up only in
+/// CI.
+///
+/// This pins the contract end to end. It is not what *catches* the race —
+/// losing it takes a machine with no spare core, which is why it was CI that
+/// found it and not this suite; the deterministic coverage is the `drain`
+/// tests beside the implementation. Hence `echo`, the fastest child there
+/// is, over many rounds: the most hostile thing a fixture can do from out
+/// here.
+#[test]
+#[cfg(unix)]
+fn wait_does_not_return_until_the_output_has_arrived() {
+    let dir = scratch("wait_drains");
+    // No helper: `echo` is the point. `run` wants one, so pass something.
+    let helper = script(
+        &dir,
+        "unused",
+        "class Main\n\tstatic fn main()\n\tend\nend\n",
+    );
+    let out = run(
+        &dir,
+        r#"class Main
+	static fn main()
+		local rounds: integer = 200
+		local whole: integer = 0
+		local ended: integer = 0
+		for _ = 1, rounds do
+			local p: Process = Os.spawn("echo", {"the-whole-line"})!
+			p.wait()
+			-- One read, straight after the wait.
+			if String.trim(Bytes.toString(p.read()) ?? "") == "the-whole-line" then
+				whole = whole + 1
+			end
+			if p.atEof() then
+				ended = ended + 1
+			end
+		end
+		println("whole: " .. whole .. "/" .. rounds)
+		println("ended: " .. ended .. "/" .. rounds)
+	end
+end
+"#,
+        &helper,
+    );
+    assert_eq!(
+        out, "whole: 200/200\nended: 200/200\n",
+        "one read after `wait` should see every byte the child wrote, every time"
+    );
+}
+
 /// True non-UTF-8 output, which needs a child that is not a Saule program.
 #[test]
 #[cfg(unix)]

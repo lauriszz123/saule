@@ -186,6 +186,65 @@ fn f_suffix_makes_an_integer_literal_a_float() {
 }
 
 #[test]
+fn exponent_notation_is_a_float() {
+    assert_eq!(
+        lex("1e9 1.5e3 2e-7 6.022E+23 .5e2"),
+        vec![
+            Token::Float(1e9),
+            Token::Float(1.5e3),
+            Token::Float(2e-7),
+            Token::Float(6.022E+23),
+            Token::Float(0.5e2),
+            Token::Eof,
+        ]
+    );
+}
+
+#[test]
+fn an_exponent_makes_a_float_even_with_a_whole_mantissa() {
+    // `1e9` is not the integer 1000000000: an exponent is real-number
+    // notation, and the two numeric types never mix implicitly.
+    assert_eq!(lex("1e2"), vec![Token::Float(100.0), Token::Eof]);
+}
+
+#[test]
+fn e_is_only_an_exponent_when_digits_follow() {
+    // The shapes that must keep lexing as two tokens. `1end` is the one that
+    // would really bite: `if a then x = 1end` is legal, if terse, Saule.
+    assert_eq!(
+        lex("1e"),
+        vec![Token::Int(1), Token::Identifier("e".into()), Token::Eof]
+    );
+    assert_eq!(lex("1end"), vec![Token::Int(1), Token::End, Token::Eof]);
+    assert_eq!(
+        lex("1e+"),
+        vec![
+            Token::Int(1),
+            Token::Identifier("e".into()),
+            Token::Plus,
+            Token::Eof
+        ]
+    );
+    assert_eq!(
+        lex("1exp"),
+        vec![Token::Int(1), Token::Identifier("exp".into()), Token::Eof]
+    );
+}
+
+#[test]
+fn a_hex_literal_has_no_exponent() {
+    // `e` is a hex digit, so `0x1e9` is one integer — 489.
+    assert_eq!(lex("0x1e9"), vec![Token::Int(0x1e9), Token::Eof]);
+}
+
+#[test]
+fn exponent_literal_span_covers_the_whole_literal() {
+    let toks = Lexer::new("1.5e-3").tokenize().unwrap();
+    assert_eq!(toks[0].value, Token::Float(1.5e-3));
+    assert_eq!(toks[0].span, 0..6);
+}
+
+#[test]
 fn f_suffix_on_an_already_fractional_literal() {
     assert_eq!(
         lex("2.5f .5f"),

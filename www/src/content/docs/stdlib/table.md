@@ -2,7 +2,7 @@
 title: "Table"
 description: "Tables in Saule double as arrays (integer-keyed, 1-based) and maps. Most of these helpers operate on the array side; keys / values see both, and map…"
 sidebar:
-  order: 4
+  order: 5
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

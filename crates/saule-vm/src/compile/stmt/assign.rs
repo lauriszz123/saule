@@ -373,14 +373,23 @@ impl Compiler<'_> {
                 return Ok(());
             }
 
-            // A proved class resolves to a field slot; anything else is
-            // `SETFX`, which asks `assign_member` at run time (§8.5). This
-            // is the write half of the same escape hatch `GETFX` gives the
-            // read, and it used to refuse — which was `json_usage`'s first
-            // refusal, on a `table` field reached through an `any`.
-            let slot = self
+            // A proved class resolves to a field slot or to a static;
+            // anything else is `SETFX`, which asks `assign_member` at run
+            // time (§8.5). This is the write half of the same escape hatch
+            // `GETFX` gives the read, and it used to refuse — which was
+            // `json_usage`'s first refusal, on a `table` field reached
+            // through an `any`.
+            //
+            // Resolved through `member_access`, the read side's own rule, so
+            // the two halves agree about what a member *is*. A defaulted
+            // private field in a class with no `init` is a static, and
+            // `self.n = …` on one has to store to that cell: looking only
+            // for an instance slot left it to `SETFX`, which cannot find one
+            // either and reported "class `C` declares no instance field `n`"
+            // at run time, naming a field the class does declare.
+            let access = self
                 .class_of_expr(obj)
-                .and_then(|class| self.chunk.classes[class as usize].layout.slot(name));
+                .and_then(|class| self.member_access(class, name));
             // The receiver may be read in place only if evaluating the
             // right-hand side cannot disturb it — and an assignment's RHS is
             // an arbitrary expression, so the same purity test the binary
@@ -402,8 +411,17 @@ impl Compiler<'_> {
             // does anything run between these reads and the store.
             let v = self.rhs_operand(value, in_place)?;
             let (a, c) = (self.reg8(o, span)?, self.reg8(v, span)?);
-            match slot {
-                Some(slot) => self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span),
+            match access {
+                Some(crate::compile::expr::member::MemberAccess::Field(slot)) => {
+                    self.emit(Instruction::abc(Op::SETF, a, slot as u8, c), span)
+                }
+                // The receiver is evaluated and then ignored, exactly as the
+                // read side does it: it may have side effects, and the cell
+                // being written does not depend on it.
+                Some(crate::compile::expr::member::MemberAccess::Static(st)) => self.emit(
+                    Instruction::abc(Op::SETSTAT, c, st.class as u8, st.slot as u8),
+                    span,
+                ),
                 None => {
                     let k = self.constant(
                         saule_runtime::Value::Str(saule_runtime::value::SauleStr::new(

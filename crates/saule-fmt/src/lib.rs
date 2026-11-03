@@ -275,10 +275,25 @@ fn float_text_matches(raw: &str, f: f64) -> bool {
         .or_else(|| raw.strip_suffix('F'))
         .unwrap_or(raw);
     let digits = body.strip_prefix('-').unwrap_or(body);
-    let well_formed = digits.chars().any(|c| c.is_ascii_digit())
-        && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
-        && digits.chars().filter(|&c| c == '.').count() <= 1;
-    well_formed && matches!(body.parse::<f64>(), Ok(v) if v == f)
+    // An exponent is split off first: it carries a sign of its own, so
+    // `1.5e-3` would otherwise fail the mantissa's digits-and-one-dot test
+    // and be reprinted as its expansion, losing the spelling the author
+    // chose exactly where that spelling matters most.
+    let (mantissa, exponent) = match digits.find(['e', 'E']) {
+        Some(i) => (&digits[..i], Some(&digits[i + 1..])),
+        None => (digits, None),
+    };
+    let mantissa_ok = mantissa.chars().any(|c| c.is_ascii_digit())
+        && mantissa.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && mantissa.chars().filter(|&c| c == '.').count() <= 1;
+    let exponent_ok = match exponent {
+        None => true,
+        Some(e) => {
+            let e = e.strip_prefix(['+', '-']).unwrap_or(e);
+            !e.is_empty() && e.chars().all(|c| c.is_ascii_digit())
+        }
+    };
+    mantissa_ok && exponent_ok && matches!(body.parse::<f64>(), Ok(v) if v == f)
 }
 
 /// Render an `f64` so it always reads back as a float (i.e. `1.0` rather

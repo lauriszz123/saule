@@ -2,7 +2,7 @@
 title: "Math"
 description: "Numeric utilities. integer and float are distinct in Saule, so several functions return integer even when given a float (e.g. floor, ceil)."
 sidebar:
-  order: 3
+  order: 4
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->
@@ -59,9 +59,20 @@ the stdlib does not get a private exemption. Cast one side with `as float`.
 
 ### Trigonometry
 
-`sin`, `cos`, `tan`, `asin`, `acos`, `atan(y, x?)` (`atan2`-style),
-`deg(rad)`, `rad(deg)`. All take an `integer` or a `float` and return a
-`float`.
+All of these take an `integer` or a `float` and answer a `float` — an angle is
+a real number, so there is no integer-in / integer-out form the way there is
+for `abs` or `clamp`.
+
+| Signature | Description |
+| --- | --- |
+| `Math.sin<N>(n: N) -> float` | Sine of `n` radians. |
+| `Math.cos<N>(n: N) -> float` | Cosine of `n` radians. |
+| `Math.tan<N>(n: N) -> float` | Tangent of `n` radians. |
+| `Math.asin<N>(n: N) -> float` | Arcsine, in radians. |
+| `Math.acos<N>(n: N) -> float` | Arccosine, in radians. |
+| `Math.atan<N>(y: N, x: N?) -> float` | Arctangent of `y`, in radians. With `x`, the `atan2` form — the angle to the point `(x, y)`, with the quadrant right. |
+| `Math.deg<N>(radians: N) -> float` | Radians to degrees. |
+| `Math.rad<N>(degrees: N) -> float` | Degrees to radians. |
 
 ### Random & bit-ish
 

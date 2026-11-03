@@ -418,9 +418,18 @@ fn build_one(
     built: &[ClassProto],
     span: &std::ops::Range<usize>,
 ) -> Result<ClassProto, CompileError> {
-    // The tree-walker promotes a defaulted field to a static when the class
-    // has no `init` (`eval/stmt/classes.rs`). The compiler has to make the
-    // same call, or the two engines disagree about what `C.field` means.
+    // A class with no `init` promotes its *private* defaulted fields to
+    // statics, evaluated once at class-declaration time — the rule
+    // `README.md` states under Static Members, and what lets a class stand
+    // in for a small module.
+    //
+    // `is_private` is the half that used to be missing. Promoting a public
+    // `n: integer = 5` too made the plainest class there is — fields with
+    // defaults, no constructor — silently share them between instances and
+    // refuse `c.n = 9`, reported as "class `C` declares no instance field
+    // `n`" about a field declared one line up. A public field with a default
+    // is an ordinary instance field whose default runs at construction,
+    // which is what writing it that way says.
     let has_init = members
         .iter()
         .any(|m| matches!(&m.value, ClassMember::Method(me) if me.name == "init" && !me.is_static));
@@ -434,11 +443,12 @@ fn build_one(
         match &m.value {
             ClassMember::Field {
                 is_static,
+                is_private,
                 name: fname,
                 default,
                 ..
             } => {
-                if *is_static || (!has_init && default.is_some()) {
+                if *is_static || (!has_init && *is_private && default.is_some()) {
                     statics.push(Rc::from(fname.as_str()));
                 } else {
                     own_fields.push(Rc::from(fname.as_str()));
