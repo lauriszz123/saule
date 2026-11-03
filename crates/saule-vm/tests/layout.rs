@@ -124,10 +124,12 @@ fn init_is_found_through_the_chain() {
 }
 
 #[test]
-fn a_defaulted_field_becomes_a_static_when_there_is_no_init() {
-    // Matching the tree-walker's rule in `eval/stmt/classes.rs`. If the two
-    // engines disagreed here they would disagree about what `C.field` means.
-    let (protos, idx) = build("class C\n  count: integer = 0\nend");
+fn a_defaulted_private_field_becomes_a_static_when_there_is_no_init() {
+    // The rule `README.md` states under Static Members: with no `init` there
+    // is nowhere to assign a private field, so its default is evaluated once
+    // at class-declaration time and the field is a static. That is what lets
+    // a class stand in for a small module.
+    let (protos, idx) = build("class C\n  local count: integer = 0\nend");
     let c = &protos[idx.get("C").unwrap() as usize];
     assert_eq!(
         c.layout.len(),
@@ -136,6 +138,29 @@ fn a_defaulted_field_becomes_a_static_when_there_is_no_init() {
     );
     assert_eq!(c.n_statics, 1);
     assert!(c.sindex.contains_key("count"));
+}
+
+#[test]
+fn a_defaulted_public_field_is_an_instance_field_with_no_init() {
+    // The other half of the same rule, and the half that was missing:
+    // promoting a *public* default too made the plainest class there is —
+    // fields with defaults, no constructor — share them between instances
+    // and refuse `c.count = 9`, reported at run time as "class `C` declares
+    // no instance field `count`" about a field declared one line up.
+    let (protos, idx) = build("class C\n  count: integer = 0\nend");
+    let c = &protos[idx.get("C").unwrap() as usize];
+    assert_eq!(c.layout.slot("count"), Some(0));
+    assert_eq!(c.n_statics, 0);
+}
+
+#[test]
+fn the_two_kinds_of_default_coexist_in_one_class() {
+    let (protos, idx) = build("class C\n  n: integer = 1\n  local shared: integer = 2\nend");
+    let c = &protos[idx.get("C").unwrap() as usize];
+    assert_eq!(c.layout.slot("n"), Some(0));
+    assert_eq!(c.layout.len(), 1, "only the public field takes a slot");
+    assert_eq!(c.n_statics, 1);
+    assert!(c.sindex.contains_key("shared"));
 }
 
 #[test]

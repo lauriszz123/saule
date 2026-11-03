@@ -20,6 +20,55 @@ use super::expr::{
 use super::state::{Scope, class_implements_iterable, current_return_ty, with_classes};
 use super::to_source_span;
 
+/// How many values a lone right-hand side supplies to a parallel binding,
+/// when that is knowable.
+///
+/// `local a, b = f()` spreads a multi-return across the names, so what
+/// decides whether every name gets a value is the callee's arity, not the
+/// number of expressions written. A resolved tuple supplies one value per
+/// component; any other resolved type supplies exactly one, which is the
+/// case that used to slip through — `fn one() -> integer` fills the first
+/// name and leaves the rest `nil`, in a slot whose type says that cannot
+/// happen.
+///
+/// `None` means the front end could not resolve the expression at all. The
+/// names are then left alone rather than reported against a guess, since a
+/// multi-return whose type we cannot see still fills them at run time.
+fn spread_arity(v: &Spanned<Expr>, scope: &Scope) -> Option<usize> {
+    match infer(v, scope) {
+        Some(Type::Tuple(ts)) => Some(ts.len()),
+        Some(_) => Some(1),
+        None => None,
+    }
+}
+
+/// Report every assignment target past `supplied` whose type forbids `nil`.
+///
+/// A parallel assignment with more targets than values leaves the extra ones
+/// `nil`. Catching it here is what keeps the VM's type-tag guard from being
+/// the first thing to notice — by then the only report it can make is an
+/// internal one, about a chunk disagreeing with the types it was compiled
+/// against.
+fn report_unsupplied(
+    targets: &[Spanned<Expr>],
+    supplied: usize,
+    scope: &Scope,
+    stmt: &Spanned<Stmt>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    for target in targets.iter().skip(supplied) {
+        if let Expr::Ident(n) = &target.value
+            && let Some(ty) = scope.lookup(n)
+            && !is_nullable(ty)
+        {
+            errors.push(TypeCheckError::NilToNonNullable {
+                ty: type_to_string(ty),
+                span: to_source_span(stmt.span.clone()),
+            });
+        }
+    }
+}
+
 pub(super) fn check_stmt(
     stmt: &Spanned<Stmt>,
     scope: &mut Scope,
@@ -103,11 +152,31 @@ pub(super) fn check_stmt(
                     None
                 };
 
+            // Decided before the loop binds anything, so a name being
+            // introduced cannot change what the right-hand side infers to.
+            let unknown_spread = values.len() == 1
+                && names.len() > 1
+                && matches!(values[0].value, Expr::Call { .. })
+                && spread_arity(&values[0], scope).is_none();
+
             if let Some((ts, vspan)) = tuple_spread {
                 for (i, (name, _, ty_opt)) in names.iter().enumerate() {
                     let found = ts.get(i).cloned();
                     if let (Some(ty), Some(found_ty)) = (ty_opt, found.as_ref()) {
                         check_type_assignment_compat(ty, found_ty, vspan.clone(), errors);
+                    }
+                    // Past the end of the tuple: the call has no value for
+                    // this name, so it binds `nil` — reported here rather
+                    // than left to the VM's type-tag guard, which can only
+                    // call it an internal error by the time it sees it.
+                    if found.is_none()
+                        && let Some(ty) = ty_opt
+                        && !is_nullable(ty)
+                    {
+                        errors.push(TypeCheckError::NilToNonNullable {
+                            ty: type_to_string(ty),
+                            span: to_source_span(stmt.span.clone()),
+                        });
                     }
                     let bound = match (ty_opt, found) {
                         (Some(ty), _) => ty.clone(),
@@ -130,16 +199,15 @@ pub(super) fn check_stmt(
                         None => {
                             // Fewer values than names — this one binds `nil`,
                             // same as a `local x: T` with no initializer.
-                            // A lone call as the RHS is exempt: the tuple
-                            // spread above only fires when we could infer the
-                            // callee's return tuple, and a multi-return whose
-                            // type we couldn't resolve still fills these names
-                            // at runtime. Only a call can do that — a literal
-                            // or a variable never spreads.
-                            let maybe_spread = values.len() == 1
-                                && names.len() > 1
-                                && matches!(values[0].value, Expr::Call { .. });
-                            if !is_nullable(ty) && !maybe_spread {
+                            // A lone call as the RHS is exempt only while
+                            // its arity is genuinely unknown — a native or an
+                            // unresolved callee, which still fills these names
+                            // at run time. A call we *can* see through is not
+                            // exempt: `fn one() -> integer` supplies one
+                            // value, and the names after it are as empty as a
+                            // literal would leave them. Only a call spreads at
+                            // all — a literal or a variable never does.
+                            if !is_nullable(ty) && !unknown_spread {
                                 errors.push(TypeCheckError::NilToNonNullable {
                                     ty: type_to_string(ty),
                                     span: to_source_span(stmt.span.clone()),
@@ -195,6 +263,16 @@ pub(super) fn check_stmt(
                 check_expr(v, scope, errors);
             }
 
+            // How many values a lone right-hand side supplies, which is
+            // what decides whether every target gets one. Same question as
+            // `local a, b = f()` — see [`spread_arity`] — and the same
+            // answer, since the two forms spread identically.
+            let supplied = if values.len() == 1 && targets.len() > 1 {
+                spread_arity(&values[0], scope)
+            } else {
+                Some(values.len())
+            };
+
             // Single-RHS tuple destructuring on the assignment form.
             if values.len() == 1
                 && targets.len() > 1
@@ -208,6 +286,7 @@ pub(super) fn check_stmt(
                         check_type_assignment_compat(&ty, found_ty, vspan.clone(), errors);
                     }
                 }
+                report_unsupplied(targets, ts.len(), scope, stmt, errors);
                 return;
             }
 
@@ -217,6 +296,12 @@ pub(super) fn check_stmt(
                 {
                     check_assignment_compat(&ty, v, scope, errors);
                 }
+            }
+            // A target with no value left to take is assigned `nil`, which
+            // its declared type may well forbid. Skipped where the arity is
+            // unknowable, for the reason `spread_arity` gives.
+            if let Some(n) = supplied {
+                report_unsupplied(targets, n, scope, stmt, errors);
             }
         }
 

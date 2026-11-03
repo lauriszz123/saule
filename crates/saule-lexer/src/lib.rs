@@ -354,6 +354,46 @@ impl<'src> Lexer<'src> {
             }
         }
 
+        // Optional exponent: `1e9`, `1.5e3`, `2e-7`, `6E+23`. Always a
+        // float, whether or not the mantissa has a fractional part — the
+        // notation is for real numbers, and `integer` and `float` are
+        // separate types here, so `1e9` being an `integer` on the strength
+        // of its value would make the type of a literal depend on where the
+        // decimal point landed. Lua 5.3 draws the same line, as Saule
+        // already does for `/`, `^` and the bitwise operators.
+        //
+        // Consumed only when a digit really follows, after an optional
+        // sign. That is what keeps `1end` lexing as `1` then `end`, and a
+        // bare `1e` as `1` then the name `e` — the same care the `f` suffix
+        // below takes, for the same reason.
+        if let Some(&(e_i, e_c)) = self.chars.peek()
+            && (e_c == 'e' || e_c == 'E')
+        {
+            let mut look = self.chars.clone();
+            look.next(); // the `e`
+            let signed = matches!(look.peek(), Some(&(_, '+' | '-')));
+            if signed {
+                look.next();
+            }
+            if matches!(look.peek(), Some(&(_, d)) if d.is_ascii_digit()) {
+                is_float = true;
+                self.chars.next(); // the `e`
+                end = e_i + e_c.len_utf8();
+                if signed {
+                    let (i, c) = self.chars.next().expect("peeked above");
+                    end = i + c.len_utf8();
+                }
+                while let Some(&(i, c)) = self.chars.peek() {
+                    if c.is_ascii_digit() {
+                        end = i + c.len_utf8();
+                        self.chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
         // The numeric text ends here; a suffix extends the span but must stay
         // out of the string handed to `parse`.
         let digits_end = end;

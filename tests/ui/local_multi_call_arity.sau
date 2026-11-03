@@ -1,0 +1,18 @@
+-- A lone call spreads its return values across the names, so the arity that
+-- decides whether every name gets one is the callee's. `one()` supplies a
+-- single value, leaving `port` as empty as a `local port: integer` with no
+-- initializer — which its non-nullable type forbids.
+--
+-- Caught here rather than by the VM: the chunk is compiled believing `port`
+-- holds an `integer`, so the first thing to notice at run time is the
+-- type-tag guard, and all it can report by then is an internal error.
+fn one() -> integer
+	return 1
+end
+
+class Main
+	static fn main()
+		local host: integer, port: integer = one()
+		println(host + port)
+	end
+end

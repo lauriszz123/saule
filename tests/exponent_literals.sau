@@ -1,0 +1,43 @@
+-- Exponent notation: `e` / `E`, an optional sign, and at least one digit.
+--
+-- Always a `float`, whatever the mantissa looks like — the notation is for
+-- real numbers, and `integer` and `float` never mix implicitly here, so
+-- letting the value decide would make `1e9` and `1.0e9` different types.
+
+class Main
+	static fn main()
+		local budget: float = 1e9
+		local milli: float = 1.5e3
+		local tiny: float = 2e-7
+		local avogadro: float = 6.022E+23
+		local half: float = .5e2
+		local suffixed: float = 1e3f
+
+		println(budget)
+		println(milli)
+		println(tiny)
+		println(half)
+		println(suffixed)
+		println(avogadro > 6.0e23)
+
+		-- A float like any other: arithmetic, no cast either way.
+		println(1e3 + 1.0)
+		println(2e2 * 3.0)
+		println(Math.sqrt(4e0))
+
+		-- `integer` is a different type, so the mix is still refused — the
+		-- exponent form does not smuggle a float into an integer slot.
+		local whole: integer = 1000000000
+		println(whole == (budget as integer))
+
+		-- The near misses stay what they were. `e` needs digits after it, so
+		-- a name may begin with `e`, and `1end` still closes a block.
+		local e: integer = 7
+		local e9: integer = 9
+		println(e + e9)
+		if e == 7 then println("terse")end
+
+		-- No exponent on a hex literal: `e` is a hex digit there.
+		println(0x1e9)
+	end
+end

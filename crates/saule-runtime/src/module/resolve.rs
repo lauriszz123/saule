@@ -38,6 +38,26 @@ pub fn resolve_import_path(dir: &Path, raw: &str) -> Option<PathBuf> {
     // Project-wide `src_dirs:` fallback. These are absolute, so we look the
     // import up under each in turn before giving up.
     if let Some(info) = crate::project::get() {
+        // A file that belongs to a dependency resolves against *its own*
+        // package first. Without this, a package cannot have internal
+        // folders at all: one of its files reaching another through
+        // `core.Color` fails, because the project fallback below searches
+        // the *consuming* project's `src_dirs` rather than the dep's, and
+        // the dependency lookup after it only fires when the first segment
+        // happens to name a dependency.
+        //
+        // It has to come before that fallback rather than after, or a
+        // same-named module in the consumer's tree would satisfy a
+        // dependency's private import — `core/Color.sau` in an app would
+        // quietly shadow the one inside the library.
+        if let Some(dep) = owning_dependency(&info, dir) {
+            for src_dir in &dep.src_dirs {
+                if let Some(hit) = try_resolve_base(&src_dir.join(&normalised)) {
+                    return Some(hit);
+                }
+            }
+        }
+
         for src_dir in &info.src_dirs {
             if let Some(hit) = try_resolve_base(&src_dir.join(&normalised)) {
                 return Some(hit);
@@ -120,6 +140,38 @@ pub fn unresolved_imports(module: &saule_ast::Module, dir: &Path) -> Vec<crate::
                 })
         })
         .collect()
+}
+
+/// The dependency whose `src_dirs` contain `dir` — the package the importing
+/// file belongs to, when that is not the project itself.
+///
+/// The deepest matching `src_dir` wins, so a package vendored inside another
+/// resolves against the inner one rather than its host.
+fn owning_dependency<'a>(
+    info: &'a crate::project::ProjectInfo,
+    dir: &Path,
+) -> Option<&'a crate::project::Dependency> {
+    // `dir` comes from a module path that may or may not have been
+    // canonicalized, while `src_dirs` are absolute; compare both resolved so
+    // a symlinked package directory still matches.
+    let here = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+
+    let depth = |dep: &crate::project::Dependency| {
+        dep.src_dirs
+            .iter()
+            .filter(|src| {
+                let src = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+                here.starts_with(src)
+            })
+            .map(|src| src.components().count())
+            .max()
+    };
+
+    info.dependencies
+        .iter()
+        .filter_map(|dep| depth(dep).map(|d| (d, dep)))
+        .max_by_key(|(d, _)| *d)
+        .map(|(_, dep)| dep)
 }
 
 pub(crate) fn try_resolve_base(base: &Path) -> Option<PathBuf> {

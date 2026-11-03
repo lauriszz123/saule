@@ -51,6 +51,7 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `3.14` | `float` | |
 | `.5` | `float` | The integer part may be omitted |
 | `10f`, `10F` | `float` | Suffix form of `10.0` |
+| `1e9`, `2e-7`, `6.022E+23` | `float` | Exponent: ×10ⁿ, always a `float` |
 | `"text"` | `string` | |
 | `true`, `false` | `boolean` | |
 | `nil` | — | Only assignable to a nullable (`T?`) slot |

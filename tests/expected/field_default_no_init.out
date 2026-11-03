@@ -1,0 +1,6 @@
+a: 123
+b: 1
+a.label=first b.label=anon
+a.n=100 b.n=1
+built: 4 4
+same: 8

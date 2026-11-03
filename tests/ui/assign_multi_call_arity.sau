@@ -1,0 +1,15 @@
+-- Parallel *assignment* spreads exactly as parallel binding does, so it is
+-- held to the same arity. `one()` fills `a` and leaves `b` holding `nil`,
+-- which `b`'s declared `integer` rules out.
+fn one() -> integer
+	return 1
+end
+
+class Main
+	static fn main()
+		local a: integer = 0
+		local b: integer = 0
+		a, b = one()
+		println(a + b)
+	end
+end

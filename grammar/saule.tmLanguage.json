@@ -53,7 +53,8 @@
       "patterns": [
         { "name": "constant.numeric.integer.hexadecimal.saule", "match": "\\b0[xX][0-9a-fA-F_]+\\b" },
         { "name": "constant.numeric.integer.binary.saule", "match": "\\b0[bB][01_]+\\b" },
-        { "name": "constant.numeric.float.saule", "match": "(?<![\\w.])(?:\\d+\\.\\d+|\\.\\d+)(?:[fF]\\b)?" },
+        { "name": "constant.numeric.float.saule", "match": "(?<![\\w.])(?:\\d+\\.\\d+|\\.\\d+)(?:[eE][+-]?\\d+)?(?:[fF]\\b)?" },
+        { "name": "constant.numeric.float.saule", "match": "\\b\\d+[eE][+-]?\\d+(?:[fF]\\b)?" },
         { "name": "constant.numeric.float.saule", "match": "\\b\\d+[fF]\\b" },
         { "name": "constant.numeric.integer.saule", "match": "\\b\\d+\\b" }
       ]

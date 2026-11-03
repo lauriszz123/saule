@@ -2,13 +2,13 @@
 title: "Saule"
 description: "The version of the toolchain running your code. Distinct from Project.version, which is the version of the code being run."
 sidebar:
-  order: 7
+  order: 9
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->
 
-The version of the toolchain running your code. Distinct from `Project.version`,
-which is the version of the code being run.
+The version of the toolchain running your code. Distinct from
+[`Project.version`](/saule/stdlib/project/), which is the version of the code being run.
 
 Saule versions are `<two-digit year>.<build number>` — `26.7` is the seventh
 release cut in 2026. There is no patch component; a fix is simply the next

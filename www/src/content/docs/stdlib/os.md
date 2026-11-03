@@ -2,7 +2,7 @@
 title: "Os"
 description: "Process, environment, time, and filesystem primitives. Filesystem calls return a boolean on success/failure (no detailed error type yet — wrap in…"
 sidebar:
-  order: 6
+  order: 8
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->
@@ -96,7 +96,7 @@ writes, reads what came back, and carries on in between.
 | `p.write(data: bytes) -> integer` | Write to the child's stdin; returns the byte count. An error once stdin is closed. |
 | `p.closeStdin() -> nil` | Drop stdin so the child sees end of input. Idempotent. Needed by anything that reads until EOF. |
 | `p.poll() -> integer?` | The exit code if it has finished, `nil` while it runs. Remembered, so asking twice is fine. |
-| `p.wait() -> integer` | Block until it exits, and return the code. Closes stdin first — a child waiting for input and a parent waiting for the child is a deadlock, and this is the end that can tell. |
+| `p.wait() -> integer` | Block until it exits **and its output has arrived**, and return the code. Closes stdin first — a child waiting for input and a parent waiting for the child is a deadlock, and this is the end that can tell. So `p.wait()` then `p.read()` sees all of it, where `read` on its own only ever sees what has arrived so far. |
 | `p.kill() -> boolean` | End it. `false` if it had already exited, which is not an error. |
 | `p.running() -> boolean` | Is it still going? Asks the OS, so it is accurate without a prior `poll`. |
 | `p.pid() -> integer` | The child's PID. |
@@ -134,6 +134,16 @@ local lsp: Process = Os.spawn(
 
 **The child outlives the handle.** Dropping the last reference does not kill
 it. Call `kill` or `wait`.
+
+**`wait` waits for the output too.** Output is collected on a thread of its
+own, so a child's exit says nothing about whether its last bytes have been
+picked up yet — a child as short-lived as `echo` can be gone before the
+collector has run once. `wait` therefore waits for both streams to end, which
+after the child has exited is a wait of microseconds, and that is what makes
+`wait` then `read` give you the whole of its output. The one case where a
+stream never ends is a child that leaves a grandchild holding the pipe
+(`sh -c "daemon &"`); rather than hang there, `wait` gives up after two
+seconds and returns the exit code.
 
 **Each stream buffers at most 8 MiB of unread output.** At the limit the
 reader stops taking from the pipe, so the operating system's pipe buffer

@@ -1,6 +1,8 @@
 ---
 title: "Bytes"
 description: "Byte-string utilities. bytes is a primitive type alongside string, and the two are not interchangeable: a string is text, always valid UTF-8, with…"
+sidebar:
+  order: 3
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

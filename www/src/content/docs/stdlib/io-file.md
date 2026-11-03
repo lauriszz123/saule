@@ -2,7 +2,7 @@
 title: "Io / File"
 description: "File handles are reference-counted File values. Io is the static entry point and also holds the standard streams. Mode and seek-whence are real Saule…"
 sidebar:
-  order: 5
+  order: 7
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->
