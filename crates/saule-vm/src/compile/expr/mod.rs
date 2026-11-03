@@ -159,6 +159,8 @@ impl Compiler<'_> {
 
             Expr::SafeMember { obj, name } => self.safe_member_to(e, obj, name, dst)?,
 
+            Expr::SafeIndex { obj, index } => self.safe_index_to(e, obj, index, dst)?,
+
             // `x!` — the value, or `ForceUnwrapNil` at this span.
             //
             // `(x as T)!` fuses into one `CASTUNWRAP`. Emitted at the

@@ -27,7 +27,8 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `return` | Return a value from a function |
 | `throw` | Raise an error |
 | `try` | Begin an error-handled block |
-| `catch` | Handle a thrown error |
+| `catch` | Handle a thrown error; several clauses are tried in order |
+| `finally` | Run on every way out of a `try` |
 | `for` | Begin a loop |
 | `while` | Begin a while loop |
 | `repeat` | Begin a repeat-until loop |
@@ -61,6 +62,7 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | Operator | Meaning |
 |---|---|
 | `?.` | Safe member access |
+| `?[ ]` | Safe index |
 | `??` | Null coalescing fallback |
 | `!` | Force unwrap nullable |
 | `..` | String concatenation |

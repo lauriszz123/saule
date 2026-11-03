@@ -1,7 +1,0 @@
-fn bad()
-  local s: string = nil
-end
-
-class Main
-  static fn main() bad() end
-end

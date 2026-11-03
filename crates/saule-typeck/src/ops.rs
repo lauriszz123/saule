@@ -38,6 +38,36 @@ pub(super) fn operand_class(expr: &Spanned<Expr>, scope: &Scope) -> Option<Strin
     class_of(&infer(expr, scope)?)
 }
 
+/// The bound an operand's type parameter was declared with, when the operand
+/// is a bounded type parameter.
+///
+/// `<T: OpAdd<T, T>>` is how a generic says "whatever fills me can be added".
+/// There is no class to dispatch on inside the body — `T` is rigid — so the
+/// bound is the only thing that can make `a + b` legal there, and the only
+/// thing that can say what it evaluates to.
+fn operand_bound(expr: &Spanned<Expr>, scope: &Scope) -> Option<saule_ast::TypeRef> {
+    let ty = strip_nullable(infer(expr, scope)?);
+    let Type::Named(name) = ty else {
+        return None;
+    };
+    crate::state::type_param_bound(&name)
+}
+
+/// Whether `bound` promises `contract`'s operator.
+fn bound_honours(bound: &saule_ast::TypeRef, contract: &OperatorContract) -> bool {
+    crate::state::is_subtype_named(&bound.name, contract.interface)
+}
+
+/// The type `lhs op rhs` evaluates to when `lhs` is a bounded parameter.
+///
+/// An operator interface puts its result last — `OpAdd<T, R>`, `OpNeg<R>` —
+/// so the bound's final type argument is the answer. A contract that
+/// declares no type parameters (`OpLen`) has no argument to read, and its
+/// result is fixed by the language rather than by the implementor.
+fn bound_result(bound: &saule_ast::TypeRef) -> Option<Type> {
+    bound.args.last().cloned()
+}
+
 fn not_implemented(
     contract: &OperatorContract,
     class: String,
@@ -72,6 +102,21 @@ pub(super) fn check_binary(
     let Some(contract) = binary_contract(op) else {
         return false;
     };
+    // A bounded type parameter first: it has no class, so none of the paths
+    // below would see it, and the built-in numeric rule would then reject
+    // `a + b` with "expected `integer` or `float`" — true of the parameter
+    // and useless to the author, who said in the bound what it can do.
+    if let Some(bound) = operand_bound(lhs, scope).or_else(|| operand_bound(rhs, scope)) {
+        if !bound_honours(&bound, &contract) {
+            errors.push(TypeCheckError::OperatorNotInBound {
+                op: contract.symbol,
+                bound: bound.name.clone(),
+                interface: contract.interface,
+                span: to_source_span(lhs.span.start..rhs.span.end),
+            });
+        }
+        return true;
+    }
     let left = operand_class(lhs, scope);
     let right = operand_class(rhs, scope);
     if left.is_none() && right.is_none() {
@@ -226,6 +271,17 @@ pub(super) fn check_unary(
     let Some(contract) = unary_contract(op) else {
         return false;
     };
+    if let Some(bound) = operand_bound(rhs, scope) {
+        if !bound_honours(&bound, &contract) {
+            errors.push(TypeCheckError::OperatorNotInBound {
+                op: contract.symbol,
+                bound: bound.name.clone(),
+                interface: contract.interface,
+                span: to_source_span(rhs.span.clone()),
+            });
+        }
+        return true;
+    }
     let Some(class) = operand_class(rhs, scope) else {
         return false;
     };
@@ -326,10 +382,30 @@ pub fn new_index_operands(obj_ty: &Type) -> Option<(Type, Type)> {
 /// overloads `op`. Scope-free counterpart of [`infer_unary`].
 /// Result type of `lhs op rhs` when it resolves to an operator overload.
 pub(super) fn infer_binary(op: BinOp, lhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
+    // A bounded parameter answers from its bound: `<T: OpAdd<T, R>>` makes
+    // `a + b` an `R`. Comparisons are `boolean` however they are implemented
+    // and never consult a result type, so they fall through to the built-in
+    // rule like any other operand.
+    if let Some(contract) = binary_contract(op)
+        && !matches!(
+            op,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+        )
+        && let Some(bound) = operand_bound(lhs, scope)
+        && bound_honours(&bound, &contract)
+    {
+        return bound_result(&bound);
+    }
     overload_binary_result(op, &infer(lhs, scope)?)
 }
 
 /// Result type of `op rhs` when it resolves to an operator overload.
 pub(super) fn infer_unary(op: UnaryOp, rhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
+    if let Some(contract) = unary_contract(op)
+        && let Some(bound) = operand_bound(rhs, scope)
+        && bound_honours(&bound, &contract)
+    {
+        return bound_result(&bound);
+    }
     overload_unary_result(op, &infer(rhs, scope)?)
 }

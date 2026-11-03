@@ -449,16 +449,20 @@ impl Walk {
             }
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
+                catches,
+                finally,
             } => {
                 self.block_of(Block::Try, body);
-                self.ty(Some(catch_ty));
-                let mark = self.scope.len();
-                self.bind(catch_var, Some(catch_ty.clone()), "caught error");
-                self.block_of(Block::Ended, catch_body);
-                self.scope.truncate(mark);
+                for c in catches {
+                    self.ty(Some(&c.ty));
+                    let mark = self.scope.len();
+                    self.bind(&c.var, Some(c.ty.clone()), "caught error");
+                    self.block_of(Block::Ended, &c.body);
+                    self.scope.truncate(mark);
+                }
+                if let Some(f) = finally {
+                    self.block_of(Block::Ended, f);
+                }
             }
             Stmt::Decl(d) => self.decl(&d.value),
             Stmt::Break | Stmt::Continue => {}

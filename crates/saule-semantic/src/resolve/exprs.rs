@@ -41,7 +41,7 @@ impl Resolver {
                 self.expr(obj);
             }
             Expr::SafeMember { obj, .. } => self.expr(obj),
-            Expr::Index { obj, index } => {
+            Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
                 self.expr(obj);
                 self.expr(index);
             }

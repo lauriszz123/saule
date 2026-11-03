@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 #
-# Runs every project under `examples/` and compares what it prints — and its
-# exit status — with `tests/examples/<project>.out`.
+# Runs every project under `examples/` and checks its **exit status**.
 #
-# `run_tests.sh` covers `tests/*.sau`: small, single-file, side-effect-free
-# fixtures. This runs the *example projects* instead — multi-module programs
+# The projects themselves are the tests: `examples/bf`, `examples/todo-app`,
+# `examples/json_usage` — ordinary multi-module Saule programs you can read
+# and run by hand. There is nothing else to look at; the recorded outputs this
+# script used to compare against were removed deliberately, so what a project
+# prints is no longer gated, only whether it ran.
+#
+# `run_tests.sh` covers `tests/run/` and `tests/errors/`: small, single-file,
+# side-effect-free fixtures. This runs the *example projects* instead — multi-module programs
 # with imports, file IO and real dependencies. That difference is the point.
 # Most of the silent bugs this project has found came from running code
 # shaped like a program rather than like a fixture:
@@ -15,15 +20,12 @@
 #     two modules;
 #   * an enum variant's `.value` reading `nil`.
 #
-# The expected outputs were recorded from the tree-walking interpreter, the
-# engine that defined the language until it was removed; each was also the
-# bytecode VM's output then.
+# One project is *expected* to fail — see `expected_exit` below.
 #
 # Usage:
 #   SAULE_BIN=./target/debug/saule.exe bash run_examples.sh
-#   SAULE_BLESS=1 bash run_examples.sh    # re-record; review the diff
 #
-# Exit status is non-zero when any project differs from its recording.
+# Exit status is non-zero when any project exits other than it should.
 
 set -u
 # Default to whichever of the two names exists, the way `run_tests.sh` does,
@@ -40,7 +42,6 @@ if [ ! -x "$SAULE_BIN" ]; then
   exit 1
 fi
 TIMEOUT="${SAULE_EXAMPLE_TIMEOUT:-20}"
-SAULE_BLESS="${SAULE_BLESS:-}"
 
 # GNU `timeout` is not on a stock macOS, and without a shim every project
 # here fails identically. Prefer coreutils when it is installed, and
@@ -73,6 +74,16 @@ fi
 # Projects this harness cannot run, each with a reason. Counted and printed
 # at the end, because an exclusion you cannot see is just a test you stopped
 # running.
+# What `saule run` is expected to answer for each project. Everything runs
+# cleanly except `json`, which is a library: it has no entry point, so `run`
+# refuses it, and that refusal is the behaviour being pinned.
+expected_exit() {
+  case "$1" in
+    json) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+
 skip_reason() {
   case "$1" in
     # Both open a window and loop until it is closed, so neither has a
@@ -125,22 +136,11 @@ while IFS= read -r cfg; do
   out=$(run_limited "$TIMEOUT" "$SAULE_BIN" run "$d" 2>&1 </dev/null)
   rc=$?
   restore "$d"
-  got=$(printf '%s\n[exit %s]' "$out" "$rc")
 
-  expected="tests/examples/$name.out"
-  if [ -n "$SAULE_BLESS" ]; then
-    printf '%s\n' "$got" > "$expected"
-    printf 'REC  %s\n' "$name"
-    continue
-  fi
-  if [ ! -f "$expected" ]; then
-    printf 'FAIL %-24s no recording — run with SAULE_BLESS=1 to make one\n' "$name"
-    failures=$((failures + 1))
-    continue
-  fi
-  if [ "$got" != "$(cat "$expected")" ]; then
-    printf 'FAIL %-24s output differs\n' "$name"
-    diff "$expected" <(printf '%s\n' "$got") | head -14 | sed 's/^/     /'
+  want=$(expected_exit "$name")
+  if [ "$rc" != "$want" ]; then
+    printf 'FAIL %-24s exited %s, expected %s\n' "$name" "$rc" "$want"
+    printf '%s\n' "$out" | head -8 | sed 's/^/     /'
     failures=$((failures + 1))
     continue
   fi
@@ -161,13 +161,9 @@ ran=$((total - skipped))
 if [ "$skipped" -gt 0 ]; then
   echo "note: $skipped project(s) skipped — see skip_reason()"
 fi
-if [ -n "$SAULE_BLESS" ]; then
-  echo "recorded $ran projects — review the diff"
-  exit 0
-fi
 if [ "$failures" -eq 0 ]; then
-  echo "all $ran projects ran as recorded"
+  echo "all $ran projects exited as expected"
   exit 0
 fi
-echo "$failures of $ran projects differed"
+echo "$failures of $ran projects exited unexpectedly"
 exit 1

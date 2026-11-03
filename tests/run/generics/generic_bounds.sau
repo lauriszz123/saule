@@ -1,0 +1,116 @@
+-- `<T: Bound>` — what makes a type parameter usable rather than just
+-- passable.
+--
+-- A bare `<T>` says only "some type the caller picks", so nothing can be
+-- read off a `T`: that used to compile and fail at run time, blaming the
+-- generic's body rather than the call that chose the type. A bound says
+-- what the parameter has, which is checked in two directions — the body may
+-- use exactly what the bound declares, and the call site has to supply a
+-- type that satisfies it.
+
+interface Named
+	fn name() -> string
+end
+
+interface Aged extends Named
+	fn age() -> integer
+end
+
+class Person implements Aged
+	n: string
+	a: integer
+	fn init(n: string, a: integer)
+		self.n = n
+		self.a = a
+	end
+	fn name() -> string
+		return self.n
+	end
+	fn age() -> integer
+		return self.a
+	end
+end
+
+class Money implements OpAdd<Money, Money>, OpCompare<Money>, OpToString
+	cents: integer = 0
+	fn init(c: integer)
+		self.cents = c
+	end
+	fn add(other: Money) -> Money
+		return Money(self.cents + other.cents)
+	end
+	fn compare(other: Money) -> integer
+		return self.cents - other.cents
+	end
+	fn toString() -> string
+		return "$" .. self.cents
+	end
+end
+
+-- An interface bound: the body may call what the interface declares.
+fn describe<T: Named>(x: T) -> string
+	return "<" .. x.name() .. ">"
+end
+
+-- A bound that is satisfied through inheritance of interfaces: `Aged`
+-- extends `Named`, so an `Aged` fills a `Named` slot.
+fn label<T: Aged>(x: T) -> string
+	return describe(x) .. " aged " .. x.age()
+end
+
+-- An operator bound. `OpAdd<T, R>` puts the result last, so `a + b` here is
+-- a `T` — the one thing that makes a generic `sum` possible at all.
+fn total<T: OpAdd<T, T>>(a: T, b: T) -> T
+	return a + b
+end
+
+-- `OpCompare` makes ordering available, so a generic max is writable.
+fn larger<T: OpCompare<T>>(a: T, b: T) -> T
+	if a > b then
+		return a
+	end
+	return b
+end
+
+-- A bound on a class's parameter, enforced wherever the name is spelled.
+class Registry<T: Named>
+	items: table<T> = {}
+	fn add(x: T)
+		Table.insert(self.items, x)
+	end
+	fn names() -> string
+		return String.join(", ", Iter.map(self.items, i => i.name()))
+	end
+end
+
+-- And on a method's own parameter, which nests inside the class's.
+class Printer
+	fn show<U: Named>(x: U) -> string
+		return "[" .. x.name() .. "]"
+	end
+end
+
+class Main
+	static fn main()
+		local p: Person = Person("Ada", 36)
+		println(describe(p))
+		println(label(p))
+		println(tostring(total(Money(3), Money(4))))
+		println(tostring(larger(Money(10), Money(2))))
+
+		local r: Registry<Person> = Registry<Person>()
+		r.add(p)
+		r.add(Person("Grace", 45))
+		println(r.names())
+
+		println(Printer().show(p))
+
+		-- A parameter may be passed on to another bound parameter: all the
+		-- caller knows about it is its own bound, and that is enough.
+		println(forward(p))
+	end
+end
+
+fn forward<T: Named>(x: T) -> string
+	return describe(x)
+end

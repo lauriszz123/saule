@@ -1,0 +1,18 @@
+-- A pass over the prelude and the static modules together: `type`,
+-- `tostring`, casts, and one call into each of `Math`, `String` and `Table`.
+class Main
+	static fn main()
+		println(type(42), tostring(3.5), 3.9 as integer, 2 as float)
+		println(Math.abs(-5), Math.min(3f, 1f, 7f), Math.max(3f, 1f, 7f))
+		println(
+			Math.floor(2.9),
+			Math.ceil(2.1),
+			Math.round(2.5),
+			Math.sqrt(9f),
+			Math.pow(2f, 3f),
+			Math.clamp(99f, 0f, 10f),
+			Math.sign(-7f)
+		)
+		println(Math.pi, Math.e)
+	end
+end

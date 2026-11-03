@@ -442,44 +442,45 @@ impl<'a> Cx<'a> {
             Stmt::Throw(e) => self.visit_expr(e),
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
+                catches,
+                finally,
             } => {
                 let mark = self.locals.len();
                 self.visit_block(body);
                 self.locals.truncate(mark);
-                // The `catch e: T` clause is a binding site with no
-                // span-tracked node of its own — the same hole loop
-                // variables had. Scan the clause itself (after the last
-                // body statement, before the catch block) so a local in
-                // the `try` body sharing the name can't be mistaken for
-                // it.
-                let clause = body.last().map(|b| b.span.end).unwrap_or(s.span.start)
-                    ..catch_body
-                        .first()
-                        .map(|c| c.span.start)
-                        .unwrap_or(s.span.end);
-                if clause.start <= clause.end {
-                    if let Some(span) = locate_word_in(self.source, &clause, catch_var) {
-                        self.record(
-                            span,
-                            format!(
-                                "```saule\n(error) {catch_var}: {ty}\n```",
-                                ty = render_type(catch_ty)
-                            ),
-                        );
+                for c in catches {
+                    // The clause now carries its own span — `catch` through
+                    // the binding — so the binding site no longer has to be
+                    // guessed from the gap between two blocks.
+                    let clause =
+                        c.span.start..c.body.first().map(|st| st.span.start).unwrap_or(s.span.end);
+                    if clause.start <= clause.end {
+                        if let Some(span) = locate_word_in(self.source, &clause, &c.var) {
+                            self.record(
+                                span,
+                                format!(
+                                    "```saule\n(error) {var}: {ty}\n```",
+                                    var = c.var,
+                                    ty = render_type(&c.ty)
+                                ),
+                            );
+                        }
+                        self.record_type_idents_in(&c.ty, &clause);
                     }
-                    self.record_type_idents_in(catch_ty, &clause);
+                    let mark = self.locals.len();
+                    self.locals.push(LocalVar {
+                        name: c.var.clone(),
+                        ty: c.ty.clone(),
+                        kind: LocalKind::Catch,
+                    });
+                    self.visit_block(&c.body);
+                    self.locals.truncate(mark);
                 }
-                let mark = self.locals.len();
-                self.locals.push(LocalVar {
-                    name: catch_var.clone(),
-                    ty: catch_ty.clone(),
-                    kind: LocalKind::Catch,
-                });
-                self.visit_block(catch_body);
-                self.locals.truncate(mark);
+                if let Some(f) = finally {
+                    let mark = self.locals.len();
+                    self.visit_block(f);
+                    self.locals.truncate(mark);
+                }
             }
             Stmt::Break | Stmt::Continue => {}
         }

@@ -215,21 +215,37 @@ impl<'a> Printer<'a> {
             }
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
+                catches,
+                finally,
             } => {
                 self.write("try");
                 self.newline();
-                let catch_start = catch_body
-                    .first()
-                    .map(|st| st.span.start)
-                    .unwrap_or(s.span.end);
-                self.block(body, catch_start);
-                self.writef(format_args!("catch {catch_var}: "));
-                self.ty(catch_ty);
-                self.newline();
-                self.block(catch_body, s.span.end);
+                // Each block ends where the next clause starts, so a comment
+                // trailing the last statement of one block stays inside it.
+                let next_start = |after: usize| -> usize {
+                    catches
+                        .get(after)
+                        .map(|c| c.span.start)
+                        .or_else(|| {
+                            finally
+                                .as_ref()
+                                .and_then(|f| f.first())
+                                .map(|st| st.span.start)
+                        })
+                        .unwrap_or(s.span.end)
+                };
+                self.block(body, next_start(0));
+                for (i, c) in catches.iter().enumerate() {
+                    self.writef(format_args!("catch {}: ", c.var));
+                    self.ty(&c.ty);
+                    self.newline();
+                    self.block(&c.body, next_start(i + 1));
+                }
+                if let Some(f) = finally {
+                    self.write("finally");
+                    self.newline();
+                    self.block(f, s.span.end);
+                }
                 self.write("end");
             }
             Stmt::Break => self.write("break"),

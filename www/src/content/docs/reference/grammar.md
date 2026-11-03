@@ -50,7 +50,7 @@ while  ::= 'while' exp 'do' chunk 'end'
 repeat ::= 'repeat' chunk 'until' exp
 forNum ::= 'for' nameDecl '=' exp ',' exp [',' exp] 'do' chunk 'end'
 forIn  ::= 'for' nameDecl {',' nameDecl} 'in' exp 'do' chunk 'end'
-try    ::= 'try' chunk 'catch' Name ':' type chunk 'end'
+try    ::= 'try' chunk {'catch' Name ':' type chunk} ['finally' chunk] 'end'
 
 nameDecl ::= Name [':' type]
 explist  ::= exp {',' exp}
@@ -112,7 +112,8 @@ baseType  ::= Name [typeArgs]
             | '(' [type {',' type}] ')'
 
 typeArgs   ::= '<' type {',' type} '>'
-typeParams ::= '<' Name {',' Name} '>'
+typeParams ::= '<' typeParam {',' typeParam} '>'
+typeParam  ::= Name [':' Name [typeArgs]]
 ```
 
 Suffixes are applied in the order written, so `T?[]` and `T[]?` differ. An
@@ -160,6 +161,7 @@ postfix    ::= primary {suffix}
 suffix ::= '.' (Name | 'super')
          | '?.' Name
          | '[' exp ']'
+         | '?[' exp ']'
          | [typeArgs] args
          | 'do' [params ['->' type]] chunk 'end'
          | '!'
@@ -176,7 +178,7 @@ primary ::= Numeral | String | 'true' | 'false' | 'nil' | 'self'
           | '(' exp ')'
 
 table ::= '{' [entry {',' entry} [',']] '}'
-entry ::= Name ':' exp | String ':' exp | exp
+entry ::= Name ':' exp | String ':' exp | '[' exp ']' ':' exp | exp
 
 lambda ::= 'fn' params ['->' type] chunk 'end'
          | '(' [param {',' param}] ')' ['->' type] '=>' exp
@@ -215,8 +217,8 @@ where a `do` closes the header instead. Parenthesising re-enables it:
 `while (next() do … end) do … end`.
 
 There is no `obj:method()` call form. A method call is `obj.method()`; `:`
-appears only in type ascriptions, named arguments, table keys, `catch`
-bindings, and pipeline stages.
+appears only in type ascriptions, named arguments, table keys, type-parameter
+bounds, `catch` bindings, and pipeline stages.
 
 ### Lexical elements
 
@@ -235,6 +237,8 @@ fSuffix ::= 'f' | 'F'
 String  ::= '"' {stringChar | escape} '"'
           | "'" {stringChar | escape} "'"
 escape  ::= '\n' | '\t' | '\r' | '\0' | '\\' | '\"' | "\'"
+          | '\x' hexDigit hexDigit
+          | '\u' '{' hexDigit {hexDigit} '}'
 comment ::= '--' {any} newline | '--[[' {any} ']]'
 ```
 
@@ -242,16 +246,18 @@ comment ::= '--' {any} newline | '--[[' {any} ']]'
 
 ```
 and       as        break     case      catch     class     continue  do
-else      elseif    end       enum      export    extends   false     fn
-for       from      if        implements import    in        interface local
+else      elseif    end       enum      export    extends   false     finally
+fn        for       from      if        implements import    in        interface
+local
 match     nil       not       or        repeat    return    self      static
 super     then      throw     true      try       until     when      while
 ```
 
 Strings take either quote style, and only the delimiter that opened one closes
-it — so `'he said "hi"'` needs no escaping. The seven escapes above are the only
-ones recognised; anything else after a backslash is an error, and there is no
-hex or unicode escape. `_` groups digits in
+it — so `'he said "hi"'` needs no escaping. The escapes above are the only ones
+recognised; anything else after a backslash is an error. `\x` takes exactly two
+hex digits and `\u` one to six in braces, and both name a **codepoint** rather
+than a byte, since a `string` is always valid UTF-8. `_` groups digits in
 hex and binary literals only. An `exponent` makes the literal a `float`
 whatever the mantissa looks like, and its digits are required, so `1e` is `1`
 followed by the name `e`. There is no octal form, and no exponent or `f`

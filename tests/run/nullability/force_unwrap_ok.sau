@@ -1,0 +1,10 @@
+-- `!` on a nullable that really holds a value: the happy path of force
+-- unwrap, which the `force_unwrap_*` error fixtures cover from the other side.
+class Main
+	static fn main()
+		local name: string? = "Arthur"
+		local got: string = name!
+
+		println(got)  -- "Arthur"
+	end
+end

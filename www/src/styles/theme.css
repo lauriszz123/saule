@@ -206,3 +206,18 @@ a[data-saule-play]::after {
 	color: var(--sl-color-accent);
 	font-size: 0.85em;
 }
+
+/* Reserve the scrollbar's gutter on every page, whether or not that page
+ * scrolls. Without it the viewport is a scrollbar narrower on a long page
+ * than on a short one, so the header and the centred content shift sideways
+ * as you navigate — and on the home page, which always scrolls, the whole
+ * layout sits offset from the window edge by that much.
+ *
+ * `stable` keeps the space even when nothing overflows, which is what makes
+ * the two cases agree. It replaces the older trick of forcing
+ * `overflow-y: scroll`, and unlike that one it leaves a short page without a
+ * dead scrollbar track.
+ */
+html {
+	scrollbar-gutter: stable;
+}

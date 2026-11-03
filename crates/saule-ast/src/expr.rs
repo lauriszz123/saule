@@ -46,6 +46,16 @@ pub enum Expr {
         obj: Box<Spanned<Expr>>,
         index: Box<Spanned<Expr>>,
     },
+    /// `obj?[index]` — the index half of the safe chain. `nil` when `obj`
+    /// is `nil`, and `obj[index]` otherwise, with `obj` evaluated once.
+    ///
+    /// A node of its own rather than sugar over [`Expr::Match`]: the
+    /// formatter prints the tree back as source, so a desugared form would
+    /// reformat `t?[i]` into a `match` nobody wrote.
+    SafeIndex {
+        obj: Box<Spanned<Expr>>,
+        index: Box<Spanned<Expr>>,
+    },
     /// `f(a, b, c)`
     Call {
         callee: Box<Spanned<Expr>>,

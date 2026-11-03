@@ -50,6 +50,7 @@ impl<'a> Printer<'a> {
                 is_local,
                 name,
                 type_params,
+                type_bounds,
                 params,
                 return_ty,
                 body,
@@ -61,7 +62,7 @@ impl<'a> Printer<'a> {
                 }
                 self.write("fn ");
                 self.write(name);
-                self.type_params(type_params);
+                self.type_params(type_params, type_bounds);
                 self.write("(");
                 self.params(params);
                 self.write(")");
@@ -77,6 +78,7 @@ impl<'a> Printer<'a> {
                 exported,
                 name,
                 type_params,
+                type_bounds,
                 extends,
                 implements,
                 members,
@@ -86,7 +88,7 @@ impl<'a> Printer<'a> {
                 }
                 self.write("class ");
                 self.write(name);
-                self.type_params(type_params);
+                self.type_params(type_params, type_bounds);
                 if let Some(p) = extends {
                     self.write(" extends ");
                     self.type_ref(p);
@@ -108,6 +110,7 @@ impl<'a> Printer<'a> {
                 exported,
                 name,
                 type_params,
+                type_bounds,
                 extends,
                 methods,
             } => {
@@ -116,7 +119,7 @@ impl<'a> Printer<'a> {
                 }
                 self.write("interface ");
                 self.write(name);
-                self.type_params(type_params);
+                self.type_params(type_params, type_bounds);
                 if !extends.is_empty() {
                     self.write(" extends ");
                     for (i, n) in extends.iter().enumerate() {
@@ -142,6 +145,7 @@ impl<'a> Printer<'a> {
                 exported,
                 name,
                 type_params,
+                type_bounds,
                 variants,
                 methods,
             } => {
@@ -150,7 +154,7 @@ impl<'a> Printer<'a> {
                 }
                 self.write("enum ");
                 self.write(name);
-                self.type_params(type_params);
+                self.type_params(type_params, type_bounds);
                 self.newline();
                 self.indent += 1;
                 for (i, v) in variants.iter().enumerate() {
@@ -306,7 +310,7 @@ impl<'a> Printer<'a> {
         }
         self.write("fn ");
         self.write(&m.name);
-        self.type_params(&m.type_params);
+        self.type_params(&m.type_params, &m.type_bounds);
         self.write("(");
         self.params(&m.params);
         self.write(")");
@@ -322,7 +326,7 @@ impl<'a> Printer<'a> {
     pub(crate) fn method_sig(&mut self, m: &MethodSig) {
         self.write("fn ");
         self.write(&m.name);
-        self.type_params(&m.type_params);
+        self.type_params(&m.type_params, &m.type_bounds);
         self.write("(");
         self.params(&m.params);
         self.write(")");
@@ -381,7 +385,10 @@ impl<'a> Printer<'a> {
         self.write(">");
     }
 
-    pub(crate) fn type_params(&mut self, tps: &[String]) {
+    /// `<T, U: Bound>`. A parameter's bound is looked up by name rather than
+    /// by position, because `type_bounds` holds an entry only for the
+    /// parameters that were written with one.
+    pub(crate) fn type_params(&mut self, tps: &[String], bounds: &[saule_ast::TypeBound]) {
         if tps.is_empty() {
             return;
         }
@@ -391,6 +398,10 @@ impl<'a> Printer<'a> {
                 self.write(", ");
             }
             self.write(t);
+            if let Some(b) = bounds.iter().find(|b| &b.param == t) {
+                self.write(": ");
+                self.type_ref(&b.bound);
+            }
         }
         self.write(">");
     }

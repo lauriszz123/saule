@@ -174,10 +174,12 @@ impl<'a> Cx<'a> {
             }
             // `t[k]` — the declared element type. Indexing anything else
             // says nothing the declaration can pin down.
-            Expr::Index { obj, .. } => match strip_nullable(self.infer_type(&obj.value)?) {
-                Type::Table { value, .. } => Some(*value),
-                _ => None,
-            },
+            Expr::Index { obj, .. } | Expr::SafeIndex { obj, .. } => {
+                match strip_nullable(self.infer_type(&obj.value)?) {
+                    Type::Table { value, .. } => Some(*value),
+                    _ => None,
+                }
+            }
             // Every arm of a `match` produces the same type — the
             // checker enforces it — so the first one speaks for all.
             Expr::Match { arms, .. } => arms.first().and_then(|arm| match &arm.body {

@@ -177,7 +177,7 @@ fn the_recursion_guard_still_unwinds_after_re_entrant_calls() {
     // call would be obvious immediately after.
     //
     // The unbounded case — a comparator that sorts with itself forever —
-    // is pinned by `tests/ui/stack_overflow_reentrant.sau` instead. It
+    // is pinned by `tests/errors/exceptions/stack_overflow_reentrant.sau` instead. It
     // needs `MAX_EVAL_DEPTH` native frames of real stack, which is more
     // than libtest's 2 MiB test thread has; that fixture runs `saule` as a
     // process, on a main thread, which is the configuration users get.

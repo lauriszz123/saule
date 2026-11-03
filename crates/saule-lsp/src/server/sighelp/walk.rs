@@ -276,10 +276,17 @@ impl Cx<'_> {
             }
             Stmt::Throw(e) => self.visit_expr(e),
             Stmt::Try {
-                body, catch_body, ..
+                body,
+                catches,
+                finally,
             } => {
                 self.visit_block(body);
-                self.visit_block(catch_body);
+                for c in catches {
+                    self.visit_block(&c.body);
+                }
+                if let Some(f) = finally {
+                    self.visit_block(f);
+                }
             }
             Stmt::Break | Stmt::Continue => {}
         }
@@ -403,7 +410,7 @@ impl Cx<'_> {
                 self.visit_expr(rhs);
             }
             Expr::Member { obj, .. } | Expr::SafeMember { obj, .. } => self.visit_expr(obj),
-            Expr::Index { obj, index } => {
+            Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
                 self.visit_expr(obj);
                 self.visit_expr(index);
             }

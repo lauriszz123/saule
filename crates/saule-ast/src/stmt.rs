@@ -89,11 +89,19 @@ pub enum Stmt {
 
     Return(Vec<Spanned<Expr>>),
     Throw(Spanned<Expr>),
+    /// `try … catch e: T … [catch f: U …] [finally …] end`
+    ///
+    /// Several clauses are tried in source order, so the first whose type
+    /// matches the thrown value handles it — which is why the order is
+    /// worth writing deliberately: `catch e: any` first would shadow every
+    /// clause after it.
     Try {
         body: Vec<Spanned<Stmt>>,
-        catch_var: String,
-        catch_ty: Type,
-        catch_body: Vec<Spanned<Stmt>>,
+        catches: Vec<CatchClause>,
+        /// Runs on the way out however the `try` is left: normal
+        /// completion, a clause that handled a throw, a throw nothing
+        /// handled, or a `return` / `break` / `continue` from inside.
+        finally: Option<Vec<Spanned<Stmt>>>,
     },
 
     Break,
@@ -108,4 +116,18 @@ pub enum Stmt {
     /// for the invariant. Its span covers the skipped tokens, so tooling can
     /// still tell "there is *something* here" apart from "the file ends".
     Error,
+}
+
+/// One `catch e: T … ` clause of a [`Stmt::Try`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatchClause {
+    /// The name the thrown value is bound to inside `body`.
+    pub var: String,
+    /// The type this clause handles. A value of any other type is left for
+    /// the clauses after it, and then for the enclosing `try`.
+    pub ty: Type,
+    pub body: Vec<Spanned<Stmt>>,
+    /// Byte range of the `catch` keyword through its binding, for
+    /// diagnostics that point at the clause rather than the whole `try`.
+    pub span: std::ops::Range<usize>,
 }

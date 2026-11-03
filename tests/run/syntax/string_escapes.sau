@@ -1,0 +1,30 @@
+-- `\x` and `\u` escapes.
+--
+-- A Saule `string` is always valid UTF-8, so both forms name a **codepoint**
+-- rather than a raw byte: `\x80` is U+0080, two bytes on the wire, and not a
+-- lone 0x80, which would not be text at all. `Bytes.of(0x80)` is how you
+-- write that byte.
+
+class Main
+	static fn main()
+		println("\x41\x42\x43")
+		println("\u{48}\u{49}")
+		println("\u{e9} \u{4e16} \u{1F600}")
+
+		-- Same value, two spellings.
+		println(tostring("\x41" == "A"))
+		println(tostring("\u{41}" == "A"))
+		-- A codepoint, not a byte: one character, two bytes of UTF-8.
+		println(String.len("\x80") .. " " .. #Bytes.fromString("\x80"))
+		println(tostring("\x80" == String.char(0x80)))
+
+		-- Hex digits are case-insensitive, and `\u` takes one to six.
+		println(tostring("\u{E9}" == "\u{e9}"))
+		println(tostring("\u{000041}" == "A"))
+
+		-- Escapes compose with the rest of a literal, and with both quote
+		-- styles.
+		println("tab\there\x21")
+		println('\u{2714} done')
+	end
+end

@@ -481,7 +481,7 @@ impl Compiler<'_> {
     ///
     /// The tree-walker validates this when it *declares* the class
     /// (`eval/stmt/classes.rs`), and nothing earlier in the pipeline does —
-    /// `tests/ui/implements_missing_method.sau` exists to record that as a
+    /// `tests/errors/classes/implements_missing_method.sau` exists to record that as a
     /// typeck gap. So the compiler has to check too, or a program that
     /// should have been rejected compiles and runs with a hole in its
     /// itable.

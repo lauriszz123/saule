@@ -29,14 +29,14 @@ Recognised keys:
 | `entry` | Path to the entry `.sau` file, relative to the project root (apps only) |
 | `kind` | `"app"` (default) or `"library"` — a library has no entry point and is imported rather than run |
 | `src_dirs` | List of directories to search when resolving imports |
-| `dependencies` | Packages (`owner@repo`, pinned with `:version`) and paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory. Managed with `saule install` / `update` / `remove` — see [Packages](#packages) |
+| `dependencies` | Packages (`owner@repo`, pinned with `:version`) and paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory. Managed with `saule install` / `update` / `remove` — see [Packages](/saule/language/project-configuration/#packages) |
 | `min_saule_version` | Refuses to run if the toolchain reports a lower version |
 | `indent_style` | Formatting: `"tab"` or `"space"` (default `"space"`) |
 | `indent_width` | Formatting: columns per indent level, 1–16 (default `2`) |
 
 Unknown keys are ignored.
 
-#### Packages
+### Packages
 
 A `dependencies:` entry is one of two things, told apart by the `@`:
 

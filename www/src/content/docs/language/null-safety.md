@@ -30,6 +30,21 @@ local greeting: string? = nil
 local len: integer = #(greeting ?? "")     -- 0 when nil
 ```
 
+### Safe Index
+
+`?[...]` is the index half of the same idea — `nil` when the receiver is nil, the element otherwise:
+
+```saule
+local rows: table<integer>? = nil
+println(rows?[1] ?? 0)              -- 0, no fault on the nil receiver
+```
+
+The index expression is not evaluated at all on the nil path, the same rule `?.` follows for a call's arguments, and the two chain together:
+
+```saule
+println(grid.rows?[1]?[2] ?? -1)
+```
+
 ### Null Coalescing
 
 Use `??` to provide a fallback when a value is nil:

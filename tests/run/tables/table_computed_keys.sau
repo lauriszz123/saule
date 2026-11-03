@@ -1,0 +1,37 @@
+-- `{ [expr]: value }` — a table literal key that is computed rather than
+-- written out.
+--
+-- The brackets are what tells it from the one-element array `{ k }`: a bare
+-- `k:` is sugar for the *string* `"k"`, so a computed key has to say so.
+
+class Main
+	static fn main()
+		local k: string = "alpha"
+		local t: table<string, integer> = {[k]: 1, ["beta"]: 2, gamma: 3}
+		println(t[k] .. t["beta"] .. t.gamma)
+
+		-- Any key type the table accepts, not just strings — which is the
+		-- half a literal could not express before.
+		local n: integer = 7
+		local m: table<integer, string> = {[n]: "seven", [n + 1]: "eight"}
+		println((m[7] ?? "?") .. "," .. (m[8] ?? "?"))
+
+		local flags: table<boolean, string> = {[true]: "yes", [false]: "no"}
+		println((flags[true] ?? "?") .. "/" .. (flags[false] ?? "?"))
+
+		-- `["text"]` and `text:` mean the same thing, so they coexist.
+		local mixed: table<string, integer> = {["one"]: 1, two: 2}
+		println(mixed["one"] .. mixed.two)
+
+		-- A key expression is an expression: it may call a function, and it
+		-- runs once.
+		local keyed: table<string, integer> = {[nextKey()]: 1, [nextKey()]: 2}
+		println("calls: " .. calls .. " -> " .. (keyed["k1"] ?? -1) .. (keyed["k2"] ?? -1))
+	end
+end
+
+local calls: integer = 0
+fn nextKey() -> string
+	calls = calls + 1
+	return "k" .. calls
+end

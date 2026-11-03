@@ -236,37 +236,42 @@ impl<'a> CollectCx<'a> {
             Stmt::Throw(e) => self.visit_expr(e),
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
+                catches,
+                finally,
             } => {
                 self.with_block(|this| {
                     for s in body {
                         this.visit_stmt(s);
                     }
                 });
-                let span = catch_var_span(self.source, &s.span, body, catch_var);
-                if let Symbol::Local { name, def_span } = self.symbol
-                    && name == catch_var
-                    && def_span == &span
-                {
-                    self.push(span.clone(), true);
+                for c in catches {
+                    let span = catch_var_span(self.source, c);
+                    if let Symbol::Local { name, def_span } = self.symbol
+                        && name == &c.var
+                        && def_span == &span
+                    {
+                        self.push(span.clone(), true);
+                    }
+                    let ty_end = c.body.first().map(|st| st.span.start).unwrap_or(s.span.end);
+                    self.collect_type_name_refs_in(&c.ty, &(span.end..ty_end));
+                    let saved = self.locals.len();
+                    self.locals.push(LocalBind {
+                        name: c.var.clone(),
+                        def_span: span,
+                        ty: c.ty.clone(),
+                    });
+                    for st in &c.body {
+                        self.visit_stmt(st);
+                    }
+                    self.locals.truncate(saved);
                 }
-                let ty_end = catch_body
-                    .first()
-                    .map(|c| c.span.start)
-                    .unwrap_or(s.span.end);
-                self.collect_type_name_refs_in(catch_ty, &(span.end..ty_end));
-                let saved = self.locals.len();
-                self.locals.push(LocalBind {
-                    name: catch_var.clone(),
-                    def_span: span,
-                    ty: catch_ty.clone(),
-                });
-                for s in catch_body {
-                    self.visit_stmt(s);
+                if let Some(f) = finally {
+                    self.with_block(|this| {
+                        for st in f {
+                            this.visit_stmt(st);
+                        }
+                    });
                 }
-                self.locals.truncate(saved);
             }
             Stmt::Break | Stmt::Continue => {}
         }

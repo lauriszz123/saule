@@ -34,6 +34,7 @@
 use saule_ast::Module;
 pub(crate) use saule_ast::to_source_span;
 
+mod bounds;
 pub mod casts;
 mod coerce_sites;
 pub mod coverage;

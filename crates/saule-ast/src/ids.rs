@@ -140,10 +140,17 @@ impl<F: FnMut(&mut Spanned<Expr>)> Walk<F> {
             }
             Stmt::Return(es) => self.exprs(es),
             Stmt::Try {
-                body, catch_body, ..
+                body,
+                catches,
+                finally,
             } => {
                 self.stmts(body);
-                self.stmts(catch_body);
+                for c in catches {
+                    self.stmts(&mut c.body);
+                }
+                if let Some(f) = finally {
+                    self.stmts(f);
+                }
             }
             Stmt::Decl(d) => self.decl(d),
             Stmt::Break | Stmt::Continue | Stmt::Error => {}
@@ -234,7 +241,7 @@ impl<F: FnMut(&mut Spanned<Expr>)> Walk<F> {
                 self.expr(rhs);
             }
             Expr::Member { obj, .. } | Expr::SafeMember { obj, .. } => self.expr(obj),
-            Expr::Index { obj, index } => {
+            Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
                 self.expr(obj);
                 self.expr(index);
             }

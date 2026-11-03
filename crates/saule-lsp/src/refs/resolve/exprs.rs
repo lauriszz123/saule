@@ -134,7 +134,7 @@ impl<'a> ResolveCx<'a> {
                 }
                 self.visit_expr(obj);
             }
-            Expr::Index { obj, index } => {
+            Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
                 self.visit_expr(obj);
                 self.visit_expr(index);
             }

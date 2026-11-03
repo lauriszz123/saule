@@ -1,0 +1,6 @@
+-- The empty program: a `Main.main` that does nothing must still compile and
+-- exit 0. The floor the rest of the corpus stands on.
+class Main
+	static fn main()
+	end
+end

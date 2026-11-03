@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use saule_ast::Type;
+use saule_ast::{Type, TypeBound, TypeRef};
 
 pub(super) use saule_semantic::{
     class_implements, class_implements_iterable, is_interface, is_subtype_named, lookup_member,
@@ -45,7 +45,10 @@ thread_local! {
     /// inside the body a `T` is opaque. It is not a supertype of any
     /// concrete type and no concrete type is a `T` — the caller picks
     /// what it stands for, and the body must work for every choice.
-    static GENERICS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Name → the bound it was declared with, if any. A parameter with a
+    /// bound is still rigid; the bound only says what members it is known
+    /// to have, which is what lets a body call a method on one at all.
+    static GENERICS: RefCell<HashMap<String, Option<TypeRef>>> = RefCell::new(HashMap::new());
 
     /// Type-parameter names belonging to a *signature being called into*,
     /// pushed for the duration of one argument comparison.
@@ -93,15 +96,23 @@ pub(super) fn set_return_ty(ty: Option<Type>) -> Option<Type> {
     RETURN_TY.with(|r| std::mem::replace(&mut *r.borrow_mut(), ty))
 }
 
-/// Add `params` to the in-scope generic set. Returns the names actually
-/// inserted so the matching [`pop_generics`] can remove just those (and
-/// preserve any outer generics that share a name).
-pub(super) fn push_generics(params: &[String]) -> Vec<String> {
+/// Add `params` to the in-scope generic set, each with the bound it was
+/// declared with. Returns the names actually inserted so the matching
+/// [`pop_generics`] can remove just those (and preserve any outer generics
+/// that share a name).
+pub(super) fn push_generics(params: &[String], bounds: &[TypeBound]) -> Vec<String> {
     let mut added = Vec::new();
     GENERICS.with(|g| {
         let mut set = g.borrow_mut();
         for p in params {
-            if set.insert(p.clone()) {
+            // Looked up by name: `type_bounds` holds an entry only for the
+            // parameters that were written with one.
+            let bound = bounds
+                .iter()
+                .find(|b| &b.param == p)
+                .map(|b| b.bound.clone());
+            if !set.contains_key(p) {
+                set.insert(p.clone(), bound);
                 added.push(p.clone());
             }
         }
@@ -120,7 +131,33 @@ pub(super) fn pop_generics(added: Vec<String>) {
 
 /// True if `name` names a type parameter in scope for the current body.
 pub(super) fn is_type_param(name: &str) -> bool {
-    GENERICS.with(|g| g.borrow().contains(name))
+    GENERICS.with(|g| g.borrow().contains_key(name))
+}
+
+/// Resolve a type head for member lookup, following a type parameter's
+/// bound.
+///
+/// `<T: Named>` makes a `T`'s members exactly `Named`'s, so every member
+/// lookup on a `T` is really a lookup on its bound — with the bound's own
+/// type arguments, so `<T: Box<integer>>` reads `get()` as `integer`.
+/// Anything that is not a bounded parameter passes through untouched.
+pub(crate) fn through_bound(name: String, args: Vec<Type>) -> (String, Vec<Type>) {
+    match type_param_bound(&name) {
+        Some(b) => (b.name, b.args),
+        None => (name, args),
+    }
+}
+
+/// The bound `name` was declared with, if it is an in-scope type parameter
+/// and was written `<T: Bound>`.
+///
+/// This is what a bounded parameter is *for*: inside the body `T` has
+/// exactly the members its bound declares, so every member lookup on a `T`
+/// is answered by looking at the bound instead. An unbounded parameter
+/// answers `None`, and a lookup on one is an error — nothing is known about
+/// it, so nothing can be called on it.
+pub(crate) fn type_param_bound(name: &str) -> Option<TypeRef> {
+    GENERICS.with(|g| g.borrow().get(name).cloned().flatten())
 }
 
 /// Scope the callee's type-parameter names in for one comparison. Kept

@@ -8,7 +8,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use saule_ast::{ClassMember, Decl, EnumVariant, Expr, Module, Param, Spanned, Stmt, Type};
+use saule_ast::{
+    ClassMember, Decl, EnumVariant, Expr, Module, Param, Spanned, Stmt, Type, TypeBound,
+};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Registry types
@@ -25,6 +27,9 @@ pub struct MethodSig {
     /// name. Erased at runtime; the typechecker treats these as universal
     /// inside the body and uses them to enforce caller-side unification.
     pub type_params: Vec<String>,
+    /// Constraints written on those parameters (`<T: Named>`). Carried so a
+    /// call site can check the type it picked actually satisfies them.
+    pub type_bounds: Vec<TypeBound>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
 }
@@ -41,6 +46,8 @@ pub struct ClassInfo {
     /// `Box<integer>.get()` answers `integer` and `Box<string>.get()`
     /// answers `string` from the one declaration.
     pub type_params: Vec<String>,
+    /// Constraints written on those parameters (`class Sorted<T: OpCompare<T>>`).
+    pub type_bounds: Vec<TypeBound>,
     pub parent: Option<String>,
     /// Type arguments passed to the parent (`class C extends Box<integer>`).
     /// Empty when the parent is non-generic or was named bare.
@@ -181,6 +188,9 @@ pub type EnumRegistry = HashMap<String, EnumInfo>;
 pub struct FunctionSig {
     /// Generic type parameters declared with `<T, U>` after the name.
     pub type_params: Vec<String>,
+    /// Constraints written on those parameters (`<T: Named>`), so a call
+    /// site can check the type it picked satisfies them.
+    pub type_bounds: Vec<TypeBound>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
 }
@@ -409,6 +419,7 @@ pub fn build_registry(
                 Decl::Class {
                     name,
                     type_params,
+                    type_bounds,
                     extends,
                     implements,
                     members,
@@ -416,6 +427,7 @@ pub fn build_registry(
                 } => {
                     let mut info = ClassInfo {
                         type_params: type_params.clone(),
+                        type_bounds: type_bounds.clone(),
                         parent: extends.as_ref().map(|e| e.name.clone()),
                         parent_args: extends.as_ref().map(|e| e.args.clone()).unwrap_or_default(),
                         implements: implements.iter().map(|i| i.name.clone()).collect(),
@@ -443,6 +455,7 @@ pub fn build_registry(
                                         is_static: meth.is_static,
                                         is_private: meth.is_private,
                                         type_params: meth.type_params.clone(),
+                                        type_bounds: meth.type_bounds.clone(),
                                         params: meth.params.clone(),
                                         return_ty: meth.return_ty.clone(),
                                     },
@@ -476,6 +489,7 @@ pub fn build_registry(
                                     is_static: false,
                                     is_private: false,
                                     type_params: m.type_params.clone(),
+                                    type_bounds: m.type_bounds.clone(),
                                     params: m.params.clone(),
                                     return_ty: m.return_ty.clone(),
                                 },
@@ -551,6 +565,7 @@ pub fn build_function_registry(module: &Module) -> FunctionRegistry {
                 params,
                 return_ty,
                 type_params,
+                type_bounds,
                 ..
             } = &d.value
         {
@@ -558,6 +573,7 @@ pub fn build_function_registry(module: &Module) -> FunctionRegistry {
                 name.clone(),
                 FunctionSig {
                     type_params: type_params.clone(),
+                    type_bounds: type_bounds.clone(),
                     params: params.clone(),
                     return_ty: return_ty.clone(),
                 },

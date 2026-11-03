@@ -1,12 +1,23 @@
 //! Type parsing: nullable suffix, table<T>/table<K,V>, generic param/arg
 //! lists, function types.
 
-use saule_ast::{Spanned, Type, TypeArgs, TypeRef};
+use saule_ast::{Spanned, Type, TypeArgs, TypeBound, TypeRef};
 use saule_lexer::Token;
 use std::ops::Range;
 
 use crate::Parser;
 use crate::error::ParseError;
+
+/// A parsed `<T, U: Bound>` parameter list.
+///
+/// Two vectors rather than one list of pairs because the parameter *names*
+/// are what the rest of the compiler reads, in ~250 places, while the bounds
+/// matter in three — see [`saule_ast::TypeBound`].
+#[derive(Debug, Default, Clone)]
+pub(crate) struct GenericParams {
+    pub(crate) names: Vec<String>,
+    pub(crate) bounds: Vec<TypeBound>,
+}
 
 impl Parser {
     // ── `<>` ────────────────────────────────────────────────────────────────
@@ -267,26 +278,47 @@ impl Parser {
     }
 
     /// Consumes a `<T, U, ...>` *parameter* list on a function or method
-    /// declaration and returns the type-parameter names. Unlike
-    /// [`skip_generic_args`], every entry must be a bare identifier.
-    pub(crate) fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
+    /// declaration. Unlike [`Parser::skip_generic_args`], every entry is a
+    /// bare identifier, optionally followed by `: Bound`.
+    pub(crate) fn parse_generic_params(&mut self) -> Result<GenericParams, ParseError> {
         // `fn map<>(…)` — recovered as the non-generic declaration it
         // otherwise is, so its parameters and body still parse.
         if self.at_empty_angles() {
             self.report_empty_angles(|span| ParseError::EmptyTypeParams { span })?;
-            return Ok(Vec::new());
+            return Ok(GenericParams::default());
         }
         self.expect(&Token::Lt, "`<`")?;
-        let mut params = Vec::new();
-        let (first, _) = self.expect_ident_recover("generic parameter name")?;
-        params.push(first);
+        let mut out = GenericParams::default();
+        self.parse_generic_param(&mut out)?;
         while self.eat(&Token::Comma) {
-            let (n, _) = self.expect_ident_recover("generic parameter name")?;
-            params.push(n);
+            self.parse_generic_param(&mut out)?;
         }
         self.split_closing_shr();
         self.expect_close(&Token::Gt, "`>` to close generic parameters")?;
-        Ok(params)
+        Ok(out)
+    }
+
+    /// One entry of a parameter list: `T`, or `T: Bound`.
+    ///
+    /// The bound is a [`TypeRef`] rather than a full type: a constraint names
+    /// an interface or a class, with its own type arguments
+    /// (`<T: OpAdd<T, T>>`). `T: integer?` or `T: fn() -> nil` would say
+    /// nothing a parameter could satisfy, so the shape that parses is the
+    /// shape that means something.
+    fn parse_generic_param(&mut self, out: &mut GenericParams) -> Result<(), ParseError> {
+        let (name, _) = self.expect_ident_recover("generic parameter name")?;
+        if self.eat(&Token::Colon) {
+            let start = self.peek().span.start;
+            let bound = self.parse_type_ref("the interface or class to bound by")?;
+            let end = self.last_consumed_end().max(start);
+            out.bounds.push(TypeBound {
+                param: name.clone(),
+                bound,
+                span: start..end,
+            });
+        }
+        out.names.push(name);
+        Ok(())
     }
 
     /// Try to consume a generic-call instantiation `<T, U, ...>` immediately

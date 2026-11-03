@@ -1,0 +1,8 @@
+-- ERROR: a non-nullable field cannot start out `nil`, whatever its default
+-- says.
+class Main
+  local test: string = nil
+
+  static fn main()
+  end
+end

@@ -544,23 +544,56 @@ pub(super) fn check_stmt(
 
         Stmt::Try {
             body,
-            catch_var,
-            catch_ty,
-            catch_body,
+            catches,
+            finally,
         } => {
-            check_binding_type(catch_ty, stmt.span.clone(), errors);
             let mut body_scope = scope.clone();
             for s in body {
                 check_stmt(s, &mut body_scope, errors);
             }
-            let mut catch_scope = scope.clone();
-            catch_scope.bind(catch_var.clone(), catch_ty.clone());
-            for s in catch_body {
-                check_stmt(s, &mut catch_scope, errors);
+            for (i, c) in catches.iter().enumerate() {
+                check_binding_type(&c.ty, c.span.clone(), errors);
+                // A clause the ones before it have already swallowed can
+                // never run. Reported because the shadowing is invisible
+                // otherwise: both clauses look live, and the second one's
+                // body is dead code that still type-checks.
+                if let Some(prev) = catches[..i].iter().find(|p| catch_shadows(&p.ty, &c.ty)) {
+                    errors.push(TypeCheckError::UnreachableCatch {
+                        ty: type_to_string(&c.ty),
+                        earlier: type_to_string(&prev.ty),
+                        span: to_source_span(c.span.clone()),
+                    });
+                }
+                let mut catch_scope = scope.clone();
+                catch_scope.bind(c.var.clone(), c.ty.clone());
+                for s in &c.body {
+                    check_stmt(s, &mut catch_scope, errors);
+                }
+            }
+            if let Some(f) = finally {
+                let mut f_scope = scope.clone();
+                for s in f {
+                    check_stmt(s, &mut f_scope, errors);
+                }
             }
         }
 
         Stmt::Break | Stmt::Continue => {}
+    }
+}
+
+/// Does a `catch` for `earlier` already handle everything `later` would?
+///
+/// Only the cases that are certain: `any` catches everything, and the same
+/// type twice is the same clause twice. A subclass relationship counts too —
+/// a clause for a parent class handles its children.
+fn catch_shadows(earlier: &Type, later: &Type) -> bool {
+    if matches!(earlier, Type::Named(n) if n == "any") {
+        return true;
+    }
+    match (earlier, later) {
+        (Type::Named(a), Type::Named(b)) => a == b || super::state::is_subtype_named(b, a),
+        _ => earlier == later,
     }
 }
 

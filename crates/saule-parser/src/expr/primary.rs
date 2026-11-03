@@ -101,17 +101,30 @@ impl Parser {
         Ok(Spanned::new(Expr::Table(items), span))
     }
 
-    /// One `{ ... }` entry. Recognises three shapes:
+    /// One `{ ... }` entry. Recognises four shapes:
     ///
-    /// * `ident: expr`  — sugar for `"ident": expr`
-    /// * `"str": expr`  — explicit string key
-    /// * `expr`         — positional (appended to the array part)
+    /// * `ident: expr`   — sugar for `"ident": expr`
+    /// * `"str": expr`   — explicit string key
+    /// * `[expr]: expr`  — computed key, any expression
+    /// * `expr`          — positional (appended to the array part)
     ///
-    /// Only the literal-key forms are treated as field entries, so a
-    /// bare-identifier expression like `foo` (looking up a binding) still
-    /// works as a positional entry — the lookahead requires the `:` to
-    /// follow immediately.
+    /// Only the literal-key forms are treated as field entries without
+    /// brackets, so a bare-identifier expression like `foo` (looking up a
+    /// binding) still works as a positional entry — the lookahead requires
+    /// the `:` to follow immediately. A key that is *computed* says so with
+    /// brackets, which is what tells `{ [k]: v }` from the one-element array
+    /// `{ k }` where `k` happens to be followed by something.
     pub(crate) fn parse_table_entry(&mut self) -> Result<TableEntry, ParseError> {
+        // `[expr] :` field — the key is whatever the expression evaluates to.
+        if matches!(self.peek().value, Token::LBracket) {
+            let open = self.advance(); // `[`
+            let key = self.parse_expression()?;
+            self.expect_close(&Token::RBracket, "`]` to close a computed key")?;
+            self.expect(&Token::Colon, "`:` after a computed key")?;
+            let value = self.parse_expression()?;
+            let _ = open;
+            return Ok(TableEntry::Field { key, value });
+        }
         // `ident :` field
         if let Token::Identifier(name) = self.peek().value.clone()
             && matches!(self.peek_at(1).value, Token::Colon)

@@ -340,17 +340,46 @@ fn quote_str_with(s: &str, preferred: Option<char>) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             '\0' => out.push_str("\\0"),
-            // Any other control character is written through as itself. This
-            // used to emit `\x00`-style escapes, which the lexer has never
-            // accepted — formatting `"a\0b"` produced a file that no longer
-            // lexed. Saule has no hex escape, and the lexer takes a raw
-            // control character inside a string, so passing it through is what
-            // actually round-trips.
+            // Everything else that would be *invisible in source* is escaped,
+            // now that `\x` and `\u` exist to escape it with. A raw control
+            // byte or a zero-width character written through as itself is a
+            // file nobody can read or review — and for a while this did
+            // exactly that, because the lexer had no hex escape to use and a
+            // literal `\x00` would not have lexed.
+            c if needs_escaping(c) => out.push_str(&escape_of(c)),
             c => out.push(c),
         }
     }
     out.push(quote);
     out
+}
+
+/// Characters a formatter must not write through as themselves: they would
+/// be invisible, or indistinguishable from an ordinary space, in the source
+/// it produces.
+///
+/// Printable characters are *not* on this list, so `"\x41"` is reformatted
+/// to `"A"`. The value is identical and the result is what a reader wants;
+/// the spelling only earns preservation where the character cannot be seen.
+fn needs_escaping(c: char) -> bool {
+    matches!(c,
+        // C0 and C1 controls, and DEL.
+        '\u{1}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{7f}'..='\u{9f}'
+        // Soft hyphen, the zero-width and bidi family, line/paragraph
+        // separators, word joiner, and the byte-order mark.
+        | '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}'
+        | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+}
+
+/// The shortest escape that reproduces `c`: `\xHH` while two hex digits are
+/// enough, `\u{...}` beyond that.
+fn escape_of(c: char) -> String {
+    let n = c as u32;
+    if n <= 0xFF {
+        format!("\\x{n:02x}")
+    } else {
+        format!("\\u{{{n:x}}}")
+    }
 }
 
 /// Whether a single-param lambda came from the `name => expr` shortcut

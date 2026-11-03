@@ -120,6 +120,65 @@ Two type parameters are independent for the same reason: nothing proves a `T` is
 
 Classes, interfaces and enums take type parameters the same way — see [Generic Classes](/saule/language/classes/#generic-classes), [Generic Interfaces](/saule/language/interfaces/#generic-interfaces) and [Generic Enums](/saule/language/enums/#generic-enums).
 
+### Bounds
+
+A bare `<T>` says only "some type the caller picks", so there is nothing a body can *do* with a `T` but move it around. A **bound** says what the parameter has:
+
+```saule
+interface Named
+    fn name() -> string
+end
+
+fn describe<T: Named>(x: T) -> string
+    return "<" .. x.name() .. ">"      -- `Named` promises `name`
+end
+```
+
+The bound is checked in both directions, which is the whole point of writing one:
+
+- **Inside the body**, a `T` has exactly the members its bound declares — `x.name()` above resolves against `Named`, and a typo or a method the interface does not declare is a compile error.
+- **At every call site**, the type filling `T` has to satisfy the bound. `describe(5)` is rejected because `integer` has no `name`.
+
+Without a bound, neither half is possible, so reading a member off an unconstrained parameter is refused outright:
+
+```saule
+fn show<T>(x: T) -> string
+    return x.name()    -- ERROR: no member `name` on the unbounded type parameter `T`
+end
+```
+
+A bound names an **interface** the type must implement or a **class** it must be, with its own type arguments where it has them. Operator interfaces are the ones that pay off most, because they are what makes arithmetic on a type parameter possible at all:
+
+```saule
+fn total<T: OpAdd<T, T>>(a: T, b: T) -> T
+    return a + b                        -- `OpAdd<T, R>` puts the result last
+end
+
+fn larger<T: OpCompare<T>>(a: T, b: T) -> T
+    if a > b then
+        return a
+    end
+    return b
+end
+```
+
+Classes, interfaces and enums take bounds on their own parameters too, and a method's bound nests inside its class's:
+
+```saule
+class Registry<T: Named>
+    items: table<T> = {}
+
+    fn names() -> string
+        return String.join(", ", Iter.map(self.items, i => i.name()))
+    end
+end
+
+local people: Registry<Person> = Registry<Person>()   -- ok: `Person` is `Named`
+local wrong: Registry<integer> = Registry<integer>()  -- ERROR: `integer` does not satisfy `Named`
+```
+
+Two rules worth knowing. A parameter may be handed to another bounded parameter when its own bound implies the target's — all the caller knows about a `T` is its bound, so that is what has to be enough. And a bound is still *rigid*: `<T: Named>` does not make a `T` interchangeable with `Named`, it makes a `T` usable as one.
+
 ### Piping with `when(...):`
 
 The `when(...)` keyword starts a **colon-based pipeline** ("Saule style"). It wraps a value, and every subsequent `:func(args)` calls `func` with the upstream value threaded in as the **first argument**:

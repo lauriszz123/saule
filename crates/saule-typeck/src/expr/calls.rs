@@ -477,7 +477,7 @@ pub(crate) fn check_user_method_args(
             callee: callee_display.to_string(),
             expected: sig.params.len(),
             found: positional.len(),
-            span: to_source_span(call_span),
+            span: to_source_span(call_span.clone()),
         });
     }
 
@@ -585,6 +585,17 @@ pub(crate) fn check_user_method_args(
             });
         }
     }
+
+    // A method's own `<U: Named>` is an obligation on the caller exactly as
+    // a free function's is.
+    crate::bounds::check_satisfied(
+        &sig.type_bounds,
+        &sig.type_params,
+        &fresh,
+        &subst,
+        call_span,
+        errors,
+    );
 }
 
 /// Resolve a semantic method's return type, substituting any generic type
@@ -752,8 +763,26 @@ pub(crate) fn report_if_unknown_member(
                             });
                         }
                         return;
+                    } else if let Some(b) = crate::state::type_param_bound(&n) {
+                        // `<T: Named>` — the bound says what a `T` has, so
+                        // the check runs against it and a member the bound
+                        // does not declare is reported here rather than at
+                        // run time.
+                        (b.name, false)
+                    } else if crate::state::is_type_param(&n) {
+                        // An *unbounded* parameter. Nothing is known about
+                        // it, so nothing can be read off it — this used to
+                        // pass silently and fail when the call ran, with the
+                        // blame landing inside the generic function rather
+                        // than at the call that chose the type.
+                        errors.push(TypeCheckError::MemberOnUnboundedTypeParam {
+                            param: n,
+                            member: member.to_string(),
+                            span: to_source_span(obj.span.end..obj.span.end + member.len() + 1),
+                        });
+                        return;
                     } else {
-                        // Enum-typed locals, primitives, generics, etc.
+                        // Enum-typed locals, primitives, etc.
                         return;
                     }
                 }
@@ -775,7 +804,11 @@ pub(crate) fn report_if_unknown_member(
                 span: to_source_span(obj.span.end..obj.span.end + member.len() + 1),
             });
         }
-    } else if lookup_member(&receiver_name, member).is_none() {
+    } else if lookup_member(&receiver_name, member).is_none()
+        // An interface keeps its methods in its own registry, so a bound
+        // like `<T: Named>` is answered here rather than by `lookup_member`.
+        && saule_semantic::lookup_interface_method(&receiver_name, member).is_none()
+    {
         errors.push(TypeCheckError::UnknownMember {
             receiver: receiver_name,
             member: member.to_string(),
@@ -1050,6 +1083,17 @@ pub(crate) fn report_if_user_function_arity(
             });
         }
     }
+
+    // Finally the obligations: `<T: Named>` means the type the arguments
+    // just picked for `T` has to implement `Named`.
+    crate::bounds::check_satisfied(
+        &info.type_bounds,
+        &info.type_params,
+        &fresh,
+        &subst,
+        span,
+        errors,
+    );
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

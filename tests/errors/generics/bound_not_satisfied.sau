@@ -1,0 +1,15 @@
+-- The call site's half of a bound: `integer` has no `name`, so it cannot
+-- fill a parameter declared `<T: Named>`.
+interface Named
+	fn name() -> string
+end
+
+fn show<T: Named>(x: T) -> string
+	return x.name()
+end
+
+class Main
+	static fn main()
+		println(show(5))
+	end
+end

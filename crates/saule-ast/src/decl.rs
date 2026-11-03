@@ -20,6 +20,9 @@ pub enum Decl {
         /// it matches only itself. Widening into `any` is free; narrowing
         /// to a concrete type needs the checked `as`.
         type_params: Vec<String>,
+        /// Constraints on those parameters — see [`TypeBound`]. Empty when
+        /// every parameter was written bare.
+        type_bounds: Vec<TypeBound>,
         params: Vec<Param>,
         return_ty: Option<Type>,
         body: Vec<Spanned<Stmt>>,
@@ -32,6 +35,8 @@ pub enum Decl {
         /// Erased at runtime, like a function's. Inside the body each name is
         /// a rigid type standing for whatever the *user of the class* picked.
         type_params: Vec<String>,
+        /// Constraints on those parameters — see [`TypeBound`].
+        type_bounds: Vec<TypeBound>,
         extends: Option<TypeRef>,
         implements: Vec<TypeRef>,
         members: Vec<Spanned<ClassMember>>,
@@ -41,6 +46,8 @@ pub enum Decl {
         name: String,
         /// Generic type parameters declared with `<T, U>` after the name.
         type_params: Vec<String>,
+        /// Constraints on those parameters — see [`TypeBound`].
+        type_bounds: Vec<TypeBound>,
         extends: Vec<TypeRef>,
         methods: Vec<MethodSig>,
     },
@@ -54,6 +61,8 @@ pub enum Decl {
         /// `Ok` binds a real `T`, substituted for whatever the value's own
         /// type argument turned out to be.
         type_params: Vec<String>,
+        /// Constraints on those parameters — see [`TypeBound`].
+        type_bounds: Vec<TypeBound>,
         variants: Vec<Spanned<EnumVariant>>,
         methods: Vec<Method>,
     },
@@ -95,6 +104,23 @@ pub enum Decl {
 /// the same as the `String` it replaced. Kept as its own struct rather than a
 /// [`Type`] because these positions accept only a named type: `extends fn()`
 /// or `implements table<integer>` are not things to represent.
+/// A constraint written on a type parameter: the `Named` in `<T: Named>`.
+///
+/// Carried beside `type_params` rather than folded into it, because the
+/// parameter *names* are read all over the compiler and tooling while the
+/// bounds matter in three places — checking the body, checking the call
+/// site, and printing the declaration back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeBound {
+    /// The parameter being constrained.
+    pub param: String,
+    /// The interface or class it must satisfy, with its own type arguments:
+    /// `<T: OpAdd<T, T>>`.
+    pub bound: TypeRef,
+    /// Byte range of the bound, for diagnostics that point at it.
+    pub span: std::ops::Range<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeRef {
     pub name: String,
@@ -148,6 +174,8 @@ pub struct Method {
     pub name: String,
     /// Generic type parameters declared with `<T, U>` after the method name.
     pub type_params: Vec<String>,
+    /// Constraints on those parameters — see [`TypeBound`].
+    pub type_bounds: Vec<TypeBound>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
     pub body: Vec<Spanned<Stmt>>,
@@ -162,6 +190,8 @@ pub struct MethodSig {
     /// `interface Seq<T> … fn mapTo<U>(f: fn(T) -> U) -> Seq<U>`, `T` belongs
     /// to the interface and `U` to this one method.
     pub type_params: Vec<String>,
+    /// Constraints on those parameters — see [`TypeBound`].
+    pub type_bounds: Vec<TypeBound>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
     pub span: std::ops::Range<usize>,

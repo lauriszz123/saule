@@ -558,17 +558,25 @@ impl Resolver {
             }
             Stmt::Try {
                 body,
-                catch_var,
-                catch_body,
-                ..
+                catches,
+                finally,
             } => {
                 self.push_scope();
                 self.block(body);
                 self.pop_scope();
-                self.push_scope();
-                self.declare(catch_var);
-                self.block(catch_body);
-                self.pop_scope();
+                // Each clause's binding is visible only in its own body, so
+                // two clauses may reuse a name without colliding.
+                for c in catches {
+                    self.push_scope();
+                    self.declare(&c.var);
+                    self.block(&c.body);
+                    self.pop_scope();
+                }
+                if let Some(f) = finally {
+                    self.push_scope();
+                    self.block(f);
+                    self.pop_scope();
+                }
             }
             Stmt::Break | Stmt::Continue => {}
 

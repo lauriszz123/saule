@@ -448,6 +448,8 @@ pub(crate) fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
         info.methods.insert(
             m.name.clone(),
             saule_semantic::MethodSig {
+                // A native declaration has no generic parameters to bound.
+                type_bounds: Vec::new(),
                 is_static: m.receiver == Receiver::Static,
                 is_private: false,
                 type_params: m.type_params.clone(),

@@ -134,7 +134,7 @@ The three things that most change Saule's trajectory, in order:
 | Measurement | Command | Result |
 |---|---|---|
 | Rust test suite | `cargo test --workspace` | **1,705 passed, 0 failed** |
-| Language fixtures | `./run_tests.sh` | **254/254 behaved as expected** (97 positive + 157 `ui/` negative) |
+| Language fixtures | `./run_tests.sh` | **277/277 behaved as expected** (108 under `tests/run/`, 169 under `tests/errors/`) |
 | Benchmarks | `REPS=3 python3 benchmarks/bench.py` | see [Appendix A](#appendix-a--raw-measurements) |
 | Source size | `wc -l` over `crates/*/src` | **87.5k LOC of Rust** across 20 crates |
 | Test density | `grep -rn '#\[test\]' crates` | **1,784** test functions |
@@ -142,9 +142,9 @@ The three things that most change Saule's trajectory, in order:
 | Release history | `git tag` | **1 tag** (`v26.1`, 2026-07-30), 195 commits |
 | Memory behaviour | peak RSS over 3M closure allocations | **7.6 MB, level with the control** (was 2,468.7 MB) — see [Appendix A](#appendix-a--raw-measurements) |
 
-The `.sau` fixture suite is worth calling out specifically: `tests/*.sau` must
-run and exit 0, and `tests/ui/*.sau` must *fail*, each one pinning a specific
-diagnostic. That is a real conformance harness in embryo and it is the right
+The `.sau` fixture suite is worth calling out specifically:
+`tests/run/<area>/*.sau` must run and exit 0, and `tests/errors/<area>/*.sau`
+must *fail*, each one pinning a specific diagnostic. That is a real conformance harness in embryo and it is the right
 shape — see [§6](#6-how-to-know-it-is-stable) for how to grow it into a stability
 gate.
 
@@ -455,7 +455,7 @@ with source snippets, labels, and `help` text; imported modules carry their own
 `NamedSource` so a failure in a dependency underlines the right file
 ([error.rs:100](crates/saule-interpreter/src/error.rs:100)). `saule check`
 reports every diagnostic rather than stopping at the first, and exits non-zero
-so it can gate CI. The `tests/ui/` fixtures pin the diagnostics.
+so it can gate CI. The `tests/errors/` fixtures pin the diagnostics.
 
 Runtime errors are where it thins out:
 
@@ -538,7 +538,7 @@ Weighted by what actually stops adoption, not by what is hard to build.
 |---|---|---|
 | Language design coherence | Opinionated, consistent, well-reasoned | **A** |
 | Implementation quality | Clean, tested, documented, lint-gated | **A** |
-| Compile-time diagnostics | miette, cross-module, `ui/` pinned | **A−** |
+| Compile-time diagnostics | miette, cross-module, `tests/errors/` pinned | **A−** |
 | Documentation (language) | README 73k + DOCS 15k, examples, website | **A−** |
 | Type system completeness | Strong core, deliberately partial checker, no unions/aliases | **B** |
 | Formatter | Dedicated crate, config-driven, corpus tests, round-trips | **A−** |
@@ -676,7 +676,7 @@ Publish a `STABILITY.md` that answers, for each surface, *what may change*:
 | Surface | Proposed contract |
 |---|---|
 | Language syntax and semantics | Additive only within a year. A program valid under `26.x` runs identically under every later `26.y`. Removals require a deprecation cycle spanning a year boundary. |
-| Standard library | Additive only. Signatures never narrow. Behaviour changes only to fix a documented bug, and the fix ships with a `ui/` fixture. |
+| Standard library | Additive only. Signatures never narrow. Behaviour changes only to fix a documented bug, and the fix ships with a `tests/errors/` fixture. |
 | Diagnostic **codes** | Stable and never reused. Diagnostic *text* is explicitly unstable — say so, so nobody parses it. |
 | `saule.config` keys | Additive. Unknown keys already ignored (good); that becomes a promise. |
 | CLI surface | Subcommands and flags additive; output format of `--json` modes (once they exist) versioned. |
@@ -697,7 +697,7 @@ A contract nobody tests is a wish. Each of these is a gate that fails a PR:
 1. **Conformance suite, separated from the test suite.** `tests/*.sau` today is a
    regression suite — it tests the implementation. A conformance suite tests the
    *specification*: one directory, one file per spec section, every file
-   cross-referenced to the spec paragraph it pins. Growing `tests/ui/` into
+   cross-referenced to the spec paragraph it pins. Growing `tests/errors/` into
    "every diagnostic has exactly one fixture that produces it" is the same idea
    for errors. *Signal: coverage of the spec, measured and reported.*
 2. **Backwards-compatibility CI.** Keep a corpus of programs — the examples, the
@@ -705,11 +705,14 @@ A contract nobody tests is a wish. Each of these is a gate that fails a PR:
    *current* build against *every previously released* corpus on each PR. The
    moment a `26.7` program breaks on `26.9`, CI says so. This is the single most
    valuable stability gate and it is cheap to build.
-3. **Snapshot-test the diagnostics.** `insta` or equivalent over the `ui/`
-   fixtures, so a change in wording is a reviewable diff rather than an invisible
-   change. Today `run_tests.sh` only checks that a `ui/` fixture *fails*, not
-   *how* — so a diagnostic could silently regress into a worse one and CI stays
-   green.
+3. **Snapshot-test the diagnostics.** `insta` or equivalent over the
+   `tests/errors/` fixtures, so a change in wording is a reviewable diff
+   rather than an invisible change. `run_tests.sh` checks only that an error
+   fixture *fails*, not *how*, so a diagnostic can silently regress into a
+   worse one and CI stays green. This was in place for a while — every
+   fixture's output recorded and compared — and was removed; the two fixtures
+   that passed for the wrong reason before it existed are described in
+   `tests/errors/README.md`.
 4. **Fuzz the front end.** `cargo-fuzz` on lexer → parser → semantic → typeck,
    asserting no panics and no hangs. A production compiler must not crash on any
    input, and 60 `unwrap`/`expect` sites in the parser is exactly where a fuzzer
@@ -1542,8 +1545,8 @@ is a good boundary and it should be stated as a policy so it stays true.
 - 1,705 passing Rust tests across the workspace, 0 failures (the graphics
   engine's 129 moved out with it to Shine2D)
 - 1,784 `#[test]` functions across all crates
-- 254 `.sau` fixtures (97 positive, 157 `tests/ui/*`): positives must run and
-  exit 0, `ui` must fail. **All 254 behave as expected** — `generic_interface.sau`
+- 254 `.sau` fixtures (97 positive, 157 of them error fixtures): positives must
+  run and exit 0, the error ones must fail. **All 254 behave as expected** — `generic_interface.sau`
   had been failing and was repaired, see [§2](#2-what-was-measured)
 - Doctests: 1 running (`output::capture`), 3 marked `ignore` in the ABI/SDK docs
 

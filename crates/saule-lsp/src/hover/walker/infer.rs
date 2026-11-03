@@ -134,7 +134,7 @@ impl<'a> Cx<'a> {
                 let class = self.receiver_class(&obj.value)?;
                 lookup_field_type(&class, name)
             }
-            Expr::Index { obj, .. } => {
+            Expr::Index { obj, .. } | Expr::SafeIndex { obj, .. } => {
                 // Element type of `table<V>` / `table<K, V>`. Anything
                 // else (e.g. indexing a class instance) we don't try
                 // to resolve here — typeck handles that statically.

@@ -269,6 +269,7 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                     hit.user_fn
                         .clone()
                         .map(|(params, ret)| saule_semantic::MethodSig {
+                            type_bounds: Vec::new(),
                             is_static: false,
                             is_private: false,
                             type_params: Vec::new(),

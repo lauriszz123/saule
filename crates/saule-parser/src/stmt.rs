@@ -263,21 +263,45 @@ impl Parser {
         ))
     }
 
+    /// `try … [catch e: T …]… [finally …] end`
+    ///
+    /// At least one of `catch` and `finally` is required: a `try` with
+    /// neither protects nothing and runs nothing, so it is a mistake rather
+    /// than a no-op worth accepting.
     pub(crate) fn parse_try(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let kw = self.advance(); // `try`
-        let body = self.parse_block_until(&[Token::Catch])?;
-        self.expect_recover(&Token::Catch, "`catch` after `try` body")?;
-        let (catch_var, _) = self.expect_ident_recover("error binding name in `catch`")?;
-        self.expect_recover(&Token::Colon, "`:` and error type in `catch`")?;
-        let catch_ty = self.parse_type()?;
-        let catch_body = self.parse_block_until(&[Token::End])?;
+        let body = self.parse_block_until(&[Token::Catch, Token::Finally])?;
+        let mut catches = Vec::new();
+        while self.check(&Token::Catch) {
+            let c_kw = self.advance(); // `catch`
+            let (var, var_span) = self.expect_ident_recover("error binding name in `catch`")?;
+            self.expect_recover(&Token::Colon, "`:` and error type in `catch`")?;
+            let ty = self.parse_type()?;
+            let c_body = self.parse_block_until(&[Token::Catch, Token::Finally, Token::End])?;
+            catches.push(saule_ast::CatchClause {
+                var,
+                ty,
+                body: c_body,
+                span: c_kw.span.start..var_span.end.max(c_kw.span.end),
+            });
+        }
+        let finally = if self.check(&Token::Finally) {
+            self.advance(); // `finally`
+            Some(self.parse_block_until(&[Token::End])?)
+        } else {
+            None
+        };
+        if catches.is_empty() && finally.is_none() {
+            // Reported, then recovered as an empty-handler `try` so the rest
+            // of the file still parses.
+            self.expect_recover(&Token::Catch, "`catch` or `finally` after `try` body")?;
+        }
         let end = self.expect_close(&Token::End, "`end` to close `try`")?;
         Ok(Spanned::new(
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
+                catches,
+                finally,
             },
             kw.span.start..end.max(kw.span.end),
         ))

@@ -1,0 +1,17 @@
+-- A bare `<T>` promises nothing, so nothing can be read off a `T`.
+--
+-- This used to compile and then fail when the call ran, with the blame
+-- landing inside the generic rather than on the call that chose the type.
+interface Named
+	fn name() -> string
+end
+
+fn show<T>(x: T) -> string
+	return x.name()
+end
+
+class Main
+	static fn main()
+		println(show(5))
+	end
+end
