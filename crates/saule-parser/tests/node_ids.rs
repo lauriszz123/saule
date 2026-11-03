@@ -84,10 +84,17 @@ fn collect(m: &Module) -> Vec<NodeId> {
                     stmts(body, out);
                 }
                 Stmt::Try {
-                    body, catch_body, ..
+                    body,
+                    catches,
+                    finally,
                 } => {
                     stmts(body, out);
-                    stmts(catch_body, out);
+                    for c in catches {
+                        stmts(&c.body, out);
+                    }
+                    if let Some(f) = finally {
+                        stmts(f, out);
+                    }
                 }
                 Stmt::Decl(d) => decl(d, out),
                 Stmt::Break | Stmt::Continue | Stmt::Error => {}

@@ -45,6 +45,24 @@ impl Parser {
                         span,
                     );
                 }
+                // `t?[i]` — the index half of the safe chain. `?` and `[`
+                // are separate tokens (`?.` is one, but `?[` never needed to
+                // be), and in a postfix position nothing else can follow a
+                // `?` with a `[`, so the pair is unambiguous here.
+                Token::Question if matches!(self.peek_at(1).value, Token::LBracket) => {
+                    self.advance(); // `?`
+                    self.advance(); // `[`
+                    let index = self.with_trailing_block(|p| p.parse_expression())?;
+                    let close = self.expect_close(&Token::RBracket, "`]` after index")?;
+                    let span = expr.span.start..close.max(expr.span.end);
+                    expr = Spanned::new(
+                        Expr::SafeIndex {
+                            obj: Box::new(expr),
+                            index: Box::new(index),
+                        },
+                        span,
+                    );
+                }
                 Token::LBracket => {
                     self.advance();
                     let index = self.with_trailing_block(|p| p.parse_expression())?;

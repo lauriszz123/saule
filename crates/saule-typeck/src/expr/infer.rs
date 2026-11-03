@@ -119,6 +119,12 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             let Some((class_name, type_args)) = named_head(&stripped) else {
                 return Some(Type::Named("any".into()));
             };
+            // `<T: Named>` — a bounded type parameter has exactly the members
+            // its bound declares, so the lookup continues against the bound.
+            // Without this a `T` resolves to nothing and the whole access
+            // answers "type unknown", which is how an unchecked `x.name()`
+            // used to reach the runtime.
+            let (class_name, type_args) = crate::state::through_bound(class_name, type_args);
             // A member of an `any` is itself `any` — the chain stays
             // explicitly unknown instead of collapsing to "no information".
             //
@@ -129,6 +135,15 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             // absence of a type.
             if is_any(&Type::Named(class_name.clone())) || class_name == "table" {
                 return Some(Type::Named("any".into()));
+            }
+            if let Some(sig) = saule_semantic::lookup_interface_method(&class_name, name) {
+                // An interface bound (or an interface-typed receiver): its
+                // methods live in their own registry, not the class one.
+                let sig = substitute_receiver_args(&sig, &class_name, &type_args);
+                return Some(Type::Function {
+                    params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                    ret: Box::new(sig.return_ty.clone().unwrap_or(Type::Named("any".into()))),
+                });
             }
             if let Some(t) = saule_semantic::lookup_field_type(&class_name, name) {
                 // A field declared `T` on `class Box<T>` is an `integer` when
@@ -161,6 +176,23 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                     Expr::Member {
                         obj: obj.clone(),
                         name: name.clone(),
+                    },
+                    expr.span.clone(),
+                ),
+                scope,
+            )
+            .unwrap_or_else(|| Type::Named("any".into()));
+            Some(Type::Nullable(Box::new(strip_nullable(inner))))
+        }
+        // `t?[k]` — the same lookup as `t[k]`, made nullable, because the
+        // whole expression is `nil` when the receiver is. Mirrors
+        // `SafeMember` above, for the same reason.
+        Expr::SafeIndex { obj, index } => {
+            let inner = infer(
+                &Spanned::new(
+                    Expr::Index {
+                        obj: obj.clone(),
+                        index: index.clone(),
                     },
                     expr.span.clone(),
                 ),
@@ -318,6 +350,9 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             if let Expr::Member { obj, name } = &callee.value
                 && let Some(ty) = infer(obj, scope)
                 && let Some((type_name, type_args)) = named_head(&strip_nullable(ty))
+                // A bounded `T` resolves through its bound here too, so a
+                // call on one has the bound's declared return type.
+                && let (type_name, type_args) = crate::state::through_bound(type_name, type_args)
                 && let Some(sig) = saule_semantic::lookup_method(&type_name, name)
                     .or_else(|| saule_semantic::lookup_interface_method(&type_name, name))
             {

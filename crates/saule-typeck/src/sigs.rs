@@ -59,6 +59,7 @@ mod tests {
     fn instantiate_method_return_substitutes_nullable() {
         // find<T>(t: table<T>, f: fn(T) -> boolean) -> T?
         let sig = saule_semantic::MethodSig {
+            type_bounds: Vec::new(),
             is_static: true,
             is_private: false,
             type_params: vec!["T".into()],

@@ -37,7 +37,7 @@ impl<'a> Cx<'a> {
                 self.visit_expr(rhs);
             }
             Expr::Member { obj, .. } | Expr::SafeMember { obj, .. } => self.visit_expr(obj),
-            Expr::Index { obj, index } => {
+            Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
                 self.visit_expr(obj);
                 self.visit_expr(index);
             }

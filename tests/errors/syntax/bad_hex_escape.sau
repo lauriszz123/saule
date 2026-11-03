@@ -1,0 +1,6 @@
+-- `\x` takes exactly two hex digits.
+class Main
+	static fn main()
+		println("\x4")
+	end
+end

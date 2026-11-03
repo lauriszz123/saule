@@ -1,0 +1,7 @@
+-- A surrogate half is not a character a `string` can hold, so `\u` rejects
+-- it rather than substituting U+FFFD and hiding the mistake.
+class Main
+	static fn main()
+		println("\u{D800}")
+	end
+end

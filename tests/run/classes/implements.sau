@@ -1,0 +1,18 @@
+-- The smallest `implements`: a class satisfying a one-method interface, and
+-- an instance used through the interface's own name.
+interface Test
+	fn toString() -> string
+end
+
+class Object implements Test
+	fn toString() -> string
+		return "Object"
+	end
+end
+
+class Main
+	static fn main()
+		local obj: Object = Object()
+		println("Hello, " .. obj.toString())
+	end
+end

@@ -35,11 +35,47 @@ fn check_type_arg_arity(
     }
 }
 
+/// Validate the bounds on a declaration's type parameters.
+///
+/// Two things can be wrong before any call site is involved: the bound may
+/// name something that is not an interface or a class, in which case nothing
+/// could ever satisfy it; or it may name a parameter this declaration never
+/// declared, which is a typo in the `<...>` list. Reporting both here keeps
+/// them off the call sites, where they would surface once per call as a
+/// confusing "does not satisfy".
+pub(crate) fn check_type_bounds(
+    type_params: &[String],
+    type_bounds: &[saule_ast::TypeBound],
+    errors: &mut Vec<TypeCheckError>,
+) {
+    for b in type_bounds {
+        if !type_params.contains(&b.param) {
+            errors.push(TypeCheckError::BoundOnUnknownParam {
+                param: b.param.clone(),
+                span: to_source_span(b.span.clone()),
+            });
+            continue;
+        }
+        if !is_interface(&b.bound.name) && !with_classes(|r| r.contains_key(&b.bound.name)) {
+            errors.push(TypeCheckError::BadTypeBound {
+                param: b.param.clone(),
+                name: b.bound.name.clone(),
+                span: to_source_span(b.span.clone()),
+            });
+            continue;
+        }
+        // `<T: OpAdd<T>>` — a bound carries type arguments like any other
+        // reference, so its arity is checked the same way.
+        check_generic_arity(&b.bound.to_type(), b.span.clone(), errors);
+    }
+}
+
 pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
     match decl {
         Decl::Class {
             name: class_name,
             type_params,
+            type_bounds,
             extends,
             implements,
             members,
@@ -75,7 +111,8 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             // field typed `T`, a method returning `T`, a body mentioning it.
             // Without this each one reads as an undeclared class name, and
             // `class Box<T> local v: T` fails on its own field.
-            let prev_generics = push_generics(type_params);
+            check_type_bounds(type_params, type_bounds, errors);
+            let prev_generics = push_generics(type_params, type_bounds);
             let span_for = || members.first().map(|m| m.span.clone()).unwrap_or(0..0);
             check_type_arg_arity(extends.as_ref(), implements, span_for(), errors);
             if let Some(parent) = extends {
@@ -86,6 +123,7 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
         }
         Decl::Function {
             type_params,
+            type_bounds,
             params,
             return_ty,
             body,
@@ -95,7 +133,8 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             // as much as for its body — `fn id<T>(v: T) -> T` names `T`
             // three times before the body starts — so they go in first or
             // every mention reads as an undeclared type.
-            let prev_generics = push_generics(type_params);
+            check_type_bounds(type_params, type_bounds, errors);
+            let prev_generics = push_generics(type_params, type_bounds);
             check_param_types(params, errors);
             // `Decl::Function` carries no span of its own, so a bad return
             // type is pointed at the nearest node that does.
@@ -157,15 +196,18 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
         }
         Decl::Interface {
             type_params,
+            type_bounds,
             methods,
             ..
         } => {
             // `<T>` is in scope for every signature: `fn get() -> T` on
             // `interface Box<T>` must read `T` as the interface's parameter,
             // not as an undeclared class. A method's own `<U>` nests inside.
-            let prev_generics = push_generics(type_params);
+            check_type_bounds(type_params, type_bounds, errors);
+            let prev_generics = push_generics(type_params, type_bounds);
             for sig in methods {
-                let prev_method = push_generics(&sig.type_params);
+                check_type_bounds(&sig.type_params, &sig.type_bounds, errors);
+                let prev_method = push_generics(&sig.type_params, &sig.type_bounds);
                 check_param_types(&sig.params, errors);
                 if let Some(rt) = &sig.return_ty {
                     reject_unknown_types(rt, sig.span.clone(), errors);
@@ -177,12 +219,14 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
         }
         Decl::Enum {
             type_params,
+            type_bounds,
             variants,
             ..
         } => {
             // `<T>` is in scope for the payload types: `Ok(value: T)` must
             // read `T` as this enum's parameter, not as an undeclared class.
-            let prev_generics = push_generics(type_params);
+            check_type_bounds(type_params, type_bounds, errors);
+            let prev_generics = push_generics(type_params, type_bounds);
             for v in variants {
                 if let saule_ast::EnumVariant::Tuple { fields, .. } = &v.value {
                     check_param_types(fields, errors);
@@ -395,7 +439,8 @@ pub(crate) fn check_class(
             // As for a top-level `fn`: the method's own `<T>` belong to its
             // signature too. The class's are already in scope, pushed around
             // this whole walk by the caller.
-            let prev_generics = push_generics(&meth.type_params);
+            check_type_bounds(&meth.type_params, &meth.type_bounds, errors);
+            let prev_generics = push_generics(&meth.type_params, &meth.type_bounds);
             check_param_types(&meth.params, errors);
             if let Some(rt) = &meth.return_ty {
                 reject_unknown_types(rt, meth.span.clone(), errors);

@@ -1,0 +1,11 @@
+-- A type parameter can only be operated on through its bound. `OpToString`
+-- promises `tostring`, not `+`.
+fn total<T: OpToString>(a: T, b: T) -> T
+	return a + b
+end
+
+class Main
+	static fn main()
+		println("unreachable")
+	end
+end

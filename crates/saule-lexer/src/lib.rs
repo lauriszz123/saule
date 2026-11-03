@@ -264,6 +264,7 @@ impl<'src> Lexer<'src> {
             "throw" => Token::Throw,
             "try" => Token::Try,
             "catch" => Token::Catch,
+            "finally" => Token::Finally,
             "for" => Token::For,
             "while" => Token::While,
             "repeat" => Token::Repeat,
@@ -736,6 +737,17 @@ impl<'src> Lexer<'src> {
                     Some((_, '\\')) => s.push('\\'),
                     Some((_, '"')) => s.push('"'),
                     Some((_, '\'')) => s.push('\''),
+                    // `\x41` — exactly two hex digits, read as the codepoint
+                    // U+0041 rather than as a raw byte. A Saule `string` is
+                    // always valid UTF-8, so `\x80` is U+0080 (two bytes on
+                    // the wire) and not a lone 0x80, which would not be text
+                    // at all. `Bytes.of(0x80)` is how you write that byte.
+                    Some((i, 'x')) => self.hex_escape(i, &mut s),
+                    // `\u{1F600}` — one to six hex digits in braces, a
+                    // Unicode scalar value. Braced because a bare `\uXXXX`
+                    // cannot reach past U+FFFF without surrogate pairs, and
+                    // a surrogate is not a scalar value a `string` can hold.
+                    Some((i, 'u')) => self.unicode_escape(i, &mut s),
                     Some((i, c)) => {
                         self.error(LexerError::BadEscape(i..i + c.len_utf8()));
                         s.push('\\');
@@ -756,6 +768,83 @@ impl<'src> Lexer<'src> {
             value: Token::String(s),
             span: start..end,
             id: saule_ast::NodeId::NONE,
+        }
+    }
+
+    /// `\xHH` after the `x` has been consumed. `at` is the `x`'s offset, so
+    /// a bad escape underlines the escape rather than the whole literal.
+    ///
+    /// A malformed escape pushes the text verbatim, like every other one:
+    /// the author is mid-fix, and inventing a character would make the
+    /// error message describe a string they did not write.
+    fn hex_escape(&mut self, at: usize, out: &mut String) {
+        let mut digits = String::new();
+        for _ in 0..2 {
+            match self.chars.peek() {
+                Some(&(_, c)) if c.is_ascii_hexdigit() => {
+                    digits.push(c);
+                    self.chars.next();
+                }
+                _ => break,
+            }
+        }
+        if digits.len() != 2 {
+            self.error(LexerError::BadHexEscape(at - 1..at + 1 + digits.len()));
+            out.push_str("\\x");
+            out.push_str(&digits);
+            return;
+        }
+        // Two hex digits cannot exceed 0xFF, and every value up to there is
+        // a scalar value, so this cannot fail.
+        let n = u32::from_str_radix(&digits, 16).expect("two hex digits");
+        out.push(char::from_u32(n).expect("0..=0xFF is always a scalar value"));
+    }
+
+    /// `\u{...}` after the `u` has been consumed.
+    fn unicode_escape(&mut self, at: usize, out: &mut String) {
+        let verbatim = |out: &mut String, digits: &str, braced: bool| {
+            out.push_str("\\u");
+            if braced {
+                out.push('{');
+            }
+            out.push_str(digits);
+        };
+        if !matches!(self.chars.peek(), Some(&(_, '{'))) {
+            self.error(LexerError::BadUnicodeEscape(at - 1..at + 1));
+            verbatim(out, "", false);
+            return;
+        }
+        self.chars.next(); // `{`
+        let mut digits = String::new();
+        while let Some(&(_, c)) = self.chars.peek() {
+            if c.is_ascii_hexdigit() && digits.len() < 6 {
+                digits.push(c);
+                self.chars.next();
+            } else {
+                break;
+            }
+        }
+        let closed = matches!(self.chars.peek(), Some(&(_, '}')));
+        if closed {
+            self.chars.next();
+        }
+        let span = at - 1..at + 2 + digits.len() + usize::from(closed);
+        if digits.is_empty() || !closed {
+            self.error(LexerError::BadUnicodeEscape(span));
+            verbatim(out, &digits, true);
+            return;
+        }
+        // Rejected here rather than silently replaced: a surrogate half or a
+        // value past U+10FFFF is not a character, and substituting U+FFFD
+        // would hide a mistake in exactly the data that is hardest to eyeball.
+        let n = u32::from_str_radix(&digits, 16).expect("one to six hex digits");
+        match char::from_u32(n) {
+            Some(c) => out.push(c),
+            None => {
+                self.error(LexerError::BadUnicodeEscape(span));
+                verbatim(out, &digits, true);
+                out.push('}');
+            }
         }
     }
 

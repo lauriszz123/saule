@@ -4,6 +4,7 @@ use saule_ast::{ClassMember, Decl, EnumVariant, ImportNames, Method, MethodSig, 
 use saule_lexer::Token;
 
 use crate::error::ParseError;
+use crate::types::GenericParams;
 use crate::{Parser, stmt_decl};
 
 impl Parser {
@@ -76,11 +77,12 @@ impl Parser {
         // declaration after it down with the one bad line.
         let (name, _) = self.expect_ident("function name")?;
         // Optional generic parameter list.
-        let type_params = if self.check(&Token::Lt) {
+        let generics = if self.check(&Token::Lt) {
             self.parse_generic_params()?
         } else {
-            Vec::new()
+            GenericParams::default()
         };
+        let (type_params, type_bounds) = (generics.names, generics.bounds);
         let params = self.parse_param_list()?;
         let return_ty = self.parse_return_type_opt()?;
         let body = self.parse_block_until(&[Token::End])?;
@@ -91,6 +93,7 @@ impl Parser {
                 is_local,
                 name,
                 type_params,
+                type_bounds,
                 params,
                 return_ty,
                 body,
@@ -102,11 +105,12 @@ impl Parser {
     pub(crate) fn parse_class_decl(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `class`
         let (name, _) = self.expect_ident("class name")?;
-        let type_params = if self.check(&Token::Lt) {
+        let generics = if self.check(&Token::Lt) {
             self.parse_generic_params()?
         } else {
-            Vec::new()
+            GenericParams::default()
         };
+        let (type_params, type_bounds) = (generics.names, generics.bounds);
 
         let extends = if self.eat(&Token::Extends) {
             Some(self.parse_type_ref("parent class name")?)
@@ -160,6 +164,7 @@ impl Parser {
                 exported,
                 name,
                 type_params,
+                type_bounds,
                 extends,
                 implements,
                 members,
@@ -196,11 +201,12 @@ impl Parser {
                 // here instead hands the member loop a chance to
                 // resynchronise on the next `fn`.
                 let (name, _) = self.expect_ident("method name")?;
-                let type_params = if self.check(&Token::Lt) {
+                let generics = if self.check(&Token::Lt) {
                     self.parse_generic_params()?
                 } else {
-                    Vec::new()
+                    GenericParams::default()
                 };
+                let (type_params, type_bounds) = (generics.names, generics.bounds);
                 let params = self.parse_param_list()?;
                 let return_ty = self.parse_return_type_opt()?;
                 let body = self.parse_block_until(&[Token::End])?;
@@ -210,6 +216,7 @@ impl Parser {
                     is_private: has_local,
                     name,
                     type_params,
+                    type_bounds,
                     params,
                     return_ty,
                     body,
@@ -267,11 +274,12 @@ impl Parser {
     ) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `interface`
         let (name, _) = self.expect_ident("interface name")?;
-        let type_params = if self.check(&Token::Lt) {
+        let generics = if self.check(&Token::Lt) {
             self.parse_generic_params()?
         } else {
-            Vec::new()
+            GenericParams::default()
         };
+        let (type_params, type_bounds) = (generics.names, generics.bounds);
 
         let mut extends = Vec::new();
         if self.eat(&Token::Extends) {
@@ -315,6 +323,7 @@ impl Parser {
                 exported,
                 name,
                 type_params,
+                type_bounds,
                 extends,
                 methods,
             },
@@ -327,17 +336,19 @@ impl Parser {
         let m_start = self.peek().span.start;
         self.expect(&Token::Fn, "`fn` in interface body")?;
         let (name, _) = self.expect_ident("method name")?;
-        let type_params = if self.check(&Token::Lt) {
+        let generics = if self.check(&Token::Lt) {
             self.parse_generic_params()?
         } else {
-            Vec::new()
+            GenericParams::default()
         };
+        let (type_params, type_bounds) = (generics.names, generics.bounds);
         let params = self.parse_param_list()?;
         let return_ty = self.parse_return_type_opt()?;
         let m_end = self.last_consumed_end();
         Ok(MethodSig {
             name,
             type_params,
+            type_bounds,
             params,
             return_ty,
             span: m_start..m_end.max(m_start),
@@ -347,11 +358,12 @@ impl Parser {
     pub(crate) fn parse_enum_decl(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `enum`
         let (name, _) = self.expect_ident("enum name")?;
-        let type_params = if self.check(&Token::Lt) {
+        let generics = if self.check(&Token::Lt) {
             self.parse_generic_params()?
         } else {
-            Vec::new()
+            GenericParams::default()
         };
+        let (type_params, type_bounds) = (generics.names, generics.bounds);
 
         let mut variants = Vec::new();
         let mut methods = Vec::new();
@@ -401,6 +413,7 @@ impl Parser {
                 is_private: false,
                 name: mname,
                 type_params: Vec::new(),
+                type_bounds: Vec::new(),
                 params,
                 return_ty,
                 body,
@@ -414,6 +427,7 @@ impl Parser {
                 exported,
                 name,
                 type_params,
+                type_bounds,
                 variants,
                 methods,
             },

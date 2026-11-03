@@ -90,6 +90,12 @@ impl<'a> Printer<'a> {
                 self.write("?.");
                 self.write(name);
             }
+            Expr::SafeIndex { obj, index } => {
+                self.expr(obj, MAX_PREC);
+                self.write("?[");
+                self.expr(index, 0);
+                self.write("]");
+            }
             Expr::Index { obj, index } => {
                 self.expr(obj, MAX_PREC);
                 self.write("[");
@@ -417,7 +423,13 @@ impl<'a> Printer<'a> {
                         self.write(&lit);
                     }
                 } else {
+                    // A computed key keeps its brackets. Printing the
+                    // expression bare would turn `{ [k]: v }` into
+                    // `{ k: v }` — the literal key `"k"` rather than
+                    // whatever `k` holds, which is a different table.
+                    self.write("[");
                     self.expr(key, 0);
+                    self.write("]");
                 }
                 self.write(": ");
                 self.expr(value, 0);

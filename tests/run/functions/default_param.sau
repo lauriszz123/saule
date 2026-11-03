@@ -1,0 +1,14 @@
+-- A default parameter is used when the argument is omitted and overridden
+-- when it is supplied.
+class Test
+	static fn default(introduce: string, name: string = "Unnamed")
+		println(introduce, name)
+	end
+end
+
+class Main
+	static fn main()
+		Test.default("My name is:")
+		Test.default("And my name is:", "Laurynas")
+	end
+end

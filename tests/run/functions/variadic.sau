@@ -1,0 +1,17 @@
+-- A variadic parameter arrives as a table of the surplus arguments, so the
+-- body iterates it like any other.
+local fn sum(...values: integer) -> integer
+	local total: integer = 0
+
+	for v: integer in values do
+		total = total + v
+	end
+
+	return total
+end
+
+class Main
+	static fn main()
+		println(sum(1, 2, 3, 4, 5))  -- should be 15
+	end
+end

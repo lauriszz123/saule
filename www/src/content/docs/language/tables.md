@@ -112,6 +112,25 @@ local mix: table = { "a", "b", color: "red", 99 }
 
 Keys in `{ key: value }` literals can be bare identifiers or quoted strings — both produce a string-keyed map entry.
 
+#### Computed keys
+
+A key in brackets is an expression, evaluated where it is written:
+
+```saule
+local field: string = "name"
+local row: table<string, string> = { [field]: "Ada", role: "author" }
+
+-- Any key type the table accepts, not only strings:
+local byId: table<integer, string> = { [1 + 1]: "two", [3]: "three" }
+```
+
+The brackets are what distinguishes the two meanings: a bare `name:` is sugar
+for the string key `"name"`, so a key that should be *computed* has to say so —
+`{ field: "Ada" }` keys by the text `"field"`, `{ [field]: "Ada" }` by what
+`field` holds. `["name"]` and `name:` are the same key written two ways, and a
+computed key is checked against the table's declared key type exactly as
+`t[k] = v` would be.
+
 ### Indexed Access
 
 `t[k]` accepts any value as a key:

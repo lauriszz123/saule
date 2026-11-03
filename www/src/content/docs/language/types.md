@@ -267,7 +267,7 @@ local quoted: string = 'he said "hi"'
 local possessive: string = "it's fine"
 ```
 
-Seven escapes are recognised, and both quote escapes work in either style, so
+These escapes are recognised, and both quote escapes work in either style, so
 moving a literal between them never invalidates one:
 
 | Escape | Meaning |
@@ -279,10 +279,24 @@ moving a literal between them never invalidates one:
 | `\\` | Backslash |
 | `\"` | Double quote |
 | `\'` | Single quote |
+| `\xHH` | The codepoint with that two-digit hex value: `\x41` is `A` |
+| `\u{...}` | The codepoint with that one-to-six-digit hex value: `\u{1F600}` is 😀 |
 
-Anything else after a backslash is a lex error — there is no hex or unicode
-escape, so use `String.char` for codepoints. A literal newline inside a string
-is allowed and is kept as-is.
+Anything else after a backslash is a lex error. A literal newline inside a
+string is allowed and is kept as-is.
+
+Both numeric escapes name a **codepoint**, not a byte. A `string` is always
+valid UTF-8, so `"\x80"` is U+0080 — two bytes once encoded — and not a lone
+`0x80`, which is not text at all. `Bytes.of(0x80)` is how you write that byte,
+and the distinction is the same one [`bytes` vs `string`](/saule/language/types/#bytes-vs-string)
+draws everywhere else. `\u` rejects a value that is not a character: a
+surrogate half (`D800`–`DFFF`) or anything past `10FFFF` is an error rather
+than a silent U+FFFD.
+
+`saule fmt` keeps an escape wherever the character would otherwise be
+invisible in source — a control character, a zero-width or bidi character —
+and unescapes the ones that are perfectly readable, so `"\x41"` comes back as
+`"A"`.
 
 `saule fmt` leaves the choice alone. It reads the delimiter back out of your
 source, so formatting never rewrites `'hello'` into `"hello"` — in a string

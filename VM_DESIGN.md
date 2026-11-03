@@ -194,7 +194,7 @@ A VM built with it lands around 6×.
 
 ## 3. Design principles
 
-1. **Preserve semantics exactly.** `tests/*.sau` and `tests/ui/*.sau` are the
+1. **Preserve semantics exactly.** `tests/run/` and `tests/errors/` are the
    contract. The VM is an implementation change, not a language change.
 2. **The tree-walker keeps working at every commit.** See §22. Every
    preparatory change must be independently justifiable as an improvement to
@@ -1665,7 +1665,7 @@ In dependency order:
 10. **Variadics, trailing blocks, named arguments, defaults** — §19.
 
 *Exit criteria:*
-- All 91 `tests/*.sau` and all `tests/ui/*.sau` behave identically under both
+- All 91 run fixtures and all error fixtures behave identically under both
   engines.
 - All 10 benchmarks run under `--vm`.
 - The differential harness (§23.2) is green across `examples/` and `www/`.
@@ -1744,8 +1744,9 @@ project does not leave the interpreter worse off.
 
 ### 23.1 What exists
 
-- `tests/*.sau` — 91 fixtures that must run and exit 0.
-- `tests/ui/*.sau` — fixtures that must fail, each pinning a specific diagnostic.
+- `tests/run/<area>/*.sau` — 91 fixtures that must run and exit 0.
+- `tests/errors/<area>/*.sau` — fixtures that must fail, each pinning a specific
+  diagnostic.
 - `run_tests.sh` — gates both, honours `SAULE_BIN`.
 - `benchmarks/bench.py` — supports `new=` / `old=` comparison.
 

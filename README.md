@@ -306,7 +306,7 @@ local quoted: string = 'he said "hi"'
 local possessive: string = "it's fine"
 ```
 
-Seven escapes are recognised, and both quote escapes work in either style, so
+These escapes are recognised, and both quote escapes work in either style, so
 moving a literal between them never invalidates one:
 
 | Escape | Meaning |
@@ -318,10 +318,24 @@ moving a literal between them never invalidates one:
 | `\\` | Backslash |
 | `\"` | Double quote |
 | `\'` | Single quote |
+| `\xHH` | The codepoint with that two-digit hex value: `\x41` is `A` |
+| `\u{...}` | The codepoint with that one-to-six-digit hex value: `\u{1F600}` is 😀 |
 
-Anything else after a backslash is a lex error — there is no hex or unicode
-escape, so use `String.char` for codepoints. A literal newline inside a string
-is allowed and is kept as-is.
+Anything else after a backslash is a lex error. A literal newline inside a
+string is allowed and is kept as-is.
+
+Both numeric escapes name a **codepoint**, not a byte. A `string` is always
+valid UTF-8, so `"\x80"` is U+0080 — two bytes once encoded — and not a lone
+`0x80`, which is not text at all. `Bytes.of(0x80)` is how you write that byte,
+and the distinction is the same one [`bytes` vs `string`](#bytes-vs-string)
+draws everywhere else. `\u` rejects a value that is not a character: a
+surrogate half (`D800`–`DFFF`) or anything past `10FFFF` is an error rather
+than a silent U+FFFD.
+
+`saule fmt` keeps an escape wherever the character would otherwise be
+invisible in source — a control character, a zero-width or bidi character —
+and unescapes the ones that are perfectly readable, so `"\x41"` comes back as
+`"A"`.
 
 `saule fmt` leaves the choice alone. It reads the delimiter back out of your
 source, so formatting never rewrites `'hello'` into `"hello"` — in a string
@@ -837,6 +851,25 @@ local mix: table = { "a", "b", color: "red", 99 }
 
 Keys in `{ key: value }` literals can be bare identifiers or quoted strings — both produce a string-keyed map entry.
 
+#### Computed keys
+
+A key in brackets is an expression, evaluated where it is written:
+
+```luau
+local field: string = "name"
+local row: table<string, string> = { [field]: "Ada", role: "author" }
+
+-- Any key type the table accepts, not only strings:
+local byId: table<integer, string> = { [1 + 1]: "two", [3]: "three" }
+```
+
+The brackets are what distinguishes the two meanings: a bare `name:` is sugar
+for the string key `"name"`, so a key that should be *computed* has to say so —
+`{ field: "Ada" }` keys by the text `"field"`, `{ [field]: "Ada" }` by what
+`field` holds. `["name"]` and `name:` are the same key written two ways, and a
+computed key is checked against the table's declared key type exactly as
+`t[k] = v` would be.
+
 ### Indexed Access
 
 `t[k]` accepts any value as a key:
@@ -1005,6 +1038,65 @@ end
 Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function you are *calling* is not the `T` declared by the one you are writing, however alike they read.
 
 Classes, interfaces and enums take type parameters the same way — see [Generic Classes](#generic-classes), [Generic Interfaces](#generic-interfaces) and [Generic Enums](#generic-enums).
+
+### Bounds
+
+A bare `<T>` says only "some type the caller picks", so there is nothing a body can *do* with a `T` but move it around. A **bound** says what the parameter has:
+
+```luau
+interface Named
+    fn name() -> string
+end
+
+fn describe<T: Named>(x: T) -> string
+    return "<" .. x.name() .. ">"      -- `Named` promises `name`
+end
+```
+
+The bound is checked in both directions, which is the whole point of writing one:
+
+- **Inside the body**, a `T` has exactly the members its bound declares — `x.name()` above resolves against `Named`, and a typo or a method the interface does not declare is a compile error.
+- **At every call site**, the type filling `T` has to satisfy the bound. `describe(5)` is rejected because `integer` has no `name`.
+
+Without a bound, neither half is possible, so reading a member off an unconstrained parameter is refused outright:
+
+```luau
+fn show<T>(x: T) -> string
+    return x.name()    -- ERROR: no member `name` on the unbounded type parameter `T`
+end
+```
+
+A bound names an **interface** the type must implement or a **class** it must be, with its own type arguments where it has them. Operator interfaces are the ones that pay off most, because they are what makes arithmetic on a type parameter possible at all:
+
+```luau
+fn total<T: OpAdd<T, T>>(a: T, b: T) -> T
+    return a + b                        -- `OpAdd<T, R>` puts the result last
+end
+
+fn larger<T: OpCompare<T>>(a: T, b: T) -> T
+    if a > b then
+        return a
+    end
+    return b
+end
+```
+
+Classes, interfaces and enums take bounds on their own parameters too, and a method's bound nests inside its class's:
+
+```luau
+class Registry<T: Named>
+    items: table<T> = {}
+
+    fn names() -> string
+        return String.join(", ", Iter.map(self.items, i => i.name()))
+    end
+end
+
+local people: Registry<Person> = Registry<Person>()   -- ok: `Person` is `Named`
+local wrong: Registry<integer> = Registry<integer>()  -- ERROR: `integer` does not satisfy `Named`
+```
+
+Two rules worth knowing. A parameter may be handed to another bounded parameter when its own bound implies the target's — all the caller knows about a `T` is its bound, so that is what has to be enough. And a bound is still *rigid*: `<T: Named>` does not make a `T` interchangeable with `Named`, it makes a `T` usable as one.
 
 ### Piping with `when(...):`
 
@@ -2220,6 +2312,21 @@ local greeting: string? = nil
 local len: integer = #(greeting ?? "")     -- 0 when nil
 ```
 
+### Safe Index
+
+`?[...]` is the index half of the same idea — `nil` when the receiver is nil, the element otherwise:
+
+```luau
+local rows: table<integer>? = nil
+println(rows?[1] ?? 0)              -- 0, no fault on the nil receiver
+```
+
+The index expression is not evaluated at all on the nil path, the same rule `?.` follows for a call's arguments, and the two chain together:
+
+```luau
+println(grid.rows?[1]?[2] ?? -1)
+```
+
 ### Null Coalescing
 
 Use `??` to provide a fallback when a value is nil:
@@ -2278,6 +2385,49 @@ end
 ```
 
 The `catch` clause names the thrown value and its expected type. Inside the catch block, code runs as if the `try` block had returned normally.
+
+### Several `catch` clauses
+
+A `try` may carry more than one clause. They are tried **in source order**, and the first whose type matches the thrown value handles it; a value no clause accepts carries on to the enclosing `try`:
+
+```luau
+try
+    risky()
+catch e: string
+    println("message: " .. e)
+catch e: integer
+    println("code: " .. e)
+catch e: ParseError
+    println("parse: " .. e.detail)
+catch e: any
+    println("something else")
+end
+```
+
+Each clause's binding is scoped to its own body, so the clauses are free to reuse a name. `catch e: any` matches everything, which is why it belongs last — a clause after it can never run, and the compiler says so:
+
+```luau
+catch e: any
+    …
+catch e: string      -- ERROR: this `catch string` can never run
+```
+
+### `finally`
+
+A `finally` block runs on **every** way out of the `try`: normal completion, a clause that handled a throw, a throw that no clause handled, and a `return`, `break` or `continue` from inside:
+
+```luau
+local f: File = Io.open(path, IoMode.Read)!
+try
+    return parse(f.read("a") ?? "")
+catch e: string
+    return fallback()
+finally
+    f.close()            -- runs on all three paths
+end
+```
+
+When nothing handled the throw, the `finally` runs and then the value carries on outward — cleanup does not swallow the failure. A `try` needs at least one of `catch` and `finally`; with neither it protects nothing and runs nothing.
 
 ### Nullable returns for expected failures
 
@@ -2571,7 +2721,7 @@ Recognised keys:
 
 Unknown keys are ignored.
 
-#### Packages
+### Packages
 
 A `dependencies:` entry is one of two things, told apart by the `@`:
 
@@ -2712,7 +2862,8 @@ of every construct, see the [Grammar](#grammar).
 | `return` | Return a value from a function |
 | `throw` | Raise an error |
 | `try` | Begin an error-handled block |
-| `catch` | Handle a thrown error |
+| `catch` | Handle a thrown error; several clauses are tried in order |
+| `finally` | Run on every way out of a `try` |
 | `for` | Begin a loop |
 | `while` | Begin a while loop |
 | `repeat` | Begin a repeat-until loop |
@@ -2746,6 +2897,7 @@ of every construct, see the [Grammar](#grammar).
 | Operator | Meaning |
 |---|---|
 | `?.` | Safe member access |
+| `?[ ]` | Safe index |
 | `??` | Null coalescing fallback |
 | `!` | Force unwrap nullable |
 | `..` | String concatenation |
@@ -2808,7 +2960,7 @@ while  ::= 'while' exp 'do' chunk 'end'
 repeat ::= 'repeat' chunk 'until' exp
 forNum ::= 'for' nameDecl '=' exp ',' exp [',' exp] 'do' chunk 'end'
 forIn  ::= 'for' nameDecl {',' nameDecl} 'in' exp 'do' chunk 'end'
-try    ::= 'try' chunk 'catch' Name ':' type chunk 'end'
+try    ::= 'try' chunk {'catch' Name ':' type chunk} ['finally' chunk] 'end'
 
 nameDecl ::= Name [':' type]
 explist  ::= exp {',' exp}
@@ -2870,7 +3022,8 @@ baseType  ::= Name [typeArgs]
             | '(' [type {',' type}] ')'
 
 typeArgs   ::= '<' type {',' type} '>'
-typeParams ::= '<' Name {',' Name} '>'
+typeParams ::= '<' typeParam {',' typeParam} '>'
+typeParam  ::= Name [':' Name [typeArgs]]
 ```
 
 Suffixes are applied in the order written, so `T?[]` and `T[]?` differ. An
@@ -2918,6 +3071,7 @@ postfix    ::= primary {suffix}
 suffix ::= '.' (Name | 'super')
          | '?.' Name
          | '[' exp ']'
+         | '?[' exp ']'
          | [typeArgs] args
          | 'do' [params ['->' type]] chunk 'end'
          | '!'
@@ -2934,7 +3088,7 @@ primary ::= Numeral | String | 'true' | 'false' | 'nil' | 'self'
           | '(' exp ')'
 
 table ::= '{' [entry {',' entry} [',']] '}'
-entry ::= Name ':' exp | String ':' exp | exp
+entry ::= Name ':' exp | String ':' exp | '[' exp ']' ':' exp | exp
 
 lambda ::= 'fn' params ['->' type] chunk 'end'
          | '(' [param {',' param}] ')' ['->' type] '=>' exp
@@ -2973,8 +3127,8 @@ where a `do` closes the header instead. Parenthesising re-enables it:
 `while (next() do … end) do … end`.
 
 There is no `obj:method()` call form. A method call is `obj.method()`; `:`
-appears only in type ascriptions, named arguments, table keys, `catch`
-bindings, and pipeline stages.
+appears only in type ascriptions, named arguments, table keys, type-parameter
+bounds, `catch` bindings, and pipeline stages.
 
 ### Lexical elements
 
@@ -2993,6 +3147,8 @@ fSuffix ::= 'f' | 'F'
 String  ::= '"' {stringChar | escape} '"'
           | "'" {stringChar | escape} "'"
 escape  ::= '\n' | '\t' | '\r' | '\0' | '\\' | '\"' | "\'"
+          | '\x' hexDigit hexDigit
+          | '\u' '{' hexDigit {hexDigit} '}'
 comment ::= '--' {any} newline | '--[[' {any} ']]'
 ```
 
@@ -3000,16 +3156,18 @@ comment ::= '--' {any} newline | '--[[' {any} ']]'
 
 ```
 and       as        break     case      catch     class     continue  do
-else      elseif    end       enum      export    extends   false     fn
-for       from      if        implements import    in        interface local
+else      elseif    end       enum      export    extends   false     finally
+fn        for       from      if        implements import    in        interface
+local
 match     nil       not       or        repeat    return    self      static
 super     then      throw     true      try       until     when      while
 ```
 
 Strings take either quote style, and only the delimiter that opened one closes
-it — so `'he said "hi"'` needs no escaping. The seven escapes above are the only
-ones recognised; anything else after a backslash is an error, and there is no
-hex or unicode escape. `_` groups digits in
+it — so `'he said "hi"'` needs no escaping. The escapes above are the only ones
+recognised; anything else after a backslash is an error. `\x` takes exactly two
+hex digits and `\u` one to six in braces, and both name a **codepoint** rather
+than a byte, since a `string` is always valid UTF-8. `_` groups digits in
 hex and binary literals only. An `exponent` makes the literal a `float`
 whatever the mantissa looks like, and its digits are required, so `1e` is `1`
 followed by the name `e`. There is no octal form, and no exponent or `f`

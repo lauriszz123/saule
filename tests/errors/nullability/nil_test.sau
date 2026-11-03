@@ -1,0 +1,7 @@
+-- ERROR: `nil` assigned to a non-nullable `string` — the plainest form of
+-- the rule the rest of this area explores.
+class Main
+  static fn main()
+    local test: string = nil
+  end
+end

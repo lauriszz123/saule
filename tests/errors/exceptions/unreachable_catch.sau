@@ -1,0 +1,13 @@
+-- `catch` clauses are tried in source order, so a clause after `catch e: any`
+-- can never run.
+class Main
+	static fn main()
+		try
+			throw "x"
+		catch e: any
+			println("any")
+		catch e: string
+			println("never")
+		end
+	end
+end

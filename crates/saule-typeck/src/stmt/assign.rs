@@ -163,6 +163,12 @@ pub(crate) fn check_generic_arity(
                     found: args.len(),
                     span: to_source_span(span),
                 });
+            } else {
+                // The count is right, so each argument can now be held to
+                // the bound its parameter declared: `class Registry<T: Named>`
+                // written as `Registry<integer>` is checked here, wherever
+                // that annotation appears.
+                check_arg_bounds(name, args, span, errors);
             }
         }
         Type::Nullable(inner) => check_generic_arity(inner, span, errors),
@@ -184,6 +190,47 @@ pub(crate) fn check_generic_arity(
             check_generic_arity(ret, span, errors);
         }
         Type::Named(_) => {}
+    }
+}
+
+/// Hold each type argument to the bound its parameter declared.
+///
+/// The declaration-side half of a bound is checked when the declaration is
+/// walked; this is the use-side half for a *type*, as
+/// [`crate::bounds::check_satisfied`] is for a call. Together they mean a
+/// bound cannot be written down without being enforced everywhere the name
+/// is spelled.
+fn check_arg_bounds(
+    name: &str,
+    args: &[Type],
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let Some((params, bounds)) = with_classes(|r| {
+        r.get(name)
+            .map(|c| (c.type_params.clone(), c.type_bounds.clone()))
+    }) else {
+        return;
+    };
+    for b in &bounds {
+        let Some(i) = params.iter().position(|p| p == &b.param) else {
+            continue;
+        };
+        let Some(arg) = args.get(i) else {
+            continue;
+        };
+        // A bound that names nothing real is reported at the declaration.
+        if !is_interface(&b.bound.name) && !with_classes(|r| r.contains_key(&b.bound.name)) {
+            continue;
+        }
+        if !crate::bounds::satisfies(arg, &b.bound.name) {
+            errors.push(TypeCheckError::BoundNotSatisfied {
+                param: b.param.clone(),
+                bound: b.bound.name.clone(),
+                found: crate::expr::type_to_string(arg),
+                span: to_source_span(span.clone()),
+            });
+        }
     }
 }
 

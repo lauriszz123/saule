@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 # Run every `.sau` fixture through the debug build.
 #
-#   tests/*.sau      must run and exit 0
-#   tests/ui/*.sau   must fail — each one exists to pin a specific diagnostic
+#   tests/run/<area>/*.sau      must run and exit 0
+#   tests/errors/<area>/*.sau   must fail — each one exists to pin a specific
+#                               diagnostic
 #
-# and in both cases print exactly what `expected/<name>.out` beside it says —
-# stdout and stderr together, diagnostics included. Exit status alone is a
-# weak check, and weak in exactly the place that matters: a bug that prints
-# the wrong value while still exiting 0 passes silently.
-#
-# The expected outputs were recorded from the tree-walking interpreter, the
-# engine that defined the language until it was removed; every one was also
-# the bytecode VM's output then, so they still say what the language means.
+# **Exit status is all that is checked.** The recorded outputs this suite used
+# to compare against were removed deliberately; what a fixture prints, and
+# what diagnostic an error fixture produces, is no longer gated. So a fixture
+# that fails for the wrong reason passes here, and a change that prints the
+# wrong value while still exiting 0 passes too — `tests/errors/README.md` has
+# the two cases where that happened before. Read a fixture's output yourself
+# when you change one.
 #
 # Exits non-zero if any fixture is on the wrong side of either line, so CI
 # can gate on it. `SAULE_BIN` overrides the binary (e.g. to test a release
 # build).
 #
-# SAULE_BLESS=1 writes each fixture's output to its expected file instead of
-# comparing — for a new fixture, or a deliberate change in behaviour. Read
-# the resulting diff before committing it: it is the specification.
+# `--list` prints the corpus instead of running it: every fixture grouped by
+# area, with the first sentence of its own leading comment as the description.
+# That makes the scope of the suite readable without opening 277 files, and it
+# reads the fixtures themselves rather than a table that would go stale.
+# `--list <area>` narrows to one area (`generics`, `errors/classes`, …).
 SAULE_BIN="${SAULE_BIN:-}"
-SAULE_BLESS="${SAULE_BLESS:-}"
 
 # Default to whichever of the two names exists: Windows builds `saule.exe`.
 if [ -z "$SAULE_BIN" ]; then
@@ -32,6 +33,61 @@ if [ -z "$SAULE_BIN" ]; then
   fi
 fi
 
+# ── `--list` ────────────────────────────────────────────────────────────────
+# Reads each fixture's leading `--` comment block and prints its first
+# sentence. A fixture with no comment is listed with a `?`, which is a gap
+# worth seeing rather than hiding.
+fixture_summary() {
+  awk '
+    # Stop at the first line that is not a `--` comment: the description is
+    # the block at the top of the file, not every comment in it.
+    !/^--/ { exit }
+    {
+      line = $0
+      sub(/^--+[ \t]*/, "", line)
+      if (line == "") { if (text != "") exit; else next }
+      text = (text == "" ? line : text " " line)
+      # One sentence is enough for a listing, and the first one is the one
+      # fixtures are written to lead with.
+      if (text ~ /\. /) { sub(/\. .*/, ".", text); exit }
+      if (text ~ /\.$/) { exit }
+    }
+    END {
+      gsub(/[ \t]+/, " ", text)
+      # Cut on a word boundary, so a truncated line still reads.
+      if (length(text) > 72) {
+        text = substr(text, 1, 69)
+        sub(/[ \t][^ \t]*$/, "", text)
+        text = text " ..."
+      }
+      print (text == "" ? "?" : text)
+    }
+  ' "$1"
+}
+
+list_corpus() {
+  local want="${1:-}" area last=""
+  for f in tests/run/*/*.sau tests/errors/*/*.sau; do
+    area="$(dirname "${f#tests/}")"
+    # `--list generics` matches both trees; `--list errors/classes` one.
+    if [ -n "$want" ] && [ "${area#*/}" != "$want" ] && [ "$area" != "$want" ]; then
+      continue
+    fi
+    if [ "$area" != "$last" ]; then
+      [ -n "$last" ] && echo
+      printf '%s (%s)\n' "$area" "$(ls "tests/$area"/*.sau | wc -l | tr -d ' ')"
+      last="$area"
+    fi
+    printf '  %-38s %s\n' "$(basename "$f" .sau)" "$(fixture_summary "$f")"
+  done
+  [ -n "$last" ] || { echo "no such area: $want" >&2; return 1; }
+}
+
+if [ "${1:-}" = "--list" ]; then
+  list_corpus "${2:-}"
+  exit $?
+fi
+
 if [ ! -x "$SAULE_BIN" ]; then
   echo "error: $SAULE_BIN not found — run 'cargo build -p saule-cli' first" >&2
   exit 1
@@ -39,24 +95,6 @@ fi
 
 failures=0
 total=0
-
-# Fixtures whose output cannot be pinned, each with a reason. Their exit
-# status is still checked. Counted at the end, so this list cannot grow
-# unnoticed — an exemption you cannot see is a failing test you stopped
-# reading.
-output_exempt() {
-  case "$1" in
-    # Both profiles report, but not the same way: a level of re-entrant
-    # nesting costs several times more stack in a debug build, so it runs
-    # out of the thread's stack where a release build reaches the level
-    # count first. The message differs accordingly — and so does how many
-    # times `Table.sort: comparator failed:` is wrapped around it. That the
-    # run *reports* rather than dying is what this fixture pins.
-    tests/ui/stack_overflow_reentrant.sau) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-exempted=0
 
 # Fixtures that cannot run on this platform at all, each with a reason.
 # Counted at the end for the same reason as the exemptions above.
@@ -70,41 +108,14 @@ platform_skip() {
     # Spawns `sh`, `cat` and `printf` and reads `/dev/zero` — a Unix
     # userland. `crates/saule-cli/tests/spawn.rs` pins the same behaviour
     # on every platform, Windows included, with `saule` as the child.
-    tests/spawn.sau) return 0 ;;
+    tests/run/stdlib/spawn.sau) return 0 ;;
     *) return 1 ;;
   esac
 }
 skipped=0
 
-# Compare (or, when blessing, record) one fixture's output. Echoes a diff
-# and returns non-zero when it differs.
-check_output() {
-  local f="$1" out="$2" expected
-  expected="$(dirname "$f")/expected/$(basename "$f" .sau).out"
-  if [ -n "$SAULE_BLESS" ]; then
-    # Only write when the recording would actually differ. `$(…)` strips
-    # trailing newlines on capture, and the comparison below strips them
-    # from the file too, so a golden that ends in a blank line already
-    # passes — rewriting it regardless would mean blessing one fixture
-    # churns every other golden in the tree, burying the real change.
-    if [ ! -f "$expected" ] || [ "$out" != "$(cat "$expected")" ]; then
-      printf '%s\n' "$out" > "$expected"
-    fi
-    return 0
-  fi
-  if [ ! -f "$expected" ]; then
-    echo "     no expected output — run with SAULE_BLESS=1 to record it"
-    return 1
-  fi
-  if [ "$out" = "$(cat "$expected")" ]; then
-    return 0
-  fi
-  diff "$expected" <(printf '%s\n' "$out") | head -12 | sed 's/^/     /'
-  return 1
-}
-
-echo '== positive tests =='
-for f in tests/*.sau; do
+echo '== run tests =='
+for f in tests/run/*/*.sau; do
   if platform_skip "$f"; then
     printf 'SKIP %s (not on this platform)\n' "$f"
     skipped=$((skipped + 1))
@@ -117,51 +128,29 @@ for f in tests/*.sau; do
     failures=$((failures + 1))
     continue
   fi
-  if ! output_exempt "$f" && ! d=$(check_output "$f" "$out"); then
-    printf 'FAIL %s (output differs)\n' "$f"
-    printf '%s\n' "$d"
-    failures=$((failures + 1))
-    continue
-  fi
   printf 'OK   %s\n' "$f"
 done
 
 echo
-echo '== ui tests (expected to error) =='
-for f in tests/ui/*.sau; do
+echo '== error tests (expected to fail) =='
+for f in tests/errors/*/*.sau; do
   total=$((total + 1))
+  # Only *that* it errors, not how: the diagnostic each fixture is named for
+  # is no longer compared against anything.
   if out=$("$SAULE_BIN" run "$f" 2>&1 </dev/null); then
     printf 'FAIL %s (did not error)\n' "$f"
     failures=$((failures + 1))
     continue
   fi
-  # These exist to pin a specific *diagnostic*, so the message itself has to
-  # match too — erroring for a different reason is not the same behaviour.
-  if ! output_exempt "$f" && ! d=$(check_output "$f" "$out"); then
-    printf 'FAIL %s (diagnostic differs)\n' "$f"
-    printf '%s\n' "$d"
-    failures=$((failures + 1))
-    continue
-  fi
   printf 'OK   %s\n' "$f"
 done
 
 echo
-for f in tests/*.sau tests/ui/*.sau; do
-  output_exempt "$f" && exempted=$((exempted + 1))
-done
-if [ "$exempted" -gt 0 ]; then
-  echo "note: $exempted fixture(s) exempt from the output check — see output_exempt()"
-fi
 if [ "$skipped" -gt 0 ]; then
   echo "note: $skipped fixture(s) skipped on this platform — see platform_skip()"
 fi
-if [ -n "$SAULE_BLESS" ]; then
-  echo "recorded the output of $total fixtures — review the diff"
-  exit 0
-fi
 if [ "$failures" -eq 0 ]; then
-  echo "all $total fixtures behaved as expected"
+  echo "all $total fixtures exited as expected"
   exit 0
 fi
 echo "$failures of $total fixtures failed" >&2

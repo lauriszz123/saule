@@ -1,0 +1,8 @@
+-- A computed key is checked against the table's declared key type, exactly
+-- as `t[k] = v` would be.
+class Main
+	static fn main()
+		local t: table<string, integer> = {[1]: 5}
+		println(#t)
+	end
+end

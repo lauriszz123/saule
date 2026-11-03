@@ -125,10 +125,17 @@ fn walk_stmt<V: Visitor>(s: &Spanned<Stmt>, v: &mut V) {
             walk_stmts(body, v);
         }
         Stmt::Try {
-            body, catch_body, ..
+            body,
+            catches,
+            finally,
         } => {
             walk_stmts(body, v);
-            walk_stmts(catch_body, v);
+            for c in catches {
+                walk_stmts(&c.body, v);
+            }
+            if let Some(f) = finally {
+                walk_stmts(f, v);
+            }
         }
         Stmt::Decl(d) => walk_decl(d, v),
         Stmt::Break | Stmt::Continue | Stmt::Error => {}
@@ -207,7 +214,7 @@ fn walk_expr<V: Visitor>(e: &Spanned<Expr>, v: &mut V) {
             walk_expr(rhs, v);
         }
         Expr::Member { obj, .. } | Expr::SafeMember { obj, .. } => walk_expr(obj, v),
-        Expr::Index { obj, index } => {
+        Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
             walk_expr(obj, v);
             walk_expr(index, v);
         }

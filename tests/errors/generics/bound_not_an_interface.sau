@@ -1,0 +1,11 @@
+-- A bound names an interface to implement or a class to be. `integer` is
+-- neither, so nothing could ever satisfy it.
+fn bad<T: integer>(x: T) -> T
+	return x
+end
+
+class Main
+	static fn main()
+		println("unreachable")
+	end
+end

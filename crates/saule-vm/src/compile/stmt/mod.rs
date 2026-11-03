@@ -198,11 +198,10 @@ impl Compiler<'_> {
 
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
+                catches,
+                finally,
             } => {
-                self.try_catch(body, catch_var, catch_ty, catch_body, span)?;
+                self.try_catch(body, catches, finally.as_deref(), span)?;
                 Ok(None)
             }
 
@@ -216,6 +215,10 @@ impl Compiler<'_> {
             }
 
             Stmt::Return(values) => {
+                // Every `finally` between here and the function boundary
+                // runs first, innermost out — a `return` is a way out of a
+                // `try` like any other.
+                self.run_pending_finallys(0, span)?;
                 self.ret(values, span)?;
                 Ok(None)
             }
@@ -230,6 +233,10 @@ impl Compiler<'_> {
                     ));
                 }
                 let is_break = matches!(s.value, Stmt::Break);
+                // Only the `try` blocks this jump actually leaves: a `try`
+                // that *contains* the loop is not being left, so its
+                // `finally` must not run here.
+                self.run_pending_finallys(self.loops.len(), span)?;
                 let label = self.emit_jump(Op::JMP, 0, span);
                 let l = self.loops.last_mut().expect("checked");
                 if is_break {

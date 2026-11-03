@@ -1,0 +1,8 @@
+-- ERROR: and inside a free function, which has no class around it to blame.
+fn bad()
+  local s: string = nil
+end
+
+class Main
+  static fn main() bad() end
+end

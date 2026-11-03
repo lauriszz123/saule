@@ -36,6 +36,7 @@ pub(crate) fn render_function_sig(
 /// none. Pass `m.return_ty.as_ref()` for the written one.
 pub(crate) fn render_method_head(owner: &str, m: &Method, return_ty: Option<&Type>) -> String {
     let sig = MethodSig {
+        type_bounds: Vec::new(),
         is_static: m.is_static,
         is_private: m.is_private,
         type_params: m.type_params.clone(),

@@ -235,38 +235,43 @@ impl<'a> ResolveCx<'a> {
             Stmt::Throw(e) => self.visit_expr(e),
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
+                catches,
+                finally,
             } => {
                 self.with_block(|this| {
                     for s in body {
                         this.visit_stmt(s);
                     }
                 });
-                let span = catch_var_span(self.source, &s.span, body, catch_var);
-                self.record(
-                    span.clone(),
-                    Symbol::Local {
-                        name: catch_var.clone(),
-                        def_span: span.clone(),
-                    },
-                );
-                let ty_end = catch_body
-                    .first()
-                    .map(|c| c.span.start)
-                    .unwrap_or(s.span.end);
-                self.record_type_names_in(catch_ty, &(span.end..ty_end));
-                let saved = self.locals.len();
-                self.locals.push(LocalBind {
-                    name: catch_var.clone(),
-                    def_span: span,
-                    ty: catch_ty.clone(),
-                });
-                for s in catch_body {
-                    self.visit_stmt(s);
+                for c in catches {
+                    let span = catch_var_span(self.source, c);
+                    self.record(
+                        span.clone(),
+                        Symbol::Local {
+                            name: c.var.clone(),
+                            def_span: span.clone(),
+                        },
+                    );
+                    let ty_end = c.body.first().map(|st| st.span.start).unwrap_or(s.span.end);
+                    self.record_type_names_in(&c.ty, &(span.end..ty_end));
+                    let saved = self.locals.len();
+                    self.locals.push(LocalBind {
+                        name: c.var.clone(),
+                        def_span: span,
+                        ty: c.ty.clone(),
+                    });
+                    for st in &c.body {
+                        self.visit_stmt(st);
+                    }
+                    self.locals.truncate(saved);
                 }
-                self.locals.truncate(saved);
+                if let Some(f) = finally {
+                    self.with_block(|this| {
+                        for st in f {
+                            this.visit_stmt(st);
+                        }
+                    });
+                }
             }
             Stmt::Break | Stmt::Continue => {}
         }

@@ -89,6 +89,37 @@ impl Compiler<'_> {
         Ok(())
     }
 
+    /// `obj?[index]` — an index read that yields `nil` when the receiver is
+    /// nil instead of faulting on it.
+    ///
+    /// The nil check guards the index expression too, matching `?.`'s rule
+    /// that nothing to the right of a nil receiver runs: `t?[next()]` must
+    /// not advance `next` when `t` is nil.
+    pub(crate) fn safe_index_to(
+        &mut self,
+        e: &Spanned<Expr>,
+        obj: &Spanned<Expr>,
+        index: &Spanned<Expr>,
+        dst: u16,
+    ) -> Result<(), CompileError> {
+        let span = &e.span;
+        let m = self.mark();
+        let r = self.expr_tmp(obj)?;
+        let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+        self.emit(Instruction::abc(Op::JNOTNIL, b, 0, 0), span);
+        let to_nil = self.emit_jump(Op::JMP, 0, span);
+        // The present path is an ordinary index read, so it picks up
+        // whatever `index_to` knows — a table read, an `OpIndex` overload,
+        // a string — rather than a second implementation of all three.
+        self.index_to(e, obj, index, dst, None)?;
+        let done = self.emit_jump(Op::JMP, 0, span);
+        self.patch_here(to_nil)?;
+        self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
+        self.patch_here(done)?;
+        self.free_to(m);
+        Ok(())
+    }
+
     /// `obj?.method(args)`.
     ///
     /// The nil check guards the **whole call**, arguments included. That is

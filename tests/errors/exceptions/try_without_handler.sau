@@ -1,0 +1,9 @@
+-- A `try` with neither `catch` nor `finally` protects nothing and runs
+-- nothing on the way out.
+class Main
+	static fn main()
+		try
+			println("body")
+		end
+	end
+end

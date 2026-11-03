@@ -134,12 +134,17 @@ fn collect_self_assignments(stmt: &Stmt, out: &mut Vec<String>) {
             }
         }
         Stmt::Try {
-            body, catch_body, ..
+            body,
+            catches,
+            finally,
         } => {
             for s in body {
                 collect_self_assignments(&s.value, out);
             }
-            for s in catch_body {
+            for s in catches.iter().flat_map(|c| &c.body) {
+                collect_self_assignments(&s.value, out);
+            }
+            for s in finally.iter().flatten() {
                 collect_self_assignments(&s.value, out);
             }
         }

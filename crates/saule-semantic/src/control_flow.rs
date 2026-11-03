@@ -151,10 +151,17 @@ fn check_stmt(stmt: &Spanned<Stmt>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
             check_block(body, ctx.enter_loop(), errors);
         }
         Stmt::Try {
-            body, catch_body, ..
+            body,
+            catches,
+            finally,
         } => {
             check_block(body, ctx, errors);
-            check_block(catch_body, ctx, errors);
+            for c in catches {
+                check_block(&c.body, ctx, errors);
+            }
+            if let Some(f) = finally {
+                check_block(f, ctx, errors);
+            }
         }
 
         Stmt::Decl(decl) => check_decl(&decl.value, ctx, errors),
@@ -226,7 +233,7 @@ fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
         // A cast is transparent to control flow — it wraps a value, it
         // doesn't branch or return.
         Expr::Cast { value, .. } => check_expr(value, ctx, errors),
-        Expr::Index { obj, index } => {
+        Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
             check_expr(obj, ctx, errors);
             check_expr(index, ctx, errors);
         }

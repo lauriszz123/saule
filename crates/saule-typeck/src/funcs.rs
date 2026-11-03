@@ -31,6 +31,9 @@ pub(super) struct FunctionInfo {
     /// name. Used by the caller-side argument checker to unify across
     /// `T`-typed slots.
     pub(super) type_params: Vec<String>,
+    /// Constraints on those parameters (`<T: Named>`), checked against what
+    /// each call actually picked — see [`crate::bounds`].
+    pub(super) type_bounds: Vec<saule_ast::TypeBound>,
     /// Declared return type, if any. `None` is treated as "unknown" and
     /// causes the typechecker to skip downstream inference.
     pub(super) return_ty: Option<Type>,
@@ -47,6 +50,7 @@ thread_local! {
 fn info_from_params(
     params: &[Param],
     type_params: &[String],
+    type_bounds: &[saule_ast::TypeBound],
     return_ty: &Option<Type>,
 ) -> FunctionInfo {
     FunctionInfo {
@@ -55,6 +59,7 @@ fn info_from_params(
         variadic: params.last().is_some_and(|p| p.variadic),
         params: params.to_vec(),
         type_params: type_params.to_vec(),
+        type_bounds: type_bounds.to_vec(),
         return_ty: return_ty.clone(),
     }
 }
@@ -70,7 +75,12 @@ pub(super) fn install(module: &Module) {
             .map(|(name, sig)| {
                 (
                     name.clone(),
-                    info_from_params(&sig.params, &sig.type_params, &sig.return_ty),
+                    info_from_params(
+                        &sig.params,
+                        &sig.type_params,
+                        &sig.type_bounds,
+                        &sig.return_ty,
+                    ),
                 )
             })
             .collect()
@@ -82,6 +92,7 @@ pub(super) fn install(module: &Module) {
                 params,
                 return_ty,
                 type_params,
+                type_bounds,
                 ..
             } = &d.value
         {
@@ -99,7 +110,7 @@ pub(super) fn install(module: &Module) {
             });
             map.insert(
                 name.clone(),
-                info_from_params(params, type_params, &declared),
+                info_from_params(params, type_params, type_bounds, &declared),
             );
         }
     }

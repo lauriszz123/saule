@@ -61,12 +61,30 @@ fn ends_in_return(code: &[Instruction]) -> bool {
 }
 
 /// One function being compiled.
+/// A `finally` block waiting to be run on the way out of its `try`.
+///
+/// Re-emitted inline at each exit rather than called as a subroutine: a
+/// frame has nowhere to keep a return address, and the block is small. The
+/// body is owned rather than borrowed so a `FuncCtx` stays free of the AST's
+/// lifetime — a nested function gets a fresh context and therefore an empty
+/// stack, which is also exactly right, since a `return` inside a lambda
+/// written in a `try` returns from the lambda and leaves the `try` alone.
+pub struct PendingFinally {
+    pub body: Vec<saule_ast::Spanned<saule_ast::Stmt>>,
+    /// How many loops were open when the `try` was entered, so `break` can
+    /// tell which pending blocks it is actually leaving.
+    pub loops_at_entry: usize,
+}
+
 pub struct FuncCtx {
     pub name: Option<Rc<str>>,
     pub code: Vec<Instruction>,
     pub regs: RegAlloc,
     pub lines: Vec<LineEntry>,
     pub handlers: Vec<crate::chunk::Handler>,
+    /// `finally` blocks of the `try` statements this point sits inside,
+    /// innermost last.
+    pub finallys: Vec<PendingFinally>,
     pub n_params: u8,
     /// Chunk proto indices this function's `CLOSURE` instructions refer to.
     ///
@@ -180,6 +198,7 @@ impl FuncCtx {
             regs: RegAlloc::new(),
             lines: Vec::new(),
             handlers: Vec::new(),
+            finallys: Vec::new(),
             n_params: 0,
             nested: Vec::new(),
             jump_tables: Vec::new(),

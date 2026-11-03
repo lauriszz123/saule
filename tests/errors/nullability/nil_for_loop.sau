@@ -1,0 +1,9 @@
+-- ERROR: the rule holds inside a loop body too — a scope is not an escape
+-- from it.
+class Main
+  static fn main()
+    for i: integer = 1, 3 do
+      local s: string = nil
+    end
+  end
+end

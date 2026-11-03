@@ -1,0 +1,9 @@
+-- ERROR: and inside an `if` branch, where only one of the two bindings is
+-- the bad one.
+class Main
+  static fn main()
+    if true then
+      local a: string, b: string = nil, "this is bad"
+    end
+  end
+end

@@ -198,7 +198,7 @@ pub fn write_member(
         Value::Instance(inst) => {
             // Instances have a fixed shape, so there is no slot to conjure
             // for a name the class never declared. The typechecker already
-            // rejects that (`tests/ui/unknown_field.sau`); this fires for a
+            // rejects that (`tests/errors/classes/unknown_field.sau`); this fires for a
             // receiver it could not prove, where silently creating an
             // invisible field would be a worse answer than saying so.
             if inst.borrow_mut().set_field(name, value) {

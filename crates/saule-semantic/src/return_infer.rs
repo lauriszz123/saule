@@ -401,16 +401,19 @@ impl Cx<'_> {
             }
             Stmt::Try {
                 body,
-                catch_var,
-                catch_ty,
-                catch_body,
-                ..
+                catches,
+                finally,
             } => {
                 self.block(body, out);
-                let mark = self.scope.len();
-                self.scope.push((catch_var.clone(), catch_ty.clone()));
-                self.block(catch_body, out);
-                self.scope.truncate(mark);
+                for c in catches {
+                    let mark = self.scope.len();
+                    self.scope.push((c.var.clone(), c.ty.clone()));
+                    self.block(&c.body, out);
+                    self.scope.truncate(mark);
+                }
+                if let Some(f) = finally {
+                    self.block(f, out);
+                }
             }
             // A `match` used as a statement can hold `return`s in its arms.
             Stmt::Expr(e) => {

@@ -120,7 +120,7 @@ impl<'a> CollectCx<'a> {
                     _ => {}
                 }
             }
-            Expr::Index { obj, index } => {
+            Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
                 self.visit_expr(obj);
                 self.visit_expr(index);
             }

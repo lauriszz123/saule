@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use saule_ast::{Decl, Expr, Spanned, Stmt, Type};
+use saule_ast::{Decl, Expr, Type};
 use saule_semantic::{with_classes, with_enums, with_interfaces};
 
 use super::Symbol;
@@ -169,18 +169,12 @@ pub(super) fn field_owner(class: &str, name: &str) -> Option<String> {
 /// the wrong word whenever the `try` body declares a local of the same
 /// name — so the scan starts after the last body statement, where the
 /// `catch` clause always is.
-pub(super) fn catch_var_span(
-    source: &str,
-    stmt_span: &Range<usize>,
-    body: &[Spanned<Stmt>],
-    catch_var: &str,
-) -> Range<usize> {
-    let start = body
-        .last()
-        .map(|s| s.span.end)
-        .unwrap_or(stmt_span.start)
-        .max(stmt_span.start);
-    locate_word_in(source, &(start..stmt_span.end), catch_var).unwrap_or_else(|| stmt_span.clone())
+pub(super) fn catch_var_span(source: &str, clause: &saule_ast::CatchClause) -> Range<usize> {
+    // The clause's span runs from its `catch` keyword through the binding,
+    // so the name is inside it by construction — no scanning from the end
+    // of the previous block, which guessed wrong as soon as a `try` had
+    // more than one clause.
+    locate_word_in(source, &clause.span, &clause.var).unwrap_or_else(|| clause.span.clone())
 }
 
 /// Every named type head reachable from `ty` — `table<K, Player>` and

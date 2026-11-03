@@ -1,0 +1,7 @@
+-- ERROR: one bad binding in a parallel `local` is enough, even when the
+-- other is fine.
+class Main
+  static fn main()
+    local a: string, b: string = nil, "this is bad"
+  end
+end

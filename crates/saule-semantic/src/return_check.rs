@@ -165,11 +165,16 @@ fn stmt_returns(stmt: &Stmt) -> bool {
                 && block_returns(else_b)
         }
         Stmt::Try {
-            body, catch_body, ..
+            body,
+            catches,
+            finally,
         } => {
-            // Both the protected region and the handler must return for
-            // the `try` itself to count.
-            block_returns(body) && block_returns(catch_body)
+            // The protected region and *every* clause must return for the
+            // `try` itself to count — a clause that falls through is a path
+            // out of the statement. A `finally` that returns settles it on
+            // its own, since it runs however the `try` is left.
+            finally.as_ref().is_some_and(|f| block_returns(f))
+                || (block_returns(body) && catches.iter().all(|c| block_returns(&c.body)))
         }
         // Match: only count if every arm returns AND the arms are
         // exhaustive in a way we can see — either a wildcard arm exists

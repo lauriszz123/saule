@@ -6,11 +6,12 @@
 > **The tree-walking interpreter has been removed.** It was the default
 > engine until Phase 4, and the differential oracle after that; everything
 > below that says "both engines", "falls back" or "the oracle" describes how
-> the VM was built, not how it is tested now. Its answers were kept: every
-> fixture's output (`tests/**/expected/`), every example project's
-> (`tests/examples/`) and every differential test's outcome
-> (`crates/saule-vm/tests/differential/expected.txt`) was recorded from it,
-> in the last commit that had both engines, where they agreed.
+> the VM was built, not how it is tested now. Its answers were kept for a
+> while — every fixture's and example project's output was recorded from it,
+> in the last commit that had both engines, where they agreed — but those
+> recordings have since been removed, and only the differential tests'
+> outcomes (`crates/saule-vm/tests/differential/expected.txt`) still hold
+> them.
 >
 > **Ground rule, absolute:** all of the below pass at every commit.
 
@@ -29,10 +30,9 @@ right. `run_examples.sh` does the same for the *example projects* —
 multi-module, with imports and file IO — which is a different question from
 the single-file fixtures, and the one that has actually caught things.
 
-A deliberate change in behaviour re-records: `SAULE_BLESS=1` on either
-script, or on `cargo test -p saule-vm --test differential` for a new
-differential test. The recordings are the specification now, so the diff
-they produce gets reviewed like any other.
+`run_tests.sh` and `run_examples.sh` check exit status only; the differential
+tests are the one place a recording is still compared, and
+`SAULE_BLESS=1 cargo test -p saule-vm --test differential` re-records those.
 
 ### Per-platform notes
 
@@ -1550,15 +1550,15 @@ The verifier also earned its keep: `CALLMX` was missing from its
 `expect_extra` list, and four fixtures failed with `an EXTRAARG with no
 instruction before it` rather than running a mis-decoded chunk.
 
-### `tests/ui/` is the diagnostic corpus — audited
+### `tests/errors/` is the diagnostic corpus — audited
 
-**Every file in `tests/ui/` is a deliberate error.** Each pins a specific
+**Every file in `tests/errors/` is a deliberate error.** Each pins a specific
 message, and `run_tests.sh` requires all of them to fail. Most are
 compile-time — parser, `saule-semantic`, `saule-typeck` — but not all:
 `throw_uncaught`, `io_use_after_close`, the `force_unwrap_*` set,
 `table_insert_oob`, `pow_negative_exponent` and the two `stack_overflow_*`
 fixtures are **runtime** errors, pinned for the same reason. See
-`tests/ui/README.md`.
+`tests/errors/README.md`.
 
 **All 144 fail with a real diagnostic** — none exits 0, none produces an
 empty message. But the harness gates on **exit status**, and that is a
@@ -1571,7 +1571,7 @@ Reading all 144 messages against their filenames found three that were.
 | `io_use_after_close` | Opened `/tmp/...`, which does not exist on Windows, so `Io.open` returned nil and the `!` killed the run on **line 4** — never reaching `close()`, let alone the use after it. | Relative path. Fails with `type error: file is closed` at the write after the close, which is the point. |
 | `match_variant_arity_mismatch` | Fails with `cannot determine the type of this expression` — the generic fallback, not an arity check. The fixture's own comment says "the typechecker should reject this"; it rejects it, but for no stated reason. | **Left as-is and recorded as a gap below.** The fixture is honest about intent; the diagnostic is what is missing. |
 
-*The general lesson, now in `tests/ui/README.md`:* a fixture whose message is
+*The general lesson, now in `tests/errors/README.md`:* a fixture whose message is
 `cannot determine the type of this expression` is a signal rather than a
 pass. It usually means the precise check the fixture is named for does not
 exist, and the generic fallback is standing in for it.
@@ -2047,7 +2047,7 @@ such a proto is the `EXTRAARG` rather than the tail call. `verify.rs`'s
 
 #### Bug 1: the fixture that stopped being a test and became a hang
 
-`tests/ui/stack_overflow_recursion.sau` was `return forever(n + 1)` — a
+`tests/errors/exceptions/stack_overflow_recursion.sau` was `return forever(n + 1)` — a
 **tail** call. Once the tree-walker trampolined it, unbounded recursion
 became an unbounded *loop*: both engines spin, and `run_tests.sh` has no
 per-fixture timeout, so the whole suite hangs rather than fails. Pre-existing
@@ -2333,7 +2333,7 @@ fresh `Vm` with frames of its own — so it cannot see the nesting at all.
 What nesting consumes is the **native** stack, one Rust frame per level,
 which is what the tree-walker's own depth guard already counts. Sharing the
 counter also bounds a program bouncing between engines once rather than
-twice. Pinned by `tests/ui/stack_overflow_reentrant.sau`.
+twice. Pinned by `tests/errors/exceptions/stack_overflow_reentrant.sau`.
 
 **The two guards this deleted:** `refuse_closure_to_native` in
 `compile/expr.rs`, and the `toString` refusal in `compile/layout.rs`.
@@ -2591,7 +2591,7 @@ that coverage grows.
 
 **All five are met. Phase 3 is closed.**
 
-- [x] All `tests/*.sau` and all `tests/ui/*.sau` behave identically under
+- [x] All run fixtures and all error fixtures behave identically under
       both engines — `SAULE_DIFF=1 ./run_tests.sh`, **236/236**, output
       compared rather than just exit status, two documented exemptions.
       **Note what this does and does not say:** it holds *including* the
@@ -3999,10 +3999,11 @@ never have caught any of them.
       `if`/`while`/`for`, nesting and block scoping. Programs the compiler
       cannot compile yet are *skipped*, since `Unsupported` is the designed
       fall-back signal, not a failure.
-- [x] **`tests/ui/` audited** — all 144 fixtures read against their names,
+- [x] **`tests/errors/` audited** — all 144 fixtures read against their names,
       not just their exit status. Three were failing for the wrong reason;
       two are fixed and one is recorded as a missing diagnostic. See
-      "`tests/ui/` is the diagnostic corpus" above and `tests/ui/README.md`.
+      "`tests/errors/` is the diagnostic corpus" above and
+      `tests/errors/README.md`.
 - [x] **`SAULE_DIFF=1 ./run_tests.sh`** — every fixture under **both**
       engines, output compared character for character. This is the
       "conformance tests at no authoring cost" item, and it closes a hole

@@ -410,6 +410,71 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("this `catch {ty}` can never run")]
+    #[diagnostic(help(
+        "an earlier `catch {earlier}` already handles it — clauses are tried in source order, so put the narrower type first"
+    ))]
+    UnreachableCatch {
+        ty: String,
+        earlier: String,
+        #[label("already handled above")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("operator `{op}` is not promised by the bound `{bound}`")]
+    #[diagnostic(help(
+        "a type parameter can only be operated on through its bound — bound it by the operator's own interface (`{interface}`) if the operator is what you need"
+    ))]
+    OperatorNotInBound {
+        op: &'static str,
+        bound: String,
+        interface: &'static str,
+        #[label("not promised here")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("no member `{member}` on the unbounded type parameter `{param}`")]
+    #[diagnostic(help(
+        "a bare `<{param}>` says only \"some type the caller picks\", so nothing can be read off it — bound it with the interface it must satisfy (`<{param}: SomeInterface>`) and its methods become available here"
+    ))]
+    MemberOnUnboundedTypeParam {
+        param: String,
+        member: String,
+        #[label("not known to exist")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{found}` does not satisfy the bound `{bound}` on `{param}`")]
+    #[diagnostic(help(
+        "`{param}` is declared `<{param}: {bound}>`, so the type filling it has to implement `{bound}`"
+    ))]
+    BoundNotSatisfied {
+        param: String,
+        bound: String,
+        found: String,
+        #[label("does not implement `{bound}`")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{name}` is not an interface or class, so it cannot bound `{param}`")]
+    #[diagnostic(help(
+        "a bound names an interface the type must implement, or a class it must be — `<{param}: Named>`"
+    ))]
+    BadTypeBound {
+        param: String,
+        name: String,
+        #[label("not a bound")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{param}` is bounded but is not one of this declaration's type parameters")]
+    #[diagnostic(help("declare it in the `<...>` list, or remove the bound"))]
+    BoundOnUnknownParam {
+        param: String,
+        #[label("no such type parameter")]
+        span: miette::SourceSpan,
+    },
+
     #[error("no member `{member}` on `{receiver}`")]
     #[diagnostic(help(
         "check the spelling, or add `{member}` as a field / method to `{receiver}`"

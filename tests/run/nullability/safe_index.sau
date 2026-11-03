@@ -1,0 +1,44 @@
+-- `t?[i]` — the index half of the safe chain, alongside `?.`.
+--
+-- `nil` when the receiver is nil, the element otherwise, with the receiver
+-- evaluated once and the *index* not evaluated at all on the nil path —
+-- the same rule `?.` follows for a call's arguments.
+
+class Grid
+	rows: table<table<integer>>? = nil
+end
+
+class Main
+	static fn main()
+		local missing: table<integer>? = nil
+		local present: table<integer>? = {10, 20, 30}
+		println(missing?[1] ?? -1)
+		println(present?[2] ?? -1)
+
+		local map: table<string, integer>? = {a: 5}
+		println(map?["a"] ?? -1)
+		println(map?["nope"] ?? -1)
+
+		-- Chains, mixing both halves.
+		local g: Grid = Grid()
+		println(g.rows?[1]?[1] ?? -1)
+		g.rows = {{7, 8}}
+		println(g.rows?[1]?[2] ?? -1)
+
+		-- The index is not evaluated when the receiver is nil.
+		println(missing?[bump()] ?? -1)
+		println("evaluated: " .. hits)
+		println(present?[bump()] ?? -1)
+		println("evaluated: " .. hits)
+
+		-- The result is nullable, so it needs a fallback like any other.
+		local n: integer = present?[1] ?? 0
+		println(n)
+	end
+end
+
+local hits: integer = 0
+fn bump() -> integer
+	hits = hits + 1
+	return 1
+end

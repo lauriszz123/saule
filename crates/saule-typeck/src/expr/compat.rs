@@ -228,7 +228,16 @@ pub(crate) fn check_table_literal_compat(
     };
 
     let has_positional = items.iter().any(|e| matches!(e, TableEntry::Positional(_)));
-    let has_field = items.iter().any(|e| matches!(e, TableEntry::Field { .. }));
+    // A field key written as a name or a string literal (`name: v`,
+    // `"text": v`, and `["text"]: v`, which mean the same thing) is a
+    // *string* key, so the table has to be keyed by string. A **computed**
+    // key is whatever its expression evaluates to, and is checked against
+    // the declared key type instead — that is the whole point of writing it
+    // in brackets.
+    let string_key = |key: &Spanned<Expr>| matches!(key.value, Expr::Str(_));
+    let has_string_key = items
+        .iter()
+        .any(|e| matches!(e, TableEntry::Field { key, .. } if string_key(key)));
 
     // `{a, b, c}` literal cannot fill a map-typed table whose key is not
     // integer-compatible.
@@ -245,7 +254,7 @@ pub(crate) fn check_table_literal_compat(
     }
     // Field entries (`name: ...`) require the table to declare a key
     // type compatible with `string`. Array-typed `table<T>` rejects them.
-    if has_field {
+    if has_string_key {
         let key_ok = match key {
             None => false,
             Some(k) => is_string_like(k),
@@ -260,6 +269,17 @@ pub(crate) fn check_table_literal_compat(
                 span: to_source_span(value.span.clone()),
             });
             return true;
+        }
+    }
+    // A computed key has to be a key the table accepts — `{ [1]: "a" }` is
+    // as wrong for a `table<string, string>` as `t[1] = "a"` would be.
+    if let Some(k) = key {
+        for item in items {
+            if let TableEntry::Field { key: k_expr, .. } = item
+                && !string_key(k_expr)
+            {
+                check_table_key_compat(k, k_expr, scope, errors);
+            }
         }
     }
     // Each value must match the declared value type.

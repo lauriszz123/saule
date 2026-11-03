@@ -1187,6 +1187,8 @@ pub fn builtin_registries() -> (
 
     // FsInfo ────────────────────────────────────────────────────────────
     let mut info = ClassInfo {
+        // A native declaration has no generic parameters to bound.
+        type_bounds: Vec::new(),
         type_params: Vec::new(),
         parent_args: Vec::new(),
         implements_args: Vec::new(),
