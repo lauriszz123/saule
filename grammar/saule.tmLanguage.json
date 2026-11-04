@@ -63,7 +63,7 @@
       "patterns": [
         {
           "name": "keyword.control.saule",
-          "match": "\\b(if|else|elseif|then|end|for|while|repeat|until|do|in|break|continue|return|throw|try|catch|match|case|when)\\b"
+          "match": "\\b(if|else|elseif|then|end|for|while|repeat|until|do|in|break|continue|return|throw|try|catch|finally|match|case|when)\\b"
         },
         {
           "name": "keyword.declaration.saule",
