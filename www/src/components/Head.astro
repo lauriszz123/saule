@@ -1,0 +1,150 @@
+---
+/**
+ * Starlight's `<head>`, plus the one script the site needs on every page.
+ *
+ * The sliding tab indicator cannot be done in CSS alone: Starlight marks the
+ * selected tab with a `box-shadow` on that tab, so there is no single element
+ * to move, and CSS has no way to measure where a sibling sits. This measures
+ * the selected tab and hands the numbers to the stylesheet as custom
+ * properties; the indicator itself, and its transition, stay in CSS.
+ */
+import Default from '@astrojs/starlight/components/Head.astro';
+---
+
+<Default {...Astro.props}><slot /></Default>
+
+<script>
+	/** Point the indicator at whichever tab is selected. */
+	function sync(list: HTMLElement) {
+		const selected = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+		if (!selected) return;
+		list.style.setProperty('--saule-tab-x', `${selected.offsetLeft}px`);
+		list.style.setProperty('--saule-tab-w', `${selected.offsetWidth}px`);
+		// Only now: the stylesheet draws the indicator — and drops Starlight's
+		// per-tab underline — only once there are real numbers to draw it
+		// with. Without the script the original underline simply stays.
+		list.dataset.sauleTabs = 'ready';
+	}
+
+	function init() {
+		const lists = document.querySelectorAll<HTMLElement>('starlight-tabs [role="tablist"]');
+		if (lists.length === 0) return;
+
+		for (const list of lists) {
+			sync(list);
+			// Starlight moves the selection itself, by click and by arrow key,
+			// so the attribute it writes is the signal to follow rather than
+			// any particular event.
+			new MutationObserver(() => sync(list)).observe(list, {
+				subtree: true,
+				attributes: true,
+				attributeFilter: ['aria-selected'],
+			});
+		}
+
+		// A tab's width depends on the text in it, which depends on the font
+		// that ended up loading, and on how much room the column has.
+		let queued = false;
+		const resync = () => {
+			if (queued) return;
+			queued = true;
+			requestAnimationFrame(() => {
+				queued = false;
+				for (const list of lists) sync(list);
+			});
+		};
+		window.addEventListener('resize', resync);
+		document.fonts?.ready.then(resync);
+	}
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', init);
+	} else {
+		init();
+	}
+</script>
+
+<script>
+	/**
+	 * Open the standard-library entry a URL points at.
+	 *
+	 * A `<details>` stays closed when the fragment lands on it, so a link to
+	 * `#string-sub` would scroll to a row that still hides the thing it was
+	 * shared for.
+	 */
+	function openTarget() {
+		const id = decodeURIComponent(location.hash.slice(1));
+		if (!id) return;
+		const entry = document.getElementById(id);
+		if (entry instanceof HTMLDetailsElement) {
+			entry.open = true;
+			entry.scrollIntoView({ block: 'start' });
+		}
+	}
+
+	window.addEventListener('hashchange', openTarget);
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', openTarget);
+	} else {
+		openTarget();
+	}
+</script>
+
+<script>
+	/**
+	 * Remember which sidebar groups the reader left open.
+	 *
+	 * Every group is `collapsed: true` in the config, so a first visit shows
+	 * the whole shape of the documentation at once rather than one expanded
+	 * section and a lot of scrolling. After that the nav should be however
+	 * they last arranged it, which is what this restores.
+	 */
+	const KEY = 'saule:sidebar-open';
+
+	function readOpen(): string[] {
+		try {
+			const raw = localStorage.getItem(KEY);
+			const parsed: unknown = raw ? JSON.parse(raw) : [];
+			return Array.isArray(parsed) ? parsed.filter((l): l is string => typeof l === 'string') : [];
+		} catch {
+			return [];
+		}
+	}
+
+	function writeOpen(labels: string[]) {
+		try {
+			localStorage.setItem(KEY, JSON.stringify(labels));
+		} catch {
+			/* Private window or blocked storage: the nav still works, it just
+			   starts from the configured state every time. */
+		}
+	}
+
+	function initSidebar() {
+		const groups = document.querySelectorAll<HTMLDetailsElement>('.sidebar-content details');
+		if (groups.length === 0) return;
+		const open = new Set(readOpen());
+
+		for (const group of groups) {
+			const label = group.querySelector('summary')?.textContent?.trim();
+			if (!label) continue;
+			// A group holding the current page stays open whatever was saved:
+			// collapsing the section you are reading hides where you are.
+			const here = group.querySelector('a[aria-current="page"]') !== null;
+			if (!here) group.open = open.has(label);
+
+			group.addEventListener('toggle', () => {
+				const saved = new Set(readOpen());
+				if (group.open) saved.add(label);
+				else saved.delete(label);
+				writeOpen([...saved]);
+			});
+		}
+	}
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', initSidebar);
+	} else {
+		initSidebar();
+	}
+</script>

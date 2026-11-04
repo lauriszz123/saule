@@ -107,15 +107,21 @@ pub(crate) fn expected_arg_types(
     // left to right, a named argument targets the slot with its name, and a
     // trailing block takes the callback slot nothing else claimed.
     //
-    // Keyed off `names`, which native signatures leave empty — they record no
-    // parameter names, so nothing here can be matched up and every slot comes
-    // back `None`, as before.
-    let param_slots: Vec<saule_ast::ParamSlot<'_>> = names
-        .iter()
-        .enumerate()
-        .map(|(i, n)| match params.get(i) {
-            Some(ty) => saule_ast::ParamSlot::new(n, ty),
-            None => saule_ast::ParamSlot::untyped(n),
+    // Built from the parameter *types*, with the name attached where there is
+    // one. A native signature records no names, and keying this off `names`
+    // alone gave it no slots at all — so every expected type came back
+    // `None`, and the lambda in `Iter.map(xs, s => String.len(s))` typed its
+    // parameter as `any` instead of the element type the receiver had already
+    // pinned. A nameless slot simply cannot be matched by a named argument,
+    // which is right: natives do not take them.
+    let slot_count = params.len().max(names.len());
+    let param_slots: Vec<saule_ast::ParamSlot<'_>> = (0..slot_count)
+        .map(|i| {
+            let name = names.get(i).map(String::as_str).unwrap_or("");
+            match params.get(i) {
+                Some(ty) => saule_ast::ParamSlot::new(name, ty),
+                None => saule_ast::ParamSlot::untyped(name),
+            }
         })
         .collect();
     let slots = saule_ast::resolve_arg_slots(args, &param_slots);

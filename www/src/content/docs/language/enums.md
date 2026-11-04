@@ -40,11 +40,24 @@ print(s.describe())    -- "Status is: alive"
 ### Enums as Types
 
 ```saule
-fn move(self, dir: Direction) -> nil
-    if dir == Direction.North then
-        self.y = self.y + 1
+enum Direction
+    North
+    South
+end
+
+class Walker
+    y: integer = 0
+
+    fn move(dir: Direction) -> nil
+        if dir == Direction.North then
+            self.y = self.y + 1
+        end
     end
 end
+
+local w: Walker = Walker()
+w.move(Direction.North)
+println(w.y)                    -- 1
 ```
 
 ### Generic Enums
@@ -68,8 +81,15 @@ end
 The instantiation comes from the construction where the payload pins it down, and from the annotation where it doesn't — `Result.Err("boom")` says nothing about `T`, so it fits any `Result`:
 
 ```saule
+enum Result<T>
+    Ok(value: T)
+    Err(message: string)
+end
+
 local inferred = Result.Ok("hi")            -- Result<string>
 local failed: Result<integer> = Result.Err("boom")
+
+println(match inferred case Result.Ok(v) then v case Result.Err(m) then m end)   -- hi
 ```
 
 Exhaustiveness is unaffected: type arguments say what the payloads hold, never which variants exist.

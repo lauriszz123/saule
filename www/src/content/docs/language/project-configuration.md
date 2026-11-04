@@ -138,14 +138,14 @@ A typical project-mode entry file:
 
 ```saule
 import Player from "entities/Player"
-import Math from "utils/Math"
+import clamp from "utils/Math"
 
 class Main
     static fn main()
         local p: Player = Player("Arthur", 100, 1.5)
         p.greet()
 
-        local dmg: integer = Math.clamp(50, 0, 100)
+        local dmg: integer = clamp(50, 0, 100)
         p.damage(dmg)
     end
 end

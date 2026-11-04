@@ -74,14 +74,26 @@ impl Layouts {
     }
 }
 
+/// What [`build_interfaces`] learned about a module's interfaces: the protos,
+/// each one's index by name, and each one's transitive ancestors.
+pub struct Interfaces {
+    pub protos: Vec<crate::chunk::InterfaceProto>,
+    pub index: HashMap<String, u32>,
+    /// Every interface each one extends, transitively, excluding itself. A
+    /// class listing `implements Combatant` satisfies `Damageable` too when
+    /// `Combatant extends Damageable`, and dispatch needs an itable for each
+    /// of them — built from that one `implements` entry.
+    pub ancestors: HashMap<String, Vec<String>>,
+}
+
 /// Collect every `interface` and number its methods.
 ///
-/// `extends` is flattened here: an interface's slot list includes everything
-/// it inherits, so an implementing class needs one itable per interface
-/// rather than one per level.
-pub fn build_interfaces(
-    module: &Module,
-) -> (Vec<crate::chunk::InterfaceProto>, HashMap<String, u32>) {
+/// `extends` is flattened two ways, for two different consumers. An
+/// interface's own slot list includes everything it inherits, so an
+/// implementing class needs one itable per interface rather than one per
+/// level; and [`Interfaces::ancestors`] names the interfaces each one
+/// extends, so the class gets an itable for those as well.
+pub fn build_interfaces(module: &Module) -> Interfaces {
     use crate::chunk::InterfaceProto;
 
     let mut decls: HashMap<&str, (Vec<&str>, Vec<&str>)> = HashMap::new();
@@ -128,8 +140,26 @@ pub fn build_interfaces(
         }
     }
 
+    /// Every interface `name` extends, transitively, excluding itself.
+    fn ancestors<'a>(
+        name: &'a str,
+        decls: &HashMap<&'a str, (Vec<&'a str>, Vec<&'a str>)>,
+        out: &mut Vec<String>,
+    ) {
+        let Some((extends, _)) = decls.get(name) else {
+            return;
+        };
+        for p in extends.iter() {
+            if !out.iter().any(|o| o == p) {
+                out.push((*p).to_string());
+                ancestors(p, decls, out);
+            }
+        }
+    }
+
     let mut protos = Vec::new();
     let mut index = HashMap::new();
+    let mut parents: HashMap<String, Vec<String>> = HashMap::new();
     for name in order {
         let mut methods = Vec::new();
         gather(name, &decls, &mut Vec::new(), &mut methods);
@@ -139,6 +169,9 @@ pub fn build_interfaces(
             .enumerate()
             .map(|(i, n)| (Rc::clone(n), i as u16))
             .collect();
+        let mut up = Vec::new();
+        ancestors(name, &decls, &mut up);
+        parents.insert(name.to_string(), up);
         index.insert(name.to_string(), protos.len() as u32);
         protos.push(InterfaceProto {
             name: Rc::from(name),
@@ -146,7 +179,11 @@ pub fn build_interfaces(
             index: idx,
         });
     }
-    (protos, index)
+    Interfaces {
+        protos,
+        index,
+        ancestors: parents,
+    }
 }
 
 /// Collect every `enum` and assign **dense tags in declaration order**.
@@ -247,7 +284,11 @@ pub fn build(
     interfaces: &mut Vec<crate::chunk::InterfaceProto>,
     imported: &Layouts,
 ) -> Result<Layouts, CompileError> {
-    let (mut ifaces, mut iface_index) = build_interfaces(module);
+    let Interfaces {
+        protos: mut ifaces,
+        index: mut iface_index,
+        ancestors: iface_parents,
+    } = build_interfaces(module);
     // Renumber this module's interfaces onto the end of the program's table,
     // then fold in what the imports already named.
     let base = interfaces.len() as u32;
@@ -326,8 +367,20 @@ pub fn build(
         // class's vtable slot. Built once here, so a `CALLIF` is a small-map
         // probe and an indexed load rather than a name lookup (§8.4).
         let mut missing: Vec<(String, String)> = Vec::new();
-        for iname in implements.get(*name).into_iter().flat_map(|v| v.iter()) {
-            let Some(&ii) = iface_index.get(*iname) else {
+        let implemented: Vec<String> = implements
+            .get(*name)
+            .into_iter()
+            .flat_map(|v| v.iter())
+            .flat_map(|i| {
+                // The interface itself, then everything it extends: a
+                // `Combatant` is a `Damageable`, and a call through the
+                // parent interface looks for the parent's own itable.
+                std::iter::once((*i).to_string())
+                    .chain(iface_parents.get(*i).into_iter().flatten().cloned())
+            })
+            .collect();
+        for iname in implemented.iter() {
+            let Some(&ii) = iface_index.get(iname.as_str()) else {
                 continue;
             };
             let iface = &ifaces[ii as usize];

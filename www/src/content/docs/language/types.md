@@ -47,8 +47,9 @@ local raw: bytes = Bytes.fromString(text)
 println(String.len(text))   -- 5 codepoints
 println(#raw)               -- 6 bytes
 
-local oops: string = raw    -- error: cannot assign `bytes` to `string`
-println(String.len(raw))    -- error: expects `string`, got `bytes`
+-- Neither of these compiles, which is the point of keeping them apart:
+--   local oops: string = raw    -- ERROR: cannot assign `bytes` to `string`
+--   println(String.len(raw))    -- ERROR: expects `string`, got `bytes`
 ```
 
 Nothing converts between them implicitly, and `as` is not a way across
@@ -80,6 +81,10 @@ The two directions are deliberately not symmetric:
 local b: byte = 200                  -- a literal in range: no cast needed
 local n: integer = b                 -- widening is free; a byte *is* an integer
 
+fn readLength() -> integer
+    return 300
+end
+
 local computed: integer = readLength()
 local narrowed: byte? = computed as byte   -- checked: nil when out of range
 local oops: byte = computed          -- ERROR: needs `as byte`
@@ -100,8 +105,13 @@ level can know what it holds.
 a result that stayed `byte` would be a lie:
 
 ```saule
+local b: byte = 0x7f
+
 local sum: integer = b + 100         -- integer, not byte
 local masked: integer = b & 0x0f     -- bit patterns work; a byte has them
+
+println(sum)                         -- 227
+println(masked)                      -- 15
 ```
 
 That makes the overflow visible in the type instead of hidden in a wrap, and
@@ -122,11 +132,18 @@ through them one at a time.
 A function value's type is its **signature**: the types it is called with and the type it hands back. There is no bare `function` type — a slot that holds a callable has to say which calls are legal against it.
 
 ```saule
+fn advance(dt: float)
+  println("tick " .. dt)
+end
+
 local onTick: fn(float) -> nil = fn(dt: float)
   advance(dt)
 end
 
 local compare: fn(integer, integer) -> boolean = (a, b) => a < b
+
+onTick(0.5)                  -- tick 0.5
+println(compare(1, 2))       -- true
 ```
 
 The parts are the same ones a declaration writes: a parenthesised parameter-type list, then `->` and the return type. `-> nil` is the "returns nothing" spelling. Nullability wraps the whole type, so an optional callback needs parentheses — `(fn(string) -> nil)?`, not `fn(string) -> nil?`, which is a callback returning a nullable `nil`.
@@ -142,16 +159,30 @@ end
 The payoff is that anonymous functions assigned into such a slot are checked against it — arity, parameter types, and return type — instead of being accepted on the grounds that they are *some* function:
 
 ```saule
-local field = TextField()
-field.onChanged = fn(count: integer)   -- error: expected fn(string) -> nil
-  print(count)
+class TextField
+  onChanged: fn(string) -> nil = text => println(text)
 end
+
+local field: TextField = TextField()
+
+-- The slot's type is the contract, so this is rejected:
+--   field.onChanged = fn(count: integer)   -- ERROR: expected fn(string) -> nil
+--     println(count)
+--   end
 ```
 
 It also means the parameters of a lambda written into a typed slot don't need annotations. The signature supplies them, and the body is checked with the real types:
 
 ```saule
-field.onChanged = text => print(text:upper())   -- `text` is a `string`
+class TextField
+  onChanged: fn(string) -> nil = text => println(text)
+end
+
+local field: TextField = TextField()
+
+-- `text` is a `string`, taken from the slot's own type.
+field.onChanged = text => println(String.upper(text))
+field.onChanged("saule")                        -- SAULE
 ```
 
 An earlier version of the language accepted a bare `function` annotation. It carried no arity and no parameter types, so every lambda fit every slot and the mistake surfaced at the call — or, for a callback stored now and invoked later, not at all. Widen deliberately with `any` if a slot really does accept anything.
@@ -397,8 +428,10 @@ local gone: integer = 1 << 64            -- 0
 **Precedence follows Lua**: `|` is loosest, then `~`, then `&`, then the shifts, and all of them bind looser than `..`, `+` and `*` but tighter than any comparison. So the mask-test idiom needs no parentheses:
 
 ```saule
+local flags: integer = 0b0110
+
 if flags & 0b0100 != 0 then              -- (flags & 0b0100) != 0
-    println("bit set")
+    println("bit set")                   -- bit set
 end
 ```
 
@@ -484,8 +517,13 @@ Because the result is nullable, the failure case cannot be ignored — combine
 it with `??` for a fallback or `!` to turn it back into a throw:
 
 ```saule
+local value: any = 42
+
 local n: integer = value as integer ?? 0     -- default on mismatch
-local m: integer = (value as integer)!       -- throw on mismatch
+local m: integer = (value as integer)!       -- fails loudly on mismatch
+
+println(n)                                   -- 42
+println(m)                                   -- 42
 ```
 
 This is what makes `any` **sound**: a value annotated `integer` really is an

@@ -1,0 +1,240 @@
+---
+title: Documentation
+description: Everything written about Saule — the guides that teach it, the language reference, the standard library, and the worked examples — in one index.
+tableOfContents: false
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Saule is a statically typed, class-oriented scripting language. It reads like
+Lua and checks like a typed language: every parameter and field states its
+type, `nil` is a thing a type opts into rather than a value any slot can hold,
+and the compiler reports what it found before anything runs.
+
+This page is the index. If you are starting from nothing, read
+[Introduction](/saule/guides/introduction/) and then
+[Your First Program](/saule/guides/first-program/) — about fifteen minutes
+together. If you are here to look one thing up, the
+[Quick Reference](/saule/reference/quick-reference/) and the
+[Grammar](/saule/reference/grammar/) are the two pages that answer most
+questions without reading prose.
+
+## Start here
+
+<CardGrid>
+	<LinkCard
+		title="Introduction"
+		href="/saule/guides/introduction/"
+		description="What the language is for, what it borrows from Lua, and what it does differently."
+	/>
+	<LinkCard
+		title="Installation"
+		href="/saule/guides/installation/"
+		description="Install the toolchain on Linux, macOS or Windows, and check it works."
+	/>
+	<LinkCard
+		title="Your First Program"
+		href="/saule/guides/first-program/"
+		description="From an empty file to a running program, with the type checker explained as it speaks."
+	/>
+	<LinkCard
+		title="Playground"
+		href="/saule/play/"
+		description="Write and run Saule in the browser. Nothing to install."
+	/>
+</CardGrid>
+
+## The language
+
+Fourteen pages covering the whole language, in the order they build on each
+other. Each one is worth reading end to end once; afterwards they work as
+reference.
+
+<CardGrid>
+	<LinkCard
+		title="Types"
+		href="/saule/language/types/"
+		description="integer, float, string, bytes, byte, boolean, any — and why integer and float never mix implicitly."
+	/>
+	<LinkCard
+		title="Variables"
+		href="/saule/language/variables/"
+		description="local bindings, module variables, inference, and the rule that a non-nullable slot can never start empty."
+	/>
+	<LinkCard
+		title="Tables"
+		href="/saule/language/tables/"
+		description="One structure, two jobs: 1-based arrays and typed maps, with element types that are invariant."
+	/>
+	<LinkCard
+		title="Functions"
+		href="/saule/language/functions/"
+		description="Defaults, named arguments, multiple returns, variadics, generics and the when(...) pipeline."
+	/>
+	<LinkCard
+		title="Lambdas and Closures"
+		href="/saule/language/lambdas-and-closures/"
+		description="Arrow lambdas, inferred parameter types, captured state, and trailing blocks."
+	/>
+	<LinkCard
+		title="Classes"
+		href="/saule/language/classes/"
+		description="Fields, methods, visibility, static members, inheritance and overriding."
+	/>
+	<LinkCard
+		title="Interfaces"
+		href="/saule/language/interfaces/"
+		description="Contracts a class fulfils, including the Op* family behind operator overloading."
+	/>
+	<LinkCard
+		title="Enums"
+		href="/saule/language/enums/"
+		description="Plain variants, valued variants, payloads, methods and generic enums."
+	/>
+	<LinkCard
+		title="Pattern Matching"
+		href="/saule/language/pattern-matching/"
+		description="match as a statement and an expression, with guards and exhaustiveness checking."
+	/>
+	<LinkCard
+		title="Null Safety"
+		href="/saule/language/null-safety/"
+		description="T?, ?., ?[ ], ?? and ! — how absence is expressed and how the checker makes you handle it."
+	/>
+	<LinkCard
+		title="Error Handling"
+		href="/saule/language/error-handling/"
+		description="throw, try, several catch clauses, finally — and when a nullable return is the better answer."
+	/>
+	<LinkCard
+		title="Loops"
+		href="/saule/language/loops/"
+		description="Numeric for, for-in over tables and iterables, while, repeat-until, break and continue."
+	/>
+	<LinkCard
+		title="Imports and File Structure"
+		href="/saule/language/imports-and-file-structure/"
+		description="export, import, folder modules, visibility across files, and why circular imports are refused."
+	/>
+	<LinkCard
+		title="Project Configuration"
+		href="/saule/language/project-configuration/"
+		description="saule.config: entry points, source roots, dependencies and the minimum toolchain version."
+	/>
+</CardGrid>
+
+## Standard library
+
+Everything Saule ships with. All of it is in scope with no `import` — the
+modules are static classes, not packages.
+
+<CardGrid>
+	<LinkCard
+		title="Prelude"
+		href="/saule/stdlib/prelude-always-in-scope/"
+		description="print, println, printf, tostring, type, assert, error — and the interfaces the language itself looks for."
+	/>
+	<LinkCard
+		title="String"
+		href="/saule/stdlib/string/"
+		description="UTF-8 aware text: slicing, searching, splitting, joining, padding and formatting."
+	/>
+	<LinkCard
+		title="Bytes"
+		href="/saule/stdlib/bytes/"
+		description="Buffers that are not text, kept apart from string so a byte can never be mistaken for a character."
+	/>
+	<LinkCard
+		title="Math"
+		href="/saule/stdlib/math/"
+		description="Rounding, arithmetic, trigonometry and randomness, generic over integer and float."
+	/>
+	<LinkCard
+		title="Table"
+		href="/saule/stdlib/table/"
+		description="The mutating half of the sequence API: insert, remove, sort, and questions about a table."
+	/>
+	<LinkCard
+		title="Iter"
+		href="/saule/stdlib/iter/"
+		description="The deriving half: map, filter, reduce and friends, eager and fully typed."
+	/>
+	<LinkCard
+		title="Io / File"
+		href="/saule/stdlib/io-file/"
+		description="Standard streams and file handles, with modes and seek positions as real enums."
+	/>
+	<LinkCard
+		title="Os"
+		href="/saule/stdlib/os/"
+		description="Time, environment, filesystem, and child processes you can talk to while they run."
+	/>
+	<LinkCard
+		title="Saule"
+		href="/saule/stdlib/saule/"
+		description="The version of the toolchain running your code, and how to degrade gracefully on an older one."
+	/>
+	<LinkCard
+		title="Project"
+		href="/saule/stdlib/project/"
+		description="The saule.config of the code being run: name, version, root and source directories."
+	/>
+	<LinkCard
+		title="Conventions"
+		href="/saule/stdlib/conventions/"
+		description="The patterns that repeat across the whole library, and why each one is the way it is."
+	/>
+</CardGrid>
+
+## Reference
+
+<CardGrid>
+	<LinkCard
+		title="Quick Reference"
+		href="/saule/reference/quick-reference/"
+		description="Keywords, literals and operators in three tables, for looking something up at a glance."
+	/>
+	<LinkCard
+		title="Grammar"
+		href="/saule/reference/grammar/"
+		description="The complete syntax, transcribed from the parser, so it describes what the compiler accepts."
+	/>
+	<LinkCard
+		title="CLI"
+		href="/saule/reference/cli/"
+		description="saule run, check, fmt, build and the rest, with the flags each one takes."
+	/>
+	<LinkCard
+		title="Editor Support"
+		href="/saule/reference/editors/"
+		description="Syntax highlighting, the language server, and what it gives you in each editor."
+	/>
+</CardGrid>
+
+## Worked examples
+
+Complete programs rather than fragments — each one is a project you can read
+end to end.
+
+<CardGrid>
+	<LinkCard
+		title="All examples"
+		href="/saule/examples/"
+		description="The index, with what each program demonstrates."
+	/>
+	<LinkCard
+		title="Operator Overloading"
+		href="/saule/examples/vector-math/"
+		description="A Vec2 that adds, subtracts and scales through the Op* interfaces."
+	/>
+	<LinkCard
+		title="Bitwise Operators"
+		href="/saule/examples/bitwise-flags/"
+		description="A permission flag set and a packed RGBA colour, with Lua 5.3's spellings."
+	/>
+	<LinkCard
+		title="Todo App"
+		href="/saule/examples/todo-app/"
+		description="A multi-module program with imports, file IO and a real project layout."
+	/>
+</CardGrid>

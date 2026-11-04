@@ -86,6 +86,16 @@ pub struct FuncCtx {
     /// innermost last.
     pub finallys: Vec<PendingFinally>,
     pub n_params: u8,
+    /// How many values this function's `return` statements produce, from its
+    /// declared return type — `(a, b)` is 2, anything else 1.
+    ///
+    /// Only read by a `return` that has a `finally` to run first. That
+    /// `return` has to evaluate its values **before** the cleanup, so the
+    /// cleanup cannot change what comes back, and pinning them down needs a
+    /// register count rather than the usual "however many the callee
+    /// produced, ask `top`" — which only `RET A 0` can read, and only when
+    /// it is the very next instruction. See `Compiler::ret_through_finallys`.
+    pub ret_arity: u8,
     /// Chunk proto indices this function's `CLOSURE` instructions refer to.
     ///
     /// `CLOSURE Bx` indexes the *enclosing proto's* nested list rather than
@@ -200,6 +210,7 @@ impl FuncCtx {
             handlers: Vec::new(),
             finallys: Vec::new(),
             n_params: 0,
+            ret_arity: 1,
             nested: Vec::new(),
             jump_tables: Vec::new(),
             upvals: Vec::new(),
@@ -369,5 +380,16 @@ impl Compiler<'_> {
 
     pub fn func_label(&self) -> String {
         self.f.name.as_deref().unwrap_or("<lambda>").to_string()
+    }
+}
+
+/// How many values a declared return type stands for.
+///
+/// A tuple return is the only multi-valued shape; everything else, including
+/// a missing annotation on a lambda, is one value.
+pub fn ret_arity_of(return_ty: Option<&saule_ast::Type>) -> u8 {
+    match return_ty {
+        Some(saule_ast::Type::Tuple(ts)) => u8::try_from(ts.len()).unwrap_or(u8::MAX),
+        _ => 1,
     }
 }

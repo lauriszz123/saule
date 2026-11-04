@@ -38,12 +38,19 @@ end
 -- main.sau
 import appName, showHeader from "config"
 
-print(appName)
+class Main
+    static fn main()
+        showHeader()                -- MyGame v1
+        println(appName)            -- MyGame
+    end
+end
 ```
 
 Module variables are mutable, and every write is checked against the declared type:
 
 ```saule
+export version: integer = 1
+
 version = version + 1        -- ok
 version = "two"              -- ERROR: `string` into `integer`
 ```
@@ -74,9 +81,17 @@ The explicit form is preferred for public APIs (function bodies, module-level co
 Declare and assign several names in one statement. Types can be mixed (each name carries its own optional annotation):
 
 ```saule
+fn divmod(a: integer, b: integer) -> (integer, integer)
+    return a / b, a % b
+end
+
 local x: integer, y: integer = 10, 20
 local name, age = "Arthur", 36          -- both inferred
 local q, r = divmod(17, 5)              -- unpack multi-return
+
+println(x + y)                          -- 30
+println(name .. " is " .. age)          -- Arthur is 36
+println(q .. " remainder " .. r)        -- 3 remainder 2
 ```
 
 ### Nullable Without Initializer
@@ -93,7 +108,10 @@ The same applies to any name a multiple binding leaves without a value, and to a
 
 ```saule
 local host: string, port: integer = "localhost"   -- ERROR: `port` is nil
-export appName: string                            -- ERROR: `string` is never nil
+```
+
+```saule
+export appName: string                            -- ERROR: never initialized
 ```
 
 ### Reassignment
@@ -103,7 +121,8 @@ export appName: string                            -- ERROR: `string` is never ni
 ```saule
 local hp: integer = 100
 hp = hp - 25                    -- reassign the local
-local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
+local hp: integer = 0           -- allowed: a second `local` shadows the first
+print(hp)                       -- 0, the later binding
 ```
 
 > Class **fields** are a separate thing — they live on instances or the class itself, not in the surrounding scope. They use `name: T = expr` for public and `local name: T = expr` for private. See [Classes → Access Modifiers](/saule/language/classes/#access-modifiers).
@@ -179,6 +198,10 @@ these are compile errors:
 ```saule
 local n: integer = 1
 n /= 2.0                        -- ERROR: cannot mix integer and float
+```
+
+```saule
+local n: integer = 1
 n ..= "x"                       -- ERROR: `..` yields a string, `n` is an integer
 ```
 
@@ -187,8 +210,23 @@ does not parse. It also routes through operator overloads, so a class that
 implements `OpAdd` supports `+=` with no extra work:
 
 ```saule
+class Vec implements OpAdd<Vec, Vec>
+    x: integer = 0
+    y: integer = 0
+
+    fn init(x: integer, y: integer)
+        self.x = x
+        self.y = y
+    end
+
+    fn add(other: Vec) -> Vec
+        return Vec(self.x + other.x, self.y + other.y)
+    end
+end
+
 local v: Vec = Vec(1, 2)
 v += Vec(10, 20)                -- calls Vec.add
+println(v.x .. "," .. v.y)      -- 11,22
 ```
 
 There is deliberately no compound form for the comparison or logical operators:

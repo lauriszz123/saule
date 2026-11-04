@@ -1,0 +1,64 @@
+-- A class satisfies every interface in its interface's ancestry, not only
+-- the one it names.
+--
+-- `implements Combatant` is a promise about `Damageable` too, because
+-- `Combatant extends Damageable`. Dispatch builds an itable per interface,
+-- and it used to build one only for the name the class listed — so passing a
+-- `Knight` where a `Damageable` was wanted type-checked and then died at run
+-- time with "`Knight` does not implement the interface this call requires".
+
+interface Damageable
+	fn isAlive() -> boolean
+	fn damage(amount: integer) -> nil
+end
+
+interface Combatant extends Damageable
+	fn attack(target: Damageable) -> nil
+end
+
+-- Two levels up, to pin that the walk is transitive rather than one step.
+interface Hero extends Combatant
+	fn name() -> string
+end
+
+class Knight implements Hero
+	hp: integer = 10
+
+	fn isAlive() -> boolean
+		return self.hp > 0
+	end
+
+	fn damage(amount: integer)
+		self.hp = self.hp - amount
+	end
+
+	fn attack(target: Damageable)
+		target.damage(4)
+	end
+
+	fn name() -> string
+		return "knight"
+	end
+end
+
+fn hit(target: Damageable)
+	target.damage(3)
+end
+
+fn duel(a: Combatant, b: Damageable)
+	a.attack(b)
+end
+
+local k: Knight = Knight()
+
+-- Through the grandparent interface.
+hit(k)
+println("after hit: " .. k.hp)
+
+-- Through the parent interface, with the grandparent as the argument type.
+duel(k, k)
+println("after duel: " .. k.hp)
+
+-- And through its own.
+println(k.name())
+println(k.isAlive())

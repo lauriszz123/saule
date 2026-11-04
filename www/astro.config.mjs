@@ -28,6 +28,17 @@ export default defineConfig({
 				baseUrl: editBase,
 			},
 			customCss: ['./src/styles/theme.css'],
+			// Only the search dialog is overridden, and only to fill its empty
+			// state — the component wraps Starlight's own rather than replacing
+			// it, so the Pagefind wiring and the Ctrl+K shortcut stay theirs.
+			components: {
+				Search: './src/components/Search.astro',
+				// Adds the header's Docs button ahead of the social icons.
+				SocialIcons: './src/components/SocialIcons.astro',
+				// Carries the one site-wide script: the sliding tab indicator,
+				// which needs to measure the selected tab.
+				Head: './src/components/Head.astro',
+			},
 			expressiveCode: {
 				themes: ['github-dark-default', 'github-light'],
 				// Reuse the VS Code extension's TextMate grammar verbatim, so
@@ -56,8 +67,16 @@ export default defineConfig({
 				},
 			},
 			sidebar: [
+				// The index first, so every page in the docs has a way back to
+				// the top of them — the header's Docs button is the other one,
+				// and it is not on narrow screens.
+				{
+					label: 'Documentation',
+					link: '/docs/',
+				},
 				{
 					label: 'Getting Started',
+					collapsed: true,
 					items: [
 						{ label: 'Introduction', slug: 'guides/introduction' },
 						{ label: 'Installation', slug: 'guides/installation' },
@@ -66,14 +85,20 @@ export default defineConfig({
 				},
 				{
 					label: 'Language Guide',
+					collapsed: true,
 					items: [{ autogenerate: { directory: 'language' } }],
 				},
+				// Restored: removing it left eleven pages reachable only from
+				// the index or from search, which is one step too many for the
+				// half of the documentation people look things up in most.
 				{
 					label: 'Standard Library',
+					collapsed: true,
 					items: [{ autogenerate: { directory: 'stdlib' } }],
 				},
 				{
 					label: 'Reference',
+					collapsed: true,
 					items: [
 						{ label: 'Quick Reference', slug: 'reference/quick-reference' },
 						{ label: 'Grammar', slug: 'reference/grammar' },
@@ -83,6 +108,7 @@ export default defineConfig({
 				},
 				{
 					label: 'Examples',
+					collapsed: true,
 					items: [{ autogenerate: { directory: 'examples' } }],
 				},
 				{

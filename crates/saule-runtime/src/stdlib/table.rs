@@ -101,7 +101,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
 
 /// Register native signatures for the typechecker (lazy, via `sigs::lookup`).
 pub fn register_sigs() {
-    use crate::stdlib::sigs::{register_g, t_any, t_named, t_nullable, t_table};
+    use crate::stdlib::sigs::{register_g, t_any, t_named, t_nullable, t_table, t_table_map};
     use saule_ast::Type;
     let any = || t_any();
     let i = || t_named("integer");
@@ -219,7 +219,16 @@ pub fn register_sigs() {
     // In-place: reverses / empties the receiver and answers `nil`, matching
     // `insert` and `sort` rather than returning a new table.
     register_g("Table.reverse", vec!["V"], vec![table_v()], vec![nil()]);
-    register_g("Table.clear", vec!["V"], vec![table_v()], vec![nil()]);
+    // Keyed `table<K, V>`, not `table<V>`: `clear` empties *both* halves, so
+    // typing it to the array form alone refused the map-only tables it is
+    // documented to work on — and an array table satisfies `table<K, V>`
+    // with `K` bound to `integer`.
+    register_g(
+        "Table.clear",
+        vec!["K", "V"],
+        vec![t_table_map(t_named("K"), t_named("V"))],
+        vec![nil()],
+    );
     // `Table.slice<V>(t, from, to?) -> table<V>` — a new table holding the
     // 1-based range `[from, to]`, `to` defaulting to the end. Negative
     // indices count from the end, as they do in `String.sub`, and an

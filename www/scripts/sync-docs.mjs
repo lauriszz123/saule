@@ -76,6 +76,15 @@ function headingsOf(markdown) {
 	for (const line of markdown.split('\n')) {
 		if (/^\s*```/.test(line)) inFence = !inFence;
 		if (inFence) continue;
+		// A per-function entry (`#### \`String.sub(...)\``) anchors under the
+		// name alone, matching the id `renderApiEntries` gives it — so a
+		// `[...](#string-sub)` written anywhere in the source resolves to the
+		// page that function actually lives on.
+		const api = /^#### `([^`]+)`\s*$/.exec(line);
+		if (api) {
+			out.push({ level: 4, text: api[1], slug: signatureAnchor(api[1]) });
+			continue;
+		}
 		const m = /^(#{2,3}) (.+)$/.exec(line);
 		if (m) out.push({ level: m[1].length, text: m[2].trim(), slug: slugify(m[2]) });
 	}
@@ -294,6 +303,264 @@ function planDocument({ file, dir, sourcePath }) {
 	return { file, dir, sections };
 }
 
+// ---------------------------------------------------------------------------
+// API tables
+// ---------------------------------------------------------------------------
+
+/**
+ * The standard library's reference tables are the pages people *use*, and a
+ * two-column table of inline code is the wrong shape for them: the signature
+ * wraps mid-type, nothing is highlighted, and every description is expanded
+ * at once whether or not it is the one you came for.
+ *
+ * These turn each row into an expandable entry with a highlighted signature.
+ * Done here, at generation time, rather than in the browser: the markup is
+ * static, there is no flash of unstyled table, and the generated pages stay
+ * plain `.md` — they are lifted verbatim from `DOCS.md`, so a stray `{` must
+ * not be able to break a build.
+ */
+
+/** Type and keyword names the signatures use, longest first so `bytes` wins over `byte`. */
+const SIG_TYPES = [
+	'integer', 'boolean', 'string', 'bytes', 'float', 'table', 'byte', 'any', 'nil', 'fn',
+	'File', 'Process', 'FsInfo', 'FsKind', 'IoMode', 'IoSeek', 'OsPlatform',
+];
+
+/**
+ * Colour a signature the way the code blocks on the same page are coloured.
+ *
+ * A scanner rather than a chain of replacements: replacing names inside text
+ * that already holds `<span>` tags corrupts the tags themselves, and the
+ * order the patterns run in silently decides the result.
+ */
+function highlightSignature(sig, { code = false } = {}) {
+	const token = new RegExp(
+		[
+			'(?<comment>--[^\\n]*)',
+			'(?<str>"(?:[^"\\\\]|\\\\.)*")',
+			'(?<num>\\b0[xX][0-9a-fA-F]+\\b|\\b\\d+(?:\\.\\d+)?\\b)',
+			'(?<kw>\\b(?:true|false|nil|local|fn|return|end|if|then|else|for|in|do|not|and|or)\\b)',
+			code
+				? '(?<fn>\\b[A-Za-z_][\\w]*(?:\\.[A-Za-z_][\\w]*)?(?=\\())'
+				: '(?<fn>^[A-Za-z_][\\w]*\\.[A-Za-z_][\\w]*|^[a-z_][\\w]*(?=\\())',
+			`(?<type>\\b(?:${SIG_TYPES.join('|')})\\b|\\b[A-Z][A-Za-z0-9]*\\b)`,
+			'(?<arrow>->|==|!=|<=|>=|\\?\\?)',
+			'(?<punct>[(),:?<>\\[\\]{}|=+*/%#!-]|\\.\\.\\.)',
+			'(?<name>[A-Za-z_][\\w]*)',
+			'(?<other>\\s+|.)',
+		].join('|'),
+		'gu'
+	);
+	let out = '';
+	for (const m of sig.matchAll(token)) {
+		const g = m.groups;
+		const text = escapeHtml(m[0]);
+		if (g.comment) out += `<span class="sig-comment">${text}</span>`;
+		else if (g.str) out += `<span class="sig-str">${text}</span>`;
+		else if (g.num) out += `<span class="sig-num">${text}</span>`;
+		else if (g.kw) out += `<span class="sig-kw">${text}</span>`;
+		else if (g.fn) out += `<span class="sig-fn">${text}</span>`;
+		else if (g.type) out += `<span class="sig-type">${text}</span>`;
+		else if (g.arrow) out += `<span class="sig-arrow">${text}</span>`;
+		else if (g.punct) out += `<span class="sig-punct">${text}</span>`;
+		else if (g.name) out += `<span class="sig-param">${text}</span>`;
+		else out += text;
+	}
+	return out;
+}
+
+function escapeHtml(text) {
+	return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * The slice of markdown these descriptions actually use — code spans, links,
+ * bold and italics. Raw HTML suspends markdown parsing, so once a row is an
+ * HTML block its description has to arrive already rendered.
+ */
+function renderInline(md) {
+	const code = [];
+	// Code spans first and stashed, so a `*` or `_` inside one is not read as
+	// emphasis and a `<` inside one is escaped exactly once.
+	let out = md.replace(/`([^`]+)`/g, (_, inner) => {
+		code.push(`<code>${escapeHtml(inner)}</code>`);
+		return `\u0000${code.length - 1}\u0000`;
+	});
+	out = escapeHtml(out);
+	out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+	out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+	out = out.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+	return out.replace(/\u0000(\d+)\u0000/g, (_, i) => code[Number(i)]);
+}
+
+/**
+ * Pull the worked examples out of a description.
+ *
+ * They are written as a trailing sentence of inline code — `` `expr == v` ``
+ * — which reads correctly in `DOCS.md` on GitHub, where there is no room for
+ * a code block inside a table cell. Here there *is* room, so they are lifted
+ * out and rendered as one, syntax-highlighted like any other Saule code on
+ * the page. What is left behind is the prose.
+ */
+function splitExamples(desc) {
+	// Only the closing sentence, and only when it reads as a claim about a
+	// result — `x == y`, or `expr` is `value`. A sentence that merely
+	// *mentions* a function ("Same operation as `Table.concat(t, sep)`")
+	// says nothing worth running, and lifting it would turn prose into a
+	// code block that proves nothing.
+	const sentences = desc.split(/(?<=\.)\s+/);
+	const last = sentences[sentences.length - 1] ?? '';
+	if (!/==|\sis\s/.test(last)) return { prose: desc, examples: [] };
+
+	const examples = [];
+	let tail = last.replace(/`([^`]+)`/g, (match, inner) => {
+		// An expression, not a name: it calls something, indexes something,
+		// or is a literal being compared against one.
+		if (!/[(#{]/.test(inner) && !/^-?\d/.test(inner)) return match;
+		examples.push(inner);
+		return '\u0000';
+	});
+	if (examples.length === 0) return { prose: desc, examples: [] };
+
+	// What is left of that sentence is connective tissue — ", and", "is 6." —
+	// and reads as noise once the code is a block of its own.
+	tail = tail.replace(/\u0000/g, '').replace(/\s+/g, ' ').trim();
+	const keep = /^[,.;:]?\s*(?:and|while|,|is|where|—|-|\.|\s|[a-z0-9 ]{0,24}\.)?$/i.test(tail)
+		? ''
+		: tail;
+
+	const prose = [...sentences.slice(0, -1), keep]
+		.join(' ')
+		.replace(/\s+/g, ' ')
+		.replace(/[\s:,]+$/, '')
+		.trim();
+	return { prose: prose.endsWith('.') || prose === '' ? prose : `${prose}.`, examples };
+}
+
+/** `String.sub(...)` -> `string-sub`, for a stable anchor. */
+function signatureAnchor(sig) {
+	const name = sig.match(/^([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)/)?.[1] ?? sig;
+	return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/**
+ * Turn each `#### \`signature\`` block into an expandable entry.
+ *
+ * This is the shape the reference is written in: one heading per function,
+ * carrying its own prose and its own runnable example. The heading is
+ * replaced by a `<summary>` so the page collapses to a scannable list of
+ * signatures, and everything under it is handed back to the markdown parser
+ * untouched — links, lists, and fenced blocks that Expressive Code
+ * highlights with the project's own grammar.
+ */
+function renderApiEntries(body) {
+	const lines = body.split('\n');
+	const out = [];
+	let open = false;
+	// An overload set — `Math.random()`, `Math.random(n)`, `Math.random(lo, hi)`
+	// — gives every entry the same name, and three elements sharing one `id`
+	// is invalid HTML whose anchor links all land on the first of them.
+	const used = new Map();
+	const uniqueAnchor = (sig) => {
+		const base = signatureAnchor(sig);
+		const n = (used.get(base) ?? 0) + 1;
+		used.set(base, n);
+		return n === 1 ? base : `${base}-${n}`;
+	};
+	const close = () => {
+		if (open) {
+			// The trailing blank line is load-bearing: without it the next
+			// line continues the HTML block, and a `### heading` right after
+			// a `</div>` renders as the literal text `### heading`.
+			out.push('', '</details>', '</div>', '');
+			open = false;
+		}
+	};
+	for (let i = 0; i < lines.length; i++) {
+		const heading = lines[i].match(/^####\s+`([^`]+)`\s*$/);
+		// Any other heading ends the run: a `###` is a new group of
+		// functions, and its own prose must not land inside the last entry.
+		if (!heading && /^#{1,3}\s/.test(lines[i])) {
+			close();
+			out.push(lines[i]);
+			continue;
+		}
+		if (!heading) {
+			out.push(lines[i]);
+			continue;
+		}
+		close();
+		const sig = heading[1];
+		out.push('<div class="api-list">');
+		out.push(`<details class="api-entry" id="${uniqueAnchor(sig)}">`);
+		out.push(`<summary><code class="api-sig">${highlightSignature(sig)}</code></summary>`);
+		out.push('');
+		open = true;
+	}
+	close();
+	return out.join('\n');
+}
+
+/**
+ * Rewrite every `| Signature | Description |` table in `body` into expandable
+ * entries. A table with any other shape is left exactly as it is.
+ */
+function renderApiTables(body) {
+	const lines = body.split('\n');
+	const out = [];
+	for (let i = 0; i < lines.length; i++) {
+		const header = lines[i].match(/^\|\s*Signature\s*\|\s*Description\s*\|\s*$/);
+		if (!header || !/^\|\s*-+\s*\|\s*-+\s*\|\s*$/.test(lines[i + 1] ?? '')) {
+			out.push(lines[i]);
+			continue;
+		}
+		const rows = [];
+		let j = i + 2;
+		for (; j < lines.length && lines[j].startsWith('|'); j++) {
+			// `\|` is an escaped pipe inside a cell, not a column break.
+			const cells = lines[j]
+				.replace(/\\\|/g, '\u0001')
+				.split('|')
+				.slice(1, -1)
+				.map((c) => c.trim().replace(/\u0001/g, '\\|'));
+			if (cells.length < 2) break;
+			rows.push(cells);
+		}
+		if (rows.length === 0) {
+			out.push(lines[i]);
+			continue;
+		}
+		out.push('<div class="api-list">');
+		for (const [sigCell, descCell] of rows) {
+			const sig = sigCell.replace(/^`|`$/g, '');
+			const anchor = signatureAnchor(sig);
+			const { prose, examples } = splitExamples(descCell);
+			// A blank line after the `<summary>` hands the rest back to the
+			// markdown parser, so the description keeps its links and the
+			// example becomes a real fenced block — highlighted by Expressive
+			// Code with the project's own TextMate grammar, exactly as the
+			// playground and every other code block on the site is. A
+			// hand-rolled tokeniser cannot stay in step with that grammar and
+			// did not: it invented its own palette.
+			out.push(`<details class="api-entry" id="${anchor}">`);
+			out.push(`<summary><code class="api-sig">${highlightSignature(sig)}</code></summary>`);
+			out.push('');
+			out.push(prose);
+			if (examples.length > 0) {
+				out.push('');
+				out.push('```saule');
+				out.push(...examples);
+				out.push('```');
+			}
+			out.push('');
+			out.push('</details>');
+		}
+		out.push('</div>');
+		i = j - 1;
+	}
+	return out.join('\n');
+}
+
 function write(plans, index) {
 	for (const plan of plans) {
 		for (const section of plan.sections) {
@@ -316,12 +583,15 @@ function write(plans, index) {
 				.filter((l) => l !== null)
 				.join('\n');
 
-			const body = restoreSauleFences(
+			let body = restoreSauleFences(
 				rewriteLinks(section.body, index, {
 					file: plan.file,
 					section: title,
 				})
 			);
+			// Only the standard library: those are the reference pages, where
+			// a reader is looking one function up rather than reading through.
+			if (section.dir === 'stdlib') body = renderApiEntries(renderApiTables(body));
 
 			const dir = join(docsRoot, section.dir);
 			mkdirSync(dir, { recursive: true });

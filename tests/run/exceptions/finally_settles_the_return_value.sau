@@ -1,0 +1,80 @@
+-- A `finally` runs on the way out of a `return`, but the value that comes
+-- back is the one the `return` named — the cleanup cannot change it.
+--
+-- The `return` used to be compiled as "run every pending `finally`, then
+-- evaluate the returned expression", which read `n` after the cleanup had
+-- overwritten it, and called `f.read` on a file the cleanup had closed.
+
+fn pinned() -> integer
+    local n: integer = 1
+    try
+        return n
+    finally
+        n = 99
+    end
+end
+
+println(pinned())                   -- 1
+
+-- Multi-return keeps every value, and keeps them from before the cleanup.
+fn pair() -> (integer, integer)
+    local x: integer = 1
+    local y: integer = 2
+    try
+        return x, y
+    finally
+        x = 99
+        y = 99
+    end
+end
+
+local p: integer, q: integer = pair()
+println(p .. " " .. q)              -- 1 2
+
+-- `return f()` spreads the callee's results across the declared arity.
+fn two() -> (integer, string)
+    return 7, "seven"
+end
+
+fn through() -> (integer, string)
+    try
+        return two()
+    finally
+        println("cleanup")
+    end
+end
+
+local a: integer, b: string = through()
+println(a .. " " .. b)              -- 7 seven
+
+-- Nested cleanups both run, innermost first, and neither is the value.
+fn nested() -> string
+    local s: string = "value"
+    try
+        try
+            return s
+        finally
+            s = "inner"
+        end
+    finally
+        s = "outer"
+    end
+end
+
+println(nested())                   -- value
+
+-- A `return` out of a loop inside the `try` still runs the cleanup once.
+fn loopy() -> integer
+    try
+        for i: integer = 1, 3 do
+            if i == 2 then
+                return i
+            end
+        end
+        return 0
+    finally
+        println("loop cleanup")
+    end
+end
+
+println(loopy())                    -- 2

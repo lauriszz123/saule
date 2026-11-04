@@ -72,7 +72,10 @@ pub(crate) fn narrow_falsy(cond: &Spanned<Expr>, scope: &mut Scope) {
 /// A no-op for unknown or already non-nullable names.
 fn strip_nullable_binding(name: &str, scope: &mut Scope) {
     if let Some(Type::Nullable(t)) = scope.lookup(name).cloned() {
-        scope.bind(name.to_string(), *t);
+        // `narrow`, not `bind`: the declared type stays nullable, so a write
+        // to `name` inside the narrowed region is still checked against what
+        // it was declared as.
+        scope.narrow(name.to_string(), *t);
     }
 }
 

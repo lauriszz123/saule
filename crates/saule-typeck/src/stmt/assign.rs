@@ -428,6 +428,14 @@ pub(crate) fn refine_bare_binding(decl_ty: &Type, value: &Spanned<Expr>, scope: 
     let Type::Named(name) = inner_decl else {
         return decl_ty.clone();
     };
+    // An empty literal is no evidence. `local t: table = {}` infers
+    // `table<integer, …>` from the braces alone, and refining to that turns
+    // a deliberately unconstrained annotation into an array — so `t["k"]`
+    // on the next line was rejected for having a string key, which is
+    // exactly what a bare `table` is written to allow.
+    if matches!(&value.value, Expr::Table(items) if items.is_empty()) {
+        return decl_ty.clone();
+    }
     let Some(value_ty) = infer(value, scope) else {
         return decl_ty.clone();
     };
