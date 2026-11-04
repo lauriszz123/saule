@@ -458,12 +458,45 @@ impl<'a> Printer<'a> {
             self.write("...");
         }
         self.write(&p.name);
-        self.write(": ");
-        self.ty(&p.ty);
+        if !self.param_type_was_omitted(p) {
+            self.write(": ");
+            self.ty(&p.ty);
+        }
         if let Some(d) = &p.default {
             self.write(" = ");
             self.expr(d, 0);
         }
+    }
+
+    /// Whether this parameter was written with no `: T`.
+    ///
+    /// A lambda's parameter types are optional, and the parser fills an
+    /// omitted one with `any` — so by the time the AST exists, `(a, b) => …`
+    /// and `(a: any, b: any) => …` are the same tree. Printing the type back
+    /// out turned every untyped lambda into an annotated one, which is not a
+    /// layout change: it writes an annotation the author left off, and pins
+    /// the parameter to `any` where the typechecker would otherwise have
+    /// refined it from the lambda's target type.
+    ///
+    /// Only `any` qualifies, and only when the parameter's own source text
+    /// carries no `:` — so a declaration's explicit `fn f(x: any)` keeps it.
+    /// The text is cut at the first `=` so a default value cannot be
+    /// mistaken for an annotation.
+    pub(crate) fn param_type_was_omitted(&self, p: &Param) -> bool {
+        if !matches!(&p.ty, Type::Named(n) if n == "any") {
+            return false;
+        }
+        // No source to consult (`format_module`) means no evidence, and the
+        // safe guess is to keep the annotation: dropping it from a *lambda*
+        // changes nothing, but dropping it from a declaration, where types
+        // are required, produces source that does not parse.
+        if self.source.is_empty() {
+            return false;
+        }
+        self.source
+            .get(p.span.clone())
+            .map(|raw| raw.split('=').next().unwrap_or(raw))
+            .is_some_and(|head| !head.contains(':'))
     }
 
     // ---- expressions -------------------------------------------------------

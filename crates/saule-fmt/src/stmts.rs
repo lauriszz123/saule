@@ -113,26 +113,30 @@ impl<'a> Printer<'a> {
             } => {
                 self.write("if ");
                 self.expr(cond, 0);
-                self.write(" then");
-                self.newline();
+                self.open_block(" then", cond.span.end);
                 // Ceiling for each chunk: start of the next chunk's
                 // keyword (approximated by next cond / next stmt).
-                let then_ceiling = next_if_chunk_start(elseifs, else_block, s.span.end);
+                let mut then_ceiling = next_if_chunk_start(elseifs, else_block, s.span.end);
+                if elseifs.is_empty() && else_block.is_some() {
+                    then_ceiling = self.else_kw(then_ceiling, s.span.end);
+                }
                 self.block(then_block, then_ceiling);
                 for (i, (c, body)) in elseifs.iter().enumerate() {
                     self.drain_before(c.span.start);
                     self.write("elseif ");
                     self.expr(c, 0);
-                    self.write(" then");
-                    self.newline();
-                    let ceiling = next_if_chunk_start(&elseifs[i + 1..], else_block, s.span.end);
+                    self.open_block(" then", c.span.end);
+                    let mut ceiling =
+                        next_if_chunk_start(&elseifs[i + 1..], else_block, s.span.end);
+                    if i + 1 == elseifs.len() && else_block.is_some() {
+                        ceiling = self.else_kw(ceiling, s.span.end);
+                    }
                     self.block(body, ceiling);
                 }
                 if let Some(eb) = else_block {
                     let else_start = eb.first().map(|st| st.span.start).unwrap_or(s.span.end);
-                    self.drain_before(else_start);
-                    self.write("else");
-                    self.newline();
+                    self.drain_before(self.else_kw(else_start, s.span.end));
+                    self.open_block_at_keyword("else", self.last_pos, else_start);
                     self.block(eb, s.span.end);
                 }
                 self.write("end");
@@ -140,14 +144,12 @@ impl<'a> Printer<'a> {
             Stmt::While { cond, body } => {
                 self.write("while ");
                 self.expr(cond, 0);
-                self.write(" do");
-                self.newline();
+                self.open_block(" do", cond.span.end);
                 self.block(body, s.span.end);
                 self.write("end");
             }
             Stmt::Repeat { body, cond } => {
-                self.write("repeat");
-                self.newline();
+                self.open_block("repeat", s.span.start);
                 // `until` sits after the body; use cond.span.start as the
                 // body's ceiling so trailing comments don't escape past
                 // the `until`.
@@ -178,8 +180,7 @@ impl<'a> Printer<'a> {
                     self.write(", ");
                     self.expr(st, 0);
                 }
-                self.write(" do");
-                self.newline();
+                self.open_block(" do", step.as_ref().unwrap_or(to).span.end);
                 self.block(body, s.span.end);
                 self.write("end");
             }
@@ -197,8 +198,7 @@ impl<'a> Printer<'a> {
                 }
                 self.write(" in ");
                 self.expr(iter, 0);
-                self.write(" do");
-                self.newline();
+                self.open_block(" do", iter.span.end);
                 self.block(body, s.span.end);
                 self.write("end");
             }
@@ -218,8 +218,7 @@ impl<'a> Printer<'a> {
                 catches,
                 finally,
             } => {
-                self.write("try");
-                self.newline();
+                self.open_block("try", s.span.start);
                 // Each block ends where the next clause starts, so a comment
                 // trailing the last statement of one block stays inside it.
                 let next_start = |after: usize| -> usize {
@@ -234,16 +233,27 @@ impl<'a> Printer<'a> {
                         })
                         .unwrap_or(s.span.end)
                 };
-                self.block(body, next_start(0));
+                let body_ceiling = if catches.is_empty() && finally.is_some() {
+                    self.finally_kw(next_start(0), s.span.end)
+                } else {
+                    next_start(0)
+                };
+                self.block(body, body_ceiling);
                 for (i, c) in catches.iter().enumerate() {
                     self.writef(format_args!("catch {}: ", c.var));
                     self.ty(&c.ty);
+                    // The clause's own span ends at its body, so anchor to
+                    // the declared type's text instead of the keyword.
+                    self.try_trailing(c.span.start);
                     self.newline();
-                    self.block(&c.body, next_start(i + 1));
+                    let mut ceiling = next_start(i + 1);
+                    if i + 1 == catches.len() && finally.is_some() {
+                        ceiling = self.finally_kw(ceiling, s.span.end);
+                    }
+                    self.block(&c.body, ceiling);
                 }
                 if let Some(f) = finally {
-                    self.write("finally");
-                    self.newline();
+                    self.open_block_at_keyword("finally", self.last_pos, s.span.end);
                     self.block(f, s.span.end);
                 }
                 self.write("end");
@@ -252,6 +262,21 @@ impl<'a> Printer<'a> {
             Stmt::Continue => self.write("continue"),
             Stmt::Decl(d) => self.decl(&d.value, d.span.end),
         }
+    }
+
+    /// Where the `else` keyword sits between here and `until`, or
+    /// `default` if it cannot be found.
+    fn else_kw(&self, default: usize, until: usize) -> usize {
+        self.keyword_start("else", self.last_pos, until)
+            .filter(|&at| at <= default)
+            .unwrap_or(default)
+    }
+
+    /// The same, for `finally`.
+    fn finally_kw(&self, default: usize, until: usize) -> usize {
+        self.keyword_start("finally", self.last_pos, until)
+            .filter(|&at| at <= default)
+            .unwrap_or(default)
     }
 
     // ---- declarations ------------------------------------------------------

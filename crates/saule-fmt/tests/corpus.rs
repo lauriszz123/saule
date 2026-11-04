@@ -951,3 +951,85 @@ fn a_unary_or_casts_parentheses_are_the_authors_to_keep() {
         );
     }
 }
+
+/// The formatter lays code out; it does not rewrite it.
+///
+/// Three things it used to change, each found by running `saule fmt` over
+/// the documentation's examples and reading the diff:
+///
+///   * an integer literal came back in decimal whatever base it was
+///     written in, so `0xFF_80_00` became `16744448`;
+///   * an untyped lambda parameter gained `: any`, an annotation the author
+///     left off and one the checker would otherwise refine;
+///   * a comment trailing a block-opening keyword moved onto its own line
+///     *inside* the block, reattaching it to the first statement.
+#[test]
+fn formatting_preserves_what_the_author_wrote() {
+    let cases: &[(&str, &str)] = &[
+        // The base a number was written in.
+        (
+            "local mask: integer = 0xFF\n",
+            "local mask: integer = 0xFF\n",
+        ),
+        (
+            "local bits: integer = 0b1010\n",
+            "local bits: integer = 0b1010\n",
+        ),
+        (
+            "local colour: integer = 0xFF_80_00\n",
+            "local colour: integer = 0xFF_80_00\n",
+        ),
+        (
+            "local plain: integer = 255\n",
+            "local plain: integer = 255\n",
+        ),
+        // Whether a lambda parameter was annotated.
+        (
+            "local cmp: fn(integer, integer) -> boolean = (a, b) => a < b\n",
+            "local cmp: fn(integer, integer) -> boolean = (a, b) => a < b\n",
+        ),
+        (
+            "local keep: fn(any) -> boolean = (x: any) => x != nil\n",
+            "local keep: fn(any) -> boolean = (x: any) => x != nil\n",
+        ),
+        ("local one = x => x\n", "local one = x => x\n"),
+        // …but a declaration's types are its contract and stay put.
+        (
+            "fn declared(v: any) -> any\n  return v\nend\n",
+            "fn declared(v: any) -> any\n  return v\nend\n",
+        ),
+        // What a comment is attached to.
+        (
+            "if true then  -- fast path\n  println(1)\nend\n",
+            "if true then  -- fast path\n  println(1)\nend\n",
+        ),
+        (
+            "if true then\n  println(1)\nelse  -- the rest\n  println(2)\nend\n",
+            "if true then\n  println(1)\nelse  -- the rest\n  println(2)\nend\n",
+        ),
+        (
+            "for i = 1, 3 do  -- thrice\n  println(i)\nend\n",
+            "for i = 1, 3 do  -- thrice\n  println(i)\nend\n",
+        ),
+        (
+            "repeat  -- at least once\n  println(1)\nuntil true\n",
+            "repeat  -- at least once\n  println(1)\nuntil true\n",
+        ),
+        (
+            "try  -- guarded\n  throw \"x\"\ncatch e: string  -- only kind\n  println(e)\n\
+             finally  -- always\n  println(1)\nend\n",
+            "try  -- guarded\n  throw \"x\"\ncatch e: string  -- only kind\n  println(e)\n\
+             finally  -- always\n  println(1)\nend\n",
+        ),
+    ];
+
+    let mut failures = Vec::new();
+    for (src, want) in cases {
+        match format_with_comments(src) {
+            Ok(got) if got == *want => {}
+            Ok(got) => failures.push(format!("--- input\n{src}--- want\n{want}--- got\n{got}")),
+            Err(e) => failures.push(format!("--- input\n{src}--- did not parse: {e}")),
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}

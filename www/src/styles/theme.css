@@ -451,6 +451,253 @@ site-search dialog[open]::backdrop {
 	}
 }
 
+/* ── The home page, in segments ──────────────────────────────────────────
+ * Four full-height panes — the hero, why, what it looks like, how to get
+ * it — rather than one long scroll. Each fills the viewport and arrives as
+ * you reach it.
+ *
+ * Snapping is `mandatory` and `scroll-snap-stop: always`: one segment per
+ * screen, and a flick advances exactly one rather than skipping past two.
+ *
+ * That only works if a segment fits, so each pane is exactly one viewport
+ * tall and scrolls *inside* itself when its content is longer. Chaining
+ * does the rest — the inner scroller consumes the wheel until it reaches
+ * its end, then the page moves on to the next pane.
+ *
+ * Both are dropped below 40rem of height, where a viewport cannot hold a
+ * heading and a paragraph at once and forcing one on it would trap the
+ * reader rather than pace them.
+ */
+html:has(.pane) {
+	scroll-snap-type: y mandatory;
+	/* The header is sticky, so a snapped section would start underneath it. */
+	scroll-padding-top: var(--sl-nav-height);
+}
+
+@media (max-height: 40rem) {
+	html:has(.pane) {
+		scroll-snap-type: none;
+	}
+
+	body:has(.pane) .hero,
+	.pane {
+		min-height: 0;
+	}
+}
+
+/*
+ * The hero is a segment too, and the element to say so on is `.hero`
+ * itself.
+ *
+ * Not the content panel: on a splash page there is exactly one of those
+ * and it holds *everything* — the hero and all three panes inside a single
+ * `.sl-container`. Giving it a one-viewport height and `align-content:
+ * center` centred ~3600px of content in a 905px box, and centred overflow
+ * goes both ways: the first pane ended up 574px above the document origin,
+ * where no amount of scrolling can reach it.
+ *
+ * `min-height`, never `height`, for the same reason. A box that cannot
+ * grow pushes its overflow out of both ends; one that can simply gets
+ * taller. What keeps a segment to one screen is `.pane-inner` below, which
+ * scrolls internally — a guard that fails visibly rather than invisibly.
+ */
+/*
+ * The headline is sized against its column, not the window.
+ *
+ * Starlight scales it at `5vw`, which is right for a one-column hero and
+ * too big for this one: past 50rem the hero splits in two and the copy
+ * gets a little under half the width, while the font carries on growing
+ * with the viewport. At 1900px that left "Checked before it runs." a word
+ * too long for its line, so "runs." dropped to a line of its own.
+ *
+ * `text-wrap: balance` is the backstop. If the line has to break at some
+ * width, it breaks into two even halves rather than stranding one short
+ * word — which is the thing that actually looks unfinished.
+ */
+body:has(.pane) .hero h1 {
+	font-size: clamp(var(--sl-text-3xl), calc(0.25rem + 2.6vw), 2.75rem);
+	text-wrap: balance;
+}
+
+body:has(.pane) .hero .tagline {
+	text-wrap: pretty;
+}
+
+body:has(.pane) .hero {
+	scroll-snap-align: start;
+	scroll-snap-stop: always;
+	/* Less the panel's own top padding, so the hero and that padding
+	   together come to one screen. */
+	min-height: calc(100dvh - var(--sl-nav-height) - 1.5rem);
+	align-content: center;
+}
+
+.pane {
+	scroll-snap-align: start;
+	scroll-snap-stop: always;
+	min-height: calc(100dvh - var(--sl-nav-height));
+	display: grid;
+	align-content: center;
+}
+
+/* The content panel already carries Starlight's own padding; the panes sit
+   inside one, so they only need breathing room top and bottom. */
+.pane {
+	padding-block: clamp(2rem, 6vh, 5rem);
+}
+
+/* A hairline between segments, so the boundary is visible before you reach
+   it rather than only once it has snapped. */
+.pane + .pane {
+	border-top: 1px solid var(--sl-color-gray-6);
+}
+
+/* Starlight's prose rhythm puts a top margin on every element that follows
+   a sibling, which would stack on top of each pane's own padding. */
+.sl-markdown-content .pane {
+	margin-top: 0;
+}
+
+/*
+ * The content. Deliberately not a scroll container.
+ *
+ * It was one, as a guard against a segment that would not fit — and that
+ * guard cost more than it was worth. The items arrive offset downward, and
+ * a downward transform counts toward scrollable overflow, so the box kept
+ * summoning a scrollbar for the length of the reveal and dismissing it
+ * again. Deferring the moment it was allowed to scroll only shrank the
+ * flash, because flipping `overflow` is itself a reflow: the bar narrows
+ * the content, the content reflows taller, and the browser settles it a
+ * frame later.
+ *
+ * So there is no inner scroller. A segment whose content genuinely will
+ * not fit simply grows — `min-height` on `.pane` permits that — and the
+ * page scrolls as a page does. Nothing can flicker, because there is
+ * nothing to appear.
+ */
+.pane-inner {
+	width: 100%;
+}
+
+/*
+ * Compact, because the whole segment has one screen.
+ *
+ * Six cards at the prose scale came to about a viewport and a half, which
+ * is what made the hero and "Why Saule" share a screen. Scoped to `.pane`
+ * so every other page keeps the reading size.
+ */
+.pane .card {
+	padding: 1rem 1.1rem;
+}
+
+.pane .card .sl-heading-wrapper,
+.pane .card > :first-child {
+	margin-top: 0;
+}
+
+.pane .card p {
+	font-size: var(--sl-text-sm);
+	line-height: 1.6;
+}
+
+.pane .sl-markdown-content :is(h2, .pane-inner > h2) {
+	font-size: clamp(1.6rem, 3.2vh, 2.5rem);
+}
+
+/* Three across once there is room, so six cards are two rows rather than
+   three. */
+@media (min-width: 72rem) {
+	.pane .card-grid {
+		grid-template-columns: repeat(3, 1fr);
+	}
+}
+
+/*
+ * Code inside a segment is sized to the screen, not to the prose.
+ *
+ * The longest sample is twenty-five lines; at the reading size that is
+ * taller than the pane holding it, and the pane's own scrollbar appeared
+ * beside it — which is precisely the "two things at once" a segment is
+ * meant to avoid. Scoped to `.pane`, so every code block in the
+ * documentation keeps its size.
+ */
+.pane .expressive-code {
+	margin-top: 0.75rem;
+}
+
+/* Expressive Code's own variables, rather than selectors competing with
+   its `all: unset` on the `<code>`. These are the extension point it
+   documents, so they cannot be out-specified by a future version of it. */
+.pane .expressive-code {
+	--ec-codeFontSize: clamp(0.66rem, 1.55vh, 0.85rem);
+	--ec-codeLineHt: 1.55;
+	--ec-codePadBlk: 0.6rem;
+}
+
+.pane .expressive-code pre {
+	max-height: min(56vh, 34rem);
+}
+
+/* The tab strip and the button row give up what they can, so the sample
+   itself keeps as much of the pane as possible. */
+.pane starlight-tabs {
+	margin-top: 0.5rem;
+}
+
+.pane .pane-actions {
+	margin-block: 1.25rem 0;
+}
+
+/* The heading leads each segment and wants room to do it. */
+.pane-inner > h2 {
+	margin-top: 0;
+}
+
+.pane-actions {
+	display: flex;
+	gap: 0.75rem;
+	flex-wrap: wrap;
+	justify-content: center;
+	margin-block: 2.5rem 0;
+}
+
+/*
+ * The reveal.
+ *
+ * `[data-reveal]` is written by the observer in `Head.astro`, which also
+ * sets `--step`. Doing it from script rather than in CSS is what keeps the
+ * page readable with JavaScript off: nothing is hidden until something is
+ * there to show it again.
+ */
+.pane [data-reveal] {
+	opacity: 0;
+	/* `--reveal-from` is set per pane as it arrives: positive when the
+	   reader is going down, so the content rises into place, negative when
+	   they are coming back up, so it settles downward. Against the scroll
+	   it would read as a stutter. */
+	transform: translateY(var(--reveal-from, 1.25rem));
+	transition:
+		opacity var(--saule-slow) var(--saule-ease),
+		transform var(--saule-slow) var(--saule-ease);
+	transition-delay: calc(var(--step, 0) * 70ms);
+}
+
+.pane.is-visible [data-reveal] {
+	opacity: 1;
+	transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html:has(.pane) {
+		scroll-snap-type: none;
+	}
+
+	.pane [data-reveal] {
+		transition-property: opacity;
+		transform: none;
+	}
+}
+
 /* ── First paint ─────────────────────────────────────────────────────────
  * The hero and the cards arrive rather than appearing. Staggered by a few
  * tens of milliseconds so the eye reads an order; `both` holds the start

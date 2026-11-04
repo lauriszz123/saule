@@ -5,47 +5,59 @@ template: splash
 editUrl: false
 lastUpdated: false
 pagefind: false
+tableOfContents: false
 ---
 
 import Playground from '../../components/Playground.astro';
 
 <Playground />
 
-<div style="max-width:52rem; margin:3rem auto 0;">
+<style is:global>
+	{`
+	/*
+	 * The playground is an application, not an article: it fills what the
+	 * header leaves and scrolls nothing of its own.
+	 *
+	 * Starlight's splash template wraps the page in a centred container with
+	 * a reading measure and generous padding, and puts a <h1> above it. All
+	 * of that is right for a splash page and wrong for an editor, so this
+	 * page — and only this page, which is what the body class scopes — opts
+	 * out of the frame rather than fighting it rule by rule.
+	 */
+	body:has(.pg) {
+		overflow: hidden;
+	}
 
-### How it works
+	body:has(.pg) .main-frame .main-pane > main {
+		padding: 0;
+	}
 
-Your code runs **entirely in your browser** — the same interpreter the `saule`
-CLI uses, compiled to WebAssembly. Nothing is sent to a server, so the type
-checker, the diagnostics and the output are the ones you would get locally.
+	body:has(.pg) .sl-container,
+	body:has(.pg) .sl-markdown-content {
+		max-width: none;
+		margin: 0;
+		padding: 0;
+	}
 
-The runtime is fetched the first time you press Run, so that run takes a
-moment longer than the rest.
+	/* The page title would push the editor off the bottom of the window, and
+	   the browser tab and the header already say where you are. */
+	body:has(.pg) .content-panel:first-of-type,
+	body:has(.pg) .hero {
+		display: none;
+	}
 
-A program that will not finish on its own can be stopped with **Stop** or
-<kbd>Esc</kbd>; anything still running after 10 seconds is stopped for you.
+	body:has(.pg) .content-panel {
+		padding: 0;
+		border: 0;
+	}
 
-**Copy link** puts your program in the URL, so you can share exactly what you
-wrote.
-
-### Your own scripts
-
-**New** starts a file of your own. It saves as you type, appears in the picker
-under *My scripts*, and can be renamed or deleted from the toolbar. Examples
-are never overwritten — **Save as my script** forks one into a file of yours.
-
-Scripts live in this browser only: they survive a reload, but do not follow you
-to another machine. Use **Copy link** to take one elsewhere.
-
-### Notes on the sandbox
-
-The playground runs in **single-file mode**, like `saule run file.sau`: your
-program executes top-to-bottom, with no `class Main`.
-
-`import` does not work here, nor do the parts of `Os` and `Io` that reach for
-real files or processes — they fail with an error. Everything else — the full
-type system, classes, interfaces, enums, pattern matching, closures, and the
-`String`, `Math`, `Table` and `Iter` libraries — behaves exactly as it does
-locally.
-
-</div>
+	/*
+	 * How much of the viewport the header takes, which is what the stylesheet
+	 * subtracts. Starlight sets --sl-nav-height itself; the fallback is for a
+	 * version that stops.
+	 */
+	.pg {
+		--pg-top: var(--sl-nav-height, 3.5rem);
+	}
+	`}
+</style>

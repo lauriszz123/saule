@@ -952,7 +952,9 @@ version = "26.0.0"
 dependencies = [
  "js-sys",
  "miette",
+ "saule-ast",
  "saule-diagnostics",
+ "saule-fmt",
  "saule-lexer",
  "saule-parser",
  "saule-runtime",

@@ -185,3 +185,92 @@ export function rememberLast(value: string | null) {
 		// Nothing to remember with. The session still works.
 	}
 }
+
+/*
+ * The workspace: which files are open as tabs, which is in front, and how
+ * the panes are arranged.
+ *
+ * Separate from the scripts themselves because it describes a *view* of
+ * them, not their contents — losing it costs a reader their tab bar, not
+ * their work. Kept to one key so a corrupt value is one `removeItem` away
+ * from a clean start.
+ */
+
+const SESSION_KEY = 'saule.playground.session.v1';
+
+/** One open tab. An example or a shared program is open read-through. */
+export interface OpenTab {
+	kind: 'example' | 'user' | 'shared';
+	/** The example's id, the script's id, or a shared program's name. */
+	id: string;
+	/** A shared program has no store behind it, so its text lives here. */
+	source?: string;
+}
+
+export interface Session {
+	tabs: OpenTab[];
+	/** Index into `tabs`. Clamped on read, so a stale value cannot break boot. */
+	active: number;
+	/** Which way the editor and the output pane sit relative to each other. */
+	layout: 'side-by-side' | 'stacked';
+	/** The editor's share of the split, 0.2–0.8. */
+	split: number;
+	sidebar: boolean;
+	/** Whether the Examples category in the sidebar is expanded. */
+	examples: boolean;
+}
+
+export const DEFAULT_SESSION: Session = {
+	tabs: [],
+	active: 0,
+	layout: 'side-by-side',
+	split: 0.56,
+	sidebar: true,
+	// Collapsed to begin with: the sidebar opens on your own files, and
+	// the examples are one line away when you want them.
+	examples: false,
+};
+
+function isTab(value: unknown): value is OpenTab {
+	if (typeof value !== 'object' || value === null) return false;
+	const t = value as Record<string, unknown>;
+	return (
+		(t.kind === 'example' || t.kind === 'user' || t.kind === 'shared') &&
+		typeof t.id === 'string' &&
+		(t.source === undefined || typeof t.source === 'string')
+	);
+}
+
+export function readSession(): Session {
+	try {
+		const raw = window.localStorage.getItem(SESSION_KEY);
+		if (!raw) return { ...DEFAULT_SESSION };
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		const tabs = Array.isArray(parsed.tabs) ? parsed.tabs.filter(isTab) : [];
+		return {
+			tabs,
+			active: clamp(Number(parsed.active) || 0, 0, Math.max(0, tabs.length - 1)),
+			layout: parsed.layout === 'stacked' ? 'stacked' : 'side-by-side',
+			split: clamp(Number(parsed.split) || DEFAULT_SESSION.split, 0.2, 0.8),
+			sidebar: parsed.sidebar !== false,
+			// `=== true`, not `!== false`: a session saved before this key
+			// existed has no opinion, and the default is closed.
+			examples: parsed.examples === true,
+		};
+	} catch {
+		return { ...DEFAULT_SESSION };
+	}
+}
+
+export function writeSession(session: Session) {
+	try {
+		window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+	} catch {
+		// Nothing to remember with. The session still works, it just starts
+		// from the default arrangement next time.
+	}
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+	return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo;
+}

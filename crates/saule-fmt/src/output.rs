@@ -160,6 +160,83 @@ impl<'a> Printer<'a> {
         true
     }
 
+    /// Write a block-opening keyword and take with it any comment the
+    /// author left on that same source line.
+    ///
+    /// Without this the comment is still pending when the block drains its
+    /// leading comments, so
+    ///
+    /// ```text
+    /// if ready then        -- the fast path
+    ///     go()
+    /// end
+    /// ```
+    ///
+    /// came back with the note on its own line *inside* the block, reading
+    /// as a comment on `go()` rather than on the condition. A comment may be
+    /// moved to a new column; it should not be moved to a new subject.
+    ///
+    /// `after` is a source offset the opener is known to follow — the
+    /// condition's end for `then`, the iterable's for `do`, the statement's
+    /// start for a bare `try`.
+    pub(crate) fn open_block(&mut self, keyword: &str, after: usize) {
+        self.write(keyword);
+        self.try_trailing(after);
+        self.newline();
+    }
+
+    /// As [`Self::open_block`], for a keyword that has no span to anchor to.
+    ///
+    /// `else`, `catch` and `finally` are written from the AST's shape rather
+    /// than from a token, so the only way to know where one sits is to look
+    /// for it. The search runs from the end of the previous block to the
+    /// start of the next one, and a hit only matters if a comment follows it
+    /// on the same line, so the worst a false positive can do is leave the
+    /// comment exactly where it would have gone anyway.
+    pub(crate) fn open_block_at_keyword(&mut self, keyword: &str, from: usize, until: usize) {
+        self.write(keyword);
+        if let Some(at) = self.keyword_offset(keyword.trim(), from, until) {
+            self.try_trailing(at);
+        }
+        self.newline();
+    }
+
+    /// Where `kw` starts in `source[from..until]`, as a whole word.
+    ///
+    /// Used to stop a block's comment drain *before* the keyword that ends
+    /// it: `block`'s ceiling is otherwise the next clause's first statement,
+    /// which is past an `-- note` sitting on the `else` line, so the drain
+    /// claims it and [`Self::open_block_at_keyword`] never sees it.
+    pub(crate) fn keyword_start(&self, kw: &str, from: usize, until: usize) -> Option<usize> {
+        self.keyword_offset(kw, from, until)
+            .map(|end| end - kw.len())
+    }
+
+    /// Offset just past `kw` in `source[from..until]`, as a whole word.
+    fn keyword_offset(&self, kw: &str, from: usize, until: usize) -> Option<usize> {
+        let until = until.min(self.source.len());
+        let hay = self.source.get(from..until)?;
+        let mut at = 0;
+        while let Some(i) = hay[at..].find(kw) {
+            let start = at + i;
+            let end = start + kw.len();
+            let before_ok = start == 0
+                || !hay[..start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            let after_ok = !hay[end..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            if before_ok && after_ok {
+                return Some(from + end);
+            }
+            at = end;
+        }
+        None
+    }
+
     pub(crate) fn write_comment(&mut self, c: &Comment) {
         // `write_str` would apply indentation; we want indent only on the
         // first line. Manage it manually.

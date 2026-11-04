@@ -13,6 +13,13 @@
 export interface Example {
 	id: string;
 	label: string;
+	/**
+	 * The sidebar heading this example sits under. Examples are listed in
+	 * source order within a group, and the groups in the order they first
+	 * appear here — so this array's order is the reading order, and there
+	 * is no second list to keep it in.
+	 */
+	group: string;
 	/** One-line description shown under the picker. */
 	blurb: string;
 	source: string;
@@ -21,6 +28,7 @@ export interface Example {
 export const EXAMPLES: Example[] = [
 	{
 		id: 'hello',
+		group: 'Basics',
 		label: 'Hello, world',
 		blurb: 'The smallest program, plus typed locals.',
 		source: `println("Hello, world!")
@@ -34,6 +42,7 @@ println("Welcome to " .. name .. " " .. version .. ", " .. year)
 	},
 	{
 		id: 'types',
+		group: 'Basics',
 		label: 'Integer vs float',
 		blurb: 'Lua’s single number type, split in two. Mixing them is a compile error.',
 		source: `-- Saule splits Lua's \`number\` into two distinct types.
@@ -64,6 +73,7 @@ println(speed as integer)
 	},
 	{
 		id: 'classes',
+		group: 'Classes and interfaces',
 		label: 'Classes',
 		blurb: 'Fields, a constructor, methods, statics, and inheritance.',
 		source: `class Entity
@@ -111,6 +121,7 @@ p.damage(40)
 	},
 	{
 		id: 'nullsafety',
+		group: 'The type system',
 		label: 'Null safety',
 		blurb: 'nil is opt-in, and the compiler makes you handle it.',
 		source: `-- A variable can only hold nil if its type says so.
@@ -133,6 +144,7 @@ println("hello, " .. name)
 	},
 	{
 		id: 'match',
+		group: 'The type system',
 		label: 'Pattern matching',
 		blurb: 'Enums with payloads, matched exhaustively.',
 		source: `enum Shape
@@ -165,6 +177,7 @@ end
 	},
 	{
 		id: 'generics',
+		group: 'The type system',
 		label: 'Generics & lambdas',
 		blurb: 'Type parameters, function types, and arrow lambdas.',
 		source: `fn filter<T>(items: table<T>, predicate: fn(T) -> boolean) -> table<T>
@@ -201,6 +214,7 @@ end
 	},
 	{
 		id: 'interfaces',
+		group: 'Classes and interfaces',
 		label: 'Interfaces',
 		blurb: 'Multiple implementation, and interfaces used as types.',
 		source: `interface Named
@@ -249,6 +263,7 @@ println(goblin.getName() .. " alive? " .. (goblin.isAlive() and "yes" or "no"))
 	},
 	{
 		id: 'operators',
+		group: 'Classes and interfaces',
 		label: 'Operator overloading',
 		blurb: 'Classes define what `+`, `==`, `<` and `tostring` mean for them.',
 		source: `-- Operators are interfaces. A class opts into \`+\`, \`-\`, \`==\`, \`<\` or
@@ -329,6 +344,7 @@ println(2 ^ 3 ^ 2)
 	},
 	{
 		id: 'fizzbuzz',
+		group: 'Basics',
 		label: 'FizzBuzz',
 		blurb: 'Loops and conditionals, the traditional way.',
 		source: `for i = 1, 20 do
@@ -346,6 +362,7 @@ end
 	},
 	{
 		id: 'trailingblocks',
+		group: 'Syntax',
 		label: 'Trailing blocks',
 		blurb: 'A declarative UI, where a container takes its children as a do ... end block.',
 		source: `class Ui

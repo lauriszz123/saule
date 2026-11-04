@@ -5,8 +5,8 @@ template: splash
 editUrl: false
 lastUpdated: false
 hero:
-  title: Lua's simplicity.<br/>Now it argues back.
-  tagline: A statically typed, class-oriented scripting language. Small enough to hold in your head, and opinionated enough to say so when you're wrong — while you're still writing it.
+  title: Lua's simplicity.<br/>Checked before it runs.
+  tagline: A statically typed, class-oriented scripting language. Familiar to anyone who knows Lua, with mistakes caught while you write rather than when you run.
   image:
     # The full brand lockup, wordmark and all. The header beside it uses
     # `logo.svg`, the text-free mark — they are deliberately different files,
@@ -33,9 +33,23 @@ hero:
 
 import { Card, CardGrid, Tabs, TabItem, LinkButton } from '@astrojs/starlight/components';
 
+{/*
+	The page reads as four full-height segments rather than one long scroll:
+	the hero, then why, then what it looks like, then how to get it. Each
+	`.pane` fills the viewport and reveals itself as it arrives — see the
+	`.pane` rules in `theme.css` and the observer in `Head.astro`.
+
+	The hero is not one of these. It animates on load, which is the first
+	thing anyone sees, and re-running that on scroll would make going back
+	up the page feel broken.
+*/}
+
+<section class="pane" data-pane>
+<div class="pane-inner">
+
 ## Why Saule
 
-<CardGrid stagger>
+<CardGrid>
 	<Card title="Types you can't ignore" icon="approve-check">
 		Parameters and fields always state their type, so the boundaries of your
 		code are never guesswork — and inside a body, inference keeps the
@@ -68,6 +82,12 @@ import { Card, CardGrid, Tabs, TabItem, LinkButton } from '@astrojs/starlight/co
 		and IntelliJ.
 	</Card>
 </CardGrid>
+
+</div>
+</section>
+
+<section class="pane" data-pane>
+<div class="pane-inner">
 
 ## See it
 
@@ -188,11 +208,17 @@ local lengths: table<integer> = map<string, integer>({"a", "bb", "ccc"}, s => #s
 	</TabItem>
 </Tabs>
 
-<div style="display:flex; gap:0.75rem; flex-wrap:wrap; justify-content:center; margin-block:2.5rem;">
+<div class="pane-actions">
 	<LinkButton href="/saule/play/" icon="rocket">Run this in your browser</LinkButton>
 	<LinkButton href="/saule/examples/" variant="secondary" icon="open-book">Browse full examples</LinkButton>
 	<LinkButton href="/saule/reference/grammar/" variant="minimal" icon="document">Read the grammar</LinkButton>
 </div>
+
+</div>
+</section>
+
+<section class="pane" data-pane>
+<div class="pane-inner">
 
 ## Install
 
@@ -214,3 +240,6 @@ saule run hello.sau
 
 Full instructions, including editor setup, are in the
 [installation guide](/saule/guides/installation/).
+
+</div>
+</section>
