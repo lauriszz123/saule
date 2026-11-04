@@ -13,7 +13,10 @@ impl<'a> Printer<'a> {
     pub(crate) fn expr(&mut self, e: &Spanned<Expr>, parent_prec: u8) {
         let outer_end = e.span.end;
         match &e.value {
-            Expr::Int(n) => self.writef(format_args!("{n}")),
+            Expr::Int(n) => {
+                let lit = self.int_lit(*n, &e.span);
+                self.write(&lit);
+            }
             Expr::Float(f) => {
                 let s = self.float_lit(*f, &e.span);
                 self.write(&s);
@@ -209,7 +212,13 @@ impl<'a> Printer<'a> {
                 // return type) or `(params) => expr`. The parser has no
                 // `fn(...) => expr` form, so block bodies must use `fn`.
                 LambdaBody::Expr(e) => {
-                    if is_bare_arrow_param(params, return_ty) {
+                    // `x => e` only when the author wrote it bare: the
+                    // shorthand and `(x: any) => e` mean the same thing, and
+                    // collapsing one into the other is still rewriting an
+                    // annotation rather than laying it out.
+                    if is_bare_arrow_param(params, return_ty)
+                        && self.param_type_was_omitted(&params[0])
+                    {
                         self.write(&params[0].name);
                     } else {
                         self.write("(");
@@ -501,6 +510,26 @@ impl<'a> Printer<'a> {
     /// original source is available we reuse the literal's own span verbatim,
     /// provided it still reads back as the same value; [`format_float`] covers
     /// the source-less path (`format_module`) and any span that doesn't match.
+    /// Render an integer literal in the base it was written in.
+    ///
+    /// `Token::Int` carries only the value, so by the time the AST exists
+    /// `0xFF`, `0b1111_1111` and `255` are indistinguishable — and printing
+    /// the value reduced every mask and flag in a program to decimal.
+    /// `0xFF_80_00` came back as `16744448`, which is the same number and a
+    /// different piece of code. Read the spelling back out of the source at
+    /// the literal's span, the same trick [`Self::float_lit`] and
+    /// [`Self::str_lit`] use.
+    ///
+    /// Falls back to the decimal value when there is no source to consult
+    /// (`format_module`) or when the span does not hold a literal that reads
+    /// back as this exact number.
+    pub(crate) fn int_lit(&self, n: i64, span: &Range<usize>) -> String {
+        match self.source.get(span.clone()) {
+            Some(raw) if int_text_matches(raw, n) => raw.to_string(),
+            _ => n.to_string(),
+        }
+    }
+
     pub(crate) fn float_lit(&self, f: f64, span: &Range<usize>) -> String {
         match self.source.get(span.clone()) {
             Some(raw) if float_text_matches(raw, f) => raw.to_string(),

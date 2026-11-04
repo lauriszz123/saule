@@ -17,10 +17,14 @@ saule-version = { path = "../saule-version" }
 # The diagnostic JSON contract, shared with `saule check --json` so the
 # playground and the CLI cannot drift apart.
 saule-diagnostics = { path = "../saule-diagnostics" }
+saule-ast = { path = "../saule-ast" }
 saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
 saule-typeck = { path = "../saule-typeck" }
+# The pretty-printer behind `format`. The playground's Format button is the
+# same code path `saule fmt` runs, so the two can never disagree.
+saule-fmt = { path = "../saule-fmt" }
 # `native-packages` off: the browser cannot dlopen a shared library, and
 # leaving it on would pull `libloading`, which does not build for wasm.
 saule-runtime = { path = "../saule-runtime", default-features = false }

@@ -1,0 +1,1422 @@
+/*
+ * The playground's layout and chrome.
+ *
+ * A separate stylesheet rather than a scoped `<style>` block because almost
+ * every rule here targets an element the script creates — a tab, a tree row,
+ * a line of output — and Astro's scoping attribute is only stamped onto
+ * markup it can see. Scoped selectors would have compiled to
+ * `.pg-tab[data-astro-cid-…]` and matched nothing.
+ *
+ * The page sets `--pg-top` to the header's height; everything below fills
+ * what is left of the viewport.
+ */
+
+.pg {
+	display: grid;
+	grid-template-columns: var(--pg-sidebar-w, 15rem) auto 1fr;
+	height: calc(100dvh - var(--pg-top, 4rem));
+	min-height: 28rem;
+	overflow: hidden;
+	background: var(--sl-color-black);
+	color: var(--sl-color-white);
+	font-size: var(--sl-text-sm);
+
+	/*
+	 * Syntax colours. The hues are GitHub's, because they are familiar and
+	 * well separated, but everything achromatic — comments, punctuation,
+	 * the gutter, the active-line wash — is warm rather than the cold
+	 * blue-grey of the original: on this background a blue-grey comment
+	 * reads as a different material from the code around it.
+	 *
+	 * The greys are also lifted. Line numbers at #4d5560 were 2.3:1
+	 * against the pane, below the 3:1 floor for anything you are expected
+	 * to read, and they are the one part of an editor people scan
+	 * deliberately.
+	 */
+	--cm-text: var(--sl-color-white);
+	--cm-comment: #8b8474;
+	--cm-string: #a5d6ff;
+	--cm-number: #79c0ff;
+	--cm-atom: #79c0ff;
+	--cm-keyword: #ff7b72;
+	--cm-decl: #ff9e64;
+	--cm-self: #ffa657;
+	--cm-type: #ffd580;
+	--cm-fn: #d2a8ff;
+	--cm-op: #ff7b72;
+	--cm-punct: #9a9282;
+	--cm-gutter: #746c5d;
+	--cm-active: rgb(255 235 190 / 5%);
+	--cm-selection: var(--saule-selection);
+	--cm-error-line: var(--saule-danger-soft);
+
+	--pg-line: var(--sl-color-gray-6, #2a2724);
+	/* IntelliJ's run green, which reads as "go" at this size where the
+	   site's accent does not. */
+	--pg-run-green: #5fad65;
+	--pg-raised: color-mix(in srgb, var(--sl-color-black) 86%, var(--sl-color-white));
+	--pg-sunken: color-mix(in srgb, var(--sl-color-black) 96%, #000);
+}
+
+:root[data-theme='light'] .pg {
+	--cm-comment: #6b6455;
+	--cm-string: #0a3069;
+	--cm-number: #0550ae;
+	--cm-atom: #0550ae;
+	--cm-keyword: #cf222e;
+	--cm-decl: #953800;
+	--cm-self: #953800;
+	--cm-type: #7c5314;
+	--cm-fn: #6639ba;
+	--cm-op: #cf222e;
+	--cm-punct: #5f594e;
+	--cm-gutter: #8f8878;
+	--cm-active: rgb(90 60 0 / 4%);
+
+	--pg-line: var(--sl-color-gray-5);
+	--pg-run-green: #3a8a41;
+	--pg-raised: color-mix(in srgb, var(--sl-color-white) 97%, var(--sl-color-black));
+	--pg-sunken: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-black));
+}
+
+/*
+ * Each child names its own column.
+ *
+ * Without this they are auto-placed, and hiding the sidebar shifts
+ * everything one column left: the toggle lands in the collapsed `0` column
+ * and becomes unclickable, and the main pane lands in the `auto` column and
+ * shrinks to its content, leaving the `1fr` beside it empty. That is a
+ * layout that only holds while every child is present, which is exactly the
+ * thing the sidebar stops being.
+ */
+.pg-sidebar {
+	grid-column: 1;
+}
+
+.pg-sidebar-toggle {
+	grid-column: 2;
+}
+
+.pg-main {
+	grid-column: 3;
+}
+
+.pg.pg-no-sidebar {
+	grid-template-columns: 0 auto 1fr;
+}
+
+/*
+ * `hidden` means hidden, everywhere in here.
+ *
+ * Every `display` this file sets is an author rule, and an author rule
+ * beats the browser's own `[hidden] { display: none }` whatever its
+ * specificity. So `.pg-btn { display: inline-flex }` quietly made the
+ * `hidden` attribute a no-op — the Stop button sat there in red with
+ * nothing to stop, and Reset showed for files it could not reset. Stating
+ * it once is better than remembering a `[hidden]` arm on every rule that
+ * sets `display`.
+ */
+.pg [hidden],
+.pg[hidden] {
+	display: none !important;
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* ---- sidebar ------------------------------------------------------------ */
+
+.pg-sidebar {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	border-right: 1px solid var(--pg-line);
+	background: var(--pg-sunken);
+}
+
+.pg-sidebar-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	padding: 0.6rem 0.5rem 0.6rem 0.9rem;
+	border-bottom: 1px solid var(--pg-line);
+}
+
+.pg-sidebar-title {
+	font-size: var(--sl-text-xs);
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+}
+
+.pg-tree {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0.5rem 0.4rem 1rem;
+	scrollbar-width: thin;
+}
+
+.pg-tree-group {
+	margin: 0.9rem 0 0.3rem;
+	padding-inline: 0.5rem;
+	font-size: 0.68rem;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+}
+
+.pg-tree-group:first-child {
+	margin-top: 0.2rem;
+}
+
+/* ---- the Examples category ---------------------------------------------- */
+
+.pg-tree-category {
+	margin-top: 0.3rem;
+}
+
+.pg-tree-summary {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	margin: 0.9rem 0 0.3rem;
+	padding: 0.2rem 0.5rem;
+	border-radius: 0.3rem;
+	cursor: pointer;
+	list-style: none;
+	transition: color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+/* Safari still draws its own triangle without this. */
+.pg-tree-summary::-webkit-details-marker {
+	display: none;
+}
+
+.pg-tree-summary:hover {
+	color: var(--sl-color-white);
+}
+
+.pg-tree-chevron {
+	flex-shrink: 0;
+	transition: transform var(--saule-mid, 200ms) var(--saule-ease, ease-out);
+}
+
+.pg-tree-category[open] > .pg-tree-summary .pg-tree-chevron {
+	transform: rotate(90deg);
+}
+
+/* Inside the category, the headings step in so the nesting reads. */
+.pg-tree-subgroup {
+	margin-top: 0.6rem;
+	padding-left: 1.2rem;
+	font-size: 0.64rem;
+	opacity: 0.85;
+}
+
+.pg-tree-sublist {
+	padding-left: 0.7rem;
+}
+
+.pg-tree-empty {
+	margin: 0.1rem 0 0;
+	padding: 0.2rem 0.5rem 0.4rem;
+	font-size: 0.72rem;
+	line-height: 1.5;
+	color: var(--sl-color-gray-4);
+}
+
+.pg-tree-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.pg-tree-item {
+	display: flex;
+	align-items: center;
+	border-radius: 0.35rem;
+}
+
+.pg-tree-item:hover {
+	background: color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
+}
+
+.pg-tree-open {
+	flex: 1;
+	min-width: 0;
+	text-align: left;
+	border: 0;
+	background: none;
+	color: var(--sl-color-gray-2);
+	font: inherit;
+	font-size: var(--sl-text-sm);
+	padding: 0.3rem 0.5rem;
+	border-radius: 0.35rem;
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	transition: color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-tree-open:hover {
+	color: var(--sl-color-white);
+}
+
+.pg-tree-current {
+	color: var(--sl-color-accent-high);
+	font-weight: 600;
+}
+
+/* The per-script actions appear on hover, so a list of ten files is a list
+   of ten names rather than thirty controls. They stay on keyboard focus. */
+.pg-tree-actions {
+	display: flex;
+	gap: 0.1rem;
+	padding-right: 0.25rem;
+	opacity: 0;
+	transition: opacity var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-tree-item:hover .pg-tree-actions,
+.pg-tree-actions:focus-within {
+	opacity: 1;
+}
+
+.pg-storage {
+	margin: 0;
+	padding: 0.6rem 0.9rem;
+	border-top: 1px solid var(--pg-line);
+	font-size: 0.7rem;
+	line-height: 1.4;
+	color: var(--sl-color-gray-3);
+}
+
+.pg-warn {
+	color: var(--saule-warning);
+}
+
+.pg-ok {
+	color: var(--saule-success);
+}
+
+/* ---- the sidebar's handle ------------------------------------------------ */
+
+.pg-sidebar-toggle {
+	display: grid;
+	place-items: center;
+	/* A thin handle beside an open sidebar; a proper stripe to press when
+	   it is the only way back. */
+	width: 0.9rem;
+	transition:
+		width var(--saule-mid, 200ms) var(--saule-ease, ease-out),
+		background var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+	border: 0;
+	border-right: 1px solid var(--pg-line);
+	background: var(--pg-sunken);
+	color: var(--sl-color-gray-3);
+	cursor: pointer;
+}
+
+.pg-no-sidebar .pg-sidebar-toggle {
+	width: 1.5rem;
+}
+
+.pg-sidebar-toggle:hover {
+	background: var(--pg-raised);
+	color: var(--sl-color-white);
+}
+
+.pg-sidebar-toggle svg {
+	transition: transform var(--saule-mid, 200ms) var(--saule-ease, ease-out);
+}
+
+.pg-no-sidebar .pg-sidebar-toggle svg {
+	transform: rotate(180deg);
+}
+
+/* ---- main column --------------------------------------------------------- */
+
+.pg-main {
+	display: grid;
+	/* toolbar · the split · the Problems tool window · the status bar */
+	grid-template-rows: auto minmax(0, 1fr) auto auto;
+	min-width: 0;
+	min-height: 0;
+}
+
+/* ---- the toolbar ------------------------------------------------------------ */
+
+/*
+ * Tabs and actions on one line, after IntelliJ's main toolbar: the run
+ * widget sits at the right end of the row that names what is open, so the
+ * thing you press and the thing it acts on are never far apart.
+ */
+.pg-toolbar {
+	display: flex;
+	align-items: stretch;
+	min-width: 0;
+	background: var(--pg-sunken);
+	border-bottom: 1px solid var(--pg-line);
+}
+
+.pg-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	flex-shrink: 0;
+	padding: 0.25rem 0.5rem 0.25rem 0.4rem;
+	border-left: 1px solid var(--pg-line);
+}
+
+/*
+ * Each action keeps its own width. Without this the buttons shrink below
+ * their `nowrap` text, which does not clip it — it overflows the box and
+ * draws across whatever is beside it.
+ */
+.pg-actions > * {
+	flex-shrink: 0;
+}
+
+/* A hairline between groups of actions, as IntelliJ separates its toolbar. */
+.pg-sep {
+	width: 1px;
+	height: 1.1rem;
+	margin-inline: 0.2rem;
+	background: var(--pg-line);
+}
+
+/* ---- the run widget ------------------------------------------------------------ */
+
+.pg-run-widget {
+	display: flex;
+	align-items: center;
+}
+
+.pg-run,
+.pg-stop {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	max-width: 11rem;
+	border: 1px solid transparent;
+	border-radius: 0.3rem;
+	background: transparent;
+	color: var(--sl-color-white);
+	font: inherit;
+	font-size: var(--sl-text-xs);
+	line-height: 1.4;
+	padding: 0.25rem 0.55rem;
+	cursor: pointer;
+	white-space: nowrap;
+	transition:
+		background var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		border-color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-run:hover:not(:disabled),
+.pg-stop:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--sl-color-white) 9%, transparent);
+	border-color: var(--pg-line);
+}
+
+/* Dimmed, not hidden: the control keeps its place so the eye already knows
+   where it is by the time it lights up. */
+.pg-run:disabled,
+.pg-stop:disabled {
+	color: var(--sl-color-gray-4);
+	cursor: default;
+}
+
+/* The green triangle is the one piece of colour in the toolbar, which is
+   what makes it findable without a label. */
+.pg-run-glyph {
+	color: var(--pg-run-green);
+	flex-shrink: 0;
+}
+
+.pg-run:disabled .pg-run-glyph,
+.pg-stop:disabled svg {
+	color: var(--sl-color-gray-4);
+}
+
+.pg-run-target {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-weight: 500;
+}
+
+/* Red only while it can do something. */
+.pg-stop:not(:disabled) {
+	color: var(--saule-danger);
+}
+
+.pg-stop:not(:disabled) svg {
+	color: var(--saule-danger);
+}
+
+.pg-run kbd,
+.pg-stop kbd {
+	font-family: var(--saule-font-mono);
+	font-size: 0.66rem;
+	padding: 0.05rem 0.3rem;
+	border-radius: 0.2rem;
+	color: var(--sl-color-gray-3);
+	background: color-mix(in srgb, var(--sl-color-white) 8%, transparent);
+	transition: opacity var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-run:disabled kbd,
+.pg-stop:disabled kbd {
+	opacity: 0.45;
+}
+
+/* ---- tabs ----------------------------------------------------------------- */
+
+.pg-tabs {
+	display: flex;
+	align-items: stretch;
+	flex: 1;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.pg-tabs::-webkit-scrollbar {
+	display: none;
+}
+
+.pg-tab {
+	display: flex;
+	align-items: center;
+	gap: 0.2rem;
+	padding-right: 0.3rem;
+	border-right: 1px solid var(--pg-line);
+	background: transparent;
+	/* The active tab is marked by a line along its top edge, drawn as a
+	   border that is always present so switching tabs moves no text. */
+	border-top: 2px solid transparent;
+	transition: background var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+	white-space: nowrap;
+}
+
+.pg-tab:hover {
+	background: color-mix(in srgb, var(--sl-color-white) 4%, transparent);
+}
+
+.pg-tab-active {
+	background: var(--sl-color-black);
+	border-top-color: var(--sl-color-accent);
+}
+
+.pg-tab-label {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	border: 0;
+	background: none;
+	color: var(--sl-color-gray-2);
+	font: inherit;
+	font-size: var(--sl-text-sm);
+	padding: 0.45rem 0.3rem 0.45rem 0.8rem;
+	cursor: pointer;
+}
+
+.pg-tab-active .pg-tab-label {
+	color: var(--sl-color-white);
+}
+
+/* A dot where the close button is, until you reach for it. */
+.pg-tab-dirty .pg-tab-label::after {
+	content: '';
+	width: 0.4rem;
+	height: 0.4rem;
+	border-radius: 50%;
+	background: var(--saule-warning);
+}
+
+.pg-tab-badge {
+	font-size: 0.6rem;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	padding: 0.1rem 0.3rem;
+	border-radius: 0.2rem;
+	color: var(--sl-color-gray-3);
+	background: color-mix(in srgb, var(--sl-color-white) 8%, transparent);
+}
+
+.pg-tab-close,
+.pg-tab-add {
+	border: 0;
+	background: none;
+	color: var(--sl-color-gray-3);
+	font: inherit;
+	font-size: 1rem;
+	line-height: 1;
+	padding: 0.2rem 0.35rem;
+	border-radius: 0.25rem;
+	cursor: pointer;
+	transition:
+		background var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-tab-close:hover,
+.pg-tab-add:hover {
+	background: color-mix(in srgb, var(--sl-color-white) 10%, transparent);
+	color: var(--sl-color-white);
+}
+
+.pg-tab-add {
+	padding-inline: 0.6rem;
+}
+
+/* ---- the split ------------------------------------------------------------- */
+
+.pg-split {
+	display: grid;
+	min-height: 0;
+	min-width: 0;
+	/* `--pg-split` is the editor's share; `minmax(0, …)` is what stops a long
+	   unwrapped line from forcing the column wider than its fraction. */
+	grid-template-columns: minmax(0, calc(var(--pg-split, 0.56) * 100%)) auto minmax(0, 1fr);
+}
+
+.pg[data-layout='stacked'] .pg-split {
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-rows: minmax(0, calc(var(--pg-split, 0.56) * 100%)) auto minmax(0, 1fr);
+}
+
+.pg-pane {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+.pg-pane-output {
+	border-left: 1px solid var(--pg-line);
+	background: var(--pg-sunken);
+}
+
+.pg[data-layout='stacked'] .pg-pane-output {
+	border-left: 0;
+	border-top: 1px solid var(--pg-line);
+}
+
+.pg-gutter {
+	position: relative;
+	background: var(--pg-line);
+	cursor: col-resize;
+	touch-action: none;
+	/* 1px of line, with a wider invisible target: a hairline is accurate and
+	   almost impossible to hit. */
+	width: 1px;
+}
+
+.pg[data-layout='stacked'] .pg-gutter {
+	width: auto;
+	height: 1px;
+	cursor: row-resize;
+}
+
+.pg-gutter::after {
+	content: '';
+	position: absolute;
+	inset: 0 -4px;
+	background: transparent;
+	transition: background var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg[data-layout='stacked'] .pg-gutter::after {
+	inset: -4px 0;
+}
+
+.pg-gutter:hover::after,
+.pg-gutter:focus-visible::after {
+	background: color-mix(in srgb, var(--sl-color-accent) 55%, transparent);
+}
+
+.pg-gutter:focus-visible {
+	outline: none;
+}
+
+/* ---- the editor notification ----------------------------------------------------- */
+
+/*
+ * A strip across the top of the editor, as an IDE reports something about
+ * the file you have open rather than about the project.
+ */
+.pg-banner {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.35rem 0.5rem 0.35rem 0.8rem;
+	border-bottom: 1px solid var(--pg-line);
+	background: color-mix(in srgb, var(--saule-warning) 12%, var(--pg-sunken));
+	color: var(--sl-color-gray-2);
+	font-size: var(--sl-text-xs);
+	line-height: 1.5;
+}
+
+.pg-banner svg {
+	flex-shrink: 0;
+	color: var(--saule-warning);
+}
+
+.pg-banner-spacer {
+	flex: 1;
+	min-width: 0.5rem;
+}
+
+.pg-banner-action {
+	flex-shrink: 0;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.3rem;
+	background: var(--sl-color-black);
+	color: var(--sl-color-white);
+	font: inherit;
+	font-size: var(--sl-text-xs);
+	padding: 0.2rem 0.6rem;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		border-color var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-banner-action:hover {
+	border-color: var(--sl-color-accent);
+	color: var(--sl-color-accent-high);
+}
+
+/* ---- the editor -------------------------------------------------------------- */
+
+.pg-editor {
+	flex: 1;
+	min-height: 0;
+	overflow: hidden;
+	/* Breathing room lives here rather than on `.cm-content`, which
+	   CodeMirror aligns the gutter against. */
+	padding-block: 0.5rem;
+}
+
+.pg-editor .cm-editor {
+	height: 100%;
+}
+
+.pg-editor .cm-scroller {
+	overflow: auto;
+}
+
+.cm-errorLine {
+	background: var(--cm-error-line);
+}
+
+/* ---- problems ------------------------------------------------------------------ */
+
+.pg-problems {
+	border-top: 1px solid var(--pg-line);
+	background: var(--pg-sunken);
+}
+
+.pg-problems-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	max-height: 11rem;
+	overflow: hidden auto;
+	scrollbar-width: thin;
+}
+
+.pg-problems-list li {
+	border-bottom: 1px solid color-mix(in srgb, var(--pg-line) 60%, transparent);
+}
+
+.pg-problems-list button {
+	display: flex;
+	gap: 0.6rem;
+	width: 100%;
+	text-align: left;
+	border: 0;
+	background: none;
+	color: var(--sl-color-gray-2);
+	font: inherit;
+	font-size: var(--sl-text-xs);
+	line-height: 1.5;
+	padding: 0.35rem 0.9rem;
+	cursor: pointer;
+}
+
+.pg-problems-list button:hover {
+	background: color-mix(in srgb, var(--sl-color-white) 5%, transparent);
+	color: var(--sl-color-white);
+}
+
+.pg-problem-at {
+	flex-shrink: 0;
+	font-family: var(--saule-font-mono);
+	color: var(--sl-color-gray-3);
+}
+
+.pg-problem-error .pg-problem-at {
+	color: var(--saule-danger);
+}
+
+.pg-problem-warning .pg-problem-at {
+	color: var(--saule-warning);
+}
+
+/* ---- the output pane ------------------------------------------------------------- */
+
+.pg-pane-head {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.35rem 0.5rem 0.35rem 0.9rem;
+	border-bottom: 1px solid var(--pg-line);
+	font-size: var(--sl-text-xs);
+}
+
+.pg-pane-title {
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+}
+
+.pg-pane-spacer {
+	flex: 1;
+}
+
+.pg-status {
+	color: var(--sl-color-gray-3);
+	font-family: var(--saule-font-mono);
+}
+
+.pg-status.pg-ok {
+	color: var(--saule-success);
+}
+
+.pg-status.pg-fail {
+	color: var(--saule-danger);
+}
+
+.pg-output {
+	flex: 1;
+	min-height: 0;
+	margin: 0;
+	padding: 0.8rem 0.9rem;
+	overflow: auto;
+	background: transparent;
+	font-family: var(--saule-font-mono);
+	font-size: 0.82rem;
+	line-height: 1.6;
+	white-space: pre-wrap;
+	word-break: break-word;
+	tab-size: 4;
+}
+
+.pg-dim {
+	color: var(--sl-color-gray-3);
+}
+
+.pg-stderr {
+	color: var(--saule-stderr);
+}
+
+.pg-error,
+.pg-warning {
+	display: block;
+	margin-top: 0.6rem;
+	padding: 0.5rem 0.7rem;
+	border-radius: 0.35rem;
+	border-left: 3px solid currentcolor;
+}
+
+.pg-error {
+	color: var(--saule-danger);
+	background: var(--saule-danger-tint);
+}
+
+.pg-warning {
+	color: var(--saule-warning);
+	background: var(--saule-warning-tint);
+}
+
+.pg-diag-label {
+	font-weight: 700;
+	text-transform: uppercase;
+	font-size: 0.72rem;
+	letter-spacing: 0.04em;
+}
+
+.pg-diag-loc {
+	border: 0;
+	background: none;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	opacity: 0.8;
+	cursor: pointer;
+	text-decoration: underline dotted;
+}
+
+.pg-diag-loc:hover {
+	opacity: 1;
+}
+
+.pg-notice {
+	padding: 0.6rem 0.8rem;
+	border-radius: 0.35rem;
+	background: var(--pg-raised);
+	color: var(--sl-color-gray-2);
+}
+
+/* ---- the status bar ---------------------------------------------------------------- */
+
+/*
+ * An IDE's status bar: one thin line, small type, readings rather than
+ * actions. Everything you can *do* moved to the toolbar; what is left
+ * states where the caret is, how the file is indented and encoded, and
+ * which build of the language is answering.
+ */
+.pg-statusbar {
+	display: flex;
+	align-items: center;
+	gap: 0.1rem;
+	min-height: 1.6rem;
+	padding-inline: 0.4rem;
+	border-top: 1px solid var(--pg-line);
+	background: var(--pg-sunken);
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+/*
+ * A tool-window stripe button. Visible only when it has something to
+ * report, and lit while its window is open — IntelliJ's own convention,
+ * and the reason the bar is not a row of permanently-dark toggles.
+ */
+.pg-stripe {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	border: 0;
+	border-radius: 0.25rem;
+	background: none;
+	color: var(--sl-color-gray-3);
+	font: inherit;
+	font-size: var(--sl-text-xs);
+	padding: 0.15rem 0.45rem;
+	cursor: pointer;
+	white-space: nowrap;
+	transition:
+		background var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-stripe:hover {
+	background: color-mix(in srgb, var(--sl-color-white) 9%, transparent);
+	color: var(--sl-color-white);
+}
+
+.pg-stripe-error {
+	color: var(--saule-danger);
+}
+
+.pg-stripe-on {
+	background: color-mix(in srgb, var(--sl-color-accent) 22%, transparent);
+	color: var(--sl-color-white);
+}
+
+.pg-statusbar::-webkit-scrollbar {
+	display: none;
+}
+
+.pg-statusbar-spacer {
+	flex: 1;
+	min-width: 0.5rem;
+}
+
+/* Each reading is its own segment, spaced rather than ruled apart. */
+.pg-meta {
+	font-size: 0.68rem;
+	font-family: var(--saule-font-mono);
+	color: var(--sl-color-gray-3);
+	white-space: nowrap;
+	padding-inline: 0.45rem;
+}
+
+.pg-meta:empty {
+	display: none;
+}
+
+.pg-version {
+	opacity: 0.7;
+}
+
+.pg-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	border: 1px solid var(--sl-color-gray-5);
+	background: var(--sl-color-black);
+	color: var(--sl-color-white);
+	border-radius: 0.35rem;
+	padding: 0.3rem 0.7rem;
+	font: inherit;
+	font-size: var(--sl-text-xs);
+	line-height: 1.4;
+	white-space: nowrap;
+	cursor: pointer;
+	transition:
+		background var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		border-color var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-btn:hover:not(:disabled) {
+	border-color: var(--sl-color-accent);
+	color: var(--sl-color-accent-high);
+}
+
+.pg-btn:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.pg-btn-primary {
+	background: var(--sl-color-accent);
+	border-color: var(--sl-color-accent);
+	color: var(--sl-color-black);
+	font-weight: 600;
+}
+
+.pg-btn-primary:hover:not(:disabled) {
+	background: var(--sl-color-accent-high);
+	border-color: var(--sl-color-accent-high);
+	color: var(--sl-color-black);
+}
+
+.pg-btn-danger {
+	background: var(--saule-danger);
+	border-color: var(--saule-danger);
+	color: #fff;
+}
+
+.pg-btn kbd {
+	font-family: var(--saule-font-mono);
+	font-size: 0.68rem;
+	padding: 0.05rem 0.3rem;
+	border-radius: 0.2rem;
+	background: color-mix(in srgb, currentcolor 15%, transparent);
+}
+
+.pg-icon {
+	display: grid;
+	place-items: center;
+	width: 1.6rem;
+	height: 1.6rem;
+	border: 0;
+	border-radius: 0.3rem;
+	background: none;
+	color: var(--sl-color-gray-3);
+	cursor: pointer;
+	transition:
+		background var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+		color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+}
+
+.pg-icon:hover {
+	background: color-mix(in srgb, var(--sl-color-white) 10%, transparent);
+	color: var(--sl-color-white);
+}
+
+.pg-icon-sm {
+	width: 1.3rem;
+	height: 1.3rem;
+}
+
+/* ---- dialogs -------------------------------------------------------------------------- */
+
+/*
+ * Centred two ways, because only one of them applies at a time.
+ *
+ * A modal `<dialog>` is normally laid out against the viewport, and the
+ * browser's own `margin: auto` centres it. Here it is not: an ancestor of
+ * this page establishes a containing block, so the dialog is laid out as a
+ * child of `.pg` — a grid — and with no placement of its own it was
+ * auto-placed into the sidebar's column, pinned to the grid's top-left
+ * corner, which is exactly where it appeared.
+ *
+ * `place-self` centres it when it is a grid item; `margin: auto` centres it
+ * when it is not. Each is inert in the other's case, so this holds whichever
+ * way a browser treats it.
+ */
+.pg-dialog {
+	grid-column: 1 / -1;
+	grid-row: 1 / -1;
+	place-self: center;
+	margin: auto;
+	/*
+	 * The same panel treatment as the search dialog: a grey one step up
+	 * from the page, a hairline, and Starlight's own `--sl-shadow-lg`.
+	 *
+	 * The shadow here used to be a single `0 1.5rem 3rem rgb(0 0 0 / 45%)`.
+	 * Against a backdrop that is *already* dimmed and blurred, a black blur
+	 * that size has nothing left to darken — it reads as a grey smudge
+	 * ringing the panel rather than as depth. `--sl-shadow-lg` is three
+	 * layers at 1–10% doing the same job by implication, which is why the
+	 * search dialog looks like it is floating and this one looked dirty.
+	 * Separation comes from the lighter panel, not from the shadow.
+	 */
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.6rem;
+	background-color: var(--sl-color-gray-6);
+	color: var(--sl-color-white);
+	padding: 1.2rem;
+	max-width: min(32rem, calc(100vw - 2rem));
+	/* The shortcuts list plus three paragraphs is taller than a laptop; let
+	   it scroll rather than run off the bottom. */
+	max-height: min(44rem, calc(100dvh - 4rem));
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--sl-color-gray-4) transparent;
+	box-shadow: var(--sl-shadow-lg);
+}
+
+/*
+ * Opening and closing, borrowed wholesale from the search dialog.
+ *
+ * A native `<dialog>` has no exit animation by default: `close()` removes
+ * it from the top layer immediately. `allow-discrete` on `display` and
+ * `overlay` is what keeps it painted long enough to animate out, and
+ * `@starting-style` supplies the state it animates *in* from. Browsers
+ * without either show it instantly, which is the behaviour it had before.
+ *
+ * `transform` here is only the entry offset. The centring is `place-self`
+ * and `margin`, so animating the transform to `none` does not move it.
+ */
+.pg-dialog {
+	opacity: 0;
+	transform: translateY(-0.75rem) scale(0.98);
+	transition:
+		opacity var(--saule-mid) var(--saule-ease),
+		transform var(--saule-mid) var(--saule-ease),
+		overlay var(--saule-mid) var(--saule-ease) allow-discrete,
+		display var(--saule-mid) var(--saule-ease) allow-discrete;
+}
+
+.pg-dialog[open] {
+	opacity: 1;
+	transform: none;
+}
+
+@starting-style {
+	.pg-dialog[open] {
+		opacity: 0;
+		transform: translateY(-0.75rem) scale(0.98);
+	}
+}
+
+/* The same blur the search dialog uses — Starlight's own backdrop values —
+   fading in with the dialog rather than snapping to full blur. */
+.pg-dialog::backdrop {
+	background-color: var(--sl-color-backdrop-overlay);
+	-webkit-backdrop-filter: blur(0.25rem);
+	backdrop-filter: blur(0.25rem);
+	opacity: 0;
+	transition:
+		opacity var(--saule-mid) var(--saule-ease),
+		overlay var(--saule-mid) var(--saule-ease) allow-discrete,
+		display var(--saule-mid) var(--saule-ease) allow-discrete;
+}
+
+.pg-dialog[open]::backdrop {
+	opacity: 1;
+}
+
+@starting-style {
+	.pg-dialog[open]::backdrop {
+		opacity: 0;
+	}
+}
+
+/* Off, not fast — matching the site's own reduced-motion rule. The fade
+   stays, since it moves nothing. */
+@media (prefers-reduced-motion: reduce) {
+	.pg-dialog,
+	.pg-dialog[open] {
+		transition-property: opacity;
+		transform: none;
+	}
+}
+
+.pg-dialog-form {
+	display: flex;
+	flex-direction: column;
+	gap: 0.8rem;
+}
+
+.pg-dialog-title {
+	margin: 0;
+	font-size: var(--sl-text-lg);
+	font-weight: 600;
+}
+
+.pg-dialog-help .pg-dialog-title:not(:first-child) {
+	margin-top: 1.4rem;
+}
+
+.pg-dialog-body {
+	margin: 0.6rem 0 0;
+	font-size: var(--sl-text-sm);
+	line-height: 1.6;
+	color: var(--sl-color-gray-2);
+}
+
+.pg-dialog-body code {
+	font-family: var(--saule-font-mono);
+	font-size: 0.88em;
+	padding: 0.05rem 0.25rem;
+	border-radius: 0.2rem;
+	background: color-mix(in srgb, var(--sl-color-white) 8%, transparent);
+}
+
+.pg-dialog-field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	font-size: var(--sl-text-xs);
+	color: var(--sl-color-gray-3);
+}
+
+.pg-dialog-field input {
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.35rem;
+	background: var(--pg-sunken);
+	color: var(--sl-color-white);
+	font: inherit;
+	font-family: var(--saule-font-mono);
+	font-size: var(--sl-text-sm);
+	padding: 0.45rem 0.6rem;
+}
+
+.pg-dialog-field input:focus-visible {
+	outline: 2px solid var(--sl-color-accent);
+	outline-offset: 1px;
+}
+
+.pg-dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.5rem;
+	margin-top: 1rem;
+}
+
+.pg-keys {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 0.4rem 1rem;
+	margin: 0.8rem 0 0;
+	font-size: var(--sl-text-sm);
+}
+
+.pg-keys dt {
+	display: flex;
+	gap: 0.2rem;
+	align-items: center;
+}
+
+.pg-keys dd {
+	margin: 0;
+	color: var(--sl-color-gray-2);
+}
+
+.pg-keys kbd {
+	font-family: var(--saule-font-mono);
+	font-size: 0.72rem;
+	padding: 0.1rem 0.35rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-bottom-width: 2px;
+	border-radius: 0.25rem;
+	/* A step lighter than the panel, so it reads as a key sitting on it
+	   rather than a hole cut into it. */
+	background: var(--sl-color-gray-5);
+	white-space: nowrap;
+}
+
+/* ---- completion and hover ---------------------------------------------------------------- */
+
+.cm-tooltip.cm-tooltip-autocomplete > ul,
+.cm-tooltip.cm-tooltip-hover {
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.4rem;
+	background: var(--pg-raised);
+	color: var(--sl-color-white);
+	box-shadow: 0 0.6rem 1.6rem rgb(0 0 0 / 35%);
+	font-family: var(--saule-font-mono);
+	font-size: 0.8rem;
+	overflow: hidden;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul > li {
+	display: flex;
+	align-items: baseline;
+	gap: 0.6rem;
+	padding: 0.2rem 0.6rem;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+	background: color-mix(in srgb, var(--sl-color-accent) 28%, transparent);
+	color: var(--sl-color-white);
+}
+
+.cm-completionLabel {
+	color: var(--cm-fn);
+}
+
+.cm-completionDetail {
+	margin-left: auto;
+	font-style: normal;
+	font-size: 0.74rem;
+	color: var(--sl-color-gray-3);
+}
+
+.cm-tooltip.cm-completionInfo {
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.4rem;
+	background: var(--pg-raised);
+	padding: 0;
+	max-width: 28rem;
+}
+
+.cm-saule-info {
+	padding: 0.6rem 0.75rem;
+	font-family: var(--sl-font);
+}
+
+.cm-saule-info + .cm-saule-info {
+	border-top: 1px solid var(--pg-line);
+}
+
+.cm-saule-info-sig {
+	font-family: var(--saule-font-mono);
+	font-size: 0.78rem;
+	color: var(--cm-type);
+	word-break: break-word;
+}
+
+.cm-saule-info-body {
+	margin: 0.45rem 0 0;
+	font-size: 0.8rem;
+	line-height: 1.55;
+	color: var(--sl-color-gray-2);
+}
+
+.cm-saule-info-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-top: 0.55rem;
+	font-size: 0.7rem;
+	color: var(--sl-color-gray-3);
+}
+
+.cm-saule-info-foot a {
+	color: var(--sl-color-accent-high);
+	text-decoration: none;
+}
+
+.cm-saule-info-foot a:hover {
+	text-decoration: underline;
+}
+
+.cm-saule-hover {
+	max-width: 30rem;
+}
+
+/* CodeMirror's lint panel chrome, in this palette. */
+.cm-tooltip-lint {
+	font-family: var(--sl-font);
+	font-size: 0.8rem;
+	white-space: pre-wrap;
+}
+
+.cm-diagnostic {
+	border-left-width: 3px;
+	padding: 0.4rem 0.6rem;
+}
+
+.cm-diagnostic-error {
+	border-left-color: var(--saule-danger);
+}
+
+.cm-diagnostic-warning {
+	border-left-color: var(--saule-warning);
+}
+
+.cm-lintRange-error {
+	/* The default is a data-URI squiggle in a fixed colour; this one follows
+	   the theme. */
+	background: none;
+	text-decoration: underline wavy var(--saule-danger);
+	text-underline-offset: 0.25em;
+}
+
+.cm-lintRange-warning {
+	background: none;
+	text-decoration: underline wavy var(--saule-warning);
+	text-underline-offset: 0.25em;
+}
+
+/* ---- narrow screens -------------------------------------------------------------------- */
+
+@media (max-width: 60rem) {
+	/* Below this the sidebar costs more than it gives: the tab bar already
+	   names what is open, and the tree is one tap away. */
+	.pg {
+		grid-template-columns: 0 auto 1fr;
+	}
+
+	.pg-sidebar {
+		position: absolute;
+		z-index: 5;
+		width: 15rem;
+		height: calc(100dvh - var(--pg-top, 4rem));
+		box-shadow: 0 0 2rem rgb(0 0 0 / 40%);
+	}
+
+	.pg[data-layout='side-by-side'] .pg-split {
+		/* Side by side stops working long before this; stack regardless of
+		   what was saved. */
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr) auto minmax(0, 14rem);
+	}
+
+	.pg[data-layout='side-by-side'] .pg-gutter {
+		width: auto;
+		height: 1px;
+		cursor: row-resize;
+	}
+
+	.pg[data-layout='side-by-side'] .pg-pane-output {
+		border-left: 0;
+		border-top: 1px solid var(--pg-line);
+	}
+}

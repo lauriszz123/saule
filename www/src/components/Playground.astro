@@ -1,16 +1,25 @@
 ---
 /**
- * The Saule playground: a CodeMirror editor, a program picker, and an output
- * pane.
+ * The Saule playground.
  *
- * The picker holds two kinds of program. Examples ship with the site and are
- * read-only in the sense that editing one never overwrites it — you fork it
- * into a script of your own. Scripts are what the visitor writes, and they
- * live in `localStorage` (see `lib/playground-storage.ts`); they autosave,
- * rename and delete, and they share by link exactly as examples do.
+ * A full-height editor rather than a widget on a page: a sidebar of
+ * programs, a tab bar, a CodeMirror editor with live diagnostics, and an
+ * output pane, over a status bar.
  *
- * Execution goes through `src/lib/runtime.ts`, which is the only piece that
- * knows how a program actually runs.
+ * Three pieces do the work and are documented where they live:
+ *
+ *   * `lib/runtime.ts` — the only thing that knows how a program runs,
+ *     checks or formats, and the only thing that touches a worker.
+ *   * `lib/saule-complete.ts` — completion and hover, generated from
+ *     DOCS.md so the editor and the reference cannot disagree.
+ *   * `lib/playground-storage.ts` — scripts and the workspace, in
+ *     `localStorage`, since there is no server behind this site.
+ *
+ * The picker holds two kinds of program. Examples ship with the site and
+ * are read-only in the sense that editing one never overwrites it — you
+ * fork it into a script of your own. Scripts are what the visitor writes;
+ * they autosave, rename and delete, and share by link exactly as examples
+ * do.
  */
 ---
 
@@ -24,62 +33,232 @@
 	coordinate maths, so clicking and selecting land on the wrong characters.
 	Starlight's rule explicitly exempts `:where(.not-content *)`.
 -->
-<div class="playground not-content" data-playground>
-	<div class="pg-toolbar">
-		<div class="pg-picker-group">
-			<label class="pg-picker">
-				<span class="pg-picker-label">Program</span>
-				<select data-examples aria-label="Open an example or one of your scripts"></select>
-			</label>
-			<button type="button" class="pg-btn" data-new title="Start a script of your own">
+<div class="pg not-content" data-playground data-layout="side-by-side">
+	<aside class="pg-sidebar" data-sidebar>
+		<div class="pg-sidebar-head">
+			<span class="pg-sidebar-title">Programs</span>
+			<button type="button" class="pg-icon" data-new title="New script (Ctrl+Alt+N)">
 				<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
 					<path d="M7 2h2v5h5v2H9v5H7V9H2V7h5V2Z" fill="currentColor"></path>
 				</svg>
-				New
+				<span class="sr-only">New script</span>
 			</button>
 		</div>
+		<nav class="pg-tree" data-tree aria-label="Programs"></nav>
+		<p class="pg-storage" data-storage></p>
+	</aside>
 
-		<div class="pg-actions">
-			<button type="button" class="pg-btn pg-btn-primary" data-run>
-				<svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14">
-					<path d="M4 2.5v11l9-5.5-9-5.5Z" fill="currentColor"></path>
-				</svg>
-				Run
-				<kbd>⌘↵</kbd>
-			</button>
-			<button type="button" class="pg-btn pg-btn-stop" data-stop hidden>
+	<button
+		type="button"
+		class="pg-sidebar-toggle"
+		data-sidebar-toggle
+		aria-expanded="true"
+		title="Hide the sidebar (Ctrl+B)"
+	>
+		<svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12">
+			<path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="2"></path>
+		</svg>
+		<span class="sr-only">Toggle the sidebar</span>
+	</button>
+
+	<div class="pg-main">
+		<!--
+			Tabs on the left, actions on the right, as IntelliJ's toolbar is
+			laid out: what is open and what you can do to it belong on the
+			same line, above the thing they act on.
+		-->
+		<div class="pg-toolbar">
+			<div class="pg-tabs" data-tabs role="tablist" aria-label="Open programs"></div>
+
+			<div class="pg-actions">
+				<!--
+					The run widget: one control that names its target and
+					runs it, with Stop taking the same space while a program
+					is running.
+				-->
+				<div class="pg-run-widget">
+					<button type="button" class="pg-run" data-run>
+						<svg class="pg-run-glyph" aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
+							<path d="M4.5 2.8v10.4l8.5-5.2-8.5-5.2Z" fill="currentColor"></path>
+						</svg>
+						<span class="pg-run-target" data-run-target></span>
+						<kbd data-run-key>Ctrl ↵</kbd>
+					</button>
+					<button type="button" class="pg-stop" data-stop disabled>
+						<svg aria-hidden="true" viewBox="0 0 16 16" width="11" height="11">
+							<rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"></rect>
+						</svg>
+						Stop
+						<kbd>Esc</kbd>
+					</button>
+				</div>
+
+				<span class="pg-sep"></span>
+
+				<!--
+					Labelled, not icons. An icon-only toolbar hides what the
+					page can do behind a hover: the point of Share is partly
+					that someone sees it is possible. The label lives in its
+					own span because both buttons report back through it —
+					"Copied!", "Already tidy" — and swapping the button's
+					text wholesale would take the glyph with it.
+				-->
+				<button type="button" class="pg-btn" data-format title="Format (Shift+Alt+F)">
+					<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
+						<path
+							d="M2.5 3.5h11M2.5 6.8h7M2.5 10h11M2.5 13.2h7"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							stroke-linecap="round"></path>
+					</svg>
+					<span data-format-label>Format</span>
+				</button>
+				<button type="button" class="pg-btn" data-share title="Copy a link to this program">
+					<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
+						<path
+							d="M6.6 9.4a3 3 0 0 0 4.3 0l2-2a3 3 0 0 0-4.3-4.3l-.9.9M9.4 6.6a3 3 0 0 0-4.3 0l-2 2a3 3 0 0 0 4.3 4.3l.9-.9"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.5"
+							stroke-linecap="round"></path>
+					</svg>
+					<span data-share-label>Share</span>
+				</button>
+			</div>
+		</div>
+
+		<div class="pg-split" data-split>
+			<section class="pg-pane pg-pane-editor" data-editor-pane>
+				<!--
+					An editor notification, the way an IDE explains a
+					read-only file: these two actions exist *because* of
+					what is open, so they belong to the file rather than to
+					the toolbar. They were two variable-width buttons in a
+					fixed-width row, and "Save as my script" is long enough
+					to push the row past the window on any ordinary laptop.
+				-->
+				<div class="pg-banner" data-banner hidden>
+					<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
+						<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"
+						></circle>
+						<path d="M8 7.3v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+						></path>
+						<circle cx="8" cy="4.8" r="0.85" fill="currentColor"></circle>
+					</svg>
+					<span data-banner-text></span>
+					<span class="pg-banner-spacer"></span>
+					<button type="button" class="pg-banner-action" data-save-as>Save a copy</button>
+					<button type="button" class="pg-banner-action" data-reset hidden>Reset</button>
+				</div>
+				<div class="pg-editor" data-editor></div>
+			</section>
+
+			<div
+				class="pg-gutter"
+				data-gutter
+				role="separator"
+				aria-orientation="vertical"
+				aria-label="Resize the panes"
+				tabindex="0"
+			>
+			</div>
+
+			<section class="pg-pane pg-pane-output">
+				<div class="pg-pane-head">
+					<span class="pg-pane-title">Output</span>
+					<span class="pg-status" data-status></span>
+					<span class="pg-pane-spacer"></span>
+					<button
+						type="button"
+						class="pg-icon"
+						data-layout-toggle
+						title="Stack the panes instead"
+					>
+						<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
+							<rect
+								x="1.5"
+								y="2.5"
+								width="13"
+								height="11"
+								rx="1.5"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"></rect>
+							<path
+								d="M8 2.5v11"
+								data-layout-divider
+								stroke="currentColor"
+								stroke-width="1.6"></path>
+						</svg>
+						<span class="sr-only">Toggle the pane arrangement</span>
+					</button>
+					<button type="button" class="pg-icon" data-clear title="Clear the output">
+						<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13">
+							<path
+								d="M3 5h10M6.5 5V3.5h3V5M5 5l.7 8.5h4.6L11 5"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.5"></path>
+						</svg>
+						<span class="sr-only">Clear the output</span>
+					</button>
+				</div>
+				<pre class="pg-output" data-output aria-live="polite"></pre>
+			</section>
+		</div>
+
+		<!--
+			A tool window rather than a strip inside the editor: Problems
+			spans the whole width and opens over both panes, which is where
+			IntelliJ puts it and what gives a long message room to be read.
+		-->
+		<div class="pg-problems" data-problems hidden>
+			<ul class="pg-problems-list" data-problems-list></ul>
+		</div>
+
+		<!--
+			The status bar is for what is true, not for what you can do: a
+			single thin line of readings, the way an IDE's is. The one
+			control on it is the stripe button that opens Problems, which is
+			itself a statement that there are some.
+		-->
+		<div class="pg-statusbar">
+			<button type="button" class="pg-stripe" data-problems-toggle hidden>
 				<svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12">
-					<rect x="3" y="3" width="10" height="10" rx="1" fill="currentColor"></rect>
+					<path
+						d="M8 2.2 15 14H1L8 2.2Z"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.4"
+						stroke-linejoin="round"></path>
+					<path d="M8 6.3v3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+					></path>
+					<circle cx="8" cy="11.7" r="0.8" fill="currentColor"></circle>
 				</svg>
-				Stop
+				<span data-problems-count></span>
 			</button>
-			<button type="button" class="pg-btn" data-save-as hidden>Save as my script</button>
-			<button type="button" class="pg-btn" data-reset hidden>Reset</button>
-			<button type="button" class="pg-btn" data-rename hidden>Rename</button>
-			<button type="button" class="pg-btn pg-btn-danger-ghost" data-delete hidden>Delete</button>
-			<button type="button" class="pg-btn" data-share>Copy link</button>
-		</div>
-	</div>
 
-	<p class="pg-blurb" data-blurb></p>
+			<span class="pg-statusbar-spacer"></span>
 
-	<div class="pg-split">
-		<div class="pg-pane pg-pane-editor">
-			<div class="pg-pane-head">
-				<span data-filename>main.sau</span>
-				<span class="pg-savestate" data-savestate></span>
-			</div>
-			<div class="pg-editor" data-editor></div>
-		</div>
-
-		<div class="pg-pane pg-pane-output">
-			<div class="pg-pane-head">
-				<span>Output</span>
-				<span class="pg-status" data-status></span>
-			</div>
-			<pre class="pg-output" data-output aria-live="polite"><span class="pg-dim"
-					>Press Run to execute the program.</span
-				></pre>
+			<span class="pg-meta" data-savestate></span>
+			<span class="pg-meta" data-cursor></span>
+			<span class="pg-meta">4 spaces</span>
+			<span class="pg-meta">UTF-8</span>
+			<span class="pg-meta pg-version" data-version></span>
+			<button type="button" class="pg-icon pg-icon-sm" data-help title="Keyboard shortcuts (?)">
+				<svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12">
+					<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"
+					></circle>
+					<path
+						d="M6.2 6.1a1.9 1.9 0 1 1 2.4 1.8c-.4.1-.6.5-.6.9v.4"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"></path>
+					<circle cx="8" cy="11.6" r="0.9" fill="currentColor"></circle>
+				</svg>
+				<span class="sr-only">Keyboard shortcuts</span>
+			</button>
 		</div>
 	</div>
 
@@ -105,10 +284,44 @@
 			</div>
 		</form>
 	</dialog>
+
+	<!--
+		`autofocus` on the dialog itself, not on anything inside it.
+
+		Opening a modal focuses its first focusable descendant when nothing
+		claims focus, and in here that is the Close button at the very
+		bottom — so the browser scrolled it into view and the dialog opened
+		at its own end. Focusing the dialog leaves the scroll where it
+		starts, and Escape still closes it.
+	-->
+	<dialog class="pg-dialog pg-dialog-help" data-help-dialog tabindex="-1" autofocus>
+		<h2 class="pg-dialog-title">Keyboard shortcuts</h2>
+		<dl class="pg-keys" data-keys></dl>
+		<h2 class="pg-dialog-title">How it works</h2>
+		<p class="pg-dialog-body">
+			Your code runs entirely in your browser — the same compiler and VM the
+			<code>saule</code> CLI uses, built to WebAssembly. Nothing is sent to a server, so the
+			type checker, the diagnostics and the output are the ones you would get locally. The
+			runtime is fetched the first time you press Run.
+		</p>
+		<p class="pg-dialog-body">
+			Programs run in single-file mode, like <code>saule run file.sau</code>: top to bottom,
+			with no <code>class Main</code>. <code>import</code> does not work here, nor do the
+			parts of <code>Os</code> and <code>Io</code> that reach for real files or processes.
+			Everything else behaves exactly as it does locally.
+		</p>
+		<p class="pg-dialog-body">
+			Scripts are saved in this browser only. <strong>Copy link</strong> puts a program in
+			the URL, which is how one travels to another machine.
+		</p>
+		<div class="pg-dialog-actions">
+			<button type="button" class="pg-btn pg-btn-primary" data-help-close>Close</button>
+		</div>
+	</dialog>
 </div>
 
 <script>
-	import { EditorState, Compartment } from '@codemirror/state';
+	import { EditorState, StateEffect, StateField } from '@codemirror/state';
 	import {
 		EditorView,
 		keymap,
@@ -118,18 +331,26 @@
 		drawSelection,
 		rectangularSelection,
 		highlightSpecialChars,
+		Decoration,
+		type DecorationSet,
 	} from '@codemirror/view';
 	import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+	import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 	import {
 		syntaxHighlighting,
 		HighlightStyle,
 		bracketMatching,
 		indentUnit,
+		foldGutter,
+		foldKeymap,
+		codeFolding,
 	} from '@codemirror/language';
 	import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+	import { linter, lintGutter, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
 	import { tags as t } from '@lezer/highlight';
 
 	import { saule } from '../lib/saule-mode';
+	import { sauleDocs } from '../lib/saule-complete';
 	import { EXAMPLES, DEFAULT_EXAMPLE } from '../lib/playground-examples';
 	import {
 		listScripts,
@@ -141,14 +362,16 @@
 		normaliseName,
 		uniqueName,
 		isPersistent,
-		lastOpened,
-		rememberLast,
+		readSession,
+		writeSession,
 	} from '../lib/playground-storage';
-	import type { UserScript } from '../lib/playground-storage';
+	import type { OpenTab, Session, UserScript } from '../lib/playground-storage';
 	import {
 		runSaule,
 		stopSaule,
-		RUNTIME_AVAILABLE,
+		checkSaule,
+		formatSaule,
+		getRuntimeVersion,
 		RuntimeUnavailableError,
 		RunCancelledError,
 	} from '../lib/runtime';
@@ -163,53 +386,128 @@ println("Hello from my script!")
 	if (root) init(root);
 
 	function init(root: HTMLElement) {
-		const editorHost = root.querySelector<HTMLElement>('[data-editor]')!;
-		const picker = root.querySelector<HTMLSelectElement>('[data-examples]')!;
-		const blurb = root.querySelector<HTMLElement>('[data-blurb]')!;
-		const output = root.querySelector<HTMLElement>('[data-output]')!;
-		const status = root.querySelector<HTMLElement>('[data-status]')!;
-		const runBtn = root.querySelector<HTMLButtonElement>('[data-run]')!;
-		const stopBtn = root.querySelector<HTMLButtonElement>('[data-stop]')!;
-		const resetBtn = root.querySelector<HTMLButtonElement>('[data-reset]')!;
-		const shareBtn = root.querySelector<HTMLButtonElement>('[data-share]')!;
-		const newBtn = root.querySelector<HTMLButtonElement>('[data-new]')!;
-		const saveAsBtn = root.querySelector<HTMLButtonElement>('[data-save-as]')!;
-		const renameBtn = root.querySelector<HTMLButtonElement>('[data-rename]')!;
-		const deleteBtn = root.querySelector<HTMLButtonElement>('[data-delete]')!;
-		const filename = root.querySelector<HTMLElement>('[data-filename]')!;
-		const savestate = root.querySelector<HTMLElement>('[data-savestate]')!;
+		// Defaults to `HTMLElement`, which is what all but one of these are;
+		// the exception passes its own type.
+		const q = <T extends Element = HTMLElement>(name: string) =>
+			root.querySelector<T>(`[data-${name}]`)!;
 
-		const dialog = root.querySelector<HTMLDialogElement>('[data-dialog]')!;
-		const dialogTitle = root.querySelector<HTMLElement>('[data-dialog-title]')!;
-		const dialogBody = root.querySelector<HTMLElement>('[data-dialog-body]')!;
-		const dialogField = root.querySelector<HTMLElement>('[data-dialog-field]')!;
-		const dialogInput = root.querySelector<HTMLInputElement>('[data-dialog-input]')!;
-		const dialogCancel = root.querySelector<HTMLButtonElement>('[data-dialog-cancel]')!;
-		const dialogConfirm = root.querySelector<HTMLButtonElement>('[data-dialog-confirm]')!;
+		const editorHost = q('editor');
+		const tabBar = q('tabs');
+		const tree = q('tree');
+		const sidebar = q('sidebar');
+		const sidebarToggle = q<HTMLButtonElement>('sidebar-toggle');
+		const storageNote = q('storage');
+		const output = q('output');
+		const status = q('status');
+		const splitEl = q('split');
+		const gutterEl = q('gutter');
+		const problems = q('problems');
+		const problemsCount = q('problems-count');
+		const problemsList = q<HTMLUListElement>('problems-list');
+		const savestate = q('savestate');
+		const cursorMeta = q('cursor');
+		const versionMeta = q('version');
 
-		/**
-		 * What the editor is currently showing. `example` and `user` name an
-		 * entry in the picker; `shared` is a program that arrived in the URL
-		 * and belongs to neither list until it is saved.
-		 */
-		type Current =
-			| { kind: 'example'; id: string }
-			| { kind: 'user'; id: string }
-			| { kind: 'shared'; name: string };
+		const runBtn = q<HTMLButtonElement>('run');
+		const runTarget = q('run-target');
+		const stopBtn = q<HTMLButtonElement>('stop');
+		const formatBtn = q<HTMLButtonElement>('format');
+		const shareBtn = q<HTMLButtonElement>('share');
+		const shareLabel = q('share-label');
+		const formatLabel = q('format-label');
+		const saveAsBtn = q<HTMLButtonElement>('save-as');
+		const banner = q('banner');
+		const bannerText = q('banner-text');
+		const resetBtn = q<HTMLButtonElement>('reset');
+		const newBtn = q<HTMLButtonElement>('new');
+		const clearBtn = q<HTMLButtonElement>('clear');
+		const problemsStripe = q<HTMLButtonElement>('problems-toggle');
+		const layoutBtn = q<HTMLButtonElement>('layout-toggle');
+		const layoutDivider = q<SVGPathElement>('layout-divider');
+		const helpBtn = q<HTMLButtonElement>('help');
+		const runKey = q('run-key');
+
+		const dialog = q<HTMLDialogElement>('dialog');
+		const dialogTitle = q('dialog-title');
+		const dialogBody = q('dialog-body');
+		const dialogField = q('dialog-field');
+		const dialogInput = q<HTMLInputElement>('dialog-input');
+		const dialogCancel = q<HTMLButtonElement>('dialog-cancel');
+		const dialogConfirm = q<HTMLButtonElement>('dialog-confirm');
+		const helpDialog = q<HTMLDialogElement>('help-dialog');
+		const helpClose = q<HTMLButtonElement>('help-close');
+		const keysList = q('keys');
+
+		/** macOS writes ⌘ where everyone else writes Ctrl. */
+		const MAC = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent);
+		const MOD = MAC ? '⌘' : 'Ctrl';
+		runKey.textContent = `${MOD} ↵`;
 
 		/**
 		 * Whether scripts survive a reload. False in Safari's private mode and
 		 * wherever storage is denied — the playground still works, but it says
-		 * so in the editor's title bar instead of quietly losing files.
+		 * so rather than quietly losing files.
 		 */
 		const persistent = isPersistent();
+		storageNote.textContent = persistent
+			? 'Saved in this browser.'
+			: 'Storage is unavailable — scripts last for this session only.';
+		storageNote.classList.toggle('pg-warn', !persistent);
 
-		let current: Current = { kind: 'example', id: DEFAULT_EXAMPLE.id };
-		/** True while a `load` is writing the document, so the autosave sits it out. */
-		let applying = false;
-		/** Edits to an example or a shared program, which have nowhere to go yet. */
-		let dirty = false;
-		let saveTimer: number | undefined;
+		let session: Session = readSession();
+
+		// ---- what is open ----------------------------------------------------
+
+		/**
+		 * The editor's text for each open tab.
+		 *
+		 * A user script's text lives in storage and is read back from there;
+		 * an example's and a shared program's live here, because an example
+		 * is never overwritten and a shared program has nowhere to go until
+		 * it is saved. Keyed by `tabKey`, so switching tabs restores exactly
+		 * what was in the editor.
+		 */
+		const buffers = new Map<string, string>();
+		/** Tabs whose edits have nowhere to be saved. */
+		const dirty = new Set<string>();
+
+		function tabKey(tab: OpenTab): string {
+			return `${tab.kind}:${tab.id}`;
+		}
+
+		function activeTab(): OpenTab | null {
+			return session.tabs[session.active] ?? null;
+		}
+
+		function tabLabel(tab: OpenTab): string {
+			if (tab.kind === 'user') return getScript(tab.id)?.name ?? 'untitled.sau';
+			if (tab.kind === 'shared') return tab.id;
+			return `${EXAMPLES.find((e) => e.id === tab.id)?.label ?? tab.id}`;
+		}
+
+		function tabSource(tab: OpenTab): string {
+			const key = tabKey(tab);
+			const held = buffers.get(key);
+			if (held !== undefined) return held;
+			if (tab.kind === 'user') return getScript(tab.id)?.source ?? '';
+			if (tab.kind === 'shared') return tab.source ?? '';
+			return EXAMPLES.find((e) => e.id === tab.id)?.source ?? '';
+		}
+
+		function persist() {
+			// The editor's current text belongs to the active tab before
+			// anything about the arrangement is written down.
+			const tab = activeTab();
+			if (tab) buffers.set(tabKey(tab), view.state.doc.toString());
+			writeSession({
+				...session,
+				tabs: session.tabs.map((t) =>
+					t.kind === 'shared' ? { ...t, source: buffers.get(tabKey(t)) ?? t.source } : t
+				),
+			});
+		}
+
+		// ---- the editor ------------------------------------------------------
 
 		// Colours come from CSS variables so the editor follows Starlight's
 		// light/dark toggle without re-creating the EditorView.
@@ -289,16 +587,41 @@ println("Hello from my script!")
 			'&.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
 				backgroundColor: 'var(--cm-selection)',
 			},
-			'.cm-errorLine': { backgroundColor: 'var(--cm-error-line)' },
 		});
 
-		const readOnly = new Compartment();
-		const startup = resolveStartup();
+		/**
+		 * The line a run failed on, highlighted until the next edit.
+		 *
+		 * The squiggles come from the linter and describe *compile* errors.
+		 * A run-time failure has no linter to report it — the program
+		 * compiled — so it is drawn here instead.
+		 */
+		const setErrorLine = StateEffect.define<number | null>();
+		const errorLine = StateField.define<DecorationSet>({
+			create: () => Decoration.none,
+			update(value, tr) {
+				value = value.map(tr.changes);
+				for (const effect of tr.effects) {
+					if (!effect.is(setErrorLine)) continue;
+					value =
+						effect.value === null
+							? Decoration.none
+							: Decoration.set([
+									Decoration.line({ class: 'cm-errorLine' }).range(effect.value),
+								]);
+				}
+				return tr.docChanged ? Decoration.none : value;
+			},
+			provide: (f) => EditorView.decorations.from(f),
+		});
+
+		/** True while `load` is writing the document, so autosave sits it out. */
+		let applying = false;
 
 		const view = new EditorView({
 			parent: editorHost,
 			state: EditorState.create({
-				doc: startup.source,
+				doc: '',
 				extensions: [
 					lineNumbers(),
 					highlightActiveLineGutter(),
@@ -307,155 +630,526 @@ println("Hello from my script!")
 					drawSelection(),
 					rectangularSelection(),
 					highlightActiveLine(),
+					highlightSelectionMatches(),
 					bracketMatching(),
 					closeBrackets(),
+					codeFolding(),
+					foldGutter(),
+					lintGutter(),
+					linter(lintSource, { delay: 400 }),
 					indentUnit.of('    '),
 					saule(),
+					sauleDocs(),
 					syntaxHighlighting(highlight),
+					errorLine,
 					theme,
 					EditorView.lineWrapping,
 					keymap.of([
-						{ key: 'Mod-Enter', run: () => (run(), true) },
-						{ key: 'Mod-s', run: () => (run(), true), preventDefault: true },
+						{ key: 'Mod-Enter', run: () => (void run(), true) },
+						{ key: 'Mod-s', run: () => (void run(), true), preventDefault: true },
+						{ key: 'Shift-Alt-f', run: () => (void format(), true) },
 						...closeBracketsKeymap,
 						...defaultKeymap,
 						...historyKeymap,
+						...searchKeymap,
+						...foldKeymap,
 						indentWithTab,
 					]),
-					readOnly.of(EditorState.readOnly.of(false)),
 					EditorView.updateListener.of((update) => {
 						if (update.docChanged && !applying) onEdit();
+						if (update.selectionSet || update.docChanged) showCursor();
 					}),
 				],
 			}),
 		});
 
-		// ---- the picker -----------------------------------------------------
+		// ---- live diagnostics -------------------------------------------------
 
-		/** The option value for whatever is open, or '' for a shared program. */
-		function currentValue(): string {
-			if (current.kind === 'shared') return 'shared';
-			return `${current.kind}:${current.id}`;
+		/**
+		 * Compile the buffer and hand the linter what the compiler said.
+		 *
+		 * `checkSaule` resolves to `null` when a newer request has already
+		 * superseded this one; returning the previous set for that case is
+		 * what keeps the squiggles from flickering off and back on with
+		 * every keystroke.
+		 */
+		let lastDiagnostics: CmDiagnostic[] = [];
+
+		async function lintSource(view: EditorView): Promise<CmDiagnostic[]> {
+			const source = view.state.doc.toString();
+			let found: Diagnostic[] | null;
+			try {
+				found = await checkSaule(source);
+			} catch {
+				// The runtime could not start. The editor still works; it
+				// just has nothing to underline.
+				return [];
+			}
+			if (found === null) return lastDiagnostics;
+
+			const doc = view.state.doc;
+			lastDiagnostics = found.map((d) => {
+				const from = d.span ? toCharOffset(source, d.span.start) : 0;
+				const to = d.span ? toCharOffset(source, d.span.end) : 0;
+				return {
+					// A diagnostic with no span belongs to the whole program;
+					// anchoring it to the first line is the least misleading
+					// place to put it.
+					from: Math.min(from, doc.length),
+					to: Math.min(Math.max(to, from + 1), doc.length),
+					severity: d.severity === 'warning' ? 'warning' : 'error',
+					source: d.phase,
+					message: d.help ? `${d.message}\n\nhelp: ${d.help}` : d.message,
+				} satisfies CmDiagnostic;
+			});
+			showProblems(found, source);
+			return lastDiagnostics;
 		}
 
 		/**
-		 * Rebuild both groups from scratch. Scripts are listed first: once
-		 * someone has files of their own, those are what they came back for.
+		 * A UTF-8 byte offset as a JavaScript string index.
+		 *
+		 * The compiler reports byte offsets, because that is what it works
+		 * in; JavaScript strings are indexed in UTF-16 code units. The two
+		 * agree for ASCII and diverge the moment a program contains a
+		 * non-ASCII string literal or comment — and an editor that
+		 * underlines the wrong characters is worse than one that does not
+		 * underline at all.
 		 */
-		function renderPicker() {
-			picker.replaceChildren();
+		function toCharOffset(source: string, byteOffset: number): number {
+			let bytes = 0;
+			let i = 0;
+			while (i < source.length && bytes < byteOffset) {
+				const code = source.codePointAt(i)!;
+				if (code > 0xffff) {
+					bytes += 4;
+					i += 2;
+				} else {
+					bytes += code > 0x7ff ? 3 : code > 0x7f ? 2 : 1;
+					i += 1;
+				}
+			}
+			return i;
+		}
 
+		/** Line and column for a byte offset, for the problems list. */
+		function locate(source: string, byteOffset: number): { line: number; column: number } {
+			const at = toCharOffset(source, byteOffset);
+			const before = source.slice(0, at);
+			const nl = before.lastIndexOf('\n');
+			return { line: before.split('\n').length, column: at - nl };
+		}
+
+		function showProblems(found: Diagnostic[], source: string) {
+			// The stripe is the whole indication when there is nothing
+			// wrong: a tool window that opens itself on every keystroke
+			// would take the editor's room away mid-sentence.
+			problemsStripe.hidden = found.length === 0;
+			if (!found.length) {
+				problems.hidden = true;
+				problemsStripe.classList.remove('pg-stripe-on');
+				return;
+			}
+
+			const errors = found.filter((d) => d.severity === 'error').length;
+			const warnings = found.length - errors;
+			problemsStripe.classList.toggle('pg-stripe-error', errors > 0);
+			problemsCount.textContent = [
+				errors ? `${errors} error${errors === 1 ? '' : 's'}` : '',
+				warnings ? `${warnings} warning${warnings === 1 ? '' : 's'}` : '',
+			]
+				.filter(Boolean)
+				.join(', ');
+
+			problemsList.replaceChildren(
+				...found.map((d) => {
+					const li = document.createElement('li');
+					li.className = d.severity === 'error' ? 'pg-problem-error' : 'pg-problem-warning';
+					const button = document.createElement('button');
+					button.type = 'button';
+					if (d.span) {
+						const { line, column } = locate(source, d.span.start);
+						const where = document.createElement('span');
+						where.className = 'pg-problem-at';
+						where.textContent = `${line}:${column}`;
+						button.append(where);
+						button.addEventListener('click', () => jumpTo(d.span!.start, source));
+					}
+					button.append(document.createTextNode(d.message));
+					li.append(button);
+					return li;
+				})
+			);
+		}
+
+		/** Put the cursor on a diagnostic's position and scroll it into view. */
+		function jumpTo(byteOffset: number, source: string) {
+			const at = Math.min(toCharOffset(source, byteOffset), view.state.doc.length);
+			view.dispatch({
+				selection: { anchor: at },
+				effects: EditorView.scrollIntoView(at, { y: 'center' }),
+			});
+			view.focus();
+		}
+
+		problemsStripe.addEventListener('click', () => {
+			const open = problems.hasAttribute('hidden');
+			problems.toggleAttribute('hidden', !open);
+			problemsStripe.classList.toggle('pg-stripe-on', open);
+		});
+
+		function showCursor() {
+			const head = view.state.selection.main.head;
+			const line = view.state.doc.lineAt(head);
+			cursorMeta.textContent = `Ln ${line.number}, Col ${head - line.from + 1}`;
+		}
+
+		// ---- the sidebar ------------------------------------------------------
+
+		function renderTree() {
+			tree.replaceChildren();
+
+			// Your own files come first and are always here, listed or
+			// not. Ten examples under four headings is enough to push a
+			// short list of scripts off the bottom of a laptop's sidebar,
+			// and the scripts are what someone came back for.
+			tree.append(groupHeading('My scripts'));
 			const scripts = listScripts();
 			if (scripts.length) {
-				const group = document.createElement('optgroup');
-				group.label = 'My scripts';
+				const list = document.createElement('ul');
+				list.className = 'pg-tree-list';
 				for (const script of scripts) {
-					const option = document.createElement('option');
-					option.value = `user:${script.id}`;
-					option.textContent = script.name;
-					group.append(option);
+					list.append(treeItem({ kind: 'user', id: script.id }, script.name, script));
 				}
-				picker.append(group);
+				tree.append(list);
+			} else {
+				const empty = document.createElement('p');
+				empty.className = 'pg-tree-empty';
+				empty.textContent = 'Nothing yet — press + to start one.';
+				tree.append(empty);
 			}
 
-			const examples = document.createElement('optgroup');
-			examples.label = 'Examples';
+			// Examples fold away as one category. `<details>` rather than a
+			// button and a class: the open/closed state, the keyboard
+			// behaviour and the semantics come with it.
+			const category = document.createElement('details');
+			category.className = 'pg-tree-category';
+			category.open = session.examples;
+			category.addEventListener('toggle', () => {
+				session.examples = category.open;
+				persist();
+			});
+
+			const summary = document.createElement('summary');
+			summary.className = 'pg-tree-group pg-tree-summary';
+			const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+			chevron.setAttribute('class', 'pg-tree-chevron');
+			chevron.setAttribute('viewBox', '0 0 16 16');
+			chevron.setAttribute('width', '10');
+			chevron.setAttribute('height', '10');
+			chevron.setAttribute('aria-hidden', 'true');
+			const arm = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+			arm.setAttribute('d', 'm6 3 5 5-5 5');
+			arm.setAttribute('fill', 'none');
+			arm.setAttribute('stroke', 'currentColor');
+			arm.setAttribute('stroke-width', '2');
+			chevron.append(arm);
+			summary.append(chevron, document.createTextNode('Examples'));
+			category.append(summary);
+
+			// Group order follows first appearance in EXAMPLES, so the array
+			// is the reading order and there is no second list to maintain.
+			const groups = new Map<string, typeof EXAMPLES>();
 			for (const example of EXAMPLES) {
-				const option = document.createElement('option');
-				option.value = `example:${example.id}`;
-				option.textContent = example.label;
-				examples.append(option);
+				const list = groups.get(example.group);
+				if (list) list.push(example);
+				else groups.set(example.group, [example]);
 			}
-			picker.append(examples);
-
-			// A shared program is in neither list, so it needs a placeholder to
-			// select — otherwise the picker would show an unrelated entry.
-			if (current.kind === 'shared') {
-				const option = document.createElement('option');
-				option.value = 'shared';
-				option.textContent = `${current.name} (shared link)`;
-				picker.prepend(option);
+			for (const [name, examples] of groups) {
+				const heading = groupHeading(name);
+				heading.classList.add('pg-tree-subgroup');
+				category.append(heading);
+				const list = document.createElement('ul');
+				list.className = 'pg-tree-list pg-tree-sublist';
+				for (const example of examples) {
+					list.append(treeItem({ kind: 'example', id: example.id }, example.label));
+				}
+				category.append(list);
 			}
-
-			picker.value = currentValue();
+			tree.append(category);
 		}
 
-		// ---- opening programs -----------------------------------------------
+		function groupHeading(text: string): HTMLElement {
+			const h = document.createElement('h3');
+			h.className = 'pg-tree-group';
+			h.textContent = text;
+			return h;
+		}
 
-		/** Replace the document without the change counting as a user edit. */
-		function setDoc(source: string) {
+		function treeItem(tab: OpenTab, label: string, script?: UserScript): HTMLElement {
+			const li = document.createElement('li');
+			li.className = 'pg-tree-item';
+
+			const open = document.createElement('button');
+			open.type = 'button';
+			open.className = 'pg-tree-open';
+			open.textContent = label;
+			const current = activeTab();
+			if (current && tabKey(current) === tabKey(tab)) open.classList.add('pg-tree-current');
+			open.addEventListener('click', () => openTab(tab));
+			li.append(open);
+
+			if (script) {
+				const menu = document.createElement('span');
+				menu.className = 'pg-tree-actions';
+				menu.append(
+					iconButton('Rename', 'M11.5 2.5 13.5 4.5 5 13H3v-2l8.5-8.5Z', () =>
+						void renameFlow(script)
+					),
+					iconButton('Delete', 'M3 5h10M6.5 5V3.5h3V5M5 5l.7 8.5h4.6L11 5', () =>
+						void deleteFlow(script)
+					)
+				);
+				li.append(menu);
+			}
+			return li;
+		}
+
+		function iconButton(label: string, path: string, onClick: () => void): HTMLButtonElement {
+			const button = document.createElement('button');
+			button.type = 'button';
+			button.className = 'pg-icon pg-icon-sm';
+			button.title = label;
+			button.innerHTML =
+				`<svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12">` +
+				`<path d="${path}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`;
+			const sr = document.createElement('span');
+			sr.className = 'sr-only';
+			sr.textContent = label;
+			button.append(sr);
+			button.addEventListener('click', (event) => {
+				event.stopPropagation();
+				onClick();
+			});
+			return button;
+		}
+
+		// ---- tabs --------------------------------------------------------------
+
+		function renderTabs() {
+			tabBar.replaceChildren();
+			session.tabs.forEach((tab, i) => {
+				const key = tabKey(tab);
+				const el = document.createElement('div');
+				el.className = 'pg-tab';
+				if (i === session.active) el.classList.add('pg-tab-active');
+				if (dirty.has(key)) el.classList.add('pg-tab-dirty');
+
+				const label = document.createElement('button');
+				label.type = 'button';
+				label.className = 'pg-tab-label';
+				label.setAttribute('role', 'tab');
+				label.setAttribute('aria-selected', String(i === session.active));
+				label.textContent = tabLabel(tab);
+				if (tab.kind !== 'user') {
+					const badge = document.createElement('span');
+					badge.className = 'pg-tab-badge';
+					badge.textContent = tab.kind === 'shared' ? 'link' : 'example';
+					label.append(badge);
+				}
+				label.addEventListener('click', () => activate(i));
+				el.append(label);
+
+				const close = document.createElement('button');
+				close.type = 'button';
+				close.className = 'pg-tab-close';
+				close.title = 'Close';
+				close.textContent = '×';
+				close.addEventListener('click', (event) => {
+					event.stopPropagation();
+					void closeTab(i);
+				});
+				el.append(close);
+
+				// Middle-click closes, as it does in every editor and every
+				// browser. `auxclick` rather than `click`, which only fires
+				// for the primary button.
+				el.addEventListener('auxclick', (event) => {
+					if (event.button !== 1) return;
+					event.preventDefault();
+					void closeTab(i);
+				});
+				// A middle *press* starts Chrome's autoscroll and pastes the
+				// primary selection on Linux. Neither belongs on a tab, and
+				// both happen before `auxclick` would get the chance to say
+				// so.
+				el.addEventListener('mousedown', (event) => {
+					if (event.button === 1) event.preventDefault();
+				});
+
+				tabBar.append(el);
+			});
+
+			const add = document.createElement('button');
+			add.type = 'button';
+			add.className = 'pg-tab-add';
+			add.title = 'New script';
+			add.textContent = '+';
+			add.addEventListener('click', () => void newFlow());
+			tabBar.append(add);
+
+			// Now that the strip scrolls, the tab in front can be off the
+			// end of it — opening one from the sidebar would otherwise
+			// change the editor with nothing on the strip to show it had.
+			const current = tabBar.children[session.active];
+			current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+		}
+
+		/*
+		 * The wheel scrolls the strip sideways.
+		 *
+		 * A tab strip only ever overflows horizontally, and a mouse only
+		 * reports `deltaY` — so without this the wheel does nothing at all
+		 * over the one part of the page that has somewhere to go. A
+		 * trackpad's horizontal gesture already arrives as `deltaX` and is
+		 * left to the browser.
+		 *
+		 * `passive: false` because the default has to be cancellable;
+		 * `preventDefault` only when the strip can actually move, so a
+		 * wheel over a strip with nothing to scroll still reaches whatever
+		 * is behind it.
+		 */
+		tabBar.addEventListener(
+			'wheel',
+			(event) => {
+				if (event.deltaY === 0 || event.shiftKey) return;
+				const room = tabBar.scrollWidth - tabBar.clientWidth;
+				if (room <= 0) return;
+				// Firefox reports lines rather than pixels for a mouse wheel.
+				const step = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+				const next = Math.min(room, Math.max(0, tabBar.scrollLeft + event.deltaY * step));
+				if (next === tabBar.scrollLeft) return;
+				tabBar.scrollLeft = next;
+				event.preventDefault();
+			},
+			{ passive: false }
+		);
+
+		/** Put `tab` in front, opening it if it is not already a tab. */
+		function openTab(tab: OpenTab) {
+			const key = tabKey(tab);
+			const at = session.tabs.findIndex((t) => tabKey(t) === key);
+			if (at !== -1) {
+				activate(at);
+				return;
+			}
+			persist();
+			session.tabs.push(tab);
+			activate(session.tabs.length - 1);
+		}
+
+		/**
+		 * Put the tab at `index` in the editor.
+		 *
+		 * `stash` hands the editor's current text back to the tab losing
+		 * focus, which is right when switching between two live tabs and
+		 * wrong everywhere else: a caller that has just closed a tab, reset
+		 * an example or forked one into a script has already decided what
+		 * that buffer should be, and saving over it would restore exactly
+		 * the text it meant to discard.
+		 */
+		function activate(index: number, stash = true) {
+			if (stash && index === session.active && buffers.has(tabKey(session.tabs[index]!))) {
+				// Already in front, and its text is already in the editor.
+				view.focus();
+				return;
+			}
+			if (stash) {
+				const leaving = activeTab();
+				if (leaving) buffers.set(tabKey(leaving), view.state.doc.toString());
+			}
+
+			session.active = Math.max(0, Math.min(index, session.tabs.length - 1));
+			const tab = activeTab();
+			if (!tab) return;
+
 			applying = true;
-			view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } });
+			view.dispatch({
+				changes: { from: 0, to: view.state.doc.length, insert: tabSource(tab) },
+				selection: { anchor: 0 },
+			});
 			applying = false;
-		}
 
-		function openExample(id: string) {
-			const example = EXAMPLES.find((e) => e.id === id) ?? DEFAULT_EXAMPLE;
-			current = { kind: 'example', id: example.id };
-			dirty = false;
-			setDoc(example.source);
-			blurb.textContent = example.blurb;
-			afterOpen();
-		}
-
-		function openScript(script: UserScript) {
-			current = { kind: 'user', id: script.id };
-			dirty = false;
-			setDoc(script.source);
-			blurb.textContent = 'Your script. Edits save as you type.';
-			afterOpen();
-		}
-
-		function openShared(name: string, source: string) {
-			current = { kind: 'shared', name };
-			dirty = false;
-			setDoc(source);
-			blurb.textContent = 'Loaded from a shared link — save it to keep it.';
-			afterOpen({ keepHash: true });
-		}
-
-		function afterOpen(options: { keepHash?: boolean } = {}) {
-			if (!options.keepHash) history_replace('');
-			rememberLast(current.kind === 'shared' ? null : currentValue());
-			renderPicker();
+			renderTabs();
+			renderTree();
 			applyMode();
 			clearOutput();
+			persist();
+			showCursor();
+			view.focus();
 		}
 
-		/** Show the actions that make sense for what is open, and say so. */
+		async function closeTab(index: number) {
+			const tab = session.tabs[index];
+			if (!tab) return;
+			if (!(await confirmDiscard(tab))) return;
+
+			buffers.delete(tabKey(tab));
+			dirty.delete(tabKey(tab));
+			session.tabs.splice(index, 1);
+			if (!session.tabs.length) {
+				// Never leave an empty editor: the default example is the
+				// floor, as it is on a first visit.
+				session.tabs.push({ kind: 'example', id: DEFAULT_EXAMPLE.id });
+				session.active = 0;
+			} else if (session.active >= index) {
+				session.active = Math.max(0, session.active - (session.active === index ? 0 : 1));
+				session.active = Math.min(session.active, session.tabs.length - 1);
+			}
+			activate(session.active, false);
+		}
+
+		/** Show the actions that make sense for what is open. */
 		function applyMode() {
-			const isUser = current.kind === 'user';
-			resetBtn.hidden = current.kind !== 'example';
-			renameBtn.hidden = !isUser;
-			deleteBtn.hidden = !isUser;
-			saveAsBtn.hidden = isUser;
-
-			if (isUser) {
-				const script = getScript(current.id);
-				filename.textContent = script?.name ?? 'untitled.sau';
-			} else if (current.kind === 'shared') {
-				filename.textContent = current.name;
-			} else {
-				filename.textContent = 'main.sau';
+			const tab = activeTab();
+			resetBtn.hidden = tab?.kind !== 'example';
+			// The banner is the whole explanation for a program that is not
+			// yours, so it says which kind it is rather than leaving two
+			// buttons to be worked out.
+			banner.hidden = !tab || tab.kind === 'user';
+			if (tab?.kind === 'example') {
+				bannerText.textContent =
+					'An example. Editing it never overwrites it — save a copy to keep your changes.';
+			} else if (tab?.kind === 'shared') {
+				bannerText.textContent = 'Opened from a shared link. Save a copy to keep it.';
 			}
-
-			setSaveState(isUser ? 'saved' : dirty ? 'unsaved' : 'clean');
+			runTarget.textContent = tab ? tabLabel(tab) : 'Run';
+			setSaveState();
 		}
 
-		function setSaveState(state: 'saved' | 'saving' | 'unsaved' | 'clean') {
-			savestate.className = 'pg-savestate';
-			if (state === 'clean') {
+		function setSaveState(state?: 'saving') {
+			const tab = activeTab();
+			savestate.className = 'pg-meta';
+			if (!tab) {
 				savestate.textContent = '';
-			} else if (state === 'saving') {
+				return;
+			}
+			if (state === 'saving') {
 				savestate.textContent = 'saving…';
-			} else if (state === 'saved') {
+				return;
+			}
+			if (tab.kind === 'user') {
 				savestate.textContent = persistent ? 'saved' : 'this session only';
-				savestate.classList.add(persistent ? 'pg-saved' : 'pg-unsaved');
-			} else {
+				savestate.classList.add(persistent ? 'pg-ok' : 'pg-warn');
+			} else if (dirty.has(tabKey(tab))) {
 				savestate.textContent = 'unsaved';
-				savestate.classList.add('pg-unsaved');
+				savestate.classList.add('pg-warn');
+			} else {
+				savestate.textContent = tab.kind === 'shared' ? 'from a link' : 'example';
 			}
 		}
+
+		let saveTimer: number | undefined;
 
 		/**
 		 * Every edit either autosaves, or is flagged as having nowhere to go.
@@ -463,13 +1157,16 @@ println("Hello from my script!")
 		 * just offers "Save as my script".
 		 */
 		function onEdit() {
+			const tab = activeTab();
+			if (!tab) return;
 			// The hash describes a program that no longer matches the buffer.
-			if (window.location.hash) history_replace('');
+			if (window.location.hash) historyReplace('');
 
-			if (current.kind !== 'user') {
-				if (!dirty) {
-					dirty = true;
-					setSaveState('unsaved');
+			if (tab.kind !== 'user') {
+				if (!dirty.has(tabKey(tab))) {
+					dirty.add(tabKey(tab));
+					renderTabs();
+					setSaveState();
 				}
 				return;
 			}
@@ -477,14 +1174,14 @@ println("Hello from my script!")
 			setSaveState('saving');
 			window.clearTimeout(saveTimer);
 			saveTimer = window.setTimeout(() => {
-				if (current.kind !== 'user') return;
-				const saved = updateScript(current.id, view.state.doc.toString());
-				// Deleted in another tab; fall back rather than resurrect it.
-				if (!saved) {
-					openExample(DEFAULT_EXAMPLE.id);
+				const current = activeTab();
+				if (current?.kind !== 'user') return;
+				if (!updateScript(current.id, view.state.doc.toString())) {
+					// Deleted in another tab; fall back rather than resurrect it.
+					void closeTab(session.active);
 					return;
 				}
-				setSaveState('saved');
+				setSaveState();
 			}, 400);
 		}
 
@@ -493,12 +1190,13 @@ println("Hello from my script!")
 			if (saveTimer === undefined) return;
 			window.clearTimeout(saveTimer);
 			saveTimer = undefined;
-			if (current.kind === 'user') updateScript(current.id, view.state.doc.toString());
+			const tab = activeTab();
+			if (tab?.kind === 'user') updateScript(tab.id, view.state.doc.toString());
 		}
 
 		/** Ask before throwing away edits that are not being autosaved. */
-		async function confirmDiscard(): Promise<boolean> {
-			if (!dirty || current.kind === 'user') return true;
+		async function confirmDiscard(tab: OpenTab): Promise<boolean> {
+			if (tab.kind === 'user' || !dirty.has(tabKey(tab))) return true;
 			const answer = await openDialog({
 				title: 'Discard your changes?',
 				body: 'This program is not one of your scripts, so its edits are not saved. Save it as a script first to keep them.',
@@ -508,60 +1206,21 @@ println("Hello from my script!")
 			return answer !== null;
 		}
 
-		picker.addEventListener('change', async () => {
-			const value = picker.value;
-			if (value === currentValue()) return;
-			if (!(await confirmDiscard())) {
-				picker.value = currentValue();
-				return;
-			}
+		// ---- scripts of your own ------------------------------------------------
 
-			if (value.startsWith('user:')) {
-				const script = getScript(value.slice(5));
-				if (script) openScript(script);
-				else renderPicker();
-			} else if (value.startsWith('example:')) {
-				openExample(value.slice(8));
-			}
-		});
-
-		resetBtn.addEventListener('click', () => {
-			if (current.kind === 'example') openExample(current.id);
-		});
-
-		// ---- scripts of your own --------------------------------------------
-
-		newBtn.addEventListener('click', async () => {
-			if (!(await confirmDiscard())) return;
+		async function newFlow() {
 			const name = await openDialog({
 				title: 'New script',
 				input: uniqueName('scratch.sau'),
 				confirm: 'Create',
 			});
 			if (name === null) return;
-			openScript(createScript(name, STARTER));
-			view.focus();
-		});
+			const script = createScript(name, STARTER);
+			buffers.set(`user:${script.id}`, STARTER);
+			openTab({ kind: 'user', id: script.id });
+		}
 
-		saveAsBtn.addEventListener('click', async () => {
-			const suggested =
-				current.kind === 'shared'
-					? current.name
-					: `${EXAMPLES.find((e) => e.id === current.id)?.id ?? 'program'}.sau`;
-			const name = await openDialog({
-				title: 'Save as my script',
-				body: 'Saved in this browser only. Use Copy link to take it elsewhere.',
-				input: uniqueName(suggested),
-				confirm: 'Save',
-			});
-			if (name === null) return;
-			openScript(createScript(name, view.state.doc.toString()));
-		});
-
-		renameBtn.addEventListener('click', async () => {
-			if (current.kind !== 'user') return;
-			const script = getScript(current.id);
-			if (!script) return;
+		async function renameFlow(script: UserScript) {
 			const name = await openDialog({
 				title: 'Rename script',
 				input: script.name,
@@ -569,14 +1228,12 @@ println("Hello from my script!")
 			});
 			if (name === null) return;
 			renameScript(script.id, name || script.name);
-			renderPicker();
+			renderTabs();
+			renderTree();
 			applyMode();
-		});
+		}
 
-		deleteBtn.addEventListener('click', async () => {
-			if (current.kind !== 'user') return;
-			const script = getScript(current.id);
-			if (!script) return;
+		async function deleteFlow(script: UserScript) {
 			const answer = await openDialog({
 				title: `Delete ${script.name}?`,
 				body: 'This cannot be undone.',
@@ -586,11 +1243,52 @@ println("Hello from my script!")
 			if (answer === null) return;
 			window.clearTimeout(saveTimer);
 			saveTimer = undefined;
+			const at = session.tabs.findIndex((t) => t.kind === 'user' && t.id === script.id);
 			deleteScript(script.id);
-			openExample(DEFAULT_EXAMPLE.id);
+			buffers.delete(`user:${script.id}`);
+			if (at !== -1) {
+				session.tabs.splice(at, 1);
+				if (!session.tabs.length) session.tabs.push({ kind: 'example', id: DEFAULT_EXAMPLE.id });
+				session.active = Math.min(session.active, session.tabs.length - 1);
+				activate(session.active, false);
+			} else {
+				renderTree();
+			}
+		}
+
+		newBtn.addEventListener('click', () => void newFlow());
+
+		saveAsBtn.addEventListener('click', async () => {
+			const tab = activeTab();
+			if (!tab || tab.kind === 'user') return;
+			const suggested = tab.kind === 'shared' ? tab.id : `${tab.id}.sau`;
+			const name = await openDialog({
+				title: 'Save as my script',
+				body: 'Saved in this browser only. Use Copy link to take it elsewhere.',
+				input: uniqueName(suggested),
+				confirm: 'Save',
+			});
+			if (name === null) return;
+			const script = createScript(name, view.state.doc.toString());
+			// The fork replaces the tab it came from: two tabs showing the
+			// same text, one of them saving and one not, is a trap.
+			dirty.delete(tabKey(tab));
+			buffers.delete(tabKey(tab));
+			buffers.set(`user:${script.id}`, script.source);
+			session.tabs[session.active] = { kind: 'user', id: script.id };
+			activate(session.active, false);
 		});
 
-		// ---- the dialog ------------------------------------------------------
+		resetBtn.addEventListener('click', () => {
+			const tab = activeTab();
+			if (tab?.kind !== 'example') return;
+			dirty.delete(tabKey(tab));
+			buffers.delete(tabKey(tab));
+			renderTabs();
+			activate(session.active, false);
+		});
+
+		// ---- the dialog ----------------------------------------------------------
 
 		interface DialogOptions {
 			title: string;
@@ -622,10 +1320,11 @@ println("Hello from my script!")
 						if (dialog.returnValue !== 'confirm') return resolve(null);
 						resolve(wantsInput ? normaliseName(dialogInput.value) : '');
 					},
-					{ once: true },
+					{ once: true }
 				);
 				dialog.returnValue = '';
 				dialog.showModal();
+				dialog.scrollTop = 0;
 				if (wantsInput) dialogInput.select();
 			});
 		}
@@ -647,7 +1346,140 @@ println("Hello from my script!")
 			if (event.target === dialog) dialog.close('');
 		});
 
-		// ---- sharing --------------------------------------------------------
+		// ---- help ------------------------------------------------------------------
+
+		const SHORTCUTS: [string, string][] = [
+			[`${MOD} ↵`, 'Run the program'],
+			['Esc', 'Stop a running program'],
+			['Shift Alt F', 'Format'],
+			[`${MOD} Space`, 'Completions'],
+			[`${MOD} F`, 'Find in the program'],
+			[`${MOD} Z  /  ${MOD} Shift Z`, 'Undo / redo'],
+			['Tab', 'Indent the selection'],
+			[`${MOD} B`, 'Show or hide the sidebar'],
+			[`${MOD} Alt N`, 'New script'],
+			['?', 'This list'],
+		];
+
+		keysList.replaceChildren(
+			...SHORTCUTS.flatMap(([keys, what]) => {
+				const dt = document.createElement('dt');
+				for (const key of keys.split(' ')) {
+					if (!key) continue;
+					if (key === '/') {
+						dt.append(document.createTextNode(' or '));
+						continue;
+					}
+					const kbd = document.createElement('kbd');
+					kbd.textContent = key;
+					dt.append(kbd);
+				}
+				const dd = document.createElement('dd');
+				dd.textContent = what;
+				return [dt, dd];
+			})
+		);
+
+		/**
+		 * Open the help, at the top of it.
+		 *
+		 * `autofocus` on the dialog is the standards-blessed way to stop the
+		 * browser reaching for the first focusable descendant — the Close
+		 * button, right at the bottom — and scrolling it into view. Chrome
+		 * does it anyway, so the scroll is also put back explicitly. Both,
+		 * because the attribute is the correct thing to say and the
+		 * assignment is the thing that holds.
+		 */
+		function openHelp() {
+			helpDialog.showModal();
+			helpDialog.scrollTop = 0;
+		}
+
+		helpBtn.addEventListener('click', openHelp);
+		helpClose.addEventListener('click', () => helpDialog.close());
+		helpDialog.addEventListener('click', (event) => {
+			if (event.target === helpDialog) helpDialog.close();
+		});
+
+		// ---- layout ------------------------------------------------------------------
+
+		function applyLayout() {
+			root.dataset.layout = session.layout;
+			splitEl.style.setProperty('--pg-split', String(session.split));
+			gutterEl.setAttribute(
+				'aria-orientation',
+				session.layout === 'side-by-side' ? 'vertical' : 'horizontal'
+			);
+			layoutBtn.title =
+				session.layout === 'side-by-side'
+					? 'Stack the panes instead'
+					: 'Put the panes side by side';
+			layoutDivider.setAttribute('d', session.layout === 'side-by-side' ? 'M8 2.5v11' : 'M1.5 8h13');
+			root.classList.toggle('pg-no-sidebar', !session.sidebar);
+			sidebar.hidden = !session.sidebar;
+			sidebarToggle.setAttribute('aria-expanded', String(session.sidebar));
+			sidebarToggle.title = session.sidebar ? 'Hide the sidebar' : 'Show the sidebar';
+		}
+
+		layoutBtn.addEventListener('click', () => {
+			session.layout = session.layout === 'side-by-side' ? 'stacked' : 'side-by-side';
+			applyLayout();
+			persist();
+		});
+
+		sidebarToggle.addEventListener('click', () => {
+			session.sidebar = !session.sidebar;
+			applyLayout();
+			persist();
+		});
+
+		/**
+		 * Dragging the gutter.
+		 *
+		 * Pointer capture rather than document-level listeners: the pointer
+		 * leaves the 6px gutter immediately, and without capture the drag
+		 * would end the moment it did.
+		 */
+		gutterEl.addEventListener('pointerdown', (event) => {
+			event.preventDefault();
+			gutterEl.setPointerCapture(event.pointerId);
+			const rect = splitEl.getBoundingClientRect();
+
+			const move = (e: PointerEvent) => {
+				const fraction =
+					session.layout === 'side-by-side'
+						? (e.clientX - rect.left) / rect.width
+						: (e.clientY - rect.top) / rect.height;
+				session.split = Math.min(0.8, Math.max(0.2, fraction));
+				splitEl.style.setProperty('--pg-split', String(session.split));
+			};
+			const up = (e: PointerEvent) => {
+				gutterEl.releasePointerCapture(e.pointerId);
+				gutterEl.removeEventListener('pointermove', move);
+				gutterEl.removeEventListener('pointerup', up);
+				persist();
+			};
+			gutterEl.addEventListener('pointermove', move);
+			gutterEl.addEventListener('pointerup', up);
+		});
+
+		// A split that can only be dragged is a split keyboard users cannot
+		// move at all.
+		gutterEl.addEventListener('keydown', (event) => {
+			const step = event.shiftKey ? 0.1 : 0.02;
+			const back = session.layout === 'side-by-side' ? 'ArrowLeft' : 'ArrowUp';
+			const forward = session.layout === 'side-by-side' ? 'ArrowRight' : 'ArrowDown';
+			if (event.key !== back && event.key !== forward) return;
+			event.preventDefault();
+			session.split = Math.min(
+				0.8,
+				Math.max(0.2, session.split + (event.key === forward ? step : -step))
+			);
+			splitEl.style.setProperty('--pg-split', String(session.split));
+			persist();
+		});
+
+		// ---- sharing --------------------------------------------------------------
 
 		/**
 		 * Programs travel in the URL fragment, base64url-encoded. The fragment
@@ -673,41 +1505,7 @@ println("Hello from my script!")
 			}
 		}
 
-		/**
-		 * What to open on arrival, in order of how specific the request is: a
-		 * shared link, then whatever was open last, then the first example.
-		 * Called before the editor exists, so it only returns a description.
-		 */
-		function resolveStartup():
-			| { kind: 'example'; id: string; source: string }
-			| { kind: 'user'; id: string; source: string }
-			| { kind: 'shared'; name: string; source: string } {
-			const code = /[#&]code=([^&]+)/.exec(window.location.hash);
-			const shared = code ? decode(code[1]!) : null;
-			if (shared !== null) {
-				const named = /[#&]name=([^&]+)/.exec(window.location.hash);
-				const name = normaliseName(named ? (decode(named[1]!) ?? 'shared.sau') : 'shared.sau');
-				// Reloading a link you copied from your own script should
-				// reopen that script, not offer to save a second copy of it.
-				const mine = listScripts().find((s) => s.name === name && s.source === shared);
-				if (mine) return { kind: 'user', id: mine.id, source: mine.source };
-				return { kind: 'shared', name, source: shared };
-			}
-
-			const last = lastOpened();
-			if (last?.startsWith('user:')) {
-				const script = getScript(last.slice(5));
-				if (script) return { kind: 'user', id: script.id, source: script.source };
-			}
-			if (last?.startsWith('example:')) {
-				const example = EXAMPLES.find((e) => e.id === last.slice(8));
-				if (example) return { kind: 'example', id: example.id, source: example.source };
-			}
-
-			return { kind: 'example', id: DEFAULT_EXAMPLE.id, source: DEFAULT_EXAMPLE.source };
-		}
-
-		function history_replace(hash: string) {
+		function historyReplace(hash: string) {
 			const url = new URL(window.location.href);
 			url.hash = hash;
 			window.history.replaceState(null, '', url.toString());
@@ -715,27 +1513,66 @@ println("Hello from my script!")
 
 		shareBtn.addEventListener('click', async () => {
 			flushSave();
+			const tab = activeTab();
 			// The name rides along so the recipient opens `parser.sau`, not an
 			// anonymous buffer — and so "Save as my script" can suggest it.
-			const name = current.kind === 'example' ? null : filename.textContent;
+			const name = tab && tab.kind !== 'example' ? tabLabel(tab) : null;
 			const parts = [`code=${encode(view.state.doc.toString())}`];
 			if (name) parts.push(`name=${encode(name)}`);
-			history_replace(parts.join('&'));
+			historyReplace(parts.join('&'));
 
-			const label = shareBtn.textContent;
 			try {
 				await navigator.clipboard.writeText(window.location.href);
-				shareBtn.textContent = 'Copied!';
+				flash(shareLabel, 'Copied!');
 			} catch {
 				// Clipboard access can be denied; the URL bar still has the link.
-				shareBtn.textContent = 'Link in URL bar';
+				flash(shareLabel, 'In the URL bar');
 			}
-			setTimeout(() => {
-				shareBtn.textContent = label;
-			}, 2000);
 		});
 
-		// ---- running --------------------------------------------------------
+		// ---- formatting --------------------------------------------------------------
+
+		async function format() {
+			const source = view.state.doc.toString();
+			formatBtn.disabled = true;
+			try {
+				const result = await formatSaule(source);
+				if (!result.ok || result.text === undefined) {
+					// Nothing is laid out from a tree that did not parse, and
+					// the linter is already underlining why.
+					flash(formatLabel, 'Cannot format');
+					return;
+				}
+				if (result.text === source) {
+					flash(formatLabel, 'Already tidy');
+					return;
+				}
+				// Replace the text, not the document: a full swap would lose
+				// the cursor, and undo would swallow the whole file.
+				const head = view.state.selection.main.head;
+				view.dispatch({
+					changes: { from: 0, to: view.state.doc.length, insert: result.text },
+					selection: { anchor: Math.min(head, result.text.length) },
+				});
+			} catch (err) {
+				flash(formatLabel, err instanceof RuntimeUnavailableError ? 'Unavailable' : 'Failed');
+			} finally {
+				formatBtn.disabled = false;
+			}
+		}
+
+		/** Say something on a button for a moment, then put its label back. */
+		function flash(label: Element, text: string) {
+			const was = label.textContent;
+			label.textContent = text;
+			setTimeout(() => {
+				label.textContent = was;
+			}, 1600);
+		}
+
+		formatBtn.addEventListener('click', () => void format());
+
+		// ---- running ------------------------------------------------------------------
 
 		function clearOutput() {
 			output.replaceChildren(dim('Press Run to execute the program.'));
@@ -757,47 +1594,6 @@ println("Hello from my script!")
 			return span;
 		}
 
-		/**
-		 * Turn a diagnostic's byte offset into a line and column.
-		 *
-		 * The runtime reports UTF-8 byte offsets, because that is what the
-		 * compiler works in; JavaScript strings are indexed in UTF-16 code
-		 * units. The two agree for ASCII and diverge the moment a program
-		 * contains a non-ASCII string literal or comment, so the walk below
-		 * counts bytes explicitly rather than trusting the string index.
-		 */
-		function locate(source: string, byteOffset: number): { line: number; column: number } {
-			let bytes = 0;
-			let ln = 1;
-			let column = 1;
-
-			for (let i = 0; i < source.length && bytes < byteOffset; i++) {
-				const code = source.codePointAt(i)!;
-
-				if (source[i] === '\n') {
-					ln++;
-					column = 1;
-				} else {
-					column++;
-				}
-
-				if (code > 0xffff) {
-					// An astral character is one surrogate pair here and four
-					// bytes there; skip its low surrogate so it counts once.
-					bytes += 4;
-					i++;
-				} else if (code > 0x7ff) {
-					bytes += 3;
-				} else if (code > 0x7f) {
-					bytes += 2;
-				} else {
-					bytes += 1;
-				}
-			}
-
-			return { line: ln, column };
-		}
-
 		/** Render a diagnostic the way the CLI does: phase, position, message, help. */
 		function renderDiagnostic(d: Diagnostic, source: string): HTMLElement {
 			const wrap = document.createElement('div');
@@ -808,7 +1604,12 @@ println("Hello from my script!")
 			// frame to blame, say — and those simply go without one.
 			if (d.span) {
 				const { line: ln, column } = locate(source, d.span.start);
-				wrap.append(line(` (line ${ln}, column ${column})`, 'pg-diag-loc'));
+				const jump = document.createElement('button');
+				jump.type = 'button';
+				jump.className = 'pg-diag-loc';
+				jump.textContent = ` (line ${ln}, column ${column})`;
+				jump.addEventListener('click', () => jumpTo(d.span!.start, source));
+				wrap.append(jump);
 			}
 			wrap.append(line(': '), line(d.message));
 
@@ -824,10 +1625,13 @@ println("Hello from my script!")
 
 		function setRunning(active: boolean) {
 			running = active;
+			// Both stay in place and neither moves: a control that appears
+			// only once it is needed is a control you have to find under
+			// time pressure, which is exactly the wrong moment. Stop is
+			// greyed out until there is something to stop, and red the
+			// instant there is.
 			runBtn.disabled = active;
-			// Swap Run for Stop rather than showing both: while a program is
-			// running, stopping it is the only useful action.
-			stopBtn.hidden = !active;
+			stopBtn.disabled = !active;
 		}
 
 		async function run() {
@@ -838,6 +1642,7 @@ println("Hello from my script!")
 			status.textContent = firstRun ? 'Starting the runtime…' : 'Running…';
 			status.className = 'pg-status';
 			output.replaceChildren();
+			view.dispatch({ effects: setErrorLine.of(null) });
 
 			// The source is captured rather than re-read after the run, so the
 			// offsets in the diagnostics are resolved against the exact text
@@ -847,6 +1652,7 @@ println("Hello from my script!")
 			try {
 				const result = await runSaule(source);
 				firstRun = false;
+				versionMeta.textContent = getRuntimeVersion() ?? '';
 
 				const nodes: Node[] = [];
 				for (const chunk of result.output) {
@@ -857,495 +1663,150 @@ println("Hello from my script!")
 				if (!nodes.length) nodes.push(dim('(no output)'));
 				output.replaceChildren(...nodes);
 
+				// Mark where it failed, if the failure had a place.
+				const located = result.diagnostics.find((d) => d.span);
+				if (located?.span) {
+					const at = Math.min(
+						toCharOffset(source, located.span.start),
+						view.state.doc.length
+					);
+					view.dispatch({
+						effects: setErrorLine.of(view.state.doc.lineAt(at).from),
+					});
+				}
+
 				status.textContent = result.ok
 					? `Finished in ${result.durationMs.toFixed(0)} ms`
 					: `Failed — ${result.diagnostics.length} diagnostic(s)`;
 				status.className = result.ok ? 'pg-status pg-ok' : 'pg-status pg-fail';
 			} catch (err) {
+				const box = document.createElement('div');
+				box.className = 'pg-notice';
 				if (err instanceof RunCancelledError) {
 					// Stopped on purpose — by the button or the timeout. Not a
 					// failure of the program, so it reads differently.
-					const box = document.createElement('div');
-					box.className = 'pg-notice';
 					box.append(line(err.message));
-					output.replaceChildren(box);
 					status.textContent = 'Stopped';
-					status.className = 'pg-status pg-fail';
 				} else {
-					const message =
-						err instanceof RuntimeUnavailableError
-							? err.message
-							: `Unexpected failure: ${err instanceof Error ? err.message : String(err)}`;
-
-					const box = document.createElement('div');
-					box.className = 'pg-notice';
-					box.append(line(message));
-					output.replaceChildren(box);
-
+					box.append(
+						line(
+							err instanceof RuntimeUnavailableError
+								? err.message
+								: `Unexpected failure: ${err instanceof Error ? err.message : String(err)}`
+						)
+					);
 					status.textContent = 'Runtime unavailable';
-					status.className = 'pg-status pg-fail';
 				}
+				output.replaceChildren(box);
+				status.className = 'pg-status pg-fail';
 			} finally {
 				setRunning(false);
 			}
 		}
 
-		runBtn.addEventListener('click', run);
+		runBtn.addEventListener('click', () => void run());
 		stopBtn.addEventListener('click', () => stopSaule());
+		clearBtn.addEventListener('click', clearOutput);
 
-		// ---- boot -----------------------------------------------------------
+		// ---- boot ------------------------------------------------------------------------
 
-		// The document is already in the editor — `resolveStartup` fed it to
-		// `EditorState.create`. What is left is the chrome around it, and the
-		// `open*` helpers do that without re-writing an identical document.
-		if (startup.kind === 'shared') openShared(startup.name, startup.source);
-		else if (startup.kind === 'user') {
-			const script = getScript(startup.id)!;
-			openScript(script);
-		} else openExample(startup.id);
+		/**
+		 * What to open on arrival, in order of how specific the request is: a
+		 * shared link, then the tabs from last time, then the first example.
+		 */
+		function resolveStartup() {
+			const code = /[#&]code=([^&]+)/.exec(window.location.hash);
+			const shared = code ? decode(code[1]!) : null;
+			if (shared !== null) {
+				const named = /[#&]name=([^&]+)/.exec(window.location.hash);
+				const name = normaliseName(named ? (decode(named[1]!) ?? 'shared.sau') : 'shared.sau');
+				// Reloading a link you copied from your own script should
+				// reopen that script, not offer to save a second copy of it.
+				const mine = listScripts().find((s) => s.name === name && s.source === shared);
+				const tab: OpenTab = mine
+					? { kind: 'user', id: mine.id }
+					: { kind: 'shared', id: name, source: shared };
+				buffers.set(tabKey(tab), shared);
+				const at = session.tabs.findIndex((t) => tabKey(t) === tabKey(tab));
+				if (at === -1) {
+					session.tabs.push(tab);
+					session.active = session.tabs.length - 1;
+				} else {
+					session.active = at;
+				}
+				return;
+			}
 
-		if (!RUNTIME_AVAILABLE) {
-			runBtn.title = 'The browser runtime is still being built';
-			status.textContent = 'Runtime not yet available';
-			status.className = 'pg-status pg-fail';
+			// Drop tabs for scripts deleted since, and seed each shared tab's
+			// buffer from what was stored with it.
+			session.tabs = session.tabs.filter((t) => t.kind !== 'user' || getScript(t.id));
+			for (const tab of session.tabs) {
+				if (tab.kind === 'shared' && tab.source !== undefined) {
+					buffers.set(tabKey(tab), tab.source);
+				}
+			}
+			if (!session.tabs.length) {
+				session.tabs = [{ kind: 'example', id: DEFAULT_EXAMPLE.id }];
+				session.active = 0;
+			}
+			session.active = Math.min(session.active, session.tabs.length - 1);
 		}
 
-		// Stopping a program is worth a keyboard shortcut of its own, since
-		// the mouse may be nowhere near the button when a loop runs away.
+		resolveStartup();
+		applyLayout();
+		renderTabs();
+		renderTree();
+		// `activate` would see the index as unchanged and skip the load, so
+		// the first document goes in explicitly.
+		applying = true;
+		view.dispatch({
+			changes: { from: 0, to: view.state.doc.length, insert: tabSource(activeTab()!) },
+		});
+		applying = false;
+		applyMode();
+		clearOutput();
+		showCursor();
+		persist();
+
+		// ---- global keys -------------------------------------------------------------------
+
 		document.addEventListener('keydown', (event) => {
+			// Stopping a program is worth a shortcut of its own, since the
+			// mouse may be nowhere near the button when a loop runs away.
 			if (running && event.key === 'Escape') {
 				event.preventDefault();
 				stopSaule();
+				return;
 			}
+			const mod = MAC ? event.metaKey : event.ctrlKey;
+			if (mod && event.altKey && event.key.toLowerCase() === 'n') {
+				event.preventDefault();
+				void newFlow();
+				return;
+			}
+			if (mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'b') {
+				event.preventDefault();
+				sidebarToggle.click();
+				return;
+			}
+			// `?` only outside a text field, where it is a character.
+			const target = event.target as HTMLElement | null;
+			const typing =
+				target?.closest('.cm-editor, input, textarea, [contenteditable]') !== null;
+			if (event.key === '?' && !typing && !dialog.open && !helpDialog.open) {
+				event.preventDefault();
+				openHelp();
+			}
+		});
+
+		// The editor's text belongs to its tab before the page goes away.
+		window.addEventListener('beforeunload', () => {
+			flushSave();
+			persist();
 		});
 	}
 </script>
 
-<style>
-	/*
-	 * Starlight's splash template caps content at 1080px, which is a good
-	 * measure for prose and far too narrow for a side-by-side editor. Widen
-	 * only the container that actually holds a playground, so every other
-	 * splash page keeps its reading width.
-	 */
-	:global(.sl-container:has(.playground)) {
-		max-width: min(100%, 92rem);
-	}
-
-	.playground {
-		width: 100%;
-		margin-inline: auto;
-
-		/*
-		 * Syntax colours. The hues are GitHub's, because they are familiar and
-		 * well separated, but everything achromatic — comments, punctuation,
-		 * the gutter, the active-line wash — is warm rather than the cold
-		 * blue-grey of the original: on this background a blue-grey comment
-		 * reads as a different material from the code around it.
-		 *
-		 * The greys are also lifted. Line numbers at #4d5560 were 2.3:1
-		 * against the pane, below the 3:1 floor for anything you are expected
-		 * to read, and they are the one part of an editor people scan
-		 * deliberately.
-		 */
-		--cm-text: var(--sl-color-white);
-		--cm-comment: #8b8474;
-		--cm-string: #a5d6ff;
-		--cm-number: #79c0ff;
-		--cm-atom: #79c0ff;
-		--cm-keyword: #ff7b72;
-		--cm-decl: #ff9e64;
-		--cm-self: #ffa657;
-		--cm-type: #ffd580;
-		--cm-fn: #d2a8ff;
-		--cm-op: #ff7b72;
-		--cm-punct: #9a9282;
-		--cm-gutter: #746c5d;
-		--cm-active: rgb(255 235 190 / 5%);
-		--cm-selection: var(--saule-selection);
-		--cm-error-line: var(--saule-danger-soft);
-	}
-
-	:global(:root[data-theme='light']) .playground {
-		--cm-comment: #6b6455;
-		--cm-string: #0a3069;
-		--cm-number: #0550ae;
-		--cm-atom: #0550ae;
-		--cm-keyword: #cf222e;
-		--cm-decl: #953800;
-		--cm-self: #953800;
-		--cm-type: #7c5314;
-		--cm-fn: #6639ba;
-		--cm-op: #cf222e;
-		--cm-punct: #5f594e;
-		--cm-gutter: #8f8878;
-		--cm-active: rgb(90 60 0 / 4%);
-	}
-
-	.pg-toolbar {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 1rem;
-		align-items: end;
-		justify-content: space-between;
-		margin-bottom: 0.75rem;
-	}
-
-	/* The picker and New belong together — one is "open something", the other
-	   is "open something that does not exist yet" — so they share a row and
-	   the button sits on the select's baseline, not the label's. */
-	.pg-picker-group {
-		display: flex;
-		align-items: end;
-		gap: 0.5rem;
-	}
-
-	.pg-picker {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-	}
-
-	.pg-picker-label {
-		font-size: var(--sl-text-xs);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--sl-color-gray-3);
-	}
-
-	.pg-picker select {
-		background: var(--sl-color-black);
-		color: var(--sl-color-white);
-		border: 1px solid var(--sl-color-gray-5);
-		border-radius: 0.4rem;
-		padding: 0.45rem 0.7rem;
-		font: inherit;
-		font-size: var(--sl-text-sm);
-		min-width: 14rem;
-	}
-
-	.pg-actions {
-		display: flex;
-		gap: 0.5rem;
-		flex-wrap: wrap;
-	}
-
-	.pg-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.4rem;
-		border: 1px solid var(--sl-color-gray-5);
-		background: var(--sl-color-black);
-		color: var(--sl-color-white);
-		border-radius: 0.4rem;
-		padding: 0.45rem 0.85rem;
-		font: inherit;
-		font-size: var(--sl-text-sm);
-		cursor: pointer;
-		transition: background-color 0.15s, border-color 0.15s;
-	}
-
-	.pg-btn:hover:not(:disabled) {
-		border-color: var(--sl-color-accent);
-	}
-
-	.pg-btn:disabled {
-		opacity: 0.55;
-		cursor: not-allowed;
-	}
-
-	.pg-btn-primary {
-		background: var(--sl-color-accent);
-		border-color: var(--sl-color-accent);
-		color: var(--sl-color-black);
-		font-weight: 600;
-	}
-
-	.pg-btn-stop {
-		border-color: var(--saule-danger);
-		color: var(--saule-danger);
-		font-weight: 600;
-	}
-
-	.pg-btn-stop:hover {
-		background: var(--saule-danger-soft);
-		border-color: var(--saule-danger);
-	}
-
-	/* Delete sits in a row of neutral buttons, so it is tinted rather than
-	   filled: a solid red button next to Run would pull the eye to the one
-	   action nobody is looking for. It fills in on hover, once the pointer
-	   has already committed to it. */
-	.pg-btn-danger-ghost {
-		color: var(--saule-danger);
-	}
-
-	.pg-btn-danger-ghost:hover:not(:disabled) {
-		border-color: var(--saule-danger);
-		background: var(--saule-danger-soft);
-	}
-
-	.pg-btn-danger {
-		background: var(--saule-danger);
-		border-color: var(--saule-danger);
-		color: var(--sl-color-black);
-		font-weight: 600;
-	}
-
-	.pg-btn-danger:hover:not(:disabled) {
-		border-color: var(--saule-danger);
-		filter: brightness(1.08);
-	}
-
-	.pg-btn[hidden] {
-		display: none;
-	}
-
-	.pg-btn kbd {
-		font-family: var(--saule-font-mono);
-		font-size: 0.75em;
-		opacity: 0.7;
-		border: none;
-		background: none;
-		padding: 0;
-	}
-
-	.pg-blurb {
-		margin: 0 0 0.9rem;
-		font-size: var(--sl-text-sm);
-		color: var(--sl-color-gray-3);
-		min-height: 1.4em;
-	}
-
-	.pg-split {
-		display: grid;
-		grid-template-columns: 1fr;
-		gap: 1rem;
-		/* Both panes track the taller one, so the editor growing with its
-		   content doesn't leave the output pane short. */
-		align-items: stretch;
-	}
-
-	@media (min-width: 60rem) {
-		.pg-split {
-			grid-template-columns: 1.15fr 1fr;
-		}
-	}
-
-	.pg-pane {
-		display: flex;
-		flex-direction: column;
-		border: 1px solid var(--sl-color-gray-5);
-		border-radius: 0.6rem;
-		overflow: hidden;
-		background: var(--sl-color-black);
-		/* Tall enough to feel like an editor, capped so it always fits the
-		   viewport without the page itself scrolling. */
-		min-height: min(62vh, 34rem);
-		height: 100%;
-	}
-
-	.pg-pane-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 1rem;
-		padding: 0.5rem 0.85rem;
-		border-bottom: 1px solid var(--sl-color-gray-5);
-		background: var(--sl-color-gray-6);
-		font-size: var(--sl-text-xs);
-		font-family: var(--saule-font-mono);
-		color: var(--sl-color-gray-2);
-	}
-
-	.pg-status {
-		font-size: var(--sl-text-xs);
-		color: var(--sl-color-gray-3);
-	}
-
-	.pg-status.pg-ok {
-		color: var(--saule-success);
-	}
-
-	.pg-status.pg-fail {
-		color: var(--saule-danger);
-	}
-
-	/* Save state is reassurance, not information: it should be legible when
-	   looked for and invisible otherwise, so it stays at the pane header's
-	   own weight and only takes colour when something is *not* saved. */
-	.pg-savestate {
-		font-size: var(--sl-text-xs);
-		color: var(--sl-color-gray-3);
-	}
-
-	.pg-savestate.pg-unsaved {
-		color: var(--saule-warning);
-	}
-
-	.pg-editor {
-		flex: 1;
-		overflow: auto;
-		min-height: 0;
-		/* Vertical breathing room lives here rather than on `.cm-content`,
-		   which CodeMirror aligns the line-number gutter against. */
-		padding-block: 0.5rem;
-	}
-
-	/* CodeMirror injects its own DOM, so these need to pierce scoping. */
-	.pg-editor :global(.cm-editor) {
-		height: 100%;
-	}
-
-	.pg-output {
-		flex: 1;
-		margin: 0;
-		padding: 0.75rem 0.85rem;
-		overflow: auto;
-		font-family: var(--saule-font-mono);
-		font-size: 0.8rem;
-		line-height: 1.6;
-		white-space: pre-wrap;
-		word-break: break-word;
-		color: var(--sl-color-white);
-		background: var(--sl-color-black);
-	}
-
-	/*
-	 * Everything in the output pane is built by the script above with
-	 * `document.createElement`, so none of it carries the `data-astro-cid`
-	 * attribute Astro adds when it scopes a stylesheet — a plain `.pg-error`
-	 * rule here compiles to `.pg-error[data-astro-cid-…]` and matches
-	 * nothing, which is why diagnostics used to render as undifferentiated
-	 * white text. Scoping by the static ancestor and going `:global` on the
-	 * generated part is what makes these apply, without leaking the class
-	 * names to the rest of the site.
-	 */
-	.pg-output :global(.pg-dim) {
-		color: var(--sl-color-gray-3);
-	}
-
-	.pg-output :global(.pg-stderr) {
-		color: var(--saule-stderr);
-	}
-
-	.pg-output :global(.pg-error),
-	.pg-output :global(.pg-warning) {
-		margin-block: 0.35rem;
-		padding: 0.5rem 0.7rem;
-		border-radius: 0.35rem;
-		border-left: 3px solid currentcolor;
-	}
-
-	.pg-output :global(.pg-error) {
-		color: var(--saule-danger);
-		background: var(--saule-danger-tint);
-	}
-
-	.pg-output :global(.pg-warning) {
-		color: var(--saule-warning);
-		background: var(--saule-warning-tint);
-	}
-
-	.pg-output :global(.pg-diag-label) {
-		font-weight: 600;
-		text-transform: capitalize;
-	}
-
-	/* Part of the heading line, but the message is what should be read first. */
-	.pg-output :global(.pg-diag-loc) {
-		opacity: 0.8;
-	}
-
-	.pg-output :global(.pg-notice) {
-		padding: 0.85rem 1rem;
-		border-radius: 0.45rem;
-		border: 1px solid var(--sl-color-accent);
-		background: var(--sl-color-accent-low);
-		color: var(--sl-color-white);
-		line-height: 1.6;
-	}
-
-	/* The one `.pg-dim` that is in the markup rather than generated. */
-	.pg-dim {
-		color: var(--sl-color-gray-3);
-	}
-
-	/* ---- naming, renaming and deleting scripts ---------------------------- */
-
-	.pg-dialog {
-		/* Starlight's reset zeroes every margin, which includes the `auto`
-		   the UA stylesheet uses to centre an open dialog. Put it back. */
-		inset: 0;
-		margin: auto;
-		border: 1px solid var(--sl-color-gray-5);
-		border-radius: 0.6rem;
-		background: var(--sl-color-black);
-		color: var(--sl-color-white);
-		padding: 0;
-		width: min(26rem, calc(100vw - 2rem));
-		box-shadow: var(--sl-shadow-lg);
-	}
-
-	.pg-dialog::backdrop {
-		background: var(--sl-color-backdrop-overlay);
-	}
-
-	.pg-dialog-form {
-		display: flex;
-		flex-direction: column;
-		gap: 0.85rem;
-		padding: 1.1rem 1.2rem;
-	}
-
-	.pg-dialog-title {
-		margin: 0;
-		font-size: var(--sl-text-lg);
-		line-height: 1.3;
-	}
-
-	.pg-dialog-body {
-		margin: 0;
-		font-size: var(--sl-text-sm);
-		color: var(--sl-color-gray-2);
-		line-height: 1.5;
-	}
-
-	.pg-dialog-field {
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
-	}
-
-	.pg-dialog-field[hidden] {
-		display: none;
-	}
-
-	.pg-dialog-field span {
-		font-size: var(--sl-text-xs);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--sl-color-gray-3);
-	}
-
-	.pg-dialog-field input {
-		font-family: var(--saule-font-mono);
-		font-size: var(--sl-text-sm);
-		padding: 0.5rem 0.7rem;
-		border-radius: 0.4rem;
-		border: 1px solid var(--sl-color-gray-5);
-		background: var(--sl-color-gray-6);
-		color: var(--sl-color-white);
-	}
-
-	.pg-dialog-field input:focus {
-		outline: 2px solid var(--sl-color-accent);
-		outline-offset: -1px;
-	}
-
-	.pg-dialog-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.5rem;
-	}
+<style is:global>
+	@import '../styles/playground.css';
 </style>

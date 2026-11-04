@@ -82,25 +82,36 @@ fn failed(diagnostics: Vec<Diagnostic>, output: Vec<OutputChunk>) -> RunResult {
 /// this source, but a chunk carries a name for its disassembly and errors.
 const PLAYGROUND_NAME: &str = "playground.sau";
 
-/// Compile and run `source`, returning the structured result.
+/// What the front end produced: something runnable, or why not.
+enum Front {
+    Ready(std::rc::Rc<saule_vm::Chunk>),
+    Failed(Vec<Diagnostic>),
+}
+
+/// Everything up to but not including execution.
+///
+/// Factored out because [`check`] wants exactly this and nothing more: the
+/// playground reports errors as you type without running anything, and a
+/// second copy of the phase order is how the two would come to disagree
+/// about what a program means.
 ///
 /// Unlike `saule_runtime::check_and_run`, which stops at the first
 /// diagnostic, this reports **every** semantic and type error in one pass —
 /// a playground that fixes one error at a time and re-runs is a poor way to
 /// learn a type system.
-pub fn run(source: &str) -> RunResult {
+fn front_end(source: &str) -> Front {
     // Registers the stdlib's type signatures and prelude names. `check_and_run`
     // does this internally; running the phases by hand means doing it here.
     saule_runtime::init();
 
     let tokens = match saule_lexer::Lexer::new(source).tokenize() {
         Ok(tokens) => tokens,
-        Err(err) => return failed(vec![to_diagnostic(&err, Phase::Lex)], Vec::new()),
+        Err(err) => return Front::Failed(vec![to_diagnostic(&err, Phase::Lex)]),
     };
 
     let mut module = match saule_parser::parse(tokens) {
         Ok(module) => module,
-        Err(err) => return failed(vec![to_diagnostic(&err, Phase::Parse)], Vec::new()),
+        Err(err) => return Front::Failed(vec![to_diagnostic(&err, Phase::Parse)]),
     };
 
     // The two static passes by hand, in the order `analyze_and_check`
@@ -117,7 +128,7 @@ pub fn run(source: &str) -> RunResult {
         .map(|e| to_diagnostic(e, Phase::Semantic))
         .collect();
     if !semantic.is_empty() {
-        return failed(semantic, Vec::new());
+        return Front::Failed(semantic);
     }
 
     let type_errors: Vec<Diagnostic> = saule_typeck::check_and_resolve(&mut module)
@@ -125,15 +136,36 @@ pub fn run(source: &str) -> RunResult {
         .map(|e| to_diagnostic(e, Phase::Type))
         .collect();
     if !type_errors.is_empty() {
-        return failed(type_errors, Vec::new());
+        return Front::Failed(type_errors);
     }
 
     // The bytecode engine — the only one. This is the single-module route
     // rather than `program::compile`, because there is no filesystem here
     // for an import graph to live in; an `import` is a compile error.
-    let chunk = match saule_vm::compile(&module, PLAYGROUND_NAME, source) {
-        Ok(chunk) => std::rc::Rc::new(chunk),
-        Err(err) => return failed(vec![to_diagnostic(&err, Phase::Compile)], Vec::new()),
+    match saule_vm::compile(&module, PLAYGROUND_NAME, source) {
+        Ok(chunk) => Front::Ready(std::rc::Rc::new(chunk)),
+        Err(err) => Front::Failed(vec![to_diagnostic(&err, Phase::Compile)]),
+    }
+}
+
+/// Every compile-time diagnostic in `source`, without running it.
+///
+/// What the editor's squiggles are drawn from. Running a program to find out
+/// whether it compiles is both slower and destructive — a half-finished
+/// program that happens to parse would print, write and loop on every
+/// keystroke.
+pub fn check(source: &str) -> Vec<Diagnostic> {
+    match front_end(source) {
+        Front::Ready(_) => Vec::new(),
+        Front::Failed(diagnostics) => diagnostics,
+    }
+}
+
+/// Compile and run `source`, returning the structured result.
+pub fn run(source: &str) -> RunResult {
+    let chunk = match front_end(source) {
+        Front::Ready(chunk) => chunk,
+        Front::Failed(diagnostics) => return failed(diagnostics, Vec::new()),
     };
 
     // Anything the program prints is captured rather than written to a stdout
@@ -175,6 +207,97 @@ pub fn run(source: &str) -> RunResult {
             failed(vec![to_diagnostic(&err, Phase::Runtime)], output)
         }
     }
+}
+
+/// The result of a [`format`] request.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct FormatResult {
+    pub ok: bool,
+    /// The formatted source. Absent when the program did not parse.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Why it could not be formatted, as one diagnostic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<Diagnostic>,
+}
+
+/// Pretty-print `source`, preserving its comments.
+///
+/// The lossless lexer path, which is what `saule fmt` uses — the editor's
+/// Format and the CLI's must not lay the same file out differently.
+///
+/// A program that does not parse is not formatted. There is nothing useful
+/// to print from a broken tree, and a formatter that guesses at one would
+/// hand back source the author never wrote.
+pub fn format(source: &str) -> FormatResult {
+    use saule_fmt::{Comment, CommentKind};
+    use saule_lexer::Token;
+
+    let raw = match saule_lexer::Lexer::new(source).tokenize_with_trivia() {
+        Ok(raw) => raw,
+        Err(err) => {
+            return FormatResult {
+                ok: false,
+                text: None,
+                diagnostic: Some(to_diagnostic(&err, Phase::Lex)),
+            };
+        }
+    };
+
+    let mut comments: Vec<Comment> = Vec::new();
+    let mut tokens = Vec::with_capacity(raw.len());
+    for tok in raw {
+        match tok.value {
+            Token::LineComment(text) => comments.push(Comment {
+                span: tok.span,
+                kind: CommentKind::Line,
+                text,
+            }),
+            Token::BlockComment(text) => comments.push(Comment {
+                span: tok.span,
+                kind: CommentKind::Block,
+                text,
+            }),
+            other => tokens.push(saule_ast::Spanned {
+                value: other,
+                span: tok.span,
+                id: saule_ast::NodeId::NONE,
+            }),
+        }
+    }
+
+    match saule_parser::parse(tokens) {
+        Ok(module) => FormatResult {
+            ok: true,
+            text: Some(saule_fmt::format_module_with_comments(
+                &module, source, &comments,
+            )),
+            diagnostic: None,
+        },
+        Err(err) => FormatResult {
+            ok: false,
+            text: None,
+            diagnostic: Some(to_diagnostic(&err, Phase::Parse)),
+        },
+    }
+}
+
+/// [`check`], serialized as `{"diagnostics": […]}`.
+pub fn check_to_json(source: &str) -> String {
+    #[derive(Serialize)]
+    struct CheckResult {
+        diagnostics: Vec<Diagnostic>,
+    }
+    let result = CheckResult {
+        diagnostics: check(source),
+    };
+    serde_json::to_string(&result).unwrap_or_else(|_| r#"{"diagnostics":[]}"#.to_string())
+}
+
+/// [`format`], serialized.
+pub fn format_to_json(source: &str) -> String {
+    serde_json::to_string(&format(source))
+        .unwrap_or_else(|_| r#"{"ok":false}"#.to_string())
 }
 
 /// [`run`], serialized. The browser entry point returns this string.
@@ -229,6 +352,21 @@ mod browser {
             start_ms: js_sys::Date::now(),
         };
         saule_runtime::platform::with_platform(Box::new(platform), || super::run_to_json(source))
+    }
+
+    /// Report every compile-time diagnostic in a program without running it.
+    ///
+    /// No platform is installed, unlike [`run`]: nothing executes, so
+    /// nothing can ask for a clock.
+    #[wasm_bindgen]
+    pub fn check(source: &str) -> String {
+        super::check_to_json(source)
+    }
+
+    /// Pretty-print a program, returning a JSON `FormatResult`.
+    #[wasm_bindgen]
+    pub fn format(source: &str) -> String {
+        super::format_to_json(source)
     }
 
     /// The toolchain version this module was built from, so the playground can
@@ -448,5 +586,55 @@ println(area(Shape.Rect(3.0, 4.0)))
         // would make `if (d.span)` checks pass on a null.
         let raw = run_to_json(r#"println("hi")"#);
         assert!(!raw.contains("null"), "unexpected null in {raw}");
+    }
+}
+
+#[cfg(test)]
+mod check_and_format_tests {
+    use super::*;
+
+    #[test]
+    fn a_clean_program_has_no_diagnostics() {
+        assert_eq!(check("println(\"hi\")\n"), Vec::new());
+    }
+
+    #[test]
+    fn check_reports_without_running() {
+        // If this ran, the loop would never return.
+        let diagnostics = check("local n: string = 1\nwhile true do end\n");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].phase, Phase::Type);
+    }
+
+    #[test]
+    fn check_reports_every_type_error_at_once() {
+        let diagnostics = check("local a: string = 1\nlocal b: integer = \"x\"\n");
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn format_lays_out_and_keeps_comments() {
+        let out = format("local   x:integer=1  -- note\n");
+        assert!(out.ok);
+        assert_eq!(out.text.as_deref(), Some("local x: integer = 1  -- note\n"));
+    }
+
+    #[test]
+    fn format_declines_a_program_that_does_not_parse() {
+        let out = format("local x: = \n");
+        assert!(!out.ok);
+        assert!(out.text.is_none());
+        assert!(out.diagnostic.is_some());
+    }
+
+    #[test]
+    fn format_does_not_rewrite_what_the_author_wrote() {
+        // The playground's Format button is `saule fmt`, so the fidelity
+        // rules `saule-fmt`'s own corpus test pins apply here too.
+        let out = format("local mask: integer = 0xFF\nlocal f = (a, b) => a < b\n");
+        assert_eq!(
+            out.text.as_deref(),
+            Some("local mask: integer = 0xFF\nlocal f = (a, b) => a < b\n")
+        );
     }
 }

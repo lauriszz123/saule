@@ -269,6 +269,38 @@ fn bin_sym(op: BinOp) -> &'static str {
 /// shapes the lexer does: digits with an optional single `.` (either side
 /// may be empty, but not both), an optional `f`/`F` suffix, and the leading
 /// `-` that negative literal *patterns* fold into their span.
+/// Whether `raw` is an integer literal that reads back as exactly `n`.
+///
+/// Accepts the three bases the lexer accepts and the `_` separator, and
+/// re-parses rather than trusting the shape: a span that is not a literal at
+/// all, or one whose digits overflow, falls through to the decimal value.
+fn int_text_matches(raw: &str, n: i64) -> bool {
+    let body = raw.strip_prefix('-').unwrap_or(raw);
+    let (digits, radix) = match body.get(..2) {
+        Some("0x") | Some("0X") => (&body[2..], 16),
+        Some("0b") | Some("0B") => (&body[2..], 2),
+        _ => (body, 10),
+    };
+    // A separator may sit between digits but not at either end, which is
+    // also what the lexer accepts.
+    if digits.starts_with('_') || digits.ends_with('_') {
+        return false;
+    }
+    let cleaned: String = digits.chars().filter(|&c| c != '_').collect();
+    if cleaned.is_empty() || !cleaned.chars().all(|c| c.is_digit(radix)) {
+        return false;
+    }
+    let Ok(parsed) = i64::from_str_radix(&cleaned, radix) else {
+        return false;
+    };
+    let parsed = if body.len() < raw.len() {
+        -parsed
+    } else {
+        parsed
+    };
+    parsed == n
+}
+
 fn float_text_matches(raw: &str, f: f64) -> bool {
     let body = raw
         .strip_suffix('f')

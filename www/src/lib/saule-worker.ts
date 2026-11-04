@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 /**
- * Runs Saule programs off the main thread.
+ * Runs, checks and formats Saule programs off the main thread.
  *
  * A WebAssembly module cannot be interrupted from the outside — there is no
  * way to ask it to stop mid-execution. So `while true do end`, which is an
@@ -12,19 +12,27 @@
  * whatever the program does, and `worker.terminate()` is an unconditional
  * kill. That is the entire reason this file exists.
  *
- * Protocol — the main thread sends `{ type: 'run', id, source }`, and gets
- * back exactly one `{ type: 'result' | 'error', id, ... }` per request. A
+ * The same file backs two workers (see `runtime.ts`): one that executes, and
+ * one that only ever compiles. Only the first is ever terminated, which is
+ * what lets the editor keep reporting errors while a program is running — and
+ * what keeps Stop from throwing away an in-flight check.
+ *
+ * Protocol — the main thread sends `{ type, id, source }`, and gets back
+ * exactly one `{ type: 'result' | 'error', id, ... }` per request. A
  * `{ type: 'ready' }` is posted once the wasm module has initialised, so the
  * page can show that the runtime is warming up on first use.
  */
 
-import init, { run, version } from './saule_wasm/saule_wasm.js';
+import init, { check, format, run, version } from './saule_wasm/saule_wasm.js';
 // Vite rewrites this to the emitted asset URL (hashed, and prefixed with the
 // site's base path), so the module is fetched rather than inlined as base64 —
 // which keeps it cacheable and out of the JS bundle.
 import wasmUrl from './saule_wasm/saule_wasm_bg.wasm?url';
 
-export type WorkerRequest = { type: 'run'; id: number; source: string };
+/** Which entry point a request wants. All three take a program's source. */
+export type WorkerJob = 'run' | 'check' | 'format';
+
+export type WorkerRequest = { type: WorkerJob; id: number; source: string };
 
 export type WorkerResponse =
 	| { type: 'ready'; version: string }
@@ -33,22 +41,25 @@ export type WorkerResponse =
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
-/** Initialise once; every later run awaits the same promise. */
+/** Initialise once; every later request awaits the same promise. */
 const ready: Promise<void> = init({ module_or_path: wasmUrl }).then(() => {
 	const message: WorkerResponse = { type: 'ready', version: version() };
 	ctx.postMessage(message);
 });
 
+const ENTRY: Record<WorkerJob, (source: string) => string> = { run, check, format };
+
 ctx.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
 	const request = event.data;
-	if (request?.type !== 'run') return;
+	const entry = request && ENTRY[request.type];
+	if (!entry) return;
 
 	void ready
 		.then(() => {
-			// `run` returns the JSON string described by `RunResult` in
-			// runtime.ts. Parsing happens on the main thread so a malformed
-			// payload surfaces there rather than as a dead worker.
-			const json = run(request.source);
+			// Each entry point returns the JSON string its counterpart in
+			// runtime.ts describes. Parsing happens on the main thread so a
+			// malformed payload surfaces there rather than as a dead worker.
+			const json = entry(request.source);
 			const message: WorkerResponse = { type: 'result', id: request.id, json };
 			ctx.postMessage(message);
 		})

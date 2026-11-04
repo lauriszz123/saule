@@ -148,3 +148,157 @@ import Default from '@astrojs/starlight/components/Head.astro';
 		initSidebar();
 	}
 </script>
+
+<script>
+	/**
+	 * Reveal the home page's segments as they arrive.
+	 *
+	 * The markup stays plain: nothing is hidden in the stylesheet by
+	 * default, because a page that hides its own content and relies on
+	 * script to show it again is a page that is blank when the script does
+	 * not run. `data-reveal` is written here, so the hidden state only ever
+	 * exists once there is something to undo it.
+	 *
+	 * The hero is deliberately not included. It animates on load — the
+	 * first thing anyone sees — and re-running that every time you scroll
+	 * back up would make the page feel like it was reloading.
+	 */
+	function initPanes() {
+		const panes = document.querySelectorAll<HTMLElement>('[data-pane]');
+		if (panes.length === 0) return;
+
+		/*
+		 * Start at the top, every time.
+		 *
+		 * A browser restores the scroll position on reload, and it does not
+		 * re-snap afterwards — so a refresh landed wherever you happened to
+		 * be, which on a snapped page means halfway between two segments
+		 * with neither of them whole. On a page whose first screen is the
+		 * thing it exists to show, resuming is the wrong behaviour anyway.
+		 */
+		if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+		// A module script is deferred, so it can run *after* the browser has
+		// already restored the position — and the restore itself is not a
+		// single moment: Chrome re-applies it once images and fonts have
+		// settled the layout. So this holds the top for a few frames rather
+		// than asking once. `instant`, because a page that visibly scrolls
+		// itself upward is worse than one that is simply there.
+		const toTop = () => window.scrollTo({ top: 0, behavior: 'instant' });
+		toTop();
+		requestAnimationFrame(toTop);
+		window.addEventListener('load', toTop, { once: true });
+		// Only while nobody has touched it: the moment a reader scrolls, the
+		// position is theirs and this must stop fighting them for it.
+		let settled = false;
+		const release = () => {
+			settled = true;
+		};
+		window.addEventListener('wheel', release, { once: true, passive: true });
+		window.addEventListener('touchstart', release, { once: true, passive: true });
+		window.addEventListener('keydown', release, { once: true });
+		const until = Date.now() + 600;
+		const hold = () => {
+			if (settled || Date.now() > until) return;
+			if (window.scrollY !== 0) toTop();
+			requestAnimationFrame(hold);
+		};
+		requestAnimationFrame(hold);
+
+		if (!('IntersectionObserver' in window)) return;
+
+		for (const pane of panes) {
+			// What arrives one after another. A grid of cards staggers card
+			// by card; anything else staggers as the block it is.
+			const inner = pane.querySelector(':scope > .pane-inner');
+			const items: HTMLElement[] = [];
+			for (const child of Array.from(inner?.children ?? [])) {
+				const cards = child.querySelectorAll<HTMLElement>('.card');
+				if (cards.length) items.push(...cards);
+				else if (child instanceof HTMLElement) items.push(child);
+			}
+			items.forEach((el, i) => {
+				el.dataset.reveal = '';
+				// Capped: past half a second the last card is arriving long
+				// after the reader has got there, which reads as lag rather
+				// than as sequence.
+				el.style.setProperty('--step', String(Math.min(i, 7)));
+			});
+		}
+
+		/** The sticky header's height, in pixels, for the observer's root. */
+		const navHeight = Math.round(
+			parseFloat(
+				getComputedStyle(document.documentElement).getPropertyValue('--sl-nav-height')
+			) * parseFloat(getComputedStyle(document.documentElement).fontSize) || 64
+		);
+
+		/**
+		 * Which way the reader is going.
+		 *
+		 * A segment arriving from below should rise into place; one
+		 * arriving from above should come down into it. Animating both the
+		 * same way means half of every journey has the content moving
+		 * against the scroll, which reads as a stutter rather than as
+		 * arrival.
+		 */
+		let heading: 1 | -1 = 1;
+		let lastY = window.scrollY;
+		window.addEventListener(
+			'scroll',
+			() => {
+				const y = window.scrollY;
+				// Ignore the sub-pixel noise a snap settle produces, which
+				// would otherwise flip the direction at the end of a scroll.
+				if (Math.abs(y - lastY) > 2) heading = y > lastY ? 1 : -1;
+				lastY = y;
+			},
+			{ passive: true }
+		);
+
+		const seen = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const pane = entry.target as HTMLElement;
+					const showing = entry.intersectionRatio;
+
+					/*
+					 * Two thresholds, not one boundary.
+					 *
+					 * A pane is a viewport tall *less the header*, so the
+					 * one you just left keeps a sliver on screen behind
+					 * that header and never reaches zero. Resetting only
+					 * at zero meant a segment re-armed one segment late —
+					 * which is why going back up played nothing until you
+					 * had gone down twice.
+					 *
+					 * The gap between the two is what stops a pane parked
+					 * on a snap boundary from flickering between states.
+					 */
+					if (showing <= 0.15) {
+						pane.classList.remove('is-visible');
+						continue;
+					}
+					if (showing < 0.35) continue;
+					if (pane.classList.contains('is-visible')) continue;
+
+					pane.style.setProperty('--reveal-from', heading > 0 ? '1.25rem' : '-1.25rem');
+					pane.classList.add('is-visible');
+				}
+			},
+			{
+				threshold: [0, 0.15, 0.35, 0.6, 1],
+				// Discount the strip hidden behind the sticky header, so
+				// "on screen" means what the reader can actually see.
+				rootMargin: `-${navHeight}px 0px 0px 0px`,
+			}
+		);
+
+		for (const pane of panes) seen.observe(pane);
+	}
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', initPanes);
+	} else {
+		initPanes();
+	}
+</script>

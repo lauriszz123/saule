@@ -17,7 +17,7 @@ export default defineConfig({
 			title: 'Saule',
 			description:
 				'A statically typed, class-oriented scripting language with Lua’s simplicity and a real type system.',
-			tagline: 'Lua’s simplicity. Now it argues back.',
+			tagline: 'Lua’s simplicity. Checked before it runs.',
 			logo: {
 				src: './src/assets/logo.svg',
 				replacesTitle: false,
