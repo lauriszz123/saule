@@ -577,6 +577,10 @@ body:has(.pane) .hero {
  */
 .pane-inner {
 	width: 100%;
+	/* A grid item defaults to `min-width: auto`, so one long line of code
+	   can widen the pane past the viewport and give the whole page a
+	   horizontal scrollbar. */
+	min-width: 0;
 }
 
 /*
@@ -695,6 +699,75 @@ body:has(.pane) .hero {
 	.pane [data-reveal] {
 		transition-property: opacity;
 		transform: none;
+	}
+}
+
+/* ── The segments on small screens ───────────────────────────────────────
+ * A segment is a promise that one screen holds one idea. A phone cannot
+ * keep it: six cards stack into a single column, and the shortest code
+ * sample is taller than the viewport. Forcing a snap onto sections that do
+ * not fit gives the reader a page that resists every flick and still shows
+ * them half of something.
+ *
+ * So below 50rem the segmenting stands down. The sections stay, the
+ * reveals stay — it simply becomes an ordinary page, which is what it
+ * honestly is at that size.
+ */
+@media (max-width: 50rem) {
+	html:has(.pane) {
+		scroll-snap-type: none;
+	}
+
+	body:has(.pane) .hero,
+	.pane {
+		min-height: 0;
+	}
+
+	.pane {
+		padding-block: 2.5rem;
+	}
+
+	/* The cap exists to keep a sample inside its segment. With no segment
+	   to stay inside, it only gets in the way of reading the sample. */
+	.pane .expressive-code pre {
+		max-height: none;
+	}
+
+	.pane .expressive-code {
+		--ec-codeFontSize: 0.72rem;
+	}
+
+	.pane .card {
+		padding: 0.9rem 1rem;
+	}
+}
+
+/*
+ * Touch, at any size: no `scroll-snap-stop`.
+ *
+ * It makes every flick stop at the next boundary, which is right for a
+ * mouse wheel and wrong for a thumb — a long page becomes a sequence of
+ * deliberate swipes with no way to cover ground.
+ */
+@media (pointer: coarse) {
+	body:has(.pane) .hero,
+	.pane {
+		scroll-snap-stop: normal;
+	}
+}
+
+/*
+ * Tablets: two columns of cards, and a hero that is not yet split.
+ * Starlight divides the hero at 50rem, so between there and 72rem the
+ * headline column is at its narrowest relative to the type.
+ */
+@media (min-width: 50rem) and (max-width: 72rem) {
+	body:has(.pane) .hero h1 {
+		font-size: clamp(var(--sl-text-2xl), calc(0.25rem + 3.4vw), 2.25rem);
+	}
+
+	.pane {
+		padding-block: 2rem;
 	}
 }
 
