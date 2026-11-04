@@ -1,0 +1,38 @@
+-- A `repeat` body is not narrowed by its `until` condition.
+--
+-- `while` is the opposite: reaching a `while` body means the condition
+-- held, so the body sees what that proves. A `repeat` body runs *first*,
+-- and the condition holding is what ends the loop — so narrowing the body
+-- by it used to refuse the assignment that makes the loop terminate at all.
+
+local tries: integer = 0
+
+fn getInput() -> string?
+    tries = tries + 1
+    if tries < 3 then
+        return nil
+    end
+    return "ready"
+end
+
+local input: string? = nil
+
+repeat
+    input = getInput()
+until input != nil
+
+println(input ?? "")            -- ready
+println(tries)                  -- 3
+
+-- `while` still narrows, which is the point of keeping the two apart:
+-- `String.upper` takes a `string`, and `pending` is only ever reachable
+-- here because the condition proved it is not nil.
+local queue: table<string?> = {"a", "b", nil}
+local at: integer = 1
+local pending: string? = queue[1]
+
+while pending != nil do
+    println(String.upper(pending))      -- A, then B
+    at = at + 1
+    pending = queue[at]
+end

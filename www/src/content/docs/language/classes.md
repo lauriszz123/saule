@@ -53,9 +53,25 @@ end
 
 Call the class as if it were a function:
 ```saule
+class Player
+    name: string = ""
+    health: integer = 0
+    score: integer = 0
+
+    fn init(name: string, health: integer, score: integer)
+        self.name = name
+        self.health = health
+        self.score = score
+    end
+
+    fn greet()
+        println("Hi, I am " .. self.name)
+    end
+end
+
 local p: Player = Player("Arthur", 100, 5)
 
-p.greet()
+p.greet()                       -- Hi, I am Arthur
 ```
 
 ### Implicit `self`
@@ -125,9 +141,11 @@ That covers a class with no `init` at all (there is nowhere to assign the field)
 Static fields are stricter — nothing runs before the first read of a static, so `init` is not an option and the value has to be in the declaration:
 
 ```saule
-static local scores: table<integer> = {}    -- ok
-static local scores: table<integer>?        -- ok, starts nil
-static local scores: table<integer>         -- ERROR: never initialized
+class Board
+    static local scores: table<integer> = {}    -- ok
+    static local pending: table<integer>?       -- ok, starts nil
+    static local totals: table<integer>         -- ERROR: never initialized
+end
 ```
 
 ### Static Members
@@ -135,19 +153,44 @@ static local scores: table<integer>         -- ERROR: never initialized
 Static fields and methods belong to the class itself, not to instances. They are accessed via the class name from the outside, or by bare name (or `self.name` in a `static fn`) from inside:
 
 ```saule
-print(Player.maxHealth)         -- 100
-print(Player.getMaxHealth())    -- 100
+class Player
+    static maxHealth: integer = 100
+
+    static fn getMaxHealth() -> integer
+        return Player.maxHealth
+    end
+end
+
+println(Player.maxHealth)       -- 100
+println(Player.getMaxHealth())  -- 100
 ```
 
 Static fields are shared across all instances. Modifying them affects the class globally:
 
 ```saule
+class Player
+    static maxHealth: integer = 100
+end
+
 Player.maxHealth = 200
+println(Player.maxHealth)       -- 200
 ```
 
 A class with **no** `fn init` promotes every **private** `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
 
 ```saule
+class Person
+    name: string = ""
+
+    fn init(name: string)
+        self.name = name
+    end
+
+    fn introduce()
+        println("I am " .. self.name)
+    end
+end
+
 class Main
     static local lauris: Person = Person("Laurynas")
 
@@ -155,6 +198,8 @@ class Main
         lauris.introduce()     -- `lauris` resolves via the class
     end
 end
+
+Main.main()                    -- I am Laurynas
 ```
 
 The word `local` is doing the work there. A **public** defaulted field is an
@@ -296,15 +341,45 @@ local n: integer = p.first()
 Type arguments are **invariant**, the same rule [table elements](/saule/language/tables/#element-types-are-invariant) follow and for the same reason: a `Box<string>` accepted into a `Box<integer>` slot would be an alias through which the wrong type could be written back.
 
 ```saule
+class Box<T>
+    local value: T
+    fn init(value: T)
+        self.value = value
+    end
+end
+
 local b: Box<integer> = Box("no")   -- ERROR: Box<string> is not Box<integer>
-local c: Box<integer, string> = ... -- ERROR: `Box` expects 1 type argument
+```
+
+```saule
+class Box<T>
+    local value: T
+    fn init(value: T)
+        self.value = value
+    end
+end
+
+local c: Box<integer, string> = Box(1)  -- ERROR: `Box` expects 1 type argument
 ```
 
 Naming the class **without** its arguments means "some instantiation, unknown which", and is accepted against any of them:
 
 ```saule
+class Box<T>
+    local value: T
+
+    fn init(value: T)
+        self.value = value
+    end
+
+    fn get() -> T
+        return self.value
+    end
+end
+
 local any: Box = Box(1)             -- ok
 local back: Box<integer> = any      -- ok
+println(back.get())                 -- 1
 ```
 
 Like a function's, a class's type parameters are erased at runtime — they constrain the program, they don't reach it.

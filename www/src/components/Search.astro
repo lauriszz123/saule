@@ -1,0 +1,542 @@
+---
+/**
+ * Starlight's search dialog, with something in it before you type.
+ *
+ * Pagefind renders nothing for an empty query, so opening the modal showed a
+ * blank panel — which reads as broken rather than as "waiting for input", and
+ * answers neither "what can I search here?" nor "what was I just looking at?".
+ *
+ * This wraps the stock component rather than replacing it: the dialog, the
+ * keyboard shortcut and the Pagefind wiring are all Starlight's, and the only
+ * addition is a panel that fills the empty state with recent searches and a
+ * handful of jumping-off points. When the query is non-empty it gets out of
+ * the way entirely.
+ */
+import Default from '@astrojs/starlight/components/Search.astro';
+---
+
+<Default {...Astro.props}><slot /></Default>
+
+<script>
+	/** Where the destinations come from. Paths are relative to the site base. */
+	const QUICK_LINKS: Array<{ path: string; label: string; hint: string }> = [
+		{ path: 'guides/first-program/', label: 'Write your first program', hint: 'Guide' },
+		{ path: 'language/types/', label: 'Types, casting and nil', hint: 'Language' },
+		{ path: 'language/null-safety/', label: 'Null safety — ?. ?? !', hint: 'Language' },
+		{ path: 'language/classes/', label: 'Classes and interfaces', hint: 'Language' },
+		{ path: 'stdlib/prelude-always-in-scope/', label: 'Standard library', hint: 'Reference' },
+		{ path: 'reference/grammar/', label: 'Grammar', hint: 'Reference' },
+	];
+
+	const STORE_KEY = 'saule:recent-searches';
+	const MAX_RECENT = 5;
+
+	/**
+	 * One remembered entry.
+	 *
+	 * A `url` means the reader *opened* that page from a search, so the entry
+	 * is the page's own title and the chip goes straight back to it. Without
+	 * one it is a query that found results but was never followed, and the
+	 * chip puts the text back in the box instead.
+	 */
+	type Recent = { label: string; url?: string };
+
+	/**
+	 * Recent entries live in `localStorage`, which can throw outright in a
+	 * private window or with site data blocked — so every read and write is
+	 * guarded and the panel simply shows one section instead of two.
+	 */
+	function readRecent(): Recent[] {
+		try {
+			const raw = localStorage.getItem(STORE_KEY);
+			if (!raw) return [];
+			const parsed: unknown = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return [];
+			return parsed
+				.map((item): Recent | null => {
+					// Entries written before pages were remembered are bare
+					// strings; read them rather than dropping them.
+					if (typeof item === 'string') return { label: item };
+					if (item && typeof item === 'object' && typeof (item as Recent).label === 'string') {
+						const { label, url } = item as Recent;
+						return typeof url === 'string' ? { label, url } : { label };
+					}
+					return null;
+				})
+				.filter((e): e is Recent => e !== null)
+				.slice(0, MAX_RECENT);
+		} catch {
+			return [];
+		}
+	}
+
+	function writeRecent(entries: Recent[]) {
+		try {
+			localStorage.setItem(STORE_KEY, JSON.stringify(entries.slice(0, MAX_RECENT)));
+		} catch {
+			/* Nothing to do: the panel keeps working, it just will not remember. */
+		}
+	}
+
+	/**
+	 * Is one of these two the other with more typing on the end?
+	 *
+	 * `Quic` and `Quick` are not two searches, they are one search caught
+	 * mid-word, and a list that shows both is showing keystrokes. Treating a
+	 * prefix as the same search is what collapses them.
+	 */
+	function samePrefix(a: string, b: string) {
+		const [x, y] = [a.toLowerCase(), b.toLowerCase()];
+		return x.startsWith(y) || y.startsWith(x);
+	}
+
+	/**
+	 * Add an entry, newest first, dropping what it supersedes.
+	 *
+	 * A page always wins over the queries that led to it: open *Quick
+	 * Reference* after typing `quic`, `quick`, `quick ref` and the list holds
+	 * one entry, the page, not four stages of typing it.
+	 */
+	function remember(entry: Recent, supersedes?: string) {
+		const label = entry.label.trim();
+		if (label.length < 2) return;
+		const kept = readRecent().filter((e) => {
+			if (e.url && entry.url) return e.url !== entry.url;
+			if (e.url !== undefined) return true;
+			// A query entry goes when the new entry is the same search — by
+			// prefix, or because it is the page that search was aiming at.
+			if (supersedes && samePrefix(e.label, supersedes)) return false;
+			return !samePrefix(e.label, label);
+		});
+		writeRecent([{ label, ...(entry.url ? { url: entry.url } : {}) }, ...kept]);
+	}
+
+	const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+	function buildPanel(input: HTMLInputElement): HTMLElement {
+		const panel = document.createElement('div');
+		panel.className = 'saule-search-start';
+		// Not focusable and not announced as a landmark: it is a hint layer
+		// over an input the user is already typing into.
+		panel.setAttribute('aria-live', 'polite');
+
+		const recent = document.createElement('section');
+		recent.className = 'saule-search-section saule-search-recent';
+		panel.append(recent);
+
+		const quick = document.createElement('section');
+		quick.className = 'saule-search-section';
+		quick.innerHTML = '<h2 class="saule-search-heading">Jump to</h2>';
+		const quickList = document.createElement('ul');
+		quickList.className = 'saule-search-links';
+		for (const link of QUICK_LINKS) {
+			const li = document.createElement('li');
+			const a = document.createElement('a');
+			a.href = `${base}/${link.path}`;
+			a.className = 'saule-search-link';
+			a.innerHTML =
+				`<span class="saule-search-link-label"></span>` +
+				`<span class="saule-search-link-hint"></span>`;
+			a.querySelector('.saule-search-link-label')!.textContent = link.label;
+			a.querySelector('.saule-search-link-hint')!.textContent = link.hint;
+			li.append(a);
+			quickList.append(li);
+		}
+		quick.append(quickList);
+		panel.append(quick);
+
+		/** Re-render the recent list from storage. Hidden when there is none. */
+		const renderRecent = () => {
+			const queries = readRecent();
+			recent.replaceChildren();
+			if (queries.length === 0) {
+				recent.hidden = true;
+				return;
+			}
+			recent.hidden = false;
+
+			const heading = document.createElement('h2');
+			heading.className = 'saule-search-heading';
+			heading.textContent = 'Recent';
+			const clear = document.createElement('button');
+			clear.type = 'button';
+			clear.className = 'saule-search-clear';
+			clear.textContent = 'Clear';
+			clear.addEventListener('click', () => {
+				writeRecent([]);
+				renderRecent();
+				input.focus();
+			});
+			heading.append(clear);
+			recent.append(heading);
+
+			const list = document.createElement('ul');
+			list.className = 'saule-search-chips';
+			for (const entry of queries) {
+				const li = document.createElement('li');
+				if (entry.url) {
+					// A page you opened: one click back to it, no re-search.
+					const chip = document.createElement('a');
+					chip.className = 'saule-search-chip';
+					chip.dataset.kind = 'page';
+					chip.href = entry.url;
+					chip.textContent = entry.label;
+					li.append(chip);
+				} else {
+					const chip = document.createElement('button');
+					chip.type = 'button';
+					chip.className = 'saule-search-chip';
+					chip.textContent = entry.label;
+					chip.addEventListener('click', () => {
+						// Pagefind listens for `input`, so setting `value`
+						// alone would fill the box and search for nothing.
+						input.value = entry.label;
+						input.dispatchEvent(new Event('input', { bubbles: true }));
+						input.focus();
+					});
+					li.append(chip);
+				}
+				list.append(li);
+			}
+			recent.append(list);
+		};
+
+		renderRecent();
+		panel.addEventListener('saule:refresh-recent', renderRecent);
+		return panel;
+	}
+
+	/** Wire one `<site-search>` once Pagefind has mounted its input. */
+	function enhance(search: Element) {
+		const container = search.querySelector('.search-container');
+		if (!container || container.querySelector('.saule-search-start')) return false;
+		const input = search.querySelector<HTMLInputElement>('input.pagefind-ui__search-input');
+		if (!input) return false;
+
+		const panel = buildPanel(input);
+		container.append(panel);
+		// Readable from the console: `document.querySelector('.search-container')
+		// .dataset.sauleSearch` answers "did this script attach at all?"
+		container.setAttribute('data-saule-search', 'ready');
+
+		let wasEmpty: boolean | undefined;
+		const sync = () => {
+			const empty = input.value.trim().length === 0;
+			const changed = empty !== wasEmpty;
+			wasEmpty = empty;
+			panel.hidden = !empty;
+			// Pagefind keeps its results drawer mounted between queries, so
+			// after one search its leftover height sits between the input and
+			// this panel and pushes the panel out of the dialog's scroll area.
+			// Marking the container lets the stylesheet collapse the drawer
+			// for exactly as long as the panel is the thing to show.
+			container.toggleAttribute('data-saule-empty', empty);
+			// Only when the panel *becomes* visible. Re-rendering on every
+			// sync replaced the chips under the pointer between mousedown and
+			// mouseup, so a click on one never completed.
+			if (empty && changed) panel.dispatchEvent(new CustomEvent('saule:refresh-recent'));
+		};
+
+		input.addEventListener('input', sync);
+
+		/**
+		 * `input` is not enough on its own.
+		 *
+		 * Pagefind's own clear button (the X) sets the field's value directly,
+		 * and assigning to `value` fires no `input` event — so the panel
+		 * stayed hidden with an empty box, which is the one state it exists
+		 * for. Rather than guess at every path that can change the value,
+		 * watch the Pagefind subtree and re-check after anything moves.
+		 * Coalesced to one check per frame, so a results re-render costs one.
+		 */
+		let queued = false;
+		const resync = () => {
+			if (queued) return;
+			queued = true;
+			requestAnimationFrame(() => {
+				queued = false;
+				sync();
+			});
+		};
+		/**
+		 * Changes *inside* the panel are this script's own work — rendering
+		 * the chips — and reacting to them means rendering them again, which
+		 * is a loop that never settles and leaves nothing clickable.
+		 */
+		const fromPagefind = (records: MutationRecord[]) =>
+			records.some((record) => !panel.contains(record.target));
+		new MutationObserver((records) => {
+			if (fromPagefind(records)) resync();
+		}).observe(container, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: ['value', 'class'],
+		});
+		// The X itself, for the case where Pagefind clears without otherwise
+		// touching the DOM.
+		search.addEventListener('click', (event) => {
+			if ((event.target as Element | null)?.closest('.pagefind-ui__search-clear')) resync();
+		});
+		// `<dialog>` fires no event when it opens, and Starlight opens it from
+		// a button and from Ctrl+K. The attribute is the one signal both share.
+		const dialog = search.querySelector('dialog');
+		if (dialog) {
+			new MutationObserver(resync).observe(dialog, {
+				attributes: true,
+				attributeFilter: ['open'],
+			});
+		}
+		// Enter and following a result are the unambiguous moments, recorded
+		// immediately rather than waiting for the timer.
+		/**
+		 * Only a query the reader *acted on* is remembered: Enter, or opening
+		 * a result. Recording one that merely sat there meant reading
+		 * whatever results were on screen — and after an earlier search those
+		 * are the earlier search's, so a query that found nothing was filed
+		 * as one that worked.
+		 */
+		input.addEventListener('keydown', (event) => {
+			if (event.key !== 'Enter') return;
+			if (!search.querySelector('.pagefind-ui__result')) return;
+			remember({ label: input.value });
+		});
+		search.addEventListener('click', (event) => {
+			const link = (event.target as Element | null)?.closest<HTMLAnchorElement>(
+				'.pagefind-ui__result a'
+			);
+			if (!link) return;
+			// The page's own title, not the half-typed query that found it —
+			// what the reader was looking for is the thing they just opened.
+			const result = link.closest('.pagefind-ui__result');
+			const title =
+				result?.querySelector('.pagefind-ui__result-link')?.textContent?.trim() ||
+				link.textContent?.trim() ||
+				'';
+			remember({ label: title, url: link.href }, input.value);
+		});
+
+		/**
+		 * Closing the dialog clears the box, so reopening it starts fresh —
+		 * with the query that was just there sitting in Recent, one click
+		 * away. Leaving it filled meant every reopen showed stale results
+		 * instead of the panel, which made the panel look like it had
+		 * forgotten the search that was still on screen.
+		 */
+		dialog?.addEventListener('close', () => {
+			if (input.value !== '') {
+				input.value = '';
+				input.dispatchEvent(new Event('input', { bubbles: true }));
+			}
+			// Unconditionally: returning early when the box was already empty
+			// left the panel hidden from whenever it was last hidden, which is
+			// how an empty search ended up showing nothing at all.
+			sync();
+		});
+
+		sync();
+		return true;
+	}
+
+	function init() {
+		for (const search of document.querySelectorAll('site-search')) {
+			if (enhance(search)) continue;
+			// Pagefind mounts on an idle callback after the dialog exists, so
+			// the input usually is not there yet on first pass. Watch for it
+			// rather than polling, and stop as soon as it arrives.
+			const container = search.querySelector('.search-container');
+			if (!container) continue;
+			const observer = new MutationObserver(() => {
+				if (enhance(search)) observer.disconnect();
+			});
+			observer.observe(container, { childList: true, subtree: true });
+		}
+	}
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', init);
+	} else {
+		init();
+	}
+</script>
+
+<style is:global>
+	/* Built at runtime, so these cannot be scoped styles — the class names are
+	   prefixed instead. Colours come from Starlight's own tokens so the panel
+	   follows the theme toggle without a second palette to keep in step. */
+	.saule-search-start {
+		display: flex;
+		flex-direction: column;
+		gap: 1.25rem;
+		padding: 1rem 0 0.25rem;
+		animation: saule-rise var(--saule-mid, 200ms) var(--saule-ease, ease-out) both;
+	}
+
+	/* Each section a beat after the one above it, so the panel assembles in
+	   reading order instead of landing all at once. */
+	.saule-search-section {
+		animation: saule-rise var(--saule-mid, 200ms) var(--saule-ease, ease-out) both;
+	}
+
+	.saule-search-section:nth-child(2) {
+		animation-delay: 60ms;
+	}
+
+	/* The chips come in one after another — a short enough step that the row
+	   reads as a single gesture rather than a queue. */
+	.saule-search-chips li {
+		animation: saule-rise var(--saule-fast, 120ms) var(--saule-ease, ease-out) both;
+	}
+
+	.saule-search-chips li:nth-child(2) {
+		animation-delay: 40ms;
+	}
+	.saule-search-chips li:nth-child(3) {
+		animation-delay: 80ms;
+	}
+	.saule-search-chips li:nth-child(4) {
+		animation-delay: 120ms;
+	}
+	.saule-search-chips li:nth-child(5) {
+		animation-delay: 160ms;
+	}
+
+	.saule-search-start[hidden] {
+		display: none;
+	}
+
+	/* While the panel is showing there is nothing to show results in, and an
+	   empty drawer still takes up room. */
+	.search-container[data-saule-empty] .pagefind-ui__drawer {
+		display: none;
+	}
+
+	.saule-search-heading {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin: 0 0 0.5rem;
+		font-size: var(--sl-text-xs);
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+	}
+
+	.saule-search-clear {
+		border: 0;
+		background: none;
+		padding: 0;
+		font: inherit;
+		letter-spacing: inherit;
+		color: var(--sl-color-gray-3);
+		cursor: pointer;
+	}
+
+	.saule-search-clear:hover,
+	.saule-search-clear:focus-visible {
+		color: var(--sl-color-white);
+		text-decoration: underline;
+	}
+
+	.saule-search-chips,
+	.saule-search-links {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	.saule-search-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.saule-search-chip {
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 999px;
+		background: var(--sl-color-gray-6);
+		padding: 0.3rem 0.75rem;
+		font: inherit;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-white);
+		cursor: pointer;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* A chip that goes straight to a page says so, so the two kinds are not
+	   silently different things that look identical. */
+	.saule-search-chip[data-kind='page'] {
+		text-decoration: none;
+	}
+
+	.saule-search-chip[data-kind='page']::after {
+		content: '↗';
+		margin-inline-start: 0.4em;
+		color: var(--sl-color-gray-3);
+		font-size: 0.85em;
+	}
+
+	.saule-search-chip:hover,
+	.saule-search-chip:focus-visible {
+		border-color: var(--sl-color-accent);
+		background: var(--sl-color-gray-5);
+	}
+
+	.saule-search-links {
+		display: grid;
+		gap: 0.25rem;
+	}
+
+	.saule-search-link {
+		transition:
+			background-color var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+			color var(--saule-fast, 120ms) var(--saule-ease, ease-out),
+			transform var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 1rem;
+		border-radius: 0.5rem;
+		padding: 0.5rem 0.625rem;
+		text-decoration: none;
+		color: var(--sl-color-white);
+	}
+
+	.saule-search-link:hover,
+	.saule-search-link:focus-visible {
+		background: var(--sl-color-gray-6);
+		color: var(--sl-color-white);
+		transform: translateX(3px);
+	}
+
+	.saule-search-clear {
+		transition: color var(--saule-fast, 120ms) var(--saule-ease, ease-out);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.saule-search-start,
+		.saule-search-section,
+		.saule-search-chips li {
+			animation: none;
+		}
+
+		.saule-search-link:hover,
+		.saule-search-link:focus-visible {
+			transform: none;
+		}
+	}
+
+	.saule-search-link-label {
+		font-size: var(--sl-text-sm);
+	}
+
+	.saule-search-link-hint {
+		flex: none;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+</style>

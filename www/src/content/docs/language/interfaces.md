@@ -27,7 +27,28 @@ end
 A class can implement multiple interfaces:
 
 ```saule
-export class Player extends Entity implements Greetable, Damageable
+class Entity
+    local name: string
+
+    fn init(name: string)
+        self.name = name
+    end
+
+    fn getName() -> string
+        return self.name
+    end
+end
+
+interface Greetable
+    fn greet() -> nil
+end
+
+interface Damageable
+    fn damage(amount: integer) -> nil
+    fn isAlive() -> boolean
+end
+
+class Player extends Entity implements Greetable, Damageable
     local health: integer
 
     fn init(name: string, health: integer)
@@ -37,7 +58,7 @@ export class Player extends Entity implements Greetable, Damageable
     end
 
     fn greet()
-        print("Hi, I am " .. self.getName())
+        println("Hi, I am " .. self.getName())
     end
 
     fn damage(amount: integer)
@@ -48,6 +69,11 @@ export class Player extends Entity implements Greetable, Damageable
         return self.health > 0
     end
 end
+
+local p: Player = Player("Arthur", 30)
+p.greet()                       -- Hi, I am Arthur
+p.damage(30)
+println(p.isAlive())            -- false
 ```
 
 ### Interface Composition
@@ -55,9 +81,31 @@ end
 Interfaces can extend other interfaces:
 
 ```saule
+interface Damageable
+    fn isAlive() -> boolean
+    fn damage(amount: integer) -> nil
+end
+
 interface Combatant extends Damageable
     fn attack(target: Damageable) -> nil
 end
+
+-- A class implementing `Combatant` owes every method of both.
+class Knight implements Combatant
+    fn isAlive() -> boolean
+        return true
+    end
+
+    fn damage(amount: integer)
+        println("took " .. amount)
+    end
+
+    fn attack(target: Damageable)
+        target.damage(5)
+    end
+end
+
+Knight().attack(Knight())       -- took 5
 ```
 
 ### Interfaces as Types
@@ -65,6 +113,29 @@ end
 This is the main power — use interfaces as parameter and variable types:
 
 ```saule
+interface Damageable
+    fn isAlive() -> boolean
+    fn damage(amount: integer) -> nil
+end
+
+class Player implements Damageable
+    name: string = ""
+    health: integer = 0
+
+    fn init(name: string, health: integer)
+        self.name = name
+        self.health = health
+    end
+
+    fn isAlive() -> boolean
+        return self.health > 0
+    end
+
+    fn damage(amount: integer)
+        self.health = self.health - amount
+    end
+end
+
 fn processEntity(target: Damageable, amount: integer) -> nil
     if target.isAlive() then
         target.damage(amount)
@@ -78,13 +149,25 @@ processEntity(p, 30)    -- works, Player implements Damageable
 ### Generic Interfaces
 
 ```saule
+class Player
+    name: string = ""
+
+    fn init(name: string)
+        self.name = name
+    end
+
+    fn getName() -> string
+        return self.name
+    end
+end
+
 interface Repository<T>
     fn save(item: T) -> nil
     fn findById(id: integer) -> T
     fn delete(id: integer) -> nil
 end
 
-export class PlayerRepository implements Repository<Player>
+class PlayerRepository implements Repository<Player>
     local items: table<Player>
 
     fn init()
@@ -112,11 +195,21 @@ The argument is real, not decoration: `Repository<Player>` substitutes `Player` 
 Any class implementing `Iterable<T>` works inside a `for-in` loop automatically. The contract is a single method `iter()` that returns a **step closure**: each call returns the next element, or `nil` to signal the end. The loop stops on the first `nil`.
 
 ```saule
-interface Iterable<T>
-    fn iter() -> fn() -> T?
+class Player
+    name: string = ""
+    health: integer = 0
+
+    fn init(name: string, health: integer)
+        self.name = name
+        self.health = health
+    end
+
+    fn getName() -> string
+        return self.name
+    end
 end
 
-export class PlayerQueue implements Iterable<Player>
+class PlayerQueue implements Iterable<Player>
     local items: table<Player>
 
     fn init()
@@ -147,19 +240,40 @@ queue.push(Player("Arthur", 100))
 queue.push(Player("Merlin", 80))
 
 for player: Player in queue do
-    player.greet()
+    println(player.getName())   -- Arthur, then Merlin
 end
 ```
 
 For iteration that yields **pairs** (key + value, index + value, etc.), implement `Iterable2<K, V>` whose `iter()` returns a closure with two return values:
 
 ```saule
-interface Iterable2<K, V>
-    fn iter() -> fn() -> (K?, V?)
+class Player
+    name: string = ""
+    health: integer = 0
+
+    fn init(name: string, health: integer)
+        self.name = name
+        self.health = health
+    end
+
+    fn getName() -> string
+        return self.name
+    end
+
+    fn isAlive() -> boolean
+        return self.health > 0
+    end
+
+    fn damage(amount: integer)
+        self.health = self.health - amount
+    end
 end
 
+local playerMap: table<string, Player> = {}
+playerMap["p1"] = Player("Arthur", 100)
+
 for key: string, value: Player in playerMap do
-    print(key .. " = " .. value.getName())
+    println(key .. " = " .. value.getName())   -- p1 = Arthur
 end
 ```
 
@@ -340,14 +454,14 @@ class Text implements Assignable<string>, OpToString
     fn toString() -> string return self.raw end
 end
 
-local greeting: Text = "hello, world"   -- runs Text.from
+local greeting: Text = "hello, world"   -- runs Text.of
 println(greeting)                        -- hello, world  (OpToString)
 println(greeting.upper())                -- HELLO, WORLD
 ```
 
-The method is **static** — there is no instance yet to call it on — and
-`from` is usable as a name here even though it opens an `import` tail
-elsewhere, because after `fn` and after `.` an import cannot start.
+The method is **static** — there is no instance yet to call it on — and it
+is named `of`, which is the one name the compiler looks for: a class that
+declares `Assignable<T>` without it converts nothing.
 
 The annotation picks the target, so this is *target-typed*: there is never a
 question of which class a bare value should become, only whether the one
@@ -358,9 +472,24 @@ module variable, and a user function's or method's parameters. Everywhere
 else the ordinary rule stands:
 
 ```saule
+class Text implements Assignable<string>
+    local raw: string
+    fn init(raw: string)  self.raw = raw end
+    static fn of(s: string) -> Text return Text(s) end
+end
+
 local all: table<Text> = {"a"}   -- ERROR: table elements do not convert
-local t: Text = "a"
-t = "b"                           -- ERROR: only the declaration converts
+```
+
+```saule
+class Text implements Assignable<string>
+    local raw: string
+    fn init(raw: string)  self.raw = raw end
+    static fn of(s: string) -> Text return Text(s) end
+end
+
+local t: Text = "a"              -- ok, this site converts
+t = "b"                          -- ERROR: only the declaration converts
 ```
 
 That boundary is soundness rather than an unfinished edge. The compiler

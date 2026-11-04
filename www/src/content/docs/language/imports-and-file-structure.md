@@ -15,11 +15,11 @@ An import names either a single `.sau` file or a folder module (a directory with
 -- single import
 import Player from "entities/Player"
 
+-- several names from one file
+import clamp, lerp from "utils/Math"
+
 -- import with alias
 import PlayerRepository as PlayerRepo from "data/PlayerRepository"
-
--- import a utility module
-import Math from "utils/Math"
 
 -- pull every exported name out of one file
 import * from "entities/Player"
@@ -130,7 +130,9 @@ A file without `export` is private to itself — even sibling files in the same 
 
 ### Utility Modules
 
-Not everything needs a class. Export standalone functions from a utility file:
+Not everything needs a class. Export standalone functions from a utility
+file and import them by name — a file is not a namespace, so the functions
+arrive as themselves rather than under the file's name:
 
 ```saule
 -- utils/Math.sau
@@ -147,10 +149,10 @@ end
 ```
 
 ```saule
-import Math from "utils/Math"
+import clamp, lerp from "utils/Math"
 
-local clamped: integer = Math.clamp(150, 0, 100)   -- 100
-local smooth: float = Math.lerp(0.0, 1.0, 0.5)    -- 0.5
+local clamped: integer = clamp(150, 0, 100)     -- 100
+local smooth: float = lerp(0.0, 1.0, 0.5)       -- 0.5
 ```
 
 ### Visibility Rules

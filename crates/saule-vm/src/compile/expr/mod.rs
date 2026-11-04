@@ -194,7 +194,11 @@ impl Compiler<'_> {
 
             Expr::Match { scrutinee, arms } => self.match_to(e, scrutinee, arms, dst)?,
 
-            Expr::Lambda { params, body, .. } => self.lambda_to(e, params, body, dst)?,
+            Expr::Lambda {
+                params,
+                return_ty,
+                body,
+            } => self.lambda_to(e, params, return_ty.as_ref(), body, dst)?,
 
             Expr::Table(entries) => self.table_to(e, entries, dst)?,
 

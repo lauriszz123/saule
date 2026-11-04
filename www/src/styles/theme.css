@@ -221,3 +221,572 @@ a[data-saule-play]::after {
 html {
 	scrollbar-gutter: stable;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Motion
+ *
+ * One easing curve and three durations, used everywhere, so the whole site
+ * moves at one speed rather than each component inventing its own. The curve
+ * is a gentle ease-out: things arrive quickly and settle, which reads as
+ * responsive where a symmetric ease reads as sluggish.
+ *
+ * Everything here is decoration over a layout that already works without it.
+ * The `prefers-reduced-motion` block at the end turns all of it off — not
+ * just shortened, off — because the point of that setting is vestibular
+ * safety, and a 1ms slide is still a slide.
+ * ────────────────────────────────────────────────────────────────────────── */
+:root {
+	--saule-ease: cubic-bezier(0.22, 1, 0.36, 1);
+	--saule-fast: 120ms;
+	--saule-mid: 200ms;
+	--saule-slow: 360ms;
+}
+
+/* The entrance every panel shares: up, into focus, out of blur. */
+@keyframes saule-rise {
+	from {
+		opacity: 0;
+		transform: translateY(0.5rem);
+		filter: blur(6px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+		filter: blur(0);
+	}
+}
+
+@keyframes saule-fade {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────
+ * Hero actions, the copy button on code blocks, pagination, and the search
+ * panel's own chips. A press moves *down* from the hover lift rather than
+ * back to rest, so the button tracks the pointer instead of snapping.
+ */
+.sl-link-button,
+.saule-search-chip,
+.expressive-code .copy button,
+.pagination-links a {
+	transition:
+		background-color var(--saule-mid) var(--saule-ease),
+		border-color var(--saule-mid) var(--saule-ease),
+		color var(--saule-mid) var(--saule-ease),
+		box-shadow var(--saule-mid) var(--saule-ease),
+		transform var(--saule-fast) var(--saule-ease);
+}
+
+.sl-link-button:hover,
+.pagination-links a:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 0.5rem 1.25rem -0.5rem rgb(0 0 0 / 0.45);
+}
+
+.sl-link-button:active,
+.pagination-links a:active,
+.saule-search-chip:active {
+	transform: translateY(0);
+	transition-duration: 60ms;
+}
+
+.saule-search-chip:hover {
+	transform: translateY(-1px);
+}
+
+/* The arrow in "Get started →" leans into the direction it points. */
+.sl-link-button:hover svg {
+	transition: transform var(--saule-mid) var(--saule-ease);
+	transform: translateX(0.15rem);
+}
+
+/* ── Links and navigation ────────────────────────────────────────────────
+ * Sidebar entries and the table of contents shift a hair on hover. Only the
+ * colour is animated on prose links: moving body text under the pointer is
+ * distracting where moving a nav item is a target growing toward you.
+ */
+a {
+	transition: color var(--saule-fast) var(--saule-ease);
+}
+
+.sidebar-content a,
+#starlight__on-this-page ~ ul a,
+starlight-toc a {
+	transition:
+		color var(--saule-fast) var(--saule-ease),
+		background-color var(--saule-fast) var(--saule-ease),
+		transform var(--saule-fast) var(--saule-ease);
+}
+
+.sidebar-content a:hover,
+starlight-toc a:hover {
+	transform: translateX(2px);
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────────
+ * The "Why Saule" grid: colour only, deliberately.
+ *
+ * A lift was tried and removed. The cards in that grid are different heights
+ * and sit in a two-column layout, so raising one shifted its neighbour's
+ * shadow and the row read as unstable — and the effect landed unevenly
+ * between the narrow left column and the wide right one. A border that warms
+ * to the accent says "this one" without moving anything.
+ */
+.card {
+	transition: border-color var(--saule-mid) var(--saule-ease);
+}
+
+.card:hover {
+	border-color: var(--sl-color-accent);
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────────────
+ * Starlight marks the selected tab with a border on the bottom edge. The
+ * colour transition carries the selection across, and the panel below fades
+ * up so a switch reads as new content rather than a redraw.
+ */
+starlight-tabs [role='tab'] {
+	border-radius: 0.25rem 0.25rem 0 0;
+	transition:
+		color var(--saule-mid) var(--saule-ease),
+		background-color var(--saule-mid) var(--saule-ease);
+}
+
+/* An unselected tab warms toward the selected one's colour, so the row
+   answers the pointer rather than waiting for a click to react. */
+starlight-tabs [role='tab']:hover {
+	color: var(--sl-color-white);
+	background-color: var(--sl-color-gray-6);
+}
+
+/*
+ * The indicator. Starlight underlines the selected tab with a `box-shadow` on
+ * that tab, which means the line cannot travel — it can only stop being drawn
+ * in one place and start being drawn in another. One absolutely positioned
+ * bar on the list, moved by the measurements `Head.astro` writes, slides
+ * between them instead.
+ *
+ * Gated on `[data-saule-tabs]`, which only appears once the script has real
+ * numbers: without JS the original per-tab underline is left exactly as it
+ * was.
+ */
+starlight-tabs [role='tablist'] {
+	position: relative;
+}
+
+starlight-tabs [role='tablist'][data-saule-tabs] .tab > [role='tab'] {
+	box-shadow: none;
+}
+
+starlight-tabs [role='tablist'][data-saule-tabs]::after {
+	content: '';
+	position: absolute;
+	left: 0;
+	/* The list's own 2px bottom border is the track; the indicator sits on
+	   top of it rather than above it. */
+	bottom: -2px;
+	height: 2px;
+	width: var(--saule-tab-w, 0);
+	transform: translateX(var(--saule-tab-x, 0));
+	background-color: var(--sl-color-text-accent);
+	transition:
+		transform var(--saule-slow) var(--saule-ease),
+		width var(--saule-slow) var(--saule-ease);
+}
+
+starlight-tabs [role='tabpanel']:not([hidden]) {
+	animation: saule-rise var(--saule-mid) var(--saule-ease) both;
+}
+
+/* ── The search dialog ───────────────────────────────────────────────────
+ * A native `<dialog>` has no exit animation by default: `close()` removes it
+ * from the top layer immediately. `allow-discrete` on `display` and `overlay`
+ * is what keeps it painted long enough to animate out, and `@starting-style`
+ * supplies the state it animates *in* from. Browsers without either show the
+ * dialog instantly, which is exactly today's behaviour.
+ */
+site-search dialog {
+	opacity: 0;
+	transform: translateY(-0.75rem) scale(0.98);
+	transition:
+		opacity var(--saule-mid) var(--saule-ease),
+		transform var(--saule-mid) var(--saule-ease),
+		overlay var(--saule-mid) var(--saule-ease) allow-discrete,
+		display var(--saule-mid) var(--saule-ease) allow-discrete;
+}
+
+site-search dialog[open] {
+	opacity: 1;
+	transform: none;
+}
+
+@starting-style {
+	site-search dialog[open] {
+		opacity: 0;
+		transform: translateY(-0.75rem) scale(0.98);
+	}
+}
+
+/* The backdrop blurs in with it, rather than snapping to full blur. */
+site-search dialog::backdrop {
+	opacity: 0;
+	transition:
+		opacity var(--saule-mid) var(--saule-ease),
+		overlay var(--saule-mid) var(--saule-ease) allow-discrete,
+		display var(--saule-mid) var(--saule-ease) allow-discrete;
+}
+
+site-search dialog[open]::backdrop {
+	opacity: 1;
+}
+
+@starting-style {
+	site-search dialog[open]::backdrop {
+		opacity: 0;
+	}
+}
+
+/* ── First paint ─────────────────────────────────────────────────────────
+ * The hero and the cards arrive rather than appearing. Staggered by a few
+ * tens of milliseconds so the eye reads an order; `both` holds the start
+ * state so nothing flashes at full opacity before its turn.
+ */
+[data-has-hero] .hero > img,
+[data-has-hero] .hero > .stack {
+	animation: saule-rise var(--saule-slow) var(--saule-ease) both;
+}
+
+[data-has-hero] .hero > img {
+	animation-delay: 80ms;
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────
+ * Off, not fast. Colour transitions are kept: they convey state without
+ * moving anything, which is what the setting is about.
+ */
+@media (prefers-reduced-motion: reduce) {
+	.sl-link-button:hover,
+	.pagination-links a:hover,
+	.sidebar-content a:hover,
+	starlight-toc a:hover,
+	.saule-search-chip:hover,
+	.sl-link-button:hover svg {
+		transform: none;
+	}
+
+	[data-has-hero] .hero > img,
+	[data-has-hero] .hero > .stack,
+	starlight-tabs [role='tabpanel']:not([hidden]) {
+		animation: none;
+	}
+
+	site-search dialog,
+	site-search dialog[open] {
+		transition-property: opacity;
+		transform: none;
+	}
+
+	starlight-tabs [role='tablist'][data-saule-tabs]::after {
+		transition: none;
+	}
+}
+
+/* ── Search results ──────────────────────────────────────────────────────
+ * Results arrive top to bottom rather than all at once: the eye follows the
+ * list down instead of being handed a finished block, which also makes the
+ * gap between "typed" and "found" read as the search working rather than as
+ * a stall.
+ *
+ * The steps are short and the duration shorter, because Pagefind re-renders
+ * on every keystroke — at 30ms a step the whole list is in within a quarter
+ * of a second, fast enough that typing does not feel like it is fighting an
+ * animation.
+ *
+ * Enumerated rather than computed: CSS has no way to derive a delay from an
+ * element's index, and ten covers a screenful. Anything past that arrives
+ * with the tenth, which is below the fold anyway.
+ */
+.pagefind-ui__result {
+	animation: saule-rise 180ms var(--saule-ease) both;
+}
+
+.pagefind-ui__result:nth-child(2) {
+	animation-delay: 30ms;
+}
+.pagefind-ui__result:nth-child(3) {
+	animation-delay: 60ms;
+}
+.pagefind-ui__result:nth-child(4) {
+	animation-delay: 90ms;
+}
+.pagefind-ui__result:nth-child(5) {
+	animation-delay: 120ms;
+}
+.pagefind-ui__result:nth-child(6) {
+	animation-delay: 150ms;
+}
+.pagefind-ui__result:nth-child(7) {
+	animation-delay: 180ms;
+}
+.pagefind-ui__result:nth-child(8) {
+	animation-delay: 210ms;
+}
+.pagefind-ui__result:nth-child(9) {
+	animation-delay: 240ms;
+}
+.pagefind-ui__result:nth-child(n + 10) {
+	animation-delay: 270ms;
+}
+
+/* Sub-results are part of their parent result, so they follow it closely
+   rather than restarting the stagger. */
+.pagefind-ui__result-nested {
+	animation: saule-fade 160ms var(--saule-ease) both;
+	animation-delay: 60ms;
+}
+
+/* The count, and "no results": a fade only, since a line of text sliding
+   under a cursor that is still typing is more movement than it is worth. */
+.pagefind-ui__message {
+	animation: saule-fade 160ms var(--saule-ease) both;
+}
+
+/* A result is a link, so it gets the same hover treatment as the rest. */
+.pagefind-ui__result {
+	transition:
+		background-color var(--saule-fast) var(--saule-ease),
+		transform var(--saule-fast) var(--saule-ease);
+}
+
+.pagefind-ui__result:hover {
+	transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pagefind-ui__result,
+	.pagefind-ui__result-nested,
+	.pagefind-ui__message {
+		animation: none;
+	}
+
+	.pagefind-ui__result:hover {
+		transform: none;
+	}
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Standard library reference
+ *
+ * Each function is an expandable entry rather than a row in a two-column
+ * table. A table put the signature and its description side by side in
+ * half-width columns, so a signature wrapped mid-type and every description
+ * was open at once — on a page a reader opens to look up *one* function.
+ *
+ * The signature is coloured by `sync-docs`, which tags each token at
+ * generation time. The palette is the one the Saule grammar uses in code
+ * blocks on the same page, so a signature and an example agree about what a
+ * type looks like.
+ * ────────────────────────────────────────────────────────────────────────── */
+:root {
+	--saule-sig-fn: var(--saule-amber-400);
+	--saule-sig-type: #79c0ff;
+	--saule-sig-param: var(--sl-color-white);
+	--saule-sig-punct: var(--sl-color-gray-3);
+	--saule-sig-str: #a5d6ff;
+	--saule-sig-num: #79c0ff;
+	--saule-sig-kw: #ff7b72;
+	--saule-sig-comment: var(--sl-color-gray-3);
+	--saule-chevron: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+}
+
+/* Height is interpolable from a keyword only where this is enabled; it is
+   inert everywhere else, so it cannot break a layout that does not animate. */
+:root {
+	interpolate-size: allow-keywords;
+}
+
+:root[data-theme='light'] {
+	--saule-sig-fn: var(--saule-amber-700);
+	--saule-sig-type: #0550ae;
+	--saule-sig-str: #0a3069;
+	--saule-sig-num: #0550ae;
+	--saule-sig-kw: #cf222e;
+}
+
+.api-list {
+	margin-top: 1rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+	overflow: hidden;
+}
+
+.api-entry + .api-entry {
+	border-top: 1px solid var(--sl-color-gray-5);
+}
+
+.api-entry > summary {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.7rem 0.9rem;
+	cursor: pointer;
+	list-style: none;
+	background-color: transparent;
+	transition: background-color var(--saule-fast) var(--saule-ease);
+}
+
+.api-entry > summary::-webkit-details-marker {
+	display: none;
+}
+
+/*
+ * A disclosure chevron of our own, so it can turn with the entry.
+ *
+ * Drawn as an SVG mask rather than two rotated borders: the border trick
+ * renders as a lopsided tick at small sizes, because the two edges round to
+ * different pixel widths, and it cannot be made bigger without also moving
+ * off-centre.
+ */
+.api-entry > summary::before {
+	content: '';
+	flex: none;
+	width: 0.85rem;
+	height: 0.85rem;
+	background-color: var(--sl-color-gray-3);
+	-webkit-mask: var(--saule-chevron) center / contain no-repeat;
+	mask: var(--saule-chevron) center / contain no-repeat;
+	transform: rotate(0deg);
+	transition:
+		transform var(--saule-mid) var(--saule-ease),
+		background-color var(--saule-fast) var(--saule-ease);
+}
+
+.api-entry[open] > summary::before {
+	transform: rotate(90deg);
+	background-color: var(--sl-color-accent);
+}
+
+.api-entry > summary:hover::before {
+	background-color: var(--sl-color-white);
+}
+
+.api-entry > summary:hover {
+	background-color: var(--sl-color-gray-6);
+}
+
+.api-entry[open] > summary {
+	background-color: var(--sl-color-gray-6);
+}
+
+/* The signature itself: one line, never wrapped mid-type — it scrolls
+   sideways on a narrow screen instead, the way a code block does. */
+.api-sig {
+	font-family: var(--saule-font-mono);
+	font-size: var(--sl-text-sm);
+	white-space: pre;
+	overflow-x: auto;
+	background: none;
+	border: none;
+	padding: 0;
+}
+
+.api-sig::-webkit-scrollbar {
+	height: 0.35rem;
+}
+
+.sig-fn {
+	color: var(--saule-sig-fn);
+	font-weight: 600;
+}
+.sig-type {
+	color: var(--saule-sig-type);
+}
+.sig-param {
+	color: var(--saule-sig-param);
+}
+.sig-punct,
+.sig-arrow {
+	color: var(--saule-sig-punct);
+}
+.sig-str {
+	color: var(--saule-sig-str);
+}
+.sig-num {
+	color: var(--saule-sig-num);
+}
+.sig-kw {
+	color: var(--saule-sig-kw);
+}
+.sig-comment {
+	color: var(--saule-sig-comment);
+	font-style: italic;
+}
+
+.api-doc {
+	padding: 0.2rem 0.9rem 0.9rem 2.1rem;
+}
+
+.api-prose {
+	margin: 0;
+	color: var(--sl-color-gray-2);
+}
+
+/* The worked example: a real code block, highlighted by the same tokens the
+   signature above it uses, so the two agree about what a type looks like. */
+.api-example {
+	margin-top: 0.7rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.4rem;
+	background-color: var(--saule-code-bg);
+	padding: 0.6rem 0.8rem;
+	overflow-x: auto;
+	font-size: var(--sl-text-sm);
+	line-height: 1.7;
+}
+
+.api-example code {
+	font-family: var(--saule-font-mono);
+	background: none;
+	border: none;
+	padding: 0;
+	white-space: pre;
+}
+
+/*
+ * Open and close, not just open.
+ *
+ * A `<details>` snaps: its content is in the layout or it is not. Animating
+ * `block-size` needs a keyword to interpolate *to*, which is what
+ * `interpolate-size` enables, and the content needs to stay rendered on the
+ * way out, which is what the discrete transition on `content-visibility`
+ * does. Browsers without either simply snap, exactly as before.
+ */
+.api-entry::details-content {
+	block-size: 0;
+	overflow: hidden;
+	transition:
+		block-size var(--saule-mid) var(--saule-ease),
+		content-visibility var(--saule-mid) var(--saule-ease) allow-discrete;
+}
+
+.api-entry[open]::details-content {
+	block-size: auto;
+}
+
+/* An entry linked to directly opens itself, so a shared anchor lands on the
+   thing it names rather than on a closed row. */
+.api-entry:target {
+	scroll-margin-top: 6rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.api-entry > summary::before,
+	.api-entry::details-content {
+		transition: none;
+	}
+}

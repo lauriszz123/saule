@@ -86,8 +86,9 @@ local raw: bytes = Bytes.fromString(text)
 println(String.len(text))   -- 5 codepoints
 println(#raw)               -- 6 bytes
 
-local oops: string = raw    -- error: cannot assign `bytes` to `string`
-println(String.len(raw))    -- error: expects `string`, got `bytes`
+-- Neither of these compiles, which is the point of keeping them apart:
+--   local oops: string = raw    -- ERROR: cannot assign `bytes` to `string`
+--   println(String.len(raw))    -- ERROR: expects `string`, got `bytes`
 ```
 
 Nothing converts between them implicitly, and `as` is not a way across
@@ -119,6 +120,10 @@ The two directions are deliberately not symmetric:
 local b: byte = 200                  -- a literal in range: no cast needed
 local n: integer = b                 -- widening is free; a byte *is* an integer
 
+fn readLength() -> integer
+    return 300
+end
+
 local computed: integer = readLength()
 local narrowed: byte? = computed as byte   -- checked: nil when out of range
 local oops: byte = computed          -- ERROR: needs `as byte`
@@ -139,8 +144,13 @@ level can know what it holds.
 a result that stayed `byte` would be a lie:
 
 ```luau
+local b: byte = 0x7f
+
 local sum: integer = b + 100         -- integer, not byte
 local masked: integer = b & 0x0f     -- bit patterns work; a byte has them
+
+println(sum)                         -- 227
+println(masked)                      -- 15
 ```
 
 That makes the overflow visible in the type instead of hidden in a wrap, and
@@ -161,11 +171,18 @@ through them one at a time.
 A function value's type is its **signature**: the types it is called with and the type it hands back. There is no bare `function` type — a slot that holds a callable has to say which calls are legal against it.
 
 ```luau
+fn advance(dt: float)
+  println("tick " .. dt)
+end
+
 local onTick: fn(float) -> nil = fn(dt: float)
   advance(dt)
 end
 
 local compare: fn(integer, integer) -> boolean = (a, b) => a < b
+
+onTick(0.5)                  -- tick 0.5
+println(compare(1, 2))       -- true
 ```
 
 The parts are the same ones a declaration writes: a parenthesised parameter-type list, then `->` and the return type. `-> nil` is the "returns nothing" spelling. Nullability wraps the whole type, so an optional callback needs parentheses — `(fn(string) -> nil)?`, not `fn(string) -> nil?`, which is a callback returning a nullable `nil`.
@@ -181,16 +198,30 @@ end
 The payoff is that anonymous functions assigned into such a slot are checked against it — arity, parameter types, and return type — instead of being accepted on the grounds that they are *some* function:
 
 ```luau
-local field = TextField()
-field.onChanged = fn(count: integer)   -- error: expected fn(string) -> nil
-  print(count)
+class TextField
+  onChanged: fn(string) -> nil = text => println(text)
 end
+
+local field: TextField = TextField()
+
+-- The slot's type is the contract, so this is rejected:
+--   field.onChanged = fn(count: integer)   -- ERROR: expected fn(string) -> nil
+--     println(count)
+--   end
 ```
 
 It also means the parameters of a lambda written into a typed slot don't need annotations. The signature supplies them, and the body is checked with the real types:
 
 ```luau
-field.onChanged = text => print(text:upper())   -- `text` is a `string`
+class TextField
+  onChanged: fn(string) -> nil = text => println(text)
+end
+
+local field: TextField = TextField()
+
+-- `text` is a `string`, taken from the slot's own type.
+field.onChanged = text => println(String.upper(text))
+field.onChanged("saule")                        -- SAULE
 ```
 
 An earlier version of the language accepted a bare `function` annotation. It carried no arity and no parameter types, so every lambda fit every slot and the mistake surfaced at the call — or, for a callback stored now and invoked later, not at all. Widen deliberately with `any` if a slot really does accept anything.
@@ -436,8 +467,10 @@ local gone: integer = 1 << 64            -- 0
 **Precedence follows Lua**: `|` is loosest, then `~`, then `&`, then the shifts, and all of them bind looser than `..`, `+` and `*` but tighter than any comparison. So the mask-test idiom needs no parentheses:
 
 ```luau
+local flags: integer = 0b0110
+
 if flags & 0b0100 != 0 then              -- (flags & 0b0100) != 0
-    println("bit set")
+    println("bit set")                   -- bit set
 end
 ```
 
@@ -523,8 +556,13 @@ Because the result is nullable, the failure case cannot be ignored — combine
 it with `??` for a fallback or `!` to turn it back into a throw:
 
 ```luau
+local value: any = 42
+
 local n: integer = value as integer ?? 0     -- default on mismatch
-local m: integer = (value as integer)!       -- throw on mismatch
+local m: integer = (value as integer)!       -- fails loudly on mismatch
+
+println(n)                                   -- 42
+println(m)                                   -- 42
 ```
 
 This is what makes `any` **sound**: a value annotated `integer` really is an
@@ -585,12 +623,19 @@ end
 -- main.sau
 import appName, showHeader from "config"
 
-print(appName)
+class Main
+    static fn main()
+        showHeader()                -- MyGame v1
+        println(appName)            -- MyGame
+    end
+end
 ```
 
 Module variables are mutable, and every write is checked against the declared type:
 
 ```luau
+export version: integer = 1
+
 version = version + 1        -- ok
 version = "two"              -- ERROR: `string` into `integer`
 ```
@@ -621,9 +666,17 @@ The explicit form is preferred for public APIs (function bodies, module-level co
 Declare and assign several names in one statement. Types can be mixed (each name carries its own optional annotation):
 
 ```luau
+fn divmod(a: integer, b: integer) -> (integer, integer)
+    return a / b, a % b
+end
+
 local x: integer, y: integer = 10, 20
 local name, age = "Arthur", 36          -- both inferred
 local q, r = divmod(17, 5)              -- unpack multi-return
+
+println(x + y)                          -- 30
+println(name .. " is " .. age)          -- Arthur is 36
+println(q .. " remainder " .. r)        -- 3 remainder 2
 ```
 
 ### Nullable Without Initializer
@@ -640,7 +693,10 @@ The same applies to any name a multiple binding leaves without a value, and to a
 
 ```luau
 local host: string, port: integer = "localhost"   -- ERROR: `port` is nil
-export appName: string                            -- ERROR: `string` is never nil
+```
+
+```luau
+export appName: string                            -- ERROR: never initialized
 ```
 
 ### Reassignment
@@ -650,7 +706,8 @@ export appName: string                            -- ERROR: `string` is never ni
 ```luau
 local hp: integer = 100
 hp = hp - 25                    -- reassign the local
-local hp: integer = 0           -- ERROR: `hp` is already declared in this scope
+local hp: integer = 0           -- allowed: a second `local` shadows the first
+print(hp)                       -- 0, the later binding
 ```
 
 > Class **fields** are a separate thing — they live on instances or the class itself, not in the surrounding scope. They use `name: T = expr` for public and `local name: T = expr` for private. See [Classes → Access Modifiers](#access-modifiers).
@@ -726,6 +783,10 @@ these are compile errors:
 ```luau
 local n: integer = 1
 n /= 2.0                        -- ERROR: cannot mix integer and float
+```
+
+```luau
+local n: integer = 1
 n ..= "x"                       -- ERROR: `..` yields a string, `n` is an integer
 ```
 
@@ -734,8 +795,23 @@ does not parse. It also routes through operator overloads, so a class that
 implements `OpAdd` supports `+=` with no extra work:
 
 ```luau
+class Vec implements OpAdd<Vec, Vec>
+    x: integer = 0
+    y: integer = 0
+
+    fn init(x: integer, y: integer)
+        self.x = x
+        self.y = y
+    end
+
+    fn add(other: Vec) -> Vec
+        return Vec(self.x + other.x, self.y + other.y)
+    end
+end
+
 local v: Vec = Vec(1, 2)
 v += Vec(10, 20)                -- calls Vec.add
+println(v.x .. "," .. v.y)      -- 11,22
 ```
 
 There is deliberately no compound form for the comparison or logical operators:
@@ -808,8 +884,15 @@ Suffixes apply left to right, which is what makes `?` read correctly beside
 one:
 
 ```luau
+class Dog
+    name: string = "rex"
+end
+
 local maybeList: Dog[]? = nil               -- a nullable array
 local maybeDogs: Dog?[] = {Dog(), nil}      -- an array of nullable Dog
+
+println(maybeList == nil)                   -- true
+println(#maybeDogs)                         -- 2
 ```
 
 There is no `[K]` form for map keys — a string-keyed table stays
@@ -823,6 +906,18 @@ either direction. Writing through the wider name would put an `Animal` into
 a table the narrower name still believes holds only `Dog`s:
 
 ```luau
+class Animal
+    fn speak() -> string
+        return "..."
+    end
+end
+
+class Dog extends Animal
+    fn fetch() -> string
+        return "ball"
+    end
+end
+
 local dogs: table<Dog> = {}
 local animals: table<Animal> = dogs    -- ERROR: table<Dog> is not table<Animal>
 Table.insert(animals, Animal())        -- ...this is why
@@ -908,15 +1003,24 @@ print(#t)    -- 3
 
 ### Removing Keys
 
-Assigning `nil` does **not** delete a map entry (so JSON-style `{"x": null}` round-trips faithfully). Use `Table.remove(t, key)` to actually drop a key:
+Assigning `nil` clears a map entry's **value** but does not remove its
+**key** — so JSON-style `{"x": null}` round-trips faithfully:
 
 ```luau
-local user: table = { name: "Arthur", draft: true }
-Table.remove(user, "draft")
-print(user.draft)    -- nil
+local user: table<string, any> = {}
+user["name"] = "Arthur"
+user["draft"] = true
+
+user["draft"] = nil
+print(user["draft"] ?? "no value")   -- no value
+print(#Table.keys(user))             -- 2: the key is still there
 ```
 
-For the array part, `Table.remove(t, i)` shifts subsequent elements down (standard Lua behaviour).
+There is no function that drops a single map key. `Table.remove(t, i)` takes
+an **integer position** in the array part and shifts the elements after it
+down, which is a different operation; `Table.clear(t)` empties the whole
+table. To build a map without a key, leave it out rather than setting it and
+removing it.
 
 ### Iterating
 
@@ -947,12 +1051,27 @@ end
 ### Default Parameters
 
 ```luau
+class Player
+    name: string = ""
+    health: integer = 0
+    score: integer = 0
+
+    fn init(name: string, health: integer, score: integer)
+        self.name = name
+        self.health = health
+        self.score = score
+    end
+end
+
 fn createPlayer(name: string, health: integer = 100, score: integer = 0) -> Player
     return Player(name, health, score)
 end
 
-local p: Player = createPlayer("Arthur")         -- health=100, score=0
-local p: Player = createPlayer("Arthur", 50)     -- health=50, score=0
+local a: Player = createPlayer("Arthur")         -- health=100, score=0
+local b: Player = createPlayer("Arthur", 50)     -- health=50
+
+println(a.health)                                -- 100
+println(b.health)                                -- 50, score=0
 ```
 
 ### Named Parameters
@@ -1084,6 +1203,20 @@ end
 Classes, interfaces and enums take bounds on their own parameters too, and a method's bound nests inside its class's:
 
 ```luau
+interface Named
+    fn name() -> string
+end
+
+class Person implements Named
+    local who: string
+    fn init(who: string)
+        self.who = who
+    end
+    fn name() -> string
+        return self.who
+    end
+end
+
 class Registry<T: Named>
     items: table<T> = {}
 
@@ -1103,17 +1236,36 @@ Two rules worth knowing. A parameter may be handed to another bounded parameter 
 The `when(...)` keyword starts a **colon-based pipeline** ("Saule style"). It wraps a value, and every subsequent `:func(args)` calls `func` with the upstream value threaded in as the **first argument**:
 
 ```luau
+fn pipe(s: string) -> string
+    return s .. "world"
+end
+
 local result: string = when("Hello, "):pipe()
 -- equivalent to:  pipe("Hello, ")
+println(result)                 -- Hello, world
 ```
 
 Each stage feeds its result into the next, so a chain reads top-to-bottom even though every step is an ordinary free-function call:
 
 ```luau
+fn filter<T>(items: table<T>, keep: fn(T) -> boolean) -> table<T>
+    return Iter.filter(items, keep)
+end
+
+fn map<T>(items: table<T>, f: fn(T) -> T) -> table<T>
+    return Iter.map(items, f)
+end
+
+fn length_of<T>(items: table<T>) -> integer
+    return #items
+end
+
 local size: integer = when({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
     :filter<integer>(x => x % 2 == 0)
     :map(x => x * x)
     :length_of()
+
+println(size)                   -- 5
 ```
 
 That's exactly the same as `length_of(map(filter<integer>({...}, x => x % 2 == 0), x => x * x))` — just easier to read.
@@ -1123,12 +1275,15 @@ That's exactly the same as `length_of(map(filter<integer>({...}, x => x % 2 == 0
 The type of the upstream value must match the **first parameter** of the next stage, otherwise the typechecker rejects the chain at compile time:
 
 ```luau
-fn to_str(n: integer) -> string ... end
-fn square(n: integer) -> integer ... end
+fn to_str(n: integer) -> string
+    return tostring(n)
+end
 
-local err = when(5):to_str():square()
--- COMPILE ERROR: pipeline stage `square` expects `integer` as first
---                argument, got `string`
+fn square(n: integer) -> integer
+    return n * n
+end
+
+local err = when(5):to_str():square()   -- ERROR: stage `square` expects `integer`, got `string`
 ```
 
 Rules:
@@ -1180,9 +1335,14 @@ lambda is being assigned to, so `x` below is a real `integer` inside the body
 
 ```luau
 local double: fn(integer) -> integer = fn(x)
-    return #x            -- ERROR: cannot take length of an `integer`
+    return String.len(x)   -- ERROR: argument 1 of `String.len` expects `string`, got `integer`
 end
 ```
+
+The inferred type is a real one, not a silent `any` — passing `x` where a
+`string` is wanted is rejected before the program runs. Not every misuse is
+caught, though: `#x` and `x.field` on that same `integer` are **runtime**
+errors rather than compile-time ones.
 
 This works in all three lambda forms, and an explicit annotation still wins:
 
@@ -1207,7 +1367,9 @@ fn map(items: table<integer>, transform: fn(integer) -> integer) -> table<intege
     return result
 end
 
+local nums: table<integer> = {1, 2, 3}
 local doubled: table<integer> = map(nums, x => x * 2)
+println(Table.concat(doubled, ","))     -- 2,4,6
 ```
 
 ### Functions as Return Values
@@ -1247,15 +1409,24 @@ When the last argument to a call is a function, it can be written after the
 closing parenthesis as a `do ... end` block:
 
 ```luau
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
 fn view(spacing: integer, body: fn() -> nil) -> nil
-    Layout.push(spacing)
+    println("open " .. spacing)
     body()
-    Layout.pop()
+    println("close")
 end
 
 view(spacing: 10) do
     text("Hello")
-    button(label: "OK")
+    button("OK")
 end
 ```
 
@@ -1263,9 +1434,22 @@ That is sugar, nothing more — it produces the same call as writing the lambda
 out in full:
 
 ```luau
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
+fn view(spacing: integer, body: fn() -> nil) -> nil
+    body()
+end
+
 view(spacing: 10, fn()
     text("Hello")
-    button(label: "OK")
+    button("OK")
 end)
 ```
 
@@ -1305,6 +1489,19 @@ what lets it follow named arguments, even though a normal positional argument
 cannot:
 
 ```luau
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
+fn view(spacing: integer, body: fn() -> nil) -> nil
+    body()
+end
+
 view(spacing: 10) do    -- `spacing` is named, so the block fills `body`
     text("Hello")
 end
@@ -1314,6 +1511,15 @@ Binding to the callback slot — rather than to the next unfilled one — is wha
 makes the form work with defaults in between:
 
 ```luau
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
 fn panel(title: string, spacing: integer = 0, body: fn() -> nil) -> nil
     body()
 end
@@ -1332,6 +1538,10 @@ function is skipped over, so a trailing `enabled: boolean` doesn't get in the
 way:
 
 ```luau
+fn showToast(message: string)
+    println(message)
+end
+
 fn menuItem(label: string, onSelected: fn() -> nil, enabled: boolean = true) -> nil
     onSelected()
 end
@@ -1348,7 +1558,15 @@ how supplying the callback *and* a trailing block reads as a duplicate-argument
 error:
 
 ```luau
-menuItem("Open", () => nil) do    -- error: a function where `enabled` wants a boolean
+fn showToast(message: string)
+    println(message)
+end
+
+fn menuItem(label: string, onSelected: fn() -> nil, enabled: boolean = true) -> nil
+    onSelected()
+end
+
+menuItem("Open", () => nil) do    -- ERROR: a function where `enabled` wants a boolean
     showToast("Open")
 end
 ```
@@ -1359,16 +1577,35 @@ end
 the loop, never to a call in the condition:
 
 ```luau
+class Queue
+    left: integer = 2
+
+    fn pop() -> boolean
+        self.left = self.left - 1
+        return self.left >= 0
+    end
+end
+
+local queue: Queue = Queue()
+
 while queue.pop() do    -- the loop's `do`, not a trailing block on `pop()`
-    ...
+    println("one item")
 end
 ```
 
 Parenthesise the call if you really want a trailing block inside a loop header:
 
 ```luau
+local ticks: integer = 0
+
+fn frame(body: fn() -> boolean) -> boolean
+    ticks = ticks + 1
+    return ticks < 3 and body()
+end
+
+-- Parenthesising re-enables the trailing block inside a loop header.
 while (frame() do return true end) do
-    ...
+    println("frame " .. ticks)
 end
 ```
 
@@ -1382,6 +1619,29 @@ That is the practical reason to reach for one instead of passing a table of
 values:
 
 ```luau
+class Player
+    name: string = ""
+    fn init(name: string)
+        self.name = name
+    end
+end
+
+fn row(label: string)
+    println(label)
+end
+
+fn text(s: string)
+    println(s)
+end
+
+fn panel(title: string, body: fn() -> nil) -> nil
+    body()
+end
+
+local players: table<Player> = {Player("ada"), Player("alan")}
+local debug: boolean = true
+local fps: integer = 60
+
 panel(title: "Stats") do
     for _, p in players do
         row(p.name)
@@ -1442,9 +1702,25 @@ end
 
 Call the class as if it were a function:
 ```luau
+class Player
+    name: string = ""
+    health: integer = 0
+    score: integer = 0
+
+    fn init(name: string, health: integer, score: integer)
+        self.name = name
+        self.health = health
+        self.score = score
+    end
+
+    fn greet()
+        println("Hi, I am " .. self.name)
+    end
+end
+
 local p: Player = Player("Arthur", 100, 5)
 
-p.greet()
+p.greet()                       -- Hi, I am Arthur
 ```
 
 ### Implicit `self`
@@ -1514,9 +1790,11 @@ That covers a class with no `init` at all (there is nowhere to assign the field)
 Static fields are stricter — nothing runs before the first read of a static, so `init` is not an option and the value has to be in the declaration:
 
 ```luau
-static local scores: table<integer> = {}    -- ok
-static local scores: table<integer>?        -- ok, starts nil
-static local scores: table<integer>         -- ERROR: never initialized
+class Board
+    static local scores: table<integer> = {}    -- ok
+    static local pending: table<integer>?       -- ok, starts nil
+    static local totals: table<integer>         -- ERROR: never initialized
+end
 ```
 
 ### Static Members
@@ -1524,19 +1802,44 @@ static local scores: table<integer>         -- ERROR: never initialized
 Static fields and methods belong to the class itself, not to instances. They are accessed via the class name from the outside, or by bare name (or `self.name` in a `static fn`) from inside:
 
 ```luau
-print(Player.maxHealth)         -- 100
-print(Player.getMaxHealth())    -- 100
+class Player
+    static maxHealth: integer = 100
+
+    static fn getMaxHealth() -> integer
+        return Player.maxHealth
+    end
+end
+
+println(Player.maxHealth)       -- 100
+println(Player.getMaxHealth())  -- 100
 ```
 
 Static fields are shared across all instances. Modifying them affects the class globally:
 
 ```luau
+class Player
+    static maxHealth: integer = 100
+end
+
 Player.maxHealth = 200
+println(Player.maxHealth)       -- 200
 ```
 
 A class with **no** `fn init` promotes every **private** `local field = expr` to a static, evaluated once at class-declaration time. This makes a class usable as a small module:
 
 ```luau
+class Person
+    name: string = ""
+
+    fn init(name: string)
+        self.name = name
+    end
+
+    fn introduce()
+        println("I am " .. self.name)
+    end
+end
+
 class Main
     static local lauris: Person = Person("Laurynas")
 
@@ -1544,6 +1847,8 @@ class Main
         lauris.introduce()     -- `lauris` resolves via the class
     end
 end
+
+Main.main()                    -- I am Laurynas
 ```
 
 The word `local` is doing the work there. A **public** defaulted field is an
@@ -1685,15 +1990,45 @@ local n: integer = p.first()
 Type arguments are **invariant**, the same rule [table elements](#element-types-are-invariant) follow and for the same reason: a `Box<string>` accepted into a `Box<integer>` slot would be an alias through which the wrong type could be written back.
 
 ```luau
+class Box<T>
+    local value: T
+    fn init(value: T)
+        self.value = value
+    end
+end
+
 local b: Box<integer> = Box("no")   -- ERROR: Box<string> is not Box<integer>
-local c: Box<integer, string> = ... -- ERROR: `Box` expects 1 type argument
+```
+
+```luau
+class Box<T>
+    local value: T
+    fn init(value: T)
+        self.value = value
+    end
+end
+
+local c: Box<integer, string> = Box(1)  -- ERROR: `Box` expects 1 type argument
 ```
 
 Naming the class **without** its arguments means "some instantiation, unknown which", and is accepted against any of them:
 
 ```luau
+class Box<T>
+    local value: T
+
+    fn init(value: T)
+        self.value = value
+    end
+
+    fn get() -> T
+        return self.value
+    end
+end
+
 local any: Box = Box(1)             -- ok
 local back: Box<integer> = any      -- ok
+println(back.get())                 -- 1
 ```
 
 Like a function's, a class's type parameters are erased at runtime — they constrain the program, they don't reach it.
@@ -1722,7 +2057,28 @@ end
 A class can implement multiple interfaces:
 
 ```luau
-export class Player extends Entity implements Greetable, Damageable
+class Entity
+    local name: string
+
+    fn init(name: string)
+        self.name = name
+    end
+
+    fn getName() -> string
+        return self.name
+    end
+end
+
+interface Greetable
+    fn greet() -> nil
+end
+
+interface Damageable
+    fn damage(amount: integer) -> nil
+    fn isAlive() -> boolean
+end
+
+class Player extends Entity implements Greetable, Damageable
     local health: integer
 
     fn init(name: string, health: integer)
@@ -1732,7 +2088,7 @@ export class Player extends Entity implements Greetable, Damageable
     end
 
     fn greet()
-        print("Hi, I am " .. self.getName())
+        println("Hi, I am " .. self.getName())
     end
 
     fn damage(amount: integer)
@@ -1743,6 +2099,11 @@ export class Player extends Entity implements Greetable, Damageable
         return self.health > 0
     end
 end
+
+local p: Player = Player("Arthur", 30)
+p.greet()                       -- Hi, I am Arthur
+p.damage(30)
+println(p.isAlive())            -- false
 ```
 
 ### Interface Composition
@@ -1750,9 +2111,31 @@ end
 Interfaces can extend other interfaces:
 
 ```luau
+interface Damageable
+    fn isAlive() -> boolean
+    fn damage(amount: integer) -> nil
+end
+
 interface Combatant extends Damageable
     fn attack(target: Damageable) -> nil
 end
+
+-- A class implementing `Combatant` owes every method of both.
+class Knight implements Combatant
+    fn isAlive() -> boolean
+        return true
+    end
+
+    fn damage(amount: integer)
+        println("took " .. amount)
+    end
+
+    fn attack(target: Damageable)
+        target.damage(5)
+    end
+end
+
+Knight().attack(Knight())       -- took 5
 ```
 
 ### Interfaces as Types
@@ -1760,6 +2143,29 @@ end
 This is the main power — use interfaces as parameter and variable types:
 
 ```luau
+interface Damageable
+    fn isAlive() -> boolean
+    fn damage(amount: integer) -> nil
+end
+
+class Player implements Damageable
+    name: string = ""
+    health: integer = 0
+
+    fn init(name: string, health: integer)
+        self.name = name
+        self.health = health
+    end
+
+    fn isAlive() -> boolean
+        return self.health > 0
+    end
+
+    fn damage(amount: integer)
+        self.health = self.health - amount
+    end
+end
+
 fn processEntity(target: Damageable, amount: integer) -> nil
     if target.isAlive() then
         target.damage(amount)
@@ -1773,13 +2179,25 @@ processEntity(p, 30)    -- works, Player implements Damageable
 ### Generic Interfaces
 
 ```luau
+class Player
+    name: string = ""
+
+    fn init(name: string)
+        self.name = name
+    end
+
+    fn getName() -> string
+        return self.name
+    end
+end
+
 interface Repository<T>
     fn save(item: T) -> nil
     fn findById(id: integer) -> T
     fn delete(id: integer) -> nil
 end
 
-export class PlayerRepository implements Repository<Player>
+class PlayerRepository implements Repository<Player>
     local items: table<Player>
 
     fn init()
@@ -1807,11 +2225,21 @@ The argument is real, not decoration: `Repository<Player>` substitutes `Player` 
 Any class implementing `Iterable<T>` works inside a `for-in` loop automatically. The contract is a single method `iter()` that returns a **step closure**: each call returns the next element, or `nil` to signal the end. The loop stops on the first `nil`.
 
 ```luau
-interface Iterable<T>
-    fn iter() -> fn() -> T?
+class Player
+    name: string = ""
+    health: integer = 0
+
+    fn init(name: string, health: integer)
+        self.name = name
+        self.health = health
+    end
+
+    fn getName() -> string
+        return self.name
+    end
 end
 
-export class PlayerQueue implements Iterable<Player>
+class PlayerQueue implements Iterable<Player>
     local items: table<Player>
 
     fn init()
@@ -1842,19 +2270,40 @@ queue.push(Player("Arthur", 100))
 queue.push(Player("Merlin", 80))
 
 for player: Player in queue do
-    player.greet()
+    println(player.getName())   -- Arthur, then Merlin
 end
 ```
 
 For iteration that yields **pairs** (key + value, index + value, etc.), implement `Iterable2<K, V>` whose `iter()` returns a closure with two return values:
 
 ```luau
-interface Iterable2<K, V>
-    fn iter() -> fn() -> (K?, V?)
+class Player
+    name: string = ""
+    health: integer = 0
+
+    fn init(name: string, health: integer)
+        self.name = name
+        self.health = health
+    end
+
+    fn getName() -> string
+        return self.name
+    end
+
+    fn isAlive() -> boolean
+        return self.health > 0
+    end
+
+    fn damage(amount: integer)
+        self.health = self.health - amount
+    end
 end
 
+local playerMap: table<string, Player> = {}
+playerMap["p1"] = Player("Arthur", 100)
+
 for key: string, value: Player in playerMap do
-    print(key .. " = " .. value.getName())
+    println(key .. " = " .. value.getName())   -- p1 = Arthur
 end
 ```
 
@@ -2035,14 +2484,14 @@ class Text implements Assignable<string>, OpToString
     fn toString() -> string return self.raw end
 end
 
-local greeting: Text = "hello, world"   -- runs Text.from
+local greeting: Text = "hello, world"   -- runs Text.of
 println(greeting)                        -- hello, world  (OpToString)
 println(greeting.upper())                -- HELLO, WORLD
 ```
 
-The method is **static** — there is no instance yet to call it on — and
-`from` is usable as a name here even though it opens an `import` tail
-elsewhere, because after `fn` and after `.` an import cannot start.
+The method is **static** — there is no instance yet to call it on — and it
+is named `of`, which is the one name the compiler looks for: a class that
+declares `Assignable<T>` without it converts nothing.
 
 The annotation picks the target, so this is *target-typed*: there is never a
 question of which class a bare value should become, only whether the one
@@ -2053,9 +2502,24 @@ module variable, and a user function's or method's parameters. Everywhere
 else the ordinary rule stands:
 
 ```luau
+class Text implements Assignable<string>
+    local raw: string
+    fn init(raw: string)  self.raw = raw end
+    static fn of(s: string) -> Text return Text(s) end
+end
+
 local all: table<Text> = {"a"}   -- ERROR: table elements do not convert
-local t: Text = "a"
-t = "b"                           -- ERROR: only the declaration converts
+```
+
+```luau
+class Text implements Assignable<string>
+    local raw: string
+    fn init(raw: string)  self.raw = raw end
+    static fn of(s: string) -> Text return Text(s) end
+end
+
+local t: Text = "a"              -- ok, this site converts
+t = "b"                          -- ERROR: only the declaration converts
 ```
 
 That boundary is soundness rather than an unfinished edge. The compiler
@@ -2103,11 +2567,24 @@ print(s.describe())    -- "Status is: alive"
 ### Enums as Types
 
 ```luau
-fn move(self, dir: Direction) -> nil
-    if dir == Direction.North then
-        self.y = self.y + 1
+enum Direction
+    North
+    South
+end
+
+class Walker
+    y: integer = 0
+
+    fn move(dir: Direction) -> nil
+        if dir == Direction.North then
+            self.y = self.y + 1
+        end
     end
 end
+
+local w: Walker = Walker()
+w.move(Direction.North)
+println(w.y)                    -- 1
 ```
 
 ### Generic Enums
@@ -2131,8 +2608,15 @@ end
 The instantiation comes from the construction where the payload pins it down, and from the annotation where it doesn't — `Result.Err("boom")` says nothing about `T`, so it fits any `Result`:
 
 ```luau
+enum Result<T>
+    Ok(value: T)
+    Err(message: string)
+end
+
 local inferred = Result.Ok("hi")            -- Result<string>
 local failed: Result<integer> = Result.Err("boom")
+
+println(match inferred case Result.Ok(v) then v case Result.Err(m) then m end)   -- hi
 ```
 
 Exhaustiveness is unaffected: type arguments say what the payloads hold, never which variants exist.
@@ -2148,11 +2632,21 @@ Exhaustiveness is unaffected: type arguments say what the payloads hold, never w
 ### Basic Match
 
 ```luau
+enum Status
+    Ok
+    Warn
+    Error
+end
+
+local status: Status = Status.Warn
+
 local label: string = match status
     case Status.Ok then "fine"
     case Status.Warn then "watch out"
     case Status.Error then "oops"
 end
+
+println(label)                  -- watch out
 ```
 
 Each arm is `case <pattern> then <expression-or-block>`. The block runs until the next `case` or the closing `end`.
@@ -2182,9 +2676,28 @@ end
 `match` is the cleanest way to consume a `T?` — `nil` is just another pattern:
 
 ```luau
+class User
+    name: string = ""
+    fn init(name: string)
+        self.name = name
+    end
+end
+
+class Repo
+    fn findById(id: integer) -> User?
+        if id == 1 then
+            return User("Ada")
+        end
+        return nil
+    end
+end
+
+local repo: Repo = Repo()
+local id: integer = 1
+
 match repo.findById(id)
     case nil then println("not found")
-    case user then println("hi " .. user.name)
+    case user then println("hi " .. user.name)    -- hi Ada
 end
 ```
 
@@ -2195,14 +2708,20 @@ The bare name `user` here is a **binding pattern**: it captures the non-nil valu
 Use `_` to ignore a value and any identifier to bind it:
 
 ```luau
+local n: integer = 7
+
 match n
     case 0 then println("zero")
     case 1 then println("one")
-    case other then println("something else: " .. other)
+    case other then println("something else: " .. other)   -- something else: 7
 end
 
-match pair
-    case (0, _) then println("x is zero")
+fn pair() -> (integer, integer)
+    return 0, 5
+end
+
+match pair()
+    case (0, _) then println("x is zero")      -- x is zero
     case (_, 0) then println("y is zero")
     case _ then println("neither")
 end
@@ -2215,10 +2734,12 @@ A pattern that starts with a lowercase identifier (and isn't an enum variant) bi
 Add a condition that must also hold for the arm to fire:
 
 ```luau
+local n: integer = 5
+
 match n
     case x when x < 0 then println("negative")
     case 0 then println("zero")
-    case x then println("positive " .. x)
+    case x then println("positive " .. x)      -- positive 5
 end
 ```
 
@@ -2229,9 +2750,15 @@ Guards are evaluated **after** the pattern matches. If the guard is false, match
 Numbers, strings, booleans, and `nil` are all valid patterns:
 
 ```luau
+fn showHelp()
+    println("help")
+end
+
+local command: string = "help"
+
 match command
-    case "quit" then exit()
-    case "help" then showHelp()
+    case "quit" then println("bye")
+    case "help" then showHelp()                -- help
     case other then println("unknown: " .. other)
 end
 ```
@@ -2245,9 +2772,12 @@ fn divmod(a: integer, b: integer) -> (integer, integer)
     return a / b, a % b
 end
 
+local a: integer = 17
+local b: integer = 5
+
 match divmod(a, b)
     case (q, 0) then println("clean: " .. q)
-    case (q, r) then println(q .. " rem " .. r)
+    case (q, r) then println(q .. " rem " .. r)   -- 3 rem 2
 end
 ```
 
@@ -2260,8 +2790,9 @@ enum Color
     Red, Green, Blue
 end
 
--- ❌ compile error: non-exhaustive match, missing case `Color.Blue`
-local name: string = match c
+local c: Color = Color.Red
+
+local name: string = match c   -- ERROR: non-exhaustive, missing `Color.Blue`
     case Color.Red then "red"
     case Color.Green then "green"
 end
@@ -2274,6 +2805,12 @@ Add the missing variant or a wildcard arm to fix it. For nullables, both `nil` a
 Because `match` produces a value, it composes naturally with `local`, `return`, and arguments:
 
 ```luau
+enum Tier
+    Free
+    Pro
+    Enterprise
+end
+
 fn priceFor(tier: Tier) -> integer
     return match tier
         case Tier.Free then 0
@@ -2281,6 +2818,8 @@ fn priceFor(tier: Tier) -> integer
         case Tier.Enterprise then 99
     end
 end
+
+println(priceFor(Tier.Pro))     -- 9
 ```
 
 If used as a statement, the result is simply discarded — same rule as any other expression.
@@ -2301,8 +2840,28 @@ local name: string = nil        -- ERROR, string is never nil
 Use `?.` to access a member that may be nil. Returns nil instead of crashing:
 
 ```luau
+class Player
+    name: string = ""
+    fn init(name: string)
+        self.name = name
+    end
+end
+
+class Repo
+    fn findById(id: integer) -> Player?
+        if id == 1 then
+            return Player("Ada")
+        end
+        return nil
+    end
+end
+
+local repo: Repo = Repo()
+local id: integer = 2
+
 local player: Player? = repo.findById(id)
 local name: string? = player?.name      -- nil if `player` was nil
+println(name ?? "<none>")               -- <none>
 ```
 
 For lengths of strings, bytes and tables, use `#`:
@@ -2324,7 +2883,15 @@ println(rows?[1] ?? 0)              -- 0, no fault on the nil receiver
 The index expression is not evaluated at all on the nil path, the same rule `?.` follows for a call's arguments, and the two chain together:
 
 ```luau
-println(grid.rows?[1]?[2] ?? -1)
+class Grid
+    rows: table<table<integer>>? = nil
+end
+
+local grid: Grid = Grid()
+println(grid.rows?[1]?[2] ?? -1)        -- -1, nothing to index
+
+grid.rows = {{7, 8}}
+println(grid.rows?[1]?[2] ?? -1)        -- 8
 ```
 
 ### Null Coalescing
@@ -2332,7 +2899,9 @@ println(grid.rows?[1]?[2] ?? -1)
 Use `??` to provide a fallback when a value is nil:
 
 ```luau
+local name: string? = nil
 local display: string = name ?? "Unknown"
+println(display)                        -- Unknown
 ```
 
 ### Force Unwrap
@@ -2340,18 +2909,34 @@ local display: string = name ?? "Unknown"
 Use `!` to assert a value is not nil. Crashes at runtime if it is:
 
 ```luau
+local name: string? = "Arthur"
 local forced: string = name!
+println(forced)                         -- Arthur
 ```
 
 ### Combining Operators
 
 ```luau
+class Player
+    name: string = ""
+    fn init(name: string)
+        self.name = name
+    end
+    fn getName() -> string
+        return self.name
+    end
+end
+
+fn getPlayers() -> table<Player?>
+    return {Player("Ada"), nil}
+end
+
 local players: table<Player?> = getPlayers()
 
 for player: Player? in players do
     local name: string = player?.getName() ?? "Unknown"
 
-    print(name)
+    println(name)                       -- Ada, then Unknown
 end
 ```
 
@@ -2364,23 +2949,47 @@ Saule uses `try / catch` for unexpected runtime errors. For expected, recoverabl
 ### Throwing Errors
 
 ```luau
-fn damage(amount: integer)
-    if amount < 0 then
-        throw "Damage cannot be negative"
-    end
+class Player
+    health: integer = 100
 
-    self.health = self.health - amount
+    fn damage(amount: integer)
+        if amount < 0 then
+            throw "Damage cannot be negative"
+        end
+
+        self.health = self.health - amount
+    end
 end
+
+local p: Player = Player()
+p.damage(10)
+println(p.health)                       -- 90
 ```
 
 ### Try / Catch
 
 ```luau
+class Player
+    health: integer = 0
+
+    fn init(health: integer)
+        self.health = health
+    end
+
+    fn damage(amount: integer)
+        if amount < 0 then
+            throw "Damage cannot be negative"
+        end
+
+        self.health = self.health - amount
+    end
+end
+
 try
-    local p: Player = Player("Arthur", 100)
+    local p: Player = Player(100)
     p.damage(-10)
 catch e: string
-    print("Caught: " .. e)
+    println("Caught: " .. e)    -- Caught: Damage cannot be negative
 end
 ```
 
@@ -2391,6 +3000,18 @@ The `catch` clause names the thrown value and its expected type. Inside the catc
 A `try` may carry more than one clause. They are tried **in source order**, and the first whose type matches the thrown value handles it; a value no clause accepts carries on to the enclosing `try`:
 
 ```luau
+class ParseError
+    detail: string = ""
+
+    fn init(detail: string)
+        self.detail = detail
+    end
+end
+
+fn risky()
+    throw ParseError("unexpected `}` on line 3")
+end
+
 try
     risky()
 catch e: string
@@ -2398,7 +3019,7 @@ catch e: string
 catch e: integer
     println("code: " .. e)
 catch e: ParseError
-    println("parse: " .. e.detail)
+    println("parse: " .. e.detail)      -- parse: unexpected `}` on line 3
 catch e: any
     println("something else")
 end
@@ -2407,9 +3028,13 @@ end
 Each clause's binding is scoped to its own body, so the clauses are free to reuse a name. `catch e: any` matches everything, which is why it belongs last — a clause after it can never run, and the compiler says so:
 
 ```luau
+try
+    throw "boom"
 catch e: any
-    …
+    println("anything")
 catch e: string      -- ERROR: this `catch string` can never run
+    println("never")
+end
 ```
 
 ### `finally`
@@ -2417,14 +3042,37 @@ catch e: string      -- ERROR: this `catch string` can never run
 A `finally` block runs on **every** way out of the `try`: normal completion, a clause that handled a throw, a throw that no clause handled, and a `return`, `break` or `continue` from inside:
 
 ```luau
-local f: File = Io.open(path, IoMode.Read)!
-try
-    return parse(f.read("a") ?? "")
-catch e: string
-    return fallback()
-finally
-    f.close()            -- runs on all three paths
+local path: string = Os.tmpname()
+
+local out: File = Io.open(path, IoMode.Write)!
+out.write("port=8080")
+out.close()
+
+fn parse(text: string) -> string
+    local eq: integer?, _: integer? = String.find(text, "=")
+    if eq == nil then
+        throw "no `=` in `" .. text .. "`"
+    end
+    return String.sub(text, eq + 1)
 end
+
+fn fallback() -> string
+    return "80"
+end
+
+fn readPort() -> string
+    local f: File = Io.open(path, IoMode.Read)!
+    try
+        return parse(f.read("a") ?? "")
+    catch e: string
+        return fallback()
+    finally
+        f.close()            -- runs on all three paths
+    end
+end
+
+println(readPort())              -- 8080
+Os.remove(path)
 ```
 
 When nothing handled the throw, the `finally` runs and then the value carries on outward — cleanup does not swallow the failure. A `try` needs at least one of `catch` and `finally`; with neither it protects nothing and runs nothing.
@@ -2432,14 +3080,38 @@ When nothing handled the throw, the `finally` runs and then the value carries on
 ### Nullable returns for expected failures
 
 ```luau
-fn findPlayer(id: integer) -> Player?
-    if id < 0 then
-        return nil
+class Player
+    local name: string
+
+    fn init(name: string)
+        self.name = name
     end
-    return self.items[id]
+
+    fn getName() -> string
+        return self.name
+    end
 end
 
+class Repo
+    local items: table<Player>
+
+    fn init(items: table<Player>)
+        self.items = items
+    end
+
+    fn findPlayer(id: integer) -> Player?
+        if id < 0 or id > #self.items then
+            return nil
+        end
+        return self.items[id]
+    end
+end
+
+local repo: Repo = Repo({Player("Arthur")})
+
 local name: string = repo.findPlayer(5)?.getName() ?? "Unknown"
+println(name)                   -- Unknown
+println(repo.findPlayer(1)?.getName() ?? "Unknown")     -- Arthur
 ```
 
 Reserve `try / catch` for truly unexpected runtime errors — bad data from an external source, file I/O failures, contract violations. For everyday "this lookup might miss", `T?` plus `?.` / `??` keeps the failure mode visible in the type signature.
@@ -2501,11 +3173,24 @@ end
 Runs at least once, checks the condition at the end:
 
 ```luau
+local tries: integer = 0
+
+fn getInput() -> string?
+    tries = tries + 1
+    if tries < 3 then
+        return nil
+    end
+    return "ready"
+end
+
 local input: string? = nil
 
 repeat
     input = getInput()
 until input != nil
+
+println(input ?? "")            -- ready
+println(tries)                  -- 3, the body always ran at least once
 ```
 
 ### Break and Continue
@@ -2530,11 +3215,11 @@ An import names either a single `.sau` file or a folder module (a directory with
 -- single import
 import Player from "entities/Player"
 
+-- several names from one file
+import clamp, lerp from "utils/Math"
+
 -- import with alias
 import PlayerRepository as PlayerRepo from "data/PlayerRepository"
-
--- import a utility module
-import Math from "utils/Math"
 
 -- pull every exported name out of one file
 import * from "entities/Player"
@@ -2645,7 +3330,9 @@ A file without `export` is private to itself — even sibling files in the same 
 
 ### Utility Modules
 
-Not everything needs a class. Export standalone functions from a utility file:
+Not everything needs a class. Export standalone functions from a utility
+file and import them by name — a file is not a namespace, so the functions
+arrive as themselves rather than under the file's name:
 
 ```luau
 -- utils/Math.sau
@@ -2662,10 +3349,10 @@ end
 ```
 
 ```luau
-import Math from "utils/Math"
+import clamp, lerp from "utils/Math"
 
-local clamped: integer = Math.clamp(150, 0, 100)   -- 100
-local smooth: float = Math.lerp(0.0, 1.0, 0.5)    -- 0.5
+local clamped: integer = clamp(150, 0, 100)     -- 100
+local smooth: float = lerp(0.0, 1.0, 0.5)       -- 0.5
 ```
 
 ### Visibility Rules
@@ -2823,14 +3510,14 @@ A typical project-mode entry file:
 
 ```luau
 import Player from "entities/Player"
-import Math from "utils/Math"
+import clamp from "utils/Math"
 
 class Main
     static fn main()
         local p: Player = Player("Arthur", 100, 1.5)
         p.greet()
 
-        local dmg: integer = Math.clamp(50, 0, 100)
+        local dmg: integer = clamp(50, 0, 100)
         p.damage(dmg)
     end
 end

@@ -60,11 +60,24 @@ end
 Runs at least once, checks the condition at the end:
 
 ```saule
+local tries: integer = 0
+
+fn getInput() -> string?
+    tries = tries + 1
+    if tries < 3 then
+        return nil
+    end
+    return "ready"
+end
+
 local input: string? = nil
 
 repeat
     input = getInput()
 until input != nil
+
+println(input ?? "")            -- ready
+println(tries)                  -- 3, the body always ran at least once
 ```
 
 ### Break and Continue

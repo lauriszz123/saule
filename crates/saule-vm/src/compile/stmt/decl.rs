@@ -96,7 +96,11 @@ impl Compiler<'_> {
         }
 
         let saule_ast::Decl::Function {
-            name, params, body, ..
+            name,
+            params,
+            return_ty,
+            body,
+            ..
         } = &d.value
         else {
             return Err(CompileError::unsupported(
@@ -134,6 +138,7 @@ impl Compiler<'_> {
         }
 
         self.push_function(Some(name));
+        self.f.ret_arity = crate::compile::ctx::func::ret_arity_of(return_ty.as_ref());
         // Parameters occupy registers `0..n`: the calling convention leaves
         // them there, because the callee's frame *is* the argument window
         // (§6.2). Nothing is copied on entry.

@@ -218,8 +218,16 @@ impl Compiler<'_> {
                 // Every `finally` between here and the function boundary
                 // runs first, innermost out — a `return` is a way out of a
                 // `try` like any other.
-                self.run_pending_finallys(0, span)?;
-                self.ret(values, span)?;
+                //
+                // But the values come first: the returned value is the one
+                // the `return` expression named, not whatever the cleanup
+                // left behind. `ret_through_finallys` is that order; plain
+                // `ret` is the common case with no cleanup to order against.
+                if self.f.finallys.is_empty() {
+                    self.ret(values, span)?;
+                } else {
+                    self.ret_through_finallys(values, span)?;
+                }
                 Ok(None)
             }
 

@@ -47,9 +47,14 @@ lambda is being assigned to, so `x` below is a real `integer` inside the body
 
 ```saule
 local double: fn(integer) -> integer = fn(x)
-    return #x            -- ERROR: cannot take length of an `integer`
+    return String.len(x)   -- ERROR: argument 1 of `String.len` expects `string`, got `integer`
 end
 ```
+
+The inferred type is a real one, not a silent `any` — passing `x` where a
+`string` is wanted is rejected before the program runs. Not every misuse is
+caught, though: `#x` and `x.field` on that same `integer` are **runtime**
+errors rather than compile-time ones.
 
 This works in all three lambda forms, and an explicit annotation still wins:
 
@@ -74,7 +79,9 @@ fn map(items: table<integer>, transform: fn(integer) -> integer) -> table<intege
     return result
 end
 
+local nums: table<integer> = {1, 2, 3}
 local doubled: table<integer> = map(nums, x => x * 2)
+println(Table.concat(doubled, ","))     -- 2,4,6
 ```
 
 ### Functions as Return Values
@@ -114,15 +121,24 @@ When the last argument to a call is a function, it can be written after the
 closing parenthesis as a `do ... end` block:
 
 ```saule
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
 fn view(spacing: integer, body: fn() -> nil) -> nil
-    Layout.push(spacing)
+    println("open " .. spacing)
     body()
-    Layout.pop()
+    println("close")
 end
 
 view(spacing: 10) do
     text("Hello")
-    button(label: "OK")
+    button("OK")
 end
 ```
 
@@ -130,9 +146,22 @@ That is sugar, nothing more — it produces the same call as writing the lambda
 out in full:
 
 ```saule
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
+fn view(spacing: integer, body: fn() -> nil) -> nil
+    body()
+end
+
 view(spacing: 10, fn()
     text("Hello")
-    button(label: "OK")
+    button("OK")
 end)
 ```
 
@@ -172,6 +201,19 @@ what lets it follow named arguments, even though a normal positional argument
 cannot:
 
 ```saule
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
+fn view(spacing: integer, body: fn() -> nil) -> nil
+    body()
+end
+
 view(spacing: 10) do    -- `spacing` is named, so the block fills `body`
     text("Hello")
 end
@@ -181,6 +223,15 @@ Binding to the callback slot — rather than to the next unfilled one — is wha
 makes the form work with defaults in between:
 
 ```saule
+-- Stand-ins for whatever your UI library provides.
+fn text(s: string)
+    println(s)
+end
+
+fn button(label: string)
+    println("[" .. label .. "]")
+end
+
 fn panel(title: string, spacing: integer = 0, body: fn() -> nil) -> nil
     body()
 end
@@ -199,6 +250,10 @@ function is skipped over, so a trailing `enabled: boolean` doesn't get in the
 way:
 
 ```saule
+fn showToast(message: string)
+    println(message)
+end
+
 fn menuItem(label: string, onSelected: fn() -> nil, enabled: boolean = true) -> nil
     onSelected()
 end
@@ -215,7 +270,15 @@ how supplying the callback *and* a trailing block reads as a duplicate-argument
 error:
 
 ```saule
-menuItem("Open", () => nil) do    -- error: a function where `enabled` wants a boolean
+fn showToast(message: string)
+    println(message)
+end
+
+fn menuItem(label: string, onSelected: fn() -> nil, enabled: boolean = true) -> nil
+    onSelected()
+end
+
+menuItem("Open", () => nil) do    -- ERROR: a function where `enabled` wants a boolean
     showToast("Open")
 end
 ```
@@ -226,16 +289,35 @@ end
 the loop, never to a call in the condition:
 
 ```saule
+class Queue
+    left: integer = 2
+
+    fn pop() -> boolean
+        self.left = self.left - 1
+        return self.left >= 0
+    end
+end
+
+local queue: Queue = Queue()
+
 while queue.pop() do    -- the loop's `do`, not a trailing block on `pop()`
-    ...
+    println("one item")
 end
 ```
 
 Parenthesise the call if you really want a trailing block inside a loop header:
 
 ```saule
+local ticks: integer = 0
+
+fn frame(body: fn() -> boolean) -> boolean
+    ticks = ticks + 1
+    return ticks < 3 and body()
+end
+
+-- Parenthesising re-enables the trailing block inside a loop header.
 while (frame() do return true end) do
-    ...
+    println("frame " .. ticks)
 end
 ```
 
@@ -249,6 +331,29 @@ That is the practical reason to reach for one instead of passing a table of
 values:
 
 ```saule
+class Player
+    name: string = ""
+    fn init(name: string)
+        self.name = name
+    end
+end
+
+fn row(label: string)
+    println(label)
+end
+
+fn text(s: string)
+    println(s)
+end
+
+fn panel(title: string, body: fn() -> nil) -> nil
+    body()
+end
+
+local players: table<Player> = {Player("ada"), Player("alan")}
+local debug: boolean = true
+local fps: integer = 60
+
 panel(title: "Stats") do
     for _, p in players do
         row(p.name)

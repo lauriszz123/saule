@@ -18,6 +18,7 @@ impl Compiler<'_> {
         &mut self,
         e: &Spanned<Expr>,
         params: &[saule_ast::Param],
+        return_ty: Option<&saule_ast::Type>,
         body: &saule_ast::LambdaBody,
         dst: u16,
     ) -> Result<(), CompileError> {
@@ -34,6 +35,7 @@ impl Compiler<'_> {
         // there would compile to the inner closure instead of the outer one.
         let self_fn_name = self.binding_lambda_to.take();
         self.push_function(None);
+        self.f.ret_arity = crate::compile::ctx::func::ret_arity_of(return_ty);
         self.f.self_fn_name = self_fn_name;
         let outcome = (|| -> Result<(), CompileError> {
             let label = self.func_label();

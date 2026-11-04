@@ -227,8 +227,25 @@ pub(super) fn check_stmt(
 
         Stmt::Assign { target, value } => {
             check_expr(target, scope, errors);
-            check_expr(value, scope, errors);
+            // Walked against the target's declared type, which is what gives
+            // an untyped lambda its parameter types: `x.onChanged = t => ...`
+            // takes `t` from the field's own `fn(string) -> nil`, exactly as
+            // `local f: fn(string) -> nil = t => ...` already did. Without
+            // it the parameter fell back to `any` and the body went
+            // unchecked.
+            //
+            // For a bare name that is the *declared* type rather than the
+            // narrowed one, for the same reason `check_write_to_target` uses
+            // it: the expectation belongs to the slot, not to the value
+            // about to be replaced.
+            let expected = match &target.value {
+                Expr::Ident(n) => scope.declared(n).cloned(),
+                _ => None,
+            }
+            .or_else(|| infer(target, scope));
+            check_expr_expecting(value, expected.as_ref(), scope, errors);
             check_write_to_target(target, value, scope, errors);
+            reassigned(target, value, scope);
         }
 
         Stmt::CompoundAssign { target, op, value } => {
@@ -253,6 +270,7 @@ pub(super) fn check_stmt(
             );
             check_expr(&combined, scope, errors);
             check_write_to_target(target, &combined, scope, errors);
+            reassigned(target, &combined, scope);
         }
 
         Stmt::AssignMulti { targets, values } => {
@@ -363,20 +381,28 @@ pub(super) fn check_stmt(
             }
         }
 
-        Stmt::While { cond, body } | Stmt::Repeat { body, cond } => {
+        Stmt::While { cond, body } => {
             check_expr(cond, scope, errors);
-            check_boolean_cond(
-                if matches!(stmt.value, Stmt::While { .. }) {
-                    "while"
-                } else {
-                    "until"
-                },
-                cond,
-                scope,
-                errors,
-            );
+            check_boolean_cond("while", cond, scope, errors);
+            // Reaching the body means the condition held, so the body sees
+            // whatever that proves.
             let mut body_scope = scope.clone();
             narrow_truthy(cond, &mut body_scope);
+            for s in body {
+                check_stmt(s, &mut body_scope, errors);
+            }
+        }
+
+        Stmt::Repeat { body, cond } => {
+            check_expr(cond, scope, errors);
+            check_boolean_cond("until", cond, scope, errors);
+            // **No narrowing here, unlike `while`.** A `repeat` body runs
+            // before the condition is ever evaluated, and the condition
+            // holding is what *ends* the loop rather than what enters it —
+            // so `repeat x = f() until x != nil` would otherwise narrow `x`
+            // to non-nil inside the very body that is trying to fill it, and
+            // refuse the assignment that makes the loop terminate.
+            let mut body_scope = scope.clone();
             for s in body {
                 check_stmt(s, &mut body_scope, errors);
             }
@@ -597,6 +623,25 @@ fn catch_shadows(earlier: &Type, later: &Type) -> bool {
     }
 }
 
+/// Re-set the flow type of a bare-name target after a write to it.
+///
+/// Narrowing describes the value that was in the slot; writing a new one
+/// invalidates it. What replaces it is settled by whether the written value
+/// may be nil — see [`Scope::reassign`].
+fn reassigned(target: &Spanned<Expr>, value: &Spanned<Expr>, scope: &mut Scope) {
+    let Expr::Ident(n) = &target.value else {
+        return;
+    };
+    // An un-inferable value is treated as possibly nil: it falls back to
+    // the declared type, which is always sound.
+    let may_be_nil = !matches!(
+        infer(value, scope),
+        Some(t) if !matches!(&t, Type::Nullable(_))
+            && !matches!(&t, Type::Named(n) if n == "nil")
+    );
+    scope.reassign(n, may_be_nil);
+}
+
 /// The rules that govern writing `value` into `target`, independent of how
 /// the written value was spelled.
 ///
@@ -615,8 +660,16 @@ fn check_write_to_target(
     // local's does — hence the same scope-then-module lookup order
     // `infer` uses for reads.
     if let Expr::Ident(n) = &target.value
-        && let Some(ty) = scope.lookup(n).cloned().or_else(|| crate::vars::lookup(n))
+        && let Some(ty) = scope
+            .declared(n)
+            .cloned()
+            .or_else(|| crate::vars::lookup(n))
     {
+        // `declared`, not `lookup`: a write is bound by what the name was
+        // declared as, not by what flow narrowing proved about the value
+        // being overwritten. `while x != nil do x = next() end` is the case
+        // — the narrowed `x` is non-nil, and checking the write against that
+        // refused the assignment the loop exists to make.
         check_assignment_compat(&ty, value, scope, errors);
     }
     // `t[k] = v` — enforce the table's static key/value types.

@@ -69,8 +69,15 @@ Suffixes apply left to right, which is what makes `?` read correctly beside
 one:
 
 ```saule
+class Dog
+    name: string = "rex"
+end
+
 local maybeList: Dog[]? = nil               -- a nullable array
 local maybeDogs: Dog?[] = {Dog(), nil}      -- an array of nullable Dog
+
+println(maybeList == nil)                   -- true
+println(#maybeDogs)                         -- 2
 ```
 
 There is no `[K]` form for map keys — a string-keyed table stays
@@ -84,6 +91,18 @@ either direction. Writing through the wider name would put an `Animal` into
 a table the narrower name still believes holds only `Dog`s:
 
 ```saule
+class Animal
+    fn speak() -> string
+        return "..."
+    end
+end
+
+class Dog extends Animal
+    fn fetch() -> string
+        return "ball"
+    end
+end
+
 local dogs: table<Dog> = {}
 local animals: table<Animal> = dogs    -- ERROR: table<Dog> is not table<Animal>
 Table.insert(animals, Animal())        -- ...this is why
@@ -169,15 +188,24 @@ print(#t)    -- 3
 
 ### Removing Keys
 
-Assigning `nil` does **not** delete a map entry (so JSON-style `{"x": null}` round-trips faithfully). Use `Table.remove(t, key)` to actually drop a key:
+Assigning `nil` clears a map entry's **value** but does not remove its
+**key** — so JSON-style `{"x": null}` round-trips faithfully:
 
 ```saule
-local user: table = { name: "Arthur", draft: true }
-Table.remove(user, "draft")
-print(user.draft)    -- nil
+local user: table<string, any> = {}
+user["name"] = "Arthur"
+user["draft"] = true
+
+user["draft"] = nil
+print(user["draft"] ?? "no value")   -- no value
+print(#Table.keys(user))             -- 2: the key is still there
 ```
 
-For the array part, `Table.remove(t, i)` shifts subsequent elements down (standard Lua behaviour).
+There is no function that drops a single map key. `Table.remove(t, i)` takes
+an **integer position** in the array part and shifts the elements after it
+down, which is a different operation; `Table.clear(t)` empties the whole
+table. To build a map without a key, leave it out rather than setting it and
+removing it.
 
 ### Iterating
 

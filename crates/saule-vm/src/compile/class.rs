@@ -196,6 +196,7 @@ impl Compiler<'_> {
         span: &Range<usize>,
     ) -> Result<u32, CompileError> {
         self.push_function(Some(&format!("{enum_name}.{}", m.name)));
+        self.f.ret_arity = crate::compile::ctx::func::ret_arity_of(m.return_ty.as_ref());
         self.f.in_method = true;
 
         let outcome = (|| -> Result<(), CompileError> {
@@ -233,6 +234,7 @@ impl Compiler<'_> {
         span: &Range<usize>,
     ) -> Result<u32, CompileError> {
         self.push_function(Some(&format!("{class_name}.{}", m.name)));
+        self.f.ret_arity = crate::compile::ctx::func::ret_arity_of(m.return_ty.as_ref());
         self.f.current_class = Some(class);
         self.f.in_method = has_self;
         // Only when `self` is really bound: a static method's lambdas must

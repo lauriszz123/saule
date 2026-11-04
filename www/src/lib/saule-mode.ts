@@ -19,7 +19,7 @@ import { StreamLanguage, LanguageSupport, type StringStream } from '@codemirror/
 const CONTROL = new Set([
 	'if', 'else', 'elseif', 'then', 'end', 'for', 'while', 'repeat', 'until',
 	'do', 'in', 'break', 'continue', 'return', 'throw', 'try', 'catch',
-	'match', 'case', 'when',
+	'finally', 'match', 'case', 'when',
 ]);
 
 // keyword.declaration.saule

@@ -156,3 +156,95 @@ impl Compiler<'_> {
         }
     }
 }
+
+impl Compiler<'_> {
+    /// `return` out of a `try` that has a `finally`.
+    ///
+    /// The ordinary [`Compiler::ret`] cannot be used behind
+    /// `run_pending_finallys`, because that would evaluate the returned
+    /// expression *after* the cleanup — so
+    ///
+    /// ```text
+    /// fn readPort() -> string
+    ///     local f: File = Io.open(path, IoMode.Read)!
+    ///     try
+    ///         return f.read("a") ?? ""
+    ///     finally
+    ///         f.close()
+    ///     end
+    /// end
+    /// ```
+    ///
+    /// read from a file the `finally` had already closed, and
+    /// `try return n finally n = 99 end` returned `99`. Every language with
+    /// `finally` settles the value first; this does too.
+    ///
+    /// So: evaluate into a block of registers, run the cleanup **without
+    /// freeing them** — the allocator is a bump pointer, so the cleanup's
+    /// own temporaries land above the block and cannot touch it — then
+    /// `RET` the block.
+    ///
+    /// The one thing this gives up is `RET A 0`, the "however many the
+    /// callee produced" form, which only works when the `RET` is the
+    /// instruction right after the call. A fixed count is needed instead,
+    /// and `FuncCtx::ret_arity` is it: the enclosing function's declared
+    /// return type already says how many values a `return` here produces,
+    /// so nothing is truncated that the signature did not already truncate.
+    pub(crate) fn ret_through_finallys(
+        &mut self,
+        values: &[Spanned<Expr>],
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        if values.is_empty() {
+            self.run_pending_finallys(0, span)?;
+            self.emit(Instruction::abc(Op::RET0, 0, 0, 0), span);
+            return Ok(());
+        }
+
+        let m = self.mark();
+        // `return f()` in a function declared `-> (a, b)` spreads `f`'s
+        // results across the whole block; every other shape is one value
+        // per expression, padded to the declared arity with nil.
+        let spread = values.len() == 1 && matches!(values[0].value, Expr::Call { .. });
+        let n = if spread {
+            self.f.ret_arity.max(1) as u16
+        } else {
+            values.len() as u16
+        };
+
+        let base = self.alloc_n(n, span)?;
+        if spread {
+            let Ok(want) = u8::try_from(n) else {
+                return Err(CompileError::unsupported(
+                    "returning over 254 values",
+                    span.clone(),
+                ));
+            };
+            let r = self.expr_results(&values[0], base, Want::Fixed(want))?;
+            debug_assert!(!r.terminated, "`Want::Fixed` never replaces the frame");
+            debug_assert_eq!(r.base, base, "`Want::Fixed` lands where it was asked");
+        } else {
+            for (i, v) in values.iter().enumerate() {
+                self.expr_to(v, base + i as u16)?;
+            }
+        }
+
+        // The block stays allocated across this, which is the whole point.
+        self.run_pending_finallys(0, span)?;
+
+        let a = self.reg8(base, span)?;
+        if n == 1 {
+            self.emit(Instruction::abc(Op::RET1, a, 0, 0), span);
+        } else {
+            let Ok(count) = u8::try_from(n) else {
+                return Err(CompileError::unsupported(
+                    "returning over 254 values",
+                    span.clone(),
+                ));
+            };
+            self.emit(Instruction::abc(Op::RET, a, count + 1, 0), span);
+        }
+        self.free_to(m);
+        Ok(())
+    }
+}

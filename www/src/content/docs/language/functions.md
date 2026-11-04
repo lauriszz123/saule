@@ -28,12 +28,27 @@ end
 ### Default Parameters
 
 ```saule
+class Player
+    name: string = ""
+    health: integer = 0
+    score: integer = 0
+
+    fn init(name: string, health: integer, score: integer)
+        self.name = name
+        self.health = health
+        self.score = score
+    end
+end
+
 fn createPlayer(name: string, health: integer = 100, score: integer = 0) -> Player
     return Player(name, health, score)
 end
 
-local p: Player = createPlayer("Arthur")         -- health=100, score=0
-local p: Player = createPlayer("Arthur", 50)     -- health=50, score=0
+local a: Player = createPlayer("Arthur")         -- health=100, score=0
+local b: Player = createPlayer("Arthur", 50)     -- health=50
+
+println(a.health)                                -- 100
+println(b.health)                                -- 50, score=0
 ```
 
 ### Named Parameters
@@ -165,6 +180,20 @@ end
 Classes, interfaces and enums take bounds on their own parameters too, and a method's bound nests inside its class's:
 
 ```saule
+interface Named
+    fn name() -> string
+end
+
+class Person implements Named
+    local who: string
+    fn init(who: string)
+        self.who = who
+    end
+    fn name() -> string
+        return self.who
+    end
+end
+
 class Registry<T: Named>
     items: table<T> = {}
 
@@ -184,17 +213,36 @@ Two rules worth knowing. A parameter may be handed to another bounded parameter 
 The `when(...)` keyword starts a **colon-based pipeline** ("Saule style"). It wraps a value, and every subsequent `:func(args)` calls `func` with the upstream value threaded in as the **first argument**:
 
 ```saule
+fn pipe(s: string) -> string
+    return s .. "world"
+end
+
 local result: string = when("Hello, "):pipe()
 -- equivalent to:  pipe("Hello, ")
+println(result)                 -- Hello, world
 ```
 
 Each stage feeds its result into the next, so a chain reads top-to-bottom even though every step is an ordinary free-function call:
 
 ```saule
+fn filter<T>(items: table<T>, keep: fn(T) -> boolean) -> table<T>
+    return Iter.filter(items, keep)
+end
+
+fn map<T>(items: table<T>, f: fn(T) -> T) -> table<T>
+    return Iter.map(items, f)
+end
+
+fn length_of<T>(items: table<T>) -> integer
+    return #items
+end
+
 local size: integer = when({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
     :filter<integer>(x => x % 2 == 0)
     :map(x => x * x)
     :length_of()
+
+println(size)                   -- 5
 ```
 
 That's exactly the same as `length_of(map(filter<integer>({...}, x => x % 2 == 0), x => x * x))` — just easier to read.
@@ -204,12 +252,15 @@ That's exactly the same as `length_of(map(filter<integer>({...}, x => x % 2 == 0
 The type of the upstream value must match the **first parameter** of the next stage, otherwise the typechecker rejects the chain at compile time:
 
 ```saule
-fn to_str(n: integer) -> string ... end
-fn square(n: integer) -> integer ... end
+fn to_str(n: integer) -> string
+    return tostring(n)
+end
 
-local err = when(5):to_str():square()
--- COMPILE ERROR: pipeline stage `square` expects `integer` as first
---                argument, got `string`
+fn square(n: integer) -> integer
+    return n * n
+end
+
+local err = when(5):to_str():square()   -- ERROR: stage `square` expects `integer`, got `string`
 ```
 
 Rules:

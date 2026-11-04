@@ -20,18 +20,61 @@ pub(super) use saule_semantic::{
 };
 
 /// Tracks the static types of `local` bindings in lexical scope.
+///
+/// Two maps, because flow narrowing and declaration answer different
+/// questions. `vars` is what a *read* of the name yields here, which an
+/// `if x != nil` may have sharpened; `declared` is the type the binding was
+/// written with, which nothing sharpens. A **write** has to be checked
+/// against the declared type: `while x != nil do x = next() end` narrows
+/// `x` to non-nil for the body, and checking the assignment against *that*
+/// refused the very line that advances the loop.
 #[derive(Default, Clone)]
 pub(super) struct Scope {
     vars: HashMap<String, Type>,
+    declared: HashMap<String, Type>,
 }
 
 impl Scope {
+    /// The type a read of `name` yields here — narrowed, if flow proved
+    /// something.
     pub(super) fn lookup(&self, name: &str) -> Option<&Type> {
         self.vars.get(name)
     }
 
+    /// The type `name` was declared with. What a write must satisfy.
+    pub(super) fn declared(&self, name: &str) -> Option<&Type> {
+        self.declared.get(name)
+    }
+
+    /// Introduce a binding: both its declared type and its current one.
     pub(super) fn bind(&mut self, name: String, ty: Type) {
+        self.declared.insert(name.clone(), ty.clone());
         self.vars.insert(name, ty);
+    }
+
+    /// Sharpen what a read of `name` yields, leaving its declared type
+    /// alone. Flow narrowing only — see [`crate::expr::narrow`].
+    pub(super) fn narrow(&mut self, name: String, ty: Type) {
+        self.vars.insert(name, ty);
+    }
+
+    /// Re-set `name`'s flow type after a write to it.
+    ///
+    /// A narrowing is a fact about the value that *was* there, and a write
+    /// replaces it. Nullability is the only thing narrowing tracks, so the
+    /// new flow type is the declared one when the written value may be nil,
+    /// and the declared type's non-null inner type when it provably is not —
+    /// which is what keeps `if s != nil then s = s .. "!" end` readable
+    /// after the assignment.
+    pub(super) fn reassign(&mut self, name: &str, value_may_be_nil: bool) {
+        let Some(decl) = self.declared.get(name).cloned() else {
+            return;
+        };
+        let now = match (&decl, value_may_be_nil) {
+            (Type::Nullable(inner), false) => (**inner).clone(),
+            _ => decl,
+        };
+        self.vars.insert(name.to_string(), now);
     }
 }
 

@@ -396,10 +396,15 @@ fn a_cast_and_an_index_read_their_operands_in_place() {
     // `sort`'s comparator, `(a as integer)! < (b as integer)!` on untyped
     // lambda parameters: 46% of that benchmark is `CASTCHK` + `UNWRAPNIL`,
     // and every one of them was preceded by a `MOVE`.
+    // `table<any>`, so the comparator's parameters really are `any` and the
+    // casts are doing work. Written as `table<integer>` this produced the
+    // same code back when a lambda handed to a native got no expected type
+    // and its parameters fell back to `any` whatever the receiver held. Now
+    // that they infer, that source is a redundant cast and is rejected.
     let l = listing(
-        "local t: table<integer> = {3, 1, 2}\n\
+        "local t: table<any> = {3, 1, 2}\n\
          Table.sort(t, (a, b) => (a as integer)! < (b as integer)!)\n\
-         t[1] .. \",\" .. t[3]",
+         tostring((t[1] as integer) ?? 0) .. \",\" .. tostring((t[3] as integer) ?? 0)",
     );
     let body = proto(&l, "<lambda>");
     assert!(
@@ -407,9 +412,9 @@ fn a_cast_and_an_index_read_their_operands_in_place() {
         "the comparator still copies its parameters:{NL}{body}"
     );
     must_agree(
-        "local t: table<integer> = {3, 1, 2}\n\
+        "local t: table<any> = {3, 1, 2}\n\
          Table.sort(t, (a, b) => (a as integer)! < (b as integer)!)\n\
-         t[1] .. \",\" .. t[3]",
+         tostring((t[1] as integer) ?? 0) .. \",\" .. tostring((t[3] as integer) ?? 0)",
     );
 }
 
@@ -422,9 +427,9 @@ fn a_cast_that_is_immediately_unwrapped_becomes_one_instruction() {
     // `CASTCHK UNWRAPNIL` as an adjacent pair 6,665,964 times in
     // `benchmarks/sau/sort.sau` — 46% of the program between the two halves.
     let l = listing(
-        "local t: table<integer> = {3, 1, 2}\n\
+        "local t: table<any> = {3, 1, 2}\n\
          Table.sort(t, (a, b) => (a as integer)! < (b as integer)!)\n\
-         t[1] .. \",\" .. t[3]",
+         tostring((t[1] as integer) ?? 0) .. \",\" .. tostring((t[3] as integer) ?? 0)",
     );
     let body = proto(&l, "<lambda>");
     assert!(

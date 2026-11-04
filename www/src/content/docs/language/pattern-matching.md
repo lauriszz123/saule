@@ -14,11 +14,21 @@ sidebar:
 ### Basic Match
 
 ```saule
+enum Status
+    Ok
+    Warn
+    Error
+end
+
+local status: Status = Status.Warn
+
 local label: string = match status
     case Status.Ok then "fine"
     case Status.Warn then "watch out"
     case Status.Error then "oops"
 end
+
+println(label)                  -- watch out
 ```
 
 Each arm is `case <pattern> then <expression-or-block>`. The block runs until the next `case` or the closing `end`.
@@ -48,9 +58,28 @@ end
 `match` is the cleanest way to consume a `T?` — `nil` is just another pattern:
 
 ```saule
+class User
+    name: string = ""
+    fn init(name: string)
+        self.name = name
+    end
+end
+
+class Repo
+    fn findById(id: integer) -> User?
+        if id == 1 then
+            return User("Ada")
+        end
+        return nil
+    end
+end
+
+local repo: Repo = Repo()
+local id: integer = 1
+
 match repo.findById(id)
     case nil then println("not found")
-    case user then println("hi " .. user.name)
+    case user then println("hi " .. user.name)    -- hi Ada
 end
 ```
 
@@ -61,14 +90,20 @@ The bare name `user` here is a **binding pattern**: it captures the non-nil valu
 Use `_` to ignore a value and any identifier to bind it:
 
 ```saule
+local n: integer = 7
+
 match n
     case 0 then println("zero")
     case 1 then println("one")
-    case other then println("something else: " .. other)
+    case other then println("something else: " .. other)   -- something else: 7
 end
 
-match pair
-    case (0, _) then println("x is zero")
+fn pair() -> (integer, integer)
+    return 0, 5
+end
+
+match pair()
+    case (0, _) then println("x is zero")      -- x is zero
     case (_, 0) then println("y is zero")
     case _ then println("neither")
 end
@@ -81,10 +116,12 @@ A pattern that starts with a lowercase identifier (and isn't an enum variant) bi
 Add a condition that must also hold for the arm to fire:
 
 ```saule
+local n: integer = 5
+
 match n
     case x when x < 0 then println("negative")
     case 0 then println("zero")
-    case x then println("positive " .. x)
+    case x then println("positive " .. x)      -- positive 5
 end
 ```
 
@@ -95,9 +132,15 @@ Guards are evaluated **after** the pattern matches. If the guard is false, match
 Numbers, strings, booleans, and `nil` are all valid patterns:
 
 ```saule
+fn showHelp()
+    println("help")
+end
+
+local command: string = "help"
+
 match command
-    case "quit" then exit()
-    case "help" then showHelp()
+    case "quit" then println("bye")
+    case "help" then showHelp()                -- help
     case other then println("unknown: " .. other)
 end
 ```
@@ -111,9 +154,12 @@ fn divmod(a: integer, b: integer) -> (integer, integer)
     return a / b, a % b
 end
 
+local a: integer = 17
+local b: integer = 5
+
 match divmod(a, b)
     case (q, 0) then println("clean: " .. q)
-    case (q, r) then println(q .. " rem " .. r)
+    case (q, r) then println(q .. " rem " .. r)   -- 3 rem 2
 end
 ```
 
@@ -126,8 +172,9 @@ enum Color
     Red, Green, Blue
 end
 
--- ❌ compile error: non-exhaustive match, missing case `Color.Blue`
-local name: string = match c
+local c: Color = Color.Red
+
+local name: string = match c   -- ERROR: non-exhaustive, missing `Color.Blue`
     case Color.Red then "red"
     case Color.Green then "green"
 end
@@ -140,6 +187,12 @@ Add the missing variant or a wildcard arm to fix it. For nullables, both `nil` a
 Because `match` produces a value, it composes naturally with `local`, `return`, and arguments:
 
 ```saule
+enum Tier
+    Free
+    Pro
+    Enterprise
+end
+
 fn priceFor(tier: Tier) -> integer
     return match tier
         case Tier.Free then 0
@@ -147,6 +200,8 @@ fn priceFor(tier: Tier) -> integer
         case Tier.Enterprise then 99
     end
 end
+
+println(priceFor(Tier.Pro))     -- 9
 ```
 
 If used as a statement, the result is simply discarded — same rule as any other expression.

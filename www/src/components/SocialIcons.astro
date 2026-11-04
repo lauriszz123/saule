@@ -1,0 +1,63 @@
+---
+/**
+ * The header's right-hand cluster: a Docs button ahead of Starlight's own
+ * social icons.
+ *
+ * This slot rather than a new one because it is the only part of the header
+ * Starlight lets a site add to without rebuilding the header itself, and the
+ * button belongs beside the GitHub link rather than in the nav — it is a
+ * destination, not a page in the current section.
+ */
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const href = `${base}/docs/`;
+// Highlighted while anywhere under the docs tree, which is every page that is
+// not the home page or the playground.
+const path = Astro.url.pathname;
+const current = path.startsWith(`${base}/docs`);
+---
+
+<a class="saule-docs-link" href={href} aria-current={current ? 'page' : undefined}>Docs</a>
+<Default {...Astro.props}><slot /></Default>
+
+<style>
+	.saule-docs-link {
+		display: inline-flex;
+		align-items: center;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 999px;
+		padding: 0.3rem 0.9rem;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		line-height: 1;
+		text-decoration: none;
+		white-space: nowrap;
+		color: var(--sl-color-white);
+		background-color: transparent;
+		transition:
+			background-color var(--saule-mid, 200ms) var(--saule-ease, ease-out),
+			border-color var(--saule-mid, 200ms) var(--saule-ease, ease-out),
+			color var(--saule-mid, 200ms) var(--saule-ease, ease-out);
+	}
+
+	.saule-docs-link:hover,
+	.saule-docs-link:focus-visible {
+		border-color: var(--sl-color-accent);
+		background-color: var(--sl-color-accent);
+		color: var(--sl-color-black);
+	}
+
+	.saule-docs-link[aria-current='page'] {
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-accent-high);
+	}
+
+	/* The header is tight on small screens, where the sidebar already leads
+	   with the same sections. */
+	@media (max-width: 50rem) {
+		.saule-docs-link {
+			display: none;
+		}
+	}
+</style>
