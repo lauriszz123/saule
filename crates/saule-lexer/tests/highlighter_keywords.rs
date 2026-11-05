@@ -8,11 +8,20 @@
 //! neither highlighter, so a `try`/`catch`/`finally` block rendered with the
 //! `finally` as plain text in every published example.
 //!
-//! This is the check that comment wanted to be. It reads the keyword table
-//! out of the lexer's own source rather than importing it, because the table
-//! is a `match` arm rather than a value — which is also what keeps this test
-//! honest: it fails if a keyword is added to the lexer and nowhere else.
+//! This is the check that comment wanted to be.
+//!
+//! It used to read the keyword table out of the lexer's own source, because
+//! the table was a `match` arm rather than a value. It is now
+//! [`saule_lexer::KEYWORDS`], expanded from the same macro as the lookup, so
+//! this imports it instead — a scrape that silently matched nothing would let
+//! every check below pass forever, and that is exactly what happened when the
+//! table moved.
+//!
+//! What still cannot be checked from here: each of the three editor plugins
+//! keeps its own copy of this list in its own repository. The failure message
+//! names them.
 
+use saule_lexer::{KEYWORDS, Lexer, Token};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -25,20 +34,9 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every `"word" => Token::…` arm in `ident_or_keyword`.
+/// The reserved words, straight from the lexer.
 fn lexer_keywords() -> BTreeSet<String> {
-    let src = include_str!("../src/lib.rs");
-    src.lines()
-        .filter_map(|l| {
-            let l = l.trim();
-            let rest = l.strip_prefix('"')?;
-            let (word, tail) = rest.split_once('"')?;
-            tail.trim_start().strip_prefix("=> Token::")?;
-            word.chars()
-                .all(|c| c.is_ascii_lowercase() || c == '_')
-                .then(|| word.to_string())
-        })
-        .collect()
+    KEYWORDS.iter().map(|k| (*k).to_string()).collect()
 }
 
 /// Every bare word inside a `\b(a|b|c)\b` alternation in the grammar.
@@ -106,7 +104,11 @@ fn the_textmate_grammar_knows_every_keyword() {
         .collect();
     assert!(
         missing.is_empty(),
-        "grammar/saule.tmLanguage.json does not highlight: {missing:?}"
+        "grammar/saule.tmLanguage.json does not highlight: {missing:?}\n\
+         Each editor plugin keeps its own copy, in its own repository:\n\
+         \x20 saule-vscode   syntaxes/saule.tmLanguage.json\n\
+         \x20 saule-intellij src/main/kotlin/com/saule/lang/lexer/SauleTokenTypes.kt\n\
+         \x20 saule-nvim     syntax/saule.vim"
     );
 }
 
@@ -123,16 +125,54 @@ fn the_playground_editor_knows_every_keyword() {
 }
 
 #[test]
-fn the_keyword_table_was_actually_found() {
-    // A parser that silently matched nothing would make both tests above
-    // pass forever.
-    let keywords = lexer_keywords();
+fn the_keyword_list_is_not_empty_or_malformed() {
+    // An empty list would make both tests above pass forever.
     assert!(
-        keywords.len() > 30,
-        "only {} keywords parsed out of the lexer — the table moved",
-        keywords.len()
+        KEYWORDS.len() > 30,
+        "only {} keywords in KEYWORDS — did the macro lose its body?",
+        KEYWORDS.len()
     );
     for expected in ["class", "finally", "match", "when"] {
-        assert!(keywords.contains(expected), "`{expected}` was not parsed");
+        assert!(KEYWORDS.contains(&expected), "`{expected}` is missing");
+    }
+    let unique: BTreeSet<&&str> = KEYWORDS.iter().collect();
+    assert_eq!(unique.len(), KEYWORDS.len(), "KEYWORDS has a duplicate");
+    for word in KEYWORDS {
+        assert!(
+            !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "`{word}` is not a plausible keyword"
+        );
+    }
+}
+
+/// Each reserved word lexes as one, and both token helpers agree it is one.
+///
+/// The highlighters are not the only consumers of "is this a keyword".
+/// [`Token::is_keyword`] decides whether a name collision is reported as
+/// "`x` is a reserved word — choose another name" rather than a bare parse
+/// error, and whether the word is accepted as a member name after a dot. A
+/// keyword added to the table but not to that list is reserved by the parser
+/// and invisible to everything that asks a token what it is — which is the
+/// state `finally` was in, and what this test exists to catch.
+#[test]
+fn the_token_helpers_know_every_keyword() {
+    for word in KEYWORDS {
+        let lexed = Lexer::new(word).tokenize().expect("a keyword lexes");
+        // `tokenize` appends `Eof`.
+        assert_eq!(lexed.len(), 2, "`{word}` did not lex to a single token");
+        let tok = &lexed[0].value;
+        assert!(
+            !matches!(tok, Token::Identifier(_)),
+            "`{word}` lexed as an identifier"
+        );
+        assert!(
+            tok.is_keyword(),
+            "`{word}` is reserved but `Token::is_keyword` says no — add it there"
+        );
+        assert_eq!(
+            tok.lexeme(),
+            Some(*word),
+            "`{word}` is reserved but `Token::lexeme` spells it differently"
+        );
     }
 }
