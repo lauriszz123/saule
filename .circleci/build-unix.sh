@@ -78,7 +78,9 @@ name="saule-$SAULE_VERSION-$TRIPLE"
 staging="dist/$name"
 mkdir -p "$staging"
 cp "target/$TRIPLE/release/saule" "target/$TRIPLE/release/saule-lsp" "$staging/"
-cp README.md "$staging/"
+# README.md is the front door; LANGUAGE.md and DOCS.md are the guide and the
+# standard library reference, so an offline archive carries the whole manual.
+cp README.md LANGUAGE.md DOCS.md "$staging/"
 # Written as an `if` rather than `[ -f LICENSE ] && cp …`: under `set -e` a
 # failing `&&` chain in tail position aborts the script, so the terse spelling
 # would break every build until LICENSE exists.

@@ -2,21 +2,25 @@
 /**
  * Split the repo's long-form Markdown into Starlight pages.
  *
- * README.md (~1600 lines) and DOCS.md are the canonical prose for the
- * language and its standard library. Rather than fork them into the website
- * — where the copy would rot the first time a feature lands — this script
- * slices them on `##` boundaries into one page per section and rewrites the
- * cross-references.
+ * LANGUAGE.md and DOCS.md are the canonical prose for the language and its
+ * standard library. Rather than fork them into the website — where the copy
+ * would rot the first time a feature lands — this script slices them on `##`
+ * boundaries into one page per section and rewrites the cross-references.
  *
- * The hard part is links. Inside a single README, `[classes](#classes)` is an
- * in-page anchor; once `## Classes` becomes its own route, that anchor has to
- * become `/saule/language/classes/`. So the script first indexes *every*
+ * README.md is deliberately *not* a source here: it is the repository's front
+ * door, a short page of install-and-orient that links to both of these. The
+ * language guide used to live in it, which made the front door 3,900 lines
+ * long.
+ *
+ * The hard part is links. Inside a single document, `[classes](#classes)` is
+ * an in-page anchor; once `## Classes` becomes its own route, that anchor has
+ * to become `/saule/language/classes/`. So the script first indexes *every*
  * heading in both files (h2 and h3, since some links target h3s like
  * `#escaping-any-with-as`), then rewrites each `](#...)` against that index.
  *
  * Run it with `npm run sync-docs` from `www/`. Output goes to
  * `src/content/docs/{language,stdlib,reference}` and is overwritten wholesale
- * — never hand-edit those files; edit README.md/DOCS.md instead.
+ * — never hand-edit those files; edit LANGUAGE.md/DOCS.md instead.
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +33,7 @@ const docsRoot = join(here, '..', 'src', 'content', 'docs');
 
 /**
  * GitHub's heading-slug algorithm, which is what the existing `](#...)`
- * links in README.md were written against. Lowercase, strip anything that
+ * links in LANGUAGE.md were written against. Lowercase, strip anything that
  * isn't a word character/space/hyphen, spaces to hyphens. Backticks and
  * parens vanish, which is why `### Folder Modules (\`init.sau\`)` is linked
  * as `#folder-modules-initsau`.
@@ -193,7 +197,13 @@ function buildAnchorIndex(plans) {
  *   `](#classes)`               → `](/saule/language/classes/)`
  *   `](./DOCS.md#table)`        → `](/saule/stdlib/table/)`
  *   `](./DOCS.md)`              → `](/saule/stdlib/prelude/)`
- *   `](./README.md#...)`        → the matching language page
+ *   `](./LANGUAGE.md#...)`      → the matching language page
+ *
+ * Both `./` and `../` prefixes are accepted. DOCS.md's own prose reaches the
+ * language guide as `../LANGUAGE.md#...` in places, and when only `./` was
+ * matched those links were left verbatim in the generated page — a relative
+ * path to a repository file, which is a 404 on the site.
+ *
  * Anything unresolved is reported so a broken link surfaces at sync time
  * rather than as a 404 in production.
  */
@@ -206,15 +216,19 @@ function rewriteLinks(body, index, { file, section }) {
 		return target;
 	};
 
-	let out = body.replace(/\]\((\.\/(?:README|DOCS)\.md)?#([^)\s]+)\)/g, (match, _doc, anchor) => {
-		const target = resolve(anchor);
-		return target ? `](${target})` : match;
-	});
+	let out = body.replace(
+		/\]\((\.{1,2}\/(?:LANGUAGE|DOCS)\.md)?#([^)\s]+)\)/g,
+		(match, _doc, anchor) => {
+			const target = resolve(anchor);
+			return target ? `](${target})` : match;
+		},
+	);
 
 	// Bare document links, with no fragment, land on each doc's first page.
 	out = out
-		.replace(/\]\(\.\/DOCS\.md\)/g, `](${withBase('/stdlib/prelude/')})`)
-		.replace(/\]\(\.\/README\.md\)/g, `](${withBase('/guides/introduction/')})`);
+		.replace(/\]\(\.{1,2}\/DOCS\.md\)/g, `](${withBase('/stdlib/prelude/')})`)
+		.replace(/\]\(\.{1,2}\/LANGUAGE\.md\)/g, `](${withBase('/guides/introduction/')})`)
+		.replace(/\]\(\.{1,2}\/README\.md\)/g, `](${withBase('/guides/introduction/')})`);
 
 	for (const anchor of unresolved) {
 		console.warn(`  ! ${file} › ${section}: unresolved link target #${anchor}`);
@@ -236,7 +250,7 @@ const REROUTE = new Map([
 	['Grammar', { dir: 'reference', fileSlug: 'grammar' }],
 ]);
 
-/** Explicit sidebar ordering — teaching order, not the order of the README. */
+/** Explicit sidebar ordering — teaching order, not the order of the guide. */
 const ORDER = {
 	language: [
 		'types',
@@ -272,7 +286,7 @@ const ORDER = {
 /**
  * Turn ```luau fences back into ```saule.
  *
- * README.md and DOCS.md are read on GitHub first, and GitHub highlights a
+ * LANGUAGE.md and DOCS.md are read on GitHub first, and GitHub highlights a
  * fence only when Linguist knows the language — it has no Saule entry, so
  * ```saule renders as flat grey text there. The sources therefore tag their
  * blocks `luau`, the nearest language Linguist *does* know (Lua plus `:`
@@ -596,8 +610,9 @@ function write(plans, index) {
 			const dir = join(docsRoot, section.dir);
 			mkdirSync(dir, { recursive: true });
 			// Plain `.md`, not `.mdx`: this content is lifted verbatim from a
-			// README, so a stray `{` or `<` in future prose would be parsed as
-			// JSX and fail the build. Nothing here needs components.
+			// hand-written Markdown source, so a stray `{` or `<` in future
+			// prose would be parsed as JSX and fail the build. Nothing here
+			// needs components.
 			writeFileSync(join(dir, `${section.fileSlug}.md`), `${frontmatter}\n${body}\n`, 'utf8');
 			console.log(`  → ${section.dir}/${section.fileSlug}.md  (${title})`);
 		}
@@ -818,13 +833,13 @@ function writeExamples() {
 console.log('Syncing repo Markdown into Starlight pages…');
 
 // Generated directories are rebuilt from scratch every run, so a section
-// renamed in the README doesn't leave a stale orphan page behind.
+// renamed in the guide doesn't leave a stale orphan page behind.
 for (const dir of ['language', 'stdlib']) {
 	rmSync(join(docsRoot, dir), { recursive: true, force: true });
 }
 
 const plans = [
-	planDocument({ file: 'README.md', dir: 'language', sourcePath: join(repoRoot, 'README.md') }),
+	planDocument({ file: 'LANGUAGE.md', dir: 'language', sourcePath: join(repoRoot, 'LANGUAGE.md') }),
 	planDocument({ file: 'DOCS.md', dir: 'stdlib', sourcePath: join(repoRoot, 'DOCS.md') }),
 ];
 

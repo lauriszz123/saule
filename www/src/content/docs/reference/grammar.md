@@ -3,7 +3,7 @@ title: "Grammar"
 description: "The complete syntax of Saule, in the notation the Lua reference manual uses: {a} means zero or more a, [a] means an optional a, | separates…"
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 The complete syntax of Saule, in the notation the Lua reference manual uses:
 `{a}` means zero or more `a`, `[a]` means an optional `a`, `|` separates

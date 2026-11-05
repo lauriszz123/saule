@@ -44,7 +44,7 @@ Indices are **1-based**, as everywhere else in Saule.
 
 
 Builds a buffer from byte values. The arguments are typed
-[`byte`](../README.md#the-byte-type), so a literal outside `0..=255` is a
+[`byte`](/saule/language/types/#the-byte-type), so a literal outside `0..=255` is a
 **compile** error rather than a runtime surprise, and a computed value has to
 narrow with `as byte` first.
 
@@ -196,7 +196,7 @@ println(Bytes.len(Bytes.empty()))   -- 0
 
 
 The byte at `i`, or `nil` when `i` is outside the buffer. The result is a
-[`byte`](../README.md#the-byte-type), which is in `0..=255` by construction
+[`byte`](/saule/language/types/#the-byte-type), which is in `0..=255` by construction
 and widens to `integer` for free.
 
 ```saule

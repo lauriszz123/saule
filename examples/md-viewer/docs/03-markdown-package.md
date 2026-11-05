@@ -495,7 +495,7 @@ code. An unrecognised entity is left alone.
 ## The barrel
 
 `src/init.sau` is the package's public surface —
-[folder-module rules](../../../README.md#folder-modules-initsau) apply, and
+[folder-module rules](../../../LANGUAGE.md#folder-modules-initsau) apply, and
 re-export only happens in an `init.sau`:
 
 ```saule

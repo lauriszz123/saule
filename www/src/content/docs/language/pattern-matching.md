@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 `match` selects one of several branches by structurally inspecting a value. Unlike a C-style `switch`, every arm is independent (no fall-through), patterns can **bind** parts of the value, and the typechecker requires the arms to be **exhaustive** — so a forgotten enum variant or unhandled `nil` is a compile error, not a production incident.
 

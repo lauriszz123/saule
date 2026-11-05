@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 Saule has 10 primitive types, inherited from Lua's type system but statically declared. Lua's single `number` type is split into two distinct types in Saule, and Lua's single `string` type is likewise split into text and bytes:
 

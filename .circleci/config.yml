@@ -426,8 +426,8 @@ jobs:
   #   1. Every Saule sample the website shows by hand actually compiles and
   #      runs — checked against the real compiler built from this commit.
   #   2. The generated pages under www/src/content/docs are in sync with the
-  #      README.md / DOCS.md / examples they come from, so a committed page can
-  #      never contradict its source.
+  #      LANGUAGE.md / DOCS.md / examples they come from, so a committed page
+  #      can never contradict its source.
   check-www:
     executor: rust-linux
     steps:
@@ -487,7 +487,7 @@ jobs:
             npm run check-samples
             npm run sync-docs
             # `git status --porcelain`, not `git diff`: a new `##` section in
-            # the README generates a page that does not exist yet, and an
+            # the guide generates a page that does not exist yet, and an
             # *untracked* file is invisible to `git diff`. That would let a new
             # documentation page pass CI and then be missing from the repo.
             changed="$(git status --porcelain -- src/content/docs)"
@@ -687,7 +687,8 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       # The same checkout as `test-windows`, so the archive is built from the
-      # bytes that were tested — README.md included, which ships in it.
+      # bytes that were tested — the Markdown manual included, which ships
+      # in it.
       - checkout-windows
       - attach_workspace:
           at: .
@@ -726,7 +727,8 @@ jobs:
             $staging = "dist/$name"
             New-Item -ItemType Directory -Force -Path $staging | Out-Null
             Copy-Item "target/$env:TRIPLE/release/saule.exe","target/$env:TRIPLE/release/saule-lsp.exe" $staging
-            Copy-Item README.md $staging
+            # Matches build-unix.sh: front door, language guide, stdlib reference.
+            Copy-Item README.md,LANGUAGE.md,DOCS.md $staging
             if (Test-Path LICENSE) {
               Copy-Item LICENSE $staging
             } else {

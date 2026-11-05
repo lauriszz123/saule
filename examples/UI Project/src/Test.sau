@@ -48,14 +48,10 @@ export class PanelView extends View
         "Tab moves focus and Enter presses. Ctrl+S saves, Esc unfocuses. " .. "In the field: shift+arrows select, Ctrl+A/C/X/V work, and " .. "clicking or dragging moves the caret. This paragraph wraps " .. "itself to whatever width the panel happens to be."
       ).foregroundStyle(Colors.textMuted)
 
-      TextField(
-        placeholder: "Your name",
-        autofocus: true,
-        onChanged: fn(text: string)
-          scratch.name = text
-          context.markNeedsBuild()
-        end
-      ) do (text: string)
+      TextField(placeholder: "Your name", autofocus: true, onChanged: fn(text: string)
+        scratch.name = text
+        context.markNeedsBuild()
+      end) do (text: string)
         println("submitted: " .. text)
       end
 
@@ -74,16 +70,13 @@ export class PanelView extends View
 
     -- Read bottom-up, the chain is the tree: pad the stack, put a rounded
     -- surface behind it, then hold the whole thing off the window edge.
-    return KeyboardListener(
-      onKeyDown: fn(event: KeyEvent)
-        return self.shortcut(context, event)
-      end,
-      child: panel.padding(20.0).background(
-        Colors.surfaceLight,
-        radius: 10.0,
-        border: Colors.border
-      ).padding(24.0)
-    )
+    return KeyboardListener(onKeyDown: fn(event: KeyEvent)
+      return self.shortcut(context, event)
+    end, child: panel.padding(20.0).background(
+      Colors.surfaceLight,
+      radius: 10.0,
+      border: Colors.border
+    ).padding(24.0))
   end
 
   -- Screen-level keys. Returning false lets anything else keep bubbling.
@@ -217,14 +210,10 @@ export class PanelView extends View
 
     -- `onChanged` is passed by name, which frees the trailing block for the
     -- panes — that is the whole trailing-block rule in one call.
-    return TabView(
-      tabs: {"List", "Canvas", "Notes"},
-      index: tab,
-      onChanged: fn(next: integer)
-        scratch.tab = next
-        context.markNeedsBuild()
-      end
-    ) do
+    return TabView(tabs: {"List", "Canvas", "Notes"}, index: tab, onChanged: fn(next: integer)
+      scratch.tab = next
+      context.markNeedsBuild()
+    end) do
       self.rows(context).padding(insets: gap)
 
       BouncingBall().clipped().background(Colors.surface, radius: 8.0).padding(insets: gap)
@@ -270,22 +259,17 @@ export class PanelView extends View
         -- near the top of the panel instead of under the cursor.
         local at: Offset = pointerPosition()
 
-        showMenu(
-          context,
-          at.dx,
-          at.dy,
-          items: {
-            MenuItem("Open", fn()
-              showToast(context, "Open")
-            end),
-            MenuItem("Rename", enabled: true) do
-              showToast(context, "Rename")
-            end,
-            MenuItem("Delete") do
-              showToast(context, "Delete")
-            end,
-          }
-        )
+        showMenu(context, at.dx, at.dy, items: {
+          MenuItem("Open", fn()
+            showToast(context, "Open")
+          end),
+          MenuItem("Rename", enabled: true) do
+            showToast(context, "Rename")
+          end,
+          MenuItem("Delete") do
+            showToast(context, "Delete")
+          end,
+        })
       end
     )
   end
@@ -319,20 +303,15 @@ export class PanelView extends View
     -- cursor on a scaled display; `pointerPosition` converts.
     local at: Offset = pointerPosition()
 
-    showMenu(
-      context,
-      at.dx,
-      at.dy,
-      items: {
-        MenuItem("Duplicate") do
-          println("duplicate")
-        end,
-        MenuItem("Export") do
-          println("export")
-        end,
-        MenuItem("Unavailable", enabled: false),
-      }
-    )
+    showMenu(context, at.dx, at.dy, items: {
+      MenuItem("Duplicate") do
+        println("duplicate")
+      end,
+      MenuItem("Export") do
+        println("export")
+      end,
+      MenuItem("Unavailable", enabled: false),
+    })
   end
 
   -- A modal: focus moves inside it, Tab cannot leave, Esc or the barrier

@@ -31,7 +31,7 @@ A handful of patterns repeat across the stdlib:
   and answers in kind, but one call may not take both.
 - **No exceptions for "expected" failures.** Filesystem helpers return
   `boolean` rather than throwing. Use `throw` / `try` / `catch` for genuinely
-  exceptional cases — see [README §Error Handling](/saule/language/error-handling/).
+  exceptional cases — see [Language guide §Error Handling](/saule/language/error-handling/).
   The exception is `Os.list`, which throws; see
   [Failure conventions](/saule/stdlib/os/#failure-conventions).
 - **Mutate with `Table`, transform with `Iter`.** `Table.*` writes to the
@@ -43,4 +43,4 @@ A handful of patterns repeat across the stdlib:
 Anything not in this reference is not in the toolchain. Libraries — JSON among
 them — ship as ordinary Saule packages: a git repo with a `saule.config`,
 added to `dependencies:`. See
-[README §Importing from a Dependency](/saule/language/imports-and-file-structure/#importing-from-a-dependency).
+[Language guide §Importing from a Dependency](/saule/language/imports-and-file-structure/#importing-from-a-dependency).

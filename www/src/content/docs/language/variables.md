@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 Saule follows Lua's scoping model with one deliberate departure: `local` makes a binding **lexically scoped** (visible only inside the block / function / file where it was declared), and there are no implicit globals — assigning to a name that was never declared is an error, not a new binding. To publish a name beyond its file, declare it with `export`. The type annotation is optional in either form — when omitted, the type is inferred from the initializer.
 

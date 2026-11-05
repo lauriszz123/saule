@@ -5,8 +5,9 @@ This is the reference for everything Saule ships out of the box — the prelude
 `Math`, `Table`, `Iter`, `Io` / `File`, `Os`, `Saule`, `Project`). Every one of
 them is in scope with no `import`.
 
-For language syntax see [README.md](./README.md). For the runtime side of
-errors / pattern matching / generics see the corresponding README sections.
+For language syntax see [LANGUAGE.md](./LANGUAGE.md). For the runtime side of
+errors / pattern matching / generics see the corresponding sections of that
+guide.
 
 > All function and method signatures are written in Saule's own type notation.
 > `T?` is nullable, `(A, B)` is a multi-return tuple, `...T` is variadic, and
@@ -15,7 +16,7 @@ errors / pattern matching / generics see the corresponding README sections.
 <!--
   Code fences say `luau`, not `saule`: GitHub's Linguist has no Saule entry, so
   a fence tagged `saule` renders unhighlighted there. See the note at the top of
-  README.md. `npm run sync-docs` rewrites them back to `saule` for the website.
+  LANGUAGE.md. `npm run sync-docs` rewrites them back to `saule` for the website.
 -->
 
 ---
@@ -177,7 +178,7 @@ println("still running")         -- still running
 
 Conversion between types is the `as` cast, not a function — `3.9 as integer`,
 `n as string`, `"42" as integer` (which is `integer?`, since the text may hold
-no number). See [README §Casting](./README.md#casting).
+no number). See [Language guide §Casting](./LANGUAGE.md#casting).
 
 ### Prelude interfaces
 
@@ -280,9 +281,9 @@ println(tostring(cheapest))                     -- $3.99
 The `<T>` on these is a real type argument, checked like any other: `OpAdd`
 takes two (the operand and the result), `OpEq` one, `OpLen` none — supplying
 the wrong number is an error rather than being ignored. See
-[Custom Iterable](./README.md#custom-iterable) and
-[Operator Overloading](./README.md#operator-overloading) for the dispatch
-rules, and [Generic Classes](./README.md#generic-classes) for declaring your
+[Custom Iterable](./LANGUAGE.md#custom-iterable) and
+[Operator Overloading](./LANGUAGE.md#operator-overloading) for the dispatch
+rules, and [Generic Classes](./LANGUAGE.md#generic-classes) for declaring your
 own generic types.
 
 ---
@@ -761,7 +762,7 @@ Indices are **1-based**, as everywhere else in Saule.
 #### `Bytes.of(...byte) -> bytes`
 
 Builds a buffer from byte values. The arguments are typed
-[`byte`](../README.md#the-byte-type), so a literal outside `0..=255` is a
+[`byte`](./LANGUAGE.md#the-byte-type), so a literal outside `0..=255` is a
 **compile** error rather than a runtime surprise, and a computed value has to
 narrow with `as byte` first.
 
@@ -871,7 +872,7 @@ println(Bytes.len(Bytes.empty()))   -- 0
 #### `Bytes.byte(b: bytes, i: integer) -> byte?`
 
 The byte at `i`, or `nil` when `i` is outside the buffer. The result is a
-[`byte`](../README.md#the-byte-type), which is in `0..=255` by construction
+[`byte`](./LANGUAGE.md#the-byte-type), which is in `0..=255` by construction
 and widens to `integer` for free.
 
 ```saule
@@ -3339,7 +3340,7 @@ inside a project.
 
 **It needs no import.** Like every other stdlib module, `Project` is in scope
 everywhere. For the config file's own keys, and which of them are required,
-see [README §Project Configuration](./README.md#project-configuration).
+see [Language guide §Project Configuration](./LANGUAGE.md#project-configuration).
 
 ## Conventions
 
@@ -3367,7 +3368,7 @@ A handful of patterns repeat across the stdlib:
   and answers in kind, but one call may not take both.
 - **No exceptions for "expected" failures.** Filesystem helpers return
   `boolean` rather than throwing. Use `throw` / `try` / `catch` for genuinely
-  exceptional cases — see [README §Error Handling](./README.md#error-handling).
+  exceptional cases — see [Language guide §Error Handling](./LANGUAGE.md#error-handling).
   The exception is `Os.list`, which throws; see
   [Failure conventions](#failure-conventions).
 - **Mutate with `Table`, transform with `Iter`.** `Table.*` writes to the
@@ -3379,5 +3380,5 @@ A handful of patterns repeat across the stdlib:
 Anything not in this reference is not in the toolchain. Libraries — JSON among
 them — ship as ordinary Saule packages: a git repo with a `saule.config`,
 added to `dependencies:`. See
-[README §Importing from a Dependency](./README.md#importing-from-a-dependency).
+[Language guide §Importing from a Dependency](./LANGUAGE.md#importing-from-a-dependency).
 

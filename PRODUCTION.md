@@ -37,6 +37,31 @@ on this machine (macOS 25.6, arm64), not estimated.
 > The judgements in this document are otherwise unrevised: nothing since the
 > last revision has moved a Tier 0 or Tier 1 item.
 
+> **Revised 2026-11-05 against `bcc6cb7`.** The distribution layer this document
+> called the binding constraint has shipped, and the text had drifted far enough
+> to misrepresent the project: §1's table still told a reader to clone the repo
+> and build it with Rust, and that libraries could not be added at all. Both
+> were false. What is now true and verified against the working tree:
+>
+> - **21 releases published**, `v26.21` latest, six platform triples per release.
+> - **A one-line checksummed installer**, served from the docs site.
+> - **The VS Code extension is published** on the Visual Studio Marketplace at
+>   `saule.saule`, version 26.21.0; the JetBrains plugin is listed as 35823, and
+>   `saule-nvim` installs from its own repository.
+> - **A working package manager**: `install`, `update`, `remove`, `list`, with
+>   `saule.lock` pinning exact commits.
+> - **`saule test`** and **runtime stack traces** both exist.
+> - **CI tests Linux, macOS and Windows**, and gates both pull requests and
+>   releases — §5 item 17's "CI tests one platform" was wrong.
+> - **[STABILITY.md](STABILITY.md)**, `CONTRIBUTING.md`, `SECURITY.md` and a
+>   Code of Conduct all exist.
+>
+> The judgements below are otherwise unrevised, and the Tier 2/Tier 3 items are
+> unmoved: the SDK crates are still unpublished, there is still no `saule doc`,
+> no specification, no conformance suite and no debugger. The grades in
+> [§4](#4-scorecard-against-a-production-language) were already current and are
+> unchanged. Benchmark and LOC figures still predate `197ef4f`.
+
 > **Scope note.** This document does not repeat [RELEASE_PLAN.md](RELEASE_PLAN.md),
 > which already sequences distribution and the package manager in detail and is
 > largely correct. This is the layer above that plan: what the plan does *not*
@@ -69,7 +94,16 @@ on this machine (macOS 25.6, arm64), not estimated.
 
 ## 1. The verdict in one page
 
-**Saule is a well-built language implementation and not yet a product.**
+**Saule is a well-built language implementation, now installable, with an empty
+ecosystem.**
+
+The original verdict here was "a well-built language implementation and not yet
+a product," and the product layer it was missing has largely arrived: you can
+install the toolchain in one command on three platforms, get working editor
+support from a marketplace, typecheck, format, test, and install a dependency
+by Git ref. What remains is narrower and more specific than "a product" — it is
+*other people's code*: nothing published to install, and no supported way to
+write a native library without cloning this repository.
 
 The engineering quality is genuinely high, and that is not a courtesy: 87.5k
 lines of Rust across 20 crates, 1,705 passing Rust tests plus 254 `.sau`
@@ -82,35 +116,51 @@ package ABI is frozen, documented, and paired with a proc-macro SDK that infers
 the Saule signature from Rust types so the manifest cannot drift. That is
 better than what most languages have at 1.0.
 
-What is missing is almost entirely the *product* layer, and it is missing
-uniformly:
+Where the gaps now fall, question by question:
 
 | Question a new user asks | Answer today |
 |---|---|
-| How do I install it? | Clone the repo and build it with Rust. One git tag exists; no published artifact. |
-| How do I add a library? | You cannot. `dependencies:` accepts local relative paths only. |
-| How do I write a test? | There is no test runner. Write a `.sau` file and check the output by eye. |
-| Where did my error come from? | The line it failed on. There is no call stack. |
-| Is my editor going to work? | Yes — the parser recovers, so features survive half-typed code. |
+| How do I install it? | One command. A checksummed installer off the docs site, six platform triples, 21 releases published. |
+| How do I add a library? | `saule install <owner>@<repo>`, pinned to an exact commit in `saule.lock`. No registry — a package is a public Git repo. Direct dependencies only. |
+| How do I publish one? | Push a Git tag. There is no `saule publish` command, and no package exists to install yet. |
+| How do I write a test? | `saule test` runs every `fn test_*` in `tests/` and in `*_test.sau`. `assert` is the only way to assert. |
+| Where did my error come from? | A stack trace, on runtime errors and uncaught `throw`s. |
+| Is my editor going to work? | Yes. VS Code is on the Marketplace, JetBrains is listed, Neovim installs from its repo, and the parser recovers so features survive half-typed code. |
+| Can I write a native library? | Only by cloning the compiler. The SDK crates are not on crates.io. |
+| Where are the docs for a package? | Nowhere. There is no `saule doc`. |
 | How fast is it? | 0.8×–4.8× PUC Lua on the bytecode VM, now the default engine, and **1.24×–3.52× the tree-walker** — the second figure is the one that does not depend on which Lua is installed. Phase 5's peepholes cut instructions retired by 11–50% depending on the benchmark. |
-| Is it stable? | Nothing states what "stable" means, and nothing enforces it. |
+| Is it stable? | [STABILITY.md](STABILITY.md) says what may change, and says plainly not to build something you cannot easily update. Nothing yet *enforces* it — see [§6.2](#62-then-mechanise-it). |
 
 None of those are research problems. All of them are work, and the sequencing
 matters more than the total volume — see [§10](#10-sequenced-roadmap).
 
-The three things that most change Saule's trajectory, in order:
+The things that most change Saule's trajectory, in order — the first is struck
+through because it is done, and kept because it was the one that mattered most:
 
-1. **Shipping a release at all.** The release workflow builds six triples and has
-   never published; one tag exists. Every other item on this list is invisible
-   until someone who is not the author can install `saule`. This is now the
-   binding constraint, and it is process, not engineering.
+1. ~~**Shipping a release at all.**~~ **Done.** This was the binding constraint
+   and it is gone: 21 releases, six triples each, a checksummed one-line
+   installer, and published editor support. Someone who is not the author can
+   install `saule` in one command. Everything below was invisible until this
+   happened.
 2. **Publishing `saule-native-abi` / `saule-sdk` / `saule-export-macro` to
    crates.io.** Today they are path dependencies inside this workspace, so
    "write a native library for Saule" means "clone the compiler." That is a hard
    stop on third-party native packages, which is the ecosystem's growth path.
-3. **A stability contract.** Not a version number — a written statement of what
-   may change and what may not, with tests that fail when it does. §6 proposes
-   one.
+   It is now the top item, and it is **not** simply a `cargo publish` away:
+   `saule-sdk` and `saule-export-macro` carry path dependencies with no
+   `version`, which `cargo publish` rejects outright, none of the three declare
+   `repository`, and `version.workspace = true` resolves to `26.0.0` — the
+   year of record, which tells an SDK consumer nothing. The crates need their
+   own semver, decoupled from the toolchain's year scheme.
+3. **A package anyone can install.** The package manager works and there is
+   nothing published to point it at; `RELEASE_PLAN`'s own motivating example,
+   `saule install lauriszz123@uikit`, resolves to a repository that does not
+   exist. A package manager with an empty ecosystem is a claim rather than a
+   feature, and the first real package is also the only honest test of whether
+   publishing is seamless.
+4. **A stability contract with teeth.** [STABILITY.md](STABILITY.md) now exists
+   and states what may change — that was the missing half. The other half is
+   still missing: nothing mechanises it. §6.2 lists the gates.
 
 > **Done since the original draft.** Parser error recovery was the first item on
 > this list and has landed. `saule_parser` now exposes `parse_recover` and
@@ -552,16 +602,21 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Test tooling for users | `saule test`: discovery, filter, exit status; only `assert` to assert with | **C+** |
 | Debugger | None (no DAP) | **F** |
 | Distribution / install | Six-platform releases, one-line checksummed installer; binaries unsigned | **B** |
-| Package management | `install`, `update`, `remove`, `list`, `saule.lock`; one copy per ref, no signatures | **B−** |
+| Package management | `install`, `update`, `remove`, `list`, `saule.lock`; direct-only resolution, one copy per ref, no signatures, nothing published to install | **B−** |
 | Embedding story | Works, undocumented, no facade crate, global state | **C−** |
 | Native library authoring | Excellent design, no distribution, no ABI check | **C+** |
 | Stability policy | [STABILITY.md](STABILITY.md): pre-1.0, what may change, how to cope | **C** |
 | Governance / contribution | LICENSE, CI, CONTRIBUTING, SECURITY, Code of Conduct; no RFC path | **C+** |
 
-The pattern is unmistakable: **everything that is code is good, and everything
-that is contract, distribution, or user-facing tooling is absent.** That is
-normal for a solo-built language and it is a very fixable position — the hard
-part (a coherent, working implementation) is done.
+The original reading of this table was: **everything that is code is good, and
+everything that is contract, distribution, or user-facing tooling is absent.**
+One third of that has been paid off — distribution is a B, and the tooling
+column (formatter, LSP, test runner, package manager) now scores between B− and
+A−. What is still weak is the same thing it always was, and it is the *contract*
+column: no specification, no conformance suite, no enforced stability policy, no
+debugger, no published SDK. That is normal for a solo-built language and it is a
+very fixable position — the hard part (a coherent, working implementation) is
+done.
 
 ---
 
@@ -569,28 +624,46 @@ part (a coherent, working implementation) is done.
 
 ### Tier 0 — blocks *any* outside user
 
-> **Update, November 2026.** Items 1 and 2 below are done: releases are published
-> with a one-line installer, and packages install from GitHub with a lockfile.
-> Item 4 is ready but needs publishing. In Tier 1, the test runner and stack
-> traces have landed, and the cycle collector addresses the leak. The original
-> text is kept for its reasoning, and the grades above are current.
+> **Update, 2026-11-05.** **Tier 0 is empty.** Items 1 and 2 are done: releases
+> are published with a one-line installer, and packages install from GitHub with
+> a lockfile. Item 3 landed earlier. Item 4 is now done for VS Code — published
+> at `saule.saule` 26.21.0 — and the JetBrains plugin is listed as 35823, with
+> `saule-nvim` installing from its own repository.
+>
+> In Tier 1, the test runner and stack traces have landed, and the cycle
+> collector addresses the dominant leak. **The binding constraint has moved to
+> Tier 2**: the SDK crates are unpublished, so nobody can write a native library
+> without cloning this repo, and nothing exists to `saule install`.
+>
+> The original text of each item is kept for its reasoning, and the grades above
+> are current.
 
-1. **No installable toolchain.** `scripts/install_path.sh` symlinks a build from
-   a clone. One tag exists; the release workflow builds six triples but has
-   effectively never published. RELEASE_PLAN steps 2–3 cover this correctly.
-   *Until this ships, the user count is 1.*
-2. **No package manager.** `dependencies:` takes local paths. RELEASE_PLAN steps
-   5–8 cover this and the design (no index, git-hosted, exact pins, SHA lock) is
-   sound.
+1. ~~**No installable toolchain.**~~ **Done.** The original entry read:
+   "`scripts/install_path.sh` symlinks a build from a clone. One tag exists; the
+   release workflow builds six triples but has effectively never published.
+   RELEASE_PLAN steps 2–3 cover this correctly. *Until this ships, the user
+   count is 1.*" Steps 2–3 shipped: 21 releases, six triples each, and a
+   checksummed one-line installer served from the docs site.
+2. ~~**No package manager.**~~ **Done**, with one caveat. `saule install`,
+   `update`, `remove` and `list` work against public Git repositories, and
+   `saule.lock` pins exact commits. The design RELEASE_PLAN steps 5–8 proposed
+   (no index, git-hosted, exact pins, SHA lock) was sound and is what shipped.
+   The caveat: **resolution is direct-only** — a package's own dependencies are
+   not fetched, which is RELEASE_PLAN step 8 and still open. That was a
+   deliberate deferral and it invalidates no lockfile written before it.
 3. ~~**Parser gives up on the first error.**~~ **Done** — see the note in
    [§1](#1-the-verdict-in-one-page). `parse_recover` always produces a tree, and
    the LSP builds on it. The follow-on question is no longer *whether* the editor
    survives a syntax error but how good the recovered tree is; the 33 recovery
    tests are the place to grow that, and §6.2's diagnostic snapshots would make
    regressions in it reviewable.
-4. **Editor plugins are unpublished.** All three exist and work; none are on a
-   marketplace. A language you must sideload editor support for is a language
-   people bounce off.
+4. ~~**Editor plugins are unpublished.**~~ **Done.** All three exist, work, and
+   are installable from their normal channel: VS Code on the Visual Studio
+   Marketplace (`saule.saule`), JetBrains as plugin 35823, and `saule-nvim`
+   via lazy.nvim or packer. A language you must sideload editor support for is
+   a language people bounce off, and that is no longer the case. Open follow-on:
+   Open VSX, for VSCodium users, and upstreaming the filetype and LSP config
+   into `nvim-lspconfig`.
 
 ### Tier 1 — blocks serious use
 
@@ -625,7 +698,15 @@ part (a coherent, working implementation) is done.
 
 ### Tier 2 — blocks the ecosystem
 
-11. **SDK crates unpublished on crates.io.** See [§8](#8-is-it-easy-to-write-a-native-library).
+11. **SDK crates unpublished on crates.io.** See
+    [§8](#8-is-it-easy-to-write-a-native-library). **This is now the top item on
+    the whole list**, Tier 0 being empty. It is also not a one-command fix:
+    `saule-sdk` and `saule-export-macro` declare their dependencies by `path`
+    with no `version`, which `cargo publish` refuses; none of the three set
+    `repository`; and `version.workspace = true` gives them `26.0.0`, the
+    year-of-record, which communicates nothing to a consumer. Decide on semver
+    for the SDK, decoupled from the toolchain's `<year>.<build>`, before the
+    first publish rather than after.
 12. ~~**No ABI version check when loading a native package.**~~ **Done.**
     `saule_native_abi::ABI_VERSION` is exported by every package as
     `saule_abi_version` (emitted by `saule_package!`) and checked in
@@ -640,20 +721,24 @@ part (a coherent, working implementation) is done.
     good tutorial with a grammar appendix. A spec is a different document: it
     says what is *guaranteed*, and it is what an alternate implementation, a
     conformance suite, and a stability policy are all written against.
-15. **No contribution path.** No `CONTRIBUTING.md`, no issue templates, no RFC
-    process, no code of conduct. A consumer language needs contributors, and
-    contributors need a door.
+15. **No contribution path.** *Partly done.* [CONTRIBUTING.md](CONTRIBUTING.md)
+    and a [Code of Conduct](CODE_OF_CONDUCT.md) now exist, and the former says
+    where a feature, a diagnostic and a stdlib function each have to leave
+    traces. Still missing: issue and PR templates — `.github/` holds only
+    `CODEOWNERS` — and an RFC process for anything that changes the language.
+    A consumer language needs contributors, and contributors need a door.
 
 ### Tier 3 — worth knowing about
 
 16. **`tower-lsp 0.20`** — verify its maintenance status before 1.0; the
     ecosystem has been consolidating on a maintained fork
     (`tower-lsp-server`). A dead LSP framework is a slow-motion problem.
-17. **CI tests one platform.** The test jobs run on Linux only, deliberately
-    ("the release pipeline builds all six triples"). But the release pipeline
-    *builds*, it does not *test*. Nothing has ever run the test suite on Windows
-    or macOS. Given filesystem, path-separator, and DPI code that is explicitly
-    platform-conditional, that is a real risk.
+17. ~~**CI tests one platform.**~~ **Done** (`ebda520`). `test-linux`,
+    `test-macos` and `test-windows` all run the full suite, and they gate both
+    pull requests and releases: the `version` job requires all three plus
+    `check-www`, so a red test on any platform means no archives are built and
+    no release is cut. This also closes §6.2 item 6 and the matching §6.3
+    criterion.
 18. ~~**`saule-engine-lib` is excluded from clippy and from release builds.**~~
     **Done.** It is now [Shine2D](https://github.com/lauriszz123/saule-shine),
     its own repository built against the SDK from git, so nothing in this
@@ -672,12 +757,22 @@ part (a coherent, working implementation) is done.
 ## 6. How to know it is stable
 
 "Stable" is not a feeling and not a version number. It is **a written contract
-plus mechanised evidence that the contract holds.** Saule currently has neither,
-and that is the gap this section closes.
+plus mechanised evidence that the contract holds.** Saule now has the first and
+not the second: [STABILITY.md](STABILITY.md) is published. The gap this section
+closes is the evidence.
 
-### 6.1 Write the contract first
+### 6.1 Write the contract first — *done, and narrower than this*
 
-Publish a `STABILITY.md` that answers, for each surface, *what may change*:
+[STABILITY.md](STABILITY.md) exists. What it says, deliberately, is less than
+the table below: it is addressed to someone deciding whether to use Saule today,
+so it states the blunt version — the language and standard library *can* break
+between releases, pin your packages, set `min_saule_version`, run `saule check`
+and `saule test` in CI. That is the honest contract for a pre-1.0 toolchain and
+it should not be strengthened before the gates in §6.2 can hold it up.
+
+The table below is the contract to grow *into*, surface by surface, as each gate
+lands. A promise of "additive only within a year" is worth making only once
+something fails when it is broken:
 
 | Surface | Proposed contract |
 |---|---|
@@ -726,8 +821,9 @@ A contract nobody tests is a wish. Each of these is a gate that fails a PR:
    stability criterion.
 5. **Benchmark regression gate.** `bench.py` already supports `new=` / `old=`.
    Wire it to CI with a threshold so a change cannot silently cost 20%.
-6. **Multi-platform test matrix.** Run the *test suite* — not just the build — on
-   Linux, macOS, and Windows. See §5 item 17.
+6. ~~**Multi-platform test matrix.**~~ **Done** (`ebda520`) — the *test suite*,
+   not just the build, runs on Linux, macOS and Windows and gates every PR and
+   release. See §5 item 17. This is the one gate in this list that is live.
 7. **Memory-behaviour tests.** Assert that a program's live-value count returns
    to baseline after a workload. This is how the cycle-leak class of bug becomes
    visible instead of anecdotal.
@@ -739,14 +835,20 @@ A contract nobody tests is a wish. Each of these is a gate that fails a PR:
 
 Concretely, Saule is ready to call itself stable when *all* of these hold:
 
-- [ ] `STABILITY.md` exists and every gate in §6.2 is live in CI.
+- [ ] `STABILITY.md` exists **and** every gate in §6.2 is live in CI. *Half
+      done: [STABILITY.md](STABILITY.md) is written; none of the gates below
+      except the platform matrix are in CI.*
 - [ ] The spec is written, separate from the tutorial, and the conformance suite
-      cites it section by section.
+      cites it section by section. *[LANGUAGE.md](LANGUAGE.md) is the tutorial;
+      the spec does not exist.*
 - [ ] Fuzzing has run for a sustained period with zero panics outstanding.
 - [ ] The backwards-compatibility corpus spans at least a year of releases with
-      zero unintentional breaks.
-- [ ] Test suite green on all three desktop platforms.
-- [ ] The native ABI is versioned and checked at load time.
+      zero unintentional breaks. *21 releases exist to build it from; nothing
+      runs an old program against a new build.*
+- [x] Test suite green on all three desktop platforms. *Done (`ebda520`) —
+      `test-linux`, `test-macos` and `test-windows` gate every PR and release.*
+- [x] The native ABI is versioned and checked at load time. *Done — see §5
+      item 12.*
 - [ ] A non-author has shipped something real with it and reported back.
 
 That last one is not a formality. Every list above is written from the inside;
@@ -1215,25 +1317,31 @@ saule-lang/awesome-saule         ← discovery, no index required
 
 Ordered by *unblocking*, not by size. Each phase makes the next one possible.
 
-### Phase 1 — Make it obtainable
-RELEASE_PLAN steps 2–4, unchanged. Prove the release pipeline, ship the one-line
-installer, publish the three editor plugins. **Nothing else matters until someone
-who is not you can run `saule`.**
+### Phase 1 — Make it obtainable — **DONE**
+RELEASE_PLAN steps 2–4. The release pipeline is proven (21 releases, six triples
+each), the one-line installer is live and checksum-verified, and the editor
+plugins are published. **Nothing else mattered until someone who is not you
+could run `saule`**, and that is now true in one command on three platforms.
 
 ### Phase 2 — Make it usable
 - ~~Parser error recovery + partial AST.~~ **Done** (`197ef4f`).
 - ~~Fix the closure/scope cycle (§3.2).~~ **Done** — lambdas capture names, not
   frames. Regression-guarded by unit tests asserting the defining scope is not
   retained, plus a `tests/closure_capture.sau` fixture pinning the semantics.
-- Build the cycle-report tool (§6.2 item 7). Now the highest-value memory work:
-  the closure leak went unnoticed for the life of the project because nothing
-  measures this, and the remaining user-authored cycles have the same problem.
-- `saule test`.
-- Runtime stack traces.
-- Document the remaining data-structure cycle behaviour; add `weak`.
+- ~~`saule test`.~~ **Done** — discovery, filtering and exit status; `assert` is
+  still the only way to assert.
+- ~~Runtime stack traces.~~ **Done** — on runtime errors and uncaught `throw`s.
+- Build the cycle-report tool (§6.2 item 7). **Still open, and now the
+  highest-value remaining item in this phase**: the closure leak went unnoticed
+  for the life of the project because nothing measures this, and the remaining
+  user-authored cycles have the same problem.
+- Document the remaining data-structure cycle behaviour; add `weak`. Still open.
 
-### Phase 3 — Make it extensible
+### Phase 3 — Make it extensible — **the current phase, and the binding one**
 - Publish `saule-native-abi`, `saule-export-macro`, `saule-sdk` with semver.
+  **Still open and now top of the list.** See §5 item 11 for what blocks the
+  `cargo publish` itself: path dependencies without `version`, no `repository`,
+  and a workspace version that is a year rather than a semver.
 - ~~Add `abi_version` to the manifest **and** a load-time check.~~ **Done.**
 - ~~Extract `saule-project`; delete the duplicate config parser.~~ **Done.**
 - ~~Split `saule-engine-lib` into its own repo and rebuild it against the
@@ -1242,14 +1350,23 @@ who is not you can run `saule`.**
   from git; it becomes a version requirement when the SDK is published.
 - Ship `saule-package-template`.
 
-### Phase 4 — Make it a platform
-RELEASE_PLAN steps 5–9: `saule add`, `saule publish`, the lockfile, native release
-assets. Plus `saule doc`.
+### Phase 4 — Make it a platform — **mostly landed early**
+RELEASE_PLAN steps 5–9. Done ahead of this sequencing: `saule check`, the
+config/lock format, and consuming packages — `install`, `update`, `remove`,
+`list`, with `saule.lock` pinning exact commits. Still open: `saule publish`
+(today you push a Git tag), `saule doctor` and `saule clean`, prebuilt native
+release assets, `saule doc`, and **a package that actually exists to install** —
+see §1.
 
 ### Phase 5 — Make it stable
-- `STABILITY.md`, the spec, the conformance suite.
-- Every gate in §6.2: backwards-compatibility CI, diagnostic snapshots, fuzzing,
-  benchmark regression, three-platform test matrix.
+- ~~`STABILITY.md`~~ **done**; the spec and the conformance suite are still
+  owed, and they are the two that take real time.
+- Every gate in §6.2. ~~Three-platform test matrix~~ **done** (`ebda520`);
+  backwards-compatibility CI, diagnostic snapshots, fuzzing and the benchmark
+  regression gate are all still open. Of these, **fuzzing is worth pulling
+  forward**: a public installer means strangers feeding arbitrary input to a
+  parser with ~60 `unwrap`/`expect` sites, and `run_tests.sh` gates exit status
+  only.
 - Publish the `saule` facade + `EMBEDDING.md`.
 
 ### Phase 6 — Make it fast (**done ahead of schedule — read the caveat**)

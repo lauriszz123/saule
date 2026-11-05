@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 Functions are declared with `fn`, take typed parameters, and state what they return. Parameters may carry defaults, be passed by name, or be variadic.
 
