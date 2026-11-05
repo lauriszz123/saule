@@ -21,6 +21,7 @@ impl Backend {
         // graph, not here.
         if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
             self.with_db(|db| db.set_overlay(&abs, source.clone()));
+            self.open_uris.insert(abs, uri.clone());
         }
         self.docs
             .insert(uri.to_string(), Document { source, version });
@@ -125,6 +126,7 @@ impl Backend {
     /// Analyse a single file by absolute path. Source is taken from the
     /// open-document cache if present, otherwise read from disk.
     pub(super) async fn refresh_path(&self, abs: &Path, uri: Url) {
+        let uri = self.open_uris.get(abs).map_or(uri, |open| open.clone());
         let (source, version) = if let Some(entry) = self.docs.get(uri.as_str()) {
             let s = entry.source.clone();
             let v = Some(entry.version);

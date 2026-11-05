@@ -63,6 +63,14 @@ pub struct Backend {
     /// Open documents, keyed by URI string. `DashMap` lets independent
     /// per-file operations interleave without a global lock.
     pub(crate) docs: DashMap<String, Document>,
+    /// The URI each open file was opened under, by canonical path.
+    ///
+    /// A URI rebuilt from a path is not always the one the client sent: VS Code
+    /// on Windows writes `file:///c%3A/...` where [`path_to_uri`] gives
+    /// `file:///C:/...`. Anything reaching an open file by way of its path, as
+    /// refreshing an importer does, has to come back through here to find its
+    /// buffer and to answer under the name the editor knows it by.
+    pub(crate) open_uris: DashMap<PathBuf, Url>,
     /// Every `.sau` file discovered under any workspace root, whether
     /// or not it's currently open. Keyed by absolute canonical path —
     /// the same key shape we use for the import graph.
@@ -344,6 +352,7 @@ impl Backend {
         Self {
             client,
             docs: DashMap::new(),
+            open_uris: DashMap::new(),
             workspace_files: DashMap::new(),
             rev_imports: DashMap::new(),
             workspace_roots: Mutex::new(Vec::new()),
@@ -589,6 +598,9 @@ impl LanguageServer for Backend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.docs.remove(uri.as_str());
+        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
+            self.open_uris.remove(&abs);
+        }
         // The overlay stops answering for this path, so importers now
         // see the on-disk text instead of the buffer — a different seed.
         if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {

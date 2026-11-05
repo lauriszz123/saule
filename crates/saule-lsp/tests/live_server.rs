@@ -14,6 +14,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use tower_lsp::lsp_types::Url;
 
 const CREATED: i32 = 1;
 const CHANGED: i32 = 2;
@@ -35,8 +36,12 @@ impl Drop for Server {
     }
 }
 
+/// Built by the URL crate rather than by hand: a Windows path is not a URI
+/// with `file://` in front of it, and `canonicalize` hands back `\\?\C:\…`.
 fn uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+    Url::from_file_path(path)
+        .expect("test paths are absolute")
+        .to_string()
 }
 
 impl Server {
@@ -443,6 +448,48 @@ fn a_change_reaches_files_that_only_import_it_indirectly() {
 
     server.change(&base_file, &base("string", "\"x\""));
     assert!(!server.errors(&top).is_empty());
+}
+
+/// VS Code on Windows writes `file:///c%3A/...`, where the server would write
+/// `file:///C:/...`. Any client's spelling has to be the one that gets answered,
+/// or an open file is taken for a closed one: analysed from the disk instead of
+/// its buffer, with the result published under a URI the editor never opened.
+#[test]
+fn an_open_importer_is_recognised_however_the_client_spells_its_uri() {
+    let project = Project::new(&[("lib.sau", LIB_INT), ("main.sau", MAIN)]);
+    let (lib, main) = (project.path("lib.sau"), project.path("main.sau"));
+    let spelled = uri(&main).replace("main.sau", "m%61in.sau");
+    let mut server = Server::start(Some(&project.0));
+    assert!(server.errors(&main).is_empty());
+
+    // Unsaved: the disk has no such line.
+    let buffer = format!("{MAIN}local unsaved: integer = \"x\"\n");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {
+            "uri": spelled, "languageId": "saule", "version": 1, "text": buffer,
+        }}),
+    );
+    server.settle();
+    assert_eq!(
+        server.diagnostics[&spelled].len(),
+        1,
+        "the buffer's own error"
+    );
+
+    server.open(&lib);
+    server.change(&lib, LIB_STR);
+    assert_eq!(
+        server.diagnostics[&spelled].len(),
+        2,
+        "the buffer's error and the import's: {:?}",
+        server.diagnostics[&spelled]
+    );
+    assert!(
+        server.errors(&main).is_empty(),
+        "nothing published under a spelling the editor never opened: {:?}",
+        server.errors(&main)
+    );
 }
 
 #[test]
