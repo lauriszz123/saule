@@ -659,3 +659,67 @@ fn the_editor_flags_everything_that_cannot_compile_and_nothing_that_runs() {
         );
     }
 }
+
+#[test]
+fn an_imported_function_types_its_callers_in_hover_and_hints() {
+    let source = "import * from \"Shared\"\n\nlocal name = trimmed(\"a\")\nlocal head = first({\"a\"})\nlocal top = limit\nfor tag in {\"a\", \"b\"} do\n  println(tag)\nend\nprintln(trimmed(name))\n";
+    let project = Project::new(&[
+        (
+            "Shared.sau",
+            "export fn trimmed(text: string) -> string\n  return text\nend\n\n\
+             export fn first<T>(xs: table<T>) -> T?\n  return xs[1]\nend\n\n\
+             export limit: integer = 3\n",
+        ),
+        ("main.sau", source),
+    ]);
+    let main = project.path("main.sau");
+    let mut server = Server::start(None);
+    server.open(&main);
+
+    let hints = server.request(
+        "textDocument/inlayHint",
+        json!({
+            "textDocument": {"uri": uri(&main)},
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 12, "character": 0}},
+        }),
+    );
+    let labels: Vec<&str> = hints
+        .as_array()
+        .expect("hints")
+        .iter()
+        .filter_map(|h| h["label"].as_str())
+        .collect();
+    for want in [": string", ": string?", ": integer", "text:"] {
+        assert!(labels.contains(&want), "{want}: {labels:?}");
+    }
+
+    let hover = server.hover(&main, 2, 7);
+    assert!(hover.contains("name: string"), "{hover}");
+    let help = server.request(
+        "textDocument/signatureHelp",
+        json!({
+            "textDocument": {"uri": uri(&main)},
+            "position": {"line": 8, "character": 16},
+        }),
+    );
+    let label = help["signatures"][0]["label"].as_str().unwrap_or("");
+    assert!(label.contains("text: string"), "{help}");
+}
+
+#[test]
+fn formatting_through_the_server_keeps_array_types_and_hugged_lambdas() {
+    let source = "local names: string[] = {}\nlocal grid: integer[,] = {}\nlocal spelled: table<integer, string> = {}\n\nrun(fn()\n  -- stays inside\n  println(\"\\x41\")\nend)\n";
+    let project = Project::new(&[("a.sau", source)]);
+    let file = project.path("a.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&file);
+    let edits = server.request(
+        "textDocument/formatting",
+        json!({
+            "textDocument": {"uri": uri(&file)},
+            "options": {"tabSize": 2, "insertSpaces": true},
+        }),
+    );
+    let unchanged = edits.is_null() || edits.as_array().is_some_and(Vec::is_empty);
+    assert!(unchanged, "a formatted file got edits: {edits}");
+}

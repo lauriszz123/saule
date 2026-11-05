@@ -390,7 +390,7 @@ pub fn super_init_target(class: &str) -> Option<(String, MethodSig)> {
 
 /// `ty` with each of `params` replaced by the argument in the same position.
 /// A parameter with no argument (a parent named bare) stays as it was.
-fn substitute_type_params(ty: &Type, params: &[String], args: &[Type]) -> Type {
+pub fn substitute_type_params(ty: &Type, params: &[String], args: &[Type]) -> Type {
     let go = |t: &Type| substitute_type_params(t, params, args);
     match ty {
         Type::Named(n) => params

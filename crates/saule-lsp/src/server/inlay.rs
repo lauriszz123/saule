@@ -97,7 +97,6 @@ struct Local {
 }
 
 struct Cx<'a> {
-    #[allow(dead_code)]
     source: &'a str,
     out: Vec<RawHint>,
     locals: Vec<Local>,
@@ -126,6 +125,7 @@ impl crate::exprty::TypeSource for Cx<'_> {
         self.user_fns
             .get(name)
             .map(|f| f.sig.clone())
+            .or_else(|| crate::exprty::imported_sig(name))
             .or_else(|| saule_typeck::sigs::lookup(name))
     }
 

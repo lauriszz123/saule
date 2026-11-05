@@ -94,10 +94,15 @@ impl<'a> Cx<'a> {
                                 !saule_typeck::sigs::mentions_unbound_param(t, &f.sig.type_params)
                             });
                     }
-                    // Non-constructor free call: consult native-sig
-                    // returns or imported function signatures. We
-                    // don't have ASTs for those, so return None and
-                    // accept `any`.
+                    if let Some(sig) = crate::exprty::imported_sig(name) {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                            .into_iter()
+                            .next()
+                            .filter(|t| {
+                                !saule_typeck::sigs::mentions_unbound_param(t, &sig.type_params)
+                            });
+                    }
                     if let Some(sig) = saule_typeck::sigs::lookup(name) {
                         let arg_types = self.positional_arg_types(args);
                         return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)

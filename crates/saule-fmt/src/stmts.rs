@@ -386,6 +386,17 @@ impl<'a> Printer<'a> {
                 }
                 self.write("?");
             }
+            Type::Generic(g) if g.name.starts_with('[') => {
+                let parens = matches!(g.args[0], Type::Function { .. });
+                if parens {
+                    self.write("(");
+                }
+                self.ty(&g.args[0]);
+                if parens {
+                    self.write(")");
+                }
+                self.write(&g.name);
+            }
             Type::Generic(g) => {
                 self.write(&g.name);
                 self.write("<");

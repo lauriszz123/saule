@@ -55,11 +55,15 @@ impl<'a> Printer<'a> {
                 if space {
                     self.write(" ");
                 }
-                // The operand keeps `MAX_PREC`: `-a ^ b` already means
-                // `-(a ^ b)`, so printing the inner `^` bare would be correct
-                // but relies on the reader knowing that. Parenthesising it is
-                // the same call as everywhere else in this file.
-                self.expr(rhs, MAX_PREC);
+                // A nested unary keeps its brackets: `- -a` would print as
+                // `--a`, which is a comment. Otherwise `-a ^ b` already means
+                // `-(a ^ b)`, and the author's own brackets survive either way.
+                let operand = if matches!(rhs.value, Expr::Unary { .. }) {
+                    MAX_PREC
+                } else {
+                    UNARY_PREC
+                };
+                self.expr(rhs, operand);
                 if parens {
                     self.write(")");
                 }
@@ -75,6 +79,13 @@ impl<'a> Printer<'a> {
                 }
                 let left_min = if right_assoc { p + 1 } else { p };
                 let right_min = if right_assoc { p } else { p + 1 };
+                // Nothing can bind into a prefix operator from its left, so
+                // `a ^ -b` reads one way only and needs no brackets.
+                let right_min = if matches!(rhs.value, Expr::Unary { .. }) {
+                    right_min.min(UNARY_PREC)
+                } else {
+                    right_min
+                };
                 self.expr(lhs, left_min);
                 self.writef(format_args!(" {} ", bin_sym(*op)));
                 self.expr(rhs, right_min);
@@ -425,8 +436,15 @@ impl<'a> Printer<'a> {
             TableEntry::Positional(e) => self.expr(e, 0),
             TableEntry::Field { key, value } => {
                 if let Expr::Str(s) = &key.value {
-                    if is_ident(s) {
+                    let bracketed = self
+                        .source
+                        .get(..key.span.start)
+                        .is_some_and(|before| before.trim_end().ends_with('['));
+                    if is_ident(s) && self.source_quote(&key.span).is_none() {
                         self.write(s);
+                    } else if bracketed {
+                        let lit = self.str_lit(s, &key.span);
+                        self.writef(format_args!("[{lit}]"));
                     } else {
                         let lit = self.str_lit(s, &key.span);
                         self.write(&lit);
@@ -462,9 +480,20 @@ impl<'a> Printer<'a> {
         }
         let start_col = self.current_column();
         let inline = self.render_call_args_inline(args);
-        // `+ 1` reserves the closing paren.
-        if self.force_inline || start_col + inline.len() < self.max_width() {
-            self.write(&inline);
+        let first_line = inline.find('\n').unwrap_or(inline.len());
+        if self.force_inline || start_col + first_line < self.max_width() {
+            if self.force_inline || first_line == inline.len() {
+                self.write(&inline);
+                return;
+            }
+            // A block argument stays hugged by the parentheses. The real
+            // printer writes it, because the rendering above has no comments.
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 {
+                    self.write(", ");
+                }
+                self.write_call_arg(a);
+            }
             return;
         }
 
@@ -551,6 +580,13 @@ impl<'a> Printer<'a> {
     /// `{ key: value }` table entry parses to `Expr::Str` whose span covers a
     /// bare identifier.
     pub(crate) fn str_lit(&self, s: &str, span: &Range<usize>) -> String {
+        if let Some(quote) = self.source_quote(span)
+            && let Some(written) = self.source.get(span.clone())
+            && written.len() >= 2
+            && written.ends_with(quote)
+        {
+            return written.to_string();
+        }
         quote_str_with(s, self.source_quote(span))
     }
 
@@ -589,17 +625,13 @@ impl<'a> Printer<'a> {
         if parent_prec == 0 {
             return false;
         }
-        let before = self
-            .source
-            .get(..span.start)
-            .map(str::trim_end)
-            .and_then(|s| s.chars().next_back());
-        let after = self
-            .source
-            .get(span.end..)
-            .map(str::trim_start)
-            .and_then(|s| s.chars().next());
-        before == Some('(') && after == Some(')')
+        let Some(text) = self.source.get(span.clone()) else {
+            return false;
+        };
+        let (closes, opens) = unmatched_parens(text);
+        let before = self.source.get(..span.start).unwrap_or("");
+        let after = self.source.get(span.end..).unwrap_or("");
+        run_of(before.chars().rev(), '(') > closes && run_of(after.chars(), ')') > opens
     }
 
     /// Whether the author wrote this lambda as a `do … end` block after the
@@ -636,6 +668,48 @@ impl<'a> Printer<'a> {
         let c = self.source.get(..end)?.chars().next_back()?;
         (c == '"' || c == '\'').then_some(c)
     }
+}
+
+/// How many `)` in `text` close a `(` opened before it, and how many `(` stay
+/// open at its end. An operator's span runs from inside its left operand's
+/// brackets to inside its right's, so `a) | (b` has one of each and the pair
+/// around it, if there is one, is the next one out.
+fn unmatched_parens(text: &str) -> (usize, usize) {
+    let (mut closes, mut opens) = (0, 0);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' | '\'' => {
+                while let Some(inner) = chars.next() {
+                    if inner == '\\' {
+                        chars.next();
+                    } else if inner == c {
+                        break;
+                    }
+                }
+            }
+            '-' if chars.peek() == Some(&'-') => {
+                for inner in chars.by_ref() {
+                    if inner == '\n' {
+                        break;
+                    }
+                }
+            }
+            '(' => opens += 1,
+            ')' if opens == 0 => closes += 1,
+            ')' => opens -= 1,
+            _ => {}
+        }
+    }
+    (closes, opens)
+}
+
+/// How many of `wanted` come first, whitespace aside.
+fn run_of(chars: impl Iterator<Item = char>, wanted: char) -> usize {
+    chars
+        .filter(|c| !c.is_whitespace())
+        .take_while(|c| *c == wanted)
+        .count()
 }
 
 /// A call's arguments split for trailing-block printing: everything that stays

@@ -472,7 +472,7 @@ end
         .filter(|(k, _, _)| *k == InlayHintKind::TYPE)
         .map(|(_, _, l)| l)
         .collect();
-    assert_eq!(types, vec![": integer?"], "{hints:?}");
+    assert_eq!(types, vec![": T", ": integer?"], "{hints:?}");
 }
 
 // ─── lambdas see their slot's type, and the scope around them ───────────────
@@ -695,4 +695,162 @@ fn type_hint_for_a_call_on_a_stdlib_value_type() {
         types.iter().filter(|l| *l == &": string?").count() == 2,
         "expected both reads hinted `: string?`, got {hints:?}"
     );
+}
+
+fn type_hints(src: &str) -> Vec<(String, String)> {
+    let mut hints: Vec<(usize, String)> = raw_hints(src)
+        .into_iter()
+        .filter(|(kind, _, _)| *kind == InlayHintKind::TYPE)
+        .map(|(_, byte, label)| (byte, label))
+        .collect();
+    hints.sort();
+    hints
+        .into_iter()
+        .map(|(byte, label)| {
+            let start = src[..byte]
+                .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                .map_or(0, |i| i + 1);
+            (src[start..byte].to_string(), label)
+        })
+        .collect()
+}
+
+fn hint(name: &str, label: &str) -> (String, String) {
+    (name.to_string(), label.to_string())
+}
+
+#[test]
+fn a_loop_variable_gets_the_element_type() {
+    let src = "class C\n  tags: table<string>\n  fn go()\n    for tag in self.tags do\n      println(tag)\n    end\n  end\nend\n";
+    assert_eq!(type_hints(src), vec![hint("tag", ": string")]);
+}
+
+#[test]
+fn every_kind_of_iterable_types_its_loop_variables() {
+    let cases = [
+        (
+            "local xs: string[] = {}\nfor x in xs do\nend\n",
+            vec![("x", ": string")],
+        ),
+        (
+            "local xs: string[]? = nil\nfor x in xs do\nend\n",
+            vec![("x", ": string")],
+        ),
+        (
+            "local xs: table<string, integer> = {}\nfor k, v in xs do\nend\n",
+            vec![("k", ": string"), ("v", ": integer")],
+        ),
+        (
+            "local xs: table<integer> = {}\nfor k, v in xs do\nend\n",
+            vec![("k", ": integer"), ("v", ": integer")],
+        ),
+        (
+            "local xs: boolean[][] = {}\nfor row in xs do\n  for cell in row do\n  end\nend\n",
+            vec![("row", ": table<integer, boolean>"), ("cell", ": boolean")],
+        ),
+        (
+            "local step: fn() -> string? = fn()\n  return nil\nend\nfor x in step do\nend\n",
+            vec![("x", ": string")],
+        ),
+        (
+            "class Q implements Iterable<string>\n  fn iter() -> fn() -> string?\n    return fn()\n      return nil\n    end\n  end\nend\nfor x in Q() do\nend\n",
+            vec![("x", ": string")],
+        ),
+        (
+            "class B<T> implements Iterable<T>\n  fn iter() -> fn() -> T?\n    return fn()\n      return nil\n    end\n  end\nend\nlocal b: B<integer> = B()\nfor x in b do\nend\n",
+            vec![("x", ": integer")],
+        ),
+        (
+            "class P implements Iterable2<string, integer>\n  fn iter2() -> fn() -> (string?, integer?)\n    return fn()\n      return nil, nil\n    end\n  end\nend\nfor k, v in P() do\nend\n",
+            vec![("k", ": string"), ("v", ": integer")],
+        ),
+    ];
+    for (src, want) in cases {
+        let want: Vec<_> = want.iter().map(|(n, l)| hint(n, l)).collect();
+        let got: Vec<_> = type_hints(src)
+            .into_iter()
+            .filter(|(n, _)| {
+                !["xs", "b", "step", "row"].contains(&n.as_str()) || want.iter().any(|w| w.0 == *n)
+            })
+            .collect();
+        assert_eq!(got, want, "{src}");
+    }
+}
+
+#[test]
+fn an_annotated_loop_variable_needs_no_hint() {
+    let src =
+        "local xs: string[] = {}\nfor x: string in xs do\nend\nfor k: integer, v in xs do\nend\n";
+    let got = type_hints(src);
+    assert!(!got.iter().any(|(n, _)| n == "x" || n == "k"), "{got:?}");
+    assert!(got.contains(&hint("v", ": string")), "{got:?}");
+}
+
+#[test]
+fn a_loop_variable_named_like_part_of_the_header_hints_the_right_word() {
+    let src = "local a: integer[] = {}\nfor a2, a in a do\nend\n";
+    let got = type_hints(src);
+    assert!(got.contains(&hint("a2", ": integer")), "{got:?}");
+    assert!(got.iter().filter(|(n, _)| n == "a").count() >= 1, "{got:?}");
+}
+
+#[test]
+fn what_a_loop_variable_binds_reaches_the_body() {
+    let src = "local xs: string[] = {}\nfor x in xs do\n  local y = x\nend\n";
+    assert!(type_hints(src).contains(&hint("y", ": string")));
+}
+
+#[test]
+fn a_numeric_loop_variable_is_typed_by_its_bounds() {
+    assert!(type_hints("for i = 1, 3 do\nend\n").contains(&hint("i", ": integer")));
+    assert!(type_hints("for x = 0.0, 1.0, 0.1 do\nend\n").contains(&hint("x", ": float")));
+    assert!(type_hints("for i: integer = 1, 3 do\nend\n").is_empty());
+}
+
+#[test]
+fn a_sibling_method_called_bare_gives_a_type() {
+    let src = "class C\n  fn name() -> string\n    return \"a\"\n  end\n  fn go()\n    local n = name()\n  end\nend\n";
+    assert!(type_hints(src).contains(&hint("n", ": string")));
+}
+
+#[test]
+fn a_function_whose_return_was_inferred_gives_a_type() {
+    let src = "fn name()\n  return \"a\"\nend\nlocal n = name()\n";
+    assert!(type_hints(src).contains(&hint("n", ": string")));
+}
+
+#[test]
+fn a_bare_iterable_is_typed_by_its_iter_method() {
+    let src = "class R implements Iterable\n  fn iter() -> fn() -> integer?\n    return fn()\n      return nil\n    end\n  end\nend\nfor n in R() do\nend\n";
+    assert!(type_hints(src).contains(&hint("n", ": integer")));
+    let src = "class P implements Iterable2\n  fn iter() -> fn() -> (string?, integer?)\n    return fn()\n      return nil, nil\n    end\n  end\nend\nlocal p: P = P()\nfor a, b in p do\nend\n";
+    let got = type_hints(src);
+    assert!(got.contains(&hint("a", ": string")), "{got:?}");
+    assert!(got.contains(&hint("b", ": integer")), "{got:?}");
+}
+
+#[test]
+fn an_inherited_iterable_types_the_loop() {
+    let src = "class B<T> implements Iterable<T>\n  fn iter() -> fn() -> T?\n    return fn()\n      return nil\n    end\n  end\nend\nclass S extends B<string>\nend\nfor x in S() do\nend\n";
+    assert!(type_hints(src).contains(&hint("x", ": string")));
+}
+
+#[test]
+fn what_a_match_arm_binds_reaches_its_body() {
+    let src = "enum E\n  A(name: string)\n  B\nend\nlocal e: E = E.B\nmatch e\n  case E.A(n) then\n    local m = n\n  case other then\n    local o = other\nend\n";
+    let got = type_hints(src);
+    assert!(got.contains(&hint("m", ": string")), "{got:?}");
+    assert!(got.contains(&hint("o", ": E")), "{got:?}");
+}
+
+#[test]
+fn what_a_catch_binds_reaches_its_body() {
+    let src = "try\n  println(1)\ncatch err: string\n  local m = err\nend\n";
+    assert!(type_hints(src).contains(&hint("m", ": string")));
+}
+
+#[test]
+fn a_binding_ends_with_its_arm_or_handler() {
+    let src = "local e: integer = 1\nmatch e\n  case other then\n    println(other)\nend\nlocal after = other\n";
+    assert!(!type_hints(src).iter().any(|(n, _)| n == "after"));
 }

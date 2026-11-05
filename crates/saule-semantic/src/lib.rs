@@ -48,7 +48,8 @@ pub use registry::{
     install_functions, install_registries, install_variables, interface_extends,
     interface_required_methods, interface_type_params, is_interface, is_subtype_named,
     lookup_field_type, lookup_function, lookup_interface_method, lookup_member, lookup_method,
-    super_init_target, with_classes, with_enums, with_functions, with_interfaces, with_variables,
+    substitute_type_params, super_init_target, with_classes, with_enums, with_functions,
+    with_interfaces, with_variables,
 };
 pub use return_infer::infer_missing_returns;
 
