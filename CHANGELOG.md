@@ -4,7 +4,7 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
-## Next
+## 26.22
 
 ### Added
 
@@ -37,11 +37,15 @@ history.
   `String.match(…)` and `obj.class` parse. `super` was already exempt there;
   this is the same rule for every keyword. The adjacency requirement is what
   keeps a half-typed `player.` from swallowing the next line's `local`.
-- **`saule test`** runs every top-level `fn test_name()` in `tests/` and in files
-  ending `_test.sau`.
-- **Stack traces** on runtime errors and uncaught `throw`s.
-- **`saule.lock`** records the exact commit of each package. `saule install`
-  restores it and `saule update` moves it. Commit this file.
+
+### Changed
+
+- **The README is a front door, not the manual.** The language guide it used to
+  hold — 3,900 lines of it — is now [LANGUAGE.md](LANGUAGE.md), and the README
+  is install, a taste of the language, and where to go next. The website is
+  generated from `LANGUAGE.md` and its pages are unchanged. Release archives
+  carry `README.md`, `LANGUAGE.md` and `DOCS.md`, so an offline copy is still
+  the whole manual.
 
 ### Fixed
 
@@ -51,6 +55,14 @@ history.
 - **`String.find`'s second argument is `needle`, not `pattern`** in signature
   help. It takes literal text; the name was merely unhelpful before
   `String.gsub` existed and wrong once it did.
+- **Two dead links in the standard-library reference.** `Bytes.of` and
+  `Bytes.byte` pointed at `../README.md#the-byte-type`, which the website's
+  link rewriter did not match and published verbatim.
+
+## 26.21
+
+### Fixed
+
 - **`saule fmt` keeps what you wrote.** `string[]` no longer becomes
   `table<integer, string>`, and neither do `T[,]`, `T[]?` or `(fn() -> T)[]`. String
   escapes stay escapes, `["key"]` keeps its brackets, and `(a) | (b) | c` gains no
@@ -60,6 +72,19 @@ history.
   imported variable, a `for` variable, a match binding and a `catch` variable are
   all typed, so `for tag in self.tags` shows `tag: string` and hover stops saying
   `any` for them. Signature help works on imported functions too.
+
+## 26.20
+
+### Added
+
+- **`saule test`** runs every top-level `fn test_name()` in `tests/` and in files
+  ending `_test.sau`.
+- **Stack traces** on runtime errors and uncaught `throw`s.
+- **`saule.lock`** records the exact commit of each package. `saule install`
+  restores it and `saule update` moves it. Commit this file.
+
+### Fixed
+
 - An arithmetic expression with many terms no longer hangs. Time doubled or worse
   with every `+ - * / %`, so 18 terms effectively never finished, in `saule run`,
   `saule check` and the editor.
