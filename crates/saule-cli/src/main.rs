@@ -19,6 +19,7 @@ mod init;
 mod pkg;
 mod project;
 mod run;
+mod test;
 
 /// Stack reserved for the thread the toolchain actually runs on, on every
 /// platform except macOS (see [`main`] for why macOS stays on the first
@@ -119,6 +120,7 @@ fn real_main(stack_size: usize) {
         Command::Remove(args) => pkg::cmd_remove(&args.package, args.purge),
         Command::List(args) => pkg::cmd_list(args.global),
         Command::Disasm(args) => disasm::cmd_disasm(args.target, args.deps),
+        Command::Test(args) => test::cmd_test(args.target, args.filter),
     }
 }
 

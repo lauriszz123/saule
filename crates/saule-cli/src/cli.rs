@@ -78,6 +78,26 @@ pub(crate) enum Command {
     Remove(RemoveArgs),
     List(ListArgs),
     Disasm(DisasmArgs),
+    Test(TestArgs),
+}
+
+/// `saule test [TARGET] [--filter TEXT]`
+#[derive(Debug, Args)]
+#[command(
+    about = "Run a project's tests",
+    long_about = "Run every top-level `fn test_name()` in a file under `tests/`, or in one \
+                  ending `_test.sau` under the project's source directories. A test passes \
+                  unless an `assert` fails, a `throw` goes uncaught, or a runtime error occurs. \
+                  Exits non-zero if any test failed."
+)]
+pub(crate) struct TestArgs {
+    /// Project directory or `.sau` file. Defaults to the current directory.
+    #[arg(value_name = "TARGET", value_parser = path_arg)]
+    pub target: Option<PathBuf>,
+
+    /// Only run tests whose name contains this text.
+    #[arg(long, value_name = "TEXT")]
+    pub filter: Option<String>,
 }
 
 /// `saule disasm [TARGET] [--deps]`

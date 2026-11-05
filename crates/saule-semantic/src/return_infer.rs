@@ -494,10 +494,17 @@ impl Cx<'_> {
                 // Arithmetic dispatches on the left operand's overload, else
                 // takes whichever side can be typed — `integer + integer` is
                 // an `integer`, `float + integer` a `float`.
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => self
-                    .binary_overload(*op, &lhs.value)
-                    .or_else(|| self.type_of(&lhs.value))
-                    .or_else(|| self.type_of(&rhs.value)),
+                //
+                // Asked once: `a + b + c` nests to the left, so asking twice
+                // per level doubles the work for every term.
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
+                    let lhs_ty = self.type_of(&lhs.value);
+                    lhs_ty
+                        .as_ref()
+                        .and_then(|t| crate::ops::overload_binary_result_in(self.decls, *op, t))
+                        .or(lhs_ty)
+                        .or_else(|| self.type_of(&rhs.value))
+                }
                 // Bitwise operands and results are both `integer`, so unlike
                 // arithmetic there is no operand kind to follow.
                 BinOp::BAnd | BinOp::BOr | BinOp::BXor | BinOp::Shl | BinOp::Shr => self
@@ -519,16 +526,17 @@ impl Cx<'_> {
     /// wins; otherwise `-x` keeps the operand's type with any nullability
     /// stripped, `#x` and `~x` count, and `not x` is a boolean.
     fn unary(&self, op: UnaryOp, rhs: &Expr) -> Option<Type> {
-        if let Some(ty) = self
-            .type_of(rhs)
-            .and_then(|t| crate::ops::overload_unary_result_in(self.decls, op, &t))
+        let rhs_ty = self.type_of(rhs);
+        if let Some(ty) = rhs_ty
+            .as_ref()
+            .and_then(|t| crate::ops::overload_unary_result_in(self.decls, op, t))
         {
             return Some(ty);
         }
         match op {
             UnaryOp::Not => Some(named("boolean")),
             UnaryOp::Len | UnaryOp::BNot => Some(named("integer")),
-            UnaryOp::Neg => self.type_of(rhs).map(strip_nullable),
+            UnaryOp::Neg => rhs_ty.map(strip_nullable),
         }
     }
 

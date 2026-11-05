@@ -30,6 +30,7 @@ name: "toying"
 version: "0.1.0"
 entry: "src/main.sau"
 src_dirs: ["src"]
+dependencies: ["lauriszz123@saule-shine:main"]
 min_saule_version: "26.1"
 ```
 

@@ -53,6 +53,7 @@ pub mod call;
 pub mod dispatch;
 pub mod frame;
 pub mod ops;
+pub mod trace;
 pub mod unwind;
 pub mod upval;
 
@@ -451,6 +452,27 @@ impl Vm {
         };
         self.results.clear();
         Ok(first)
+    }
+
+    /// Call a top-level function of `module` by name, with no arguments.
+    ///
+    /// `None` when the module declares no such function. A top-level function
+    /// captures nothing, since what it can see lives in module slots, so a
+    /// closure with no upvalues is all it needs.
+    pub fn call_top_level(
+        &mut self,
+        module: usize,
+        name: &str,
+    ) -> Option<Result<Vec<Value>, RuntimeError>> {
+        let chunk = Rc::clone(&self.shared.chunks[module]);
+        let idx = chunk
+            .proto(chunk.main)
+            .protos
+            .iter()
+            .copied()
+            .find(|i| chunk.proto(*i).name.as_deref() == Some(name))?;
+        let handle = self.closure_for(&chunk, idx);
+        Some(self.invoke(&handle, &[], 0..0))
     }
 
     /// Invoke a static method by name, after `run` has executed the module

@@ -545,18 +545,18 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | LSP feature breadth | Hover, goto, refs, symbols, inlay, sighelp, completion, format | **A−** |
 | LSP robustness | Error recovery + prior-parse seeding + completion repair | **B+** |
 | Runtime performance | Bytecode VM by default: 0.8×–4.8× PUC Lua, 1.24×–3.52× the tree-walker. Phase 5's peepholes cut instructions retired 11–50% — `loop_arith` halved | **B** |
-| Memory management | Refcount; closure capture fixed; user-authored cycles still leak, no tooling to see them | **C** |
-| Runtime diagnostics | No stack traces, boolean FS errors | **C−** |
+| Memory management | Refcount plus a cycle collector; 3 million reference cycles stay near 8 MB | **B** |
+| Runtime diagnostics | Stack traces on runtime errors; boolean FS errors | **B−** |
 | Concurrency | Absent | **D** |
 | Standard library | Solid core; no regex, JSON, net, structured errors | **C** |
-| Test tooling for users | None | **F** |
+| Test tooling for users | `saule test`: discovery, filter, exit status; only `assert` to assert with | **C+** |
 | Debugger | None (no DAP) | **F** |
-| Distribution / install | 1 tag, no published artifact, build-from-source | **D** |
-| Package management | Designed in detail, not built | **F** |
+| Distribution / install | Six-platform releases, one-line checksummed installer; binaries unsigned | **B** |
+| Package management | `install`, `update`, `remove`, `list`, `saule.lock`; one copy per ref, no signatures | **B−** |
 | Embedding story | Works, undocumented, no facade crate, global state | **C−** |
 | Native library authoring | Excellent design, no distribution, no ABI check | **C+** |
-| Stability policy | None | **F** |
-| Governance / contribution | LICENSE + CI; no CONTRIBUTING, no RFC path, no CoC | **D** |
+| Stability policy | [STABILITY.md](STABILITY.md): pre-1.0, what may change, how to cope | **C** |
+| Governance / contribution | LICENSE, CI, CONTRIBUTING, SECURITY, Code of Conduct; no RFC path | **C+** |
 
 The pattern is unmistakable: **everything that is code is good, and everything
 that is contract, distribution, or user-facing tooling is absent.** That is
@@ -568,6 +568,12 @@ part (a coherent, working implementation) is done.
 ## 5. The gaps, ranked
 
 ### Tier 0 — blocks *any* outside user
+
+> **Update, November 2026.** Items 1 and 2 below are done: releases are published
+> with a one-line installer, and packages install from GitHub with a lockfile.
+> Item 4 is ready but needs publishing. In Tier 1, the test runner and stack
+> traces have landed, and the cycle collector addresses the leak. The original
+> text is kept for its reasoning, and the grades above are current.
 
 1. **No installable toolchain.** `scripts/install_path.sh` symlinks a build from
    a clone. One tag exists; the release workflow builds six triples but has

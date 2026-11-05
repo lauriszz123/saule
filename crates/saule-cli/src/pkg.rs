@@ -17,6 +17,8 @@
 //!
 //! Relative paths in `dependencies:` are untouched by all of this and keep
 //! meaning exactly what they always have — see `saule_project::spec`.
+//!
+//! The exact commit of each package is recorded in `saule.lock` — see [`lock`].
 
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -27,6 +29,7 @@ use saule_project::spec::{Dependency, PackageSpec};
 
 mod edit;
 mod fetch;
+mod lock;
 #[cfg(target_os = "macos")]
 mod macho;
 mod native;
@@ -276,34 +279,95 @@ fn install_all() {
         return;
     }
 
+    let mut lock = lock::Lock::read(&root);
     let mut installed = 0;
     let mut skipped = 0;
     for spec in &packages {
-        // Already at the recorded ref: leave it. Reinstalling would refetch
-        // and rebuild every package on every call.
+        // What `saule.lock` pins wins over where the ref points today, and a
+        // pin for another ref means `dependencies:` was edited since, so it no
+        // longer applies.
+        let pinned = lock
+            .get(spec)
+            .filter(|l| spec.reference.as_ref().is_none_or(|r| *r == l.reference))
+            .cloned();
+        // Already there: leave it. Reinstalling would refetch and rebuild every
+        // package on every call.
         if let Some(receipt) = Receipt::read(spec)
             && spec
                 .reference
                 .as_ref()
                 .is_none_or(|r| *r == receipt.reference)
             && is_present(spec, &receipt)
+            && pinned
+                .as_ref()
+                .is_none_or(|l| l.reference == receipt.reference && at_commit(&receipt, &l.commit))
         {
             println!("  present   {} ({})", spec.slug(), receipt.reference);
+            if pinned.is_none()
+                && let Some(commit) = fetch::remote_commit(spec, &receipt.reference)
+                && at_commit(&receipt, &commit)
+            {
+                lock.set(spec, receipt.reference.clone(), commit);
+            }
             skipped += 1;
             continue;
         }
-        match install_package(spec) {
-            Ok(_) => installed += 1,
+        let result = match &pinned {
+            Some(l) => install_pinned(spec, l),
+            None => install_package(spec),
+        };
+        match result {
+            Ok(done) => {
+                installed += 1;
+                if let Some(commit) = done.commit {
+                    lock.set(spec, done.receipt.reference, commit);
+                }
+            }
             Err(e) => fail(format!("installing `{}`: {e}", spec.slug())),
         }
     }
+    lock.retain(&packages);
+    if let Err(e) = lock.write(&root) {
+        fail(format!("writing {}: {e}", lock::LOCK_FILE));
+    }
     println!("\n{installed} installed, {skipped} already present.");
+}
+
+/// Whether what a receipt describes is the commit `commit`. A receipt holds the
+/// abbreviated id, so this is a prefix test.
+fn at_commit(receipt: &Receipt, commit: &str) -> bool {
+    receipt
+        .commit
+        .as_ref()
+        .is_some_and(|have| commit.starts_with(have.as_str()))
+}
+
+/// Install a package at exactly the commit `saule.lock` records.
+fn install_pinned(spec: &PackageSpec, locked: &lock::Locked) -> Result<Installed, String> {
+    let spec = PackageSpec {
+        reference: Some(locked.reference.clone()),
+        ..spec.clone()
+    };
+    println!(
+        "  fetching  {} ({} at {})",
+        spec.slug(),
+        locked.reference,
+        short(&locked.commit)
+    );
+    let staging = home::tmp_dir().join(format!("install-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    let result = fetch::clone_at(&spec, &staging, &locked.commit)
+        .and_then(|fetched| install_fetched(&spec, &fetched));
+    let _ = std::fs::remove_dir_all(&staging);
+    result
 }
 
 /// What an install produced.
 struct Installed {
     spec: PackageSpec,
     receipt: Receipt,
+    /// The whole commit id, for `saule.lock`. The receipt keeps the short form.
+    commit: Option<String>,
 }
 
 /// Fetch, build if it needs building, install globally, and write a receipt.
@@ -334,6 +398,7 @@ fn install_fetched(spec: &PackageSpec, fetched: &fetch::Fetched) -> Result<Insta
     // can tell a later `saule update` whether a package tracking a *branch*
     // has moved, since the ref name alone never changes.
     let commit = fetch::short_commit(&fetched.dir);
+    let full_commit = fetch::full_commit(&fetched.dir);
     if let Some(commit) = &commit {
         println!("  at        {} ({commit})", fetched.reference);
     }
@@ -359,6 +424,7 @@ fn install_fetched(spec: &PackageSpec, fetched: &fetch::Fetched) -> Result<Insta
     Ok(Installed {
         spec: spec.clone(),
         receipt,
+        commit: full_commit,
     })
 }
 
@@ -745,6 +811,14 @@ fn record(root: &Path, spec: &PackageSpec, installed: &Installed) {
              add {entry} to it by hand"
         );
     }
+
+    if let Some(commit) = &installed.commit {
+        let mut lock = lock::Lock::read(root);
+        lock.set(spec, installed.receipt.reference.clone(), commit.clone());
+        if let Err(e) = lock.write(root) {
+            fail(format!("writing {}: {e}", lock::LOCK_FILE));
+        }
+    }
 }
 
 // ─── remove ─────────────────────────────────────────────────────────────────
@@ -776,6 +850,19 @@ pub(crate) fn cmd_remove(target: &str, purge: bool) {
                 println!("  removed   {entry} from {}", saule_project::CONFIG_FILE);
             }
             acted = true;
+            // An entry goes from `saule.lock` when its dependency does.
+            if let Ok(config) = saule_project::Config::read_in(root) {
+                let left: Vec<PackageSpec> = config
+                    .dependencies
+                    .iter()
+                    .filter_map(|raw| Dependency::parse(raw).ok()?.as_package().cloned())
+                    .collect();
+                let mut lock = lock::Lock::read(root);
+                lock.retain(&left);
+                if let Err(e) = lock.write(root) {
+                    fail(format!("writing {}: {e}", lock::LOCK_FILE));
+                }
+            }
         }
     }
 

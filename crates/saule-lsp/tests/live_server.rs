@@ -492,6 +492,26 @@ fn an_open_importer_is_recognised_however_the_client_spells_its_uri() {
     );
 }
 
+/// Each `+` used to double the work, so a sum of 18 terms never came back and
+/// took every other request in the file with it.
+#[test]
+fn a_long_expression_does_not_hang_the_server() {
+    let terms = " + x".repeat(200);
+    let source = format!(
+        "local x: integer = 1\nlocal sum = x{terms}\nlocal neg = {}x\nlocal y: integer = \"s\"\n",
+        "-".repeat(100)
+    );
+    let project = Project::new(&[("a.sau", &source)]);
+    let file = project.path("a.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&file);
+    assert!(
+        !server.errors(&file).is_empty(),
+        "the file was still checked"
+    );
+    assert!(server.hover(&file, 1, 6).contains("sum"));
+}
+
 #[test]
 fn saving_rereads_the_disk_for_clients_that_cannot_watch_files() {
     let project = Project::new(&[("lib.sau", LIB_INT), ("main.sau", MAIN)]);

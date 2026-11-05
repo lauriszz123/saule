@@ -62,13 +62,12 @@ SAULE_VERSION=26.7 curl -fsSL https://lauriszz123.github.io/saule/install.sh | s
 
 | Binary | Purpose |
 |---|---|
-| `saule` | The compiler and runtime — `run`, `fmt`, `init` |
+| `saule` | The compiler and runtime, plus `check`, `test`, `fmt`, `init` and the package commands |
 | `saule-lsp` | The language server, used by every editor plugin |
 
-Both, always. The editor plugins look for the language server in the project's
-`target/` directory first and fall back to `PATH`; without `saule-lsp`
-installed you get syntax highlighting and indentation (which are client-side)
-but no formatting, hover, or diagnostics.
+Both, always. The editor plugins find the language server on `PATH` or in
+`~/.saule/bin`. Without `saule-lsp` installed you get syntax highlighting and
+indentation (which are client-side) but no formatting, hover, or diagnostics.
 
 ## Installing by hand
 
@@ -117,11 +116,18 @@ That produces both binaries in `target/release/`. Copy them into
 `~/.saule/bin`, or add `target/release` to your `PATH`.
 
 :::caution[macOS GUI applications]
-Applications launched from the Dock or Finder do not read `~/.zshrc` or
-`~/.zprofile`, so an IDE started that way will not see `~/.saule/bin` on
-`PATH`. For IntelliJ, set the language-server path explicitly under
-**Settings › Languages & Frameworks › Saule**.
+The plugins also look in `~/.saule/bin` directly, so an IDE started from the Dock
+or Finder finds the toolchain even though it never read `~/.zshrc`.
 :::
+
+## Updating and uninstalling
+
+To update, run the install command again.
+
+To uninstall, delete `~/.saule` (on Windows, `%USERPROFILE%\\.saule`), which also
+removes every installed package. Then remove the line the installer added to your
+shell profile, such as `~/.zshrc`, or on Windows remove `.saule\\bin` from your user
+`Path`.
 
 ## Editor support
 

@@ -75,6 +75,61 @@ pub(crate) fn clone(spec: &PackageSpec, parent: &Path) -> Result<Fetched, String
     Ok(Fetched { dir, reference })
 }
 
+/// Fetch `spec` as it was at exactly `commit`, whatever its ref says now.
+///
+/// Shallow where the host allows asking for one commit, as GitHub does; a host
+/// that only serves what a ref points at gets the fuller fetch instead.
+pub(crate) fn clone_at(spec: &PackageSpec, parent: &Path, commit: &str) -> Result<Fetched, String> {
+    let url = spec.host.clone_url(&spec.owner, &spec.repo);
+    let dir = parent.join(&spec.repo);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    let path = dir.to_string_lossy().into_owned();
+    let in_dir = |args: &[&str]| {
+        let mut all = vec!["-C", path.as_str()];
+        all.extend_from_slice(args);
+        git(&all)
+    };
+
+    in_dir(&["init", "--quiet"])?;
+    in_dir(&["remote", "add", "origin", &url])?;
+    if in_dir(&["fetch", "--quiet", "--depth", "1", "origin", commit]).is_ok() {
+        in_dir(&["checkout", "--quiet", "FETCH_HEAD"])?;
+    } else {
+        in_dir(&[
+            "fetch",
+            "--quiet",
+            "--tags",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ])
+        .map_err(|e| format!("could not fetch `{url}`:\n  {e}"))?;
+        in_dir(&["checkout", "--quiet", commit]).map_err(|_| {
+            format!(
+                "`{}` no longer has the commit `{commit}` that `saule.lock` records.\n  \
+                 `saule update` moves this project to what the repository has now.",
+                spec.slug()
+            )
+        })?;
+    }
+
+    let reference = spec.reference.clone().unwrap_or_else(|| "HEAD".to_string());
+    Ok(Fetched { dir, reference })
+}
+
+/// The whole commit id a fetched tree is at, which is what `saule.lock` records.
+pub(crate) fn full_commit(dir: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// The branch a fresh clone landed on, so an install with no ref records
 /// what it actually took rather than "whatever was current".
 fn default_branch(dir: &Path) -> Result<String, String> {

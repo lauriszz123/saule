@@ -8,7 +8,7 @@
 //! * *is this operator legal here?* — [`check_binary`] / [`check_unary`],
 //!   which report a missing contract and validate the other operand
 //!   against the method's declared parameter type;
-//! * *what does it evaluate to?* — [`infer_binary`] / [`infer_unary`],
+//! * *what does it evaluate to?* — [`infer_binary`] / [`infer_unary_given`],
 //!   which read the result type straight off the implementing class's own
 //!   method signature.
 //!
@@ -46,8 +46,12 @@ pub(super) fn operand_class(expr: &Spanned<Expr>, scope: &Scope) -> Option<Strin
 /// bound is the only thing that can make `a + b` legal there, and the only
 /// thing that can say what it evaluates to.
 fn operand_bound(expr: &Spanned<Expr>, scope: &Scope) -> Option<saule_ast::TypeRef> {
-    let ty = strip_nullable(infer(expr, scope)?);
-    let Type::Named(name) = ty else {
+    bound_of(infer(expr, scope)?)
+}
+
+/// [`operand_bound`], for a caller that already holds the operand's type.
+fn bound_of(ty: Type) -> Option<saule_ast::TypeRef> {
+    let Type::Named(name) = strip_nullable(ty) else {
         return None;
     };
     crate::state::type_param_bound(&name)
@@ -379,9 +383,18 @@ pub fn new_index_operands(obj_ty: &Type) -> Option<(Type, Type)> {
 }
 
 /// Result type of `op rhs` when `rhs`'s **type** resolves to a class that
-/// overloads `op`. Scope-free counterpart of [`infer_unary`].
+/// overloads `op`. Scope-free counterpart of [`infer_unary_given`].
 /// Result type of `lhs op rhs` when it resolves to an operator overload.
 pub(super) fn infer_binary(op: BinOp, lhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
+    infer_binary_given(op, infer(lhs, scope).as_ref())
+}
+
+/// [`infer_binary`] for a caller that already holds the left operand's type.
+///
+/// Asking twice is not a small waste. An expression `a + b + c` nests to the
+/// left, so an arm that infers `lhs` twice runs twice per level, and a sum of
+/// 18 terms did not finish checking at all.
+pub(super) fn infer_binary_given(op: BinOp, lhs_ty: Option<&Type>) -> Option<Type> {
     // A bounded parameter answers from its bound: `<T: OpAdd<T, R>>` makes
     // `a + b` an `R`. Comparisons are `boolean` however they are implemented
     // and never consult a result type, so they fall through to the built-in
@@ -391,21 +404,21 @@ pub(super) fn infer_binary(op: BinOp, lhs: &Spanned<Expr>, scope: &Scope) -> Opt
             op,
             BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
         )
-        && let Some(bound) = operand_bound(lhs, scope)
+        && let Some(bound) = lhs_ty.cloned().and_then(bound_of)
         && bound_honours(&bound, &contract)
     {
         return bound_result(&bound);
     }
-    overload_binary_result(op, &infer(lhs, scope)?)
+    overload_binary_result(op, lhs_ty?)
 }
 
 /// Result type of `op rhs` when it resolves to an operator overload.
-pub(super) fn infer_unary(op: UnaryOp, rhs: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
+pub(super) fn infer_unary_given(op: UnaryOp, rhs_ty: Option<&Type>) -> Option<Type> {
     if let Some(contract) = unary_contract(op)
-        && let Some(bound) = operand_bound(rhs, scope)
+        && let Some(bound) = rhs_ty.cloned().and_then(bound_of)
         && bound_honours(&bound, &contract)
     {
         return bound_result(&bound);
     }
-    overload_unary_result(op, &infer(rhs, scope)?)
+    overload_unary_result(op, rhs_ty?)
 }

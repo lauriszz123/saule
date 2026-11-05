@@ -268,8 +268,9 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             BinOp::Concat => crate::ops::infer_binary(*op, lhs, scope)
                 .or_else(|| Some(Type::Named("string".into()))),
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
-                crate::ops::infer_binary(*op, lhs, scope)
-                    .or_else(|| infer(lhs, scope))
+                let lhs_ty = infer(lhs, scope);
+                crate::ops::infer_binary_given(*op, lhs_ty.as_ref())
+                    .or(lhs_ty)
                     .or_else(|| infer(rhs, scope))
                     .map(widen_byte)
             }
@@ -551,11 +552,14 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
         // count, `~x` is always an integer bit pattern, `not x` is always a
         // boolean — unless the operand is a class overloading `OpNeg` /
         // `OpLen` / `OpBNot`, which names its own result.
-        Expr::Unary { op, rhs } => crate::ops::infer_unary(*op, rhs, scope).or_else(|| match op {
-            UnaryOp::Neg => infer(rhs, scope).map(strip_nullable).map(widen_byte),
-            UnaryOp::Len | UnaryOp::BNot => Some(Type::Named("integer".into())),
-            UnaryOp::Not => Some(Type::Named("boolean".into())),
-        }),
+        Expr::Unary { op, rhs } => {
+            let rhs_ty = infer(rhs, scope);
+            crate::ops::infer_unary_given(*op, rhs_ty.as_ref()).or_else(|| match op {
+                UnaryOp::Neg => rhs_ty.map(strip_nullable).map(widen_byte),
+                UnaryOp::Len | UnaryOp::BNot => Some(Type::Named("integer".into())),
+                UnaryOp::Not => Some(Type::Named("boolean".into())),
+            })
+        }
         // A lambda is a function value. Parameters carry their declared
         // types (`any` when the writer left them off); the return type comes
         // from the annotation when present, and from the body otherwise.

@@ -34,10 +34,12 @@ All three plugins need the binary, and the
 curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
 ```
 
-Plugins auto-discover it at `<workspace>/target/release/saule-lsp`, then
-`target/debug`, then `saule-lsp` on your `PATH`. Working inside a built
-checkout of the language repository therefore needs no `PATH` setup at all;
-working anywhere else is what the installer is for.
+Plugins find it on your `PATH`, then in `~/.saule/bin`. They do not run a binary
+from the project you open, because a repository can contain a
+`target/debug/saule-lsp` of its own. If you work on Saule itself and want your own
+build, turn on the setting for it: `saule.allowProjectBuild` in VS Code,
+`vim.g.saule_use_project_build = true` in Neovim, or *Run the binaries from a
+project's own target/ folder* in IntelliJ.
 
 Syntax highlighting and indentation are client-side, so they work even without
 the server. Everything in the list above does not.
@@ -103,10 +105,8 @@ which picks up your shared `on_attach` and `capabilities`:
 require("saule.lsp").setup()
 ```
 
-Either way the server is located by walking up from the file you are editing,
-looking for `target/release/saule-lsp` and then `target/debug`, before falling
-back to `$PATH` — so a built checkout needs no configuration, and everything
-else is covered by the installer. `vim.g.saule_lsp_path` overrides it.
+Either way the server is found on `$PATH` or in `~/.saule/bin`, which the installer
+covers. `vim.g.saule_lsp_path` overrides it.
 
 ## IntelliJ IDEA
 
