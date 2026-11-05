@@ -75,8 +75,10 @@
 
 	--pg-line: var(--sl-color-gray-5);
 	--pg-run-green: #3a8a41;
-	--pg-raised: color-mix(in srgb, var(--sl-color-white) 97%, var(--sl-color-black));
-	--pg-sunken: color-mix(in srgb, var(--sl-color-white) 92%, var(--sl-color-black));
+	/* Starlight's `white` is the text colour and `black` the page, so in this
+	   theme `white` is the dark one. These mix a little text into the page. */
+	--pg-raised: color-mix(in srgb, var(--sl-color-black) 97%, var(--sl-color-white));
+	--pg-sunken: color-mix(in srgb, var(--sl-color-black) 92%, var(--sl-color-white));
 }
 
 /*
@@ -353,8 +355,8 @@
 
 .pg-main {
 	display: grid;
-	/* toolbar · the split · the Problems tool window · the status bar */
-	grid-template-rows: auto minmax(0, 1fr) auto auto;
+	/* toolbar · the split · the Problems tool window · the key row · the status bar */
+	grid-template-rows: auto minmax(0, 1fr) auto auto auto;
 	min-width: 0;
 	min-height: 0;
 }
@@ -1385,38 +1387,462 @@
 	text-underline-offset: 0.25em;
 }
 
-/* ---- narrow screens -------------------------------------------------------------------- */
+/* ---- controls that only exist on small screens ----------------------------------------- */
+
+.pg-drawer-btn,
+.pg-views,
+.pg-run-label,
+.pg-scrim {
+	display: none;
+}
+
+/*
+ * The keys a phone's keyboard buries two layers down, in a row above it.
+ * Shown by the script while the editor has focus on a touch device, which
+ * is a question CSS cannot ask.
+ */
+.pg-keybar {
+	display: flex;
+	align-items: stretch;
+	gap: 0.25rem;
+	padding: 0.25rem;
+	overflow-x: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: none;
+	border-top: 1px solid var(--pg-line);
+	background: var(--pg-sunken);
+}
+
+.pg-keybar::-webkit-scrollbar {
+	display: none;
+}
+
+.pg-key {
+	flex: 0 0 auto;
+	min-width: 2.5rem;
+	min-height: 2.5rem;
+	padding-inline: 0.4rem;
+	border: 1px solid var(--pg-line);
+	border-radius: 0.35rem;
+	background: var(--pg-raised);
+	color: var(--sl-color-white);
+	font-family: var(--saule-font-mono);
+	font-size: 1rem;
+	line-height: 1;
+	cursor: pointer;
+	touch-action: manipulation;
+}
+
+.pg-key:active {
+	background: color-mix(in srgb, var(--sl-color-accent) 30%, var(--pg-raised));
+}
+
+.pg-key-word {
+	font-family: inherit;
+	font-size: var(--sl-text-xs);
+}
+
+.pg-key-run {
+	color: var(--pg-run-green);
+}
+
+/* ---- tablets and phones ---------------------------------------------------------------- */
 
 @media (max-width: 60rem) {
-	/* Below this the sidebar costs more than it gives: the tab bar already
-	   names what is open, and the tree is one tap away. */
+	/*
+	 * Pinned to the viewport rather than sitting in the page's flow, because
+	 * a phone's browser moves the page when its keyboard opens: there is no
+	 * in-flow height that stays right. The script supplies the height and
+	 * offset of what is actually visible while the keyboard is up.
+	 */
 	.pg {
-		grid-template-columns: 0 auto 1fr;
+		position: fixed;
+		inset: var(--pg-top, 4rem) 0 auto;
+		height: calc(var(--pg-vvh, 100dvh) - var(--pg-top, 4rem));
+		min-height: 0;
+	}
+
+	.pg,
+	.pg.pg-no-sidebar {
+		grid-template-columns: 0 0 minmax(0, 1fr);
+	}
+
+	/* The tree is a drawer here, opened from the toolbar. */
+	.pg-sidebar-toggle {
+		display: none;
 	}
 
 	.pg-sidebar {
 		position: absolute;
+		inset-block: 0;
+		left: 0;
 		z-index: 5;
-		width: 15rem;
-		height: calc(100dvh - var(--pg-top, 4rem));
+		width: min(18rem, 85vw);
 		box-shadow: 0 0 2rem rgb(0 0 0 / 40%);
+		animation: pg-drawer-in var(--saule-mid, 200ms) var(--saule-ease, ease-out);
 	}
 
-	.pg[data-layout='side-by-side'] .pg-split {
-		/* Side by side stops working long before this; stack regardless of
-		   what was saved. */
+	.pg-scrim {
+		display: block;
+		position: absolute;
+		inset: 0;
+		z-index: 4;
+		border: 0;
+		background: var(--sl-color-backdrop-overlay);
+		cursor: pointer;
+	}
+
+	.pg-drawer-btn {
+		display: grid;
+		place-items: center;
+		flex-shrink: 0;
+		width: 2.75rem;
+		border: 0;
+		border-right: 1px solid var(--pg-line);
+		background: none;
+		color: var(--sl-color-gray-2);
+		cursor: pointer;
+	}
+
+	/* Always stacked here, so there is nothing for this to choose between. */
+	[data-layout-toggle],
+	.pg-run kbd,
+	.pg-stop kbd {
+		display: none;
+	}
+
+	/*
+	 * Scrolling past the end of a pane should stop there, not pull the page
+	 * down to refresh it and lose what was typed.
+	 */
+	.pg-editor .cm-scroller,
+	.pg-output,
+	.pg-tree,
+	.pg-problems-list {
+		overscroll-behavior: contain;
+	}
+
+	/*
+	 * The keyboard takes the header's place, and the height it left. The
+	 * header is removed rather than covered: it sits above the page content
+	 * in a stacking order no z-index in here can beat.
+	 */
+	html:has(.pg-keyboard) header.header {
+		display: none;
+	}
+
+	.pg.pg-keyboard {
+		top: 0;
+		height: var(--pg-vvh, 100dvh);
+		transform: translateY(var(--pg-vv-top, 0));
+	}
+
+	.pg-keyboard .pg-statusbar,
+	.pg-keyboard .pg-banner,
+	.pg-keyboard .pg-problems {
+		display: none;
+	}
+}
+
+@keyframes pg-drawer-in {
+	from {
+		transform: translateX(-100%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pg-sidebar {
+		animation: none;
+	}
+}
+
+/*
+ * One pane at a time, wherever two would leave neither usable: a phone held
+ * upright, and any small screen held sideways.
+ *
+ * The same query is in the script, which needs to know when Run should bring
+ * the output forward. Change them together.
+ */
+@media (max-width: 40rem), (max-width: 60rem) and (max-height: 30rem) {
+	.pg-split,
+	.pg[data-layout='stacked'] .pg-split {
 		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: minmax(0, 1fr) auto minmax(0, 14rem);
+		grid-template-rows: minmax(0, 1fr);
 	}
 
-	.pg[data-layout='side-by-side'] .pg-gutter {
-		width: auto;
-		height: 1px;
-		cursor: row-resize;
+	.pg-gutter {
+		display: none;
 	}
 
-	.pg[data-layout='side-by-side'] .pg-pane-output {
+	.pg[data-view='code'] .pg-pane-output,
+	.pg[data-view='output'] .pg-pane-editor {
+		display: none;
+	}
+
+	.pg[data-layout='stacked'] .pg-pane-output {
+		border-top: 0;
+	}
+
+	.pg-views {
+		display: flex;
+		flex-shrink: 0;
+		padding: 0.15rem;
+		border-radius: 0.4rem;
+		background: color-mix(in srgb, var(--sl-color-white) 8%, transparent);
+	}
+
+	.pg-view {
+		min-height: 2.25rem;
+		padding-inline: 0.6rem;
+		border: 0;
+		border-radius: 0.3rem;
+		background: none;
+		color: var(--sl-color-gray-2);
+		font: inherit;
+		font-size: var(--sl-text-xs);
+		font-weight: 500;
+		cursor: pointer;
+		touch-action: manipulation;
+	}
+
+	.pg-view[aria-pressed='true'] {
+		background: var(--sl-color-black);
+		color: var(--sl-color-white);
+	}
+
+	.pg-run-widget {
+		margin-left: auto;
+	}
+
+	/*
+	 * Stop takes Run's place rather than sitting beside it. Keeping both in
+	 * view is the right call on a desktop toolbar, but here the second one
+	 * would cost the width of the file name it already gave up.
+	 */
+	.pg-run:disabled,
+	.pg-stop:disabled,
+	.pg-sep,
+	.pg-run-target {
+		display: none;
+	}
+
+	.pg-run-label {
+		display: inline;
+		font-weight: 600;
+	}
+
+	.pg-banner {
+		flex-wrap: wrap;
+	}
+
+	.pg-banner-spacer {
+		display: none;
+	}
+
+	.pg-banner [data-banner-text] {
+		flex: 1 1 calc(100% - 1.5rem);
+		min-width: 0;
+	}
+
+	.pg-banner-action {
+		flex: 1 1 0;
+	}
+
+	/* Readings a phone has no room for and no use for. */
+	.pg-statusbar .pg-meta:not([data-cursor], [data-savestate]) {
+		display: none;
+	}
+}
+
+/* Upright: tabs on one row and actions on the next. */
+@media (max-width: 40rem) {
+	.pg-toolbar {
+		flex-wrap: wrap;
+	}
+
+	.pg-tabs {
+		flex: 1 1 0;
+	}
+
+	.pg-actions {
+		flex: 1 0 100%;
+		min-width: 0;
+		overflow-x: auto;
+		scrollbar-width: none;
 		border-left: 0;
 		border-top: 1px solid var(--pg-line);
+	}
+
+	/*
+	 * Icons, on this one row only: the labels do not fit beside everything
+	 * else. They stay readable to a screen reader, and reappear while a
+	 * button has something to report ("Copied!").
+	 */
+	.pg-actions .pg-btn {
+		min-width: 2.5rem;
+		justify-content: center;
+	}
+
+	.pg-actions .pg-btn:not(.pg-flashing) > span {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+
+	/* The two gutters that cost a code column for something the squiggles
+	   and the Problems list already say. */
+	.pg-editor .cm-foldGutter,
+	.pg-editor .cm-gutter-lint {
+		display: none;
+	}
+
+	.pg-keyboard .pg-tabs,
+	.pg-keyboard .pg-drawer-btn {
+		display: none;
+	}
+
+	.pg-keyboard .pg-actions {
+		border-top: 0;
+	}
+}
+
+/* Sideways: the banner gets one line, and the keyboard leaves room for code
+   and its key row only. */
+@media (max-width: 60rem) and (max-height: 30rem) {
+	.pg-banner {
+		flex-wrap: nowrap;
+	}
+
+	.pg-banner [data-banner-text] {
+		flex: 1 1 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.pg-banner-action {
+		flex: 0 0 auto;
+	}
+
+	.pg-keyboard .pg-toolbar {
+		display: none;
+	}
+
+	/* All named, or the rest move up to fill the toolbar's row once that is
+	   gone, and the editor grows past the keyboard instead of scrolling. */
+	.pg-toolbar {
+		grid-row: 1;
+	}
+
+	.pg-split {
+		grid-row: 2;
+	}
+
+	.pg-problems {
+		grid-row: 3;
+	}
+
+	.pg-keybar {
+		grid-row: 4;
+	}
+
+	.pg-statusbar {
+		grid-row: 5;
+	}
+}
+
+/* ---- fingers ----------------------------------------------------------------------------- */
+
+/*
+ * At any width, since a large tablet gets the desktop layout but is still
+ * driven by touch.
+ */
+@media (pointer: coarse) {
+	/*
+	 * iOS zooms the page when focus lands in a field set below 16px, and
+	 * does not zoom back. Beating CodeMirror's theme takes the extra class.
+	 */
+	.pg-editor .cm-editor,
+	.pg-dialog-field input {
+		font-size: 16px;
+	}
+
+	.pg-icon {
+		width: 2.5rem;
+		height: 2.5rem;
+	}
+
+	.pg-icon-sm {
+		width: 2.25rem;
+		height: 2.25rem;
+	}
+
+	.pg-run,
+	.pg-stop,
+	.pg-btn,
+	.pg-banner-action {
+		min-height: 2.5rem;
+		touch-action: manipulation;
+	}
+
+	.pg-tab-label {
+		padding-block: 0.7rem;
+	}
+
+	.pg-tab-close {
+		min-width: 2.25rem;
+		min-height: 2.25rem;
+	}
+
+	.pg-tab-add {
+		min-width: 2.75rem;
+	}
+
+	.pg-tree-open,
+	.pg-tree-summary {
+		padding-block: 0.65rem;
+	}
+
+	.pg-stripe {
+		min-height: 2.25rem;
+	}
+
+	.pg-problems-list button {
+		padding-block: 0.65rem;
+	}
+
+	.pg-statusbar {
+		min-height: 2.25rem;
+	}
+
+	/* A hairline with an 8px target is not a thing a thumb can find. */
+	.pg-gutter {
+		z-index: 1;
+	}
+
+	.pg-gutter::after {
+		inset: 0 -12px;
+	}
+
+	.pg[data-layout='stacked'] .pg-gutter::after {
+		inset: -12px 0;
+	}
+}
+
+/* With no hover to reveal them, the per-script actions are simply there. */
+@media (hover: none) {
+	.pg-tree-actions {
+		opacity: 1;
+	}
+}
+
+/* A dialog centred on the whole screen ends up under the keyboard. */
+@media (pointer: coarse) and (max-width: 40rem) {
+	.pg-dialog {
+		place-self: start center;
+		margin: 1.5rem auto auto;
 	}
 }
