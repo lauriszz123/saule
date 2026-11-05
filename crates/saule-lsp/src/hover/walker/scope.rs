@@ -80,22 +80,7 @@ impl<'a> Cx<'a> {
     /// key defaulting to `integer` for an array-style `table<V>` that
     /// declares no key type.
     pub(crate) fn iteration_types(&self, iter: &Expr, vars: usize) -> Vec<Type> {
-        let ty = match self.infer_init_type(iter) {
-            Some(Type::Nullable(inner)) => *inner,
-            Some(t) => t,
-            None => return Vec::new(),
-        };
-        let Type::Table { key, value } = ty else {
-            return Vec::new();
-        };
-        if vars >= 2 {
-            let k = key
-                .map(|k| *k)
-                .unwrap_or_else(|| Type::Named("integer".into()));
-            vec![k, *value]
-        } else {
-            vec![*value]
-        }
+        crate::exprty::loop_binding_types(self.infer_init_type(iter), vars)
     }
 
     /// Record the hover for a loop variable at its binding site, found

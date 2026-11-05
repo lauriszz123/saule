@@ -130,6 +130,23 @@ impl Parsed {
 /// The entry point for every consumer that executes, checks or rewrites the
 /// code — a partially-guessed tree is worse than no tree when the output is
 /// a program's behaviour or the user's file on disk.
+/// [`parse`] for a tool that prints the tree back as source.
+///
+/// `T[]` means `table<integer, T>`, so everything that reads a program's
+/// meaning gets that one type whichever was written. A printer needs to know
+/// which was written. Here a suffix stays a [`GenericType`](saule_ast::GenericType)
+/// named for its brackets (`[]`, `[,]`) with the element as its one argument.
+/// No such name can come from a program.
+pub fn parse_keeping_array_suffixes(tokens: Vec<Spanned<Token>>) -> Result<Module, ParseError> {
+    let mut parser = Parser::new(tokens);
+    parser.keep_array_suffixes = true;
+    let parsed = finish(parser);
+    match parsed.errors.into_iter().next() {
+        Some(first) => Err(first),
+        None => Ok(parsed.module),
+    }
+}
+
 pub fn parse(tokens: Vec<Spanned<Token>>) -> Result<Module, ParseError> {
     let parsed = run(tokens);
     match parsed.errors.into_iter().next() {
@@ -282,6 +299,8 @@ pub struct Parser {
     /// the header expression of a `while`/`for`, where a following `do` belongs
     /// to the loop rather than to the call. See [`Parser::without_trailing_block`].
     no_trailing_block: bool,
+    /// See [`parse_keeping_array_suffixes`].
+    keep_array_suffixes: bool,
     /// Current grammatical nesting depth — see [`MAX_NESTING_DEPTH`] and
     /// [`Parser::nested`]. Parser state rather than a thread-local because
     /// there is already a `&mut self` threaded through every rule.
@@ -319,6 +338,7 @@ impl Parser {
             tokens,
             pos: 0,
             no_trailing_block: false,
+            keep_array_suffixes: false,
             depth: 0,
             errors: Vec::new(),
             last_error_pos: None,

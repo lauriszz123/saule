@@ -95,7 +95,7 @@ class ContactsState extends State
 	end
 
 	local fn submit()
-		local name: string = trimmed(self.name)
+		local name = trimmed(self.name)
 		local email: string = trimmed(self.email)
 
 		if String.len(name) == 0 then
@@ -117,9 +117,9 @@ class ContactsState extends State
 		self.setState() do
 			-- The tag list is copied, or the next edit to the form would
 			-- reach into the row that was just filed.
-			local tags: table<string> = {}
+			local tags: table<integer, string> = {}
 
-			for tag: string in self.tags do
+			for tag in self.tags do
 				tags[#tags + 1] = tag
 			end
 
@@ -389,9 +389,7 @@ class ContactsState extends State
 				cells: {
 					self.nameCell(contact, theme),
 					Text(contact.email).font(13.0).foregroundStyle(theme.textMuted),
-					Chip(label: contact.role, color: theme.surfaceLight).aligned(
-						Alignment.centerLeft()
-					),
+					Chip(label: contact.role, color: theme.surfaceLight).aligned(Alignment.centerLeft()),
 					self.tagCell(contact, theme),
 					IconButton(icon: Icons.delete, tooltip: "Remove", size: 16.0) do
 						self.removeContact(id)
@@ -425,9 +423,11 @@ class ContactsState extends State
 		--
 		-- `ScrollView() do show(grid) end` is the other way to say this. Here
 		-- the slot is named and there is exactly one child, so `child:` wins.
-		return ScrollView(child: grid)
-			.clipped()
-			.background(theme.surface, radius: 10.0, border: theme.border)
+		return ScrollView(child: grid).clipped().background(
+			theme.surface,
+			radius: 10.0,
+			border: theme.border
+		)
 	end
 
 	local fn nameCell(contact: Contact, theme: ThemeData) -> View

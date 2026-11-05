@@ -1,0 +1,55 @@
+---
+/**
+ * JetBrains' own install button for the plugin, which offers to install it into
+ * an IDE that is open. It renders inside a frame the page cannot see into, so
+ * the plain link stays beside it for whenever the frame comes up empty.
+ */
+const PLUGIN_ID = 35823;
+const url = `https://plugins.jetbrains.com/plugin/${PLUGIN_ID}-saule`;
+---
+
+<div class="not-content jetbrains-install">
+	<div id="jetbrains-install"></div>
+	<a href={url}>View Saule on JetBrains Marketplace</a>
+</div>
+
+<script is:inline src="https://plugins.jetbrains.com/assets/scripts/mp-widget.js"></script>
+<script is:inline define:vars={{ PLUGIN_ID }}>
+	window.MarketplaceWidget?.setupMarketplaceWidget('install', PLUGIN_ID, '#jetbrains-install');
+</script>
+
+<style>
+	.jetbrains-install {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 1rem;
+		margin-block: 1rem;
+	}
+
+	/* `not-content` opts out of the site's link colours, so it is stated here. */
+	.jetbrains-install a,
+	.jetbrains-install a:visited {
+		color: var(--sl-color-text-accent);
+	}
+
+	/*
+	 * JetBrains' script adds these, so Astro's scoping cannot reach them.
+	 *
+	 * A frame whose page has a different colour scheme from its parent gets an
+	 * opaque background, which on the dark theme showed as white corners around
+	 * the button. Matching the scheme lets the frame be transparent, and the
+	 * rounding clips it to the button's own shape in any browser that still
+	 * paints a background.
+	 */
+	#jetbrains-install :global(iframe) {
+		display: block;
+		color-scheme: light;
+		border-radius: 24px;
+	}
+
+	#jetbrains-install :global(.mp-embeddable-iframe) {
+		border-radius: 24px;
+		overflow: hidden;
+	}
+</style>

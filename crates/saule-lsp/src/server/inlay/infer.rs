@@ -67,7 +67,8 @@ impl<'a> Cx<'a> {
                 .iter()
                 .rev()
                 .find(|l| l.name == *name)
-                .map(|l| l.ty.clone()),
+                .map(|l| l.ty.clone())
+                .or_else(|| saule_semantic::with_variables(|reg| reg.get(name).cloned())),
             Expr::Call { callee, args, .. } => {
                 if let Expr::Ident(name) = &callee.value {
                     if with_classes(|r| r.contains_key(name)) {
@@ -76,7 +77,9 @@ impl<'a> Cx<'a> {
                     // Sibling top-level `fn` — bind its type parameters
                     // from the actual arguments, exactly as for a generic
                     // native.
-                    if let Some(f) = self.user_fns.get(name) {
+                    if let Some(f) = self.user_fns.get(name)
+                        && !f.sig.returns.is_empty()
+                    {
                         let arg_types = self.positional_arg_types(args);
                         return saule_typeck::sigs::instantiate_returns(&f.sig, &arg_types)
                             .into_iter()
@@ -88,11 +91,26 @@ impl<'a> Cx<'a> {
                                 !saule_typeck::sigs::mentions_unbound_param(t, &f.sig.type_params)
                             });
                     }
+                    if let Some(sig) = crate::exprty::imported_sig(name) {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
+                            .into_iter()
+                            .next()
+                            .filter(|t| {
+                                !saule_typeck::sigs::mentions_unbound_param(t, &sig.type_params)
+                            });
+                    }
                     if let Some(sig) = saule_typeck::sigs::lookup(name) {
                         let arg_types = self.positional_arg_types(args);
                         return saule_typeck::sigs::instantiate_returns(&sig, &arg_types)
                             .into_iter()
                             .next();
+                    }
+                    if let Some(class) = &self.enclosing_class
+                        && let Some(sig) = lookup_method(class, name)
+                    {
+                        let arg_types = self.positional_arg_types(args);
+                        return saule_typeck::sigs::instantiate_method_return(&sig, &arg_types);
                     }
                 }
                 // `recv.method(args)` — dot-call on a class instance or on
@@ -401,6 +419,7 @@ impl<'a> Cx<'a> {
                 .flatten()
                 .map(method_sig_as_native)
                 .or_else(|| self.user_fns.get(name).map(|f| f.sig.clone()))
+                .or_else(|| crate::exprty::imported_sig(name))
                 .or_else(|| saule_typeck::sigs::lookup(name)),
             Expr::Member { obj, name } => self
                 .receiver_class(&obj.value)
@@ -436,6 +455,9 @@ impl<'a> Cx<'a> {
                 }
                 if let Some(f) = self.user_fns.get(name) {
                     return Some(CalleeParams::Named(f.params.clone()));
+                }
+                if let Some(sig) = saule_semantic::lookup_function(name) {
+                    return Some(CalleeParams::Named(sig.params));
                 }
                 // Bare native (`assert`, `tonumber`, ...): synthesise
                 // names from the registered native sig so the user

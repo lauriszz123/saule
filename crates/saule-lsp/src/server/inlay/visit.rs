@@ -56,6 +56,64 @@ impl<'a> Cx<'a> {
         self.visit_expr(e);
     }
 
+    /// What `pat` binds, by the same rules as hover's `bind_pattern`.
+    fn bind_pattern(&mut self, pat: &saule_ast::Pattern, scrutinee: Option<&Type>) {
+        use saule_ast::Pattern;
+        match pat {
+            Pattern::Bind(name) => self.locals.push(Local {
+                name: name.clone(),
+                ty: scrutinee
+                    .cloned()
+                    .map(strip_nullable)
+                    .unwrap_or(Type::Named("any".into())),
+            }),
+            Pattern::Variant {
+                enum_name,
+                variant,
+                fields,
+            } => {
+                let types: Vec<Type> = crate::hover::render::declared_variant_fields(
+                    enum_name,
+                    variant,
+                    &Default::default(),
+                )
+                .map(|ps| ps.into_iter().map(|p| p.ty).collect())
+                .unwrap_or_default();
+                for (i, sub) in fields.iter().enumerate() {
+                    self.bind_pattern(&sub.value, types.get(i));
+                }
+            }
+            Pattern::Tuple(parts) => {
+                for (i, sub) in parts.iter().enumerate() {
+                    let part = match scrutinee {
+                        Some(Type::Tuple(types)) => types.get(i),
+                        _ => None,
+                    };
+                    self.bind_pattern(&sub.value, part);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A `: T` ghost after `name`, found inside `search` because a loop header
+    /// keeps no span for the names it binds.
+    fn push_binding_hint(&mut self, name: &str, search: std::ops::Range<usize>, ty: &Type) {
+        let Some(label) = render_type(ty) else {
+            return;
+        };
+        let Some(found) = crate::hover::util::locate_word_in(self.source, &search, name) else {
+            return;
+        };
+        self.out.push(RawHint {
+            byte: found.end,
+            label: format!(": {label}"),
+            kind: InlayHintKind::TYPE,
+            padding_left: None,
+            padding_right: None,
+        });
+    }
+
     pub(crate) fn visit_stmt(&mut self, s: &Spanned<Stmt>) {
         match &s.value {
             // A recovery hole has no children to walk.
@@ -185,20 +243,47 @@ impl<'a> Cx<'a> {
                     self.visit_expr(s);
                 }
                 let mark = self.locals.len();
+                let bound = [Some(from), Some(to), step.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|e| {
+                        matches!(self.infer_type(&e.value), Some(Type::Named(n)) if n == "float")
+                    });
+                let ty = var_ty
+                    .clone()
+                    .unwrap_or_else(|| Type::Named(if bound { "float" } else { "integer" }.into()));
+                if var_ty.is_none() {
+                    self.push_binding_hint(var, s.span.start..from.span.start, &ty);
+                }
                 self.locals.push(Local {
                     name: var.clone(),
-                    ty: var_ty.clone().unwrap_or(Type::Named("integer".into())),
+                    ty,
                 });
                 self.visit_block(body);
                 self.locals.truncate(mark);
             }
             Stmt::ForIn { vars, iter, body } => {
                 self.visit_expr(iter);
+                let inferred =
+                    crate::exprty::loop_binding_types(self.infer_type(&iter.value), vars.len());
                 let mark = self.locals.len();
-                for (n, t) in vars {
+                let mut from = s.span.start;
+                for (i, (n, t)) in vars.iter().enumerate() {
+                    let header = from..iter.span.start;
+                    if let Some(found) = crate::hover::util::locate_word_in(self.source, &header, n)
+                    {
+                        from = found.end;
+                    }
+                    let ty = t
+                        .clone()
+                        .or_else(|| inferred.get(i).cloned())
+                        .unwrap_or(Type::Named("any".into()));
+                    if t.is_none() {
+                        self.push_binding_hint(n, header, &ty);
+                    }
                     self.locals.push(Local {
                         name: n.clone(),
-                        ty: t.clone().unwrap_or(Type::Named("any".into())),
+                        ty,
                     });
                 }
                 self.visit_block(body);
@@ -217,7 +302,13 @@ impl<'a> Cx<'a> {
             } => {
                 self.visit_block(body);
                 for c in catches {
+                    let mark = self.locals.len();
+                    self.locals.push(Local {
+                        name: c.var.clone(),
+                        ty: c.ty.clone(),
+                    });
                     self.visit_block(&c.body);
+                    self.locals.truncate(mark);
                 }
                 if let Some(f) = finally {
                     self.visit_block(f);
@@ -341,7 +432,10 @@ impl<'a> Cx<'a> {
             Expr::Lambda { params, body, .. } => self.visit_lambda(params, body, None),
             Expr::Match { scrutinee, arms } => {
                 self.visit_expr(scrutinee);
+                let scrutinee_ty = self.infer_type(&scrutinee.value);
                 for arm in arms {
+                    let mark = self.locals.len();
+                    self.bind_pattern(&arm.pattern.value, scrutinee_ty.as_ref());
                     if let Some(g) = &arm.guard {
                         self.visit_expr(g);
                     }
@@ -349,6 +443,7 @@ impl<'a> Cx<'a> {
                         MatchBody::Expr(e) => self.visit_expr(e),
                         MatchBody::Block(b) => self.visit_block(b),
                     }
+                    self.locals.truncate(mark);
                 }
             }
             Expr::Int(_)

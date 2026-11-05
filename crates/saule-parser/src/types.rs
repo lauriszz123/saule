@@ -150,6 +150,12 @@ impl Parser {
             dims += 1;
         }
         self.expect_close(&Token::RBracket, "`]` to close an array type")?;
+        if self.keep_array_suffixes {
+            return Ok(Type::generic(
+                format!("[{}]", ",".repeat(dims - 1)),
+                vec![ty],
+            ));
+        }
         for _ in 0..dims {
             ty = Type::Table {
                 key: Some(Box::new(Type::Named("integer".to_string()))),

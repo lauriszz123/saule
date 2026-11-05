@@ -232,3 +232,78 @@ pub(crate) fn refine_lambda_params(
         })
         .collect()
 }
+
+/// The signature of a function the semantic pass knows by this local name,
+/// which is how an imported function is reached: its body is in another file.
+pub(crate) fn imported_sig(name: &str) -> Option<saule_typeck::sigs::NativeSig> {
+    let sig = saule_semantic::lookup_function(name)?;
+    Some(saule_typeck::sigs::NativeSig {
+        type_params: sig.type_params,
+        bounds: Vec::new(),
+        params: sig.params.into_iter().map(|p| p.ty).collect(),
+        variadic: None,
+        returns: sig.return_ty.into_iter().collect(),
+    })
+}
+
+/// What each variable of `for a, b in iter` binds, for as many as are known.
+///
+/// A table yields its value to one variable and key then value to two. A step
+/// closure yields what it returns, without the `nil` that ends the loop. A
+/// class yields what its `Iterable<T>` or `Iterable2<K, V>` says.
+pub(crate) fn loop_binding_types(iter: Option<Type>, vars: usize) -> Vec<Type> {
+    let iter = match iter {
+        Some(Type::Nullable(inner)) => *inner,
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    match iter {
+        Type::Table { key, value } if vars >= 2 => vec![
+            key.map_or_else(|| Type::Named("integer".into()), |k| *k),
+            *value,
+        ],
+        Type::Table { value, .. } => vec![*value],
+        Type::Function { ret, .. } => match *ret {
+            Type::Tuple(parts) => parts.into_iter().map(without_nil).collect(),
+            other => vec![without_nil(other)],
+        },
+        Type::Named(class) => class_iteration(&class, &[], vars, 0),
+        Type::Generic(g) => class_iteration(&g.name, &g.args, vars, 0),
+        _ => Vec::new(),
+    }
+}
+
+fn without_nil(ty: Type) -> Type {
+    match ty {
+        Type::Nullable(inner) => *inner,
+        other => other,
+    }
+}
+
+fn class_iteration(class: &str, args: &[Type], vars: usize, depth: usize) -> Vec<Type> {
+    let Some(info) = saule_semantic::with_classes(|reg| reg.get(class).cloned()) else {
+        return Vec::new();
+    };
+    if depth > 32 {
+        return Vec::new();
+    }
+    let wanted = if vars >= 2 { "Iterable2" } else { "Iterable" };
+    let bind = |ty: &Type| saule_semantic::substitute_type_params(ty, &info.type_params, args);
+    for (name, given) in info.implements.iter().zip(&info.implements_args) {
+        if name == wanted && !given.is_empty() {
+            return given.iter().map(bind).collect();
+        }
+    }
+    if let Some(parent) = &info.parent {
+        let parent_args: Vec<Type> = info.parent_args.iter().map(bind).collect();
+        let inherited = class_iteration(parent, &parent_args, vars, depth + 1);
+        if !inherited.is_empty() {
+            return inherited;
+        }
+    }
+    // `implements Iterable` with no arguments: the method says what it yields.
+    match saule_semantic::lookup_method(class, "iter").and_then(|sig| sig.return_ty) {
+        Some(step) => loop_binding_types(Some(bind(&step)), vars),
+        None => Vec::new(),
+    }
+}

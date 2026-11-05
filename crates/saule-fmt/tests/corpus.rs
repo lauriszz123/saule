@@ -1033,3 +1033,161 @@ fn formatting_preserves_what_the_author_wrote() {
     }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+fn stays_as_written(src: &str) {
+    let out = format_with_comments(src).expect("formats");
+    assert_eq!(out, src, "the formatter changed what the author wrote");
+}
+
+#[test]
+fn array_types_keep_the_way_they_were_written() {
+    stays_as_written(concat!(
+        "local a: string[] = {}\n",
+        "local b: string[][] = {}\n",
+        "local c: string[,] = {}\n",
+        "local d: string[]? = nil\n",
+        "local e: string?[] = {}\n",
+        "local f: (fn() -> integer)[] = {}\n",
+        "local g: (fn() -> integer)[]? = nil\n",
+        "local h: fn() -> integer[] = fn()\n  return {}\nend\n",
+        "local i: table<integer, string> = {}\n",
+        "local j: table<integer, string[]> = {}\n",
+        "local k: table<string>[] = {}\n",
+        "local l: table<string, Box<string[]>> = {}\n",
+        "local m: Box<string>[] = {}\n",
+    ));
+}
+
+#[test]
+fn array_types_keep_their_spelling_in_every_position() {
+    stays_as_written(concat!(
+        "class Inbox<T>\n",
+        "  tags: string[]\n",
+        "  local seen: T[] = {}\n\n",
+        "  fn add(item: T, others: T[]) -> T[]\n",
+        "    return others\n",
+        "  end\n",
+        "end\n\n",
+        "interface Tagged\n",
+        "  fn tags() -> string[]\n",
+        "end\n\n",
+        "export names: string[] = {}\n\n",
+        "fn pick(names: string[], ...rest: string[]) -> (string[], integer[])\n",
+        "  local cast = names as string[]\n",
+        "  local f = (xs: string[]) -> string[] => xs\n",
+        "  for n: string[] in {names} do\n",
+        "    println(#n)\n",
+        "  end\n",
+        "  return names, {}\n",
+        "end\n",
+    ));
+}
+
+#[test]
+fn a_comment_inside_a_lambda_argument_stays_inside_it() {
+    stays_as_written(concat!(
+        "out.setBackward(fn()\n",
+        "  -- the forward pass already computed this\n",
+        "  lhs.accumulate(out.gradient())\n",
+        "end)\n",
+    ));
+}
+
+#[test]
+fn a_long_lambda_argument_stays_hugged_by_the_parentheses() {
+    stays_as_written(concat!(
+        "out.setBackward(fn()\n",
+        "  local slope: NDArray = (lhs.value ^ (rhs.value - 1.0)) * rhs.value * rhs.value * rhs.value\n",
+        "  lhs.accumulate(out.gradient() * slope * slope * slope * slope * slope * slope)\n",
+        "end)\n",
+    ));
+    stays_as_written("foo(1, \"two\", fn(x: integer) -> integer\n  return x\nend)\n");
+}
+
+#[test]
+fn string_escapes_keep_the_way_they_were_written() {
+    stays_as_written(concat!(
+        "println(\"\\x41\")\n",
+        "println(\"\\u{2714} done\")\n",
+        "println('\\u{e9}')\n",
+        "println(\"tab\\there\")\n",
+        "local t: table<string, integer> = {\"\\x41\": 1}\n",
+    ));
+}
+
+#[test]
+fn a_bracketed_string_key_keeps_its_brackets() {
+    stays_as_written("local t: table<string, integer> = {[\"beta\"]: 2, [\"a b\"]: 3, gamma: 4}\n");
+}
+
+#[test]
+fn operands_in_parentheses_gain_no_extra_pair() {
+    stays_as_written("local a = ((r & m) << 8) | ((g & m) << 4) | (b & m)\n");
+    stays_as_written("local a = (x + 1) | (y + 1)\n");
+    stays_as_written("local a = -2 ^ 2\n");
+    stays_as_written("local a = -(2 ^ 2)\n");
+    stays_as_written("local a = (-2) ^ 2\n");
+    stays_as_written("local a = 2.0 ^ -1.0\n");
+    stays_as_written("local a = 2.0 ^ (-1.0)\n");
+    stays_as_written("local a = -(-b)\n");
+    stays_as_written("local a = (\")\" .. b) .. (\"(\" .. c)\n");
+    stays_as_written("local a = ((x + 1) | (y + 1)) | z\n");
+}
+
+/// Every token and comment of every program in order, with what layout may
+/// legitimately change set aside: a list's trailing comma, and parentheses in
+/// a position that brings its own.
+#[test]
+fn formatting_the_corpus_changes_no_token() {
+    use saule_lexer::{Lexer, Token};
+    let spelled = |src: &str| -> Option<Vec<String>> {
+        let tokens = Lexer::new(src).tokenize().ok()?;
+        Some(
+            tokens
+                .into_iter()
+                .filter_map(|t| {
+                    let text = src.get(t.span.clone())?.trim_end().to_string();
+                    match t.value {
+                        Token::Eof | Token::Comma | Token::LParen | Token::RParen => None,
+                        _ => Some(text),
+                    }
+                })
+                .collect(),
+        )
+    };
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "sau") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&workspace_root().join("tests"), &mut files);
+    walk(&workspace_root().join("examples"), &mut files);
+    assert!(files.len() > 100, "found only {}", files.len());
+    // The corpus holds programs at the parser's nesting limit.
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let mut failures = Vec::new();
+            for path in files {
+                let Ok(src) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(out) = format_with_comments(&src) else {
+                    continue;
+                };
+                if spelled(&src) != spelled(&out) {
+                    failures.push(path.display().to_string());
+                }
+            }
+            assert!(failures.is_empty(), "changed: {failures:#?}");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

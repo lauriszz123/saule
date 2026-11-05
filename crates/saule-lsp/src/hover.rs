@@ -25,7 +25,7 @@ mod imports;
 pub(crate) mod render;
 #[cfg(test)]
 mod tests;
-mod util;
+pub(crate) mod util;
 mod walker;
 
 use std::ops::Range;

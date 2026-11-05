@@ -16,6 +16,15 @@ history.
 
 ### Fixed
 
+- **`saule fmt` keeps what you wrote.** `string[]` no longer becomes
+  `table<integer, string>`, and neither do `T[,]`, `T[]?` or `(fn() -> T)[]`. String
+  escapes stay escapes, `["key"]` keeps its brackets, and `(a) | (b) | c` gains no
+  extra parentheses. A comment at the top of a lambda argument stays inside it, and
+  a long `f(fn() … end)` is no longer split on to separate lines.
+- **Hover and inlay hints know more types.** A call to an imported function, an
+  imported variable, a `for` variable, a match binding and a `catch` variable are
+  all typed, so `for tag in self.tags` shows `tag: string` and hover stops saying
+  `any` for them. Signature help works on imported functions too.
 - An arithmetic expression with many terms no longer hangs. Time doubled or worse
   with every `+ - * / %`, so 18 terms effectively never finished, in `saule run`,
   `saule check` and the editor.

@@ -91,9 +91,20 @@ pub fn format_module_with_options(
     comments: &[Comment],
     options: FmtOptions,
 ) -> String {
+    let spelled = parse_as_written(source);
     let mut p = Printer::new(source, comments, options);
-    p.module(module);
+    p.module(spelled.as_ref().unwrap_or(module));
     p.finish()
+}
+
+/// `source` parsed with its array suffixes intact, so `string[]` prints as
+/// `string[]`. The caller's tree has them desugared, which is what the rest
+/// of the toolchain wants. `None` leaves the printer with that tree.
+fn parse_as_written(source: &str) -> Option<Module> {
+    use saule_lexer::{Lexer, Token};
+    let mut tokens = Lexer::new(source).tokenize().ok()?;
+    tokens.retain(|t| !matches!(t.value, Token::LineComment(_) | Token::BlockComment(_)));
+    saule_parser::parse_keeping_array_suffixes(tokens).ok()
 }
 
 /// Layout configuration for the printer.

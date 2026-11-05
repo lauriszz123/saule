@@ -20,7 +20,7 @@ fn is_ident_byte(b: u8) -> bool {
 /// Locate the first occurrence of `name` as a word (bounded by
 /// non-identifier bytes) inside `source[range]`. Returns the absolute
 /// byte range of the match.
-pub(super) fn locate_word_in(
+pub(crate) fn locate_word_in(
     source: &str,
     range: &Range<usize>,
     name: &str,

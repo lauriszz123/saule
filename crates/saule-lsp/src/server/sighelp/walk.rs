@@ -653,7 +653,12 @@ pub(crate) fn contains(span: &std::ops::Range<usize>, offset: usize) -> bool {
 /// signature-help walker can resolve free-call expressions whose target
 /// is a user-defined function (not a class init, not a stdlib native).
 pub(crate) fn collect_user_fns(module: &Module) -> HashMap<String, (Vec<Param>, Option<Type>)> {
-    let mut out = HashMap::new();
+    let mut out: HashMap<String, (Vec<Param>, Option<Type>)> =
+        saule_semantic::with_functions(|reg| {
+            reg.iter()
+                .map(|(name, sig)| (name.clone(), (sig.params.clone(), sig.return_ty.clone())))
+                .collect()
+        });
     for s in &module.stmts {
         if let Stmt::Decl(d) = &s.value
             && let Decl::Function {

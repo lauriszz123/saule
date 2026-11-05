@@ -198,6 +198,7 @@ impl crate::exprty::TypeSource for Cx<'_> {
         self.module_fns
             .get(name)
             .map(|f| f.sig.clone())
+            .or_else(|| crate::exprty::imported_sig(name))
             .or_else(|| saule_typeck::sigs::lookup(name))
     }
 
