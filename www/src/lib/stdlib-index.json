@@ -349,6 +349,42 @@
 			"href": "/stdlib/string/#string-format"
 		},
 		{
+			"label": "String.match",
+			"owner": "String",
+			"name": "match",
+			"method": false,
+			"signature": "String.match(s: string, pat: string, from: integer?) -> table<string>?",
+			"params": "s: string, pat: string, from: integer?",
+			"returns": "table<string>?",
+			"detail": "The first match of `pat` in `s`, or `nil` when there is none. `from` says where to start looking and defaults to 1; a negative value counts back from the end.",
+			"section": "Patterns",
+			"href": "/stdlib/string/#string-match"
+		},
+		{
+			"label": "String.gmatch",
+			"owner": "String",
+			"name": "gmatch",
+			"method": false,
+			"signature": "String.gmatch(s: string, pat: string) -> fn() -> (string?, table<string>?)",
+			"params": "s: string, pat: string",
+			"returns": "fn() -> (string?, table<string>?)",
+			"detail": "A step closure over **every** match, for `for … in`. Each call reports the whole match and its captures; the loop ends when there are no more.",
+			"section": "Patterns",
+			"href": "/stdlib/string/#string-gmatch"
+		},
+		{
+			"label": "String.gsub",
+			"owner": "String",
+			"name": "gsub",
+			"method": false,
+			"signature": "String.gsub(s: string, pat: string, repl: string, limit: integer?) -> (string, integer)",
+			"params": "s: string, pat: string, repl: string, limit: integer?",
+			"returns": "(string, integer)",
+			"detail": "Every match of `pat` in `s` replaced by `repl`, and **how many** replacements were made. `limit` caps the count; without it every match is replaced.",
+			"section": "Patterns",
+			"href": "/stdlib/string/#string-gsub"
+		},
+		{
 			"label": "Bytes.of",
 			"owner": "Bytes",
 			"name": "of",
@@ -356,7 +392,7 @@
 			"signature": "Bytes.of(...byte) -> bytes",
 			"params": "...byte",
 			"returns": "bytes",
-			"detail": "Builds a buffer from byte values. The arguments are typed [`byte`](../README.md#the-byte-type), so a literal outside `0..=255` is a **compile** error rather than a runtime surprise, and a computed value has to narrow with `as byte` first.",
+			"detail": "Builds a buffer from byte values. The arguments are typed [`byte`](./LANGUAGE.md#the-byte-type), so a literal outside `0..=255` is a **compile** error rather than a runtime surprise, and a computed value has to narrow with `as byte` first.",
 			"section": "Building",
 			"href": "/stdlib/bytes/#bytes-of"
 		},
@@ -428,7 +464,7 @@
 			"signature": "Bytes.byte(b: bytes, i: integer) -> byte?",
 			"params": "b: bytes, i: integer",
 			"returns": "byte?",
-			"detail": "The byte at `i`, or `nil` when `i` is outside the buffer. The result is a [`byte`](../README.md#the-byte-type), which is in `0..=255` by construction and widens to `integer` for free.",
+			"detail": "The byte at `i`, or `nil` when `i` is outside the buffer. The result is a [`byte`](./LANGUAGE.md#the-byte-type), which is in `0..=255` by construction and widens to `integer` for free.",
 			"section": "Inspecting",
 			"href": "/stdlib/bytes/#bytes-byte"
 		},
@@ -641,10 +677,10 @@
 			"owner": "Math",
 			"name": "pow",
 			"method": false,
-			"signature": "Math.pow<N>(a: N, b: N) -> float",
-			"params": "a: N, b: N",
+			"signature": "Math.pow<N>(base: N, exp: N) -> float",
+			"params": "base: N, exp: N",
 			"returns": "float",
-			"detail": "`a` raised to the power `b`. **Always a float**, which is what lets it answer a negative exponent — `2 ^ -1` is an error on integers, while `Math.pow(2, -1)` is `0.5`.",
+			"detail": "`base` raised to the power `exp`. **Always a float**, which is what lets it answer a negative exponent — `2 ^ -1` is an error on integers, while `Math.pow(2, -1)` is `0.5`.",
 			"section": "Arithmetic",
 			"href": "/stdlib/math/#math-pow"
 		},

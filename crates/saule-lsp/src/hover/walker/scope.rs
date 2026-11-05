@@ -4,8 +4,8 @@
 
 use crate::hover::render::{
     render_class_full, render_enum_from_registry, render_function_sig,
-    render_interface_from_registry, render_native_sig_full, render_stdlib_module, render_type,
-    with_doc,
+    render_interface_from_registry, render_native_sig_full, render_stdlib_entry,
+    render_stdlib_module, render_stdlib_module_doc, render_type, with_doc,
 };
 use crate::hover::util::{
     collect_named_heads, contains, is_primitive, locate_word_in, named_type, resolve_member,
@@ -268,17 +268,23 @@ impl<'a> Cx<'a> {
         if let Some(f) = self.module_fns.get(name) {
             return Some(with_doc(f.md.clone(), doc));
         }
-        if let Some(sig) = saule_typeck::sigs::lookup(name) {
+        if saule_typeck::sigs::lookup(name).is_some() {
+            // A prelude function — `println`, `assert`. Documented in
+            // `DOCS.md`, which has the parameter names the registry does not.
+            if let Some(entry) = saule_docs::stdlib().entry(name) {
+                return Some(render_stdlib_entry(entry));
+            }
+            let sig = saule_typeck::sigs::lookup(name)?;
             return Some(format!(
                 "```saule\nfn {name}{}\n```",
                 render_native_sig_full(&sig)
             ));
         }
         if saule_typeck::sigs::is_value_type(name) && saule_semantic::prelude::contains(name) {
-            return Some(render_stdlib_module(name, "type"));
+            return Some(stdlib_module_card(name, "type"));
         }
         if saule_typeck::sigs::is_module(name) && saule_semantic::prelude::contains(name) {
-            return Some(render_stdlib_module(name, "module"));
+            return Some(stdlib_module_card(name, "module"));
         }
         // Bare identifier inside a class body — try resolving as a
         // method or field of the enclosing class. Covers calling a
@@ -394,5 +400,17 @@ impl<'a> Cx<'a> {
             }
             _ => None,
         }
+    }
+}
+
+/// A module's hover card: the member list the registry can build, plus the
+/// module's own prose from `DOCS.md` when it has some.
+///
+/// `Io / File` is documented as one page under two names, so both resolve.
+fn stdlib_module_card(name: &str, kind: &str) -> String {
+    let members = render_stdlib_module(name, kind);
+    match saule_docs::stdlib().module(name) {
+        Some(m) => render_stdlib_module_doc(m, members),
+        None => members,
     }
 }

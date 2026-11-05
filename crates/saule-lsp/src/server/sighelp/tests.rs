@@ -213,11 +213,11 @@ fn signature_for_stdlib_string_find_uses_real_param_names() {
     let h = help(src, "find(\"", 5).expect("help");
     let label = &h.signatures[0].label;
     assert!(label.contains("s: "), "expected `s:` in {label}");
-    assert!(
-        label.contains("pattern: "),
-        "expected `pattern:` in {label}"
-    );
-    assert!(label.contains("init"), "expected `init` in {label}");
+    // `needle` and `from`, from `DOCS.md`. `String.find` takes literal
+    // text, so the hand table's old `pattern` / `init` were Lua's names for
+    // a different function.
+    assert!(label.contains("needle: "), "expected `needle:` in {label}");
+    assert!(label.contains("from"), "expected `from` in {label}");
 }
 
 // ── `self.super(...)` → parent constructor ────────────────────

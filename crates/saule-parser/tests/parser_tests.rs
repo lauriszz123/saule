@@ -917,15 +917,21 @@ fn a_generic_call_can_close_with_a_right_shift() {
 // ── `from` stays a keyword ───────────────────────────────────────────────
 
 #[test]
-fn from_is_reserved_everywhere() {
-    // `from` opens an import tail and is a keyword in every position. It
-    // briefly had a contextual exemption after `fn` and `.`, so that the
-    // conversion contract could spell its method `from`; renaming that
-    // method to `of` let the exemption go, and with it the half-permitted
-    // state where `from` worked in two places and failed in the rest.
+fn from_is_reserved_as_a_name() {
+    // `from` opens an import tail and cannot be *declared* as a name: not as
+    // a local, not as a parameter, not as a method.
+    //
+    // It once had a contextual exemption after `fn` and `.`, so that the
+    // conversion contract could spell its method `from`; renaming that method
+    // to `of` let the exemption go, and with it "the half-permitted state
+    // where `from` worked in two places and failed in the rest".
+    //
+    // Reading a member name after `.` is now uniform for every keyword, which
+    // is the opposite of that half state rather than a return to it — see
+    // `keywords_are_member_names_after_a_dot`. So `C.from("x")` parses, while
+    // everything that would *bind* the name still does not.
     for src in [
         "class C\n\tstatic fn from(s: string) -> C\n\t\treturn C()\n\tend\nend",
-        "local v = C.from(\"x\")",
         "local from = 1",
         "fn slice(from: integer) -> integer\n\treturn from\nend",
     ] {
@@ -1074,4 +1080,77 @@ fn a_bracket_holding_an_expression_is_not_an_array_suffix() {
     assert_eq!(m.stmts.len(), 1);
     let m = parse_src("local n: integer = (a as integer[])[1]");
     assert_eq!(m.stmts.len(), 1);
+}
+
+/// A keyword is a legal member name after `.` or `?.`.
+///
+/// The grammar demands a name there, so nothing a keyword could mean instead
+/// is reachable — and without this, the reserved-word list decides what a
+/// library may call its methods. `String.match` is the case that forced it.
+#[test]
+fn keywords_are_member_names_after_a_dot() {
+    for src in [
+        "local x = String.match(s, p)",
+        "local x = t.class",
+        "local x = t.enum",
+        "local x = t.for",
+        "local x = t.end",
+        "local x = t.if",
+        "local x = t.local",
+        "local x = t?.match",
+        "local x = a.match.enum",
+    ] {
+        let tokens = Lexer::new(src).tokenize().expect("lex ok");
+        parse(tokens).unwrap_or_else(|e| panic!("`{src}` should parse, got {e:?}"));
+    }
+}
+
+/// The member name is the keyword's own spelling, not a placeholder.
+#[test]
+fn a_keyword_member_keeps_its_name() {
+    let m = parse_src("local x = String.match(s, p)");
+    let Stmt::Local {
+        value: Some(value), ..
+    } = &m.stmts[0].value
+    else {
+        panic!("expected local");
+    };
+    // `String.match(...)` is a call whose callee is the member access.
+    let Expr::Call { callee, .. } = &value.value else {
+        panic!("expected a call, got {:?}", value.value);
+    };
+    match &callee.value {
+        Expr::Member { name, .. } => assert_eq!(name, "match"),
+        other => panic!("expected member access, got {other:?}"),
+    }
+}
+
+/// A keyword after `.` must not swallow the token a statement needs.
+///
+/// `end` is the risk case: if the member rule applied where no `.` preceded
+/// it, a block would lose its terminator.
+#[test]
+fn a_keyword_is_still_a_keyword_without_a_dot() {
+    let m = parse_src("if a then\n    x = 1\nend\nlocal y = 2");
+    assert_eq!(m.stmts.len(), 2, "the `end` closed the `if`");
+}
+
+/// The keyword-as-member rule requires adjacency, so a keyword separated from
+/// the dot by whitespace is still a keyword.
+///
+/// This is what stops `local c = player.` from eating the `local` on the next
+/// line while the file is half-typed — see `member_access_with_nothing_after_
+/// the_dot` in the recovery suite, and `Parser::member_name`.
+#[test]
+fn a_keyword_is_only_a_member_name_when_tight_against_the_dot() {
+    // Adjacent: a member name.
+    let tokens = Lexer::new("local x = t.match").tokenize().expect("lex ok");
+    assert!(parse(tokens).is_ok(), "`t.match` should parse");
+
+    // Separated: not a member name, so this is a parse error rather than a
+    // silent reinterpretation of the next statement.
+    for src in ["local x = t. match", "local x = t.\nmatch"] {
+        let tokens = Lexer::new(src).tokenize().expect("lex ok");
+        assert!(parse(tokens).is_err(), "`{src}` should not parse");
+    }
 }

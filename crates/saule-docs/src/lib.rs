@@ -58,12 +58,14 @@
 mod extract;
 mod index;
 mod render;
+pub mod stdlib;
 #[cfg(test)]
 mod tests;
 mod validate;
 
 pub use extract::extract;
 pub use index::{DocIndex, ItemKind, collect, walk};
+pub use stdlib::{EntryKind, StdlibDocs, StdlibEntry, StdlibModule, stdlib};
 pub use validate::{DocWarning, validate};
 
 use std::ops::Range;

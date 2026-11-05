@@ -31,6 +31,9 @@ pub mod iter;
 pub mod math;
 pub mod ops;
 pub mod os;
+/// Lua-style patterns, backing `String.match`, `String.gmatch` and
+/// `String.gsub`. Not a package of its own — it has no Saule-visible surface.
+pub mod pattern;
 pub mod process;
 pub mod project;
 pub mod sigs;

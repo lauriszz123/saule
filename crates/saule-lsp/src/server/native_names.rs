@@ -23,7 +23,19 @@ use saule_typeck::sigs::NativeSig;
 /// trailing slot named after the variadic type.
 pub(super) fn param_names(qname: &str, sig: &NativeSig) -> Vec<String> {
     let table = stdlib_table();
-    let mut out: Vec<String> = if let Some(named) = table.get(qname) {
+    // `DOCS.md` first: it documents every stdlib function with its parameter
+    // names, so it covers the whole library rather than the most-used corner
+    // of it, and it is the spelling the reader has already seen in the
+    // reference. The table below predates it and stays as the fallback for a
+    // name the documentation has not reached yet; `names_agree_with_the_docs`
+    // keeps the two from drifting where both have an answer.
+    let documented = saule_docs::stdlib()
+        .entry(qname)
+        .map(|e| e.params.clone())
+        .filter(|p| !p.is_empty());
+    let mut out: Vec<String> = if let Some(p) = documented {
+        p
+    } else if let Some(named) = table.get(qname) {
         named.iter().map(|s| (*s).to_string()).collect()
     } else {
         derive_from_types(&sig.params)
@@ -34,12 +46,17 @@ pub(super) fn param_names(qname: &str, sig: &NativeSig) -> Vec<String> {
     while out.len() < sig.params.len() {
         out.push(derive_one(&sig.params[out.len()]));
     }
-    if sig.variadic.is_some() {
-        let var_name = sig
-            .variadic
-            .as_ref()
-            .map(derive_one)
-            .unwrap_or_else(|| "rest".to_string());
+    if let Some(var_ty) = &sig.variadic {
+        // The table may name the variadic slot too — `String.char`'s
+        // `codepoint`, `Io.read`'s `path` — and that name is better than
+        // anything derivable from `integer` or `string`. It sits at the index
+        // just past the positional parameters. (The documentation never names
+        // this slot: see `StdlibEntry::params`.)
+        let var_name = table
+            .get(qname)
+            .and_then(|named| named.get(sig.params.len()))
+            .map(|n| (*n).to_string())
+            .unwrap_or_else(|| derive_one(var_ty));
         out.push(var_name);
     }
     // Disambiguate duplicates by appending an index — `s, s` becomes
@@ -110,117 +127,30 @@ fn stdlib_table() -> &'static HashMap<&'static str, &'static [&'static str]> {
     TABLE.get_or_init(|| {
         let mut m: HashMap<&'static str, &'static [&'static str]> = HashMap::new();
 
-        // ── Math ────────────────────────────────────────────────
-        for f in &[
-            "Math.floor",
-            "Math.ceil",
-            "Math.round",
-            "Math.sign",
-            "Math.sqrt",
-            "Math.sin",
-            "Math.cos",
-            "Math.tan",
-            "Math.asin",
-            "Math.acos",
-            "Math.exp",
-            "Math.deg",
-            "Math.rad",
-            "Math.abs",
-            "Math.type",
-        ] {
-            m.insert(f, &["n"]);
-        }
-        m.insert("Math.atan", &["y", "x"]);
-        m.insert("Math.log", &["x", "base"]);
-        m.insert("Math.max", &["a", "b"]);
-        m.insert("Math.min", &["a", "b"]);
-        m.insert("Math.pow", &["base", "exp"]);
-        m.insert("Math.random", &["lo", "hi"]);
-        m.insert("Math.randomseed", &["seed"]);
-        m.insert("Math.modf", &["n"]);
-        m.insert("Math.fmod", &["a", "b"]);
-
-        // ── String ──────────────────────────────────────────────
-        m.insert("String.byte", &["s", "i"]);
+        // What is left here after `DOCS.md` became the source of positional
+        // names: the **variadic** slots, which the documentation declines to
+        // name because `...string` declares a type and no name.
+        //
+        // This table used to carry every name for the most-used corner of the
+        // library. Sixty-nine of those entries became unreachable the moment
+        // `param_names` preferred the documentation, and eighteen of them
+        // *contradicted* it — `String.find`'s second argument was called
+        // `pattern` here, which was merely unhelpful before Lua patterns
+        // existed and is actively wrong now that `String.gsub` takes a real
+        // one. They are gone rather than left to rot:
+        // `names_agree_with_the_docs` fails if a new one reappears.
         m.insert("String.char", &["codepoint"]);
         m.insert("String.format", &["fmt"]);
-        m.insert("String.len", &["s"]);
-        m.insert("String.sub", &["s", "i", "j"]);
-        m.insert("String.rep", &["s", "n"]);
-        m.insert("String.starts", &["s", "prefix"]);
-        m.insert("String.ends", &["s", "suffix"]);
-        m.insert("String.find", &["s", "pattern", "init"]);
-        m.insert("String.lower", &["s"]);
-        m.insert("String.upper", &["s"]);
-        m.insert("String.iter", &["s"]);
-        m.insert("String.split", &["s", "sep"]);
-        m.insert("String.trim", &["s"]);
-        m.insert("String.replace", &["s", "from", "to"]);
-        m.insert("String.contains", &["s", "needle"]);
-
-        // ── Os ──────────────────────────────────────────────────
-        m.insert("Os.difftime", &["t2", "t1"]);
-        m.insert("Os.date", &["fmt", "time"]);
-        m.insert("Os.sleep", &["seconds"]);
-        m.insert("Os.getenv", &["name"]);
-        m.insert("Os.setenv", &["name", "value"]);
-        m.insert("Os.chdir", &["path"]);
-        m.insert("Os.remove", &["path"]);
-        m.insert("Os.rename", &["from", "to"]);
-        m.insert("Os.list", &["path"]);
-        m.insert("Os.exists", &["path"]);
-        m.insert("Os.mkdir", &["path", "recursive"]);
-        m.insert("Os.exit", &["code"]);
-        m.insert("Os.execute", &["cmd"]);
-        m.insert("Os.read_file", &["path"]);
-        m.insert("Os.write_file", &["path", "contents"]);
-        m.insert("Os.append_file", &["path", "contents"]);
-        m.insert("Os.is_dir", &["path"]);
-        m.insert("Os.is_file", &["path"]);
-
-        // ── Io ──────────────────────────────────────────────────
-        m.insert("Io.open", &["path", "mode"]);
         m.insert("Io.read", &["path"]);
         m.insert("Io.write", &["path", "contents"]);
         m.insert("File.read", &["mode"]);
         m.insert("File.write", &["data"]);
-        m.insert("File.close", &[]);
-        m.insert("File.lines", &[]);
-        m.insert("File.seek", &["whence", "offset"]);
-
-        // ── Table ───────────────────────────────────────────────
-        m.insert("Table.insert", &["t", "value", "pos"]);
-        m.insert("Table.remove", &["t", "pos"]);
-        m.insert("Table.concat", &["t", "sep", "i", "j"]);
-        m.insert("Table.sort", &["t", "cmp"]);
-        m.insert("Table.unpack", &["t", "i", "j"]);
+        m.insert("Math.max", &["a"]);
+        m.insert("Math.min", &["a"]);
         m.insert("Table.pack", &["values"]);
-        m.insert("Table.contains", &["t", "value"]);
-        m.insert("Table.indexof", &["t", "value"]);
-        m.insert("Table.copy", &["t"]);
-        m.insert("Table.length", &["t"]);
-        m.insert("Table.keys", &["t"]);
-        m.insert("Table.values", &["t"]);
-
-        // ── Iter ────────────────────────────────────────────────
-        m.insert("Iter.range", &["from", "to", "step"]);
-        m.insert("Iter.map", &["iter", "fn"]);
-        m.insert("Iter.filter", &["iter", "predicate"]);
-        m.insert("Iter.reduce", &["iter", "init", "fn"]);
-        m.insert("Iter.take", &["iter", "n"]);
-        m.insert("Iter.skip", &["iter", "n"]);
-        m.insert("Iter.collect", &["iter"]);
-
-        // ── core (bare) ─────────────────────────────────────────
         m.insert("println", &["value"]);
         m.insert("print", &["value"]);
         m.insert("printf", &["fmt"]);
-        m.insert("assert", &["cond", "message"]);
-        m.insert("error", &["message", "level"]);
-        m.insert("typeof", &["value"]);
-        m.insert("tostring", &["value"]);
-        m.insert("pairs", &["t"]);
-        m.insert("ipairs", &["t"]);
 
         m
     })
@@ -242,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn known_stdlib_returns_table_names() {
+    fn known_stdlib_returns_documented_names() {
         let s = sig(
             vec![
                 Type::Named("string".into()),
@@ -251,7 +181,22 @@ mod tests {
             ],
             None,
         );
-        assert_eq!(param_names("String.find", &s), vec!["s", "pattern", "init"]);
+        // `needle` and `from`, not `pattern` and `init`: these come from
+        // `DOCS.md` now, and the old hand-table spelling called a literal
+        // substring a "pattern" — a name that was unhelpful before
+        // `String.gsub` existed and wrong afterwards.
+        assert_eq!(param_names("String.find", &s), vec!["s", "needle", "from"]);
+    }
+
+    /// A variadic slot is still named by the table, which is the only source
+    /// with a name for it.
+    #[test]
+    fn a_variadic_slot_is_named_by_the_table() {
+        let s = sig(vec![], Some(Type::Named("integer".into())));
+        // `codepoint`, not the type-derived `i`.
+        assert_eq!(param_names("String.char", &s), vec!["codepoint"]);
+        let w = sig(vec![], Some(Type::Named("string".into())));
+        assert_eq!(param_names("Io.read", &w), vec!["path"]);
     }
 
     #[test]
@@ -294,5 +239,118 @@ mod tests {
             None,
         );
         assert_eq!(param_names("Foo.bar", &s), vec!["i"]);
+    }
+    /// The hand table and `DOCS.md` must not disagree.
+    ///
+    /// Both answer "what are this function's parameters called", and the
+    /// reader sees the documentation's spelling in the reference and the
+    /// table's in signature help. Where both have an answer it has to be the
+    /// same answer, or the editor contradicts the manual.
+    ///
+    /// A mismatch is fixed in whichever is wrong — usually the table, since
+    /// the documentation's examples are executed by CI and its signature is
+    /// the one checked against the compiler.
+    #[test]
+    fn every_registered_member_is_documented() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(saule_runtime::init);
+        let docs = saule_docs::stdlib();
+        let mut missing = Vec::new();
+        let mut total = 0;
+        for module in [
+            "String", "Bytes", "Math", "Table", "Iter", "Io", "Os", "Saule", "Project", "File",
+            "Process",
+        ] {
+            for m in saule_typeck::sigs::module_members(module) {
+                total += 1;
+                let q = format!("{module}.{m}");
+                if docs.entry(&q).is_none() {
+                    missing.push(q);
+                }
+            }
+        }
+        for free in [
+            "print",
+            "println",
+            "printf",
+            "tostring",
+            "type",
+            "assert",
+            "error",
+            "typeof",
+            "ipairs",
+            "pairs",
+            "tonumber",
+            "tointeger",
+        ] {
+            if saule_typeck::sigs::lookup(free).is_some() {
+                total += 1;
+                if docs.entry(free).is_none() {
+                    missing.push(free.to_string());
+                }
+            }
+        }
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "{} of {total} registered stdlib members have no `DOCS.md` entry, so \
+             they hover with types and no prose. Document them (a `####` \
+             signature heading, or a row in the module's constant table):\n  {}",
+            missing.len(),
+            missing.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn names_agree_with_the_docs() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(saule_runtime::init);
+        let docs = saule_docs::stdlib();
+        let mut disagreements = Vec::new();
+        for (qname, hand) in stdlib_table().iter() {
+            let Some(entry) = docs.entry(qname) else {
+                continue;
+            };
+            let Some(sg) = saule_typeck::sigs::lookup(qname) else {
+                continue;
+            };
+            // Only the **positional** slots are comparable. The variadic one
+            // is named by the table alone — the documentation declines to
+            // name it, which is not a disagreement.
+            let slots = sg.params.len();
+            if slots == 0 || entry.params.is_empty() {
+                continue;
+            }
+            let n = slots.min(hand.len()).min(entry.params.len());
+            let a: Vec<&str> = hand.iter().take(n).copied().collect();
+            let b: Vec<&str> = entry.params.iter().take(n).map(String::as_str).collect();
+            if a != b {
+                disagreements.push(format!(
+                    "{qname}: table {a:?} vs DOCS.md {b:?} ({})",
+                    entry.signature
+                ));
+            }
+        }
+        assert!(
+            disagreements.is_empty(),
+            "hand table contradicts the documentation:\n{}",
+            disagreements.join("\n")
+        );
+    }
+
+    /// Every documented function's names reach signature help.
+    #[test]
+    fn documented_names_are_used() {
+        let s = sig(
+            vec![
+                Type::Named("string".into()),
+                Type::Named("string".into()),
+                Type::Nullable(Box::new(Type::Named("integer".into()))),
+            ],
+            None,
+        );
+        // Without the documentation these would be the type-derived
+        // `s, s2, i` — `String.match` is not in the hand table.
+        assert_eq!(param_names("String.match", &s), vec!["s", "pat", "from"]);
     }
 }

@@ -110,14 +110,23 @@ pub(crate) fn module_members(module: &str) -> Vec<CompletionItem> {
     let mut items: Vec<CompletionItem> = sigs::module_members(module)
         .into_iter()
         .map(|m| {
-            let sig = sigs::lookup(&format!("{module}.{m}"));
-            let kind = if sig.is_some() {
-                CompletionItemKind::METHOD
-            } else {
-                CompletionItemKind::FIELD
+            let qname = format!("{module}.{m}");
+            let sig = sigs::lookup(&qname);
+            let documented = saule_docs::stdlib().entry(&qname);
+            let kind = match (documented.map(|d| d.kind), sig.is_some()) {
+                (Some(saule_docs::EntryKind::Constant), _) => CompletionItemKind::CONSTANT,
+                (_, true) => CompletionItemKind::METHOD,
+                (_, false) => CompletionItemKind::FIELD,
             };
-            let detail = sig.map(|s| render_native_sig(&m, &s));
-            item(m, kind, detail)
+            // The documented signature carries parameter names, so the detail
+            // column reads `sub(s: string, from: integer, …)` rather than
+            // `sub(string, integer, …)` — which is the difference between
+            // knowing the order and having to guess it.
+            let detail = documented
+                .map(crate::hover::render::render_stdlib_detail)
+                .or_else(|| sig.map(|s| render_native_sig(&m, &s)));
+            let doc = documented.map(crate::hover::render::render_stdlib_completion_doc);
+            doc_of(item(m, kind, detail), doc)
         })
         .collect();
     items.sort_by(|a, b| a.label.cmp(&b.label));

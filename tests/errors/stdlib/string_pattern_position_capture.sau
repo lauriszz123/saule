@@ -1,0 +1,5 @@
+-- A position capture `()` yields an integer in Lua, and Saule's captures are
+-- a `table<string>`. Rejected rather than stringified, because a caller who
+-- then indexed with `"5"` would be surprised much later.
+local m: table<string>? = String.match("hello", "()ll")
+println(m != nil)

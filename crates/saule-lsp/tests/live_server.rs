@@ -594,6 +594,16 @@ const RUNTIME_ONLY: &[&str] = &[
     "nullability/force_unwrap_nil",
     "nullability/force_unwrap_return_nil",
     "stdlib/io_use_after_close",
+    // A pattern arrives as a `string` argument, so nothing before the call
+    // knows what it says. Validating a pattern written as a literal would be
+    // a real improvement — the same trick `String.format`'s placeholders
+    // would want — but it is a checker feature that does not exist yet, and
+    // until it does these can only fail where the pattern is compiled.
+    "stdlib/string_gmatch_anchored",
+    "stdlib/string_gsub_bad_capture_ref",
+    "stdlib/string_gsub_negative_limit",
+    "stdlib/string_pattern_malformed_set",
+    "stdlib/string_pattern_position_capture",
     "syntax/pow_negative_exponent",
     "tables/table_insert_oob",
 ];
@@ -722,4 +732,98 @@ fn formatting_through_the_server_keeps_array_types_and_hugged_lambdas() {
     );
     let unchanged = edits.is_null() || edits.as_array().is_some_and(Vec::is_empty);
     assert!(unchanged, "a formatted file got edits: {edits}");
+}
+
+/// The standard library hovers with prose, not just types.
+///
+/// `DOCS.md` is the only source that knows what `String.gsub`'s third
+/// argument is called or what the function is for; `saule_docs::stdlib`
+/// parses it and the hover renderer lays it out. This drives the real server
+/// so that a break anywhere in that chain — the parse, the lookup, the
+/// renderer, the wiring — shows up here.
+#[test]
+fn the_editor_documents_the_standard_library() {
+    let source =
+        "local m = String.match(\"a1\", \"%d\")\nlocal pi = Math.pi\nprintln(String.len(\"a\"))\n";
+    let project = Project::new(&[("a.sau", source)]);
+    let file = project.path("a.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&file);
+    assert!(
+        server.errors(&file).is_empty(),
+        "{:?}",
+        server.errors(&file)
+    );
+
+    // A function: documented signature with parameter names, the prose, and
+    // a link to the reference.
+    let h = server.hover(&file, 0, 18);
+    for expect in [
+        "fn String.match(s: string, pat: string, from: integer?)",
+        "The first match of",
+        "**String**",
+        "Patterns",
+        "https://lauriszz123.github.io/saule/stdlib/string/#string-match",
+    ] {
+        assert!(
+            h.contains(expect),
+            "hover on `String.match` lacks {expect:?}:\n{h}"
+        );
+    }
+    // The body's own in-page links must have been made absolute, or they are
+    // dead text in a hover panel.
+    assert!(
+        !h.contains("](#"),
+        "hover still carries an in-page link:\n{h}"
+    );
+
+    // A constant, documented as a table row rather than a signature.
+    let p = server.hover(&file, 1, 16);
+    assert!(p.contains("Math.pi: float"), "hover on `Math.pi`:\n{p}");
+
+    // The module name itself: members listed with parameter names, then the
+    // module's own prose.
+    let m = server.hover(&file, 2, 9);
+    assert!(
+        m.contains("fn sub(s: string, from: integer, to: integer?)"),
+        "module card should name parameters:\n{m}"
+    );
+    assert!(
+        m.contains("UTF-8 aware text utilities"),
+        "module card should carry the module prose:\n{m}"
+    );
+
+    // Completion on a module carries the documented detail and documentation.
+    server.change(&file, &format!("{source}String."));
+    let completion = server.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": {"uri": uri(&file)},
+            "position": {"line": 3, "character": 7},
+        }),
+    );
+    let items = completion
+        .get("items")
+        .unwrap_or(&completion)
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let gsub = items
+        .iter()
+        .find(|i| i["label"] == "gsub")
+        .unwrap_or_else(|| panic!("no `gsub` in completion: {items:?}"));
+    assert!(
+        gsub["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("repl: string"),
+        "completion detail should name parameters: {gsub:?}"
+    );
+    assert!(
+        gsub["documentation"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("replaced by"),
+        "completion documentation should carry prose: {gsub:?}"
+    );
 }

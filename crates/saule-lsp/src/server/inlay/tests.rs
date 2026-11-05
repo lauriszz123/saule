@@ -243,8 +243,9 @@ fn parameter_hint_for_free_top_level_fn() {
 #[test]
 fn parameter_hint_for_stdlib_module_call() {
     init_stdlib();
-    // `String.find(s, pattern, init?)` — first two positionals get
-    // `s:` and `pattern:` from the static names table.
+    // `String.find(s, needle, from?)` — the first two positionals get
+    // `s:` and `needle:`, which come from `DOCS.md` rather than from the
+    // hand table that used to call the second one `pattern`.
     let src = "fn main()\n  local i = String.find(\"hello\", \"l\")\nend\n";
     let hints = raw_hints(src);
     let labels: Vec<&String> = hints
@@ -253,7 +254,7 @@ fn parameter_hint_for_stdlib_module_call() {
         .map(|(_, _, l)| l)
         .collect();
     assert!(labels.contains(&&"s:".to_string()), "got {hints:?}");
-    assert!(labels.contains(&&"pattern:".to_string()), "got {hints:?}");
+    assert!(labels.contains(&&"needle:".to_string()), "got {hints:?}");
 }
 
 /// A stdlib module call gets a type hint just like a user function

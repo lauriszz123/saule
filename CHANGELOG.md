@@ -8,6 +8,28 @@ history.
 
 ### Added
 
+- **Lua-style patterns.** `String.match`, `String.gmatch` and `String.gsub` read
+  their pattern argument as a pattern rather than literal text: `.` is any
+  character, `%d` a digit, `(…)` a capture, `%1` a back-reference. The classes,
+  quantifiers, anchors, `%b` and `%f` all behave as Lua's do, with two
+  deliberate differences — patterns run over **characters, not bytes**, so `.`
+  never splits a multi-byte character; and `%a`/`%l`/`%u`/`%s`/`%w` are
+  Unicode-aware while `%d` stays ASCII `0`–`9`. `String.find`, `String.replace`
+  and `String.split` are unchanged and still literal. See
+  [DOCS.md](DOCS.md#patterns).
+- **The editor documents the standard library.** Hovering `String.gsub`, `Math.pi`
+  or `String` itself now shows the signature *with parameter names*, what the
+  thing is for, the example from the reference, and a link to the published page
+  — where before it showed `(string, string, string, integer?) -> (string, integer)`
+  and nothing else. Signature help, inlay hints and completion get the names
+  from the same place. The source is `DOCS.md`, parsed at build time, so the
+  editor cannot describe a function the documentation does not: all **174**
+  registered members are covered, and a test fails if a new one arrives
+  undocumented.
+- **A keyword can be a member name** when written tight against the dot, so
+  `String.match(…)` and `obj.class` parse. `super` was already exempt there;
+  this is the same rule for every keyword. The adjacency requirement is what
+  keeps a half-typed `player.` from swallowing the next line's `local`.
 - **`saule test`** runs every top-level `fn test_name()` in `tests/` and in files
   ending `_test.sau`.
 - **Stack traces** on runtime errors and uncaught `throw`s.
@@ -16,6 +38,12 @@ history.
 
 ### Fixed
 
+- **`Io.stdin`, `Io.stdout` and `Io.stderr` are documented** as values with
+  types, rather than only mentioned in the prose around them.
+- **`Math.pow`'s parameters are called `base` and `exp`**, not `a` and `b`.
+- **`String.find`'s second argument is `needle`, not `pattern`** in signature
+  help. It takes literal text; the name was merely unhelpful before
+  `String.gsub` existed and wrong once it did.
 - **`saule fmt` keeps what you wrote.** `string[]` no longer becomes
   `table<integer, string>`, and neither do `T[,]`, `T[]?` or `(fn() -> T)[]`. String
   escapes stay escapes, `["key"]` keeps its brackets, and `(a) | (b) | c` gains no

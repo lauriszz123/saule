@@ -3840,3 +3840,59 @@ end
     let md = hover_src_at(src, "fn clean(", "fn ".len()).expect("hover");
     assert!(md.contains("-> integer"), "got: {md}");
 }
+
+// ── stdlib hover cards, from DOCS.md ─────────────────────────────────────────
+
+/// A stdlib function hovers with its documented signature and prose.
+///
+/// The end-to-end version of this lives in `tests/live_server.rs`; this one
+/// pins the renderer's shape without starting a server.
+#[test]
+fn a_stdlib_function_hovers_with_its_documentation() {
+    let md = hover("local m = String.match(s, p)", "match").expect("hover");
+    assert!(
+        md.starts_with("```saule\nfn String.match(s: string, pat: string, from: integer?)"),
+        "signature should lead, with names:\n{md}"
+    );
+    assert!(
+        md.contains("\n---\n"),
+        "a rule should separate it from the prose"
+    );
+    assert!(
+        md.contains("**String** · *Patterns*"),
+        "context line:\n{md}"
+    );
+    assert!(md.contains("The first match of"), "prose:\n{md}");
+    assert!(md.contains("[Full reference →]"), "reference link:\n{md}");
+}
+
+/// A constant hovers too — documented as a table row, not a signature.
+#[test]
+fn a_stdlib_constant_hovers_with_its_description() {
+    let md = hover("local x = Math.pi", "pi").expect("hover");
+    assert!(md.contains("Math.pi: float"), "{md}");
+    // No `fn` — it is not callable.
+    assert!(!md.contains("fn Math.pi"), "{md}");
+}
+
+/// A prelude function is labelled as always in scope.
+#[test]
+fn a_prelude_function_says_it_is_always_in_scope() {
+    let md = hover("println(1)", "println").expect("hover");
+    assert!(md.contains("fn println(...any) -> nil"), "{md}");
+    assert!(md.contains("**Prelude** · *always in scope*"), "{md}");
+}
+
+/// A module's card lists its members *with parameter names*, then its prose.
+#[test]
+fn a_stdlib_module_card_names_parameters() {
+    let md = hover("local n = String.len(\"a\")", "String").expect("hover");
+    assert!(
+        md.contains("fn sub(s: string, from: integer, to: integer?) -> string"),
+        "member list should carry names:\n{md}"
+    );
+    assert!(
+        md.contains("UTF-8 aware text utilities"),
+        "module prose:\n{md}"
+    );
+}

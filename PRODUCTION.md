@@ -598,7 +598,7 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Memory management | Refcount plus a cycle collector; 3 million reference cycles stay near 8 MB | **B** |
 | Runtime diagnostics | Stack traces on runtime errors; boolean FS errors | **B−** |
 | Concurrency | Absent | **D** |
-| Standard library | Solid core; no regex, JSON, net, structured errors | **C** |
+| Standard library | Solid core, plus Lua-style patterns; no JSON, net, structured errors | **C+** |
 | Test tooling for users | `saule test`: discovery, filter, exit status; only `assert` to assert with | **C+** |
 | Debugger | None (no DAP) | **F** |
 | Distribution / install | Six-platform releases, one-line checksummed installer; binaries unsigned | **B** |
@@ -691,10 +691,14 @@ done.
    left (an enum with methods,
    a prelude name outside a call, `self` outside a method); each costs speed
    on the file that uses it, never correctness.
-10. **Stdlib holes that force a native package**: pattern matching / regex
-    (Lua's `string.match`, `gmatch`, `gsub` have no equivalent — `String.find`
-    is literal-only), JSON, structured filesystem errors, date/time beyond
-    `Os.date`, and any networking.
+10. **Stdlib holes that force a native package.** ~~Pattern matching /
+    regex~~ **done**: `String.match`, `String.gmatch` and `String.gsub` are
+    Lua's patterns, ported over characters rather than bytes, with the engine
+    in [pattern.rs](crates/saule-runtime/src/stdlib/pattern.rs) and its
+    behaviour pinned against PUC Lua. Still open: JSON (written in Saule
+    already, as `examples/json` — it should be promoted, not demonstrated),
+    structured filesystem errors, date/time beyond `Os.date`, and any
+    networking.
 
 ### Tier 2 — blocks the ecosystem
 

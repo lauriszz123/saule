@@ -1,0 +1,4 @@
+-- A negative substitution limit is rejected rather than silently meaning
+-- "unlimited" or "none".
+local out: string, n: integer = String.gsub("aaa", "a", "b", -1)
+println(out, n)

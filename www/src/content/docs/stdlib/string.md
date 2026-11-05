@@ -12,9 +12,12 @@ UTF-8 aware text utilities. Every index is **1-based** and counted in
 character in half. A negative index counts from the end, where `-1` is the
 last character.
 
-Saule has **no pattern language**. Every function here operates on literal
-text: the `.` in `String.replace(s, ".", "-")` is a full stop, not "any
-character".
+Most functions here operate on **literal text**: the `.` in
+`String.replace(s, ".", "-")` is a full stop, not "any character". The three
+in [Patterns](/saule/stdlib/string/#patterns) — `String.match`, `String.gmatch` and `String.gsub` —
+read their pattern argument as a Lua-style pattern instead, where `.` *is* any
+character. Which language an argument is written in is decided by the function
+you call, never by a flag.
 
 ### Characters and codepoints
 
@@ -238,7 +241,8 @@ defaults to 1.
 
 Two values, so you can slice around the match without measuring it. For just
 the start index, [`String.indexOf`](/saule/stdlib/string/#string-indexof) answers the same
-question with one value.
+question with one value. `needle` is literal text; for the pattern form see
+[`String.match`](/saule/stdlib/string/#string-match) and [`Patterns`](/saule/stdlib/string/#patterns).
 
 ```saule
 local line: string = "name = Saule"
@@ -504,6 +508,11 @@ Replaces every occurrence of `from` with `to`, or only the first `limit` of
 them when `limit` is given. Literal text, not a pattern. An empty `from`
 matches nothing and returns `s` unchanged, so this can never loop forever.
 
+For the pattern form — where `.` is any character and `(…)` captures — see
+[`String.gsub`](/saule/stdlib/string/#string-gsub). The two are separate functions rather than one
+with a flag, so that neither has an argument whose language you have to
+remember.
+
 ```saule
 println(String.replace("a.b.c", ".", "/"))        -- a/b/c
 println(String.replace("a.b.c", ".", "/", 1))     -- a/b.c, first only
@@ -592,6 +601,247 @@ println(String.format("%s scored %d%%", "Ada", 98)) -- Ada scored 98%
 -- `%s` takes anything, including a class that implements `OpToString`.
 println(String.format("[%s] [%s]", true, 1.5))      -- [true] [1.5]
 ```
+
+
+</details>
+</div>
+
+### Patterns
+
+`String.find`, `String.replace` and `String.split` all take **literal** text:
+`String.replace(s, ".", "-")` replaces full stops. The three functions in this
+group read their second argument as a **pattern** instead, where `.` means "any
+character", `%d` means "a digit" and `(…)` captures part of the match.
+
+These are Lua's patterns, not regular expressions. There is no alternation
+(`a|b`) and no counted repetition (`a{2,5}`); what you get instead is a small
+language that fits in the table below, needs no separate engine, and is already
+familiar to anyone arriving from Lua.
+
+#### Pattern syntax
+
+A **character class** matches one character:
+
+| Class | Matches |
+|---|---|
+| `.` | any character |
+| `%a` | a letter |
+| `%d` | a digit, ASCII `0`–`9` only |
+| `%l` | a lowercase letter |
+| `%u` | an uppercase letter |
+| `%s` | whitespace |
+| `%w` | a letter or a digit |
+| `%x` | a hexadecimal digit |
+| `%p` | punctuation |
+| `%c` | a control character |
+| `%g` | any printable character except a space |
+| `%A`, `%D`, `%S`, … | the **complement** — any uppercase class letter negates it |
+| `[set]` | any character in the set: `[aeiou]`, a range `[a-z]`, or a class `[%a_]` |
+| `[^set]` | any character **not** in the set |
+| `%x` where `x` is not a class letter | the literal `x` — this is how you match `%.`, `%%`, `%(` |
+
+A **quantifier** follows a class and repeats it:
+
+| Quantifier | Meaning |
+|---|---|
+| `*` | 0 or more, as many as possible |
+| `+` | 1 or more, as many as possible |
+| `-` | 0 or more, as **few** as possible |
+| `?` | 0 or 1 |
+
+And the rest of the language:
+
+| Item | Meaning |
+|---|---|
+| `^` | anchor at the start of the subject — only meaningful as the first character |
+| `$` | anchor at the end — only meaningful as the last character |
+| `(…)` | a **capture**: the text it matched is reported separately |
+| `%1`–`%9` | match the same text capture 1–9 matched |
+| `%bxy` | a balanced pair: from `x` to its matching `y`, counting nesting — `%b()` |
+| `%f[set]` | a **frontier**: the empty position where the previous character is not in `set` and the next one is |
+
+#### Two differences from Lua, on purpose
+
+**Patterns run over characters, not bytes.** A Saule `string` is always valid
+UTF-8 and is measured in codepoints, so `.` matches one character however many
+bytes it encodes to, and every index these functions report is a character
+index. In Lua, `("saulė"):gsub(".", "-")` gives six dashes and can cut `ė` in
+half; here it gives five.
+
+**`%a` is Unicode-aware and `%d` is not.** `%a`, `%l`, `%u`, `%s` and `%w` use
+the Unicode properties, so `%a+` matches `saulė` and `ąčę`. `%d` is deliberately
+ASCII `0`–`9` only: a `%d+` is almost always about to be read as a number, and
+the other digit systems a Unicode `%d` would match are not numbers any
+conversion would accept.
+
+**Not supported:** a position capture, Lua's `()`, which yields an integer
+index. Captures here are a `table<string>` and there is no honest integer to
+put in one — returning the digits as text would be a trap for whoever indexed
+with them. [`String.find`](/saule/stdlib/string/#string-find) already answers that question.
+
+<div class="api-list">
+<details class="api-entry" id="string-match">
+<summary><code class="api-sig"><span class="sig-fn">String.match</span><span class="sig-punct">(</span><span class="sig-param">s</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-param">pat</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-param">from</span><span class="sig-punct">:</span> <span class="sig-type">integer</span><span class="sig-punct">?</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-type">table</span><span class="sig-punct">&lt;</span><span class="sig-type">string</span><span class="sig-punct">&gt;</span><span class="sig-punct">?</span></code></summary>
+
+
+The first match of `pat` in `s`, or `nil` when there is none. `from` says where
+to start looking and defaults to 1; a negative value counts back from the end.
+
+On a match you get the **captures**, one element each, in the order they were
+opened. When the pattern declares no captures you get a one-element table
+holding the whole match — a pattern without parentheses captures itself, which
+is Lua's rule, and it means `m[1]` is always "the interesting part".
+
+A table rather than two values, because of how this gets called: a single
+binding against a multi-return takes the whole tuple, so
+`local m = String.match(s, p)` would hand back a `(string?, table<string>?)`
+and every caller would have to destructure to reach anything.
+
+```saule
+-- No captures: the whole match, in one element.
+local v: table<string>? = String.match("saule 26.21 linux", "%d+%.%d+")
+if v != nil then
+    println(v![1])                                  -- 26.21
+end
+
+-- Captures: one element each.
+local kv: table<string>? = String.match("name = Saule", "(%w+)%s*=%s*(%w+)")
+if kv != nil then
+    println(kv![1] .. " is " .. kv![2])             -- name is Saule
+end
+
+-- A miss is nil, so `assert` is the short way to a definite table.
+println(String.match("no digits here", "%d+") == nil)   -- true
+local sure: table<string> = assert(String.match("x=1", "%d"))
+println(sure[1])                                    -- 1
+
+-- `^` anchors to the start; `from` moves where that start is.
+println(String.match("hello", "^h%a+") != nil)      -- true
+println(String.match("hello", "^e") == nil)         -- true
+println(assert(String.match("abc abc", "%a+", 5))[1])  -- abc
+```
+
+
+</details>
+</div>
+
+<div class="api-list">
+<details class="api-entry" id="string-gmatch">
+<summary><code class="api-sig"><span class="sig-fn">String.gmatch</span><span class="sig-punct">(</span><span class="sig-param">s</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-param">pat</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-kw">fn</span><span class="sig-punct">(</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-punct">(</span><span class="sig-type">string</span><span class="sig-punct">?</span><span class="sig-punct">,</span> <span class="sig-type">table</span><span class="sig-punct">&lt;</span><span class="sig-type">string</span><span class="sig-punct">&gt;</span><span class="sig-punct">?</span><span class="sig-punct">)</span></code></summary>
+
+
+A step closure over **every** match, for `for … in`. Each call reports the whole
+match and its captures; the loop ends when there are no more.
+
+Two values here rather than one, because a `for` *is* flexible about how many it
+binds — unlike a `local`. So one loop variable costs nothing and gets the common
+case right, and a second is there when you want the captures:
+
+```saule
+-- One variable: the whole match.
+for word in String.gmatch("the quick brown fox", "%a+") do
+    print(word .. " ")                              -- the quick brown fox
+end
+println("")
+
+-- Two: the whole match and its captures.
+for whole, caps in String.gmatch("a=1, b=2, c=3", "(%a+)=(%d+)") do
+    println(whole .. " -> " .. caps![1] .. " is " .. caps![2])
+end
+-- a=1 -> a is 1
+-- b=2 -> b is 2
+-- c=3 -> c is 3
+
+-- Collecting into a table.
+local nums: table<string> = {}
+for n in String.gmatch("10,20,30", "%d+") do
+    nums[#nums + 1] = n
+end
+println(String.join("+", nums))                     -- 10+20+30
+
+-- Walking the lines of a block of text: `[^\n]+` is "a run of non-newlines".
+local doc: string = "first\nsecond\nthird"
+local count: integer = 0
+for _ in String.gmatch(doc, "[^\n]+") do
+    count = count + 1
+end
+println(count)                                      -- 3
+```
+
+A zero-width match advances by one character rather than matching forever, so
+`String.gmatch(s, "%a*")` terminates.
+
+An **anchored** pattern is an error here, not an empty loop. `^` can match in
+one place only, so iterating it is a mistake somewhere — and both of the things
+an implementation could quietly do instead are worse. Lua reads the `^` as a
+literal character, so its `gmatch(s, "^a")` silently yields nothing; yielding
+exactly one match would silently turn the loop into an `if`. Use
+[`String.match`](/saule/stdlib/string/#string-match) for a single anchored match.
+
+
+</details>
+</div>
+
+<div class="api-list">
+<details class="api-entry" id="string-gsub">
+<summary><code class="api-sig"><span class="sig-fn">String.gsub</span><span class="sig-punct">(</span><span class="sig-param">s</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-param">pat</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-param">repl</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-param">limit</span><span class="sig-punct">:</span> <span class="sig-type">integer</span><span class="sig-punct">?</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-punct">(</span><span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-type">integer</span><span class="sig-punct">)</span></code></summary>
+
+
+Every match of `pat` in `s` replaced by `repl`, and **how many** replacements
+were made. `limit` caps the count; without it every match is replaced.
+
+`repl` is a template, not literal text:
+
+| In `repl` | Inserts |
+|---|---|
+| `%1`–`%9` | capture 1–9 |
+| `%0` | the whole match |
+| `%%` | a literal `%` |
+
+Any other `%x` is an error rather than a silent literal, because at that point
+it is far more likely to be a typo than an intent.
+
+```saule
+-- The count is the second value, so `local out, n = …`.
+local out: string, n: integer = String.gsub("hello world", "o", "0")
+println(out .. " (" .. n .. ")")                    -- hell0 w0rld (2)
+
+-- Captures let you reorder what you matched.
+local name: string, _c: integer = String.gsub("john smith", "(%a+) (%a+)", "%2, %1")
+println(name)                                       -- smith, john
+
+-- `%0` is the whole match, `%%` a literal percent.
+local tagged: string, _t: integer = String.gsub("ab", "%a", "[%0]")
+println(tagged)                                     -- [a][b]
+local pct: string, _p: integer = String.gsub("98", "%d+", "%0%%")
+println(pct)                                        -- 98%
+
+-- Collapsing runs of whitespace, the canonical use.
+local tidy: string, _w: integer = String.gsub("too   many    spaces", "%s+", " ")
+println(tidy)                                       -- too many spaces
+
+-- `limit` stops early; 0 replaces nothing.
+local two: string, tn: integer = String.gsub("aaaa", "a", "b", 2)
+println(two .. " (" .. tn .. ")")                   -- bbaa (2)
+
+-- No match leaves the subject alone and reports 0.
+local same: string, zero: integer = String.gsub("abc", "%d", "!")
+println(same .. " (" .. zero .. ")")                -- abc (0)
+
+-- Counting without rewriting: replace a match with itself.
+local _same: string, commas: integer = String.gsub("a,b,c", ",", ",")
+println(commas)                                     -- 2
+```
+
+An anchored pattern replaces at most once, at the start:
+
+```saule
+local fixed: string, fn2: integer = String.gsub("aaa", "^a", "b")
+println(fixed .. " (" .. fn2 .. ")")                -- baa (1)
+```
+
+Compare [`String.replace`](/saule/stdlib/string/#string-replace), which is the literal form and the
+right choice when the text you are replacing is just text.
 
 </details>
 </div>
