@@ -1,0 +1,8 @@
+-- An enum's variants are fixed.
+-- Should be a compile error.
+
+enum Color
+	Red
+end
+
+Color.Red = 1

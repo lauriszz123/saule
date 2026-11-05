@@ -359,18 +359,58 @@ pub fn lookup_method(class: &str, method: &str) -> Option<MethodSig> {
 /// signature. Mirrors the interpreter's `constructor_chain`, which walks
 /// the same chain from the parent up. `None` when `class` is unknown, has
 /// no parent, or no ancestor declares a constructor.
+///
+/// The signature is the one the *caller* sees: in `class S extends P<integer>`
+/// a parent's `fn init(x: T)` takes an `integer`, so the parent's parameters
+/// are written in terms of the arguments `S` gave it.
 pub fn super_init_target(class: &str) -> Option<(String, MethodSig)> {
     with_classes(|reg| {
-        let mut cur = reg.get(class)?.parent.clone();
+        let start = reg.get(class)?;
+        let mut cur = start.parent.clone();
+        let mut args = start.parent_args.clone();
         while let Some(name) = cur {
             let info = reg.get(&name)?;
+            // What this ancestor's own parameters mean here, for this level
+            // and for the arguments it hands to the next one up.
+            let bound = |ty: &Type| substitute_type_params(ty, &info.type_params, &args);
             if let Some(sig) = info.methods.get("init") {
-                return Some((name, sig.clone()));
+                let mut sig = sig.clone();
+                for p in &mut sig.params {
+                    p.ty = bound(&p.ty);
+                }
+                return Some((name, sig));
             }
+            let next_args = info.parent_args.iter().map(bound).collect();
             cur = info.parent.clone();
+            args = next_args;
         }
         None
     })
+}
+
+/// `ty` with each of `params` replaced by the argument in the same position.
+/// A parameter with no argument (a parent named bare) stays as it was.
+fn substitute_type_params(ty: &Type, params: &[String], args: &[Type]) -> Type {
+    let go = |t: &Type| substitute_type_params(t, params, args);
+    match ty {
+        Type::Named(n) => params
+            .iter()
+            .position(|p| p == n)
+            .and_then(|i| args.get(i))
+            .cloned()
+            .unwrap_or_else(|| ty.clone()),
+        Type::Nullable(inner) => Type::Nullable(Box::new(go(inner))),
+        Type::Table { key, value } => Type::Table {
+            key: key.as_deref().map(|k| Box::new(go(k))),
+            value: Box::new(go(value)),
+        },
+        Type::Tuple(items) => Type::Tuple(items.iter().map(go).collect()),
+        Type::Function { params: ps, ret } => Type::Function {
+            params: ps.iter().map(go).collect(),
+            ret: Box::new(go(ret)),
+        },
+        Type::Generic(g) => Type::generic(g.name.clone(), g.args.iter().map(go).collect()),
+    }
 }
 
 /// Look up the declared type of field `name` on `class` (walking the parent
@@ -612,6 +652,38 @@ fn synthetic_param_names(count: usize) -> Vec<String> {
     (0..count)
         .map(|i| ((b'T' + i as u8) as char).to_string())
         .collect()
+}
+
+/// Every method a class implementing `iface` has to define, following
+/// `extends`, sorted so a message listing them does not change between runs.
+pub fn interface_required_methods(iface: &str) -> Vec<String> {
+    let mut queue = vec![iface.to_string()];
+    let mut seen: Vec<String> = Vec::new();
+    let mut methods: Vec<String> = Vec::new();
+    while let Some(name) = queue.pop() {
+        if seen.contains(&name) {
+            continue;
+        }
+        // Declared by the language rather than in any source file, so they
+        // have no entry in the registry to read.
+        if name == "Iterable" || name == "Iterable2" {
+            methods.push("iter".to_string());
+        }
+        INTERFACE_METHODS.with(|c| {
+            if let Some(m) = c.borrow().get(&name) {
+                methods.extend(m.keys().cloned());
+            }
+        });
+        with_interfaces(|r| {
+            if let Some(ext) = r.get(&name) {
+                queue.extend(ext.iter().cloned());
+            }
+        });
+        seen.push(name);
+    }
+    methods.sort();
+    methods.dedup();
+    methods
 }
 
 /// The signature of `method` on `iface`, following `extends`.

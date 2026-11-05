@@ -1,0 +1,5 @@
+-- `#` needs something with a length, and an `integer` has none.
+-- Should be a compile error.
+
+local n: integer = 1
+println(#n)

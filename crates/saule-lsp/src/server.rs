@@ -143,13 +143,29 @@ impl Backend {
     /// completion, signature help and inlay hints together — parses once.
     pub(crate) fn parsed(&self, uri: &Url, source: &str) -> std::sync::Arc<saule_db::Parsed> {
         match uri.to_file_path().ok().and_then(|p| canonical(&p)) {
-            Some(abs) => self.with_db(|db| {
-                // The buffer the request carries is the authority; teach it
-                // to the database before asking, so every other query in
-                // this request sees the same text.
-                db.set_overlay(&abs, source.to_string());
-                db.parsed(&abs)
-            }),
+            Some(abs) => {
+                let open = self.docs.contains_key(uri.as_str());
+                self.with_db(|db| {
+                    // Text read off the disk is not a buffer. Installing it as
+                    // one would pin the file at that text: the overlay outranks
+                    // the disk, so a later checkout would go unseen by every
+                    // file importing this one.
+                    if !open {
+                        db.clear_overlay(&abs);
+                        if db.text(&abs).as_deref() != Some(source) {
+                            db.file_changed(&abs);
+                        }
+                        if db.text(&abs).as_deref() == Some(source) {
+                            return db.parsed(&abs);
+                        }
+                    }
+                    // The buffer the request carries is the authority; teach
+                    // it to the database before asking, so every other query
+                    // in this request sees the same text.
+                    db.set_overlay(&abs, source.to_string());
+                    db.parsed(&abs)
+                })
+            }
             // An `untitled:` buffer has no path to key on. Parsed every
             // time, which is the right trade for a file with no identity.
             None => std::sync::Arc::new(self.with_db(|db| db.parse_anonymous(source))),
@@ -480,8 +496,14 @@ impl LanguageServer for Backend {
                 // back to the raw path so removal still finds its entry.
                 if let Ok(raw) = event.uri.to_file_path() {
                     self.workspace_files.remove(&raw);
+                    self.rev_imports.remove(&raw);
                     self.with_db(|db| db.file_changed(&raw));
                     structural = true;
+                    // Its diagnostics would otherwise stay in the editor,
+                    // pointing at a file that is not there.
+                    self.client
+                        .publish_diagnostics(event.uri.clone(), Vec::new(), None)
+                        .await;
                 }
                 continue;
             };
@@ -518,10 +540,13 @@ impl LanguageServer for Backend {
         // than guess.
         if structural {
             self.with_db(|db| db.invalidate_all());
+            self.refresh_everything().await;
+            return;
         }
 
         for (abs, uri) in touched {
             self.refresh_path(&abs, uri).await;
+            self.refresh_importers(&abs).await;
         }
     }
 
@@ -553,6 +578,11 @@ impl LanguageServer for Backend {
         // `None` — just re-run analysis against whatever we cached from
         // the last `did_change`. This catches setups where the client
         // debounces / suppresses `did_change` between saves.
+        //
+        // It is also the only signal a client without file watching ever
+        // sends that the disk may have moved, so what was read from there is
+        // dropped too. A save is rare enough for that to be free.
+        self.with_db(|db| db.invalidate_all());
         self.refresh(params.text_document.uri).await;
     }
 
@@ -567,15 +597,21 @@ impl LanguageServer for Backend {
         // Don't clear diagnostics — the file is still part of the
         // workspace. Re-analyse from disk so the Problems pane keeps
         // showing any errors that were live when the user closed it.
-        if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p))
-            && self.workspace_files.contains_key(&abs)
+        let abs = uri.to_file_path().ok().and_then(|p| canonical(&p));
+        if let Some(abs) = &abs
+            && self.workspace_files.contains_key(abs)
         {
-            self.refresh_path(&abs, uri).await;
-            return;
+            self.refresh_path(abs, uri).await;
+        } else {
+            // File isn't tracked (untitled buffer, outside workspace) —
+            // safe to clear stale diagnostics.
+            self.client.publish_diagnostics(uri, Vec::new(), None).await;
         }
-        // File isn't tracked (untitled buffer, outside workspace) —
-        // safe to clear stale diagnostics.
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        // Closing without saving puts the disk's text back in front of every
+        // file that imports this one.
+        if let Some(abs) = &abs {
+            self.refresh_importers(abs).await;
+        }
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {

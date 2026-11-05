@@ -1,0 +1,5 @@
+-- Indexing needs a table, or a class implementing `OpIndex`.
+-- Should be a compile error, not an internal error from the VM.
+
+local n: integer = 1
+println(n[1])

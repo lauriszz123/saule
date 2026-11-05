@@ -1,0 +1,5 @@
+-- A value of a known non-function type cannot be called.
+-- Should be a compile error.
+
+local n: integer = 1
+n()

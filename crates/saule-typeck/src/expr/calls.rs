@@ -310,6 +310,13 @@ pub(crate) fn check_native_args(
     // want an optional `any` should register `Nullable(any)` for that
     // slot (e.g. `Os.exit`).
     let required: usize = sig.params.iter().take_while(|p| !is_nullable(p)).count();
+    // `assert` accepts a nil value, which is the point of it, but the value
+    // still has to be written: `assert()` asserts nothing and fails at run time.
+    let required = if callee == "assert" {
+        required.max(1)
+    } else {
+        required
+    };
     let positional: Vec<&CallArg> = args
         .iter()
         .filter(|a| matches!(a, CallArg::Positional(_)))

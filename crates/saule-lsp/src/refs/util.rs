@@ -249,6 +249,8 @@ pub(super) fn named_type(ty: &Type) -> Option<String> {
     match ty {
         Type::Named(n) => Some(n.clone()),
         Type::Nullable(inner) => named_type(inner),
+        // A `Box<integer>` is an instance of `Box`.
+        Type::Generic(g) => Some(g.name.clone()),
         _ => None,
     }
 }

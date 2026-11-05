@@ -1,7 +1,5 @@
 -- Class claims `implements Damageable` but doesn't define `damage()`.
--- Should be a (compile) error — listed as a typeck gap.
--- The runtime *does* validate this when the class is declared; this
--- file mostly exists to lock that behavior in.
+-- A compile error, from the type checker.
 
 interface Damageable
   fn damage(amount: integer)

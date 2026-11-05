@@ -340,7 +340,10 @@ fn check_file(
     // both passes report their full error list, and typeck runs even when
     // semantic found something: the two families rarely mask each other and a
     // developer would rather see both in one go.
-    for e in saule_runtime::semantic::analyze_with_seed(&parsed.module, seed) {
+    let (semantic_errors, bindings) =
+        saule_runtime::semantic::analyze_with_bindings(&parsed.module, seed);
+    let semantic_clean = semantic_errors.is_empty();
+    for e in semantic_errors {
         file.record(e, Phase::Semantic, make_src());
     }
     // Same walk either way — `check_with_types` is `check` plus a sink, so
@@ -357,8 +360,19 @@ fn check_file(
             &table,
         ))
     } else {
-        for e in saule_runtime::typeck::check(&parsed.module) {
+        let mut resolved = parsed.module.clone();
+        let (errors, types) = saule_runtime::typeck::check_and_resolve_with_types(&mut resolved);
+        // The compiler has the last word on whether this runs, so it gets a
+        // say here too — but only past a clean front end, since it assumes one.
+        let clean = semantic_clean && errors.is_empty();
+        for e in errors {
             file.record(e, Phase::Type, make_src());
+        }
+        if clean
+            && let Some(e) =
+                saule_vm::compile::rejection(&resolved, &name, &source, &bindings, &types)
+        {
+            file.record(e, Phase::Compile, make_src());
         }
         None
     };

@@ -32,7 +32,7 @@ use super::{Backend, canonical};
 impl Backend {
     /// Compute inlay hints for `uri`. Re-runs analysis under the shared
     /// lock so the registries reflect the current document. Returns an
-    /// empty vec on lex / parse failure or for closed documents.
+    /// empty vec for closed documents.
     pub(super) async fn inlay_hints(&self, uri: &Url) -> Vec<InlayHint> {
         let entry = match self.docs.get(uri.as_str()) {
             Some(e) => e,
@@ -41,12 +41,9 @@ impl Backend {
         let source = entry.source.clone();
         drop(entry);
 
-        let Ok(tokens) = saule_lexer::Lexer::new(&source).tokenize() else {
-            return Vec::new();
-        };
-        let Ok(module) = saule_parser::parse(tokens) else {
-            return Vec::new();
-        };
+        // The recovered tree, so hints elsewhere in the file survive the
+        // syntax error on the line being typed.
+        let module = self.syntax(uri, &source);
         let line_index = LineIndex::new(&source);
 
         let module_dir = uri

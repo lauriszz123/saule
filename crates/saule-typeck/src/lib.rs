@@ -43,6 +43,7 @@ pub(crate) mod expr;
 mod funcs;
 mod matches;
 pub mod ops;
+mod receivers;
 pub mod sigs;
 mod state;
 mod stmt;

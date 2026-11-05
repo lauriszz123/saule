@@ -70,7 +70,41 @@ pub(crate) fn check_type_bounds(
     }
 }
 
-pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
+/// `class C implements I` where `C` lacks methods `I` requires, its parents'
+/// included. Reads the registries rather than this file, so an interface
+/// imported from another module is held to the same rule.
+fn report_missing_interface_methods(
+    class: &str,
+    implements: &[saule_ast::TypeRef],
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let mut missing: Vec<String> = Vec::new();
+    for iface in implements {
+        for method in saule_semantic::interface_required_methods(&iface.name) {
+            if saule_semantic::lookup_method(class, &method).is_none() {
+                missing.push(format!("`{method}` from interface `{}`", iface.name));
+            }
+        }
+    }
+    if missing.is_empty() {
+        return;
+    }
+    errors.push(TypeCheckError::MissingInterfaceMethods {
+        name: class.to_string(),
+        plural: if missing.len() == 1 { "" } else { "s" },
+        list: missing.join(", "),
+        span: to_source_span(span),
+    });
+}
+
+/// `decl_span` is for diagnostics about the declaration as a whole. Only its
+/// header is used, so an error on a class does not paint its entire body.
+pub(crate) fn check_decl(
+    decl: &Decl,
+    decl_span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
     match decl {
         Decl::Class {
             name: class_name,
@@ -79,8 +113,12 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
             extends,
             implements,
             members,
+            exported,
             ..
         } => {
+            let header =
+                "class ".len() + class_name.len() + if *exported { "export ".len() } else { 0 };
+            let class_span = decl_span.start..decl_span.start + header;
             // Validate the class hierarchy: every name in `extends` /
             // `implements` must refer to a real class / interface that
             // semantic has already collected into the registry.
@@ -107,6 +145,7 @@ pub(crate) fn check_decl(decl: &Decl, errors: &mut Vec<TypeCheckError>) {
                     });
                 }
             }
+            report_missing_interface_methods(class_name, implements, class_span, errors);
             // The class's own `<T, U>` are in scope for every member: a
             // field typed `T`, a method returning `T`, a body mentioning it.
             // Without this each one reads as an undeclared class name, and
@@ -338,7 +377,17 @@ pub(crate) fn override_mismatch(
 
 pub(crate) fn seed_params(scope: &mut Scope, params: &[Param]) {
     for p in params {
-        scope.bind(p.name.clone(), p.ty.clone());
+        // `...values: integer` declares the type of each surplus argument. In
+        // the body the name is the table holding them.
+        let ty = if p.variadic {
+            Type::Table {
+                key: None,
+                value: Box::new(p.ty.clone()),
+            }
+        } else {
+            p.ty.clone()
+        };
+        scope.bind(p.name.clone(), ty);
     }
 }
 
