@@ -55,6 +55,17 @@ history.
 - **`String.find`'s second argument is `needle`, not `pattern`** in signature
   help. It takes literal text; the name was merely unhelpful before
   `String.gsub` existed and wrong once it did.
+- **`local finally = 1` says why it is rejected.** `finally` was reserved by the
+  parser but missing from the list the token helpers consult, so a name
+  collision with it produced a bare parse error instead of "`finally` is a
+  reserved word — choose another name", and `obj.finally` would not parse as a
+  member access although `obj.try` did.
+- **`saule install` explains a mingw toolchain.** A native package whose
+  dependencies reach `windows-sys` cannot link on a Windows host whose default
+  Rust toolchain targets `x86_64-pc-windows-gnu` without mingw's `dlltool`
+  installed. The failure was reported as "the package failed to build", leaving
+  the reader to decode a linker error whose cause was never the package. It now
+  names the toolchain, says so, and gives the one-line fix.
 - **Two dead links in the standard-library reference.** `Bytes.of` and
   `Bytes.byte` pointed at `../README.md#the-byte-type`, which the website's
   link rewriter did not match and published verbatim.

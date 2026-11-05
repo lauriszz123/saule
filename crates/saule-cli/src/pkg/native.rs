@@ -35,7 +35,14 @@ pub(crate) fn build(dir: &Path) -> Result<Built, String> {
             _ => format!("could not run `cargo`: {e}"),
         })?;
     if !status.success() {
-        return Err("the package failed to build — see cargo's output above".to_string());
+        let mut msg = "the package failed to build — see cargo's output above".to_string();
+        // Almost always the package's own fault, but there is one failure that
+        // never is, and it is the first thing a Windows user hits.
+        if let Some(hint) = toolchain_hint() {
+            msg.push_str("\n  ");
+            msg.push_str(&hint);
+        }
+        return Err(msg);
     }
 
     let release = dir.join("target").join("release");
@@ -70,6 +77,60 @@ pub(crate) fn build(dir: &Path) -> Result<Built, String> {
             ))
         }
     }
+}
+
+/// A hint about the *toolchain* when a native build fails, or `None` when
+/// nothing is obviously wrong with it.
+///
+/// Diagnosed from the toolchain rather than from cargo's output, which this
+/// function never sees: the build streams straight to the terminal, because a
+/// release build of a real package takes minutes and a progress bar that
+/// appears only at the end is indistinguishable from a hang. Reading the
+/// condition directly is also the sturdier of the two — it does not depend on
+/// how cargo words an error this year.
+///
+/// Runs only after a failure, so it costs nothing on the path that works.
+fn toolchain_hint() -> Option<String> {
+    let out = Command::new("rustc").arg("-vV").output().ok()?;
+    let vv = String::from_utf8_lossy(&out.stdout);
+    let host = vv
+        .lines()
+        .find_map(|l| l.strip_prefix("host: "))?
+        .trim()
+        .to_string();
+    gnu_toolchain_hint(&host, || on_path("dlltool"))
+}
+
+/// The hint itself, with the two facts it depends on passed in.
+///
+/// Split out so it can be tested: the interesting case is a Windows host,
+/// which is not where the test suite runs.
+fn gnu_toolchain_hint(host: &str, dlltool_present: impl FnOnce() -> bool) -> Option<String> {
+    if !host.ends_with("-pc-windows-gnu") || dlltool_present() {
+        return None;
+    }
+    Some(format!(
+        "Your default Rust toolchain targets `{host}`, which links through \
+         mingw's `dlltool` — and `dlltool` is not on PATH, so anything \
+         depending on `windows-sys` cannot link.\n  \
+         This is a toolchain problem, not a problem with the package. The \
+         usual fix is to build with MSVC instead, which needs no mingw:\n    \
+         rustup default stable-x86_64-pc-windows-msvc\n  \
+         Saule's own releases are built for MSVC, so that also matches the \
+         toolchain the interpreter you are running was built with."
+    ))
+}
+
+/// Is `name` an executable somewhere on `PATH`?
+///
+/// `PATHEXT` is not consulted; `.exe` is appended on Windows and that is the
+/// only suffix a mingw `dlltool` ever carries.
+fn on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path)
+        .any(|dir| dir.join(name).is_file() || dir.join(format!("{name}.exe")).is_file())
 }
 
 /// Every file in `dir` that this platform could load. Not recursive: cargo
@@ -132,4 +193,68 @@ pub(crate) fn install(built: &Built) -> Result<String, String> {
     }
 
     Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The case that prompted this: a Windows host on the GNU target with no
+    /// mingw installed. `saule install` reported only "the package failed to
+    /// build", and the cause was never the package.
+    #[test]
+    fn a_gnu_windows_host_without_dlltool_is_explained() {
+        let hint = gnu_toolchain_hint("x86_64-pc-windows-gnu", || false)
+            .expect("a gnu host with no dlltool should be explained");
+        assert!(hint.contains("dlltool"), "{hint}");
+        assert!(
+            hint.contains("rustup default stable-x86_64-pc-windows-msvc"),
+            "the hint must name the fix: {hint}"
+        );
+        assert!(
+            hint.contains("not a problem with the package"),
+            "the hint must say whose fault it is not: {hint}"
+        );
+    }
+
+    /// With mingw installed, the GNU target links fine and the failure is the
+    /// package's own. Saying otherwise would send the reader somewhere useless.
+    #[test]
+    fn a_gnu_host_with_dlltool_gets_no_hint() {
+        assert!(gnu_toolchain_hint("x86_64-pc-windows-gnu", || true).is_none());
+    }
+
+    /// Every other host, including MSVC — which never wants `dlltool` even
+    /// when one is absent.
+    #[test]
+    fn other_hosts_get_no_hint() {
+        for host in [
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-unknown-linux-musl",
+        ] {
+            assert!(
+                gnu_toolchain_hint(host, || false).is_none(),
+                "{host} should get no mingw hint"
+            );
+        }
+    }
+
+    /// `-pc-windows-gnu` has to be the *end* of the triple, so a target that
+    /// merely contains it is not mistaken for one.
+    #[test]
+    fn the_triple_is_matched_at_the_end() {
+        assert!(gnu_toolchain_hint("x86_64-pc-windows-gnullvm", || false).is_none());
+    }
+
+    #[test]
+    fn on_path_finds_something_that_exists_and_not_something_that_does_not() {
+        // `sh` on unix, `cmd` on Windows — one of the two is always there.
+        assert!(
+            on_path("sh") || on_path("cmd"),
+            "PATH lookup found neither `sh` nor `cmd`"
+        );
+        assert!(!on_path("saule-definitely-not-a-real-binary-9f3a"));
+    }
 }
