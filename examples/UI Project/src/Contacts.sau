@@ -95,7 +95,7 @@ class ContactsState extends State
 	end
 
 	local fn submit()
-		local name: string = trimmed(self.name)
+		local name = trimmed(self.name)
 		local email: string = trimmed(self.email)
 
 		if String.len(name) == 0 then
@@ -119,7 +119,7 @@ class ContactsState extends State
 			-- reach into the row that was just filed.
 			local tags: table<integer, string> = {}
 
-			for tag: string in self.tags do
+			for tag in self.tags do
 				tags[#tags + 1] = tag
 			end
 

@@ -1,0 +1,44 @@
+---
+/**
+ * Opens the extension's page in VS Code, ready to install. The `vscode:` link
+ * only works where VS Code is installed, so the Marketplace page sits beside it.
+ */
+const ID = 'saule.saule';
+---
+
+<div class="not-content vscode-install">
+	<a class="button" href={`vscode:extension/${ID}`}>Install in VS Code</a>
+	<a href={`https://marketplace.visualstudio.com/items?itemName=${ID}`}>
+		View Saule on Visual Studio Marketplace
+	</a>
+</div>
+
+<style>
+	.vscode-install {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 1rem;
+		margin-block: 1rem;
+	}
+
+	/* `not-content` opts out of the site's link colours, so they are stated here. */
+	a,
+	a:visited {
+		color: var(--sl-color-text-accent);
+	}
+
+	a.button,
+	a.button:visited {
+		padding: 0.6rem 1.25rem;
+		border-radius: 999px;
+		background: var(--sl-color-text-accent);
+		color: var(--sl-color-black);
+		font-weight: 600;
+		text-decoration: none;
+	}
+
+	a.button:hover {
+		filter: brightness(1.1);
+	}
+</style>

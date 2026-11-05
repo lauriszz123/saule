@@ -3,6 +3,9 @@ title: Editor Support
 description: Setting up Saule in VS Code, Neovim, and IntelliJ — syntax highlighting plus the saule-lsp language server.
 ---
 
+import JetBrainsInstall from '../../../components/JetBrainsInstall.astro';
+import VSCodeInstall from '../../../components/VSCodeInstall.astro';
+
 Every editor plugin is a thin client. The intelligence lives in **`saule-lsp`**,
 a Language Server Protocol implementation that ships with the toolchain, so all
 three editors get the same feature set:
@@ -46,20 +49,12 @@ the server. Everything in the list above does not.
 
 ## VS Code
 
-```sh
-git clone https://github.com/lauriszz123/saule-vscode.git
-cd saule-vscode
-npm install
-npm run compile
-```
+<VSCodeInstall />
 
-Then either press <kbd>F5</kbd> (**Run Extension**) from Run & Debug, or package
-and install it properly:
+Or search for **Saule** in the Extensions view, or install it from a terminal:
 
 ```sh
-npm install -g @vscode/vsce
-vsce package
-code --install-extension saule-<version>.vsix
+code --install-extension saule.saule
 ```
 
 ### Settings
@@ -69,6 +64,7 @@ code --install-extension saule-<version>.vsix
 | `saule.server.path` | `""` | Absolute path to `saule-lsp`. Empty means auto-detect. |
 | `saule.cli.path` | `""` | Absolute path to `saule`, used by the run commands. Empty means auto-detect. |
 | `saule.toolchainDir` | `""` | Directory holding both binaries, used when no explicit path is set. |
+| `saule.allowProjectBuild` | `false` | Use a project's own `target/` build. Opening a folder then runs any `target/debug/saule-lsp` it contains, so this is only for working on Saule itself. |
 | `saule.server.extraArgs` | `[]` | Extra CLI arguments for the server. |
 | `saule.trace.server` | `"off"` | LSP message tracing — `off`, `messages`, or `verbose`. |
 
@@ -114,16 +110,10 @@ Works in **Community and Ultimate** (and other JetBrains IDEs) — it rides on t
 open-source [LSP4IJ](https://github.com/redhat-developer/lsp4ij) client rather
 than the Ultimate-only native LSP API.
 
-Build and install:
+<JetBrainsInstall />
 
-```sh
-git clone https://github.com/lauriszz123/saule-intellij.git
-cd saule-intellij
-./gradlew buildPlugin
-```
-
-Then **Settings ▸ Plugins ▸ ⚙ ▸ Install Plugin from Disk…** and pick the zip
-from `build/distributions/`.
+Or install it from inside the IDE: **Settings ▸ Plugins ▸ Marketplace**, then
+search for **Saule**. The IDE offers to install LSP4IJ along with it.
 
 Beyond the shared LSP features it adds:
 
@@ -134,13 +124,6 @@ Beyond the shared LSP features it adds:
 
 Colouring, brace matching, and indent-while-typing come from a native IntelliJ
 lexer rather than the server, so they stay responsive.
-
-:::caution[macOS: IDE launched from the Dock]
-GUI applications started from the Dock or Finder do not read `~/.zshrc`, so the
-IDE will not see `~/.saule/bin` on `PATH`. Set the toolchain directory
-explicitly under **Settings ▸ Languages & Frameworks ▸ Saule**, or override it
-with `SAULE_PATH`.
-:::
 
 ## Syntax highlighting
 
