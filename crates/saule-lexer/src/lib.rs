@@ -39,6 +39,76 @@ pub struct Lexed {
     pub errors: Vec<LexerError>,
 }
 
+/// The reserved words, paired with the token each becomes.
+///
+/// One list, expanded twice: into [`KEYWORDS`] and into the lookup
+/// [`ident_or_keyword`] uses. They cannot drift apart, which matters because
+/// three editor plugins carry their own copy of this list and nothing outside
+/// this repository can be made to fail when one of them falls behind — see
+/// `tests/keyword_parity.rs`.
+macro_rules! keywords {
+    ($($text:literal => $variant:ident,)*) => {
+        /// Every reserved word, exactly as it is written in source.
+        ///
+        /// This is the list an editor grammar has to match. A word here is
+        /// never an identifier, so adding one is a breaking change for any
+        /// program that used it as a name.
+        pub const KEYWORDS: &[&str] = &[$($text),*];
+
+        /// The token for a reserved word, or `None` for an identifier.
+        fn keyword_token(text: &str) -> Option<Token> {
+            match text {
+                $($text => Some(Token::$variant),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+keywords! {
+    "class" => Class,
+    "fn" => Fn,
+    "if" => If,
+    "else" => Else,
+    "elseif" => Elseif,
+    "true" => True,
+    "false" => False,
+    "nil" => Nil,
+    "return" => Return,
+    "import" => Import,
+    "export" => Export,
+    "extends" => Extends,
+    "implements" => Implements,
+    "interface" => Interface,
+    "enum" => Enum,
+    "super" => Super,
+    "self" => Self_,
+    "static" => Static,
+    "local" => Local,
+    "throw" => Throw,
+    "try" => Try,
+    "catch" => Catch,
+    "finally" => Finally,
+    "for" => For,
+    "while" => While,
+    "repeat" => Repeat,
+    "until" => Until,
+    "break" => Break,
+    "continue" => Continue,
+    "end" => End,
+    "then" => Then,
+    "do" => Do,
+    "in" => In,
+    "as" => As,
+    "from" => From,
+    "match" => Match,
+    "case" => Case,
+    "when" => When,
+    "and" => And,
+    "or" => Or,
+    "not" => Not,
+}
+
 impl Lexed {
     pub fn is_ok(&self) -> bool {
         self.errors.is_empty()
@@ -241,50 +311,8 @@ impl<'src> Lexer<'src> {
             }
         }
         let text = &self.source[start..end];
-        let tok = match text {
-            "class" => Token::Class,
-            "fn" => Token::Fn,
-            "if" => Token::If,
-            "else" => Token::Else,
-            "elseif" => Token::Elseif,
-            "true" => Token::True,
-            "false" => Token::False,
-            "nil" => Token::Nil,
-            "return" => Token::Return,
-            "import" => Token::Import,
-            "export" => Token::Export,
-            "extends" => Token::Extends,
-            "implements" => Token::Implements,
-            "interface" => Token::Interface,
-            "enum" => Token::Enum,
-            "super" => Token::Super,
-            "self" => Token::Self_,
-            "static" => Token::Static,
-            "local" => Token::Local,
-            "throw" => Token::Throw,
-            "try" => Token::Try,
-            "catch" => Token::Catch,
-            "finally" => Token::Finally,
-            "for" => Token::For,
-            "while" => Token::While,
-            "repeat" => Token::Repeat,
-            "until" => Token::Until,
-            "break" => Token::Break,
-            "continue" => Token::Continue,
-            "end" => Token::End,
-            "then" => Token::Then,
-            "do" => Token::Do,
-            "in" => Token::In,
-            "as" => Token::As,
-            "from" => Token::From,
-            "match" => Token::Match,
-            "case" => Token::Case,
-            "when" => Token::When,
-            "and" => Token::And,
-            "or" => Token::Or,
-            "not" => Token::Not,
-            _ => Token::Identifier(text.to_string()),
-        };
+        let tok = keyword_token(text).unwrap_or_else(|| Token::Identifier(text.to_string()));
+
         Spanned {
             value: tok,
             span: start..end,

@@ -483,7 +483,28 @@ jobs:
             set -eu
             export SAULE_BIN="$PWD/target/debug/saule"
             cd www
-            npm ci
+
+            # One retry behind a cache clean.
+            #
+            # `npm ci` finalises each downloaded tarball into npm's
+            # content-addressable store by renaming a temp file into place, and
+            # parallel extractions of the same hash can race there — npm then
+            # reports EEXIST and ENOENT in one breath ("File exists" and "no
+            # such file or directory, rename"). It says nothing about this tree
+            # and it clears on a second attempt, but it failed a release:
+            # `version` requires this job, so a flake here means no archives
+            # and no release at all.
+            #
+            # Clearing the store first is what makes the retry worth having —
+            # the half-written entry is what the next attempt would trip over
+            # again. Not npm's suggested `--force`, which overwrites
+            # "recklessly" and would keep the corrupt entry.
+            npm ci || {
+              echo "npm ci failed; clearing npm's cache and retrying once" >&2
+              npm cache clean --force
+              npm ci
+            }
+
             npm run check-samples
             npm run sync-docs
             # `git status --porcelain`, not `git diff`: a new `##` section in

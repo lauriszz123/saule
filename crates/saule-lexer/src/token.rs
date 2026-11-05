@@ -260,6 +260,7 @@ impl Token {
                 | Token::Throw
                 | Token::Try
                 | Token::Catch
+                | Token::Finally
                 | Token::For
                 | Token::While
                 | Token::Repeat
