@@ -12,7 +12,9 @@
 # script does not get a say.
 #
 # Environment:
-#   SAULE_VERSION   install this version instead of the latest, e.g. 26.7
+#   SAULE_CHANNEL   `stable` (default) or `latest`. See "Which channel?".
+#   SAULE_VERSION   install this exact version instead of resolving a channel,
+#                   e.g. 26.7. Overrides SAULE_CHANNEL.
 #   SAULE_HOME      install root. Used verbatim — it *is* the directory, not
 #                   a parent to append `.saule` to. Defaults to ~/.saule.
 #   SAULE_NO_MODIFY_PATH=1
@@ -109,6 +111,43 @@ detect_triple() {
     esac
 }
 
+# ─── Which channel? ─────────────────────────────────────────────────────────
+# Two channels, and the difference is a flag on the GitHub release rather than
+# anything in the version number:
+#
+#   stable  the newest release that is *not* marked as a pre-release. Every
+#           build is published as a pre-release and stays one until it is
+#           blessed, so this channel moves only when somebody decides it
+#           should. It is the default.
+#   latest  the newest release of any kind — what `main` has just built.
+#
+# A version is `26.7` on both channels. Stability is a property of the
+# release, not of the version: a `26.7-stable` spelling would collide with the
+# `-dev+<sha>` suffix that means "not a release", would sort *before* `26.7`
+# under semver precedence, and could not be compared by `min_saule_version`,
+# which is a plain numeric dotted compare.
+#
+# A channel is remembered in `$SAULE_HOME/channel`, so re-running the
+# installer upgrades you within the channel you chose instead of silently
+# moving you to the other one.
+resolve_channel() {
+    saule_home="${SAULE_HOME:-$HOME/.saule}"
+    if [ -n "${SAULE_CHANNEL:-}" ]; then
+        printf '%s' "$SAULE_CHANNEL"
+        return
+    fi
+    if [ -r "$saule_home/channel" ]; then
+        remembered="$(cat "$saule_home/channel" 2>/dev/null || true)"
+        case "$remembered" in
+            stable|latest)
+                printf '%s' "$remembered"
+                return
+                ;;
+        esac
+    fi
+    printf 'stable'
+}
+
 # ─── Which version? ─────────────────────────────────────────────────────────
 # Releases are tagged `v26.7`, while the archives inside them carry the bare
 # `26.7`. Both spellings are needed, so this resolves the tag and `main`
@@ -119,12 +158,24 @@ resolve_tag() {
         return
     fi
 
+    case "$1" in
+        stable) resolve_stable_tag ;;
+        latest) resolve_latest_tag ;;
+        *) err "unknown channel \`$1\`. Use \`stable\` or \`latest\`, or set SAULE_VERSION." ;;
+    esac
+}
+
+# The newest release GitHub does not consider a pre-release.
+resolve_stable_tag() {
     # `/releases/latest` is a redirect to `/releases/tag/vX.Y`, so the tag can
-    # be read straight out of the URL it settles on. That is deliberately not
-    # api.github.com: the API allows 60 unauthenticated requests an hour per
-    # IP, and a whole office behind one NAT can spend them between them — at
-    # which point the installer looks broken to everybody there. The redirect
-    # is served by the web host and is not rate limited.
+    # be read straight out of the URL it settles on — and GitHub excludes
+    # pre-releases from it, which is the whole mechanism behind this channel.
+    #
+    # That is deliberately not api.github.com: the API allows 60
+    # unauthenticated requests an hour per IP, and a whole office behind one
+    # NAT can spend them between them — at which point the installer looks
+    # broken to everybody there. The redirect is served by the web host and is
+    # not rate limited.
     url="$(fetch_final_url "$WEB/releases/latest" 2>/dev/null || true)"
     tag="${url##*/tag/}"
     case "$tag" in
@@ -137,14 +188,49 @@ resolve_tag() {
     # wget cannot report where a redirect went, so it pays the API's limit.
     # sed rather than jq, so the installer needs nothing but a downloader.
     json="$(fetch_stdout "$API/releases/latest" 2>/dev/null || true)"
-    [ -n "$json" ] || err "could not resolve the latest release from $WEB/releases.
+    [ -n "$json" ] || err "could not resolve the latest stable release from $WEB/releases.
+    Are you online, and has any release been marked stable yet?
+    Try SAULE_CHANNEL=latest, or set SAULE_VERSION to install a specific one."
+
+    tag="$(printf '%s' "$json" \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | head -1)"
+    [ -n "$tag" ] || err "could not read a tag from the latest stable release. Set SAULE_VERSION to install a specific one."
+    printf '%s' "$tag"
+}
+
+# The newest release of any kind, pre-releases included.
+#
+# `releases.atom` rather than the API, for the same rate-limit reason the
+# stable channel avoids it: the feed is served by the web host, needs no
+# authentication, and lists every release newest-first including
+# pre-releases — which `/releases/latest` by definition will not show. Each
+# entry's link ends in the tag, so the first one is the answer.
+resolve_latest_tag() {
+    feed="$(fetch_stdout "$WEB/releases.atom" 2>/dev/null || true)"
+    if [ -n "$feed" ]; then
+        tag="$(printf '%s' "$feed" \
+            | sed -n 's|.*<link[^>]*href="[^"]*/releases/tag/\(v[0-9][^"]*\)".*|\1|p' \
+            | head -1)"
+        case "$tag" in
+            v[0-9]*)
+                printf '%s' "$tag"
+                return
+                ;;
+        esac
+    fi
+
+    # The API lists releases newest-first too, and unlike `/releases/latest`
+    # this endpoint includes pre-releases.
+    json="$(fetch_stdout "$API/releases?per_page=1" 2>/dev/null || true)"
+    [ -n "$json" ] || err "could not resolve the newest release from $WEB/releases.
     Are you online, and does the project have a published release yet?
     Set SAULE_VERSION to install a specific one."
 
     tag="$(printf '%s' "$json" \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         | head -1)"
-    [ -n "$tag" ] || err "could not read a tag from the latest release. Set SAULE_VERSION to install a specific one."
+    [ -n "$tag" ] || err "could not read a tag from the newest release. Set SAULE_VERSION to install a specific one."
     printf '%s' "$tag"
 }
 
@@ -208,14 +294,22 @@ add_to_rc() {
 # ─── Install ────────────────────────────────────────────────────────────────
 main() {
     triple="$(detect_triple)"
-    tag="$(resolve_tag)"
+    channel="$(resolve_channel)"
+    tag="$(resolve_tag "$channel")"
     version="${tag#v}"
     saule_home="${SAULE_HOME:-$HOME/.saule}"
 
     archive="saule-$version-$triple.tar.gz"
     base="$WEB/releases/download/$tag"
 
-    say "installing Saule $version for $triple"
+    # Naming the channel matters when a bug report says "I installed the
+    # latest": on the stable channel that is a different build from the one
+    # `main` built today, and the two are told apart only here.
+    if [ -n "${SAULE_VERSION:-}" ]; then
+        say "installing Saule $version for $triple (pinned)"
+    else
+        say "installing Saule $version for $triple ($channel channel)"
+    fi
 
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/saule-install.XXXXXX")" \
         || err "could not create a temporary directory"
@@ -253,6 +347,13 @@ main() {
     mv -f "$stage/saule" "$saule_home/bin/saule"
     mv -f "$stage/saule-lsp" "$saule_home/bin/saule-lsp"
     rmdir "$stage" 2>/dev/null || true
+
+    # Remembered so the next run of this script stays on the same channel. An
+    # explicit SAULE_VERSION does not change it: pinning one build is not a
+    # decision to leave the channel you are on.
+    if [ -z "${SAULE_VERSION:-}" ]; then
+        printf '%s\n' "$channel" > "$saule_home/channel" 2>/dev/null || true
+    fi
 
     say "installed to $saule_home/bin"
 

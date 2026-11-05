@@ -41,7 +41,7 @@ manager. Design detail that would clutter a step lives in the appendices.
 | Versioning | **Done.** `26.<build>`, generated on release, readable from the CLI, the LSP, and the language. See step 0. |
 | CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. **The suite runs on Linux, macOS and Windows** and gates both pull requests (`pr-check`) and releases — the `version` job requires all three platforms plus `check-www`, so a red test anywhere means no archives and no release. There are no GitHub Actions workflows; GitHub keeps the code, the Releases, and Pages. |
 | Releases | **Done.** Every push to `main` publishes six platform archives to GitHub Releases. 21 published to date; `v26.21` is current. |
-| Toolchain install | **Done.** [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site and verify checksums. |
+| Toolchain install | **Done.** [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site and verify checksums. Two channels: `stable` (default) and `latest` — see step 3. |
 | Package manager | **Done, without `publish`.** `saule install`, `update`, `remove` and `list`, with `saule.lock`. A package is published by pushing a Git tag. |
 | Dependencies | Paths and `owner@repo:version`, pinned to exact commits by `saule.lock`. **Direct only** — a package's own dependencies are not resolved (step 8). |
 | Native packages | `saule install` builds them with Cargo. Prebuilt libraries do not exist yet. |
@@ -313,6 +313,43 @@ it *is* the directory, not a parent to append `.saule` to.
 `install.ps1` mirrors this with `%USERPROFILE%\.saule\bin`,
 `Get-FileHash -Algorithm SHA256`, `Expand-Archive`, and
 `[Environment]::SetEnvironmentVariable('Path', …, 'User')`.
+
+### Two channels, and why not a `-stable` tag
+
+The installer resolves one of two channels, defaulting to `stable`:
+
+| Channel | Resolves to | How |
+|---|---|---|
+| `stable` | the newest release not marked pre-release | the `/releases/latest` redirect, which GitHub excludes pre-releases from — the path the installer already used |
+| `latest` | the newest release of any kind | `releases.atom`, which lists pre-releases, with the API as a fallback |
+
+The whole mechanism is `prerelease: true` on the publish call. Every build is
+published as a pre-release, so **`stable` does not move until somebody blesses
+a build**, which is one `gh release edit` against a release that already
+exists — no rebuild, no second pipeline, no branch. `SAULE_CHANNEL` picks a
+channel and `$SAULE_HOME/channel` remembers it, so an upgrade stays where the
+user put themselves.
+
+Three alternatives were considered and rejected:
+
+- **A `v26.7-stable` tag.** It would collide with the `-dev+<sha>` suffix that
+  means "not a release", sort *before* `26.7` under semver precedence, and
+  break `min_saule_version`, which is a plain numeric dotted compare. Two tags
+  on one build would also mean two releases for one set of archives, making
+  `/releases/latest` ambiguous.
+- **A `stable` branch.** Building from it would produce artifacts that are not
+  the ones already tested, or require re-tagging — two releases per build
+  again. Branches earn their keep for *backporting*, and the version scheme
+  deliberately has no patch component: STABILITY.md says a fix means the next
+  build, so there is nothing to backport into. A branch that is only a pointer
+  is a less visible copy of the GitHub flag.
+- **A channel file on the docs site.** The site is deployed by hand
+  ([deploy-gh-pages.sh](www/scripts/deploy-gh-pages.sh)), with no CI path, so
+  the pointer would go stale the moment a build was blessed.
+
+What counts as stable belongs in [STABILITY.md](STABILITY.md) — it is a
+promise to users, not a pipeline detail. The mechanics are in
+[CIRCLECI.md](CIRCLECI.md#blessing-a-stable-release).
 
 ### macOS signing: less than previously assumed
 

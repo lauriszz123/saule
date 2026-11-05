@@ -17,6 +17,13 @@ history.
   Unicode-aware while `%d` stays ASCII `0`–`9`. `String.find`, `String.replace`
   and `String.split` are unchanged and still literal. See
   [DOCS.md](DOCS.md#patterns).
+- **Two install channels.** `curl … | sh` now installs the **stable** channel:
+  the newest release blessed as stable, rather than whatever `main` built an
+  hour ago. `SAULE_CHANNEL=latest` takes the newest build of all, and the
+  choice is remembered in `~/.saule/channel` so later upgrades stay on it.
+  Version numbers are unchanged — `26.22` is `26.22` on either channel,
+  because stability is a property of the release and not of the version.
+  See [STABILITY.md](STABILITY.md#channels).
 - **The editor documents the standard library.** Hovering `String.gsub`, `Math.pi`
   or `String` itself now shows the signature *with parameter names*, what the
   thing is for, the example from the reference, and a link to the published page

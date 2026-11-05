@@ -35,7 +35,11 @@ saule --version
 
 The installer picks the right build for your machine, verifies it against the
 release's `SHA256SUMS`, and installs `saule` and `saule-lsp` into `~/.saule/bin`.
-Running it again upgrades in place. Full details, options and a
+Running it again upgrades in place.
+
+That installs the **stable** channel. For the newest build of all, pass
+`SAULE_CHANNEL=latest` (`$env:SAULE_CHANNEL='latest'` on Windows) — your choice
+is remembered, so later upgrades stay on it. Full details, options and a
 build-from-source path are in the
 [installation guide](https://lauriszz123.github.io/saule/guides/installation/).
 

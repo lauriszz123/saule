@@ -9,7 +9,9 @@
 # Because `iex` runs this as an expression rather than as a script file, there
 # is no `param()` block and no `$args` — every knob is an environment variable:
 #
-#   $env:SAULE_VERSION           install this version instead of the latest
+#   $env:SAULE_CHANNEL           `stable` (default) or `latest`.
+#   $env:SAULE_VERSION           install this exact version instead of
+#                                resolving a channel. Overrides SAULE_CHANNEL.
 #   $env:SAULE_HOME              install root. Used verbatim — it *is* the
 #                                directory, not a parent to append `.saule` to.
 #   $env:SAULE_NO_MODIFY_PATH=1  install, but leave the user PATH alone.
@@ -50,6 +52,35 @@ switch ($arch) {
     default { Fail "unsupported architecture '$arch'. Build from source: $Web" }
 }
 
+$sauleHome = if ($env:SAULE_HOME) { $env:SAULE_HOME } else { Join-Path $env:USERPROFILE '.saule' }
+
+# ─── Which channel? ─────────────────────────────────────────────────────────
+# Two channels, and the difference is a flag on the GitHub release rather than
+# anything in the version number:
+#
+#   stable  the newest release that is *not* marked as a pre-release. Every
+#           build is published as a pre-release and stays one until it is
+#           blessed, so this channel moves only when somebody decides it
+#           should. It is the default.
+#   latest  the newest release of any kind — what `main` has just built.
+#
+# A version is `26.7` on both channels; stability is a property of the
+# release, not of the version. The channel is remembered in
+# `$SAULE_HOME\channel`, so re-running this script upgrades you within the
+# channel you chose instead of silently moving you to the other one.
+$channelFile = Join-Path $sauleHome 'channel'
+$channel = if ($env:SAULE_CHANNEL) {
+    $env:SAULE_CHANNEL
+} elseif (Test-Path $channelFile) {
+    $remembered = (Get-Content -Raw $channelFile).Trim()
+    if ($remembered -in @('stable', 'latest')) { $remembered } else { 'stable' }
+} else {
+    'stable'
+}
+if ($channel -notin @('stable', 'latest')) {
+    Fail "unknown channel '$channel'. Use 'stable' or 'latest', or set `$env:SAULE_VERSION."
+}
+
 # ─── Which version? ─────────────────────────────────────────────────────────
 # Releases are tagged `v26.7`; the archives inside them carry the bare `26.7`.
 # Both spellings are needed below.
@@ -57,28 +88,43 @@ if ($env:SAULE_VERSION) {
     $version = $env:SAULE_VERSION -replace '^v', ''
     $tag     = "v$version"
 } else {
+    # Invoke-RestMethod parses the JSON, so unlike install.sh there is no
+    # hand-rolled parsing to get wrong.
+    #
+    # These calls cost an API request. Anonymous callers get 60 an hour per
+    # IP, so a large office that shares one address can run the limit down
+    # between them; setting $env:SAULE_VERSION skips the call entirely.
+    #
+    # `/releases/latest` excludes pre-releases, which is the whole mechanism
+    # behind the stable channel. `/releases?per_page=1` includes them, which
+    # is what makes it the right endpoint for `latest`.
+    $endpoint = if ($channel -eq 'stable') { "$Api/releases/latest" } else { "$Api/releases?per_page=1" }
     try {
-        # Invoke-RestMethod parses the JSON, so unlike install.sh there is no
-        # hand-rolled parsing to get wrong.
-        #
-        # This is the one call that costs an API request. Anonymous callers get
-        # 60 an hour per IP, so a large office that shares one address can run
-        # the limit down between them; setting $env:SAULE_VERSION skips the
-        # call entirely and installs that version directly.
-        $latest = Invoke-RestMethod -UseBasicParsing "$Api/releases/latest"
+        $response = Invoke-RestMethod -UseBasicParsing $endpoint
     } catch {
-        Fail "could not resolve the latest release from $Web/releases.`n    Are you online, and does the project have a published release yet?`n    Set `$env:SAULE_VERSION to install a specific one."
+        if ($channel -eq 'stable') {
+            Fail "could not resolve the latest stable release from $Web/releases.`n    Are you online, and has any release been marked stable yet?`n    Try `$env:SAULE_CHANNEL='latest', or set `$env:SAULE_VERSION to install a specific one."
+        } else {
+            Fail "could not resolve the newest release from $Web/releases.`n    Are you online, and does the project have a published release yet?`n    Set `$env:SAULE_VERSION to install a specific one."
+        }
     }
-    $tag     = $latest.tag_name
+    # The list endpoint answers with an array; `/releases/latest` with one object.
+    $release = if ($response -is [array]) { $response[0] } else { $response }
+    $tag     = $release.tag_name
     $version = $tag -replace '^v', ''
-    if (-not $version) { Fail 'could not read a version from the latest release. Set $env:SAULE_VERSION to install a specific one.' }
+    if (-not $version) { Fail "could not read a version from the $channel release. Set `$env:SAULE_VERSION to install a specific one." }
 }
-
-$sauleHome = if ($env:SAULE_HOME) { $env:SAULE_HOME } else { Join-Path $env:USERPROFILE '.saule' }
 $archive   = "saule-$version-$triple.zip"
 $base      = "$Web/releases/download/$tag"
 
-Say "installing Saule $version for $triple"
+# Naming the channel matters when a bug report says "I installed the latest":
+# on the stable channel that is a different build from the one `main` built
+# today, and the two are told apart only here.
+if ($env:SAULE_VERSION) {
+    Say "installing Saule $version for $triple (pinned)"
+} else {
+    Say "installing Saule $version for $triple ($channel channel)"
+}
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("saule-install-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -136,6 +182,13 @@ try {
         }
         Copy-Item (Join-Path $unpacked $exe) $dest -Force
     }
+    # Remembered so the next run of this script stays on the same channel. An
+    # explicit SAULE_VERSION does not change it: pinning one build is not a
+    # decision to leave the channel you are on.
+    if (-not $env:SAULE_VERSION) {
+        try { Set-Content -Path $channelFile -Value $channel -NoNewline } catch {}
+    }
+
     Say "installed to $bin"
 
     # Both binaries matter. `saule-lsp` is the language server every editor

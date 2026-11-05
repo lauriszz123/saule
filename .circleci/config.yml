@@ -826,12 +826,26 @@ jobs:
             # `target_commitish` is what creates the tag: GitHub tags the
             # commit for us, so there is no push and no second pipeline. On the
             # re-cut path the tag already exists and this field is ignored.
+            #
+            # **`prerelease: true` is what makes the two install channels
+            # work**, and it is the only mechanism behind them. Every build
+            # published here is a pre-release, which GitHub excludes from
+            # `/releases/latest` — so the installer's default `stable` channel
+            # does not see it, while the `latest` channel (which reads
+            # `releases.atom`) does. Blessing a build is one command against
+            # an already-published release:
+            #
+            #   gh release edit v26.22 --prerelease=false --latest
+            #
+            # `make_latest: false` is passed explicitly rather than left to
+            # GitHub's by-creation-date rule, so publishing never moves the
+            # stable pointer as a side effect.
             body="$(jq -n \
               --arg tag "$TAG" \
               --arg target "$CIRCLE_SHA1" \
               --arg name "Saule $VERSION" \
               --rawfile notes meta/release-notes.md \
-              '{tag_name: $tag, target_commitish: $target, name: $name, body: $notes, draft: false, prerelease: false}')"
+              '{tag_name: $tag, target_commitish: $target, name: $name, body: $notes, draft: false, prerelease: true, make_latest: "false"}')"
 
             echo "Creating release $TAG at $CIRCLE_SHA1"
             release="$(curl --fail-with-body -sS -X POST \
@@ -854,7 +868,12 @@ jobs:
 
             echo
             echo "Published: https://github.com/$GITHUB_REPO/releases/tag/$TAG"
-            echo "The installer will pick this up as \`latest\` immediately."
+            echo
+            echo "This is a PRE-RELEASE, so it is on the \`latest\` channel only:"
+            echo "  SAULE_CHANNEL=latest curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh"
+            echo
+            echo "The default \`stable\` channel will not offer it until it is blessed:"
+            echo "  gh release edit $TAG --prerelease=false --latest"
       - store_artifacts:
           path: dist
           destination: release
