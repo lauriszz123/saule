@@ -1,5 +1,5 @@
 -- `for ... in <non-iterable>` over a non-table, non-function, non-instance
--- value is a runtime type error.
+-- value is a compile error.
 class Main
   static fn main()
     for v in 42 do

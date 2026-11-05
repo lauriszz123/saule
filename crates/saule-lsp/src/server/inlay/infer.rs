@@ -12,6 +12,7 @@ use super::*;
 fn class_name(ty: Type) -> Option<String> {
     match strip_nullable(ty) {
         Type::Named(n) => Some(n),
+        Type::Generic(g) => Some(g.name),
         _ => None,
     }
 }
@@ -380,16 +381,9 @@ impl<'a> Cx<'a> {
                     &callee.value
                 {
                     let inner_class = self.receiver_class(&inner.value)?;
-                    return match lookup_method(&inner_class, name)?.return_ty? {
-                        Type::Named(n) => Some(n),
-                        // `-> Text?` still names `Text`; the nullability
-                        // is the caller's problem, not the lookup's.
-                        Type::Nullable(inner) => match *inner {
-                            Type::Named(n) => Some(n),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
+                    // `-> Text?` still names `Text`; the nullability is the
+                    // caller's problem, not the lookup's.
+                    return class_name(lookup_method(&inner_class, name)?.return_ty?);
                 }
                 None
             }

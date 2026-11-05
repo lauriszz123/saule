@@ -25,10 +25,14 @@ belongs to rather than the one its error message mentions — a bad argument to
 `Table.insert` is a `stdlib` fixture, not a `functions` one.
 
 Most are compile-time errors — parser, `saule-semantic`, `saule-typeck` — but
-not all. `throw_uncaught`, `io_use_after_close`, `force_unwrap_*`,
-`table_insert_oob`, `pow_negative_exponent` and the two `stack_overflow_*`
-fixtures are **runtime** errors, and are here for the same reason: the
-message and its span are the behaviour being pinned.
+not all. `throw_uncaught`, `catch_wrong_type`, `io_use_after_close`,
+`force_unwrap_*`, `table_insert_oob`, `pow_negative_exponent` and the two
+`stack_overflow_*` fixtures are **runtime** errors, and are here for the same
+reason: the message and its span are the behaviour being pinned.
+
+`crates/saule-lsp/tests/live_server.rs` holds that list too: every other
+fixture here has to be flagged by the editor, and nothing in `tests/run/` may
+be. A new runtime-only fixture has to be named there.
 
 Nothing but fixtures lives here: one `.sau` per test, grouped by area.
 

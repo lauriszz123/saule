@@ -196,6 +196,33 @@ pub fn compile(module: &Module, name: &str, source: &str) -> Result<Chunk, Compi
     compile_with(module, name, source, &bindings, &types)
 }
 
+/// Why the compiler would refuse this module, for tools that stop short of
+/// running it.
+///
+/// Some programs are only rejected here, so a checker that ends at
+/// `saule-typeck` passes programs `saule run` then refuses. Call it once the
+/// front end is clean, with the side tables that pass produced.
+///
+/// Only the language's own verdicts come back. This compiles one module with
+/// its imports unbound, so "a class implementing an interface this compiler
+/// cannot see" is a limit of that view rather than a fault in the program,
+/// and a panic is a compiler bug the user's editor should not die of.
+pub fn rejection(
+    module: &Module,
+    name: &str,
+    source: &str,
+    bindings: &saule_semantic::Bindings,
+    types: &saule_typeck::TypeTable,
+) -> Option<CompileError> {
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compile_with(module, name, source, bindings, types)
+    }));
+    match compiled {
+        Ok(Err(e @ (CompileError::Rejected(_) | CompileError::TooManyRegisters { .. }))) => Some(e),
+        _ => None,
+    }
+}
+
 /// Collects the receiver names a module assigns through — the `X` of any
 /// `X.field = value`.
 ///

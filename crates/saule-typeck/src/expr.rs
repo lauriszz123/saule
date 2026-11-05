@@ -38,6 +38,7 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             report_if_nullable_receiver(obj, name, scope, errors);
             report_if_private(obj, name, scope, errors);
             report_if_unknown_member(obj, name, scope, errors);
+            crate::receivers::check_member(obj, name, scope, errors);
         }
         Expr::Call {
             callee,
@@ -51,9 +52,11 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                 report_if_nullable_receiver(obj, name, scope, errors);
                 report_if_private(obj, name, scope, errors);
                 report_if_unknown_member(obj, name, scope, errors);
+                crate::receivers::check_member(obj, name, scope, errors);
                 report_if_enum_variant_arity(obj, name, args, errors, expr.span.clone());
             } else {
                 check_expr(callee, scope, errors);
+                crate::receivers::check_call(callee, scope, errors);
                 report_if_user_function_arity(
                     callee,
                     args,
@@ -201,9 +204,13 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             check_expr(obj, scope, errors);
             check_expr(index, scope, errors);
             super::ops::check_index_receiver(obj, index, scope, errors);
+            crate::receivers::check_index(obj, scope, errors);
         }
         Expr::Unary { op, rhs } => {
             check_expr(rhs, scope, errors);
+            if *op == saule_ast::UnaryOp::Len {
+                crate::receivers::check_length(rhs, scope, errors);
+            }
             // `-v` / `#v` on a class instance need an `OpNeg` / `OpLen`
             // overload; anything else is a runtime type error.
             super::ops::check_unary(*op, rhs, scope, errors);

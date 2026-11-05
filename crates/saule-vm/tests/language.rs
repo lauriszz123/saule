@@ -417,10 +417,8 @@ fn calling_non_callable_errors() {
         local x: integer = 5
         x()
     "#;
-    assert!(matches!(
-        eval(src).unwrap_err(),
-        PipelineError::Runtime(RuntimeError::TypeError { .. })
-    ));
+    // Known from the type alone, so it never gets as far as running.
+    assert!(matches!(eval(src).unwrap_err(), PipelineError::Typeck(_)));
 }
 
 // ────────────────────────────────────────────────────────────────────────

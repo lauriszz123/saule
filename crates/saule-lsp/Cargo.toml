@@ -20,6 +20,7 @@ saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
 saule-typeck = { path = "../saule-typeck" }
 saule-runtime = { path = "../saule-runtime" }
+saule-vm = { path = "../saule-vm" }
 saule-fmt = { path = "../saule-fmt" }
 miette = "7.6.0"
 tower-lsp = "0.20"

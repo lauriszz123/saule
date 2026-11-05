@@ -77,7 +77,7 @@ pub(super) fn check_stmt(
     match &stmt.value {
         Stmt::Error => {}
 
-        Stmt::Decl(decl) => check_decl(&decl.value, errors),
+        Stmt::Decl(decl) => check_decl(&decl.value, decl.span.clone(), errors),
 
         Stmt::Local {
             name, ty, value, ..
@@ -469,6 +469,7 @@ pub(super) fn check_stmt(
                 }
                 other => other,
             };
+            crate::receivers::check_iterable(iter, scope, errors);
             // If the iter expression is a known class instance, it must
             // implement `Iterable` or `Iterable2` (walking the parent chain).
             if let Some(Type::Named(class_name)) = iter_ty.clone()

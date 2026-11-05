@@ -1,0 +1,4 @@
+-- `assert` accepts a nil value, but the value still has to be written.
+-- Should be a compile error.
+
+assert()

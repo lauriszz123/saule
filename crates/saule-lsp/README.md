@@ -27,4 +27,4 @@ Built on `tower-lsp` + `tokio`. At startup it calls
 ## Dependencies
 
 `saule-ast`, `saule-lexer`, `saule-parser`, `saule-semantic`,
-`saule-typeck`, `saule-runtime`, `saule-fmt`.
+`saule-typeck`, `saule-runtime`, `saule-vm`, `saule-fmt`.

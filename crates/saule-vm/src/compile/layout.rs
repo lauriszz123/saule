@@ -393,12 +393,9 @@ pub fn build(
                 Some(s) => {
                     proto.itables.insert(ii, s);
                 }
-                // The class is missing a method its interface requires.
-                // Nothing before this point rejects that — `saule-semantic`
-                // does not, and the typechecker does not either
-                // (`tests/errors/classes/implements_missing_method.sau` records the gap)
-                // — so it is reported here, before anything runs, rather
-                // than compiling a class whose itable has a hole in it.
+                // The class is missing a method its interface requires. The
+                // type checker reports this first; this is the backstop that
+                // keeps a class whose itable has a hole in it from compiling.
                 None => missing.extend(
                     iface
                         .methods

@@ -1,0 +1,5 @@
+-- A module body runs top to bottom, so `x` does not exist yet.
+-- Should be a compile error.
+
+println(x)
+local x: integer = 1

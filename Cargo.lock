@@ -839,6 +839,7 @@ dependencies = [
  "saule-semantic",
  "saule-typeck",
  "saule-version",
+ "saule-vm",
  "serde_json",
  "tokio",
  "tower-lsp",

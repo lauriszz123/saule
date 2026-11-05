@@ -515,6 +515,26 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    /// An operation no value of this type supports, in the runtime's words.
+    /// See [`crate::receivers`].
+    #[error("{message}")]
+    InvalidOperation {
+        message: String,
+        label: &'static str,
+        #[label("{label}")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("class `{name}` is missing method{plural}: {list}")]
+    #[diagnostic(help("define them on the class, or remove the interface from `implements`"))]
+    MissingInterfaceMethods {
+        name: String,
+        plural: &'static str,
+        list: String,
+        #[label("declared here")]
+        span: miette::SourceSpan,
+    },
+
     #[error("class `{name}` cannot implement `{iface}` — no interface with that name is in scope")]
     #[diagnostic(help(
         "define `interface {iface}` first, import it, or remove it from the `implements` list"

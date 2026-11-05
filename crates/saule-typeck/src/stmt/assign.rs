@@ -522,6 +522,18 @@ pub(crate) fn check_member_assign_receiver(
     {
         return;
     }
+    // `Color.Red = ...` — an enum's variants are fixed.
+    if let Expr::Ident(n) = &obj.value
+        && scope.lookup(n).is_none()
+        && crate::state::with_enums(|r| r.contains_key(n))
+    {
+        errors.push(TypeCheckError::InvalidFieldAssign {
+            receiver: "enum".to_string(),
+            member: name.to_string(),
+            span: crate::to_source_span(span),
+        });
+        return;
+    }
     // Otherwise infer the receiver's type. We can only complain when we
     // actually know it; an unknown type silently passes so dynamic `any`
     // code still works.
@@ -531,11 +543,22 @@ pub(crate) fn check_member_assign_receiver(
     // shaped like a table is allowed through. Reject only the truly
     // field-less primitives / functions.
     let bad = match &stripped {
-        Type::Named(n) => matches!(n.as_str(), "integer" | "float" | "boolean" | "string"),
+        Type::Named(n) => {
+            matches!(
+                n.as_str(),
+                "integer" | "float" | "boolean" | "string" | "bytes"
+            ) || crate::state::with_enums(|r| r.contains_key(n))
+        }
         Type::Tuple(_) | Type::Function { .. } => true,
         _ => false,
     };
     if bad {
+        // The walk over the target has already said this receiver has no
+        // fields to read. For a write this is the one message worth keeping.
+        errors.retain(|e| {
+            !matches!(e, TypeCheckError::InvalidOperation { label: "has no fields", span, .. }
+                if span.offset() == obj.span.end)
+        });
         errors.push(TypeCheckError::InvalidFieldAssign {
             receiver: type_to_string(&stripped),
             member: name.to_string(),

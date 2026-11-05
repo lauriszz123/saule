@@ -1,0 +1,8 @@
+-- Only the compiler resolves named arguments for a declared function, so this
+-- pins `saule check` and the editor asking it.
+
+fn f(a: integer)
+	println(a)
+end
+
+f(b: 1)

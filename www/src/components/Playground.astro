@@ -33,7 +33,11 @@
 	coordinate maths, so clicking and selecting land on the wrong characters.
 	Starlight's rule explicitly exempts `:where(.not-content *)`.
 -->
-<div class="pg not-content" data-playground data-layout="side-by-side">
+<div class="pg not-content" data-playground data-layout="side-by-side" data-view="code">
+	<!-- Behind the sidebar when it is a drawer; tapping away is how it closes. -->
+	<button type="button" class="pg-scrim" data-scrim tabindex="-1" aria-label="Close the programs list" hidden
+	></button>
+
 	<aside class="pg-sidebar" data-sidebar>
 		<div class="pg-sidebar-head">
 			<span class="pg-sidebar-title">Programs</span>
@@ -68,9 +72,33 @@
 			same line, above the thing they act on.
 		-->
 		<div class="pg-toolbar">
+			<button
+				type="button"
+				class="pg-drawer-btn"
+				data-drawer-open
+				aria-expanded="false"
+				title="Programs"
+			>
+				<svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
+					<path
+						d="M2 3.5h12M2 8h12M2 12.5h12"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"></path>
+				</svg>
+				<span class="sr-only">Programs</span>
+			</button>
+
 			<div class="pg-tabs" data-tabs role="tablist" aria-label="Open programs"></div>
 
 			<div class="pg-actions">
+				<!-- Which pane is showing, where only one fits. -->
+				<div class="pg-views" role="group" aria-label="Show">
+					<button type="button" class="pg-view" data-view-code aria-pressed="true">Code</button>
+					<button type="button" class="pg-view" data-view-output aria-pressed="false">Output</button>
+				</div>
+
 				<!--
 					The run widget: one control that names its target and
 					runs it, with Stop taking the same space while a program
@@ -82,6 +110,7 @@
 							<path d="M4.5 2.8v10.4l8.5-5.2-8.5-5.2Z" fill="currentColor"></path>
 						</svg>
 						<span class="pg-run-target" data-run-target></span>
+						<span class="pg-run-label">Run</span>
 						<kbd data-run-key>Ctrl ↵</kbd>
 					</button>
 					<button type="button" class="pg-stop" data-stop disabled>
@@ -217,6 +246,8 @@
 			<ul class="pg-problems-list" data-problems-list></ul>
 		</div>
 
+		<div class="pg-keybar" data-keybar role="toolbar" aria-label="Insert into the editor" hidden></div>
+
 		<!--
 			The status bar is for what is true, not for what you can do: a
 			single thin line of readings, the way an IDE's is. The one
@@ -334,7 +365,15 @@
 		Decoration,
 		type DecorationSet,
 	} from '@codemirror/view';
-	import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+	import {
+		defaultKeymap,
+		history,
+		historyKeymap,
+		indentMore,
+		indentWithTab,
+		redo,
+		undo,
+	} from '@codemirror/commands';
 	import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 	import {
 		syntaxHighlighting,
@@ -345,7 +384,7 @@
 		foldKeymap,
 		codeFolding,
 	} from '@codemirror/language';
-	import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+	import { closeBrackets, closeBracketsKeymap, insertBracket } from '@codemirror/autocomplete';
 	import { linter, lintGutter, type Diagnostic as CmDiagnostic } from '@codemirror/lint';
 	import { tags as t } from '@lezer/highlight';
 
@@ -426,6 +465,23 @@ println("Hello from my script!")
 		const layoutDivider = q<SVGPathElement>('layout-divider');
 		const helpBtn = q<HTMLButtonElement>('help');
 		const runKey = q('run-key');
+		const scrim = q<HTMLButtonElement>('scrim');
+		const drawerBtn = q<HTMLButtonElement>('drawer-open');
+		const viewCodeBtn = q<HTMLButtonElement>('view-code');
+		const viewOutputBtn = q<HTMLButtonElement>('view-output');
+		const keybar = q('keybar');
+
+		// The sidebar is a drawer and the panes always stack below this. The
+		// same widths are in playground.css.
+		const compactScreen = window.matchMedia('(max-width: 60rem)');
+		const singlePane = window.matchMedia(
+			'(max-width: 40rem), (max-width: 60rem) and (max-height: 30rem)'
+		);
+		const coarsePointer = window.matchMedia('(pointer: coarse)');
+		// Not part of the session: a phone opening its drawer should not leave
+		// the same browser's desktop layout changed, and a drawer left open
+		// should not cover the editor on the next visit.
+		let drawerOpen = false;
 
 		const dialog = q<HTMLDialogElement>('dialog');
 		const dialogTitle = q('dialog-title');
@@ -644,6 +700,13 @@ println("Hello from my script!")
 					errorLine,
 					theme,
 					EditorView.lineWrapping,
+					// Without these a phone capitalises the first letter of each
+					// line and "corrects" identifiers into English.
+					EditorView.contentAttributes.of({
+						autocapitalize: 'off',
+						autocorrect: 'off',
+						spellcheck: 'false',
+					}),
 					keymap.of([
 						{ key: 'Mod-Enter', run: () => (void run(), true) },
 						{ key: 'Mod-s', run: () => (void run(), true), preventDefault: true },
@@ -658,6 +721,7 @@ println("Hello from my script!")
 					EditorView.updateListener.of((update) => {
 						if (update.docChanged && !applying) onEdit();
 						if (update.selectionSet || update.docChanged) showCursor();
+						if (update.focusChanged) syncKeybar();
 					}),
 				],
 			}),
@@ -785,6 +849,7 @@ println("Hello from my script!")
 		/** Put the cursor on a diagnostic's position and scroll it into view. */
 		function jumpTo(byteOffset: number, source: string) {
 			const at = Math.min(toCharOffset(source, byteOffset), view.state.doc.length);
+			showPane('code');
 			view.dispatch({
 				selection: { anchor: at },
 				effects: EditorView.scrollIntoView(at, { y: 'center' }),
@@ -957,7 +1022,10 @@ println("Hello from my script!")
 					badge.textContent = tab.kind === 'shared' ? 'link' : 'example';
 					label.append(badge);
 				}
-				label.addEventListener('click', () => activate(i));
+				label.addEventListener('click', () => {
+					showPane('code');
+					activate(i);
+				});
 				el.append(label);
 
 				const close = document.createElement('button');
@@ -1037,6 +1105,8 @@ println("Hello from my script!")
 
 		/** Put `tab` in front, opening it if it is not already a tab. */
 		function openTab(tab: OpenTab) {
+			closeDrawer();
+			showPane('code');
 			const key = tabKey(tab);
 			const at = session.tabs.findIndex((t) => tabKey(t) === key);
 			if (at !== -1) {
@@ -1403,22 +1473,34 @@ println("Hello from my script!")
 
 		// ---- layout ------------------------------------------------------------------
 
+		/**
+		 * The arrangement actually on screen, which is the saved one only
+		 * where it fits. `session.layout` is left alone so that a narrow window
+		 * does not rewrite what the visitor chose.
+		 */
+		function activeLayout(): Session['layout'] {
+			return compactScreen.matches ? 'stacked' : session.layout;
+		}
+
 		function applyLayout() {
-			root.dataset.layout = session.layout;
+			root.dataset.layout = activeLayout();
 			splitEl.style.setProperty('--pg-split', String(session.split));
 			gutterEl.setAttribute(
 				'aria-orientation',
-				session.layout === 'side-by-side' ? 'vertical' : 'horizontal'
+				activeLayout() === 'side-by-side' ? 'vertical' : 'horizontal'
 			);
 			layoutBtn.title =
 				session.layout === 'side-by-side'
 					? 'Stack the panes instead'
 					: 'Put the panes side by side';
 			layoutDivider.setAttribute('d', session.layout === 'side-by-side' ? 'M8 2.5v11' : 'M1.5 8h13');
-			root.classList.toggle('pg-no-sidebar', !session.sidebar);
-			sidebar.hidden = !session.sidebar;
-			sidebarToggle.setAttribute('aria-expanded', String(session.sidebar));
-			sidebarToggle.title = session.sidebar ? 'Hide the sidebar' : 'Show the sidebar';
+			const showSidebar = compactScreen.matches ? drawerOpen : session.sidebar;
+			root.classList.toggle('pg-no-sidebar', !showSidebar);
+			sidebar.hidden = !showSidebar;
+			sidebarToggle.setAttribute('aria-expanded', String(showSidebar));
+			sidebarToggle.title = showSidebar ? 'Hide the sidebar' : 'Show the sidebar';
+			drawerBtn.setAttribute('aria-expanded', String(showSidebar));
+			scrim.hidden = !(compactScreen.matches && drawerOpen);
 		}
 
 		layoutBtn.addEventListener('click', () => {
@@ -1427,11 +1509,126 @@ println("Hello from my script!")
 			persist();
 		});
 
-		sidebarToggle.addEventListener('click', () => {
+		function closeDrawer() {
+			if (!drawerOpen) return;
+			drawerOpen = false;
+			applyLayout();
+		}
+
+		function toggleSidebar() {
+			if (compactScreen.matches) {
+				drawerOpen = !drawerOpen;
+				applyLayout();
+				return;
+			}
 			session.sidebar = !session.sidebar;
 			applyLayout();
 			persist();
+		}
+
+		sidebarToggle.addEventListener('click', toggleSidebar);
+		drawerBtn.addEventListener('click', toggleSidebar);
+		scrim.addEventListener('click', closeDrawer);
+
+		compactScreen.addEventListener('change', () => {
+			drawerOpen = false;
+			applyLayout();
+			syncViewport();
 		});
+
+		/** Which pane is in front. Only matters where `singlePane` matches. */
+		function showPane(pane: 'code' | 'output') {
+			root.dataset.view = pane;
+			viewCodeBtn.setAttribute('aria-pressed', String(pane === 'code'));
+			viewOutputBtn.setAttribute('aria-pressed', String(pane === 'output'));
+			if (pane === 'code') view.requestMeasure();
+		}
+
+		viewCodeBtn.addEventListener('click', () => showPane('code'));
+		viewOutputBtn.addEventListener('click', () => showPane('output'));
+
+		/**
+		 * The row of keys above a phone's keyboard.
+		 *
+		 * `mousedown` is cancelled on the row itself, because a button taking
+		 * focus would blur the editor and close the keyboard these keys exist
+		 * to sit on top of.
+		 */
+		function typeKey(text: string) {
+			const bracket = insertBracket(view.state, text);
+			view.dispatch(
+				bracket ?? {
+					...view.state.replaceSelection(text),
+					scrollIntoView: true,
+					userEvent: 'input.type',
+				}
+			);
+		}
+
+		const KEYS: [label: string, title: string, press: () => void, className?: string][] = [
+			['▶', 'Run', () => void run(), 'pg-key-run'],
+			['⇥', 'Indent', () => void indentMore(view)],
+			...['{', '}', '(', ')', '[', ']', '"', '=', ':', '.', ',', '<', '>', '+', '-', '*', '/', '_'].map(
+				(key): [string, string, () => void] => [key, `Type ${key}`, () => typeKey(key)]
+			),
+			['Undo', 'Undo', () => void undo(view), 'pg-key-word'],
+			['Redo', 'Redo', () => void redo(view), 'pg-key-word'],
+			['Done', 'Hide the keyboard', () => view.contentDOM.blur(), 'pg-key-word'],
+		];
+
+		keybar.replaceChildren(
+			...KEYS.map(([label, title, press, className]) => {
+				const key = document.createElement('button');
+				key.type = 'button';
+				key.className = `pg-key ${className ?? ''}`.trim();
+				key.textContent = label;
+				key.title = title;
+				key.setAttribute('aria-label', title);
+				key.tabIndex = -1;
+				key.addEventListener('click', press);
+				return key;
+			})
+		);
+		keybar.addEventListener('mousedown', (event) => event.preventDefault());
+
+		function syncKeybar() {
+			keybar.hidden = !(coarsePointer.matches && view.hasFocus);
+		}
+
+		/**
+		 * Fit the page to what the keyboard leaves.
+		 *
+		 * `100dvh` does not shrink for an on-screen keyboard, and iOS slides
+		 * the whole page up as well, so the only honest numbers are the visual
+		 * viewport's. While no keyboard is up the properties are removed and
+		 * the stylesheet's `100dvh` applies. Pinch zoom also shrinks the visual
+		 * viewport, which is not a keyboard and should move nothing.
+		 */
+		let keyboardUp = false;
+
+		function syncViewport() {
+			const viewport = window.visualViewport;
+			if (!viewport) return;
+			const up =
+				compactScreen.matches &&
+				viewport.scale < 1.01 &&
+				window.innerHeight - viewport.height > 120;
+			root.classList.toggle('pg-keyboard', up);
+			if (up) {
+				root.style.setProperty('--pg-vvh', `${viewport.height}px`);
+				root.style.setProperty('--pg-vv-top', `${viewport.offsetTop}px`);
+			} else {
+				root.style.removeProperty('--pg-vvh');
+				root.style.removeProperty('--pg-vv-top');
+			}
+			if (up && !keyboardUp && view.hasFocus) {
+				view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) });
+			}
+			keyboardUp = up;
+		}
+
+		window.visualViewport?.addEventListener('resize', syncViewport);
+		window.visualViewport?.addEventListener('scroll', syncViewport);
 
 		/**
 		 * Dragging the gutter.
@@ -1447,7 +1644,7 @@ println("Hello from my script!")
 
 			const move = (e: PointerEvent) => {
 				const fraction =
-					session.layout === 'side-by-side'
+					activeLayout() === 'side-by-side'
 						? (e.clientX - rect.left) / rect.width
 						: (e.clientY - rect.top) / rect.height;
 				session.split = Math.min(0.8, Math.max(0.2, fraction));
@@ -1467,8 +1664,8 @@ println("Hello from my script!")
 		// move at all.
 		gutterEl.addEventListener('keydown', (event) => {
 			const step = event.shiftKey ? 0.1 : 0.02;
-			const back = session.layout === 'side-by-side' ? 'ArrowLeft' : 'ArrowUp';
-			const forward = session.layout === 'side-by-side' ? 'ArrowRight' : 'ArrowDown';
+			const back = activeLayout() === 'side-by-side' ? 'ArrowLeft' : 'ArrowUp';
+			const forward = activeLayout() === 'side-by-side' ? 'ArrowRight' : 'ArrowDown';
 			if (event.key !== back && event.key !== forward) return;
 			event.preventDefault();
 			session.split = Math.min(
@@ -1565,8 +1762,10 @@ println("Hello from my script!")
 		function flash(label: Element, text: string) {
 			const was = label.textContent;
 			label.textContent = text;
+			label.parentElement?.classList.add('pg-flashing');
 			setTimeout(() => {
 				label.textContent = was;
+				label.parentElement?.classList.remove('pg-flashing');
 			}, 1600);
 		}
 
@@ -1637,6 +1836,12 @@ println("Hello from my script!")
 		async function run() {
 			if (running) return;
 			setRunning(true);
+			// Where only one pane fits, the result is what you pressed Run to
+			// see, and the keyboard would only be covering it.
+			if (singlePane.matches) {
+				showPane('output');
+				view.contentDOM.blur();
+			}
 			// The module is fetched on first use, so say so — a couple of
 			// hundred milliseconds of silence otherwise looks like a hang.
 			status.textContent = firstRun ? 'Starting the runtime…' : 'Running…';
@@ -1776,6 +1981,12 @@ println("Hello from my script!")
 			if (running && event.key === 'Escape') {
 				event.preventDefault();
 				stopSaule();
+				return;
+			}
+			if (drawerOpen && event.key === 'Escape') {
+				event.preventDefault();
+				closeDrawer();
+				drawerBtn.focus();
 				return;
 			}
 			const mod = MAC ? event.metaKey : event.ctrlKey;

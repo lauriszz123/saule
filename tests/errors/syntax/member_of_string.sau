@@ -1,0 +1,5 @@
+-- A string has no fields: its functions live on `String`.
+-- Should be a compile error.
+
+local s: string = "a"
+println(s.upper())

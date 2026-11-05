@@ -268,10 +268,10 @@ impl Walk {
             Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
                 let class = match &obj.value {
                     Expr::Self_ => self.class.clone(),
-                    _ => match self.type_of(&obj.value) {
-                        Some(Type::Named(c)) => Some(c),
-                        _ => None,
-                    },
+                    _ => self
+                        .type_of(&obj.value)
+                        .as_ref()
+                        .and_then(super::infer::class_of),
                 }?;
                 saule_semantic::registry::lookup_field_type(&class, name)
             }
@@ -857,9 +857,9 @@ impl Walk {
             Expr::Self_ => self.class.clone(),
             Expr::Ident(name) => {
                 if let Some(v) = self.scope.iter().rev().find(|v| v.name == *name)
-                    && let Some(Type::Named(n)) = &v.ty
+                    && let Some(class) = v.ty.as_ref().and_then(super::infer::class_of)
                 {
-                    return Some(n.clone());
+                    return Some(class);
                 }
                 saule_semantic::with_classes(|r| r.contains_key(name)).then(|| name.clone())
             }
@@ -870,14 +870,7 @@ impl Walk {
                 }
                 Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
                     let recv = self.receiver_class(&obj.value)?;
-                    match saule_semantic::lookup_method(&recv, name)?.return_ty? {
-                        Type::Named(n) => Some(n),
-                        Type::Nullable(inner) => match *inner {
-                            Type::Named(n) => Some(n),
-                            _ => None,
-                        },
-                        _ => None,
-                    }
+                    super::infer::class_of(&saule_semantic::lookup_method(&recv, name)?.return_ty?)
                 }
                 _ => None,
             },

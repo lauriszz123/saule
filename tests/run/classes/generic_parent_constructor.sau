@@ -1,0 +1,35 @@
+-- A generic parent's constructor takes what the subclass bound `T` to, through
+-- as many levels as there are.
+
+class Box<T>
+	value: T
+
+	fn init(value: T)
+		self.value = value
+	end
+end
+
+class IntBox extends Box<integer>
+	fn init()
+		self.super(5)
+	end
+end
+
+class Named<U> extends Box<U>
+	label: string
+
+	fn init(value: U)
+		self.super(value)
+		self.label = "named"
+	end
+end
+
+class Middle extends Named<string>
+	fn init()
+		self.super("deep")
+	end
+end
+
+println(IntBox().value)
+println(Named<integer>(1).value)
+println(Middle().value)

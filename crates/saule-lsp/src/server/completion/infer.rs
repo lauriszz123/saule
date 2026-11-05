@@ -119,6 +119,8 @@ pub(crate) fn class_of(ty: &Type) -> Option<String> {
     match ty {
         Type::Named(n) => Some(n.clone()),
         Type::Nullable(inner) => class_of(inner),
+        // A `Box<integer>` is an instance of `Box`.
+        Type::Generic(g) => Some(g.name.clone()),
         _ => None,
     }
 }

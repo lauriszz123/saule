@@ -15,17 +15,17 @@ impl Backend {
     /// (including imports), then walks the AST under [`hover::hover_at`]
     /// to find the smallest enclosing node and render a Markdown blurb.
     ///
-    /// Returns `None` for closed documents, lex / parse failures, or
-    /// nodes that don't have anything useful to surface (literals,
-    /// keywords, whitespace).
+    /// Returns `None` for closed documents, or nodes that don't have anything
+    /// useful to surface (literals, keywords, whitespace).
     pub(super) async fn hover_at(&self, uri: &Url, pos: Position) -> Option<Hover> {
         let entry = self.docs.get(uri.as_str())?;
         let source = entry.source.clone();
         drop(entry);
 
-        // Lex + parse first so failures don't grab the analysis lock.
-        let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
-        let module = saule_parser::parse(tokens).ok()?;
+        // The recovered tree, like every other request: a syntax error being
+        // typed on one line is no reason for hover to stop working on the rest
+        // of the file. Before the analysis lock, since no analysis happens yet.
+        let module = self.syntax(uri, &source);
 
         let line_index = LineIndex::new(&source);
         let offset = line_index.offset(&source, pos);

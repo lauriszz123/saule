@@ -1,0 +1,5 @@
+-- A built-in package exports a fixed list of names.
+-- Should be a compile error.
+
+import Nope from "math"
+println(Nope)

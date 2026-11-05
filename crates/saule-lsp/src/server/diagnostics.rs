@@ -1,6 +1,7 @@
 //! Diagnostic pipeline: cache → analyse → publish, plus the reverse
 //! import graph and the initial workspace scan that runs at startup.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +21,7 @@ impl Backend {
         // graph, not here.
         if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
             self.with_db(|db| db.set_overlay(&abs, source.clone()));
+            self.open_uris.insert(abs, uri.clone());
         }
         self.docs
             .insert(uri.to_string(), Document { source, version });
@@ -33,27 +35,7 @@ impl Backend {
         let abs = uri.to_file_path().ok().and_then(|p| canonical(&p));
         if let Some(a) = &abs {
             self.refresh_path(a, uri.clone()).await;
-            // Re-analyse importers (best-effort; missing entries skip).
-            let importers: Vec<PathBuf> = self
-                .rev_imports
-                .get(a)
-                .map(|e| e.iter().cloned().collect())
-                .unwrap_or_default();
-            for importer in importers {
-                if &importer == a {
-                    continue;
-                }
-                // Only the ones an edit can actually have changed. The
-                // database knows whether anything this file reads came out
-                // different; when nothing did, its diagnostics are the ones
-                // already on screen.
-                if !self.analysis_inputs_moved(&importer).await {
-                    continue;
-                }
-                if let Some(dep_uri) = path_to_uri(&importer) {
-                    self.refresh_path(&importer, dep_uri).await;
-                }
-            }
+            self.refresh_importers(a).await;
         } else {
             // No file path (e.g. `untitled:` buffer) — analyse the open
             // doc only, no cross-file follow-up possible.
@@ -67,6 +49,62 @@ impl Backend {
             self.client
                 .publish_diagnostics(uri, diagnostics, Some(version))
                 .await;
+        }
+    }
+
+    /// Re-publish every file that reaches `changed` through its imports.
+    ///
+    /// All of them, not just the direct ones: a type declared in `base` can
+    /// reach `top` through `mid` without `top` ever naming `base`.
+    pub(super) async fn refresh_importers(&self, changed: &Path) {
+        let mut queue = vec![changed.to_path_buf()];
+        let mut seen: HashSet<PathBuf> = HashSet::from([changed.to_path_buf()]);
+        while let Some(next) = queue.pop() {
+            let importers: Vec<PathBuf> = self
+                .rev_imports
+                .get(&next)
+                .map(|e| e.iter().cloned().collect())
+                .unwrap_or_default();
+            for importer in importers {
+                if !seen.insert(importer.clone()) {
+                    continue;
+                }
+                queue.push(importer.clone());
+                // Only the ones an edit can actually have changed. The
+                // database knows whether anything this file reads came out
+                // different; when nothing did, its diagnostics are the ones
+                // already on screen.
+                if !self.analysis_inputs_moved(&importer).await {
+                    continue;
+                }
+                if let Some(uri) = path_to_uri(&importer) {
+                    self.refresh_path(&importer, uri).await;
+                }
+            }
+        }
+    }
+
+    /// Re-publish every file we know of, unconditionally. For the changes
+    /// that alter what imports *resolve to* — a file appearing or vanishing,
+    /// a new `saule.config` — which leave no dependency edge to follow, since
+    /// an import that did not resolve recorded nothing.
+    pub(super) async fn refresh_everything(&self) {
+        let mut paths: HashSet<PathBuf> = self
+            .workspace_files
+            .iter()
+            .map(|f| f.key().clone())
+            .collect();
+        let open: Vec<String> = self.docs.iter().map(|d| d.key().clone()).collect();
+        paths.extend(
+            open.iter()
+                .filter_map(|uri| Url::parse(uri).ok())
+                .filter_map(|uri| uri.to_file_path().ok())
+                .filter_map(|p| canonical(&p)),
+        );
+        for path in paths {
+            if let Some(uri) = path_to_uri(&path) {
+                self.refresh_path(&path, uri).await;
+            }
         }
     }
 
@@ -88,6 +126,7 @@ impl Backend {
     /// Analyse a single file by absolute path. Source is taken from the
     /// open-document cache if present, otherwise read from disk.
     pub(super) async fn refresh_path(&self, abs: &Path, uri: Url) {
+        let uri = self.open_uris.get(abs).map_or(uri, |open| open.clone());
         let (source, version) = if let Some(entry) = self.docs.get(uri.as_str()) {
             let s = entry.source.clone();
             let v = Some(entry.version);
@@ -185,17 +224,9 @@ impl Backend {
         // installed above, so src_dirs / dependency resolution works.
         let mut unresolved_import = false;
         if let Some(dir) = module_dir.as_deref() {
-            for stmt in &module.stmts {
-                let Stmt::Decl(d) = &stmt.value else {
-                    continue;
-                };
-                let Decl::Import { path, .. } = &d.value else {
-                    continue;
-                };
-                if saule_runtime::module::resolve_import_path(dir, path).is_none() {
-                    out.push(import_error_diag(path, d.span.clone(), source, &line_index));
-                    unresolved_import = true;
-                }
+            for e in saule_runtime::module::unresolved_imports(module, dir) {
+                out.push(diag_from(&e, source, &line_index));
+                unresolved_import = true;
             }
         }
 
@@ -212,7 +243,9 @@ impl Backend {
         // project it was last handed — would be derived from a seed built
         // against the wrong `src_dirs`, and the memo would keep it.
         let revision = abs_path.map(|p| self.with_db(|db| db.analysis_revision(p)));
-        for e in saule_semantic::analyze_with_seed(module, seed) {
+        let (semantic_errors, bindings) = saule_semantic::analyze_with_bindings(module, seed);
+        let semantic_clean = semantic_errors.is_empty();
+        for e in semantic_errors {
             out.push(diag_from(&e, source, &line_index));
         }
         // Run typeck even if semantic flagged issues — the type errors are
@@ -222,7 +255,18 @@ impl Backend {
         // check` draws the same line. Typeck reads the registries that
         // `analyze_with_seed` just installed, so the order matters.
         if !unresolved_import {
-            for e in saule_typeck::check(module) {
+            let mut resolved = module.clone();
+            let (errors, types) = saule_typeck::check_and_resolve_with_types(&mut resolved);
+            let clean = semantic_clean && errors.is_empty();
+            for e in errors {
+                out.push(diag_from(&e, source, &line_index));
+            }
+            // What `saule run` would still refuse. `saule check` asks the same
+            // question, so the editor and the command line cannot disagree.
+            if clean
+                && let Some(e) =
+                    saule_vm::compile::rejection(&resolved, uri.as_str(), source, &bindings, &types)
+            {
                 out.push(diag_from(&e, source, &line_index));
             }
         }
@@ -314,25 +358,6 @@ fn doc_warning_diag(
         severity: Some(DiagnosticSeverity::WARNING),
         source: Some("saule".to_string()),
         message: w.message.clone(),
-        ..Default::default()
-    }
-}
-
-/// Diagnostic for an `import` whose path failed to resolve (typo, missing
-/// dep, wrong src_dir, or an installed native package that could not be
-/// used). Uses the whole import statement span so editors highlight the
-/// entire line, and the same words `saule check` prints.
-fn import_error_diag(
-    path: &str,
-    span: Range<usize>,
-    source: &str,
-    line_index: &LineIndex,
-) -> Diagnostic {
-    Diagnostic {
-        range: line_index.range(source, span.start, span.end),
-        severity: Some(DiagnosticSeverity::ERROR),
-        source: Some("saule".to_string()),
-        message: saule_runtime::module::unresolved_import_message(path),
         ..Default::default()
     }
 }

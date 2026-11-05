@@ -139,7 +139,43 @@ pub fn unresolved_imports(module: &saule_ast::Module, dir: &Path) -> Vec<crate::
                     span: d.span.clone(),
                 })
         })
+        .chain(unexported_native_imports(module))
         .collect()
+}
+
+/// `import Nope from "math"`: a name a built-in package does not export. The
+/// wording is the one the program driver uses when it reaches the import.
+///
+/// A file of the same name resolves ahead of a package, so one found by the
+/// caller's walk is not asked about here; this only reads the packages'
+/// export lists, which are known without loading anything.
+fn unexported_native_imports(module: &saule_ast::Module) -> Vec<crate::RuntimeError> {
+    let mut errors = Vec::new();
+    for stmt in &module.stmts {
+        let saule_ast::Stmt::Decl(d) = &stmt.value else {
+            continue;
+        };
+        let saule_ast::Decl::Import {
+            path,
+            names: saule_ast::ImportNames::List(names),
+            ..
+        } = &d.value
+        else {
+            continue;
+        };
+        let Some(pkg) = crate::native_packages::lookup(path) else {
+            continue;
+        };
+        for (name, _) in names {
+            if !pkg.exports.contains(&name.as_str()) {
+                errors.push(crate::RuntimeError::ImportError {
+                    message: format!("`{name}` is not exported from `{path}`"),
+                    span: d.span.clone(),
+                });
+            }
+        }
+    }
+    errors
 }
 
 /// The dependency whose `src_dirs` contain `dir` — the package the importing
