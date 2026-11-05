@@ -1,0 +1,6 @@
+-- `String.gmatch` refuses an anchored pattern: `^` can match in one place
+-- only, so iterating it is a mistake. Lua reads the `^` as a literal and
+-- quietly yields nothing, which is the behaviour this error replaces.
+for word in String.gmatch("aaa", "^a") do
+	println(word)
+end

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 Tables are Saule's only data structure — same model as Lua. A single table holds both an **array part** (contiguous 1-based integer keys) and a **map part** (everything else: strings, booleans, non-positive integers). The two parts share one value space and one length.
 

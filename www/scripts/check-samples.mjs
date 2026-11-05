@@ -13,7 +13,7 @@
  *   - fenced ```saule blocks in the pages under src/content/docs that this
  *     project authored by hand, opted in per-file via HAND_WRITTEN below.
  *
- * The generated pages are deliberately excluded: they come from README.md
+ * The generated pages are deliberately excluded: they come from LANGUAGE.md
  * and DOCS.md, where most snippets are illustrative fragments (a lone method
  * body, a type signature) that were never meant to compile standalone.
  *

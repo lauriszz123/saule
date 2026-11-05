@@ -426,8 +426,8 @@ jobs:
   #   1. Every Saule sample the website shows by hand actually compiles and
   #      runs — checked against the real compiler built from this commit.
   #   2. The generated pages under www/src/content/docs are in sync with the
-  #      README.md / DOCS.md / examples they come from, so a committed page can
-  #      never contradict its source.
+  #      LANGUAGE.md / DOCS.md / examples they come from, so a committed page
+  #      can never contradict its source.
   check-www:
     executor: rust-linux
     steps:
@@ -487,7 +487,7 @@ jobs:
             npm run check-samples
             npm run sync-docs
             # `git status --porcelain`, not `git diff`: a new `##` section in
-            # the README generates a page that does not exist yet, and an
+            # the guide generates a page that does not exist yet, and an
             # *untracked* file is invisible to `git diff`. That would let a new
             # documentation page pass CI and then be missing from the repo.
             changed="$(git status --porcelain -- src/content/docs)"
@@ -687,7 +687,8 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       # The same checkout as `test-windows`, so the archive is built from the
-      # bytes that were tested — README.md included, which ships in it.
+      # bytes that were tested — the Markdown manual included, which ships
+      # in it.
       - checkout-windows
       - attach_workspace:
           at: .
@@ -726,7 +727,8 @@ jobs:
             $staging = "dist/$name"
             New-Item -ItemType Directory -Force -Path $staging | Out-Null
             Copy-Item "target/$env:TRIPLE/release/saule.exe","target/$env:TRIPLE/release/saule-lsp.exe" $staging
-            Copy-Item README.md $staging
+            # Matches build-unix.sh: front door, language guide, stdlib reference.
+            Copy-Item README.md,LANGUAGE.md,DOCS.md $staging
             if (Test-Path LICENSE) {
               Copy-Item LICENSE $staging
             } else {
@@ -824,12 +826,26 @@ jobs:
             # `target_commitish` is what creates the tag: GitHub tags the
             # commit for us, so there is no push and no second pipeline. On the
             # re-cut path the tag already exists and this field is ignored.
+            #
+            # **`prerelease: true` is what makes the two install channels
+            # work**, and it is the only mechanism behind them. Every build
+            # published here is a pre-release, which GitHub excludes from
+            # `/releases/latest` — so the installer's default `stable` channel
+            # does not see it, while the `latest` channel (which reads
+            # `releases.atom`) does. Blessing a build is one command against
+            # an already-published release:
+            #
+            #   gh release edit v26.22 --prerelease=false --latest
+            #
+            # `make_latest: false` is passed explicitly rather than left to
+            # GitHub's by-creation-date rule, so publishing never moves the
+            # stable pointer as a side effect.
             body="$(jq -n \
               --arg tag "$TAG" \
               --arg target "$CIRCLE_SHA1" \
               --arg name "Saule $VERSION" \
               --rawfile notes meta/release-notes.md \
-              '{tag_name: $tag, target_commitish: $target, name: $name, body: $notes, draft: false, prerelease: false}')"
+              '{tag_name: $tag, target_commitish: $target, name: $name, body: $notes, draft: false, prerelease: true, make_latest: "false"}')"
 
             echo "Creating release $TAG at $CIRCLE_SHA1"
             release="$(curl --fail-with-body -sS -X POST \
@@ -852,7 +868,12 @@ jobs:
 
             echo
             echo "Published: https://github.com/$GITHUB_REPO/releases/tag/$TAG"
-            echo "The installer will pick this up as \`latest\` immediately."
+            echo
+            echo "This is a PRE-RELEASE, so it is on the \`latest\` channel only:"
+            echo "  SAULE_CHANNEL=latest curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh"
+            echo
+            echo "The default \`stable\` channel will not offer it until it is blessed:"
+            echo "  gh release edit $TAG --prerelease=false --latest"
       - store_artifacts:
           path: dist
           destination: release

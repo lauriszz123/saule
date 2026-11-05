@@ -30,7 +30,7 @@ build. See each plugin's README.
 - **A new diagnostic** gets a fixture in `tests/errors/<area>/`, which has to fail.
   `crates/saule-lsp/tests/live_server.rs` also requires the editor to flag it.
 - **A new language feature** gets a passing fixture in `tests/run/<area>/`, and
-  belongs in `README.md`. Its keywords must also reach
+  belongs in `LANGUAGE.md`. Its keywords must also reach
   `grammar/saule.tmLanguage.json` and the three editor plugins.
 - **A standard library function** needs a signature as well as an implementation,
   so misuse is caught before the program runs, and an entry in `DOCS.md`.

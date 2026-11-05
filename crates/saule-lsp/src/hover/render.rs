@@ -3,9 +3,12 @@
 //! display in the hover popup.
 
 mod decls;
+/// Hover cards built from `DOCS.md` rather than from the type registry.
+mod stdlib;
 mod types;
 
 pub(crate) use decls::*;
+pub(crate) use stdlib::*;
 pub(crate) use types::*;
 
 use saule_docs::DocBlock;

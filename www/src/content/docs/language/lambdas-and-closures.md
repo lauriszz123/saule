@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 ### Arrow Lambda
 

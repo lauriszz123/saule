@@ -1,7 +1,22 @@
 # Saule — Public Release & Package Distribution Plan
 
-Written against `229bac6` as an ordered set of steps. The table below is current;
-the step text further down records the original plan.
+Written against `229bac6` as an ordered set of steps, and revised 2026-11-05
+against `bcc6cb7`. The table below is current; the step text further down
+records the original plan, with each step's status noted where it has since
+landed.
+
+**Steps 0–6 are done.** A user on macOS, Linux or Windows installs the
+toolchain in one command, gets published editor support, and can install a
+dependency from a public Git repository with `saule.lock` pinning the commit.
+
+What is left, verified against `bcc6cb7`:
+
+| Step | State |
+|---|---|
+| 7 — Publishing and repair | **Partial.** `saule init --lib` exists. `saule publish`, `saule doctor` and `saule clean` do not — publishing a package means pushing a Git tag by hand, and a broken install is repaired by hand. |
+| 8 — Real dependency graphs | **Not done.** `saule update` exists, but `cmd_install` walks only the root project's `dependencies:`, so **resolution is direct-only** — a package's own dependencies are not fetched. `--as` does not exist. This was explicitly deferred in step 6 and the deferral still stands: it changes no format and invalidates no existing lockfile. |
+| 9 — Native release assets | **Not done.** `saule install` still builds native packages with Cargo, so installing one requires a Rust toolchain. |
+| The first package | **Not done.** See *Also worth doing early*. |
 
 **The goal.** A user on macOS, Linux, or Windows runs one command, gets the
 Saule toolchain and working editor support, and can then
@@ -24,13 +39,13 @@ manager. Design detail that would clutter a step lives in the appendices.
 | Area | State today |
 |---|---|
 | Versioning | **Done.** `26.<build>`, generated on release, readable from the CLI, the LSP, and the language. See step 0. |
-| CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. Runs on `main` only; `develop` runs nothing. There are no GitHub Actions workflows; GitHub keeps the code, the Releases, and Pages. |
-| Releases | **Done.** Every push to `main` publishes six platform archives to GitHub Releases. |
-| Toolchain install | **Done.** [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site and verify checksums. |
+| CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. **The suite runs on Linux, macOS and Windows** and gates both pull requests (`pr-check`) and releases — the `version` job requires all three platforms plus `check-www`, so a red test anywhere means no archives and no release. There are no GitHub Actions workflows; GitHub keeps the code, the Releases, and Pages. |
+| Releases | **Done.** Every push to `main` publishes six platform archives to GitHub Releases. 21 published to date; `v26.21` is current. |
+| Toolchain install | **Done.** [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site and verify checksums. Two channels: `stable` (default) and `latest` — see step 3. |
 | Package manager | **Done, without `publish`.** `saule install`, `update`, `remove` and `list`, with `saule.lock`. A package is published by pushing a Git tag. |
-| Dependencies | Paths and `owner@repo:version`, pinned to exact commits by `saule.lock`. |
+| Dependencies | Paths and `owner@repo:version`, pinned to exact commits by `saule.lock`. **Direct only** — a package's own dependencies are not resolved (step 8). |
 | Native packages | `saule install` builds them with Cargo. Prebuilt libraries do not exist yet. |
-| Editor plugins | All three are ready to publish, with release workflows. **None are published yet**: the marketplaces need accounts and tokens. |
+| Editor plugins | **Published.** VS Code on the Visual Studio Marketplace (`saule.saule`, 26.21.0), JetBrains as plugin 35823, `saule-nvim` from its own repository. Open VSX is still worth doing. |
 | Licensing | **Done.** MIT: [LICENSE](LICENSE) at the root, `license = "MIT"` in `[workspace.package]`, and every archive ships a copy. See step 1. |
 
 Four things are already right and shape everything below:
@@ -299,6 +314,43 @@ it *is* the directory, not a parent to append `.saule` to.
 `Get-FileHash -Algorithm SHA256`, `Expand-Archive`, and
 `[Environment]::SetEnvironmentVariable('Path', …, 'User')`.
 
+### Two channels, and why not a `-stable` tag
+
+The installer resolves one of two channels, defaulting to `stable`:
+
+| Channel | Resolves to | How |
+|---|---|---|
+| `stable` | the newest release not marked pre-release | the `/releases/latest` redirect, which GitHub excludes pre-releases from — the path the installer already used |
+| `latest` | the newest release of any kind | `releases.atom`, which lists pre-releases, with the API as a fallback |
+
+The whole mechanism is `prerelease: true` on the publish call. Every build is
+published as a pre-release, so **`stable` does not move until somebody blesses
+a build**, which is one `gh release edit` against a release that already
+exists — no rebuild, no second pipeline, no branch. `SAULE_CHANNEL` picks a
+channel and `$SAULE_HOME/channel` remembers it, so an upgrade stays where the
+user put themselves.
+
+Three alternatives were considered and rejected:
+
+- **A `v26.7-stable` tag.** It would collide with the `-dev+<sha>` suffix that
+  means "not a release", sort *before* `26.7` under semver precedence, and
+  break `min_saule_version`, which is a plain numeric dotted compare. Two tags
+  on one build would also mean two releases for one set of archives, making
+  `/releases/latest` ambiguous.
+- **A `stable` branch.** Building from it would produce artifacts that are not
+  the ones already tested, or require re-tagging — two releases per build
+  again. Branches earn their keep for *backporting*, and the version scheme
+  deliberately has no patch component: STABILITY.md says a fix means the next
+  build, so there is nothing to backport into. A branch that is only a pointer
+  is a less visible copy of the GitHub flag.
+- **A channel file on the docs site.** The site is deployed by hand
+  ([deploy-gh-pages.sh](www/scripts/deploy-gh-pages.sh)), with no CI path, so
+  the pointer would go stale the moment a build was blessed.
+
+What counts as stable belongs in [STABILITY.md](STABILITY.md) — it is a
+promise to users, not a pipeline detail. The mechanics are in
+[CIRCLECI.md](CIRCLECI.md#blessing-a-stable-release).
+
 ### macOS signing: less than previously assumed
 
 An earlier draft of this plan budgeted for Apple notarization. For this
@@ -341,6 +393,12 @@ back to `saule-lsp` on `$PATH` (`SauleToolchain.kt`, `extension.ts`,
 `toolchain.lua`), so **once step 3 puts the server on PATH, all three work
 as-is.** The gap is publication, not function.
 
+> **Status, 2026-11-05 — this step is done.** All three install from their
+> normal channel. The remaining text records what each one needed, and the two
+> follow-ons that are still open: **Open VSX**, so VSCodium users can install
+> the extension, and upstreaming the filetype and LSP config into
+> `nvim-lspconfig`.
+
 **Neovim** — done. `saule.lsp.setup()` used to resolve the server by walking
 up from its own file to a repo checkout, which only worked while the plugin
 lived inside one; it now starts from the buffer's own directory, the same
@@ -349,21 +407,22 @@ is the opt-in for anything else. It installs via lazy.nvim or packer pointing
 at `lauriszz123/saule-nvim`. Longer term, upstream the filetype and LSP config
 into `nvim-lspconfig`.
 
-**VS Code** — needs a real Marketplace publisher ID (`package.json` says
-`"publisher": "saule"`, which must be claimed or changed), a PAT in CI, and
-`vsce publish` on tag. Worth publishing to OpenVSX for VSCodium users too.
+**VS Code** — **done.** The `saule` publisher ID was claimed and the extension
+is live at
+[`saule.saule`](https://marketplace.visualstudio.com/items?itemName=saule.saule),
+tracking the toolchain version (26.21.0). Still open: publishing to **Open VSX**
+for VSCodium users, which is a separate registry and a separate token.
 
-**IntelliJ** — needs a JetBrains Marketplace account and token plus the
-`publishPlugin` Gradle task. One open question: the platform wants
-`sourceCompatibility=21` while `gradle.properties` pins `javaVersion=17`.
-The LSP4IJ runtime dependency is already declared correctly, and the
-previously-noted non-executable `gradlew` is already fixed (mode `100755`).
+**IntelliJ** — **done.** Listed as
+[plugin 35823](https://plugins.jetbrains.com/plugin/35823-saule). The LSP4IJ
+runtime dependency was already declared correctly, and the previously-noted
+non-executable `gradlew` was already fixed (mode `100755`).
 
 Stamp the release version into each plugin's manifests before packaging it —
 see *Cutting a release* above for the per-repository command.
 
 **Done when** all three install from their normal channel and give diagnostics
-in a project outside this repo.
+in a project outside this repo. — **Met.**
 
 ---
 
@@ -466,14 +525,16 @@ machine, and `saule doctor --fix` recovers from a deleted `packages/` entry.
 
 ## Also worth doing early
 
-**UIKit does not exist yet.** It's the motivating package for the whole
-source-package path and the first real test of `saule publish`. Ship it as a
-stub during step 6 — publishing a package you wrote is the only way to find out
-whether the flow is actually seamless.
+**UIKit does not exist yet — and this is now the oldest unpaid item in the
+plan.** It's the motivating package for the whole source-package path and the
+first real test of publishing. Steps 5–8 shipped without it, so the package
+manager works and has nothing to point at: `saule install lauriszz123/uikit`,
+the example used throughout this document, resolves to a repository that does
+not exist. Publishing a package you wrote is the only way to find out whether
+the flow is actually seamless.
 
-**`examples/json_usage` currently fails to typecheck** (`Json.decode` returns
-`any?` assigned to a `table?`). Pre-existing, unrelated to versioning, but
-CI runs the fixtures now, so it will show up as a red build.
+~~**`examples/json_usage` currently fails to typecheck**~~ — **fixed.**
+`saule check "examples/json_usage"` passes (verified 2026-11-05).
 
 ---
 

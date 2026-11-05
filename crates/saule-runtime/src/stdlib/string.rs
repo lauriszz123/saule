@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use crate::native_packages::NativePackage;
 use crate::prelude::Prelude;
+use crate::stdlib::pattern;
 use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::SauleStr;
 use crate::value::{ClassObject, NativeClosure, TableObject, Value};
@@ -65,6 +66,9 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
         native("String.padStart", str_pad_start),
     );
     static_fields.insert("padEnd".to_string(), native("String.padEnd", str_pad_end));
+    static_fields.insert("match".to_string(), native("String.match", str_match));
+    static_fields.insert("gmatch".to_string(), native("String.gmatch", str_gmatch));
+    static_fields.insert("gsub".to_string(), native_multi("String.gsub", str_gsub));
 
     let class = ClassObject {
         name: "String".to_string(),
@@ -124,10 +128,11 @@ pub fn register_sigs() {
 
     // ─── text manipulation ──────────────────────────────────────────────
     //
-    // Saule has no pattern language, so these are the plain-substring
-    // operations that Lua leaves to `string.gsub` and friends. Every one of
-    // them takes and returns literal text: `String.replace(s, ".", "-")`
-    // replaces full stops, not "any character".
+    // These are the plain-substring operations, and they stay literal on
+    // purpose: `String.replace(s, ".", "-")` replaces full stops, not "any
+    // character". When a pattern is wanted, `String.gsub` is the one that
+    // reads `.` as a wildcard — the two are separate functions precisely so
+    // that neither has a flag deciding which language its argument is in.
 
     use crate::stdlib::sigs::{register_g, t_table};
     // `split(s, sep) -> table<string>`. An empty separator splits into
@@ -169,6 +174,42 @@ pub fn register_sigs() {
         vec![s()],
     );
     register("String.padEnd", vec![s(), i(), t_nullable(s())], vec![s()]);
+
+    // ─── patterns ───────────────────────────────────────────────────────
+    //
+    // Each of the three has the return shape that fits how it is *called*,
+    // which is why they are not uniform:
+    //
+    // `match` is called in a `local`, and a single binding against a
+    // multi-return takes the whole tuple rather than its first element —
+    // `local m = String.find(s, x)` gives `m` the type `(integer?, integer?)`.
+    // So `match` returns one value: a table of the captures, or of the whole
+    // match when the pattern declared none. That is also Lua's rule, typed.
+    register(
+        "String.match",
+        vec![s(), s(), t_nullable(i())],
+        vec![t_nullable(t_table(s()))],
+    );
+    // `gmatch` is called in a `for`, and a `for` *is* arity-flexible over a
+    // tuple, so it can afford to return both without costing the common case
+    // anything: `for word in String.gmatch(s, "%a+")` binds the whole match,
+    // and `for word, caps in …` binds the captures too.
+    register(
+        "String.gmatch",
+        vec![s(), s()],
+        vec![t_function(
+            vec![],
+            Type::Tuple(vec![t_nullable(s()), t_nullable(t_table(s()))]),
+        )],
+    );
+    // `gsub` returns the new string and how many substitutions were made,
+    // destructured as `local out, n = …`, matching both Lua and the 2-tuple
+    // `String.find` already returns.
+    register(
+        "String.gsub",
+        vec![s(), s(), s(), t_nullable(i())],
+        vec![s(), i()],
+    );
     let _ = t_any;
 }
 
@@ -788,12 +829,178 @@ fn as_float(v: &Value, spec: char) -> Result<f64, String> {
 
 // ─── text manipulation ──────────────────────────────────────────────────────
 //
-// Plain-substring operations. Saule dropped Lua's pattern language, and
-// nothing replaced it, which left `split` / `replace` / `trim` — the three
-// things every text-handling program starts with — as hand-written loops over
-// `String.find` and `String.sub`. These are the literal-text versions; a
-// pattern or regex facility, if one ever lands, is a separate surface and does
-// not change what these mean.
+// Plain-substring operations: `split` / `replace` / `trim` and friends, the
+// things every text-handling program starts with, which without them are
+// hand-written loops over `String.find` and `String.sub`.
+//
+// These are the literal-text versions and they stay that way. Lua's pattern
+// language has since landed next door, as `String.match` / `gmatch` / `gsub`
+// — a separate surface, which is the point: `String.replace(s, ".", "-")`
+// replaces full stops, and neither function has a flag deciding which
+// language its argument is written in.
+
+// ─── patterns ───────────────────────────────────────────────────────────────
+//
+// The engine is in [`crate::stdlib::pattern`]; these three are the Saule
+// surface over it. The pattern syntax, and the two places it departs from
+// Lua's, are documented there and in `DOCS.md`.
+
+/// `String.match(s, pat, init?) -> table<string>?`
+///
+/// `nil` when nothing matches. On a match, the captures — or a one-element
+/// table holding the whole match when the pattern declared none, which is
+/// Lua's rule that a pattern without parentheses captures itself.
+///
+/// Returning a table rather than a tuple is forced by how this gets called: a
+/// single binding against a multi-return takes the whole tuple, so
+/// `local m = String.match(s, p)` would hand back a `(string?, table?)` and
+/// every caller would have to destructure to get at anything.
+fn str_match(args: &[Value]) -> Result<Value, String> {
+    expect_min_arity("String.match", args, 2)?;
+    let s = expect_string("String.match", args, 0)?;
+    let pat = expect_string("String.match", args, 1)?;
+    let chars: Vec<char> = s.chars().collect();
+    let pchars: Vec<char> = pat.chars().collect();
+
+    let init: i64 = if args.len() >= 3 {
+        expect_int("String.match", args, 2)?
+    } else {
+        1
+    };
+    let start = resolve_index(init, chars.len());
+
+    match pattern::find(&chars, &pchars, start)? {
+        None => Ok(Value::Nil),
+        Some(m) => Ok(string_table(m.capture_texts(&chars))),
+    }
+}
+
+/// `String.gmatch(s, pat) -> fn() -> (string?, table<string>?)`
+///
+/// A step closure over every match, for `for … in`. The tuple costs the
+/// common case nothing — `for word in String.gmatch(s, "%a+")` binds the
+/// whole match — while `for word, caps in …` also gets the captures.
+///
+/// A zero-width match advances by one character rather than looping forever,
+/// which is what makes `String.gmatch(s, "%a*")` terminate.
+///
+/// An anchored pattern is refused. It can match in only one place, so
+/// iterating it is a mistake somewhere — and the two things an implementation
+/// could silently do instead are both worse. Lua reads the `^` as a literal
+/// character, so `gmatch(s, "^a")` quietly yields nothing; yielding exactly
+/// one match would quietly make the loop a no-op `if`. Saying so is better
+/// than either.
+fn str_gmatch(args: &[Value]) -> Result<Value, String> {
+    expect_arity("String.gmatch", args, 2)?;
+    let s = expect_string("String.gmatch", args, 0)?;
+    let pat = expect_string("String.gmatch", args, 1)?;
+    let chars: Rc<Vec<char>> = Rc::new(s.chars().collect());
+    let pchars: Rc<Vec<char>> = Rc::new(pat.chars().collect());
+    if pattern::is_anchored(&pchars) {
+        return Err(
+            "String.gmatch cannot iterate an anchored pattern: `^` matches in one place \
+             only. Use String.match for a single anchored match, or drop the `^`."
+                .to_string(),
+        );
+    }
+    let cursor = Rc::new(RefCell::new(0usize));
+
+    Ok(Value::NativeClosure(Rc::new(NativeClosure {
+        name: "String.gmatch#step",
+        func: Box::new(move |_args: &[Value]| {
+            let mut pos = cursor.borrow_mut();
+            if *pos > chars.len() {
+                return Ok(vec![Value::Nil, Value::Nil]);
+            }
+            match pattern::find(&chars, &pchars, *pos)? {
+                None => {
+                    // Park past the end so a loop that keeps calling stays done.
+                    *pos = chars.len() + 1;
+                    Ok(vec![Value::Nil, Value::Nil])
+                }
+                Some(m) => {
+                    *pos = if m.end == m.start { m.end + 1 } else { m.end };
+                    let whole: String = chars[m.start..m.end].iter().collect();
+                    Ok(vec![
+                        Value::Str(SauleStr::new(whole)),
+                        string_table(m.capture_texts(&chars)),
+                    ])
+                }
+            }
+        }),
+        param_names: Vec::new(),
+    })))
+}
+
+/// `String.gsub(s, pat, repl, limit?) -> (string, integer)`
+///
+/// The rewritten string and how many substitutions were made. `repl` is a
+/// template: `%1`–`%9` insert a capture, `%0` the whole match, `%%` a literal
+/// percent.
+///
+/// `limit` caps the number of substitutions; without it every match is
+/// replaced. A zero-width match advances by one character, so
+/// `String.gsub(s, "x*", "-")` terminates.
+fn str_gsub(args: &[Value]) -> Result<Vec<Value>, String> {
+    expect_min_arity("String.gsub", args, 3)?;
+    let s = expect_string("String.gsub", args, 0)?;
+    let pat = expect_string("String.gsub", args, 1)?;
+    let repl = expect_string("String.gsub", args, 2)?;
+    let limit = if args.len() >= 4 {
+        let n = expect_int("String.gsub", args, 3)?;
+        if n < 0 {
+            return Err(format!("String.gsub limit cannot be negative, got {n}"));
+        }
+        Some(n as usize)
+    } else {
+        None
+    };
+
+    let chars: Vec<char> = s.chars().collect();
+    let pchars: Vec<char> = pat.chars().collect();
+    let rchars: Vec<char> = repl.chars().collect();
+    // `^` anchors to the start of the subject, so there is at most one match
+    // to make. Without this the loop would re-anchor at each new position and
+    // `gsub("aaa", "^a", "b")` would replace all three.
+    let anchored = pattern::is_anchored(&pchars);
+
+    let mut out = String::with_capacity(s.len());
+    let mut pos = 0usize;
+    let mut count = 0usize;
+
+    while limit.is_none_or(|l| count < l) {
+        let Some(m) = pattern::find(&chars, &pchars, pos)? else {
+            break;
+        };
+        out.extend(&chars[pos..m.start]);
+        out.push_str(&pattern::expand_replacement(&rchars, &chars, &m)?);
+        count += 1;
+
+        if anchored {
+            pos = m.end;
+            break;
+        }
+
+        if m.end == m.start {
+            // Zero-width: emit the character we are standing on and step over
+            // it, or stop if there is none left.
+            if m.end >= chars.len() {
+                pos = m.end;
+                break;
+            }
+            out.push(chars[m.end]);
+            pos = m.end + 1;
+        } else {
+            pos = m.end;
+        }
+    }
+
+    out.extend(&chars[pos.min(chars.len())..]);
+    Ok(vec![
+        Value::Str(SauleStr::new(out)),
+        Value::Int(count as i64),
+    ])
+}
 
 /// A `table<string>` value from an iterator of pieces.
 fn string_table<I: IntoIterator<Item = String>>(parts: I) -> Value {

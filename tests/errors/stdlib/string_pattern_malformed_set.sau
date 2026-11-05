@@ -1,0 +1,3 @@
+-- An unterminated bracket set is a malformed pattern.
+local m: table<string>? = String.match("abc", "[abc")
+println(m != nil)

@@ -55,4 +55,4 @@ inside a project.
 
 **It needs no import.** Like every other stdlib module, `Project` is in scope
 everywhere. For the config file's own keys, and which of them are required,
-see [README §Project Configuration](/saule/language/project-configuration/).
+see [Language guide §Project Configuration](/saule/language/project-configuration/).

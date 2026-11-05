@@ -15,16 +15,16 @@ cannot drift from the thing it documents.
 
 | On the site | Comes from | Kept in sync by |
 |---|---|---|
-| Language Guide | `README.md` | `npm run sync-docs` |
+| Language Guide | `LANGUAGE.md` | `npm run sync-docs` |
 | Standard Library | `DOCS.md` | `npm run sync-docs` |
-| Quick Reference | `README.md` § Quick Reference | `npm run sync-docs` |
+| Quick Reference | `LANGUAGE.md` § Quick Reference | `npm run sync-docs` |
 | Examples | `examples/*/` — real source, read verbatim | `npm run sync-docs` |
 | Code highlighting | `grammar/saule.tmLanguage.json` | read at build time |
 | CLI reference, guides, landing page | hand-written in `src/content/docs/` | — |
 
 **Never hand-edit** anything under `src/content/docs/{language,stdlib,examples}`
 or `src/content/docs/reference/quick-reference.md` — those directories are wiped
-and regenerated. Edit `README.md`, `DOCS.md`, or the example project instead,
+and regenerated. Edit `LANGUAGE.md`, `DOCS.md`, or the example project instead,
 then re-run the sync.
 
 Highlighting deserves a note: Shiki reads the repository's TextMate grammar
@@ -41,7 +41,7 @@ by `npm run sync:grammar` in the
 | `npm run dev` | Dev server with hot reload |
 | `npm run build` | Production build into `dist/` |
 | `npm run preview` | Serve the production build locally |
-| `npm run sync-docs` | Regenerate docs pages from `README.md`, `DOCS.md`, `examples/` |
+| `npm run sync-docs` | Regenerate docs pages from `LANGUAGE.md`, `DOCS.md`, `examples/` |
 | `npm run check-samples` | Compile and run every hand-written Saule sample on the site |
 
 `check-samples` needs the compiler. It uses `../target/release/saule` if
@@ -55,7 +55,7 @@ npm run check-samples
 It only checks samples that are meant to be complete programs — the playground
 examples and the ```saule blocks on the hand-written pages, listed in
 `HAND_WRITTEN` at the top of `scripts/check-samples.mjs`. Snippets generated
-from `README.md` are excluded, because most are illustrative fragments that
+from `LANGUAGE.md` are excluded, because most are illustrative fragments that
 were never meant to compile standalone.
 
 ## The playground

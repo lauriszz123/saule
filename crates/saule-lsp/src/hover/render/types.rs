@@ -214,7 +214,12 @@ fn render_member_method(name: &str, sig: &MethodSig) -> String {
 /// Hover for a stdlib static-class identifier (`Math`, `String`, …) or
 /// a value type (`File`). Lists every member known to
 /// `saule_typeck::sigs`, looking up signatures where available so the
-/// reader sees `fn sqrt(number) -> float` instead of just `sqrt`.
+/// reader sees `fn sqrt(n: float) -> float` instead of just `sqrt`.
+///
+/// The documented signature is preferred over the registry's, because the
+/// registry has no parameter names: `fn sub(string, integer, integer?)` tells
+/// you an index goes second but not that it is the *start*. Where a member is
+/// registered and undocumented, the typed form is still rendered.
 pub(crate) fn render_stdlib_module(name: &str, kind: &str) -> String {
     let mut members = saule_typeck::sigs::module_members(name);
     members.sort();
@@ -226,7 +231,24 @@ pub(crate) fn render_stdlib_module(name: &str, kind: &str) -> String {
     s.push_str(" {\n");
     for m in &members {
         let qname = format!("{name}.{m}");
-        if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
+        // `String.sub(s: string, …)` as documented, minus the owner prefix
+        // the enclosing `module String {` block already supplies.
+        if let Some(doc) = saule_docs::stdlib().entry(&qname) {
+            let shown = doc
+                .signature
+                .strip_prefix(&format!("{name}."))
+                .unwrap_or(&doc.signature);
+            match doc.kind {
+                saule_docs::EntryKind::Function => {
+                    s.push_str("  fn ");
+                    s.push_str(shown);
+                }
+                saule_docs::EntryKind::Constant => {
+                    s.push_str("  ");
+                    s.push_str(shown);
+                }
+            }
+        } else if let Some(sig) = saule_typeck::sigs::lookup(&qname) {
             s.push_str("  fn ");
             s.push_str(m);
             s.push_str(&render_native_sig_full(&sig));

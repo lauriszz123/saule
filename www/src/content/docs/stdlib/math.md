@@ -298,11 +298,11 @@ println(neg[1] ?? 0.0)          -- -2.0
 
 <div class="api-list">
 <details class="api-entry" id="math-pow">
-<summary><code class="api-sig"><span class="sig-fn">Math.pow</span><span class="sig-punct">&lt;</span><span class="sig-type">N</span><span class="sig-punct">&gt;</span><span class="sig-punct">(</span><span class="sig-param">a</span><span class="sig-punct">:</span> <span class="sig-type">N</span><span class="sig-punct">,</span> <span class="sig-param">b</span><span class="sig-punct">:</span> <span class="sig-type">N</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-type">float</span></code></summary>
+<summary><code class="api-sig"><span class="sig-fn">Math.pow</span><span class="sig-punct">&lt;</span><span class="sig-type">N</span><span class="sig-punct">&gt;</span><span class="sig-punct">(</span><span class="sig-param">base</span><span class="sig-punct">:</span> <span class="sig-type">N</span><span class="sig-punct">,</span> <span class="sig-param">exp</span><span class="sig-punct">:</span> <span class="sig-type">N</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-type">float</span></code></summary>
 
 
-`a` raised to the power `b`. **Always a float**, which is what lets it answer
-a negative exponent — `2 ^ -1` is an error on integers, while
+`base` raised to the power `exp`. **Always a float**, which is what lets it
+answer a negative exponent — `2 ^ -1` is an error on integers, while
 `Math.pow(2, -1)` is `0.5`.
 
 ```saule

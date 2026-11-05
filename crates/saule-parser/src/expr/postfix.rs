@@ -8,22 +8,53 @@ use saule_lexer::Token;
 use std::ops::Range;
 
 impl Parser {
+    /// A member name, which may be a keyword written tight against the dot.
+    ///
+    /// After `.` the grammar demands a name, so a keyword there cannot be
+    /// anything else, and accepting one keeps the reserved-word list from
+    /// deciding what a library may call its methods — `String.match` is the
+    /// case that forced it. `super` was already exempt here so that
+    /// `self.super(args)` could reach the parent constructor; this is that
+    /// rule stated once instead of once per collision.
+    ///
+    /// **The keyword has to be adjacent to the dot** — no space, no newline.
+    /// That is what keeps error recovery working. The editor parses
+    ///
+    /// ```text
+    /// local c = player.
+    /// local after = 1
+    /// ```
+    ///
+    /// on every keystroke after the `.` is typed, and without the adjacency
+    /// test the `local` beginning the *next line* is a keyword in a member
+    /// position, so it gets eaten as the field name and two statements
+    /// collapse into one. Nobody writes `player. match`, and an identifier
+    /// field is unaffected either way, so the cost is nil and the recovery
+    /// behaviour is preserved exactly.
+    fn member_name(
+        &mut self,
+        dot_end: usize,
+        what: &'static str,
+    ) -> Result<(String, Range<usize>), ParseError> {
+        let tok = self.peek();
+        if tok.value.is_keyword() && tok.span.start == dot_end {
+            let t = self.advance();
+            // Every keyword has a fixed lexeme, so this cannot fail.
+            if let Some(text) = t.value.lexeme() {
+                return Ok((text.to_string(), t.span));
+            }
+        }
+        self.expect_ident_recover(what)
+    }
+
     pub(crate) fn postfix_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let mut expr = self.primary_expr()?;
         loop {
             let tok = self.peek().value.clone();
             match tok {
                 Token::Dot => {
-                    self.advance();
-                    // `super` is a keyword everywhere else, but after `.` we
-                    // treat it as just a member name so `self.super(args)`
-                    // can dispatch to the parent constructor.
-                    let (name, name_span) = if matches!(self.peek().value, Token::Super) {
-                        let t = self.advance();
-                        ("super".to_string(), t.span)
-                    } else {
-                        self.expect_ident_recover("field name after `.`")?
-                    };
+                    let dot_end = self.advance().span.end;
+                    let (name, name_span) = self.member_name(dot_end, "field name after `.`")?;
                     let span = expr.span.start..name_span.end;
                     expr = Spanned::new(
                         Expr::Member {
@@ -34,8 +65,8 @@ impl Parser {
                     );
                 }
                 Token::QuestionDot => {
-                    self.advance();
-                    let (name, name_span) = self.expect_ident_recover("field name after `?.`")?;
+                    let dot_end = self.advance().span.end;
+                    let (name, name_span) = self.member_name(dot_end, "field name after `?.`")?;
                     let span = expr.span.start..name_span.end;
                     expr = Spanned::new(
                         Expr::SafeMember {

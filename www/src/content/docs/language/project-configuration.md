@@ -5,7 +5,7 @@ sidebar:
   order: 14
 ---
 
-<!-- Generated from README.md by `npm run sync-docs`. Edit that file, not this one. -->
+<!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
 Every Saule project has a `saule.config` file at the root:
 

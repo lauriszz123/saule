@@ -1,0 +1,179 @@
+-- Lua-style patterns: String.match, String.gmatch and String.gsub.
+--
+-- Every expectation here was cross-checked against PUC Lua 5.4, except the
+-- two places Saule departs on purpose — codepoint indexing and the Unicode
+-- classes — which are called out where they appear.
+--
+-- `assert` rather than `println`: run_tests.sh gates exit status only, so a
+-- fixture that prints the wrong answer passes unless it asserts.
+
+-- ─── String.match ───────────────────────────────────────────────────────────
+
+-- No captures: a one-element table holding the whole match.
+local m: table<string> = assert(String.match("version 26.21 here", "%d+%.%d+"))
+assert(#m == 1, "whole match is one element")
+assert(m[1] == "26.21", "matched the version")
+
+-- Captures: one element each, in order.
+local kv: table<string> = assert(String.match("key = value", "(%w+)%s*=%s*(%w+)"))
+assert(#kv == 2, "two captures")
+assert(kv[1] == "key")
+assert(kv[2] == "value")
+
+-- A miss is nil, not an empty table.
+assert(String.match("abc", "%d+") == nil, "no digits in abc")
+
+-- `init` starts the search later, 1-based, negative counts from the end.
+assert(assert(String.match("abc abc", "%a+", 5))[1] == "abc")
+assert(assert(String.match("one two", "%a+", -3))[1] == "two")
+
+-- Anchors.
+assert(assert(String.match("hello", "^h%a+"))[1] == "hello")
+assert(String.match("hello", "^e") == nil, "^ anchors at the start")
+assert(assert(String.match("hello", "o$"))[1] == "o")
+
+-- Greedy `*` and `+` against lazy `-`.
+assert(assert(String.match("<a><b>", "<(.-)>"))[1] == "a", "lazy stops early")
+assert(assert(String.match("<a><b>", "<(.*)>"))[1] == "a><b", "greedy runs on")
+
+-- `?` is zero-or-one.
+assert(assert(String.match("color", "colou?r"))[1] == "color")
+assert(assert(String.match("colour", "colou?r"))[1] == "colour")
+
+-- Sets: ranges, negation, and a `]` in first position.
+assert(assert(String.match("abc123", "[0-9]+"))[1] == "123")
+assert(assert(String.match("abc123", "[^0-9]+"))[1] == "abc")
+assert(assert(String.match("a]b", "[%]]"))[1] == "]")
+assert(assert(String.match("x_9", "[%a_]+"))[1] == "x_")
+
+-- `%b` matches a balanced pair, counting nesting.
+assert(assert(String.match("f(a(b)c)x", "%b()"))[1] == "(a(b)c)")
+
+-- A back-reference matches what the capture matched.
+assert(assert(String.match("abcabc", "(abc)%1"))[1] == "abc")
+assert(String.match("abcdef", "(abc)%1") == nil, "no repeat to back-refer to")
+
+-- Character classes.
+assert(assert(String.match("  x", "%s+"))[1] == "  ")
+assert(assert(String.match("a1!", "%p"))[1] == "!")
+assert(assert(String.match("Hello", "%u"))[1] == "H")
+assert(assert(String.match("Hello", "%l+"))[1] == "ello")
+assert(assert(String.match("0xFF", "%x+"))[1] == "0", "x is not a hex digit")
+assert(assert(String.match("ab12", "%w+"))[1] == "ab12")
+-- An uppercase class letter is the complement.
+assert(assert(String.match("abc123", "%D+"))[1] == "abc")
+assert(assert(String.match("   q", "%S"))[1] == "q")
+-- `%%` and `%.` are the literals, not classes.
+assert(assert(String.match("a.b", "a%.b"))[1] == "a.b")
+assert(String.match("axb", "a%.b") == nil, "%. is a literal full stop")
+assert(assert(String.match("50%", "%d+%%"))[1] == "50%")
+
+-- ─── String.gmatch ──────────────────────────────────────────────────────────
+
+-- One loop variable binds the whole match.
+local words: table<string> = {}
+for word in String.gmatch("the quick brown fox", "%a+") do
+	words[#words + 1] = word
+end
+assert(#words == 4, "four words")
+assert(String.join(",", words) == "the,quick,brown,fox")
+
+-- Two bind the whole match and the captures.
+local keys: table<string> = {}
+local vals: table<string> = {}
+for whole, caps in String.gmatch("a=1, b=2, c=3", "(%a+)=(%d+)") do
+	assert(String.len(whole) == 3, "whole is `a=1`-shaped")
+	keys[#keys + 1] = caps[1]
+	vals[#vals + 1] = caps[2]
+end
+assert(String.join("", keys) == "abc")
+assert(String.join("", vals) == "123")
+
+-- No match: the loop body never runs.
+local ran: integer = 0
+for _ in String.gmatch("abc", "%d") do
+	ran = ran + 1
+end
+assert(ran == 0, "nothing to iterate")
+
+-- A zero-width match advances rather than looping forever.
+local empties: integer = 0
+for _ in String.gmatch("ab", "x*") do
+	empties = empties + 1
+end
+assert(empties == 3, "one empty match per position, plus the end")
+
+-- ─── String.gsub ────────────────────────────────────────────────────────────
+
+local out: string, n: integer = String.gsub("hello world", "o", "0")
+assert(out == "hell0 w0rld")
+assert(n == 2, "two substitutions")
+
+-- `%1`..`%9` insert a capture; order can be changed.
+local swapped: string, sn: integer = String.gsub("john smith", "(%a+) (%a+)", "%2, %1")
+assert(swapped == "smith, john")
+assert(sn == 1)
+
+-- `%0` is the whole match.
+local wrapped: string, wn: integer = String.gsub("ab", "%a", "[%0]")
+assert(wrapped == "[a][b]")
+assert(wn == 2)
+
+-- `%%` is a literal percent.
+local pct: string, pn: integer = String.gsub("ab", "a", "100%%")
+assert(pct == "100%b")
+assert(pn == 1)
+
+-- `limit` caps the count; 0 replaces nothing.
+local two: string, tn: integer = String.gsub("aaaa", "a", "b", 2)
+assert(two == "bbaa")
+assert(tn == 2)
+local none: string, nn: integer = String.gsub("aaa", "a", "b", 0)
+assert(none == "aaa")
+assert(nn == 0)
+
+-- No match leaves the subject alone.
+local same: string, zn: integer = String.gsub("abc", "%d", "!")
+assert(same == "abc")
+assert(zn == 0)
+
+-- A zero-width pattern terminates and visits every position.
+local dashed: string, dn: integer = String.gsub("abc", "x*", "-")
+assert(dashed == "-a-b-c-")
+assert(dn == 4)
+
+-- An anchored gsub replaces at most the one match at the start: `^` ties the
+-- pattern to the start of the subject, not to wherever the scan has reached.
+local anchored: string, an: integer = String.gsub("aaa", "^a", "b")
+assert(anchored == "baa")
+assert(an == 1)
+local anchor2: string, a2: integer = String.gsub("abc abc", "^%a+", "X")
+assert(anchor2 == "X abc")
+assert(a2 == 1)
+-- A bare `^` matches the empty string at the start, once.
+local bare: string, bn2: integer = String.gsub("aaa", "^", "X")
+assert(bare == "Xaaa")
+assert(bn2 == 1)
+
+-- ─── the two deliberate departures from Lua ─────────────────────────────────
+
+-- 1. Patterns run over codepoints, not bytes. "saulė" is five characters and
+--    six bytes; in Lua `.` would match six times.
+local dots: string, dotn: integer = String.gsub("saulė", ".", "-")
+assert(dots == "-----", "five characters")
+assert(dotn == 5, "five, not six")
+
+-- 2. `%a`, `%l`, `%u`, `%s` and `%w` are Unicode-aware...
+assert(assert(String.match("saulė", "%a+"))[1] == "saulė", "ė is a letter")
+-- ...but `%d` is ASCII `0-9` only, so a `%d+` is always safe to parse.
+assert(String.match("٣٤", "%d+") == nil, "%d does not match other digit systems")
+
+-- ─── patterns and the literal functions stay separate ───────────────────────
+
+-- `String.replace` is literal: `.` is a full stop.
+assert(String.replace("a.b.c", ".", "-") == "a-b-c")
+-- `String.gsub` reads the same argument as a pattern.
+local wild: string, _wn: integer = String.gsub("a.b.c", ".", "-")
+assert(wild == "-----", "every character, not every full stop")
+
+println("string patterns ok")

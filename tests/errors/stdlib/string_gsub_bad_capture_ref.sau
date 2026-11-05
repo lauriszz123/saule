@@ -1,0 +1,3 @@
+-- The replacement names a capture the pattern does not have.
+local out: string, n: integer = String.gsub("abc", "(%a)", "%2")
+println(out, n)

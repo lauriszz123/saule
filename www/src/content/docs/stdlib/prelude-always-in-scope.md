@@ -192,7 +192,7 @@ println("still running")         -- still running
 
 Conversion between types is the `as` cast, not a function — `3.9 as integer`,
 `n as string`, `"42" as integer` (which is `integer?`, since the text may hold
-no number). See [README §Casting](/saule/language/types/#casting).
+no number). See [Language guide §Casting](/saule/language/types/#casting).
 
 
 </details>

@@ -7,7 +7,9 @@ use std::ops::Range;
 use saule_ast::Type;
 use saule_semantic::{lookup_field_type, lookup_method};
 
-use super::render::{render_method_sig, render_native_sig_full, render_type, with_doc};
+use super::render::{
+    render_method_sig, render_native_sig_full, render_stdlib_entry, render_type, with_doc,
+};
 
 pub(super) fn contains(r: &Range<usize>, o: usize) -> bool {
     r.start <= o && o <= r.end
@@ -137,6 +139,14 @@ pub(super) fn resolve_member(
     }
     // Stdlib fallback: `Math.sqrt`, `String.byte`, etc.
     let qname = format!("{class}.{name}");
+    // The documentation first, because it is the only source with parameter
+    // names and prose — the registry below has positional types and nothing
+    // else. An entry missing here means the function is registered but
+    // undocumented, which the fallback still renders (and `saule-docs`'
+    // own coverage test is what stops that becoming normal).
+    if let Some(entry) = saule_docs::stdlib().entry(&qname) {
+        return Some(render_stdlib_entry(entry));
+    }
     if let Some(sigs) = saule_typeck::sigs::lookup_all(&qname) {
         // An overloaded native gets a line per form. Showing only the first
         // would under-report it: `Math.random` really does return a float
@@ -150,9 +160,10 @@ pub(super) fn resolve_member(
         return Some(format!("```saule\n{body}\n```"));
     }
     if saule_typeck::sigs::has_member(class, name) {
-        // Member is known but its signature wasn't registered (typed
-        // value field like `Math.pi`). We can't say more than "yes,
-        // it exists" — better than silent hover-fail though.
+        // Member is known but its signature wasn't registered — a typed
+        // value field like `Math.pi`. The documentation's constant tables
+        // cover these, so the branch above normally answers first; this is
+        // what is left when one is registered and undocumented.
         return Some(format!("```saule\n(member) {class}.{name}\n```"));
     }
     None

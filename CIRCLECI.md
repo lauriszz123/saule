@@ -38,7 +38,9 @@ of this; the CircleCI side is below.
   built and a GitHub Release is created, tag included. The version generates
   itself (`scripts/next-version.sh` takes the next build number after the
   highest existing `v26.*` tag), so nobody types a version number.
-  `install.sh` sees the new release as `latest` the moment it exists.
+  The release is created as a **pre-release**, so `install.sh` offers it on
+  the `latest` channel immediately and on the default `stable` channel not at
+  all — see *Blessing a stable release* below.
 - **Push to a branch with an open pull request** (`develop` included, through
   its PR into `main`) → the `pr-check` workflow runs the four test jobs on its
   head commit. That is the required check GitHub waits for.
@@ -61,17 +63,6 @@ of this; the CircleCI side is below.
 - **`[skip ci]` in the merge commit's message** → not even a pipeline. This is
   the hatch for a merge into `main` that should not cut a release: a typo in a
   comment, a README tweak. Put it in the title when merging the PR.
-
-Work on a branch of `develop`:
-
-```bash
-git switch develop && git pull github develop
-git switch -c fix/whatever
-git push -u github fix/whatever
-gh pr create --base develop
-```
-
----
 
 ## 1. The project connection
 
@@ -181,6 +172,50 @@ version → builds six archives,
 each one *executed* to confirm it reports the version the release claims →
 checksums them and refuses a partial set → creates the tag and the Release and
 uploads seven assets.
+
+### Blessing a stable release
+
+The two install channels are one flag on the GitHub release, and nothing else:
+
+| Channel | What the installer resolves | How |
+|---|---|---|
+| `stable` (default) | newest release **not** marked pre-release | the `/releases/latest` redirect, which GitHub excludes pre-releases from |
+| `latest` | newest release of any kind | `releases.atom`, which lists them |
+
+Every pipeline publishes a pre-release, so **`stable` does not move on its
+own**. Blessing a build is one command against a release that already exists,
+with no rebuild and no second pipeline:
+
+```sh
+gh release edit v26.22 --prerelease=false --latest
+```
+
+`--latest` is passed explicitly because GitHub otherwise picks its "latest
+release" by creation date; stating it keeps the pointer under your control.
+Always bless **forward** — blessing an older build than the current stable
+would move users backwards.
+
+What qualifies a build is written down in [STABILITY.md](STABILITY.md), not
+here, because it is a promise to users rather than a pipeline detail.
+
+Neither channel appears in a version number: `26.22` is `26.22` on both. A
+`-stable` tag suffix was considered and rejected — it would collide with the
+`-dev+<sha>` suffix that means "not a release", sort *before* `26.22` under
+semver precedence, and break `min_saule_version`, which is a plain numeric
+dotted compare.
+
+
+Work on a branch of `develop`:
+
+```bash
+git switch develop && git pull github develop
+git switch -c fix/whatever
+git push -u github fix/whatever
+gh pr create --base develop
+```
+
+---
+
 
 ### Where the version comes from, and why nothing is committed back
 

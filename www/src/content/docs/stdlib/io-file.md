@@ -35,6 +35,12 @@ Os.remove(path)
 `Io.stdin`, `Io.stdout` and `Io.stderr` are `File` values that are already
 open. They need no `Io.open` and should not be closed.
 
+| Name | Type | What it holds |
+| --- | --- | --- |
+| `Io.stdin` | `File` | This process's standard input, already open for reading |
+| `Io.stdout` | `File` | This process's standard output. `println` writes here |
+| `Io.stderr` | `File` | This process's standard error, for diagnostics that must not be piped away with the output |
+
 ```saule
 Io.stdout.write("to stdout\n")
 Io.stderr.write("to stderr\n")

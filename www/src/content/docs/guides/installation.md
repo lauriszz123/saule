@@ -35,6 +35,45 @@ release's `SHA256SUMS`, installs both binaries into `~/.saule/bin`
 (`%USERPROFILE%\.saule\bin` on Windows), and puts that directory on your
 `PATH`. Running it again upgrades in place.
 
+## Two channels
+
+That command installs the **stable** channel, which is the one to want unless
+you have a reason otherwise.
+
+| Channel | What you get |
+|---|---|
+| `stable` | The newest release that has been blessed as stable. Moves only when somebody decides it should. **The default.** |
+| `latest` | The newest release of any kind — whatever the last push to `main` built. New features arrive here first, and so do new bugs. |
+
+Both channels carry the same kind of version number: `26.7` is `26.7` on
+either one. Stability is a property of the *release*, not of the version, so
+there is no `-stable` suffix to parse and `min_saule_version` keeps working
+unchanged.
+
+To take the `latest` channel:
+
+**macOS and Linux**
+
+```sh
+SAULE_CHANNEL=latest curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
+```
+
+**Windows**
+
+```powershell
+$env:SAULE_CHANNEL='latest'; irm https://lauriszz123.github.io/saule/install.ps1 | iex
+```
+
+Your choice is remembered in `~/.saule/channel`, so **re-running the installer
+upgrades you within the channel you picked** rather than quietly moving you to
+the other one. To switch, set `SAULE_CHANNEL` again. To see which one you are
+on, read that file — and `saule --version` reports the version either way.
+
+:::caution[Which should I report bugs against?]
+Say which channel you are on. "The latest" means two different builds
+depending on the answer, and that is usually the first thing worth knowing.
+:::
+
 ### Reading it first
 
 Piping a script into a shell is worth being suspicious of. Both scripts are
@@ -50,7 +89,8 @@ Both installers are configured by environment variables.
 
 | Variable | Effect |
 |---|---|
-| `SAULE_VERSION` | Install a specific version, e.g. `26.7`, instead of the latest |
+| `SAULE_CHANNEL` | `stable` (the default) or `latest` — see [Two channels](#two-channels) |
+| `SAULE_VERSION` | Install one exact version, e.g. `26.7`. Overrides `SAULE_CHANNEL`, and does **not** change the channel you are remembered as being on |
 | `SAULE_HOME` | Install root. Used **verbatim** — it *is* the directory, not a parent to append `.saule` to. Defaults to `~/.saule` |
 | `SAULE_NO_MODIFY_PATH=1` | Install the binaries but leave your shell profile and `PATH` alone |
 
