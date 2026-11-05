@@ -51,6 +51,7 @@ pub use chunk::{Chunk, Proto};
 pub use compile::{CompileError, compile};
 pub use op::{Instruction, Op};
 pub use vm::Vm;
+pub use vm::trace::{StackTrace, TraceFrame, take_stack_trace};
 
 use saule_runtime::{RuntimeError, Value};
 
@@ -164,7 +165,45 @@ pub fn run_chunk_entry(chunk: Rc<Chunk>) -> Result<bool, RuntimeError> {
 /// runs before the module that imported it, so a module that prints at the
 /// top level prints first — the order the language has always had.
 pub fn run_program(program: program::Program) -> Result<bool, RuntimeError> {
+    let mut vm = load_program(program)?;
+    match vm.call_static("Main", "main") {
+        Some(r) => r.map(|_| true),
+        None => Ok(false),
+    }
+}
+
+/// Run a program's top levels, then call each named top-level function of its
+/// entry module and hand back what came of it. The program's `Main.main` is
+/// not called. A failure in a top level is returned, since nothing can be
+/// called after one; a test failing is only reported, and the next one runs.
+pub fn run_tests(
+    program: program::Program,
+    names: &[String],
+    mut on_result: impl FnMut(&str, Result<(), RuntimeError>),
+) -> Result<(), RuntimeError> {
+    let entry = program.entry;
+    let mut vm = load_program(program)?;
+    for name in names {
+        vm::trace::clear();
+        let result = match vm.call_top_level(entry, name) {
+            Some(r) => r.map(|_| ()),
+            None => Err(RuntimeError::TypeError {
+                message: format!("the test `{name}` could not be found"),
+                span: 0..0,
+            }),
+        };
+        if result.is_err() {
+            vm.reset_after_failure();
+        }
+        on_result(name, result);
+    }
+    Ok(())
+}
+
+/// A VM with every module's top level run, in dependency order.
+fn load_program(program: program::Program) -> Result<Vm, RuntimeError> {
     saule_runtime::init();
+    vm::trace::clear();
     let entry = program.entry;
     // Lifted out before the chunks move into the VM. Compiling a dynamic
     // native package folds its exports from the manifest and deliberately
@@ -200,10 +239,7 @@ pub fn run_program(program: program::Program) -> Result<bool, RuntimeError> {
         }
         vm.run_module(i).map_err(at_import)?;
     }
-    match vm.call_static("Main", "main") {
-        Some(r) => r.map(|_| true),
-        None => Ok(false),
-    }
+    Ok(vm)
 }
 
 /// `e`, raised while the top level of the module `src` ran, as an

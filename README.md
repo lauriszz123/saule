@@ -3443,6 +3443,40 @@ An entry always holds an exact version — there are no ranges, so `saule update
 is the only thing that ever changes one. `--check` exits 1 when something is
 behind and 2 when a package could not be reached, so CI can tell the two apart.
 
+A tag or a branch can move, so the exact commit of each package is also written
+to **`saule.lock`**, next to `saule.config`. Commit it: `saule install` restores
+those commits on a fresh clone, and `saule update` is what moves them. Packages
+are shared across projects, one copy per ref, so two projects locking the same
+branch to different commits will replace each other's copy when each runs
+`saule install`. Pinning a tag avoids this.
+
+Installing a package can run code: a native package is built with `cargo build`.
+See [SECURITY.md](https://github.com/lauriszz123/saule/blob/main/SECURITY.md).
+
+### Tests
+
+`saule test` runs every top-level function named `test_...` that takes no
+parameters, in any `.sau` file under `tests/` and any file ending `_test.sau` in
+your source directories:
+
+```saule
+fn add(a: integer, b: integer) -> integer
+  return a + b
+end
+
+fn test_adds()
+  assert(add(1, 2) == 3, "one and two make three")
+end
+```
+
+A test fails if an `assert` fails, a `throw` goes uncaught, or a runtime error
+occurs, and the rest still run. `saule test --filter adds` runs only the tests
+whose name contains `adds`, and the command exits 1 if any test failed. Each file
+runs as its own program, so tests in one file share its top-level variables.
+
+Give a test file a name no module has: `tests/calc.sau` importing `"calc"` finds
+itself first.
+
 A package's **import name** comes from its own `name:`, not from its repository
 name, which is why Saule needs no central index. `saule install` prints the
 `import` line to use.

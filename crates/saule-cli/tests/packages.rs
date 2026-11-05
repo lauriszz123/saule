@@ -835,6 +835,129 @@ fn update_accepts_the_import_name() {
 
 /// A package tracking a branch has a ref name that never changes, so the
 /// commit is the only thing that can say it moved.
+/// Move the `main`-style branch of `repos/uikit` on, with `who()` saying `says`.
+fn move_branch(s: &Scratch, says: &str) {
+    s.write(
+        "repos/uikit/src/init.sau",
+        &format!("export fn who() -> string\n  return \"{says}\"\nend\n"),
+    );
+    let dir = s.path("repos/uikit");
+    git(&dir, &["add", "-A"]);
+    git(
+        &dir,
+        &[
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-qm",
+            says,
+        ],
+    );
+}
+
+fn head_of(dir: &Path) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("run git");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A branch-tracking package, with no tags to move onto.
+fn publish_branch(s: &Scratch) {
+    let files = library("uikit");
+    for (rel, body) in as_files(&files) {
+        s.write(&format!("repos/uikit/{rel}"), body);
+    }
+    let dir = s.path("repos/uikit");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(
+        &dir,
+        &[
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=test",
+            "commit",
+            "-qm",
+            "first",
+        ],
+    );
+}
+
+#[test]
+fn installing_records_the_exact_commit_in_the_lock_file() {
+    let s = Scratch::new("lock-written");
+    publish_branch(&s);
+    let proj = s.project(&[]);
+    assert!(s.saule(&proj, &["install", "acme@uikit"]).status.success());
+    let lock = std::fs::read_to_string(proj.join("saule.lock")).expect("saule.lock");
+    let head = head_of(&s.path("repos/uikit"));
+    assert!(lock.contains("github.com/acme/uikit"), "{lock}");
+    assert!(lock.contains(&head), "{lock}");
+}
+
+#[test]
+fn a_fresh_install_gets_the_locked_commit_even_after_the_branch_moved() {
+    let s = Scratch::new("lock-honoured");
+    publish_branch(&s);
+    let proj = s.project(&[]);
+    assert!(s.saule(&proj, &["install", "acme@uikit"]).status.success());
+    let pinned = head_of(&s.path("repos/uikit"));
+
+    move_branch(&s, "moved");
+    // A new machine: nothing installed, only what the repository holds.
+    std::fs::remove_dir_all(s.path("home")).unwrap();
+    let out = s.saule(&proj, &["install"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let lock = std::fs::read_to_string(proj.join("saule.lock")).unwrap();
+    assert!(lock.contains(&pinned), "the pin must not move: {lock}");
+    s.main_is("import who from \"uikit\"", "println(who())");
+    let out = s.saule(&proj, &["run"]);
+    assert!(!stdout(&out).contains("moved"), "{}", stdout(&out));
+}
+
+#[test]
+fn updating_moves_the_lock_and_removing_drops_it() {
+    let s = Scratch::new("lock-moved");
+    publish_branch(&s);
+    let proj = s.project(&[]);
+    assert!(s.saule(&proj, &["install", "acme@uikit"]).status.success());
+
+    move_branch(&s, "moved");
+    let head = head_of(&s.path("repos/uikit"));
+    let out = s.saule(&proj, &["update"]);
+    assert!(out.status.success(), "{}", stdout(&out));
+    let lock = std::fs::read_to_string(proj.join("saule.lock")).unwrap();
+    assert!(lock.contains(&head), "{lock}");
+
+    let out = s.saule(&proj, &["remove", "uikit"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!proj.join("saule.lock").exists(), "nothing left to pin");
+}
+
+#[test]
+fn a_locked_commit_the_repository_no_longer_has_says_what_to_do() {
+    let s = Scratch::new("lock-gone");
+    publish_branch(&s);
+    let proj = s.project(&[]);
+    assert!(s.saule(&proj, &["install", "acme@uikit"]).status.success());
+    let lock_path = proj.join("saule.lock");
+    let lock = std::fs::read_to_string(&lock_path).unwrap();
+    let head = head_of(&s.path("repos/uikit"));
+    std::fs::write(&lock_path, lock.replace(&head, &"0".repeat(40))).unwrap();
+    std::fs::remove_dir_all(s.path("home")).unwrap();
+
+    let out = s.saule(&proj, &["install"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("saule update"), "{}", stderr(&out));
+}
+
 #[test]
 fn update_tracks_a_branch_by_commit() {
     let s = Scratch::new("update-branch");

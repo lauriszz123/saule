@@ -265,6 +265,7 @@ impl Vm {
     #[cold]
     #[inline(never)]
     pub(crate) fn attribute(&self, e: RuntimeError) -> RuntimeError {
+        self.record_trace();
         match e {
             // A `throw` has to stay itself for an enclosing `catch`; the
             // others are anchored already.

@@ -231,6 +231,27 @@ or an explicit gap. In project mode one unusable file does not stop the rest:
 the chunks that compiled are printed, the failures go to stderr, and the exit
 status is 1.
 
+## `saule test`
+
+Run a project's tests.
+
+```sh
+saule test [OPTIONS] [TARGET]
+```
+
+| Option | Description |
+|---|---|
+| `--filter <TEXT>` | Only run tests whose name contains this text |
+
+A test is a top-level function named `test_...` with no parameters. In a project
+it is looked for in `tests/` and in files ending `_test.sau` in the source
+directories; given a file, only that file is run. The program's `Main.main` is not
+called.
+
+A test fails if an `assert` fails, a `throw` goes uncaught, or a runtime error
+occurs, and the rest still run. The exit status is 1 if any test failed or a test
+file does not compile, and 0 otherwise, including when there are no tests.
+
 ## `saule init`
 
 Scaffold a new project in `./<name>`.

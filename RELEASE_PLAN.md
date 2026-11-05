@@ -1,7 +1,7 @@
 # Saule — Public Release & Package Distribution Plan
 
-Rewritten against `229bac6` as an ordered set of steps. Step 0 is **done**;
-everything from step 1 on is not.
+Written against `229bac6` as an ordered set of steps. The table below is current;
+the step text further down records the original plan.
 
 **The goal.** A user on macOS, Linux, or Windows runs one command, gets the
 Saule toolchain and working editor support, and can then
@@ -25,12 +25,12 @@ manager. Design detail that would clutter a step lives in the appendices.
 |---|---|
 | Versioning | **Done.** `26.<build>`, generated on release, readable from the CLI, the LSP, and the language. See step 0. |
 | CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. Runs on `main` only; `develop` runs nothing. There are no GitHub Actions workflows; GitHub keeps the code, the Releases, and Pages. |
-| Releases | **The pipeline exists and publishes to GitHub Releases on every push to `main`.** Not yet run for real: no published artifacts. |
-| Toolchain install | **Written and live**: [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site, and the install page is rewritten around them. They have nothing to download until the first release exists. |
-| Package manager | **Does not exist.** `saule` has three subcommands: `run`, `fmt`, `init`. |
-| Dependencies | Local relative paths only (`dependencies: ["../json"]`). No versions, no remote fetch, no lockfile. |
-| Native packages | Work, but install via per-platform shell scripts needing a full Rust build. |
-| Editor plugins | All three exist and all three fall back to `saule-lsp` on `$PATH`. **None are published** anywhere. |
+| Releases | **Done.** Every push to `main` publishes six platform archives to GitHub Releases. |
+| Toolchain install | **Done.** [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site and verify checksums. |
+| Package manager | **Done, without `publish`.** `saule install`, `update`, `remove` and `list`, with `saule.lock`. A package is published by pushing a Git tag. |
+| Dependencies | Paths and `owner@repo:version`, pinned to exact commits by `saule.lock`. |
+| Native packages | `saule install` builds them with Cargo. Prebuilt libraries do not exist yet. |
+| Editor plugins | All three are ready to publish, with release workflows. **None are published yet**: the marketplaces need accounts and tokens. |
 | Licensing | **Done.** MIT: [LICENSE](LICENSE) at the root, `license = "MIT"` in `[workspace.package]`, and every archive ships a copy. See step 1. |
 
 Four things are already right and shape everything below:

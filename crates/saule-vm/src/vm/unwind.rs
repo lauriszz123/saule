@@ -31,6 +31,8 @@ impl Vm {
         // being safe to read the moment that frame goes. Only the escaping
         // case uses it, and a throw is cold enough not to care.
         let span = proto.span_at(here);
+        // Only what this throw pops, and only kept if nothing catches it.
+        let mut popped: super::trace::Popped = Vec::new();
         while let Some(frame) = self.frames.last() {
             let func = Rc::clone(&frame.func);
             let (base, pc) = (frame.base, frame.pc);
@@ -59,13 +61,18 @@ impl Vm {
                 self.stack[base as usize + err_reg as usize] = value;
                 let f = self.frames.last_mut().expect("checked");
                 f.pc = target;
+                // Whatever a re-entrant call recorded on the way here was
+                // caught too.
+                super::trace::clear();
                 return Ok(());
             }
 
+            popped.push((Rc::clone(&frame.proto), Rc::clone(&frame.chunk), at));
             self.close_upvalues(base);
             self.frames.pop();
         }
 
+        super::trace::record_popped(&popped);
         Err(RuntimeError::Thrown {
             value: value.to_display_string(),
             span,

@@ -6,8 +6,15 @@ A Saule project. Run with:
 saule run
 ```
 
+It uses packages from GitHub, so install them once first (this builds the
+native graphics package, which needs [Rust](https://rustup.rs)):
+
+```sh
+saule install
+```
+
 The declarative, SwiftUI-flavoured view toolkit this renders with lives in its
-own package, [`../uikit`](../uikit/README.md), listed in this project's
+own package, [`saule-uikit`](https://github.com/lauriszz123/saule-uikit), listed in this project's
 `dependencies:` and imported as `import * from "uikit"`. `src/Test.sau` is the
 demo the entry point renders.
 

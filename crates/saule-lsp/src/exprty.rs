@@ -65,14 +65,15 @@ fn named(n: &str) -> Option<Type> {
 /// as the checker does), `#x` counts, `~x` is an integer bit pattern, and
 /// `not x` is a boolean.
 pub(crate) fn unary_type<S: TypeSource + ?Sized>(cx: &S, op: UnaryOp, rhs: &Expr) -> Option<Type> {
-    if let Some(ty) = cx
-        .type_of(rhs)
-        .and_then(|t| saule_typeck::ops::overload_unary_result(op, &t))
+    let rhs_ty = cx.type_of(rhs);
+    if let Some(ty) = rhs_ty
+        .as_ref()
+        .and_then(|t| saule_typeck::ops::overload_unary_result(op, t))
     {
         return Some(ty);
     }
     match op {
-        UnaryOp::Neg => cx.type_of(rhs).map(strip_nullable),
+        UnaryOp::Neg => rhs_ty.map(strip_nullable),
         UnaryOp::Len | UnaryOp::BNot => named("integer"),
         UnaryOp::Not => named("boolean"),
     }
@@ -127,8 +128,13 @@ pub(crate) fn binary_type<S: TypeSource + ?Sized>(
         // Arithmetic dispatches on the left operand's overload, else takes
         // whichever side we can type.
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
-            overload(cx, op, lhs)
-                .or_else(|| cx.type_of(lhs))
+            // Asked once: `a + b + c` nests to the left, so asking twice per
+            // level doubles the work for every term.
+            let lhs_ty = cx.type_of(lhs);
+            lhs_ty
+                .as_ref()
+                .and_then(|t| saule_typeck::ops::overload_binary_result(op, t))
+                .or(lhs_ty)
                 .or_else(|| cx.type_of(rhs))
         }
 

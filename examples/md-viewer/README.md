@@ -4,6 +4,9 @@ A Markdown reader written in Saule, rendered with UIKit. Open a folder, pick a
 file, read it — and click a `[link](other.md)` to go there, with back and
 forward.
 
+It uses packages from GitHub, so run `saule install` in this folder once first
+(this builds the native graphics package, which needs [Rust](https://rustup.rs)).
+
 ```sh
 saule run examples/md-viewer            # opens on this project's docs/
 saule run examples/md-viewer -- ~/notes # or any folder
@@ -16,7 +19,7 @@ is finished is the design: a complete, cross-linked specification in
 documents that describe it.
 
 [Milestone 0](docs/06-build-order.md#milestone-0--make-uikit-a-package) *is*
-done: `../uikit` is a real package, `UI Project` depends on it and still runs,
+done: [`saule-uikit`](https://github.com/lauriszz123/saule-uikit) is a real package, `UI Project` depends on it and still runs,
 and `assets/` already holds the Material Icons font. Start at
 [Milestone 1](docs/06-build-order.md#milestone-1--blocks-headless).
 
