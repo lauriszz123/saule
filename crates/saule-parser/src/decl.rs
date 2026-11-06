@@ -7,6 +7,10 @@ use crate::error::ParseError;
 use crate::types::GenericParams;
 use crate::{Parser, stmt_decl};
 
+/// What every import error points at: the module comes first.
+const IMPORT_FORMS: &str = "the module comes first: `from \"uikit\" import *`, \
+                            `from shine import Window`, or `import shine`";
+
 impl Parser {
     // ─────────────────────────────────────────────────────────────────────────
     // Declarations
@@ -455,10 +459,9 @@ impl Parser {
     pub(crate) fn parse_import(&mut self) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `import`
         if matches!(self.peek().value, Token::Star) || self.at_old_import_list() {
-            return Err(self.expected_here("a module after `import`").with_help(
-                "names come after the module now: `from \"uikit\" import *`, \
-                 `from shine import Window`, or `import shine` and then `shine.Window`",
-            ));
+            return Err(self
+                .expected_here("a module after `import`")
+                .with_help(IMPORT_FORMS));
         }
         let (path, quoted, mut end) = self.parse_module_path()?;
         let name = if self.eat(&Token::As) {
@@ -504,15 +507,23 @@ impl Parser {
         ))
     }
 
-    /// The removed `import A, B from path`: a name, then `,`, or `as` and
-    /// `from`, or `from` and a module with no `import` after it. That last
-    /// part tells `import kit` followed by a `from kit import x` line apart.
+    /// The removed `import A, B from path`, recognised only where nothing
+    /// else can be meant: a list of two or more names before `from`.
+    ///
+    /// A single name is left alone. `import uikit` followed by a `from …`
+    /// line is the same run of tokens as the removed `import Window from
+    /// shine`, and the parser cannot see the line break between them, so
+    /// guessing would flag the import on the line above whatever is being
+    /// typed. Read as written, the old single-name form still fails where
+    /// its `from` has no `import`, and that error says what to write.
     fn at_old_import_list(&self) -> bool {
         let mut i = 0;
+        let mut names = 0;
         loop {
             if !matches!(self.peek_at(i).value, Token::Identifier(_)) {
                 return false;
             }
+            names += 1;
             let mut next = i + 1;
             if matches!(self.peek_at(next).value, Token::As) {
                 if !matches!(self.peek_at(next + 1).value, Token::Identifier(_)) {
@@ -522,29 +533,10 @@ impl Parser {
             }
             match self.peek_at(next).value {
                 Token::Comma => i = next + 1,
-                Token::From => return !self.module_then_import(next + 1),
+                Token::From => return names > 1,
                 _ => return false,
             }
         }
-    }
-
-    /// Whether a module path starts `offset` tokens ahead and `import`
-    /// follows it.
-    fn module_then_import(&self, offset: usize) -> bool {
-        let mut i = offset;
-        match self.peek_at(i).value {
-            Token::String(_) => i += 1,
-            Token::Identifier(_) => {
-                i += 1;
-                while matches!(self.peek_at(i).value, Token::Dot)
-                    && matches!(self.peek_at(i + 1).value, Token::Identifier(_))
-                {
-                    i += 2;
-                }
-            }
-            _ => return false,
-        }
-        matches!(self.peek_at(i).value, Token::Import)
     }
 
     /// `from path import *` or `from path import A, B as C`, after an
@@ -556,7 +548,14 @@ impl Parser {
         let kw = self.advance(); // `from`
         let (path, quoted, mut end) = self.parse_module_path()?;
         if !self.eat(&Token::Import) {
-            let err = self.expected_here("`import` after the module");
+            // Anchored on the `from` line rather than on the next token,
+            // which is usually on another line, often far below.
+            let err = ParseError::Expected {
+                expected: "`import` after the module".into(),
+                found: self.peek().value.describe(),
+                help: Some(IMPORT_FORMS.to_string()),
+                span: kw.span.start..end,
+            };
             if !self.recovering() {
                 return Err(err);
             }

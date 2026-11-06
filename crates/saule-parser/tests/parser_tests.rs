@@ -1346,3 +1346,37 @@ fn a_namespace_member_is_a_type_too() {
         )))
     );
 }
+
+#[test]
+fn a_from_line_being_typed_does_not_break_the_import_above_it() {
+    for src in [
+        "import uikit\nfrom H",
+        "import uikit as ui\nfrom H",
+        "import uikit\nfrom H\n\nlocal x = 1\n",
+    ] {
+        let tokens = Lexer::new(src).tokenize().expect("lex");
+        let parsed = saule_parser::parse_recover(tokens, src);
+        let first_line_end = src.find('\n').unwrap();
+        assert!(
+            !parsed.errors.is_empty(),
+            "{src}: the unfinished line is an error"
+        );
+        for e in &parsed.errors {
+            let at = miette::Diagnostic::labels(e)
+                .and_then(|mut l| l.next())
+                .map(|l| l.offset())
+                .unwrap_or(0);
+            let second_line_end = src[first_line_end + 1..]
+                .find('\n')
+                .map_or(src.len(), |i| first_line_end + 1 + i);
+            assert!(
+                at > first_line_end && at <= second_line_end,
+                "{src}: the error belongs on the `from` line: {e}"
+            );
+        }
+        assert!(matches!(
+            &parsed.module.stmts[0].value,
+            Stmt::Decl(d) if matches!(&d.value, Decl::Import { names: ImportNames::Namespace(_), .. })
+        ));
+    }
+}

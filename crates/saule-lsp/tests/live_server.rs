@@ -1008,3 +1008,27 @@ fn a_namespace_import_brings_bare_names_into_the_editor_too() {
     server.change(&main, "from kit i");
     assert_eq!(complete(&mut server, &main, 0, 10), ["import"]);
 }
+
+#[test]
+fn typing_a_from_line_under_an_import_leaves_the_import_alone() {
+    let project = kit_project("import kit\n");
+    let main = project.path("main.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&main);
+
+    for (text, col) in [("import kit\nfrom k", 6), ("import kit as k\nfrom k", 6)] {
+        server.change(&main, text);
+        let first_line: Vec<&Value> = server
+            .diagnostics
+            .get(&uri(&main))
+            .map(|all| {
+                all.iter()
+                    .filter(|d| d["range"]["start"]["line"] == 0)
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(first_line.is_empty(), "{text}: {first_line:?}");
+        let offered = complete(&mut server, &main, 1, col);
+        assert!(offered.contains(&"kit".to_string()), "{text}: {offered:?}");
+    }
+}
