@@ -94,16 +94,28 @@ pub(crate) fn filter(items: Vec<CompletionItem>, prefix: &str) -> Vec<Completion
         .collect()
 }
 
+/// Names spelled the way the author started typing come first: `f` is
+/// reaching for `fn`, `for` or a local `frame` before the `FlowStack` class,
+/// and `F` the other way round. Used only where no argument type says what
+/// fits, which is the stronger signal.
+pub(crate) fn case_first(items: Vec<CompletionItem>, prefix: &str) -> Vec<CompletionItem> {
+    let Some(lower) = prefix.chars().next().map(char::is_lowercase) else {
+        return items;
+    };
+    items
+        .into_iter()
+        .map(|mut i| {
+            let same = i.label.chars().next().map(char::is_lowercase) == Some(lower);
+            let rest = i.sort_text.take().unwrap_or_else(|| i.label.clone());
+            i.sort_text = Some(format!("{}{rest}", if same { '0' } else { '1' }));
+            i
+        })
+        .collect()
+}
+
 pub(crate) fn dedup(mut items: Vec<CompletionItem>) -> Vec<CompletionItem> {
-    let mut seen: Vec<String> = Vec::new();
-    items.retain(|i| {
-        if seen.contains(&i.label) {
-            false
-        } else {
-            seen.push(i.label.clone());
-            true
-        }
-    });
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|i| seen.insert(i.label.clone()));
     items
 }
 
@@ -132,6 +144,7 @@ pub(crate) const STATEMENT_KEYWORDS: &[&str] = &[
     "enum",
     "export",
     "import",
+    "from",
     "match",
     "do",
     // `when(x):stage()` — a pipeline is a statement like any other. The

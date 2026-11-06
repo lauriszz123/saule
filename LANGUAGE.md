@@ -3231,17 +3231,18 @@ from "data/PlayerRepository" import PlayerRepository as PlayerRepo
 from "entities/Player" import *
 ```
 
-Or import the module as a whole and reach into it by name:
+Or import the module as a whole. Everything it exports comes in, as with `from shine import *`, and is also reachable through its name:
 
 ```luau
-import shine                  -- shine.Window, shine.run()
-import "ui/widgets"           -- widgets.Button
-import shine as sh            -- sh.Window
+import shine                  -- Window, and shine.Window
+import "ui/widgets"           -- Button, and widgets.Button
+import shine as sh            -- Window, and sh.Window
 
-local w: shine.Window = shine.Window("Demo")
+local a: Window = Window("Demo")
+local b: shine.Window = shine.Window("Demo")
 ```
 
-A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
+The qualified name is there for when two modules export the same one. A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
 
 The path may be written **with or without quotes**. Unquoted, `.` separates folders — the two lines below mean exactly the same thing:
 

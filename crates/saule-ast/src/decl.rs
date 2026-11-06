@@ -156,16 +156,18 @@ pub enum ImportNames {
     All,
     /// `from "path" import A, B as C, D`
     List(Vec<(String, Option<String>)>),
-    /// `import "path"` or `import path as name`: every export, reached as
-    /// `name.Export`. The parser reads `name.Export` as one identifier, so
-    /// past it the binding is an ordinary name that happens to hold a dot.
+    /// `import "path"` or `import path as name`: every export, both bare,
+    /// as `from path import *` binds it, and as `name.Export`. The parser
+    /// reads `name.Export` as one identifier, so past it the binding is an
+    /// ordinary name that happens to hold a dot.
     Namespace(String),
 }
 
 impl ImportNames {
-    /// `(exported, local)` for each name this import binds. A wildcard or a
-    /// namespace binds every one of `exports`; a list binds what it names,
-    /// whether or not the module has it, which is the caller's to report.
+    /// `(exported, local)` for each name this import binds. A wildcard binds
+    /// every one of `exports`, and a namespace binds each twice, bare and
+    /// qualified; a list binds what it names, whether or not the module has
+    /// it, which is the caller's to report.
     pub fn bind<'a>(&self, exports: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)> {
         match self {
             ImportNames::All => exports
@@ -174,7 +176,12 @@ impl ImportNames {
                 .collect(),
             ImportNames::Namespace(ns) => exports
                 .into_iter()
-                .map(|e| (e.to_string(), format!("{ns}.{e}")))
+                .flat_map(|e| {
+                    [
+                        (e.to_string(), format!("{ns}.{e}")),
+                        (e.to_string(), e.to_string()),
+                    ]
+                })
                 .collect(),
             ImportNames::List(items) => items
                 .iter()

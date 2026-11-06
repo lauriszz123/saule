@@ -134,3 +134,68 @@ pub(crate) fn named(ty: Type) -> Option<String> {
 }
 
 // ─── candidates ─────────────────────────────────────────────────────────────
+
+/// The type a binding's initialiser gives it, for ranking. Weaker than the
+/// checker, like the rest of this file: a literal, a call whose return type is
+/// declared, an operator whose result is fixed, or another binding.
+pub(crate) fn value_type(expr: &Expr, found: &Found, depth: usize) -> Option<Type> {
+    use saule_ast::{BinOp, UnaryOp};
+    if depth > MAX_INFER_DEPTH {
+        return None;
+    }
+    let named = |n: &str| Some(Type::Named(n.into()));
+    match expr {
+        Expr::Int(_) => named("integer"),
+        Expr::Float(_) => named("float"),
+        Expr::Str(_) => named("string"),
+        Expr::Bool(_) => named("boolean"),
+        Expr::Table(_) => named("table"),
+        Expr::Ident(n) => {
+            let v = found.scope.iter().rev().find(|v| &v.name == n)?;
+            v.ty.clone()
+                .or_else(|| value_type(v.init.as_ref()?, found, depth + 1))
+        }
+        Expr::Unary {
+            op: UnaryOp::Not, ..
+        } => named("boolean"),
+        Expr::Unary {
+            op: UnaryOp::Len, ..
+        } => named("integer"),
+        Expr::Binary { op, lhs, .. } => match op {
+            BinOp::Concat => named("string"),
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                named("boolean")
+            }
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
+                value_type(&lhs.value, found, depth + 1)
+            }
+            _ => None,
+        },
+        Expr::Call { callee, .. } => {
+            if let Expr::Ident(n) = &callee.value
+                && let Some(sig) = saule_semantic::lookup_function(n)
+            {
+                return sig.return_ty;
+            }
+            if let Expr::Ident(n) = &callee.value
+                && let Some(sig) = sigs::lookup(n)
+            {
+                return sig_return(&sig);
+            }
+            if let Expr::Member { obj, name } = &callee.value
+                && let Expr::Ident(m) = &obj.value
+                && let Some(sig) = sigs::lookup(&format!("{m}.{name}"))
+            {
+                return sig_return(&sig);
+            }
+            match infer_d(expr, found, depth + 1)? {
+                Recv::Instance(c) => Some(Type::Named(c)),
+                _ => None,
+            }
+        }
+        _ => match infer_d(expr, found, depth + 1)? {
+            Recv::Instance(c) => Some(Type::Named(c)),
+            _ => None,
+        },
+    }
+}

@@ -4,6 +4,26 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
+## Next
+
+### Changed
+
+- **`import shine` brings in every export, as `from shine import *` does**, and
+  keeps `shine.Window` working too.
+
+### Fixed
+
+- Completion after `from uikit ` offers `import`, and after `import uikit ` or
+  `from uikit import Window ` offers `as`, instead of every name in scope.
+  `from` is offered where a statement begins.
+- Completion ranks what fits first in more places: a local without a type
+  annotation ranks by the value it was given, a standard-library argument by
+  its parameter's type, an `if`, `while` or `until` condition puts booleans
+  first, and a type reached through a namespace (`uikit.ThemeData`) fits a slot
+  declared with the bare name. Where no type applies, names spelled the way
+  you started typing come first: `f` reaches `fn`, `for` and your locals before
+  the `FlowStack` class.
+
 ## 26.23
 
 ### Changed

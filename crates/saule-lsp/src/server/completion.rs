@@ -117,6 +117,11 @@ impl Backend {
             Ctx::ImportPath { quoted } => self.import_path_items(module_dir.as_deref(), *quoted),
             Ctx::ImportName { path } => import_name_items(path, module_dir.as_deref()),
         };
+        let items = if found.expected.is_none() {
+            case_first(items, &prefix)
+        } else {
+            items
+        };
 
         Some(CompletionResponse::Array(filter(items, &prefix)))
     }
