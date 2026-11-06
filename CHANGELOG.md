@@ -6,6 +6,14 @@ history.
 
 ## Next
 
+### Fixed
+
+- `import uikit` followed by a `from …` line still being typed no longer
+  reports the import as the removed syntax, and completion works on the `from`
+  line. An unfinished `from path` is reported on its own line.
+
+## 26.24
+
 ### Changed
 
 - **`import shine` brings in every export, as `from shine import *` does**, and
