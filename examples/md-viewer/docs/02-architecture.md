@@ -327,7 +327,7 @@ classDiagram
         +equals(o) boolean
     }
     class LinkResolver {
-        +resolve(from: Location, href)$ Location?
+        +resolve(base: Location, href)$ Location?
         +isExternal(href)$ boolean
         +normalize(path)$ string
     }

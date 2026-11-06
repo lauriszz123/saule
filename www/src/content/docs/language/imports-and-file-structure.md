@@ -24,13 +24,16 @@ from "entities/Player" import *
 Or import the module as a whole. Everything it exports comes in, as with `from shine import *`, and is also reachable through its name:
 
 ```saule
-import shine                  -- Window, and shine.Window
-import "ui/widgets"           -- Button, and widgets.Button
-import shine as sh            -- Window, and sh.Window
+-- `shine` exports Window, Graphics, Keyboard, Mouse and Timer
+import shine                  -- all five, and shine.Window, shine.Graphics, …
+import shine as sh            -- all five, and sh.Window, sh.Graphics, …
+import "uikit"                -- everything uikit exports, and uikit.WindowGroup, …
 
 local a: Window = Window("Demo")
 local b: shine.Window = shine.Window("Demo")
 ```
+
+An import brings in only what that module exports.
 
 The qualified name is there for when two modules export the same one. A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
 

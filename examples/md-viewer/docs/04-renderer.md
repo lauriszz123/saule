@@ -56,7 +56,7 @@ export class DocumentView extends View
     end
 
     fn body(context: BuildContext) -> View
-        local style: MarkdownStyle = MarkdownStyle.from(Theme.of(context))
+        local style: MarkdownStyle = MarkdownStyle.fromTheme(Theme.of(context))
 
         return VStack(alignment: StackAlignment.Leading, spacing: style.blockGap) do
             for child: View in BlockRenderer.renderAll(self.document.blocks, style) do
@@ -414,7 +414,7 @@ export class MarkdownStyle
     quoteBar: Color
     ruleColor: Color
 
-    static fn from(theme: ThemeData) -> MarkdownStyle
+    static fn fromTheme(theme: ThemeData) -> MarkdownStyle
 end
 ```
 

@@ -28,7 +28,7 @@ about the app is declared on the `App` subclass, the way
 `examples/UI Project/src/main.sau` does it.
 
 ```saule
-from UIKit import *
+from uikit import *
 from Shell import *
 from FontRegistry import *
 
@@ -329,18 +329,18 @@ export class LinkResolver
             or String.starts(href, "//")
     end
 
-    static fn resolve(from: Location, href: string) -> Location?
+    static fn resolve(base: Location, href: string) -> Location?
 end
 ```
 
 `resolve` in order:
 
 1. **Split the anchor.** Everything after the first `#`. An href of `"#the-ast"`
-   alone means *this document*: return `Location(from.path, "the-ast")`.
+   alone means *this document*: return `Location(base.path, "the-ast")`.
 2. **Empty path after the split** → same document, new anchor.
 3. **Absolute path** (leading `/`, or a Windows drive letter) → use as-is.
-4. **Relative path** → join against the *directory* of `from.path`, not
-   `from.path` itself. `docs/02-architecture.md` + `04-renderer.md` =
+4. **Relative path** → join against the *directory* of `base.path`, not
+   `base.path` itself. `docs/02-architecture.md` + `04-renderer.md` =
    `docs/04-renderer.md`.
 5. **Normalize.** Split on `/`, drop `.` segments, pop one segment per `..`,
    rejoin. Do this textually — do not shell out to a real path canonicaliser,
@@ -567,7 +567,7 @@ deserve a real screen rather than a blank pane.
 - Optionally a light/dark toggle on the right, flipping the `ThemeData` the
   `Theme` in [`main.sau`](#mainsau) is given. That means lifting the theme
   choice into `Shell` state — a five-line change, and it is the fastest way to
-  prove `MarkdownStyle.from(theme)` is actually reading the theme.
+  prove `MarkdownStyle.fromTheme(theme)` is actually reading the theme.
 
 ---
 

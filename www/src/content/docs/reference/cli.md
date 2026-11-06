@@ -26,6 +26,10 @@ saule run [TARGET] [-- ARGS...]
 | `TARGET` | A project directory or a `.sau` file. Defaults to the current directory. |
 | `ARGS` | Everything after `--`, forwarded verbatim to the script's `Os.args()` |
 
+| Option | Description |
+|---|---|
+| `--profile-bytecode` | Count what the bytecode VM executes and print an opcode and opcode-pair histogram to stderr when the program finishes |
+
 Whether `TARGET` is a directory is the **only** thing that picks the mode:
 
 | Invocation | What runs |
@@ -266,3 +270,65 @@ saule init [--lib] <NAME>
 
 `NAME` is both the directory that gets created and the project's `name:` in
 `saule.config`, which is the prefix dependents use to import from it.
+
+## `saule install`
+
+Install a package, or everything this project needs.
+
+```sh
+saule install lauriszz123@saule-shine         # the newest tagged version
+saule install lauriszz123@saule-shine:v0.1.0  # a specific tag or branch
+saule install ../uikit                        # a project on this machine
+saule install                                 # everything in saule.config
+```
+
+A package is `<owner>@<repo>`, pinned with `:<version>`. Without one, the newest
+tag is installed and recorded, so a fresh clone gets that same version; a
+repository with no tags falls back to its default branch. Packages are
+installed once, globally, and shared by every project, which records only the
+ones it uses in `dependencies:`. A path is used where it lies — nothing is
+copied, so edits to it take effect immediately.
+
+## `saule update`
+
+Move this project's packages to their newest tagged version.
+
+```sh
+saule update [--check] [PACKAGE]
+```
+
+| Option | Description |
+|---|---|
+| `--check` | Report what is out of date and install nothing; exit 1 when something is behind, 2 when a package could not be reached |
+
+A package pinned to a tag moves to the newest tag; one tracking a branch is
+compared by commit and reinstalled from that branch. Path dependencies are left
+alone.
+
+## `saule remove`
+
+Remove a package from this project's `dependencies:`.
+
+```sh
+saule remove [--purge] <PACKAGE>
+```
+
+| Option | Description |
+|---|---|
+| `--purge` | Also delete the globally installed copy, not just this project's reference to it |
+
+The installed copy is otherwise kept, because other projects may use it. The
+package may be named as `owner@repo:v1`, `owner@repo`, just `repo`, or the name
+you import it under.
+
+## `saule list`
+
+List this project's dependencies and what is installed for each.
+
+```sh
+saule list [--global]
+```
+
+| Option | Description |
+|---|---|
+| `--global` | Every package installed on this machine, whichever project asked for it |

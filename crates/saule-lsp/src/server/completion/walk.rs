@@ -89,10 +89,10 @@ pub(crate) enum Ctx {
     /// `case Colour.<caret>` — the enum is already named, so only its own
     /// variants belong here.
     VariantName { enum_name: String },
-    /// `import * from <caret>` — offer importable modules. `quoted` mirrors
+    /// `from <caret>` or `import <caret>` — offer importable modules. `quoted` mirrors
     /// how the author spelled the path so suggestions match their style.
     ImportPath { quoted: bool },
-    /// `import <caret> from some.module` — offer that module's exports.
+    /// `from some.module import <caret>` — offer that module's exports.
     ImportName { path: String },
 }
 
