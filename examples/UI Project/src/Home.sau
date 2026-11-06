@@ -23,7 +23,7 @@ export class HomeScreen extends View
 			end
 		end
 
-		local cards: table<View> = {
+		local cards: View[] = {
 			DemoCard(
 				icon: Icons.list,
 				title: "Contacts",

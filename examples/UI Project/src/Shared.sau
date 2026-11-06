@@ -6,8 +6,8 @@ import * from "uikit"
 -- Strip leading and trailing spaces. Saule's `String` has no `trim`, and every
 -- form in here needs one before it can decide whether a field is empty.
 export fn trimmed(text: string) -> string
-	local first: integer = 1
-	local last: integer = String.len(text)
+	local first = 1
+	local last = String.len(text)
 
 	while first <= last and String.sub(text, first, first) == " " do
 		first = first + 1
@@ -45,13 +45,13 @@ end
 -- could only leave with the mouse.
 export class RouteScreen extends View
 	title: string
-	actions: table<View>
+	actions: View[]
 	content: View?
 	footer: View?
 
 	fn init(
 		title: string = "",
-		actions: table<View> = {},
+		actions: View[] = {},
 		footer: View? = nil,
 		key: string? = nil,
 		content: (fn() -> nil)? = nil
@@ -69,22 +69,19 @@ export class RouteScreen extends View
 			context.navigator()?.pop()
 		end
 
-		return KeyboardListener(
-			onKeyDown: fn(event: KeyEvent)
-				if event.key == "escape" then
-					context.navigator()?.pop()
+		return KeyboardListener(onKeyDown: fn(event: KeyEvent)
+			if event.key == "escape" then
+				context.navigator()?.pop()
 
-					return true
-				end
+				return true
+			end
 
-				return false
-			end,
-			child: Screen(
-				toolbar: Toolbar(title: self.title, leading: back, actions: self.actions),
-				content: self.content,
-				footer: self.footer
-			)
-		)
+			return false
+		end, child: Screen(
+			toolbar: Toolbar(title: self.title, leading: back, actions: self.actions),
+			content: self.content,
+			footer: self.footer
+		))
 	end
 end
 
@@ -111,9 +108,11 @@ export class Card extends View
 	fn body(context: BuildContext) -> View
 		local theme: ThemeData = Theme.of(context)
 
-		return (self.content ?? Frame())
-			.padding(self.padding)
-			.background(self.color ?? theme.surface, radius: 10.0, border: theme.border)
+		return (self.content ?? Frame()).padding(self.padding).background(
+			self.color ?? theme.surface,
+			radius: 10.0,
+			border: theme.border
+		)
 	end
 end
 
@@ -151,14 +150,15 @@ export class Chip extends View
 			-- The × only exists on a removable chip, so a read-only one is a
 			-- single `Text` rather than a row with an invisible button in it.
 			if self.onRemove != nil then
-				Icon(Icons.close, 12.0, ink.withAlpha(0.7))
-					.onTapGesture(self.onRemove!)
+				Icon(Icons.close, 12.0, ink.withAlpha(0.7)).onTapGesture(self.onRemove!)
 			end
 		end
 
-		return row
-			.padding(insets: EdgeInsets.symmetric(horizontal: 9.0, vertical: 4.0))
-			.background(fill, radius: 9.0, border: theme.border)
+		return row.padding(insets: EdgeInsets.symmetric(horizontal: 9.0, vertical: 4.0)).background(
+			fill,
+			radius: 9.0,
+			border: theme.border
+		)
 	end
 end
 
@@ -214,12 +214,10 @@ export class Avatar extends View
 	end
 
 	fn body(context: BuildContext) -> View
-		return Text(Avatar.initialsOf(self.name))
-			.font(self.size * 0.38)
-			.foregroundStyle(Colors.white)
-			.centered()
-			.frame(width: self.size, height: self.size)
-			.background(Avatar.colorFor(self.name), radius: self.size / 2.0)
+		return Text(Avatar.initialsOf(self.name)).font(self.size * 0.38).foregroundStyle(Colors.white).centered().frame(
+			width: self.size,
+			height: self.size
+		).background(Avatar.colorFor(self.name), radius: self.size / 2.0)
 	end
 end
 
@@ -245,10 +243,9 @@ export class EmptyState extends View
 			Text(self.title).font(15.0).foregroundStyle(theme.textMuted)
 
 			if String.len(self.detail) > 0 then
-				Text(self.detail)
-					.font(12.0)
-					.foregroundStyle(theme.textMuted.withAlpha(0.7))
-					.multilineTextAlignment(TextAlign.Center)
+				Text(self.detail).font(12.0).foregroundStyle(theme.textMuted.withAlpha(0.7)).multilineTextAlignment(
+					TextAlign.Center
+				)
 			end
 		end.centered()
 	end
