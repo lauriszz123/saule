@@ -499,8 +499,8 @@ code. An unrecognised entity is left alone.
 re-export only happens in an `init.sau`:
 
 ```saule
-import * from Ast
-import * from Parser
+from Ast import *
+from Parser import *
 ```
 
 `LineScanner`, `BlockParser`, `InlineParser`, `Slugger` and `Entities` stay
@@ -524,7 +524,7 @@ export class Markdown
 end
 ```
 
-Then in the app: `import Markdown from "markdown"`, because `markdown` is
+Then in the app: `from "markdown" import Markdown`, because `markdown` is
 listed in [md-viewer's `dependencies`](../saule.config).
 
 ---

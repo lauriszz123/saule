@@ -196,8 +196,8 @@ pub(crate) fn import_name_items(path: &str, dir: Option<&std::path::Path>) -> Ve
     out
 }
 
-/// Exported declarations of the module at `abs`. An `init.sau` barrel
-/// re-exports whatever it imports, so those targets are followed too.
+/// Exported declarations of the module at `abs`, and what its
+/// `export from … import …` statements pass on.
 pub(crate) fn collect_exports(
     abs: &std::path::Path,
     depth: usize,
@@ -248,13 +248,31 @@ pub(crate) fn collect_exports(
                 name,
                 ..
             } => (name, CompletionItemKind::ENUM),
-            // A barrel publishes what it imports; follow those.
-            Decl::Import { path, .. } => {
-                if abs.file_stem().and_then(|s| s.to_str()) == Some("init")
-                    && let Some(parent) = abs.parent()
-                    && let Some(next) = saule_runtime::module::resolve_import_path(parent, path)
-                {
-                    collect_exports(&next, depth + 1, out, seen);
+            Decl::Import {
+                path,
+                names,
+                exported: true,
+                ..
+            } => {
+                let mut passed = Vec::new();
+                if let Some(parent) = abs.parent() {
+                    if let Some(pkg) = saule_runtime::native_packages::lookup(path) {
+                        passed = import_name_items(pkg.name, None);
+                    } else if saule_runtime::dynamic_packages::is_dynamic_package(path) {
+                        passed = import_name_items(path, None);
+                    } else if let Some(next) =
+                        saule_runtime::module::resolve_import_path(parent, path)
+                    {
+                        collect_exports(&next, depth + 1, &mut passed, seen);
+                    }
+                }
+                let labels: Vec<String> = passed.iter().map(|i| i.label.clone()).collect();
+                for (orig, local) in names.bind(labels.iter().map(String::as_str)) {
+                    if let Some(found) = passed.iter().find(|i| i.label == orig) {
+                        let mut found = found.clone();
+                        found.label = local;
+                        out.push(found);
+                    }
                 }
                 continue;
             }

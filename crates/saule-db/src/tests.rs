@@ -36,7 +36,7 @@ impl Fixture {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         let dir = fs::canonicalize(&dir).expect("canonicalize");
-        fs::write(dir.join("main.sau"), "import * from \"lib\"\n").expect("write main");
+        fs::write(dir.join("main.sau"), "from \"lib\" import *\n").expect("write main");
         fs::write(dir.join("lib.sau"), "export class Alpha\nend\n").expect("write lib");
         Fixture {
             main: dir.join("main.sau"),
@@ -69,7 +69,7 @@ fn editing_a_body_does_not_rebuild_the_seed() {
     assert!(db.seed(&fx.main).classes.contains_key("Alpha"));
 
     db.reset_stats();
-    db.set_overlay(&fx.main, "import * from \"lib\"\n\nlocal x = 1\n".into());
+    db.set_overlay(&fx.main, "from \"lib\" import *\n\nlocal x = 1\n".into());
     assert!(db.seed(&fx.main).classes.contains_key("Alpha"));
 
     let stats = db.stats();
@@ -111,7 +111,7 @@ fn editing_an_import_line_rebuilds_the_seed() {
     fs::write(fx.dir.join("other.sau"), "export class Gamma\nend\n").expect("write other");
     db.set_overlay(
         &fx.main,
-        "import * from \"lib\"\nimport * from \"other\"\n".into(),
+        "from \"lib\" import *\nfrom \"other\" import *\n".into(),
     );
 
     let seed = db.seed(&fx.main);
@@ -143,7 +143,7 @@ fn an_unsaved_buffer_outranks_the_file_on_disk() {
 fn setting_the_same_text_again_is_free() {
     let fx = Fixture::new("idempotent");
     let mut db = Db::new();
-    let text = "import * from \"lib\"\n";
+    let text = "from \"lib\" import *\n";
     db.set_overlay(&fx.main, text.into());
     db.seed(&fx.main);
 
@@ -174,7 +174,7 @@ fn a_repeated_query_is_a_hit() {
 fn a_broken_file_still_parses_and_still_has_imports() {
     let fx = Fixture::new("broken");
     let mut db = Db::new();
-    db.set_overlay(&fx.main, "import * from \"lib\"\n\nclass Half\n".into());
+    db.set_overlay(&fx.main, "from \"lib\" import *\n\nclass Half\n".into());
 
     let parsed = db.parsed(&fx.main);
     assert!(
@@ -204,7 +204,7 @@ fn deleting_an_imported_file_empties_the_seed() {
 fn an_anonymous_buffer_is_served_without_caching() {
     let fx = Fixture::new("anon");
     let db = Db::new();
-    let parsed = db.parse_anonymous("import * from \"lib\"\n");
+    let parsed = db.parse_anonymous("from \"lib\" import *\n");
     assert!(parsed.is_clean());
     let seed = db.seed_of(&parsed.module, &fx.dir);
     assert!(seed.classes.contains_key("Alpha"));
@@ -266,7 +266,7 @@ fn analysis_revision_tracks_value_not_edits() {
     let after_rename = db.analysis_revision(&f.main);
     assert!(after_rename > after_surface, "a rename must move it");
 
-    f.write(&f.main, "import * from \"lib\"\n-- a note\n");
+    f.write(&f.main, "from \"lib\" import *\n-- a note\n");
     db.file_changed(&f.main);
     let after_own = db.analysis_revision(&f.main);
     assert!(
@@ -293,8 +293,8 @@ fn every_importer_of_a_changed_surface_moves() {
     f.write(&f.lib, "export class Alpha\nend\n");
     let mid = f.dir.join("mid.sau");
     let top = f.dir.join("top.sau");
-    f.write(&mid, "import * from \"lib\"\n");
-    f.write(&top, "import * from \"lib\"\nimport * from \"mid\"\n");
+    f.write(&mid, "from \"lib\" import *\n");
+    f.write(&top, "from \"lib\" import *\nfrom \"mid\" import *\n");
 
     let mut db = Db::new();
     db.analysis_revision(&mid);

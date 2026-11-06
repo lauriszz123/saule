@@ -28,7 +28,7 @@ exported symbol, and your `///` doc comments.
    method's signature is registered, so `Graphics.circle(...)` type-checks —
    and the editor completes it and shows its docs — before any of the
    package's code runs.
-2. When a program reaches `import Graphics from "shine"`, the interpreter
+2. When a program reaches `from "shine" import Graphics`, the interpreter
    loads the library, checks that it was built against the same native ABI,
    and binds each export to its symbol.
 3. Calls cross a small, frozen C ABI ([`saule-native-abi`](../../crates/saule-native-abi))
@@ -104,9 +104,9 @@ saule examples/native-package/demo.sau
 ## Import forms
 
 ```saule
-import Graphics from "shine"                 -- single class
-import Graphics, Window, Timer from "shine"  -- several classes
-import * from "shine"                        -- everything the package exports
+from "shine" import Graphics                 -- single class
+from "shine" import Graphics, Window, Timer  -- several classes
+from "shine" import *                        -- everything the package exports
 ```
 
 ## Game loop

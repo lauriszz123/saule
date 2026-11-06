@@ -44,7 +44,7 @@ use imports::{
 ///
 /// * `import_blurbs` — pre-rendered Markdown for each `import` statement
 ///   keyed by its source span. The cursor is matched against the keys
-///   so hovering anywhere on `import Storage from "storage"` surfaces
+///   so hovering anywhere on `from "storage" import Storage` surfaces
 ///   "imports `Storage` from `…/storage.sau`" without re-resolving the
 ///   path during the AST walk.
 /// * `docs` — `---` doc comments harvested from each imported file,

@@ -1,5 +1,5 @@
-import Canvas from "canvas"
-import * from "widgets"
+from "canvas" import Canvas
+from "widgets" import *
 
 -- A tiny declarative UI, drawn to the terminal.
 --

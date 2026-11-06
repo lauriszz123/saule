@@ -35,7 +35,7 @@ fn tmp(tag: &str) -> PathBuf {
 
 #[test]
 fn bare_dependency_name_resolves_to_its_init_module() {
-    // `import X from "json"` names the package itself, which resolves to
+    // `from "json" import X` names the package itself, which resolves to
     // the one thing a package may expose: `src/init.sau`.
     let root = tmp("init");
     let dep = make_pkg(&root, "json", "init.sau");
@@ -60,7 +60,7 @@ fn a_package_without_init_is_not_importable_by_name() {
 #[test]
 fn modules_inside_a_dependency_are_still_reachable() {
     // The package's own files stay importable by path, which is how an
-    // `init.sau` barrel re-exports them.
+    // `init.sau` re-exports them with `export from`.
     let root = tmp("qualified");
     let dep = make_pkg(&root, "json", "init.sau");
     let src = dep.src_dirs[0].clone();
@@ -101,7 +101,7 @@ fn the_import_seed_reads_imports_from_disk_by_default() {
     )
     .unwrap();
 
-    let importer = parse_module("import Widget from \"lib\"\n");
+    let importer = parse_module("from \"lib\" import Widget\n");
     let seed = collect_import_seed(&importer, &src);
 
     assert!(
@@ -123,7 +123,7 @@ fn an_overlay_supersedes_the_on_disk_copy_of_an_import() {
     let lib = src.join("lib.sau");
     std::fs::write(&lib, "export class OldName\n\tfn spin() end\nend\n").unwrap();
 
-    let importer = parse_module("import NewName from \"lib\"\n");
+    let importer = parse_module("from \"lib\" import NewName\n");
     let buffer = "export class NewName\n\tfn spin() end\nend\n".to_string();
     let lib_canonical = lib.canonicalize().unwrap_or_else(|_| lib.clone());
 
@@ -156,7 +156,7 @@ fn an_overlay_that_declines_falls_back_to_disk() {
     )
     .unwrap();
 
-    let importer = parse_module("import Widget from \"lib\"\n");
+    let importer = parse_module("from \"lib\" import Widget\n");
     let seed = collect_import_seed_with(&importer, &src, &|_| None);
 
     assert!(

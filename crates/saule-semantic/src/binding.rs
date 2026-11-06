@@ -59,7 +59,7 @@ pub enum Binding {
     /// `self`.
     SelfRef,
     /// The name resolved to nothing the resolver can see, but the module has
-    /// an unenumerable `import * from "..."` so it is not reported as an
+    /// an unenumerable `from "..." import *` so it is not reported as an
     /// error.
     ///
     /// Distinguished from simply being absent from the table: absent means

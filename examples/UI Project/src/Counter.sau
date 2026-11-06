@@ -1,4 +1,4 @@
-import * from "uikit"
+from "uikit" import *
 
 -- A counter, written the way SwiftUI writes one.
 --

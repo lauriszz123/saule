@@ -1,6 +1,6 @@
-import * from LineScanner
-import * from Slugger
-import * from Ast
+from LineScanner import *
+from Slugger import *
+from Ast import *
 
 local fn indentOf(line: string)
     local width = 0

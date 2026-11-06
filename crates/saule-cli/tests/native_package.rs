@@ -144,7 +144,7 @@ fn a_native_class_has_a_constructor_methods_and_properties() {
     let home = fixture_home("class_surface");
     let out = run_ok(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 local c: Counter = Counter(10)
 println(c.value)
 println(c.bump())
@@ -162,7 +162,7 @@ fn objects_pass_in_by_reference_and_come_back_as_objects() {
     let home = fixture_home("objects_in_and_out");
     let out = run_ok(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 local a = Counter(3)
 local b: Counter = a.fork()
 println(a.absorb(b), b.value)
@@ -183,7 +183,7 @@ fn an_object_is_dropped_with_its_last_reference() {
     let home = fixture_home("object_lifetime");
     let out = run_ok(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 println(Counter.live())
 local a: Counter? = Counter(1)
 local b: Counter? = a
@@ -203,7 +203,7 @@ fn a_shared_object_keeps_its_identity() {
     let home = fixture_home("shared_identity");
     let out = run_ok(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 local a = Util.shared()
 local b = Util.shared()
 println(a == b, a == Counter(100))
@@ -219,7 +219,7 @@ fn a_reentrant_call_cannot_alias_a_mutable_borrow() {
     let home = fixture_home("reentrancy");
     let err = run_err(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 local c = Counter(1)
 println(c.whileBumping(fn()
   c.bump()
@@ -241,7 +241,7 @@ fn a_read_only_property_cannot_be_assigned() {
     let home = fixture_home("read_only");
     let err = run_err(
         &home,
-        "import * from \"fixture\"\nlocal c = Counter(1)\nc.value = 3\n",
+        "from \"fixture\" import *\nlocal c = Counter(1)\nc.value = 3\n",
     );
     assert!(err.contains("`Counter.value` is read-only"), "{err}");
 }
@@ -253,7 +253,7 @@ fn enums_cross_the_boundary_as_themselves() {
     let home = fixture_home("enums");
     let out = run_ok(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 println(Util.round(2.1, Rounding.Up), Util.round(2.9, Rounding.Down))
 local m: Rounding? = Util.preferred(true)
 println(m == Rounding.Nearest, Util.preferred(false) == nil)
@@ -269,7 +269,7 @@ fn collections_are_copied_and_tuples_spread() {
     let home = fixture_home("collections");
     let out = run_ok(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 println(Util.sum({1, 2, 3, 4}))
 local t = Util.tally({"a", "b", "a"})
 println(t["a"], t["b"])
@@ -286,7 +286,7 @@ println(Util.greet("ada"), Util.greet("bob", "!"))
 #[test]
 fn a_rust_error_is_a_saule_runtime_error() {
     let home = fixture_home("result_err");
-    let err = run_err(&home, "import * from \"fixture\"\nUtil.divmod(1, 0)\n");
+    let err = run_err(&home, "from \"fixture\" import *\nUtil.divmod(1, 0)\n");
     assert!(err.contains("division by zero"), "{err}");
 }
 
@@ -295,7 +295,7 @@ fn a_rust_error_is_a_saule_runtime_error() {
 #[test]
 fn a_panic_is_a_saule_runtime_error() {
     let home = fixture_home("panic");
-    let err = run_err(&home, "import * from \"fixture\"\nprintln(Util.boom())\n");
+    let err = run_err(&home, "from \"fixture\" import *\nprintln(Util.boom())\n");
     assert!(err.contains("Util.boom panicked at"), "{err}");
     assert!(err.contains("kaboom"), "{err}");
     assert!(
@@ -309,7 +309,7 @@ fn an_integer_that_does_not_fit_is_refused() {
     let home = fixture_home("narrow");
     let err = run_err(
         &home,
-        "import * from \"fixture\"\nprintln(Util.narrow(5000000000))\n",
+        "from \"fixture\" import *\nprintln(Util.narrow(5000000000))\n",
     );
     assert!(
         err.contains("argument `x` is 5000000000, which does not fit a i32"),
@@ -359,7 +359,7 @@ fn the_checker_types_native_classes_and_enums() {
         let out = saule(
             &home,
             "check",
-            &format!("import * from \"fixture\"\n{snippet}\n"),
+            &format!("from \"fixture\" import *\n{snippet}\n"),
         );
         let err = stderr(&out);
         assert!(!out.status.success(), "`{snippet}` should not check");
@@ -373,7 +373,7 @@ fn the_checker_types_native_classes_and_enums() {
     let out = saule(
         &home,
         "check",
-        "import * from \"fixture\"\nlocal c: Counter = Counter(1)\nlocal n: integer = c.bump()\n",
+        "from \"fixture\" import *\nlocal c: Counter = Counter(1)\nlocal n: integer = c.bump()\n",
     );
     assert!(out.status.success(), "{}", stderr(&out));
 }
@@ -389,7 +389,7 @@ fn a_missing_module_is_reported_at_the_import() {
         let out = saule(
             &home,
             cmd,
-            "import Timer from \"nosuchthing\"\nlocal t: float = Timer.getTime()\n",
+            "from \"nosuchthing\" import Timer\nlocal t: float = Timer.getTime()\n",
         );
         let err = stderr(&out);
         assert!(
@@ -397,7 +397,7 @@ fn a_missing_module_is_reported_at_the_import() {
             "{cmd}: {err}"
         );
         assert!(
-            err.contains("import Timer from"),
+            err.contains("from \"nosuchthing\" import Timer"),
             "{cmd}: not at the import: {err}"
         );
         assert!(
@@ -416,7 +416,7 @@ fn a_library_that_is_not_a_package_says_so() {
         .join("native_packages")
         .join(format!("notsaule{}", std::env::consts::DLL_SUFFIX));
     std::fs::write(&fake, b"not a shared library").expect("write the fake library");
-    let out = saule(&home, "check", "import X from \"notsaule\"\n");
+    let out = saule(&home, "check", "from \"notsaule\" import X\n");
     let err = stderr(&out);
     assert!(err.contains("`notsaule` cannot be imported"), "{err}");
     assert!(err.contains("is not a shared library"), "{err}");
@@ -445,7 +445,7 @@ fn a_package_for_another_abi_is_refused_before_loading() {
     let out = saule(
         &home,
         "run",
-        "import * from \"fixture\"\nprintln(Counter.live())\n",
+        "from \"fixture\" import *\nprintln(Counter.live())\n",
     );
     let err = stderr(&out);
     assert!(!out.status.success());
@@ -466,7 +466,7 @@ fn a_package_installed_the_old_way_explains_the_new_layout() {
         "[package]\nname = \"engine\"\nversion = \"0.1.0\"\n",
     )
     .expect("write an old manifest");
-    let out = saule(&home, "check", "import Timer from \"engine\"\n");
+    let out = saule(&home, "check", "from \"engine\" import Timer\n");
     let err = stderr(&out);
     assert!(err.contains("installed the old way"), "{err}");
 }
@@ -481,7 +481,7 @@ fn two_libraries_claiming_one_package_are_both_refused() {
             (lib, &format!("b{}", std::env::consts::DLL_SUFFIX)),
         ],
     );
-    let out = saule(&home, "check", "import * from \"fixture\"\n");
+    let out = saule(&home, "check", "from \"fixture\" import *\n");
     let err = stderr(&out);
     assert!(err.contains("is installed more than once"), "{err}");
 }
@@ -499,7 +499,7 @@ fn a_native_class_can_overload_arithmetic() {
     let home = fixture_home("ops-arith");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Money = Money(250)\n\
          local b: Money = Money(125)\n\
          println((a + b).cents)\n\
@@ -516,7 +516,7 @@ fn native_overloads_chain() {
     let home = fixture_home("ops-chain");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Money = Money(100)\n\
          local b: Money = Money(5)\n\
          println((a + b + b - a).cents)\n",
@@ -532,7 +532,7 @@ fn a_native_class_can_overload_equality_and_ordering() {
     let home = fixture_home("ops-cmp");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Money = Money(250)\n\
          local b: Money = Money(125)\n\
          local c: Money = Money(250)\n\
@@ -552,7 +552,7 @@ fn a_native_class_can_overload_length_and_tostring() {
     let home = fixture_home("ops-len");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Money = Money(1234)\n\
          println(#a)\n\
          println(tostring(a))\n\
@@ -570,7 +570,7 @@ fn a_native_class_without_the_contract_still_refuses_the_operator() {
     let out = saule(
         &home,
         "check",
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Counter = Counter(1)\n\
          local b: Counter = Counter(2)\n\
          println(a + b)\n",
@@ -592,7 +592,7 @@ fn a_native_overload_is_used_by_an_equality_branch_too() {
     let home = fixture_home("ops-branch");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Money = Money(250)\n\
          local c: Money = Money(250)\n\
          if a == c then\n\
@@ -622,7 +622,7 @@ fn a_native_class_can_overload_indexing() {
     let home = fixture_home("ops-index");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local m: Money = Money(1234)\n\
          println(m[1])\n\
          println(m[2])\n\
@@ -641,7 +641,7 @@ fn a_native_index_error_is_reported_where_it_happened() {
     let out = saule(
         &home,
         "run",
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local m: Money = Money(100)\n\
          println(m[9])\n",
     );
@@ -658,7 +658,7 @@ fn table_indexing_is_untouched_by_the_native_path() {
     let home = fixture_home("ops-index-table");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local t: table<integer> = {10, 20, 30}\n\
          println(t[2])\n\
          t[2] = 99\n\
@@ -680,7 +680,7 @@ fn a_chaining_method_returns_the_same_object() {
     let home = fixture_home("ops-chain-attr");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local m: Money = Money(100)\n\
          m.plus(10).plus(5)\n\
          println(m.cents)\n",
@@ -696,7 +696,7 @@ fn the_chained_value_is_the_receiver_itself() {
     let home = fixture_home("ops-chain-identity");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Money = Money(100)\n\
          local b: Money = a.plus(1)\n\
          b.plus(1)\n\
@@ -714,7 +714,7 @@ fn a_failing_chained_method_still_errors() {
     let out = saule(
         &home,
         "run",
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local m: Money = Money(100)\n\
          m.plusChecked(-5)\n",
     );
@@ -730,7 +730,7 @@ fn the_checker_sees_a_chaining_method_return_the_class() {
     let out = saule(
         &home,
         "check",
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local m: Money = Money(1)\n\
          local n: Money = m.plus(1).plus(2)\n\
          println(n.cents)\n",
@@ -754,7 +754,7 @@ fn a_native_class_can_be_assignable_from_a_bare_value() {
     let home = fixture_home("ops-assignable");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local m: Money = 250\n\
          println(m.cents)\n\
          println(tostring(m))\n",
@@ -773,7 +773,7 @@ fn assigning_an_existing_native_object_aliases_rather_than_copies() {
     let home = fixture_home("ops-assignable-alias");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local a: Money = Money(100)\n\
          local b: Money = a\n\
          b.plus(5)\n\
@@ -791,7 +791,7 @@ fn nil_is_not_converted_by_assignable() {
     let home = fixture_home("ops-assignable-nil");
     let out = run_ok(
         &home,
-        "import * from \"fixture\"\n\
+        "from \"fixture\" import *\n\
          local m: Money? = nil\n\
          println(m == nil)\n",
     );
@@ -803,7 +803,7 @@ fn bytes_cross_the_abi_in_both_directions() {
     let home = fixture_home("bytes_round_trip");
     let out = run_ok(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 local b: bytes = Bytes.of(0x89, 0x50, 0x4e, 0x47)
 -- Out to the package and back, contents intact.
 local back: bytes = Util.echoBytes(b)
@@ -828,7 +828,7 @@ fn a_bytes_parameter_refuses_a_string() {
     // the checker stops it, which is the guarantee `bytes` is for.
     let err = run_err(
         &home,
-        r#"import * from "fixture"
+        r#"from "fixture" import *
 println(Util.bytesLen("not a buffer"))
 "#,
     );

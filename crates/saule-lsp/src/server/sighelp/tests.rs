@@ -1314,9 +1314,13 @@ fn an_imported_free_function_reports_its_signature() {
         "export fn showToast(context: integer, message: string = \"\") -> nil\nend\n",
     )
     .unwrap();
-    std::fs::write(dir.join("kit").join("init.sau"), "import * from overlay\n").unwrap();
+    std::fs::write(
+        dir.join("kit").join("init.sau"),
+        "export from overlay import *\n",
+    )
+    .unwrap();
 
-    let src = "import * from kit\n\nfn build()\n  showToast(1, \"hi\")\nend\n";
+    let src = "from kit import *\n\nfn build()\n  showToast(1, \"hi\")\nend\n";
     let tokens = saule_lexer::Lexer::new(src).tokenize().expect("lex");
     let module = saule_parser::parse(tokens).expect("parse");
     let seed = saule_runtime::module::collect_import_seed(&module, &dir);

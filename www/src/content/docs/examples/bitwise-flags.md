@@ -221,8 +221,8 @@ end
 ## `src/main.sau`
 
 ```saule title="src/main.sau"
-import Permissions from "permissions"
-import pack, red, green, blue, alpha, toHex, swapRedAndBlue from "color"
+from "permissions" import Permissions
+from "color" import pack, red, green, blue, alpha, toHex, swapRedAndBlue
 
 class Main
 	static fn main()

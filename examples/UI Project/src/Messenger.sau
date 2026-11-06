@@ -1,5 +1,5 @@
-import * from "uikit"
-import * from Shared
+from "uikit" import *
+from Shared import *
 
 -- A small messenger: sign in, sign up, a conversation list, a thread, and a
 -- settings page. All of it in-memory — there is no network here, and the

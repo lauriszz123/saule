@@ -62,7 +62,7 @@ fn passing_tests_exit_zero() {
     write(
         &root,
         "tests/calc_tests.sau",
-        "import add from \"calc\"\n\nfn test_adds()\n  assert(add(1, 2) == 3)\nend\n\n\
+        "from \"calc\" import add\n\nfn test_adds()\n  assert(add(1, 2) == 3)\nend\n\n\
          fn test_adds_again()\n  assert(add(2, 2) == 4)\nend\n",
     );
     let out = saule(&root, &["test"]);

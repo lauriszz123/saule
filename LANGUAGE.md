@@ -631,7 +631,7 @@ end
 
 ```luau
 -- main.sau
-import appName, showHeader from "config"
+from "config" import appName, showHeader
 
 class Main
     static fn main()
@@ -3219,27 +3219,35 @@ end
 
 ### Importing
 
-An import names either a single `.sau` file or a folder module (a directory with an `init.sau` — see [Folder Modules](#folder-modules-initsau)). The path is relative to the importing file's directory, then the project's `src_dirs`.
+An import names either a single `.sau` file or a folder module (a directory with an `init.sau` — see [Folder Modules](#folder-modules-initsau)), and the path is relative to the importing file's directory, then the project's `src_dirs`. The module comes first, so an editor knows what it can offer before you type a name.
 
 ```luau
--- single import
-import Player from "entities/Player"
+-- one name, several, or one under another name
+from "entities/Player" import Player
+from "utils/Math" import clamp, lerp
+from "data/PlayerRepository" import PlayerRepository as PlayerRepo
 
--- several names from one file
-import clamp, lerp from "utils/Math"
-
--- import with alias
-import PlayerRepository as PlayerRepo from "data/PlayerRepository"
-
--- pull every exported name out of one file
-import * from "entities/Player"
+-- every exported name
+from "entities/Player" import *
 ```
+
+Or import the module as a whole and reach into it by name:
+
+```luau
+import shine                  -- shine.Window, shine.run()
+import "ui/widgets"           -- widgets.Button
+import shine as sh            -- sh.Window
+
+local w: shine.Window = shine.Window("Demo")
+```
+
+A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
 
 The path may be written **with or without quotes**. Unquoted, `.` separates folders — the two lines below mean exactly the same thing:
 
 ```luau
-import * from "some/folder/module"
-import * from some.folder.module
+from "some/folder/module" import *
+from some.folder.module import *
 ```
 
 ### Apps and Libraries
@@ -3268,8 +3276,8 @@ A project listed in `dependencies:` is reachable by its `name:`. Naming the
 dependency on its own imports **the package itself**:
 
 ```luau
-import Json from "json"          -- the `json` package
-import Parser from "json/lexer"  -- a specific module inside it
+from "json" import Json          -- the `json` package
+from "json/lexer" import Parser  -- a specific module inside it
 ```
 
 A package exposes itself through an **`init.sau`** in one of its `src_dirs` —
@@ -3287,33 +3295,30 @@ json/
 
 ### Folder Modules (`init.sau`)
 
-A folder becomes a single importable **module** by giving it an `init.sau`. That file is a *barrel*: whatever it imports becomes the module's public surface, so a folder of files can be consumed as one unit.
+A folder becomes a single importable **module** by giving it an `init.sau`. Importing the folder imports that file, so whatever it exports is the folder's public surface.
+
+### Re-exports
+
+`export from` passes names on: they are imported here and exported again, so a folder of files can be consumed as one unit.
 
 ```luau
 -- some/folder/module/init.sau
--- Paths are relative to this file. This is all the barrel does: it lists
--- the files whose exports should be visible to importers of the module.
-import * from view
-import * from button
+-- Paths are relative to this file.
+export from view import *
+export from button import Button, Toggle as Switch
 ```
 
-Consumers then import the folder itself and get everything the barrel pulled in:
+Consumers then import the folder itself and get everything it passes on:
 
 ```luau
-import * from some.folder.module
+from some.folder.module import View, Button
+import some.folder.module as ui
 
 local view: View = View("Name")
-local b: Button = Button()
+local s: ui.Switch = ui.Switch()
 ```
 
-Named and aliased imports work against a barrel too:
-
-```luau
-import View from some.folder.module
-import View as V, Button from some.folder.module
-```
-
-Re-exporting is **only** done by `init.sau` / `init.saule`. Any other file keeps its imports private — importing a regular file gives you the names it declared with `export`, never the ones it imported. That keeps a file's imports an implementation detail.
+Only what is written with `export from` is passed on. A plain `from … import` keeps its names private to the file, in an `init.sau` too, so a file's imports stay an implementation detail. Any file can re-export, and a re-export of a re-export works. A namespace cannot be re-exported; name what to pass on instead.
 
 ### Exporting
 
@@ -3359,7 +3364,7 @@ end
 ```
 
 ```luau
-import clamp, lerp from "utils/Math"
+from "utils/Math" import clamp, lerp
 
 local clamped: integer = clamp(150, 0, 100)     -- 100
 local smooth: float = lerp(0.0, 1.0, 0.5)       -- 0.5
@@ -3553,8 +3558,8 @@ that cannot be found or parsed.
 A typical project-mode entry file:
 
 ```luau
-import Player from "entities/Player"
-import clamp from "utils/Math"
+from "entities/Player" import Player
+from "utils/Math" import clamp
 
 class Main
     static fn main()

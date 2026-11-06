@@ -242,7 +242,7 @@ fn position(source: &str, needle: &str, nth: usize, offset: usize) -> Value {
     json!({ "line": line, "character": character })
 }
 
-const PROGRAM: &str = "import * from \"fixture\"
+const PROGRAM: &str = "from \"fixture\" import *
 local c: Counter = Counter(1)
 local n: integer = c.bump()
 local r: Rounding = Rounding.Up
@@ -325,7 +325,7 @@ fn a_native_package_is_clean_completes_and_hovers() {
 #[test]
 fn a_misused_native_class_is_flagged_in_the_editor() {
     let home = fixture_home("editor_errors");
-    let source = "import * from \"fixture\"\nlocal c = Counter(1)\nc.bump(\"x\")\n";
+    let source = "from \"fixture\" import *\nlocal c = Counter(1)\nc.bump(\"x\")\n";
     let (_server, _uri, diags) = open(&home, source);
     let messages: Vec<&str> = diags.iter().filter_map(|d| d["message"].as_str()).collect();
     assert!(

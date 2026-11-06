@@ -31,9 +31,11 @@ impl<'a> CollectCx<'a> {
                     }
                 }
                 Symbol::Class(t) | Symbol::Interface(t) | Symbol::Enum(t) | Symbol::Function(t)
-                    if name == t && self.lookup_local(name).is_none() =>
+                    if crate::refs::util::unqualified(name) == t
+                        && self.lookup_local(name).is_none() =>
                 {
-                    self.push(e.span.clone(), false);
+                    // Only the declared name, so a rename leaves `kit.` alone.
+                    self.push(e.span.end - t.len()..e.span.end, false);
                 }
                 // Bare reference to an enclosing class's static method —
                 // mirrors what the cursor resolver records for `help()`

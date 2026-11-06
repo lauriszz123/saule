@@ -10,7 +10,7 @@
 //!
 //! Variables imported from other modules land here too, seeded by the
 //! embedder through `saule_semantic`'s variable registry, so
-//! `import * from "config"` gives `appName` a type at the use site.
+//! `from "config" import *` gives `appName` a type at the use site.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

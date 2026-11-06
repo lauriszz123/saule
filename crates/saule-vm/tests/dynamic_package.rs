@@ -87,14 +87,14 @@ fn two_module_program(name: &str) -> PathBuf {
         &[
             (
                 "lib.sau",
-                "import * from fixture\n\
+                "from fixture import *\n\
                  export fn total() -> integer\n\
                  \x20 local c = Counter(40)\n\
                  \x20 c.bump()\n\
                  \x20 return c.value + Util.sum({1})\n\
                  end\n",
             ),
-            ("main.sau", "import total from lib\nprintln(total())\n"),
+            ("main.sau", "from lib import total\nprintln(total())\n"),
         ],
     )
 }

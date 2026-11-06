@@ -36,7 +36,7 @@ end
 
 ```saule
 -- main.sau
-import appName, showHeader from "config"
+from "config" import appName, showHeader
 
 class Main
     static fn main()

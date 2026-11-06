@@ -301,6 +301,9 @@ pub struct Parser {
     no_trailing_block: bool,
     /// See [`parse_keeping_array_suffixes`].
     keep_array_suffixes: bool,
+    /// Names bound by `import path` so far. `name.Export` after one of them
+    /// is read as the single identifier the import bound.
+    pub(crate) namespaces: std::collections::HashSet<String>,
     /// Current grammatical nesting depth — see [`MAX_NESTING_DEPTH`] and
     /// [`Parser::nested`]. Parser state rather than a thread-local because
     /// there is already a `&mut self` threaded through every rule.
@@ -339,6 +342,7 @@ impl Parser {
             pos: 0,
             no_trailing_block: false,
             keep_array_suffixes: false,
+            namespaces: Default::default(),
             depth: 0,
             errors: Vec::new(),
             last_error_pos: None,

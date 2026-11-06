@@ -318,7 +318,11 @@ pub fn seed_classes(
     manifest
         .exports
         .iter()
-        .filter_map(|class| Some((local_name(&class.name, names)?, class_info(class))))
+        .flat_map(|class| {
+            local_names(&class.name, names)
+                .into_iter()
+                .map(|local| (local, class_info(class)))
+        })
         .collect()
 }
 
@@ -335,25 +339,31 @@ pub fn seed_enums(
     manifest
         .enums
         .iter()
-        .filter_map(|e| {
+        .flat_map(|e| {
             let mut info = saule_semantic::EnumInfo::default();
             for v in &e.variants {
                 info.add_variant(v.clone(), saule_semantic::VariantInfo::default());
             }
-            Some((local_name(&e.name, names)?, info))
+            local_names(&e.name, names)
+                .into_iter()
+                .map(move |local| (local, info.clone()))
         })
         .collect()
 }
 
-/// The name an export is bound to by an import: itself for `import *`, its
-/// alias (or itself) when listed, `None` when not imported.
-fn local_name(export: &str, names: &saule_ast::ImportNames) -> Option<String> {
+/// The names an export is bound to by an import: itself for a wildcard, its
+/// alias (or itself) when listed, none when not imported. A namespace binds
+/// `ns.Export`, and the bare name for type metadata only, as
+/// `module::seed` explains.
+fn local_names(export: &str, names: &saule_ast::ImportNames) -> Vec<String> {
     match names {
-        saule_ast::ImportNames::All => Some(export.to_string()),
+        saule_ast::ImportNames::All => vec![export.to_string()],
+        saule_ast::ImportNames::Namespace(ns) => vec![format!("{ns}.{export}"), export.to_string()],
         saule_ast::ImportNames::List(items) => items
             .iter()
-            .find(|(orig, _)| orig == export)
-            .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone())),
+            .filter(|(orig, _)| orig == export)
+            .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone()))
+            .collect(),
     }
 }
 

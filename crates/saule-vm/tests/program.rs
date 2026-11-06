@@ -56,7 +56,7 @@ fn a_subclass_extends_a_parent_from_another_module() {
             ),
             (
                 "main.sau",
-                "import Base from shapes\n\
+                "from shapes import Base\n\
                  class Derived extends Base\n\
                  \x20 fn init()\n\
                  \x20   self.super()\n\
@@ -130,8 +130,8 @@ fn an_import_cycle_is_refused_rather_than_looping() {
     let dir = project(
         "cyclic_modules",
         &[
-            ("a.sau", "import B from b\nexport class A\nend\n"),
-            ("b.sau", "import A from a\nexport class B\nend\n"),
+            ("a.sau", "from b import B\nexport class A\nend\n"),
+            ("b.sau", "from a import A\nexport class B\nend\n"),
         ],
     );
     saule_runtime::init();
@@ -167,7 +167,7 @@ fn an_imported_function_is_copied_into_the_importing_module_slot() {
             ),
             (
                 "main.sau",
-                "import double from lib\n\
+                "from lib import double\n\
                  class Main\n\
                  \x20 static fn main()\n\
                  \x20   println(double(21))\n\
@@ -215,7 +215,7 @@ fn a_module_top_level_runs_before_the_module_that_imports_it() {
             ),
             (
                 "main.sau",
-                "import Marker from first\n\
+                "from first import Marker\n\
                  println(\"second\")\n\
                  class Main\n\
                  \x20 static fn main()\n\
@@ -264,7 +264,7 @@ fn a_named_argument_binds_to_an_imported_classs_constructor() {
             ),
             (
                 "main.sau",
-                "import Box from boxes\n\
+                "from boxes import Box\n\
                  class Main\n\
                  \x20 static fn main()\n\
                  \x20   println(Box(label: \"a\").show())\n\
@@ -308,7 +308,7 @@ fn a_top_level_fns_parameters_do_not_leak_across_modules() {
             ),
             (
                 "main.sau",
-                "import seed from lib\n\
+                "from lib import seed\n\
                  fn tag(tail: string, head: string) -> string\n\
                  \x20 return head .. \"/\" .. tail\n\
                  end\n\
@@ -348,8 +348,8 @@ fn a_named_argument_binds_to_an_imported_fn() {
             ),
             (
                 "main.sau",
-                "import tag from lib\n\
-                 import tag as mark from lib\n\
+                "from lib import tag\n\
+                 from lib import tag as mark\n\
                  class Main\n\
                  \x20 static fn main()\n\
                  \x20   println(tag(tail: \"t\", head: \"h\"))\n\
@@ -399,7 +399,7 @@ fn an_override_of_an_imported_method_is_inherited_by_its_own_subclass() {
             ),
             (
                 "mid.sau",
-                "import * from base\n\
+                "from base import *\n\
                  export class B extends A\n\
                  \x20 fn who() -> string\n    return \"B\"\n  end\n\
                  end\n\
@@ -408,8 +408,8 @@ fn an_override_of_an_imported_method_is_inherited_by_its_own_subclass() {
             ),
             (
                 "main.sau",
-                "import * from mid\n\
-                 import * from base\n\
+                "from mid import *\n\
+                 from base import *\n\
                  class Main\n\
                  \x20 static fn main()\n\
                  \x20   local c: A = C()\n\
@@ -455,7 +455,7 @@ fn constructing_an_imported_class_calls_its_own_field_initializer() {
             ),
             (
                 "shapes.sau",
-                "import * from vals\n\
+                "from vals import *\n\
                  export class Boxed\n\
                  \x20 -- Not a constant, so this needs a `field_init` proto.\n\
                  \x20 n: integer = seed() + 1\n\
@@ -464,7 +464,7 @@ fn constructing_an_imported_class_calls_its_own_field_initializer() {
             ),
             (
                 "main.sau",
-                "import * from shapes\n\
+                "from shapes import *\n\
                  fn pad1() -> integer\n  return 1\nend\n\
                  fn pad2() -> integer\n  return 2\nend\n\
                  fn pad3() -> integer\n  return 3\nend\n\
@@ -488,7 +488,7 @@ fn constructing_an_imported_class_calls_its_own_field_initializer() {
 // `a class extending one the compiler cannot see`.
 
 #[test]
-fn a_barrel_module_re_exports_a_type_and_a_value() {
+fn a_folder_module_re_exports_a_type_and_a_value() {
     let dir = project(
         "barrel_reexport",
         &[
@@ -507,11 +507,14 @@ fn a_barrel_module_re_exports_a_type_and_a_value() {
                  end\n",
             ),
             // Declares nothing of its own — every name it publishes is one
-            // it imported.
-            ("kit/init.sau", "import * from shapes\nimport * from util\n"),
+            // it re-exports.
+            (
+                "kit/init.sau",
+                "export from shapes import *\nexport from util import *\n",
+            ),
             (
                 "main.sau",
-                "import * from kit\n\
+                "from kit import *\n\
                  class Derived extends Base\n\
                  \x20 fn init()\n    self.super()\n    self.b = 2\n  end\n\
                  \x20 b: integer\n\
@@ -553,9 +556,9 @@ fn a_barrel_module_re_exports_a_type_and_a_value() {
 }
 
 #[test]
-fn a_barrel_re_exports_through_another_barrel() {
-    // Barrels nest: `outer` publishes what `inner` published, which is what
-    // `inner` imported. Post-order makes this fall out — every barrel's
+fn a_re_export_passes_on_another_re_export() {
+    // Re-exports nest: `outer` publishes what `inner` published, which is
+    // what `inner` imported. Post-order makes this fall out — every module's
     // export map is complete before its importer is compiled — but only if
     // the re-export reads the *target's* map rather than its declarations.
     let dir = project(
@@ -565,11 +568,11 @@ fn a_barrel_re_exports_through_another_barrel() {
                 "outer/inner/leaf.sau",
                 "export fn leaf() -> string\n  return \"leaf\"\nend\n",
             ),
-            ("outer/inner/init.sau", "import * from leaf\n"),
-            ("outer/init.sau", "import * from inner\n"),
+            ("outer/inner/init.sau", "export from leaf import *\n"),
+            ("outer/init.sau", "export from inner import *\n"),
             (
                 "main.sau",
-                "import * from outer\n\
+                "from outer import *\n\
                  class Main\n\
                  \x20 static fn main()\n    println(leaf())\n  end\n\
                  end\n",
@@ -581,8 +584,8 @@ fn a_barrel_re_exports_through_another_barrel() {
 
 #[test]
 fn a_named_re_export_publishes_the_alias() {
-    // `import X as Y` inside a barrel publishes `Y`, because that is the
-    // name the barrel bound — and `X` is then *not* visible through it.
+    // `export from m import X as Y` publishes `Y`, because that is the name
+    // it bound — and `X` is then *not* visible through it.
     let dir = project(
         "barrel_alias",
         &[
@@ -590,10 +593,10 @@ fn a_named_re_export_publishes_the_alias() {
                 "kit/thing.sau",
                 "export fn ping() -> string\n  return \"pong\"\nend\n",
             ),
-            ("kit/init.sau", "import ping as knock from thing\n"),
+            ("kit/init.sau", "export from thing import ping as knock\n"),
             (
                 "main.sau",
-                "import knock from kit\n\
+                "from kit import knock\n\
                  class Main\n\
                  \x20 static fn main()\n    println(knock())\n  end\n\
                  end\n",
@@ -604,23 +607,21 @@ fn a_named_re_export_publishes_the_alias() {
 }
 
 #[test]
-fn a_plain_module_does_not_re_export_what_it_imported() {
-    // Re-export is `init.sau`'s alone — `module::is_init_module`, called
-    // rather than restated. A plain module that imports `Base` does not
-    // republish it, so `Base` is not in scope in `main.sau`: an error, and
-    // never an invented layout.
+fn an_import_without_export_is_not_passed_on() {
+    // Only `export from` re-exports, in an `init.sau` too. `middle` imports
+    // `Base` for itself, so `Base` is not in scope in `main.sau`: an error,
+    // and never an invented layout.
     let dir = project(
         "barrel_only_init",
         &[
             (
-                "shapes.sau",
+                "middle/shapes.sau",
                 "export class Base\n  fn init()\n    self.a = 1\n  end\n  a: integer\nend\n",
             ),
-            // Not an `init.sau`: imports `Base`, publishes nothing.
-            ("middle.sau", "import * from shapes\n"),
+            ("middle/init.sau", "from shapes import *\n"),
             (
                 "main.sau",
-                "import * from middle\n\
+                "from middle import *\n\
                  class Derived extends Base\n\
                  \x20 fn init()\n    self.super()\n  end\n\
                  end\n",
@@ -629,6 +630,84 @@ fn a_plain_module_does_not_re_export_what_it_imported() {
     );
     match saule_vm::program::compile(&dir.join("main.sau")) {
         Err(e) => assert!(e.to_string().contains("Base"), "{e}"),
-        Ok(_) => panic!("only an `init.sau` re-exports; a plain module must not"),
+        Ok(_) => panic!("an import without `export` must not be passed on"),
     }
+}
+
+#[test]
+fn an_imported_function_can_be_called_from_the_top_level() {
+    // Its declaration is in another file, which has already run. Calls in
+    // the module body used to be refused as reaching a later declaration.
+    let dir = project(
+        "top_level_imported_call",
+        &[
+            (
+                "lib.sau",
+                "export fn twice(n: integer) -> integer\n  return n * 2\nend\n",
+            ),
+            (
+                "main.sau",
+                "from lib import *\nimport lib as l\nprintln(twice(1))\nprintln(l.twice(2))\n",
+            ),
+        ],
+    );
+    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "2\n4");
+}
+
+#[test]
+fn any_module_can_re_export() {
+    // Not only a folder's `init.sau`: a plain file passes on what it names.
+    let dir = project(
+        "reexport_plain",
+        &[
+            (
+                "shapes.sau",
+                "export class Base\n  fn init()\n    self.a = 1\n  end\n  a: integer\nend\n",
+            ),
+            ("middle.sau", "export from shapes import Base\n"),
+            (
+                "main.sau",
+                "from middle import Base\n\
+                 class Main\n\
+                 \x20 static fn main()\n    println(Base().a)\n  end\n\
+                 end\n",
+            ),
+        ],
+    );
+    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "1");
+}
+
+#[test]
+fn a_namespace_import_reaches_classes_functions_and_types() {
+    let dir = project(
+        "namespace_import",
+        &[
+            (
+                "kit/shapes.sau",
+                "export class Box\n\
+                 \x20 size: integer\n\
+                 \x20 fn init(size: integer)\n    self.size = size\n  end\n\
+                 \x20 fn grown() -> Box\n    return Box(self.size + 1)\n  end\n\
+                 end\n\
+                 export fn twice(n: integer) -> integer\n  return n * 2\nend\n\
+                 export enum Tone\n  Warm\n  Cold\nend\n",
+            ),
+            ("kit/init.sau", "export from shapes import *\n"),
+            (
+                "main.sau",
+                "import kit\n\
+                 import \"kit/shapes\" as raw\n\
+                 local b: kit.Box = kit.Box(2)\n\
+                 local g = b.grown()\n\
+                 local t: kit.Tone = kit.Tone.Cold\n\
+                 println(g.size)\n\
+                 println(kit.twice(raw.twice(1)))\n\
+                 println(t == kit.Tone.Cold)\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        run_capturing(compile(&dir.join("main.sau"))).trim(),
+        "3\n4\ntrue"
+    );
 }

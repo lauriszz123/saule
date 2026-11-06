@@ -1,4 +1,4 @@
-import Entry from storage
+from storage import Entry
 
 export class Renderer
 	static fn print(tasks: table<Entry>)

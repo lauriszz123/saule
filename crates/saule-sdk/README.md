@@ -51,7 +51,7 @@ fn load(path: &str) -> Result<Image, String> { /* … */ }
 What a Saule program sees:
 
 ```luau
-import * from "gfx"
+from "gfx" import *
 
 local img: Image = Gfx.load("a.png")   -- a real class, not an integer handle
 local copy = Image(img.width, 64)       -- constructor

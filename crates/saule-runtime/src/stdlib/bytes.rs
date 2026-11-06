@@ -20,7 +20,7 @@ use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::{ClassObject, SauleBytes, SauleStr, TableObject};
 use crate::value::{NativeFn, Value};
 
-/// `import Bytes from "bytes"`. Auto-prelude'd, like `String`, so a bare
+/// `from "bytes" import Bytes`. Auto-prelude'd, like `String`, so a bare
 /// `Bytes.fromString(…)` works without an import.
 pub static BYTES_PACKAGE: NativePackage = NativePackage {
     name: "bytes",

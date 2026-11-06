@@ -109,7 +109,7 @@ end
 -- difference between `OpConcat` and `OpToString`: the first decides what
 -- `..` *builds*, the second only decides how a value renders.
 
-import Vec2 from "vec2"
+from "vec2" import Vec2
 
 export class Path implements OpLen, OpConcat<Path, Path>, OpToString
 	local points: table<Vec2>
@@ -177,8 +177,8 @@ end
 ## `src/main.sau`
 
 ```saule title="src/main.sau"
-import Vec2 from "vec2"
-import Path from "path"
+from "vec2" import Vec2
+from "path" import Path
 
 class Main
 	static fn main()

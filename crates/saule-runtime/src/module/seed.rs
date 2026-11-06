@@ -70,7 +70,7 @@ impl<'a> SeedIo<'a> {
 }
 
 /// [`collect_import_seed`], but consulting `overlay` before the filesystem for
-/// every module it reads — transitively, including through barrel modules.
+/// every module it reads — transitively, including through re-exports.
 pub fn collect_import_seed_with(
     module: &Module,
     dir: &Path,
@@ -108,7 +108,7 @@ fn parsed_module(abs: &Path, io: SeedIo<'_>) -> Option<std::sync::Arc<Module>> {
     saule_parser::parse(tokens).ok().map(std::sync::Arc::new)
 }
 
-/// Union of the local names every `import * from "..."` in `module` binds.
+/// Union of the local names every `from "..." import *` in `module` binds.
 ///
 /// `None` when at least one wildcard target couldn't be enumerated — the
 /// name resolver reads that as "unknown names may be in scope here" and
@@ -123,7 +123,7 @@ pub(crate) fn collect_wildcard_names(
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
         let Decl::Import {
-            names: names @ ImportNames::All,
+            names: names @ (ImportNames::All | ImportNames::Namespace(_)),
             path,
             ..
         } = &d.value
@@ -140,8 +140,8 @@ pub(crate) fn collect_wildcard_names(
 /// executing anything.
 ///
 /// `None` means the target couldn't be enumerated: an unresolvable path,
-/// an unreadable or unparseable file, or a barrel chain nested deeper
-/// than [`MAX_BARREL_DEPTH`].
+/// an unreadable or unparseable file, or a chain of re-exports nested deeper
+/// than [`MAX_REEXPORT_DEPTH`].
 pub(crate) fn static_import_names(
     dir: &Path,
     path: &str,
@@ -150,28 +150,35 @@ pub(crate) fn static_import_names(
     io: SeedIo<'_>,
 ) -> Option<Vec<String>> {
     // A name list is its own answer — no need to look at the target.
-    if let ImportNames::List(items) = names {
-        return Some(
-            items
-                .iter()
-                .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone()))
-                .collect(),
-        );
+    if let ImportNames::List(_) = names {
+        return Some(names.bind([]).into_iter().map(|(_, local)| local).collect());
     }
+    let exports = static_export_names(dir, path, depth, io)?;
+    Some(
+        names
+            .bind(exports.iter().map(String::as_str))
+            .into_iter()
+            .map(|(_, local)| local)
+            .collect(),
+    )
+}
 
-    // Glob over a native package: the descriptor / manifest already lists
-    // exactly what the import binds.
+/// Every name the module at `path` exports: its own `export`ed declarations
+/// and whatever its `export from … import …` statements pass on.
+pub(crate) fn static_export_names(
+    dir: &Path,
+    path: &str,
+    depth: usize,
+    io: SeedIo<'_>,
+) -> Option<Vec<String>> {
     if let Some(pkg) = crate::native_packages::lookup(path) {
         return Some(pkg.exports.iter().map(|n| (*n).to_string()).collect());
     }
     if crate::dynamic_packages::is_dynamic_package(path) {
         return Some(crate::dynamic_packages::export_names(path));
     }
-
-    // Glob over a file module: its `export`ed top-level declarations.
     let abs = resolve_import_path(dir, path)?;
     let imported = parsed_module(&abs, io)?;
-
     let mut out: Vec<String> = imported
         .stmts
         .iter()
@@ -180,35 +187,36 @@ pub(crate) fn static_import_names(
             _ => None,
         })
         .collect();
-
-    // A barrel re-exports whatever *it* imports, so its surface is wider
-    // than its own declarations. The depth bound doubles as the cycle
-    // guard: a barrel that (transitively) globs itself bottoms out here
-    // and reports "can't enumerate" rather than recursing forever.
-    if is_init_module(&abs) {
-        if depth >= MAX_BARREL_DEPTH {
+    // The depth bound doubles as the cycle guard: a module that
+    // (transitively) re-exports itself bottoms out here and reports "can't
+    // enumerate" rather than recursing forever.
+    let sub_dir = abs
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    for stmt in &imported.stmts {
+        let Stmt::Decl(d) = &stmt.value else { continue };
+        let Decl::Import {
+            names,
+            path,
+            exported: true,
+            ..
+        } = &d.value
+        else {
+            continue;
+        };
+        if depth >= MAX_REEXPORT_DEPTH {
             return None;
         }
-        let sub_dir = abs
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        for stmt in &imported.stmts {
-            let Stmt::Decl(d) = &stmt.value else { continue };
-            let Decl::Import { names, path, .. } = &d.value else {
-                continue;
-            };
-            out.extend(static_import_names(&sub_dir, path, names, depth + 1, io)?);
-        }
+        out.extend(static_import_names(&sub_dir, path, names, depth + 1, io)?);
     }
-
     Some(out)
 }
 
-/// How many nested `init.sau` barrels we will follow when gathering type
+/// How many nested re-exports we will follow when gathering type
 /// metadata. Deep enough for any sane module tree, bounded so a pathological
 /// (or cyclic) layout can't hang the typechecker.
-pub(crate) const MAX_BARREL_DEPTH: usize = 8;
+pub(crate) const MAX_REEXPORT_DEPTH: usize = 8;
 
 pub(crate) fn collect_import_seed_inner(
     module: &Module,
@@ -217,13 +225,35 @@ pub(crate) fn collect_import_seed_inner(
     depth: usize,
     io: SeedIo<'_>,
 ) -> saule_semantic::ModuleSeed {
+    collect_seed(module, dir, visited, depth, io, false)
+}
+
+/// What `module`'s imports bring into scope, or with `only_exported` what its
+/// `export from … import …` statements pass on to whoever imports it.
+fn collect_seed(
+    module: &Module,
+    dir: &Path,
+    visited: &mut HashSet<PathBuf>,
+    depth: usize,
+    io: SeedIo<'_>,
+    only_exported: bool,
+) -> saule_semantic::ModuleSeed {
     let mut seed = saule_semantic::ModuleSeed::default();
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
-        let Decl::Import { names, path, .. } = &d.value else {
+        let Decl::Import {
+            names,
+            path,
+            exported,
+            ..
+        } = &d.value
+        else {
             continue;
         };
+        if only_exported && !exported {
+            continue;
+        }
 
         // Native package seed — fold the package's synthetic
         // class/interface/enum metadata directly into the seed; no need
@@ -308,81 +338,70 @@ pub(crate) fn collect_import_seed_inner(
             }
         }
 
-        // Barrel module: an `init.sau` re-exports what *it* imports, so the
-        // metadata for the names we just pulled in lives one level deeper.
-        // Recurse into its own imports (relative to the barrel's folder) and
-        // fold the result in.
-        if is_init_module(&abs) && depth < MAX_BARREL_DEPTH && visited.insert(abs.clone()) {
+        // What the imported module passes on from its own imports lives one
+        // level deeper. `visited` holds the modules on the current path, so a
+        // cycle of re-exports stops instead of recursing.
+        if depth < MAX_REEXPORT_DEPTH && visited.insert(abs.clone()) {
             let sub_dir = abs
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let sub = collect_import_seed_inner(&imported, &sub_dir, visited, depth + 1, io);
-            merge_barrel_seed(&mut seed, sub, names);
+            let sub = collect_seed(&imported, &sub_dir, visited, depth + 1, io, true);
+            visited.remove(&abs);
+            merge_reexported_seed(&mut seed, sub, names);
         }
     }
 
     seed
 }
 
-/// Fold a barrel module's seed into `seed`, honouring the importer's name
-/// filter: a glob takes everything, a name list takes only what it asked
-/// for (renamed by any `as` clause).
-pub(crate) fn merge_barrel_seed(
+/// The names `key`, exported by the imported module, is known by here.
+///
+/// A namespace import also keeps the bare name, for type metadata only: the
+/// imported module's own signatures say `Window`, not `shine.Window`, and a
+/// method returning one has to resolve. Name resolution never sees it, so
+/// `Window` alone is still an undefined name in the importing file, and a
+/// local declaration of the same name wins over it.
+fn local_names(names: &ImportNames, key: &str) -> Vec<String> {
+    match names {
+        ImportNames::All => vec![key.to_string()],
+        ImportNames::Namespace(ns) => vec![format!("{ns}.{key}"), key.to_string()],
+        ImportNames::List(items) => items
+            .iter()
+            .filter(|(orig, _)| orig == key)
+            .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone()))
+            .collect(),
+    }
+}
+
+fn merge_into<V: Clone>(
+    to: &mut std::collections::HashMap<String, V>,
+    from: std::collections::HashMap<String, V>,
+    names: &ImportNames,
+) {
+    for (k, v) in from {
+        for local in local_names(names, &k) {
+            to.entry(local).or_insert_with(|| v.clone());
+        }
+    }
+}
+
+/// Fold what an imported module re-exports into `seed`, under the names this
+/// import gives them.
+pub(crate) fn merge_reexported_seed(
     seed: &mut saule_semantic::ModuleSeed,
     sub: saule_semantic::ModuleSeed,
     names: &ImportNames,
 ) {
-    match names {
-        ImportNames::All => {
-            for (k, v) in sub.classes {
-                seed.classes.entry(k).or_insert(v);
-            }
-            for (k, v) in sub.interfaces {
-                seed.interfaces.entry(k).or_insert(v);
-            }
-            // Beside `interfaces` for the same reason the direct-import path
-            // carries them: an interface whose method signatures were dropped
-            // registers as a type, but every call through it resolves to an
-            // unknown return. Packages expose their names through a barrel,
-            // so without this no library can publish a usable interface.
-            for (k, v) in sub.interface_methods {
-                seed.interface_methods.entry(k).or_insert(v);
-            }
-            for (k, v) in sub.enums {
-                seed.enums.entry(k).or_insert(v);
-            }
-            for (k, v) in sub.functions {
-                seed.functions.entry(k).or_insert(v);
-            }
-            for (k, v) in sub.variables {
-                seed.variables.entry(k).or_insert(v);
-            }
-        }
-        ImportNames::List(items) => {
-            for (orig, alias) in items {
-                let local = alias.clone().unwrap_or_else(|| orig.clone());
-                if let Some(v) = sub.classes.get(orig).cloned() {
-                    seed.classes.entry(local.clone()).or_insert(v);
-                }
-                if let Some(v) = sub.interfaces.get(orig).cloned() {
-                    seed.interfaces.entry(local.clone()).or_insert(v);
-                }
-                if let Some(v) = sub.interface_methods.get(orig).cloned() {
-                    seed.interface_methods.entry(local.clone()).or_insert(v);
-                }
-                if let Some(v) = sub.enums.get(orig).cloned() {
-                    seed.enums.entry(local.clone()).or_insert(v);
-                }
-                if let Some(v) = sub.functions.get(orig).cloned() {
-                    seed.functions.entry(local.clone()).or_insert(v);
-                }
-                if let Some(v) = sub.variables.get(orig).cloned() {
-                    seed.variables.entry(local).or_insert(v);
-                }
-            }
-        }
-    }
+    merge_into(&mut seed.classes, sub.classes, names);
+    merge_into(&mut seed.interfaces, sub.interfaces, names);
+    // Beside `interfaces` for the same reason the direct-import path carries
+    // them: an interface whose method signatures were dropped registers as a
+    // type, but every call through it resolves to an unknown return.
+    merge_into(&mut seed.interface_methods, sub.interface_methods, names);
+    merge_into(&mut seed.enums, sub.enums, names);
+    merge_into(&mut seed.functions, sub.functions, names);
+    merge_into(&mut seed.variables, sub.variables, names);
 }
 
 /// Resolve which `(original_name, local_alias)` pairs come into the
@@ -391,19 +410,29 @@ pub(crate) fn collect_import_aliases(
     imported: &Module,
     names: &ImportNames,
 ) -> Vec<(String, String)> {
+    let exports: Vec<&str> = imported
+        .stmts
+        .iter()
+        .filter_map(|s| match &s.value {
+            Stmt::Decl(d) => exported_name(&d.value),
+            _ => None,
+        })
+        .collect();
+    with_bare_names(names, names.bind(exports))
+}
+
+/// [`local_names`] for a whole binding list: a namespace's bare names ride
+/// along for type metadata.
+fn with_bare_names(names: &ImportNames, bound: Vec<(String, String)>) -> Vec<(String, String)> {
     match names {
-        ImportNames::All => imported
-            .stmts
-            .iter()
-            .filter_map(|s| match &s.value {
-                Stmt::Decl(d) => exported_name(&d.value).map(|n| (n.to_string(), n.to_string())),
-                _ => None,
-            })
-            .collect(),
-        ImportNames::List(items) => items
-            .iter()
-            .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
-            .collect(),
+        ImportNames::Namespace(_) => {
+            let bare: Vec<(String, String)> = bound
+                .iter()
+                .map(|(orig, _)| (orig.clone(), orig.clone()))
+                .collect();
+            bound.into_iter().chain(bare).collect()
+        }
+        _ => bound,
     }
 }
 
@@ -414,15 +443,5 @@ pub(crate) fn collect_native_aliases(
     pkg: &crate::native_packages::NativePackage,
     names: &ImportNames,
 ) -> Vec<(String, String)> {
-    match names {
-        ImportNames::All => pkg
-            .exports
-            .iter()
-            .map(|n| ((*n).to_string(), (*n).to_string()))
-            .collect(),
-        ImportNames::List(items) => items
-            .iter()
-            .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
-            .collect(),
-    }
+    with_bare_names(names, names.bind(pkg.exports.iter().copied()))
 }

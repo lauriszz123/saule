@@ -4,6 +4,32 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
+## Next
+
+### Changed
+
+- **Imports name the module first.** `from shine import Window, Button as Btn`
+  and `from "uikit" import *` replace `import Window from shine` and
+  `import * from "uikit"`, so the editor knows what it can offer before you type
+  a name. The old form is now a syntax error that says what to write instead.
+- **Re-exports are written out.** `export from shapes import *` passes names on,
+  from any file. An `init.sau` no longer re-exports whatever it imports: a plain
+  `from … import` keeps its names private there too. Turn each import in a
+  folder's `init.sau` into `export from` to keep its surface as it was.
+
+### Added
+
+- **Namespace imports.** `import shine`, `import "ui/widgets"` or
+  `import shine as sh` bring in a module as a whole; `shine.Window` then works as
+  a name and as a type, with completion after `shine.`, hover, go to definition
+  and references. A name the module does not export reads as
+  `` `shine` has no export named `Windw` ``.
+
+### Fixed
+
+- A function brought in by `from x import *` can be called from a file's top
+  level. It was rejected as used before its declaration.
+
 ## 26.22
 
 ### Added

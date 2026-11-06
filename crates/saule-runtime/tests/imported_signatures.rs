@@ -57,7 +57,7 @@ fn an_imported_functions_return_type_is_known() {
 
     let errs = type_errors(
         "\
-import * from \"geometry\"
+from \"geometry\" import *
 
 fn run() -> float
   local widest: float = 0.0
@@ -80,7 +80,7 @@ fn an_imported_functions_return_type_is_enforced() {
     // rather than silently skipped the way an unknown type once was.
     let errs = type_errors(
         "\
-import * from \"geometry\"
+from \"geometry\" import *
 
 fn run() -> string
   local s: string = atLeast(1.0, 3.0)
@@ -102,7 +102,7 @@ fn an_import_alias_carries_the_signature_under_the_local_name() {
 
     let errs = type_errors(
         "\
-import atLeast as floorAt from \"geometry\"
+from \"geometry\" import atLeast as floorAt
 
 fn run() -> string
   local s: string = floorAt(1.0, 3.0)
@@ -126,7 +126,7 @@ fn a_local_declaration_wins_over_an_imported_one_of_the_same_name() {
     // fine — the imported `float` version must not shadow it.
     let errs = type_errors(
         "\
-import * from \"geometry\"
+from \"geometry\" import *
 
 fn atLeast(a: float, b: float) -> string
   return \"x\"

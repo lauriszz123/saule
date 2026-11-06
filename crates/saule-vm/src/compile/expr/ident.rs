@@ -58,7 +58,7 @@ impl Compiler<'_> {
                         // tree-walker finds the name undefined and errors.
                         // Exact, not conservative: the declaration either
                         // has been passed or it has not.
-                        if self.enclosing.is_empty() && !self.module_decls_seen.contains(name) {
+                        if self.enclosing.is_empty() && !self.declared_above(name) {
                             return Err(crate::compile::declared_later(name, false, span.clone()));
                         }
                         let g = self.mod_slot(slot, span)?;

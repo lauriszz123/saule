@@ -23,7 +23,10 @@ impl<'a> ResolveCx<'a> {
                 return;
             }
         }
-        self.best = Some(Resolved { symbol, span });
+        self.best = Some(Resolved {
+            symbol: crate::refs::util::unqualified_symbol(symbol),
+            span,
+        });
     }
 
     pub(crate) fn lookup_local(&self, name: &str) -> Option<&LocalBind> {

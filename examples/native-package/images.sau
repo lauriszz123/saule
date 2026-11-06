@@ -7,7 +7,7 @@
 --
 -- Build & install the package first (see README.md), then:
 --   saule run examples/native-package/images.sau path/to/sheet.png
-import * from shine
+from shine import *
 
 -- `Util` is the table-helper class the package exports; it has no numeric
 -- helpers, so the zoom clamp is spelled out here.

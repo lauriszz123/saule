@@ -34,7 +34,7 @@ fn an_import_without_a_program_driver_still_refuses() {
     // somewhere. It took over from `t[idx()] += 1`, the last refusal a
     // valid program could reach, once compound assignment learned to pin
     // its target's sub-expressions in registers.
-    let src = "import Json from \"json\"\n1";
+    let src = "from \"json\" import Json\n1";
     let module = front_end(src);
     match saule_vm::compile(&module, "x.sau", src) {
         Err(saule_vm::CompileError::Unsupported { thing, span }) => {

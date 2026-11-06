@@ -125,7 +125,7 @@ end
 ## `src/widgets.sau`
 
 ```saule title="src/widgets.sau"
-import Canvas from "canvas"
+from "canvas" import Canvas
 
 -- The widget set. Every widget is a class, and constructing one draws it.
 --
@@ -225,8 +225,8 @@ end
 ## `src/main.sau`
 
 ```saule title="src/main.sau"
-import Canvas from "canvas"
-import * from "widgets"
+from "canvas" import Canvas
+from "widgets" import *
 
 -- A tiny declarative UI, drawn to the terminal.
 --

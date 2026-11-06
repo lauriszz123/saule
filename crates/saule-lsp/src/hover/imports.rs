@@ -5,36 +5,22 @@
 use saule_ast::{Decl, ImportNames, Module, Stmt};
 
 pub(super) fn aliases_for_file(imported: &Module, names: &ImportNames) -> Vec<(String, String)> {
-    match names {
-        ImportNames::All => imported
-            .stmts
-            .iter()
-            .filter_map(|s| match &s.value {
-                Stmt::Decl(d) => exported_name(&d.value).map(|n| (n.to_string(), n.to_string())),
-                _ => None,
-            })
-            .collect(),
-        ImportNames::List(items) => items
-            .iter()
-            .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
-            .collect(),
-    }
+    let exports: Vec<&str> = imported
+        .stmts
+        .iter()
+        .filter_map(|s| match &s.value {
+            Stmt::Decl(d) => exported_name(&d.value),
+            _ => None,
+        })
+        .collect();
+    names.bind(exports)
 }
 
 pub(super) fn aliases_for_native(
     exports: &[&'static str],
     names: &ImportNames,
 ) -> Vec<(String, String)> {
-    match names {
-        ImportNames::All => exports
-            .iter()
-            .map(|n| ((*n).to_string(), (*n).to_string()))
-            .collect(),
-        ImportNames::List(items) => items
-            .iter()
-            .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
-            .collect(),
-    }
+    names.bind(exports.iter().copied())
 }
 
 /// Like [`aliases_for_native`] but for dynamic (manifest-described)
@@ -44,13 +30,7 @@ pub(super) fn aliases_for_dynamic(
     exports: &[String],
     names: &ImportNames,
 ) -> Vec<(String, String)> {
-    match names {
-        ImportNames::All => exports.iter().map(|n| (n.clone(), n.clone())).collect(),
-        ImportNames::List(items) => items
-            .iter()
-            .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
-            .collect(),
-    }
+    names.bind(exports.iter().map(String::as_str))
 }
 
 /// The name a declaration contributes to `import *`, or `None` when it

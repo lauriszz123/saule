@@ -98,7 +98,14 @@ impl Compiler<'_> {
     /// Returning `false` makes the call site report it: the program is one
     /// the language rejects, and the front end does not catch it yet.
     pub fn callk_resolvable(&self, name: &str) -> bool {
-        !self.enclosing.is_empty() || self.module_decls_seen.contains(name)
+        !self.enclosing.is_empty() || self.declared_above(name)
+    }
+
+    /// Whether the module body has passed `name`'s declaration. A name a
+    /// wildcard or namespace import binds has none in this file: the import
+    /// ran before this module's body did.
+    pub fn declared_above(&self, name: &str) -> bool {
+        !self.module_decls.contains(name) || self.module_decls_seen.contains(name)
     }
 
     /// Whether calling `name` from the **module body** could reach a

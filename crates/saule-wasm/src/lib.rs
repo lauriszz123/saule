@@ -495,7 +495,7 @@ println(1 / zero)
     #[test]
     fn import_fails_with_a_diagnostic_rather_than_crashing() {
         // No filesystem in the sandbox. This must be an ordinary error.
-        let v = json(r#"import Foo from "bar""#);
+        let v = json(r#"from "bar" import Foo"#);
         assert_eq!(v["ok"], false);
         assert!(!v["diagnostics"].as_array().unwrap().is_empty());
     }

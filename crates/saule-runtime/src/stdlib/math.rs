@@ -12,7 +12,7 @@ use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::SauleStr;
 use crate::value::{ClassObject, Value};
 
-/// `import Math from "math"`. Auto-prelude'd so bare `Math.sqrt(…)`
+/// `from "math" import Math`. Auto-prelude'd so bare `Math.sqrt(…)`
 /// also works.
 pub static MATH_PACKAGE: NativePackage = NativePackage {
     name: "math",

@@ -1,5 +1,5 @@
-import * from uikit
-import * from Screen
+from uikit import *
+from Screen import *
 
 class MainApp extends App
     fn body() -> Scene

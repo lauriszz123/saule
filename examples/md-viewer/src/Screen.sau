@@ -1,4 +1,4 @@
-import * from uikit
+from uikit import *
 
 local fn markdownFiles(dir: string) -> table<string>
     local out: table<string> = {}

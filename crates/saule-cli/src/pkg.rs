@@ -199,7 +199,7 @@ fn install_path(dir: &Path) {
         );
     }
 
-    println!("\n    import * from \"{name}\"");
+    println!("\n    from \"{name}\" import *");
     println!(
         "\nUsed where it lies, so your edits to it take effect immediately — \
          nothing was copied."
@@ -514,7 +514,7 @@ fn is_present(spec: &PackageSpec, receipt: &Receipt) -> bool {
 /// an install finishes.
 fn usage_hint(installed: &Installed) -> String {
     match &installed.receipt.name {
-        Some(name) => format!("    import * from \"{name}\""),
+        Some(name) => format!("    from \"{name}\" import *"),
         None => format!(
             "Installed. See `{}`'s documentation for what it exports.",
             installed.spec.slug()
@@ -830,7 +830,7 @@ pub(crate) fn cmd_remove(target: &str, purge: bool) {
 
     // What the user types is whatever they know the package by, and after an
     // install the thing they know is the import name — `saule install` ends
-    // by telling them to write `import * from "shine"`. So `shine` has to
+    // by telling them to write `from "shine" import *`. So `shine` has to
     // work here, even though nothing in `dependencies:` spells it.
     let found = root.as_ref().and_then(|r| find_package(r, target));
     let needle = found

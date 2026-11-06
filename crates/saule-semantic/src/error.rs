@@ -45,6 +45,15 @@ pub enum SemanticError {
         span: miette::SourceSpan,
     },
 
+    #[error("`{namespace}` has no export named `{name}`")]
+    #[diagnostic(help("check the spelling, or that the module declares it with `export`"))]
+    NotExported {
+        namespace: String,
+        name: String,
+        #[label("not exported")]
+        span: miette::SourceSpan,
+    },
+
     #[error("cannot assign to undeclared variable `{name}`")]
     #[diagnostic(help("use `local {name} = ...` to declare it first"))]
     AssignToUndeclared {

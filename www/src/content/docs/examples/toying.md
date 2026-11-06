@@ -37,7 +37,7 @@ min_saule_version: "26.1"
 ## `src/main.sau`
 
 ```saule title="src/main.sau"
-import * from "shine"
+from "shine" import *
 
 class Main
 	static fn main()

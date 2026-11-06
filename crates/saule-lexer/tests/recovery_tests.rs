@@ -98,7 +98,7 @@ fn an_escaped_quote_does_not_close_the_literal() {
 #[test]
 fn an_unterminated_string_at_end_of_file_keeps_what_was_typed() {
     // What completion inside an import path sees mid-keystroke.
-    let (tokens, errors) = recover("import Json from \"vend");
+    let (tokens, errors) = recover("from \"vend");
     assert!(matches!(
         errors.as_slice(),
         [LexerError::UnterminatedString(_)]
