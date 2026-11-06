@@ -91,6 +91,11 @@ fn complete_ranked(marked: &str) -> Vec<String> {
         Ctx::VariantName { enum_name } => enum_variants(enum_name),
         _ => return Vec::new(),
     };
+    let items = if found.expected.is_none() {
+        case_first(items, &prefix)
+    } else {
+        items
+    };
     let mut items = filter(items, &prefix);
     items.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
     items.into_iter().map(|i| i.label).collect()
@@ -961,12 +966,13 @@ fn parameter_names_outrank_values_at_a_positional_argument() {
     );
 }
 
-/// Outside any argument there is no slot, so the order is untouched: a local
-/// still beats a class, whatever the types are.
+/// Outside any argument there is no slot, so types do not reorder anything: a
+/// local still beats a class, whatever the types are. (The case typed does, which
+/// `a_lowercase_start_ranks_keywords_and_locals_before_classes` covers.)
 #[test]
 fn no_slot_leaves_the_order_alone() {
     let got = complete_ranked(&format!(
-        "{SLOTS}fn go()\n    local align: Align = Align()\n    local x = Al@\nend\n"
+        "{SLOTS}fn go()\n    local align: Align = Align()\n    local x = al@\nend\n"
     ));
     assert_eq!(got.first().map(String::as_str), Some("align"), "{got:?}");
 }
@@ -1760,4 +1766,79 @@ fn the_countable_signal_does_not_leak() {
     let pos = |name: &str| got.iter().position(|i| i == name);
     // Back in ordinary territory, declaration order decides, not countability.
     assert!(pos("limit").is_some() && pos("lines").is_some(), "{got:?}");
+}
+
+// ── import lines and ranking ─────────────────────────────────────────────────
+
+#[test]
+fn after_a_from_module_only_import_is_offered() {
+    assert_eq!(complete("from uikit @"), ["import"]);
+    assert_eq!(complete("from uikit i@"), ["import"]);
+    assert_eq!(complete("from \"ui/kit\" i@"), ["import"]);
+    assert_eq!(complete("export from shapes @"), ["import"]);
+}
+
+#[test]
+fn after_an_imported_module_or_name_as_is_offered() {
+    assert_eq!(complete("import uikit @"), ["as"]);
+    assert_eq!(complete("from uikit import Window @"), ["as"]);
+    assert_eq!(complete("from uikit import Window, Button a@"), ["as"]);
+}
+
+#[test]
+fn a_statement_can_begin_with_from() {
+    assert!(complete("fr@").contains(&"from".to_string()));
+}
+
+#[test]
+fn a_lowercase_start_ranks_keywords_and_locals_before_classes() {
+    let src = "class Frame\nend\nlocal flag = true\nf@";
+    let ranked = complete_ranked(src);
+    let class_at = ranked.iter().position(|l| l == "Frame").unwrap();
+    for word in ["flag", "fn", "for", "from"] {
+        let at = ranked.iter().position(|l| l == word).unwrap_or(usize::MAX);
+        assert!(at < class_at, "{word} after Frame: {ranked:?}");
+    }
+    let ranked = complete_ranked("class Frame\nend\nlocal flag = true\nF@");
+    assert_eq!(
+        ranked.first().map(String::as_str),
+        Some("Frame"),
+        "{ranked:?}"
+    );
+}
+
+#[test]
+fn an_unannotated_local_ranks_by_the_type_it_was_given() {
+    let src = "fn take(label: string) -> nil\nend\n\
+               local count = 3\nlocal name = \"x\"\nlocal joined = name .. \"y\"\n\
+               take(@)";
+    let ranked = complete_ranked(src);
+    let after_params: Vec<&String> = ranked.iter().filter(|l| !l.ends_with(':')).collect();
+    assert_eq!(after_params[..2], ["joined", "name"], "{ranked:?}");
+}
+
+#[test]
+fn a_condition_ranks_booleans_first() {
+    let src = "local data = 3\nlocal done = 1 < 2\nif d@";
+    assert_eq!(
+        complete_ranked(src).first().map(String::as_str),
+        Some("done")
+    );
+    let src = "local data = 3\nlocal done = not true\nwhile d@";
+    assert_eq!(
+        complete_ranked(src).first().map(String::as_str),
+        Some("done")
+    );
+}
+
+#[test]
+fn a_stdlib_argument_ranks_by_type_but_offers_no_parameter_names() {
+    let src = "local count = 3\nlocal name = \"x\"\nprintln(String.len(@))";
+    let ranked = complete_ranked(src);
+    assert_eq!(
+        ranked.first().map(String::as_str),
+        Some("name"),
+        "{ranked:?}"
+    );
+    assert!(!ranked.iter().any(|l| l.ends_with(':')), "{ranked:?}");
 }

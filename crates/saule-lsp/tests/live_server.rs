@@ -873,6 +873,7 @@ fn namespace_and_from_imports_check_clean_and_report_a_missing_export() {
     let main = project.path("main.sau");
     let mut server = Server::start(Some(&project.0));
     assert_eq!(server.errors_on_opening(&main), Vec::<String>::new());
+    server.open(&main);
     server.change(&main, &format!("{USES_KIT}println(kit.Nope)\n"));
     assert_eq!(server.errors(&main), ["`kit` has no export named `Nope`"]);
 }
@@ -990,4 +991,20 @@ fn hover_definition_and_hints_see_through_a_namespace() {
         help["signatures"][0]["label"], "kit.twice(n: integer) -> integer",
         "{help}"
     );
+}
+
+#[test]
+fn a_namespace_import_brings_bare_names_into_the_editor_too() {
+    let source = "import kit\n\nlocal b: Box = Box(2)\nlocal n = twice(b.size)\nlocal c: kit.Box = kit.Box(n)\n";
+    let project = kit_project(source);
+    let main = project.path("main.sau");
+    let mut server = Server::start(Some(&project.0));
+    assert_eq!(server.errors_on_opening(&main), Vec::<String>::new());
+    server.open(&main);
+    assert!(server.hover(&main, 2, 16).contains("class Box"));
+
+    server.change(&main, "import kit\nlocal b = B");
+    assert!(complete(&mut server, &main, 1, 11).contains(&"Box".to_string()));
+    server.change(&main, "from kit i");
+    assert_eq!(complete(&mut server, &main, 0, 10), ["import"]);
 }

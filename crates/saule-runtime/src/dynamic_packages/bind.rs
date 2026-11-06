@@ -352,9 +352,8 @@ pub fn seed_enums(
 }
 
 /// The names an export is bound to by an import: itself for a wildcard, its
-/// alias (or itself) when listed, none when not imported. A namespace binds
-/// `ns.Export`, and the bare name for type metadata only, as
-/// `module::seed` explains.
+/// alias (or itself) when listed, none when not imported, and both itself and
+/// `ns.Export` for a namespace.
 fn local_names(export: &str, names: &saule_ast::ImportNames) -> Vec<String> {
     match names {
         saule_ast::ImportNames::All => vec![export.to_string()],

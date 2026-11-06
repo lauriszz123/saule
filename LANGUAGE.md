@@ -3231,17 +3231,21 @@ from "data/PlayerRepository" import PlayerRepository as PlayerRepo
 from "entities/Player" import *
 ```
 
-Or import the module as a whole and reach into it by name:
+Or import the module as a whole. Everything it exports comes in, as with `from shine import *`, and is also reachable through its name:
 
 ```luau
-import shine                  -- shine.Window, shine.run()
-import "ui/widgets"           -- widgets.Button
-import shine as sh            -- sh.Window
+-- `shine` exports Window, Graphics, Keyboard, Mouse and Timer
+import shine                  -- all five, and shine.Window, shine.Graphics, …
+import shine as sh            -- all five, and sh.Window, sh.Graphics, …
+import "uikit"                -- everything uikit exports, and uikit.WindowGroup, …
 
-local w: shine.Window = shine.Window("Demo")
+local a: Window = Window("Demo")
+local b: shine.Window = shine.Window("Demo")
 ```
 
-A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
+An import brings in only what that module exports.
+
+The qualified name is there for when two modules export the same one. A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
 
 The path may be written **with or without quotes**. Unquoted, `.` separates folders — the two lines below mean exactly the same thing:
 
@@ -3401,7 +3405,7 @@ name: "myproject"
 version: "1.0.0"
 entry: "main.sau"
 src_dirs: ["src"]
-dependencies: ["../shared-lib", "~/code/json", "lauriszz123@uikit:v1.2.0"]
+dependencies: ["../shared-lib", "~/code/json", "lauriszz123@saule-uikit:main"]
 min_saule_version: "26.1"
 indent_style: "space"
 indent_width: 2
@@ -3428,7 +3432,7 @@ Unknown keys are ignored.
 A `dependencies:` entry is one of two things, told apart by the `@`:
 
 ```
-dependencies: ["lauriszz123@uikit:v1.2.0", "../shared-lib"]
+dependencies: ["lauriszz123@saule-uikit:main", "../shared-lib"]
 ```
 
 A **package** is `owner@repo`, optionally pinned with `:version`, and is
@@ -3438,8 +3442,8 @@ relative to the project root — and is used *where it lies*, so nothing is
 copied and edits to it take effect immediately.
 
 ```sh
-saule install lauriszz123@uikit          # the newest tagged version
-saule install lauriszz123@uikit:v1.2.0   # a specific tag or branch
+saule install lauriszz123@saule-uikit          # the newest tagged version
+saule install lauriszz123@saule-uikit:main     # a specific tag or branch
 saule install ../shared-lib              # a project on this machine
 saule install                            # everything this project records
 saule update                             # move packages to their newest tag

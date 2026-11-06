@@ -48,4 +48,4 @@ end
 * `src/main.sau` — the `App`, its window, and `Main.main`
 * `src/Test.sau` — the demo panel: controls, tabs, overlays, a live canvas
 * `src/Counter.sau` — the smallest stateful view, using `context.state`
-* [`../uikit/`](../uikit/) — the toolkit itself, as a `kind: "library"` package
+* [`saule-uikit`](https://github.com/lauriszz123/saule-uikit) — the toolkit itself, as a `kind: "library"` package

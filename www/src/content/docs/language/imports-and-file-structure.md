@@ -21,17 +21,21 @@ from "data/PlayerRepository" import PlayerRepository as PlayerRepo
 from "entities/Player" import *
 ```
 
-Or import the module as a whole and reach into it by name:
+Or import the module as a whole. Everything it exports comes in, as with `from shine import *`, and is also reachable through its name:
 
 ```saule
-import shine                  -- shine.Window, shine.run()
-import "ui/widgets"           -- widgets.Button
-import shine as sh            -- sh.Window
+-- `shine` exports Window, Graphics, Keyboard, Mouse and Timer
+import shine                  -- all five, and shine.Window, shine.Graphics, …
+import shine as sh            -- all five, and sh.Window, sh.Graphics, …
+import "uikit"                -- everything uikit exports, and uikit.WindowGroup, …
 
-local w: shine.Window = shine.Window("Demo")
+local a: Window = Window("Demo")
+local b: shine.Window = shine.Window("Demo")
 ```
 
-A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
+An import brings in only what that module exports.
+
+The qualified name is there for when two modules export the same one. A namespace is named after the last part of its path. A path whose last part is not a name, like `"my-lib"`, needs `as`. `shine.Window` works anywhere a name or a type does, and a name the module does not export is reported as one: ``"`shine` has no export named `Windw`"``.
 
 The path may be written **with or without quotes**. Unquoted, `.` separates folders — the two lines below mean exactly the same thing:
 

@@ -274,6 +274,7 @@ impl Slot {
     pub(crate) fn new(expected: Option<&Type>) -> Slot {
         let want = expected
             .and_then(base_type_name)
+            .map(|n| unqualified(&n).to_string())
             .filter(|n| n != "any" && n != "nil")
             .map_or(Want::Nothing, Want::Named);
         Slot { want }
@@ -291,7 +292,7 @@ impl Slot {
     /// keyword, or a binding with no annotation to read.
     fn rank(&self, have: Option<&str>, bucket: &str) -> String {
         let fits = match (&self.want, have) {
-            (Want::Named(want), Some(have)) => is_subtype_named(have, want),
+            (Want::Named(want), Some(have)) => is_subtype_named(unqualified(have), want),
             (Want::Countable, Some(have)) => countable_name(have),
             _ => false,
         };
@@ -309,6 +310,12 @@ impl Slot {
         }
         self.rank(have.and_then(base_type_name).as_deref(), bucket)
     }
+}
+
+/// `ThemeData` for `uikit.ThemeData`: a type reached through `import uikit` is
+/// the same type as the bare one.
+fn unqualified(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
 }
 
 /// Can `#` be applied to a value of this type?
@@ -368,13 +375,18 @@ pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> V
             continue;
         }
         seen.push(v.name.clone());
-        let detail =
-            v.ty.as_ref()
-                .map(|t| format!("{}: {}", v.kind, render_type(t)))
-                .unwrap_or_else(|| v.kind.to_string());
+        let ty = v.ty.clone().or_else(|| {
+            v.init
+                .as_ref()
+                .and_then(|e| super::super::infer::value_type(e, found, 0))
+        });
+        let detail = ty
+            .as_ref()
+            .map(|t| format!("{}: {}", v.kind, render_type(t)))
+            .unwrap_or_else(|| v.kind.to_string());
         items.push(sorted(
             item(v.name.clone(), CompletionItemKind::VARIABLE, Some(detail)),
-            &slot.rank_ty(v.ty.as_ref(), "0"),
+            &slot.rank_ty(ty.as_ref(), "0"),
         ));
     }
 

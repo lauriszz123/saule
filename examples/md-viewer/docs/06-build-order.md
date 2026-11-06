@@ -36,7 +36,8 @@ diverging.
 
 1. `git mv "examples/UI Project/src/UIKit" examples/uikit/src` — 29 files, with
    history.
-2. [`examples/uikit/saule.config`](../../uikit/saule.config):
+2. `examples/uikit/saule.config` (the package has since moved to
+   [saule-uikit](https://github.com/lauriszz123/saule-uikit)):
    ```
    name: "uikit"
    version: "0.1.0"
@@ -190,7 +191,7 @@ no bold, no links.
 1. `main.sau` — `WindowGroup` + `Theme` + a hardcoded `DocumentView`. Read the
    file with `Io.open` right there in `Main.main` for now; `DocumentStore`
    comes in [Milestone 5](#milestone-5--the-sidebar).
-2. `MarkdownStyle.from(theme)` — [the numbers](04-renderer.md#markdownstyle).
+2. `MarkdownStyle.fromTheme(theme)` — [the numbers](04-renderer.md#markdownstyle).
 3. `InlineRenderer.runs` — handle `Text` and `SoftBreak`; every other variant
    falls through to rendering its children. Plain `Text` views, plain
    `TextStyle`, no faces.
@@ -326,7 +327,7 @@ nothing visibly wrong.
 In rough order of value:
 
 1. **Dark mode.** `ThemeData.dark()` in `Shell` state plus a `TopBar` toggle.
-   This is also the test that `MarkdownStyle.from(theme)` reads the theme
+   This is also the test that `MarkdownStyle.fromTheme(theme)` reads the theme
    instead of hardcoding colours — which it probably does in one or two places.
 2. **Keyboard.** [The table](05-app-shell.md#keyboard).
 3. **Strikethrough line** — the `ZStack` + `Box` from

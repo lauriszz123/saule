@@ -104,6 +104,9 @@ pub(crate) fn line_keywords(
     if let Some(kws) = header_keywords(&words) {
         return Some((kws, "class header"));
     }
+    if let Some(kws) = import_keywords(&words) {
+        return Some((kws, "import"));
+    }
     // From the *last* opener on the line, so a one-line `match c case P …`
     // is read as the arm it ends in rather than the match it starts with.
     let tail = words
@@ -114,6 +117,26 @@ pub(crate) fn line_keywords(
         Some(&"case") => arm_keywords(tail).map(|k| (k, "match arm")),
         Some(&"while") | Some(&"for") => loop_keywords(tail).map(|k| (k, "loop header")),
         _ => condition_keywords(tail).map(|k| (k, "condition")),
+    }
+}
+
+/// The keyword an import line is waiting for: `import` after `from path`,
+/// and `as` after the module of `import path` or a name in `from path import
+/// A`. A line still choosing its module or its names is the tree's to answer.
+fn import_keywords(words: &[&str]) -> Option<Vec<&'static str>> {
+    let words = match words.first() {
+        Some(&"export") => &words[1..],
+        _ => words,
+    };
+    match words {
+        ["from", _path] => Some(vec!["import"]),
+        ["import", _path] => Some(vec!["as"]),
+        ["from", _path, "import", .., last]
+            if !last.ends_with(',') && !matches!(*last, "import" | "as" | "*") =>
+        {
+            Some(vec!["as"])
+        }
+        _ => None,
     }
 }
 

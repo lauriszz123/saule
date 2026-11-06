@@ -655,6 +655,28 @@ fn an_imported_function_can_be_called_from_the_top_level() {
 }
 
 #[test]
+fn a_namespace_import_also_brings_every_name_in_bare() {
+    let dir = project(
+        "namespace_bare",
+        &[
+            (
+                "kit.sau",
+                "export class Box\n  size: integer\n  fn init(size: integer)\n    self.size = size\n  end\nend\n\
+                 export fn twice(n: integer) -> integer\n  return n * 2\nend\n",
+            ),
+            (
+                "main.sau",
+                "import kit\n\
+                 local a: Box = Box(1)\n\
+                 local b: kit.Box = kit.Box(2)\n\
+                 println(twice(a.size) + kit.twice(b.size))\n",
+            ),
+        ],
+    );
+    assert_eq!(run_capturing(compile(&dir.join("main.sau"))).trim(), "6");
+}
+
+#[test]
 fn any_module_can_re_export() {
     // Not only a folder's `init.sau`: a plain file passes on what it names.
     let dir = project(

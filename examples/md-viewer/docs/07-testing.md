@@ -111,7 +111,7 @@ these two classes live in projects. Two options:
 
 Cases worth pinning for `LinkResolver`:
 
-| `from` | `href` | expected |
+| `base` | `href` | expected |
 |---|---|---|
 | `docs/02-architecture.md` | `04-renderer.md` | `docs/04-renderer.md`, no anchor |
 | `docs/02-architecture.md` | `#the-ast` | same path, anchor `the-ast` |

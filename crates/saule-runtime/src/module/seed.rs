@@ -355,13 +355,8 @@ fn collect_seed(
     seed
 }
 
-/// The names `key`, exported by the imported module, is known by here.
-///
-/// A namespace import also keeps the bare name, for type metadata only: the
-/// imported module's own signatures say `Window`, not `shine.Window`, and a
-/// method returning one has to resolve. Name resolution never sees it, so
-/// `Window` alone is still an undefined name in the importing file, and a
-/// local declaration of the same name wins over it.
+/// The names `key`, exported by the imported module, is known by here: a
+/// namespace import binds it both bare and qualified.
 fn local_names(names: &ImportNames, key: &str) -> Vec<String> {
     match names {
         ImportNames::All => vec![key.to_string()],
@@ -418,22 +413,7 @@ pub(crate) fn collect_import_aliases(
             _ => None,
         })
         .collect();
-    with_bare_names(names, names.bind(exports))
-}
-
-/// [`local_names`] for a whole binding list: a namespace's bare names ride
-/// along for type metadata.
-fn with_bare_names(names: &ImportNames, bound: Vec<(String, String)>) -> Vec<(String, String)> {
-    match names {
-        ImportNames::Namespace(_) => {
-            let bare: Vec<(String, String)> = bound
-                .iter()
-                .map(|(orig, _)| (orig.clone(), orig.clone()))
-                .collect();
-            bound.into_iter().chain(bare).collect()
-        }
-        _ => bound,
-    }
+    names.bind(exports)
 }
 
 /// Native-package counterpart of [`collect_import_aliases`]: wildcards
@@ -443,5 +423,5 @@ pub(crate) fn collect_native_aliases(
     pkg: &crate::native_packages::NativePackage,
     names: &ImportNames,
 ) -> Vec<(String, String)> {
-    with_bare_names(names, names.bind(pkg.exports.iter().copied()))
+    names.bind(pkg.exports.iter().copied())
 }

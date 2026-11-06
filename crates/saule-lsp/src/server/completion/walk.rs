@@ -89,10 +89,10 @@ pub(crate) enum Ctx {
     /// `case Colour.<caret>` — the enum is already named, so only its own
     /// variants belong here.
     VariantName { enum_name: String },
-    /// `import * from <caret>` — offer importable modules. `quoted` mirrors
+    /// `from <caret>` or `import <caret>` — offer importable modules. `quoted` mirrors
     /// how the author spelled the path so suggestions match their style.
     ImportPath { quoted: bool },
-    /// `import <caret> from some.module` — offer that module's exports.
+    /// `from some.module import <caret>` — offer that module's exports.
     ImportName { path: String },
 }
 
@@ -395,12 +395,12 @@ impl Walk {
                 elseifs,
                 else_block,
             } => {
-                self.expr(cond);
+                self.condition(cond);
                 // A branch that `else`/`elseif` can still follow; the final
                 // `else` cannot be followed by either, only closed.
                 self.block_of(Block::IfBranch, then_block);
                 for (c, b) in elseifs {
-                    self.expr(c);
+                    self.condition(c);
                     self.block_of(Block::IfBranch, b);
                 }
                 if let Some(b) = else_block {
@@ -408,12 +408,12 @@ impl Walk {
                 }
             }
             Stmt::While { cond, body } => {
-                self.expr(cond);
+                self.condition(cond);
                 self.block_of(Block::Ended, body);
             }
             Stmt::Repeat { body, cond } => {
                 self.block_of(Block::Repeat, body);
-                self.expr(cond);
+                self.condition(cond);
             }
             Stmt::ForNumeric {
                 var,
@@ -795,6 +795,8 @@ impl Walk {
             self.args(args);
             return;
         };
+        // A stdlib function takes its arguments by position only.
+        let by_name = !params.iter().any(|p| p.span == NATIVE_PARAM);
         let param_slots = saule_ast::param_slots(&params);
         let slots = saule_ast::resolve_arg_slots(args, &param_slots);
 
@@ -817,6 +819,7 @@ impl Walk {
             .map(|(_, p)| p.clone())
             .collect();
 
+        let unfilled = if by_name { unfilled } else { Vec::new() };
         let outer = std::mem::replace(&mut self.named_params, unfilled);
         let outer_expected = self.expected.take();
         for (a, slot) in args.iter().zip(slots.iter()) {
@@ -847,6 +850,13 @@ impl Walk {
         self.expected = outer_expected;
     }
 
+    /// A condition holds a `boolean`, so that is what fits at its caret.
+    fn condition(&mut self, cond: &Spanned<Expr>) {
+        let outer = self.expected.replace(Type::Named("boolean".into()));
+        self.expr(cond);
+        self.expected = outer;
+    }
+
     /// The callee's declared parameters, for the callee shapes a lambda
     /// argument realistically appears under: a top-level `fn`, a method on the
     /// enclosing class, and a class constructor.
@@ -861,14 +871,25 @@ impl Walk {
                 {
                     return Some(sig.params);
                 }
-                self.user_fns.get(name).map(|(ps, _)| ps.clone())
+                self.user_fns
+                    .get(name)
+                    .map(|(ps, _)| ps.clone())
+                    .or_else(|| native_params(name))
             }
             // `recv.method(`, `Theme.of(` — resolve the receiver, then
             // the method on it. `lookup_method` walks the parent chain,
             // so an inherited modifier answers too.
             Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
-                let class = self.receiver_class(&obj.value)?;
-                saule_semantic::lookup_method(&class, name).map(|s| s.params)
+                if let Some(class) = self.receiver_class(&obj.value)
+                    && let Some(sig) = saule_semantic::lookup_method(&class, name)
+                {
+                    return Some(sig.params);
+                }
+                // `String.len(` — a stdlib function, named by its module.
+                let Expr::Ident(module) = &obj.value else {
+                    return None;
+                };
+                native_params(&format!("{module}.{name}"))
             }
             _ => None,
         }
@@ -991,4 +1012,30 @@ pub(crate) fn bind_pattern(w: &mut Walk, p: &saule_ast::Pattern) {
 /// means "the author is starting a fresh argument here".
 fn is_sentinel_positional(arg: &CallArg) -> bool {
     matches!(arg, CallArg::Positional(e) if matches!(&e.value, Expr::Ident(n) if n == SENTINEL))
+}
+
+/// The span a stdlib parameter carries, which has none in any source.
+const NATIVE_PARAM: std::ops::Range<usize> = usize::MAX..usize::MAX;
+
+/// A stdlib function's parameters, named the way its documentation names
+/// them.
+fn native_params(qualified: &str) -> Option<Vec<Param>> {
+    let sig = saule_typeck::sigs::lookup(qualified)?;
+    let names = crate::server::native_names::param_names(qualified, &sig);
+    Some(
+        sig.params
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| Param {
+                name: names
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("arg{}", i + 1)),
+                ty: ty.clone(),
+                default: None,
+                variadic: false,
+                span: NATIVE_PARAM,
+            })
+            .collect(),
+    )
 }

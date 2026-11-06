@@ -14,7 +14,7 @@ name: "myproject"
 version: "1.0.0"
 entry: "main.sau"
 src_dirs: ["src"]
-dependencies: ["../shared-lib", "~/code/json", "lauriszz123@uikit:v1.2.0"]
+dependencies: ["../shared-lib", "~/code/json", "lauriszz123@saule-uikit:main"]
 min_saule_version: "26.1"
 indent_style: "space"
 indent_width: 2
@@ -41,7 +41,7 @@ Unknown keys are ignored.
 A `dependencies:` entry is one of two things, told apart by the `@`:
 
 ```
-dependencies: ["lauriszz123@uikit:v1.2.0", "../shared-lib"]
+dependencies: ["lauriszz123@saule-uikit:main", "../shared-lib"]
 ```
 
 A **package** is `owner@repo`, optionally pinned with `:version`, and is
@@ -51,8 +51,8 @@ relative to the project root — and is used *where it lies*, so nothing is
 copied and edits to it take effect immediately.
 
 ```sh
-saule install lauriszz123@uikit          # the newest tagged version
-saule install lauriszz123@uikit:v1.2.0   # a specific tag or branch
+saule install lauriszz123@saule-uikit          # the newest tagged version
+saule install lauriszz123@saule-uikit:main     # a specific tag or branch
 saule install ../shared-lib              # a project on this machine
 saule install                            # everything this project records
 saule update                             # move packages to their newest tag

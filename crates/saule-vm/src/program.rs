@@ -442,22 +442,15 @@ fn imported_layouts(
             }
             Target::Module(i) => (&exports[*i], &paths[*i]),
         };
-        // A wildcard binds every export, a namespace every export as
-        // `ns.Name`, and a named list the ones it asks for, under the alias
-        // when there is one.
-        let namespace = matches!(edge.names, ImportNames::Namespace(_));
+        // A wildcard binds every export, a namespace every export both bare
+        // and as `ns.Name`, and a named list the ones it asks for, under the
+        // alias when there is one.
         for (orig, local) in edge.names.bind(from.keys().map(String::as_str)) {
             let orig = &orig;
-            // A namespace's types also keep their bare names, which is how the
-            // imported module's own signatures spell them. Never a slot, so
-            // the bare name is still nothing the program can say.
             match from.get(orig) {
                 Some(Export::Class(i)) => {
                     if let Some(s) = slot_of(&local) {
                         type_slots.push((s, crate::chunk::TypeSlot::Class(*i)));
-                    }
-                    if namespace {
-                        out.index.entry(orig.clone()).or_insert(*i);
                     }
                     out.index.insert(local, *i);
                 }
@@ -465,15 +458,9 @@ fn imported_layouts(
                     if let Some(s) = slot_of(&local) {
                         type_slots.push((s, crate::chunk::TypeSlot::Enum(*i)));
                     }
-                    if namespace {
-                        out.enums.entry(orig.clone()).or_insert(*i);
-                    }
                     out.enums.insert(local, *i);
                 }
                 Some(Export::Interface(i)) => {
-                    if namespace {
-                        out.interfaces.entry(orig.clone()).or_insert(*i);
-                    }
                     out.interfaces.insert(local, *i);
                 }
                 // A native package's export, re-exported by that module: a

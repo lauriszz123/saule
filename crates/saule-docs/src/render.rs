@@ -1,4 +1,4 @@
-//! Markdown rendering for hover popups and `saule doc` output.
+//! Markdown rendering for hover popups.
 //!
 //! Kept in this crate rather than in the LSP so the CLI renders docs
 //! identically — one description of what a doc comment looks like when
