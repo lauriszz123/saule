@@ -50,7 +50,7 @@ use crate::prelude::Prelude;
 use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::{ClassObject, InterfaceObject, NativeClosure, TableObject, Value};
 
-/// `import Iterable, Iterable2, Iter from "iter"`. Auto-prelude'd so the
+/// `from "iter" import Iterable, Iterable2, Iter`. Auto-prelude'd so the
 /// `for … in … do` desugar can rely on the interface names always being in
 /// scope, and so `Iter.map(…)` needs no import either.
 pub static ITER_PACKAGE: NativePackage = NativePackage {

@@ -208,11 +208,29 @@ impl<'a> Printer<'a> {
                 names,
                 path,
                 quoted,
+                exported,
             } => {
-                self.write("import ");
+                // Preserve how the author spelled the path — both whether it
+                // was quoted at all, and which quote was used.
+                let module = if *quoted {
+                    quote_str_with(path, self.path_quote_before(path, decl_end))
+                } else {
+                    path.clone()
+                };
+                if *exported {
+                    self.write("export ");
+                }
                 match names {
-                    ImportNames::All => self.write("*"),
+                    ImportNames::Namespace(name) => {
+                        self.writef(format_args!("import {module}"));
+                        let last = path.rsplit(['/', '.']).next().unwrap_or_default();
+                        if name != last {
+                            self.writef(format_args!(" as {name}"));
+                        }
+                    }
+                    ImportNames::All => self.writef(format_args!("from {module} import *")),
                     ImportNames::List(ns) => {
+                        self.writef(format_args!("from {module} import "));
                         for (i, (orig, alias)) in ns.iter().enumerate() {
                             if i > 0 {
                                 self.write(", ");
@@ -223,14 +241,6 @@ impl<'a> Printer<'a> {
                             }
                         }
                     }
-                }
-                // Preserve how the author spelled the path — both whether it
-                // was quoted at all, and which quote was used.
-                if *quoted {
-                    let q = self.source_quote_ending_at(decl_end);
-                    self.writef(format_args!(" from {}", quote_str_with(path, q)));
-                } else {
-                    self.writef(format_args!(" from {path}"));
                 }
             }
         }

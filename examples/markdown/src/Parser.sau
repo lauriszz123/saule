@@ -1,7 +1,7 @@
-import * from Ast
-import * from LineScanner
-import * from Slugger
-import * from BlockParser
+from Ast import *
+from LineScanner import *
+from Slugger import *
+from BlockParser import *
 
 export class Markdown
     static fn parse(source: string) -> Document

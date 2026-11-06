@@ -192,7 +192,7 @@ end
 /// quoted one.
 #[test]
 fn resolves_quoted_import_path() {
-    let src = "import * from \"entities/Player\"\n";
+    let src = "from \"entities/Player\" import *\n";
     let s = resolve(src, "entities/Player");
     assert!(
         matches!(&s, Symbol::ImportPath(p) if p == "entities/Player"),
@@ -202,7 +202,7 @@ fn resolves_quoted_import_path() {
 
 #[test]
 fn resolves_bare_import_path() {
-    let src = "import * from Geometry\n";
+    let src = "from Geometry import *\n";
     let s = resolve(src, "Geometry");
     assert!(
         matches!(&s, Symbol::ImportPath(p) if p == "Geometry"),
@@ -212,7 +212,7 @@ fn resolves_bare_import_path() {
 
 #[test]
 fn resolves_bare_dotted_import_path() {
-    let src = "import View as V from some.folder.module\n";
+    let src = "from some.folder.module import View as V\n";
     let s = resolve(src, "some.folder.module");
     assert!(
         matches!(&s, Symbol::ImportPath(p) if p == "some.folder.module"),
@@ -225,7 +225,7 @@ fn resolves_bare_dotted_import_path() {
 #[test]
 fn bare_import_path_is_the_trailing_occurrence() {
     init_stdlib();
-    let src = "import Geometry from Geometry\n";
+    let src = "from Geometry import Geometry\n";
     let module = parse_src(src);
     analyze(&module);
 

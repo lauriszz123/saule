@@ -1,4 +1,4 @@
-import Json from json
+from json import Json
 
 export class Entry
 	local todo: string

@@ -28,9 +28,9 @@ about the app is declared on the `App` subclass, the way
 `examples/UI Project/src/main.sau` does it.
 
 ```saule
-import * from UIKit
-import * from Shell
-import * from FontRegistry
+from UIKit import *
+from Shell import *
+from FontRegistry import *
 
 export class MdViewerApp extends App
     fn body() -> Scene

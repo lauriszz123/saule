@@ -50,6 +50,7 @@ pub(super) fn run(
         locals: Vec::new(),
         enum_variant_fields: collect_enum_variant_fields(module),
         module_fns: collect_module_fns(module),
+        namespaces: collect_namespaces(module),
     };
     cx.visit_module(module);
     cx.best.map(|h| (h.md, h.span))
@@ -105,6 +106,26 @@ struct Cx<'a> {
     /// function (`map(...)` below `fn map<T, U>`) had nothing to
     /// resolve against and fell through to `None`.
     module_fns: HashMap<String, ModuleFn>,
+    /// `import path as name`, as name → path.
+    namespaces: HashMap<String, String>,
+}
+
+fn collect_namespaces(module: &Module) -> HashMap<String, String> {
+    module
+        .stmts
+        .iter()
+        .filter_map(|s| match &s.value {
+            Stmt::Decl(d) => match &d.value {
+                Decl::Import {
+                    names: saule_ast::ImportNames::Namespace(name),
+                    path,
+                    ..
+                } => Some((name.clone(), path.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
 }
 
 /// A top-level `fn` of the module under the cursor, in the three shapes

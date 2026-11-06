@@ -156,6 +156,8 @@ pub(crate) struct Walk {
     block: Block,
     /// Whether the expression currently being walked is the operand of `#`.
     count_operand: bool,
+    /// The module each `import path as name` so far refers to, by name.
+    namespaces: std::collections::HashMap<String, String>,
 }
 
 impl Walk {
@@ -200,6 +202,7 @@ impl Walk {
             match_arm: false,
             block: Block::Module,
             count_operand: false,
+            namespaces: Default::default(),
         };
         w.block(&module.stmts);
         w.found
@@ -615,7 +618,11 @@ impl Walk {
                 names,
                 path,
                 quoted,
+                ..
             } => {
+                if let saule_ast::ImportNames::Namespace(name) = names {
+                    self.namespaces.insert(name.clone(), path.clone());
+                }
                 // The sentinel lands inside the path (bare or quoted) when the
                 // caret is choosing a module...
                 if path.contains(SENTINEL) {
@@ -631,6 +638,12 @@ impl Walk {
         }
     }
 
+    /// The module behind `ns` when `name` is `ns.⟨caret⟩`.
+    fn namespace_member(&self, name: &str) -> Option<String> {
+        let ns = name.strip_suffix(SENTINEL)?.strip_suffix('.')?;
+        self.namespaces.get(ns).cloned()
+    }
+
     fn params(&mut self, params: &[Param]) {
         for p in params {
             self.ty(Some(&p.ty));
@@ -641,6 +654,12 @@ impl Walk {
     /// A sentinel anywhere inside a type annotation means the caret is
     /// writing a type.
     fn ty(&mut self, ty: Option<&Type>) {
+        if let Some(Type::Named(n)) = ty
+            && let Some(path) = self.namespace_member(n)
+        {
+            self.record(Ctx::ImportName { path });
+            return;
+        }
         if ty.is_some_and(type_mentions_sentinel) {
             self.record(Ctx::TypeName);
         }
@@ -662,6 +681,13 @@ impl Walk {
         match &e.value {
             Expr::Ident(n) if n == SENTINEL => {
                 self.record(Ctx::Value { stmt_start: false });
+            }
+            // `shine.⟨caret⟩`: the parser read it as one name, so what goes
+            // here is whatever `shine` exports.
+            Expr::Ident(n) if self.namespace_member(n).is_some() => {
+                if let Some(path) = self.namespace_member(n) {
+                    self.record(Ctx::ImportName { path });
+                }
             }
             Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
                 if name == SENTINEL {

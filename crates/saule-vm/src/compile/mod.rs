@@ -805,7 +805,7 @@ fn top_level_declared_names(stmt: &saule_ast::Spanned<saule_ast::Stmt>) -> Vec<S
             | Decl::Enum { name, .. }
             | Decl::Variable { name, .. } => out.push(name.clone()),
             Decl::Import { names, .. } => match names {
-                ImportNames::All => {}
+                ImportNames::All | ImportNames::Namespace(_) => {}
                 ImportNames::List(items) => {
                     for (orig, alias) in items {
                         out.push(alias.clone().unwrap_or_else(|| orig.clone()));

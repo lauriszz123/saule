@@ -59,7 +59,7 @@
 //!
 //! ## Wildcard imports
 //!
-//! `import * from "..."` introduces names this crate can't enumerate on
+//! `from "..." import *` introduces names this crate can't enumerate on
 //! its own — it has no module loader. The embedder resolves them and
 //! hands the result over as [`crate::ModuleSeed::wildcard_names`]:
 //!
@@ -135,7 +135,7 @@ struct Resolver {
     /// `super.x` is legal (when a parent exists; we don't check that here),
     /// `self.super(...)` is only legal when also `in_init`.
     in_method: bool,
-    /// True when the module contains `import * from "..."` *and* the
+    /// True when the module contains `from "..." import *` *and* the
     /// embedder couldn't tell us what those imports bind. Suppresses
     /// undefined-name diagnostics, since any unknown ident might have
     /// come in through the glob.

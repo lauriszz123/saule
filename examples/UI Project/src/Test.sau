@@ -1,7 +1,7 @@
-import * from shine
-import * from "uikit"
-import * from Shared
-import * from Counter
+from shine import *
+from "uikit" import *
+from Shared import *
+from Counter import *
 
 -- The gallery as a pushable route: the panel below, plus the back arrow every
 -- route gets. `PanelView` itself stays route-agnostic, so it is still usable

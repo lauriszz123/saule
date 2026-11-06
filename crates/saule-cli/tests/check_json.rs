@@ -170,7 +170,7 @@ fn a_parse_error_is_phase_parse() {
 #[test]
 fn an_unresolved_import_is_phase_import() {
     let s = Scratch::new("bad_import");
-    let f = s.write("imp.sau", "import * from \"nowhere\"\n");
+    let f = s.write("imp.sau", "from \"nowhere\" import *\n");
 
     let run = check_json(&f);
     let diags = run.diagnostics();

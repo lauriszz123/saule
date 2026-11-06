@@ -129,7 +129,7 @@ end
 
 ```saule
 -- main.sau
-import Player from "entities/Player"
+from "entities/Player" import Player
 
 class Main
     static fn main()

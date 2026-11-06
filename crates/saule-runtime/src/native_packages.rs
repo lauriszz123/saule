@@ -68,7 +68,7 @@ pub struct NativePackage {
 
     /// Names produced by [`Self::install`] that should be exposed via
     /// `import`. Exactly these are harvested out of the scratch table
-    /// passed to `install`. Wildcards (`import * from "x"`) pull in every
+    /// passed to `install`. Wildcards (`from "x" import *`) pull in every
     /// entry.
     pub exports: &'static [&'static str],
 

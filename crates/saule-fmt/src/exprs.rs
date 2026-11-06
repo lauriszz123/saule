@@ -659,14 +659,18 @@ impl<'a> Printer<'a> {
             .is_some_and(|s| s.starts_with("do"))
     }
 
-    /// The quote character immediately before `end`, if it is one.
-    ///
-    /// For `import x from "a/b"` the path has no span of its own — the only
-    /// position recorded is the declaration's end, which the parser places
-    /// just past the closing quote.
-    pub(crate) fn source_quote_ending_at(&self, end: usize) -> Option<char> {
-        let c = self.source.get(..end)?.chars().next_back()?;
-        (c == '"' || c == '\'').then_some(c)
+    /// The quote the import path `path`, written before `end`, was spelled
+    /// with.
+    pub(crate) fn path_quote_before(&self, path: &str, end: usize) -> Option<char> {
+        let before = self.source.get(..end)?;
+        let double = before.rfind(&format!("\"{path}\""));
+        let single = before.rfind(&format!("'{path}'"));
+        match (double, single) {
+            (Some(d), Some(s)) => Some(if d > s { '"' } else { '\'' }),
+            (Some(_), None) => Some('"'),
+            (None, Some(_)) => Some('\''),
+            (None, None) => None,
+        }
     }
 }
 

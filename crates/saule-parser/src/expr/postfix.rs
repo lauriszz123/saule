@@ -56,6 +56,12 @@ impl Parser {
                     let dot_end = self.advance().span.end;
                     let (name, name_span) = self.member_name(dot_end, "field name after `.`")?;
                     let span = expr.span.start..name_span.end;
+                    if let Expr::Ident(ns) = &expr.value
+                        && self.namespaces.contains(ns)
+                    {
+                        expr = Spanned::new(Expr::Ident(format!("{ns}.{name}")), span);
+                        continue;
+                    }
                     expr = Spanned::new(
                         Expr::Member {
                             obj: Box::new(expr),

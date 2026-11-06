@@ -1,4 +1,4 @@
-import * from "shine"
+from "shine" import *
 
 class Main
 	static fn main()

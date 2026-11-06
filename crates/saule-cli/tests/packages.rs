@@ -176,7 +176,7 @@ fn installing_a_source_package_records_it_and_makes_it_importable() {
     let out = s.saule(&proj, &["install", "acme@uikit:v1"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("import * from \"uikit\""),
+        stdout(&out).contains("from \"uikit\" import *"),
         "{}",
         stdout(&out)
     );
@@ -194,7 +194,7 @@ fn installing_a_source_package_records_it_and_makes_it_importable() {
     );
 
     // And a program can import it.
-    s.main_is("import who from \"uikit\"", "println(who())");
+    s.main_is("from \"uikit\" import who", "println(who())");
     let run = s.saule(&proj, &["run"]);
     assert!(run.status.success(), "{}", stderr(&run));
     assert_eq!(stdout(&run), "uikit\n");
@@ -386,7 +386,7 @@ fn paths_and_packages_coexist_in_one_list() {
     );
 
     s.main_is(
-        "import who from \"uikit\"\nimport hello from \"shared\"",
+        "from \"uikit\" import who\nfrom \"shared\" import hello",
         "println(hello(), who())",
     );
     let run = s.saule(&proj, &["run"]);
@@ -490,7 +490,7 @@ fn installing_a_path_records_it_relative_and_makes_it_importable() {
     let out = s.saule(&proj, &["install", "../shared"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
-    assert!(text.contains("import * from \"shared\""), "{text}");
+    assert!(text.contains("from \"shared\" import *"), "{text}");
     assert!(text.contains("nothing was copied"), "{text}");
 
     // Relative to the project root, so the pair stays portable — and with `/`
@@ -504,7 +504,7 @@ fn installing_a_path_records_it_relative_and_makes_it_importable() {
         "a path must not be fetched"
     );
 
-    s.main_is("import hello from \"shared\"", "println(hello())");
+    s.main_is("from \"shared\" import hello", "println(hello())");
     let run = s.saule(&proj, &["run"]);
     assert!(run.status.success(), "{}", stderr(&run));
     assert_eq!(stdout(&run), "hi\n");
@@ -526,7 +526,7 @@ fn a_path_dependency_picks_up_edits_without_reinstalling() {
     let proj = s.project(&[]);
     assert!(s.saule(&proj, &["install", "../shared"]).status.success());
 
-    s.main_is("import hello from \"shared\"", "println(hello())");
+    s.main_is("from \"shared\" import hello", "println(hello())");
     assert_eq!(stdout(&s.saule(&proj, &["run"])), "first\n");
 
     // No reinstall, no second command.
@@ -573,7 +573,7 @@ fn installing_the_project_itself_is_refused() {
 fn running_without_installing_first_says_what_to_run() {
     let s = Scratch::new("not-installed");
     let proj = s.project(&["gh:acme/uikit@v1"]);
-    s.main_is("import who from \"uikit\"", "println(who())");
+    s.main_is("from \"uikit\" import who", "println(who())");
 
     let out = s.saule(&proj, &["run"]);
     assert!(!out.status.success());
@@ -771,7 +771,7 @@ fn update_installs_the_newest_tag_and_rewrites_the_entry() {
     assert!(s.path("home/packages/github.com/acme/uikit/v2").is_dir());
 
     // And the updated copy is what a program now imports.
-    s.main_is("import who from \"uikit\"", "println(who())");
+    s.main_is("from \"uikit\" import who", "println(who())");
     let run = s.saule(&proj, &["run"]);
     assert!(run.status.success(), "{}", stderr(&run));
     assert_eq!(stdout(&run), "uikit\n");
@@ -917,7 +917,7 @@ fn a_fresh_install_gets_the_locked_commit_even_after_the_branch_moved() {
 
     let lock = std::fs::read_to_string(proj.join("saule.lock")).unwrap();
     assert!(lock.contains(&pinned), "the pin must not move: {lock}");
-    s.main_is("import who from \"uikit\"", "println(who())");
+    s.main_is("from \"uikit\" import who", "println(who())");
     let out = s.saule(&proj, &["run"]);
     assert!(!stdout(&out).contains("moved"), "{}", stdout(&out));
 }
@@ -1005,7 +1005,7 @@ fn update_tracks_a_branch_by_commit() {
 
     let out = s.saule(&proj, &["update"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    s.main_is("import who from \"uikit\"", "println(who())");
+    s.main_is("from \"uikit\" import who", "println(who())");
     assert_eq!(stdout(&s.saule(&proj, &["run"])), "moved\n");
 }
 

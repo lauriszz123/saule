@@ -7,8 +7,7 @@
 //! the checker and the language server:
 //!
 //! * [`resolve_import_path`] — the file (or native-package sentinel) an
-//!   `import` names, and [`is_init_module`], which decides which modules
-//!   re-export what they import;
+//!   `import` names;
 //! * [`collect_import_seed`] and friends — the classes, interfaces and enums
 //!   an import brings into scope, read from the imported file's source so a
 //!   module can be checked without running anything.

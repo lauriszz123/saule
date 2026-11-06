@@ -63,7 +63,7 @@ use crate::native_packages::NativePackage;
 use crate::prelude::Prelude;
 use crate::value::{InterfaceObject, Value};
 
-/// `import OpAdd, OpCompare from "ops"`. Auto-prelude'd so operators can
+/// `from "ops" import OpAdd, OpCompare`. Auto-prelude'd so operators can
 /// be overloaded without an import, the same way `Iterable` is always in
 /// scope for `for … in`.
 ///

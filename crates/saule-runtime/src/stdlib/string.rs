@@ -11,7 +11,7 @@ use crate::stdlib::{expect_arity, expect_min_arity};
 use crate::value::SauleStr;
 use crate::value::{ClassObject, NativeClosure, TableObject, Value};
 
-/// `import String from "string"`. Auto-prelude'd so bare
+/// `from "string" import String`. Auto-prelude'd so bare
 /// `String.format(…)` also works.
 pub static STRING_PACKAGE: NativePackage = NativePackage {
     name: "string",

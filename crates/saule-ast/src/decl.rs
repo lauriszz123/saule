@@ -89,10 +89,13 @@ pub enum Decl {
         /// The module path with `.` / `/` separators, e.g. `some.folder.module`
         /// or `entities/Player`. Stored without surrounding quotes either way.
         path: String,
-        /// How the path was spelled: `true` for `from "some/path"`, `false`
-        /// for the unquoted `from some.folder.module`. Purely cosmetic — it
-        /// only exists so the formatter can preserve the author's style.
+        /// How the path was spelled: `true` for `"some/path"`, `false` for
+        /// the unquoted `some.folder.module`. Purely cosmetic — it only
+        /// exists so the formatter can preserve the author's style.
         quoted: bool,
+        /// `export from path import …`: what this binds is also part of what
+        /// this module exports.
+        exported: bool,
     },
 }
 
@@ -149,10 +152,36 @@ impl TypeRef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportNames {
-    /// `import * from "path"`
+    /// `from "path" import *`
     All,
-    /// `import A, B as C, D from "path"`
+    /// `from "path" import A, B as C, D`
     List(Vec<(String, Option<String>)>),
+    /// `import "path"` or `import path as name`: every export, reached as
+    /// `name.Export`. The parser reads `name.Export` as one identifier, so
+    /// past it the binding is an ordinary name that happens to hold a dot.
+    Namespace(String),
+}
+
+impl ImportNames {
+    /// `(exported, local)` for each name this import binds. A wildcard or a
+    /// namespace binds every one of `exports`; a list binds what it names,
+    /// whether or not the module has it, which is the caller's to report.
+    pub fn bind<'a>(&self, exports: impl IntoIterator<Item = &'a str>) -> Vec<(String, String)> {
+        match self {
+            ImportNames::All => exports
+                .into_iter()
+                .map(|e| (e.to_string(), e.to_string()))
+                .collect(),
+            ImportNames::Namespace(ns) => exports
+                .into_iter()
+                .map(|e| (e.to_string(), format!("{ns}.{e}")))
+                .collect(),
+            ImportNames::List(items) => items
+                .iter()
+                .map(|(orig, alias)| (orig.clone(), alias.clone().unwrap_or_else(|| orig.clone())))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

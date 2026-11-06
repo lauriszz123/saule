@@ -296,7 +296,7 @@ impl Backend {
     /// The config is found by walking up from the file, not from the
     /// workspace root. A repository is very often not a single Saule
     /// project: open this one at its root and `examples/UI Project` has no
-    /// config above it, so `import * from "uikit"` resolves to nothing and
+    /// config above it, so `from "uikit" import *` resolves to nothing and
     /// every name that package brings in — `App`, `Theme`, `Scene` — is
     /// missing from completion, hover and go-to-definition alike.
     ///

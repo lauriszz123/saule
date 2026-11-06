@@ -78,6 +78,7 @@ impl Parser {
             Token::Interface => self.parse_interface_decl(false).map(stmt_decl),
             Token::Enum => self.parse_enum_decl(false).map(stmt_decl),
             Token::Import => self.parse_import().map(stmt_decl),
+            Token::From => self.parse_from_import(false).map(stmt_decl),
             Token::Export => self.parse_export(),
             _ => self.parse_expr_or_assign(),
         }

@@ -29,7 +29,7 @@ use crate::value::{
     TableObject, Value,
 };
 
-/// `import Os, OsPlatform, FsKind, FsInfo from "os"`. Auto-prelude'd so
+/// `from "os" import Os, OsPlatform, FsKind, FsInfo`. Auto-prelude'd so
 /// the existing bare-name call sites keep working.
 pub static OS_PACKAGE: NativePackage = NativePackage {
     name: "os",

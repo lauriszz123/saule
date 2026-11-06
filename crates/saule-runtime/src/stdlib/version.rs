@@ -30,7 +30,7 @@ use crate::native_packages::NativePackage;
 use crate::prelude::Prelude;
 use crate::value::{ClassObject, NativeClosure, SauleStr, Value};
 
-/// `import Saule from "saule"`. Auto-prelude'd, like every other stdlib
+/// `from "saule" import Saule`. Auto-prelude'd, like every other stdlib
 /// static class — a version check shouldn't need an import.
 pub static VERSION_PACKAGE: NativePackage = NativePackage {
     name: "saule",

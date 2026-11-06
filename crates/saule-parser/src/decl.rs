@@ -19,6 +19,20 @@ impl Parser {
             Token::Class => self.parse_class_decl(true)?,
             Token::Interface => self.parse_interface_decl(true)?,
             Token::Enum => self.parse_enum_decl(true)?,
+            Token::From => self.parse_from_import(true)?,
+            Token::Import => {
+                let tok = self.peek().clone();
+                return Err(ParseError::Expected {
+                    expected: "a declaration after `export`".into(),
+                    found: "`import`".into(),
+                    help: Some(
+                        "a namespace cannot be re-exported; name what to pass on with \
+                         `export from path import Name` or `export from path import *`"
+                            .to_string(),
+                    ),
+                    span: tok.span,
+                });
+            }
             // `export name: T = expr` — a module-level variable. No keyword
             // introduces it, so an identifier here is the whole signal.
             Token::Identifier(_) => self.parse_variable_decl(true, kw.span.start)?,
@@ -435,49 +449,185 @@ impl Parser {
         ))
     }
 
+    /// `import path` or `import path as name`: a namespace. The path is a
+    /// quoted literal or a bare dotted chain; the name defaults to its last
+    /// segment.
     pub(crate) fn parse_import(&mut self) -> Result<Spanned<Decl>, ParseError> {
         let kw = self.advance(); // `import`
+        if matches!(self.peek().value, Token::Star) || self.at_old_import_list() {
+            return Err(self.expected_here("a module after `import`").with_help(
+                "names come after the module now: `from \"uikit\" import *`, \
+                 `from shine import Window`, or `import shine` and then `shine.Window`",
+            ));
+        }
+        let (path, quoted, mut end) = self.parse_module_path()?;
+        let name = if self.eat(&Token::As) {
+            let (alias, span) = self.expect_ident_recover("a name after `as`")?;
+            end = span.end;
+            alias
+        } else {
+            let last = path
+                .rsplit(['/', '.'])
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let usable = last
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
+                && last.chars().all(|c| c.is_alphanumeric() || c == '_');
+            if !usable && !path.is_empty() {
+                let err = ParseError::Expected {
+                    expected: "`as name` after this module".into(),
+                    found: format!("`{last}`, which is not a name").into(),
+                    help: Some(format!("write `import \"{path}\" as someName`")),
+                    span: kw.span.start..end,
+                };
+                if !self.recovering() {
+                    return Err(err);
+                }
+                self.record(err);
+            }
+            last
+        };
+        if !name.is_empty() {
+            self.namespaces.insert(name.clone());
+        }
+        Ok(Spanned::new(
+            Decl::Import {
+                names: ImportNames::Namespace(name),
+                path,
+                quoted,
+                exported: false,
+            },
+            kw.span.start..end.max(kw.span.end),
+        ))
+    }
 
-        // `import * from "path"`
+    /// The removed `import A, B from path`: a name, then `,`, or `as` and
+    /// `from`, or `from` and a module with no `import` after it. That last
+    /// part tells `import kit` followed by a `from kit import x` line apart.
+    fn at_old_import_list(&self) -> bool {
+        let mut i = 0;
+        loop {
+            if !matches!(self.peek_at(i).value, Token::Identifier(_)) {
+                return false;
+            }
+            let mut next = i + 1;
+            if matches!(self.peek_at(next).value, Token::As) {
+                if !matches!(self.peek_at(next + 1).value, Token::Identifier(_)) {
+                    return false;
+                }
+                next += 2;
+            }
+            match self.peek_at(next).value {
+                Token::Comma => i = next + 1,
+                Token::From => return !self.module_then_import(next + 1),
+                _ => return false,
+            }
+        }
+    }
+
+    /// Whether a module path starts `offset` tokens ahead and `import`
+    /// follows it.
+    fn module_then_import(&self, offset: usize) -> bool {
+        let mut i = offset;
+        match self.peek_at(i).value {
+            Token::String(_) => i += 1,
+            Token::Identifier(_) => {
+                i += 1;
+                while matches!(self.peek_at(i).value, Token::Dot)
+                    && matches!(self.peek_at(i + 1).value, Token::Identifier(_))
+                {
+                    i += 2;
+                }
+            }
+            _ => return false,
+        }
+        matches!(self.peek_at(i).value, Token::Import)
+    }
+
+    /// `from path import *` or `from path import A, B as C`, after an
+    /// optional `export` the caller has already consumed.
+    pub(crate) fn parse_from_import(
+        &mut self,
+        exported: bool,
+    ) -> Result<Spanned<Decl>, ParseError> {
+        let kw = self.advance(); // `from`
+        let (path, quoted, mut end) = self.parse_module_path()?;
+        if !self.eat(&Token::Import) {
+            let err = self.expected_here("`import` after the module");
+            if !self.recovering() {
+                return Err(err);
+            }
+            // `from shine ` still being typed: keep the declaration so
+            // completion knows the module.
+            self.record(err);
+            return Ok(Spanned::new(
+                Decl::Import {
+                    names: ImportNames::List(Vec::new()),
+                    path,
+                    quoted,
+                    exported,
+                },
+                kw.span.start..end,
+            ));
+        }
+        end = self.last_consumed_end();
         let names = if self.eat(&Token::Star) {
+            end = self.last_consumed_end();
             ImportNames::All
         } else {
             let mut list = Vec::new();
-            let (n, _) = self.expect_ident_recover("imported name")?;
-            let alias = if self.eat(&Token::As) {
-                let (a, _) = self.expect_ident_recover("alias name after `as`")?;
-                Some(a)
-            } else {
-                None
-            };
-            list.push((n, alias));
-            while self.eat(&Token::Comma) {
-                let (n, _) = self.expect_ident_recover("imported name")?;
+            loop {
+                if !matches!(self.peek().value, Token::Identifier(_)) {
+                    // `from shine import ` with the names not typed yet.
+                    let err = self.expected_here("a name to import, or `*`");
+                    if !self.recovering() {
+                        return Err(err);
+                    }
+                    self.record(err);
+                    break;
+                }
+                let (n, span) = self.expect_ident_recover("imported name")?;
+                end = span.end;
                 let alias = if self.eat(&Token::As) {
-                    let (a, _) = self.expect_ident_recover("alias name after `as`")?;
+                    let (a, span) = self.expect_ident_recover("a name after `as`")?;
+                    end = span.end;
                     Some(a)
                 } else {
                     None
                 };
                 list.push((n, alias));
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
             }
             ImportNames::List(list)
         };
+        Ok(Spanned::new(
+            Decl::Import {
+                names,
+                path,
+                quoted,
+                exported,
+            },
+            kw.span.start..end.max(kw.span.end),
+        ))
+    }
 
-        self.expect_recover(&Token::From, "`from` in import")?;
-
-        // The path is either a quoted literal (`from "some/folder/module"`)
-        // or a bare dotted chain (`from some.folder.module`). The latter is
-        // just sugar: `.` is already a path separator, so both spellings
-        // produce the same `path` string.
-        let path_tok = self.peek().clone();
-        let (path, quoted, path_end) = match path_tok.value {
+    /// A quoted literal or a bare dotted chain (`some.folder.module`); both
+    /// give the same path string. Returns it, whether it was quoted, and
+    /// where it ends.
+    fn parse_module_path(&mut self) -> Result<(String, bool, usize), ParseError> {
+        let tok = self.peek().clone();
+        match tok.value {
             Token::String(s) => {
                 self.advance();
-                (s, true, path_tok.span.end)
+                Ok((s, true, tok.span.end))
             }
             Token::Identifier(_) => {
-                let (first, first_span) = self.expect_ident_recover("module path")?;
+                let (first, first_span) = self.expect_ident_recover("module name")?;
                 let mut parts = vec![first];
                 let mut end = first_span.end;
                 // Only extend on `.`; no statement can start with one, so
@@ -487,30 +637,22 @@ impl Parser {
                     parts.push(seg);
                     end = seg_span.end;
                 }
-                (parts.join("."), false, end)
+                Ok((parts.join("."), false, end))
             }
             _ => {
                 let err = ParseError::expected(
                     "a module path, quoted or bare (e.g. \"a/b\" or a.b)",
-                    &path_tok,
+                    &tok,
                 );
                 if !self.recovering() {
                     return Err(err);
                 }
-                // An `import … from ` still being typed. Keeping the
-                // declaration with an empty path is what lets completion
-                // offer the modules that could go there.
+                // A module still being typed. Keeping the declaration with an
+                // empty path is what lets completion offer the modules that
+                // could go there.
                 self.record(err);
-                (String::new(), false, self.last_consumed_end())
+                Ok((String::new(), false, self.last_consumed_end()))
             }
-        };
-        Ok(Spanned::new(
-            Decl::Import {
-                names,
-                path,
-                quoted,
-            },
-            kw.span.start..path_end.max(kw.span.end),
-        ))
+        }
     }
 }

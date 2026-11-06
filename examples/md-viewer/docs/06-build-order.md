@@ -46,14 +46,14 @@ diverging.
    indent_style: "tab"
    indent_width: 4
    ```
-   `src/init.sau` was already the barrel, so `import * from "uikit"` resolves
+   `src/init.sau` was already the barrel, so `from "uikit" import *` resolves
    with no change to the kit itself. **Not one line of UIKit source was
-   edited** — its internal imports (`import * from Framework`, and so on) are
+   edited** — its internal imports (`from Framework import *`, and so on) are
    relative to the importing file, so moving the folder as a unit left them all
    valid.
 3. `dependencies: ["../uikit"]` added to
    [`examples/UI Project/saule.config`](../../UI%20Project/saule.config).
-4. `import * from UIKit` → `import * from "uikit"` in the seven `UI Project`
+4. `from UIKit import *` → `from "uikit" import *` in the seven `UI Project`
    sources that use it: `main`, `Home`, `Shared`, `Test`, `Counter`,
    `Contacts`, `Messenger`.
 5. `MaterialIcons-Regular.ttf` and its licence **copied** (not moved) into
@@ -81,7 +81,7 @@ executes *on import* of the barrel, and `Framework.sau` throws
 
 **If you ever want to undo this:** copy the folder back to
 `examples/md-viewer/src/UIKit`, drop `"../uikit"` from
-[`md-viewer/saule.config`](../saule.config), and use `import * from UIKit`.
+[`md-viewer/saule.config`](../saule.config), and use `from UIKit import *`.
 Everything downstream is identical.
 
 ---

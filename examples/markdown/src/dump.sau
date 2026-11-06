@@ -1,5 +1,5 @@
-import * from Ast
-import * from Parser
+from Ast import *
+from Parser import *
 
 local fn flag(b: boolean?) -> string
     if b == nil then

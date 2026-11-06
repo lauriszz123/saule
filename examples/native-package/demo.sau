@@ -1,5 +1,5 @@
 -- Demo of the dynamically-loaded `engine` native package.
-import Graphics, Window, Timer from shine
+from shine import Graphics, Window, Timer
 
 class Main
 	static fn main()

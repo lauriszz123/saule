@@ -8,7 +8,10 @@ pub(crate) fn module_has_wildcard_import(module: &Module) -> bool {
     module.stmts.iter().any(|s| {
         matches!(
             &s.value,
-            Stmt::Decl(d) if matches!(&d.value, Decl::Import { names: ImportNames::All, .. })
+            Stmt::Decl(d) if matches!(
+                &d.value,
+                Decl::Import { names: ImportNames::All | ImportNames::Namespace(_), .. }
+            )
         )
     })
 }
@@ -45,7 +48,7 @@ pub(crate) fn collect_module_scope(module: &Module) -> Vec<Rc<str>> {
                 | Decl::Enum { name, .. }
                 | Decl::Variable { name, .. } => push(name, &mut order),
                 Decl::Import { names, .. } => match names {
-                    ImportNames::All => {}
+                    ImportNames::All | ImportNames::Namespace(_) => {}
                     ImportNames::List(items) => {
                         for (orig, alias) in items {
                             push(alias.as_deref().unwrap_or(orig), &mut order);

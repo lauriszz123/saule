@@ -66,10 +66,24 @@ impl Imports {
         let mut key = Vec::new();
         for stmt in &module.stmts {
             let Stmt::Decl(d) = &stmt.value else { continue };
-            let Decl::Import { names, path, .. } = &d.value else {
+            let Decl::Import {
+                names,
+                path,
+                exported,
+                ..
+            } = &d.value
+            else {
                 continue;
             };
-            key.push((render_names(names), path.clone()));
+            let shown = render_names(names);
+            key.push((
+                if *exported {
+                    format!("export {shown}")
+                } else {
+                    shown
+                },
+                path.clone(),
+            ));
             stmts.push(stmt.clone());
         }
         Imports {
@@ -82,6 +96,7 @@ impl Imports {
 fn render_names(names: &ImportNames) -> String {
     match names {
         ImportNames::All => "*".to_string(),
+        ImportNames::Namespace(name) => format!("namespace {name}"),
         ImportNames::List(items) => items
             .iter()
             .map(|(orig, alias)| match alias {

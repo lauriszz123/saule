@@ -1,4 +1,4 @@
-import Canvas from "canvas"
+from "canvas" import Canvas
 
 -- The widget set. Every widget is a class, and constructing one draws it.
 --

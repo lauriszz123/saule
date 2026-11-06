@@ -203,9 +203,26 @@ impl<'a> Cx<'a> {
                     continue;
                 }
                 if let Some(md) = self.resolve_ident(&name) {
-                    self.record(span, md);
+                    self.record(span.clone(), md);
                 }
+                self.record_namespace_part(&name, span.start);
             }
+        }
+    }
+
+    /// `kit` in a `kit.Box` written at `start`: the namespace, not what it
+    /// leads to.
+    pub(crate) fn record_namespace_part(&mut self, name: &str, start: usize) {
+        let Some((ns, _)) = name.split_once('.') else {
+            return;
+        };
+        let Some(path) = self.namespaces.get(ns) else {
+            return;
+        };
+        let span = start..start + ns.len();
+        if contains(&span, self.offset) {
+            let md = format!("```saule\n(namespace) {ns}\n```\n\nEverything `{path}` exports.");
+            self.record(span, md);
         }
     }
 
@@ -298,7 +315,7 @@ impl<'a> Cx<'a> {
         // A top-level function imported from another file — final
         // fallback. `analyze_with_seed` registers these under the local
         // alias, following re-export barrels, so a name reached through
-        // `import * from UIKit` resolves the same as a direct one.
+        // `from UIKit import *` resolves the same as a direct one.
         if let Some(sig) = saule_semantic::lookup_function(name) {
             return Some(with_doc(
                 render_function_sig(name, &sig.type_params, &sig.params, sig.return_ty.as_ref()),

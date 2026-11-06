@@ -184,8 +184,17 @@ impl Parser {
                     Ok(Type::Tuple(items))
                 }
             }
-            Token::Identifier(name) => {
+            Token::Identifier(mut name) => {
                 self.advance();
+                // `shine.Window`: a type reached through a namespace import.
+                if self.namespaces.contains(&name)
+                    && self.check(&Token::Dot)
+                    && let Token::Identifier(member) = &self.peek_at(1).value
+                {
+                    name = format!("{name}.{member}");
+                    self.advance();
+                    self.advance();
+                }
                 // `table<T>` (array) and `table<K, V>` (hashmap) have their own
                 // node — see `Type::Generic` for why the one built-in
                 // container stays special-cased. Any other identifier carrying

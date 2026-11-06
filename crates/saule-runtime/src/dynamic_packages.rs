@@ -25,7 +25,7 @@
 //!    [`seed_enums`] give the checker each class and enum an import brings in,
 //!    so `Graphics.circle(…)`, `Image(…)` and `img.width` type-check *before*
 //!    the binary is ever loaded.
-//! 3. An `import X from "<pkg>"` resolves to a sentinel path
+//! 3. An `from "<pkg>" import X` resolves to a sentinel path
 //!    ([`sentinel_path`]). The bytecode compiler resolves imports at
 //!    *compile* time and folds a package's exports into constants, and a
 //!    compile must never `dlopen` a library, so the step is split:

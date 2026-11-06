@@ -587,7 +587,7 @@ fn quote_style_is_preserved_in_every_position() {
         // Non-identifier table key.
         "local t = { 'a b': 1 }",
         // Import path.
-        "import x from 'a/b'",
+        "from 'a/b' import x",
     ] {
         let out = format_with_source(src);
         assert!(
@@ -603,7 +603,7 @@ fn quote_choice_is_idempotent() {
         "local s = 'hello'",
         r#"local s = "hello""#,
         r#"local s = 'he said "hi"'"#,
-        "import x from 'a/b'",
+        "from 'a/b' import x",
     ] {
         let once = format_with_source(src);
         let twice = format_with_source(&once);
@@ -1190,4 +1190,26 @@ fn formatting_the_corpus_changes_no_token() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn every_import_form_keeps_its_spelling() {
+    stays_as_written(concat!(
+        "import shine\n",
+        "import shine as sh\n",
+        "import ui.widgets\n",
+        "import \"ui/widgets\"\n",
+        "import 'ui/widgets' as w\n",
+        "import \"my-lib\" as lib\n",
+        "from shine import *\n",
+        "from \"shine\" import Window, Button as Btn\n",
+        "from 'shine' import Window\n",
+        "export from shapes import *\n",
+        "export from \"shapes\" import Box as Crate\n",
+    ));
+}
+
+#[test]
+fn a_namespace_member_keeps_its_namespace() {
+    stays_as_written("import kit\n\nlocal b: kit.Box? = kit.Box(kit.twice(1))\n");
 }

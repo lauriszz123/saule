@@ -32,7 +32,7 @@ use crate::stdlib::expect_min_arity;
 use crate::value::SauleStr;
 use crate::value::{ClassObject, NativeClosure, TableObject, Value};
 
-/// `import Table from "table"`. Auto-prelude'd so bare `Table.insert(…)`
+/// `from "table" import Table`. Auto-prelude'd so bare `Table.insert(…)`
 /// also works.
 pub static TABLE_PACKAGE: NativePackage = NativePackage {
     name: "table",

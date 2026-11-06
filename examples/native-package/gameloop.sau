@@ -5,7 +5,7 @@
 --
 -- Build & install the package first (see README.md), then:
 --   saule run examples/native-package/gameloop.sau
-import Graphics, Window, Timer from shine
+from shine import Graphics, Window, Timer
 
 class Main
 	static fn main()

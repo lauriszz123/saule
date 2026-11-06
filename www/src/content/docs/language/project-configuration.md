@@ -171,8 +171,8 @@ that cannot be found or parsed.
 A typical project-mode entry file:
 
 ```saule
-import Player from "entities/Player"
-import clamp from "utils/Math"
+from "entities/Player" import Player
+from "utils/Math" import clamp
 
 class Main
     static fn main()

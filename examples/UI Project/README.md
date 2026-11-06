@@ -15,7 +15,7 @@ saule install
 
 The declarative, SwiftUI-flavoured view toolkit this renders with lives in its
 own package, [`saule-uikit`](https://github.com/lauriszz123/saule-uikit), listed in this project's
-`dependencies:` and imported as `import * from "uikit"`. `src/Test.sau` is the
+`dependencies:` and imported as `from "uikit" import *`. `src/Test.sau` is the
 demo the entry point renders.
 
 The whole kit leans on one Saule feature, the **trailing block**: when the last

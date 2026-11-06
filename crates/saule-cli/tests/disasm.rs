@@ -51,7 +51,7 @@ impl Scratch {
         );
         self.write(
             "src/main.sau",
-            "import * from \"base\"\n\n\
+            "from \"base\" import *\n\n\
              class Derived extends Base\nend\n\n\
              class Main\n  static fn main()\n    \
              local d: Derived = Derived()\n    println(d.greet())\n  end\nend\n",
@@ -252,7 +252,7 @@ fn a_missing_file_is_an_error() {
 #[test]
 fn an_unresolved_import_fails_without_emitting_a_chunk() {
     let s = Scratch::new("bad_import");
-    let f = s.write("imp.sau", "import * from \"nowhere\"\n");
+    let f = s.write("imp.sau", "from \"nowhere\" import *\n");
 
     let run = disasm(&[f.to_str().unwrap()], None);
 

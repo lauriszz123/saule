@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn imports_are_skipped() {
-        let src = "import Foo from \"bar\"\nfn main()\nend\n";
+        let src = "from \"bar\" import Foo\nfn main()\nend\n";
         let syms = outline(src);
         assert_eq!(syms.len(), 1);
         assert_eq!(syms[0].name, "main");

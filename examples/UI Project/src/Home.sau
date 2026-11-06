@@ -1,8 +1,8 @@
-import * from "uikit"
-import * from Shared
-import * from Contacts
-import * from Messenger
-import * from Test
+from "uikit" import *
+from Shared import *
+from Contacts import *
+from Messenger import *
+from Test import *
 
 -- The launcher. Three cards, each pushing a full-window route; every route
 -- brings its own back arrow, so this screen never has to know what it opened.
@@ -23,7 +23,7 @@ export class HomeScreen extends View
 			end
 		end
 
-		local cards: table<View> = {
+		local cards: View[] = {
 			DemoCard(
 				icon: Icons.list,
 				title: "Contacts",

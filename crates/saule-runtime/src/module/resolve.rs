@@ -1,5 +1,5 @@
 //! Turning an import path into a file on disk: relative paths,
-//! project roots, package directories, and `init.sau` barrels.
+//! project roots, package directories, and folder modules (`init.sau`).
 
 use std::path::{Path, PathBuf};
 
@@ -77,7 +77,7 @@ pub fn resolve_import_path(dir: &Path, raw: &str) -> Option<PathBuf> {
                 }
             }
         } else {
-            // Bare `import X from "json"` — the import names the dependency
+            // Bare `from "json" import X` — the import names the dependency
             // itself rather than a module inside it, so it resolves to the
             // package's entry point: an `init.sau` under one of its
             // `src_dirs`. That is the single convention for "what a package
@@ -143,7 +143,7 @@ pub fn unresolved_imports(module: &saule_ast::Module, dir: &Path) -> Vec<crate::
         .collect()
 }
 
-/// `import Nope from "math"`: a name a built-in package does not export. The
+/// `from "math" import Nope`: a name a built-in package does not export. The
 /// wording is the one the program driver uses when it reaches the import.
 ///
 /// A file of the same name resolves ahead of a package, so one found by the
@@ -225,18 +225,4 @@ pub(crate) fn try_resolve_base(base: &Path) -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// True when `path` is a folder module's entry file (`init.sau` /
-/// `init.saule`).
-///
-/// Such a file is a *barrel*: it re-exports whatever it imports, so a folder
-/// of files can be consumed as one module. See [`collect_exports`].
-///
-/// `pub` because `saule-vm`'s program driver has to answer the same question
-/// about the same file. Which modules re-export is a language rule, not an
-/// engine's private business, and the two must not each have their own copy
-/// of it.
-pub fn is_init_module(path: &Path) -> bool {
-    path.file_stem().and_then(|s| s.to_str()) == Some("init")
 }

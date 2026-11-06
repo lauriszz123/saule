@@ -86,7 +86,7 @@ pub enum Export {
     Value {
         slot: u16,
     },
-    /// A native package's export that a barrel re-publishes. Native exports
+    /// A native package's export that a module re-exports. Native exports
     /// are Rust-built values fixed before the program runs, so it travels
     /// as the value itself and folds into a constant wherever it lands.
     Native(saule_runtime::Value),
@@ -396,16 +396,11 @@ fn fold_native(
     vals: &HashMap<String, saule_runtime::Value>,
     natives: &mut HashMap<String, saule_runtime::Value>,
 ) -> Result<(), ProgramError> {
-    match &edge.names {
-        ImportNames::All => natives.extend(vals.iter().map(|(k, v)| (k.clone(), v.clone()))),
-        ImportNames::List(items) => {
-            for (orig, alias) in items {
-                let Some(v) = vals.get(orig) else {
-                    return Err(not_exported(unit, orig, &edge.raw, &edge.span));
-                };
-                natives.insert(alias.clone().unwrap_or_else(|| orig.clone()), v.clone());
-            }
-        }
+    for (orig, local) in edge.names.bind(vals.keys().map(String::as_str)) {
+        let Some(v) = vals.get(&orig) else {
+            return Err(not_exported(unit, &orig, &edge.raw, &edge.span));
+        };
+        natives.insert(local, v.clone());
     }
     Ok(())
 }
@@ -447,20 +442,22 @@ fn imported_layouts(
             }
             Target::Module(i) => (&exports[*i], &paths[*i]),
         };
-        // `import * from x` binds every export; a named list binds the ones
-        // it asks for, under the alias when there is one.
-        let wanted: Vec<(&String, String)> = match &edge.names {
-            ImportNames::All => from.keys().map(|k| (k, k.clone())).collect(),
-            ImportNames::List(items) => items
-                .iter()
-                .map(|(orig, alias)| (orig, alias.clone().unwrap_or_else(|| orig.clone())))
-                .collect(),
-        };
-        for (orig, local) in wanted {
+        // A wildcard binds every export, a namespace every export as
+        // `ns.Name`, and a named list the ones it asks for, under the alias
+        // when there is one.
+        let namespace = matches!(edge.names, ImportNames::Namespace(_));
+        for (orig, local) in edge.names.bind(from.keys().map(String::as_str)) {
+            let orig = &orig;
+            // A namespace's types also keep their bare names, which is how the
+            // imported module's own signatures spell them. Never a slot, so
+            // the bare name is still nothing the program can say.
             match from.get(orig) {
                 Some(Export::Class(i)) => {
                     if let Some(s) = slot_of(&local) {
                         type_slots.push((s, crate::chunk::TypeSlot::Class(*i)));
+                    }
+                    if namespace {
+                        out.index.entry(orig.clone()).or_insert(*i);
                     }
                     out.index.insert(local, *i);
                 }
@@ -468,12 +465,18 @@ fn imported_layouts(
                     if let Some(s) = slot_of(&local) {
                         type_slots.push((s, crate::chunk::TypeSlot::Enum(*i)));
                     }
+                    if namespace {
+                        out.enums.entry(orig.clone()).or_insert(*i);
+                    }
                     out.enums.insert(local, *i);
                 }
                 Some(Export::Interface(i)) => {
+                    if namespace {
+                        out.interfaces.entry(orig.clone()).or_insert(*i);
+                    }
                     out.interfaces.insert(local, *i);
                 }
-                // A native package's export, re-published by a barrel: a
+                // A native package's export, re-exported by that module: a
                 // constant, folded like any other native import.
                 Some(Export::Native(v)) => {
                     natives.insert(local, v.clone());
@@ -522,7 +525,7 @@ fn export_of(
     //
     // `layouts` here is this module's *whole* type scope, imports included —
     // `layout::build` seeds it with them so a subclass can extend an
-    // imported parent — which is exactly what makes a barrel's re-export of
+    // imported parent — which is exactly what makes a re-export of
     // a type fall out with no extra lookup, and with the same program-global
     // index the declaring module assigned.
     if let Some(i) = layouts.get(name) {
@@ -550,23 +553,15 @@ fn export_of(
 /// Normally only `export`ed declarations, matching `module::collect_exports`
 /// in the tree-walker — a name without `export` stays private.
 ///
-/// ## Barrels
+/// ## Re-exports
 ///
-/// An `init.sau` is a **barrel**: it also publishes everything its `import`
-/// statements brought in, which is what lets a folder of files be consumed
-/// as one module. `examples/UI Project` is built on it — `UIKit/init.sau`
-/// re-exports two dozen siblings and declares nothing of its own — and until
-/// this existed here, a class declared behind the barrel was invisible to
-/// the modules that extend it, which surfaced as the wrong diagnostic
-/// entirely: `a class extending one the compiler cannot see`.
+/// `export from x import …` also publishes what that import brought in,
+/// which is what lets a folder of files be consumed as one module through
+/// its `init.sau`.
 ///
-/// The rule is `module::is_init_module`, called rather than restated: which
-/// modules re-export is a language rule, and two engines each with their own
-/// copy of it is how they drift.
-///
-/// **A re-exported value publishes the barrel's own slot, not the original
-/// module's.** The barrel's prologue copies the value into that slot when
-/// the barrel runs, and the tree-walker's barrel snapshots
+/// **A re-exported value publishes the re-exporting module's own slot, not
+/// the original module's.** Its prologue copies the value into that slot when
+/// it runs, and the tree-walker snapshots
 /// `env.get(name)` at exactly the same moment — so forwarding the source
 /// slot instead would hand a later importer a *fresher* value than the
 /// tree-walker gives it, in the one case where something mutated the
@@ -574,18 +569,18 @@ fn export_of(
 /// program-global and there is only one of it.
 ///
 /// Statements are walked in source order, imports included, because that is
-/// the order the tree-walker resolves collisions in — a barrel that both
+/// the order the tree-walker resolves collisions in — a module that both
 /// declares `X` and imports one publishes whichever came last.
 struct Exported {
     names: HashMap<String, Export>,
-    /// `(destination, source)` global slot pairs for values a barrel
+    /// `(destination, source)` global slot pairs for values a module
     /// re-published under a slot of its own.
     ///
     /// The two slots hold the same function, so whatever the program knows
     /// about the one it knows about the other — `Tables::fn_params_by_slot`
     /// in particular, which §19's call-site binding reads and which is keyed
     /// on the slot the *declaring* module exported from. Without carrying it
-    /// across, a `fn` reached through a barrel had no parameter list, and
+    /// across, a `fn` reached through a re-export had no parameter list, and
     /// every named argument or trailing block on it refused with
     /// `a named argument to a callee the compiler cannot identify`.
     ///
@@ -601,7 +596,6 @@ fn collect_exports(
     bindings: &saule_semantic::Bindings,
     exports: &[HashMap<String, Export>],
 ) -> Result<Exported, ProgramError> {
-    let barrel = saule_runtime::module::is_init_module(&unit.path);
     let mut out = HashMap::new();
     let mut value_aliases = Vec::new();
     // `unit.imports` is one edge per `Decl::Import`, in source order, so a
@@ -639,34 +633,27 @@ fn collect_exports(
                     out.insert(name.clone(), e);
                 }
             }
-            Decl::Import { names, .. } => {
+            Decl::Import {
+                names, exported, ..
+            } => {
                 let Some(this) = unit.imports.get(edge) else {
                     continue;
                 };
                 edge += 1;
-                if !barrel {
+                if !exported {
                     continue;
                 }
                 let from = match &this.target {
                     Target::Module(i) => &exports[*i],
                     // A native package's exports are folded into constants
                     // at compile time — they reach no module slot and no
-                    // layout table — so the barrel republishes the values
+                    // layout table — so the module re-exports the values
                     // themselves, and each importer folds them in turn. A
-                    // dynamic package's library is loaded when the barrel
+                    // dynamic package's library is loaded when the module
                     // runs, which post-order puts before any importer.
                     Target::Native(vals) | Target::Dynamic { exports: vals, .. } => {
-                        let pairs: Vec<(String, &String)> = match names {
-                            ImportNames::All => vals.keys().map(|k| (k.clone(), k)).collect(),
-                            ImportNames::List(items) => items
-                                .iter()
-                                .map(|(orig, alias)| {
-                                    (alias.clone().unwrap_or_else(|| orig.clone()), orig)
-                                })
-                                .collect(),
-                        };
-                        for (local, orig) in pairs {
-                            if let Some(v) = vals.get(orig) {
+                        for (orig, local) in names.bind(vals.keys().map(String::as_str)) {
+                            if let Some(v) = vals.get(&orig) {
                                 out.insert(local, Export::Native(v.clone()));
                             }
                         }
@@ -674,23 +661,16 @@ fn collect_exports(
                     }
                 };
                 // The names this import bound *locally* — under their
-                // aliases, since that is what the barrel published them as.
-                let locals: Vec<String> = match names {
-                    ImportNames::All => from.keys().cloned().collect(),
-                    ImportNames::List(items) => items
-                        .iter()
-                        .map(|(orig, alias)| alias.clone().unwrap_or_else(|| orig.clone()))
-                        .collect(),
-                };
-                for local in locals {
+                // aliases, since that is what the module published them as.
+                for (orig, local) in names.bind(from.keys().map(String::as_str)) {
                     let Some(e) = export_of(&local, slot_base, layouts, bindings) else {
                         continue;
                     };
-                    // A value moved to a slot of the barrel's own; note the
+                    // A value moved to a slot of the module's own; note the
                     // pair so what the program knows about the source slot
                     // follows it there.
                     if let (Export::Value { slot: dst }, Some(Export::Value { slot: src })) =
-                        (&e, from.get(&local))
+                        (&e, from.get(&orig))
                     {
                         value_aliases.push((*dst, *src));
                     }

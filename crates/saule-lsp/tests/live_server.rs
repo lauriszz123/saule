@@ -311,7 +311,7 @@ impl Drop for Project {
 
 const LIB_INT: &str = "class Lib\n  static fn value() -> integer\n    return 1\n  end\nend\n";
 const LIB_STR: &str = "class Lib\n  static fn value() -> string\n    return \"x\"\n  end\nend\n";
-const MAIN: &str = "import Lib from \"lib\"\nlocal n: integer = Lib.value()\nprintln(n)\n";
+const MAIN: &str = "from \"lib\" import Lib\nlocal n: integer = Lib.value()\nprintln(n)\n";
 
 #[test]
 fn an_edit_shows_and_clears_an_error() {
@@ -432,11 +432,11 @@ fn a_change_reaches_files_that_only_import_it_indirectly() {
         ("base.sau", &base("integer", "1")),
         (
             "mid.sau",
-            "import Base from \"base\"\nclass Mid\n  static fn make() -> Base\n    return Base()\n  end\nend\n",
+            "from \"base\" import Base\nclass Mid\n  static fn make() -> Base\n    return Base()\n  end\nend\n",
         ),
         (
             "top.sau",
-            "import Mid from \"mid\"\nimport Base from \"base\"\nlocal a: integer = Mid.make().value()\nprintln(a)\n",
+            "from \"mid\" import Mid\nfrom \"base\" import Base\nlocal a: integer = Mid.make().value()\nprintln(a)\n",
         ),
     ]);
     let (base_file, top) = (project.path("base.sau"), project.path("top.sau"));
@@ -672,7 +672,7 @@ fn the_editor_flags_everything_that_cannot_compile_and_nothing_that_runs() {
 
 #[test]
 fn an_imported_function_types_its_callers_in_hover_and_hints() {
-    let source = "import * from \"Shared\"\n\nlocal name = trimmed(\"a\")\nlocal head = first({\"a\"})\nlocal top = limit\nfor tag in {\"a\", \"b\"} do\n  println(tag)\nend\nprintln(trimmed(name))\n";
+    let source = "from \"Shared\" import *\n\nlocal name = trimmed(\"a\")\nlocal head = first({\"a\"})\nlocal top = limit\nfor tag in {\"a\", \"b\"} do\n  println(tag)\nend\nprintln(trimmed(name))\n";
     let project = Project::new(&[
         (
             "Shared.sau",
@@ -825,5 +825,169 @@ fn the_editor_documents_the_standard_library() {
             .unwrap_or_default()
             .contains("replaced by"),
         "completion documentation should carry prose: {gsub:?}"
+    );
+}
+
+const SHAPES: &str = "export class Box\n  size: integer\n  fn init(size: integer)\n    self.size = size\n  end\n  fn grown() -> Box\n    return Box(self.size + 1)\n  end\nend\n\nexport fn twice(n: integer) -> integer\n  return n * 2\nend\n";
+
+const USES_KIT: &str = "import kit\nfrom kit import twice as tw\n\nlocal b: kit.Box = kit.Box(2)\nlocal g = b.grown()\nlocal n = kit.twice(3)\nprintln(g.size + tw(n))\n";
+
+/// `kit/shapes.sau` behind a `kit/init.sau` that re-exports it, and a
+/// `main.sau` written with `text`.
+fn kit_project(text: &str) -> Project {
+    let project = Project::new(&[("main.sau", text)]);
+    std::fs::create_dir_all(project.path("kit")).unwrap();
+    project.write("kit/shapes.sau", SHAPES);
+    project.write("kit/init.sau", "export from shapes import *\n");
+    project
+}
+
+fn labels(result: &Value) -> Vec<String> {
+    let items = result.get("items").unwrap_or(result);
+    let mut out: Vec<String> = items
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i["label"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+fn complete(server: &mut Server, path: &Path, line: u32, character: u32) -> Vec<String> {
+    let result = server.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": {"uri": uri(path)},
+            "position": {"line": line, "character": character},
+        }),
+    );
+    labels(&result)
+}
+
+#[test]
+fn namespace_and_from_imports_check_clean_and_report_a_missing_export() {
+    let project = kit_project(USES_KIT);
+    let main = project.path("main.sau");
+    let mut server = Server::start(Some(&project.0));
+    assert_eq!(server.errors_on_opening(&main), Vec::<String>::new());
+    server.change(&main, &format!("{USES_KIT}println(kit.Nope)\n"));
+    assert_eq!(server.errors(&main), ["`kit` has no export named `Nope`"]);
+}
+
+#[test]
+fn the_removed_import_syntax_is_an_error_that_says_what_to_write() {
+    let project = kit_project("import * from kit\n");
+    let main = project.path("main.sau");
+    let mut server = Server::start(Some(&project.0));
+    let errors = server.errors_on_opening(&main);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("expected a module after `import`"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn completion_offers_what_a_module_exports() {
+    let project = kit_project("import kit\n");
+    let main = project.path("main.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&main);
+
+    server.change(&main, "from kit import ");
+    assert_eq!(complete(&mut server, &main, 0, 16), ["Box", "twice"]);
+
+    server.change(&main, "import kit\nkit.");
+    assert_eq!(complete(&mut server, &main, 1, 4), ["Box", "twice"]);
+
+    server.change(&main, "import kit\nlocal b: kit.");
+    assert_eq!(complete(&mut server, &main, 1, 13), ["Box", "twice"]);
+
+    server.change(&main, "from ");
+    let modules = complete(&mut server, &main, 0, 5);
+    assert!(modules.contains(&"kit".to_string()), "{modules:?}");
+}
+
+#[test]
+fn hover_definition_and_hints_see_through_a_namespace() {
+    let project = kit_project(USES_KIT);
+    let main = project.path("main.sau");
+    let shapes = project.path("kit/shapes.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&main);
+    server.open(&shapes);
+
+    assert!(server.hover(&main, 3, 14).contains("class kit.Box"));
+    assert!(server.hover(&main, 3, 10).contains("(namespace) kit"));
+    assert!(
+        server
+            .hover(&main, 5, 15)
+            .contains("fn kit.twice(n: integer) -> integer")
+    );
+    assert!(server.hover(&main, 4, 6).contains("g: Box"));
+
+    let def = server.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": {"uri": uri(&main)},
+            "position": {"line": 3, "character": 24},
+        }),
+    );
+    assert_eq!(def[0]["uri"], uri(&shapes), "{def}");
+    assert_eq!(def[0]["range"]["start"]["line"], 0, "{def}");
+
+    let refs = server.request(
+        "textDocument/references",
+        json!({
+            "textDocument": {"uri": uri(&shapes)},
+            "position": {"line": 0, "character": 14},
+            "context": {"includeDeclaration": false},
+        }),
+    );
+    // Every `Box` in main.sau, each just the name: renaming it must leave
+    // the `kit.` in front alone.
+    let in_main: Vec<&Value> = refs
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["uri"] == uri(&main))
+        .collect();
+    assert_eq!(in_main.len(), 2, "{refs}");
+    for r in in_main {
+        let width = r["range"]["end"]["character"].as_u64().unwrap()
+            - r["range"]["start"]["character"].as_u64().unwrap();
+        assert_eq!(width, 3, "{r}");
+    }
+
+    let hints = server.request(
+        "textDocument/inlayHint",
+        json!({
+            "textDocument": {"uri": uri(&main)},
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 8, "character": 0}},
+        }),
+    );
+    let shown: Vec<&str> = hints
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["label"].as_str())
+        .collect();
+    for want in [": Box", ": integer", "n:"] {
+        assert!(shown.contains(&want), "{want}: {shown:?}");
+    }
+
+    let help = server.request(
+        "textDocument/signatureHelp",
+        json!({
+            "textDocument": {"uri": uri(&main)},
+            "position": {"line": 5, "character": 20},
+        }),
+    );
+    assert_eq!(
+        help["signatures"][0]["label"], "kit.twice(n: integer) -> integer",
+        "{help}"
     );
 }

@@ -16,10 +16,19 @@ impl Resolver {
             Expr::Error => {}
             Expr::Ident(name) => {
                 if !self.resolve_at(expr.id, name) {
-                    self.errors.push(SemanticError::UndefinedName {
-                        name: name.clone(),
-                        span: to_source_span(span),
-                    });
+                    // Only a namespace import makes a name with a dot in it.
+                    let error = match name.split_once('.') {
+                        Some((namespace, member)) => SemanticError::NotExported {
+                            namespace: namespace.to_string(),
+                            name: member.to_string(),
+                            span: to_source_span(span),
+                        },
+                        None => SemanticError::UndefinedName {
+                            name: name.clone(),
+                            span: to_source_span(span),
+                        },
+                    };
+                    self.errors.push(error);
                 }
             }
             Expr::Self_ => {

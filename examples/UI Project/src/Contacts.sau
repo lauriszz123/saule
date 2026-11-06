@@ -1,5 +1,5 @@
-import * from "uikit"
-import * from Shared
+from "uikit" import *
+from Shared import *
 
 -- One row of the table. A plain value: the screen's state owns the list, and
 -- the table is handed a fresh view of it on every rebuild.
@@ -7,7 +7,7 @@ export class Contact
 	name: string
 	email: string
 	role: string
-	tags: table<string>
+	tags: string[]
 	added: Date
 
 	-- Stable across sorts and deletes, which is what the table row keys on.
@@ -18,7 +18,7 @@ export class Contact
 		name: string = "",
 		email: string = "",
 		role: string = "",
-		tags: table<string> = {},
+		tags: string[] = {},
 		added: Date? = nil
 	)
 		self.id = id
@@ -46,7 +46,7 @@ export class ContactsScreen extends StatefulView
 end
 
 class ContactsState extends State
-	local contacts: table<Contact>
+	local contacts: Contact[]
 	local nextId: integer
 
 	-- The form.
@@ -54,7 +54,7 @@ class ContactsState extends State
 	local email: string
 	local role: string
 	local added: Date
-	local tags: table<string>
+	local tags: string[]
 	local tagDraft: string
 	local error: string
 

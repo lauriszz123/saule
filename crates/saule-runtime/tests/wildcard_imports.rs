@@ -1,4 +1,4 @@
-//! `import * from "..."` used to make the name resolver give up: any
+//! `from "..." import *` used to make the name resolver give up: any
 //! module containing a glob had its undefined-name diagnostics switched
 //! off wholesale, so a typo (or a name the author simply never imported)
 //! was silently accepted. The module loader can enumerate what a glob
@@ -61,7 +61,7 @@ fn glob_over_a_file_module_still_reports_undefined_names() {
 
     let found = undefined_names(
         "\
-import * from \"shapes\"
+from \"shapes\" import *
 
 fn run() -> nil
   local a = Circle.area(2.0)
@@ -84,7 +84,7 @@ fn glob_does_not_expose_unexported_declarations() {
 
     let found = undefined_names(
         "\
-import * from \"shapes\"
+from \"shapes\" import *
 
 fn run() -> nil
   local h = Hidden()
@@ -98,19 +98,19 @@ end
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An `init.sau` barrel re-exports what it imports, so a glob over the
-/// folder has to see through one more level.
+/// An `export from` passes names on, so a glob over the folder has to see
+/// through one more level.
 #[test]
-fn glob_over_a_barrel_sees_reexported_names() {
+fn glob_over_a_re_export_sees_its_names() {
     let dir = scratch("barrel");
     let lib = dir.join("lib");
     std::fs::create_dir_all(&lib).unwrap();
     std::fs::write(lib.join("shapes.sau"), SHAPES).unwrap();
-    std::fs::write(lib.join("init.sau"), "import * from \"shapes\"\n").unwrap();
+    std::fs::write(lib.join("init.sau"), "export from \"shapes\" import *\n").unwrap();
 
     let found = undefined_names(
         "\
-import * from \"lib\"
+from \"lib\" import *
 
 fn run() -> nil
   local a = Circle.area(2.0)
@@ -135,7 +135,7 @@ fn unenumerable_glob_suppresses_undefined_names() {
 
     let found = undefined_names(
         "\
-import * from \"no_such_module\"
+from \"no_such_module\" import *
 
 fn run() -> nil
   local c = Whatever()
@@ -161,7 +161,7 @@ fn named_import_alongside_a_glob_still_reports_undefined_names() {
 
     let found = undefined_names(
         "\
-import Circle as Round from \"shapes\"
+from \"shapes\" import Circle as Round
 
 fn run() -> nil
   local a = Round.area(2.0)

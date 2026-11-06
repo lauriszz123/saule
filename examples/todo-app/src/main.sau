@@ -1,5 +1,5 @@
-import * from storage
-import * from render
+from storage import *
+from render import *
 
 class Main
 	static fn help()

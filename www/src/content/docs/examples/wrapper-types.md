@@ -161,8 +161,8 @@ end
 ## `src/main.sau`
 
 ```saule title="src/main.sau"
-import Text from "text"
-import Settings from "settings"
+from "text" import Text
+from "settings" import Settings
 
 -- A parameter is one of the sites `Assignable` applies at, so callers may pass a
 -- bare `string` and get a `Text` bound here.

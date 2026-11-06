@@ -171,7 +171,7 @@ fn parses_try_catch() {
 
 #[test]
 fn parses_import() {
-    let m = parse_src(r#"import Player, Entity as E from "game.entities""#);
+    let m = parse_src(r#"from "game.entities" import Player, Entity as E"#);
     match &m.stmts[0].value {
         Stmt::Decl(d) => assert!(matches!(d.value, Decl::Import { .. })),
         _ => panic!("expected import"),
@@ -181,13 +181,14 @@ fn parses_import() {
 #[test]
 fn parses_glob_import_with_from() {
     // The explicit glob spelling stays supported.
-    let m = parse_src(r#"import * from "shine""#);
+    let m = parse_src(r#"from "shine" import *"#);
     match &m.stmts[0].value {
         Stmt::Decl(d) => match &d.value {
             Decl::Import {
                 names,
                 path,
                 quoted,
+                ..
             } => {
                 assert_eq!(names, &ImportNames::All);
                 assert_eq!(path, "shine");
@@ -202,13 +203,14 @@ fn parses_glob_import_with_from() {
 #[test]
 fn parses_unquoted_dotted_module_path() {
     // `from some.folder.module` — no quotes; `.` is already a path separator.
-    let m = parse_src("import * from some.folder.module");
+    let m = parse_src("from some.folder.module import *");
     match &m.stmts[0].value {
         Stmt::Decl(d) => match &d.value {
             Decl::Import {
                 names,
                 path,
                 quoted,
+                ..
             } => {
                 assert_eq!(names, &ImportNames::All);
                 assert_eq!(path, "some.folder.module");
@@ -224,7 +226,7 @@ fn parses_unquoted_dotted_module_path() {
 fn unquoted_import_does_not_swallow_next_statement() {
     // No statement can begin with `.`, so the bare path stops at `shine`
     // and the following call parses as its own statement.
-    let m = parse_src("import * from shine\nGraphics.present()");
+    let m = parse_src("from shine import *\nGraphics.present()");
     assert_eq!(m.stmts.len(), 2);
     match &m.stmts[0].value {
         Stmt::Decl(d) => match &d.value {
@@ -240,7 +242,7 @@ fn unquoted_import_does_not_swallow_next_statement() {
 
 #[test]
 fn parses_unquoted_named_import_with_alias() {
-    let m = parse_src("import View as V, Button from some.folder.module");
+    let m = parse_src("from some.folder.module import View as V, Button");
     match &m.stmts[0].value {
         Stmt::Decl(d) => match &d.value {
             Decl::Import { names, path, .. } => {
@@ -945,7 +947,7 @@ fn from_is_reserved_as_a_name() {
 
 #[test]
 fn from_still_opens_an_import_tail() {
-    let m = parse_src("import A, B from \"mod\"");
+    let m = parse_src("from \"mod\" import A, B");
     match &m.stmts[0].value {
         Stmt::Decl(d) => match &d.value {
             Decl::Import { path, .. } => assert_eq!(path, "mod"),
@@ -1153,4 +1155,194 @@ fn a_keyword_is_only_a_member_name_when_tight_against_the_dot() {
         let tokens = Lexer::new(src).tokenize().expect("lex ok");
         assert!(parse(tokens).is_err(), "`{src}` should not parse");
     }
+}
+
+// ── imports ──────────────────────────────────────────────────────────────────
+
+fn only_import(src: &str) -> (ImportNames, String, bool, bool) {
+    let m = parse_src(src);
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::Import {
+                names,
+                path,
+                quoted,
+                exported,
+            } => (names.clone(), path.clone(), *quoted, *exported),
+            other => panic!("expected an import, got {other:?}"),
+        },
+        other => panic!("expected an import, got {other:?}"),
+    }
+}
+
+fn parse_error(src: &str) -> String {
+    let tokens = Lexer::new(src).tokenize().expect("lex");
+    match parse(tokens) {
+        Ok(m) => panic!("expected an error, parsed {m:?}"),
+        Err(e) => {
+            let help = miette::Diagnostic::help(&e)
+                .map(|h| h.to_string())
+                .unwrap_or_default();
+            format!("{e} {help}")
+        }
+    }
+}
+
+#[test]
+fn a_namespace_import_is_named_by_its_last_segment() {
+    let ns = |s: &str| ImportNames::Namespace(s.to_string());
+    assert_eq!(
+        only_import("import shine"),
+        (ns("shine"), "shine".into(), false, false)
+    );
+    assert_eq!(
+        only_import("import ui.widgets"),
+        (ns("widgets"), "ui.widgets".into(), false, false)
+    );
+    assert_eq!(
+        only_import("import \"ui/widgets\""),
+        (ns("widgets"), "ui/widgets".into(), true, false)
+    );
+    assert_eq!(
+        only_import("import shine as sh"),
+        (ns("sh"), "shine".into(), false, false)
+    );
+    assert_eq!(
+        only_import("import \"my-lib\" as lib"),
+        (ns("lib"), "my-lib".into(), true, false)
+    );
+}
+
+#[test]
+fn a_path_that_is_not_a_name_needs_as() {
+    let err = parse_error("import \"my-lib\"\n");
+    assert!(err.contains("`as name`"), "{err}");
+}
+
+#[test]
+fn from_imports_take_a_list_or_a_wildcard() {
+    assert_eq!(
+        only_import("from shine import Window, Button as Btn"),
+        (
+            ImportNames::List(vec![
+                ("Window".into(), None),
+                ("Button".into(), Some("Btn".into())),
+            ]),
+            "shine".into(),
+            false,
+            false
+        )
+    );
+    assert_eq!(
+        only_import("from \"ui/widgets\" import *"),
+        (ImportNames::All, "ui/widgets".into(), true, false)
+    );
+}
+
+#[test]
+fn export_from_marks_a_re_export() {
+    assert!(
+        only_import("export from shapes import *").3,
+        "a wildcard re-export"
+    );
+    let (names, _, _, exported) = only_import("export from shapes import Box as Crate");
+    assert!(exported);
+    assert_eq!(
+        names,
+        ImportNames::List(vec![("Box".into(), Some("Crate".into()))])
+    );
+}
+
+#[test]
+fn a_namespace_cannot_be_re_exported() {
+    let err = parse_error("export import shine\n");
+    assert!(err.contains("export from path import"), "{err}");
+}
+
+#[test]
+fn the_removed_import_forms_say_what_to_write_instead() {
+    for old in [
+        "import * from \"uikit\"",
+        "import * from shine",
+        "import Window from shine",
+        "import Window, Button from \"shine\"",
+        "import Window as W from shine",
+        "import Window as W, Button from shine",
+    ] {
+        let err = parse_error(old);
+        assert!(err.contains("from \"uikit\" import *"), "{old}: {err}");
+    }
+}
+
+#[test]
+fn a_namespace_import_then_a_from_import_are_two_statements() {
+    let m = parse_src(
+        "import kit\nfrom kit import twice as tw\nimport kit as k\nfrom shine import *\n",
+    );
+    assert_eq!(m.stmts.len(), 4);
+}
+
+#[test]
+fn a_namespace_member_is_one_name() {
+    let m = parse_src("import kit\nlocal b = kit.Box(1).size\n");
+    let Stmt::Local {
+        value: Some(value), ..
+    } = &m.stmts[1].value
+    else {
+        panic!("expected a local");
+    };
+    let Expr::Member { obj, name } = &value.value else {
+        panic!("expected `.size`, got {:?}", value.value);
+    };
+    assert_eq!(name, "size");
+    let Expr::Call { callee, .. } = &obj.value else {
+        panic!("expected a call");
+    };
+    assert_eq!(callee.value, Expr::Ident("kit.Box".into()));
+}
+
+#[test]
+fn a_member_of_a_value_is_not_a_namespace() {
+    let m = parse_src("local kit = {}\nlocal b = kit.Box\n");
+    let Stmt::Local {
+        value: Some(value), ..
+    } = &m.stmts[1].value
+    else {
+        panic!("expected a local");
+    };
+    assert!(
+        matches!(value.value, Expr::Member { .. }),
+        "{:?}",
+        value.value
+    );
+}
+
+#[test]
+fn a_namespace_member_is_a_type_too() {
+    let m = parse_src(
+        "import kit\nlocal a: kit.Box = nil\nlocal b: kit.Box? = nil\nlocal c: kit.Box[] = {}\nlocal d: kit.Pair<integer>? = nil\n",
+    );
+    let ty = |i: usize| match &m.stmts[i].value {
+        Stmt::Local { ty: Some(t), .. } => t.clone(),
+        other => panic!("expected a typed local, got {other:?}"),
+    };
+    assert_eq!(ty(1), Type::Named("kit.Box".into()));
+    assert_eq!(
+        ty(2),
+        Type::Nullable(Box::new(Type::Named("kit.Box".into())))
+    );
+    assert_eq!(
+        ty(3),
+        Type::Table {
+            key: Some(Box::new(Type::Named("integer".into()))),
+            value: Box::new(Type::Named("kit.Box".into())),
+        }
+    );
+    assert_eq!(
+        ty(4),
+        Type::Nullable(Box::new(Type::generic(
+            "kit.Pair",
+            vec![Type::Named("integer".into())]
+        )))
+    );
 }

@@ -22,6 +22,9 @@ impl<'a> Cx<'a> {
         if let Some(md) = self.expr_md(&e.value) {
             self.record(e.span.clone(), md);
         }
+        if let Expr::Ident(name) = &e.value {
+            self.record_namespace_part(name, e.span.start);
+        }
         match &e.value {
             // A recovery hole has no children and resolves to nothing.
             Expr::Error => {}

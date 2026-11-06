@@ -177,7 +177,7 @@ pub struct ModuleSeed {
     /// Declared types of the `export name: T = value` module variables the
     /// imports bring in, keyed by their local name.
     pub variables: VariableRegistry,
-    /// Local names this module's `import * from "..."` statements bind,
+    /// Local names this module's `from "..." import *` statements bind,
     /// as enumerated by the embedder.
     ///
     /// `None` — the default — means "not enumerated", and the resolver

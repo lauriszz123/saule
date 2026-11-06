@@ -584,7 +584,7 @@ end
     .unwrap();
 
     let app_src = "\
-import Storage from \"storage\"
+from \"storage\" import Storage
 
 fn run() -> nil
   local s: Storage = Storage()
@@ -643,7 +643,7 @@ end
     .unwrap();
 
     let app_src = "\
-import greet from \"util\"
+from \"util\" import greet
 
 fn main() -> nil
   print(greet(\"world\"))
@@ -869,7 +869,7 @@ end
     .unwrap();
 
     let app_src = "\
-import Event from \"events\"
+from \"events\" import Event
 
 fn dispatch(event: Event) -> string
   return match event
@@ -896,7 +896,7 @@ end
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The shape the UI Project actually uses: `import * from Events` over an
+/// The shape the UI Project actually uses: `from Events import *` over an
 /// `export enum`, hovered on a `case` arm in a `match`.
 ///
 /// A named import and a wildcard reach the registry by different routes,
@@ -923,7 +923,7 @@ end
     .unwrap();
 
     let app_src = "\
-import * from \"events\"
+from \"events\" import *
 
 fn dispatch(event: Event) -> string
   return match event
@@ -1525,7 +1525,7 @@ end
     )
     .unwrap();
 
-    let app_src = "import * from \"json\"\n\nfn run() -> nil\nend\n";
+    let app_src = "from \"json\" import *\n\nfn run() -> nil\nend\n";
     let tokens = saule_lexer::Lexer::new(app_src).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
     let seed = saule_runtime::module::collect_import_seed(&module, &dir);
@@ -1913,7 +1913,7 @@ end
 /// Free functions reached through a re-export barrel resolve for
 /// named-argument hover.
 ///
-/// A barrel (`init.sau`: nothing but `import * from ...`) declares no
+/// A folder module (`init.sau`: nothing but `export from ...`) declares no
 /// functions itself, so a single-level scan of the import target found
 /// none of them and every call to one hovered its keys as a bare name
 /// with no type. Classes never had this problem — they arrive through
@@ -1930,11 +1930,15 @@ fn named_arg_resolves_through_a_re_export_barrel() {
         "export fn showToast(context: integer, message: string = \"\") -> nil\nend\n",
     )
     .unwrap();
-    // The barrel: re-exports, declares nothing.
-    std::fs::write(dir.join("kit").join("init.sau"), "import * from overlay\n").unwrap();
+    // Re-exports, declares nothing.
+    std::fs::write(
+        dir.join("kit").join("init.sau"),
+        "export from overlay import *\n",
+    )
+    .unwrap();
 
     let app = "\
-import * from kit
+from kit import *
 
 fn main() -> nil
   showToast(1, message: \"hi\")
@@ -1971,9 +1975,9 @@ fn a_barrel_does_not_forward_a_private_function() {
         "fn helper(seed: integer = 0) -> nil\nend\n",
     )
     .unwrap();
-    std::fs::write(dir.join("kit").join("init.sau"), "import * from impl\n").unwrap();
+    std::fs::write(dir.join("kit").join("init.sau"), "from impl import *\n").unwrap();
 
-    let app = "import * from kit\n\nfn main() -> nil\n  helper(seed: 1)\nend\n";
+    let app = "from kit import *\n\nfn main() -> nil\n  helper(seed: 1)\nend\n";
     let tokens = saule_lexer::Lexer::new(app).tokenize().unwrap();
     let module = saule_parser::parse(tokens).unwrap();
     let seed = saule_runtime::module::collect_import_seed(&module, &dir);

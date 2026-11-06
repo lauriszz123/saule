@@ -17,7 +17,7 @@ use crate::native_packages::NativePackage;
 use crate::prelude::Prelude;
 use crate::value::{ClassObject, SauleStr, TableObject, Value};
 
-/// `import Project from "project"`. Auto-prelude'd so the existing bare
+/// `from "project" import Project`. Auto-prelude'd so the existing bare
 /// `Project.name` references keep working.
 pub static PROJECT_PACKAGE: NativePackage = NativePackage {
     name: "project",

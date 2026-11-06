@@ -34,8 +34,8 @@ min_saule_version: "26.1"
 ## `src/main.sau`
 
 ```saule title="src/main.sau"
-import * from storage
-import * from render
+from storage import *
+from render import *
 
 class Main
 	static fn help()
@@ -136,7 +136,7 @@ end
 ## `src/storage.sau`
 
 ```saule title="src/storage.sau"
-import Json from json
+from json import Json
 
 export class Entry
 	local todo: string
@@ -288,7 +288,7 @@ end
 ## `src/render.sau`
 
 ```saule title="src/render.sau"
-import Entry from storage
+from storage import Entry
 
 export class Renderer
 	static fn print(tasks: table<Entry>)

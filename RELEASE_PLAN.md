@@ -1,7 +1,7 @@
 # Saule — Public Release & Package Distribution Plan
 
-Written against `229bac6` as an ordered set of steps, and revised 2026-11-05
-against `bcc6cb7`. The table below is current; the step text further down
+Written against `229bac6` as an ordered set of steps, and revised 2026-11-06
+against `770b58f`. The table below is current; the step text further down
 records the original plan, with each step's status noted where it has since
 landed.
 
@@ -9,7 +9,7 @@ landed.
 toolchain in one command, gets published editor support, and can install a
 dependency from a public Git repository with `saule.lock` pinning the commit.
 
-What is left, verified against `bcc6cb7`:
+What is left, verified against `770b58f`:
 
 | Step | State |
 |---|---|
@@ -40,12 +40,12 @@ manager. Design detail that would clutter a step lives in the appendices.
 |---|---|
 | Versioning | **Done.** `26.<build>`, generated on release, readable from the CLI, the LSP, and the language. See step 0. |
 | CI | **CircleCI** — [.circleci/config.yml](.circleci/config.yml): fmt, clippy, tests, `.sau` fixtures under both engines, version agreement, website checks. **The suite runs on Linux, macOS and Windows** and gates both pull requests (`pr-check`) and releases — the `version` job requires all three platforms plus `check-www`, so a red test anywhere means no archives and no release. There are no GitHub Actions workflows; GitHub keeps the code, the Releases, and Pages. |
-| Releases | **Done.** Every push to `main` publishes six platform archives to GitHub Releases. 21 published to date; `v26.21` is current. |
+| Releases | **Done.** Every push to `main` publishes six platform archives to GitHub Releases, as a pre-release on the `latest` channel until it is blessed. 22 published to date; `v26.22` is current, and `v26.23`, which changes the import syntax, is next. |
 | Toolchain install | **Done.** [install.sh](www/public/install.sh) and [install.ps1](www/public/install.ps1) are served from the docs site and verify checksums. Two channels: `stable` (default) and `latest` — see step 3. |
 | Package manager | **Done, without `publish`.** `saule install`, `update`, `remove` and `list`, with `saule.lock`. A package is published by pushing a Git tag. |
 | Dependencies | Paths and `owner@repo:version`, pinned to exact commits by `saule.lock`. **Direct only** — a package's own dependencies are not resolved (step 8). |
 | Native packages | `saule install` builds them with Cargo. Prebuilt libraries do not exist yet. |
-| Editor plugins | **Published.** VS Code on the Visual Studio Marketplace (`saule.saule`, 26.21.0), JetBrains as plugin 35823, `saule-nvim` from its own repository. Open VSX is still worth doing. |
+| Editor plugins | **Published.** VS Code on the Visual Studio Marketplace (`saule.saule`, 26.21.0 live), JetBrains as plugin 35823 (awaiting approval), `saule-nvim` from its own repository. Open VSX is still worth doing. |
 | Licensing | **Done.** MIT: [LICENSE](LICENSE) at the root, `license = "MIT"` in `[workspace.package]`, and every archive ships a copy. See step 1. |
 
 Four things are already right and shape everything below:
@@ -410,7 +410,7 @@ into `nvim-lspconfig`.
 **VS Code** — **done.** The `saule` publisher ID was claimed and the extension
 is live at
 [`saule.saule`](https://marketplace.visualstudio.com/items?itemName=saule.saule),
-tracking the toolchain version (26.21.0). Still open: publishing to **Open VSX**
+tracking the toolchain version (26.21.0 live; to be restamped with each release). Still open: publishing to **Open VSX**
 for VSCodium users, which is a separate registry and a separate token.
 
 **IntelliJ** — **done.** Listed as

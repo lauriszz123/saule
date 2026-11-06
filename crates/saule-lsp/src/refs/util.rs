@@ -9,6 +9,36 @@ use saule_semantic::{with_classes, with_enums, with_interfaces};
 
 use super::Symbol;
 
+/// `Box` for `kit.Box`. A name reached through `import kit` is the same
+/// declaration as the bare one, and a symbol is known by its declaration.
+pub(crate) fn unqualified(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
+}
+
+/// The same symbol, known by its declared names.
+pub(super) fn unqualified_symbol(symbol: Symbol) -> Symbol {
+    let bare = |s: String| unqualified(&s).to_string();
+    match symbol {
+        Symbol::Class(n) => Symbol::Class(bare(n)),
+        Symbol::Interface(n) => Symbol::Interface(bare(n)),
+        Symbol::Enum(n) => Symbol::Enum(bare(n)),
+        Symbol::Function(n) => Symbol::Function(bare(n)),
+        Symbol::EnumVariant { enum_name, variant } => Symbol::EnumVariant {
+            enum_name: bare(enum_name),
+            variant,
+        },
+        Symbol::Method { class, name } => Symbol::Method {
+            class: bare(class),
+            name,
+        },
+        Symbol::Field { class, name } => Symbol::Field {
+            class: bare(class),
+            name,
+        },
+        other => other,
+    }
+}
+
 /// One local binding tracked during the walk. `def_span` is the byte
 /// range of the identifier at the declaration site so each binding has
 /// stable identity even when an inner scope shadows the name.
@@ -182,9 +212,9 @@ pub(super) fn catch_var_span(source: &str, clause: &saule_ast::CatchClause) -> R
 /// cursor on any of them can navigate.
 pub(super) fn named_type_heads(ty: &Type, out: &mut Vec<String>) {
     match ty {
-        Type::Named(n) => out.push(n.clone()),
+        Type::Named(n) => out.push(unqualified(n).to_string()),
         Type::Generic(g) => {
-            out.push(g.name.clone());
+            out.push(unqualified(&g.name).to_string());
             for a in &g.args {
                 named_type_heads(a, out);
             }
@@ -295,7 +325,7 @@ pub(super) fn inferred_type_of(
 /// `from "a/b"` sits between quotes; `from a.b` is bare, and the parser ends
 /// the declaration's span at its last segment, so the bare path is the span's
 /// suffix. Only handling the quoted form is what used to make goto-definition
-/// silently do nothing on `import * from Geometry`.
+/// silently do nothing on `from Geometry import *`.
 pub(super) fn locate_import_path(
     source: &str,
     range: &Range<usize>,
