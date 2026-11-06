@@ -4,7 +4,7 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
-## Next
+## 26.23
 
 ### Changed
 

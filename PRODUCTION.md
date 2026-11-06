@@ -62,6 +62,12 @@ on this machine (macOS 25.6, arm64), not estimated.
 > [§4](#4-scorecard-against-a-production-language) were already current and are
 > unchanged. Benchmark and LOC figures still predate `197ef4f`.
 
+> **Revised 2026-11-06 against `770b58f`.** 22 releases are published, `v26.22`
+> latest. `v26.23` changes how modules are imported: the module comes first
+> (`from shine import Window`), `import shine` brings in a namespace, and
+> re-exports are written out with `export from` instead of being implied by an
+> `init.sau`. §3.5 is updated to match. Nothing else below has moved.
+
 > **Scope note.** This document does not repeat [RELEASE_PLAN.md](RELEASE_PLAN.md),
 > which already sequences distribution and the package manager in detail and is
 > largely correct. This is the layer above that plan: what the plan does *not*
@@ -541,8 +547,13 @@ Behaviour worth knowing:
 
 - **Two run modes, decided by one thing**: directory ⇒ project mode (requires
   `class Main` with `static fn main()`); file ⇒ script mode (runs top to bottom).
-- **Folder modules** via `init.sau` barrels, with a `MAX_BARREL_DEPTH = 8` bound
-  that doubles as the cycle guard.
+- **Imports name the module first**: `from shine import Window`,
+  `from "uikit" import *`, or `import shine` for a namespace reached as
+  `shine.Window`. The parser reads `shine.Window` as one name, so everything
+  after it handles a namespace as ordinary names.
+- **Folder modules** via `init.sau`, which is what importing a folder imports.
+  Re-exports are explicit (`export from shapes import *`) and allowed from any
+  file; a `MAX_REEXPORT_DEPTH = 8` bound doubles as the cycle guard.
 - **Module loading is cached per `ModuleLoader`**, shared through the environment
   so transitive imports hit the same cache.
 - **Cross-module typechecking works through an "import seed"** — the checker
