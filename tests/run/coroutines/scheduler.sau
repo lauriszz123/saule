@@ -1,0 +1,44 @@
+-- A round-robin scheduler runs fifty coroutines to completion, each in step.
+
+fn check(label: string, got: string, want: string)
+  println(label .. ": " .. got)
+  assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
+end
+
+class Main
+  static fn main()
+    local tasks: table<Coroutine<boolean>> = {}
+    local steps: integer = 0
+    local order: string = ""
+    for t = 1, 50 do
+      tasks[t] = Coroutine.create(fn(co: Yielder<boolean>)
+        for s = 1, 3 do
+          steps = steps + 1
+          if t <= 2 then
+            order = order .. t .. "." .. s .. " "
+          end
+          co.yield(true)
+        end
+      end)
+    end
+
+    local rounds: integer = 0
+    local alive: boolean = true
+    while alive do
+      alive = false
+      rounds = rounds + 1
+      for t = 1, #tasks do
+        local task: Coroutine<boolean> = tasks[t]
+        if not task.isDone() then
+          task.resume()
+          alive = true
+        end
+      end
+    end
+
+    check("steps", steps .. "", "150")
+    -- Three yields, one more resume to finish, one round finding none left.
+    check("rounds", rounds .. "", "5")
+    check("order", order, "1.1 2.1 1.2 2.2 1.3 2.3 ")
+  end
+end

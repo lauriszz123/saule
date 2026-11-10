@@ -79,6 +79,93 @@ impl Vm {
         self.close_upvalues_slow(from);
     }
 
+    // ---- leaving the register file ---------------------------------------
+    //
+    // An open upvalue is a register *index*, and an index only means
+    // something in one register file. Runtime code reached from the
+    // dispatch loop — a native, an operator overload, a `toString`, a
+    // getter — can call a Saule function back, and that call runs on a
+    // *different* register file (a fresh `Vm` over the same shared state).
+    // A closure it runs, reading an upvalue still open over *this* file,
+    // would read or write the other file's register at that index: the
+    // caller never sees the write, and the callback's own temporaries are
+    // clobbered.
+    //
+    // So the VM keeps one invariant: **every open upvalue points into the
+    // register file that is running.** Before control leaves for code that
+    // may call back, [`park_upvalues`](Self::park_upvalues) copies each open
+    // value into its cell and closes it, so whoever runs next reads and
+    // writes the cell. When control comes back,
+    // [`unpark_upvalues`](Self::unpark_upvalues) writes each cell back into
+    // its register and reopens it.
+    //
+    // Registers are *copied* rather than moved out, because a native's
+    // arguments are a borrow of this very register file and a parked
+    // local may be one of them. The copy is stale until unparking
+    // overwrites it, and nothing reads it in between: this file's frames
+    // do not run until control comes back.
+    //
+    // A coroutine is the same situation stretched across a `yield`: a
+    // suspended coroutine's register file is not running, so its upvalues
+    // are parked for as long as it is suspended.
+
+    /// Run `f` — a call out to runtime code that may re-enter the VM — with
+    /// this register file's open upvalues parked.
+    ///
+    /// Costs one load and a branch when nothing is open, which is every
+    /// program that never captures a local. Restored whether `f` succeeds
+    /// or fails: a `catch` in this file's frames resumes in them.
+    #[inline(always)]
+    pub(crate) fn foreign<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
+        if self.open_upvals.is_empty() {
+            return f(self);
+        }
+        self.park_upvalues();
+        let r = f(self);
+        self.unpark_upvalues();
+        r
+    }
+
+    /// Close every open upvalue into its cell, remembering where each one
+    /// was so [`unpark_upvalues`](Self::unpark_upvalues) can reopen it.
+    #[inline(never)]
+    pub(crate) fn park_upvalues(&mut self) {
+        debug_assert!(self.parked.is_empty(), "register file parked twice");
+        for cell in &self.open_upvals {
+            let mut cell = cell.borrow_mut();
+            let idx = cell
+                .stack_index()
+                .expect("the open list holds only open upvalues");
+            *cell = Upvalue::Closed(self.stack[idx as usize].clone());
+            self.parked.push(idx);
+        }
+    }
+
+    /// Undo [`park_upvalues`](Self::park_upvalues): each cell's current value
+    /// — possibly written while parked — goes back into its register, and
+    /// the upvalue is open again.
+    #[inline(never)]
+    pub(crate) fn unpark_upvalues(&mut self) {
+        debug_assert_eq!(self.parked.len(), self.open_upvals.len());
+        for (cell, idx) in self.open_upvals.iter().zip(self.parked.drain(..)) {
+            let mut cell = cell.borrow_mut();
+            let Upvalue::Closed(v) = std::mem::replace(&mut *cell, Upvalue::Open(idx)) else {
+                unreachable!("nothing reopens a parked upvalue but its own register file");
+            };
+            self.stack[idx as usize] = v;
+        }
+    }
+
+    /// Close every upvalue this register file still has open, because the
+    /// file is being abandoned with frames on it — an error escaped a
+    /// re-entrant call. A closure that captured one of those registers and
+    /// escaped keeps the value; left open, it would read whichever register
+    /// file next ran at that index.
+    pub(crate) fn abandon(&mut self) {
+        self.close_upvalues(0);
+        self.frames.clear();
+    }
+
     #[inline(never)]
     fn close_upvalues_slow(&mut self, from: u32) {
         while let Some(last) = self.open_upvals.last() {

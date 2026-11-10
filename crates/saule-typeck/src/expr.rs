@@ -71,7 +71,8 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             // which is what types an untyped lambda's parameters — see
             // `expected_arg_types`. Every other expression ignores the
             // expectation and checks exactly as before.
-            let expected = expected_arg_types(&callee.value, args, scope);
+            let hint = call_hint(expr.id);
+            let expected = expected_arg_types(&callee.value, args, scope, hint.as_ref());
             for (i, a) in args.iter().enumerate() {
                 check_arg_expecting(a, expected.get(i).and_then(|t| t.as_ref()), scope, errors);
             }
@@ -176,27 +177,21 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             // User-defined class methods: `Class.method(args)` (static) or
             // `instance.method(args)` (instance). The native-sig path above
             // never matches these because they aren't registered as natives.
-            if let Expr::Member { obj, name } = &callee.value {
-                let class_name = match &obj.value {
-                    Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => Some(n.clone()),
-                    Expr::Self_ => current_class(),
-                    _ => infer(obj, scope).and_then(|t| match strip_nullable(t) {
-                        Type::Named(n) if with_classes(|r| r.contains_key(&n)) => Some(n),
-                        _ => None,
-                    }),
-                };
-                if let Some(class_name) = class_name
-                    && let Some(sig) = saule_semantic::lookup_method(&class_name, name)
-                {
-                    check_user_method_args(
-                        &format!("{class_name}.{name}"),
-                        &sig,
-                        args,
-                        scope,
-                        errors,
-                        expr.span.clone(),
-                    );
-                }
+            //
+            // The receiver may be generic — `box.put(x)` on a `Box<integer>`
+            // — in which case its type arguments are already substituted
+            // into `sig`, so `put` is checked as taking an `integer`.
+            if let Expr::Member { obj, name } = &callee.value
+                && let Some((class_name, sig)) = receiver_method(obj, name, scope)
+            {
+                check_user_method_args(
+                    &format!("{class_name}.{name}"),
+                    &sig,
+                    args,
+                    scope,
+                    errors,
+                    expr.span.clone(),
+                );
             }
         }
         Expr::SafeMember { obj, .. } => check_expr(obj, scope, errors),
@@ -385,6 +380,13 @@ pub(super) fn check_expr_expecting(
             None => Some(&**want_ret),
         };
         check_lambda_body(&refined, body, expected_ret, scope, errors);
+        return;
+    }
+    // A call checks its arguments knowing where its value goes, which is
+    // what types an untyped lambda argument of a generic method — see
+    // `CALL_HINT`.
+    if let (Expr::Call { .. }, Some(want)) = (&expr.value, expected) {
+        with_call_hint(expr, want, || check_expr(expr, scope, errors));
         return;
     }
     check_expr(expr, scope, errors);

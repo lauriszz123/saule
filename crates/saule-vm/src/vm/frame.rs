@@ -143,8 +143,21 @@ impl VmFunction for Closure {
         let out = vm.invoke(handle, args, span);
         if out.is_ok() {
             shared.give_vm(vm);
+        } else {
+            vm.abandon();
         }
         out
+    }
+
+    /// `Coroutine.create(f)`: a coroutine whose body is this closure.
+    fn coroutine(
+        &self,
+        handle: &Rc<VmFunctionRef>,
+    ) -> Option<Rc<saule_runtime::value::CoroutineRef>> {
+        Some(super::coroutine::Coroutine::create(
+            Rc::clone(handle),
+            self.shared.clone(),
+        ))
     }
 
     /// The single-result form, and the one the callbacks actually use.
@@ -172,6 +185,10 @@ impl VmFunction for Closure {
         let out = vm.invoke_first(handle, args, span);
         if out.is_ok() {
             shared.give_vm(vm);
+        } else {
+            // Dropped rather than pooled, but a closure that captured one of
+            // its registers may have escaped — close those first.
+            vm.abandon();
         }
         out
     }

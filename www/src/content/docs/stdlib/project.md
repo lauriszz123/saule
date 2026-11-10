@@ -2,7 +2,7 @@
 title: "Project"
 description: "The saule.config of the code being run, as the loader read it at startup."
 sidebar:
-  order: 10
+  order: 11
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

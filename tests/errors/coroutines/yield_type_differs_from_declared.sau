@@ -1,0 +1,8 @@
+-- The body's Yielder type must agree with the coroutine's: a Yielder<string> body cannot make a Coroutine<integer>.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co: Yielder<string>)
+      co.yield("x")
+    end)
+  end
+end

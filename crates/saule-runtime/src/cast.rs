@@ -120,6 +120,7 @@ fn matches_named(value: &Value, name: &str) -> bool {
         other => match value {
             Value::File(_) => other == "File",
             Value::Process(_) => other == "Process",
+            Value::Coroutine(c) => c.class_name() == other,
             Value::Foreign(obj) => obj.class.name == other,
             Value::Instance(inst) => {
                 let inst = inst.borrow();

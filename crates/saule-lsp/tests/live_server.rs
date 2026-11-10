@@ -581,10 +581,118 @@ fn members_of_a_generic_class_resolve_through_every_receiver() {
     );
 }
 
+/// Coroutines in the editor, end to end through the real server: what every
+/// client — VS Code, Neovim, IntelliJ — gets, since all three take hover,
+/// completion, signature help and diagnostics from `saule-lsp` and add
+/// nothing of their own for a library type.
+#[test]
+fn coroutines_are_typed_in_the_editor() {
+    let source = "fn countTo(n: integer) -> Coroutine<integer>\n\
+                  \x20 return Coroutine.create(fn(co)\n\
+                  \x20   for i = 1, n do\n\
+                  \x20     co.yield(i)\n\
+                  \x20   end\n\
+                  \x20 end)\n\
+                  end\n\
+                  \n\
+                  local gen: Coroutine<integer> = countTo(3)\n\
+                  local first: integer? = gen.resume()\n\
+                  for v in gen do\n\
+                  \x20 println(v)\n\
+                  end\n";
+    let project = Project::new(&[("a.sau", source)]);
+    let file = project.path("a.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&file);
+    assert!(
+        server.errors(&file).is_empty(),
+        "a correct program is clean: {:?}",
+        server.errors(&file)
+    );
+
+    // Hover: each handle with its type argument, and the loop variable with
+    // the element type `for … in` gives it.
+    let h = server.hover(&file, 8, 7);
+    assert!(h.contains("Coroutine<integer>"), "hover on `gen`:\n{h}");
+    let h = server.hover(&file, 3, 6);
+    assert!(h.contains("Yielder<integer>"), "hover on `co`:\n{h}");
+    let h = server.hover(&file, 11, 10);
+    assert!(h.contains("integer"), "hover on `v`:\n{h}");
+
+    // Hover on the library itself: documented, with the reference link.
+    let h = server.hover(&file, 1, 21);
+    assert!(
+        h.contains("Coroutine.create") && h.contains("/stdlib/coroutine/"),
+        "hover on `Coroutine.create`:\n{h}"
+    );
+    let h = server.hover(&file, 9, 29);
+    assert!(
+        h.contains("resume") && h.contains("/stdlib/coroutine/"),
+        "hover on `gen.resume`:\n{h}"
+    );
+
+    // Signature help inside `co.yield(`: the parameter, with `T` resolved.
+    let help = server.request(
+        "textDocument/signatureHelp",
+        json!({
+            "textDocument": {"uri": uri(&file)},
+            "position": {"line": 3, "character": 15},
+        }),
+    );
+    let label = help["signatures"][0]["label"].as_str().unwrap_or("");
+    assert!(
+        label.contains("value: integer"),
+        "signature help on `co.yield(`: {help}"
+    );
+
+    // Completion: a coroutine offers its own methods and not the yielder's;
+    // a yielder offers `yield`.
+    server.change(&file, &format!("{source}gen."));
+    let offered = complete(&mut server, &file, 13, 4);
+    for want in ["resume", "status", "isDone", "error", "iter"] {
+        assert!(
+            offered.iter().any(|l| l == want),
+            "`gen.` lacks {want}: {offered:?}"
+        );
+    }
+    assert!(
+        !offered.iter().any(|l| l == "yield"),
+        "`gen.` offers `yield`: {offered:?}"
+    );
+    let in_body = source.replace("      co.yield(i)", "      co.");
+    server.change(&file, &in_body);
+    let offered = complete(&mut server, &file, 3, 9);
+    assert!(
+        offered.iter().any(|l| l == "yield"),
+        "`co.` lacks yield: {offered:?}"
+    );
+
+    // Diagnostics: a misuse is shown as you type, not when the program runs.
+    let wrong = source.replace("co.yield(i)", "co.yield(\"x\")");
+    server.change(&file, &wrong);
+    let errors = server.errors(&file);
+    assert!(
+        errors.iter().any(|e| e.contains("Yielder.yield")),
+        "wrong yield type is flagged: {errors:?}"
+    );
+    let wrong = source.replace("gen.resume()", "gen.yield(1)");
+    server.change(&file, &wrong);
+    let errors = server.errors(&file);
+    assert!(
+        errors.iter().any(|e| e.contains("yield")),
+        "`yield` on a Coroutine is flagged: {errors:?}"
+    );
+}
+
 /// The errors `saule run` reports while running rather than before: they
 /// depend on values the checker cannot know. Every other fixture in
 /// `tests/errors/` fails before anything runs, so the editor has to show it.
 const RUNTIME_ONLY: &[&str] = &[
+    // Which coroutine is running when a `Yielder` is used, and whether its
+    // coroutine still exists, are facts about the moment of the call. Every
+    // other coroutine misuse is a type error now that `Coroutine<T>` is typed.
+    "coroutines/yield_after_coroutine_freed",
+    "coroutines/yield_outside_coroutine",
     "exceptions/catch_wrong_type",
     "exceptions/stack_overflow_recursion",
     "exceptions/stack_overflow_reentrant",

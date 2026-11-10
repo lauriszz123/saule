@@ -1,0 +1,9 @@
+-- A typed coroutine's resume takes no arguments; values go out through yield, not in through resume.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield(1)
+    end)
+    gen.resume(5)
+  end
+end

@@ -235,9 +235,14 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
             }
             None
         }
-        CalleeRef::Method { class, name } => {
+        CalleeRef::Method {
+            class,
+            name,
+            type_args,
+        } => {
             let head = shown(&format!("{class}.{name}"));
             if let Some(sig) = lookup_method(class, name) {
+                let sig = walk::substitute_receiver(&sig, class, type_args);
                 return build_help(&head, Some(sig), &hit.args, offset, ml);
             }
             // Stdlib value-type instance method (e.g. `file.write` where
@@ -298,6 +303,9 @@ pub(crate) enum CalleeRef {
     Method {
         class: String,
         name: String,
+        /// The receiver's type arguments — `[integer]` for a call on a
+        /// `Coroutine<integer>` — substituted into the signature shown.
+        type_args: Vec<Type>,
     },
     /// `self.super(...)` — the `init` of `owner`, the nearest ancestor
     /// that declares one. Kept separate from `Method` so the rendered
@@ -424,6 +432,8 @@ fn answer_from_module(module: &Module, source: &str, offset: usize) -> Answer {
         region: None,
         barrier: None,
         hits: Vec::new(),
+        return_ty: None,
+        call_hint: None,
     };
     cx.visit_module(module);
 

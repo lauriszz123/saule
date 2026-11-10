@@ -1,0 +1,13 @@
+-- A Yielder whose coroutine has been freed says the coroutine no longer exists.
+class Main
+  static fn main()
+    local escaped: table<Yielder<integer>> = {}
+    local gen: Coroutine<integer>? = Coroutine.create(fn(co)
+      escaped[1] = co
+      co.yield(1)
+    end)
+    gen!.resume()
+    gen = nil
+    escaped[1].yield(2)
+  end
+end

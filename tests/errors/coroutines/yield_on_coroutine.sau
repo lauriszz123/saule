@@ -1,0 +1,9 @@
+-- `yield` belongs to the Yielder the body is given; a Coroutine handle has no `yield`.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield(1)
+    end)
+    gen.yield(1)
+  end
+end

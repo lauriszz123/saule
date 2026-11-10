@@ -6,8 +6,40 @@ history.
 
 ## Next
 
+### Added
+
+- **Coroutines.** `Coroutine.create(fn(co) … end)` makes a function that pauses
+  at `co.yield(v)` and resumes from exactly there, with its locals and call
+  stack intact. They are stackful — pass the yielder down and any function can
+  yield — and typed: a `Coroutine<T>` yields `T`s, `resume()` answers a `T?`,
+  and `for v in gen do` iterates one with `v: T`. `T` is learned from where the
+  coroutine goes, so the body's `co` needs no annotation. A coroutine that
+  fails is reported through `resume()` and `error()` rather than ending the
+  program. See [Coroutines](./LANGUAGE.md#coroutines) and the
+  [`Coroutine` reference](./DOCS.md#coroutine); the editor types, completes and
+  documents both handles.
+
+### Changed
+
+- **A generic class's methods are checked like any other's.** On a receiver
+  such as `Box<integer>`, `box.put("x")` is now an argument error, a misspelt
+  method is reported, and a lambda argument's parameters take their types from
+  the receiver. These calls were not checked at all before.
+- **A generic method learns its type parameters from where its result goes**
+  when the arguments leave them open — an annotated `local`, a declared return
+  type, or the parameter the call fills. An argument that disagrees is still
+  reported.
+- `for v in x` over an instance of an `Iterable<T>` class binds `v` as a `T`
+  when it is not annotated, as it already did for tables.
+- A method call on an `any` value is `any`, as a field read on one already
+  was, so a dynamic call's result can be used anywhere `any` can.
+
 ### Fixed
 
+- A callback run by a built-in — a `Table.sort` comparator, an operator
+  overload, a `toString` — reads and writes the enclosing function's locals
+  correctly. It used to touch its own registers instead: the caller never saw
+  the writes, and the callback could fail with an internal type error.
 - `import uikit` followed by a `from …` line still being typed no longer
   reports the import as the removed syntax, and completion works on the `from`
   line. An unfinished `from path` is reported on its own line.

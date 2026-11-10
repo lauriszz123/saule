@@ -1,4 +1,4 @@
-from "uikit" import *
+from uikit import *
 
 -- Pieces both screens use. Nothing here knows what a contact or a message is —
 -- it is all shape.

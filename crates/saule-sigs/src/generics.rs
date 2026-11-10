@@ -166,6 +166,33 @@ pub fn instantiate_param_types(
     type_params: &[String],
     arg_types: &[Option<Type>],
 ) -> Vec<Option<Type>> {
+    instantiate_param_types_seeded(params, type_params, arg_types, None)
+}
+
+/// [`instantiate_param_types`], with the call's *result* already known.
+///
+/// `seed` is the signature's declared return type and the type the call's
+/// value is headed for — `local gen: Coroutine<integer> = Coroutine.create(…)`
+/// gives `(Coroutine<T>, Coroutine<integer>)`. Unifying those first binds
+/// `T := integer` before any argument is looked at, which is the only place
+/// it can come from when the argument is a lambda whose parameters were
+/// left unannotated: `fn(co) … end` says nothing about `T` on its own.
+///
+/// The seed binds through [`unify_any_fallback`], so a destination written
+/// `Coroutine<any>` binds `T := any` — that `any` was written on purpose.
+///
+/// **The arguments go first; the seed only fills what they left unbound.**
+/// A seed applied first would *win*: a body annotated `fn(co: Yielder<string>)`
+/// headed for a `Coroutine<integer>` would be told its slot wants a
+/// `Yielder<integer>`, and the mismatch the program actually contains would
+/// disappear. An unannotated lambda binds nothing, so it still gets the
+/// seed's answer.
+pub fn instantiate_param_types_seeded(
+    params: &[Type],
+    type_params: &[String],
+    arg_types: &[Option<Type>],
+    seed: Option<(&Type, &Type)>,
+) -> Vec<Option<Type>> {
     let fresh = Freshened::new(type_params);
     let renamed: Vec<Type> = params.iter().map(|t| fresh.rename(t)).collect();
     let mut subst = std::collections::HashMap::new();
@@ -174,6 +201,19 @@ pub fn instantiate_param_types(
     for (expected, found) in renamed.iter().zip(arg_types.iter()) {
         if let Some(found_ty) = found {
             unify(expected, found_ty, &fresh.params, &mut subst);
+        }
+    }
+    if let Some((declared_ret, wanted)) = seed {
+        unify_any_fallback(
+            &fresh.rename(declared_ret),
+            wanted,
+            &fresh.params,
+            &mut subst,
+        );
+    }
+    for (expected, found) in renamed.iter().zip(arg_types.iter()) {
+        if let Some(found_ty) = found {
+            unify_any_fallback(expected, found_ty, &fresh.params, &mut subst);
         }
     }
     renamed
@@ -194,6 +234,39 @@ pub fn unify(
     params: &[String],
     subst: &mut std::collections::HashMap<String, Type>,
 ) {
+    unify_with(expected, found, params, subst, false);
+}
+
+/// [`unify`]'s last resort, run once every argument has had its say: a
+/// parameter that is *still* unbound, and that an argument matched against
+/// `any`, binds to `any`.
+///
+/// `unify` declines to bind `T := any` so a later argument can pin `T` down
+/// properly. When none does, declining leaves `T` unbound for good, and the
+/// whole call — `Coroutine.create(fn(co: Yielder<any>) … end)`, or the same
+/// with `fn(co: any)` — infers as nothing at all, even though every argument
+/// said exactly what it meant: anything. Run after the ordinary pass, this
+/// can only fill what that pass left empty; it never overrides a binding.
+///
+/// A whole structured slot matched against `any` — `fn(Yielder<T>) -> nil`
+/// given a lambda whose parameter is plain `any` — binds every unbound
+/// parameter the slot mentions.
+pub fn unify_any_fallback(
+    expected: &Type,
+    found: &Type,
+    params: &[String],
+    subst: &mut std::collections::HashMap<String, Type>,
+) {
+    unify_with(expected, found, params, subst, true);
+}
+
+fn unify_with(
+    expected: &Type,
+    found: &Type,
+    params: &[String],
+    subst: &mut std::collections::HashMap<String, Type>,
+    any_binds: bool,
+) {
     // A free type-param on the expected side binds to whatever the actual
     // argument's type is — **including its nullability**. `Table.insert`
     // is `insert<V>(table<V>, V)`, so a `table<any?>` first argument has
@@ -206,16 +279,24 @@ pub fn unify(
         // Don't bind `V := any` — that would erase the constraint for the
         // remaining args. Leave it unbound so later args can refine it.
         // `any?` is a real constraint though (it permits nil), so it binds.
-        if !is_any(found) {
+        // The fallback pass is the exception: see `unify_any_fallback`.
+        if any_binds || !is_any(found) {
             subst.insert(n.clone(), found.clone());
         }
         return;
     }
+    if any_binds && is_any(found) {
+        bind_unbound_mentions(expected, found, params, subst);
+        return;
+    }
+    let unify = |e: &Type, f: &Type, subst: &mut std::collections::HashMap<String, Type>| {
+        unify_with(e, f, params, subst, any_binds)
+    };
     match (expected, found) {
         (Type::Nullable(e_inner), Type::Nullable(f_inner)) => {
-            unify(e_inner, f_inner, params, subst);
+            unify(e_inner, f_inner, subst);
         }
-        (Type::Nullable(e_inner), other) => unify(e_inner, other, params, subst),
+        (Type::Nullable(e_inner), other) => unify(e_inner, other, subst),
         (
             Type::Table {
                 value: e_val,
@@ -226,14 +307,14 @@ pub fn unify(
                 key: f_key,
             },
         ) => {
-            unify(e_val, f_val, params, subst);
+            unify(e_val, f_val, subst);
             if let (Some(ek), Some(fk)) = (e_key, f_key) {
-                unify(ek, fk, params, subst);
+                unify(ek, fk, subst);
             }
         }
         (Type::Tuple(es), Type::Tuple(fs)) if es.len() == fs.len() => {
             for (e, f) in es.iter().zip(fs.iter()) {
-                unify(e, f, params, subst);
+                unify(e, f, subst);
             }
         }
         (
@@ -247,9 +328,9 @@ pub fn unify(
             },
         ) if ep.len() == fp.len() => {
             for (e, f) in ep.iter().zip(fp.iter()) {
-                unify(e, f, params, subst);
+                unify(e, f, subst);
             }
-            unify(er, fr, params, subst);
+            unify(er, fr, subst);
         }
         // `Result<T>` against `Result<integer>` binds `T := integer`.
         // The heads must match: two different generics say nothing about
@@ -259,10 +340,40 @@ pub fn unify(
             if e.name == f.name && e.args.len() == f.args.len() =>
         {
             for (a, b) in e.args.iter().zip(f.args.iter()) {
-                unify(a, b, params, subst);
+                unify(a, b, subst);
             }
         }
         _ => {}
+    }
+}
+
+/// Bind every still-unbound parameter `ty` mentions to `with`.
+fn bind_unbound_mentions(
+    ty: &Type,
+    with: &Type,
+    params: &[String],
+    subst: &mut std::collections::HashMap<String, Type>,
+) {
+    let mut each = |t: &Type| bind_unbound_mentions(t, with, params, subst);
+    match ty {
+        Type::Named(n) => {
+            if params.iter().any(|p| p == n) && !subst.contains_key(n) {
+                subst.insert(n.clone(), with.clone());
+            }
+        }
+        Type::Nullable(inner) => each(inner),
+        Type::Table { key, value } => {
+            if let Some(k) = key {
+                each(k);
+            }
+            each(value);
+        }
+        Type::Tuple(items) => items.iter().for_each(each),
+        Type::Function { params: ps, ret } => {
+            ps.iter().for_each(&mut each);
+            each(ret);
+        }
+        Type::Generic(g) => g.args.iter().for_each(each),
     }
 }
 

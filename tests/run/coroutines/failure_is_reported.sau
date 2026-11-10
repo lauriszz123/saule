@@ -1,0 +1,75 @@
+-- A coroutine that fails is dead, `resume` answers nil, and `error()` says why; the program carries on.
+
+fn check(label: string, got: string, want: string)
+  println(label .. ": " .. got)
+  assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
+end
+
+fn down(n: integer) -> integer
+  return 1 + down(n + 1)
+end
+
+class Main
+  static fn main()
+    -- An uncaught `throw`: the thrown value is the error.
+    local thrower: Coroutine<string> = Coroutine.create(fn(co)
+      co.yield("before")
+      throw "boom"
+    end)
+    local log: string = tostring(thrower.resume()) .. ","
+    log = log .. tostring(thrower.resume()) .. ","
+    log = log .. thrower.status() .. "," .. tostring(thrower.error())
+    check("throw", log, "before,nil,dead,boom")
+    check("stays dead", tostring(thrower.resume()) .. tostring(thrower.error()), "nilboom")
+
+    -- A runtime error.
+    local unwrap: Coroutine<string> = Coroutine.create(fn(co)
+      local s: string? = nil
+      co.yield(s!)
+    end)
+    unwrap.resume()
+    local msg: string = unwrap.error() ?? ""
+    println("unwrap: " .. msg)
+    assert(String.find(msg, "force-unwrapped") != nil, "unexpected error: " .. msg)
+
+    -- Unbounded recursion inside the coroutine.
+    local deep: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield(down(0))
+    end)
+    deep.resume()
+    local overflow: string = deep.error() ?? ""
+    println("overflow: " .. overflow)
+    assert(String.find(overflow, "stack overflow") != nil, "unexpected error: " .. overflow)
+
+    -- A throw the coroutine catches itself is not a failure.
+    local handled: Coroutine<string> = Coroutine.create(fn(co)
+      try
+        throw "handled"
+      catch e: string
+        co.yield(e)
+      end
+      co.yield("fine")
+    end)
+    check("caught inside",
+      tostring(handled.resume()) .. tostring(handled.resume()) .. tostring(handled.error()),
+      "handledfinenil")
+
+    -- The caller's captured locals are intact after a failure, and a closure
+    -- the failed body built keeps its value.
+    local n: integer = 0
+    local escaped: fn() -> integer = fn() -> integer
+      return 0
+    end
+    local failing: Coroutine<integer> = Coroutine.create(fn(co)
+      local mine: integer = 42
+      escaped = fn() -> integer
+        return mine + n
+      end
+      n = 5
+      throw "stop"
+    end)
+    failing.resume()
+    n = n + 1
+    check("after failure", n .. "|" .. escaped(), "6|48")
+  end
+end

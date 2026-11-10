@@ -2,7 +2,7 @@
 title: "Io / File"
 description: "Io is the static entry point and holds the standard streams; a File is a reference-counted handle to an open file. Both the mode a file is opened in…"
 sidebar:
-  order: 7
+  order: 8
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

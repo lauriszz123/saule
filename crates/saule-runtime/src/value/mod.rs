@@ -14,6 +14,7 @@
 //! | [`file`]     | `FileHandle`                                   |
 //! | [`process`]  | `ProcessHandle`, `Stream`                      |
 //! | [`foreign`]  | `ForeignObject`, `ForeignClass`                |
+//! | [`coroutine`]| `VmCoroutine`, `CoroutineRef`                  |
 //!
 //! When adding a new variant, remember to extend [`Value::type_name`],
 //! [`Value::is_truthy`], [`Value::to_display_string`], and the `PartialEq`
@@ -21,6 +22,7 @@
 
 pub mod bytes;
 pub mod class;
+pub mod coroutine;
 pub mod enum_;
 pub mod file;
 pub mod foreign;
@@ -35,6 +37,7 @@ use std::rc::Rc;
 
 pub use bytes::{SauleBytes, hash_bytes};
 pub use class::{ClassObject, FieldDef, FieldLayout, InstanceObject, MethodRef, SlotStatics};
+pub use coroutine::{CoroutineRef, VmCoroutine};
 pub use enum_::{EnumObject, EnumVariantObject};
 pub use file::FileHandle;
 pub use foreign::{ForeignClass, ForeignObject};
@@ -98,6 +101,10 @@ pub enum Value {
     /// package's; this holds one reference to it. To a program it is an
     /// instance like any other.
     Foreign(Rc<ForeignObject>),
+    /// A coroutine, or the yielder its body is handed. Implemented by the
+    /// VM and held opaquely, like [`Value::VmFunction`]; see
+    /// [`coroutine`]. Compared by identity.
+    Coroutine(Rc<CoroutineRef>),
 }
 
 /// Copying a value is the single most common thing the engines do — every
@@ -160,6 +167,7 @@ impl Value {
             Value::File(h) => Value::File(Rc::clone(h)),
             Value::Process(h) => Value::Process(Rc::clone(h)),
             Value::Foreign(o) => Value::Foreign(Rc::clone(o)),
+            Value::Coroutine(c) => Value::Coroutine(Rc::clone(c)),
             // The scalars never reach here; `clone` answers them inline.
             other => match other {
                 Value::Nil => Value::Nil,
@@ -194,6 +202,7 @@ impl Value {
             Value::Interface(_) => "interface",
             Value::File(_) => "file",
             Value::Process(_) => "process",
+            Value::Coroutine(c) => c.type_name(),
         }
     }
 
@@ -250,6 +259,7 @@ impl Value {
             Value::Foreign(o) => format!("<instance of {}>", o.class.name),
             Value::File(h) => format!("{:?}", h.borrow()),
             Value::Process(h) => format!("{:?}", h.borrow()),
+            Value::Coroutine(c) => format!("<{}>", c.type_name()),
         }
     }
 }
@@ -294,6 +304,7 @@ impl PartialEq for Value {
             // By the package's object, not by our wrapper: the same object
             // returned twice is two wrappers, each owning a reference.
             (Value::Foreign(a), Value::Foreign(b)) => a.ptr() == b.ptr(),
+            (Value::Coroutine(a), Value::Coroutine(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }

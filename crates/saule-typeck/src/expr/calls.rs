@@ -17,7 +17,16 @@ use super::*;
 ///
 /// Mirrors the dispatch in [`check_expr`]'s `Call` arm, in the same
 /// precedence order.
-fn callee_signature(callee: &Expr, scope: &Scope) -> Option<(Vec<Type>, Vec<String>, Vec<String>)> {
+///
+/// Also returns the callee's declared return type where it is a user or
+/// builtin-class method — the one kind of callee whose generic parameters a
+/// *result* can bind, through [`CALL_HINT`].
+type CalleeSignature = (Vec<Type>, Vec<String>, Vec<String>);
+
+fn callee_signature_and_return(
+    callee: &Expr,
+    scope: &Scope,
+) -> Option<(CalleeSignature, Option<Type>)> {
     let from_params = |params: &[saule_ast::Param], type_params: Vec<String>| {
         (
             params.iter().map(|p| p.ty.clone()).collect(),
@@ -38,19 +47,19 @@ fn callee_signature(callee: &Expr, scope: &Scope) -> Option<(Vec<Type>, Vec<Stri
                 // construction of a generic class was an argument error.
                 let mut type_params = class_type_params(name);
                 type_params.extend(sig.type_params.iter().cloned());
-                return Some(from_params(&sig.params, type_params));
+                return Some((from_params(&sig.params, type_params), None));
             }
             // A sibling member reached without `self.` inside a class body.
             if let Some(class) = current_class()
                 && let Some(sig) = saule_semantic::lookup_method(&class, name)
             {
-                return Some(from_params(&sig.params, sig.type_params));
+                return Some((from_params(&sig.params, sig.type_params), None));
             }
             if let Some(info) = funcs::lookup(name) {
-                return Some(from_params(&info.params, info.type_params.clone()));
+                return Some((from_params(&info.params, info.type_params.clone()), None));
             }
             let sig = crate::sigs::lookup(name)?;
-            Some((sig.params, Vec::new(), sig.type_params))
+            Some(((sig.params, Vec::new(), sig.type_params), None))
         }
         Expr::Member { obj, name } => {
             // `self.super(args)` delegates to the parent's constructor.
@@ -59,28 +68,60 @@ fn callee_signature(callee: &Expr, scope: &Scope) -> Option<(Vec<Type>, Vec<Stri
                 && let Some(class) = current_class()
                 && let Some((_, sig)) = saule_semantic::super_init_target(&class)
             {
-                return Some(from_params(&sig.params, sig.type_params));
+                return Some((from_params(&sig.params, sig.type_params), None));
             }
-            let class_name = match &obj.value {
-                Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => Some(n.clone()),
-                Expr::Self_ => current_class(),
-                _ => infer(obj, scope).and_then(|t| match strip_nullable(t) {
-                    Type::Named(n) if with_classes(|r| r.contains_key(&n)) => Some(n),
-                    _ => None,
-                }),
-            };
-            if let Some(class_name) = class_name
-                && let Some(sig) = saule_semantic::lookup_method(&class_name, name)
-            {
-                return Some(from_params(&sig.params, sig.type_params));
+            // A method — static, on `self`, or on a receiver whose type may
+            // be generic, with that receiver's type arguments substituted.
+            if let Some((_, sig)) = receiver_method(obj, name, scope) {
+                let ret = sig.return_ty.clone();
+                return Some((from_params(&sig.params, sig.type_params), ret));
             }
             // Stdlib module or value-type member.
             let qname = native_callee_name(&Spanned::new(callee.clone(), 0..0), scope)?;
             let sig = crate::sigs::lookup(&qname)?;
-            Some((sig.params, Vec::new(), sig.type_params))
+            Some(((sig.params, Vec::new(), sig.type_params), None))
         }
         _ => None,
     }
+}
+
+thread_local! {
+    /// The type the value of one particular call is headed for, keyed by
+    /// the call's node — set by [`with_call_hint`] while that call is
+    /// checked.
+    ///
+    /// A generic method's parameters normally bind from its arguments. When
+    /// an argument is a lambda written without parameter types, it says
+    /// nothing, and the only thing left that does is where the result goes:
+    /// `local gen: Coroutine<integer> = Coroutine.create(fn(co) … end)`
+    /// binds `T := integer` from the declaration, which is what types `co`
+    /// as a `Yielder<integer>` and checks the body against it.
+    ///
+    /// Keyed by node so the hint applies to that one call and never leaks
+    /// into a call nested inside its arguments.
+    static CALL_HINT: std::cell::RefCell<Option<(saule_ast::NodeId, Type)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` — the checking of `call` — knowing its value is headed for a
+/// slot of type `expected`.
+pub(crate) fn with_call_hint<R>(call: &Spanned<Expr>, expected: &Type, f: impl FnOnce() -> R) -> R {
+    let bare = match expected {
+        Type::Nullable(inner) => inner.as_ref().clone(),
+        other => other.clone(),
+    };
+    let outer = CALL_HINT.with(|h| h.replace(Some((call.id, bare))));
+    let out = f();
+    CALL_HINT.with(|h| *h.borrow_mut() = outer);
+    out
+}
+
+/// The hint for the call `id`, if one was set for exactly that call.
+pub(crate) fn call_hint(id: saule_ast::NodeId) -> Option<Type> {
+    CALL_HINT.with(|h| match &*h.borrow() {
+        Some((hid, ty)) if *hid == id => Some(ty.clone()),
+        _ => None,
+    })
 }
 
 /// The type each argument of `callee(args)` is expected to have, with the
@@ -99,8 +140,10 @@ pub(crate) fn expected_arg_types(
     callee: &Expr,
     args: &[CallArg],
     scope: &Scope,
+    hint: Option<&Type>,
 ) -> Vec<Option<Type>> {
-    let Some((params, names, type_params)) = callee_signature(callee, scope) else {
+    let Some(((params, names, type_params), ret)) = callee_signature_and_return(callee, scope)
+    else {
         return vec![None; args.len()];
     };
     // Which slot each argument fills: positional arguments consume slots
@@ -133,7 +176,8 @@ pub(crate) fn expected_arg_types(
             found[*i] = infer(e, scope);
         }
     }
-    let expected = instantiate_param_types(&params, &type_params, &found);
+    let seed = ret.as_ref().zip(hint);
+    let expected = instantiate_param_types_seeded(&params, &type_params, &found, seed);
     slots
         .iter()
         .map(|s| s.and_then(|i| expected.get(i).cloned().flatten()))
@@ -619,19 +663,63 @@ pub(crate) fn semantic_method_return(
     args: &[CallArg],
     scope: &Scope,
 ) -> Option<Type> {
+    semantic_method_return_expecting(sig, args, scope, None)
+}
+
+/// [`semantic_method_return`], knowing the type the result is headed for.
+///
+/// The arguments bind first, as they always have. `expected` then fills
+/// only what they left unbound — see [`CALL_HINT`] for why the result is
+/// sometimes the only place a parameter can be learned from, and
+/// `instantiate_param_types_seeded` for why it must not go first: a seed
+/// that won would hide a body whose annotation disagrees with where its
+/// coroutine is going.
+///
+/// A lambda argument is then inferred again, *against* its slot as bound so
+/// far, so `fn(co) … end` filling `fn(Yielder<T>) -> nil` once `T := integer`
+/// types as `fn(Yielder<integer>) -> nil`.
+pub(crate) fn semantic_method_return_expecting(
+    sig: &saule_semantic::MethodSig,
+    args: &[CallArg],
+    scope: &Scope,
+    expected: Option<&Type>,
+) -> Option<Type> {
     let ret = sig.return_ty.clone()?;
     if sig.type_params.is_empty() {
         return Some(ret);
     }
     let fresh = Freshened::new(&sig.type_params);
     let mut subst: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
-    let positional = args.iter().filter_map(|a| match a {
-        CallArg::Positional(e) => Some(e),
-        CallArg::Named { .. } => None,
-    });
-    for (p, arg_expr) in sig.params.iter().zip(positional) {
+    let positional: Vec<&Spanned<Expr>> = args
+        .iter()
+        .filter_map(|a| match a {
+            CallArg::Positional(e) => Some(e),
+            CallArg::Named { .. } => None,
+        })
+        .collect();
+    for (p, arg_expr) in sig.params.iter().zip(positional.iter()) {
         if let Some(found_ty) = infer(arg_expr, scope) {
             unify(&fresh.rename(&p.ty), &found_ty, &fresh.params, &mut subst);
+        }
+    }
+    if let Some(want) = expected {
+        unify_any_fallback(&fresh.rename(&ret), want, &fresh.params, &mut subst);
+    }
+    let mut found: Vec<Option<Type>> = Vec::with_capacity(positional.len());
+    for (p, arg_expr) in sig.params.iter().zip(positional.iter()) {
+        let slot = substitute(&fresh.rename(&p.ty), &subst, &fresh.params);
+        let found_ty =
+            infer_lambda_expecting(arg_expr, &slot, scope).or_else(|| infer(arg_expr, scope));
+        if let Some(found_ty) = &found_ty {
+            unify(&fresh.rename(&p.ty), found_ty, &fresh.params, &mut subst);
+        }
+        found.push(found_ty);
+    }
+    // Whatever no argument pinned down, but some argument matched against
+    // `any`, is `any` — see `unify_any_fallback`.
+    for (p, found_ty) in sig.params.iter().zip(found.iter()) {
+        if let Some(found_ty) = found_ty {
+            unify_any_fallback(&fresh.rename(&p.ty), found_ty, &fresh.params, &mut subst);
         }
     }
     let resolved = substitute(&fresh.rename(&ret), &subst, &fresh.params);
@@ -798,6 +886,14 @@ pub(crate) fn report_if_unknown_member(
                         // Enum-typed locals, primitives, etc.
                         return;
                     }
+                }
+                // A generic class's instance — `Box<integer>`,
+                // `Coroutine<integer>` — has the members its class declares,
+                // whatever it was instantiated with. This arm was missing,
+                // so a typo on any generic instance went unreported until it
+                // ran.
+                Type::Generic(g) if with_classes(|r| r.contains_key(&g.name)) => {
+                    (g.name.clone(), false)
                 }
                 _ => return,
             },

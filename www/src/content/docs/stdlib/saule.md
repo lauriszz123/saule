@@ -2,7 +2,7 @@
 title: "Saule"
 description: "The version of the toolchain running your code. Distinct from Project, which is the version of the code being run: upgrade the compiler and…"
 sidebar:
-  order: 9
+  order: 10
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

@@ -298,6 +298,8 @@ fn receiver_type(name: &str) -> Option<&'static str> {
     match name {
         "f" => Some("File"),
         "p" => Some("Process"),
+        "gen" => Some("Coroutine"),
+        "co" => Some("Yielder"),
         _ => None,
     }
 }

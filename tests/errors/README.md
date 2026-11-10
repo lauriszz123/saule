@@ -19,16 +19,17 @@ message when you touch one.
 Both trees are split into the same areas, so a feature's passing and failing
 fixtures sit at mirrored paths: `tests/run/generics/` and
 `tests/errors/generics/`. The areas are `basics` (passing only), `classes`,
-`control`, `exceptions`, `functions`, `generics`, `modules`, `nullability`,
-`stdlib`, `syntax` and `tables`. Put a new fixture in the area its *subject*
+`control`, `coroutines`, `exceptions`, `functions`, `generics`, `modules`,
+`nullability`, `stdlib`, `syntax` and `tables`. Put a new fixture in the area its *subject*
 belongs to rather than the one its error message mentions — a bad argument to
 `Table.insert` is a `stdlib` fixture, not a `functions` one.
 
 Most are compile-time errors — parser, `saule-semantic`, `saule-typeck` — but
 not all. `throw_uncaught`, `catch_wrong_type`, `io_use_after_close`,
-`force_unwrap_*`, `table_insert_oob`, `pow_negative_exponent` and the two
-`stack_overflow_*` fixtures are **runtime** errors, and are here for the same
-reason: the message and its span are the behaviour being pinned.
+`force_unwrap_*`, `table_insert_oob`, `pow_negative_exponent`, the two
+`stack_overflow_*` fixtures and the two `coroutines/yield_*` fixtures about a
+yielder that escaped its coroutine are **runtime** errors, and are here for
+the same reason: the message and its span are the behaviour being pinned.
 
 `crates/saule-lsp/tests/live_server.rs` holds that list too: every other
 fixture here has to be flagged by the editor, and nothing in `tests/run/` may

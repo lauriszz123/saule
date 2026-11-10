@@ -83,9 +83,13 @@ impl Vm {
             len += saule_runtime::ops::display_hint(&self.stack[i]);
         }
         let mut s = String::with_capacity(len);
-        for i in from..=to {
-            saule_runtime::ops::display_into(&self.stack[i], span.clone(), &mut s)?;
-        }
+        // Rendering may run a `toString` overload — see `Vm::foreign`.
+        self.foreign(|vm| {
+            for i in from..=to {
+                saule_runtime::ops::display_into(&vm.stack[i], span.clone(), &mut s)?;
+            }
+            Ok::<(), RuntimeError>(())
+        })?;
         *self.reg_mut(dst) = Value::Str(SauleStr::new(s));
         Ok(())
     }
@@ -175,7 +179,14 @@ impl Vm {
 
     /// `CALLMX`: a method call on a receiver the compiler could not prove,
     /// handed to the runtime's dynamic method dispatch.
+    ///
+    /// Also where a coroutine yields: `co.yield(v)` is a method call on the
+    /// yielder, and when it is made by the coroutine's own code it is the
+    /// one call that must *leave* the dispatch loop — see
+    /// [`Vm::try_yield`]. `pc` is the instruction after this one, which is
+    /// where a resumed coroutine continues.
     #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
     fn call_member_by_name(
         &mut self,
         k: u32,
@@ -184,6 +195,7 @@ impl Vm {
         a: usize,
         chunk: &Chunk,
         site: &Site<'_>,
+        pc: usize,
     ) -> Result<(), RuntimeError> {
         let key = chunk.constants[k as usize].clone();
         let Value::Str(name) = &key else {
@@ -196,16 +208,27 @@ impl Vm {
         // `CALLM` — so a call site can switch between the two without
         // moving anything.
         let n_args = (ins.b() as usize).saturating_sub(1);
-        let recv = (*self.reg(base + a)).clone();
-        let args: Vec<Value> = (0..n_args)
-            .map(|i| (*self.reg(base + a + 1 + i)).clone())
-            .collect();
-        let vs = saule_runtime::call::call_method(&recv, name, &args, site.span())?;
         let n_ret = if ins.c() == 0 {
             ALL_RESULTS
         } else {
             ins.c() - 1
         };
+        if let Value::Coroutine(c) = self.reg(base + a)
+            && name.as_str() == "yield"
+        {
+            let c = Rc::clone(c);
+            if self.try_yield(&c, base + a, n_args, n_ret, pc) {
+                return Err(RuntimeError::Yield);
+            }
+            // Not this register file's coroutine: the runtime path below
+            // reports why it cannot yield from here.
+        }
+        let recv = (*self.reg(base + a)).clone();
+        let args: Vec<Value> = (0..n_args)
+            .map(|i| (*self.reg(base + a + 1 + i)).clone())
+            .collect();
+        let vs =
+            self.foreign(|_| saule_runtime::call::call_method(&recv, name, &args, site.span()))?;
         self.store_results(base + a, &vs, n_ret);
         Ok(())
     }
@@ -240,11 +263,24 @@ impl Vm {
     /// comparison; [`execute_collecting`](Self::execute_collecting) is the
     /// owning form, for the callers that want a `Vec` anyway.
     pub(crate) fn execute(&mut self) -> Result<(), RuntimeError> {
+        let entry_depth = self.frames.len();
+        self.execute_from(entry_depth)
+    }
+
+    /// [`execute`](Self::execute), returning once the frame at depth
+    /// `entry_depth` (1-based) returns rather than the frame on top now.
+    ///
+    /// The two are the same thing except for a resumed coroutine. It
+    /// re-enters the loop with however many frames it had when it yielded,
+    /// but what it is running is still its *body*, at depth 1 — and taking
+    /// the current depth instead would end the run the moment the function
+    /// it yielded from returned.
+    pub(crate) fn execute_from(&mut self, entry_depth: usize) -> Result<(), RuntimeError> {
         #[cfg(feature = "profile")]
         if crate::profile::is_enabled() {
-            return self.execute_loop::<true>();
+            return self.execute_loop::<true>(entry_depth);
         }
-        self.execute_loop::<false>()
+        self.execute_loop::<false>(entry_depth)
     }
 
     /// Anchor an error in the module whose code raised it.
@@ -300,9 +336,10 @@ impl Vm {
         Ok(std::mem::take(&mut self.results))
     }
 
-    fn execute_loop<const PROFILE: bool>(&mut self) -> Result<(), RuntimeError> {
-        let entry_depth = self.frames.len();
-
+    fn execute_loop<const PROFILE: bool>(
+        &mut self,
+        entry_depth: usize,
+    ) -> Result<(), RuntimeError> {
         'reentry: loop {
             // Re-derived once per frame activation, then held in locals
             // across the whole inner loop (§5.3). The clones are what let
@@ -650,7 +687,8 @@ impl Vm {
                         };
                         let l = (*self.reg(base + ins.b() as usize)).clone();
                         let r = (*self.reg(base + ins.c() as usize)).clone();
-                        let v = saule_runtime::ops::binary(op, l, r, proto.span_at(here))?;
+                        let span = proto.span_at(here);
+                        let v = self.foreign(|_| saule_runtime::ops::binary(op, l, r, span))?;
                         *self.reg_mut(base + a) = v;
                     }
                     Op::UNARYX => {
@@ -662,8 +700,9 @@ impl Vm {
                             });
                         };
                         let v = (*self.reg(base + ins.b() as usize)).clone();
+                        let span = proto.span_at(here);
                         *self.reg_mut(base + a) =
-                            saule_runtime::ops::unary(op, v, proto.span_at(here))?;
+                            self.foreign(|_| saule_runtime::ops::unary(op, v, span))?;
                     }
 
                     // ---- §15.7 comparison and branching ------------------
@@ -791,12 +830,10 @@ impl Vm {
                         // pay one discriminant check and nothing else.
                         if matches!(l, Value::Foreign(_)) || matches!(r, Value::Foreign(_)) {
                             let (l, r) = ((*l).clone(), (*r).clone());
-                            let v = saule_runtime::ops::binary(
-                                saule_ast::BinOp::Eq,
-                                l,
-                                r,
-                                proto.span_at(here),
-                            )?;
+                            let span = proto.span_at(here);
+                            let v = self.foreign(|_| {
+                                saule_runtime::ops::binary(saule_ast::BinOp::Eq, l, r, span)
+                            })?;
                             *self.reg_mut(base + a) = v;
                         } else {
                             let eq = *l == *r;
@@ -949,18 +986,19 @@ impl Vm {
                                 *self.reg_mut(base + a + 1) = Value::Nil;
                                 *self.reg_mut(base + a + 2) = Value::Bool(true);
                             }
-                            Value::Instance(_) => {
+                            // A coroutine iterates the way an `Iterable`
+                            // instance does: its `iter()` hands back a driver
+                            // that resumes it once per step.
+                            Value::Instance(_) | Value::Coroutine(_) => {
                                 // `iter()` runs once per *loop*, not once
                                 // per step, so the re-entrant call costs
                                 // nothing measurable. Routed through the
                                 // runtime's dynamic method dispatch, the
                                 // same one `CALLMX` uses.
-                                let vs = saule_runtime::call::call_method(
-                                    &src,
-                                    "iter",
-                                    &[],
-                                    proto.span_at(here),
-                                )?;
+                                let span = proto.span_at(here);
+                                let vs = self.foreign(|_| {
+                                    saule_runtime::call::call_method(&src, "iter", &[], span)
+                                })?;
                                 let Some(driver) = vs.into_iter().next() else {
                                     return Err(RuntimeError::TypeError {
                                         message: format!(
@@ -1112,11 +1150,12 @@ impl Vm {
                             // engines report `#` on an integer differently —
                             // caught by `SAULE_DIFF=1 ./run_tests.sh`, which
                             // compares diagnostics as well as values.
-                            other => saule_runtime::ops::unary(
-                                saule_ast::UnaryOp::Len,
-                                other.clone(),
-                                proto.span_at(here),
-                            )?,
+                            other => {
+                                let (v, span) = (other.clone(), proto.span_at(here));
+                                self.foreign(|_| {
+                                    saule_runtime::ops::unary(saule_ast::UnaryOp::Len, v, span)
+                                })?
+                            }
                         };
                         *self.reg_mut(base + a) = v;
                     }
@@ -1145,10 +1184,10 @@ impl Vm {
                         self.concat(from, to, base + a, span)?;
                     }
                     Op::TOSTR => {
-                        let s = saule_runtime::ops::display_value(
-                            self.reg(base + ins.b() as usize),
-                            proto.span_at(here),
-                        )?;
+                        let span = proto.span_at(here);
+                        let s = self.foreign(|vm| {
+                            saule_runtime::ops::display_value(vm.reg(base + ins.b() as usize), span)
+                        })?;
                         *self.reg_mut(base + a) = Value::Str(SauleStr::new(s));
                     }
 
@@ -1701,8 +1740,9 @@ impl Vm {
                             });
                         };
                         let recv = (*self.reg(base + ins.b() as usize)).clone();
-                        let v =
-                            saule_runtime::members::read_member(&recv, name, proto.span_at(here))?;
+                        let span = proto.span_at(here);
+                        let v = self
+                            .foreign(|_| saule_runtime::members::read_member(&recv, name, span))?;
                         *self.reg_mut(base + a) = v;
                     }
                     Op::SETFX => {
@@ -1719,7 +1759,10 @@ impl Vm {
                         };
                         let recv = (*self.reg(base + a)).clone();
                         let v = (*self.reg(base + ins.c() as usize)).clone();
-                        saule_runtime::members::write_member(&recv, name, v, proto.span_at(here))?;
+                        let span = proto.span_at(here);
+                        self.foreign(|_| {
+                            saule_runtime::members::write_member(&recv, name, v, span)
+                        })?;
                     }
                     Op::CALLMX => {
                         let k = self.extra_arg(code.as_ptr(), &mut pc);
@@ -1730,6 +1773,7 @@ impl Vm {
                             a,
                             &chunk,
                             &Site::Code(&proto, here),
+                            pc,
                         )?;
                     }
 

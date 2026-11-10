@@ -1,0 +1,8 @@
+-- A Coroutine<integer> yields integers: yielding a string is caught before the program runs.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield("one")
+    end)
+  end
+end

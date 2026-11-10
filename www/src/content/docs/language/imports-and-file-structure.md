@@ -2,7 +2,7 @@
 title: "Imports and File Structure"
 description: "An import names either a single .sau file or a folder module (a directory with an init.sau — see Folder Modules), and the path is relative to the…"
 sidebar:
-  order: 13
+  order: 14
 ---
 
 <!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->

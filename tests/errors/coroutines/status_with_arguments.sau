@@ -1,0 +1,9 @@
+-- Coroutine.status takes no arguments.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield(1)
+    end)
+    local s: string = gen.status("now")
+  end
+end

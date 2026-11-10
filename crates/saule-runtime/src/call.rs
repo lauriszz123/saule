@@ -331,6 +331,7 @@ pub fn call_method(
             crate::stdlib::process::dispatch_process_method(handle, name, args)
                 .map_err(|message| RuntimeError::TypeError { message, span })
         }
+        Value::Coroutine(c) => c.call_method(name, args, span),
         // An object of a native class: its method takes the object as
         // argument 0, the same shape a compiled method takes `self` in.
         Value::Foreign(obj) => {

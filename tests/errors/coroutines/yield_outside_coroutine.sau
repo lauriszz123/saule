@@ -1,0 +1,12 @@
+-- A Yielder used after it escapes its coroutine cannot yield: that coroutine is not the one running.
+class Main
+  static fn main()
+    local escaped: table<Yielder<integer>> = {}
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      escaped[1] = co
+      co.yield(1)
+    end)
+    gen.resume()
+    escaped[1].yield(2)
+  end
+end

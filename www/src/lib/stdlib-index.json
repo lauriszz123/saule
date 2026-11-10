@@ -1285,6 +1285,90 @@
 			"href": "/stdlib/iter/#iter-groupby"
 		},
 		{
+			"label": "Coroutine.create",
+			"owner": "Coroutine",
+			"name": "create",
+			"method": false,
+			"signature": "Coroutine.create<T>(body: fn(Yielder<T>) -> nil) -> Coroutine<T>",
+			"params": "body: fn(Yielder<T>) -> nil",
+			"returns": "Coroutine<T>",
+			"detail": "A new coroutine that has not started. Nothing in `body` runs until the first `resume`, which calls it with the coroutine's yielder.",
+			"section": "Creating",
+			"href": "/stdlib/prelude-always-in-scope/#coroutine-create"
+		},
+		{
+			"label": "resume",
+			"owner": "Coroutine",
+			"name": "resume",
+			"method": true,
+			"signature": "gen.resume() -> T?",
+			"params": "",
+			"returns": "T?",
+			"detail": "Run the coroutine until it next yields, and answer the value it yielded. When the body finishes — or has already — it answers `nil`, and so it does when the body **fails**: a runtime error or an uncaught `throw` inside a coroutine does not end the program. The coroutine is dead afterwards and [`error()`](#gen-error) says what went wrong.",
+			"section": "Coroutine methods",
+			"href": "/stdlib/prelude-always-in-scope/#gen-resume"
+		},
+		{
+			"label": "status",
+			"owner": "Coroutine",
+			"name": "status",
+			"method": true,
+			"signature": "gen.status() -> string",
+			"params": "",
+			"returns": "string",
+			"detail": "Where the coroutine is in its life:",
+			"section": "Coroutine methods",
+			"href": "/stdlib/prelude-always-in-scope/#gen-status"
+		},
+		{
+			"label": "isDone",
+			"owner": "Coroutine",
+			"name": "isDone",
+			"method": true,
+			"signature": "gen.isDone() -> boolean",
+			"params": "",
+			"returns": "boolean",
+			"detail": "`true` once the coroutine is dead — finished or failed. Shorthand for `gen.status() == \"dead\"`, and the natural test for a loop that drives several coroutines at once.",
+			"section": "Coroutine methods",
+			"href": "/stdlib/prelude-always-in-scope/#gen-isdone"
+		},
+		{
+			"label": "error",
+			"owner": "Coroutine",
+			"name": "error",
+			"method": true,
+			"signature": "gen.error() -> string?",
+			"params": "",
+			"returns": "string?",
+			"detail": "Why the coroutine failed, or `nil` if it has not. For an uncaught `throw` it is the thrown value; for any other failure, the runtime error's message.",
+			"section": "Coroutine methods",
+			"href": "/stdlib/prelude-always-in-scope/#gen-error"
+		},
+		{
+			"label": "iter",
+			"owner": "Coroutine",
+			"name": "iter",
+			"method": true,
+			"signature": "gen.iter() -> fn() -> T?",
+			"params": "",
+			"returns": "fn() -> T?",
+			"detail": "A step closure that resumes the coroutine once per call — what `for v in gen do` uses, so you rarely call it yourself. A coroutine is an `Iterable<T>`, and the loop variable is a `T`.",
+			"section": "Coroutine methods",
+			"href": "/stdlib/prelude-always-in-scope/#gen-iter"
+		},
+		{
+			"label": "yield",
+			"owner": "Yielder",
+			"name": "yield",
+			"method": true,
+			"signature": "co.yield(value: T) -> nil",
+			"params": "value: T",
+			"returns": "nil",
+			"detail": "Suspend the coroutine this yielder belongs to and hand `value` to whoever resumed it. The call returns when the coroutine is next resumed.",
+			"section": "Yielder methods",
+			"href": "/stdlib/prelude-always-in-scope/#co-yield"
+		},
+		{
 			"label": "Io.open",
 			"owner": "Io",
 			"name": "open",
@@ -1875,6 +1959,7 @@
 	],
 	"modules": [
 		"Bytes",
+		"Coroutine",
 		"Io",
 		"Iter",
 		"Math",

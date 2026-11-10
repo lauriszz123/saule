@@ -50,6 +50,7 @@
 
 pub mod build;
 pub mod call;
+pub mod coroutine;
 pub mod dispatch;
 pub mod frame;
 pub mod ops;
@@ -197,6 +198,18 @@ pub struct Vm {
     /// nil-ing 8KB of it per sort comparison would cost more than the
     /// bounds checks the padding removes.
     high_water: usize,
+    /// While control is out of this register file, the register each open
+    /// upvalue was parked from — parallel to `open_upvals`, empty otherwise.
+    /// See [`Vm::foreign`].
+    parked: Vec<u32>,
+    /// The coroutine this register file belongs to, by address, or 0 for
+    /// every other `Vm`. A `yield` is honoured only by the register file of
+    /// the coroutine it names — see [`Vm::try_yield`].
+    coroutine: usize,
+    /// While suspended: the register the pending `yield` call's results go
+    /// to, and how many it wants. The values the next `resume` passes in
+    /// become those results.
+    yield_slot: (usize, u8),
     /// Where the outermost frame's return values land.
     ///
     /// Owned by the `Vm` rather than allocated per return, because a
@@ -285,6 +298,9 @@ impl Vm {
             frames: Vec::with_capacity(32),
             open_upvals: Vec::new(),
             high_water: 0,
+            parked: Vec::new(),
+            coroutine: 0,
+            yield_slot: (0, 0),
             results: Vec::new(),
         }
     }

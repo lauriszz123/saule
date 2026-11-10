@@ -44,7 +44,7 @@ function parseSignature(sig) {
 	// Instance methods are documented on a sample receiver (`f.read`,
 	// `p.wait`) because that is how they are called. The index wants the
 	// type, since nothing is ever typed as `f`.
-	const RECEIVER = { f: 'File', p: 'Process' };
+	const RECEIVER = { f: 'File', p: 'Process', gen: 'Coroutine', co: 'Yielder' };
 	const owner = rawOwner === null ? null : (RECEIVER[rawOwner] ?? rawOwner);
 	const method = rawOwner !== null && rawOwner in RECEIVER;
 

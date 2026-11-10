@@ -23,6 +23,7 @@ fixtures sit at mirrored paths:
 | `basics` | The smoke tests — `hello_world`, `fibonacci`, enums |
 | `classes` | Inheritance, interfaces, statics, fields, overrides, visibility, operator overloads |
 | `control` | Loops, `break` / `continue`, `match`, narrowing |
+| `coroutines` | `Coroutine.create`, `resume` / `yield`, status, nesting, failure reporting |
 | `exceptions` | `try` / `catch` / `finally` / `throw` |
 | `functions` | Lambdas, closures, variadics, defaults, named arguments, trailing blocks, pipelines |
 | `generics` | Type parameters, bounds, generic classes / interfaces / enums |

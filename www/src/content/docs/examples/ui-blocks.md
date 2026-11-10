@@ -125,7 +125,7 @@ end
 ## `src/widgets.sau`
 
 ```saule title="src/widgets.sau"
-from "canvas" import Canvas
+from canvas import Canvas
 
 -- The widget set. Every widget is a class, and constructing one draws it.
 --
@@ -225,8 +225,8 @@ end
 ## `src/main.sau`
 
 ```saule title="src/main.sau"
-from "canvas" import Canvas
-from "widgets" import *
+from canvas import Canvas
+from widgets import *
 
 -- A tiny declarative UI, drawn to the terminal.
 --
@@ -234,57 +234,56 @@ from "widgets" import *
 -- after the parentheses is the panel's contents — an ordinary lambda passed as
 -- the initialiser's last argument, without the `fn(` / `end)` ceremony.
 class Main
-  static local players: table<string> = {"ada", "grace", "linus"}
-  static local scores: table<integer> = {120, 95, 87}
+	static local players: table<string> = {"ada", "grace", "linus"}
+	static local scores: table<integer> = {120, 95, 87}
 
-  static fn main()
-    local screen = Canvas() do
-      Panel(title: "Saule UI", spacing: 1) do
-        Text("Trailing blocks, drawn.")
+	static fn main()
+		local screen = Canvas() do
+			Panel(title: "Saule UI", spacing: 1) do
+				Text("Trailing blocks, drawn.")
 
-        -- Nesting is just a block inside a block.
-        Panel(title: "Session") do
-          Field("player", "ada")
-          Field("region", "eu-north")
-          Field("build", "26.1")
-        end
+				-- Nesting is just a block inside a block.
+				Panel(title: "Session") do
+					Field("player", "ada")
+					Field("region", "eu-north")
+					Field("build", "26.1")
+				end
 
-        Panel(title: "Scoreboard") do
-          -- The reason this is a block and not a table of children:
-          -- ordinary control flow works inside it.
-          for i, name in Main.players do
-            local score: integer = Main.scores[i]
-            if score >= 100 then
-              Field(name, score .. " *")
-            else
-              Field(name, "" .. score)
-            end
-          end
+				Panel(title: "Scoreboard") do
+					-- The reason this is a block and not a table of children:
+					-- ordinary control flow works inside it.
+					for i, name in Main.players do
+						local score: integer = Main.scores[i]
+						if score >= 100 then
+							Field(name, score .. " *")
+						else
+							Field(name, "" .. score)
+						end
+					end
 
-          Rule()
-          Field("total", "" .. Main.total())
-        end
+					Rule()
+					Field("total", "" .. Main.total())
+				end
 
-        -- `Row` lays its children across instead of down.
-        Row(spacing: 3) do
-          Button("Play")
-          Button("Options")
-          Button("Quit")
-        end
-      end
-    end
+				-- `Row` lays its children across instead of down.
+				Row(spacing: 3) do
+					Button("Play")
+					Button("Options")
+					Button("Quit")
+				end
+			end
+		end
 
-    println(screen.render())
-  end
+		println(screen.render())
+	end
 
-  static local fn total() -> integer
-    local sum: integer = 0
-    for _, score in Main.scores do
-      sum = sum + score
-    end
+	static local fn total() -> integer
+		local sum: integer = 0
+		for _, score in Main.scores do
+			sum = sum + score
+		end
 
-
-    return sum
-  end
+		return sum
+	end
 end
 ```

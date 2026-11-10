@@ -122,8 +122,20 @@ pub(super) fn resolve_member(
         ));
     }
 
+    // A builtin class's method has no source and so no `---` block, but the
+    // standard library documents it: `Coroutine.create` and `gen.resume` are
+    // methods to the checker and entries in `DOCS.md`. That entry, with its
+    // parameter names, prose and link, is the better card.
+    let method_card = |sig: &saule_semantic::MethodSig| match (
+        &doc,
+        saule_docs::stdlib().entry(&format!("{class}.{name}")),
+    ) {
+        (None, Some(entry)) => render_stdlib_entry(entry),
+        _ => with_doc(render_method_sig(class, name, sig), doc),
+    };
+
     if is_call && let Some(sig) = lookup_method(class, name) {
-        return Some(with_doc(render_method_sig(class, name, &sig), doc));
+        return Some(method_card(&sig));
     }
     if let Some(ty) = lookup_field_type(class, name) {
         return Some(with_doc(
@@ -135,7 +147,7 @@ pub(super) fn resolve_member(
         ));
     }
     if let Some(sig) = lookup_method(class, name) {
-        return Some(with_doc(render_method_sig(class, name, &sig), doc));
+        return Some(method_card(&sig));
     }
     // Stdlib fallback: `Math.sqrt`, `String.byte`, etc.
     let qname = format!("{class}.{name}");
