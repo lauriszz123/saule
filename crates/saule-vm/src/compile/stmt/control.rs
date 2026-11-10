@@ -192,6 +192,13 @@ impl Compiler<'_> {
         if !matches!(op, Lt | LtEq | Gt | GtEq | Eq | NotEq) {
             return Ok(None);
         }
+        // `x == nil` / `x != nil` before anything numeric is asked: `nil`
+        // has no numeric kind, so both would fall past `kind` below, and
+        // `!=` then declines in `constant_compare_jump` and materialises a
+        // boolean. `JNIL`/`JNOTNIL` answer the question directly.
+        if let Some(label) = self.nil_compare_jump(*op, lhs, rhs, &cond.span)? {
+            return Ok(Some(label));
+        }
         // Both sides must agree on a numeric kind, the same test
         // `binary_to` makes before it picks a typed opcode. A mismatch is
         // no longer the end of the road: `JEQK` below compares a register
@@ -243,6 +250,65 @@ impl Compiler<'_> {
         // changes here.
         self.emit(Instruction::abc(o, la, rb, 0), &cond.span);
         let label = self.emit_jump(Op::JMP, 0, &cond.span);
+        self.free_to(m);
+        Ok(Some(label))
+    }
+
+    /// `x == nil` / `x != nil` feeding a branch — `JNIL` / `JNOTNIL` (§15.12).
+    ///
+    /// The same discovery `fused_compare_jump` and `JEQK` were written for,
+    /// one opcode over: both opcodes have been in the instruction set since
+    /// Phase 1 and **nothing emitted either from a comparison**. A nil test
+    /// reached `constant_compare_jump`, which takes `==` only, so
+    /// `x == nil` became `JEQK` against a nil constant and `x != nil`
+    /// declined outright to `EQV` + `NOT` + `TEST` + `JMP` — four words to
+    /// ask whether a register holds nil.
+    ///
+    /// Measured first, per §16. `--profile-bytecode` on
+    /// `benchmarks/sau/nullsafe.sau`, 5,088,042 instructions: `EQV` 216,000
+    /// (4.2%), `NOT` 216,000 (4.2%), `TEST` 216,000 (4.2%), with `EQV NOT`
+    /// and `NOT TEST` both adjacent pairs at 4.2% each. The triple is about
+    /// an eighth of the program, and every one of them is a `!= nil`.
+    ///
+    /// **The substitution is exact, not merely close.** `nil` never reaches
+    /// an `equals` overload — `v == nil` is the nullability check it looks
+    /// like, which `constant_compare_jump`'s own comment already works
+    /// through — so there is no contract to dispatch and no guard to
+    /// replicate here. `EQV` against a nil constant is `values_equal(v,
+    /// Nil)`, true exactly when `v` is nil, which is what `JNIL` tests.
+    ///
+    /// Polarity follows the convention every `J*` here uses: skip the next
+    /// instruction — the jump to the false branch — when the condition
+    /// *holds*. `== nil` holds when the value is nil, so it skips on nil
+    /// (`JNIL`); `!= nil` skips on a present value (`JNOTNIL`).
+    fn nil_compare_jump(
+        &mut self,
+        op: saule_ast::BinOp,
+        lhs: &Spanned<Expr>,
+        rhs: &Spanned<Expr>,
+        span: &std::ops::Range<usize>,
+    ) -> Result<Option<crate::compile::ctx::Label>, CompileError> {
+        let o = match op {
+            saule_ast::BinOp::Eq => Op::JNIL,
+            saule_ast::BinOp::NotEq => Op::JNOTNIL,
+            _ => return Ok(None),
+        };
+        // Either side may be the literal: both comparisons commute, and
+        // `nil == x` is as ordinary as `x == nil`. `nil == nil` picks the
+        // left operand and tests a register holding nil, which answers
+        // true — the same answer `EQV` gave it.
+        let value = match (&lhs.value, &rhs.value) {
+            (_, Expr::Nil) => lhs,
+            (Expr::Nil, _) => rhs,
+            _ => return Ok(None),
+        };
+
+        let m = self.mark();
+        let r = self.operand_to_reg(value, self.operand_is_pure(value))?;
+        let a = self.reg8(r, span)?;
+        // `B` and `C` are unused: one register operand, no constant.
+        self.emit(Instruction::abc(o, a, 0, 0), span);
+        let label = self.emit_jump(Op::JMP, 0, span);
         self.free_to(m);
         Ok(Some(label))
     }

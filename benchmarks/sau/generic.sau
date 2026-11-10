@@ -1,0 +1,77 @@
+-- Generic classes and generic functions, instantiated at several types.
+--
+-- The question a static language has to answer that Lua never asks: what
+-- does a type parameter cost at runtime? A `Stack<T>` holds and returns a
+-- `T` through the same field and the same method bodies whatever `T` is, and
+-- a generic function takes a comparator it cannot know the type of. If
+-- generics are erased this should land on top of the plain-table version;
+-- anything slower is boxing or a dispatch that `oop` does not pay.
+class Stack<T>
+	items: table<T>
+	top: integer
+
+	fn init()
+		self.items = {}
+		self.top = 0
+	end
+
+	fn push(v: T)
+		self.top = self.top + 1
+		self.items[self.top] = v
+	end
+
+	fn pop() -> T?
+		if self.top == 0 then
+			return nil
+		end
+		local v: T? = self.items[self.top]
+		self.top = self.top - 1
+		return v
+	end
+
+	fn size() -> integer
+		return self.top
+	end
+end
+
+class Main
+	-- Generic over the element and over how to rank it. Nothing in the body
+	-- can look inside a `T`, so the comparator is the only way through.
+	static fn pickMax<T>(a: T, b: T, better: fn(T, T) -> boolean) -> T
+		if better(a, b) then
+			return a
+		end
+		return b
+	end
+
+	static fn main()
+		local n: integer = 700000
+		local st: Stack<integer> = Stack()
+		local total: integer = 0
+		-- Hoisted: constructing a lambda per iteration is what `closure`
+		-- measures, and it would sit on top of what this one is for.
+		local better: fn(integer, integer) -> boolean = (x, y) => x > y
+
+		for i: integer = 1, n do
+			st.push(i % 997)
+			st.push(i % 89)
+			local b: integer = st.pop() ?? 0
+			local a: integer = st.pop() ?? 0
+			total = total + Main.pickMax(a, b, better)
+		end
+
+		-- A second instantiation, so `Stack<T>` is exercised at more than
+		-- one `T` in the same program.
+		local ws: Stack<string> = Stack()
+		for i: integer = 1, 2000 do
+			ws.push("w" .. (i % 17))
+		end
+		local wide: string = ""
+		local wider: fn(string, string) -> boolean = (x, y) => String.len(x) > String.len(y)
+		for i: integer = 1, 2000 do
+			wide = Main.pickMax(wide, ws.pop() ?? "", wider)
+		end
+
+		println(total .. " " .. st.size() .. " " .. wide)
+	end
+end

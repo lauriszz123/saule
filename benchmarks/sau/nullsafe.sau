@@ -1,0 +1,72 @@
+-- Optional chaining: `?.`, `?[ ]`, `??` and `!` down a three-deep path.
+--
+-- A language feature with no Lua counterpart, measured against what Lua
+-- programmers write instead — an `and` / `or` chain. The data is built so
+-- every link is missing some of the time, meaning the short-circuit is taken
+-- on a genuinely unpredictable branch rather than never or always.
+class Inner
+	v: integer?
+
+	fn init(v: integer?)
+		self.v = v
+	end
+end
+
+class Mid
+	inner: Inner?
+	tags: table<integer>?
+
+	fn init(inner: Inner?, tags: table<integer>?)
+		self.inner = inner
+		self.tags = tags
+	end
+end
+
+class Outer
+	mid: Mid?
+
+	fn init(mid: Mid?)
+		self.mid = mid
+	end
+end
+
+class Main
+	static fn main()
+		local n: integer = 30000
+		local rows: table<Outer> = {}
+		for i: integer = 1, n do
+			local m: integer = i % 5
+			if m == 0 then
+				-- No `mid` at all: the chain stops at the first link.
+				Table.insert(rows, Outer(nil))
+			elseif m == 1 then
+				-- A `mid`, but nothing under it.
+				Table.insert(rows, Outer(Mid(nil, nil)))
+			elseif m == 2 then
+				-- Present all the way down, but the leaf itself is nil.
+				Table.insert(rows, Outer(Mid(Inner(nil), {})))
+			else
+				Table.insert(rows, Outer(Mid(Inner(i), {i, i + 1})))
+			end
+		end
+
+		local sum: integer = 0
+		local tagged: integer = 0
+		local forced: integer = 0
+		for pass: integer = 1, 70 do
+			for i: integer = 1, n do
+				local row: Outer = rows[i]!
+				-- Three safe hops and a fallback, as one expression.
+				sum = sum + (row.mid?.inner?.v ?? -1)
+				-- Safe index into a nullable table.
+				tagged = tagged + (row.mid?.tags?[1] ?? 0)
+				-- Force-unwrap on the path already known to be whole.
+				if row.mid != nil and row.mid!.inner != nil and row.mid!.inner!.v != nil then
+					forced = forced + row.mid!.inner!.v!
+				end
+			end
+		end
+
+		println(sum .. " " .. tagged .. " " .. forced)
+	end
+end

@@ -1,0 +1,59 @@
+-- The `Table` module: build, splice, search, reorder, join.
+--
+-- `array` measures raw `Table.insert` and indexing. This measures the rest
+-- of the module, in the mix a collection-heavy program produces: an insert
+-- at a position (which shifts every element after it), removals from the
+-- middle and the end, an in-place reverse, a slice and a copy, two linear
+-- searches, a comparator sort, a join, and the keys of a map pulled out and
+-- ordered.
+--
+-- Lua ships `insert`, `remove`, `concat` and `sort`; the other six are
+-- written out in the twin, because that is what Lua leaves you to do.
+class Main
+	static fn main()
+		local passes: integer = 3000
+		local n: integer = 1000
+		local checksum: integer = 0
+
+		for pass: integer = 1, passes do
+			local t: table<integer> = {}
+			for i: integer = 1, n do
+				Table.insert(t, (i * 7919 + pass) % 10007)
+			end
+
+			-- Insert at the front: every element moves up one.
+			Table.insert(t, 42, 1)
+			local mid: integer = Table.remove(t, n / 2) ?? 0
+			local tail: integer = Table.remove(t) ?? 0
+			checksum = (checksum + mid + tail) % 1000000007
+
+			Table.reverse(t)
+
+			local head: table<integer> = Table.slice(t, 1, 100)
+			local dup: table<integer> = Table.copy(head)
+
+			if Table.contains(t, 5000) then
+				checksum = checksum + 1
+			end
+			checksum = (checksum + (Table.indexOf(t, dup[1]!) ?? 0)) % 1000000007
+
+			Table.sort(head, (a, b) => a < b)
+			checksum = (checksum + String.len(Table.concat(head, ","))) % 1000000007
+			checksum = (checksum + Table.len(t) + #dup) % 1000000007
+		end
+
+		-- A map, its keys lifted out and ordered. Map iteration order is not
+		-- specified in either language, so the keys are sorted before
+		-- anything depends on them.
+		local m: table<string, integer> = {}
+		for i: integer = 1, 2000 do
+			m["k" .. (i % 500)] = i
+		end
+		local keys: table<string> = Table.keys(m)
+		Table.sort(keys, (a, b) => a < b)
+		local vals: table<integer> = Table.values(m)
+		checksum = (checksum + #keys + #vals + String.len(keys[1]!)) % 1000000007
+
+		println(checksum)
+	end
+end

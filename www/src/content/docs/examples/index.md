@@ -1,6 +1,6 @@
 ---
 title: Overview
-description: "Complete Saule projects you can clone and run, from an 18-line tour to a Brainfuck interpreter."
+description: "Complete Saule projects you can clone and run, grouped simple to advanced."
 sidebar:
   order: 1
 ---
@@ -11,16 +11,37 @@ Every example here is a real project in the repository — the code on each
 page is read straight from it, so it always matches what you get when you
 clone and run.
 
+They are grouped by what you need to know to read one, not by how long it
+is, and each group is in reading order.
+
+## Simple
+
+Ordinary programs: arguments, files, tables and `match`, with nothing exotic in them.
+
 | Example | What it shows |
 |---|---|
 | [Filesystem Info](/saule/examples/fs-info-example/) | Inspects one path with Os.fsInfo and reports what it is. Shows nullable returns for paths that may not exist, and match over an enum with a _ fallback. |
+| [Todo App](/saule/examples/todo-app/) | A complete command-line application: argument parsing with Os.args(), JSON persistence through the json library declared in dependencies:, match over subcommands, and rendering split into its own module. |
+
+## Intermediate
+
+The type system and the object model doing real work — operators as interfaces, and a bigger program built out of plain features.
+
+| Example | What it shows |
+|---|---|
 | [Operator Overloading](/saule/examples/vector-math/) | A Vec2 that adds, negates, compares and prints like a built-in number, plus a Path where # counts points and concatenation joins two paths. Shows how each operator is an interface whose method supplies both the behaviour and the result type. |
 | [Bitwise Operators](/saule/examples/bitwise-flags/) | A Permissions flag set that unions, intersects and flips with the bitwise operators and prints like rwx, plus an RGBA colour packed into one integer with shifts and masks. Shows the Lua 5.3 spellings (~ is xor, because ^ is already exponentiation), the precedence that makes bits & flag != 0 need no parentheses, and the Op* interfaces that put all six operators on a class. |
-| [Wrapper Types](/saule/examples/wrapper-types/) | A Text built straight from a string literal and a Settings with full control of every read and write. Shows Assignable<T> target-typed construction and OpIndex / OpNewIndex as Saule's __index / __newindex — with nothing injected: a wrapper declares every method it exposes, calling the String class explicitly. |
-| [Coroutines](/saule/examples/coroutines/) | A six-part tour of coroutines: lazy stream combinators over infinite sources, a tokenizer that yields from two frames below the coroutine body, a recursive-descent parser that pulls one token at a time, and a cooperative scheduler whose tasks interleave on one thread — one of which fails without taking the others with it. Shows Coroutine<T> and Yielder<T>, where T is learned from, stackful yielding through ordinary function calls, laziness that is counted rather than claimed, and the dynamic two-way form. |
-| [Todo App](/saule/examples/todo-app/) | A complete command-line application: argument parsing with Os.args(), JSON persistence through the json library declared in dependencies:, match over subcommands, and rendering split into its own module. |
 | [Brainfuck Interpreter](/saule/examples/bf/) | An interpreter for another language, in about 240 lines. Tables as a tape, a dispatch loop, and a program that takes its source file from Os.args(). |
+
+## Advanced
+
+What Saule does that its ancestors do not: index overloading, trailing blocks, coroutines, and calling into Rust.
+
+| Example | What it shows |
+|---|---|
+| [Wrapper Types](/saule/examples/wrapper-types/) | A Text built straight from a string literal and a Settings with full control of every read and write. Shows Assignable<T> target-typed construction and OpIndex / OpNewIndex as Saule's __index / __newindex — with nothing injected: a wrapper declares every method it exposes, calling the String class explicitly. |
 | [Declarative UI](/saule/examples/ui-blocks/) | A miniature SwiftUI-shaped toolkit drawn to the terminal: every widget is a class, constructing one draws it, and containers take their children as a trailing block (Panel(title: "…") do … end). Shows an immediate-mode layout engine that builds no widget tree, and why a block beats a table of children — if and for work inside one. |
+| [Coroutines](/saule/examples/coroutines/) | A six-part tour of coroutines: lazy stream combinators over infinite sources, a tokenizer that yields from two frames below the coroutine body, a recursive-descent parser that pulls one token at a time, and a cooperative scheduler whose tasks interleave on one thread — one of which fails without taking the others with it. Shows Coroutine<T> and Yielder<T>, where T is learned from, stackful yielding through ordinary function calls, laziness that is counted rather than claimed, and the dynamic two-way form. |
 | [Graphics Window](/saule/examples/toying/) | Opens a window and draws a rectangle that follows the mouse, using the Love2D-style Shine2D native package. Shows how Saule calls into a dynamically-loaded Rust library. |
 
 ## Also in the repository

@@ -2,7 +2,10 @@
 title: "Coroutines"
 description: "A six-part tour of coroutines: lazy stream combinators over infinite sources, a tokenizer that yields from two frames below the coroutine body, a recursive-descent parser that pulls one token at a time, and a cooperative scheduler whose tasks interleave on one thread — one of which fails without taking the others with it. Shows Coroutine<T> and Yielder<T>, where T is learned from, stackful yielding through ordinary function calls, laziness that is counted rather than claimed, and the dynamic two-way form."
 sidebar:
-  order: 6
+  order: 9
+  badge:
+    text: "Advanced"
+    variant: caution
 ---
 
 <!-- Generated from examples/coroutines by `npm run sync-docs`. Edit the example, not this file. -->
@@ -639,8 +642,7 @@ class Main
 
 		-- Past the end it answers `nil` for ever, which is what lets a loop
 		-- drain a generator without asking whether it is empty first.
-		printf("after the body returned: %s, resume -> %s\n",
-			greet.status(), greet.resume() ?? "nil")
+		printf("after the body returned: %s, resume -> %s\n", greet.status(), greet.resume() ?? "nil")
 	end
 
 	-- 2 ----------------------------------------------------------------
@@ -663,8 +665,11 @@ class Main
 			return n
 		end)
 		local three: table<integer> = Stream.collect(Stream.take(counted, 3))
-		printf("took %s from an infinite source, and it produced %d values\n",
-			String.join(", ", three), produced)
+		printf(
+			"took %s from an infinite source, and it produced %d values\n",
+			String.join(", ", three),
+			produced
+		)
 
 		-- A generator is the shape fibonacci wants: `a` and `b` are locals
 		-- that happen to survive between resumes, not fields on an object.
@@ -673,8 +678,7 @@ class Main
 
 		-- `reduce` and `chunk` are terminal and transforming stages over the
 		-- same `Coroutine<T>` — there is no second sequence abstraction here.
-		local sum: integer = Stream.reduce(
-			Stream.take(Stream.naturals(1), 100), 0, (acc, n) => acc + n)
+		local sum: integer = Stream.reduce(Stream.take(Stream.naturals(1), 100), 0, (acc, n) => acc + n)
 		printf("sum of 1..100: %d\n", sum)
 
 		local rows: table<string> = {}
@@ -685,8 +689,9 @@ class Main
 
 		-- Interleaving needs two sources driven by hand, which is what
 		-- `resume()`'s `T?` is for: `nil` marks the side that ran out.
-		local mixed: table<string> = Stream.collect(Stream.interleave(
-			Stream.of({"tick", "tick", "tick"}), Stream.of({"tock", "tock"})))
+		local mixed: table<string> = Stream.collect(
+			Stream.interleave(Stream.of({"tick", "tick", "tick"}), Stream.of({"tock", "tock"}))
+		)
 		printf("interleaved: %s\n", String.join(" ", mixed))
 	end
 
@@ -714,8 +719,12 @@ class Main
 			end
 		end
 		local resumed: Token? = stream.resume()
-		printf("read %d tokens, then broke out; the lexer is %s and next is %s\n",
-			before, stream.status(), resumed?.text ?? "nothing")
+		printf(
+			"read %d tokens, then broke out; the lexer is %s and next is %s\n",
+			before,
+			stream.status(),
+			resumed?.text ?? "nothing"
+		)
 
 		-- A `throw` the coroutine does not catch kills *it*, not the program.
 		-- Everything it yielded first was still delivered.
@@ -728,8 +737,12 @@ class Main
 			end
 			delivered = delivered + 1
 		end
-		printf("bad input: %d tokens delivered, then %s — error() says: %s\n",
-			delivered, broken.status(), broken.error() ?? "")
+		printf(
+			"bad input: %d tokens delivered, then %s — error() says: %s\n",
+			delivered,
+			broken.status(),
+			broken.error() ?? ""
+		)
 	end
 
 	-- 4 ----------------------------------------------------------------

@@ -1432,6 +1432,38 @@ impl Vm {
                         let inst = saule_runtime::value::InstanceObject::new(Rc::clone(class));
                         *self.reg_mut(base + a) = Value::Instance(Rc::new(RefCell::new(inst)));
                     }
+                    // `obj.field!` — the read and the nil test in one word.
+                    // The value is cloned **once**, straight into the
+                    // destination, where `GETF` + `UNWRAPNIL` cloned it into
+                    // a temp and then cloned it again out of it.
+                    Op::GETFU => {
+                        let slot = ins.c() as usize;
+                        let v = match self.reg(base + ins.b() as usize) {
+                            Value::Instance(i) => {
+                                let i = i.borrow();
+                                match i.fields.get(slot) {
+                                    Some(v) => v.clone(),
+                                    None => {
+                                        return Err(field_slot_err(
+                                            slot,
+                                            i.fields.len(),
+                                            &proto,
+                                            here,
+                                        ));
+                                    }
+                                }
+                            }
+                            other => return Err(operand_err(other, "instance", &proto, here)),
+                        };
+                        // The span is the `!`'s, so this blames the unwrap
+                        // and not the field read that fed it.
+                        if matches!(v, Value::Nil) {
+                            return Err(RuntimeError::ForceUnwrapNil {
+                                span: proto.span_at(here),
+                            });
+                        }
+                        *self.reg_mut(base + a) = v;
+                    }
                     Op::GETF => {
                         let slot = ins.c() as usize;
                         let v = match self.reg(base + ins.b() as usize) {

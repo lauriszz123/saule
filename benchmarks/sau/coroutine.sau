@@ -1,0 +1,27 @@
+-- Generator throughput: one coroutine, drained to exhaustion.
+--
+-- Isolates the context switch itself. The body does almost nothing, so what
+-- the clock measures is `resume` entering the coroutine, `yield` handing a
+-- value back out and the loop picking it up — a million round trips, with no
+-- other work to hide them behind.
+class Main
+	static fn counter(n: integer) -> Coroutine<integer>
+		return Coroutine.create(fn(co)
+			for i: integer = 1, n do
+				co.yield(i)
+			end
+		end)
+	end
+
+	static fn main()
+		local total: integer = 0
+		-- Re-created each pass, so coroutine setup and teardown are in the
+		-- measurement too rather than amortised over one very long run.
+		for pass: integer = 1, 90 do
+			for v in Main.counter(50000) do
+				total = total + v
+			end
+		end
+		println(total)
+	end
+end

@@ -25,9 +25,34 @@ history.
   scheduler whose tasks interleave on one thread — one of which fails without
   taking the others with it. The playground gains three coroutine programs
   alongside it.
+- **The examples are tiered, and there are ten more of them.** Both the
+  playground picker and the Examples index group their programs as *Simple*,
+  *Intermediate* and *Advanced* — by the features you need to know to read
+  one, not by length — and each example page carries its tier as a sidebar
+  badge. The playground gains strings and text, tables, loops and control
+  flow, functions (defaults, named arguments, multiple returns, variadics),
+  error handling, enums, custom iterables, bitwise operators, wrapper types
+  and `when(…)` pipelines; its null-safety, pattern-matching and generics
+  programs were rewritten to cover `?.`/`?[`/`!`, guards and bindings, and
+  bounds. All 24 run under both engines in `npm run check-samples`.
 
 ### Changed
 
+- **`obj.field!` is one instruction, and `x != nil` is two.** Two codegen
+  fusions the VM's opcode table already had the opcodes for but nothing
+  emitted. A force-unwrapped field read was `GETF` + `UNWRAPNIL`, which
+  cloned the value into a temporary and then out of it again — a
+  reference-count round trip per link — and is now a single `GETFU`; a
+  nil comparison fell past every fused branch form and materialised a
+  boolean through `EQV` + `NOT` + `TEST`, and is now `JNIL` / `JNOTNIL`.
+  Both were measured with `--profile-bytecode` first, per `VM_DESIGN.md`
+  §16: `GETF UNWRAPNIL` was the top adjacent pair in
+  `benchmarks/sau/nullsafe.sau` at 5.7%, and the `EQV`/`NOT`/`TEST` triple
+  about an eighth of the same program. Together they take 18% of its
+  instructions out and `nullsafe` from 3.3x Lua to 2.9x; object-graph
+  walking such as `bintree` gains a little too. **The copy is what costs,
+  not the dispatch** — removing the cheaper triple alone moved the wall
+  clock not at all, which is worth knowing before fusing the next pair.
 - **A generic class's methods are checked like any other's.** On a receiver
   such as `Box<integer>`, `box.put("x")` is now an argument error, a misspelt
   method is reported, and a lambda argument's parameters take their types from

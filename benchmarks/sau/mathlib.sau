@@ -1,0 +1,37 @@
+-- The `Math` module: transcendentals, rounding and the integer helpers.
+--
+-- `mandel` measures float arithmetic the compiler can see through — add and
+-- multiply, inline. This measures the calls: a library call per operation,
+-- thirteen of them per iteration, which is what numeric code that does more
+-- than add actually looks like.
+--
+-- Both runtimes hand `sin`, `cos`, `exp` and `log` to the platform's libm,
+-- so the arithmetic is the same to the last bit and the printed accumulator
+-- is a real cross-check rather than an approximate one.
+class Main
+	static fn main()
+		local n: integer = 1000000
+		local acc: float = 0.0
+		local whole: integer = 0
+
+		for i: integer = 1, n do
+			local x: float = (i % 1000) as float / 250.0 + 0.001
+
+			acc = acc + Math.sqrt(x)
+			acc = acc + Math.sin(x) * Math.cos(x)
+			acc = acc + Math.tan(x / 8.0)
+			acc = acc + Math.atan(x)
+			acc = acc + Math.exp(-x)
+			acc = acc + Math.log(x + 1.0, 2.0)
+			acc = acc + Math.pow(x, 1.5)
+			acc = acc + Math.fmod(x, 0.75)
+
+			whole = whole + Math.floor(x) + Math.ceil(x) + Math.round(x)
+			whole = whole + Math.abs(i % 7 - 3) + Math.sign(x - 2.0)
+			whole = whole + Math.min(i % 13, 5) + Math.max(i % 11, 4)
+			whole = whole + Math.clamp(i % 100, 10, 90)
+		end
+
+		println(String.format("%.6f %d", acc, whole))
+	end
+end

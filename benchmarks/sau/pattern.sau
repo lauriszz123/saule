@@ -1,0 +1,75 @@
+-- Lua-style patterns: `match` with captures, `gmatch`, `gsub`, `find`.
+--
+-- Log-line scanning, the job patterns exist for. Each line is matched
+-- against an anchored three-capture date, scanned word by word, searched for
+-- a keyed field and then rewritten with every number masked — four passes of
+-- the pattern engine over the same string.
+--
+-- Saule's patterns run over codepoints where Lua's run over bytes, and its
+-- `%a` is Unicode-aware. The input here is pure ASCII so the two agree
+-- exactly; on non-ASCII text they are answering different questions and
+-- would not be comparable.
+class Main
+	static fn lines(n: integer) -> table<string>
+		local levels: table<string> = {"INFO", "WARN", "ERROR", "DEBUG"}
+		local users: table<string> = {"ada", "grace", "alan", "edsger", "barbara"}
+		local out: table<string> = {}
+		local seed: integer = 24601
+		for i: integer = 1, n do
+			seed = (seed * 1103515245 + 12345) % 2147483648
+			local lvl: string = levels[seed % 4 + 1]!
+			local who: string = users[(seed / 4) % 5 + 1]!
+			out[i] = "2026-11-" .. String.padStart("" .. (seed % 28 + 1), 2, "0")
+				.. " " .. lvl .. " user=" .. who
+				.. " code=" .. (seed % 10000) .. " took=" .. (seed % 500) .. "ms"
+		end
+		return out
+	end
+
+	static fn main()
+		local lines: table<string> = Main.lines(1000)
+		local days: integer = 0
+		local words: integer = 0
+		local letters: integer = 0
+		local codes: integer = 0
+		local masked: integer = 0
+		local sample: string = ""
+
+		for pass: integer = 1, 140 do
+			for i: integer = 1, #lines do
+				local line: string = lines[i]!
+
+				-- Anchored, three captures.
+				local date: table<string>? = String.match(line, "^(%d+)-(%d+)-(%d+)")
+				if date != nil then
+					days = days + ((date![3]! as integer?) ?? 0)
+				end
+
+				-- Every word, one at a time.
+				local step: fn() -> (string?, table<string>?) = String.gmatch(line, "%a+")
+				while true do
+					local w: string?, caps: table<string>? = step()
+					if w == nil then
+						break
+					end
+					words = words + 1
+					letters = letters + String.len(w!)
+				end
+
+				-- One keyed field, by capture.
+				local code: table<string>? = String.match(line, "code=(%d+)")
+				if code != nil then
+					codes = (codes + ((code![1]! as integer?) ?? 0)) % 1000000007
+				end
+
+				-- Rewrite: mask every run of digits.
+				local out: string, hits: integer = String.gsub(line, "%d+", "#")
+				masked = masked + hits
+				sample = out
+			end
+		end
+
+		println(days .. " " .. words .. " " .. letters .. " " .. codes .. " " .. masked)
+		println(sample)
+	end
+end

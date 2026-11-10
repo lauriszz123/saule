@@ -1,0 +1,67 @@
+-- Operator overloading: `+`, `-`, `*` and `==` on a user-defined type.
+--
+-- Saule's answer to Lua's `__add` / `__sub` / `__mul` / `__eq` metamethods,
+-- and the direct comparison for them. Each iteration is three overload
+-- dispatches, three fresh instances and an `equals`, so this measures the
+-- cost of routing an operator to a method plus the allocation that a
+-- value-type style forces — the shape all vector and matrix code has.
+--
+-- Integer components on purpose: the result is exact, so the two languages
+-- are compared on a value neither can round differently.
+class Vec3 implements OpAdd<Vec3, Vec3>, OpSub<Vec3, Vec3>, OpMul<Vec3, Vec3>, OpEq<Vec3>, OpToString
+	x: integer
+	y: integer
+	z: integer
+
+	fn init(x: integer, y: integer, z: integer)
+		self.x = x
+		self.y = y
+		self.z = z
+	end
+
+	fn add(o: Vec3) -> Vec3
+		return Vec3(self.x + o.x, self.y + o.y, self.z + o.z)
+	end
+
+	fn sub(o: Vec3) -> Vec3
+		return Vec3(self.x - o.x, self.y - o.y, self.z - o.z)
+	end
+
+	-- Wrapped, so the components stay bounded over 300k iterations instead
+	-- of drifting into bignum territory in one language and not the other.
+	fn mul(o: Vec3) -> Vec3
+		return Vec3((self.x * o.x) % 1000003, (self.y * o.y) % 1000003, (self.z * o.z) % 1000003)
+	end
+
+	fn equals(o: Vec3) -> boolean
+		return self.x == o.x and self.y == o.y and self.z == o.z
+	end
+
+	fn toString() -> string
+		return "<" .. self.x .. " " .. self.y .. " " .. self.z .. ">"
+	end
+end
+
+class Main
+	static fn main()
+		local n: integer = 900000
+		local acc: Vec3 = Vec3(1, 2, 3)
+		local step: Vec3 = Vec3(7, 11, 13)
+		local unit: Vec3 = Vec3(1, 1, 1)
+		local hits: integer = 0
+
+		-- Multiply before subtracting: the product can be zero, and adding
+		-- `step` first keeps every component positive, so `%` never has to
+		-- answer the sign question the two languages answer differently.
+		for i: integer = 1, n do
+			acc = acc * step
+			acc = acc + step
+			acc = acc - unit
+			if acc == step then
+				hits = hits + 1
+			end
+		end
+
+		println(tostring(acc) .. " " .. hits)
+	end
+end

@@ -26,14 +26,47 @@ pub(crate) enum MemberAccess {
 }
 
 impl Compiler<'_> {
-    /// `obj.name` — a field read, or a static read off a class name.
+    /// `obj.name`, or `obj.name!` when `unwrap_at` carries the `!`'s span.
+    ///
+    /// Fusing the force-unwrap in is worth a parameter for the reason
+    /// [`index_to`](Self::index_to) takes the same one: a nullable field is
+    /// how a link in an object graph is declared, so `node.next!` is not a
+    /// special case but how walking one is written. See [`Op::GETFU`].
+    ///
+    /// Only an instance **field** fuses — [`member_read`](Self::member_read)
+    /// says whether it did, and everything else gets a plain `UNWRAPNIL` on
+    /// top of whichever opcode reached the member.
     pub(crate) fn member_to(
         &mut self,
         e: &Spanned<Expr>,
         obj: &Spanned<Expr>,
         name: &str,
         dst: u16,
+        unwrap_at: Option<&std::ops::Range<usize>>,
     ) -> Result<(), CompileError> {
+        if self.member_read(e, obj, name, dst, unwrap_at)? {
+            return Ok(());
+        }
+        // The member was reached by an opcode with no fused form. `B` and
+        // `A` are the same register: the test reads the value just written
+        // and writes it straight back.
+        if let Some(bang) = unwrap_at {
+            let a = self.reg8(dst, bang)?;
+            self.emit(Instruction::abc(Op::UNWRAPNIL, a, a, 0), bang);
+        }
+        Ok(())
+    }
+
+    /// [`member_to`](Self::member_to)'s body: emit the read, and report
+    /// whether it fused the `!` in itself.
+    fn member_read(
+        &mut self,
+        e: &Spanned<Expr>,
+        obj: &Spanned<Expr>,
+        name: &str,
+        dst: u16,
+        unwrap_at: Option<&std::ops::Range<usize>>,
+    ) -> Result<bool, CompileError> {
         let span = &e.span;
         let a = self.reg8(dst, span)?;
 
@@ -52,7 +85,7 @@ impl Compiler<'_> {
                 Instruction::abc(Op::GETSTAT, a, s.class as u8, s.slot as u8),
                 span,
             );
-            return Ok(());
+            return Ok(false);
         }
 
         // `Status.Alive` — a singleton variant reference.
@@ -61,7 +94,8 @@ impl Compiler<'_> {
             && let Some(e_idx) = self.layouts.enum_of(en)
             && let Some(&tag) = self.chunk.enums[e_idx as usize].by_name.get(name)
         {
-            return self.variant_ref_to(e_idx, tag, dst, span);
+            self.variant_ref_to(e_idx, tag, dst, span)?;
+            return Ok(false);
         }
 
         // `Counter.total` — the receiver is a type name, not a value. No
@@ -73,7 +107,7 @@ impl Compiler<'_> {
                 Instruction::abc(Op::GETSTAT, a, s.class as u8, s.slot as u8),
                 span,
             );
-            return Ok(());
+            return Ok(false);
         }
 
         // `Math.pi`, `Os.sep`, `IoMode.Write` — a stdlib member holding a
@@ -94,7 +128,7 @@ impl Compiler<'_> {
         {
             let k = self.constant(v, span)?;
             self.emit(Instruction::abx(Op::LOADK, a, k), span);
-            return Ok(());
+            return Ok(false);
         }
 
         // `variant.value` — the payload a valued variant carries. Not a
@@ -109,7 +143,7 @@ impl Compiler<'_> {
             let b = self.reg8(r, span)?;
             self.emit(Instruction::abc(Op::UNWRAP, a, b, 0), span);
             self.free_to(m);
-            return Ok(());
+            return Ok(false);
         }
 
         // `p.health` where the front end proved `p`'s class: one indexed
@@ -128,7 +162,7 @@ impl Compiler<'_> {
             )?;
             self.map_key_read(dst, r, key, span)?;
             self.free_to(m);
-            return Ok(());
+            return Ok(false);
         }
 
         // No proved class: `GETFX` asks the tree-walker's own `read_member`
@@ -150,7 +184,7 @@ impl Compiler<'_> {
             let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
             self.emit(Instruction::abc(Op::GETFX, a, b, kc), span);
             self.free_to(m);
-            return Ok(());
+            return Ok(false);
         };
         let Some(access) = self.member_access(class, name) else {
             return Err(CompileError::unsupported(
@@ -170,9 +204,21 @@ impl Compiler<'_> {
         let m = self.mark();
         let r = self.operand_to_reg(obj, in_place)?;
         let b = self.reg8(r, span)?;
-        self.emit(self.member_load(access, a, b), span);
+        // `obj.field!` is one `GETFU`. A *static* read is not fused: it
+        // goes through `GETSTAT`, which has no unwrapping form and no
+        // measured pair asking for one.
+        let fused = match (unwrap_at, access) {
+            (Some(bang), MemberAccess::Field(slot)) => {
+                self.emit(Instruction::abc(Op::GETFU, a, b, slot as u8), bang);
+                true
+            }
+            _ => {
+                self.emit(self.member_load(access, a, b), span);
+                false
+            }
+        };
         self.free_to(m);
-        Ok(())
+        Ok(fused)
     }
 
     /// `R[dst] := R[table][K[key]]` — a table read on a constant key.

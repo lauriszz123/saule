@@ -967,3 +967,101 @@ fn an_or_in_branch_position_is_left_alone() {
          check(1, 0) .. check(0, 1) .. check(0, 0) .. check(1, 1)",
     );
 }
+
+#[test]
+fn a_nil_comparison_feeding_an_if_becomes_a_nil_branch() {
+    // `nil` has no numeric kind, so neither side of `x != nil` reaches the
+    // fused numeric branches, and `constant_compare_jump` takes `==` only.
+    // `!=` therefore materialised a boolean: `EQV` + `NOT` + `TEST` + `JMP`,
+    // four words to ask whether a register holds nil. `--profile-bytecode`
+    // on `nullsafe` counted `EQV`, `NOT` and `TEST` at 216,000 each of
+    // 5,088,042 instructions — about an eighth of the program, all of it
+    // one `!= nil`.
+    for (op, want) in [("==", "JNIL"), ("!=", "JNOTNIL")] {
+        let src = format!(
+            "local x: integer? = 3{NL}local r: integer = 0{NL}\
+             if x {op} nil then{NL} r = 1{NL}end{NL}r"
+        );
+        let l = listing(&src);
+        assert!(
+            emits(&l, want),
+            "`{op} nil` did not fuse to {want}:{NL}{l}"
+        );
+        assert!(
+            !emits(&l, "EQV"),
+            "`{op} nil` still materialises a boolean:{NL}{l}"
+        );
+        assert!(!emits(&l, "NOT"), "`{op} nil` still negates:{NL}{l}");
+        assert!(!emits(&l, "TEST"), "`{op} nil` still tests:{NL}{l}");
+        must_agree(&src);
+    }
+}
+
+#[test]
+fn a_nil_comparison_folds_from_either_side() {
+    // `==` and `!=` commute, so the literal folds whichever side it is on
+    // and there is no mirrored opcode.
+    let src = format!(
+        "local x: integer? = 3{NL}local r: integer = 0{NL}\
+         if nil != x then{NL} r = 1{NL}end{NL}r"
+    );
+    let l = listing(&src);
+    assert!(
+        emits(&l, "JNOTNIL"),
+        "a literal on the left did not fold:{NL}{l}"
+    );
+    must_agree(&src);
+}
+
+/// Two classes and a nullable link between them — the fixture the field
+/// force-unwrap tests below walk.
+const LINKED: &str = "class Leaf\n\
+\x20 v: integer?\n\
+\x20 fn init(v: integer?)\n    self.v = v\n  end\n\
+end\n\
+class Node\n\
+\x20 next: Leaf?\n\
+\x20 label: string? = \"tail\"\n\
+\x20 fn init(n: Leaf?)\n    self.next = n\n  end\n\
+end\n";
+
+#[test]
+fn a_force_unwrapped_field_read_fuses() {
+    // `GETF` + `UNWRAPNIL` collapses to `GETFU`. The saving is not the
+    // dispatch but the copy: `UNWRAPNIL` cloned the value out of one
+    // register and into another, which for an instance is a reference-count
+    // increment on the way in and a decrement on the old occupant's way
+    // out. `--profile-bytecode` on `nullsafe` counted `GETF UNWRAPNIL` as
+    // the **top adjacent pair**, 288,000 of 5,088,042 instructions.
+    let src = format!("{LINKED}local n: Node = Node(Leaf(42)){NL}n.next!.v!");
+    let l = listing(&src);
+    assert!(emits(&l, "GETFU"), "the field unwrap did not fuse:{NL}{l}");
+    assert!(
+        !emits(&l, "UNWRAPNIL"),
+        "the separate unwrap is still emitted:{NL}{l}"
+    );
+    must_agree(&src);
+}
+
+#[test]
+fn a_force_unwrapped_static_read_keeps_the_separate_unwrap() {
+    // Only the instance-**field** form fuses. A static read reaches its
+    // member through `GETSTAT`, which has no unwrapping form and no
+    // measured pair asking for one, so it keeps `UNWRAPNIL` — and this is
+    // the assertion that fails if `member_read` ever starts reporting a
+    // fusion it did not perform, which would drop the nil test entirely.
+    let src = format!(
+        "class Holder{NL}\x20 static total: integer? = 99{NL}end{NL}Holder.total!"
+    );
+    let l = listing(&src);
+    assert!(emits(&l, "GETSTAT"), "expected a static read:{NL}{l}");
+    assert!(
+        emits(&l, "UNWRAPNIL"),
+        "a static read must keep its own unwrap:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "GETFU"),
+        "a static read must not fuse as a field:{NL}{l}"
+    );
+    must_agree(&src);
+}

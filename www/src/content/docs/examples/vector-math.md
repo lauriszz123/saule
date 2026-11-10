@@ -2,7 +2,10 @@
 title: "Operator Overloading"
 description: "A Vec2 that adds, negates, compares and prints like a built-in number, plus a Path where # counts points and concatenation joins two paths. Shows how each operator is an interface whose method supplies both the behaviour and the result type."
 sidebar:
-  order: 3
+  order: 4
+  badge:
+    text: "Intermediate"
+    variant: note
 ---
 
 <!-- Generated from examples/vector-math by `npm run sync-docs`. Edit the example, not this file. -->

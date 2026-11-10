@@ -2,7 +2,10 @@
 title: "Brainfuck Interpreter"
 description: "An interpreter for another language, in about 240 lines. Tables as a tape, a dispatch loop, and a program that takes its source file from Os.args()."
 sidebar:
-  order: 8
+  order: 6
+  badge:
+    text: "Intermediate"
+    variant: note
 ---
 
 <!-- Generated from examples/bf by `npm run sync-docs`. Edit the example, not this file. -->

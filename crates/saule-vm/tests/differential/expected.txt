@@ -489,3 +489,18 @@ d134832975243817	V string:grandchild/2
 5fef50b9a31b658f	V string:late
 a2c60cdeaf9301cf	V boolean:true
 9b1e2542f78b1d6c	V string:1,3
+732fe3ce7125f7d3	V string:absent
+28029e7b84649ac8	V integer:42
+2d03badd7379e066	V integer:1
+fc37a56aa6cddb05	V string:absent
+aee79328483f3994	E force-unwrapped a `nil` value
+f85097d6bd0be40d	V integer:0
+0467100a25cb17d1	V string:present
+58a6522586e0cc81	E force-unwrapped a `nil` value
+68bb2aad3c9ee9cb	V string:present
+0124dd03adba6087	V integer:1
+3455879793b75ba5	V integer:99
+3e01143238fdd417	V integer:42
+16aed9c53b0449cd	V integer:1
+8db567589f853c5f	V integer:0
+23b2faf1cef7fc43	V integer:1

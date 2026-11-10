@@ -2,7 +2,10 @@
 title: "Wrapper Types"
 description: "A Text built straight from a string literal and a Settings with full control of every read and write. Shows Assignable<T> target-typed construction and OpIndex / OpNewIndex as Saule's __index / __newindex — with nothing injected: a wrapper declares every method it exposes, calling the String class explicitly."
 sidebar:
-  order: 5
+  order: 7
+  badge:
+    text: "Advanced"
+    variant: caution
 ---
 
 <!-- Generated from examples/wrapper-types by `npm run sync-docs`. Edit the example, not this file. -->
