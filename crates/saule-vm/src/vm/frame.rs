@@ -149,6 +149,17 @@ impl VmFunction for Closure {
         out
     }
 
+    /// `Coroutine.create(f)`: a coroutine whose body is this closure.
+    fn coroutine(
+        &self,
+        handle: &Rc<VmFunctionRef>,
+    ) -> Option<Rc<saule_runtime::value::CoroutineRef>> {
+        Some(super::coroutine::Coroutine::create(
+            Rc::clone(handle),
+            self.shared.clone(),
+        ))
+    }
+
     /// The single-result form, and the one the callbacks actually use.
     ///
     /// Identical to [`call`](Self::call) except that the result never

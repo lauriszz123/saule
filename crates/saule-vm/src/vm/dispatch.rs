@@ -179,7 +179,14 @@ impl Vm {
 
     /// `CALLMX`: a method call on a receiver the compiler could not prove,
     /// handed to the runtime's dynamic method dispatch.
+    ///
+    /// Also where a coroutine yields: `co.yield(v)` is a method call on the
+    /// yielder, and when it is made by the coroutine's own code it is the
+    /// one call that must *leave* the dispatch loop — see
+    /// [`Vm::try_yield`]. `pc` is the instruction after this one, which is
+    /// where a resumed coroutine continues.
     #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
     fn call_member_by_name(
         &mut self,
         k: u32,
@@ -188,6 +195,7 @@ impl Vm {
         a: usize,
         chunk: &Chunk,
         site: &Site<'_>,
+        pc: usize,
     ) -> Result<(), RuntimeError> {
         let key = chunk.constants[k as usize].clone();
         let Value::Str(name) = &key else {
@@ -200,17 +208,27 @@ impl Vm {
         // `CALLM` — so a call site can switch between the two without
         // moving anything.
         let n_args = (ins.b() as usize).saturating_sub(1);
+        let n_ret = if ins.c() == 0 {
+            ALL_RESULTS
+        } else {
+            ins.c() - 1
+        };
+        if let Value::Coroutine(c) = self.reg(base + a)
+            && name.as_str() == "yield"
+        {
+            let c = Rc::clone(c);
+            if self.try_yield(&c, base + a, n_args, n_ret, pc) {
+                return Err(RuntimeError::Yield);
+            }
+            // Not this register file's coroutine: the runtime path below
+            // reports why it cannot yield from here.
+        }
         let recv = (*self.reg(base + a)).clone();
         let args: Vec<Value> = (0..n_args)
             .map(|i| (*self.reg(base + a + 1 + i)).clone())
             .collect();
         let vs =
             self.foreign(|_| saule_runtime::call::call_method(&recv, name, &args, site.span()))?;
-        let n_ret = if ins.c() == 0 {
-            ALL_RESULTS
-        } else {
-            ins.c() - 1
-        };
         self.store_results(base + a, &vs, n_ret);
         Ok(())
     }
@@ -245,11 +263,24 @@ impl Vm {
     /// comparison; [`execute_collecting`](Self::execute_collecting) is the
     /// owning form, for the callers that want a `Vec` anyway.
     pub(crate) fn execute(&mut self) -> Result<(), RuntimeError> {
+        let entry_depth = self.frames.len();
+        self.execute_from(entry_depth)
+    }
+
+    /// [`execute`](Self::execute), returning once the frame at depth
+    /// `entry_depth` (1-based) returns rather than the frame on top now.
+    ///
+    /// The two are the same thing except for a resumed coroutine. It
+    /// re-enters the loop with however many frames it had when it yielded,
+    /// but what it is running is still its *body*, at depth 1 — and taking
+    /// the current depth instead would end the run the moment the function
+    /// it yielded from returned.
+    pub(crate) fn execute_from(&mut self, entry_depth: usize) -> Result<(), RuntimeError> {
         #[cfg(feature = "profile")]
         if crate::profile::is_enabled() {
-            return self.execute_loop::<true>();
+            return self.execute_loop::<true>(entry_depth);
         }
-        self.execute_loop::<false>()
+        self.execute_loop::<false>(entry_depth)
     }
 
     /// Anchor an error in the module whose code raised it.
@@ -305,9 +336,10 @@ impl Vm {
         Ok(std::mem::take(&mut self.results))
     }
 
-    fn execute_loop<const PROFILE: bool>(&mut self) -> Result<(), RuntimeError> {
-        let entry_depth = self.frames.len();
-
+    fn execute_loop<const PROFILE: bool>(
+        &mut self,
+        entry_depth: usize,
+    ) -> Result<(), RuntimeError> {
         'reentry: loop {
             // Re-derived once per frame activation, then held in locals
             // across the whole inner loop (§5.3). The clones are what let
@@ -1738,6 +1770,7 @@ impl Vm {
                             a,
                             &chunk,
                             &Site::Code(&proto, here),
+                            pc,
                         )?;
                     }
 

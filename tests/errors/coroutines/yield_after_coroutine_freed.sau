@@ -1,0 +1,14 @@
+-- A yielder whose coroutine has been freed says the coroutine no longer exists.
+class Main
+  static fn main()
+    local holder: table<any> = {}
+    local gen: any? = Coroutine.create(fn(co: any) -> nil
+      holder[1] = co
+      co.yield(nil)
+    end)
+    gen!.resume()
+    gen = nil
+    local y: any = holder[1]
+    y.yield(1)
+  end
+end

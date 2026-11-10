@@ -1,0 +1,9 @@
+-- What resume returns is `any`, and `any` does not flow into an `integer` slot without `as`.
+class Main
+  static fn main()
+    local gen: any = Coroutine.create(fn(co: any) -> nil
+      co.yield(1)
+    end)
+    local n: integer = gen.resume()
+  end
+end

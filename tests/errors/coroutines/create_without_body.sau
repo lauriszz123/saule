@@ -1,0 +1,6 @@
+-- Coroutine.create takes exactly one argument, the body; caught before the program runs.
+class Main
+  static fn main()
+    local gen: any = Coroutine.create()
+  end
+end

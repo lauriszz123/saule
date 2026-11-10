@@ -26,6 +26,7 @@ use crate::value::{NativeFn, Value};
 
 pub mod bytes;
 pub mod core;
+pub mod coroutine;
 pub mod io;
 pub mod iter;
 pub mod math;
@@ -67,6 +68,7 @@ pub fn register_builtin_packages() {
     register(&os::OS_PACKAGE);
     register(&project::PROJECT_PACKAGE);
     register(&version::VERSION_PACKAGE);
+    register(&coroutine::COROUTINE_PACKAGE);
 }
 
 /// Walk every registered package and let it register its native

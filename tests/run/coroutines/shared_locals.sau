@@ -1,0 +1,93 @@
+-- Captured locals stay one live binding across suspension, from every side.
+
+fn check(label: string, got: string, want: string)
+  println(label .. ": " .. got)
+  assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
+end
+
+class Main
+  static fn main()
+    -- The coroutine writes the caller's local; the caller writes it back
+    -- while the coroutine is suspended; the coroutine sees that.
+    local shared: integer = 0
+    local gen: any = Coroutine.create(fn(co: any) -> nil
+      while true do
+        shared = shared + 1
+        co.yield(shared)
+      end
+    end)
+    local log: string = tostring(gen.resume()) .. ","
+    shared = shared + 10
+    log = log .. tostring(gen.resume()) .. ","
+    check("caller's local", log .. shared, "1,12,12")
+
+    -- A closure over a local of the *suspended* coroutine reads and writes
+    -- it, and the coroutine sees the write when it resumes.
+    local peek: fn() -> integer = fn() -> integer
+      return -1
+    end
+    local poke: fn(integer) -> nil = fn(v: integer) -> nil
+      return nil
+    end
+    local owner: any = Coroutine.create(fn(co: any) -> nil
+      local mine: integer = 1
+      peek = fn() -> integer
+        return mine
+      end
+      poke = fn(v: integer) -> nil
+        mine = v
+      end
+      co.yield(mine)
+      mine = mine + 1
+      co.yield(mine)
+    end)
+    local seen: string = tostring(owner.resume()) .. ","
+    seen = seen .. peek() .. ","
+    poke(41)
+    seen = seen .. peek() .. ","
+    seen = seen .. tostring(owner.resume()) .. ","
+    seen = seen .. peek()
+    check("coroutine's local", seen, "1,1,41,42,42")
+
+    -- Two coroutines interleaving over one local.
+    local trace: string = ""
+    local a: any = Coroutine.create(fn(co: any) -> nil
+      for i = 1, 3 do
+        trace = trace .. "a" .. i
+        co.yield(nil)
+      end
+    end)
+    local b: any = Coroutine.create(fn(co: any) -> nil
+      for i = 1, 3 do
+        trace = trace .. "b" .. i
+        co.yield(nil)
+      end
+    end)
+    for i = 1, 3 do
+      a.resume()
+      b.resume()
+    end
+    check("interleaved", trace, "a1b1a2b2a3b3")
+
+    -- A nested coroutine sharing a local of the coroutine around it.
+    local outer: any = Coroutine.create(fn(co: any) -> nil
+      local depth: integer = 1
+      local inner: any = Coroutine.create(fn(ico: any) -> nil
+        while true do
+          depth = depth * 10
+          ico.yield(depth)
+        end
+      end)
+      while true do
+        local got: any = inner.resume()
+        depth = depth + 1
+        co.yield(tostring(got) .. ">" .. depth)
+      end
+    end)
+    local nested: string = ""
+    for i = 1, 3 do
+      nested = nested .. tostring(outer.resume()) .. ","
+    end
+    check("nested", nested, "10>11,110>111,1110>1111,")
+  end
+end

@@ -365,6 +365,18 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
                 let sig = substitute_receiver_args(&sig, &type_name, &type_args);
                 return semantic_method_return(&sig, args, scope);
             }
+            // `x.method(args)` on an `any` receiver is `any`, as `x.field`
+            // already is (see the `Member` arm). The call is dispatched by
+            // name at run time and nothing is known about what it returns,
+            // so the result stays *explicitly* unknown. Without this it was
+            // "no type at all", and the result of a dynamic call could not
+            // be bound, passed or returned anywhere a type is checked — not
+            // even into a slot declared `any`.
+            if let Expr::Member { obj, .. } = &callee.value
+                && infer(obj, scope).is_some_and(|ty| is_any(&ty))
+            {
+                return Some(Type::Named("any".into()));
+            }
             if let Some(qname) = native_callee_name(callee, scope)
                 // The *selected* form, not merely the first: `Math.random()`
                 // is a float where `Math.random(1, 6)` is an integer, and

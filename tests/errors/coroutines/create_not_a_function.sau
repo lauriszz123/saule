@@ -1,0 +1,6 @@
+-- Coroutine.create needs a function to run as the body; an integer is not one.
+class Main
+  static fn main()
+    local gen: any = Coroutine.create(42)
+  end
+end

@@ -46,6 +46,19 @@ pub trait VmFunction: fmt::Debug {
     /// is a malloc and a free *per comparison*, which measured as a quarter
     /// of the comparator's cost.
     ///
+    /// A new, not-yet-started coroutine whose body is this function —
+    /// `Coroutine.create(f)`.
+    ///
+    /// `None` from an implementor that cannot suspend a running function,
+    /// which is the default. The VM can: a coroutine is a register file of
+    /// its own that keeps its frames between resumes.
+    fn coroutine(
+        &self,
+        _handle: &std::rc::Rc<VmFunctionRef>,
+    ) -> Option<std::rc::Rc<super::CoroutineRef>> {
+        None
+    }
+
     /// The default implementation is the honest one for any implementor
     /// that has no cheaper route; the VM overrides it with a path that
     /// returns out of the register file directly.

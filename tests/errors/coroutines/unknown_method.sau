@@ -1,0 +1,8 @@
+-- A coroutine answers only resume / status / isDone / error; anything else is an error naming them.
+class Main
+  static fn main()
+    local gen: any = Coroutine.create(fn(co: any) -> nil
+    end)
+    gen.start()
+  end
+end

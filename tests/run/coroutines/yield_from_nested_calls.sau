@@ -1,0 +1,88 @@
+-- Coroutines are stackful: any function the body calls can yield, at any depth.
+
+fn check(label: string, got: string, want: string)
+  println(label .. ": " .. got)
+  assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
+end
+
+-- Yields only after the deeper calls return, so each resume continues a
+-- different frame.
+fn postOrder(co: any, n: integer)
+  if n == 0 then
+    return
+  end
+  postOrder(co, n - 1)
+  co.yield(n)
+end
+
+fn helper(co: any) -> string
+  co.yield("from helper")
+  return "helper returned"
+end
+
+class Counter
+  local n: integer
+  fn init()
+    self.n = 0
+  end
+  fn run(co: any)
+    while self.n < 3 do
+      self.n = self.n + 1
+      co.yield(self.n)
+    end
+  end
+end
+
+fn drain(gen: any) -> string
+  local log: string = ""
+  while gen.isDone() == false do
+    log = log .. tostring(gen.resume()) .. ","
+  end
+  return log
+end
+
+class Main
+  static fn main()
+    check("recursion", drain(Coroutine.create(fn(co: any) -> nil
+      postOrder(co, 5)
+    end)), "1,2,3,4,5,nil,")
+
+    local c: Counter = Counter()
+    check("method", drain(Coroutine.create(fn(co: any) -> nil
+      c.run(co)
+    end)), "1,2,3,nil,")
+
+    check("tail call", drain(Coroutine.create(fn(co: any) -> string
+      return helper(co)
+    end)), "from helper,helper returned,")
+
+    check("inside try", drain(Coroutine.create(fn(co: any) -> string
+      try
+        co.yield("in try")
+        throw "after resume"
+      catch e: string
+        co.yield("caught " .. e)
+      end
+      return "end"
+    end)), "in try,caught after resume,end,")
+
+    local items: table<string> = {"a", "b", "c"}
+    check("for in", drain(Coroutine.create(fn(co: any) -> nil
+      for i: integer, v: string in items do
+        co.yield(i .. v)
+      end
+    end)), "1a,2b,3c,nil,")
+
+    -- Deep: five hundred frames, one yield in each.
+    local deep: any = Coroutine.create(fn(co: any) -> nil
+      postOrder(co, 500)
+    end)
+    local count: integer = 0
+    local v: any? = deep.resume()
+    while v != nil do
+      count = count + 1
+      v = deep.resume()
+    end
+    check("deep", count .. "", "500")
+  end
+end

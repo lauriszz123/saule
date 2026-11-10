@@ -1,0 +1,8 @@
+-- Coroutine.status takes no arguments.
+class Main
+  static fn main()
+    local gen: any = Coroutine.create(fn(co: any) -> nil
+    end)
+    gen.status("now")
+  end
+end

@@ -1,0 +1,29 @@
+-- A coroutine yields values in order, then reports itself dead and answers nil.
+
+fn check(label: string, got: string, want: string)
+  println(label .. ": " .. got)
+  assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
+end
+
+class Main
+  static fn main()
+    local ran: integer = 0
+    local gen: any = Coroutine.create(fn(co: any) -> nil
+      ran = ran + 1
+      for i = 1, 3 do
+        co.yield(i * 10)
+      end
+    end)
+
+    -- Creating a coroutine runs nothing.
+    check("before", tostring(gen.status()) .. ran, "suspended0")
+
+    local log: string = ""
+    for i = 1, 5 do
+      log = log .. tostring(gen.resume()) .. ","
+    end
+    check("yields", log, "10,20,30,nil,nil,")
+    check("after", tostring(gen.status()) .. tostring(gen.isDone()) .. ran, "deadtrue1")
+    check("no error", tostring(gen.error()), "nil")
+  end
+end

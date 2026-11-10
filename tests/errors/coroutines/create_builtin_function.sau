@@ -1,0 +1,6 @@
+-- A built-in function cannot be a coroutine's body: it has no frames to keep, so it cannot be suspended.
+class Main
+  static fn main()
+    local gen: any = Coroutine.create(print)
+  end
+end

@@ -1,0 +1,13 @@
+-- A yielder used after it escapes its coroutine cannot yield: that coroutine is not the one running.
+class Main
+  static fn main()
+    local holder: table<any> = {}
+    local gen: any = Coroutine.create(fn(co: any) -> nil
+      holder[1] = co
+      co.yield(nil)
+    end)
+    gen.resume()
+    local y: any = holder[1]
+    y.yield(1)
+  end
+end

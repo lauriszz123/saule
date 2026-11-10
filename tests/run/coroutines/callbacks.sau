@@ -1,0 +1,46 @@
+-- Resuming from inside a callback works; yielding from inside one fails the coroutine, reported.
+
+fn check(label: string, got: string, want: string)
+  println(label .. ": " .. got)
+  assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
+end
+
+class Main
+  static fn main()
+    -- A sort comparator resumes a counter. Resuming is an ordinary call,
+    -- and the counter yields from its own code, which is all a yield needs.
+    local counter: any = Coroutine.create(fn(co: any) -> nil
+      local n: integer = 0
+      while true do
+        n = n + 1
+        co.yield(n)
+      end
+    end)
+    local calls: integer = 0
+    local t: table<integer> = {3, 1, 2}
+    Table.sort(t, fn(a: integer, b: integer) -> boolean
+      counter.resume()
+      calls = calls + 1
+      return a < b
+    end)
+    check("sorted", t[1] .. "" .. t[2] .. "" .. t[3], "123")
+    -- The counter has been resumed once per comparison, so its next value
+    -- is one past that.
+    check("counted", tostring(counter.resume()), (calls + 1) .. "")
+
+    -- A yield made from inside a comparator cannot suspend the coroutine:
+    -- the sort's own call is in the way. The coroutine fails, and says so.
+    local gen: any = Coroutine.create(fn(co: any) -> nil
+      local u: table<integer> = {2, 1}
+      Table.sort(u, fn(a: integer, b: integer) -> boolean
+        co.yield(a)
+        return a < b
+      end)
+    end)
+    check("result", tostring(gen.resume()), "nil")
+    check("status", tostring(gen.status()), "dead")
+    local msg: string = tostring(gen.error())
+    println("error: " .. msg)
+    assert(String.find(msg, "inside a callback") != nil, "unexpected error: " .. msg)
+  end
+end

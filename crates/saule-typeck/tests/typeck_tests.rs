@@ -419,6 +419,33 @@ fn any_cannot_flow_into_a_nullable_concrete_slot_either() {
 }
 
 #[test]
+fn a_method_call_on_an_any_receiver_is_any() {
+    // As `x.field` on an `any` is `any`, so is `x.method()`. It used to be
+    // no type at all, which made the result of every dynamic call unusable
+    // in any checked position — even one declared `any`.
+    accepts(&in_fn(
+        "  local a: any = 5\n  local r: any = a.anything(1, \"two\")",
+    ));
+    accepts(&in_fn(
+        "  local a: any = 5\n  local n: integer = (a.count() as integer)!",
+    ));
+    // Chained: each call off an `any` is another `any`.
+    accepts(&in_fn(
+        "  local a: any = 5\n  local r: any = a.first().second()",
+    ));
+}
+
+#[test]
+fn a_method_calls_any_result_still_needs_a_cast() {
+    // `any` is explicit uncertainty, not a free downcast: the result of a
+    // dynamic call into a concrete slot is the direction `as` exists for.
+    rejects(
+        &in_fn("  local a: any = 5\n  local n: integer = a.count()"),
+        "integer",
+    );
+}
+
+#[test]
 fn a_cast_yields_a_nullable_of_the_target_type() {
     accepts(&in_fn(
         "  local a: any = 5\n  local n: integer? = a as integer",

@@ -585,6 +585,16 @@ fn members_of_a_generic_class_resolve_through_every_receiver() {
 /// depend on values the checker cannot know. Every other fixture in
 /// `tests/errors/` fails before anything runs, so the editor has to show it.
 const RUNTIME_ONLY: &[&str] = &[
+    // Coroutine handles are `any` until `Coroutine<T>` is typed, so what a
+    // body is, which coroutine a yielder belongs to and which methods a
+    // handle answers are all known only when the call is made.
+    "coroutines/create_builtin_function",
+    "coroutines/create_not_a_function",
+    "coroutines/status_with_arguments",
+    "coroutines/unknown_method",
+    "coroutines/yield_after_coroutine_freed",
+    "coroutines/yield_on_coroutine",
+    "coroutines/yield_outside_coroutine",
     "exceptions/catch_wrong_type",
     "exceptions/stack_overflow_recursion",
     "exceptions/stack_overflow_reentrant",

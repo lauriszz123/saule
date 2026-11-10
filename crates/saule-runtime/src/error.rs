@@ -71,6 +71,17 @@ pub enum RuntimeError {
         span: std::ops::Range<usize>,
     },
 
+    /// A coroutine yielding: not an error, but the way a `yield` leaves the
+    /// dispatch loop. The loop's own error path is the one exit that keeps
+    /// every frame where it is, which is exactly what suspending needs.
+    ///
+    /// It never escapes the VM. The coroutine's `resume` is the only thing
+    /// that runs a dispatch loop a `yield` can be raised in, and it turns
+    /// this back into the yielded values. If one is ever rendered, that is a
+    /// VM bug, and the message says so.
+    #[error("internal: a coroutine `yield` escaped the VM")]
+    Yield,
+
     #[error("import error: {message}")]
     ImportError {
         message: String,

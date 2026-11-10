@@ -508,6 +508,9 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         // `local x = (a == a)` and `if a == a then` answered differently,
         // because they compile to different opcodes.
         (Value::Foreign(x), Value::Foreign(y)) => x.ptr() == y.ptr(),
+        // Identity, agreeing with `Value`'s `PartialEq` for the reason the
+        // arm above gives.
+        (Value::Coroutine(x), Value::Coroutine(y)) => std::rc::Rc::ptr_eq(x, y),
         // Cross-type comparisons are always false (Lua semantics).
         _ => false,
     }
