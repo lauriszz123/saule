@@ -230,6 +230,15 @@ function rewriteLinks(body, index, { file, section }) {
 		.replace(/\]\(\.{1,2}\/LANGUAGE\.md\)/g, `](${withBase('/guides/introduction/')})`)
 		.replace(/\]\(\.{1,2}\/README\.md\)/g, `](${withBase('/guides/introduction/')})`);
 
+	// `./examples/<dir>` is the project directory when the guide is read on
+	// GitHub. On the site it becomes that example's generated page — or a
+	// repository link when the project has no page, which is a 404 otherwise.
+	out = out.replace(/\]\(\.{1,2}\/examples\/([^)\s]+?)\/?\)/g, (match, dir) =>
+		EXAMPLES.some((e) => e.dir === dir)
+			? `](${withBase(`/examples/${dir}/`)})`
+			: `](${repoUrl(`examples/${dir}`)})`,
+	);
+
 	for (const anchor of unresolved) {
 		console.warn(`  ! ${file} › ${section}: unresolved link target #${anchor}`);
 	}
@@ -676,6 +685,17 @@ const EXAMPLES = [
 			'A `Text` built straight from a string literal and a `Settings` with full control of every read and write. Shows `Assignable<T>` target-typed construction and `OpIndex` / `OpNewIndex` as Saule\'s `__index` / `__newindex` — with nothing injected: a wrapper declares every method it exposes, calling the `String` class explicitly.',
 		run: 'saule run',
 		files: ['src/text.sau', 'src/settings.sau', 'src/main.sau'],
+	},
+	{
+		dir: 'coroutines',
+		title: 'Coroutines',
+		// No literal `|` in this blurb — the index renders it inside a
+		// markdown table cell with backticks stripped, where a pipe would
+		// start a new column.
+		blurb:
+			'A six-part tour of coroutines: lazy stream combinators over infinite sources, a tokenizer that yields from two frames below the coroutine body, a recursive-descent parser that pulls one token at a time, and a cooperative scheduler whose tasks interleave on one thread — one of which fails without taking the others with it. Shows `Coroutine<T>` and `Yielder<T>`, where `T` is learned from, stackful yielding through ordinary function calls, laziness that is counted rather than claimed, and the dynamic two-way form.',
+		run: 'saule run',
+		files: ['src/stream.sau', 'src/lexer.sau', 'src/calc.sau', 'src/scheduler.sau', 'src/main.sau'],
 	},
 	// `json_usage` is deliberately absent: as of this writing it does not
 	// typecheck (`Json.decode` returns `any?`, which the example assigns

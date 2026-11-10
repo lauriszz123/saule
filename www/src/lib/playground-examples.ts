@@ -519,6 +519,298 @@ println(risky.resume())           -- nil
 println(risky.error() ?? "")      -- sensor offline
 `,
 	},
+	{
+		id: 'streams',
+		group: 'Coroutines',
+		label: 'Lazy pipelines',
+		blurb: 'Stream combinators that are themselves coroutines — map, filter and take over an infinite source, costing only what you take.',
+		source: `-- Lazy streams, where every combinator is itself a coroutine.
+--
+-- A Coroutine<T> is already a lazy sequence: nothing in the body runs until
+-- something resumes it, and \`for v in src do\` resumes it once per value. So a
+-- combinator is just a coroutine that loops over another one.
+
+-- Infinite. That is safe here, because a stage only runs when the stage after
+-- it asks for a value.
+fn naturals(start: integer) -> Coroutine<integer>
+    return Coroutine.create(fn(co)
+        local n: integer = start
+        while true do
+            co.yield(n)
+            n = n + 1
+        end
+    end)
+end
+
+-- The generator shape fibonacci wants: \`a\` and \`b\` are locals that survive
+-- between resumes, not fields on an object.
+fn fibonacci() -> Coroutine<integer>
+    return Coroutine.create(fn(co)
+        local a: integer = 0
+        local b: integer = 1
+        while true do
+            co.yield(b)
+            local next: integer = a + b
+            a = b
+            b = next
+        end
+    end)
+end
+
+-- \`T\` comes from the source, \`U\` from the mapper, and the body's yielder is a
+-- Yielder<U> because that is what the declared return type promises.
+fn map<T, U>(src: Coroutine<T>, f: fn(T) -> U) -> Coroutine<U>
+    return Coroutine.create(fn(co)
+        for value in src do
+            co.yield(f(value))
+        end
+    end)
+end
+
+fn filter<T>(src: Coroutine<T>, keep: fn(T) -> boolean) -> Coroutine<T>
+    return Coroutine.create(fn(co)
+        for value in src do
+            if keep(value) then
+                co.yield(value)
+            end
+        end
+    end)
+end
+
+-- \`break\` leaves the source suspended where it was rather than draining it.
+fn take<T>(src: Coroutine<T>, n: integer) -> Coroutine<T>
+    return Coroutine.create(fn(co)
+        local taken: integer = 0
+        for value in src do
+            co.yield(value)
+            taken = taken + 1
+            if taken == n then
+                break
+            end
+        end
+    end)
+end
+
+fn collect<T>(src: Coroutine<T>) -> table<T>
+    local out: table<T> = {}
+    for value in src do
+        out[#out + 1] = value
+    end
+    return out
+end
+
+local evens: table<integer> = collect(take(filter(naturals(1), n => n % 2 == 0), 6))
+println("first six even naturals: " .. String.join(", ", evens))
+
+local fib: table<integer> = collect(take(fibonacci(), 12))
+println("fibonacci: " .. String.join(", ", fib))
+
+local labelled: table<string> = collect(map(take(fibonacci(), 5), n => "<" .. n .. ">"))
+println("mapped: " .. String.join(" ", labelled))
+
+-- Laziness, counted rather than claimed: the counter is an ordinary captured
+-- local, bumped once per value the infinite source actually produced.
+local produced: integer = 0
+local counted: Coroutine<integer> = map(naturals(1), fn(n: integer) -> integer
+    produced = produced + 1
+    return n
+end)
+println("took " .. String.join(", ", collect(take(counted, 3))) ..
+    " from an infinite source, which produced " .. produced .. " values")
+`,
+	},
+	{
+		id: 'stackful',
+		group: 'Coroutines',
+		label: 'Stackful tokenizer',
+		blurb: 'A tokenizer that yields from two frames below the coroutine body, because the yielder is an ordinary value.',
+		source: `-- Stackful: the yielder is an ordinary value, so any function the coroutine
+-- called can yield on its behalf.
+--
+-- A hand-written tokenizer usually needs a class with an index field, because
+-- \`next()\` has to pick up where the last call left off. Here \`scan\` is written
+-- as one straight-line loop — \`i\` is a local — and each \`co.yield\` hands a
+-- token out and freezes the loop mid-stride. The whole call stack between the
+-- yield and the resume is suspended with it.
+
+fn isDigit(c: string) -> boolean
+    return c >= "0" and c <= "9"
+end
+
+-- Two frames below the coroutine body, and still yielding. The return value
+-- is where scanning carries on from.
+fn scanNumber(co: Yielder<string>, source: string, start: integer) -> integer
+    local i: integer = start
+    while i <= String.len(source) and isDigit(String.sub(source, i, i)) do
+        i = i + 1
+    end
+    co.yield("number " .. String.sub(source, start, i - 1))
+    return i
+end
+
+fn scan(co: Yielder<string>, source: string)
+    local i: integer = 1
+    while i <= String.len(source) do
+        local c: string = String.sub(source, i, i)
+        if c == " " then
+            i = i + 1
+        elseif isDigit(c) then
+            i = scanNumber(co, source, i)
+        elseif String.contains("+-*/()", c) then
+            co.yield("symbol " .. c)
+            i = i + 1
+        else
+            -- A throw the coroutine does not catch kills *it*, not the
+            -- program: resume() answers nil and error() carries this message.
+            throw "unexpected '" .. c .. "' at column " .. i
+        end
+    end
+end
+
+fn tokens(source: string) -> Coroutine<string>
+    return Coroutine.create(fn(co)
+        scan(co, source)
+    end)
+end
+
+for token in tokens("12 + (34 * 5)") do
+    println(token)
+end
+
+-- Stopping early really stops the work: \`break\` leaves the lexer suspended on
+-- the character after the token it just handed over.
+local stream: Coroutine<string> = tokens("1 + 2 + 3 + 4")
+for token in stream do
+    if String.starts(token, "symbol") then
+        break
+    end
+end
+println("broke out; the lexer is " .. stream.status())
+println("resuming carries on: " .. (stream.resume() ?? ""))
+
+-- Bad input, reported rather than fatal — and everything yielded before the
+-- failure was still delivered.
+local broken: Coroutine<string> = tokens("7 * $")
+while true do
+    local token: string? = broken.resume()
+    if token == nil then
+        break
+    end
+    println("delivered " .. token!)
+end
+println("then: " .. broken.status() .. ", because " .. (broken.error() ?? ""))
+`,
+	},
+	{
+		id: 'tasks',
+		group: 'Coroutines',
+		label: 'Cooperative tasks',
+		blurb: 'Four tasks interleaved on one thread, round-robin — including one that fails without taking the others down.',
+		source: `-- Cooperative multitasking: a task is a coroutine that decides for itself
+-- when to hand control back.
+--
+-- Nothing runs in parallel and there are no locks. \`resume()\` transfers
+-- control into a task, and that task's next \`yield\` transfers it back — so
+-- between two yields a task has the whole program to itself.
+
+class Task
+    name: string = ""
+    local job: Coroutine<string>
+
+    fn init(name: string, body: fn(Yielder<string>) -> nil)
+        self.name = name
+        self.job = Coroutine.create(body)
+    end
+
+    fn isDone() -> boolean
+        return self.job.isDone()
+    end
+
+    -- One slice of work. How long a slice is, is the task's own business:
+    -- \`resume\` runs it until *it* yields.
+    fn step(tick: integer)
+        local note: string? = self.job.resume()
+
+        if note != nil then
+            println(String.format("tick %d  %-9s %s", tick, self.name, note!))
+            return
+        end
+
+        -- \`nil\` means the task is over — but over how? A crash is contained:
+        -- the coroutine dies, the program does not, and the other tasks keep
+        -- their turns. \`error()\` tells a crash from a clean finish.
+        local failure: string? = self.job.error()
+        if failure != nil then
+            println(String.format("tick %d  %-9s FAILED: %s", tick, self.name, failure!))
+        else
+            println(String.format("tick %d  %-9s done", tick, self.name))
+        end
+    end
+end
+
+local tasks: table<Task> = {}
+
+-- The parameter type is the coroutine contract itself: fn(Yielder<string>).
+fn spawn(name: string, body: fn(Yielder<string>) -> nil)
+    tasks[#tasks + 1] = Task(name, body)
+end
+
+spawn("download", fn(co)
+    for percent = 25, 100, 25 do
+        co.yield("fetching " .. percent .. "%")
+    end
+end)
+
+spawn("render", fn(co)
+    co.yield("laying out")
+    co.yield("painting")
+end)
+
+spawn("sensor", fn(co)
+    co.yield("reading 21.4C")
+    throw "sensor offline"
+end)
+
+-- A \`yield\` inside a \`try\` resumes *inside the same try*, so a task can pause
+-- mid-retry and still catch its own failure afterwards.
+spawn("retry", fn(co)
+    for attempt = 1, 3 do
+        try
+            co.yield("attempt " .. attempt)
+            if attempt < 3 then
+                throw "timed out"
+            end
+            co.yield("connected")
+        catch e: string
+            co.yield("recovered from: " .. e)
+        end
+    end
+end)
+
+-- Round-robin: every live task gets one slice per tick, until none is left.
+fn alive() -> integer
+    local count: integer = 0
+    for task in tasks do
+        if not task.isDone() then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local tick: integer = 0
+while alive() > 0 do
+    tick = tick + 1
+    for task in tasks do
+        if not task.isDone() then
+            task.step(tick)
+        end
+    end
+end
+
+println("four tasks interleaved over " .. tick .. " ticks, on one thread")
+`,
+	},
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0]!;

@@ -18,6 +18,13 @@ history.
   program. See [Coroutines](./LANGUAGE.md#coroutines) and the
   [`Coroutine` reference](./DOCS.md#coroutine); the editor types, completes and
   documents both handles.
+- **A worked coroutines example.** [`examples/coroutines`](./examples/coroutines)
+  is a six-part tour: lazy stream combinators that are themselves coroutines,
+  a stackful tokenizer that yields from two frames below the body, a
+  recursive-descent parser that pulls one token at a time, and a cooperative
+  scheduler whose tasks interleave on one thread — one of which fails without
+  taking the others with it. The playground gains three coroutine programs
+  alongside it.
 
 ### Changed
 

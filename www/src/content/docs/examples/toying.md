@@ -2,7 +2,7 @@
 title: "Graphics Window"
 description: "Opens a window and draws a rectangle that follows the mouse, using the Love2D-style Shine2D native package. Shows how Saule calls into a dynamically-loaded Rust library."
 sidebar:
-  order: 9
+  order: 10
 ---
 
 <!-- Generated from examples/toying by `npm run sync-docs`. Edit the example, not this file. -->

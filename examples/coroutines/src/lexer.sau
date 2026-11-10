@@ -1,0 +1,124 @@
+-- A tokenizer as a coroutine, to show off the *stackful* half of the model.
+--
+-- The classic shape for a hand-written lexer is a class with an index field:
+-- `next()` picks up where the last call left off, so the position has to live
+-- outside the function that uses it. A coroutine keeps it in a local instead —
+-- `scan` below is written as one straight-line loop, as if it were allowed to
+-- run to completion, and every `co.yield` hands a token out and freezes the
+-- loop mid-stride.
+--
+-- What makes that work is that the yielder is an ordinary value. `scan`,
+-- `number` and `name` are plain static functions called from inside the
+-- coroutine body; each takes the `Yielder<Token>` and yields from one or two
+-- frames below it. The whole call stack between the yield and the resume is
+-- suspended along with it, which is why no state machine has to be unrolled by
+-- hand.
+
+export enum Kind
+	Number = "number"
+	Name = "name"
+	Operator = "op"
+	Open = "open"
+	Close = "close"
+end
+
+export class Token implements OpToString
+	kind: Kind = Kind.Number
+	text: string = ""
+	-- The 1-based column the token started at, so an error can point at it.
+	at: integer = 0
+
+	fn init(kind: Kind, text: string, at: integer)
+		self.kind = kind
+		self.text = text
+		self.at = at
+	end
+
+	fn isOperator(op: string) -> boolean
+		return self.kind == Kind.Operator and self.text == op
+	end
+
+	fn toString() -> string
+		return String.format("%s:%s", self.kind.value, self.text)
+	end
+end
+
+export class Lexer
+	-- One token per resume. Nothing is scanned until something asks, and the
+	-- caller can stop asking half-way through — see `Main.showLaziness`.
+	static fn tokens(source: string) -> Coroutine<Token>
+		return Coroutine.create(fn(co)
+			Lexer.scan(co, source)
+		end)
+	end
+
+	-- Yielding from a function the coroutine body merely *called*. `i` is an
+	-- ordinary local that survives every suspension, which is the whole
+	-- reason this reads like a loop rather than a resumable object.
+	static fn scan(co: Yielder<Token>, source: string)
+		local i: integer = 1
+		local len: integer = String.len(source)
+
+		while i <= len do
+			local c: string = String.sub(source, i, i)
+
+			if c == " " or c == "\t" then
+				i = i + 1
+			elseif Lexer.isDigit(c) then
+				i = Lexer.number(co, source, i)
+			elseif Lexer.isAlpha(c) then
+				i = Lexer.name(co, source, i)
+			elseif c == "(" then
+				co.yield(Token(Kind.Open, c, i))
+				i = i + 1
+			elseif c == ")" then
+				co.yield(Token(Kind.Close, c, i))
+				i = i + 1
+			elseif String.contains("+-*/%", c) then
+				co.yield(Token(Kind.Operator, c, i))
+				i = i + 1
+			else
+				-- A throw the coroutine does not catch does not end the
+				-- program: it kills this coroutine, `resume()` answers `nil`,
+				-- and `error()` carries this message. Every token yielded
+				-- before it was still delivered.
+				throw String.format("unexpected '%s' at column %d", c, i)
+			end
+		end
+	end
+
+	-- Two frames below the coroutine body, and still yielding. The return
+	-- value is where scanning should carry on from.
+	static fn number(co: Yielder<Token>, source: string, start: integer) -> integer
+		local i: integer = start
+		local len: integer = String.len(source)
+
+		while i <= len and Lexer.isDigit(String.sub(source, i, i)) do
+			i = i + 1
+		end
+
+		co.yield(Token(Kind.Number, String.sub(source, start, i - 1), start))
+		return i
+	end
+
+	static fn name(co: Yielder<Token>, source: string, start: integer) -> integer
+		local i: integer = start
+		local len: integer = String.len(source)
+
+		while i <= len and Lexer.isAlpha(String.sub(source, i, i)) do
+			i = i + 1
+		end
+
+		co.yield(Token(Kind.Name, String.sub(source, start, i - 1), start))
+		return i
+	end
+
+	static fn isDigit(c: string) -> boolean
+		return c >= "0" and c <= "9"
+	end
+
+	static fn isAlpha(c: string) -> boolean
+		local lower: string = String.lower(c)
+		return lower >= "a" and lower <= "z"
+	end
+end
