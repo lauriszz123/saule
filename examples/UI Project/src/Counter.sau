@@ -1,4 +1,4 @@
-from "uikit" import *
+from uikit import *
 
 -- A counter, written the way SwiftUI writes one.
 --
@@ -27,10 +27,9 @@ export class Counter extends View
 				count.set(count.int() - 1)
 			end
 
-			Text(self.label .. ": " .. count.int())
-				.foregroundStyle(Colors.text)
-				.centered()
-				.frame(width: 120.0)
+			Text(self.label .. ": " .. count.int()).foregroundStyle(Colors.text).centered().frame(
+				width: 120.0
+			)
 
 			Button(label: "+") do
 				count.set(count.int() + 1)
