@@ -447,7 +447,278 @@ end)
 println(risky.resume())           -- 1
 println(risky.resume())           -- nil
 println(risky.error() ?? "")      -- sensor offline
-`}],ov=av[0],sv=`saule.playground.scripts.v1`,cv=null;function lv(){if(cv)return cv;try{let e=window.localStorage.getItem(sv);if(!e)return[];let t=JSON.parse(e);return Array.isArray(t)?t.filter(uv):[]}catch{return cv??=[],cv}}function uv(e){if(typeof e!=`object`||!e)return!1;let t=e;return typeof t.id==`string`&&typeof t.name==`string`&&typeof t.source==`string`&&typeof t.updatedAt==`number`}function dv(e){if(cv)cv=e;else try{window.localStorage.setItem(sv,JSON.stringify(e))}catch{cv=e}}function fv(){if(cv)return!1;try{return window.localStorage.setItem(`${sv}.probe`,`1`),window.localStorage.removeItem(`${sv}.probe`),!0}catch{return!1}}function pv(){return lv().sort((e,t)=>t.updatedAt-e.updatedAt)}function mv(e){return lv().find(t=>t.id===e)??null}function hv(){return typeof crypto<`u`&&`randomUUID`in crypto?crypto.randomUUID():`s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`}function gv(e){let t=e.trim().replace(/[\\/]+/g,`-`).slice(0,60);return t?/\.sau$/i.test(t)?t:`${t}.sau`:`untitled.sau`}function _v(e){let t=gv(e),n=new Set(lv().map(e=>e.name.toLowerCase()));if(!n.has(t.toLowerCase()))return t;let r=t.replace(/\.sau$/i,``);for(let e=2;;e+=1){let t=`${r}-${e}.sau`;if(!n.has(t.toLowerCase()))return t}}function vv(e,t){let n={id:hv(),name:_v(e),source:t,updatedAt:Date.now()};return dv([n,...lv()]),n}function yv(e,t){let n=lv(),r=n.find(t=>t.id===e);return r?(r.source=t,r.updatedAt=Date.now(),dv(n),r):null}function bv(e,t){let n=lv(),r=n.find(t=>t.id===e);if(!r)return null;let i=gv(t),a=new Set(n.filter(t=>t.id!==e).map(e=>e.name.toLowerCase()));if(a.has(i.toLowerCase())){let e=i.replace(/\.sau$/i,``),t=2;for(;a.has(`${e}-${t}.sau`.toLowerCase());)t+=1;r.name=`${e}-${t}.sau`}else r.name=i;return r.updatedAt=Date.now(),dv(n),r}function xv(e){dv(lv().filter(t=>t.id!==e)),Cv()===`user:${e}`&&wv(null)}var Sv=`saule.playground.last.v1`;function Cv(){try{return window.localStorage.getItem(Sv)}catch{return null}}function wv(e){try{e===null?window.localStorage.removeItem(Sv):window.localStorage.setItem(Sv,e)}catch{}}var Tv=`saule.playground.session.v1`,Ev={tabs:[],active:0,layout:`side-by-side`,split:.56,sidebar:!0,examples:!1};function Dv(e){if(typeof e!=`object`||!e)return!1;let t=e;return(t.kind===`example`||t.kind===`user`||t.kind===`shared`)&&typeof t.id==`string`&&(t.source===void 0||typeof t.source==`string`)}function Ov(){try{let e=window.localStorage.getItem(Tv);if(!e)return{...Ev};let t=JSON.parse(e),n=Array.isArray(t.tabs)?t.tabs.filter(Dv):[];return{tabs:n,active:Av(Number(t.active)||0,0,Math.max(0,n.length-1)),layout:t.layout===`stacked`?`stacked`:`side-by-side`,split:Av(Number(t.split)||Ev.split,.2,.8),sidebar:t.sidebar!==!1,examples:t.examples===!0}}catch{return{...Ev}}}function kv(e){try{window.localStorage.setItem(Tv,JSON.stringify(e))}catch{}}function Av(e,t,n){return Number.isFinite(e)?Math.min(n,Math.max(t,e)):t}var jv=class extends Error{constructor(e){super(e),this.name=`RuntimeUnavailableError`}},Mv=class extends Error{constructor(e){super(e),this.name=`RunCancelledError`}},Nv=1e4,Pv=null;function Fv(){return Pv}var Iv=1,Lv=class{worker=null;pending=null;queue=[];currentId=0;get busy(){return this.pending!==null}send(e,t,n){return new Promise((r,i)=>{this.queue.push({type:e,source:t,timeoutMs:n,resolve:r,reject:i}),this.pump()})}pump(){if(this.pending)return;let e=this.queue.shift();if(!e)return;if(!this.worker)try{this.worker=this.spawn()}catch(t){e.reject(new jv(`Could not start the Saule runtime: ${Rv(t)}`)),this.pump();return}let t=Iv++;this.currentId=t;let n=e.timeoutMs===void 0?void 0:setTimeout(()=>{this.cancel(new Mv(`The program ran for more than ${e.timeoutMs/1e3} seconds and was stopped. An infinite loop, perhaps?`))},e.timeoutMs);this.pending={resolve:e.resolve,reject:e.reject,timeout:n},this.worker.postMessage({type:e.type,id:t,source:e.source})}cancel(e){let t=this.pending;this.pending=null,t&&(clearTimeout(t.timeout),t.reject(e)),this.dispose(),this.pump()}dispose(){this.worker&&=(this.worker.terminate(),null)}spawn(){let e=new Worker(new URL(`/saule/_astro/saule-worker-DbcoQbSo.js`,``+import.meta.url),{type:`module`});return e.addEventListener(`message`,e=>{let t=e.data;if(t.type===`ready`){Pv=t.version;return}if(!this.pending||t.id!==this.currentId)return;let n=this.pending;this.pending=null,clearTimeout(n.timeout),t.type===`error`?(n.reject(new jv(t.message)),this.dispose()):n.resolve(t.json),this.pump()}),e.addEventListener(`error`,e=>{this.cancel(new jv(e.message||`The Saule runtime failed to start.`))}),e}};function Rv(e){return e instanceof Error?e.message:String(e)}var zv=new Lv,Bv=new Lv;function Vv(e=`Stopped.`){zv.cancel(new Mv(e))}async function Hv(e){let t=performance.now(),n=await zv.send(`run`,e,Nv),r;try{r=JSON.parse(n)}catch(e){throw new jv(`The runtime returned a malformed result: ${Rv(e)}`)}return{...r,durationMs:performance.now()-t}}async function Uv(e){let t=++Wv,n=await Bv.send(`check`,e);return t===Wv?JSON.parse(n).diagnostics:null}var Wv=0;async function Gv(e){let t=await Bv.send(`format`,e);return JSON.parse(t)}var Kv=`-- A script of your own. It saves in this browser as you type.
+`},{id:`streams`,group:`Coroutines`,label:`Lazy pipelines`,blurb:`Stream combinators that are themselves coroutines — map, filter and take over an infinite source, costing only what you take.`,source:`-- Lazy streams, where every combinator is itself a coroutine.
+--
+-- A Coroutine<T> is already a lazy sequence: nothing in the body runs until
+-- something resumes it, and \`for v in src do\` resumes it once per value. So a
+-- combinator is just a coroutine that loops over another one.
+
+-- Infinite. That is safe here, because a stage only runs when the stage after
+-- it asks for a value.
+fn naturals(start: integer) -> Coroutine<integer>
+    return Coroutine.create(fn(co)
+        local n: integer = start
+        while true do
+            co.yield(n)
+            n = n + 1
+        end
+    end)
+end
+
+-- The generator shape fibonacci wants: \`a\` and \`b\` are locals that survive
+-- between resumes, not fields on an object.
+fn fibonacci() -> Coroutine<integer>
+    return Coroutine.create(fn(co)
+        local a: integer = 0
+        local b: integer = 1
+        while true do
+            co.yield(b)
+            local next: integer = a + b
+            a = b
+            b = next
+        end
+    end)
+end
+
+-- \`T\` comes from the source, \`U\` from the mapper, and the body's yielder is a
+-- Yielder<U> because that is what the declared return type promises.
+fn map<T, U>(src: Coroutine<T>, f: fn(T) -> U) -> Coroutine<U>
+    return Coroutine.create(fn(co)
+        for value in src do
+            co.yield(f(value))
+        end
+    end)
+end
+
+fn filter<T>(src: Coroutine<T>, keep: fn(T) -> boolean) -> Coroutine<T>
+    return Coroutine.create(fn(co)
+        for value in src do
+            if keep(value) then
+                co.yield(value)
+            end
+        end
+    end)
+end
+
+-- \`break\` leaves the source suspended where it was rather than draining it.
+fn take<T>(src: Coroutine<T>, n: integer) -> Coroutine<T>
+    return Coroutine.create(fn(co)
+        local taken: integer = 0
+        for value in src do
+            co.yield(value)
+            taken = taken + 1
+            if taken == n then
+                break
+            end
+        end
+    end)
+end
+
+fn collect<T>(src: Coroutine<T>) -> table<T>
+    local out: table<T> = {}
+    for value in src do
+        out[#out + 1] = value
+    end
+    return out
+end
+
+local evens: table<integer> = collect(take(filter(naturals(1), n => n % 2 == 0), 6))
+println("first six even naturals: " .. String.join(", ", evens))
+
+local fib: table<integer> = collect(take(fibonacci(), 12))
+println("fibonacci: " .. String.join(", ", fib))
+
+local labelled: table<string> = collect(map(take(fibonacci(), 5), n => "<" .. n .. ">"))
+println("mapped: " .. String.join(" ", labelled))
+
+-- Laziness, counted rather than claimed: the counter is an ordinary captured
+-- local, bumped once per value the infinite source actually produced.
+local produced: integer = 0
+local counted: Coroutine<integer> = map(naturals(1), fn(n: integer) -> integer
+    produced = produced + 1
+    return n
+end)
+println("took " .. String.join(", ", collect(take(counted, 3))) ..
+    " from an infinite source, which produced " .. produced .. " values")
+`},{id:`stackful`,group:`Coroutines`,label:`Stackful tokenizer`,blurb:`A tokenizer that yields from two frames below the coroutine body, because the yielder is an ordinary value.`,source:`-- Stackful: the yielder is an ordinary value, so any function the coroutine
+-- called can yield on its behalf.
+--
+-- A hand-written tokenizer usually needs a class with an index field, because
+-- \`next()\` has to pick up where the last call left off. Here \`scan\` is written
+-- as one straight-line loop — \`i\` is a local — and each \`co.yield\` hands a
+-- token out and freezes the loop mid-stride. The whole call stack between the
+-- yield and the resume is suspended with it.
+
+fn isDigit(c: string) -> boolean
+    return c >= "0" and c <= "9"
+end
+
+-- Two frames below the coroutine body, and still yielding. The return value
+-- is where scanning carries on from.
+fn scanNumber(co: Yielder<string>, source: string, start: integer) -> integer
+    local i: integer = start
+    while i <= String.len(source) and isDigit(String.sub(source, i, i)) do
+        i = i + 1
+    end
+    co.yield("number " .. String.sub(source, start, i - 1))
+    return i
+end
+
+fn scan(co: Yielder<string>, source: string)
+    local i: integer = 1
+    while i <= String.len(source) do
+        local c: string = String.sub(source, i, i)
+        if c == " " then
+            i = i + 1
+        elseif isDigit(c) then
+            i = scanNumber(co, source, i)
+        elseif String.contains("+-*/()", c) then
+            co.yield("symbol " .. c)
+            i = i + 1
+        else
+            -- A throw the coroutine does not catch kills *it*, not the
+            -- program: resume() answers nil and error() carries this message.
+            throw "unexpected '" .. c .. "' at column " .. i
+        end
+    end
+end
+
+fn tokens(source: string) -> Coroutine<string>
+    return Coroutine.create(fn(co)
+        scan(co, source)
+    end)
+end
+
+for token in tokens("12 + (34 * 5)") do
+    println(token)
+end
+
+-- Stopping early really stops the work: \`break\` leaves the lexer suspended on
+-- the character after the token it just handed over.
+local stream: Coroutine<string> = tokens("1 + 2 + 3 + 4")
+for token in stream do
+    if String.starts(token, "symbol") then
+        break
+    end
+end
+println("broke out; the lexer is " .. stream.status())
+println("resuming carries on: " .. (stream.resume() ?? ""))
+
+-- Bad input, reported rather than fatal — and everything yielded before the
+-- failure was still delivered.
+local broken: Coroutine<string> = tokens("7 * $")
+while true do
+    local token: string? = broken.resume()
+    if token == nil then
+        break
+    end
+    println("delivered " .. token!)
+end
+println("then: " .. broken.status() .. ", because " .. (broken.error() ?? ""))
+`},{id:`tasks`,group:`Coroutines`,label:`Cooperative tasks`,blurb:`Four tasks interleaved on one thread, round-robin — including one that fails without taking the others down.`,source:`-- Cooperative multitasking: a task is a coroutine that decides for itself
+-- when to hand control back.
+--
+-- Nothing runs in parallel and there are no locks. \`resume()\` transfers
+-- control into a task, and that task's next \`yield\` transfers it back — so
+-- between two yields a task has the whole program to itself.
+
+class Task
+    name: string = ""
+    local job: Coroutine<string>
+
+    fn init(name: string, body: fn(Yielder<string>) -> nil)
+        self.name = name
+        self.job = Coroutine.create(body)
+    end
+
+    fn isDone() -> boolean
+        return self.job.isDone()
+    end
+
+    -- One slice of work. How long a slice is, is the task's own business:
+    -- \`resume\` runs it until *it* yields.
+    fn step(tick: integer)
+        local note: string? = self.job.resume()
+
+        if note != nil then
+            println(String.format("tick %d  %-9s %s", tick, self.name, note!))
+            return
+        end
+
+        -- \`nil\` means the task is over — but over how? A crash is contained:
+        -- the coroutine dies, the program does not, and the other tasks keep
+        -- their turns. \`error()\` tells a crash from a clean finish.
+        local failure: string? = self.job.error()
+        if failure != nil then
+            println(String.format("tick %d  %-9s FAILED: %s", tick, self.name, failure!))
+        else
+            println(String.format("tick %d  %-9s done", tick, self.name))
+        end
+    end
+end
+
+local tasks: table<Task> = {}
+
+-- The parameter type is the coroutine contract itself: fn(Yielder<string>).
+fn spawn(name: string, body: fn(Yielder<string>) -> nil)
+    tasks[#tasks + 1] = Task(name, body)
+end
+
+spawn("download", fn(co)
+    for percent = 25, 100, 25 do
+        co.yield("fetching " .. percent .. "%")
+    end
+end)
+
+spawn("render", fn(co)
+    co.yield("laying out")
+    co.yield("painting")
+end)
+
+spawn("sensor", fn(co)
+    co.yield("reading 21.4C")
+    throw "sensor offline"
+end)
+
+-- A \`yield\` inside a \`try\` resumes *inside the same try*, so a task can pause
+-- mid-retry and still catch its own failure afterwards.
+spawn("retry", fn(co)
+    for attempt = 1, 3 do
+        try
+            co.yield("attempt " .. attempt)
+            if attempt < 3 then
+                throw "timed out"
+            end
+            co.yield("connected")
+        catch e: string
+            co.yield("recovered from: " .. e)
+        end
+    end
+end)
+
+-- Round-robin: every live task gets one slice per tick, until none is left.
+fn alive() -> integer
+    local count: integer = 0
+    for task in tasks do
+        if not task.isDone() then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local tick: integer = 0
+while alive() > 0 do
+    tick = tick + 1
+    for task in tasks do
+        if not task.isDone() then
+            task.step(tick)
+        end
+    end
+end
+
+println("four tasks interleaved over " .. tick .. " ticks, on one thread")
+`}],ov=av[0],sv=`saule.playground.scripts.v1`,cv=null;function lv(){if(cv)return cv;try{let e=window.localStorage.getItem(sv);if(!e)return[];let t=JSON.parse(e);return Array.isArray(t)?t.filter(uv):[]}catch{return cv??=[],cv}}function uv(e){if(typeof e!=`object`||!e)return!1;let t=e;return typeof t.id==`string`&&typeof t.name==`string`&&typeof t.source==`string`&&typeof t.updatedAt==`number`}function dv(e){if(cv)cv=e;else try{window.localStorage.setItem(sv,JSON.stringify(e))}catch{cv=e}}function fv(){if(cv)return!1;try{return window.localStorage.setItem(`${sv}.probe`,`1`),window.localStorage.removeItem(`${sv}.probe`),!0}catch{return!1}}function pv(){return lv().sort((e,t)=>t.updatedAt-e.updatedAt)}function mv(e){return lv().find(t=>t.id===e)??null}function hv(){return typeof crypto<`u`&&`randomUUID`in crypto?crypto.randomUUID():`s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`}function gv(e){let t=e.trim().replace(/[\\/]+/g,`-`).slice(0,60);return t?/\.sau$/i.test(t)?t:`${t}.sau`:`untitled.sau`}function _v(e){let t=gv(e),n=new Set(lv().map(e=>e.name.toLowerCase()));if(!n.has(t.toLowerCase()))return t;let r=t.replace(/\.sau$/i,``);for(let e=2;;e+=1){let t=`${r}-${e}.sau`;if(!n.has(t.toLowerCase()))return t}}function vv(e,t){let n={id:hv(),name:_v(e),source:t,updatedAt:Date.now()};return dv([n,...lv()]),n}function yv(e,t){let n=lv(),r=n.find(t=>t.id===e);return r?(r.source=t,r.updatedAt=Date.now(),dv(n),r):null}function bv(e,t){let n=lv(),r=n.find(t=>t.id===e);if(!r)return null;let i=gv(t),a=new Set(n.filter(t=>t.id!==e).map(e=>e.name.toLowerCase()));if(a.has(i.toLowerCase())){let e=i.replace(/\.sau$/i,``),t=2;for(;a.has(`${e}-${t}.sau`.toLowerCase());)t+=1;r.name=`${e}-${t}.sau`}else r.name=i;return r.updatedAt=Date.now(),dv(n),r}function xv(e){dv(lv().filter(t=>t.id!==e)),Cv()===`user:${e}`&&wv(null)}var Sv=`saule.playground.last.v1`;function Cv(){try{return window.localStorage.getItem(Sv)}catch{return null}}function wv(e){try{e===null?window.localStorage.removeItem(Sv):window.localStorage.setItem(Sv,e)}catch{}}var Tv=`saule.playground.session.v1`,Ev={tabs:[],active:0,layout:`side-by-side`,split:.56,sidebar:!0,examples:!1};function Dv(e){if(typeof e!=`object`||!e)return!1;let t=e;return(t.kind===`example`||t.kind===`user`||t.kind===`shared`)&&typeof t.id==`string`&&(t.source===void 0||typeof t.source==`string`)}function Ov(){try{let e=window.localStorage.getItem(Tv);if(!e)return{...Ev};let t=JSON.parse(e),n=Array.isArray(t.tabs)?t.tabs.filter(Dv):[];return{tabs:n,active:Av(Number(t.active)||0,0,Math.max(0,n.length-1)),layout:t.layout===`stacked`?`stacked`:`side-by-side`,split:Av(Number(t.split)||Ev.split,.2,.8),sidebar:t.sidebar!==!1,examples:t.examples===!0}}catch{return{...Ev}}}function kv(e){try{window.localStorage.setItem(Tv,JSON.stringify(e))}catch{}}function Av(e,t,n){return Number.isFinite(e)?Math.min(n,Math.max(t,e)):t}var jv=class extends Error{constructor(e){super(e),this.name=`RuntimeUnavailableError`}},Mv=class extends Error{constructor(e){super(e),this.name=`RunCancelledError`}},Nv=1e4,Pv=null;function Fv(){return Pv}var Iv=1,Lv=class{worker=null;pending=null;queue=[];currentId=0;get busy(){return this.pending!==null}send(e,t,n){return new Promise((r,i)=>{this.queue.push({type:e,source:t,timeoutMs:n,resolve:r,reject:i}),this.pump()})}pump(){if(this.pending)return;let e=this.queue.shift();if(!e)return;if(!this.worker)try{this.worker=this.spawn()}catch(t){e.reject(new jv(`Could not start the Saule runtime: ${Rv(t)}`)),this.pump();return}let t=Iv++;this.currentId=t;let n=e.timeoutMs===void 0?void 0:setTimeout(()=>{this.cancel(new Mv(`The program ran for more than ${e.timeoutMs/1e3} seconds and was stopped. An infinite loop, perhaps?`))},e.timeoutMs);this.pending={resolve:e.resolve,reject:e.reject,timeout:n},this.worker.postMessage({type:e.type,id:t,source:e.source})}cancel(e){let t=this.pending;this.pending=null,t&&(clearTimeout(t.timeout),t.reject(e)),this.dispose(),this.pump()}dispose(){this.worker&&=(this.worker.terminate(),null)}spawn(){let e=new Worker(new URL(`/saule/_astro/saule-worker-WF2KbOPQ.js`,``+import.meta.url),{type:`module`});return e.addEventListener(`message`,e=>{let t=e.data;if(t.type===`ready`){Pv=t.version;return}if(!this.pending||t.id!==this.currentId)return;let n=this.pending;this.pending=null,clearTimeout(n.timeout),t.type===`error`?(n.reject(new jv(t.message)),this.dispose()):n.resolve(t.json),this.pump()}),e.addEventListener(`error`,e=>{this.cancel(new jv(e.message||`The Saule runtime failed to start.`))}),e}};function Rv(e){return e instanceof Error?e.message:String(e)}var zv=new Lv,Bv=new Lv;function Vv(e=`Stopped.`){zv.cancel(new Mv(e))}async function Hv(e){let t=performance.now(),n=await zv.send(`run`,e,Nv),r;try{r=JSON.parse(n)}catch(e){throw new jv(`The runtime returned a malformed result: ${Rv(e)}`)}return{...r,durationMs:performance.now()-t}}async function Uv(e){let t=++Wv,n=await Bv.send(`check`,e);return t===Wv?JSON.parse(n).diagnostics:null}var Wv=0;async function Gv(e){let t=await Bv.send(`format`,e);return JSON.parse(t)}var Kv=`-- A script of your own. It saves in this browser as you type.
 println("Hello from my script!")
 `,qv=document.querySelector(`[data-playground]`);qv&&Jv(qv);function Jv(e){let t=t=>e.querySelector(`[data-${t}]`),n=t(`editor`),r=t(`tabs`),i=t(`tree`),a=t(`sidebar`),o=t(`sidebar-toggle`),s=t(`storage`),c=t(`output`),l=t(`status`),u=t(`split`),d=t(`gutter`),f=t(`problems`),p=t(`problems-count`),m=t(`problems-list`),h=t(`savestate`),g=t(`cursor`),_=t(`version`),v=t(`run`),y=t(`run-target`),ee=t(`stop`),b=t(`format`),x=t(`share`),S=t(`share-label`),te=t(`format-label`),ne=t(`save-as`),C=t(`banner`),re=t(`banner-text`),ie=t(`reset`),ae=t(`new`),w=t(`clear`),oe=t(`problems-toggle`),se=t(`layout-toggle`),T=t(`layout-divider`),ce=t(`help`),le=t(`run-key`),ue=t(`scrim`),de=t(`drawer-open`),fe=t(`view-code`),pe=t(`view-output`),E=t(`keybar`),me=window.matchMedia(`(max-width: 60rem)`),he=window.matchMedia(`(max-width: 40rem), (max-width: 60rem) and (max-height: 30rem)`),D=window.matchMedia(`(pointer: coarse)`),ge=!1,_e=t(`dialog`),ve=t(`dialog-title`),ye=t(`dialog-body`),be=t(`dialog-field`),xe=t(`dialog-input`),Ce=t(`dialog-cancel`),we=t(`dialog-confirm`),Te=t(`help-dialog`),Ee=t(`help-close`),De=t(`keys`),Oe=/mac|iphone|ipad/i.test(navigator.platform||navigator.userAgent),ke=Oe?`⌘`:`Ctrl`;le.textContent=`${ke} ↵`;let Ae=fv();s.textContent=Ae?`Saved in this browser.`:`Storage is unavailable — scripts last for this session only.`,s.classList.toggle(`pg-warn`,!Ae);let O=Ov(),k=new Map,je=new Set;function A(e){return`${e.kind}:${e.id}`}function Me(){return O.tabs[O.active]??null}function Ne(e){return e.kind===`user`?mv(e.id)?.name??`untitled.sau`:e.kind===`shared`?e.id:`${av.find(t=>t.id===e.id)?.label??e.id}`}function Pe(e){let t=A(e),n=k.get(t);return n===void 0?e.kind===`user`?mv(e.id)?.source??``:e.kind===`shared`?e.source??``:av.find(t=>t.id===e.id)?.source??``:n}function Fe(){let e=Me();e&&k.set(A(e),N.state.doc.toString()),kv({...O,tabs:O.tabs.map(e=>e.kind===`shared`?{...e,source:k.get(A(e))??e.source}:e)})}let Ie=Qu.define([{tag:Z.comment,color:`var(--cm-comment)`,fontStyle:`italic`},{tag:Z.string,color:`var(--cm-string)`},{tag:Z.number,color:`var(--cm-number)`},{tag:Z.atom,color:`var(--cm-atom)`},{tag:Z.keyword,color:`var(--cm-keyword)`},{tag:Z.definitionKeyword,color:`var(--cm-decl)`,fontWeight:`600`},{tag:Z.operatorKeyword,color:`var(--cm-keyword)`},{tag:Z.self,color:`var(--cm-self)`,fontStyle:`italic`},{tag:Z.typeName,color:`var(--cm-type)`},{tag:Z.function(Z.variableName),color:`var(--cm-fn)`},{tag:Z.variableName,color:`var(--cm-text)`},{tag:Z.operator,color:`var(--cm-op)`},{tag:Z.bracket,color:`var(--cm-op)`},{tag:Z.punctuation,color:`var(--cm-punct)`}]),Le=K.theme({"&":{height:`100%`,fontSize:`0.85rem`,fontFamily:`var(--saule-font-mono)`,lineHeight:`1.6`,backgroundColor:`transparent`,color:`var(--cm-text)`},".cm-content":{fontFamily:`var(--saule-font-mono)`},".cm-scroller":{fontFamily:`var(--saule-font-mono)`,lineHeight:`1.6`},".cm-gutters":{backgroundColor:`transparent`,border:`none`,color:`var(--cm-gutter)`},".cm-activeLine":{backgroundColor:`var(--cm-active)`},".cm-activeLineGutter":{backgroundColor:`var(--cm-active)`,color:`var(--cm-text)`},".cm-cursor":{borderLeftColor:`var(--cm-text)`},"&.cm-focused":{outline:`none`},"&.cm-editor .cm-selectionLayer .cm-selectionBackground":{backgroundColor:`var(--cm-selection)`},"&.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":{backgroundColor:`var(--cm-selection)`}}),Re=j.define(),ze=Se.define({create:()=>z.none,update(e,t){e=e.map(t.changes);for(let n of t.effects)n.is(Re)&&(e=n.value===null?z.none:z.set([z.line({class:`cm-errorLine`}).range(n.value)]));return t.docChanged?z.none:e},provide:e=>K.decorations.from(e)}),M=!1,N=new K({parent:n,state:F.create({doc:``,extensions:[Fc(),zc(),vs(),rf(),ns(),Ns(),Ts(),Em(),md(),wg(),Wu(),Xu(),j_(),c_(Ve,{delay:400}),lu.of(`    `),B_(),iv(),nd(Ie),ze,Le,K.lineWrapping,K.contentAttributes.of({autocapitalize:`off`,autocorrect:`off`,spellcheck:`false`}),Lo.of([{key:`Mod-Enter`,run:()=>(Mt(),!0)},{key:`Mod-s`,run:()=>(Mt(),!0),preventDefault:!0},{key:`Shift-Alt-f`,run:()=>(wt(),!0)},...Ag,...dm,...Cf,...hh,...Vu,fm]),K.updateListener.of(e=>{e.docChanged&&!M&&I(),(e.selectionSet||e.docChanged)&&Ke(),e.focusChanged&&vt()})]})}),Be=[];async function Ve(e){let t=e.state.doc.toString(),n;try{n=await Uv(t)}catch{return[]}if(n===null)return Be;let r=e.state.doc;return Be=n.map(e=>{let n=e.span?He(t,e.span.start):0,i=e.span?He(t,e.span.end):0;return{from:Math.min(n,r.length),to:Math.min(Math.max(i,n+1),r.length),severity:e.severity===`warning`?`warning`:`error`,source:e.phase,message:e.help?`${e.message}\n\nhelp: ${e.help}`:e.message}}),We(n,t),Be}function He(e,t){let n=0,r=0;for(;r<e.length&&n<t;){let t=e.codePointAt(r);t>65535?(n+=4,r+=2):(n+=t>2047?3:t>127?2:1,r+=1)}return r}function Ue(e,t){let n=He(e,t),r=e.slice(0,n),i=r.lastIndexOf(`
 `);return{line:r.split(`
