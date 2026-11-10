@@ -640,14 +640,20 @@ fn coroutines_are_typed_in_the_editor() {
         }),
     );
     let label = help["signatures"][0]["label"].as_str().unwrap_or("");
-    assert!(label.contains("value: integer"), "signature help on `co.yield(`: {help}");
+    assert!(
+        label.contains("value: integer"),
+        "signature help on `co.yield(`: {help}"
+    );
 
     // Completion: a coroutine offers its own methods and not the yielder's;
     // a yielder offers `yield`.
     server.change(&file, &format!("{source}gen."));
     let offered = complete(&mut server, &file, 13, 4);
     for want in ["resume", "status", "isDone", "error", "iter"] {
-        assert!(offered.iter().any(|l| l == want), "`gen.` lacks {want}: {offered:?}");
+        assert!(
+            offered.iter().any(|l| l == want),
+            "`gen.` lacks {want}: {offered:?}"
+        );
     }
     assert!(
         !offered.iter().any(|l| l == "yield"),

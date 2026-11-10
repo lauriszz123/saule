@@ -181,17 +181,17 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
             // The receiver may be generic — `box.put(x)` on a `Box<integer>`
             // — in which case its type arguments are already substituted
             // into `sig`, so `put` is checked as taking an `integer`.
-            if let Expr::Member { obj, name } = &callee.value {
-                if let Some((class_name, sig)) = receiver_method(obj, name, scope) {
-                    check_user_method_args(
-                        &format!("{class_name}.{name}"),
-                        &sig,
-                        args,
-                        scope,
-                        errors,
-                        expr.span.clone(),
-                    );
-                }
+            if let Expr::Member { obj, name } = &callee.value
+                && let Some((class_name, sig)) = receiver_method(obj, name, scope)
+            {
+                check_user_method_args(
+                    &format!("{class_name}.{name}"),
+                    &sig,
+                    args,
+                    scope,
+                    errors,
+                    expr.span.clone(),
+                );
             }
         }
         Expr::SafeMember { obj, .. } => check_expr(obj, scope, errors),

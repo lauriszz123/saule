@@ -105,11 +105,7 @@ thread_local! {
 
 /// Run `f` — the checking of `call` — knowing its value is headed for a
 /// slot of type `expected`.
-pub(crate) fn with_call_hint<R>(
-    call: &Spanned<Expr>,
-    expected: &Type,
-    f: impl FnOnce() -> R,
-) -> R {
+pub(crate) fn with_call_hint<R>(call: &Spanned<Expr>, expected: &Type, f: impl FnOnce() -> R) -> R {
     let bare = match expected {
         Type::Nullable(inner) => inner.as_ref().clone(),
         other => other.clone(),

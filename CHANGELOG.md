@@ -33,9 +33,6 @@ history.
   when it is not annotated, as it already did for tables.
 - A method call on an `any` value is `any`, as a field read on one already
   was, so a dynamic call's result can be used anywhere `any` can.
-- `return` checks its value against the declared return type the way an
-  annotated `local` does, so a returned lambda's parameters take their types
-  from it.
 
 ### Fixed
 

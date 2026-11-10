@@ -243,7 +243,11 @@ impl Coroutine {
         {
             return Err(format!("coroutine failed during `for … in`: {message}"));
         }
-        Ok(if out.is_empty() { vec![Value::Nil] } else { out })
+        Ok(if out.is_empty() {
+            vec![Value::Nil]
+        } else {
+            out
+        })
     }
 
     /// The body failed: record why, close what it leaves behind, and answer
@@ -323,11 +327,9 @@ impl VmCoroutine for Coroutine {
                 Ok(vec![Value::NativeClosure(Rc::new(
                     saule_runtime::value::NativeClosure {
                         name: "Coroutine.iter",
-                        func: Box::new(move |_| {
-                            match co.as_any().downcast_ref::<Coroutine>() {
-                                Some(c) => c.next_for_loop(),
-                                None => Err("internal: iterating a coroutine that is not one".into()),
-                            }
+                        func: Box::new(move |_| match co.as_any().downcast_ref::<Coroutine>() {
+                            Some(c) => c.next_for_loop(),
+                            None => Err("internal: iterating a coroutine that is not one".into()),
                         }),
                         param_names: Vec::new(),
                     },

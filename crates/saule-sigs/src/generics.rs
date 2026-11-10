@@ -204,7 +204,12 @@ pub fn instantiate_param_types_seeded(
         }
     }
     if let Some((declared_ret, wanted)) = seed {
-        unify_any_fallback(&fresh.rename(declared_ret), wanted, &fresh.params, &mut subst);
+        unify_any_fallback(
+            &fresh.rename(declared_ret),
+            wanted,
+            &fresh.params,
+            &mut subst,
+        );
     }
     for (expected, found) in renamed.iter().zip(arg_types.iter()) {
         if let Some(found_ty) = found {

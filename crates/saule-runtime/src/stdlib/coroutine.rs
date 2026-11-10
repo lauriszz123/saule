@@ -115,7 +115,12 @@ fn coroutine_builtins() -> saule_semantic::builtins::Builtins {
         ("isDone", method(false, vec![], vec![], named("boolean"))),
         (
             "error",
-            method(false, vec![], vec![], Type::Nullable(Box::new(named("string")))),
+            method(
+                false,
+                vec![],
+                vec![],
+                Type::Nullable(Box::new(named("string"))),
+            ),
         ),
         (
             "iter",
@@ -140,9 +145,7 @@ fn coroutine_builtins() -> saule_semantic::builtins::Builtins {
     )]);
 
     let mut builtins = saule_semantic::builtins::Builtins::default();
-    builtins
-        .classes
-        .insert("Coroutine".to_string(), coroutine);
+    builtins.classes.insert("Coroutine".to_string(), coroutine);
     builtins.classes.insert("Yielder".to_string(), yielder);
     builtins
 }

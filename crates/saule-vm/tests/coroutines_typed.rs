@@ -450,7 +450,10 @@ end)
 1
 "#,
     );
-    assert!(e.contains("Yielder.yield") && e.contains("integer"), "got: {e}");
+    assert!(
+        e.contains("Yielder.yield") && e.contains("integer"),
+        "got: {e}"
+    );
 }
 
 #[test]

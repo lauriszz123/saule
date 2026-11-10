@@ -571,14 +571,20 @@ pub(super) fn check_stmt(
         }
 
         Stmt::Return(values) => {
-            // A single value is checked against the declared return type, as
-            // an annotated `local` is against its annotation: that is what
-            // lets `return Coroutine.create(fn(co) … end)` in a function
-            // declared `-> Coroutine<integer>` type `co` — the factory
-            // shape every generator takes.
+            // A single returned *call* is checked knowing the declared return
+            // type: that is what lets `return Coroutine.create(fn(co) … end)`
+            // in a function declared `-> Coroutine<integer>` type `co` — the
+            // factory shape every generator takes.
+            //
+            // Calls only. A returned lambda keeps being checked on its own
+            // terms: a `for … in` driver is `return fn() … return nil … end`
+            // under a declared `fn() -> (A, B)`, and holding its body to that
+            // signature would reject the `nil` that ends the loop.
             let single_ret = current_return_ty().filter(|t| !matches!(t, Type::Tuple(_)));
             match (values.as_slice(), single_ret.as_ref()) {
-                ([v], Some(ret)) => check_expr_expecting(v, Some(ret), scope, errors),
+                ([v], Some(ret)) if matches!(v.value, Expr::Call { .. }) => {
+                    check_expr_expecting(v, Some(ret), scope, errors)
+                }
                 _ => {
                     for v in values {
                         check_expr(v, scope, errors);
@@ -756,8 +762,8 @@ fn iterable_element_types(ty: &Type, bindings: usize) -> Vec<Type> {
     let Some(Type::Function { ret, .. }) = sig.return_ty else {
         return Vec::new();
     };
-    let class_params = with_classes(|r| r.get(&name).map(|c| c.type_params.clone()))
-        .unwrap_or_default();
+    let class_params =
+        with_classes(|r| r.get(&name).map(|c| c.type_params.clone())).unwrap_or_default();
     if crate::expr::mentions_unbound_param(&ret, &class_params) {
         return Vec::new();
     }

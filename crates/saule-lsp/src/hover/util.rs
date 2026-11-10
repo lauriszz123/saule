@@ -131,7 +131,7 @@ pub(super) fn resolve_member(
         saule_docs::stdlib().entry(&format!("{class}.{name}")),
     ) {
         (None, Some(entry)) => render_stdlib_entry(entry),
-        _ => with_doc(render_method_sig(class, name, sig), doc.clone()),
+        _ => with_doc(render_method_sig(class, name, sig), doc),
     };
 
     if is_call && let Some(sig) = lookup_method(class, name) {

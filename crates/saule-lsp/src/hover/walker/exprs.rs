@@ -61,10 +61,7 @@ impl<'a> Cx<'a> {
                 let expected = sig
                     .as_ref()
                     .map(|s| {
-                        s.expected_arg_types(
-                            &self.positional_arg_types(args),
-                            destination.as_ref(),
-                        )
+                        s.expected_arg_types(&self.positional_arg_types(args), destination.as_ref())
                     })
                     .unwrap_or_default();
                 // Slot assignment follows the same rule the typechecker and

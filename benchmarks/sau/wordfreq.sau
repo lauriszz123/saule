@@ -42,7 +42,7 @@ class Main
 		for k, v in counts do
 			Table.insert(keys, k)
 		end
-		Table.sort(keys, (a, b) => (a as string)! < (b as string)!)
+		Table.sort(keys, (a, b) => a < b)
 
 		local total: integer = 0
 		local out: table<string> = {}

@@ -910,11 +910,7 @@ pub(crate) fn infer_into(value: &Spanned<Expr>, slot: &Type, scope: &Scope) -> O
 /// has no declaration to look at and answers nothing; this hands it over.
 /// Every other expression — and every call of a non-generic method, whose
 /// result does not depend on where it goes — is left to `infer`.
-fn infer_generic_call_expecting(
-    value: &Spanned<Expr>,
-    slot: &Type,
-    scope: &Scope,
-) -> Option<Type> {
+fn infer_generic_call_expecting(value: &Spanned<Expr>, slot: &Type, scope: &Scope) -> Option<Type> {
     let Expr::Call { callee, args, .. } = &value.value else {
         return None;
     };

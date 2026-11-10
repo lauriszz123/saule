@@ -278,10 +278,12 @@ impl Cx<'_> {
                 self.locals.truncate(mark);
             }
             Stmt::Return(es) => {
-                let single = self
-                    .return_ty
-                    .clone()
-                    .filter(|t| es.len() == 1 && !matches!(t, Type::Tuple(_)));
+                // A returned call, as the checker reads it; see its `Return`.
+                let single = self.return_ty.clone().filter(|t| {
+                    es.len() == 1
+                        && !matches!(t, Type::Tuple(_))
+                        && matches!(es[0].value, Expr::Call { .. })
+                });
                 for e in es {
                     self.visit_expr_expecting(e, single.as_ref());
                 }
@@ -753,7 +755,11 @@ pub(crate) fn substitute_receiver(
     if type_args.is_empty() || params.len() != type_args.len() {
         return sig.clone();
     }
-    let subst: HashMap<String, Type> = params.iter().cloned().zip(type_args.iter().cloned()).collect();
+    let subst: HashMap<String, Type> = params
+        .iter()
+        .cloned()
+        .zip(type_args.iter().cloned())
+        .collect();
     let apply = |t: &Type| saule_typeck::sigs::generics::substitute(t, &subst, &params);
     let mut out = sig.clone();
     for p in &mut out.params {

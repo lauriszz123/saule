@@ -474,12 +474,13 @@ impl<'a> Cx<'a> {
                         format!("```saule\n(return) -> {ty}\n```", ty = render_type(&rt)),
                     );
                 }
-                // A single value is read against the declared return type,
-                // as the checker reads it — the generator-factory shape.
-                let single = self
-                    .enclosing_return_ty
-                    .clone()
-                    .filter(|t| es.len() == 1 && !matches!(t, Type::Tuple(_)));
+                // A single returned call is read against the declared return
+                // type, as the checker reads it — the generator-factory shape.
+                let single = self.enclosing_return_ty.clone().filter(|t| {
+                    es.len() == 1
+                        && !matches!(t, Type::Tuple(_))
+                        && matches!(es[0].value, Expr::Call { .. })
+                });
                 for e in es {
                     self.visit_expr_expecting(e, single.as_ref());
                 }

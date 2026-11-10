@@ -460,7 +460,9 @@ fn a_lambda_argument_takes_its_parameter_type_from_a_generic_receiver() {
     rejects(
         &format!(
             "{SINK}{}",
-            in_fn("  local s: Sink<integer> = Sink()\n  s.each(fn(x)\n    local t: string = x\n  end)")
+            in_fn(
+                "  local s: Sink<integer> = Sink()\n  s.each(fn(x)\n    local t: string = x\n  end)"
+            )
         ),
         "string",
     );
@@ -513,7 +515,9 @@ fn the_destination_does_not_override_what_the_arguments_say() {
     rejects(
         &format!(
             "{SINK}{MAKER}{}",
-            in_fn("  local g: Gen<integer> = Gen.make(fn(s: Sink<string>)\n    s.put(\"x\")\n  end)")
+            in_fn(
+                "  local g: Gen<integer> = Gen.make(fn(s: Sink<string>)\n    s.put(\"x\")\n  end)"
+            )
         ),
         "Gen<string>",
     );
@@ -537,7 +541,9 @@ fn for_in_over_a_generic_iterable_binds_its_element_type() {
     rejects(
         &format!(
             "{bag}{}",
-            in_fn("  local b: Bag<integer> = Bag()\n  for v in b do\n    local s: string = v\n  end")
+            in_fn(
+                "  local b: Bag<integer> = Bag()\n  for v in b do\n    local s: string = v\n  end"
+            )
         ),
         "string",
     );
