@@ -143,6 +143,8 @@ impl VmFunction for Closure {
         let out = vm.invoke(handle, args, span);
         if out.is_ok() {
             shared.give_vm(vm);
+        } else {
+            vm.abandon();
         }
         out
     }
@@ -172,6 +174,10 @@ impl VmFunction for Closure {
         let out = vm.invoke_first(handle, args, span);
         if out.is_ok() {
             shared.give_vm(vm);
+        } else {
+            // Dropped rather than pooled, but a closure that captured one of
+            // its registers may have escaped — close those first.
+            vm.abandon();
         }
         out
     }

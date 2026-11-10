@@ -83,9 +83,13 @@ impl Vm {
             len += saule_runtime::ops::display_hint(&self.stack[i]);
         }
         let mut s = String::with_capacity(len);
-        for i in from..=to {
-            saule_runtime::ops::display_into(&self.stack[i], span.clone(), &mut s)?;
-        }
+        // Rendering may run a `toString` overload — see `Vm::foreign`.
+        self.foreign(|vm| {
+            for i in from..=to {
+                saule_runtime::ops::display_into(&vm.stack[i], span.clone(), &mut s)?;
+            }
+            Ok::<(), RuntimeError>(())
+        })?;
         *self.reg_mut(dst) = Value::Str(SauleStr::new(s));
         Ok(())
     }
@@ -200,7 +204,8 @@ impl Vm {
         let args: Vec<Value> = (0..n_args)
             .map(|i| (*self.reg(base + a + 1 + i)).clone())
             .collect();
-        let vs = saule_runtime::call::call_method(&recv, name, &args, site.span())?;
+        let vs =
+            self.foreign(|_| saule_runtime::call::call_method(&recv, name, &args, site.span()))?;
         let n_ret = if ins.c() == 0 {
             ALL_RESULTS
         } else {
@@ -650,7 +655,8 @@ impl Vm {
                         };
                         let l = (*self.reg(base + ins.b() as usize)).clone();
                         let r = (*self.reg(base + ins.c() as usize)).clone();
-                        let v = saule_runtime::ops::binary(op, l, r, proto.span_at(here))?;
+                        let span = proto.span_at(here);
+                        let v = self.foreign(|_| saule_runtime::ops::binary(op, l, r, span))?;
                         *self.reg_mut(base + a) = v;
                     }
                     Op::UNARYX => {
@@ -662,8 +668,9 @@ impl Vm {
                             });
                         };
                         let v = (*self.reg(base + ins.b() as usize)).clone();
+                        let span = proto.span_at(here);
                         *self.reg_mut(base + a) =
-                            saule_runtime::ops::unary(op, v, proto.span_at(here))?;
+                            self.foreign(|_| saule_runtime::ops::unary(op, v, span))?;
                     }
 
                     // ---- §15.7 comparison and branching ------------------
@@ -791,12 +798,10 @@ impl Vm {
                         // pay one discriminant check and nothing else.
                         if matches!(l, Value::Foreign(_)) || matches!(r, Value::Foreign(_)) {
                             let (l, r) = ((*l).clone(), (*r).clone());
-                            let v = saule_runtime::ops::binary(
-                                saule_ast::BinOp::Eq,
-                                l,
-                                r,
-                                proto.span_at(here),
-                            )?;
+                            let span = proto.span_at(here);
+                            let v = self.foreign(|_| {
+                                saule_runtime::ops::binary(saule_ast::BinOp::Eq, l, r, span)
+                            })?;
                             *self.reg_mut(base + a) = v;
                         } else {
                             let eq = *l == *r;
@@ -955,12 +960,10 @@ impl Vm {
                                 // nothing measurable. Routed through the
                                 // runtime's dynamic method dispatch, the
                                 // same one `CALLMX` uses.
-                                let vs = saule_runtime::call::call_method(
-                                    &src,
-                                    "iter",
-                                    &[],
-                                    proto.span_at(here),
-                                )?;
+                                let span = proto.span_at(here);
+                                let vs = self.foreign(|_| {
+                                    saule_runtime::call::call_method(&src, "iter", &[], span)
+                                })?;
                                 let Some(driver) = vs.into_iter().next() else {
                                     return Err(RuntimeError::TypeError {
                                         message: format!(
@@ -1112,11 +1115,12 @@ impl Vm {
                             // engines report `#` on an integer differently —
                             // caught by `SAULE_DIFF=1 ./run_tests.sh`, which
                             // compares diagnostics as well as values.
-                            other => saule_runtime::ops::unary(
-                                saule_ast::UnaryOp::Len,
-                                other.clone(),
-                                proto.span_at(here),
-                            )?,
+                            other => {
+                                let (v, span) = (other.clone(), proto.span_at(here));
+                                self.foreign(|_| {
+                                    saule_runtime::ops::unary(saule_ast::UnaryOp::Len, v, span)
+                                })?
+                            }
                         };
                         *self.reg_mut(base + a) = v;
                     }
@@ -1145,10 +1149,10 @@ impl Vm {
                         self.concat(from, to, base + a, span)?;
                     }
                     Op::TOSTR => {
-                        let s = saule_runtime::ops::display_value(
-                            self.reg(base + ins.b() as usize),
-                            proto.span_at(here),
-                        )?;
+                        let span = proto.span_at(here);
+                        let s = self.foreign(|vm| {
+                            saule_runtime::ops::display_value(vm.reg(base + ins.b() as usize), span)
+                        })?;
                         *self.reg_mut(base + a) = Value::Str(SauleStr::new(s));
                     }
 
@@ -1701,8 +1705,9 @@ impl Vm {
                             });
                         };
                         let recv = (*self.reg(base + ins.b() as usize)).clone();
-                        let v =
-                            saule_runtime::members::read_member(&recv, name, proto.span_at(here))?;
+                        let span = proto.span_at(here);
+                        let v = self
+                            .foreign(|_| saule_runtime::members::read_member(&recv, name, span))?;
                         *self.reg_mut(base + a) = v;
                     }
                     Op::SETFX => {
@@ -1719,7 +1724,10 @@ impl Vm {
                         };
                         let recv = (*self.reg(base + a)).clone();
                         let v = (*self.reg(base + ins.c() as usize)).clone();
-                        saule_runtime::members::write_member(&recv, name, v, proto.span_at(here))?;
+                        let span = proto.span_at(here);
+                        self.foreign(|_| {
+                            saule_runtime::members::write_member(&recv, name, v, span)
+                        })?;
                     }
                     Op::CALLMX => {
                         let k = self.extra_arg(code.as_ptr(), &mut pc);

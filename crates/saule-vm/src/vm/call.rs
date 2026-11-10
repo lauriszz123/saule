@@ -349,14 +349,18 @@ impl Vm {
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
         let args_from = dst + 1;
+        // Every native may call a Saule function back — `Table.sort` does —
+        // so the call goes through `foreign`, which parks this file's open
+        // upvalues for its duration. The results are stored *after* it
+        // returns, once the registers they may land in are this file's again.
         match callee {
             Value::Native(nf) => {
-                let v = (nf.func)(&self.stack[args_from..args_from + n_args]).map_err(|m| {
-                    RuntimeError::TypeError {
+                let v = self
+                    .foreign(|vm| (nf.func)(&vm.stack[args_from..args_from + n_args]))
+                    .map_err(|m| RuntimeError::TypeError {
                         message: m,
                         span: site.span(),
-                    }
-                })?;
+                    })?;
                 // **Moved**, not cloned. `store_results` takes a slice, so
                 // the one value a `Native` returns went in by reference and
                 // came back out through `cloned()` — a refcount pair per
@@ -366,12 +370,12 @@ impl Vm {
                 Ok(())
             }
             Value::NativeClosure(nc) => {
-                let vs = (nc.func)(&self.stack[args_from..args_from + n_args]).map_err(|m| {
-                    RuntimeError::TypeError {
+                let vs = self
+                    .foreign(|vm| (nc.func)(&vm.stack[args_from..args_from + n_args]))
+                    .map_err(|m| RuntimeError::TypeError {
                         message: m,
                         span: site.span(),
-                    }
-                })?;
+                    })?;
                 self.store_results(dst, &vs, n_ret);
                 Ok(())
             }

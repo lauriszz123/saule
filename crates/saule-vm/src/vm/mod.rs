@@ -197,6 +197,10 @@ pub struct Vm {
     /// nil-ing 8KB of it per sort comparison would cost more than the
     /// bounds checks the padding removes.
     high_water: usize,
+    /// While control is out of this register file, the register each open
+    /// upvalue was parked from — parallel to `open_upvals`, empty otherwise.
+    /// See [`Vm::foreign`].
+    parked: Vec<u32>,
     /// Where the outermost frame's return values land.
     ///
     /// Owned by the `Vm` rather than allocated per return, because a
@@ -285,6 +289,7 @@ impl Vm {
             frames: Vec::with_capacity(32),
             open_upvals: Vec::new(),
             high_water: 0,
+            parked: Vec::new(),
             results: Vec::new(),
         }
     }
