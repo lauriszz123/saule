@@ -24,6 +24,16 @@
 import { repo } from '../../site.config.mjs';
 import { buildTimeChannels } from '../lib/release-channels';
 
+interface Props {
+	/**
+	 * The narrow-screen form beside the site title: the stable version alone,
+	 * without its label — there is room for one short pill there, and the
+	 * channel is in its tooltip and its colour.
+	 */
+	compact?: boolean;
+}
+const { compact = false } = Astro.props;
+
 const apiUrl =
 	repo.replace('https://github.com/', 'https://api.github.com/repos/') + '/releases?per_page=20';
 const releasesUrl = `${repo}/releases`;
@@ -32,7 +42,12 @@ const initial = await buildTimeChannels();
 const hasAny = Boolean(initial.stable || initial.latest);
 ---
 
-<div class="saule-releases" data-api={apiUrl} hidden={!hasAny} aria-label="Saule releases">
+<div
+	class:list={['saule-releases', { 'saule-releases--compact': compact }]}
+	data-api={apiUrl}
+	hidden={!hasAny}
+	aria-label="Saule releases"
+>
 	<a
 		class="saule-release saule-release--stable"
 		data-channel="stable"
@@ -224,6 +239,19 @@ const hasAny = Boolean(initial.stable || initial.latest);
 		font-family: var(--saule-font-mono);
 		font-variant-numeric: tabular-nums;
 		color: var(--sl-color-white);
+	}
+
+	.saule-releases--compact .saule-release__label,
+	.saule-releases--compact .saule-release--latest {
+		display: none;
+	}
+
+	.saule-releases--compact .saule-release__version::before {
+		content: 'v';
+	}
+
+	.saule-releases--compact .saule-release--stable {
+		border-color: color-mix(in srgb, var(--saule-success) 55%, var(--sl-color-gray-5));
 	}
 
 	/* Below 50rem Starlight hides the header's icon group and shows the same

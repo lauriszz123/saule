@@ -35,6 +35,10 @@ export default defineConfig({
 				Search: './src/components/Search.astro',
 				// Adds the header's Docs button ahead of the social icons.
 				SocialIcons: './src/components/SocialIcons.astro',
+				// On narrow screens, puts the release badge (and, on pages
+				// with no menu, the Docs button) beside the title — the one
+				// part of the header Starlight shows at every width.
+				SiteTitle: './src/components/SiteTitle.astro',
 				// Carries the one site-wide script: the sliding tab indicator,
 				// which needs to measure the selected tab.
 				Head: './src/components/Head.astro',
