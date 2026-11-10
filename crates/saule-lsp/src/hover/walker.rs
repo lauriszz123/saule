@@ -45,6 +45,7 @@ pub(super) fn run(
         offset,
         enclosing_class: None,
         enclosing_return_ty: None,
+        call_hint: None,
         best: None,
         imports,
         locals: Vec::new(),
@@ -92,6 +93,13 @@ struct Cx<'a> {
     /// function omitted its `-> T` annotation. Used to surface
     /// `return` keyword hover.
     enclosing_return_ty: Option<Type>,
+    /// Where the value of one particular call is going, keyed by that
+    /// call's node — set by [`Cx::visit_expr_expecting`]. The checker's
+    /// `CALL_HINT`, mirrored: a generic method whose argument is a lambda
+    /// with no parameter types learns its type parameters from here, which
+    /// is how `co` in `local gen: Coroutine<integer> = Coroutine.create(fn(co)
+    /// … end)` hovers as the `Yielder<integer>` the checker treats it as.
+    call_hint: Option<(saule_ast::NodeId, Type)>,
     best: Option<Hit>,
     imports: &'a ImportContext,
     locals: Vec<LocalVar>,
@@ -149,6 +157,10 @@ struct CalleeSig {
     /// type can be instantiated from the other arguments rather than
     /// reported as the bare `T` the signature spells.
     type_params: Vec<String>,
+    /// The callee's declared return type, where it is a method — what a
+    /// call's destination is unified with to bind type parameters its
+    /// arguments leave open.
+    ret: Option<Type>,
     /// The callee's `---` block, so an `@param child` line reaches the
     /// hover on the `child:` key.
     doc: Option<saule_docs::DocBlock>,
@@ -156,17 +168,19 @@ struct CalleeSig {
 
 impl CalleeSig {
     /// The type each argument slot expects, with this callee's generics
-    /// bound from the argument types.
-    fn expected_arg_types(&self, arg_types: &[Option<Type>]) -> Vec<Option<Type>> {
-        saule_typeck::sigs::instantiate_params(
-            &saule_typeck::sigs::NativeSig {
-                type_params: self.type_params.clone(),
-                bounds: Vec::new(),
-                params: self.params.iter().map(|p| p.ty.clone()).collect(),
-                variadic: None,
-                returns: Vec::new(),
-            },
+    /// bound from the argument types — and, for what they leave unbound,
+    /// from `destination`, the type the call's value is headed for.
+    fn expected_arg_types(
+        &self,
+        arg_types: &[Option<Type>],
+        destination: Option<&Type>,
+    ) -> Vec<Option<Type>> {
+        let params: Vec<Type> = self.params.iter().map(|p| p.ty.clone()).collect();
+        saule_typeck::sigs::generics::instantiate_param_types_seeded(
+            &params,
+            &self.type_params,
             arg_types,
+            self.ret.as_ref().zip(destination),
         )
     }
 }
@@ -254,7 +268,10 @@ impl<'a> Cx<'a> {
                 value,
             } => {
                 if let Some(v) = value {
-                    self.visit_expr(v);
+                    // Against the annotation, as the checker reads it: an
+                    // untyped lambda — or a generic call whose lambda is —
+                    // takes its parameter types from the declared type.
+                    self.visit_expr_expecting(v, ty.as_ref());
                 }
                 let resolved = match ty.clone() {
                     // The bare structural annotation `table` is
@@ -457,8 +474,14 @@ impl<'a> Cx<'a> {
                         format!("```saule\n(return) -> {ty}\n```", ty = render_type(&rt)),
                     );
                 }
+                // A single value is read against the declared return type,
+                // as the checker reads it — the generator-factory shape.
+                let single = self
+                    .enclosing_return_ty
+                    .clone()
+                    .filter(|t| es.len() == 1 && !matches!(t, Type::Tuple(_)));
                 for e in es {
-                    self.visit_expr(e);
+                    self.visit_expr_expecting(e, single.as_ref());
                 }
             }
             Stmt::Throw(e) => self.visit_expr(e),

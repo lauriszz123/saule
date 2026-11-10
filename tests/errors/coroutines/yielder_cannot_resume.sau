@@ -1,0 +1,8 @@
+-- The body's Yielder only yields: it has no `resume`, so a coroutine cannot resume itself through it.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.resume()
+    end)
+  end
+end

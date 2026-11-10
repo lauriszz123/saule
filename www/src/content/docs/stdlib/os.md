@@ -2,7 +2,7 @@
 title: "Os"
 description: "Time, environment, filesystem and processes. This is the module that touches the world outside the program, so it is also where failure is most…"
 sidebar:
-  order: 8
+  order: 9
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->

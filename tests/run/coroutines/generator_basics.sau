@@ -5,10 +5,19 @@ fn check(label: string, got: string, want: string)
   assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
 end
 
+-- A generator factory: the declared return type types the body's `co`.
+fn countTo(n: integer) -> Coroutine<integer>
+  return Coroutine.create(fn(co)
+    for i = 1, n do
+      co.yield(i * 10)
+    end
+  end)
+end
+
 class Main
   static fn main()
     local ran: integer = 0
-    local gen: any = Coroutine.create(fn(co: any) -> nil
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
       ran = ran + 1
       for i = 1, 3 do
         co.yield(i * 10)
@@ -16,14 +25,32 @@ class Main
     end)
 
     -- Creating a coroutine runs nothing.
-    check("before", tostring(gen.status()) .. ran, "suspended0")
+    check("before", gen.status() .. ran, "suspended0")
 
     local log: string = ""
     for i = 1, 5 do
-      log = log .. tostring(gen.resume()) .. ","
+      local v: integer? = gen.resume()
+      log = log .. tostring(v) .. ","
     end
     check("yields", log, "10,20,30,nil,nil,")
-    check("after", tostring(gen.status()) .. tostring(gen.isDone()) .. ran, "deadtrue1")
+    check("after", gen.status() .. tostring(gen.isDone()) .. ran, "deadtrue1")
     check("no error", tostring(gen.error()), "nil")
+
+    -- `for … in` resumes until the coroutine finishes; `v` is an `integer`.
+    local sum: integer = 0
+    for v in countTo(4) do
+      sum = sum + v
+    end
+    check("for in", sum .. "", "100")
+
+    -- Resuming by hand until `nil`, the other common shape.
+    local manual: Coroutine<integer> = countTo(2)
+    local seen: string = ""
+    local next: integer? = manual.resume()
+    while next != nil do
+      seen = seen .. next .. ";"
+      next = manual.resume()
+    end
+    check("manual", seen, "10;20;")
   end
 end

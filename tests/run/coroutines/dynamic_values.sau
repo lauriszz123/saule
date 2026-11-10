@@ -1,4 +1,4 @@
--- Values travel both ways: resume's arguments come out of yield, and yield's out of resume.
+-- Held as `any`, a body gets Lua's full coroutine protocol: values in through resume, several at once, and return values.
 
 fn check(label: string, got: string, want: string)
   println(label .. ": " .. got)
@@ -7,34 +7,39 @@ end
 
 class Main
   static fn main()
-    -- The first resume's arguments go to the body, after the yielder.
-    local gen: any = Coroutine.create(fn(co: any, first: string) -> string
+    -- A typed body is `fn(Yielder<T>) -> nil`. One held as `any` is taken
+    -- as it is: the first resume's arguments go to the body after the
+    -- yielder, and whatever later resumes pass comes out of `yield`.
+    local echo: any = fn(co: any, first: string) -> string
       local log: string = first
       local got: any = co.yield("y1")
       log = log .. tostring(got)
       got = co.yield("y2")
       log = log .. tostring(got)
       return log
-    end)
+    end
+    local gen: any = Coroutine.create(echo)
     local a: string = tostring(gen.resume("a"))
     local b: string = tostring(gen.resume("b"))
     local c: string = tostring(gen.resume("c"))
     check("round trip", a .. "," .. b .. "," .. c, "y1,y2,abc")
 
     -- Several values at once, in both directions.
-    local pair: any = Coroutine.create(fn(co: any) -> nil
+    local pairBody: any = fn(co: any) -> nil
       local x: any?, y: any? = co.yield(1, "two")
       co.yield(tostring(x) .. tostring(y))
-    end)
+    end
+    local pair: any = Coroutine.create(pairBody)
     local p: any?, q: any? = pair.resume()
     local joined: any = pair.resume(3, "four")
     check("multiple", tostring(p) .. "," .. tostring(q) .. "," .. tostring(joined), "1,two,3four")
 
     -- The body's return values are the last resume's results.
-    local ret: any = Coroutine.create(fn(co: any) -> (integer, string)
+    local retBody: any = fn(co: any) -> (integer, string)
       co.yield(0)
       return 1, "end"
-    end)
+    end
+    local ret: any = Coroutine.create(retBody)
     ret.resume()
     local r1: any?, r2: any? = ret.resume()
     check("returned", tostring(r1) .. tostring(r2), "1end")

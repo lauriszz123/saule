@@ -1,6 +1,6 @@
--- Coroutine.create needs a function to run as the body; an integer is not one.
+-- Coroutine.create needs the body as a function; an integer is rejected before the program runs.
 class Main
   static fn main()
-    local gen: any = Coroutine.create(42)
+    local gen: Coroutine<integer> = Coroutine.create(42)
   end
 end

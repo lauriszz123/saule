@@ -11,7 +11,17 @@ fn every_anchor_url_is_a_real_page() {
     let mut bad = Vec::new();
     let mut urls: Vec<String> = d.all().iter().map(|e| e.url.clone()).collect();
     for name in [
-        "String", "Math", "Os", "Io", "File", "Table", "Iter", "Bytes", "Saule", "Project",
+        "String",
+        "Math",
+        "Os",
+        "Io",
+        "File",
+        "Table",
+        "Iter",
+        "Bytes",
+        "Coroutine",
+        "Saule",
+        "Project",
     ] {
         if let Some(m) = d.module(name) {
             urls.push(m.url.clone());

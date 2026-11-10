@@ -10,7 +10,7 @@ class Main
     -- The coroutine writes the caller's local; the caller writes it back
     -- while the coroutine is suspended; the coroutine sees that.
     local shared: integer = 0
-    local gen: any = Coroutine.create(fn(co: any) -> nil
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
       while true do
         shared = shared + 1
         co.yield(shared)
@@ -29,7 +29,7 @@ class Main
     local poke: fn(integer) -> nil = fn(v: integer) -> nil
       return nil
     end
-    local owner: any = Coroutine.create(fn(co: any) -> nil
+    local owner: Coroutine<integer> = Coroutine.create(fn(co)
       local mine: integer = 1
       peek = fn() -> integer
         return mine
@@ -51,16 +51,16 @@ class Main
 
     -- Two coroutines interleaving over one local.
     local trace: string = ""
-    local a: any = Coroutine.create(fn(co: any) -> nil
+    local a: Coroutine<boolean> = Coroutine.create(fn(co)
       for i = 1, 3 do
         trace = trace .. "a" .. i
-        co.yield(nil)
+        co.yield(true)
       end
     end)
-    local b: any = Coroutine.create(fn(co: any) -> nil
+    local b: Coroutine<boolean> = Coroutine.create(fn(co)
       for i = 1, 3 do
         trace = trace .. "b" .. i
-        co.yield(nil)
+        co.yield(true)
       end
     end)
     for i = 1, 3 do
@@ -70,16 +70,16 @@ class Main
     check("interleaved", trace, "a1b1a2b2a3b3")
 
     -- A nested coroutine sharing a local of the coroutine around it.
-    local outer: any = Coroutine.create(fn(co: any) -> nil
+    local outer: Coroutine<string> = Coroutine.create(fn(co)
       local depth: integer = 1
-      local inner: any = Coroutine.create(fn(ico: any) -> nil
+      local inner: Coroutine<integer> = Coroutine.create(fn(ico)
         while true do
           depth = depth * 10
           ico.yield(depth)
         end
       end)
       while true do
-        local got: any = inner.resume()
+        local got: integer? = inner.resume()
         depth = depth + 1
         co.yield(tostring(got) .. ">" .. depth)
       end

@@ -472,7 +472,7 @@ pub(super) fn check_stmt(
             crate::receivers::check_iterable(iter, scope, errors);
             // If the iter expression is a known class instance, it must
             // implement `Iterable` or `Iterable2` (walking the parent chain).
-            if let Some(Type::Named(class_name)) = iter_ty.clone()
+            if let Some((class_name, _)) = iter_ty.as_ref().and_then(crate::expr::named_head)
                 && with_classes(|reg| reg.contains_key(&class_name))
                 && !class_implements_iterable(&class_name)
             {
@@ -526,8 +526,8 @@ pub(super) fn check_stmt(
             // `task: Entry`. Without this, downstream method calls and
             // exhaustiveness checks (e.g. `match task.isDone()` over a
             // `boolean`) lose their receiver type and bail.
-            let yielded_from_iter: Vec<Type> = if let Some(Type::Table { key, value }) = iter_ty {
-                match vars.len() {
+            let yielded_from_iter: Vec<Type> = match iter_ty {
+                Some(Type::Table { key, value }) => match vars.len() {
                     1 => vec![(*value).clone()],
                     2 => {
                         let k_ty = key
@@ -537,9 +537,26 @@ pub(super) fn check_stmt(
                         vec![k_ty, (*value).clone()]
                     }
                     _ => Vec::new(),
+                },
+                Some(ty) => {
+                    let yielded = iterable_element_types(&ty, vars.len());
+                    // The same lie a table loop rejects: a binding annotated
+                    // with a type the iterable does not produce.
+                    for ((name, ty_opt), actual) in vars.iter().zip(yielded.iter()) {
+                        if let Some(declared) = ty_opt
+                            && !crate::expr::types_compatible(declared, actual)
+                        {
+                            errors.push(TypeCheckError::ForBindingTypeMismatch {
+                                name: name.clone(),
+                                declared: crate::expr::type_to_string(declared),
+                                actual: crate::expr::type_to_string(actual),
+                                span: to_source_span(iter.span.clone()),
+                            });
+                        }
+                    }
+                    yielded
                 }
-            } else {
-                Vec::new()
+                None => Vec::new(),
             };
             for (i, (name, ty_opt)) in vars.iter().enumerate() {
                 if let Some(ty) = ty_opt {
@@ -554,8 +571,19 @@ pub(super) fn check_stmt(
         }
 
         Stmt::Return(values) => {
-            for v in values {
-                check_expr(v, scope, errors);
+            // A single value is checked against the declared return type, as
+            // an annotated `local` is against its annotation: that is what
+            // lets `return Coroutine.create(fn(co) … end)` in a function
+            // declared `-> Coroutine<integer>` type `co` — the factory
+            // shape every generator takes.
+            let single_ret = current_return_ty().filter(|t| !matches!(t, Type::Tuple(_)));
+            match (values.as_slice(), single_ret.as_ref()) {
+                ([v], Some(ret)) => check_expr_expecting(v, Some(ret), scope, errors),
+                _ => {
+                    for v in values {
+                        check_expr(v, scope, errors);
+                    }
+                }
             }
             // Checked here, against the scope as it stands at this exact
             // statement, rather than in a second pass over the body — see
@@ -701,6 +729,47 @@ fn check_write_to_target(
         {
             check_assignment_compat(&field_ty, value, scope, errors);
         }
+    }
+}
+
+/// What each binding of `for … in x` receives, when `x` is an instance of a
+/// class with an `iter()` method — an `Iterable`, user-declared or builtin.
+///
+/// Read off `iter`'s own return type, `fn() -> T?`: the loop stops at `nil`,
+/// so each binding gets `T` with the `?` taken off. A two-binding loop wants
+/// `iter` to return two values. The receiver's type arguments are
+/// substituted first, so `for v in gen` over a `Coroutine<integer>` binds
+/// `v: integer`, and over a user `Bag<Player>` binds a `Player`.
+///
+/// Empty when that cannot be worked out, which leaves the bindings untyped
+/// exactly as they always were: a generic class named without arguments has
+/// no element type to offer, only its own parameter's name.
+fn iterable_element_types(ty: &Type, bindings: usize) -> Vec<Type> {
+    let Some((name, args)) = crate::expr::named_head(ty) else {
+        return Vec::new();
+    };
+    let (name, args) = crate::state::through_bound(name, args);
+    let Some(sig) = saule_semantic::lookup_method(&name, "iter") else {
+        return Vec::new();
+    };
+    let sig = crate::expr::substitute_receiver_args(&sig, &name, &args);
+    let Some(Type::Function { ret, .. }) = sig.return_ty else {
+        return Vec::new();
+    };
+    let class_params = with_classes(|r| r.get(&name).map(|c| c.type_params.clone()))
+        .unwrap_or_default();
+    if crate::expr::mentions_unbound_param(&ret, &class_params) {
+        return Vec::new();
+    }
+    let present = |t: &Type| match t {
+        Type::Nullable(inner) => (**inner).clone(),
+        other => other.clone(),
+    };
+    match (*ret, bindings) {
+        (Type::Tuple(items), n) if items.len() == n => items.iter().map(present).collect(),
+        (Type::Tuple(_), _) => Vec::new(),
+        (single, 1) => vec![present(&single)],
+        _ => Vec::new(),
     }
 }
 

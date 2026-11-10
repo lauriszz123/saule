@@ -7,7 +7,7 @@ end
 
 -- Yields only after the deeper calls return, so each resume continues a
 -- different frame.
-fn postOrder(co: any, n: integer)
+fn postOrder(co: Yielder<integer>, n: integer)
   if n == 0 then
     return
   end
@@ -15,9 +15,9 @@ fn postOrder(co: any, n: integer)
   co.yield(n)
 end
 
-fn helper(co: any) -> string
+fn helper(co: Yielder<string>)
   co.yield("from helper")
-  return "helper returned"
+  co.yield("helper again")
 end
 
 class Counter
@@ -25,7 +25,7 @@ class Counter
   fn init()
     self.n = 0
   end
-  fn run(co: any)
+  fn run(co: Yielder<integer>)
     while self.n < 3 do
       self.n = self.n + 1
       co.yield(self.n)
@@ -33,55 +33,60 @@ class Counter
   end
 end
 
-fn drain(gen: any) -> string
+fn drainInts(gen: Coroutine<integer>) -> string
   local log: string = ""
-  while gen.isDone() == false do
-    log = log .. tostring(gen.resume()) .. ","
+  for v in gen do
+    log = log .. v .. ","
+  end
+  return log
+end
+
+fn drainStrings(gen: Coroutine<string>) -> string
+  local log: string = ""
+  for v in gen do
+    log = log .. v .. ","
   end
   return log
 end
 
 class Main
   static fn main()
-    check("recursion", drain(Coroutine.create(fn(co: any) -> nil
+    check("recursion", drainInts(Coroutine.create(fn(co)
       postOrder(co, 5)
-    end)), "1,2,3,4,5,nil,")
+    end)), "1,2,3,4,5,")
 
     local c: Counter = Counter()
-    check("method", drain(Coroutine.create(fn(co: any) -> nil
+    check("method", drainInts(Coroutine.create(fn(co)
       c.run(co)
-    end)), "1,2,3,nil,")
+    end)), "1,2,3,")
 
-    check("tail call", drain(Coroutine.create(fn(co: any) -> string
-      return helper(co)
-    end)), "from helper,helper returned,")
+    check("helper", drainStrings(Coroutine.create(fn(co)
+      helper(co)
+    end)), "from helper,helper again,")
 
-    check("inside try", drain(Coroutine.create(fn(co: any) -> string
+    check("inside try", drainStrings(Coroutine.create(fn(co)
       try
         co.yield("in try")
         throw "after resume"
       catch e: string
         co.yield("caught " .. e)
       end
-      return "end"
-    end)), "in try,caught after resume,end,")
+    end)), "in try,caught after resume,")
 
     local items: table<string> = {"a", "b", "c"}
-    check("for in", drain(Coroutine.create(fn(co: any) -> nil
+    check("for in", drainStrings(Coroutine.create(fn(co)
       for i: integer, v: string in items do
         co.yield(i .. v)
       end
-    end)), "1a,2b,3c,nil,")
+    end)), "1a,2b,3c,")
 
     -- Deep: five hundred frames, one yield in each.
-    local deep: any = Coroutine.create(fn(co: any) -> nil
+    local deep: Coroutine<integer> = Coroutine.create(fn(co)
       postOrder(co, 500)
     end)
     local count: integer = 0
-    local v: any? = deep.resume()
-    while v != nil do
+    for v in deep do
       count = count + 1
-      v = deep.resume()
     end
     check("deep", count .. "", "500")
   end

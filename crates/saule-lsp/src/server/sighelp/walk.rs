@@ -51,6 +51,14 @@ pub(crate) struct Cx<'a> {
     /// outside it are dropped — see [`Cx::note_barrier`].
     pub(super) barrier: Option<std::ops::Range<usize>>,
     pub(super) hits: Vec<CallHit>,
+    /// The declared return type of the innermost enclosing function, so a
+    /// `return` is read against it the way the checker reads it.
+    pub(super) return_ty: Option<Type>,
+    /// Where one particular call's value is going — the checker's
+    /// `CALL_HINT`, mirrored. It is what types `co` in
+    /// `local gen: Coroutine<integer> = Coroutine.create(fn(co) … end)`, so
+    /// help inside `co.yield(` can say what `co` is.
+    pub(super) call_hint: Option<(saule_ast::NodeId, Type)>,
 }
 
 pub(crate) struct Local {
@@ -172,7 +180,7 @@ impl Cx<'_> {
                 name, ty, value, ..
             } => {
                 if let Some(v) = value {
-                    self.visit_expr(v);
+                    self.visit_expr_expecting(v, ty.as_ref());
                 }
                 let ty = ty.clone().unwrap_or_else(|| match value {
                     Some(v) => self.infer_local_ty(&v.value),
@@ -270,8 +278,12 @@ impl Cx<'_> {
                 self.locals.truncate(mark);
             }
             Stmt::Return(es) => {
+                let single = self
+                    .return_ty
+                    .clone()
+                    .filter(|t| es.len() == 1 && !matches!(t, Type::Tuple(_)));
                 for e in es {
-                    self.visit_expr(e);
+                    self.visit_expr_expecting(e, single.as_ref());
                 }
             }
             Stmt::Throw(e) => self.visit_expr(e),
@@ -294,8 +306,13 @@ impl Cx<'_> {
 
     fn visit_decl(&mut self, d: &Spanned<Decl>) {
         match &d.value {
-            Decl::Function { params, body, .. } => {
-                self.with_function(params, |this| this.visit_block(body));
+            Decl::Function {
+                params,
+                body,
+                return_ty,
+                ..
+            } => {
+                self.with_function(params, return_ty.as_ref(), |this| this.visit_block(body));
             }
             Decl::Class { name, members, .. } => {
                 let prev = self.enclosing_class.replace(name.clone());
@@ -327,11 +344,19 @@ impl Cx<'_> {
     }
 
     fn visit_method(&mut self, m: &Method) {
-        self.with_function(&m.params, |this| this.visit_block(&m.body));
+        self.with_function(&m.params, m.return_ty.as_ref(), |this| {
+            this.visit_block(&m.body)
+        });
     }
 
-    fn with_function(&mut self, params: &[Param], body: impl FnOnce(&mut Self)) {
+    fn with_function(
+        &mut self,
+        params: &[Param],
+        return_ty: Option<&Type>,
+        body: impl FnOnce(&mut Self),
+    ) {
         let saved = std::mem::take(&mut self.locals);
+        let saved_ret = std::mem::replace(&mut self.return_ty, return_ty.cloned());
         for p in params {
             self.locals.push(Local {
                 name: p.name.clone(),
@@ -340,6 +365,109 @@ impl Cx<'_> {
         }
         body(self);
         self.locals = saved;
+        self.return_ty = saved_ret;
+    }
+
+    /// [`visit_expr`](Self::visit_expr), knowing the type this position
+    /// expects: an untyped lambda's parameters come from it, and a call
+    /// learns where its value goes. Mirrors the checker's
+    /// `check_expr_expecting`.
+    fn visit_expr_expecting(&mut self, e: &Spanned<Expr>, expected: Option<&Type>) {
+        let Some(want) = expected else {
+            return self.visit_expr(e);
+        };
+        let bare = match want {
+            Type::Nullable(inner) => inner.as_ref().clone(),
+            other => other.clone(),
+        };
+        match &e.value {
+            Expr::Lambda {
+                params,
+                body,
+                return_ty,
+            } if matches!(bare, Type::Function { .. }) => {
+                if matches!(body, LambdaBody::Block(_)) {
+                    self.note_barrier(e.span.clone());
+                }
+                let refined = crate::exprty::refine_lambda_params(params, Some(&bare));
+                self.with_function(&refined, return_ty.as_ref(), |this| match body {
+                    LambdaBody::Expr(b) => this.visit_expr(b),
+                    LambdaBody::Block(b) => this.visit_block(b),
+                });
+            }
+            Expr::Call { .. } => {
+                let outer = self.call_hint.replace((e.id, bare));
+                self.visit_expr(e);
+                self.call_hint = outer;
+            }
+            _ => self.visit_expr(e),
+        }
+    }
+
+    /// What each argument of `callee(args)` expects, when `callee` is a
+    /// method: the receiver's type arguments substituted in, the method's own
+    /// generics bound from the arguments, and — for what they leave open —
+    /// from `destination`, where the call's value goes. Empty when the callee
+    /// is not a method this walker can resolve.
+    fn arg_slots(
+        &self,
+        callee: &Expr,
+        args: &[CallArg],
+        destination: Option<&Type>,
+    ) -> Vec<Option<Type>> {
+        let Expr::Member { obj, name } = callee else {
+            return Vec::new();
+        };
+        let Some(class) = self.receiver_class(&obj.value) else {
+            return Vec::new();
+        };
+        let Some(sig) = lookup_method(&class, name) else {
+            return Vec::new();
+        };
+        let sig = substitute_receiver(&sig, &class, &self.receiver_type_args(&obj.value));
+        let params: Vec<Type> = sig.params.iter().map(|p| p.ty.clone()).collect();
+        // A lambda's own type says nothing a slot does not already say, so
+        // it is left out of the binding rather than read as `any`.
+        let arg_tys: Vec<Option<Type>> = args
+            .iter()
+            .filter_map(|a| match a {
+                CallArg::Positional(e) => Some(e),
+                CallArg::Named { .. } => None,
+            })
+            .map(|e| match &e.value {
+                Expr::Lambda { .. } => None,
+                other => Some(self.infer_local_ty(other)),
+            })
+            .collect();
+        saule_typeck::sigs::generics::instantiate_param_types_seeded(
+            &params,
+            &sig.type_params,
+            &arg_tys,
+            sig.return_ty.as_ref().zip(destination),
+        )
+    }
+
+    /// The type arguments of the receiver `obj`, when its type is a generic
+    /// class: `[integer]` for a `Coroutine<integer>`. Empty otherwise.
+    fn receiver_type_args(&self, obj: &Expr) -> Vec<Type> {
+        let ty = match obj {
+            Expr::Ident(n) => self
+                .locals
+                .iter()
+                .rev()
+                .find(|l| l.name == *n)
+                .map(|l| l.ty.clone()),
+            Expr::ForceUnwrap(inner) => return self.receiver_type_args(&inner.value),
+            _ => None,
+        };
+        match ty {
+            Some(Type::Generic(g)) => g.args.clone(),
+            Some(Type::Nullable(inner)) => match *inner {
+                Type::Generic(g) => g.args,
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
     }
 
     fn visit_block(&mut self, body: &[Spanned<Stmt>]) {
@@ -356,9 +484,28 @@ impl Cx<'_> {
             Expr::Error => {}
             Expr::Cast { value, .. } => self.visit_expr(value),
             Expr::Call { callee, args, .. } => {
+                let destination = match self.call_hint.take() {
+                    Some((id, ty)) if id == e.id => Some(ty),
+                    other => {
+                        self.call_hint = other;
+                        None
+                    }
+                };
                 self.visit_expr(callee);
+                // Each argument against the slot it fills, so an untyped
+                // lambda's parameters — and the locals of its body — have
+                // the types the checker gives them.
+                let slots = self.arg_slots(&callee.value, args, destination.as_ref());
+                let mut positional = 0;
                 for a in args {
-                    visit_arg(self, a);
+                    match a {
+                        CallArg::Positional(arg) => {
+                            let slot = slots.get(positional).cloned().flatten();
+                            positional += 1;
+                            self.visit_expr_expecting(arg, slot.as_ref());
+                        }
+                        CallArg::Named { .. } => visit_arg(self, a),
+                    }
                 }
                 if let Some(callee_ref) = self.callee_ref(&callee.value) {
                     let (user_fn, local_fn) = match &callee_ref {
@@ -427,11 +574,15 @@ impl Cx<'_> {
                     }
                 }
             }
-            Expr::Lambda { params, body, .. } => {
+            Expr::Lambda {
+                params,
+                body,
+                return_ty,
+            } => {
                 if matches!(body, LambdaBody::Block(_)) {
                     self.note_barrier(e.span.clone());
                 }
-                self.with_function(params, |this| match body {
+                self.with_function(params, return_ty.as_ref(), |this| match body {
                     LambdaBody::Expr(b) => this.visit_expr(b),
                     LambdaBody::Block(b) => this.visit_block(b),
                 });
@@ -494,6 +645,7 @@ impl Cx<'_> {
                 Some(CalleeRef::Method {
                     class,
                     name: name.clone(),
+                    type_args: self.receiver_type_args(&obj.value),
                 })
             }
             _ => None,
@@ -586,6 +738,29 @@ impl Cx<'_> {
             _ => any(),
         }
     }
+}
+
+/// `sig` as read on a receiver of `class<type_args>`: the class's own type
+/// parameters replaced by the receiver's arguments, so `yield(value: T)` on a
+/// `Yielder<integer>` reads `yield(value: integer)`. Unchanged when the
+/// receiver gave no arguments, or the wrong number.
+pub(crate) fn substitute_receiver(
+    sig: &saule_semantic::MethodSig,
+    class: &str,
+    type_args: &[Type],
+) -> saule_semantic::MethodSig {
+    let params = with_classes(|r| r.get(class).map(|c| c.type_params.clone())).unwrap_or_default();
+    if type_args.is_empty() || params.len() != type_args.len() {
+        return sig.clone();
+    }
+    let subst: HashMap<String, Type> = params.iter().cloned().zip(type_args.iter().cloned()).collect();
+    let apply = |t: &Type| saule_typeck::sigs::generics::substitute(t, &subst, &params);
+    let mut out = sig.clone();
+    for p in &mut out.params {
+        p.ty = apply(&p.ty);
+    }
+    out.return_ty = out.return_ty.as_ref().map(apply);
+    out
 }
 
 /// Head class name of a type, peeling `T?`. `None` for primitives and

@@ -77,3 +77,14 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`, `&=`, `\|=`, `<<=`, `>>=` | Compound assignment (no `~=` — that is Lua's `!=`) |
 | `:` | Pipeline stage call inside `when(...)` |
 | `as` | Cast — converts a typed value (`x as integer` truncates toward zero, `n as string` renders), tests an `any` |
+
+### Coroutines
+
+| Form | Meaning |
+|---|---|
+| `Coroutine.create(fn(co) … end)` | A new, not-yet-started `Coroutine<T>`; `co` is its `Yielder<T>` |
+| `co.yield(v)` | Suspend, handing `v` to whoever resumed |
+| `gen.resume()` | Run to the next `yield`; `T?`, `nil` once done or failed |
+| `for v in gen do … end` | Resume until finished; `v` is a `T` |
+| `gen.status()` | `"suspended"`, `"running"`, `"normal"` or `"dead"` |
+| `gen.isDone()` / `gen.error()` | Dead yet? / Why it failed, or `nil` |

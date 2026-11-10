@@ -459,6 +459,66 @@ for _, line in Ui.lines do
 end
 `,
 	},
+	{
+		id: 'coroutines',
+		group: 'Coroutines',
+		label: 'Generators',
+		blurb: 'Functions that pause with yield and pick up where they left off — typed, and stackful.',
+		source: `-- A coroutine pauses at each yield and resumes from exactly there.
+-- The declared return type tells the body what it yields, so \`co\`
+-- needs no annotation: it is a Yielder<integer>.
+fn range(n: integer) -> Coroutine<integer>
+    return Coroutine.create(fn(co)
+        for i = 1, n do
+            co.yield(i)
+        end
+    end)
+end
+
+-- Generators compose: each one pulls from the one before.
+fn squares(src: Coroutine<integer>) -> Coroutine<integer>
+    return Coroutine.create(fn(co)
+        for v in src do
+            co.yield(v * v)
+        end
+    end)
+end
+
+for sq in squares(range(5)) do
+    println(sq)                   -- 1, 4, 9, 16, 25
+end
+
+-- Stackful: pass the yielder down, and any function can yield.
+fn countdown(co: Yielder<string>, n: integer)
+    if n == 0 then
+        co.yield("liftoff")
+        return
+    end
+    co.yield("" .. n)
+    countdown(co, n - 1)
+end
+
+local launch: Coroutine<string> = Coroutine.create(fn(co)
+    countdown(co, 3)
+end)
+
+println(launch.resume())          -- 3
+println(launch.status())          -- suspended
+for step in launch do
+    println(step)                 -- 2, 1, liftoff
+end
+println(launch.status())          -- dead
+
+-- A failure inside a coroutine is reported, not fatal.
+local risky: Coroutine<integer> = Coroutine.create(fn(co)
+    co.yield(1)
+    throw "sensor offline"
+end)
+println(risky.resume())           -- 1
+println(risky.resume())           -- nil
+println(risky.error() ?? "")      -- sensor offline
+`,
+	},
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0]!;

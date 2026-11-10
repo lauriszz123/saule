@@ -192,7 +192,7 @@ An earlier version of the language accepted a bare `function` annotation. It car
 Lua has these and Saule keeps the names reserved, but **neither is implemented yet**. The typechecker will accept `local h: userdata` as an annotation and then nothing in the language can produce a value to satisfy it — there is no literal, no constructor, and no standard-library function returning either. Don't reach for them:
 
 - `userdata` — raw memory for native integrations. Native packages currently exchange values through `table` and the native SDK's own types instead.
-- `thread` — coroutines. Saule has no concurrency primitives today; there is no `coroutine` module.
+- `thread` — in Lua this is the type of a coroutine. Saule's coroutines are typed instead, as `Coroutine<T>` — see [Coroutines](/saule/language/coroutines/). The name stays reserved for operating-system threads, which Saule does not have.
 
 They are listed here so the omission is visible rather than surprising.
 

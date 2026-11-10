@@ -1,0 +1,11 @@
+-- Iterating a Coroutine<integer> binds integers: a loop variable annotated `string` is a mismatch.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield(1)
+    end)
+    for s: string in gen do
+      println(s)
+    end
+  end
+end

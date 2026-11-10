@@ -1,7 +1,8 @@
--- A coroutine answers only resume / status / isDone / error; anything else is an error naming them.
+-- A coroutine has resume / status / isDone / error / iter; anything else is caught before the program runs.
 class Main
   static fn main()
-    local gen: any = Coroutine.create(fn(co: any) -> nil
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield(1)
     end)
     gen.start()
   end

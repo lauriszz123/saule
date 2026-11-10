@@ -345,6 +345,7 @@ impl<'a> Cx<'a> {
             CalleeSig {
                 params,
                 type_params,
+                ret: None,
                 doc: self.imports.docs.get(doc_key).cloned(),
                 display,
             }
@@ -405,7 +406,11 @@ impl<'a> Cx<'a> {
                 let class = self.receiver_class(&obj.value)?;
                 let m = lookup_method(&class, name)?;
                 let key = format!("{class}.{name}");
-                Some(sig(key.clone(), m.params, m.type_params, &key))
+                let ret = m.return_ty.clone();
+                Some(CalleeSig {
+                    ret,
+                    ..sig(key.clone(), m.params, m.type_params, &key)
+                })
             }
             _ => None,
         }

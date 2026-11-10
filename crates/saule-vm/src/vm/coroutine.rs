@@ -225,6 +225,27 @@ impl Coroutine {
         }
     }
 
+    /// One step of `for v in gen do`: resume, and hand the loop what was
+    /// yielded. `nil` — the coroutine finished, or had already — ends it.
+    ///
+    /// A failure **raises** here, where an explicit `resume` reports it.
+    /// `resume` has a return value and `error()` beside it to say what went
+    /// wrong; a loop has neither, and reporting the failure as the end of
+    /// the sequence would make a generator that crashed half-way look like
+    /// one that finished. Lua's `coroutine.wrap` raises for the same reason.
+    fn next_for_loop(&self) -> Result<Vec<Value>, String> {
+        if matches!(*self.state.borrow(), State::Dead) {
+            return Ok(vec![Value::Nil]);
+        }
+        let out = self.resume(&[], 0..0).map_err(|e| e.to_string())?;
+        if matches!(*self.state.borrow(), State::Dead)
+            && let Some(message) = &*self.error.borrow()
+        {
+            return Err(format!("coroutine failed during `for … in`: {message}"));
+        }
+        Ok(if out.is_empty() { vec![Value::Nil] } else { out })
+    }
+
     /// The body failed: record why, close what it leaves behind, and answer
     /// the `resume` with `nil`.
     fn fail(&self, mut vm: Vm, e: RuntimeError) -> Vec<Value> {
@@ -261,7 +282,7 @@ impl VmCoroutine for Coroutine {
 
     fn call_method(
         &self,
-        _handle: &Rc<CoroutineRef>,
+        handle: &Rc<CoroutineRef>,
         name: &str,
         args: &[Value],
         span: std::ops::Range<usize>,
@@ -296,6 +317,22 @@ impl VmCoroutine for Coroutine {
                     None => Value::Nil,
                 }])
             }
+            "iter" => {
+                no_args("iter")?;
+                let co = Rc::clone(handle);
+                Ok(vec![Value::NativeClosure(Rc::new(
+                    saule_runtime::value::NativeClosure {
+                        name: "Coroutine.iter",
+                        func: Box::new(move |_| {
+                            match co.as_any().downcast_ref::<Coroutine>() {
+                                Some(c) => c.next_for_loop(),
+                                None => Err("internal: iterating a coroutine that is not one".into()),
+                            }
+                        }),
+                        param_names: Vec::new(),
+                    },
+                ))])
+            }
             "yield" => Err(RuntimeError::TypeError {
                 message: "`yield` is called on the yielder a coroutine's body is given, not on \
                           the coroutine"
@@ -304,7 +341,8 @@ impl VmCoroutine for Coroutine {
             }),
             other => Err(RuntimeError::TypeError {
                 message: format!(
-                    "no method `{other}` on Coroutine — valid: resume / status / isDone / error"
+                    "no method `{other}` on Coroutine — valid: resume / status / isDone / error / \
+                     iter"
                 ),
                 span,
             }),

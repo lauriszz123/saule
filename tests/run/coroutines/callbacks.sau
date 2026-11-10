@@ -9,7 +9,7 @@ class Main
   static fn main()
     -- A sort comparator resumes a counter. Resuming is an ordinary call,
     -- and the counter yields from its own code, which is all a yield needs.
-    local counter: any = Coroutine.create(fn(co: any) -> nil
+    local counter: Coroutine<integer> = Coroutine.create(fn(co)
       local n: integer = 0
       while true do
         n = n + 1
@@ -30,7 +30,7 @@ class Main
 
     -- A yield made from inside a comparator cannot suspend the coroutine:
     -- the sort's own call is in the way. The coroutine fails, and says so.
-    local gen: any = Coroutine.create(fn(co: any) -> nil
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
       local u: table<integer> = {2, 1}
       Table.sort(u, fn(a: integer, b: integer) -> boolean
         co.yield(a)
@@ -38,8 +38,8 @@ class Main
       end)
     end)
     check("result", tostring(gen.resume()), "nil")
-    check("status", tostring(gen.status()), "dead")
-    local msg: string = tostring(gen.error())
+    check("status", gen.status(), "dead")
+    local msg: string = gen.error() ?? ""
     println("error: " .. msg)
     assert(String.find(msg, "inside a callback") != nil, "unexpected error: " .. msg)
   end

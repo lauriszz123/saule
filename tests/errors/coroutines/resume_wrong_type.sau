@@ -1,0 +1,9 @@
+-- resume on a Coroutine<integer> answers `integer?`, which does not fit a `string?` slot.
+class Main
+  static fn main()
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
+      co.yield(1)
+    end)
+    local s: string? = gen.resume()
+  end
+end

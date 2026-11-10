@@ -1,7 +1,7 @@
--- `yield` belongs to the yielder the body is given, not to the coroutine handle.
+-- `yield` belongs to the Yielder the body is given; a Coroutine handle has no `yield`.
 class Main
   static fn main()
-    local gen: any = Coroutine.create(fn(co: any) -> nil
+    local gen: Coroutine<integer> = Coroutine.create(fn(co)
       co.yield(1)
     end)
     gen.yield(1)

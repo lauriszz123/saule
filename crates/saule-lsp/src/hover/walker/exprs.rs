@@ -45,14 +45,27 @@ impl<'a> Cx<'a> {
                 self.visit_expr(index);
             }
             Expr::Call { callee, args, .. } => {
+                let destination = match self.call_hint.take() {
+                    Some((id, ty)) if id == e.id => Some(ty),
+                    other => {
+                        self.call_hint = other;
+                        None
+                    }
+                };
                 self.visit_expr(callee);
                 let sig = self.callee_sig(&callee.value);
                 // What each slot expects, with the callee's generics
                 // bound from the arguments — `map(names, s => #s)` gives
-                // `s` the element type of `names`, not `any`.
+                // `s` the element type of `names`, not `any` — and from
+                // where the call's value goes, for what they leave open.
                 let expected = sig
                     .as_ref()
-                    .map(|s| s.expected_arg_types(&self.positional_arg_types(args)))
+                    .map(|s| {
+                        s.expected_arg_types(
+                            &self.positional_arg_types(args),
+                            destination.as_ref(),
+                        )
+                    })
                     .unwrap_or_default();
                 // Slot assignment follows the same rule the typechecker and
                 // interpreter use, so a trailing block after a named argument
@@ -212,6 +225,17 @@ impl<'a> Cx<'a> {
             }
             let refined = crate::exprty::refine_lambda_params(params, expected);
             self.visit_lambda(e, &refined, return_ty, body);
+            return;
+        }
+        // A call knows where its value goes — see `Cx::call_hint`.
+        if let (Expr::Call { .. }, Some(want)) = (&e.value, expected) {
+            let bare = match want {
+                Type::Nullable(inner) => inner.as_ref().clone(),
+                other => other.clone(),
+            };
+            let outer = self.call_hint.replace((e.id, bare));
+            self.visit_expr(e);
+            self.call_hint = outer;
             return;
         }
         self.visit_expr(e);

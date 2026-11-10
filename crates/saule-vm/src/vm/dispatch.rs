@@ -986,7 +986,10 @@ impl Vm {
                                 *self.reg_mut(base + a + 1) = Value::Nil;
                                 *self.reg_mut(base + a + 2) = Value::Bool(true);
                             }
-                            Value::Instance(_) => {
+                            // A coroutine iterates the way an `Iterable`
+                            // instance does: its `iter()` hands back a driver
+                            // that resumes it once per step.
+                            Value::Instance(_) | Value::Coroutine(_) => {
                                 // `iter()` runs once per *loop*, not once
                                 // per step, so the re-entrant call costs
                                 // nothing measurable. Routed through the

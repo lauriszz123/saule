@@ -301,6 +301,40 @@ mod tests {
         );
     }
 
+    /// The standard library's *classes* are documented too.
+    ///
+    /// `Coroutine` and `Yielder` reach the checker as builtin classes rather
+    /// than as native signatures, so the test above, which walks the
+    /// signature registry, never sees their methods. Hover on `gen.resume`
+    /// shows the `DOCS.md` entry for `Coroutine.resume`; a method added
+    /// without one would hover as a bare signature.
+    #[test]
+    fn every_builtin_class_method_is_documented() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(saule_runtime::init);
+        let docs = saule_docs::stdlib();
+        let builtins = saule_semantic::builtins::snapshot();
+        let mut missing = Vec::new();
+        for class in ["Coroutine", "Yielder"] {
+            let info = builtins
+                .classes
+                .get(class)
+                .unwrap_or_else(|| panic!("`{class}` is not a builtin class"));
+            assert!(!info.methods.is_empty(), "`{class}` declares no methods");
+            for name in info.methods.keys() {
+                let q = format!("{class}.{name}");
+                if docs.entry(&q).is_none() {
+                    missing.push(q);
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "builtin class methods with no entry in DOCS.md:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
     #[test]
     fn names_agree_with_the_docs() {
         static ONCE: std::sync::Once = std::sync::Once::new();

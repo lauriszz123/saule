@@ -418,6 +418,138 @@ fn any_cannot_flow_into_a_nullable_concrete_slot_either() {
     );
 }
 
+// ─── generic receivers ──────────────────────────────────────────────────
+//
+// A method call's receiver used to be resolved to its class only when its
+// type was a plain name. A *generic* receiver — `Sink<integer>` — matched
+// nothing, so its calls had no argument checking, no unknown-member check,
+// and no slot types for lambda arguments.
+
+const SINK: &str = "class Sink<T>\n  fn put(v: T)\n  end\n  fn each(f: fn(T) -> nil)\n  end\nend\n";
+
+#[test]
+fn a_generic_receivers_method_checks_its_arguments() {
+    rejects(
+        &format!(
+            "{SINK}{}",
+            in_fn("  local s: Sink<integer> = Sink()\n  s.put(\"x\")")
+        ),
+        "Sink.put",
+    );
+    accepts(&format!(
+        "{SINK}{}",
+        in_fn("  local s: Sink<integer> = Sink()\n  s.put(1)")
+    ));
+}
+
+#[test]
+fn a_generic_receivers_unknown_member_is_reported() {
+    rejects(
+        &format!(
+            "{SINK}{}",
+            in_fn("  local s: Sink<integer> = Sink()\n  s.nope()")
+        ),
+        "nope",
+    );
+}
+
+#[test]
+fn a_lambda_argument_takes_its_parameter_type_from_a_generic_receiver() {
+    // `x` is an `integer` because `s` is a `Sink<integer>`: using it as a
+    // string is caught.
+    rejects(
+        &format!(
+            "{SINK}{}",
+            in_fn("  local s: Sink<integer> = Sink()\n  s.each(fn(x)\n    local t: string = x\n  end)")
+        ),
+        "string",
+    );
+}
+
+const MAKER: &str = "class Gen<T>\n  static fn make<T>(body: fn(Sink<T>) -> nil) -> Gen<T>\n    return Gen()\n  end\nend\n";
+
+#[test]
+fn a_generic_static_methods_parameter_is_learned_from_where_its_value_goes() {
+    // Nothing in `fn(s) … end` says what `T` is; the declaration does, and
+    // the body is then checked with `s: Sink<integer>`.
+    accepts(&format!(
+        "{SINK}{MAKER}{}",
+        in_fn("  local g: Gen<integer> = Gen.make(fn(s)\n    s.put(1)\n  end)")
+    ));
+    rejects(
+        &format!(
+            "{SINK}{MAKER}{}",
+            in_fn("  local g: Gen<integer> = Gen.make(fn(s)\n    s.put(\"x\")\n  end)")
+        ),
+        "Sink.put",
+    );
+}
+
+#[test]
+fn a_return_types_its_value_the_way_a_declaration_does() {
+    accepts(&format!(
+        "{SINK}{MAKER}fn build() -> Gen<integer>\n  return Gen.make(fn(s)\n    s.put(1)\n  end)\nend\n"
+    ));
+    rejects(
+        &format!(
+            "{SINK}{MAKER}fn build() -> Gen<integer>\n  return Gen.make(fn(s)\n    s.put(\"x\")\n  end)\nend\n"
+        ),
+        "Sink.put",
+    );
+}
+
+#[test]
+fn an_argument_types_its_value_from_the_parameter_it_fills() {
+    accepts(&format!(
+        "{SINK}{MAKER}fn use(g: Gen<integer>)\nend\n{}",
+        in_fn("  use(Gen.make(fn(s)\n    s.put(1)\n  end))")
+    ));
+}
+
+#[test]
+fn the_destination_does_not_override_what_the_arguments_say() {
+    // The body is annotated `Sink<string>`, so the call makes a
+    // `Gen<string>` — and that, not the declaration, is what is checked.
+    rejects(
+        &format!(
+            "{SINK}{MAKER}{}",
+            in_fn("  local g: Gen<integer> = Gen.make(fn(s: Sink<string>)\n    s.put(\"x\")\n  end)")
+        ),
+        "Gen<string>",
+    );
+}
+
+#[test]
+fn a_parameter_only_any_says_anything_about_binds_to_any() {
+    accepts(&format!(
+        "{SINK}{MAKER}{}",
+        in_fn("  local g: Gen<any> = Gen.make(fn(s)\n    s.put(1)\n    s.put(\"x\")\n  end)")
+    ));
+}
+
+#[test]
+fn for_in_over_a_generic_iterable_binds_its_element_type() {
+    let bag = "class Bag<T> implements Iterable<T>\n  local items: table<T>\n  fn init()\n    self.items = {}\n  end\n  fn iter() -> fn() -> T?\n    local i: integer = 0\n    return fn() -> T?\n      i = i + 1\n      return self.items[i]\n    end\n  end\nend\n";
+    accepts(&format!(
+        "{bag}{}",
+        in_fn("  local b: Bag<integer> = Bag()\n  for v in b do\n    local n: integer = v\n  end")
+    ));
+    rejects(
+        &format!(
+            "{bag}{}",
+            in_fn("  local b: Bag<integer> = Bag()\n  for v in b do\n    local s: string = v\n  end")
+        ),
+        "string",
+    );
+    rejects(
+        &format!(
+            "{bag}{}",
+            in_fn("  local b: Bag<integer> = Bag()\n  for v: string in b do\n  end")
+        ),
+        "`v`",
+    );
+}
+
 #[test]
 fn a_method_call_on_an_any_receiver_is_any() {
     // As `x.field` on an `any` is `any`, so is `x.method()`. It used to be

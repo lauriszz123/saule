@@ -1,10 +1,18 @@
 //! Coroutines: suspending a function part-way and resuming it later.
 //!
-//! These drive coroutines through `any`-typed handles — `Coroutine.create`
-//! returns `any` until the typed `Coroutine<T>` surface exists — so what
-//! they pin is the *runtime*: ordering, values in both directions, the call
-//! stack a suspended coroutine keeps, captured locals across suspension,
-//! status, failure, misuse, and memory.
+//! These drive coroutines through `any`-typed handles, so what they pin is
+//! the *runtime*: ordering, values in both directions, the call stack a
+//! suspended coroutine keeps, captured locals across suspension, status,
+//! failure, misuse, and memory. The typed surface — `Coroutine<T>`,
+//! `Yielder<T>`, inference, `for … in` — is `coroutines_typed.rs`.
+//!
+//! Most bodies here fit the typed contract `fn(Yielder<T>) -> nil` and are
+//! passed to `Coroutine.create` directly. The tests about what that contract
+//! leaves out — arguments to the first `resume`, values passed back in
+//! through `resume(x)`, a body's return values, several values at once —
+//! hold the body as `any` first (`local body: any = fn … end`), which is the
+//! dynamic escape hatch: an `any` body is accepted, and the runtime does
+//! everything Lua's coroutines do.
 //!
 //! Captured locals are declared inside a function wherever the test is
 //! about upvalues: a top-level local is a module slot, not a register, and
@@ -93,9 +101,10 @@ fn the_first_resume_passes_its_arguments_to_the_body() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any, a: integer, b: string) -> string
+  local body: any = fn(co: any, a: integer, b: string) -> string
     return b .. a
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   return tostring(gen.resume(7, "x"))
 end
 go()
@@ -135,14 +144,15 @@ fn what_resume_is_passed_is_what_yield_returns() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any, first: string) -> string
+  local body: any = fn(co: any, first: string) -> string
     local log: string = first
     local got: any = co.yield("y1")
     log = log .. tostring(got)
     got = co.yield("y2")
     log = log .. tostring(got)
     return log
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local a: string = tostring(gen.resume("a"))
   local b: string = tostring(gen.resume("b"))
   local c: string = tostring(gen.resume("c"))
@@ -161,10 +171,11 @@ fn several_values_pass_each_way() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> nil
+  local body: any = fn(co: any) -> nil
     local x: any?, y: any? = co.yield(1, "two")
     co.yield(tostring(x) .. tostring(y))
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local a: any?, b: any? = gen.resume()
   local c: any = gen.resume(3, "four")
   return tostring(a) .. "," .. tostring(b) .. "," .. tostring(c)
@@ -192,11 +203,12 @@ fn join(a: any?, b: any? = nil) -> string
   return tostring(a) .. "+" .. tostring(b)
 end
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> any
+  local body: any = fn(co: any) -> any
     co.yield("discard")
     co.yield(join(co.yield("args")))
     return co.yield("tail")
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local log: string = tostring(gen.resume()) .. ","
   log = log .. tostring(gen.resume("ignored", "too")) .. ","
   log = log .. tostring(gen.resume(1, 2)) .. ","
@@ -217,10 +229,11 @@ fn a_bare_yield_resumes_the_caller_with_nil() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> string
+  local body: any = fn(co: any) -> string
     local got: any? = co.yield()
     return "got " .. tostring(got)
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local first: any? = gen.resume()
   local second: any? = gen.resume()
   return tostring(first) .. "/" .. tostring(second)
@@ -238,10 +251,11 @@ fn the_body_returns_its_values_through_the_last_resume() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> (integer, string)
+  local body: any = fn(co: any) -> (integer, string)
     co.yield(0)
     return 1, "end"
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   gen.resume()
   local a: any?, b: any? = gen.resume()
   return tostring(a) .. tostring(b) .. tostring(gen.isDone())
@@ -259,9 +273,10 @@ fn a_dead_coroutine_keeps_answering_nil() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> string
+  local body: any = fn(co: any) -> string
     return "only"
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local log: string = ""
   for i = 1, 4 do
     log = log .. tostring(gen.resume()) .. ","
@@ -465,9 +480,10 @@ fn helper(co: any) -> string
   return "r"
 end
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> string
+  local body: any = fn(co: any) -> string
     return helper(co)
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   return tostring(gen.resume()) .. tostring(gen.resume()) .. tostring(gen.status())
 end
 go()
@@ -483,7 +499,7 @@ fn a_yield_inside_try_resumes_inside_it_and_its_catch_still_works() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> string
+  local body: any = fn(co: any) -> string
     try
       co.yield("in try")
       throw "after resume"
@@ -491,7 +507,8 @@ fn go() -> string
       co.yield("caught " .. e)
     end
     return "end"
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local log: string = ""
   for i = 1, 3 do
     log = log .. tostring(gen.resume()) .. ","
@@ -562,7 +579,7 @@ fn the_bodys_locals_survive_every_suspension() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> nil
+  local body: any = fn(co: any) -> nil
     local sum: integer = 0
     local label: string = "s"
     while true do
@@ -570,7 +587,8 @@ fn go() -> string
       sum = sum + 1
       label = label .. "+"
     end
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local log: string = ""
   for i = 1, 4 do
     log = log .. tostring(gen.resume()) .. ","
@@ -1070,14 +1088,15 @@ fn a_throw_caught_inside_the_coroutine_is_not_a_failure() {
         text(
             r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> string
+  local body: any = fn(co: any) -> string
     try
       throw "handled"
     catch e: string
       co.yield(e)
     end
     return "fine"
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   return tostring(gen.resume()) .. tostring(gen.resume()) .. tostring(gen.error())
 end
 go()
@@ -1167,8 +1186,8 @@ fn down(n: integer) -> integer
   return 1 + down(n + 1)
 end
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> integer
-    return down(0)
+  local gen: any = Coroutine.create(fn(co: any) -> nil
+    down(0)
   end)
   local r: any? = gen.resume()
   return tostring(r) .. "|" .. tostring(gen.error())
@@ -1337,9 +1356,10 @@ fn one_coroutine_cannot_yield_another() {
         r#"
 fn go() -> string
   local gen: any = Coroutine.create(fn(co: any) -> nil
-    local b: any = Coroutine.create(fn(bco: any, other: any) -> nil
+    local bBody: any = fn(bco: any, other: any) -> nil
       other.yield("wrong one")
-    end)
+    end
+    local b: any = Coroutine.create(bBody)
     b.resume(co)
     co.yield("b: " .. tostring(b.error()))
   end)
@@ -1375,14 +1395,11 @@ go()
 }
 
 #[test]
-fn create_rejects_what_is_not_a_saule_function() {
-    let e = fails("Coroutine.create(42)\n1");
+fn create_rejects_what_is_not_a_function_at_run_time_too() {
+    // Written directly, `Coroutine.create(42)` is a type error. Through an
+    // `any` the checker cannot see it, and the runtime has to say the same.
+    let e = fails("local f: any = 42\nlocal gen: any = Coroutine.create(f)\n1");
     assert!(e.contains("expects a function"), "got: {e}");
-    let e = fails("Coroutine.create(print)\n1");
-    assert!(
-        e.contains("built-in function cannot be suspended"),
-        "got: {e}"
-    );
 }
 
 #[test]
@@ -1428,9 +1445,11 @@ fn calling_a_yielder_method_that_does_not_exist_fails_the_coroutine() {
     let out = text(
         r#"
 fn go() -> string
-  local gen: any = Coroutine.create(fn(co: any) -> nil
+  -- Held as `any`, so `co` is too: typed, this is a compile error instead.
+  local body: any = fn(co: any) -> nil
     co.resume()
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   gen.resume()
   return tostring(gen.error())
 end
@@ -1593,10 +1612,11 @@ fn a_thousand_coroutines_are_created_and_finished() {
 fn go() -> string
   local total: integer = 0
   for i = 1, 1000 do
-    local gen: any = Coroutine.create(fn(co: any, n: integer) -> integer
+    local body: any = fn(co: any, n: integer) -> integer
       co.yield(n)
       return n * 2
-    end)
+    end
+    local gen: any = Coroutine.create(body)
     gen.resume(i)
     total = total + (gen.resume() as integer)!
   end
@@ -1619,10 +1639,11 @@ fn dive(depth: integer) -> string
   if depth == 50 then
     return "bottom"
   end
-  local gen: any = Coroutine.create(fn(co: any) -> string
+  local body: any = fn(co: any) -> string
     co.yield(depth)
     return dive(depth + 1)
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   gen.resume()
   return tostring(gen.resume())
 end
@@ -1643,9 +1664,10 @@ fn unbounded_nesting_of_resumes_is_stopped_and_reported() {
         let out = text(
             r#"
 fn dive(depth: integer) -> string
-  local gen: any = Coroutine.create(fn(co: any) -> string
+  local body: any = fn(co: any) -> string
     return dive(depth + 1)
-  end)
+  end
+  local gen: any = Coroutine.create(body)
   local r: any? = gen.resume()
   if r == nil then
     return "stopped: " .. tostring(gen.error())

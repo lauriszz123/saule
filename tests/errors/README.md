@@ -27,10 +27,9 @@ belongs to rather than the one its error message mentions — a bad argument to
 Most are compile-time errors — parser, `saule-semantic`, `saule-typeck` — but
 not all. `throw_uncaught`, `catch_wrong_type`, `io_use_after_close`,
 `force_unwrap_*`, `table_insert_oob`, `pow_negative_exponent`, the two
-`stack_overflow_*` fixtures and every `coroutines` fixture except
-`create_without_body` and `resume_result_needs_cast` are **runtime** errors,
-and are here for the same reason: the message and its span are the behaviour
-being pinned.
+`stack_overflow_*` fixtures and the two `coroutines/yield_*` fixtures about a
+yielder that escaped its coroutine are **runtime** errors, and are here for
+the same reason: the message and its span are the behaviour being pinned.
 
 `crates/saule-lsp/tests/live_server.rs` holds that list too: every other
 fixture here has to be flagged by the editor, and nothing in `tests/run/` may

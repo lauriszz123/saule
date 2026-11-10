@@ -627,6 +627,40 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
 /// code path serves `Player` and `Box<integer>` alike.
 ///
 /// `None` for anything that heads no name — a table, a tuple, a function.
+/// The class `obj.name(…)` dispatches to, and that method's signature with
+/// the receiver's own type arguments already substituted in.
+///
+/// One answer for every place that needs it — checking the arguments,
+/// typing an untyped lambda argument, reporting an unknown member — because
+/// they used to each resolve the receiver themselves, and each only knew a
+/// plain `Named` receiver. A **generic** one, `Box<integer>` or
+/// `Coroutine<integer>`, matched none of them: its method calls had no
+/// argument checking at all, and `box.put("x")` on a `Box<integer>` was
+/// accepted.
+///
+/// * `Class.method` — a static call on the class itself, no type arguments;
+/// * `self.method` — the class being checked, whose parameters are rigid;
+/// * anything else — the receiver's inferred type, through a bound if it
+///   is a type parameter.
+pub(crate) fn receiver_method(
+    obj: &Spanned<Expr>,
+    name: &str,
+    scope: &Scope,
+) -> Option<(String, saule_semantic::MethodSig)> {
+    let (class, type_args) = match &obj.value {
+        Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => (n.clone(), Vec::new()),
+        Expr::Self_ => (current_class()?, Vec::new()),
+        _ => {
+            let ty = infer(obj, scope)?;
+            let (n, args) = named_head(&strip_nullable(ty))?;
+            crate::state::through_bound(n, args)
+        }
+    };
+    let sig = saule_semantic::lookup_method(&class, name)?;
+    let sig = substitute_receiver_args(&sig, &class, &type_args);
+    Some((class, sig))
+}
+
 pub(crate) fn named_head(ty: &Type) -> Option<(String, Vec<Type>)> {
     match ty {
         Type::Named(n) => Some((n.clone(), Vec::new())),
@@ -667,7 +701,7 @@ fn substitute_class_args(ty: &Type, type_name: &str, type_args: &[Type]) -> Type
 /// Returns `sig` untouched when the receiver supplied no arguments, or the
 /// wrong number of them — there is nothing to substitute, and inventing a
 /// binding would be worse than leaving the declaration's own names in place.
-fn substitute_receiver_args(
+pub(crate) fn substitute_receiver_args(
     sig: &saule_semantic::MethodSig,
     type_name: &str,
     type_args: &[Type],
@@ -865,7 +899,33 @@ pub(crate) fn infer_into(value: &Spanned<Expr>, slot: &Type, scope: &Scope) -> O
 
     infer_byte_literal_expecting(value, bare)
         .or_else(|| infer_lambda_expecting(value, bare, scope))
+        .or_else(|| infer_generic_call_expecting(value, bare, scope))
         .or_else(|| infer(value, scope))
+}
+
+/// A call of a *generic* method, inferred knowing where its value goes.
+///
+/// `local gen: Coroutine<integer> = Coroutine.create(fn(co) … end)`: nothing
+/// in the arguments says what `T` is, the declaration does. Plain [`infer`]
+/// has no declaration to look at and answers nothing; this hands it over.
+/// Every other expression — and every call of a non-generic method, whose
+/// result does not depend on where it goes — is left to `infer`.
+fn infer_generic_call_expecting(
+    value: &Spanned<Expr>,
+    slot: &Type,
+    scope: &Scope,
+) -> Option<Type> {
+    let Expr::Call { callee, args, .. } = &value.value else {
+        return None;
+    };
+    let Expr::Member { obj, name } = &callee.value else {
+        return None;
+    };
+    let (_, sig) = receiver_method(obj, name, scope)?;
+    if sig.type_params.is_empty() {
+        return None;
+    }
+    semantic_method_return_expecting(&sig, args, scope, Some(slot))
 }
 
 /// An integer literal filling a `byte` slot types as `byte`, when it fits.
@@ -904,8 +964,42 @@ pub(crate) fn infer_byte_literal_expecting(value: &Spanned<Expr>, slot: &Type) -
 /// behaviour this adds is for an integer literal meeting a `byte`
 /// parameter — a combination that was an error until now, which is what
 /// makes it safe to add everywhere arguments are checked.
+///
+/// One more case, for the same reason a `local` gets it: an argument that is
+/// itself a call of a *generic* method learns its type parameters from the
+/// parameter it fills when nothing else pins them — `drain(Coroutine.create(
+/// fn(co) … end))` makes a `Coroutine<integer>` for a `drain` that takes one.
+/// Only from a parameter type that is fully concrete, though: one still
+/// mentioning the callee's own (renamed) parameters says nothing yet.
 pub(crate) fn infer_arg(value: &Spanned<Expr>, expected: &Type, scope: &Scope) -> Option<Type> {
-    infer_byte_literal_expecting(value, expected).or_else(|| infer(value, scope))
+    infer_byte_literal_expecting(value, expected)
+        .or_else(|| {
+            let bare = match expected {
+                Type::Nullable(inner) => inner.as_ref(),
+                other => other,
+            };
+            (!mentions_fresh_param(bare))
+                .then(|| infer_generic_call_expecting(value, bare, scope))
+                .flatten()
+        })
+        .or_else(|| infer(value, scope))
+}
+
+/// Whether `ty` mentions a type parameter renamed apart for a call — see
+/// [`Freshened`]. Such a name is a placeholder, not a type.
+fn mentions_fresh_param(ty: &Type) -> bool {
+    match ty {
+        Type::Named(n) => unfreshen_name(n) != n,
+        Type::Nullable(inner) => mentions_fresh_param(inner),
+        Type::Table { key, value } => {
+            key.as_deref().is_some_and(mentions_fresh_param) || mentions_fresh_param(value)
+        }
+        Type::Tuple(items) => items.iter().any(mentions_fresh_param),
+        Type::Function { params, ret } => {
+            params.iter().any(mentions_fresh_param) || mentions_fresh_param(ret)
+        }
+        Type::Generic(g) => g.args.iter().any(mentions_fresh_param),
+    }
 }
 
 /// Arithmetic on a `byte` yields an `integer`.

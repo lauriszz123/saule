@@ -5,33 +5,28 @@ fn check(label: string, got: string, want: string)
   assert(got == want, label .. ": expected `" .. want .. "`, got `" .. got .. "`")
 end
 
-fn range(n: integer) -> any
-  return Coroutine.create(fn(co: any) -> nil
+fn range(n: integer) -> Coroutine<integer>
+  return Coroutine.create(fn(co)
     for i = 1, n do
       co.yield(i)
     end
   end)
 end
 
-fn evens(src: any) -> any
-  return Coroutine.create(fn(co: any) -> nil
-    local v: any? = src.resume()
-    while v != nil do
-      if (v as integer)! % 2 == 0 then
+fn evens(src: Coroutine<integer>) -> Coroutine<integer>
+  return Coroutine.create(fn(co)
+    for v in src do
+      if v % 2 == 0 then
         co.yield(v)
       end
-      v = src.resume()
     end
   end)
 end
 
-fn squares(src: any) -> any
-  return Coroutine.create(fn(co: any) -> nil
-    local v: any? = src.resume()
-    while v != nil do
-      local n: integer = (v as integer)!
-      co.yield(n * n)
-      v = src.resume()
+fn squares(src: Coroutine<integer>) -> Coroutine<integer>
+  return Coroutine.create(fn(co)
+    for v in src do
+      co.yield(v * v)
     end
   end)
 end
@@ -39,26 +34,23 @@ end
 class Main
   static fn main()
     -- `running` from inside, `normal` while waiting on one it resumed.
-    local holder: table<any> = {}
-    local outer: any = Coroutine.create(fn(co: any) -> nil
-      local me: any = holder[1]
-      local inner: any = Coroutine.create(fn(ico: any) -> nil
-        ico.yield(tostring(me.status()))
+    local holder: table<Coroutine<string>> = {}
+    local outer: Coroutine<string> = Coroutine.create(fn(co)
+      local me: Coroutine<string> = holder[1]
+      local inner: Coroutine<string> = Coroutine.create(fn(ico)
+        ico.yield(me.status())
       end)
-      local seenByInner: string = tostring(inner.resume())
-      co.yield(tostring(me.status()) .. "/" .. seenByInner .. "/" .. tostring(inner.status()))
+      local seenByInner: string = inner.resume() ?? "?"
+      co.yield(me.status() .. "/" .. seenByInner .. "/" .. inner.status())
     end)
     holder[1] = outer
-    check("status", tostring(outer.resume()) .. "/" .. tostring(outer.status()),
+    check("status", (outer.resume() ?? "?") .. "/" .. outer.status(),
       "running/normal/suspended/suspended")
 
     -- Generators composed into a pipeline.
-    local p: any = squares(evens(range(10)))
     local log: string = ""
-    local v: any? = p.resume()
-    while v != nil do
-      log = log .. tostring(v) .. ","
-      v = p.resume()
+    for v in squares(evens(range(10))) do
+      log = log .. v .. ","
     end
     check("pipeline", log, "4,16,36,64,100,")
   end
