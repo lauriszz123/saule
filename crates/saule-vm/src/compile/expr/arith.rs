@@ -22,6 +22,18 @@ impl Compiler<'_> {
     ) -> Result<(), CompileError> {
         let span = &e.span;
 
+        // `-1` is a literal, not a `LOADI 1` and a `NEGI`.
+        if op == UnaryOp::Neg
+            && let Some(folded) = negated_literal(rhs)
+        {
+            let lit = Spanned {
+                value: folded,
+                span: e.span.clone(),
+                id: e.id,
+            };
+            return self.expr_to(&lit, dst);
+        }
+
         // An `Op*` overload on the operand's class, resolved here rather
         // than at run time — the same reason `binary_to` must do it (§8.7).
         // A bytecode method is a proto, not a `FunctionObject`, so the
@@ -386,6 +398,31 @@ impl Compiler<'_> {
         self.expr_to(lhs, dst)?;
         let a = self.reg8(dst, span)?;
 
+        // `x ?? 0`, `x or ""`: a right side that is one load needs no jump
+        // at all. The test skips the load in the case where the left side
+        // is the answer — one instruction executed on that path where the
+        // general shape below executes two.
+        if one_load(rhs) {
+            let skip_load = match op {
+                // `and`: keep a falsy left. `C = 1` skips when falsy.
+                BinOp::And => Instruction::abc(Op::TEST, a, 0, 1),
+                // `or`: keep a truthy left. `C = 0` skips when truthy.
+                BinOp::Or => Instruction::abc(Op::TEST, a, 0, 0),
+                // `??`: keep a non-nil left.
+                BinOp::Coalesce => Instruction::abc(Op::JNOTNIL, a, 0, 0),
+                _ => unreachable!("only the short-circuiting operators reach here"),
+            };
+            self.emit(skip_load, span);
+            let before = self.f.code.len();
+            self.expr_to(rhs, dst)?;
+            debug_assert_eq!(
+                self.f.code.len(),
+                before + 1,
+                "`one_load` promised one word"
+            );
+            return Ok(());
+        }
+
         // Each test *skips the following jump* in the case where the right
         // operand is needed, so the jump is taken exactly when the left
         // operand is the answer.
@@ -403,5 +440,27 @@ impl Compiler<'_> {
         self.expr_to(rhs, dst)?;
         self.patch_here(keep_left)?;
         Ok(())
+    }
+}
+
+/// Whether `e` compiles to exactly one instruction that writes its
+/// destination and nothing else — a literal, including a negated number.
+fn one_load(e: &Spanned<Expr>) -> bool {
+    match &e.value {
+        Expr::Nil | Expr::Bool(_) | Expr::Int(_) | Expr::Float(_) | Expr::Str(_) => true,
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            rhs,
+        } => negated_literal(rhs).is_some(),
+        _ => false,
+    }
+}
+
+/// `-n` for a number literal `n`: the value the negation folds to.
+pub(crate) fn negated_literal(rhs: &Spanned<Expr>) -> Option<Expr> {
+    match rhs.value {
+        Expr::Int(n) => n.checked_neg().map(Expr::Int),
+        Expr::Float(f) => Some(Expr::Float(-f)),
+        _ => None,
     }
 }

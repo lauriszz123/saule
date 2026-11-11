@@ -457,3 +457,59 @@ end
 out"#,
     );
 }
+
+/// Payload variants, as `benchmarks/sau/match.sau` declares them.
+const EVENT: &str = "enum Event\n  Click(x: integer, y: integer),\n  Key(code: integer),\n  Scroll(dy: integer),\n  Quit\nend\n";
+
+#[test]
+fn payload_fields_bind_and_guards_fall_through() {
+    for ev in [
+        "Event.Click(3, 4)",
+        "Event.Key(150)",
+        "Event.Key(7)",
+        "Event.Scroll(-5)",
+        "Event.Scroll(5)",
+        "Event.Quit",
+    ] {
+        must_agree(&format!(
+            "{EVENT}fn handle(e: Event) -> integer\n\
+             \x20 return match e\n\
+             \x20   case Event.Click(x, y) then x + y * 2\n\
+             \x20   case Event.Key(c) when c > 100 then c * 3\n\
+             \x20   case Event.Key(c) then c\n\
+             \x20   case Event.Scroll(dy) when dy < 0 and dy > -10 then -dy\n\
+             \x20   case Event.Scroll(dy) then dy\n\
+             \x20   case Event.Quit then 0\n\
+             \x20 end\n\
+             end\n\
+             handle({ev})"
+        ));
+        // Wildcards and a literal inside the payload.
+        must_agree(&format!(
+            "{EVENT}local e: Event = {ev}\n\
+             match e\n\
+             \x20 case Event.Click(_, 4) then 1\n\
+             \x20 case Event.Click(_, _) then 2\n\
+             \x20 case Event.Key(7) then 3\n\
+             \x20 case _ then 4\n\
+             end"
+        ));
+    }
+}
+
+#[test]
+fn a_guard_that_writes_the_scrutinee_is_seen_by_the_next_arm() {
+    // The scrutinee is a local read in place only when no guard can run
+    // code. This guard calls a closure that reassigns it, so the next arm
+    // must test the value it was *given*, not the new one.
+    must_agree(&format!(
+        "{EVENT}local e: Event = Event.Key(1)\n\
+         local swap = fn() -> boolean\n  e = Event.Quit\n  return false\nend\n\
+         match e\n\
+         \x20 case Event.Key(c) when swap() then 10\n\
+         \x20 case Event.Key(c) then 20 + c\n\
+         \x20 case Event.Quit then 30\n\
+         \x20 case _ then 40\n\
+         end"
+    ));
+}

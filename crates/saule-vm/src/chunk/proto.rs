@@ -30,6 +30,8 @@ pub struct Proto {
     pub lines: Vec<LineEntry>,
     /// Per-call-site inline caches (§8.5). Runtime scratch, not serialized.
     pub caches: RefCell<Vec<InlineCache>>,
+    /// Field paths `GETPATH C` walks, deduplicated per proto.
+    pub paths: Vec<FieldPath>,
     pub owner_class: Option<ClassIdx>,
     /// Per-arity entry points for callees with defaulted parameters (§19).
     /// `entries[n]` is the pc to start at when called with `n` arguments;
@@ -55,6 +57,7 @@ impl Proto {
             handlers: Vec::new(),
             lines: Vec::new(),
             caches: RefCell::new(Vec::new()),
+            paths: Vec::new(),
             owner_class: None,
             entries: Vec::new(),
             source: None,
@@ -122,6 +125,55 @@ pub struct LineEntry {
     pub pc: u32,
     pub span_start: u32,
     pub span_end: u32,
+}
+
+/// A chain of field reads — `a.b.c`, `a?.b?.c`, `a.b!.c!` — walked by one
+/// [`GETPATH`](crate::op::Op::GETPATH) instead of one instruction per link.
+///
+/// Worked out by the compiler, which has already proved every class on the
+/// path and resolved every name to a slot; the VM only follows the slots.
+///
+/// **What it saves is not mostly the dispatch.** Each `GETF` of a link
+/// copied the intermediate object into a register — a reference-count
+/// increment on an object the program is only passing through, and a
+/// decrement on whatever that register held before. Walking the path reads
+/// each link in place and copies only the value at the end, which in a
+/// path ending in a field like `.v` is a scalar and costs nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldPath {
+    /// From the receiver outwards: `links[0]` reads a field of `R[B]`.
+    pub links: Box<[PathLink]>,
+}
+
+/// One `.name`, `?.name` or `.name!` of a [`FieldPath`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathLink {
+    /// The field's slot in the receiver's layout.
+    pub slot: u16,
+    pub kind: LinkKind,
+    /// What a failure on this link blames: the member expression for `.`
+    /// and `?.`, the `!` for an unwrapping link — the spans `GETF` and
+    /// `GETFU` carried when each link was its own instruction.
+    pub span_start: u32,
+    pub span_end: u32,
+}
+
+impl PathLink {
+    pub fn span(&self) -> std::ops::Range<usize> {
+        self.span_start as usize..self.span_end as usize
+    }
+}
+
+/// How a [`PathLink`] treats its receiver and its result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    /// `.name`: the receiver is an instance.
+    Plain,
+    /// `?.name`: a nil receiver yields nil, and the read is skipped.
+    Safe,
+    /// `.name!`: as [`Plain`](LinkKind::Plain), and a nil field raises
+    /// `ForceUnwrapNil`.
+    Unwrap,
 }
 
 /// One remembered resolution: receivers of `class` call `(module, target)`.

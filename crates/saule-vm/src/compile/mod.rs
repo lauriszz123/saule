@@ -229,6 +229,22 @@ pub fn rejection(
 /// Position is why this needs the visitor rather than `visit_exprs`: a
 /// flattened expression walk cannot tell `Math.pi` being read from
 /// `Math.pi` being written.
+/// Every bare name the module assigns to anywhere, after its declaration.
+///
+/// A `local` holding a lambda that is never in this set holds that lambda
+/// for its whole life, so a call through it can go straight to the proto
+/// (see `FuncCtx::static_lambdas`). By name rather than by binding, which
+/// is coarser than it needs to be and never wrong.
+struct AssignedNames(std::collections::HashSet<String>);
+
+impl saule_ast::Visitor for AssignedNames {
+    fn assign_target(&mut self, e: &saule_ast::Spanned<saule_ast::Expr>) {
+        if let saule_ast::Expr::Ident(n) = &e.value {
+            self.0.insert(n.clone());
+        }
+    }
+}
+
 struct MutatedReceivers(std::collections::HashSet<String>);
 
 impl saule_ast::Visitor for MutatedReceivers {
@@ -360,6 +376,9 @@ pub(crate) fn compile_into(
     let mut mutated = MutatedReceivers(Default::default());
     saule_ast::visit(module, &mut mutated);
     c.mutated_receivers = mutated.0;
+    let mut assigned = AssignedNames(Default::default());
+    saule_ast::visit(module, &mut assigned);
+    c.assigned_names = assigned.0;
 
     // Top-level `local`s, which become module slots rather than frame
     // locals — see `Compiler::shadowed_names`. Only the top level needs

@@ -104,7 +104,32 @@ fn pass(
     let captures = code.iter().any(|i| i.op() == Some(Op::CLOSURE));
 
     for pc in 0..n {
-        if protected(code, &targets, pc) {
+        // `Jcond; JMP +1; I` — a test that skips a jump over one
+        // instruction — is `Jnot; I`: the inverted test skips `I` itself.
+        // `if n < 2 then return n end` is the shape, and the jump it drops
+        // ran on every call that did not return early. Only the tests with
+        // an exact inverse take part: a float comparison has none, since
+        // `!(a < b)` holds for a NaN where `a >= b` does not.
+        //
+        // The `JMP` is the word a conditional skip skips, which `protected`
+        // forbids deleting on its own. Here the skip itself is rewritten in
+        // the same step, so what it skips stays a single word: `I`.
+        if !dead[pc]
+            && pc + 2 < n
+            && let Some(inv) = code[pc].op().and_then(|op| inverse(code[pc], op))
+            && code[pc + 1].op() == Some(Op::JMP)
+            && code[pc + 1].sbx() == 1
+            && code[pc + 1].a() == 0
+            && !targets[pc + 1]
+            && code[pc + 2].op().is_some_and(|op| op != Op::EXTRAARG)
+            && code.get(pc + 3).and_then(|i| i.op()) != Some(Op::EXTRAARG)
+        {
+            code[pc] = inv;
+            dead[pc + 1] = true;
+            removed += 1;
+            continue;
+        }
+        if dead[pc] || protected(code, &targets, pc) {
             continue;
         }
         let Some(op) = code[pc].op() else { continue };
@@ -169,6 +194,38 @@ fn pass(
         relocate(code, lines, handlers, entries, tables, owned, &dead);
     }
     removed
+}
+
+/// The test that skips the next instruction exactly when `ins` does not.
+fn inverse(ins: Instruction, op: Op) -> Option<Instruction> {
+    let flip = match op {
+        Op::JLTII => Op::JGEII,
+        Op::JGEII => Op::JLTII,
+        Op::JLEII => Op::JGTII,
+        Op::JGTII => Op::JLEII,
+        Op::JEQII => Op::JNEII,
+        Op::JNEII => Op::JEQII,
+        Op::JLTI => Op::JGEI,
+        Op::JGEI => Op::JLTI,
+        Op::JLEI => Op::JGTI,
+        Op::JGTI => Op::JLEI,
+        Op::JEQI => Op::JNEI,
+        Op::JNEI => Op::JEQI,
+        Op::JEQ => Op::JNE,
+        Op::JNE => Op::JEQ,
+        Op::JNIL => Op::JNOTNIL,
+        Op::JNOTNIL => Op::JNIL,
+        Op::TEST => {
+            return Some(Instruction::abc(
+                Op::TEST,
+                ins.a(),
+                ins.b(),
+                (ins.c() == 0) as u8,
+            ));
+        }
+        _ => return None,
+    };
+    Some(Instruction::abc(flip, ins.a(), ins.b(), ins.c()))
 }
 
 /// Whether `pc` is a word no rule may delete, whatever it holds.

@@ -30,7 +30,7 @@ pub use desc::{
     CastFast, CastTest, ClassProto, EnumProto, InterfaceProto, JumpTable, StaticSlot, TypeDesc,
     VariantProto,
 };
-pub use proto::{Handler, InlineCache, LineEntry, Proto, UpvalDesc};
+pub use proto::{FieldPath, Handler, InlineCache, LineEntry, LinkKind, PathLink, Proto, UpvalDesc};
 
 use std::rc::Rc;
 

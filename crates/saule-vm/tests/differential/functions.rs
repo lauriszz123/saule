@@ -716,3 +716,106 @@ fn calling_a_non_callable_value_fails_the_same_way() {
     must_agree("local f: any = 5\nf()");
     must_agree("local s: any = \"x\"\ns()");
 }
+
+// ── a local holding one lambda: called directly, or compiled in place ──────
+
+#[test]
+fn a_lambda_local_is_called_as_its_proto() {
+    // Inlined: arithmetic and comparison on proved numbers.
+    must_agree(
+        "fn run() -> integer\n  local add: fn(integer, integer) -> integer = (a, b) => a + b\n  local s: integer = 0\n  for i: integer = 1, 100 do\n    s = add(s, i)\n  end\n  return s\nend\nrun()",
+    );
+    must_agree(
+        "fn run() -> integer\n  local f: fn(integer) -> integer = (a) => a * 2 + a\n  local s: integer = 5\n  s = f(s)\n  s = f(f(s))\n  return s\nend\nrun()",
+    );
+    must_agree(
+        "fn run() -> boolean\n  local lt: fn(float, float) -> boolean = (a, b) => a / 2.0 < b\n  return lt(3.0, 1.0) or lt(1.0, 3.0)\nend\nrun()",
+    );
+    // Called through `CALLK`: a block body, and an integer `%` that can fail.
+    must_agree(
+        "fn run() -> integer\n  local f: fn(integer) -> integer = fn(a: integer) -> integer\n    return a + 1\n  end\n  return f(f(1))\nend\nrun()",
+    );
+    must_agree(
+        "fn run() -> integer\n  local m: fn(integer, integer) -> integer = (a, b) => a % b\n  return m(7, 0)\nend\nrun()",
+    );
+}
+
+#[test]
+fn a_lambda_local_that_changes_is_called_as_a_value() {
+    must_agree(
+        "fn run() -> integer\n  local f: fn(integer) -> integer = (a) => a + 1\n  local x: integer = f(1)\n  f = (a) => a + 10\n  return x * 100 + f(1)\nend\nrun()",
+    );
+    // Shadowed by an inner local of the same name.
+    must_agree(
+        "fn run() -> integer\n  local f: fn(integer) -> integer = (a) => a + 1\n  local t: integer = 0\n  for i: integer = 1, 2 do\n    local f: fn(integer) -> integer = (a) => a * 10\n    t = t + f(i)\n  end\n  return t + f(0)\nend\nrun()",
+    );
+    // Capturing: a closure, not a proto.
+    must_agree(
+        "fn run() -> integer\n  local k: integer = 3\n  local f: fn(integer) -> integer = (a) => a + k\n  k = 4\n  return f(1)\nend\nrun()",
+    );
+    // Arguments with side effects still run once each, in order.
+    must_agree(
+        "fn run() -> integer\n  local n: integer = 0\n  local bump = fn() -> integer\n    n = n + 1\n    return n\n  end\n  local sub: fn(integer, integer) -> integer = (a, b) => a - b\n  return sub(bump(), bump()) * 10 + n\nend\nrun()",
+    );
+}
+
+// ── calls and returns the VM now takes a shorter way through ──────────────
+
+#[test]
+fn a_static_method_calling_itself_recurses_in_place() {
+    must_agree(
+        "class M\n  static fn fib(n: integer) -> integer\n    if n < 2 then return n end\n    return M.fib(n - 1) + M.fib(n - 2)\n  end\nend\nM.fib(15)",
+    );
+    // With a defaulted parameter: the recursive call enters at its own arity.
+    must_agree(
+        "class M\n  static fn sum(n: integer, acc: integer = 0) -> integer\n    if n == 0 then return acc end\n    local r: integer = M.sum(n - 1, acc + n)\n    return r\n  end\n  static fn go() -> integer\n    return M.sum(10)\n  end\nend\nM.go()",
+    );
+    // A closure made in each activation, so returns cannot skip closing it.
+    must_agree(
+        "class M\n  static fn build(n: integer) -> integer\n    local k: integer = n\n    local f = fn() -> integer\n      return k * 2\n    end\n    if n == 0 then return f() end\n    local r: integer = M.build(n - 1)\n    return r + f()\n  end\nend\nM.build(5)",
+    );
+    // Unbounded: the depth limit is reported, not run past.
+    must_agree(
+        "class M\n  static fn down(n: integer) -> integer\n    local r: integer = M.down(n + 1)\n    return r\n  end\nend\nM.down(0)",
+    );
+}
+
+#[test]
+fn an_early_return_tests_the_opposite_way_and_still_agrees() {
+    for v in ["0", "1", "5"] {
+        must_agree(&format!(
+            "fn f(n: integer) -> integer\n  if n < 2 then return n end\n  return -1\nend\nf({v})"
+        ));
+        must_agree(&format!(
+            "fn f(n: integer) -> integer\n  local t: integer = 3\n  if n >= t then return 1 end\n  return 2\nend\nf({v})"
+        ));
+        must_agree(&format!(
+            "fn f(b: boolean) -> integer\n  if b then return 1 end\n  return 2\nend\nf({v} > 1)"
+        ));
+    }
+    // A float comparison keeps its jump: with a NaN, `!(a < b)` and
+    // `a >= b` disagree.
+    must_agree(
+        "fn f(x: float) -> integer\n  if x < 1.0 then return 1 end\n  return 2\nend\nf(0.0 / 0.0)",
+    );
+    must_agree(
+        "fn f(x: integer?) -> integer\n  if x == nil then return 0 end\n  return x!\nend\nf(nil) + f(4)",
+    );
+}
+
+#[test]
+fn byte_arithmetic_is_integer_arithmetic() {
+    must_agree(
+        "local b: bytes = Bytes.fromString(\"\\x01z\")\nlocal x: byte = Bytes.byte(b, 2) ?? 0\nlocal t: integer = 1000\nt + x * 300 - x",
+    );
+    must_agree(
+        "local b: bytes = Bytes.fromString(\"z\")\nlocal x: byte = Bytes.byte(b, 1) ?? 0\nlocal y: byte = Bytes.byte(b, 1) ?? 0\nx * y + (x < y and 1 or 0)",
+    );
+}
+
+#[test]
+fn a_function_value_that_replaces_itself_while_running_is_kept_alive() {
+    must_agree(
+        "fn run() -> integer\n  local f: fn() -> integer = fn() -> integer\n    return 1\n  end\n  f = fn() -> integer\n    f = fn() -> integer\n      return 100\n    end\n    return 10\n  end\n  local a: integer = f()\n  return a + f()\nend\nrun()",
+    );
+}

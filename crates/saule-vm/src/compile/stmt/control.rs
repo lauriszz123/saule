@@ -548,7 +548,7 @@ impl Compiler<'_> {
     /// emitted), so the true-polarity form has to decline floats, and no
     /// profile has asked for any of it: `or` does not appear in a hot pair
     /// table in any benchmark. It keeps the materialising path, unchanged.
-    fn cond_jumps_if_false(
+    pub(crate) fn cond_jumps_if_false(
         &mut self,
         cond: &Spanned<Expr>,
     ) -> Result<Vec<crate::compile::ctx::Label>, CompileError> {

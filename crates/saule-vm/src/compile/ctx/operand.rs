@@ -125,6 +125,32 @@ impl Compiler<'_> {
                     .is_some()
                     && self.operand_is_pure(obj)
             }
+            // `obj?.field` is the same read behind a nil test, which runs
+            // nothing either — it is `GETPATH`, or `GETF` inside a branch.
+            Expr::SafeMember { obj, name } => {
+                matches!(
+                    self.class_of_nullable_expr(obj)
+                        .and_then(|c| self.member_access(c, name)),
+                    Some(crate::compile::expr::member::MemberAccess::Field(_))
+                ) && self.operand_is_pure(obj)
+            }
+            // `t?[i]` on a table: `GETIDX` behind a nil test. A table is the
+            // one receiver whose index read can run no code — the same
+            // judgement the `Index` arm makes, on the type itself.
+            Expr::SafeIndex { obj, index } => {
+                self.is_table_typed(obj) && self.operand_is_pure(obj) && self.operand_is_pure(index)
+            }
+            // `a ?? b`, `a and b`, `a or b` test a value and keep one side:
+            // tests that call nothing, and both sides land in the one
+            // destination. Pure when both sides are.
+            //
+            // `sum = sum + (row.mid?.v ?? -1)` is the shape: without this
+            // `sum` was copied into a temporary before every add.
+            Expr::Binary {
+                op: BinOp::And | BinOp::Or | BinOp::Coalesce,
+                lhs,
+                rhs,
+            } => self.operand_is_pure(lhs) && self.operand_is_pure(rhs),
             _ => self.in_place_operand(e).is_some(),
         }
     }
@@ -164,5 +190,15 @@ impl Compiler<'_> {
             return Ok(r);
         }
         self.expr_tmp(e)
+    }
+
+    /// Whether `e` was proved a `table`, or a nullable one.
+    pub fn is_table_typed(&self, e: &saule_ast::Spanned<saule_ast::Expr>) -> bool {
+        use saule_ast::Type;
+        match self.types.get(&e.id) {
+            Some(Type::Table { .. }) => true,
+            Some(Type::Nullable(inner)) => matches!(**inner, Type::Table { .. }),
+            _ => false,
+        }
     }
 }

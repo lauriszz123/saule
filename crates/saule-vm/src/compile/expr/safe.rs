@@ -69,23 +69,18 @@ impl Compiler<'_> {
             }
         };
 
-        let m = self.mark();
-        let r = self.expr_tmp(obj)?;
-        let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
-        // `JNOTNIL` skips the jump when the receiver is present, so the
-        // jump is taken exactly on the nil path.
-        self.emit(Instruction::abc(Op::JNOTNIL, b, 0, 0), span);
-        let to_nil = self.emit_jump(Op::JMP, 0, span);
+        // The receiver lands in the destination itself, and the read
+        // overwrites it in place when it is present: a nil receiver is
+        // already the nil answer, so the nil path is one skipped
+        // instruction rather than a diamond of jumps.
+        self.expr_to(obj, dst)?;
+        let a = self.reg8(dst, span)?;
+        self.emit(Instruction::abc(Op::JNIL, a, 0, 0), span);
         match (access, key) {
-            (Some(access), _) => self.emit(self.member_load(access, a, b), span),
-            (None, Some(kc)) => self.emit(Instruction::abc(Op::GETFX, a, b, kc), span),
+            (Some(access), _) => self.emit(self.member_load(access, a, a), span),
+            (None, Some(kc)) => self.emit(Instruction::abc(Op::GETFX, a, a, kc), span),
             (None, None) => unreachable!("a key is interned whenever the access is unresolved"),
         }
-        let done = self.emit_jump(Op::JMP, 0, span);
-        self.patch_here(to_nil)?;
-        self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);
-        self.patch_here(done)?;
-        self.free_to(m);
         Ok(())
     }
 
@@ -103,6 +98,27 @@ impl Compiler<'_> {
         dst: u16,
     ) -> Result<(), CompileError> {
         let span = &e.span;
+
+        // A table receiver and an index that runs nothing: the receiver
+        // lands in the destination, and the read replaces it there when it
+        // is present — `t?[1]` is `JNIL` and one `GETIDX`, no jumps. The
+        // index is evaluated before the test, which only a pure index can
+        // be, and it must not live in the destination the receiver is about
+        // to overwrite.
+        if self.is_table_typed(obj)
+            && self.operand_is_pure(index)
+            && self.in_place_operand(index) != Some(dst)
+        {
+            let m = self.mark();
+            self.expr_to(obj, dst)?;
+            let i = self.operand_to_reg(index, true)?;
+            let (a, c) = (self.reg8(dst, span)?, self.reg8(i, span)?);
+            self.emit(Instruction::abc(Op::JNIL, a, 0, 0), span);
+            self.emit(Instruction::abc(Op::GETIDX, a, a, c), span);
+            self.free_to(m);
+            return Ok(());
+        }
+
         let m = self.mark();
         let r = self.expr_tmp(obj)?;
         let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
@@ -111,7 +127,14 @@ impl Compiler<'_> {
         // The present path is an ordinary index read, so it picks up
         // whatever `index_to` knows — a table read, an `OpIndex` overload,
         // a string — rather than a second implementation of all three.
-        self.index_to(e, obj, index, dst, None)?;
+        //
+        // The receiver is **pinned** to the register it was just evaluated
+        // into. `index_to` compiles its receiver itself, and without the pin
+        // it compiled it a second time: `f()?[1]` called `f` twice.
+        self.pinned.insert(obj.id, r);
+        let read = self.index_to(e, obj, index, dst, None);
+        self.pinned.remove(&obj.id);
+        read?;
         let done = self.emit_jump(Op::JMP, 0, span);
         self.patch_here(to_nil)?;
         self.emit(Instruction::abc(Op::LOADNIL, a, 0, 0), span);

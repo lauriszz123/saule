@@ -616,6 +616,42 @@ define_ops! {
     /// Appended after `CONV`, never inserted: the numbering is the chunk
     /// ABI.
     GETFU: Abc,
+    /// `R[A] := R[B]` followed through `paths[C]` — a chain of field reads
+    /// such as `row.mid?.inner?.v` or `a.b!.c!`, in one instruction. See
+    /// [`FieldPath`](crate::chunk::FieldPath).
+    ///
+    /// Emitted for two or more links, or for one `?.` link, whenever every
+    /// link resolved to a field of a proved class. Each link behaves exactly
+    /// as the instruction it replaces: `.` as `GETF`, `.name!` as `GETFU`,
+    /// and `?.` as the nil test around a `GETF` — a nil receiver makes the
+    /// value nil and the read is skipped, and a later `.` on that nil fails
+    /// as `GETF` on a nil register would.
+    ///
+    /// `benchmarks/sau/nullsafe.sau` spent 21% of its instructions on
+    /// `GETF` and another 35% on the `JNOTNIL`/`JMP` pairs around them, and
+    /// a sixth of its time copying the objects in the middle of each chain
+    /// into registers and dropping them again.
+    ///
+    /// Appended after `GETFU`, never inserted: the numbering is the chunk
+    /// ABI.
+    GETPATH: Abc,
+    /// `R[A] := R[B].payload[C + 1]` — one field of an enum variant's
+    /// payload, as a `match` arm binds it.
+    ///
+    /// Was `UNWRAP` (a copy of the payload table into a register), then a
+    /// `LOADI` and a `GETARR` per field, then a `MOVE` into the binding:
+    /// four instructions and two reference-count round trips for a read.
+    ///
+    /// Appended after `GETPATH`, never inserted: the numbering is the chunk
+    /// ABI.
+    GETPAY: Abc,
+    /// `CALLSTAT` to the function that is running: a static method calling
+    /// itself by name. Same operands, no `EXTRAARG` — the callee's proto,
+    /// chunk and closure are the current frame's, so nothing is looked up.
+    ///
+    /// Appended after `GETPAY`, never inserted: the numbering is the chunk
+    /// ABI.
+    CALLSELF: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

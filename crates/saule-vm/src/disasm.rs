@@ -151,6 +151,20 @@ fn annotate(c: &Chunk, p: &Proto, op: Op, ins: Instruction, pc: usize) -> Option
             .get(ins.bx() as usize)
             .map(|cl| cl.name.to_string()),
         Op::VARIANT => c.enums.get(ins.bx() as usize).map(|e| e.name.to_string()),
+        // `.3?.0!.1` — the slots, each with the operator that reached it.
+        Op::GETPATH => {
+            let path = p.paths.get(ins.c() as usize)?;
+            Some(
+                path.links
+                    .iter()
+                    .map(|l| match l.kind {
+                        crate::chunk::LinkKind::Plain => format!(".{}", l.slot),
+                        crate::chunk::LinkKind::Safe => format!("?.{}", l.slot),
+                        crate::chunk::LinkKind::Unwrap => format!(".{}!", l.slot),
+                    })
+                    .collect(),
+            )
+        }
         Op::SWITCH => {
             let t = c.jump_tables.get(ins.bx() as usize)?;
             Some(format!(

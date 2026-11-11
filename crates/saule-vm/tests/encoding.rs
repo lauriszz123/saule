@@ -202,10 +202,13 @@ fn opcode_numbering_is_stable() {
     // appending.
     assert_eq!(Op::CONV as u8, 130);
     assert_eq!(Op::GETFU as u8, 131);
+    assert_eq!(Op::GETPATH as u8, 132);
+    assert_eq!(Op::GETPAY as u8, 133);
+    assert_eq!(Op::CALLSELF as u8, 134);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::GETFU),
-        "a new opcode was appended after GETFU — extend this assertion rather than \
+        Some(Op::CALLSELF),
+        "a new opcode was appended after CALLSELF — extend this assertion rather than \
          inserting one in the middle"
     );
 }

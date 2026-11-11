@@ -159,6 +159,8 @@ pub struct Compiler<'a> {
     /// reject it. So the compiler asks first, and declines to freeze a
     /// receiver this module assigns through.
     pub mutated_receivers: std::collections::HashSet<String>,
+    /// Bare names assigned to anywhere in the module — see `AssignedNames`.
+    pub assigned_names: std::collections::HashSet<String>,
     /// Top-level names bound by a `local` — i.e. holding a *value*.
     ///
     /// A module-level `local` becomes a module **slot**, not a frame local,
@@ -183,6 +185,9 @@ pub struct Compiler<'a> {
     /// new `FuncCtx`'s `self_fn_name`, so it reaches exactly the one lambda
     /// the `local` names and no deeper one.
     pub binding_lambda_to: Option<Rc<str>>,
+    /// The `CALLSTAT` operand naming the static method about to be
+    /// compiled, handed to its `FuncCtx` as `self_static`.
+    pub pending_self_static: Option<u32>,
     /// Where this module's slots start in the program's flat slot space.
     /// Added to every module-slot operand by [`Compiler::mod_slot`].
     pub module_slot_base: usize,
@@ -242,9 +247,11 @@ impl<'a> Compiler<'a> {
             loops: Vec::new(),
             layouts: Default::default(),
             mutated_receivers: Default::default(),
+            assigned_names: Default::default(),
             shadowed_names: Default::default(),
             imports_bound: false,
             binding_lambda_to: None,
+            pending_self_static: None,
             module_slot_base: 0,
             import_bindings: Vec::new(),
             native_imports: HashMap::new(),
@@ -275,6 +282,7 @@ impl<'a> Compiler<'a> {
         );
         proto.lines = std::mem::take(&mut self.f.lines);
         proto.handlers = std::mem::take(&mut self.f.handlers);
+        proto.paths = std::mem::take(&mut self.f.paths);
         proto.protos = std::mem::take(&mut self.f.nested);
         proto.source = Some(Rc::clone(&self.chunk.source));
         let mut chunk = self.chunk;
@@ -293,7 +301,11 @@ pub enum Num {
 
 pub fn num_of(name: &str) -> Option<Num> {
     match name {
-        "integer" => Some(Num::Int),
+        // A `byte` is an `Int` at run time — `Bytes.byte` answers one — so
+        // its arithmetic is integer arithmetic, and `ops::binary` could not
+        // tell the two apart if it tried. Without this, `total + byte`
+        // compiled to the dynamic `ARITHX`.
+        "integer" | "byte" => Some(Num::Int),
         "float" => Some(Num::Float),
         _ => None,
     }

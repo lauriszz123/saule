@@ -76,12 +76,39 @@ pub struct PendingFinally {
     pub loops_at_entry: usize,
 }
 
+/// An inlinable lambda's parameter names and its one body expression.
+pub type InlineBody = Rc<(
+    Vec<String>,
+    std::sync::Arc<saule_ast::Spanned<saule_ast::Expr>>,
+)>;
+
+/// A local holding one upvalue-free lambda for its whole life.
+pub struct StaticLambda {
+    pub name: Rc<str>,
+    pub reg: u16,
+    /// The lambda's proto in the chunk: what a call through the local is.
+    pub proto: u32,
+    /// Its parameter names and body, when the body is small enough and
+    /// safe enough to compile in place of a call — see
+    /// `Compiler::inlinable_lambda`.
+    pub inline: Option<InlineBody>,
+}
+
 pub struct FuncCtx {
     pub name: Option<Rc<str>>,
     pub code: Vec<Instruction>,
     pub regs: RegAlloc,
     pub lines: Vec<LineEntry>,
     pub handlers: Vec<crate::chunk::Handler>,
+    /// Field paths this function's `GETPATH` instructions name.
+    pub paths: Vec<crate::chunk::FieldPath>,
+    /// Locals that hold one upvalue-free lambda for their whole life:
+    /// `(name, register, chunk proto)`. A call through one is a `CALLK`
+    /// to the proto rather than a `CALL` on the value.
+    pub static_lambdas: Vec<StaticLambda>,
+    /// For a static method, its own `CALLSTAT` operand: a call to it from
+    /// its own body is a `CALLSELF`.
+    pub self_static: Option<u32>,
     /// `finally` blocks of the `try` statements this point sits inside,
     /// innermost last.
     pub finallys: Vec<PendingFinally>,
@@ -208,6 +235,9 @@ impl FuncCtx {
             regs: RegAlloc::new(),
             lines: Vec::new(),
             handlers: Vec::new(),
+            paths: Vec::new(),
+            static_lambdas: Vec::new(),
+            self_static: None,
             finallys: Vec::new(),
             n_params: 0,
             ret_arity: 1,
@@ -246,6 +276,10 @@ impl FuncCtx {
     }
 
     pub fn declare(&mut self, name: &str, reg: u16) {
+        // A new local by this name shadows a static lambda, and one in this
+        // register means the old local's scope is over.
+        self.static_lambdas
+            .retain(|l| l.name.as_ref() != name && l.reg != reg);
         self.scopes
             .last_mut()
             .expect("scope")
@@ -345,6 +379,7 @@ impl Compiler<'_> {
         );
         proto.lines = std::mem::take(&mut self.f.lines);
         proto.handlers = std::mem::take(&mut self.f.handlers);
+        proto.paths = std::mem::take(&mut self.f.paths);
         proto.protos = std::mem::take(&mut self.f.nested);
         proto.upvals = std::mem::take(&mut self.f.upvals);
         proto.entries = std::mem::take(&mut self.f.entries);

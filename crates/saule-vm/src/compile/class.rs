@@ -75,8 +75,10 @@ impl Compiler<'_> {
             let ClassMember::Method(m) = &members[member_i].value else {
                 continue;
             };
-            let proto = self.method_proto(name, idx, m, /* has_self */ false, span)?;
-            self.chunk.classes_mut()[idx as usize].static_methods[slot] = proto;
+            self.pending_self_static = Some((idx << 16) | slot as u32);
+            let proto = self.method_proto(name, idx, m, /* has_self */ false, span);
+            self.pending_self_static = None;
+            self.chunk.classes_mut()[idx as usize].static_methods[slot] = proto?;
         }
 
         Ok(())
@@ -237,6 +239,7 @@ impl Compiler<'_> {
         self.f.ret_arity = crate::compile::ctx::func::ret_arity_of(m.return_ty.as_ref());
         self.f.current_class = Some(class);
         self.f.in_method = has_self;
+        self.f.self_static = self.pending_self_static.take();
         // Only when `self` is really bound: a static method's lambdas must
         // not think they have a receiver.
         self.f.self_class = has_self.then_some(class);
