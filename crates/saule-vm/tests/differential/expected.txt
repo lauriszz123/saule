@@ -513,3 +513,8 @@ cac9ddf513eb7200	V string:seven
 49bdc82874ed7d49	V integer:61
 b807b8031ff61769	V integer:666666
 24c40eb02fc6223f	V integer:254100
+f6416669dfe58967	V string:0r4 0r8 0r12 0r16 0r20 0r24 0r28 1r1 1r5 1r9 1r13 1r17 1r21 1r25 1r29 2r2 2r6 2r10 2r14 2r18 2r22 2r26 2r30 3r3 3r7 3r11 3r15 3r19 3r23 3r27 apple apple date fig fig kiwi pear 
+7276c638dd8faf58	V string:3,1,2,b,a,c,
+3e080b2789baabe4	V integer:442
+0f4f48eaf6e3cf68	V string:6 [5?5][5?<instance of Tag>][5?5][5?8][8?8][5?x][8?x][5?<instance of Tag>][8?<instance of Tag>][5?x][5?9][8?9][5?9][5?x][8?x][5?<instance of Tag>][8?<instance of Tag>][8?x][5?<instance of Tag>][8?9][5?5]
+97498813399082a9	V integer:535332508

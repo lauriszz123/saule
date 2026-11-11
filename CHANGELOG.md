@@ -38,6 +38,46 @@ history.
 
 ### Changed
 
+- **Copying a value is one branch, not a jump table — 14% across the suite.**
+  `Value::clone` matched `Nil`, `Bool`, `Int` and `Float` as four arms, and
+  LLVM lowered that to a jump table on the value's type. It is inlined into
+  every `MOVE`, `GETF` and `LOADK` — a third of all instructions executed —
+  so each of those carried a second indirect branch after the dispatch's own,
+  predicted on the type of whatever was being copied. Copying any of the four
+  is the same sixteen bytes, so one "is it a scalar?" test now picks the
+  path. Found by reading the dispatch loop's machine code rather than its
+  profile, which only ever showed the cost smeared across `MOVE`. The suite's
+  geomean against Lua goes from 1.72x to **1.52x**; `oop` −25%, `closure`
+  −23%, `entity` −20%, `bytes` −18%, `fib` −13%, and nothing slower.
+- **A static call stops counting its closure, and a return of one value takes
+  a straight path.** A call to a statically-resolved function (`CALLK`,
+  `CALLSTAT` and their tail forms) took its closure out of the engine's cache
+  and bumped its reference count, and the return dropped it again — on the
+  same counter, every call, for a recursive function. The cache owns that
+  closure for the life of the engine, which is the guarantee that already lets
+  a frame hold its proto and chunk uncounted, so the frame now holds this one
+  the same way; a closure taken from a register is still owned, for the
+  reason the self-reassigning-closure test pins. And `RET1` into a caller
+  that wants one value — nearly every return — skips the general result loop,
+  its stack-growth check and its bounds checks, and the drop of an integer it
+  overwrites. `fib` −15% (2.4x Lua → **2.1x**), `bintree`, `errors`, `json`
+  −2% to −4%.
+- **`Iter.unique` looks plain values up in a hash map.** It compared each
+  element against everything kept so far, and cloned both operands of every
+  comparison into the general `==` on top: about 50,000 comparisons and
+  100,000 clones per call on 1000 integers with 97 distinct values, where the
+  Lua twin makes one table lookup per element. Plain values — everything but
+  objects — now go through a hash key built to agree exactly with the
+  language's `==`: `0.0` and `-0.0` are one value, `NaN` is never a
+  duplicate, `1`, `1.0` and `"1"` stay three. An object with an `OpEq`
+  overload is still asked, and asked in the same order and the same number of
+  times as before, so an overload with a side effect behaves as it did.
+  `iterlib` −47%, 3.5x Lua → **2.0x**.
+- **`Table.sort` moves elements instead of copying them.** Each merge pass
+  copied every element into a scratch buffer and copied the run back over the
+  original — two clones and a drop per element per pass, on each of the ~18
+  passes a 200k-element sort makes. The merge now moves values between two
+  buffers that swap roles every pass. `sort` −13%, `tablelib` −8%.
 - **A method call on a generic class is a vtable call.** On a receiver typed
   `Stack<integer>` the compiler could prove no class at all — it recognised a
   receiver's type only when the type was a bare name — so every `st.push(…)`

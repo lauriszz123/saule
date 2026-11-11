@@ -114,18 +114,29 @@ pub enum Value {
 /// Fifteen variants of refcount bumping is more than LLVM will inline into a
 /// dispatch loop, so it emitted a `bl` even for `Value::Int(3)`: a call, a
 /// jump table and a spill to copy sixteen bytes. Splitting the scalars out
-/// gives the caller a tag compare and a 16-byte move inline, and leaves the
-/// heap variants — where an `Rc` increment is the real work anyway — behind
-/// the call they were always going to need.
+/// gives the caller a 16-byte move inline, and leaves the heap variants —
+/// where an `Rc` increment is the real work anyway — behind the call they
+/// were always going to need.
+///
+/// **One test for "scalar", not four arms.** The split used to match `Nil`,
+/// `Bool`, `Int` and `Float` separately, rebuilding each, and LLVM lowered
+/// that to a jump table on the tag: every inlined copy — every `MOVE`,
+/// `GETF` and `LOADK`, a third of all instructions executed — carried a
+/// second indirect branch after the dispatch's own, predicted on the type
+/// of the value being copied. But copying any of the four is the same
+/// sixteen bytes, so one compare picks the path. That was 14% across the
+/// suite (geomean against Lua 1.72x → 1.52x; `oop` −25%, `closure` −23%):
+/// more than any change to the call path, for a branch that should never
+/// have been indirect.
 impl Clone for Value {
     #[inline]
     fn clone(&self) -> Value {
-        match self {
-            Value::Nil => Value::Nil,
-            Value::Bool(b) => Value::Bool(*b),
-            Value::Int(n) => Value::Int(*n),
-            Value::Float(f) => Value::Float(*f),
-            heap => heap.clone_heap(),
+        if self.is_scalar() {
+            // SAFETY: a scalar owns nothing, so its bits are the whole value
+            // and copying them is a complete clone.
+            unsafe { std::ptr::read(self) }
+        } else {
+            self.clone_heap()
         }
     }
 }

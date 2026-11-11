@@ -1336,7 +1336,8 @@ impl Vm {
                             // tree-walker trampolines: `Flow::TailCall` is
                             // built for `Value::Function` and nothing else.
                             Value::VmFunction(handle) => {
-                                self.enter_tail_frame(handle, callee_abs + 1, n_args, &site)?;
+                                let handle = std::mem::ManuallyDrop::new(handle);
+                                self.enter_tail_frame(handle, true, callee_abs + 1, n_args, &site)?;
                                 continue 'reentry;
                             }
                             // A native, a constructor, anything else
@@ -1362,8 +1363,11 @@ impl Vm {
                         let (tm, target) = ((packed >> 16) as usize, packed & 0xFFFF);
                         let n_args = self.arg_count(ins.b(), base + a);
                         let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let handle = self.closure_for(&tc, target);
-                        self.enter_tail_frame(handle, base + a, n_args, &Site::Code(&proto, here))?;
+                        // SAFETY: held from the closure cache, which outlives
+                        // the frame — see `Frame::owns_func`.
+                        let handle = unsafe { super::frame::hold(self.closure_for(&tc, target)) };
+                        let site = Site::Code(&proto, here);
+                        self.enter_tail_frame(handle, false, base + a, n_args, &site)?;
                         continue 'reentry;
                     }
                     Op::TAILCALLS => {
@@ -1386,8 +1390,11 @@ impl Vm {
                         };
                         let n_args = self.arg_count(ins.b(), base + a);
                         let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let handle = self.closure_for(&tc, target);
-                        self.enter_tail_frame(handle, base + a, n_args, &Site::Code(&proto, here))?;
+                        // SAFETY: held from the closure cache, which outlives
+                        // the frame — see `Frame::owns_func`.
+                        let handle = unsafe { super::frame::hold(self.closure_for(&tc, target)) };
+                        let site = Site::Code(&proto, here);
+                        self.enter_tail_frame(handle, false, base + a, n_args, &site)?;
                         continue 'reentry;
                     }
                     Op::RET0 => {

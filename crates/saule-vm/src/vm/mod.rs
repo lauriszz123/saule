@@ -381,7 +381,7 @@ impl Vm {
     pub fn run_module(&mut self, module: usize) -> Result<Vec<Value>, RuntimeError> {
         let chunk = Rc::clone(&self.shared.chunks[module]);
         let main_idx = chunk.main;
-        let handle = self.closure_for(&chunk, main_idx);
+        let handle = Rc::clone(self.closure_for(&chunk, main_idx));
         let base = self.free_base();
         self.push_frame(handle, base, 0, base, ALL_RESULTS, &Site::Known(0..0))?;
         self.execute_collecting()
@@ -453,7 +453,13 @@ impl Vm {
     ///
     /// The downcast that recovers a proto from a handle, and the stack probe
     /// and thread-local write a depth guard costs, are per *session* here
-    /// rather than per call. The calls in a session are sequential — one
+    /// rather than per call.
+    ///
+    /// The frame holds `handle` without counting it, so the caller must keep
+    /// it alive until this register file's frames are gone — returned, or
+    /// cleared by `abandon` after an error. Not `unsafe`, because its one
+    /// caller is `CallSession::call_first`, which owns the handle for the
+    /// session's whole life and abandons the file on the first error. The calls in a session are sequential — one
     /// returns before the next starts — so one guard bounds the nesting
     /// exactly as a guard each would.
     pub(crate) fn invoke_first_resolved(
@@ -473,8 +479,12 @@ impl Vm {
         // and the engine owns the chunk, both for longer than the frame.
         // See `Frame::proto`.
         let (p, c) = unsafe { (frame::hold(proto), frame::hold(chunk)) };
+        // SAFETY: the session this is called from owns `handle` for longer
+        // than the call — see `Frame::owns_func`.
+        let f = unsafe { frame::hold(handle) };
         self.push_frame_resolved(
-            Rc::clone(handle),
+            f,
+            false,
             p,
             c,
             base,
@@ -534,7 +544,7 @@ impl Vm {
             .iter()
             .copied()
             .find(|i| chunk.proto(*i).name.as_deref() == Some(name))?;
-        let handle = self.closure_for(&chunk, idx);
+        let handle = Rc::clone(self.closure_for(&chunk, idx));
         Some(self.invoke(&handle, &[], 0..0))
     }
 
@@ -573,7 +583,7 @@ impl Vm {
             return None;
         }
         let chunk = Rc::clone(&self.shared.chunks[module]);
-        let handle = self.closure_for(&chunk, proto_idx);
+        let handle = Rc::clone(self.closure_for(&chunk, proto_idx));
         let base = self.free_base();
         if let Err(e) = self.push_frame(handle, base, 0, base, ALL_RESULTS, &Site::Known(0..0)) {
             return Some(Err(e));

@@ -635,23 +635,134 @@ fn iter_reverse(args: &[Value]) -> Result<Vec<Value>, String> {
 
 /// First occurrence wins, original order preserved.
 ///
-/// Quadratic, because `==` is the language's — an `OpEq` overload is a method
-/// call, not a hash. For the sizes this is reached for that is the right
-/// trade; a caller deduplicating a large list of plain values can sort first
-/// and scan.
+/// `==` is the language's, so an element that is an object — a Saule
+/// instance or a native one, the only values that can carry an `OpEq`
+/// overload — is compared against everything kept so far, in order, by
+/// calling it. That part is quadratic, and has to be: an overload is a
+/// method call, not a hash.
+///
+/// Every other value is compared by [`values_equal`](crate::ops::values_equal),
+/// which *is* a hashable relation, so those go through a hash map instead.
+/// This used to be quadratic for them too, and cloned both operands of every
+/// comparison into `ops::binary` on top: on 1000 integers with 97 distinct
+/// values that was about 50,000 comparisons and 100,000 clones and drops per
+/// call — 41% of the `iterlib` benchmark, where the Lua twin makes one table
+/// lookup per element.
+///
+/// The observable behaviour is unchanged, overloads included. A plain value
+/// still asks every kept object *before* its first plain match whether they
+/// are equal, in order, stopping at the first yes — the same `OpEq` calls,
+/// in the same order, that the element-by-element scan made — so an
+/// overload with a side effect, or one that throws, behaves as it did.
 fn iter_unique(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_min_arity("Iter.unique", args, 1)?;
     let src = elements("Iter.unique", args, 0)?;
-    let mut out: Vec<Value> = Vec::new();
-    'next: for element in src {
-        for seen in &out {
-            if eq(seen, &element, "Iter.unique")? {
-                continue 'next;
+    let mut keep = vec![false; src.len()];
+    {
+        // The first index each plain value was kept at.
+        let mut plain: crate::fxhash::FxHashMap<UniqueKey<'_>, usize> = Default::default();
+        // Indices of kept objects, ascending, and of everything kept.
+        let mut objects: Vec<usize> = Vec::new();
+        let mut kept: Vec<usize> = Vec::new();
+        for (i, element) in src.iter().enumerate() {
+            let object = may_overload_eq(element);
+            let duplicate = if object {
+                // An overload can say anything, about anything: ask every
+                // kept value, in order, exactly as before.
+                let mut found = false;
+                for &k in &kept {
+                    if eq(&src[k], element, "Iter.unique")? {
+                        found = true;
+                        break;
+                    }
+                }
+                found
+            } else {
+                let key = UniqueKey::of(element);
+                let plain_match = key.as_ref().and_then(|k| plain.get(k).copied());
+                // The objects kept before that match are the ones the
+                // ordered scan would have asked first.
+                let mut found = false;
+                for &o in &objects {
+                    if plain_match.is_some_and(|p| o > p) {
+                        break;
+                    }
+                    if eq(&src[o], element, "Iter.unique")? {
+                        found = true;
+                        break;
+                    }
+                }
+                found || plain_match.is_some()
+            };
+            if !duplicate {
+                keep[i] = true;
+                kept.push(i);
+                if object {
+                    objects.push(i);
+                } else if let Some(k) = UniqueKey::of(element) {
+                    plain.insert(k, i);
+                }
             }
         }
-        out.push(element);
     }
+    let out: Vec<Value> = src
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(v, k)| k.then_some(v))
+        .collect();
     Ok(vec![table_value(out)])
+}
+
+/// Whether `==` on `v` can run an `OpEq` overload — the same gate
+/// `ops::binary` puts in front of `try_overload`.
+fn may_overload_eq(v: &Value) -> bool {
+    matches!(v, Value::Instance(_) | Value::Foreign(_))
+}
+
+/// A hash key that agrees exactly with [`values_equal`](crate::ops::values_equal):
+/// two values get equal keys if and only if `values_equal` says they are
+/// equal. A value that `values_equal` never calls equal to anything — `NaN`,
+/// and the variants it has no arm for, such as `Bytes` — gets no key at all,
+/// so it is never found and never stored.
+#[derive(PartialEq, Eq, Hash)]
+enum UniqueKey<'a> {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    /// The bits, with `-0.0` folded onto `0.0`: the only two distinct bit
+    /// patterns `==` calls equal.
+    Float(u64),
+    Str(&'a str),
+    /// Compared by identity: the variant, so a table is never equal to a
+    /// function, and the pointer.
+    Ref(u8, usize),
+}
+
+impl<'a> UniqueKey<'a> {
+    fn of(v: &'a Value) -> Option<UniqueKey<'a>> {
+        fn addr<T: ?Sized>(rc: &Rc<T>) -> usize {
+            Rc::as_ptr(rc) as *const () as usize
+        }
+        Some(match v {
+            Value::Nil => UniqueKey::Nil,
+            Value::Bool(b) => UniqueKey::Bool(*b),
+            Value::Int(n) => UniqueKey::Int(*n),
+            Value::Float(f) if f.is_nan() => return None,
+            Value::Float(f) => UniqueKey::Float(if *f == 0.0 { 0 } else { f.to_bits() }),
+            Value::Str(s) => UniqueKey::Str(s.as_str()),
+            Value::Table(r) => UniqueKey::Ref(0, addr(r)),
+            Value::Native(r) => UniqueKey::Ref(1, addr(r)),
+            Value::NativeClosure(r) => UniqueKey::Ref(2, addr(r)),
+            Value::VmFunction(r) => UniqueKey::Ref(3, addr(r)),
+            Value::Class(r) => UniqueKey::Ref(4, addr(r)),
+            Value::EnumVariant(r) => UniqueKey::Ref(5, addr(r)),
+            Value::Enum(r) => UniqueKey::Ref(6, addr(r)),
+            Value::Coroutine(r) => UniqueKey::Ref(7, addr(r)),
+            // `Instance` and `Foreign` never get here (they are objects);
+            // the rest `values_equal` never calls equal to anything.
+            _ => return None,
+        })
+    }
 }
 
 /// Sort ascending by an extracted key.

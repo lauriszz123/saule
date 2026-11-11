@@ -312,13 +312,35 @@ pub struct Frame {
     /// things the dispatch loop actually wants from the closure are cached
     /// beside it, and `func` is now read only by the three opcodes that
     /// touch upvalues.
-    /// Owned, and the only one of the three that is. `proto` and `chunk`
+    ///
+    /// The one of the three a frame may have to own. `proto` and `chunk`
     /// below are kept alive by the engine whatever the frame does; a closure
-    /// is not. Its last strong reference can be the very register or upvalue
-    /// cell that its own body overwrites — `f = nil` inside a lambda that
-    /// captured itself is enough — and the frame is then all that stands
-    /// between `GETUPVAL` and a freed upvalue array.
-    pub func: Rc<VmFunctionRef>,
+    /// taken from a register is not. Its last strong reference can be the
+    /// very register or upvalue cell that its own body overwrites — `f = nil`
+    /// inside a lambda that captured itself is enough — and the frame is then
+    /// all that stands between `GETUPVAL` and a freed upvalue array. So such
+    /// a frame owns it, and a frame whose closure something else is already
+    /// keeping alive only holds it — see [`owns_func`](Self::owns_func).
+    pub func: Held<VmFunctionRef>,
+    /// Whether this frame holds a strong count on [`func`](Self::func), and
+    /// so must release it when the frame goes.
+    ///
+    /// `true` for a closure that came from a register: the reason above for
+    /// owning one is real, and it is the only one that can apply. `false`
+    /// for a statically-resolved callee — `CALLK`, `CALLSTAT` and their tail
+    /// forms — whose closure lives in `VmShared::closure_cache`: a cell
+    /// written once and never cleared, in the same engine state that owns
+    /// every `Proto` and `Chunk` a frame already holds without counting. A
+    /// static closure is never a register's to drop, so it cannot be freed
+    /// under the frame. Counting it cost an increment on every call and a
+    /// decrement on every return, on the same cell for a recursive
+    /// function: 11% of `fib`. Also `false` for a call made through a
+    /// [`CallSession`], which owns the handle for longer than any call it
+    /// makes.
+    ///
+    /// Next to the other byte-wide fields, in what was padding: the frame is
+    /// no larger for it.
+    pub owns_func: bool,
     /// The running proto — `func`'s, resolved once when the frame is built.
     ///
     /// Carried as a [`Held`] rather than an `Rc`: entering and leaving a
@@ -353,6 +375,22 @@ pub struct Frame {
     /// the callee is what gathers its surplus arguments, and it cannot ask
     /// the caller after the fact.
     pub n_args: u8,
+}
+
+impl Drop for Frame {
+    /// Release the closure handle if this frame was given one to own.
+    ///
+    /// Every way a frame ends comes through here — a return's `pop`, a tail
+    /// call writing a new frame over it, an unwind, an abandoned register
+    /// file, a finished coroutine's frame list — so the rule is kept in one
+    /// place rather than at each of them.
+    fn drop(&mut self) {
+        if self.owns_func {
+            // SAFETY: an owned handle was moved in when the frame was built,
+            // and this is the only place it is released — `Drop` runs once.
+            unsafe { std::mem::ManuallyDrop::drop(&mut self.func) }
+        }
+    }
 }
 
 /// `n_ret` sentinel: the caller wants every result the callee produces.

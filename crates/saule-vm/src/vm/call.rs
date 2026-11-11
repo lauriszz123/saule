@@ -418,7 +418,8 @@ impl Vm {
     /// held across the whole chain.
     pub(crate) fn enter_tail_frame(
         &mut self,
-        handle: Rc<VmFunctionRef>,
+        handle: Held<VmFunctionRef>,
+        owns_func: bool,
         args_from: usize,
         n_args: usize,
         site: &Site<'_>,
@@ -469,6 +470,7 @@ impl Vm {
         let pc = pdata.entry_for(n_args);
         *self.frames.last_mut().expect("frame") = Frame {
             func: handle,
+            owns_func,
             proto,
             chunk,
             base: base as u32,
@@ -516,7 +518,17 @@ impl Vm {
             // the borrow of `func` ends before it is moved into the frame.
             unsafe { (hold(&cl.proto), hold(&cl.chunk)) }
         };
-        self.push_frame_resolved(func, proto, chunk, base, n_args, ret_to, n_ret, site)
+        self.push_frame_resolved(
+            std::mem::ManuallyDrop::new(func),
+            true,
+            proto,
+            chunk,
+            base,
+            n_args,
+            ret_to,
+            n_ret,
+            site,
+        )
     }
 
     /// [`push_frame`](Self::push_frame) for a caller that already holds the
@@ -528,7 +540,8 @@ impl Vm {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_frame_resolved(
         &mut self,
-        func: Rc<VmFunctionRef>,
+        func: Held<VmFunctionRef>,
+        owns_func: bool,
         proto: Held<Proto>,
         chunk: Held<Chunk>,
         base: u32,
@@ -555,6 +568,7 @@ impl Vm {
         let pc = pdata.entry_for(n_args.min(u8::MAX as usize) as u8);
         self.frames.push(Frame {
             func,
+            owns_func,
             proto,
             chunk,
             base,
@@ -595,6 +609,21 @@ impl Vm {
         // `dst < src` always — the callee's base is the caller's `A + 1` at
         // the lowest — so a forward move never clobbers an unread source.
         debug_assert!(dst <= src);
+
+        // One value back to a caller that wants one: `RET1` into an
+        // expression, which is nearly every return a program makes. The
+        // general loop below paid a stack-growth check that cannot fire here
+        // (`dst + 1 <= src + 1`, and `src` is a register of the frame just
+        // popped), two bounds-checked indexes, and the full drop of the
+        // destination's old value even when it was an integer. Both
+        // registers are inside the file by the headroom invariant `reg`
+        // documents, and `set_reg` skips the drop for a scalar.
+        if count == 1 && frame.n_ret == 1 {
+            let v = std::mem::replace(self.reg_mut(src), Value::Nil);
+            self.set_reg(dst, v);
+            return false;
+        }
+
         let wanted = if frame.n_ret == ALL_RESULTS {
             count
         } else {
@@ -717,25 +746,32 @@ impl Vm {
         // SAFETY: as above — the proto belongs to `chunk`, which outlives
         // the frame.
         let proto = unsafe { hold(chunk.proto(target)) };
-        let handle = self.closure_for(&chunk, target);
-        self.push_frame_resolved(handle, proto, chunk, base, n_args, ret_to, n_ret, site)
+        // SAFETY: the closure cache owns this closure for as long as the
+        // engine runs and never clears a cell — see `Frame::owns_func`.
+        let handle = unsafe { hold(self.closure_for(&chunk, target)) };
+        self.push_frame_resolved(
+            handle, false, proto, chunk, base, n_args, ret_to, n_ret, site,
+        )
     }
 
     /// A cached, upvalue-free closure for a statically-resolved callee, so
     /// `CALLK` allocates nothing per call.
-    pub(crate) fn closure_for(&self, chunk: &Rc<Chunk>, idx: u32) -> Rc<VmFunctionRef> {
+    ///
+    /// Lent, not cloned: the cache owns it for the life of the engine, so a
+    /// static call's frame holds it without a count (`Frame::owns_func`), and
+    /// a caller that needs to keep one clones it itself.
+    pub(crate) fn closure_for(&self, chunk: &Rc<Chunk>, idx: u32) -> &Rc<VmFunctionRef> {
         let m = chunk.module_index;
-        Rc::clone(self.shared.closure_cache[m][idx as usize].get_or_init(|| {
+        self.shared.closure_cache[m][idx as usize].get_or_init(|| {
             // Only on the first visit to this call site. Cloning the proto
             // here rather than in the caller keeps the hit path — which is
-            // every call after the first — down to two indexed loads and a
-            // refcount bump.
+            // every call after the first — down to two indexed loads.
             VmFunctionRef::new(Closure::bound(
                 Rc::clone(chunk.proto(idx)),
                 Rc::clone(chunk),
                 Vec::new(),
                 &self.shared,
             ))
-        }))
+        })
     }
 }
