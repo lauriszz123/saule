@@ -1065,3 +1065,115 @@ fn a_force_unwrapped_static_read_keeps_the_separate_unwrap() {
     );
     must_agree(&src);
 }
+
+/// A generic class, a subclass of it, and an interface over it — every
+/// shape whose receiver the type table records as `Type::Generic`.
+const GENERIC: &str = r#"
+interface Holder<T>
+  fn get() -> T
+end
+
+class Box<T> implements Holder<T>
+  item: T
+  count: integer
+
+  fn init(v: T)
+    self.item = v
+    self.count = 0
+  end
+
+  fn get() -> T
+    self.count = self.count + 1
+    return self.item
+  end
+
+  fn put(v: T)
+    self.item = v
+  end
+end
+
+class Tagged<T> extends Box<T>
+  fn init(v: T)
+    self.super(v)
+  end
+
+  fn get() -> T
+    self.count = self.count + 10
+    return self.item
+  end
+end
+"#;
+
+#[test]
+fn a_generic_receiver_dispatches_through_the_vtable() {
+    // `Box<integer>` used to prove no class at all: the compiler only
+    // recognised a receiver typed `Type::Named`, so every method call on an
+    // instance of a generic class was a `CALLMX` — a name probe and a
+    // re-entrant call — and every field access a `GETFX`. That was a
+    // quarter of the `generic` benchmark. Type arguments are erased before
+    // layouts are built, so the head name is the layout, and the call is
+    // the same `CALLM` a non-generic class gets.
+    let src = format!(
+        r#"{GENERIC}
+local b: Box<integer> = Box(5)
+b.put(b.get() + 1)
+b.item = b.item * 10
+b.count + b.item"#
+    );
+    let l = listing(&src);
+    assert!(
+        emits(&l, "CALLM"),
+        "the method call is not a vtable call:{NL}{l}"
+    );
+    assert!(
+        emits(&l, "GETF"),
+        "the field read is not a slot read:{NL}{l}"
+    );
+    assert!(
+        emits(&l, "SETF"),
+        "the field write is not a slot write:{NL}{l}"
+    );
+    for dynamic in ["CALLMX", "GETFX", "SETFX"] {
+        assert!(
+            !emits(&l, dynamic),
+            "a generic receiver still took the dynamic path ({dynamic}):{NL}{l}"
+        );
+    }
+    must_agree(&src);
+}
+
+#[test]
+fn a_generic_subclass_still_dispatches_virtually() {
+    // The vtable call has to land on the *override* when the static type
+    // is the generic parent and the instance is the generic subclass — the
+    // prefix invariant (§8.3) is what makes the parent's slot correct, and
+    // erasure is what makes it the same slot for every `T`.
+    let src = format!(
+        r#"{GENERIC}
+local t: Tagged<integer> = Tagged(3)
+local b: Box<integer> = t
+local first: integer = b.get()
+first * 100 + b.count"#
+    );
+    assert!(!emits(&listing(&src), "CALLMX"));
+    must_agree(&src);
+}
+
+#[test]
+fn a_generic_interface_receiver_dispatches_through_the_itable() {
+    let src = format!(
+        r#"{GENERIC}
+local h: Holder<string> = Box("seven")
+h.get()"#
+    );
+    let l = listing(&src);
+    assert!(
+        emits(&l, "CALLIF"),
+        "the interface call is not an itable call:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "CALLMX"),
+        "the interface call went dynamic:{NL}{l}"
+    );
+    must_agree(&src);
+}

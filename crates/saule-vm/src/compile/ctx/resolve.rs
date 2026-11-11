@@ -245,11 +245,27 @@ impl Compiler<'_> {
         self.bindings.get(id)
     }
 
-    /// The type `saule-typeck` proved for a node, if any. `None` is always
-    /// safe: it selects a dynamic opcode rather than a wrong one.
+    /// The name of the type `saule-typeck` proved for a node, if any — the
+    /// key every caller looks a class, enum or interface layout up by.
+    ///
+    /// A generic application answers with its head: `Box<integer>` names
+    /// `Box`. Type arguments are erased before layouts are built, so every
+    /// instantiation of a generic shares one layout, one vtable and one
+    /// itable, and the head is exactly the key they are filed under.
+    ///
+    /// It used to answer only for `Type::Named`, and `None` here is *not*
+    /// always the safe answer it looks like. For a method call or a field
+    /// read it is — the dynamic opcode it selects is merely slow, and on a
+    /// `Stack<T>` receiver that slowness was a quarter of the `generic`
+    /// benchmark: every `st.push(…)` a `CALLMX`, a name probe and a
+    /// re-entrant call. But an index *assignment* reads `None` as "not a
+    /// class" and emits the table write, so `grid[1] = v` on a generic class
+    /// implementing `OpNewIndex` compiled to a `SETIDX` against an instance
+    /// and failed at run time with an internal error.
     pub fn ty_name(&self, id: NodeId) -> Option<&str> {
         match self.types.get(&id)? {
             saule_ast::Type::Named(n) => Some(n.as_str()),
+            saule_ast::Type::Generic(g) => Some(g.name.as_str()),
             _ => None,
         }
     }

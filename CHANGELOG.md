@@ -38,6 +38,23 @@ history.
 
 ### Changed
 
+- **A method call on a generic class is a vtable call.** On a receiver typed
+  `Stack<integer>` the compiler could prove no class at all — it recognised a
+  receiver's type only when the type was a bare name — so every `st.push(…)`
+  compiled to `CALLMX`, a by-name lookup and a re-entrant call, and every
+  `st.top` to `GETFX`. Type arguments are erased before classes are laid out,
+  so the head name *is* the layout: `Stack<integer>` now dispatches exactly
+  like a non-generic class, and a generic interface receiver through its
+  itable. `generic` −37%, 3.8x Lua → **2.4x**.
+- **A call site that sees a few classes remembers all of them.** The cache
+  behind `CALLM` and `CALLIF` held one class, so a site visiting two or three
+  in turn missed every time — and *rewrote* itself every time, an `Rc` clone,
+  a `borrow_mut` and a drop of the class it evicted, on top of the full
+  lookup. `iface` rotates through three shapes, so its one hot site missed on
+  100% of calls and the cache cost 20% of the program, more than having none.
+  A site now widens from one class to four, and past four stops writing
+  altogether. `iface` −23% (2.5x → **1.9x**), `entity` −14% (2.2x → 1.9x);
+  sites that only ever see one class are unchanged.
 - **A native that calls back a million times sets up once, not a million
   times.** `Table.sort`'s comparator and every `Iter` combinator's callback
   run on a register file of their own — the dispatch loop holds `&mut Vm`
@@ -113,6 +130,12 @@ history.
 
 ### Fixed
 
+- **An index assignment on a generic class calls its `OpNewIndex`.**
+  `grid[1] = v` on a `Grid<T>` failed at run time with an internal "typed
+  opcode expected `table` but the register held `instance`": the compiler,
+  unable to prove a class for a generic receiver, took the assignment for a
+  table write. It is the class's overload now, as it already was on a
+  non-generic class.
 - **An `Iter` combinator reports a callback that is not a function even when
   the source is empty.** The check sat inside the per-element loop, so
   `Iter.map({}, 42)` quietly answered `{}` — the one input where a program

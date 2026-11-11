@@ -124,29 +124,187 @@ pub struct LineEntry {
     pub span_end: u32,
 }
 
-/// A monomorphic call-site cache (§8.5).
+/// One remembered resolution: receivers of `class` call `(module, target)`.
 ///
 /// The design sketch stores a `*const ClassObject`. This stores the `Rc`
 /// instead: a raw pointer that outlives its class can be matched by a *new*
 /// class allocated at the same address, which would silently read the wrong
 /// field. Holding the `Rc` makes that impossible, and the hit path still
-/// only does a pointer compare — `Rc::as_ptr` touches no refcount.
+/// only does a pointer compare — `Rc::ptr_eq` touches no refcount.
+#[derive(Debug, Clone)]
+pub struct CacheEntry {
+    pub class: Rc<ClassObject>,
+    /// Module the resolved method was compiled in.
+    pub module: u16,
+    /// Proto index within that module.
+    pub target: u32,
+}
+
+/// How many receiver classes one call site remembers before it gives up.
+///
+/// Four is the usual answer, and the suite agrees: the most a site in it
+/// sees is three (`iface`'s `shapes[i]!.area()` over squares, rectangles
+/// and rings). A site past this is a dispatcher over an open set of
+/// classes, and probing a longer list on every call costs more than the
+/// map lookup it would save.
+pub const POLY_ENTRIES: usize = 4;
+
+/// A call-site cache (§8.5): the receiver classes this `CALLM` or `CALLIF`
+/// has seen, and what each resolved to.
 ///
 /// No invalidation is needed: Saule has no metatables and no runtime class
 /// mutation, so a `(class, slot)` pair is permanently valid once observed.
 /// Caches the **resolved callee**, not the slot: the slot is already in the
 /// instruction, and what the probe actually costs is turning it into a
 /// `(module, proto)` pair — an `Rc::as_ptr`, a hash, a map probe and two
-/// indexed loads. A hit replaces all of that with one pointer compare.
+/// indexed loads. A hit replaces all of that with a pointer compare.
+///
+/// ## Why it is not only monomorphic any more
+///
+/// It was, and a site that saw two classes in turn missed on every call —
+/// worse, it *rewrote* itself on every call, an `Rc` clone, a `borrow_mut`
+/// and a drop of the class it evicted, on top of the full probe. `iface`
+/// visits three classes in strict rotation, so its one hot site missed
+/// 100% of the time and the cache was 20% of the program: more than no
+/// cache would have cost. So a site now widens from one entry to
+/// [`POLY_ENTRIES`], and past that it stops writing altogether.
+///
+/// `Mono` stays inline because nearly every site is one: its hit is the
+/// pointer compare it always was, behind no extra indirection. Only a site
+/// that has proved itself polymorphic pays for the `Box`, once.
 #[derive(Debug, Clone, Default)]
 pub enum InlineCache {
     #[default]
     Empty,
-    Mono {
-        class: Rc<ClassObject>,
-        /// Module the resolved method was compiled in.
-        module: u16,
-        /// Proto index within that module.
-        target: u32,
-    },
+    /// One receiver class seen — almost every site, forever.
+    Mono(CacheEntry),
+    /// Two to [`POLY_ENTRIES`] classes, filled in the order first seen.
+    Poly(Box<[Option<CacheEntry>; POLY_ENTRIES]>),
+    /// More classes than that: every call takes the full probe, and nothing
+    /// is written back, so there is nothing left to thrash.
+    Mega,
+}
+
+impl InlineCache {
+    /// What this site resolved receivers of `class` to, if it has seen one.
+    #[inline(always)]
+    pub fn probe(&self, class: &Rc<ClassObject>) -> Option<(u16, u32)> {
+        match self {
+            InlineCache::Mono(e) if Rc::ptr_eq(&e.class, class) => Some((e.module, e.target)),
+            InlineCache::Poly(entries) => entries
+                .iter()
+                .map_while(Option::as_ref)
+                .find(|e| Rc::ptr_eq(&e.class, class))
+                .map(|e| (e.module, e.target)),
+            _ => None,
+        }
+    }
+
+    /// Whether a miss here is still worth remembering.
+    #[inline]
+    pub fn learns(&self) -> bool {
+        !matches!(self, InlineCache::Mega)
+    }
+
+    /// Remember a miss: `class` resolves to `(module, target)` at this site.
+    ///
+    /// Only ever called after [`probe`](Self::probe) missed for `class`, so
+    /// it never adds a class twice.
+    #[cold]
+    pub fn record(&mut self, class: Rc<ClassObject>, module: u16, target: u32) {
+        let entry = CacheEntry {
+            class,
+            module,
+            target,
+        };
+        *self = match std::mem::take(self) {
+            InlineCache::Empty => InlineCache::Mono(entry),
+            InlineCache::Mono(first) => {
+                InlineCache::Poly(Box::new([Some(first), Some(entry), None, None]))
+            }
+            InlineCache::Poly(mut entries) => match entries.iter_mut().find(|e| e.is_none()) {
+                Some(free) => {
+                    *free = Some(entry);
+                    InlineCache::Poly(entries)
+                }
+                // Full: this site dispatches over an open set of classes.
+                // Dropping the entries frees the box and the classes it was
+                // pinning; from here on nothing is written.
+                None => InlineCache::Mega,
+            },
+            InlineCache::Mega => InlineCache::Mega,
+        };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn class(name: &str) -> Rc<ClassObject> {
+        Rc::new(ClassObject {
+            name: name.to_string(),
+            parent: None,
+            layout: Rc::new(Default::default()),
+            methods: Default::default(),
+            static_fields: Default::default(),
+            slot_statics: None,
+            static_methods: Default::default(),
+        })
+    }
+
+    #[test]
+    fn a_site_widens_one_class_at_a_time_then_gives_up() {
+        let classes: Vec<_> = (0..=POLY_ENTRIES)
+            .map(|i| class(&format!("C{i}")))
+            .collect();
+        let mut site = InlineCache::Empty;
+        for (i, c) in classes.iter().take(POLY_ENTRIES).enumerate() {
+            assert_eq!(site.probe(c), None, "C{i} answered before it was recorded");
+            site.record(Rc::clone(c), i as u16, 100 + i as u32);
+            let expected = if i == 0 { "Mono" } else { "Poly" };
+            assert!(
+                format!("{site:?}").starts_with(expected),
+                "after {} classes the site should be {expected}: {site:?}",
+                i + 1
+            );
+            // Every class recorded so far still answers, with its own target
+            // — widening must not evict or cross-wire an earlier entry.
+            for (j, earlier) in classes.iter().take(i + 1).enumerate() {
+                assert_eq!(site.probe(earlier), Some((j as u16, 100 + j as u32)));
+            }
+        }
+
+        // One class too many: the site stops caching rather than evicting.
+        let extra = &classes[POLY_ENTRIES];
+        site.record(Rc::clone(extra), 9, 999);
+        assert!(matches!(site, InlineCache::Mega), "{site:?}");
+        assert!(!site.learns());
+        for c in &classes {
+            assert_eq!(site.probe(c), None, "a megamorphic site answers nothing");
+        }
+    }
+
+    #[test]
+    fn a_megamorphic_site_lets_go_of_the_classes_it_held() {
+        // The cache pins classes alive with `Rc`s so a reused address cannot
+        // be mistaken for a cached class. Going megamorphic drops the box,
+        // and with it every class only the cache was still holding.
+        let classes: Vec<_> = (0..=POLY_ENTRIES)
+            .map(|i| class(&format!("C{i}")))
+            .collect();
+        let mut site = InlineCache::Empty;
+        for (i, c) in classes.iter().enumerate() {
+            site.record(Rc::clone(c), 0, i as u32);
+        }
+        assert!(matches!(site, InlineCache::Mega));
+        for c in &classes {
+            assert_eq!(
+                Rc::strong_count(c),
+                1,
+                "the megamorphic cache still pins `{}`",
+                c.name
+            );
+        }
+    }
 }

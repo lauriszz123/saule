@@ -51,8 +51,10 @@ impl Vm {
     ///
     /// The uncached probe is `Rc::as_ptr`, a hash, a map probe and two
     /// indexed loads, and it was 9.3% of `bintree` and 7.7% of `interp`.
-    /// A call site almost always sees one receiver class, so remembering
-    /// the last one turns all of that into a pointer compare.
+    /// A call site almost always sees one receiver class, so remembering it
+    /// turns all of that into a pointer compare — and a site that sees a
+    /// few, in turn, remembers each of them rather than evicting one per
+    /// call (see [`InlineCache`]).
     ///
     /// **Keyed by `pc`.** One call site is one instruction, so the program
     /// counter identifies it without an operand — `CALLM` is `ABC` with no
@@ -70,41 +72,73 @@ impl Vm {
         proto: &Proto,
         here: u32,
     ) -> Result<(usize, u32), RuntimeError> {
-        let site = here as usize;
-        {
-            let Value::Instance(inst) = &self.stack[recv] else {
-                return Err(operand_err(&self.stack[recv], "instance", proto, here));
-            };
-            let inst = inst.borrow();
-            if let Some(InlineCache::Mono {
-                class,
-                module,
-                target,
-            }) = proto.caches.borrow().get(site)
-                && Rc::ptr_eq(class, &inst.class)
-            {
-                return Ok((*module as usize, *target));
-            }
+        if let Some(hit) = self.cached_callee(recv, proto, here)? {
+            return Ok(hit);
         }
-
-        // Miss: the full probe, then remember it. A polymorphic site simply
-        // keeps missing and pays one pointer compare for the privilege.
         let (module, target) = self.vtable_lookup(recv, slot, proto, here)?;
-        if let Value::Instance(inst) = &self.stack[recv]
-            && let Ok(module16) = u16::try_from(module)
-        {
-            let class = Rc::clone(&inst.borrow().class);
-            let mut caches = proto.caches.borrow_mut();
-            if caches.len() < proto.code.len() {
-                caches.resize(proto.code.len(), InlineCache::Empty);
-            }
-            caches[site] = InlineCache::Mono {
-                class,
-                module: module16,
-                target,
-            };
-        }
+        self.remember_callee(recv, proto, here, module, target);
         Ok((module, target))
+    }
+
+    /// The call-site cache's answer for the receiver in `recv`, if this site
+    /// has seen its class.
+    ///
+    /// Shared by `CALLM` and `CALLIF`: both cache the same thing, the callee
+    /// a receiver class resolves to, and differ only in the probe a miss
+    /// falls back to.
+    ///
+    /// `inline(always)`, because a plain `inline` was not taken: this came
+    /// out as a function of its own, so every *hit* — nearly every method
+    /// call in a program — paid a call and a `Result<Option<_>, RuntimeError>`
+    /// (72 bytes, `RuntimeError` being 64) written to memory and read back.
+    /// That was `oop` +4.6%, and it is exactly the path the cache exists to
+    /// make cheap.
+    #[inline(always)]
+    fn cached_callee(
+        &self,
+        recv: usize,
+        proto: &Proto,
+        here: u32,
+    ) -> Result<Option<(usize, u32)>, RuntimeError> {
+        let Value::Instance(inst) = &self.stack[recv] else {
+            return Err(operand_err(&self.stack[recv], "instance", proto, here));
+        };
+        let inst = inst.borrow();
+        Ok(proto
+            .caches
+            .borrow()
+            .get(here as usize)
+            .and_then(|c| c.probe(&inst.class))
+            .map(|(module, target)| (module as usize, target)))
+    }
+
+    /// Record a miss: the receiver in `recv` resolves to `(module, target)`
+    /// at this site — unless the site has seen so many classes that it has
+    /// stopped learning, in which case nothing is cloned or written.
+    ///
+    /// Out of line and `cold` on purpose. A site misses a handful of times
+    /// in its life and hits on every other call, and the code here — the
+    /// widening to a polymorphic cache, with its `Box` — inlined into the
+    /// `CALLM` path made the *hit* slower: `oop` +4.6%, `bintree` +2.7%,
+    /// `vecops` +2.9%, programs whose sites never miss after the first call.
+    #[cold]
+    #[inline(never)]
+    fn remember_callee(&self, recv: usize, proto: &Proto, here: u32, module: usize, target: u32) {
+        let Value::Instance(inst) = &self.stack[recv] else {
+            return;
+        };
+        let Ok(module16) = u16::try_from(module) else {
+            return;
+        };
+        let site = here as usize;
+        let mut caches = proto.caches.borrow_mut();
+        if caches.get(site).is_some_and(|c| !c.learns()) {
+            return;
+        }
+        if caches.len() < proto.code.len() {
+            caches.resize(proto.code.len(), InlineCache::Empty);
+        }
+        caches[site].record(Rc::clone(&inst.borrow().class), module16, target);
     }
 
     /// Resolve a vtable slot against the class of the instance in `recv`.
@@ -172,37 +206,11 @@ impl Vm {
         proto: &Proto,
         here: u32,
     ) -> Result<(usize, u32), RuntimeError> {
-        let site = here as usize;
-        {
-            let Value::Instance(inst) = &self.stack[recv] else {
-                return Err(operand_err(&self.stack[recv], "instance", proto, here));
-            };
-            let inst = inst.borrow();
-            if let Some(InlineCache::Mono {
-                class,
-                module,
-                target,
-            }) = proto.caches.borrow().get(site)
-                && Rc::ptr_eq(class, &inst.class)
-            {
-                return Ok((*module as usize, *target));
-            }
+        if let Some(hit) = self.cached_callee(recv, proto, here)? {
+            return Ok(hit);
         }
         let (module, target) = self.itable_lookup(recv, iface, slot, proto, here)?;
-        if let Value::Instance(inst) = &self.stack[recv]
-            && let Ok(module16) = u16::try_from(module)
-        {
-            let class = Rc::clone(&inst.borrow().class);
-            let mut caches = proto.caches.borrow_mut();
-            if caches.len() < proto.code.len() {
-                caches.resize(proto.code.len(), InlineCache::Empty);
-            }
-            caches[site] = InlineCache::Mono {
-                class,
-                module: module16,
-                target,
-            };
-        }
+        self.remember_callee(recv, proto, here, module, target);
         Ok((module, target))
     }
 
