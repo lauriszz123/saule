@@ -814,8 +814,18 @@ pub(crate) fn report_if_unknown_member(
     // would skip it silently. Catch typos like `Table.insertttt` here
     // by consulting the members registry (which knows both callable
     // sigs *and* value-only fields like `Math.pi`).
+    //
+    // Only when the name means the package's class here. The registry is
+    // process-wide — a native package's static classes land in it the
+    // moment the package is discovered, imported here or not — so a module's
+    // own `enum Event` lost to a package's `Event` class: `Event.KeyPressed`
+    // was looked up among the package's statics and reported missing. An
+    // enum, or a class whose statics the registry does not list, is this
+    // module's own and answers for its members below.
     if let Expr::Ident(n) = &obj.value
         && crate::sigs::is_module(n)
+        && !with_enums(|r| r.contains_key(n))
+        && !declared_here(n)
     {
         // Bare `Name.member` access. For real modules (`Table`, `Io`, …)
         // accept any member listed in the registry. For *value types*
@@ -1208,3 +1218,19 @@ pub(crate) fn report_if_user_function_arity(
 // ──────────────────────────────────────────────────────────────────────────────
 // Assignment compatibility — only flags the cases we can prove are wrong.
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Whether `name` is a class this module declares rather than the native
+/// class of the same name in the process-wide signature table: it is in the
+/// class registry, and none of its static methods are ones the table lists.
+/// An imported native class is seeded into the registry too, but every one
+/// of its statics is also in the table, which is what tells the two apart.
+fn declared_here(name: &str) -> bool {
+    with_classes(|r| {
+        r.get(name).is_some_and(|info| {
+            !info
+                .methods
+                .iter()
+                .any(|(m, sig)| sig.is_static && crate::sigs::has_member(name, m))
+        })
+    })
+}

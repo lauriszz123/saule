@@ -837,3 +837,40 @@ println(Util.bytesLen("not a buffer"))
         "the error should mention the expected type, got: {err}"
     );
 }
+
+// ─── Names a program declares itself ───────────────────────────────────────
+
+#[test]
+fn a_programs_own_enum_is_not_mistaken_for_a_packages_static_class() {
+    // The package's `Util` is only a static class, and this program does not
+    // import it. Its static members still sit in the checker's process-wide
+    // table, which used to answer for `Util.Ping` before the program's own
+    // enum was consulted — and report `Ping` missing from the package's class.
+    let home = fixture_home("own_enum_shadows_static_class");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import Counter
+enum Util
+    Ping,
+    Pong
+end
+local u: Util = Util.Pong
+println(u == Util.Pong, Counter(2).value)
+"#,
+    );
+    assert_eq!(out, "true\t2\n");
+}
+
+#[test]
+fn a_static_class_is_still_checked_when_it_is_imported() {
+    // The other half: with no declaration of its own in the way, a typo on
+    // the package's static class is still caught before anything runs.
+    let home = fixture_home("static_class_typo");
+    let err = run_err(
+        &home,
+        r#"from "fixture" import Util
+println(Util.nosuchthing())
+"#,
+    );
+    assert!(err.contains("no member `nosuchthing` on `Util`"), "{err}");
+}
