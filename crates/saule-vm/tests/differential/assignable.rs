@@ -207,3 +207,37 @@ fn a_compound_assignment_to_a_simple_member_compiles() {
         "a compound assignment to `self.f` and `Class.f` must compile, not fall back"
     );
 }
+
+#[test]
+fn an_index_overload_on_a_generic_class_is_called() {
+    // `g[1] = 11` on a `Grid<integer>` failed at run time with "typed opcode
+    // expected `table` but the register held `instance`". The compiler could
+    // not prove a class for a receiver typed `Grid<integer>`, so it took the
+    // assignment for a table write and emitted `SETIDX` — against an
+    // instance. The read side had the same blind spot, silently: a
+    // `GETIDX` that the runtime happened to rescue. Both are the overload
+    // now, the way they already were on a non-generic class.
+    must_agree(
+        r#"
+class Grid<T> implements OpIndex<integer, T>, OpNewIndex<integer, T>
+  cells: table<T>
+
+  fn init()
+    self.cells = {}
+  end
+
+  fn index(i: integer) -> T
+    return self.cells[i]!
+  end
+
+  fn newIndex(i: integer, v: T) -> nil
+    self.cells[i] = v
+  end
+end
+
+local g: Grid<integer> = Grid()
+g[1] = 11
+g[2] = g[1] + 1
+g[1] * 100 + g[2]"#,
+    );
+}

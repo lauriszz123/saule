@@ -2,7 +2,10 @@
 title: "Bitwise Operators"
 description: "A Permissions flag set that unions, intersects and flips with the bitwise operators and prints like rwx, plus an RGBA colour packed into one integer with shifts and masks. Shows the Lua 5.3 spellings (~ is xor, because ^ is already exponentiation), the precedence that makes bits & flag != 0 need no parentheses, and the Op* interfaces that put all six operators on a class."
 sidebar:
-  order: 4
+  order: 5
+  badge:
+    text: "Intermediate"
+    variant: note
 ---
 
 <!-- Generated from examples/bitwise-flags by `npm run sync-docs`. Edit the example, not this file. -->

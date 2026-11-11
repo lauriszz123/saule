@@ -386,3 +386,133 @@ fn map_keys_iterate_in_the_same_order_under_both_engines() {
          local s: string = \"\"\nfor k, v in m do s = s .. tostring(k) .. \",\" end\ns",
     );
 }
+
+// ── Iter.unique and Table.sort ────────────────────────────────────────────
+//
+// Both were rewritten for speed — `unique` from a pairwise scan to a hash map
+// for plain values, `sort` from copy-merge-copy-back to moving between two
+// buffers — and neither had a test of its own before. These pin what the
+// old implementations did, which the new ones were checked against
+// program-for-program before the outcomes were recorded.
+
+#[test]
+fn unique_keeps_first_occurrences_in_order() {
+    must_agree(
+        r#"
+local out: string = ""
+for v in Iter.unique({3, 1, 3, 2, 1, 3}) do
+  out = out .. v .. ","
+end
+for v in Iter.unique({"b", "a", "b", "c", "a"}) do
+  out = out .. v .. ","
+end
+out"#,
+    );
+}
+
+#[test]
+fn unique_follows_the_language_equality_for_every_plain_value() {
+    // `values_equal`'s rules, which the hash key has to reproduce exactly:
+    // `0.0 == -0.0`, `NaN` equal to nothing (itself included), no equality
+    // across types (`1`, `1.0` and `"1"` are three values), and tables by
+    // identity rather than by contents.
+    must_agree(
+        r#"
+local nan: float = 0.0 / 0.0
+local floats = Iter.unique({0.0, -0.0, nan, nan, 1.5, 1.5})
+local mixed = Iter.unique({1, 1.0, "1", 1, 1.0, true, true})
+local t: table<integer> = {}
+local tables = Iter.unique({t, t, {}, t})
+#floats * 100 + #mixed * 10 + #tables"#,
+    );
+}
+
+/// A class whose `OpEq` records every call it receives.
+const LOGGED_EQ: &str = r#"
+local log: string = ""
+class Tag implements OpEq<any>
+  n: integer
+  fn init(n: integer)
+    self.n = n
+  end
+  fn equals(other: any) -> boolean
+    log = log .. "[" .. self.n .. "?" .. tostring(other) .. "]"
+    return tostring(other) == "" .. self.n
+  end
+end
+"#;
+
+#[test]
+fn unique_asks_an_eq_overload_in_the_order_the_scan_did() {
+    // Objects can carry an `OpEq` overload, which is a method call and so
+    // can have effects. A plain value now finds its plain duplicates by
+    // hash, but it must still ask every object kept *before* that duplicate,
+    // in order, stopping at the first yes — the exact calls the pairwise
+    // scan made. The log is the observable: one call more, one fewer or one
+    // out of order changes it.
+    must_agree(&format!(
+        r#"{LOGGED_EQ}
+local a: Tag = Tag(5)
+local b: Tag = Tag(8)
+local kept = Iter.unique({{a, 5, b, 5, 8, "x", a, 9, "x", b, 5}})
+#kept .. " " .. log"#
+    ));
+}
+
+#[test]
+fn sort_orders_every_length_including_an_unpaired_last_run() {
+    // A bottom-up merge pairs runs of 1, 2, 4, …; whenever the length is not
+    // a power of two, some pass ends on a run with no partner. Moving
+    // between two buffers, that run has to be carried across explicitly or
+    // it is lost — so sort every length from 0 to 40 and fold the results.
+    must_agree(
+        r#"
+local digest: integer = 0
+for n = 0, 40 do
+  local t: table<integer> = {}
+  local seed: integer = n * 31 + 7
+  for i = 1, n do
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    Table.insert(t, seed % 50)
+  end
+  Table.sort(t, (a, b) => a < b)
+  for i = 1, #t do
+    digest = (digest * 31 + t[i] + i) % 1000000007
+  end
+end
+digest"#,
+    );
+}
+
+#[test]
+fn sort_is_stable_and_loses_no_heap_value() {
+    // Equal keys keep their input order, and every element — strings and
+    // instances, the values a move must not drop or duplicate — comes out
+    // exactly once.
+    must_agree(
+        r#"
+class Rec
+  key: integer
+  tag: string
+  fn init(k: integer, t: string)
+    self.key = k
+    self.tag = t
+  end
+end
+local recs: table<Rec> = {}
+for i = 1, 30 do
+  Table.insert(recs, Rec(i % 4, "r" .. i))
+end
+Table.sort(recs, (a, b) => a.key < b.key)
+local s: string = ""
+for i = 1, #recs do
+  s = s .. recs[i]!.key .. recs[i]!.tag .. " "
+end
+local words: table<string> = {"pear", "fig", "apple", "kiwi", "fig", "date", "apple"}
+Table.sort(words, (a, b) => a < b)
+for i = 1, #words do
+  s = s .. words[i] .. " "
+end
+s"#,
+    );
+}

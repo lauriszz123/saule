@@ -1,0 +1,97 @@
+-- Interface dispatch across unrelated implementors.
+--
+-- `entity` measures an override chain — subclasses of one base. This
+-- measures the other polymorphism: three classes with no common ancestor,
+-- reached through a single `interface` slot. There is no shared layout to
+-- exploit, so every call site has to find the method on whichever concrete
+-- class turned up, in a list arranged so consecutive elements never agree.
+interface Shape
+	fn area() -> integer
+	fn tag() -> string
+end
+
+class Square implements Shape
+	s: integer
+
+	fn init(s: integer)
+		self.s = s
+	end
+
+	-- Mutates on every call, so neither runtime can hoist the result out of
+	-- the loop or fold it away.
+	fn area() -> integer
+		self.s = (self.s + 1) % 1000
+		return self.s * self.s
+	end
+
+	fn tag() -> string
+		return "sq"
+	end
+end
+
+class Rect implements Shape
+	w: integer
+	h: integer
+
+	fn init(w: integer, h: integer)
+		self.w = w
+		self.h = h
+	end
+
+	fn area() -> integer
+		self.w = (self.w + 2) % 1000
+		return self.w * self.h
+	end
+
+	fn tag() -> string
+		return "rect"
+	end
+end
+
+class Ring implements Shape
+	r: integer
+
+	fn init(r: integer)
+		self.r = r
+	end
+
+	fn area() -> integer
+		self.r = (self.r + 3) % 1000
+		return (self.r * self.r * 314) / 100
+	end
+
+	fn tag() -> string
+		return "ring"
+	end
+end
+
+class Main
+	static fn main()
+		local n: integer = 6000
+		local ticks: integer = 600
+		local shapes: table<Shape> = {}
+		for i: integer = 1, n do
+			local m: integer = i % 3
+			if m == 0 then
+				Table.insert(shapes, Square(i))
+			elseif m == 1 then
+				Table.insert(shapes, Rect(i, 3))
+			else
+				Table.insert(shapes, Ring(i))
+			end
+		end
+
+		local total: integer = 0
+		for t: integer = 1, ticks do
+			for i: integer = 1, n do
+				total = (total + shapes[i]!.area()) % 1000000007
+			end
+		end
+
+		local tags: integer = 0
+		for i: integer = 1, n do
+			tags = tags + String.len(shapes[i]!.tag())
+		end
+		println(total .. " " .. tags)
+	end
+end

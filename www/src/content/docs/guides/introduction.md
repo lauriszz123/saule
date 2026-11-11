@@ -6,8 +6,9 @@ sidebar:
 ---
 
 Saule is a statically typed, class-oriented scripting language. It borrows Lua's
-simplicity and runtime model — tables, closures, coroutines, multiple return
-values — and puts a real type system in front of them.
+simplicity and runtime model — tables, closures,
+[coroutines](/saule/language/coroutines/), multiple return values — and puts a
+real type system in front of them.
 
 The goal is a language that stays small enough to hold in your head while
 refusing to let a `nil` reach production.

@@ -3,13 +3,13 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use saule_runtime::value::{VmFunction, VmFunctionRef};
+use saule_runtime::value::{CallSession, VmFunction, VmFunctionRef};
 use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::Proto;
 
-use super::VmShared;
 use super::upval::Upvalue;
+use super::{Vm, VmShared};
 
 /// A bytecode function plus the upvalues it captured.
 ///
@@ -192,6 +192,111 @@ impl VmFunction for Closure {
         }
         out
     }
+
+    /// Hold the register file open across a run of calls.
+    ///
+    /// [`call_first`](Self::call_first) above does three things per call
+    /// that do not depend on the call: it upgrades the `Weak<VmShared>`,
+    /// takes a `Vm` out of the re-entry pool, and hands it back — and
+    /// handing it back resets every register the callback touched. Per
+    /// `Table.sort` that is nothing; per *comparison*, on a sort that asks
+    /// 3.3 million times, it is most of what a two-instruction comparator
+    /// costs.
+    fn call_session(&self, handle: &Rc<VmFunctionRef>) -> Option<Box<dyn CallSession>> {
+        let shared = self.shared.upgrade()?;
+        // One guard for the session, because its calls are sequential: it is
+        // the same bound on the same resource, taken once.
+        let depth = saule_runtime::enter_call_depth(&(0..0)).ok()?;
+        let vm = shared.take_vm();
+        Some(Box::new(Calls {
+            shared,
+            handle: Rc::clone(handle),
+            proto: Rc::clone(&self.proto),
+            chunk: Rc::clone(&self.chunk),
+            vm: Some(vm),
+            _depth: depth,
+        }))
+    }
+}
+
+/// One re-entry `Vm`, held for as long as a native keeps calling back.
+///
+/// The register file is reset when the session ends rather than after each
+/// call. In between, the last call's registers still refer to its values —
+/// which is why the reset exists at all — but they are released when the
+/// native that opened the session returns, instead of outliving the whole
+/// program the way a pooled-but-unreset `Vm` would.
+struct Calls {
+    shared: Rc<VmShared>,
+    handle: Rc<VmFunctionRef>,
+    /// The callee's proto and chunk, recovered from the handle once instead
+    /// of by a downcast per call.
+    proto: Rc<Proto>,
+    chunk: Rc<crate::chunk::Chunk>,
+    /// `None` once a call has failed: the engine state went with the error.
+    vm: Option<Box<Vm>>,
+    /// Held, not read: the session occupies one level of call depth for as
+    /// long as it is open.
+    _depth: saule_runtime::DepthGuard,
+}
+
+impl CallSession for Calls {
+    fn call_first(
+        &mut self,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, RuntimeError> {
+        let Some(vm) = self.vm.as_mut() else {
+            return Err(RuntimeError::TypeError {
+                message: "internal: a call session is used after one of its calls failed".into(),
+                span,
+            });
+        };
+        match vm.invoke_first_resolved(&self.handle, &self.proto, &self.chunk, args, span) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                // As in `call_first`: a closure that captured one of the
+                // callee's registers may have escaped, so close before the
+                // file is dropped. Not pooled — an unwound `Vm` still holds
+                // the frames the error left.
+                let mut vm = self.vm.take().expect("checked just above");
+                vm.abandon();
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Drop for Calls {
+    fn drop(&mut self) {
+        if let Some(vm) = self.vm.take() {
+            self.shared.give_vm(vm);
+        }
+    }
+}
+
+/// A pointer a [`Frame`] carries to something it does not own.
+///
+/// `ManuallyDrop<Rc<T>>` rather than `&T` or `*const T`, which is the same
+/// choice the dispatch loop makes one layer down and for the same reason —
+/// see that module's header. It is the same pointer in a register and the
+/// same type to codegen as an `Rc<T>`, so it keeps whatever the owned form
+/// bought LLVM, while costing nothing to create and nothing to drop.
+pub type Held<T> = std::mem::ManuallyDrop<Rc<T>>;
+
+/// Copy the pointer out of an `Rc` without touching its reference count.
+///
+/// # Safety
+///
+/// The pointee must outlive the returned [`Held`]. Nothing about the value
+/// enforces that: it neither holds a count nor carries a lifetime, and
+/// dereferencing one whose pointee has been freed is use-after-free. Every
+/// caller here satisfies it the same way — see [`Frame::proto`].
+pub(crate) unsafe fn hold<T>(rc: &Rc<T>) -> Held<T> {
+    // SAFETY: the bits are copied, not the ownership. The original `Rc` keeps
+    // its count and the copy is never dropped, so no count is touched and
+    // none is lost.
+    std::mem::ManuallyDrop::new(unsafe { std::ptr::read(rc) })
 }
 
 /// One activation record. `Environment` disappears entirely: a call is a
@@ -207,12 +312,51 @@ pub struct Frame {
     /// things the dispatch loop actually wants from the closure are cached
     /// beside it, and `func` is now read only by the three opcodes that
     /// touch upvalues.
-    pub func: Rc<VmFunctionRef>,
+    ///
+    /// The one of the three a frame may have to own. `proto` and `chunk`
+    /// below are kept alive by the engine whatever the frame does; a closure
+    /// taken from a register is not. Its last strong reference can be the
+    /// very register or upvalue cell that its own body overwrites — `f = nil`
+    /// inside a lambda that captured itself is enough — and the frame is then
+    /// all that stands between `GETUPVAL` and a freed upvalue array. So such
+    /// a frame owns it, and a frame whose closure something else is already
+    /// keeping alive only holds it — see [`owns_func`](Self::owns_func).
+    pub func: Held<VmFunctionRef>,
+    /// Whether this frame holds a strong count on [`func`](Self::func), and
+    /// so must release it when the frame goes.
+    ///
+    /// `true` for a closure that came from a register: the reason above for
+    /// owning one is real, and it is the only one that can apply. `false`
+    /// for a statically-resolved callee — `CALLK`, `CALLSTAT` and their tail
+    /// forms — whose closure lives in `VmShared::closure_cache`: a cell
+    /// written once and never cleared, in the same engine state that owns
+    /// every `Proto` and `Chunk` a frame already holds without counting. A
+    /// static closure is never a register's to drop, so it cannot be freed
+    /// under the frame. Counting it cost an increment on every call and a
+    /// decrement on every return, on the same cell for a recursive
+    /// function: 11% of `fib`. Also `false` for a call made through a
+    /// [`CallSession`], which owns the handle for longer than any call it
+    /// makes.
+    ///
+    /// Next to the other byte-wide fields, in what was padding: the frame is
+    /// no larger for it.
+    pub owns_func: bool,
     /// The running proto — `func`'s, resolved once when the frame is built.
-    pub proto: Rc<Proto>,
+    ///
+    /// Carried as a [`Held`] rather than an `Rc`: entering and leaving a
+    /// frame happens on every call *and* every return, so an owned `Proto`
+    /// and `Chunk` cost two refcount pairs per round trip for a guarantee
+    /// that was already in hand. Every `Rc<Proto>` the VM runs comes from
+    /// `chunk.proto(idx)`, so its `Chunk` holds it for the chunk's whole
+    /// life; every `Rc<Chunk>` comes from `VmShared::chunks`, which outlives
+    /// every frame opened over it. The dispatch loop already reads both out
+    /// of the frame this way and documents the invariant at length; this
+    /// stops the *writes* paying for it too.
+    pub proto: Held<Proto>,
     /// The chunk `proto` was compiled in. Constants, protos, jump tables and
     /// cast types are per chunk, so they follow the frame rather than the VM.
-    pub chunk: Rc<crate::chunk::Chunk>,
+    /// Held, not owned, for the reason given on `proto`.
+    pub chunk: Held<crate::chunk::Chunk>,
     /// `R[0]` is `stack[base]`.
     pub base: u32,
     /// Absolute register in the *caller* where this call's results go.
@@ -231,6 +375,22 @@ pub struct Frame {
     /// the callee is what gathers its surplus arguments, and it cannot ask
     /// the caller after the fact.
     pub n_args: u8,
+}
+
+impl Drop for Frame {
+    /// Release the closure handle if this frame was given one to own.
+    ///
+    /// Every way a frame ends comes through here — a return's `pop`, a tail
+    /// call writing a new frame over it, an unwind, an abandoned register
+    /// file, a finished coroutine's frame list — so the rule is kept in one
+    /// place rather than at each of them.
+    fn drop(&mut self) {
+        if self.owns_func {
+            // SAFETY: an owned handle was moved in when the frame was built,
+            // and this is the only place it is released — `Drop` runs once.
+            unsafe { std::mem::ManuallyDrop::drop(&mut self.func) }
+        }
+    }
 }
 
 /// `n_ret` sentinel: the caller wants every result the callee produces.

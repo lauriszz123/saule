@@ -3,6 +3,9 @@ title: "Filesystem Info"
 description: "Inspects one path with Os.fsInfo and reports what it is. Shows nullable returns for paths that may not exist, and match over an enum with a _ fallback."
 sidebar:
   order: 2
+  badge:
+    text: "Simple"
+    variant: tip
 ---
 
 <!-- Generated from examples/fs-info-example by `npm run sync-docs`. Edit the example, not this file. -->

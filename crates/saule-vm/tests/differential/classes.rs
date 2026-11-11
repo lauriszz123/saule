@@ -980,3 +980,107 @@ fn an_enum_held_in_a_local_reaches_its_variants() {
          e.Green.name",
     );
 }
+
+/// One call site that sees many receiver classes, in rotation.
+///
+/// The site's cache widens one class at a time — one entry, then up to
+/// four, then it stops caching — and every step of that is a chance to call
+/// the wrong method: a stale entry, an entry written against the wrong
+/// class, a lookup that keeps answering after the site gave up. Six classes
+/// in strict rotation pass the site through all of it, twice over, and each
+/// class's method returns its own number, so a cross-wired dispatch changes
+/// the sum.
+#[test]
+fn a_call_site_dispatches_correctly_while_its_cache_widens() {
+    must_agree(
+        r#"
+class Shape
+  fn area() -> integer
+    return 0
+  end
+end
+class A extends Shape
+  fn area() -> integer
+    return 1
+  end
+end
+class B extends Shape
+  fn area() -> integer
+    return 10
+  end
+end
+class C extends Shape
+  fn area() -> integer
+    return 100
+  end
+end
+class D extends Shape
+  fn area() -> integer
+    return 1000
+  end
+end
+class E extends Shape
+  fn area() -> integer
+    return 10000
+  end
+end
+class F extends Shape
+  fn area() -> integer
+    return 100000
+  end
+end
+
+local shapes: table<Shape> = {A(), B(), C(), D(), E(), F()}
+local total: integer = 0
+for round = 1, 3 do
+  for i = 1, #shapes do
+    total = total + shapes[i]!.area() * round
+  end
+end
+total"#,
+    );
+}
+
+/// The same through an interface, where the site is a `CALLIF` and the
+/// classes have nothing in common but the contract.
+#[test]
+fn an_interface_call_site_dispatches_correctly_while_its_cache_widens() {
+    must_agree(
+        r#"
+interface Weighed
+  fn weight() -> integer
+end
+class P implements Weighed
+  fn weight() -> integer
+    return 2
+  end
+end
+class Q implements Weighed
+  fn weight() -> integer
+    return 3
+  end
+end
+class R implements Weighed
+  fn weight() -> integer
+    return 5
+  end
+end
+class S implements Weighed
+  fn weight() -> integer
+    return 7
+  end
+end
+class T implements Weighed
+  fn weight() -> integer
+    return 11
+  end
+end
+
+local items: table<Weighed> = {P(), Q(), R(), S(), T(), P(), R(), T()}
+local product: integer = 1
+for i = 1, #items do
+  product = product * items[i]!.weight()
+end
+product"#,
+    );
+}

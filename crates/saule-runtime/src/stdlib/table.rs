@@ -380,7 +380,8 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
 
     // Copy out, sort, write back — keeps the comparator from re-entering the
     // borrowed table while the sort is in flight.
-    let mut elements: Vec<Value> = table.borrow().array.clone();
+    let mut src: Vec<Value> = table.borrow().array.clone();
+    let n = src.len();
 
     // Bottom-up merge sort, driven by `cmp(a, b)` alone.
     //
@@ -391,39 +392,59 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
     // of every comparison in the sort. Merging needs only the one question
     // ("does the right element belong before the left?"), so this asks it
     // once, and taking the left element on a tie keeps the sort stable.
-    let mut buf: Vec<Value> = Vec::with_capacity(elements.len());
+    //
+    // Two buffers that swap roles every pass, and every element **moved**
+    // from one to the other rather than copied. Merging into a scratch buffer
+    // and copying the run back cost two clones and a drop per element per
+    // pass — for a heap value two refcount bumps and a decrement, on each of
+    // the ~18 passes a 200k-element sort makes — and that bookkeeping was
+    // more of the `sort` benchmark than the comparisons it was arranging.
+    // A move is a 16-byte copy that leaves a `Nil` behind, and a `Nil` owns
+    // nothing: when a comparator fails part-way, dropping both buffers frees
+    // every element exactly once, and the table itself was never touched.
+    let mut dst: Vec<Value> = vec![Value::Nil; n];
+    fn take(v: &mut Value) -> Value {
+        std::mem::replace(v, Value::Nil)
+    }
     // Scratch for the comparator's two arguments, allocated once for the
     // whole sort rather than once per comparison.
     let mut argbuf: Vec<Value> = Vec::with_capacity(2);
-    let n = elements.len();
+    // The register file the comparator runs on, opened once for the whole
+    // sort rather than taken from the re-entry pool and handed back on every
+    // comparison. `None` for a native comparator, which has nothing to hold
+    // open — see `call_value_session`.
+    let mut session = crate::call::call_value_session(&comp);
     let mut width = 1;
     while width < n {
         let mut lo = 0;
         while lo < n {
             let mid = (lo + width).min(n);
             let hi = (lo + 2 * width).min(n);
-            if mid < hi {
-                buf.clear();
-                let (mut i, mut j) = (lo, mid);
-                while i < mid && j < hi {
-                    if invoke_comp(&comp, &elements[j], &elements[i], &mut argbuf)? {
-                        buf.push(elements[j].clone());
-                        j += 1;
-                    } else {
-                        buf.push(elements[i].clone());
-                        i += 1;
-                    }
+            let (mut i, mut j, mut k) = (lo, mid, lo);
+            while i < mid && j < hi {
+                if invoke_comp(&comp, session.as_deref_mut(), &src[j], &src[i], &mut argbuf)? {
+                    dst[k] = take(&mut src[j]);
+                    j += 1;
+                } else {
+                    dst[k] = take(&mut src[i]);
+                    i += 1;
                 }
-                buf.extend_from_slice(&elements[i..mid]);
-                buf.extend_from_slice(&elements[j..hi]);
-                elements[lo..hi].clone_from_slice(&buf);
+                k += 1;
+            }
+            // Whichever run is left over — and, on the last stretch of a
+            // pass, a run with no partner at all, which still has to reach
+            // the other buffer.
+            for x in (i..mid).chain(j..hi) {
+                dst[k] = take(&mut src[x]);
+                k += 1;
             }
             lo += 2 * width;
         }
+        std::mem::swap(&mut src, &mut dst);
         width *= 2;
     }
 
-    table.borrow_mut().array = elements;
+    table.borrow_mut().array = src;
     Ok(vec![Value::Nil])
 }
 
@@ -433,7 +454,13 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
 /// 200k elements asks this about 3.5 million times, so the arguments go in a
 /// buffer that already exists, and a bytecode comparator answers through
 /// `invoke_first` with no `Vec` around the one boolean it returns.
-fn invoke_comp(comp: &Value, a: &Value, b: &Value, buf: &mut Vec<Value>) -> Result<bool, String> {
+fn invoke_comp(
+    comp: &Value,
+    session: Option<&mut (dyn crate::value::CallSession + '_)>,
+    a: &Value,
+    b: &Value,
+    buf: &mut Vec<Value>,
+) -> Result<bool, String> {
     if !matches!(
         comp,
         Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
@@ -446,8 +473,11 @@ fn invoke_comp(comp: &Value, a: &Value, b: &Value, buf: &mut Vec<Value>) -> Resu
     buf.clear();
     buf.push(a.clone());
     buf.push(b.clone());
-    let result = crate::call::call_value_first(comp, buf, 0..0)
-        .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
+    let result = match session {
+        Some(s) => s.call_first(buf, 0..0),
+        None => crate::call::call_value_first(comp, buf, 0..0),
+    }
+    .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
     Ok(result.is_truthy())
 }
 

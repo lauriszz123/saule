@@ -1,0 +1,166 @@
+-- A recursive-descent calculator fed by the lexer coroutine.
+--
+-- This is the other half of the generator story. The lexer is a *producer*
+-- that wants to be written as a loop; the parser is a *consumer* that wants to
+-- ask for one token at a time and look one ahead. A coroutine serves both
+-- without either knowing about the other: the parser pulls with `resume()`,
+-- and the lexer's loop advances exactly far enough to answer.
+--
+-- Nothing buffers the whole token list. `Calc.eval("1 + 2 + <megabyte>")`
+-- would hold one token at a time however long the input is.
+
+from lexer import Lexer, Token, Kind
+
+-- One token of lookahead over a `Coroutine<Token>`.
+--
+-- `resume()` answers a `Token?`, and `nil` means *no more* — either the lexer
+-- finished or it failed. `failure()` tells those apart: a dead coroutine's
+-- `error()` is `nil` when it merely ran out.
+export class TokenSource
+	local src: Coroutine<Token>
+	local ahead: Token?
+
+	fn init(source: string)
+		self.src = Lexer.tokens(source)
+		self.ahead = self.src.resume()
+	end
+
+	fn peek() -> Token?
+		return self.ahead
+	end
+
+	fn take() -> Token?
+		local current: Token? = self.ahead
+		self.ahead = self.src.resume()
+		return current
+	end
+
+	-- The lexer's own complaint, if it died mid-stream.
+	fn failure() -> string?
+		return self.src.error()
+	end
+end
+
+export class Calc
+	local tokens: TokenSource
+	local env: table<string, float>?
+
+	fn init(source: string, env: table<string, float>?)
+		self.tokens = TokenSource(source)
+		self.env = env
+	end
+
+	-- expr := term (('+' | '-') term)*
+	static fn eval(source: string, env: table<string, float>? = nil) -> float
+		local calc: Calc = Calc(source, env)
+		local value: float = calc.expr()
+
+		-- Anything left over is a syntax error — and so is a lexer that died
+		-- part-way, which shows up as a `nil` token with a `failure()`.
+		local leftover: Token? = calc.tokens.peek()
+		if leftover != nil then
+			throw String.format("unexpected %s at column %d", tostring(leftover!), leftover!.at)
+		end
+
+		local lexFailure: string? = calc.tokens.failure()
+		if lexFailure != nil then
+			throw lexFailure!
+		end
+
+		return value
+	end
+
+	fn expr() -> float
+		local left: float = self.term()
+
+		while true do
+			local op: Token? = self.tokens.peek()
+			if op == nil then
+				break
+			end
+
+			if op!.isOperator("+") then
+				self.tokens.take()
+				left = left + self.term()
+			elseif op!.isOperator("-") then
+				self.tokens.take()
+				left = left - self.term()
+			else
+				break
+			end
+		end
+
+		return left
+	end
+
+	-- term := atom (('*' | '/' | '%') atom)*
+	fn term() -> float
+		local left: float = self.atom()
+
+		while true do
+			local op: Token? = self.tokens.peek()
+			if op == nil then
+				break
+			end
+
+			if op!.isOperator("*") then
+				self.tokens.take()
+				left = left * self.atom()
+			elseif op!.isOperator("/") then
+				self.tokens.take()
+				local divisor: float = self.atom()
+				if divisor == 0f then
+					throw "division by zero"
+				end
+				left = left / divisor
+			elseif op!.isOperator("%") then
+				self.tokens.take()
+				left = Math.fmod(left, self.atom())
+			else
+				break
+			end
+		end
+
+		return left
+	end
+
+	-- atom := number | name | '(' expr ')' | '-' atom
+	fn atom() -> float
+		local token: Token? = self.tokens.take()
+		if token == nil then
+			local why: string? = self.tokens.failure()
+			throw why ?? "unexpected end of input"
+		end
+
+		local t: Token = token!
+
+		if t.kind == Kind.Number then
+			local digits: integer? = t.text as integer
+			return (digits ?? 0) as float
+		end
+
+		if t.kind == Kind.Name then
+			-- `?[` is the safe index: no env, no lookup, no crash.
+			local bound: float? = self.env?[t.text]
+			if bound == nil then
+				throw String.format("unknown name '%s'", t.text)
+			end
+			return bound!
+		end
+
+		if t.isOperator("-") then
+			return -self.atom()
+		end
+
+		if t.kind == Kind.Open then
+			local inner: float = self.expr()
+			local close: Token? = self.tokens.take()
+			if close == nil or close!.kind != Kind.Close then
+				throw String.format("missing ')' for the '(' at column %d", t.at)
+			end
+			return inner
+		end
+
+		throw String.format("unexpected %s at column %d", tostring(t), t.at)
+	end
+end

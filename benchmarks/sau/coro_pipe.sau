@@ -1,0 +1,47 @@
+-- A lazy pipeline: three coroutines, each pulling from the one before.
+--
+-- Where `coroutine` measures one switch, this measures them nested. Every
+-- value the sink sees has crossed three suspension boundaries, and each
+-- stage is itself suspended while the stage below it runs — so the runtime
+-- is holding a stack of live coroutines and transferring control down and
+-- back up the chain for each element.
+class Main
+	static fn naturals(n: integer) -> Coroutine<integer>
+		return Coroutine.create(fn(co)
+			for i: integer = 1, n do
+				co.yield(i)
+			end
+		end)
+	end
+
+	-- Each combinator is a coroutine that drives its own source. `for v in
+	-- src` inside a coroutine body is a coroutine resuming a coroutine,
+	-- which is what makes the chain lazy: nothing runs until the sink asks.
+	static fn scaled(src: Coroutine<integer>, k: integer) -> Coroutine<integer>
+		return Coroutine.create(fn(co)
+			for v in src do
+				co.yield(v * k)
+			end
+		end)
+	end
+
+	static fn sieved(src: Coroutine<integer>) -> Coroutine<integer>
+		return Coroutine.create(fn(co)
+			for v in src do
+				if v % 3 != 0 then
+					co.yield(v)
+				end
+			end
+		end)
+	end
+
+	static fn main()
+		local total: integer = 0
+		for pass: integer = 1, 60 do
+			for v in Main.sieved(Main.scaled(Main.naturals(25000), 2)) do
+				total = total + v
+			end
+		end
+		println(total)
+	end
+end

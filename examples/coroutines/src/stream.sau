@@ -1,0 +1,147 @@
+-- Lazy streams, built out of coroutines.
+--
+-- A `Coroutine<T>` already *is* a lazy sequence: nothing in the body runs
+-- until something resumes it, and `for v in src do` resumes it once per
+-- value. So every combinator below is just a coroutine that loops over
+-- another one — about six lines each, with no iterator protocol to implement
+-- and no state machine to unroll by hand.
+--
+-- Because each stage only runs when the stage after it asks for a value, a
+-- pipeline over an infinite source is finite work: `take` stops resuming, so
+-- the stages above it stop producing.
+
+export class Stream
+	-- Every value of a table, in order.
+	static fn of<T>(items: table<T>) -> Coroutine<T>
+		return Coroutine.create(fn(co)
+			for item in items do
+				co.yield(item)
+			end
+		end)
+	end
+
+	-- Infinite: 1, 2, 3, … The coroutine never finishes, which is fine —
+	-- nothing resumes it once the consumer stops.
+	static fn naturals(start: integer) -> Coroutine<integer>
+		return Coroutine.create(fn(co)
+			local n: integer = start
+			while true do
+				co.yield(n)
+				n = n + 1
+			end
+		end)
+	end
+
+	-- Infinite too, and the kind of generator that reads worst as a class:
+	-- the two locals below would have to become fields just to survive
+	-- between calls.
+	static fn fibonacci() -> Coroutine<integer>
+		return Coroutine.create(fn(co)
+			local a: integer = 0
+			local b: integer = 1
+			while true do
+				co.yield(b)
+				local next: integer = a + b
+				a = b
+				b = next
+			end
+		end)
+	end
+
+	-- `T` comes from the source, `U` from the mapper's return type, and the
+	-- yielder in the body is a `Yielder<U>` because that is what the
+	-- declared return type promises.
+	static fn map<T, U>(src: Coroutine<T>, f: fn(T) -> U) -> Coroutine<U>
+		return Coroutine.create(fn(co)
+			for value in src do
+				co.yield(f(value))
+			end
+		end)
+	end
+
+	static fn filter<T>(src: Coroutine<T>, keep: fn(T) -> boolean) -> Coroutine<T>
+		return Coroutine.create(fn(co)
+			for value in src do
+				if keep(value) then
+					co.yield(value)
+				end
+			end
+		end)
+	end
+
+	-- The first `n` values, and not one more: the loop `break`s, which leaves
+	-- `src` suspended exactly where it was rather than draining it.
+	static fn take<T>(src: Coroutine<T>, n: integer) -> Coroutine<T>
+		return Coroutine.create(fn(co)
+			if n <= 0 then
+				return
+			end
+
+			local taken: integer = 0
+			for value in src do
+				co.yield(value)
+				taken = taken + 1
+				if taken == n then
+					break
+				end
+			end
+		end)
+	end
+
+	-- Groups of `size`, with a short final group. A coroutine can hold a
+	-- half-built batch across a yield, so nothing has to be flushed by the
+	-- caller afterwards.
+	static fn chunk<T>(src: Coroutine<T>, size: integer) -> Coroutine<table<T>>
+		return Coroutine.create(fn(co)
+			local batch: table<T> = {}
+			for value in src do
+				batch[#batch + 1] = value
+				if #batch == size then
+					co.yield(batch)
+					batch = {}
+				end
+			end
+
+			if #batch > 0 then
+				co.yield(batch)
+			end
+		end)
+	end
+
+	-- Two sources, one value from each in turn, until both are done. This is
+	-- the combinator that wants `resume()` rather than `for … in`: it has to
+	-- interleave two sequences, so it drives each one by hand and reads the
+	-- `T?` to know when that side has finished.
+	static fn interleave<T>(left: Coroutine<T>, right: Coroutine<T>) -> Coroutine<T>
+		return Coroutine.create(fn(co)
+			while not (left.isDone() and right.isDone()) do
+				local a: T? = left.resume()
+				if a != nil then
+					co.yield(a!)
+				end
+
+				local b: T? = right.resume()
+				if b != nil then
+					co.yield(b!)
+				end
+			end
+		end)
+	end
+
+	-- Terminal operations: these drain the stream instead of returning one.
+	static fn collect<T>(src: Coroutine<T>) -> table<T>
+		local out: table<T> = {}
+		for value in src do
+			out[#out + 1] = value
+		end
+		return out
+	end
+
+	static fn reduce<T, A>(src: Coroutine<T>, init: A, f: fn(A, T) -> A) -> A
+		local acc: A = init
+		for value in src do
+			acc = f(acc, value)
+		end
+		return acc
+	end
+end

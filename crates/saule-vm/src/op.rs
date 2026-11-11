@@ -579,6 +579,43 @@ define_ops! {
     /// Appended after `JNEII`, never inserted: the numbering is the chunk
     /// ABI.
     CONV: Abc,
+    /// `R[A] := R[B].field[C]`, raising `ForceUnwrapNil` if that field is
+    /// nil — [`GETF`](Op::GETF) and [`UNWRAPNIL`](Op::UNWRAPNIL) fused
+    /// (§16).
+    ///
+    /// The sibling of [`GETIDXU`](Op::GETIDXU), for fields rather than
+    /// elements, and it earns its place the same way: a nullable field is
+    /// not a niche shape but how a link in any object graph is declared, so
+    /// `node.next!` is what walking one is spelled as.
+    ///
+    /// Measured first, per §16. `--profile-bytecode` on
+    /// `benchmarks/sau/nullsafe.sau`, 5,088,042 instructions: `GETF
+    /// UNWRAPNIL` is the **top adjacent pair at 5.7%** (288,000) and
+    /// `UNWRAPNIL GETF` the third at 5.0% — the two halves of a
+    /// `a!.b!.c` chain, reading as one pair walking forwards and another
+    /// walking back.
+    ///
+    /// **The saving is not the dispatch, it is the copy.** `UNWRAPNIL`
+    /// clones the value out of one register and writes it into another,
+    /// which for an instance or a table is a reference-count increment on
+    /// the way in and a decrement on the old occupant's way out. Fusing
+    /// drops a whole clone and a whole register write per link, and that is
+    /// the half that costs: removing a cheaper pair from this same
+    /// benchmark (`EQV`/`NOT`/`TEST`, an eighth of its instructions) moved
+    /// the wall clock not at all.
+    ///
+    /// Carries the `!`'s span rather than the field expression's, so a nil
+    /// link blames the `!` — the same choice [`GETIDXU`](Op::GETIDXU)
+    /// makes.
+    ///
+    /// Only the **field** form fuses. A static read, an enum payload, a
+    /// `table` key probe and the dynamic `GETFX` each reach the member by a
+    /// different opcode, and none of them has a measured pair behind it, so
+    /// they keep `UNWRAPNIL`.
+    ///
+    /// Appended after `CONV`, never inserted: the numbering is the chunk
+    /// ABI.
+    GETFU: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

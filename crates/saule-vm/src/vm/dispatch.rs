@@ -148,7 +148,6 @@ impl Vm {
         n: usize,
         base: usize,
         a: usize,
-        chunk: &Chunk,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
         let (e_idx, tag) = ((packed >> 16) as usize, packed & 0xffff);
@@ -165,10 +164,11 @@ impl Vm {
                 span: site.span(),
             });
         };
-        let name = chunk.enums[e_idx].variants[tag as usize].name.to_string();
+        // Prebuilt once per engine — see `build_variant_names`.
+        let names = &self.shared.variant_names[e_idx];
         let v = saule_runtime::value::EnumVariantObject {
-            enum_name: e.name.clone().into(),
-            variant_name: name.into(),
+            enum_name: names.enum_name.clone(),
+            variant_name: names.variants[tag as usize].clone(),
             tag,
             value: std::cell::OnceCell::from(payload),
             enum_obj: RefCell::new(Some(Rc::clone(e))),
@@ -374,11 +374,16 @@ impl Vm {
             // slower on `loop_arith`. A `ManuallyDrop<Rc<T>>` is the same
             // pointer in a register and the same type to codegen, so it keeps
             // whatever made the owned form fast and drops only the traffic.
+            //
+            // The frame's fields are `Held` for exactly the same reason, so
+            // this is now a copy of a pointer out of a pointer: `ptr::read`
+            // because `ManuallyDrop<Rc<_>>` is not `Copy`, not because
+            // anything here is being taken out of an owner.
             let (proto, chunk, base, mut pc) = {
                 let f = self.frames.last().expect("frame");
                 (
-                    unsafe { std::mem::ManuallyDrop::new(std::ptr::read(&f.proto)) },
-                    unsafe { std::mem::ManuallyDrop::new(std::ptr::read(&f.chunk)) },
+                    unsafe { std::ptr::read(&f.proto) },
+                    unsafe { std::ptr::read(&f.chunk) },
                     f.base as usize,
                     f.pc as usize,
                 )
@@ -1089,47 +1094,81 @@ impl Vm {
                     Op::GETMAP | Op::GETMAPK | Op::GETIDX => {
                         let tr = base + ins.b() as usize;
                         let v = {
-                            let Value::Table(t) = &self.stack[tr] else {
-                                return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                            let Value::Table(t) = self.reg(tr) else {
+                                return Err(operand_err(self.reg(tr), "table", &proto, here));
                             };
                             let t = t.borrow();
                             if op == Op::GETMAPK {
                                 t.get(&chunk.constants[ins.c() as usize])
                             } else {
-                                t.get(self.reg(base + ins.c() as usize))
+                                let key = self.reg(base + ins.c() as usize);
+                                // An integer inside the array part, read in
+                                // place — see `TableObject::array_index`.
+                                match key {
+                                    Value::Int(i) => match t.array_index(*i) {
+                                        Some(slot) => t.array[slot].clone(),
+                                        None => t.get(key),
+                                    },
+                                    _ => t.get(key),
+                                }
                             }
                         };
-                        *self.reg_mut(base + a) = v;
+                        self.set_reg(base + a, v);
                     }
                     // `t[i]!` — the index and the force-unwrap in one word.
                     // See the opcode's doc for the profile that justifies it.
                     Op::GETIDXU => {
                         let tr = base + ins.b() as usize;
                         let v = {
-                            let Value::Table(t) = &self.stack[tr] else {
-                                return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                            let Value::Table(t) = self.reg(tr) else {
+                                return Err(operand_err(self.reg(tr), "table", &proto, here));
                             };
-                            t.borrow().get(self.reg(base + ins.c() as usize))
+                            let t = t.borrow();
+                            let key = self.reg(base + ins.c() as usize);
+                            match key {
+                                Value::Int(i) => match t.array_index(*i) {
+                                    Some(slot) => t.array[slot].clone(),
+                                    None => t.get(key),
+                                },
+                                _ => t.get(key),
+                            }
                         };
                         if matches!(v, Value::Nil) {
                             return Err(RuntimeError::ForceUnwrapNil {
                                 span: proto.span_at(here),
                             });
                         }
-                        *self.reg_mut(base + a) = v;
+                        self.set_reg(base + a, v);
                     }
                     Op::SETMAP | Op::SETMAPK | Op::SETIDX => {
                         let tr = base + a;
                         // The stored value is the one thing that genuinely
                         // moves into the table, so it is the one clone left.
                         let v = (*self.reg(base + ins.c() as usize)).clone();
-                        let Value::Table(t) = &self.stack[tr] else {
-                            return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                        let Value::Table(t) = self.reg(tr) else {
+                            return Err(operand_err(self.reg(tr), "table", &proto, here));
                         };
                         let r = if op == Op::SETMAPK {
                             t.borrow_mut().set(&chunk.constants[ins.b() as usize], v)
                         } else {
-                            t.borrow_mut().set(self.reg(base + ins.b() as usize), v)
+                            let key = self.reg(base + ins.b() as usize);
+                            let mut t = t.borrow_mut();
+                            // An integer inside the array part, written in
+                            // place. `on_store` first, exactly as `set` does
+                            // it, so a container stored into an array is
+                            // still seen by the cycle collector.
+                            let slot = match key {
+                                Value::Int(i) => t.array_index(*i),
+                                _ => None,
+                            };
+                            match slot {
+                                Some(slot) => {
+                                    saule_runtime::gc::on_store(&v);
+                                    t.array[slot] = v;
+                                    Ok(())
+                                }
+                                None => t.set(key, v),
+                            }
                         };
                         r.map_err(|m| RuntimeError::TypeError {
                             message: m,
@@ -1331,7 +1370,8 @@ impl Vm {
                             // tree-walker trampolines: `Flow::TailCall` is
                             // built for `Value::Function` and nothing else.
                             Value::VmFunction(handle) => {
-                                self.enter_tail_frame(handle, callee_abs + 1, n_args, &site)?;
+                                let handle = std::mem::ManuallyDrop::new(handle);
+                                self.enter_tail_frame(handle, true, callee_abs + 1, n_args, &site)?;
                                 continue 'reentry;
                             }
                             // A native, a constructor, anything else
@@ -1357,8 +1397,11 @@ impl Vm {
                         let (tm, target) = ((packed >> 16) as usize, packed & 0xFFFF);
                         let n_args = self.arg_count(ins.b(), base + a);
                         let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let handle = self.closure_for(&tc, target);
-                        self.enter_tail_frame(handle, base + a, n_args, &Site::Code(&proto, here))?;
+                        // SAFETY: held from the closure cache, which outlives
+                        // the frame — see `Frame::owns_func`.
+                        let handle = unsafe { super::frame::hold(self.closure_for(&tc, target)) };
+                        let site = Site::Code(&proto, here);
+                        self.enter_tail_frame(handle, false, base + a, n_args, &site)?;
                         continue 'reentry;
                     }
                     Op::TAILCALLS => {
@@ -1381,8 +1424,11 @@ impl Vm {
                         };
                         let n_args = self.arg_count(ins.b(), base + a);
                         let tc = Rc::clone(&self.shared.chunks[tm]);
-                        let handle = self.closure_for(&tc, target);
-                        self.enter_tail_frame(handle, base + a, n_args, &Site::Code(&proto, here))?;
+                        // SAFETY: held from the closure cache, which outlives
+                        // the frame — see `Frame::owns_func`.
+                        let handle = unsafe { super::frame::hold(self.closure_for(&tc, target)) };
+                        let site = Site::Code(&proto, here);
+                        self.enter_tail_frame(handle, false, base + a, n_args, &site)?;
                         continue 'reentry;
                     }
                     Op::RET0 => {
@@ -1431,6 +1477,38 @@ impl Vm {
                         // plus hash insert the tree-walker pays (§8.6).
                         let inst = saule_runtime::value::InstanceObject::new(Rc::clone(class));
                         *self.reg_mut(base + a) = Value::Instance(Rc::new(RefCell::new(inst)));
+                    }
+                    // `obj.field!` — the read and the nil test in one word.
+                    // The value is cloned **once**, straight into the
+                    // destination, where `GETF` + `UNWRAPNIL` cloned it into
+                    // a temp and then cloned it again out of it.
+                    Op::GETFU => {
+                        let slot = ins.c() as usize;
+                        let v = match self.reg(base + ins.b() as usize) {
+                            Value::Instance(i) => {
+                                let i = i.borrow();
+                                match i.fields.get(slot) {
+                                    Some(v) => v.clone(),
+                                    None => {
+                                        return Err(field_slot_err(
+                                            slot,
+                                            i.fields.len(),
+                                            &proto,
+                                            here,
+                                        ));
+                                    }
+                                }
+                            }
+                            other => return Err(operand_err(other, "instance", &proto, here)),
+                        };
+                        // The span is the `!`'s, so this blames the unwrap
+                        // and not the field read that fed it.
+                        if matches!(v, Value::Nil) {
+                            return Err(RuntimeError::ForceUnwrapNil {
+                                span: proto.span_at(here),
+                            });
+                        }
+                        *self.reg_mut(base + a) = v;
                     }
                     Op::GETF => {
                         let slot = ins.c() as usize;
@@ -1659,7 +1737,7 @@ impl Vm {
                     Op::NEWVAR => {
                         let packed = self.extra_arg(code.as_ptr(), &mut pc);
                         let n = (ins.b() as usize).saturating_sub(1);
-                        self.new_variant(packed, n, base, a, &chunk, &Site::Code(&proto, here))?;
+                        self.new_variant(packed, n, base, a, &Site::Code(&proto, here))?;
                     }
                     Op::GETTAG => {
                         let t = match self.reg(base + ins.b() as usize) {

@@ -180,3 +180,63 @@ fn a_returned_safe_call_still_yields_one_value_where_it_should() {
          local r: string = tostring(a) .. \"/\" .. tostring(b)\nr",
     );
 }
+
+/// A nullable link between two classes, for the `obj.field!` tests below.
+const LINKED: &str = "class Leaf\n\
+\x20 v: integer?\n\
+\x20 fn init(v: integer?)\n    self.v = v\n  end\n\
+end\n\
+class Node\n\
+\x20 next: Leaf?\n\
+\x20 fn init(n: Leaf?)\n    self.next = n\n  end\n\
+end\n";
+
+#[test]
+fn a_force_unwrapped_field_read_passes_a_value() {
+    // `obj.field!` is one `GETFU` rather than `GETF` + `UNWRAPNIL`, and
+    // nothing in the suite covered the shape before the fusion landed —
+    // `run_tests.sh` checks exit status only, so a wrong *value* here was
+    // invisible. Both links present, read through two of them.
+    must_agree(&format!("{LINKED}local n: Node = Node(Leaf(42))\nn.next!.v!"));
+}
+
+#[test]
+fn a_force_unwrapped_field_read_throws_on_a_nil_link() {
+    // The **first** link is nil, so the fused read must fault rather than
+    // carry a nil forward into the second.
+    must_agree(&format!("{LINKED}local n: Node = Node(nil)\nn.next!.v!"));
+    // ...and the second link, which is the one the outer `!` guards.
+    must_agree(&format!("{LINKED}local n: Node = Node(Leaf(nil))\nn.next!.v!"));
+}
+
+#[test]
+fn a_force_unwrapped_field_read_reaches_a_method_receiver() {
+    // `self.left!.insert(k)` — how every node in `bintree` is walked, and
+    // the shape that put `GETF UNWRAPNIL` at the top of the pair histogram.
+    must_agree(&format!(
+        "{LINKED}local n: Node = Node(Leaf(7))\nString.len(\"\" .. n.next!.v!)"
+    ));
+}
+
+#[test]
+fn a_nil_comparison_agrees_in_both_polarities() {
+    // `x != nil` is now `JNOTNIL` rather than `EQV` + `NOT` + `TEST`, and
+    // getting the polarity backwards inverts every nil guard in the
+    // language while still compiling and still running.
+    for init in ["nil", "3"] {
+        must_agree(&format!(
+            "local x: integer? = {init}\nlocal r: string = \"\"\n\
+             if x != nil then\n r = \"present\"\nelse\n r = \"absent\"\nend\nr"
+        ));
+        must_agree(&format!(
+            "local x: integer? = {init}\nlocal r: string = \"\"\n\
+             if x == nil then\n r = \"absent\"\nelse\n r = \"present\"\nend\nr"
+        ));
+        // Folded from the left, and inside an `and` chain, which is where
+        // `cond_jumps_if_false` short-circuits into one branch per operand.
+        must_agree(&format!(
+            "local x: integer? = {init}\nlocal y: integer? = 1\nlocal r: integer = 0\n\
+             if nil != x and y != nil then\n r = 1\nend\nr"
+        ));
+    }
+}

@@ -1,0 +1,90 @@
+-- Cooperative multitasking, in about seventy lines.
+--
+-- A coroutine is a task that decides for itself when to give the CPU back.
+-- There are no threads here and nothing runs in parallel: `resume()` transfers
+-- control into a task, and the task's next `yield` transfers it back. That is
+-- enough to interleave as many jobs as you like — a loading screen, a game's
+-- actors, a batch of downloads — with no locks, because between two yields a
+-- task has the whole program to itself.
+--
+-- The scheduler never learns what a task does. It resumes it, reports what it
+-- yielded, and comes back on the next tick.
+
+export class Task
+	name: string = ""
+	local job: Coroutine<string>
+	local slices: integer = 0
+
+	fn init(name: string, job: Coroutine<string>)
+		self.name = name
+		self.job = job
+	end
+
+	fn isDone() -> boolean
+		return self.job.isDone()
+	end
+
+	-- One slice of work. How long a slice is, is the task's own business:
+	-- `resume` runs it until *it* decides to yield.
+	fn step(tick: integer) -> nil
+		local note: string? = self.job.resume()
+
+		if note != nil then
+			self.slices = self.slices + 1
+			printf("  tick %d  %-9s %s\n", tick, self.name, note!)
+			return
+		end
+
+		-- `nil` means the task is over — but over how? `error()` tells a
+		-- finish from a crash, and a crash is contained: the coroutine dies,
+		-- the program does not, and the other tasks keep their turns.
+		local failure: string? = self.job.error()
+		if failure != nil then
+			printf("  tick %d  %-9s failed: %s\n", tick, self.name, failure!)
+		else
+			printf("  tick %d  %-9s done after %d slices\n", tick, self.name, self.slices)
+		end
+	end
+end
+
+export class Scheduler
+	local tasks: table<Task>
+
+	fn init()
+		self.tasks = {}
+	end
+
+	-- The parameter type *is* the coroutine contract: `fn(Yielder<string>)`.
+	-- Callers hand over a lambda and never see a `Coroutine` at all.
+	fn spawn(name: string, body: fn(Yielder<string>) -> nil) -> nil
+		self.tasks[#self.tasks + 1] = Task(name, Coroutine.create(body))
+	end
+
+	fn alive() -> integer
+		local count: integer = 0
+		for task in self.tasks do
+			if not task.isDone() then
+				count = count + 1
+			end
+		end
+		return count
+	end
+
+	-- Round-robin: every live task gets one slice per tick, until none is
+	-- left. Swapping this for a priority queue or a frame budget would not
+	-- touch a single task.
+	fn run() -> integer
+		local tick: integer = 0
+
+		while self.alive() > 0 do
+			tick = tick + 1
+			for task in self.tasks do
+				if not task.isDone() then
+					task.step(tick)
+				end
+			end
+		end
+
+		return tick
+	end
+end

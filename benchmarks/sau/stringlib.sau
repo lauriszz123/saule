@@ -1,0 +1,63 @@
+-- The `String` module, across the calls everyday text handling makes.
+--
+-- `strings` measures `..` and `String.len`; this measures the library — a
+-- field-extraction pipeline run over 60,000 records: trim, prefix test,
+-- locate a separator, slice either side, split a list, rejoin it, case-fold,
+-- substitute, pad and format. Several of these have no Lua equivalent and
+-- are written out there by hand, which is the comparison that matters: not
+-- function against function but the whole job, each language doing it the
+-- way it actually would.
+--
+-- Everything is ASCII, so Saule's codepoint indices and Lua's byte indices
+-- describe the same positions and the two outputs are comparable.
+class Main
+	static fn rows(n: integer) -> table<string>
+		local vocab: table<string> = {"alpha", "beta", "gamma", "delta", "epsilon"}
+		local out: table<string> = {}
+		local seed: integer = 777
+		for i: integer = 1, n do
+			seed = (seed * 1103515245 + 12345) % 2147483648
+			local a: string = vocab[seed % 5 + 1]!
+			local b: string = vocab[(seed / 5) % 5 + 1]!
+			local c: string = vocab[(seed / 25) % 5 + 1]!
+			Table.insert(out, "  user-" .. String.padStart("" .. (i % 10000), 4, "0") .. ":" .. a .. "," .. b .. "," .. c .. "  ")
+		end
+		return out
+	end
+
+	static fn main()
+		local rows: table<string> = Main.rows(2000)
+		local chars: integer = 0
+		local users: integer = 0
+		local betas: integer = 0
+		local last: string = ""
+
+		for pass: integer = 1, 240 do
+			for i: integer = 1, #rows do
+				local t: string = String.trim(rows[i]!)
+				if String.starts(t, "user-") then
+					users = users + 1
+				end
+
+				local colon: integer = String.indexOf(t, ":") ?? 0
+				local name: string = String.sub(t, 1, colon - 1)
+				local rest: string = String.sub(t, colon + 1)
+
+				local parts: table<string> = String.split(rest, ",")
+				local joined: string = String.join("|", parts)
+				local marked: string = String.replace(joined, "beta", "BETA")
+				if String.contains(marked, "BETA") then
+					betas = betas + 1
+				end
+
+				chars = chars + String.len(String.upper(name)) + String.len(String.lower(marked))
+				if String.ends(marked, "delta") then
+					chars = chars + 1
+				end
+				last = String.format("%s/%d/%s", String.padStart(name, 14, "."), #parts, marked)
+			end
+		end
+
+		println(chars .. " " .. users .. " " .. betas .. " " .. last)
+	end
+end

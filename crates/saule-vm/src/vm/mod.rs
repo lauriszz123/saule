@@ -70,7 +70,7 @@ pub(crate) use call::Site;
 pub use frame::{ALL_RESULTS, Closure, Frame};
 pub use upval::Upvalue;
 
-use build::{build_classes, build_enums};
+use build::{build_classes, build_enums, build_variant_names};
 use ops::max_frames_from_env;
 
 /// Frame-depth limit, equal to the runtime's re-entrant call limit
@@ -144,6 +144,9 @@ pub struct VmShared {
     statics: Vec<Rc<RefCell<Vec<Value>>>>,
     /// One runtime enum per `EnumProto`, built once at start-up.
     enums: Vec<Rc<saule_runtime::value::EnumObject>>,
+    /// `enums`' names, prebuilt for `NEWVARIANT` — see
+    /// [`build::build_variant_names`].
+    variant_names: Vec<build::VariantNames>,
     max_frames: usize,
     /// Register files parked for reuse by the next re-entrant call.
     ///
@@ -258,6 +261,7 @@ impl Vm {
         let shared = Rc::new_cyclic(|weak: &std::rc::Weak<VmShared>| {
             let (classes, class_of, statics) = build_classes(&chunks, weak);
             let enums = build_enums(&chunks, weak);
+            let variant_names = build_variant_names(&chunks);
             // A class or enum named as a value reads its module slot, which
             // no instruction writes — see `Chunk::type_slots`.
             let mut modules = vec![Value::Nil; module_slots];
@@ -276,6 +280,7 @@ impl Vm {
             }
             VmShared {
                 enums,
+                variant_names,
                 modules: RefCell::new(modules),
                 closure_cache: cache,
                 chunks,
@@ -381,7 +386,7 @@ impl Vm {
     pub fn run_module(&mut self, module: usize) -> Result<Vec<Value>, RuntimeError> {
         let chunk = Rc::clone(&self.shared.chunks[module]);
         let main_idx = chunk.main;
-        let handle = self.closure_for(&chunk, main_idx);
+        let handle = Rc::clone(self.closure_for(&chunk, main_idx));
         let base = self.free_base();
         self.push_frame(handle, base, 0, base, ALL_RESULTS, &Site::Known(0..0))?;
         self.execute_collecting()
@@ -446,6 +451,63 @@ impl Vm {
         )
     }
 
+    /// [`invoke_first`](Self::invoke_first) for a caller that already holds
+    /// the callee's proto and chunk and its own depth guard — which a
+    /// [`CallSession`](saule_runtime::value::CallSession) does, because
+    /// neither changes between the calls it makes.
+    ///
+    /// The downcast that recovers a proto from a handle, and the stack probe
+    /// and thread-local write a depth guard costs, are per *session* here
+    /// rather than per call.
+    ///
+    /// The frame holds `handle` without counting it, so the caller must keep
+    /// it alive until this register file's frames are gone — returned, or
+    /// cleared by `abandon` after an error. Not `unsafe`, because its one
+    /// caller is `CallSession::call_first`, which owns the handle for the
+    /// session's whole life and abandons the file on the first error. The calls in a session are sequential — one
+    /// returns before the next starts — so one guard bounds the nesting
+    /// exactly as a guard each would.
+    pub(crate) fn invoke_first_resolved(
+        &mut self,
+        handle: &Rc<VmFunctionRef>,
+        proto: &Rc<crate::chunk::Proto>,
+        chunk: &Rc<crate::chunk::Chunk>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, RuntimeError> {
+        let base = self.free_base();
+        self.ensure_stack(base as usize + args.len());
+        for (i, a) in args.iter().enumerate() {
+            self.stack[base as usize + i] = a.clone();
+        }
+        // SAFETY: as everywhere a frame is built — the chunk owns the proto
+        // and the engine owns the chunk, both for longer than the frame.
+        // See `Frame::proto`.
+        let (p, c) = unsafe { (frame::hold(proto), frame::hold(chunk)) };
+        // SAFETY: the session this is called from owns `handle` for longer
+        // than the call — see `Frame::owns_func`.
+        let f = unsafe { frame::hold(handle) };
+        self.push_frame_resolved(
+            f,
+            false,
+            p,
+            c,
+            base,
+            args.len(),
+            base,
+            ALL_RESULTS,
+            &Site::Known(span),
+        )?;
+        self.execute().map_err(|e| self.attribute(e))?;
+        let first = if self.results.is_empty() {
+            Value::Nil
+        } else {
+            self.results.swap_remove(0)
+        };
+        self.results.clear();
+        Ok(first)
+    }
+
     /// [`invoke`](Self::invoke) for a caller that wants a single value, with
     /// no `Vec` in the middle.
     ///
@@ -487,7 +549,7 @@ impl Vm {
             .iter()
             .copied()
             .find(|i| chunk.proto(*i).name.as_deref() == Some(name))?;
-        let handle = self.closure_for(&chunk, idx);
+        let handle = Rc::clone(self.closure_for(&chunk, idx));
         Some(self.invoke(&handle, &[], 0..0))
     }
 
@@ -526,7 +588,7 @@ impl Vm {
             return None;
         }
         let chunk = Rc::clone(&self.shared.chunks[module]);
-        let handle = self.closure_for(&chunk, proto_idx);
+        let handle = Rc::clone(self.closure_for(&chunk, proto_idx));
         let base = self.free_base();
         if let Err(e) = self.push_frame(handle, base, 0, base, ALL_RESULTS, &Site::Known(0..0)) {
             return Some(Err(e));

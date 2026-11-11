@@ -46,7 +46,7 @@ questions without reading prose.
 
 ## The language
 
-Fourteen pages covering the whole language, in the order they build on each
+Fifteen pages covering the whole language, in the order they build on each
 other. Each one is worth reading end to end once; afterwards they work as
 reference.
 
@@ -112,6 +112,11 @@ reference.
 		description="Numeric for, for-in over tables and iterables, while, repeat-until, break and continue."
 	/>
 	<LinkCard
+		title="Coroutines"
+		href="/saule/language/coroutines/"
+		description="Functions that pause with yield and resume where they stopped — typed as Coroutine<T>, stackful, and iterable."
+	/>
+	<LinkCard
 		title="Imports and File Structure"
 		href="/saule/language/imports-and-file-structure/"
 		description="export, import, folder modules, visibility across files, and why circular imports are refused."
@@ -160,6 +165,11 @@ modules are static classes, not packages.
 		description="The deriving half: map, filter, reduce and friends, eager and fully typed."
 	/>
 	<LinkCard
+		title="Coroutine"
+		href="/saule/stdlib/coroutine/"
+		description="Coroutine.create, resume, status and error, and the Yielder a body yields through."
+	/>
+	<LinkCard
 		title="Io / File"
 		href="/saule/stdlib/io-file/"
 		description="Standard streams and file handles, with modes and seek positions as real enums."
@@ -192,7 +202,7 @@ modules are static classes, not packages.
 	<LinkCard
 		title="Quick Reference"
 		href="/saule/reference/quick-reference/"
-		description="Keywords, literals and operators in three tables, for looking something up at a glance."
+		description="Keywords, literals, operators and coroutines in four tables, for looking something up at a glance."
 	/>
 	<LinkCard
 		title="Grammar"
@@ -214,7 +224,7 @@ modules are static classes, not packages.
 ## Worked examples
 
 Complete programs rather than fragments — each one is a project you can read
-end to end.
+end to end, grouped simple to advanced on the index.
 
 <CardGrid>
 	<LinkCard
@@ -231,6 +241,11 @@ end to end.
 		title="Bitwise Operators"
 		href="/saule/examples/bitwise-flags/"
 		description="A permission flag set and a packed RGBA colour, with Lua 5.3's spellings."
+	/>
+	<LinkCard
+		title="Coroutines"
+		href="/saule/examples/coroutines/"
+		description="Lazy stream combinators, a stackful tokenizer, and a cooperative scheduler."
 	/>
 	<LinkCard
 		title="Todo App"

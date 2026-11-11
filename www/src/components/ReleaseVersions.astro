@@ -1,0 +1,266 @@
+---
+/**
+ * The header's release badge: the current `stable` version, and the `latest`
+ * pre-release when there is one newer than it — the two channels the
+ * installer offers (see STABILITY.md).
+ *
+ * **Read at build time** (`lib/release-channels.ts`), from the same unlimited
+ * sources the installer uses, so the badge is right with JavaScript off and
+ * appears without a flash.
+ *
+ * **Refreshed in the browser**, because the site is deployed by hand rather
+ * than on every release, and blessing a build (`gh release edit
+ * --prerelease=false`) changes nothing the site is built from. The browser can
+ * only reach GitHub through its API — the other sources send no CORS headers
+ * — which allows 60 requests an hour per IP. So the script is frugal with it:
+ * an answer is reused for ten minutes, a stale one is revalidated with
+ * `If-None-Match` (a `304` does not count against the limit), and a refusal
+ * makes it wait rather than ask again on every page. Whatever it cannot
+ * fetch, the build's answer stays on screen.
+ *
+ * On small screens Starlight moves the header's icons into the menu (☰), and
+ * this badge goes with them.
+ */
+import { repo } from '../../site.config.mjs';
+import { buildTimeChannels } from '../lib/release-channels';
+
+interface Props {
+	/**
+	 * The narrow-screen form beside the site title: the stable version alone,
+	 * without its label — there is room for one short pill there, and the
+	 * channel is in its tooltip and its colour.
+	 */
+	compact?: boolean;
+}
+const { compact = false } = Astro.props;
+
+const apiUrl =
+	repo.replace('https://github.com/', 'https://api.github.com/repos/') + '/releases?per_page=20';
+const releasesUrl = `${repo}/releases`;
+
+const initial = await buildTimeChannels();
+const hasAny = Boolean(initial.stable || initial.latest);
+---
+
+<div
+	class:list={['saule-releases', { 'saule-releases--compact': compact }]}
+	data-api={apiUrl}
+	hidden={!hasAny}
+	aria-label="Saule releases"
+>
+	<a
+		class="saule-release saule-release--stable"
+		data-channel="stable"
+		href={initial.stable?.url ?? releasesUrl}
+		hidden={!initial.stable}
+		title="The stable channel — what the installer installs by default"
+	>
+		<span class="saule-release__label">stable</span>
+		<span class="saule-release__version">{initial.stable?.version ?? ''}</span>
+	</a>
+	<a
+		class="saule-release saule-release--latest"
+		data-channel="latest"
+		href={initial.latest?.url ?? releasesUrl}
+		hidden={!initial.latest}
+		title="The latest pre-release — install with SAULE_CHANNEL=latest"
+	>
+		<span class="saule-release__label">latest</span>
+		<span class="saule-release__version">{initial.latest?.version ?? ''}</span>
+	</a>
+</div>
+
+<script>
+	interface Release {
+		tag_name: string;
+		html_url: string;
+		prerelease: boolean;
+		draft: boolean;
+	}
+	interface Entry {
+		version: string;
+		url: string;
+	}
+	interface Channels {
+		stable?: Entry;
+		latest?: Entry;
+	}
+	/** What is kept between pages. `value` is absent after a refusal. */
+	interface Cached {
+		at: number;
+		etag?: string;
+		value?: Channels;
+	}
+
+	const CACHE_KEY = 'saule-release-channels';
+	/** How long an answer is used without asking GitHub again. */
+	const FRESH_MS = 10 * 60 * 1000;
+	/** How long to leave the API alone after it refused a request. */
+	const BACKOFF_MS = 15 * 60 * 1000;
+
+	/**
+	 * `stable` is the newest release not marked pre-release — what the
+	 * installer installs by default. `latest` is the newest pre-release, shown
+	 * only when it is newer than `stable`. GitHub lists releases newest first;
+	 * drafts are never public.
+	 */
+	function channels(releases: Release[]): Channels {
+		const published = releases.filter((r) => !r.draft);
+		const stableIdx = published.findIndex((r) => !r.prerelease);
+		const toEntry = (r: Release): Entry => ({
+			version: r.tag_name.replace(/^v/, ''),
+			url: r.html_url,
+		});
+		const out: Channels = {};
+		if (stableIdx !== -1) out.stable = toEntry(published[stableIdx]!);
+		const newestPre = published.findIndex((r) => r.prerelease);
+		if (newestPre !== -1 && (stableIdx === -1 || newestPre < stableIdx)) {
+			out.latest = toEntry(published[newestPre]!);
+		}
+		return out;
+	}
+
+	// Storage can be unavailable or throw (private windows, blocked site
+	// data), so every access is guarded and the badge works without it.
+	function readCache(): Cached | null {
+		try {
+			const raw = localStorage.getItem(CACHE_KEY);
+			return raw ? (JSON.parse(raw) as Cached) : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function writeCache(entry: Cached) {
+		try {
+			localStorage.setItem(CACHE_KEY, JSON.stringify(entry));
+		} catch {
+			// Nothing to do: the next page simply asks again.
+		}
+	}
+
+	function render(root: HTMLElement, value: Channels) {
+		for (const name of ['stable', 'latest'] as const) {
+			const link = root.querySelector<HTMLAnchorElement>(`[data-channel="${name}"]`);
+			if (!link) continue;
+			const entry = value[name];
+			link.hidden = !entry;
+			if (!entry) continue;
+			link.href = entry.url;
+			const v = link.querySelector('.saule-release__version');
+			if (v) v.textContent = entry.version;
+		}
+		root.hidden = !(value.stable || value.latest);
+	}
+
+	async function refresh(roots: HTMLElement[]) {
+		const cached = readCache();
+		const age = cached ? Date.now() - cached.at : Infinity;
+		if (cached?.value) roots.forEach((r) => render(r, cached.value!));
+		if (cached && (cached.value ? age < FRESH_MS : age < BACKOFF_MS)) return;
+
+		const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
+		if (cached?.value && cached.etag) headers['If-None-Match'] = cached.etag;
+		try {
+			const res = await fetch(roots[0]!.dataset.api!, { headers });
+			if (res.status === 304 && cached?.value) {
+				writeCache({ ...cached, at: Date.now() });
+				return;
+			}
+			if (!res.ok) {
+				// Rate-limited or down. Remember the refusal, keep any answer
+				// already on screen, and leave the API alone for a while.
+				writeCache({ at: Date.now(), value: cached?.value, etag: cached?.etag });
+				return;
+			}
+			const value = channels((await res.json()) as Release[]);
+			writeCache({ at: Date.now(), value, etag: res.headers.get('ETag') ?? undefined });
+			roots.forEach((r) => render(r, value));
+		} catch {
+			// Offline: whatever is on screen stays.
+		}
+	}
+
+	const roots = [...document.querySelectorAll<HTMLElement>('.saule-releases')];
+	if (roots.length > 0) void refresh(roots);
+</script>
+
+<style>
+	.saule-releases {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+
+	.saule-releases[hidden],
+	.saule-release[hidden] {
+		display: none;
+	}
+
+	.saule-release {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 999px;
+		padding: 0.25rem 0.6rem;
+		font-size: var(--sl-text-xs);
+		line-height: 1;
+		white-space: nowrap;
+		text-decoration: none;
+		color: var(--sl-color-gray-2);
+		transition:
+			border-color var(--saule-mid, 200ms) var(--saule-ease, ease-out),
+			color var(--saule-mid, 200ms) var(--saule-ease, ease-out);
+	}
+
+	.saule-release:hover,
+	.saule-release:focus-visible {
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-white);
+	}
+
+	.saule-release__label {
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-size: 0.68rem;
+		font-weight: 600;
+	}
+
+	.saule-release--stable .saule-release__label {
+		color: var(--saule-success);
+	}
+
+	.saule-release--latest .saule-release__label {
+		color: var(--saule-warning);
+	}
+
+	.saule-release__version {
+		font-family: var(--saule-font-mono);
+		font-variant-numeric: tabular-nums;
+		color: var(--sl-color-white);
+	}
+
+	.saule-releases--compact .saule-release__label,
+	.saule-releases--compact .saule-release--latest {
+		display: none;
+	}
+
+	.saule-releases--compact .saule-release__version::before {
+		content: 'v';
+	}
+
+	.saule-releases--compact .saule-release--stable {
+		border-color: color-mix(in srgb, var(--saule-success) 55%, var(--sl-color-gray-5));
+	}
+
+	/* Below 50rem Starlight hides the header's icon group and shows the same
+	   icons in the menu, where there is room for both pills — so nothing is
+	   hidden there. Just above it the header itself is tight, and the
+	   pre-release pill gives way first. */
+	@media (min-width: 50rem) and (max-width: 64rem) {
+		.saule-release--latest {
+			display: none;
+		}
+	}
+</style>

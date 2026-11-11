@@ -1,0 +1,67 @@
+---
+/**
+ * The site title, followed — on narrow screens only — by the release badge
+ * and, where there is no menu, the Docs button.
+ *
+ * Below 50rem Starlight hides the header's right-hand group, which is where
+ * both normally live (`SocialIcons.astro`). On a page with a sidebar the same
+ * icons reappear in the menu (☰), but the home page is a splash page: it has
+ * no sidebar, so on a phone it has no menu either, and anything in that group
+ * simply was not there. The title is the one part of the header Starlight
+ * shows at every width, so this is where they go.
+ *
+ * Beside the title rather than inside its link: a link cannot contain links.
+ */
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+import ReleaseVersions from './ReleaseVersions.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<Default {...Astro.props}><slot /></Default>
+<div class="saule-title-extras">
+	<ReleaseVersions compact />
+	<a class="saule-title-docs" href={`${base}/docs/`}>Docs</a>
+</div>
+
+<style>
+	.saule-title-extras {
+		display: none;
+		align-items: center;
+		gap: 0.5rem;
+		margin-inline-start: 0.5rem;
+		flex-shrink: 0;
+	}
+
+	@media (max-width: 49.99rem) {
+		.saule-title-extras {
+			display: inline-flex;
+		}
+	}
+
+	.saule-title-docs {
+		display: inline-flex;
+		align-items: center;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 999px;
+		padding: 0.25rem 0.6rem;
+		font-size: var(--sl-text-xs);
+		font-weight: 600;
+		line-height: 1;
+		text-decoration: none;
+		white-space: nowrap;
+		color: var(--sl-color-white);
+	}
+
+	.saule-title-docs:hover,
+	.saule-title-docs:focus-visible {
+		border-color: var(--sl-color-accent);
+		background-color: var(--sl-color-accent);
+		color: var(--sl-color-black);
+	}
+
+	/* A page with a sidebar has a menu that already leads with the docs. */
+	:global(:root[data-has-sidebar]) .saule-title-docs {
+		display: none;
+	}
+</style>

@@ -1,0 +1,45 @@
+-- Throwing and catching, at the rate a parser or validator actually throws.
+--
+-- Roughly one call in five fails, which is the interesting case: a `try`
+-- whose body usually succeeds measures only the cost of entering the block,
+-- and one that always fails measures nothing else. Two `catch` clauses, so
+-- the thrown value has to be type-tested in source order, and one of the
+-- throws carries an object rather than a string.
+class ParseError
+	code: integer
+
+	fn init(code: integer)
+		self.code = code
+	end
+end
+
+class Main
+	static fn parse(tok: integer) -> integer
+		if tok % 7 == 0 then
+			throw "bad token"
+		end
+		if tok % 11 == 0 then
+			throw ParseError(tok % 100)
+		end
+		return tok * 2
+	end
+
+	static fn main()
+		local n: integer = 3000000
+		local ok: integer = 0
+		local strs: integer = 0
+		local objs: integer = 0
+
+		for i: integer = 1, n do
+			try
+				ok = ok + Main.parse(i)
+			catch e: string
+				strs = strs + 1
+			catch e: ParseError
+				objs = objs + e.code
+			end
+		end
+
+		println(ok .. " " .. strs .. " " .. objs)
+	end
+end

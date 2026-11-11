@@ -155,7 +155,7 @@ impl Compiler<'_> {
                 }
             }
 
-            Expr::Member { obj, name } => self.member_to(e, obj, name, dst)?,
+            Expr::Member { obj, name } => self.member_to(e, obj, name, dst, None)?,
 
             Expr::SafeMember { obj, name } => self.safe_member_to(e, obj, name, dst)?,
 
@@ -178,6 +178,14 @@ impl Compiler<'_> {
                 // typed element read is spelled, and the pair was 17.7% of
                 // every instruction `matrix` executed.
                 Expr::Index { obj, index } => self.index_to(inner, obj, index, dst, Some(span))?,
+                // `obj.field!` fuses into one `GETFU` — the same case one
+                // step over, and for the same reason: a nullable field is
+                // how a link in an object graph is declared, so this is
+                // what walking one is spelled as. `GETF UNWRAPNIL` is the
+                // top adjacent pair in `nullsafe`.
+                Expr::Member { obj, name } => {
+                    self.member_to(inner, obj, name, dst, Some(span))?
+                }
                 _ => {
                     let m = self.mark();
                     let r = self.operand_to_reg(inner, self.operand_is_pure(inner))?;

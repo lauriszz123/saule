@@ -50,6 +50,45 @@ fn a_comparator_closure_captures_its_environment() {
     );
 }
 
+/// A callback that calls the same native again, from inside it.
+///
+/// The callback's register file is held open for the whole sort now —
+/// opened once, handed back when the sort ends — so a comparator that sorts
+/// a table of its own has to get a *second* one rather than reaching for the
+/// one its caller is standing on. The inner sort finishing must not hand
+/// back the file the outer one is still using.
+#[test]
+fn a_comparator_can_run_the_same_native_again() {
+    must_agree(
+        "local inner: table<integer, integer> = {3, 1, 2}\n\
+         local outer: table<integer, integer> = {5, 2, 9, 1}\n\
+         Table.sort(outer, fn(a: integer, b: integer) -> boolean\n\
+         \x20 Table.sort(inner, (x: integer, y: integer) => x > y)\n\
+         \x20 return a < b\n\
+         end)\n\
+         local r: string = outer[1] .. \",\" .. outer[4] .. \"/\" .. inner[1] .. inner[3]\nr",
+    );
+}
+
+/// The same callback, called many times, keeps seeing its own writes.
+///
+/// A combinator holds one register file across every element, where it used
+/// to take a fresh one per element. The upvalue a callback writes through is
+/// the observable that says the file being reused is not also being reset
+/// underneath it.
+#[test]
+fn a_combinator_callback_accumulates_across_elements() {
+    must_agree(
+        "local seen: integer = 0\n\
+         local t: table<integer, integer> = {1, 2, 3, 4}\n\
+         local doubled: table<integer, integer> = Iter.map(t, fn(x: integer) -> integer\n\
+         \x20 seen = seen + 1\n\
+         \x20 return x * 2\n\
+         end)\n\
+         local r: string = seen .. \":\" .. doubled[1] .. doubled[4]\nr",
+    );
+}
+
 #[test]
 fn a_tostring_overload_is_honoured_by_concatenation() {
     // The worst failure this project could ship, and the one that was live:

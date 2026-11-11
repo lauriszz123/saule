@@ -845,6 +845,59 @@ fn as_float(v: &Value, spec: char) -> Result<f64, String> {
 // surface over it. The pattern syntax, and the two places it departs from
 // Lua's, are documented there and in `DOCS.md`.
 
+thread_local! {
+    /// Character buffers for decoding a subject, a pattern or a replacement,
+    /// kept between calls. See [`Chars`].
+    static CHAR_BUFS: RefCell<Vec<Vec<char>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A string decoded to `char`s in a buffer borrowed from [`CHAR_BUFS`] and
+/// handed back when this is dropped.
+///
+/// The pattern engine works on characters, so `String.match` and
+/// `String.gsub` decoded the subject and the pattern — and `gsub` the
+/// replacement — into a fresh `Vec<char>` each, every call: an allocation and
+/// a free apiece for text that is decoded and thrown away. Taking the buffer
+/// out of the pool and putting it back makes a nested call safe too: it
+/// finds the pool short and simply allocates.
+struct Chars(Vec<char>);
+
+impl Chars {
+    fn of(s: &str) -> Chars {
+        let mut buf = CHAR_BUFS
+            .try_with(|p| p.borrow_mut().pop())
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        buf.clear();
+        buf.extend(s.chars());
+        Chars(buf)
+    }
+}
+
+impl std::ops::Deref for Chars {
+    type Target = [char];
+    fn deref(&self) -> &[char] {
+        &self.0
+    }
+}
+
+impl Drop for Chars {
+    fn drop(&mut self) {
+        let buf = std::mem::take(&mut self.0);
+        // Bounded both ways: one enormous subject is not kept resident, and
+        // the pool never holds more than a call's worth of buffers.
+        if buf.capacity() <= 1 << 16 {
+            let _ = CHAR_BUFS.try_with(|p| {
+                let mut p = p.borrow_mut();
+                if p.len() < 4 {
+                    p.push(buf);
+                }
+            });
+        }
+    }
+}
+
 /// `String.match(s, pat, init?) -> table<string>?`
 ///
 /// `nil` when nothing matches. On a match, the captures — or a one-element
@@ -859,8 +912,8 @@ fn str_match(args: &[Value]) -> Result<Value, String> {
     expect_min_arity("String.match", args, 2)?;
     let s = expect_string("String.match", args, 0)?;
     let pat = expect_string("String.match", args, 1)?;
-    let chars: Vec<char> = s.chars().collect();
-    let pchars: Vec<char> = pat.chars().collect();
+    let chars = Chars::of(&s);
+    let pchars = Chars::of(&pat);
 
     let init: i64 = if args.len() >= 3 {
         expect_int("String.match", args, 2)?
@@ -956,9 +1009,9 @@ fn str_gsub(args: &[Value]) -> Result<Vec<Value>, String> {
         None
     };
 
-    let chars: Vec<char> = s.chars().collect();
-    let pchars: Vec<char> = pat.chars().collect();
-    let rchars: Vec<char> = repl.chars().collect();
+    let chars = Chars::of(&s);
+    let pchars = Chars::of(&pat);
+    let rchars = Chars::of(&repl);
     // `^` anchors to the start of the subject, so there is at most one match
     // to make. Without this the loop would re-anchor at each new position and
     // `gsub("aaa", "^a", "b")` would replace all three.
@@ -973,7 +1026,7 @@ fn str_gsub(args: &[Value]) -> Result<Vec<Value>, String> {
             break;
         };
         out.extend(&chars[pos..m.start]);
-        out.push_str(&pattern::expand_replacement(&rchars, &chars, &m)?);
+        pattern::expand_replacement_into(&rchars, &chars, &m, &mut out)?;
         count += 1;
 
         if anchored {

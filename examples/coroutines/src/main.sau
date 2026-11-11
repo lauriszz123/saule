@@ -1,0 +1,312 @@
+-- A guided tour of Saule's coroutines. Run it and read along: each section
+-- prints what it does, and the module it leans on is named next to it.
+--
+--   1. Generators            — a function that pauses and carries on
+--   2. Lazy pipelines        — stream.sau: combinators that are coroutines
+--   3. Stackful tokenizing   — lexer.sau: yielding from two frames down
+--   4. Pull-based parsing    — calc.sau: a consumer that asks for one token
+--   5. Cooperative tasks     — scheduler.sau: interleaving, and failure
+--   6. Lifecycle and the dynamic form
+--
+-- What a coroutine is: a function that can stop in the middle, hand a value
+-- out, and later continue from exactly that point with every local and its
+-- whole call stack intact. One thread, no locks — `resume` transfers control
+-- in, `yield` transfers it back out.
+
+from stream import Stream
+from lexer import Lexer, Token, Kind
+from calc import Calc
+from scheduler import Scheduler
+
+class Main
+	static fn main()
+		Main.generators()
+		Main.pipelines()
+		Main.tokenizing()
+		Main.parsing()
+		Main.tasks()
+		Main.lifecycle()
+
+		println("")
+		println("Read the modules in this order: stream.sau, lexer.sau,")
+		println("calc.sau, scheduler.sau.")
+	end
+
+	-- 1 ----------------------------------------------------------------
+	static fn generators()
+		Main.section(1, "Generators")
+
+		-- The declared type of the local tells the body what it yields, so
+		-- `co` needs no annotation: it is a `Yielder<string>`.
+		local greet: Coroutine<string> = Coroutine.create(fn(co)
+			co.yield("hello")
+			co.yield("from")
+			co.yield("a coroutine")
+		end)
+
+		-- Creating runs nothing at all. The first `resume` starts the body.
+		printf("before the first resume: %s\n", greet.status())
+		printf("resume -> %s\n", greet.resume() ?? "")
+		printf("resume -> %s\n", greet.resume() ?? "")
+		printf("still %s, parked at the second yield\n", greet.status())
+
+		-- A coroutine is an `Iterable<T>`, so `for … in` drains it and the
+		-- loop variable is a `T` — here, a `string`.
+		for word in greet do
+			printf("the loop picked up the rest: %s\n", word)
+		end
+
+		-- Past the end it answers `nil` for ever, which is what lets a loop
+		-- drain a generator without asking whether it is empty first.
+		printf("after the body returned: %s, resume -> %s\n", greet.status(), greet.resume() ?? "nil")
+	end
+
+	-- 2 ----------------------------------------------------------------
+	static fn pipelines()
+		Main.section(2, "Lazy pipelines  (stream.sau)")
+
+		-- `Stream.naturals` never finishes. That is safe, because every stage
+		-- only runs when the stage after it asks: `take` stops resuming, so
+		-- `filter` stops asking, so the source stops counting.
+		local firstEvens: table<integer> = Stream.collect(
+			Stream.take(Stream.filter(Stream.naturals(1), n => n % 2 == 0), 6)
+		)
+		printf("first six even naturals: %s\n", String.join(", ", firstEvens))
+
+		-- Proof that nothing ran ahead of demand. The counter is an ordinary
+		-- captured local, bumped once per value the source actually produced.
+		local produced: integer = 0
+		local counted: Coroutine<integer> = Stream.map(Stream.naturals(1), fn(n)
+			produced = produced + 1
+			return n
+		end)
+		local three: table<integer> = Stream.collect(Stream.take(counted, 3))
+		printf(
+			"took %s from an infinite source, and it produced %d values\n",
+			String.join(", ", three),
+			produced
+		)
+
+		-- A generator is the shape fibonacci wants: `a` and `b` are locals
+		-- that happen to survive between resumes, not fields on an object.
+		local fib: table<integer> = Stream.collect(Stream.take(Stream.fibonacci(), 12))
+		printf("fibonacci: %s\n", String.join(", ", fib))
+
+		-- `reduce` and `chunk` are terminal and transforming stages over the
+		-- same `Coroutine<T>` — there is no second sequence abstraction here.
+		local sum: integer = Stream.reduce(Stream.take(Stream.naturals(1), 100), 0, (acc, n) => acc + n)
+		printf("sum of 1..100: %d\n", sum)
+
+		local rows: table<string> = {}
+		for batch in Stream.chunk(Stream.take(Stream.fibonacci(), 10), 4) do
+			rows[#rows + 1] = "[" .. String.join(" ", batch) .. "]"
+		end
+		printf("in chunks of four: %s\n", String.join(" ", rows))
+
+		-- Interleaving needs two sources driven by hand, which is what
+		-- `resume()`'s `T?` is for: `nil` marks the side that ran out.
+		local mixed: table<string> = Stream.collect(
+			Stream.interleave(Stream.of({"tick", "tick", "tick"}), Stream.of({"tock", "tock"}))
+		)
+		printf("interleaved: %s\n", String.join(" ", mixed))
+	end
+
+	-- 3 ----------------------------------------------------------------
+	static fn tokenizing()
+		Main.section(3, "Stackful tokenizing  (lexer.sau)")
+
+		-- `Lexer.scan` is a plain function called *inside* the coroutine, and
+		-- `Lexer.number` is a plain function called inside that. Both yield.
+		-- The suspended stack holds all three frames.
+		local shown: table<string> = {}
+		for token in Lexer.tokens("12 + rate * (7 - 3)") do
+			shown[#shown + 1] = tostring(token)
+		end
+		printf("%s\n", String.join("  ", shown))
+
+		-- Stopping early really does stop the work. `break` leaves the lexer
+		-- suspended on the character after the token it just handed over.
+		local stream: Coroutine<Token> = Lexer.tokens("1 + 2 + 3 + 4 + 5")
+		local before: integer = 0
+		for token in stream do
+			before = before + 1
+			if token.kind == Kind.Operator then
+				break
+			end
+		end
+		local resumed: Token? = stream.resume()
+		printf(
+			"read %d tokens, then broke out; the lexer is %s and next is %s\n",
+			before,
+			stream.status(),
+			resumed?.text ?? "nothing"
+		)
+
+		-- A `throw` the coroutine does not catch kills *it*, not the program.
+		-- Everything it yielded first was still delivered.
+		local broken: Coroutine<Token> = Lexer.tokens("2 + $")
+		local delivered: integer = 0
+		while true do
+			local token: Token? = broken.resume()
+			if token == nil then
+				break
+			end
+			delivered = delivered + 1
+		end
+		printf(
+			"bad input: %d tokens delivered, then %s — error() says: %s\n",
+			delivered,
+			broken.status(),
+			broken.error() ?? ""
+		)
+	end
+
+	-- 4 ----------------------------------------------------------------
+	static fn parsing()
+		Main.section(4, "Pull-based parsing  (calc.sau)")
+
+		-- The parser asks the lexer coroutine for one token at a time and
+		-- keeps one in hand to look ahead. Neither side buffers the input.
+		local env: table<string, float> = {}
+		env["rate"] = 2.5
+		env["hours"] = 8f
+
+		local expressions: table<string> = {
+			"2 + 3 * (4 - 1)",
+			"10 / 4",
+			"-3 + 20 % 7",
+			"rate * hours",
+			"2 * (rate + hours) - 1",
+		}
+
+		for source in expressions do
+			printf("  %-22s = %s\n", source, tostring(Calc.eval(source, env)))
+		end
+
+		-- Three kinds of bad input, all reported the same way: the lexer's
+		-- own failure travels out through the parser as a thrown string.
+		local broken: table<string> = {"2 + $", "2 + (3", "1 / 0", "2 + missing"}
+		for source in broken do
+			try
+				Calc.eval(source, env)
+			catch e: string
+				printf("  %-22s ! %s\n", source, e)
+			end
+		end
+	end
+
+	-- 5 ----------------------------------------------------------------
+	static fn tasks()
+		Main.section(5, "Cooperative tasks  (scheduler.sau)")
+
+		local sched: Scheduler = Scheduler()
+
+		-- Each task is a lambda that takes a yielder. Yielding is how a task
+		-- says "this is a good place to interrupt me".
+		sched.spawn("download", fn(co)
+			for percent = 25, 100, 25 do
+				co.yield("fetching " .. percent .. "%")
+			end
+		end)
+
+		sched.spawn("render", fn(co)
+			co.yield("laying out")
+			co.yield("painting")
+		end)
+
+		-- A task may drive a coroutine of its own. While the inner one runs,
+		-- this one's status is "normal" — resumed, but waiting on a child.
+		sched.spawn("report", fn(co)
+			for batch in Stream.chunk(Stream.take(Stream.fibonacci(), 6), 3) do
+				co.yield("row " .. String.join("+", batch))
+			end
+		end)
+
+		-- A task that fails takes nothing with it: its coroutine dies, the
+		-- scheduler reads `error()`, and the other tasks keep their turns.
+		sched.spawn("sensor", fn(co)
+			co.yield("reading 21.4C")
+			throw "sensor offline"
+		end)
+
+		-- `yield` inside a `try` resumes *inside the same try*, so a task can
+		-- pause mid-retry and still catch its own failure afterwards.
+		sched.spawn("retry", fn(co)
+			for attempt = 1, 3 do
+				try
+					co.yield("attempt " .. attempt)
+					if attempt < 3 then
+						throw "timed out"
+					end
+					co.yield("connected")
+				catch e: string
+					co.yield("recovered from: " .. e)
+				end
+			end
+		end)
+
+		local ticks: integer = sched.run()
+		printf("five tasks interleaved over %d ticks, on one thread\n", ticks)
+	end
+
+	-- 6 ----------------------------------------------------------------
+	static fn lifecycle()
+		Main.section(6, "Lifecycle and the dynamic form")
+
+		-- "normal" is the status of a coroutine that resumed another one and
+		-- is waiting on it. Only the inner one can see it, so the inner one
+		-- reports it.
+		local outer: Coroutine<string>? = nil
+		local inner: Coroutine<string> = Coroutine.create(fn(co)
+			co.yield("while I run, the one that resumed me is " .. (outer?.status() ?? "?"))
+		end)
+		outer = Coroutine.create(fn(co)
+			for note in inner do
+				co.yield(note)
+			end
+		end)
+		printf("%s\n", outer!.resume() ?? "")
+
+		-- A generator that might fail wants `resume()`, not `for … in`.
+		-- Iterating one **raises** when it fails — a loop has no return value
+		-- to report a failure in, and ending the loop quietly would make a
+		-- generator that crashed look like one that finished. Driving it by
+		-- hand turns that into a `nil` and a message, which is what the
+		-- tokenizer in part 3 and the scheduler in part 5 both do.
+		local failing: Coroutine<integer> = Coroutine.create(fn(co)
+			co.yield(1)
+			throw "halfway"
+		end)
+		while true do
+			local value: integer? = failing.resume()
+			if value == nil then
+				break
+			end
+			printf("drained %d\n", value!)
+		end
+		printf("it stopped because: %s\n", failing.error() ?? "it simply ended")
+
+		-- The typed contract is `fn(Yielder<T>) -> nil`: values travel one
+		-- way, out. The runtime can do more than that — `resume(x)` becoming
+		-- the result of the `yield` it wakes, and the body's return value
+		-- reaching the last `resume` — and `any` is how to ask for it, with
+		-- the checking moved to runtime like everything else `any`.
+		local body: any = fn(co: any, start: integer) -> string
+			local said: any = co.yield(start * 2)
+			local andThen: any = co.yield("you said " .. tostring(said))
+			return "signing off with " .. tostring(andThen)
+		end
+
+		local chat: any = Coroutine.create(body)
+		printf("resume(21)      -> %s\n", tostring(chat.resume(21)))
+		printf("resume(\"hi\")    -> %s\n", tostring(chat.resume("hi")))
+		printf("resume(7)       -> %s\n", tostring(chat.resume(7)))
+	end
+
+	-- A heading, so the output can be read top to bottom.
+	static fn section(number: integer, title: string)
+		println("")
+		printf("%d. %s\n", number, title)
+		println(String.rep("-", 62))
+	end
+end

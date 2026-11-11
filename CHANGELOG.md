@@ -18,9 +18,166 @@ history.
   program. See [Coroutines](./LANGUAGE.md#coroutines) and the
   [`Coroutine` reference](./DOCS.md#coroutine); the editor types, completes and
   documents both handles.
+- **A worked coroutines example.** [`examples/coroutines`](./examples/coroutines)
+  is a six-part tour: lazy stream combinators that are themselves coroutines,
+  a stackful tokenizer that yields from two frames below the body, a
+  recursive-descent parser that pulls one token at a time, and a cooperative
+  scheduler whose tasks interleave on one thread — one of which fails without
+  taking the others with it. The playground gains three coroutine programs
+  alongside it.
+- **The examples are tiered, and there are ten more of them.** Both the
+  playground picker and the Examples index group their programs as *Simple*,
+  *Intermediate* and *Advanced* — by the features you need to know to read
+  one, not by length — and each example page carries its tier as a sidebar
+  badge. The playground gains strings and text, tables, loops and control
+  flow, functions (defaults, named arguments, multiple returns, variadics),
+  error handling, enums, custom iterables, bitwise operators, wrapper types
+  and `when(…)` pipelines; its null-safety, pattern-matching and generics
+  programs were rewritten to cover `?.`/`?[`/`!`, guards and bindings, and
+  bounds. All 24 run under both engines in `npm run check-samples`.
 
 ### Changed
 
+- **Building an enum variant with a payload allocates three times, not
+  seven.** `Event.Click(x, y)` rebuilt both names — the enum's and the
+  variant's — from scratch on every construction: a `String` out of the enum
+  table and a `SauleStr` box around it, twice, for text that never changes.
+  The names are now made once per engine and shared. `match` −11%
+  (2.9x Lua → **2.5x**).
+- **A pattern search stops zeroing 512 bytes per character.** `find` built a
+  fresh match state at every start position it tried, and building one
+  clears its 32-entry capture array; an unanchored search over a line did
+  that once per character. The state is now reset instead — nothing reads a
+  capture above the current level, so it is the same state. `String.gsub`
+  also writes each replacement straight into its result, reading `%1`…`%9`
+  by span rather than building every capture's text to use one, and `match`
+  and `gsub` decode their arguments into reused buffers. `pattern` −17%
+  (2.1x Lua → **1.75x**), `wordfreq` −4%.
+- **`t[i]` with an integer inside the array is read and written in place.**
+  Every indexed read and write called the table's general `get` or `set` out
+  of line — which test every kind of key, string and hash part included — and
+  wrote the result back with the full drop of whatever the register held,
+  even a float. An integer key inside the array part now goes straight to the
+  slot, and anything else to the general path, so the answer is the same
+  either way; a store still tells the cycle collector about a container, and
+  a test now says so. `matrix` −21% (2.2x Lua → **1.8x**), `array` −5%.
+- **Copying a value is one branch, not a jump table — 14% across the suite.**
+  `Value::clone` matched `Nil`, `Bool`, `Int` and `Float` as four arms, and
+  LLVM lowered that to a jump table on the value's type. It is inlined into
+  every `MOVE`, `GETF` and `LOADK` — a third of all instructions executed —
+  so each of those carried a second indirect branch after the dispatch's own,
+  predicted on the type of whatever was being copied. Copying any of the four
+  is the same sixteen bytes, so one "is it a scalar?" test now picks the
+  path. Found by reading the dispatch loop's machine code rather than its
+  profile, which only ever showed the cost smeared across `MOVE`. The suite's
+  geomean against Lua goes from 1.72x to **1.52x**; `oop` −25%, `closure`
+  −23%, `entity` −20%, `bytes` −18%, `fib` −13%, and nothing slower.
+- **A static call stops counting its closure, and a return of one value takes
+  a straight path.** A call to a statically-resolved function (`CALLK`,
+  `CALLSTAT` and their tail forms) took its closure out of the engine's cache
+  and bumped its reference count, and the return dropped it again — on the
+  same counter, every call, for a recursive function. The cache owns that
+  closure for the life of the engine, which is the guarantee that already lets
+  a frame hold its proto and chunk uncounted, so the frame now holds this one
+  the same way; a closure taken from a register is still owned, for the
+  reason the self-reassigning-closure test pins. And `RET1` into a caller
+  that wants one value — nearly every return — skips the general result loop,
+  its stack-growth check and its bounds checks, and the drop of an integer it
+  overwrites. `fib` −15% (2.4x Lua → **2.1x**), `bintree`, `errors`, `json`
+  −2% to −4%.
+- **`Iter.unique` looks plain values up in a hash map.** It compared each
+  element against everything kept so far, and cloned both operands of every
+  comparison into the general `==` on top: about 50,000 comparisons and
+  100,000 clones per call on 1000 integers with 97 distinct values, where the
+  Lua twin makes one table lookup per element. Plain values — everything but
+  objects — now go through a hash key built to agree exactly with the
+  language's `==`: `0.0` and `-0.0` are one value, `NaN` is never a
+  duplicate, `1`, `1.0` and `"1"` stay three. An object with an `OpEq`
+  overload is still asked, and asked in the same order and the same number of
+  times as before, so an overload with a side effect behaves as it did.
+  `iterlib` −47%, 3.5x Lua → **2.0x**.
+- **`Table.sort` moves elements instead of copying them.** Each merge pass
+  copied every element into a scratch buffer and copied the run back over the
+  original — two clones and a drop per element per pass, on each of the ~18
+  passes a 200k-element sort makes. The merge now moves values between two
+  buffers that swap roles every pass. `sort` −13%, `tablelib` −8%.
+- **A method call on a generic class is a vtable call.** On a receiver typed
+  `Stack<integer>` the compiler could prove no class at all — it recognised a
+  receiver's type only when the type was a bare name — so every `st.push(…)`
+  compiled to `CALLMX`, a by-name lookup and a re-entrant call, and every
+  `st.top` to `GETFX`. Type arguments are erased before classes are laid out,
+  so the head name *is* the layout: `Stack<integer>` now dispatches exactly
+  like a non-generic class, and a generic interface receiver through its
+  itable. `generic` −37%, 3.8x Lua → **2.4x**.
+- **A call site that sees a few classes remembers all of them.** The cache
+  behind `CALLM` and `CALLIF` held one class, so a site visiting two or three
+  in turn missed every time — and *rewrote* itself every time, an `Rc` clone,
+  a `borrow_mut` and a drop of the class it evicted, on top of the full
+  lookup. `iface` rotates through three shapes, so its one hot site missed on
+  100% of calls and the cache cost 20% of the program, more than having none.
+  A site now widens from one class to four, and past four stops writing
+  altogether. `iface` −23% (2.5x → **1.9x**), `entity` −14% (2.2x → 1.9x);
+  sites that only ever see one class are unchanged.
+- **A native that calls back a million times sets up once, not a million
+  times.** `Table.sort`'s comparator and every `Iter` combinator's callback
+  run on a register file of their own — the dispatch loop holds `&mut Vm`
+  across the native that is calling back, so the callee cannot have the
+  caller's — and *getting* one was per call what it could be per sort:
+  upgrading a `Weak`, taking a file out of the re-entry pool, handing it back
+  (which resets every register the callback touched), recovering the callee's
+  proto by downcast, and taking a call-depth guard. A `CallSession` holds all
+  of that open for the run of calls — the depth guard included, since the
+  calls are sequential and one guard bounds the same nesting — and the `Iter`
+  combinators stop allocating a fresh argument `Vec` per element on top of
+  it. `sort` −17% (2.9x Lua → **2.4x**), `iterlib` −17% (4.2x → **3.5x**),
+  `tablelib` −9%; the suite's geomean 1.9x → **1.8x**. What is left is no
+  longer the outlier it was: the same lambda costs 34 ns called from Saule
+  and 8.4 ns called from Lua, so the *ordinary* call path is now the thing to
+  attack.
+- **A program that does nothing starts in half the time.** `saule run` on an
+  empty file took 2.80 ms, and 1.50 ms of that was reading every installed
+  native package's library off the disk — a 1.8 MB library costs 0.8 ms in the
+  read and another 0.75 ms parsing the 114 metadata records inside it — to
+  learn names that most programs never ask for, before the program's first
+  byte was lexed. The scan now happens at the first `import` or other question
+  that needs it, so a program that imports no package never touches the
+  packages directory: **2.80 ms → 1.34 ms**, against Lua's 0.75 ms on the same
+  machine, and the `startup` benchmark from 3.9x Lua to 1.9x. Nothing about
+  what resolves, or what an unusable package reports, changed. The one reader
+  that used to force the scan on every run was the typechecker's signature
+  table — it registers what has been discovered and no longer does the
+  discovering, which import resolution, running first and asking per `import`,
+  already did.
+- **A call no longer touches three reference counts.** A `Frame` owned its
+  closure, its `Proto` and its `Chunk`, so entering and leaving one — which
+  happens on every call *and* every return — cost three increments and three
+  decrements. Two were for a guarantee the engine already makes: a `Chunk`
+  owns every `Proto` the VM runs and `VmShared` owns every `Chunk`, both for
+  longer than any frame over them, which is the invariant the dispatch loop
+  already relies on to *read* them out of a frame without a clone. The frame
+  now carries them the same way, so only the closure handle is counted — and
+  that asymmetry is deliberate: a closure's last strong reference can be the
+  very register or upvalue cell its own body overwrites. Worth `fib` −23%,
+  `closure` −12%, `bintree` −12%, `errors` −11%, `vecops` −10%, and −6% to
+  −8% on `sort`, `generic`, `match`, `iface` and `oop`; the core-mechanisms
+  geomean goes from 1.8x Lua to 1.7x and the suite's from 2.0x to 1.9x.
+  Call-free code is untouched, as it should be: `mandel`, `strings`,
+  `nullsafe` and `mathlib` do not move.
+- **`obj.field!` is one instruction, and `x != nil` is two.** Two codegen
+  fusions the VM's opcode table already had the opcodes for but nothing
+  emitted. A force-unwrapped field read was `GETF` + `UNWRAPNIL`, which
+  cloned the value into a temporary and then out of it again — a
+  reference-count round trip per link — and is now a single `GETFU`; a
+  nil comparison fell past every fused branch form and materialised a
+  boolean through `EQV` + `NOT` + `TEST`, and is now `JNIL` / `JNOTNIL`.
+  Both were measured with `--profile-bytecode` first, per `VM_DESIGN.md`
+  §16: `GETF UNWRAPNIL` was the top adjacent pair in
+  `benchmarks/sau/nullsafe.sau` at 5.7%, and the `EQV`/`NOT`/`TEST` triple
+  about an eighth of the same program. Together they take 18% of its
+  instructions out and `nullsafe` from 3.3x Lua to 2.9x; object-graph
+  walking such as `bintree` gains a little too. **The copy is what costs,
+  not the dispatch** — removing the cheaper triple alone moved the wall
+  clock not at all, which is worth knowing before fusing the next pair.
 - **A generic class's methods are checked like any other's.** On a receiver
   such as `Box<integer>`, `box.put("x")` is now an argument error, a misspelt
   method is reported, and a lambda argument's parameters take their types from
@@ -36,6 +193,17 @@ history.
 
 ### Fixed
 
+- **An index assignment on a generic class calls its `OpNewIndex`.**
+  `grid[1] = v` on a `Grid<T>` failed at run time with an internal "typed
+  opcode expected `table` but the register held `instance`": the compiler,
+  unable to prove a class for a generic receiver, took the assignment for a
+  table write. It is the class's overload now, as it already was on a
+  non-generic class.
+- **An `Iter` combinator reports a callback that is not a function even when
+  the source is empty.** The check sat inside the per-element loop, so
+  `Iter.map({}, 42)` quietly answered `{}` — the one input where a program
+  could pass a number as its callback and hear nothing about it. It is made
+  once, before the loop.
 - A callback run by a built-in — a `Table.sort` comparator, an operator
   overload, a `toString` — reads and writes the enclosing function's locals
   correctly. It used to touch its own registers instead: the caller never saw

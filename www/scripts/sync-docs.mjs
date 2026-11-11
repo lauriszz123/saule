@@ -230,6 +230,15 @@ function rewriteLinks(body, index, { file, section }) {
 		.replace(/\]\(\.{1,2}\/LANGUAGE\.md\)/g, `](${withBase('/guides/introduction/')})`)
 		.replace(/\]\(\.{1,2}\/README\.md\)/g, `](${withBase('/guides/introduction/')})`);
 
+	// `./examples/<dir>` is the project directory when the guide is read on
+	// GitHub. On the site it becomes that example's generated page — or a
+	// repository link when the project has no page, which is a 404 otherwise.
+	out = out.replace(/\]\(\.{1,2}\/examples\/([^)\s]+?)\/?\)/g, (match, dir) =>
+		EXAMPLES.some((e) => e.dir === dir)
+			? `](${withBase(`/examples/${dir}/`)})`
+			: `](${repoUrl(`examples/${dir}`)})`,
+	);
+
 	for (const anchor of unresolved) {
 		console.warn(`  ! ${file} › ${section}: unresolved link target #${anchor}`);
 	}
@@ -634,21 +643,68 @@ function write(plans, index) {
  * that actually works for that project — several take arguments, so a bare
  * `saule run` would just print usage. `note` carries a prerequisite.
  *
+ * `tier` is the difficulty heading the index groups the project under, and
+ * the badge the sidebar shows next to it: a project is tiered by the features
+ * you need to know to read it, not by how long it is. The array is kept in
+ * tier order, because that order is also the sidebar's.
+ *
  * Projects are left out of this list on purpose when they exist only as a
  * fixture (`native-package` has no Saule source of its own) or when the source
  * is too long to read on a web page (`json`, at ~500 lines, is linked instead).
  */
+/**
+ * The tiers, in the order they are read. `badge` is the Starlight variant
+ * the sidebar paints the label with.
+ */
+const TIERS = [
+	{
+		name: 'Simple',
+		badge: 'tip',
+		intro:
+			'Ordinary programs: arguments, files, tables and `match`, with nothing exotic in them.',
+	},
+	{
+		name: 'Intermediate',
+		badge: 'note',
+		intro:
+			'The type system and the object model doing real work — operators as interfaces, and a bigger program built out of plain features.',
+	},
+	{
+		name: 'Advanced',
+		badge: 'caution',
+		intro:
+			'What Saule does that its ancestors do not: index overloading, trailing blocks, coroutines, and calling into Rust.',
+	},
+];
+
 const EXAMPLES = [
+	// --- Simple --------------------------------------------------------
 	{
 		dir: 'fs-info-example',
+		tier: 'Simple',
 		title: 'Filesystem Info',
 		blurb:
 			'Inspects one path with `Os.fsInfo` and reports what it is. Shows nullable returns for paths that may not exist, and `match` over an enum with a `_` fallback.',
 		run: 'saule run -- .',
 		files: ['src/main.sau'],
 	},
+	// `json_usage` is deliberately absent: as of this writing it does not
+	// typecheck (`Json.decode` returns `any?`, which the example assigns
+	// straight to a `table?`). It stays linked under "Also in the repository"
+	// until that is fixed. `todo-app` already covers using a dependency.
+	{
+		dir: 'todo-app',
+		tier: 'Simple',
+		title: 'Todo App',
+		blurb:
+			'A complete command-line application: argument parsing with `Os.args()`, JSON persistence through the `json` library declared in `dependencies:`, `match` over subcommands, and rendering split into its own module.',
+		run: 'saule run -- add "write some Saule"\nsaule run -- list',
+		files: ['src/main.sau', 'src/storage.sau', 'src/render.sau'],
+	},
+	// --- Intermediate --------------------------------------------------
 	{
 		dir: 'vector-math',
+		tier: 'Intermediate',
 		title: 'Operator Overloading',
 		blurb:
 			'A `Vec2` that adds, negates, compares and prints like a built-in number, plus a `Path` where `#` counts points and concatenation joins two paths. Shows how each operator is an interface whose method supplies both the behaviour and the result type.',
@@ -657,6 +713,7 @@ const EXAMPLES = [
 	},
 	{
 		dir: 'bitwise-flags',
+		tier: 'Intermediate',
 		title: 'Bitwise Operators',
 		// No literal `|` in this blurb: the index page renders it inside a
 		// markdown table cell with backticks stripped, where a pipe would
@@ -667,7 +724,18 @@ const EXAMPLES = [
 		files: ['src/permissions.sau', 'src/color.sau', 'src/main.sau'],
 	},
 	{
+		dir: 'bf',
+		tier: 'Intermediate',
+		title: 'Brainfuck Interpreter',
+		blurb:
+			'An interpreter for another language, in about 240 lines. Tables as a tape, a dispatch loop, and a program that takes its source file from `Os.args()`.',
+		run: 'saule run -- -d          # embedded hello world\nsaule run -- test.bf     # or a .bf file\nsaule run -- 400quine.bf',
+		files: ['src/main.sau', 'src/interpreter.sau'],
+	},
+	// --- Advanced ------------------------------------------------------
+	{
 		dir: 'wrapper-types',
+		tier: 'Advanced',
 		title: 'Wrapper Types',
 		// No literal `|` in this blurb — the index renders it inside a
 		// markdown table cell with backticks stripped, where a pipe would
@@ -677,28 +745,9 @@ const EXAMPLES = [
 		run: 'saule run',
 		files: ['src/text.sau', 'src/settings.sau', 'src/main.sau'],
 	},
-	// `json_usage` is deliberately absent: as of this writing it does not
-	// typecheck (`Json.decode` returns `any?`, which the example assigns
-	// straight to a `table?`). It stays linked under "Also in the repository"
-	// until that is fixed. `todo-app` already covers using a dependency.
-	{
-		dir: 'todo-app',
-		title: 'Todo App',
-		blurb:
-			'A complete command-line application: argument parsing with `Os.args()`, JSON persistence through the `json` library declared in `dependencies:`, `match` over subcommands, and rendering split into its own module.',
-		run: 'saule run -- add "write some Saule"\nsaule run -- list',
-		files: ['src/main.sau', 'src/storage.sau', 'src/render.sau'],
-	},
-	{
-		dir: 'bf',
-		title: 'Brainfuck Interpreter',
-		blurb:
-			'An interpreter for another language, in about 240 lines. Tables as a tape, a dispatch loop, and a program that takes its source file from `Os.args()`.',
-		run: 'saule run -- -d          # embedded hello world\nsaule run -- test.bf     # or a .bf file\nsaule run -- 400quine.bf',
-		files: ['src/main.sau', 'src/interpreter.sau'],
-	},
 	{
 		dir: 'ui-blocks',
+		tier: 'Advanced',
 		title: 'Declarative UI',
 		blurb:
 			'A miniature SwiftUI-shaped toolkit drawn to the terminal: every widget is a class, constructing one draws it, and containers take their children as a trailing block (`Panel(title: "…") do … end`). Shows an immediate-mode layout engine that builds no widget tree, and why a block beats a table of children — `if` and `for` work inside one.',
@@ -706,7 +755,20 @@ const EXAMPLES = [
 		files: ['src/canvas.sau', 'src/widgets.sau', 'src/main.sau'],
 	},
 	{
+		dir: 'coroutines',
+		tier: 'Advanced',
+		title: 'Coroutines',
+		// No literal `|` in this blurb — the index renders it inside a
+		// markdown table cell with backticks stripped, where a pipe would
+		// start a new column.
+		blurb:
+			'A six-part tour of coroutines: lazy stream combinators over infinite sources, a tokenizer that yields from two frames below the coroutine body, a recursive-descent parser that pulls one token at a time, and a cooperative scheduler whose tasks interleave on one thread — one of which fails without taking the others with it. Shows `Coroutine<T>` and `Yielder<T>`, where `T` is learned from, stackful yielding through ordinary function calls, laziness that is counted rather than claimed, and the dynamic two-way form.',
+		run: 'saule run',
+		files: ['src/stream.sau', 'src/lexer.sau', 'src/calc.sau', 'src/scheduler.sau', 'src/main.sau'],
+	},
+	{
 		dir: 'toying',
+		tier: 'Advanced',
 		title: 'Graphics Window',
 		blurb:
 			'Opens a window and draws a rectangle that follows the mouse, using the Love2D-style Shine2D native package. Shows how Saule calls into a dynamically-loaded Rust library.',
@@ -732,12 +794,20 @@ function writeExamples() {
 			return;
 		}
 
+		const tier = TIERS.find((t) => t.name === example.tier);
+		if (!tier) throw new Error(`examples/${example.dir}: unknown tier ${example.tier}`);
+
 		const parts = [
 			'---',
 			`title: ${yamlString(example.title)}`,
 			`description: ${yamlString(plainText(example.blurb))}`,
 			'sidebar:',
 			`  order: ${i + 2}`, // 1 is reserved for the index page
+			// The tier, painted beside the title in the sidebar, so the
+			// listing says how hard each one is without being read.
+			'  badge:',
+			`    text: ${yamlString(tier.name)}`,
+			`    variant: ${tier.badge}`,
 			'---',
 			'',
 			`<!-- Generated from examples/${example.dir} by \`npm run sync-docs\`. Edit the example, not this file. -->`,
@@ -800,7 +870,7 @@ function writeExamples() {
 	const index = [
 		'---',
 		'title: Overview',
-		'description: "Complete Saule projects you can clone and run, from an 18-line tour to a Brainfuck interpreter."',
+		'description: "Complete Saule projects you can clone and run, grouped simple to advanced."',
 		'sidebar:',
 		'  order: 1',
 		'---',
@@ -811,12 +881,29 @@ function writeExamples() {
 		'page is read straight from it, so it always matches what you get when you',
 		'clone and run.',
 		'',
-		'| Example | What it shows |',
-		'|---|---|',
-		...listed.map(
-			(e) => `| [${e.title}](${withBase(`/examples/${e.dir}/`)}) | ${plainText(e.blurb)} |`
-		),
+		'They are grouped by what you need to know to read one, not by how long it',
+		'is, and each group is in reading order.',
 		'',
+		// One table per tier. A tier with nothing in it is left out rather
+		// than printed empty, so a project moving between tiers needs no
+		// second edit here.
+		...TIERS.flatMap((tier) => {
+			const inTier = listed.filter((e) => e.tier === tier.name);
+			if (inTier.length === 0) return [];
+
+			return [
+				`## ${tier.name}`,
+				'',
+				tier.intro,
+				'',
+				'| Example | What it shows |',
+				'|---|---|',
+				...inTier.map(
+					(e) => `| [${e.title}](${withBase(`/examples/${e.dir}/`)}) | ${plainText(e.blurb)} |`
+				),
+				'',
+			];
+		}),
 	];
 
 	if (extras.length) {

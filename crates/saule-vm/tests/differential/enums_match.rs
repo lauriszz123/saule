@@ -429,3 +429,31 @@ fn a_variant_value_can_be_any_expression() {
          E.A.value .. \":\" .. E.B.value .. \":\" .. E.C.value .. \":\" .. E.D.value .. \":\" .. E.F.value",
     );
 }
+
+/// A payload variant carries its enum's name and its own, now taken from a
+/// table built once per engine and indexed by enum and tag — so build
+/// variants of two enums, at more than one tag each, and read both names
+/// back. An index off by one enum or one tag names the wrong thing.
+#[test]
+fn a_payload_variant_carries_its_own_names() {
+    must_agree(
+        r#"
+enum Shape
+  Circle(r: float),
+  Rect(w: float, h: float),
+  Empty
+end
+enum Event
+  Click(x: integer, y: integer),
+  Key(code: string)
+end
+local out: string = ""
+for _, s in {Shape.Rect(1.0, 2.0), Shape.Circle(1.0), Shape.Empty} do
+  out = out .. tostring(s) .. "/" .. s.name .. " "
+end
+for _, e in {Event.Key("q"), Event.Click(1, 2)} do
+  out = out .. tostring(e) .. "/" .. e.name .. " "
+end
+out"#,
+    );
+}

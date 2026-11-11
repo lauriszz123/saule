@@ -1,0 +1,50 @@
+-- Stackful yield: an in-order tree walk that suspends mid-recursion.
+--
+-- The property that separates a real coroutine from a callback-driven
+-- generator. `yield` fires seventeen frames deep inside `walk`, so the
+-- runtime has to park that whole call stack and restore it on the next
+-- resume. A generator built on callbacks cannot do this at all; one built on
+-- an explicit worklist has to reify the stack by hand.
+class Node
+	v: integer
+	left: Node?
+	right: Node?
+
+	fn init(v: integer, left: Node?, right: Node?)
+		self.v = v
+		self.left = left
+		self.right = right
+	end
+
+	-- The yielder is an ordinary value, so it travels down the recursion and
+	-- every frame can yield on the coroutine's behalf.
+	fn walk(co: Yielder<integer>)
+		self.left?.walk(co)
+		co.yield(self.v)
+		self.right?.walk(co)
+	end
+end
+
+class Main
+	static fn build(lo: integer, hi: integer) -> Node?
+		if lo > hi then
+			return nil
+		end
+		local mid: integer = (lo + hi) / 2
+		return Node(mid, Main.build(lo, mid - 1), Main.build(mid + 1, hi))
+	end
+
+	static fn main()
+		local root: Node = Main.build(1, 120000)!
+		local total: integer = 0
+		for pass: integer = 1, 16 do
+			local walked: Coroutine<integer> = Coroutine.create(fn(co)
+				root.walk(co)
+			end)
+			for v in walked do
+				total = total + v
+			end
+		end
+		println(total)
+	end
+end

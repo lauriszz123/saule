@@ -967,3 +967,213 @@ fn an_or_in_branch_position_is_left_alone() {
          check(1, 0) .. check(0, 1) .. check(0, 0) .. check(1, 1)",
     );
 }
+
+#[test]
+fn a_nil_comparison_feeding_an_if_becomes_a_nil_branch() {
+    // `nil` has no numeric kind, so neither side of `x != nil` reaches the
+    // fused numeric branches, and `constant_compare_jump` takes `==` only.
+    // `!=` therefore materialised a boolean: `EQV` + `NOT` + `TEST` + `JMP`,
+    // four words to ask whether a register holds nil. `--profile-bytecode`
+    // on `nullsafe` counted `EQV`, `NOT` and `TEST` at 216,000 each of
+    // 5,088,042 instructions — about an eighth of the program, all of it
+    // one `!= nil`.
+    for (op, want) in [("==", "JNIL"), ("!=", "JNOTNIL")] {
+        let src = format!(
+            "local x: integer? = 3{NL}local r: integer = 0{NL}\
+             if x {op} nil then{NL} r = 1{NL}end{NL}r"
+        );
+        let l = listing(&src);
+        assert!(
+            emits(&l, want),
+            "`{op} nil` did not fuse to {want}:{NL}{l}"
+        );
+        assert!(
+            !emits(&l, "EQV"),
+            "`{op} nil` still materialises a boolean:{NL}{l}"
+        );
+        assert!(!emits(&l, "NOT"), "`{op} nil` still negates:{NL}{l}");
+        assert!(!emits(&l, "TEST"), "`{op} nil` still tests:{NL}{l}");
+        must_agree(&src);
+    }
+}
+
+#[test]
+fn a_nil_comparison_folds_from_either_side() {
+    // `==` and `!=` commute, so the literal folds whichever side it is on
+    // and there is no mirrored opcode.
+    let src = format!(
+        "local x: integer? = 3{NL}local r: integer = 0{NL}\
+         if nil != x then{NL} r = 1{NL}end{NL}r"
+    );
+    let l = listing(&src);
+    assert!(
+        emits(&l, "JNOTNIL"),
+        "a literal on the left did not fold:{NL}{l}"
+    );
+    must_agree(&src);
+}
+
+/// Two classes and a nullable link between them — the fixture the field
+/// force-unwrap tests below walk.
+const LINKED: &str = "class Leaf\n\
+\x20 v: integer?\n\
+\x20 fn init(v: integer?)\n    self.v = v\n  end\n\
+end\n\
+class Node\n\
+\x20 next: Leaf?\n\
+\x20 label: string? = \"tail\"\n\
+\x20 fn init(n: Leaf?)\n    self.next = n\n  end\n\
+end\n";
+
+#[test]
+fn a_force_unwrapped_field_read_fuses() {
+    // `GETF` + `UNWRAPNIL` collapses to `GETFU`. The saving is not the
+    // dispatch but the copy: `UNWRAPNIL` cloned the value out of one
+    // register and into another, which for an instance is a reference-count
+    // increment on the way in and a decrement on the old occupant's way
+    // out. `--profile-bytecode` on `nullsafe` counted `GETF UNWRAPNIL` as
+    // the **top adjacent pair**, 288,000 of 5,088,042 instructions.
+    let src = format!("{LINKED}local n: Node = Node(Leaf(42)){NL}n.next!.v!");
+    let l = listing(&src);
+    assert!(emits(&l, "GETFU"), "the field unwrap did not fuse:{NL}{l}");
+    assert!(
+        !emits(&l, "UNWRAPNIL"),
+        "the separate unwrap is still emitted:{NL}{l}"
+    );
+    must_agree(&src);
+}
+
+#[test]
+fn a_force_unwrapped_static_read_keeps_the_separate_unwrap() {
+    // Only the instance-**field** form fuses. A static read reaches its
+    // member through `GETSTAT`, which has no unwrapping form and no
+    // measured pair asking for one, so it keeps `UNWRAPNIL` — and this is
+    // the assertion that fails if `member_read` ever starts reporting a
+    // fusion it did not perform, which would drop the nil test entirely.
+    let src = format!(
+        "class Holder{NL}\x20 static total: integer? = 99{NL}end{NL}Holder.total!"
+    );
+    let l = listing(&src);
+    assert!(emits(&l, "GETSTAT"), "expected a static read:{NL}{l}");
+    assert!(
+        emits(&l, "UNWRAPNIL"),
+        "a static read must keep its own unwrap:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "GETFU"),
+        "a static read must not fuse as a field:{NL}{l}"
+    );
+    must_agree(&src);
+}
+
+/// A generic class, a subclass of it, and an interface over it — every
+/// shape whose receiver the type table records as `Type::Generic`.
+const GENERIC: &str = r#"
+interface Holder<T>
+  fn get() -> T
+end
+
+class Box<T> implements Holder<T>
+  item: T
+  count: integer
+
+  fn init(v: T)
+    self.item = v
+    self.count = 0
+  end
+
+  fn get() -> T
+    self.count = self.count + 1
+    return self.item
+  end
+
+  fn put(v: T)
+    self.item = v
+  end
+end
+
+class Tagged<T> extends Box<T>
+  fn init(v: T)
+    self.super(v)
+  end
+
+  fn get() -> T
+    self.count = self.count + 10
+    return self.item
+  end
+end
+"#;
+
+#[test]
+fn a_generic_receiver_dispatches_through_the_vtable() {
+    // `Box<integer>` used to prove no class at all: the compiler only
+    // recognised a receiver typed `Type::Named`, so every method call on an
+    // instance of a generic class was a `CALLMX` — a name probe and a
+    // re-entrant call — and every field access a `GETFX`. That was a
+    // quarter of the `generic` benchmark. Type arguments are erased before
+    // layouts are built, so the head name is the layout, and the call is
+    // the same `CALLM` a non-generic class gets.
+    let src = format!(
+        r#"{GENERIC}
+local b: Box<integer> = Box(5)
+b.put(b.get() + 1)
+b.item = b.item * 10
+b.count + b.item"#
+    );
+    let l = listing(&src);
+    assert!(
+        emits(&l, "CALLM"),
+        "the method call is not a vtable call:{NL}{l}"
+    );
+    assert!(
+        emits(&l, "GETF"),
+        "the field read is not a slot read:{NL}{l}"
+    );
+    assert!(
+        emits(&l, "SETF"),
+        "the field write is not a slot write:{NL}{l}"
+    );
+    for dynamic in ["CALLMX", "GETFX", "SETFX"] {
+        assert!(
+            !emits(&l, dynamic),
+            "a generic receiver still took the dynamic path ({dynamic}):{NL}{l}"
+        );
+    }
+    must_agree(&src);
+}
+
+#[test]
+fn a_generic_subclass_still_dispatches_virtually() {
+    // The vtable call has to land on the *override* when the static type
+    // is the generic parent and the instance is the generic subclass — the
+    // prefix invariant (§8.3) is what makes the parent's slot correct, and
+    // erasure is what makes it the same slot for every `T`.
+    let src = format!(
+        r#"{GENERIC}
+local t: Tagged<integer> = Tagged(3)
+local b: Box<integer> = t
+local first: integer = b.get()
+first * 100 + b.count"#
+    );
+    assert!(!emits(&listing(&src), "CALLMX"));
+    must_agree(&src);
+}
+
+#[test]
+fn a_generic_interface_receiver_dispatches_through_the_itable() {
+    let src = format!(
+        r#"{GENERIC}
+local h: Holder<string> = Box("seven")
+h.get()"#
+    );
+    let l = listing(&src);
+    assert!(
+        emits(&l, "CALLIF"),
+        "the interface call is not an itable call:{NL}{l}"
+    );
+    assert!(
+        !emits(&l, "CALLMX"),
+        "the interface call went dynamic:{NL}{l}"
+    );
+    must_agree(&src);
+}

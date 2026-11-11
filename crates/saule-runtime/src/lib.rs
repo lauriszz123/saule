@@ -114,11 +114,13 @@ pub fn init() {
         // lives behind an `import "..."`. Third-party packages call
         // `native_packages::register` themselves.
         stdlib::register_builtin_packages();
-        // Discover externally-installed native packages under
-        // `~/.saule/native_packages/`. This only reads the description each
-        // library carries, out of the file — the libraries themselves are
-        // loaded lazily, at the `import` that needs one.
-        dynamic_packages::discover();
+        // Externally-installed native packages under
+        // `~/.saule/native_packages/` are *not* discovered here. Reading
+        // their descriptions means reading their files, which cost more than
+        // half the runtime of a program that does nothing — paid by every
+        // run, for packages most programs never import. The scan happens at
+        // the first question that needs it instead; see
+        // `dynamic_packages::discover`.
     });
 }
 

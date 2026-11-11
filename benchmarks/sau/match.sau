@@ -1,0 +1,55 @@
+-- `match` over an enum that carries payloads, with guards.
+--
+-- `interp` dispatches on a bare tag; this is the other half of pattern
+-- matching — arms that destructure a variant's fields into locals, plus two
+-- arms for the same variant separated only by a `when` guard, so the match
+-- cannot be a jump table and has to fall through to the next arm when a
+-- guard fails.
+enum Event
+	Click(x: integer, y: integer),
+	Key(code: integer),
+	Scroll(dy: integer),
+	Quit
+end
+
+class Main
+	static fn handle(e: Event) -> integer
+		return match e
+			case Event.Click(x, y) then x + y * 2
+			-- Two arms, one variant: the guard decides, and a false guard
+			-- resumes matching at the arm below.
+			case Event.Key(c) when c > 100 then c * 3
+			case Event.Key(c) then c
+			case Event.Scroll(dy) when dy < 0 then -dy
+			case Event.Scroll(dy) then dy
+			case Event.Quit then 0
+		end
+	end
+
+	static fn main()
+		local n: integer = 200000
+		local events: table<Event> = {}
+		local seed: integer = 13579
+		for i: integer = 1, n do
+			seed = (seed * 1103515245 + 12345) % 2147483648
+			local kind: integer = seed % 4
+			if kind == 0 then
+				Table.insert(events, Event.Click(seed % 640, seed % 480))
+			elseif kind == 1 then
+				Table.insert(events, Event.Key(seed % 200))
+			elseif kind == 2 then
+				Table.insert(events, Event.Scroll(seed % 21 - 10))
+			else
+				Table.insert(events, Event.Quit)
+			end
+		end
+
+		local total: integer = 0
+		for pass: integer = 1, 13 do
+			for i: integer = 1, n do
+				total = total + Main.handle(events[i]!)
+			end
+		end
+		println(total)
+	end
+end

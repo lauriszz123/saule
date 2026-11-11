@@ -179,3 +179,81 @@ fn a_shadowed_prelude_name_in_a_value_position_is_not_folded() {
         "local Math: table<string, float> = {pi: 3.0}\n         local m: table<string, float> = Math\n         m[\"pi\"]",
     );
 }
+
+// ── the integer-index fast path ───────────────────────────────────────────
+//
+// `t[i]` and `t[i] = v` read and write an integer key inside the array part
+// in place, and hand every other key to the table's general `get`/`set`.
+// The line between the two is exactly where a bug would hide: these walk
+// every key on either side of it and must answer as the general path does.
+
+#[test]
+fn an_integer_index_reads_the_same_on_both_sides_of_the_array() {
+    must_agree(
+        r#"
+local t: table<integer, integer> = {10, 20, 30}
+t[100] = 7
+t[-2] = 8
+local out: string = ""
+for _, i in {0, 1, 2, 3, 4, 100, -2, -1} do
+  out = out .. (t[i] ?? -1) .. ","
+end
+out"#,
+    );
+}
+
+#[test]
+fn an_integer_index_writes_the_same_on_both_sides_of_the_array() {
+    // Inside the array, at the slot one past it (an append, which pulls a
+    // contiguous key in from the hash part), far past it, at zero, and a
+    // value of another kind into an existing slot.
+    must_agree(
+        r#"
+local t: table<integer, any> = {1, 2, 3}
+t[2] = 20
+t[5] = 50
+t[4] = 40
+t[1000] = 9
+t[0] = "zero"
+t[3] = "three"
+local out: string = #t .. ":"
+for _, i in {0, 1, 2, 3, 4, 5, 6, 1000} do
+  out = out .. tostring(t[i]) .. ","
+end
+out"#,
+    );
+}
+
+#[test]
+fn a_force_unwrapped_index_reads_through_the_fast_path_and_fails_past_it() {
+    must_agree("local t: table<integer> = {4, 5, 6}\nt[1]! * 100 + t[3]!");
+    must_agree("local t: table<integer> = {4, 5, 6}\nt[4]!");
+}
+
+#[test]
+fn a_table_stored_through_an_array_slot_is_still_seen_by_the_cycle_collector() {
+    // The fast path writes an array slot without going through
+    // `TableObject::set`, which is where containers are registered with the
+    // cycle collector — so it calls `gc::on_store` itself, and this is what
+    // says it does. Each `t[1] = t` lands in an existing array slot, which is
+    // the fast path, and leaves a self-cycle once the loop's `t` is gone. If
+    // the store went unregistered the collector could not see any of them.
+    let src = r#"
+local i: integer = 0
+while i < 3 do
+  local t: table<any> = {0}
+  t[1] = t
+  i = i + 1
+end
+0"#;
+    let module = front_end(src);
+    let chunk = saule_vm::compile(&module, "cycles.sau", src).expect("compiles");
+    // Anything an earlier test left on this thread's registry.
+    saule_runtime::gc::collect();
+    saule_vm::run_chunk(std::rc::Rc::new(chunk)).expect("runs");
+    assert_eq!(
+        saule_runtime::gc::collect(),
+        3,
+        "the three self-cycles made through an array slot were not all collected"
+    );
+}

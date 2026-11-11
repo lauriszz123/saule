@@ -198,10 +198,14 @@ fn opcode_numbering_is_stable() {
     // ...and all of them kept theirs when `CONV` was appended after the
     // block, which is the same story one entry later.
     assert_eq!(Op::JNEII as u8, 129);
+    // And again for `GETFU`: `CONV` keeps 130, which is the whole point of
+    // appending.
+    assert_eq!(Op::CONV as u8, 130);
+    assert_eq!(Op::GETFU as u8, 131);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::CONV),
-        "a new opcode was appended after CONV — extend this assertion rather than \
+        Some(Op::GETFU),
+        "a new opcode was appended after GETFU — extend this assertion rather than \
          inserting one in the middle"
     );
 }

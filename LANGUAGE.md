@@ -3463,6 +3463,12 @@ println(gen.resume(10))       -- 10
 println(gen.resume("back"))   -- got back
 ```
 
+A worked tour of all of this — lazy stream combinators that are themselves
+coroutines, a tokenizer that yields from inside the functions it calls, a
+parser that pulls one token at a time, and a cooperative scheduler whose tasks
+interleave on one thread — is in
+[`examples/coroutines`](./examples/coroutines).
+
 See the [`Coroutine` reference](./DOCS.md#coroutine) for every method.
 
 ---

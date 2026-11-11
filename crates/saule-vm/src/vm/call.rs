@@ -12,6 +12,7 @@ use saule_runtime::{RuntimeError, Value};
 use crate::chunk::{Chunk, InlineCache, Proto};
 use crate::op::{Instruction, Op};
 
+use super::frame::{Held, hold};
 use super::ops::operand_err;
 use super::{ALL_RESULTS, Closure, Frame, Vm};
 
@@ -50,8 +51,10 @@ impl Vm {
     ///
     /// The uncached probe is `Rc::as_ptr`, a hash, a map probe and two
     /// indexed loads, and it was 9.3% of `bintree` and 7.7% of `interp`.
-    /// A call site almost always sees one receiver class, so remembering
-    /// the last one turns all of that into a pointer compare.
+    /// A call site almost always sees one receiver class, so remembering it
+    /// turns all of that into a pointer compare — and a site that sees a
+    /// few, in turn, remembers each of them rather than evicting one per
+    /// call (see [`InlineCache`]).
     ///
     /// **Keyed by `pc`.** One call site is one instruction, so the program
     /// counter identifies it without an operand — `CALLM` is `ABC` with no
@@ -69,41 +72,73 @@ impl Vm {
         proto: &Proto,
         here: u32,
     ) -> Result<(usize, u32), RuntimeError> {
-        let site = here as usize;
-        {
-            let Value::Instance(inst) = &self.stack[recv] else {
-                return Err(operand_err(&self.stack[recv], "instance", proto, here));
-            };
-            let inst = inst.borrow();
-            if let Some(InlineCache::Mono {
-                class,
-                module,
-                target,
-            }) = proto.caches.borrow().get(site)
-                && Rc::ptr_eq(class, &inst.class)
-            {
-                return Ok((*module as usize, *target));
-            }
+        if let Some(hit) = self.cached_callee(recv, proto, here)? {
+            return Ok(hit);
         }
-
-        // Miss: the full probe, then remember it. A polymorphic site simply
-        // keeps missing and pays one pointer compare for the privilege.
         let (module, target) = self.vtable_lookup(recv, slot, proto, here)?;
-        if let Value::Instance(inst) = &self.stack[recv]
-            && let Ok(module16) = u16::try_from(module)
-        {
-            let class = Rc::clone(&inst.borrow().class);
-            let mut caches = proto.caches.borrow_mut();
-            if caches.len() < proto.code.len() {
-                caches.resize(proto.code.len(), InlineCache::Empty);
-            }
-            caches[site] = InlineCache::Mono {
-                class,
-                module: module16,
-                target,
-            };
-        }
+        self.remember_callee(recv, proto, here, module, target);
         Ok((module, target))
+    }
+
+    /// The call-site cache's answer for the receiver in `recv`, if this site
+    /// has seen its class.
+    ///
+    /// Shared by `CALLM` and `CALLIF`: both cache the same thing, the callee
+    /// a receiver class resolves to, and differ only in the probe a miss
+    /// falls back to.
+    ///
+    /// `inline(always)`, because a plain `inline` was not taken: this came
+    /// out as a function of its own, so every *hit* — nearly every method
+    /// call in a program — paid a call and a `Result<Option<_>, RuntimeError>`
+    /// (72 bytes, `RuntimeError` being 64) written to memory and read back.
+    /// That was `oop` +4.6%, and it is exactly the path the cache exists to
+    /// make cheap.
+    #[inline(always)]
+    fn cached_callee(
+        &self,
+        recv: usize,
+        proto: &Proto,
+        here: u32,
+    ) -> Result<Option<(usize, u32)>, RuntimeError> {
+        let Value::Instance(inst) = &self.stack[recv] else {
+            return Err(operand_err(&self.stack[recv], "instance", proto, here));
+        };
+        let inst = inst.borrow();
+        Ok(proto
+            .caches
+            .borrow()
+            .get(here as usize)
+            .and_then(|c| c.probe(&inst.class))
+            .map(|(module, target)| (module as usize, target)))
+    }
+
+    /// Record a miss: the receiver in `recv` resolves to `(module, target)`
+    /// at this site — unless the site has seen so many classes that it has
+    /// stopped learning, in which case nothing is cloned or written.
+    ///
+    /// Out of line and `cold` on purpose. A site misses a handful of times
+    /// in its life and hits on every other call, and the code here — the
+    /// widening to a polymorphic cache, with its `Box` — inlined into the
+    /// `CALLM` path made the *hit* slower: `oop` +4.6%, `bintree` +2.7%,
+    /// `vecops` +2.9%, programs whose sites never miss after the first call.
+    #[cold]
+    #[inline(never)]
+    fn remember_callee(&self, recv: usize, proto: &Proto, here: u32, module: usize, target: u32) {
+        let Value::Instance(inst) = &self.stack[recv] else {
+            return;
+        };
+        let Ok(module16) = u16::try_from(module) else {
+            return;
+        };
+        let site = here as usize;
+        let mut caches = proto.caches.borrow_mut();
+        if caches.get(site).is_some_and(|c| !c.learns()) {
+            return;
+        }
+        if caches.len() < proto.code.len() {
+            caches.resize(proto.code.len(), InlineCache::Empty);
+        }
+        caches[site].record(Rc::clone(&inst.borrow().class), module16, target);
     }
 
     /// Resolve a vtable slot against the class of the instance in `recv`.
@@ -171,37 +206,11 @@ impl Vm {
         proto: &Proto,
         here: u32,
     ) -> Result<(usize, u32), RuntimeError> {
-        let site = here as usize;
-        {
-            let Value::Instance(inst) = &self.stack[recv] else {
-                return Err(operand_err(&self.stack[recv], "instance", proto, here));
-            };
-            let inst = inst.borrow();
-            if let Some(InlineCache::Mono {
-                class,
-                module,
-                target,
-            }) = proto.caches.borrow().get(site)
-                && Rc::ptr_eq(class, &inst.class)
-            {
-                return Ok((*module as usize, *target));
-            }
+        if let Some(hit) = self.cached_callee(recv, proto, here)? {
+            return Ok(hit);
         }
         let (module, target) = self.itable_lookup(recv, iface, slot, proto, here)?;
-        if let Value::Instance(inst) = &self.stack[recv]
-            && let Ok(module16) = u16::try_from(module)
-        {
-            let class = Rc::clone(&inst.borrow().class);
-            let mut caches = proto.caches.borrow_mut();
-            if caches.len() < proto.code.len() {
-                caches.resize(proto.code.len(), InlineCache::Empty);
-            }
-            caches[site] = InlineCache::Mono {
-                class,
-                module: module16,
-                target,
-            };
-        }
+        self.remember_callee(recv, proto, here, module, target);
         Ok((module, target))
     }
 
@@ -409,7 +418,8 @@ impl Vm {
     /// held across the whole chain.
     pub(crate) fn enter_tail_frame(
         &mut self,
-        handle: Rc<VmFunctionRef>,
+        handle: Held<VmFunctionRef>,
+        owns_func: bool,
         args_from: usize,
         n_args: usize,
         site: &Site<'_>,
@@ -418,8 +428,11 @@ impl Vm {
             message: "internal: frame handle is not a bytecode closure".into(),
             span: site.span(),
         })?;
-        let proto = Rc::clone(&cl.proto);
-        let chunk = Rc::clone(&cl.chunk);
+        // SAFETY: as in `push_frame` — the chunk owns the proto and `shared`
+        // owns the chunk, so neither can go away while this frame runs. The
+        // frame being replaced held them the same way, so overwriting it
+        // leaks no count either.
+        let (proto, chunk) = unsafe { (hold(&cl.proto), hold(&cl.chunk)) };
         let pdata = &*proto;
 
         let frame = self.frames.last().expect("frame");
@@ -457,6 +470,7 @@ impl Vm {
         let pc = pdata.entry_for(n_args);
         *self.frames.last_mut().expect("frame") = Frame {
             func: handle,
+            owns_func,
             proto,
             chunk,
             base: base as u32,
@@ -493,12 +507,28 @@ impl Vm {
                 span: site.span(),
             });
         }
-        let cl = Closure::from_handle(&func).ok_or_else(|| RuntimeError::TypeError {
-            message: "internal: frame handle is not a bytecode closure".into(),
-            span: site.span(),
-        })?;
-        let (proto, chunk) = (Rc::clone(&cl.proto), Rc::clone(&cl.chunk));
-        self.push_frame_resolved(func, proto, chunk, base, n_args, ret_to, n_ret, site)
+        let (proto, chunk) = {
+            let cl = Closure::from_handle(&func).ok_or_else(|| RuntimeError::TypeError {
+                message: "internal: frame handle is not a bytecode closure".into(),
+                span: site.span(),
+            })?;
+            // SAFETY: the closure's `Chunk` holds this `Proto`, and
+            // `shared.chunks` holds that `Chunk`, for longer than any frame
+            // over them — see `Frame::proto`. Taken in a block of its own so
+            // the borrow of `func` ends before it is moved into the frame.
+            unsafe { (hold(&cl.proto), hold(&cl.chunk)) }
+        };
+        self.push_frame_resolved(
+            std::mem::ManuallyDrop::new(func),
+            true,
+            proto,
+            chunk,
+            base,
+            n_args,
+            ret_to,
+            n_ret,
+            site,
+        )
     }
 
     /// [`push_frame`](Self::push_frame) for a caller that already holds the
@@ -510,9 +540,10 @@ impl Vm {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_frame_resolved(
         &mut self,
-        func: Rc<VmFunctionRef>,
-        proto: Rc<Proto>,
-        chunk: Rc<Chunk>,
+        func: Held<VmFunctionRef>,
+        owns_func: bool,
+        proto: Held<Proto>,
+        chunk: Held<Chunk>,
         base: u32,
         n_args: usize,
         ret_to: u32,
@@ -537,6 +568,7 @@ impl Vm {
         let pc = pdata.entry_for(n_args.min(u8::MAX as usize) as u8);
         self.frames.push(Frame {
             func,
+            owns_func,
             proto,
             chunk,
             base,
@@ -577,6 +609,21 @@ impl Vm {
         // `dst < src` always — the callee's base is the caller's `A + 1` at
         // the lowest — so a forward move never clobbers an unread source.
         debug_assert!(dst <= src);
+
+        // One value back to a caller that wants one: `RET1` into an
+        // expression, which is nearly every return a program makes. The
+        // general loop below paid a stack-growth check that cannot fire here
+        // (`dst + 1 <= src + 1`, and `src` is a register of the frame just
+        // popped), two bounds-checked indexes, and the full drop of the
+        // destination's old value even when it was an integer. Both
+        // registers are inside the file by the headroom invariant `reg`
+        // documents, and `set_reg` skips the drop for a scalar.
+        if count == 1 && frame.n_ret == 1 {
+            let v = std::mem::replace(self.reg_mut(src), Value::Nil);
+            self.set_reg(dst, v);
+            return false;
+        }
+
         let wanted = if frame.n_ret == ALL_RESULTS {
             count
         } else {
@@ -690,27 +737,41 @@ impl Vm {
         n_ret: u8,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
-        let chunk = Rc::clone(&self.shared.chunks[tm]);
-        let proto = Rc::clone(chunk.proto(target));
-        let handle = self.closure_for(&chunk, target);
-        self.push_frame_resolved(handle, proto, chunk, base, n_args, ret_to, n_ret, site)
+        // SAFETY: `shared.chunks` owns this chunk for as long as this `Vm`
+        // holds its `Rc<VmShared>`, which is the whole call, and the chunk
+        // owns the proto — see `Frame::proto`. Held rather than borrowed
+        // because `closure_for` and `push_frame_resolved` both want
+        // `&mut self`, which a borrow of `self.shared` would forbid.
+        let chunk = unsafe { hold(&self.shared.chunks[tm]) };
+        // SAFETY: as above — the proto belongs to `chunk`, which outlives
+        // the frame.
+        let proto = unsafe { hold(chunk.proto(target)) };
+        // SAFETY: the closure cache owns this closure for as long as the
+        // engine runs and never clears a cell — see `Frame::owns_func`.
+        let handle = unsafe { hold(self.closure_for(&chunk, target)) };
+        self.push_frame_resolved(
+            handle, false, proto, chunk, base, n_args, ret_to, n_ret, site,
+        )
     }
 
     /// A cached, upvalue-free closure for a statically-resolved callee, so
     /// `CALLK` allocates nothing per call.
-    pub(crate) fn closure_for(&self, chunk: &Rc<Chunk>, idx: u32) -> Rc<VmFunctionRef> {
+    ///
+    /// Lent, not cloned: the cache owns it for the life of the engine, so a
+    /// static call's frame holds it without a count (`Frame::owns_func`), and
+    /// a caller that needs to keep one clones it itself.
+    pub(crate) fn closure_for(&self, chunk: &Rc<Chunk>, idx: u32) -> &Rc<VmFunctionRef> {
         let m = chunk.module_index;
-        Rc::clone(self.shared.closure_cache[m][idx as usize].get_or_init(|| {
+        self.shared.closure_cache[m][idx as usize].get_or_init(|| {
             // Only on the first visit to this call site. Cloning the proto
             // here rather than in the caller keeps the hit path — which is
-            // every call after the first — down to two indexed loads and a
-            // refcount bump.
+            // every call after the first — down to two indexed loads.
             VmFunctionRef::new(Closure::bound(
                 Rc::clone(chunk.proto(idx)),
                 Rc::clone(chunk),
                 Vec::new(),
                 &self.shared,
             ))
-        }))
+        })
     }
 }

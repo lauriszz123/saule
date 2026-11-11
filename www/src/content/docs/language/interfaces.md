@@ -497,7 +497,7 @@ converts at those sites and only those, so relaxing the checker anywhere else
 would typecheck a value that never gets built — leaving a raw `string` inside
 a `table<Text>` for the first `Text` member call to trip over.
 
-See [`examples/wrapper-types`](./examples/wrapper-types) for all three
+See [`examples/wrapper-types`](/saule/examples/wrapper-types/) for all three
 working together.
 
 ---

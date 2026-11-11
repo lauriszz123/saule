@@ -495,8 +495,17 @@ pub fn find(src: &[char], pat: &[char], init: usize) -> Result<Option<Match>, St
     let anchored = is_anchored(pat);
     let pat_body = if anchored { &pat[1..] } else { pat };
     let mut s = init.min(src.len());
+    // One state for every start position, reset rather than rebuilt. Building
+    // it zeroes the whole capture array — 32 entries, 512 bytes — and doing
+    // that at each position an unanchored search slides past was the large
+    // `memset` in the `pattern` benchmark's profile, once per character of
+    // every line it searched. Nothing reads an entry at or above `level`, and
+    // every entry below it is written when its capture opens, so `level` and
+    // `depth` back at zero is exactly a fresh state.
+    let mut ms = MatchState::new(src, pat_body);
     loop {
-        let mut ms = MatchState::new(src, pat_body);
+        ms.level = 0;
+        ms.depth = 0;
         if let Some(e) = ms.do_match(s, 0)? {
             return Ok(Some(ms.collect(s, e)?));
         }
@@ -514,6 +523,26 @@ pub fn find(src: &[char], pat: &[char], init: usize) -> Result<Option<Match>, St
 /// more likely to be a typo than an intent.
 pub fn expand_replacement(template: &[char], src: &[char], m: &Match) -> Result<String, String> {
     let mut out = String::new();
+    expand_replacement_into(template, src, m, &mut out)?;
+    Ok(out)
+}
+
+/// [`expand_replacement`], appending to `out` — what `String.gsub` uses, so a
+/// replacement is written straight into the result rather than built in a
+/// `String` of its own per match and copied across.
+///
+/// A capture reference reads that capture's span directly. It used to call
+/// [`Match::capture_texts`], which builds a `String` for *every* capture and
+/// a `Vec` to hold them, to use one: `"<%2:%1>"` over two captures was six
+/// allocations per match thrown away. The rule `capture_texts` encodes is
+/// kept — a pattern with no captures has its whole match as capture `1` —
+/// and so is the message for a reference past the last one.
+pub fn expand_replacement_into(
+    template: &[char],
+    src: &[char],
+    m: &Match,
+    out: &mut String,
+) -> Result<(), String> {
     let mut i = 0;
     while i < template.len() {
         let c = template[i];
@@ -530,14 +559,18 @@ pub fn expand_replacement(template: &[char], src: &[char], m: &Match) -> Result<
             '0' => out.extend(&src[m.start..m.end]),
             d if d.is_ascii_digit() => {
                 let idx = d as usize - '1' as usize;
-                let texts = m.capture_texts(src);
-                let text = texts.get(idx).ok_or_else(|| {
+                let span = if m.captures.is_empty() {
+                    (idx == 0).then_some((m.start, m.end))
+                } else {
+                    m.captures.get(idx).copied()
+                };
+                let (from, to) = span.ok_or_else(|| {
                     format!(
                         "replacement refers to capture `%{d}`, but the pattern has {}",
-                        texts.len()
+                        m.captures.len().max(1)
                     )
                 })?;
-                out.push_str(text);
+                out.extend(&src[from..to]);
             }
             other => {
                 return Err(format!(
@@ -548,7 +581,7 @@ pub fn expand_replacement(template: &[char], src: &[char], m: &Match) -> Result<
         }
         i += 2;
     }
-    Ok(out)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -721,5 +754,45 @@ mod tests {
             r.is_err() || r.unwrap().is_none(),
             "must terminate, one way or the other"
         );
+    }
+
+    /// `find` keeps one state across the start positions it tries, reset
+    /// rather than rebuilt. An attempt that opens captures and then fails must
+    /// leave nothing a later attempt can see — not a capture, not the text a
+    /// back-reference compares against.
+    #[test]
+    fn a_failed_attempt_leaves_no_capture_behind() {
+        // Two captures open at `ab_` and again at `abd` before `abc` succeeds.
+        assert_eq!(caps("ab_abd_abc", "(a)(b)c").unwrap(), vec!["a", "b"]);
+        // Every attempt before `zz` captures a different letter for `%1`.
+        assert_eq!(m("xa yb zz", "(%a)%1").unwrap(), "zz");
+        // A deeper failure first: three levels open, then the last fails.
+        assert_eq!(
+            caps("((x)y ((x)z", "%((%((%a)%)z)").unwrap(),
+            vec!["(x)z", "x"]
+        );
+        assert_eq!(m("abc abd", "(a)(b)e"), None);
+    }
+
+    /// A pattern with no captures has its whole match as capture `1`, and
+    /// nothing as `2` — the rule `capture_texts` encodes, which the in-place
+    /// expansion now applies without building every capture's text.
+    #[test]
+    fn a_replacement_reads_captures_by_span() {
+        let s: Vec<char> = "ab cd".chars().collect();
+        let mt = find(&s, &"%a+".chars().collect::<Vec<_>>(), 0)
+            .unwrap()
+            .unwrap();
+        let t: Vec<char> = "<%1|%0>".chars().collect();
+        assert_eq!(expand_replacement(&t, &s, &mt).unwrap(), "<ab|ab>");
+        let two: Vec<char> = "%2".chars().collect();
+        assert_eq!(
+            expand_replacement(&two, &s, &mt).unwrap_err(),
+            "replacement refers to capture `%2`, but the pattern has 1"
+        );
+        // Appending: what is already in the buffer stays in front.
+        let mut out = String::from("pre:");
+        expand_replacement_into(&t, &s, &mt, &mut out).unwrap();
+        assert_eq!(out, "pre:<ab|ab>");
     }
 }
