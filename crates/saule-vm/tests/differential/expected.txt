@@ -523,3 +523,82 @@ cc7365223cd35d61	E force-unwrapped a `nil` value
 8ebb6ef85d716022	V string:-1,10,20,30,-1,7,8,-1,
 ec5a06a870fc0fe7	V string:5:zero,1,20,three,40,50,nil,9,
 2855afc4a415ed0c	V string:Shape.Rect/Rect Shape.Circle/Circle Shape.Empty/Empty Event.Key/Key Event.Click/Click 
+bbfc85f2e3dc845a	V integer:501
+44a634a94dabf2bf	V integer:-1
+a0480a1c49ddb8e8	V integer:4
+06d74c14bb632322	V integer:-9223372036854775807
+1e8019a23a709f13	V integer:0
+f12a4467fa16dd70	V float:-inf
+e689954f6732202f	V integer:4
+9ecc18696827bcf8	V string:none
+0f3a6ec355a0135f	V string:some
+7ef154308acb0f95	V integer:-6
+274c3673772cb7ed	V float:-0.5
+f637af16fdad249b	V boolean:false
+2675309840a699c2	V boolean:true
+abc47e814304bfe8	V boolean:false
+1abd512d8146b5fd	V boolean:true
+1157ab561e0dac00	V integer:44
+2ab9fd0490b1a97d	V integer:120
+d520bfddd9787f5b	V boolean:true
+0acf715b2191fc25	V integer:-1
+2d9ace35726441d1	V integer:0
+dd028019efae928f	V boolean:true
+3c76eb06f503bb11	V integer:-1
+2596ae49bf610ac2	E force-unwrapped a `nil` value
+a6c5aa6bf601127d	V integer:0
+4df7c4d29a1684d4	E force-unwrapped a `nil` value
+04c5cf222c19cb4b	V boolean:true
+0ca5fd99b150956e	E force-unwrapped a `nil` value
+1255d4cde5e7093d	V integer:-1
+6867cae5bd137708	V boolean:true
+57baa119c4b72089	V integer:0
+b3a326db8b2c88bd	E force-unwrapped a `nil` value
+5ed608120cd997a7	V boolean:true
+34afa408665d0c11	V boolean:false
+46bbf1983153aae2	V integer:7
+1d8fec580087cf63	V integer:4
+61b62b611a135e00	V integer:4
+0523d66890688bcb	V boolean:false
+ed975a214d9400a6	V boolean:false
+93d97e6232147bbd	V integer:42
+df82f765d79d00ad	V integer:21
+ec9257bc017a8a9a	V integer:11
+509ab6ede96a7f37	V integer:1
+125a0e91e729e78e	V integer:450
+cb1fbcbdd5a12e5b	V integer:4
+2b7d7fe3e83e51ed	V integer:7
+bfec2e9b80cdba70	V integer:3
+2c5306fcbb149a9a	V integer:5
+b5c25e2d6e349c1b	V integer:4
+7141ea232d903823	V integer:5
+5000847da5eb2bae	V integer:4
+264f15f26d70cf37	V integer:0
+35d482a3054dd02e	V integer:4
+c4f38e2525287998	V integer:5050
+d115c9dff05c4389	V integer:135
+56a1a2691d343090	V integer:211
+ba3bcc383f942b09	V boolean:true
+8cc5e66f007df59d	V integer:3
+ab53e34cee14d196	V integer:31
+39e5c3703d463fc2	E division by zero — cannot divide by 0
+0032191d7f48601f	V integer:5
+f9c05e5d81b2ff5d	V integer:-8
+ccf7ce5351cb19c2	V integer:110
+ef85ee52bf52d5cb	V integer:610
+84bdb57c529a959f	V integer:55
+a2158033d9d107ae	V integer:30
+590535b066e268e4	V integer:0
+a349a1bd995b1e9d	V integer:2
+a96c17d4dd62c0e6	V integer:2
+5901d1b066df8921	V integer:1
+a34cb5bd995d7670	V integer:2
+5bed24cd86a93e23	V integer:2
+58f439b066d3fc7d	V integer:-1
+a35a9dbd99698b04	V integer:1
+1273065b47ff60b7	V integer:1
+a24ddb11e5f01601	V integer:2
+186be82afd8f005a	V integer:4
+4fcd8c2da98e1b7e	V integer:37478
+6e57e03d93aedbec	E stack overflow: evaluation nested more than 10000 levels deep
+023fbd0ac9aef03f	V integer:14884

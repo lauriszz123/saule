@@ -83,6 +83,29 @@ impl Compiler<'_> {
         // Declared *after* the initializer, so `local x = x` reads the outer
         // `x` — the same order the resolver uses.
         self.f.declare(name, reg);
+        // `local add = (a, b) => a + b`, never reassigned and capturing
+        // nothing: every call through `add` reaches the same proto, so it
+        // can be called as one. See `FuncCtx::static_lambdas`.
+        if matches!(value.map(|v| &v.value), Some(Expr::Lambda { .. }))
+            && !self.assigned_names.contains(name)
+            && let Some(last) = self.f.code.last().copied()
+            && last.op() == Some(Op::CLOSURE)
+            && last.a() as u16 == reg
+            && let Some(&idx) = self.f.nested.get(last.bx() as usize)
+        {
+            let p = self.chunk.proto(idx);
+            if p.upvals.is_empty() && !p.is_variadic && p.entries.is_empty() {
+                let inline = value.and_then(|v| self.inlinable_lambda(v));
+                self.f
+                    .static_lambdas
+                    .push(crate::compile::ctx::func::StaticLambda {
+                        name: std::rc::Rc::from(name),
+                        reg,
+                        proto: idx,
+                        inline,
+                    });
+            }
+        }
         Ok(())
     }
 

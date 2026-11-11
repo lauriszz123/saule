@@ -199,11 +199,7 @@ impl Compiler<'_> {
                     self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
                     return Ok(Compiler::tail_result(base));
                 }
-                self.emit(
-                    Instruction::abc(Op::CALLSTAT, a, positional.len() as u8 + 1, want.c()),
-                    span,
-                );
-                self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
+                self.emit_static_call(a, positional.len() as u8 + 1, want.c(), packed, span);
                 self.finish_call(base, dst, want, mark, span)
             }
             Some(Binding::Module { .. }) if self.fn_protos.contains_key(name) => {
@@ -225,6 +221,41 @@ impl Compiler<'_> {
                 let m = self.mark();
                 // `CALLK`'s window starts at the *arguments*: there is no
                 // callee register, because the callee is the operand.
+                let n = (positional.len().max(1) as u16).max(want.slots());
+                let base = self.alloc_n(n, span)?;
+                for (i, arg) in positional.iter().enumerate() {
+                    self.expr_to(arg, base + i as u16)?;
+                }
+                let a = self.reg8(base, span)?;
+                let t = self.own_call_target(proto, span)?;
+                if self.tail_position(want) {
+                    self.emit(
+                        Instruction::abc(Op::TAILCALLK, a, positional.len() as u8 + 1, 0),
+                        span,
+                    );
+                    self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
+                    return Ok(Compiler::tail_result(base));
+                }
+                self.emit(
+                    Instruction::abc(Op::CALLK, a, positional.len() as u8 + 1, want.c()),
+                    span,
+                );
+                self.emit(Instruction::ax_of(Op::EXTRAARG, t), span);
+                self.finish_call(base, dst, want, m, span)
+            }
+            // A local that holds one upvalue-free lambda for its whole
+            // life: the callee is known, so this is the `CALLK` a top-level
+            // `fn` gets — no `MOVE` of the closure into the window, no
+            // handle to check, count or downcast on the way in.
+            Some(Binding::Local { .. })
+                if let Some((proto, inline)) = self.static_lambda(name, positional.len()) =>
+            {
+                if let Some(body) = inline
+                    && want == Want::Fixed(1)
+                {
+                    return self.inline_lambda_call(&body, &positional, dst, span);
+                }
+                let m = self.mark();
                 let n = (positional.len().max(1) as u16).max(want.slots());
                 let base = self.alloc_n(n, span)?;
                 for (i, arg) in positional.iter().enumerate() {
@@ -443,14 +474,10 @@ impl Compiler<'_> {
                 self.expr_to(arg, base + i as u16)?;
             }
             let a = self.reg8(base, span)?;
-            self.emit(
-                Instruction::abc(Op::CALLSTAT, a, args.len() as u8 + 1, want.c()),
-                span,
-            );
             // The *declaring* class, so an inherited `static fn` reached
             // through a subclass name still loads the parent's proto.
             let packed = ((s.class) << 16) | s.slot as u32;
-            self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
+            self.emit_static_call(a, args.len() as u8 + 1, want.c(), packed, span);
             return self.finish_call(base, dst, want, m, span);
         }
 
@@ -651,5 +678,162 @@ impl Compiler<'_> {
             span,
         );
         self.finish_call(base, dst, want, m, span)
+    }
+}
+
+use crate::compile::ctx::func::InlineBody;
+
+impl Compiler<'_> {
+    /// The proto `name` is bound to, when it is a local in
+    /// [`FuncCtx::static_lambdas`](crate::compile::ctx::func::FuncCtx) still
+    /// in scope, and `n_args` is exactly its parameter count — with its
+    /// body, when that can be compiled in place of the call.
+    fn static_lambda(&self, name: &str, n_args: usize) -> Option<(u32, Option<InlineBody>)> {
+        let reg = self.f.lookup(name)?;
+        let l = self
+            .f
+            .static_lambdas
+            .iter()
+            .find(|l| l.name.as_ref() == name && l.reg == reg)?;
+        (self.chunk.proto(l.proto).n_params as usize == n_args).then(|| (l.proto, l.inline.clone()))
+    }
+
+    /// `add(s, i)` where `add` is `(a, b) => a + b`: the body, compiled
+    /// right here with `a` and `b` naming the arguments' registers.
+    ///
+    /// Only for a body [`inlinable_lambda`](Self::inlinable_lambda)
+    /// accepted — arithmetic and comparisons on proved numbers, which can
+    /// neither fail nor call anything — so no error, stack trace or depth
+    /// limit can tell that the call never happened.
+    fn inline_lambda_call(
+        &mut self,
+        body: &InlineBody,
+        args: &[&Spanned<Expr>],
+        dst: u16,
+        span: &std::ops::Range<usize>,
+    ) -> Result<Results, CompileError> {
+        let (params, expr) = &**body;
+        let m = self.mark();
+        // Arguments are read where they are when all of them are pure —
+        // the body only reads its parameters, so there is nothing to protect
+        // them from but each other's evaluation.
+        let in_place = args.iter().all(|a| self.operand_is_pure(a));
+        let mut regs = Vec::with_capacity(args.len());
+        for a in args {
+            regs.push(self.operand_to_reg(a, in_place)?);
+        }
+        // The body writes its destination while it may still read a
+        // parameter, so a destination that *is* a parameter's register goes
+        // through a temporary.
+        let target = if regs.contains(&dst) {
+            self.alloc(span)?
+        } else {
+            dst
+        };
+        self.f.enter_scope();
+        for (p, r) in params.iter().zip(&regs) {
+            self.f.declare(p, *r);
+        }
+        let out = self.expr_to(expr, target);
+        self.f.leave_scope();
+        out?;
+        if target != dst {
+            let (a, b) = (self.reg8(dst, span)?, self.reg8(target, span)?);
+            self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
+        }
+        self.free_to(m);
+        Ok(Results {
+            base: dst,
+            count: Some(1),
+            terminated: false,
+        })
+    }
+
+    /// The parameters and body of `lambda`, if a call to it may be replaced
+    /// by its body: one expression, no declared return type, parameters
+    /// whose declared types convert nothing on entry, and a body that only
+    /// reads them through arithmetic and comparisons the typechecker proved
+    /// numeric. Anything that could fail, call, capture or convert keeps the
+    /// call.
+    pub(crate) fn inlinable_lambda(&self, lambda: &Spanned<Expr>) -> Option<InlineBody> {
+        let Expr::Lambda {
+            params,
+            return_ty: None,
+            body: saule_ast::LambdaBody::Expr(expr),
+        } = &lambda.value
+        else {
+            return None;
+        };
+        let plain = |t: &saule_ast::Type| match t {
+            saule_ast::Type::Named(n) => {
+                matches!(
+                    n.as_str(),
+                    "any" | "integer" | "float" | "number" | "boolean"
+                )
+            }
+            _ => false,
+        };
+        if params
+            .iter()
+            .any(|p| p.variadic || p.default.is_some() || !plain(&p.ty))
+        {
+            return None;
+        }
+        let names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        self.cannot_fail(expr, &names)
+            .then(|| std::rc::Rc::new((names, std::sync::Arc::clone(expr))))
+    }
+
+    fn cannot_fail(&self, e: &Spanned<Expr>, params: &[String]) -> bool {
+        use crate::compile::ctx::Num;
+        use saule_ast::{BinOp::*, UnaryOp};
+        match &e.value {
+            Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) => true,
+            Expr::Ident(n) => params.contains(n),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                rhs,
+            } => self.num_of_node(rhs).is_some() && self.cannot_fail(rhs, params),
+            Expr::Binary {
+                op: And | Or,
+                lhs,
+                rhs,
+            } => self.cannot_fail(lhs, params) && self.cannot_fail(rhs, params),
+            Expr::Binary { op, lhs, rhs } => {
+                let kind = match (self.num_of_node(lhs), self.num_of_node(rhs)) {
+                    (Some(l), Some(r)) if l == r => l,
+                    _ => return false,
+                };
+                // Integer `//` and `%` fail on zero; float division does not.
+                let ok = match op {
+                    Add | Sub | Mul | Lt | LtEq | Gt | GtEq | Eq | NotEq => true,
+                    Div => kind == Num::Float,
+                    _ => false,
+                };
+                ok && self.cannot_fail(lhs, params) && self.cannot_fail(rhs, params)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Compiler<'_> {
+    /// `CALLSTAT` to `packed` — or `CALLSELF` when that is the static method
+    /// being compiled, which needs no lookup at all: the callee is the frame
+    /// already running. `fib`'s two calls are this.
+    fn emit_static_call(
+        &mut self,
+        a: u8,
+        b: u8,
+        c: u8,
+        packed: u32,
+        span: &std::ops::Range<usize>,
+    ) {
+        if self.f.self_static == Some(packed) {
+            self.emit(Instruction::abc(Op::CALLSELF, a, b, c), span);
+            return;
+        }
+        self.emit(Instruction::abc(Op::CALLSTAT, a, b, c), span);
+        self.emit(Instruction::ax_of(Op::EXTRAARG, packed), span);
     }
 }

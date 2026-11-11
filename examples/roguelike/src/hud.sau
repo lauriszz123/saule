@@ -1,0 +1,160 @@
+-- What sits on top of the dungeon: hearts, coins, the minimap, banners, and
+-- the title, pause and death screens.
+
+from shine import Graphics, Font, Timer
+from dungeon import Dungeon
+from entities import Player
+from game import Game
+from art import Art
+
+export class Hud
+	small: Font
+	big: Font
+	huge: Font
+	-- The best score this session.
+	best: integer = 0
+
+	fn init()
+		self.small = Graphics.newFont(14.0)
+		self.big = Graphics.newFont(26.0)
+		self.huge = Graphics.newFont(56.0)
+	end
+
+	static fn score(g: Game) -> integer
+		return g.player.coins * 10 + g.player.kills * 5 + (g.depth - 1) * 100
+	end
+
+	fn draw(g: Game)
+		local w: float = Graphics.getWidth() as float
+		local p: Player = g.player
+
+		-- Hearts: two hit points each.
+		for i: integer = 0, p.maxHp / 2 - 1 do
+			local x: float = 24.0 + (i as float) * 26.0
+			Graphics.setColor(0.25, 0.08, 0.1)
+			Game.heart(x, 26.0, 9.0)
+			local left: integer = p.hp - i * 2
+			if left >= 2 then
+				Graphics.setColor(0.95, 0.3, 0.35)
+				Game.heart(x, 26.0, 9.0)
+			elseif left == 1 then
+				Graphics.setColor(0.95, 0.3, 0.35)
+				Graphics.setScissor(x - 12.0, 0.0, 12.0, 60.0)
+				Game.heart(x, 26.0, 9.0)
+				Graphics.setScissor()
+			end
+		end
+
+		Graphics.setFont(self.small)
+		Graphics.setColor(1.0, 0.82, 0.3)
+		Graphics.circle("fill", 22.0, 54.0, 6.0)
+		Graphics.setColor(1.0, 1.0, 1.0)
+		Graphics.print("" .. p.coins, 34.0, 46.0)
+		Graphics.print("Depth " .. g.depth .. "    Score " .. Hud.score(g), 16.0, 66.0)
+
+		-- Dash readiness, as a bar that refills.
+		local ready: float = 1.0 - p.dashCooldown / 0.9
+		Graphics.setColor(0.2, 0.25, 0.4, 0.8)
+		Graphics.rectangle("fill", 16.0, 88.0, 80.0, 5.0, 2.0)
+		Graphics.setColor(0.55, 0.7, 1.0)
+		Graphics.rectangle("fill", 16.0, 88.0, 80.0 * ready, 5.0, 2.0)
+
+		self.minimap(g, w)
+
+		if g.bannerTime > 0.0 then
+			Graphics.setFont(self.big)
+			local a: float = Math.min(1.0, g.bannerTime)
+			local tw: float = self.big.getWidth(g.banner)
+			Graphics.setColor(0.0, 0.0, 0.0, 0.5 * a)
+			Graphics.rectangle("fill", w / 2.0 - tw / 2.0 - 16.0, 96.0, tw + 32.0, 44.0, 8.0)
+			Graphics.setColor(1.0, 0.92, 0.75, a)
+			Graphics.print(g.banner, w / 2.0 - tw / 2.0, 104.0)
+		end
+
+		Graphics.setFont(self.small)
+		Graphics.setColor(1.0, 1.0, 1.0, 0.45)
+		Graphics.print(String.format("%d fps", Math.floor(Timer.getFPS())), w - 70.0, (Graphics.getHeight() as float) - 24.0)
+		Graphics.setColor(1.0, 1.0, 1.0)
+	end
+
+	-- The baked map shrunk down, with the same fog over it the dungeon has.
+	fn minimap(g: Game, w: float)
+		local scale: float = 1.0 / 8.0
+		local mw: float = (g.dungeon.w * Dungeon.TILE) as float * scale
+		local mh: float = (g.dungeon.h * Dungeon.TILE) as float * scale
+		local x: float = w - mw - 14.0
+		local y: float = 14.0
+		Graphics.setColor(0.0, 0.0, 0.0, 0.6)
+		Graphics.rectangle("fill", x - 4.0, y - 4.0, mw + 8.0, mh + 8.0, 4.0)
+		Graphics.setColor(1.0, 1.0, 1.0, 0.85)
+		Graphics.draw(g.art.map!, x, y, 0.0, scale)
+		Graphics.setColor(1.0, 1.0, 1.0)
+		Graphics.draw(g.art.fog!, x, y, 0.0, scale)
+		Graphics.setColor(0.4, 0.75, 1.0)
+		Graphics.circle("fill", x + g.player.x * scale, y + g.player.y * scale, 2.5)
+	end
+
+	fn title(time: float)
+		local w: float = Graphics.getWidth() as float
+		local h: float = Graphics.getHeight() as float
+		Graphics.setColor(0.0, 0.0, 0.0, 0.55)
+		Graphics.rectangle("fill", 0.0, 0.0, w, h)
+		Graphics.setFont(self.huge)
+		local t: string = "ROGUELIKE"
+		local glow: float = 0.8 + Math.sin(time * 2.0) * 0.2
+		Graphics.setColor(1.0, 0.75 * glow, 0.3 * glow)
+		Graphics.print(t, w / 2.0 - self.huge.getWidth(t) / 2.0, h * 0.28)
+		Graphics.setFont(self.small)
+		Graphics.setColor(0.9, 0.88, 0.8)
+		self.centered("A roguelite written in Saule, drawn with Shine", h * 0.28 + 76.0, w)
+		self.centered("WASD move    mouse aim    click / space shoot    shift dash", h * 0.58, w)
+		self.centered("Esc pause    M mute    F2 screenshot", h * 0.58 + 22.0, w)
+		Graphics.setFont(self.big)
+		Graphics.setColor(1.0, 0.92, 0.6, 0.6 + Math.sin(time * 4.0) * 0.4)
+		self.centered("Press Enter to descend", h * 0.74, w)
+		if self.best > 0 then
+			Graphics.setFont(self.small)
+			Graphics.setColor(0.8, 0.8, 0.8)
+			self.centered("Best score " .. self.best, h * 0.74 + 40.0, w)
+		end
+		Graphics.setColor(1.0, 1.0, 1.0)
+	end
+
+	fn paused()
+		local w: float = Graphics.getWidth() as float
+		local h: float = Graphics.getHeight() as float
+		Graphics.setColor(0.0, 0.0, 0.0, 0.6)
+		Graphics.rectangle("fill", 0.0, 0.0, w, h)
+		Graphics.setFont(self.big)
+		Graphics.setColor(1.0, 1.0, 1.0)
+		self.centered("Paused", h * 0.42, w)
+		Graphics.setFont(self.small)
+		self.centered("Esc to carry on, Q to give up", h * 0.42 + 40.0, w)
+	end
+
+	fn gameOver(g: Game, fade: float)
+		local w: float = Graphics.getWidth() as float
+		local h: float = Graphics.getHeight() as float
+		Graphics.setColor(0.08, 0.0, 0.0, 0.7 * fade)
+		Graphics.rectangle("fill", 0.0, 0.0, w, h)
+		Graphics.setFont(self.huge)
+		Graphics.setColor(0.95, 0.35, 0.3, fade)
+		self.centered("THE LIGHT GOES OUT", h * 0.3, w)
+		Graphics.setFont(self.big)
+		Graphics.setColor(1.0, 0.95, 0.85, fade)
+		self.centered("Score " .. Hud.score(g), h * 0.3 + 90.0, w)
+		Graphics.setFont(self.small)
+		self.centered("Depth " .. g.depth .. "    " .. g.player.kills .. " slain    " .. g.player.coins .. " coins", h * 0.3 + 130.0, w)
+		if Hud.score(g) >= self.best and self.best > 0 then
+			Graphics.setColor(1.0, 0.85, 0.3, fade)
+			self.centered("A new best!", h * 0.3 + 154.0, w)
+		end
+		Graphics.setColor(1.0, 1.0, 1.0, fade)
+		self.centered("Enter to try again", h * 0.72, w)
+		Graphics.setColor(1.0, 1.0, 1.0)
+	end
+
+	fn centered(text: string, y: float, w: float)
+		Graphics.print(text, w / 2.0 - Graphics.getFont().getWidth(text) / 2.0, y)
+	end
+end

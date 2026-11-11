@@ -38,6 +38,44 @@ history.
 
 ### Changed
 
+- **Every benchmark is now under 2x Lua; the suite is at 1.33x.** These
+  changes took the four that were still above it below:
+  - **`closure`** (2.5x → **0.8x**): a local that holds one lambda for its
+    whole life, captures nothing and is never reassigned is called as its
+    proto (`CALLK`), not as a value. If the body is arithmetic or
+    comparisons the typechecker proved numeric — which can neither fail nor
+    call anything — it is compiled at the call site instead.
+  - **`match`** (2.5x → **1.7x**): a payload field is one `GETPAY`,
+    replacing `UNWRAP`, `LOADI`, `GETARR` and a `MOVE`. A guard is a fused
+    compare-and-jump, not a boolean tested afterwards. A local scrutinee is
+    matched where it is. A chain whose arms are all variants of one enum
+    jumps on the tag to its first candidate arm instead of testing the arms
+    above it one by one.
+  - **`fib`** (2.1x → **1.8x**): a static method calling itself is a
+    `CALLSELF`, which looks nothing up. A recursive call and its return stay
+    in the dispatch loop instead of re-deriving the frame. `if n < 2 then
+    return n end` is one inverted test instead of a test and a jump. The
+    common one-value return skips `pop_frame`.
+  - **`bytes`** (2.2x → **1.6x**): a `byte` is an integer at run time, so
+    arithmetic on one now compiles to the integer opcodes instead of the
+    dynamic `ARITHX`.
+
+  Across the suite, a dynamic call no longer counts a reference to the
+  closure it calls, a static call reaches its callee through one cache cell
+  instead of three tables, and the dispatch loop decodes an opcode without a
+  table load.
+- **A chain of field reads is one instruction.** `row.mid?.inner?.v`,
+  `self.body.pos.x` and `a.b!.c!` each compiled to a field read per link, and
+  every `?.` added a four-instruction nil test around its read. Each read also
+  copied the object in the middle of the chain into a register — a reference
+  count bumped and dropped for an object the program was only passing
+  through. The compiler now records the chain's field slots once, as data in
+  the function, and one `GETPATH` walks them in place, copying only the value
+  at the end. Errors still point at the link that failed. With it, `x ?? 0`
+  and `x or ""` skip a literal fallback with one test instead of jumping
+  around it, `-1` is loaded as a literal rather than negated at run time,
+  and `t?[i]` on a table is a nil test and one read. `nullsafe` −35%
+  (2.7x Lua → **1.7x**).
 - **Building an enum variant with a payload allocates three times, not
   seven.** `Event.Click(x, y)` rebuilt both names — the enum's and the
   variant's — from scratch on every construction: a `String` out of the enum
@@ -193,6 +231,15 @@ history.
 
 ### Fixed
 
+- **An `as` in a field default converts.** `static f: float = 230 as float`
+  left the field `nil`: the checker compared a field's default against its
+  declared type but never walked the expression, so the `as` was never told
+  it was a conversion and ran as the type test instead ("is 230 a float?").
+  Static and instance defaults alike. Walking the default also means an error
+  inside one is now reported, where before it went unnoticed.
+- **`f()?[i]` calls `f` once.** A safe index compiled its receiver twice — once
+  for the nil test and again for the read — so a call there ran twice, side
+  effects and all.
 - **An index assignment on a generic class calls its `OpNewIndex`.**
   `grid[1] = v` on a `Grid<T>` failed at run time with an internal "typed
   opcode expected `table` but the register held `instance`": the compiler,

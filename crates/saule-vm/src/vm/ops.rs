@@ -11,7 +11,7 @@ use std::rc::Rc;
 use saule_runtime::value::TableObject;
 use saule_runtime::{RuntimeError, Value};
 
-use crate::chunk::Proto;
+use crate::chunk::{FieldPath, LinkKind, PathLink, Proto};
 use crate::op::Instruction;
 
 use super::DEFAULT_MAX_FRAMES;
@@ -151,6 +151,75 @@ impl Vm {
             self.float_at(base + ins.b() as usize, proto, here)?,
             self.float_at(base + ins.c() as usize, proto, here)?,
         ))
+    }
+
+    /// `GETPATH`'s walk: `R[start]` followed through every link of `path`,
+    /// and the value at the end.
+    ///
+    /// Each link reads its field **in place**. The objects in the middle of
+    /// the chain are never copied out — no reference count is touched until
+    /// the one `clone` of the value at the end — which is what a `GETF` per
+    /// link could not avoid, since each one had to land in a register.
+    ///
+    /// A failure blames the link it happened on, with the span that link's
+    /// own instruction would have carried.
+    #[inline]
+    pub(crate) fn follow_path(
+        &self,
+        start: usize,
+        path: &FieldPath,
+        proto: &Proto,
+    ) -> Result<Value, RuntimeError> {
+        let mut cur: &Value = self.reg(start);
+        for link in path.links.iter() {
+            let inst = match cur {
+                // SAFETY: the reference does not outlive this walk, and
+                // nothing in it can borrow an instance mutably — no user code
+                // runs and no register is written until the final clone has
+                // been taken. A *current* mutable borrow is reported as the
+                // panic `RefCell::borrow` would raise.
+                Value::Instance(i) => match unsafe { i.try_borrow_unguarded() } {
+                    Ok(inst) => inst,
+                    Err(e) => panic!("{e}"),
+                },
+                // `?.` on nil: the value stays nil and this read is skipped.
+                // A later `.` then meets the nil, exactly as `GETF` would.
+                Value::Nil if link.kind == LinkKind::Safe => continue,
+                other => return Err(path_operand_err(other, link, proto)),
+            };
+            cur = match inst.fields.get(link.slot as usize) {
+                Some(v) => v,
+                None => {
+                    return Err(RuntimeError::TypeError {
+                        message: format!(
+                            "internal: field slot {} on an instance with {} field(s) — \
+                             the chunk disagrees with the layout it was compiled against",
+                            link.slot,
+                            inst.fields.len()
+                        ),
+                        span: link.span(),
+                    });
+                }
+            };
+            if link.kind == LinkKind::Unwrap && matches!(cur, Value::Nil) {
+                return Err(RuntimeError::ForceUnwrapNil { span: link.span() });
+            }
+        }
+        Ok(cur.clone())
+    }
+}
+
+/// [`operand_err`] for one link of a field path, at that link's span.
+#[cold]
+fn path_operand_err(got: &Value, link: &PathLink, proto: &Proto) -> RuntimeError {
+    RuntimeError::TypeError {
+        message: format!(
+            "internal: typed opcode in `{}` expected `instance` but the register held `{}` — \
+             the chunk disagrees with the types it was compiled against",
+            proto.label(),
+            got.type_name()
+        ),
+        span: link.span(),
     }
 }
 

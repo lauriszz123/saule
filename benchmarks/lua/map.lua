@@ -1,7 +1,7 @@
 local n = 300000
 local m = {}
 for i = 1, n do
-	m["key" .. i] = i
+  m["key" .. i] = i
 end
 local s = 0
 for i = 1, n do

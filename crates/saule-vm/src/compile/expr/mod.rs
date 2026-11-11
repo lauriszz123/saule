@@ -30,6 +30,7 @@
 //! | [`pipe`] | the pipe operator |
 //! | [`member`] | `a.b`, `a[b]`, and what a member turned out to be |
 //! | [`safe`] | the `?.` family |
+//! | [`path`] | chains of field reads, as one `GETPATH` |
 //! | [`literal`] | lambdas and table constructors |
 
 pub mod args;
@@ -38,6 +39,7 @@ pub mod call;
 pub mod ident;
 pub mod literal;
 pub mod member;
+pub mod path;
 pub mod pipe;
 pub mod results;
 pub mod safe;
@@ -63,6 +65,15 @@ impl Compiler<'_> {
             if a != b {
                 self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
             }
+            return Ok(());
+        }
+
+        // `a.b.c`, `a?.b?.c`, `a.b!.c!`: one instruction for the chain.
+        if matches!(
+            e.value,
+            Expr::Member { .. } | Expr::SafeMember { .. } | Expr::ForceUnwrap(_)
+        ) && self.field_path_to(e, dst)?
+        {
             return Ok(());
         }
 

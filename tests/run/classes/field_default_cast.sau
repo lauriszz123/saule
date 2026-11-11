@@ -1,0 +1,28 @@
+-- An `as` in a field default converts, as it does anywhere else.
+--
+-- The checker never walked a field's default expression — it only checked
+-- the value against the declared type — so an `as` there was never told
+-- which reading it has. Unresolved, it ran as the type test: `230 as float`
+-- asked "is 230 a float?", got no, and the field was nil. Static and
+-- instance defaults alike, and a static read from another class too.
+
+class Base
+	static N: integer = 230
+end
+
+class Uses
+	static F: float = 230 as float
+	static G: float = Base.N as float
+	static S: string = Base.N as string
+	h: float = 7 as float
+end
+
+class Main
+	static fn main()
+		assert(Uses.F == 230.0, "static default `230 as float` was " .. tostring(Uses.F))
+		assert(Uses.G == 230.0, "static default `Base.N as float` was " .. tostring(Uses.G))
+		assert(Uses.S == "230", "static default `Base.N as string` was " .. tostring(Uses.S))
+		assert(Uses().h == 7.0, "instance default `7 as float` was " .. tostring(Uses().h))
+		println(Uses.F, Uses.G, Uses.S, Uses().h)
+	end
+end

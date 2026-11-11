@@ -1,0 +1,150 @@
+-- Every sound in the game, synthesised when it starts: a few oscillators and
+-- some noise written sample by sample into `SoundData`, then turned into
+-- `Source`s. No audio files ship with the game.
+
+from shine import Audio, Source, SoundData
+
+export enum Wave
+	Sine,
+	Square,
+	Saw,
+	Noise
+end
+
+export class Sfx
+	static RATE: integer = 22050
+
+	shoot: Source
+	hit: Source
+	kill: Source
+	hurt: Source
+	coin: Source
+	boon: Source
+	stairs: Source
+	arrow: Source
+	music: Source
+	-- Copies of the short sounds, so rapid fire overlaps instead of cutting
+	-- itself off. Played round-robin.
+	shots: table<Source> = {}
+	hits: table<Source> = {}
+	next: integer = 1
+	muted: boolean = false
+
+	fn init()
+		self.shoot = Sfx.sweep(0.09, 880.0, 330.0, Wave.Square, 0.18)
+		self.hit = Sfx.sweep(0.07, 300.0, 120.0, Wave.Noise, 0.3)
+		self.kill = Sfx.sweep(0.28, 220.0, 40.0, Wave.Noise, 0.35)
+		self.hurt = Sfx.sweep(0.25, 160.0, 60.0, Wave.Saw, 0.4)
+		self.coin = Sfx.arpeggio({988.0, 1319.0}, 0.06, 0.2)
+		self.boon = Sfx.arpeggio({523.0, 659.0, 784.0, 1047.0}, 0.08, 0.22)
+		self.stairs = Sfx.sweep(0.7, 110.0, 440.0, Wave.Sine, 0.3)
+		self.arrow = Sfx.sweep(0.12, 600.0, 900.0, Wave.Saw, 0.12)
+		for i: integer = 1, 4 do
+			Table.insert(self.shots, self.shoot.clone())
+			Table.insert(self.hits, self.hit.clone())
+		end
+		self.music = Sfx.drone()
+		self.music.setLooping(true)
+		self.music.setVolume(0.55)
+	end
+
+	-- One sample of `wave` at `phase`, in cycles.
+	static fn osc(wave: Wave, phase: float) -> float
+		local p: float = phase - (Math.floor(phase) as float)
+		return match wave
+			case Wave.Sine then Math.sin(p * 2.0 * Math.pi)
+			-- +1 for the first half of the cycle, -1 for the second.
+			case Wave.Square then 1.0 - 2.0 * (Math.floor(p * 2.0) as float)
+			case Wave.Saw then p * 2.0 - 1.0
+			case Wave.Noise then Math.random() * 2.0 - 1.0
+		end
+	end
+
+	-- A tone gliding from `f0` to `f1` Hz over `seconds`, with a quick attack
+	-- and an exponential fade.
+	static fn sweep(seconds: float, f0: float, f1: float, wave: Wave, volume: float) -> Source
+		local n: integer = Math.floor(seconds * (Sfx.RATE as float))
+		local data: SoundData = SoundData(n, Sfx.RATE)
+		local samples: table<float> = {}
+		local phase: float = 0.0
+		for i: integer = 0, n - 1 do
+			local t: float = (i as float) / (n as float)
+			local f: float = f0 + (f1 - f0) * t
+			phase = phase + f / (Sfx.RATE as float)
+			local env: float = Math.min(1.0, t * 40.0) * Math.exp(-4.0 * t)
+			Table.insert(samples, Sfx.osc(wave, phase) * env * volume)
+		end
+		data.setSamples(0, samples)
+		return Audio.newSourceFrom(data)
+	end
+
+	-- Notes one after another, each `step` seconds long.
+	static fn arpeggio(notes: table<float>, step: float, volume: float) -> Source
+		local per: integer = Math.floor(step * (Sfx.RATE as float))
+		local n: integer = per * #notes
+		local data: SoundData = SoundData(n, Sfx.RATE)
+		local samples: table<float> = {}
+		local phase: float = 0.0
+		for i: integer = 0, n - 1 do
+			local note: float = notes[i / per + 1]!
+			phase = phase + note / (Sfx.RATE as float)
+			local within: float = ((i % per) as float) / (per as float)
+			local env: float = Math.exp(-3.0 * within) * (1.0 - (i as float) / (n as float) * 0.5)
+			Table.insert(samples, Sfx.osc(Wave.Square, phase) * env * volume)
+		end
+		data.setSamples(0, samples)
+		return Audio.newSourceFrom(data)
+	end
+
+	-- Eight seconds of low drone under a slow minor arpeggio, which loops
+	-- without a seam because every voice completes whole cycles.
+	static fn drone() -> Source
+		local seconds: float = 8.0
+		local n: integer = Math.floor(seconds * (Sfx.RATE as float))
+		local data: SoundData = SoundData(n, Sfx.RATE)
+		local notes: table<float> = {220.0, 261.63, 329.63, 261.63, 196.0, 246.94, 293.66, 246.94}
+		local samples: table<float> = {}
+		local rate: float = Sfx.RATE as float
+		for i: integer = 0, n - 1 do
+			local t: float = (i as float) / rate
+			local bass: float = Math.sin(t * 55.0 * 2.0 * Math.pi) * 0.22
+				+ Math.sin(t * 82.5 * 2.0 * Math.pi) * 0.08
+			local beat: integer = Math.floor(t)
+			local within: float = t - (beat as float)
+			local f: float = notes[beat % #notes + 1]!
+			local pluck: float = Math.sin(t * f * 2.0 * Math.pi) * Math.exp(-3.5 * within) * 0.12
+			local swell: float = 0.75 + 0.25 * Math.sin(t / seconds * 2.0 * Math.pi)
+			Table.insert(samples, (bass * swell + pluck) * 0.8)
+		end
+		data.setSamples(0, samples)
+		return Audio.newSourceFrom(data)
+	end
+
+	-- Play a sound, slightly detuned each time so repeats do not drone.
+	fn play(s: Source)
+		if self.muted then
+			return
+		end
+		s.stop()
+		s.setPitch(0.92 + Math.random() * 0.16)
+		s.play()
+	end
+
+	fn playShot()
+		self.play(self.shots[self.next]!)
+		self.next = self.next % #self.shots + 1
+	end
+
+	fn playHit()
+		self.play(self.hits[self.next % #self.hits + 1]!)
+	end
+
+	fn toggleMute()
+		self.muted = not self.muted
+		if self.muted then
+			Audio.setVolume(0.0)
+		else
+			Audio.setVolume(1.0)
+		end
+	end
+end

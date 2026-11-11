@@ -207,6 +207,8 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
             }
             // `type descriptor C`
             Op::CHKTY => Some((ins.c() as usize, chunk.type_descs.len(), "type descriptor")),
+            // `paths[C]`
+            Op::GETPATH => Some((ins.c() as usize, proto.paths.len(), "field path")),
             _ => None,
         };
         if let Some((idx, limit, what)) = table

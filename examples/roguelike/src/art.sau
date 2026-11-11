@@ -1,0 +1,201 @@
+-- Every picture in the game, drawn by the game itself when it starts: no
+-- image files ship with it.
+--
+-- The tile set is painted once into a `Canvas`, and each tile is a `Quad` of
+-- it. A floor is laid out as a `SpriteBatch` of those quads and baked into a
+-- canvas the size of the whole map, so a frame draws the dungeon with one
+-- `Graphics.draw` — the shape a software renderer wants.
+
+from shine import Graphics, Canvas, Quad, SpriteBatch, Random, RandomGenerator
+from dungeon import Dungeon, Cell
+
+export class Art
+	static T: integer = 32
+	-- The lantern's reach in pixels, and how dark it is beyond it.
+	static LIGHT: integer = 230
+	static DARK: float = 0.88
+
+	tiles: Canvas
+	floors: table<Quad> = {}
+	wallTop: Quad
+	wallFace: Quad
+	stairs: Quad
+	-- A soft round dot, for particles.
+	glow: Canvas
+	-- The lantern's pool of light: clear in the middle, dark at the rim.
+	-- Painted once, because a gradient costs per pixel and a plain blit
+	-- does not.
+	light: Canvas
+	map: Canvas?
+	-- The size of the whole map: opaque black until a cell has been seen.
+	-- Full size rather than one pixel per cell scaled up, so it is drawn
+	-- with an unscaled blit.
+	fog: Canvas?
+
+	fn init()
+		local t: float = Art.T as float
+		self.tiles = Graphics.newCanvas(Art.T * 8, Art.T)
+		self.tiles.renderTo(fn()
+			for i: integer = 0, 3 do
+				Art.paintFloor((i as float) * t, i)
+			end
+			Art.paintWallTop(4.0 * t)
+			Art.paintWallFace(5.0 * t)
+			Art.paintStairs(6.0 * t)
+		end)
+		local sw: float = (Art.T * 8) as float
+		for i: integer = 0, 3 do
+			Table.insert(self.floors, Graphics.newQuad((i as float) * t, 0.0, t, t, sw, t))
+		end
+		self.wallTop = Graphics.newQuad(4.0 * t, 0.0, t, t, sw, t)
+		self.wallFace = Graphics.newQuad(5.0 * t, 0.0, t, t, sw, t)
+		self.stairs = Graphics.newQuad(6.0 * t, 0.0, t, t, sw, t)
+
+		local size: integer = Art.LIGHT * 2
+		local r: float = Art.LIGHT as float
+		self.light = Graphics.newCanvas(size, size)
+		self.light.renderTo(fn()
+			Graphics.setRadialGradient(r, r, r, {0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 0.0, 0.35, 1.0, 0.01, 0.0, 0.03, Art.DARK})
+			Graphics.setBlendMode("replace")
+			Graphics.rectangle("fill", 0.0, 0.0, size as float, size as float)
+			Graphics.setBlendMode("alpha")
+			Graphics.clearGradient()
+		end)
+
+		self.glow = Graphics.newCanvas(16, 16)
+		self.glow.renderTo(fn()
+			for r: integer = 8, 1, -1 do
+				local k: float = 1.0 - (r as float) / 8.0
+				Graphics.setColor(1.0, 1.0, 1.0, 0.15 + k * 0.85)
+				Graphics.circle("fill", 8.0, 8.0, r as float)
+			end
+			Graphics.setColor(1.0, 1.0, 1.0, 1.0)
+		end)
+	end
+
+	-- Stone flags: a base colour, a mortar line, and speckles from noise so
+	-- the four variants differ.
+	static fn paintFloor(x: float, v: integer)
+		local t: float = Art.T as float
+		local shade: float = 0.16 + (v as float) * 0.012
+		Graphics.setColor(shade, shade * 0.92, shade * 0.85)
+		Graphics.rectangle("fill", x, 0.0, t, t)
+		Graphics.setColor(0.08, 0.07, 0.07)
+		Graphics.rectangle("line", x + 0.5, 0.5, t - 1.0, t - 1.0)
+		for i: integer = 0, 14 do
+			local px: float = x + 2.0 + Random.noise((i as float) * 1.7, (v as float) * 3.1) * (t - 4.0)
+			local py: float = 2.0 + Random.noise((i as float) * 2.3 + 9.0, (v as float) * 5.7) * (t - 4.0)
+			local s: float = 0.1 + Random.noise((i as float), (v as float)) * 0.12
+			Graphics.setColor(s, s * 0.95, s * 0.9)
+			Graphics.rectangle("fill", px, py, 2.0, 2.0)
+		end
+		if v == 3 then
+			-- A crack.
+			Graphics.setColor(0.07, 0.06, 0.06)
+			Graphics.setLineWidth(1.5)
+			Graphics.line(x + 6.0, 8.0, x + 14.0, 15.0)
+			Graphics.line(x + 14.0, 15.0, x + 12.0, 24.0)
+			Graphics.setLineWidth(1.0)
+		end
+	end
+
+	static fn paintWallTop(x: float)
+		local t: float = Art.T as float
+		Graphics.setColor(0.27, 0.24, 0.3)
+		Graphics.rectangle("fill", x, 0.0, t, t)
+		Graphics.setColor(0.33, 0.3, 0.37)
+		Graphics.rectangle("fill", x + 2.0, 2.0, t - 4.0, t - 4.0, 3.0)
+		Graphics.setColor(0.2, 0.18, 0.23)
+		Graphics.rectangle("line", x + 0.5, 0.5, t - 1.0, t - 1.0)
+	end
+
+	-- The side of a wall seen from the south: bricks.
+	static fn paintWallFace(x: float)
+		local t: float = Art.T as float
+		Graphics.setColor(0.2, 0.17, 0.22)
+		Graphics.rectangle("fill", x, 0.0, t, t)
+		Graphics.setColor(0.29, 0.25, 0.31)
+		for row: integer = 0, 3 do
+			local y: float = (row as float) * 8.0
+			local shift: float = 0.0
+			if row % 2 == 1 then
+				shift = 8.0
+			end
+			for col: integer = -1, 2 do
+				Graphics.rectangle("fill", x + shift + (col as float) * 16.0 + 1.0, y + 1.0, 14.0, 6.0)
+			end
+		end
+		Graphics.setColor(0.12, 0.1, 0.13)
+		Graphics.rectangle("fill", x, t - 3.0, t, 3.0)
+	end
+
+	static fn paintStairs(x: float)
+		local t: float = Art.T as float
+		Graphics.setColor(0.05, 0.04, 0.06)
+		Graphics.rectangle("fill", x, 0.0, t, t)
+		for i: integer = 0, 4 do
+			local k: float = (i as float) / 4.0
+			Graphics.setColor(0.45 - k * 0.3, 0.38 - k * 0.27, 0.25 - k * 0.18)
+			Graphics.rectangle("fill", x + 3.0 + k * 6.0, 3.0 + (i as float) * 5.5, t - 6.0 - k * 12.0, 4.5)
+		end
+		Graphics.setColor(1.0, 0.75, 0.3, 0.8)
+		Graphics.rectangle("line", x + 1.5, 1.5, t - 3.0, t - 3.0, 2.0)
+	end
+
+	-- Lay the floor out as a sprite batch and bake it into one canvas.
+	fn bake(d: Dungeon)
+		local t: float = Art.T as float
+		local batch: SpriteBatch = Graphics.newSpriteBatch(self.tiles, d.w * d.h)
+		for y: integer = 0, d.h - 1 do
+			for x: integer = 0, d.w - 1 do
+				local px: float = (x as float) * t
+				local py: float = (y as float) * t
+				local cell: Cell = d.get(x, y)
+				if cell == Cell.Floor then
+					batch.addq(self.floors[d.variantAt(x, y) + 1]!, px, py)
+				elseif cell == Cell.Stairs then
+					batch.addq(self.stairs, px, py)
+				elseif d.isEdgeWall(x, y) then
+					-- A wall with floor below it shows its face.
+					if d.isSolid(x, y + 1) then
+						batch.addq(self.wallTop, px, py)
+					else
+						batch.addq(self.wallFace, px, py)
+					end
+				end
+			end
+		end
+		local map: Canvas = Graphics.newCanvas(d.w * Art.T, d.h * Art.T)
+		map.renderTo(fn()
+			Graphics.clear(0.0, 0.0, 0.0, 1.0)
+			Graphics.setColor(1.0, 1.0, 1.0)
+			Graphics.draw(batch)
+		end)
+		self.map = map
+
+		local fog: Canvas = Graphics.newCanvas(d.w * Art.T, d.h * Art.T)
+		fog.renderTo(fn()
+			Graphics.clear(0.0, 0.0, 0.0, 1.0)
+		end)
+		self.fog = fog
+	end
+
+	-- Clear the fog over cells that have just been seen.
+	fn reveal(cells: table<integer>)
+		if #cells == 0 then
+			return
+		end
+		local t: float = Art.T as float
+		self.fog!.renderTo(fn()
+			Graphics.setBlendMode("replace")
+			Graphics.setColor(0.0, 0.0, 0.0, 0.0)
+			local i: integer = 1
+			while i < #cells do
+				Graphics.rectangle("fill", (cells[i]! * Art.T) as float, (cells[i + 1]! * Art.T) as float, t, t)
+				i = i + 2
+			end
+			Graphics.setBlendMode("alpha")
+			Graphics.setColor(1.0, 1.0, 1.0)
+		end)
+	end
+end

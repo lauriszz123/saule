@@ -298,10 +298,25 @@ impl Vm {
         // `call_native` takes `&Value` and `&mut self`, so it cannot borrow
         // the register it is passed.
         if let Value::VmFunction(h) = &self.stack[callee_abs] {
-            let handle = Rc::clone(h);
+            // **Held, not counted**, when nothing can overwrite the callee's
+            // register while it runs. It sits just below the callee's frame,
+            // which no instruction of the callee can address, and results
+            // are written to it only after the frame is gone. The one way in
+            // is an open upvalue over that register, so with any open the
+            // handle is counted as before. A dynamic call paid a reference
+            // count bump and drop on the closure for nothing.
+            let (func, owns_func) = if self.open_upvals.is_empty() {
+                // SAFETY: as above — `stack[callee_abs]` keeps the closure
+                // alive for longer than the frame that holds this copy, and
+                // `owns_func: false` means the frame never drops it.
+                (unsafe { std::ptr::read(h) }, false)
+            } else {
+                (Rc::clone(h), true)
+            };
             self.frames.last_mut().expect("frame").pc = pc_after as u32;
-            self.push_frame(
-                handle,
+            self.push_frame_owned(
+                func,
+                owns_func,
                 (callee_abs + 1) as u32,
                 n_args,
                 callee_abs as u32,
@@ -501,6 +516,25 @@ impl Vm {
         n_ret: u8,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
+        self.push_frame_owned(func, true, base, n_args, ret_to, n_ret, site)
+    }
+
+    /// [`push_frame`](Self::push_frame), saying whether the frame owns the
+    /// reference count `func` carries. With `owns_func: false` the frame
+    /// never drops it, so `func` must be a bitwise copy of a handle that
+    /// outlives the frame.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_frame_owned(
+        &mut self,
+        func: Rc<VmFunctionRef>,
+        owns_func: bool,
+        base: u32,
+        n_args: usize,
+        ret_to: u32,
+        n_ret: u8,
+        site: &Site<'_>,
+    ) -> Result<(), RuntimeError> {
         if self.frames.len() >= self.shared.max_frames {
             return Err(RuntimeError::StackOverflow {
                 limit: self.shared.max_frames as u32,
@@ -520,7 +554,7 @@ impl Vm {
         };
         self.push_frame_resolved(
             std::mem::ManuallyDrop::new(func),
-            true,
+            owns_func,
             proto,
             chunk,
             base,
@@ -550,11 +584,44 @@ impl Vm {
         n_ret: u8,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
+        if self.push_frame_raw(func, owns_func, proto, chunk, base, n_args, ret_to, n_ret) {
+            return Err(self.stack_overflow(site));
+        }
+        Ok(())
+    }
+
+    /// The error a call past `max_frames` raises.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn stack_overflow(&self, site: &Site<'_>) -> RuntimeError {
+        RuntimeError::StackOverflow {
+            limit: self.shared.max_frames as u32,
+            span: site.span(),
+        }
+    }
+
+    /// [`push_frame_resolved`](Self::push_frame_resolved), answering `true`
+    /// for a stack overflow instead of building the error.
+    ///
+    /// `RuntimeError` is 64 bytes, so a `Result` return made every call
+    /// write and test a 64-byte value through memory to carry an error that
+    /// almost never happens. The hot call arms take this and build the error
+    /// themselves, out of line.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(crate) fn push_frame_raw(
+        &mut self,
+        func: Held<VmFunctionRef>,
+        owns_func: bool,
+        proto: Held<Proto>,
+        chunk: Held<Chunk>,
+        base: u32,
+        n_args: usize,
+        ret_to: u32,
+        n_ret: u8,
+    ) -> bool {
         if self.frames.len() >= self.shared.max_frames {
-            return Err(RuntimeError::StackOverflow {
-                limit: self.shared.max_frames as u32,
-                span: site.span(),
-            });
+            return true;
         }
         let pdata = &*proto;
         let top = base as usize + pdata.max_regs as usize;
@@ -578,7 +645,7 @@ impl Vm {
             top: top as u32,
             n_args: n_args.min(u8::MAX as usize) as u8,
         });
-        Ok(())
+        false
     }
 
     /// Pop the active frame, moving `count` results from `src` into the
@@ -727,6 +794,7 @@ impl Vm {
     /// by downcast. Resolving once and moving the results into the frame
     /// removes two refcount pairs and a downcast from every call.
     #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
     pub(crate) fn enter_static(
         &mut self,
         tm: usize,
@@ -735,23 +803,51 @@ impl Vm {
         n_args: usize,
         ret_to: u32,
         n_ret: u8,
-        site: &Site<'_>,
-    ) -> Result<(), RuntimeError> {
-        // SAFETY: `shared.chunks` owns this chunk for as long as this `Vm`
-        // holds its `Rc<VmShared>`, which is the whole call, and the chunk
-        // owns the proto — see `Frame::proto`. Held rather than borrowed
-        // because `closure_for` and `push_frame_resolved` both want
-        // `&mut self`, which a borrow of `self.shared` would forbid.
-        let chunk = unsafe { hold(&self.shared.chunks[tm]) };
-        // SAFETY: as above — the proto belongs to `chunk`, which outlives
-        // the frame.
-        let proto = unsafe { hold(chunk.proto(target)) };
-        // SAFETY: the closure cache owns this closure for as long as the
-        // engine runs and never clears a cell — see `Frame::owns_func`.
-        let handle = unsafe { hold(self.closure_for(&chunk, target)) };
-        self.push_frame_resolved(
-            handle, false, proto, chunk, base, n_args, ret_to, n_ret, site,
-        )
+    ) -> bool {
+        // SAFETY: the cache owns all three for as long as the engine runs
+        // and never clears a cell — see `Frame::owns_func` and
+        // `Frame::proto`. Held rather than borrowed because
+        // `push_frame_raw` wants `&mut self`.
+        let t = self.static_target(tm, target);
+        let (handle, proto, chunk) = unsafe { (hold(&t.closure), hold(&t.proto), hold(&t.chunk)) };
+        self.push_frame_raw(handle, false, proto, chunk, base, n_args, ret_to, n_ret)
+    }
+
+    /// `CALLSELF`: enter the running frame's own function again. `true` is
+    /// a stack overflow.
+    #[inline(never)]
+    pub(crate) fn enter_self(&mut self, pc: u32, base: u32, n_args: usize, n_ret: u8) -> bool {
+        let f = self.frames.last_mut().expect("frame");
+        f.pc = pc;
+        // SAFETY: the running frame holds all three and outlives the
+        // callee's frame, which ends first; the copies are held without a
+        // count and never dropped.
+        let (func, proto, chunk) = unsafe {
+            (
+                std::ptr::read(&f.func),
+                std::ptr::read(&f.proto),
+                std::ptr::read(&f.chunk),
+            )
+        };
+        self.push_frame_raw(func, false, proto, chunk, base, n_args, base, n_ret)
+    }
+
+    /// `(module, proto)`'s [`StaticTarget`], built on first use.
+    #[inline]
+    pub(crate) fn static_target(&self, tm: usize, idx: u32) -> &super::StaticTarget {
+        self.shared.closure_cache[tm][idx as usize].get_or_init(|| {
+            let chunk = &self.shared.chunks[tm];
+            super::StaticTarget {
+                closure: VmFunctionRef::new(Closure::bound(
+                    Rc::clone(chunk.proto(idx)),
+                    Rc::clone(chunk),
+                    Vec::new(),
+                    &self.shared,
+                )),
+                proto: Rc::clone(chunk.proto(idx)),
+                chunk: Rc::clone(chunk),
+            }
+        })
     }
 
     /// A cached, upvalue-free closure for a statically-resolved callee, so
@@ -761,17 +857,6 @@ impl Vm {
     /// static call's frame holds it without a count (`Frame::owns_func`), and
     /// a caller that needs to keep one clones it itself.
     pub(crate) fn closure_for(&self, chunk: &Rc<Chunk>, idx: u32) -> &Rc<VmFunctionRef> {
-        let m = chunk.module_index;
-        self.shared.closure_cache[m][idx as usize].get_or_init(|| {
-            // Only on the first visit to this call site. Cloning the proto
-            // here rather than in the caller keeps the hit path — which is
-            // every call after the first — down to two indexed loads.
-            VmFunctionRef::new(Closure::bound(
-                Rc::clone(chunk.proto(idx)),
-                Rc::clone(chunk),
-                Vec::new(),
-                &self.shared,
-            ))
-        })
+        &self.static_target(chunk.module_index, idx).closure
     }
 }

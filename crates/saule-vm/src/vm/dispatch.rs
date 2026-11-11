@@ -379,7 +379,7 @@ impl Vm {
             // this is now a copy of a pointer out of a pointer: `ptr::read`
             // because `ManuallyDrop<Rc<_>>` is not `Copy`, not because
             // anything here is being taken out of an owner.
-            let (proto, chunk, base, mut pc) = {
+            let (proto, chunk, mut base, mut pc) = {
                 let f = self.frames.last().expect("frame");
                 (
                     unsafe { std::ptr::read(&f.proto) },
@@ -413,7 +413,12 @@ impl Vm {
                 let here = (pc - 1) as u32;
 
                 debug_assert!(ins.op().is_some(), "verify_proto rejects unknown opcodes");
-                let op = unsafe { *Op::ALL.get_unchecked(ins.raw_op() as usize) };
+                // SAFETY: `Op` is `repr(u8)` and dense from 0, and the
+                // verifier proved this byte names one (§17). A transmute
+                // rather than a load out of `Op::ALL`: that load sat between
+                // fetching the word and indexing the jump table, one more
+                // dependent memory access on every instruction executed.
+                let op = unsafe { std::mem::transmute::<u8, Op>(ins.raw_op()) };
 
                 if PROFILE {
                     // `Some` only when the last instruction executed was
@@ -724,12 +729,14 @@ impl Vm {
                     // absent from every profile in the suite, so they share
                     // an arm. "Skip the next instruction" is the convention:
                     // that next instruction is the `JMP` to the false branch.
-                    Op::JGTI | Op::JGEI | Op::JEQI | Op::JNEI => {
+                    // The peephole turns `JLTI; JMP +1` into `JGEI`, so the
+                    // inverses of the hot two are hot too.
+                    Op::JGEI => jump_int!(|l, r| l >= r),
+                    Op::JGTI => jump_int!(|l, r| l > r),
+                    Op::JEQI | Op::JNEI => {
                         let l = self.int_at(base + a, &proto, here)?;
                         let r = self.int_at(base + ins.b() as usize, &proto, here)?;
                         let take = match op {
-                            Op::JGTI => l > r,
-                            Op::JGEI => l >= r,
                             Op::JEQI => l == r,
                             _ => l != r,
                         };
@@ -743,11 +750,11 @@ impl Vm {
                     Op::JLTII => jump_int_imm!(|l, imm| l < imm),
                     Op::JLEII => jump_int_imm!(|l, imm| l <= imm),
                     Op::JGTII => jump_int_imm!(|l, imm| l > imm),
-                    Op::JGEII | Op::JEQII | Op::JNEII => {
+                    Op::JGEII => jump_int_imm!(|l, imm| l >= imm),
+                    Op::JEQII | Op::JNEII => {
                         let l = self.int_at(base + a, &proto, here)?;
                         let imm = ins.sc();
                         let take = match op {
-                            Op::JGEII => l >= imm,
                             Op::JEQII => l == imm,
                             _ => l != imm,
                         };
@@ -1327,15 +1334,9 @@ impl Vm {
                         };
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         let dst = (base + a) as u32;
-                        self.enter_static(
-                            tm,
-                            target,
-                            dst,
-                            n_args,
-                            dst,
-                            n_ret,
-                            &Site::Code(&proto, here),
-                        )?;
+                        if self.enter_static(tm, target, dst, n_args, dst, n_ret) {
+                            return Err(self.stack_overflow(&Site::Code(&proto, here)));
+                        }
                         continue 'reentry;
                     }
                     Op::CALLNAT => {
@@ -1442,6 +1443,37 @@ impl Vm {
                         continue 'reentry;
                     }
                     Op::RET1 => {
+                        // The common return, without `pop_frame`'s call and
+                        // its copy of the frame out of the stack: one value
+                        // to a caller inside this activation that wants one,
+                        // from a frame that owns no closure count, with no
+                        // upvalue open anywhere to close.
+                        let n = self.frames.len();
+                        if n > entry_depth && n >= 2 && self.open_upvals.is_empty() {
+                            // SAFETY: `n >= 2`.
+                            let f = unsafe { self.frames.get_unchecked(n - 1) };
+                            if f.n_ret == 1 && !f.owns_func {
+                                let dst = f.ret_to as usize;
+                                // SAFETY: the frame owns nothing — `owns_func`
+                                // is false and its other handles are `Held` —
+                                // so forgetting it instead of dropping it
+                                // skips no destructor.
+                                unsafe { self.frames.set_len(n - 1) };
+                                let v = std::mem::replace(self.reg_mut(base + a), Value::Nil);
+                                self.set_reg(dst, v);
+                                // Back into the same function — a recursive
+                                // call returning — leaves code, constants and
+                                // chunk as they are; only the frame moved.
+                                // SAFETY: `n >= 2`, so a frame remains.
+                                let f = unsafe { self.frames.get_unchecked(n - 2) };
+                                if Rc::ptr_eq(&f.proto, &proto) {
+                                    base = f.base as usize;
+                                    pc = f.pc as usize;
+                                    continue;
+                                }
+                                continue 'reentry;
+                            }
+                        }
                         if self.pop_frame(base + a, 1) {
                             return Ok(());
                         }
@@ -1531,6 +1563,14 @@ impl Vm {
                         };
                         *self.reg_mut(base + a) = v;
                     }
+                    // `a.b?.c!.d` — every link in one instruction, and only
+                    // the value at the end copied. See `FieldPath`.
+                    Op::GETPATH => {
+                        // SAFETY: the verifier proved `C < paths.len()` (§17).
+                        let path = unsafe { proto.paths.get_unchecked(ins.c() as usize) };
+                        let v = self.follow_path(base + ins.b() as usize, path, &proto)?;
+                        self.set_reg(base + a, v);
+                    }
                     Op::SETF => {
                         let slot = ins.b() as usize;
                         let v = (*self.reg(base + ins.c() as usize)).clone();
@@ -1607,15 +1647,9 @@ impl Vm {
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         // `self` counts as an argument: the frame starts at
                         // the receiver, not past it.
-                        self.enter_static(
-                            tm,
-                            target,
-                            recv as u32,
-                            n_args + 1,
-                            recv as u32,
-                            1,
-                            &Site::Code(&proto, here),
-                        )?;
+                        if self.enter_static(tm, target, recv as u32, n_args + 1, recv as u32, 1) {
+                            return Err(self.stack_overflow(&Site::Code(&proto, here)));
+                        }
                         continue 'reentry;
                     }
                     Op::CALLM_MR => {
@@ -1635,15 +1669,16 @@ impl Vm {
                         };
                         let (tm, target) = self.vtable_lookup_cached(recv, slot, &proto, here)?;
                         self.frames.last_mut().expect("frame").pc = pc as u32;
-                        self.enter_static(
+                        if self.enter_static(
                             tm,
                             target,
                             recv as u32,
                             n_args + 1,
                             recv as u32,
                             n_ret,
-                            &Site::Code(&proto, here),
-                        )?;
+                        ) {
+                            return Err(self.stack_overflow(&Site::Code(&proto, here)));
+                        }
                         continue 'reentry;
                     }
                     Op::CALLIF => {
@@ -1663,16 +1698,40 @@ impl Vm {
                         let (tm, target) =
                             self.itable_lookup_cached(recv, iface, slot, &proto, here)?;
                         self.frames.last_mut().expect("frame").pc = pc as u32;
-                        self.enter_static(
+                        if self.enter_static(
                             tm,
                             target,
                             recv as u32,
                             n_args + 1,
                             recv as u32,
                             n_ret,
-                            &Site::Code(&proto, here),
-                        )?;
+                        ) {
+                            return Err(self.stack_overflow(&Site::Code(&proto, here)));
+                        }
                         continue 'reentry;
+                    }
+                    // `Main.fib(n - 1)` inside `Main.fib`: the frame running
+                    // is the callee, so its proto, chunk and closure are
+                    // copied rather than looked up.
+                    Op::CALLSELF => {
+                        let n_ret = if ins.c() == 0 {
+                            ALL_RESULTS
+                        } else {
+                            ins.c() - 1
+                        };
+                        let dst = (base + a) as u32;
+                        let n_args = (ins.b() as usize).saturating_sub(1);
+                        if self.enter_self(pc as u32, dst, n_args, n_ret) {
+                            return Err(self.stack_overflow(&Site::Code(&proto, here)));
+                        }
+                        // The same function, so the same code, constants and
+                        // chunk: only where the frame starts and where it
+                        // enters moved. Nothing `'reentry` re-derives
+                        // changed, so it is skipped.
+                        let f = self.frames.last().expect("frame");
+                        base = f.base as usize;
+                        pc = f.pc as usize;
+                        continue;
                     }
                     Op::CALLSTAT => {
                         let packed = self.extra_arg(code.as_ptr(), &mut pc);
@@ -1702,15 +1761,9 @@ impl Vm {
                         } else {
                             ins.c() - 1
                         };
-                        self.enter_static(
-                            tm,
-                            target,
-                            dst,
-                            n_args,
-                            dst,
-                            n_ret,
-                            &Site::Code(&proto, here),
-                        )?;
+                        if self.enter_static(tm, target, dst, n_args, dst, n_ret) {
+                            return Err(self.stack_overflow(&Site::Code(&proto, here)));
+                        }
                         continue 'reentry;
                     }
 
@@ -1768,6 +1821,27 @@ impl Vm {
                         if t == ins.b() as u32 {
                             pc += 1;
                         }
+                    }
+                    // `case Event.Click(x, y)` — a payload field, read in
+                    // place. What `UNWRAP` + `GETARR` did, minus the copy of
+                    // the payload table between them.
+                    Op::GETPAY => {
+                        let v = match self.reg(base + ins.b() as usize) {
+                            Value::EnumVariant(ev) => match ev.value.get() {
+                                Some(Value::Table(t)) => {
+                                    index_array(&t.borrow(), ins.c() as i64 + 1)
+                                }
+                                Some(other) => {
+                                    return Err(operand_err(other, "table", &proto, here));
+                                }
+                                None => {
+                                    let name = Value::Str(ev.variant_name.clone());
+                                    return Err(operand_err(&name, "table", &proto, here));
+                                }
+                            },
+                            other => return Err(operand_err(other, "enum", &proto, here)),
+                        };
+                        self.set_reg(base + a, v);
                     }
                     Op::UNWRAP => {
                         let v = match self.reg(base + ins.b() as usize) {

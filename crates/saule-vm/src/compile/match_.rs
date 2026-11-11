@@ -130,7 +130,14 @@ impl Compiler<'_> {
 
         let (sc, values) = match tuple_arity {
             None => {
-                let sc = self.expr_tmp(scrutinee)?;
+                // A local is matched where it already is. Nothing between
+                // the first arm's test and the last one's can write it
+                // unless a guard runs code, so only pure guards allow it.
+                let in_place = self.operand_is_pure(scrutinee)
+                    && arms
+                        .iter()
+                        .all(|a| a.guard.as_ref().is_none_or(|g| self.guard_runs_no_code(g)));
+                let sc = self.operand_to_reg(scrutinee, in_place)?;
                 (sc, ValueList::One(sc))
             }
             Some(arity) => {
@@ -356,6 +363,33 @@ impl Compiler<'_> {
         dst: u16,
         span: &Range<usize>,
     ) -> Result<(), CompileError> {
+        // Every arm a variant of one enum, or a wildcard: the tag decides
+        // which arm is tried *first*, so one `SWITCH` jumps there instead of
+        // testing the arms above it one `JIFTAG` at a time. Guards and
+        // refutable payloads still fail onward through the chain below,
+        // whose own tests are what make that correct.
+        let switch = self.chain_switch_enum(arms).map(|e_idx| {
+            let n = self.chunk.enums[e_idx as usize].variants.len();
+            (e_idx, n)
+        });
+        let mut table = None;
+        if let Some((_, n)) = switch {
+            let tag_reg = self.alloc(span)?;
+            let (ta, sa) = (self.reg8(tag_reg, span)?, self.reg8(sc, span)?);
+            self.emit(Instruction::abc(Op::GETTAG, ta, sa, 0), span);
+            let idx = self.chunk.jump_tables.len() as u16;
+            self.chunk.jump_tables.push(JumpTable {
+                targets: vec![0; n],
+                default: 0,
+            });
+            self.f.jump_tables.push(idx);
+            self.emit(Instruction::abx(Op::SWITCH, ta, idx), span);
+            table = Some(idx);
+        }
+        let n_tags = switch.map_or(0, |(_, n)| n);
+        let mut first_for_tag = vec![usize::MAX; n_tags];
+        let mut first_wildcard = usize::MAX;
+
         let mut to_end = Vec::new();
         for arm in arms {
             // Three things happen in this order, and the order is the whole
@@ -381,8 +415,47 @@ impl Compiler<'_> {
             // above is actually about.
             self.f.enter_scope();
             let mut pattern_failed = Vec::new();
-            self.test_and_bind(sc, values, &arm.pattern, &mut pattern_failed, span)?;
-            let guard_failed = self.arm_guard(arm, span)?;
+            match (&arm.pattern.value, switch) {
+                // Under the switch, the tag test is done inline so the
+                // switch can land just past it: arriving there, the tag is
+                // already known to match.
+                (
+                    Pattern::Variant {
+                        enum_name,
+                        variant,
+                        fields,
+                    },
+                    Some(_),
+                ) => {
+                    let tag = self.variant_tag(enum_name, variant, span)?;
+                    let ra = self.reg8(sc, span)?;
+                    self.emit(Instruction::abc(Op::JIFTAG, ra, tag as u8, 0), span);
+                    pattern_failed.push(self.emit_jump(Op::JMP, 0, span));
+                    if let Some(slot) = first_for_tag.get_mut(tag as usize)
+                        && *slot == usize::MAX
+                    {
+                        *slot = self.f.label_here();
+                    }
+                    self.bind_payload(sc, fields, &mut pattern_failed, span)?;
+                }
+                (Pattern::Wildcard, Some(_)) => {
+                    let here = self.f.label_here();
+                    if first_wildcard == usize::MAX {
+                        first_wildcard = here;
+                    }
+                    // Every tag no earlier arm names starts here.
+                    for slot in first_for_tag.iter_mut().filter(|s| **s == usize::MAX) {
+                        *slot = here;
+                    }
+                }
+                _ => self.test_and_bind(sc, values, &arm.pattern, &mut pattern_failed, span)?,
+            }
+            let guard_failed = match &arm.guard {
+                // The `if` statement's condition codegen: `c > 100` is one
+                // fused compare-and-jump, not a boolean tested afterwards.
+                Some(g) => self.cond_jumps_if_false(g)?,
+                None => Vec::new(),
+            };
             self.arm_body(&arm.body, dst)?;
             self.f.leave_scope();
             to_end.push(self.emit_jump(Op::JMP, 0, span));
@@ -391,10 +464,48 @@ impl Compiler<'_> {
                 self.patch_here(l)?;
             }
         }
+        let end = self.f.label_here();
         for l in to_end {
             self.patch_here(l)?;
         }
+        if let Some(idx) = table {
+            // No arm for a tag: past the whole `match`, as the chain falls.
+            let default = if first_wildcard == usize::MAX {
+                end
+            } else {
+                first_wildcard
+            };
+            let t = &mut self.chunk.jump_tables[idx as usize];
+            t.default = default as u32;
+            for (slot, first) in t.targets.iter_mut().zip(&first_for_tag) {
+                *slot = if *first == usize::MAX { end } else { *first } as u32;
+            }
+        }
         Ok(())
+    }
+
+    /// The enum a chain can switch on: every arm is a variant of that one
+    /// compiled enum or a wildcard, there are at least three arms, and at
+    /// least one is a variant.
+    fn chain_switch_enum(&self, arms: &[MatchArm]) -> Option<u32> {
+        if arms.len() < 3 {
+            return None;
+        }
+        let mut found = None;
+        for arm in arms {
+            match &arm.pattern.value {
+                Pattern::Variant { enum_name, .. } => {
+                    let e = self.layouts.enum_of(enum_name)?;
+                    if found.is_some_and(|f| f != e) {
+                        return None;
+                    }
+                    found = Some(e);
+                }
+                Pattern::Wildcard => {}
+                _ => return None,
+            }
+        }
+        found
     }
 
     /// The dense tag of `Enum.Variant`, from whichever table knows it.
@@ -563,28 +674,6 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    /// Emit an arm's guard, if it has one.
-    ///
-    /// Called **after** the pattern's bindings are declared, because a guard
-    /// is allowed to mention them — `case x when x < 0` reads `x`, and the
-    /// resolver binds it exactly as the arm body's `x` is bound. The
-    /// returned label jumps to the next arm when the guard is false, which
-    /// is the same fate a failed pattern gets.
-    fn arm_guard(
-        &mut self,
-        arm: &MatchArm,
-        span: &Range<usize>,
-    ) -> Result<Option<super::ctx::Label>, CompileError> {
-        let Some(g) = &arm.guard else { return Ok(None) };
-        let m = self.mark();
-        let r = self.expr_tmp(g)?;
-        let a = self.reg8(r, span)?;
-        self.emit(Instruction::abc(Op::TEST, a, 0, 0), span);
-        let l = self.emit_jump(Op::JMP, 0, span);
-        self.free_to(m);
-        Ok(Some(l))
-    }
-
     fn pattern_literal_to(
         &mut self,
         p: &Pattern,
@@ -622,21 +711,33 @@ impl Compiler<'_> {
         fails: &mut Vec<super::ctx::Label>,
         span: &Range<usize>,
     ) -> Result<(), CompileError> {
-        if fields.is_empty() {
-            return Ok(());
-        }
-        let payload = self.alloc(span)?;
-        let (pa, sa) = (self.reg8(payload, span)?, self.reg8(sc, span)?);
-        self.emit(Instruction::abc(Op::UNWRAP, pa, sa, 0), span);
-
+        // Each field is one `GETPAY` straight out of the variant: no copy
+        // of the payload table, no index loaded into a register, and a
+        // binding reads into its own register rather than through a temp.
+        let sa = self.reg8(sc, span)?;
         for (i, f) in fields.iter().enumerate() {
-            let idx = self.alloc(span)?;
-            let ia = self.reg8(idx, span)?;
-            self.emit(Instruction::asbx(Op::LOADI, ia, i as i32 + 1), span);
-            let slot = self.alloc(span)?;
-            let sa2 = self.reg8(slot, span)?;
-            self.emit(Instruction::abc(Op::GETARR, sa2, pa, ia), span);
-            self.test_and_bind(slot, &ValueList::One(slot), f, fails, span)?;
+            let Ok(c) = u8::try_from(i) else {
+                return Err(CompileError::unsupported(
+                    "a variant pattern over 256 fields",
+                    span.clone(),
+                ));
+            };
+            match &f.value {
+                // Reads nothing: the tag test already matched.
+                Pattern::Wildcard => {}
+                Pattern::Bind(name) => {
+                    let d = self.alloc(span)?;
+                    let da = self.reg8(d, span)?;
+                    self.emit(Instruction::abc(Op::GETPAY, da, sa, c), span);
+                    self.f.declare(name, d);
+                }
+                _ => {
+                    let slot = self.alloc(span)?;
+                    let a = self.reg8(slot, span)?;
+                    self.emit(Instruction::abc(Op::GETPAY, a, sa, c), span);
+                    self.test_and_bind(slot, &ValueList::One(slot), f, fails, span)?;
+                }
+            }
         }
         Ok(())
     }
@@ -673,4 +774,41 @@ impl Compiler<'_> {
 /// `switchable`.
 fn irrefutable(p: &Pattern) -> bool {
     matches!(p, Pattern::Wildcard | Pattern::Bind(_))
+}
+
+impl Compiler<'_> {
+    /// Whether a guard is numeric comparisons and arithmetic over locals and
+    /// literals — code that cannot write any register but its own temps.
+    ///
+    /// Not [`operand_is_pure`](Compiler::operand_is_pure): that asks whether
+    /// a local is *in a register now*, and an arm's bindings are not declared
+    /// until the arm is compiled. Whether the name is a frame local is the
+    /// resolver's answer, which is already final.
+    fn guard_runs_no_code(&self, e: &Spanned<saule_ast::Expr>) -> bool {
+        use saule_ast::{BinOp, Expr, UnaryOp};
+        match &e.value {
+            Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Nil | Expr::Str(_) => true,
+            Expr::Ident(_) => matches!(
+                self.binding(e.id),
+                Some(saule_semantic::Binding::Local { .. })
+            ),
+            Expr::Unary {
+                op: UnaryOp::Neg | UnaryOp::Not,
+                rhs,
+            } => self.num_of_node(rhs).is_some() && self.guard_runs_no_code(rhs),
+            Expr::Binary {
+                op: BinOp::And | BinOp::Or,
+                lhs,
+                rhs,
+            } => self.guard_runs_no_code(lhs) && self.guard_runs_no_code(rhs),
+            Expr::Binary { op, lhs, rhs } if !matches!(op, BinOp::Coalesce | BinOp::Concat) => {
+                matches!(
+                    (self.num_of_node(lhs), self.num_of_node(rhs)),
+                    (Some(l), Some(r)) if l == r
+                ) && self.guard_runs_no_code(lhs)
+                    && self.guard_runs_no_code(rhs)
+            }
+            _ => false,
+        }
+    }
 }

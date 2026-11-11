@@ -101,6 +101,14 @@ pub const DEFAULT_MAX_FRAMES: usize = saule_runtime::call::MAX_CALL_DEPTH as usi
 /// three bounds checks per instruction executed, for the life of the run.
 pub(crate) const REG_HEADROOM: usize = 512;
 
+/// A statically-resolved callee: its cached closure, and the proto and
+/// chunk a frame over it needs.
+pub(crate) struct StaticTarget {
+    pub closure: Rc<VmFunctionRef>,
+    pub proto: Rc<crate::chunk::Proto>,
+    pub chunk: Rc<crate::chunk::Chunk>,
+}
+
 /// Everything about a running program that is **not** per-invocation: the
 /// code, the module slots, the statics, the classes and the enums (§5.1).
 ///
@@ -124,7 +132,11 @@ pub struct VmShared {
     /// `OnceCell` rather than `RefCell<Option<..>>`: the slot is written at
     /// most once, so the borrow flag a `RefCell` maintains was pure cost on
     /// a path every statically-resolved call takes.
-    closure_cache: Vec<Vec<std::cell::OnceCell<Rc<VmFunctionRef>>>>,
+    ///
+    /// Each cell carries the proto and chunk too, so a static call reaches
+    /// all three from one cell rather than chasing `chunks[m]`, then its
+    /// proto table, then this cache.
+    closure_cache: Vec<Vec<std::cell::OnceCell<StaticTarget>>>,
     /// One runtime class per `ClassProto`, built once at start-up.
     classes: Vec<Rc<saule_runtime::value::ClassObject>>,
     /// Class identity -> index, so `CALLM` can find a receiver's vtable.
@@ -247,7 +259,7 @@ impl Vm {
             .map(|c| c.module_slot_base + c.module_slots)
             .max()
             .unwrap_or(0);
-        let cache: Vec<Vec<std::cell::OnceCell<Rc<VmFunctionRef>>>> = chunks
+        let cache: Vec<Vec<std::cell::OnceCell<StaticTarget>>> = chunks
             .iter()
             .map(|c| {
                 (0..c.protos.len())

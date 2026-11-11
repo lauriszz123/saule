@@ -1,0 +1,239 @@
+-- The dungeon: a grid of cells, carved into rooms joined by corridors.
+--
+-- Every floor is generated from one seeded `RandomGenerator`, so a seed and a
+-- depth always build the same floor. Rooms are dropped at random and kept
+-- when they do not overlap; each is joined to the one placed before it by an
+-- L-shaped corridor, and a couple of extra corridors close loops so the
+-- floor is not one long line.
+
+from shine import RandomGenerator
+
+export enum Cell
+	Wall,
+	Floor,
+	Stairs
+end
+
+export class Room
+	local x: integer = 0
+	local y: integer = 0
+	local w: integer = 0
+	local h: integer = 0
+
+	fn init(x: integer, y: integer, w: integer, h: integer)
+		self.x = x
+		self.y = y
+		self.w = w
+		self.h = h
+	end
+
+	fn centerX() -> integer
+		return self.x + self.w / 2
+	end
+
+	fn centerY() -> integer
+		return self.y + self.h / 2
+	end
+
+	-- Turn every cell of the room into `cell`.
+	fn fill(d: Dungeon, cell: Cell)
+		for y: integer = self.y, self.y + self.h - 1 do
+			for x: integer = self.x, self.x + self.w - 1 do
+				d.set(x, y, cell)
+			end
+		end
+	end
+
+	-- A random cell inside the room, kept off its edges.
+	fn randomSpot(rng: RandomGenerator) -> (integer, integer)
+		return rng.randomInt(self.x + 1, self.x + self.w - 2), rng.randomInt(self.y + 1, self.y + self.h - 2)
+	end
+
+	-- Whether `other` comes within `pad` cells of this room.
+	fn overlaps(other: Room, pad: integer) -> boolean
+		return self.x - pad < other.x + other.w and other.x - pad < self.x + self.w and self.y - pad < other.y + other.h and other.y - pad < self.y + self.h
+	end
+end
+
+export class Dungeon
+	static TILE: integer = 32
+
+	w: integer = 0
+	h: integer = 0
+	cells: table<Cell> = {}
+	-- A random 0..3 per cell, so floors are not one repeated tile.
+	variant: table<integer> = {}
+	-- Cells the lantern has lit at least once.
+	seen: table<boolean> = {}
+	rooms: table<Room> = {}
+	stairsX: integer = 0
+	stairsY: integer = 0
+
+	fn init(w: integer, h: integer, rng: RandomGenerator, depth: integer)
+		self.w = w
+		self.h = h
+		for i: integer = 1, w * h do
+			Table.insert(self.cells, Cell.Wall)
+			Table.insert(self.variant, rng.randomInt(0, 3))
+			Table.insert(self.seen, false)
+		end
+		self.carveRooms(rng, depth)
+		self.placeStairs()
+	end
+
+	local fn index(x: integer, y: integer) -> integer
+		return y * self.w + x + 1
+	end
+
+	fn inside(x: integer, y: integer) -> boolean
+		return x >= 0 and y >= 0 and x < self.w and y < self.h
+	end
+
+	fn get(x: integer, y: integer) -> Cell
+		if not self.inside(x, y) then
+			return Cell.Wall
+		end
+		return self.cells[self.index(x, y)]!
+	end
+
+	fn set(x: integer, y: integer, cell: Cell)
+		if self.inside(x, y) then
+			self.cells[self.index(x, y)] = cell
+		end
+	end
+
+	fn variantAt(x: integer, y: integer) -> integer
+		return self.variant[self.index(x, y)] ?? 0
+	end
+
+	fn isSeen(x: integer, y: integer) -> boolean
+		return self.inside(x, y) and self.seen[self.index(x, y)]!
+	end
+
+	fn markSeen(x: integer, y: integer)
+		self.seen[self.index(x, y)] = true
+	end
+
+	fn isSolid(x: integer, y: integer) -> boolean
+		return self.get(x, y) == Cell.Wall
+	end
+
+	-- Whether the point `px, py`, in pixels, is inside a wall.
+	fn solidAt(px: float, py: float) -> boolean
+		local t: float = Dungeon.TILE as float
+		return self.isSolid(Math.floor(px / t), Math.floor(py / t))
+	end
+
+	-- Whether a circle of radius `r` at `px, py` touches a wall. The four
+	-- corners of its box are enough for anything smaller than a cell.
+	fn blocked(px: float, py: float, r: float) -> boolean
+		return self.solidAt(px - r, py - r) or self.solidAt(px + r, py - r) or self.solidAt(
+			px - r,
+			py + r
+		) or self.solidAt(px + r, py + r)
+	end
+
+	-- A wall that borders a floor is drawn; one buried in rock stays dark.
+	fn isEdgeWall(x: integer, y: integer) -> boolean
+		if not self.isSolid(x, y) then
+			return false
+		end
+		for dy: integer = -1, 1 do
+			for dx: integer = -1, 1 do
+				if not self.isSolid(x + dx, y + dy) then
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	-- A corridor two cells wide, so a crowd can still pass in it.
+	local fn corridor(x0: integer, y0: integer, x1: integer, y1: integer, horizontalFirst: boolean)
+		if horizontalFirst then
+			self.hline(x0, x1, y0)
+			self.vline(y0, y1, x1)
+		else
+			self.vline(y0, y1, x0)
+			self.hline(x0, x1, y1)
+		end
+	end
+
+	local fn hline(x0: integer, x1: integer, y: integer)
+		for x: integer = Math.min(x0, x1), Math.max(x0, x1) do
+			self.set(x, y, Cell.Floor)
+			self.set(x, y + 1, Cell.Floor)
+		end
+	end
+
+	local fn vline(y0: integer, y1: integer, x: integer)
+		for y: integer = Math.min(y0, y1), Math.max(y0, y1) do
+			self.set(x, y, Cell.Floor)
+			self.set(x + 1, y, Cell.Floor)
+		end
+	end
+
+	local fn carveRooms(rng: RandomGenerator, depth: integer)
+		local want: integer = Math.min(8 + depth / 2, 14)
+		local attempts: integer = 0
+		while #self.rooms < want and attempts < 400 do
+			attempts = attempts + 1
+			local rw: integer = rng.randomInt(6, 12)
+			local rh: integer = rng.randomInt(5, 9)
+			local room: Room = Room(
+				rng.randomInt(2, self.w - rw - 3),
+				rng.randomInt(2, self.h - rh - 3),
+				rw,
+				rh
+			)
+			local free: boolean = true
+			for other in self.rooms do
+				if room.overlaps(other, 3) then
+					free = false
+					break
+				end
+			end
+			if free then
+				room.fill(self, Cell.Floor)
+				if #self.rooms > 0 then
+					local prev: Room = self.rooms[#self.rooms]!
+					self.corridor(
+						prev.centerX(),
+						prev.centerY(),
+						room.centerX(),
+						room.centerY(),
+						rng.random() < 0.5
+					)
+				end
+				Table.insert(self.rooms, room)
+			end
+		end
+		-- A few extra passages, so the map has loops to run around.
+		for i: integer = 1, 2 + depth / 3 do
+			local a: Room = self.rooms[rng.randomInt(1, #self.rooms)]!
+			local b: Room = self.rooms[rng.randomInt(1, #self.rooms)]!
+			if a != b then
+				self.corridor(a.centerX(), a.centerY(), b.centerX(), b.centerY(), rng.random() < 0.5)
+			end
+		end
+	end
+
+	-- The stairs go in the room farthest from where the player starts.
+	local fn placeStairs()
+		local start: Room = self.rooms[1]!
+		local best: Room = start
+		local bestDist: integer = -1
+		for room in self.rooms do
+			local dx: integer = room.centerX() - start.centerX()
+			local dy: integer = room.centerY() - start.centerY()
+			local d: integer = dx * dx + dy * dy
+			if d > bestDist then
+				bestDist = d
+				best = room
+			end
+		end
+		self.stairsX = best.centerX()
+		self.stairsY = best.centerY()
+		self.set(self.stairsX, self.stairsY, Cell.Stairs)
+	end
+end

@@ -1,0 +1,127 @@
+-- Roguelike: a top-down roguelite written in Saule, drawn and heard with
+-- Shine.
+--
+-- The loop is the program's own, the way Love2D's `love.run` is: read the
+-- events, step the clock, update, draw, present.
+
+from shine import Window, Graphics, Timer, Event, EventKind, Audio, Random
+from art import Art
+from fx import Fx
+from sfx import Sfx
+from game import Game
+from hud import Hud
+
+enum Screen
+	Title,
+	Playing,
+	Paused,
+	Descending,
+	Dead
+end
+
+class Main
+	static fn main()
+		Window.create(1024, 680, "Roguelike")
+		Window.setTargetFPS(60)
+		Graphics.setBackgroundColor(0.0, 0.0, 0.0)
+
+		local art: Art = Art()
+		local hud: Hud = Hud()
+		local sfx: Sfx = Sfx()
+		local fx: Fx = Fx(art.glow, hud.small)
+		sfx.music.play()
+
+		local game: Game = Game(art, fx, sfx, Random.randomInt(1, 1000000))
+		local screen: Screen = Screen.Title
+		-- Seconds into a screen change: the fade to the next floor, the slow
+		-- fade of the death screen.
+		local fade: float = 0.0
+		local time: float = 0.0
+
+		while Window.isOpen() do
+			for e in Event.poll() do
+				if e.kind == EventKind.KeyPressed then
+					if screen == Screen.Title then
+						if e.key == "return" or e.key == "space" then
+							screen = Screen.Playing
+						end
+					elseif screen == Screen.Playing then
+						if e.key == "escape" then
+							screen = Screen.Paused
+						elseif e.key == "lshift" or e.key == "rshift" then
+							game.dash()
+						end
+					elseif screen == Screen.Paused then
+						if e.key == "escape" then
+							screen = Screen.Playing
+						elseif e.key == "q" then
+							hud.best = Math.max(hud.best, Hud.score(game))
+							game = Game(art, fx, sfx, Random.randomInt(1, 1000000))
+							screen = Screen.Title
+						end
+					elseif screen == Screen.Dead then
+						if e.key == "return" and fade > 1.0 then
+							game = Game(art, fx, sfx, Random.randomInt(1, 1000000))
+							screen = Screen.Playing
+						end
+					end
+					if e.key == "m" then
+						sfx.toggleMute()
+					elseif e.key == "f2" then
+						Graphics.captureScreenshot("roguelike.png")
+					end
+				elseif e.kind == EventKind.MousePressed and e.button == 2 and screen == Screen.Playing then
+					game.dash()
+				end
+			end
+
+			-- Clamped, so a stall (dragging the window) does not teleport
+			-- everything through the walls.
+			local dt: float = Math.min(Timer.step(), 1.0 / 20.0)
+			time = time + dt
+
+			if screen == Screen.Playing then
+				game.update(dt)
+				if game.over then
+					hud.best = Math.max(hud.best, Hud.score(game))
+					screen = Screen.Dead
+					fade = 0.0
+				elseif game.onStairs then
+					screen = Screen.Descending
+					fade = 0.0
+				end
+			elseif screen == Screen.Descending then
+				fade = fade + dt
+				if fade >= 0.5 and game.onStairs then
+					game.descend()
+				end
+				if fade >= 1.0 then
+					screen = Screen.Playing
+				end
+			elseif screen == Screen.Dead then
+				fade = fade + dt
+				game.update(dt)
+			end
+
+			Graphics.clear(0.0, 0.0, 0.0)
+			game.draw()
+			match screen
+				case Screen.Title then hud.title(time)
+				case Screen.Playing then hud.draw(game)
+				case Screen.Paused then
+					hud.draw(game)
+					hud.paused()
+				case Screen.Descending then
+					hud.draw(game)
+					-- Fade to black and back across the stairs.
+					local a: float = 1.0 - Math.abs(fade - 0.5) * 2.0
+					Graphics.setColor(0.0, 0.0, 0.0, a)
+					Graphics.rectangle("fill", 0.0, 0.0, Graphics.getWidth() as float, Graphics.getHeight() as float)
+					Graphics.setColor(1.0, 1.0, 1.0)
+				case Screen.Dead then hud.gameOver(game, Math.min(1.0, fade))
+			end
+			Graphics.present()
+		end
+		Audio.stop()
+	end
+end

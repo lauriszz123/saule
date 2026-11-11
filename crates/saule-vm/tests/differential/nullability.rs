@@ -240,3 +240,123 @@ fn a_nil_comparison_agrees_in_both_polarities() {
         ));
     }
 }
+
+// ── field paths: one `GETPATH` for a chain of field reads ─────────────────
+
+/// Three classes deep, every link nullable, and a table at the middle — the
+/// shape of `benchmarks/sau/nullsafe.sau`.
+const CHAIN: &str = "class Inner\n  v: integer?\n  fn init(v: integer?)\n    self.v = v\n  end\nend\n\
+class Mid\n  inner: Inner?\n  tags: table<integer>?\n  fn init(inner: Inner?, tags: table<integer>?)\n    self.inner = inner\n    self.tags = tags\n  end\nend\n\
+class Outer\n  mid: Mid?\n  fn init(mid: Mid?)\n    self.mid = mid\n  end\nend\n";
+
+#[test]
+fn a_safe_chain_is_nil_wherever_it_breaks() {
+    for row in [
+        "Outer(nil)",
+        "Outer(Mid(nil, nil))",
+        "Outer(Mid(Inner(nil), {}))",
+        "Outer(Mid(Inner(7), {4, 5}))",
+    ] {
+        must_agree(&format!(
+            "{CHAIN}local row: Outer = {row}\nrow.mid?.inner?.v ?? -1"
+        ));
+        must_agree(&format!(
+            "{CHAIN}local row: Outer = {row}\nrow.mid?.tags?[1] ?? 0"
+        ));
+        must_agree(&format!(
+            "{CHAIN}local row: Outer = {row}\nlocal v: integer? = row.mid?.inner?.v\nv == nil"
+        ));
+    }
+}
+
+#[test]
+fn an_unwrapping_chain_blames_the_link_that_was_nil() {
+    // Each fails on a different `!`, and the error is compared — so a path
+    // that reported the wrong link, or none, fails here.
+    for row in [
+        "Outer(nil)",
+        "Outer(Mid(nil, nil))",
+        "Outer(Mid(Inner(nil), nil))",
+        "Outer(Mid(Inner(3), nil))",
+    ] {
+        must_agree(&format!(
+            "{CHAIN}local row: Outer = {row}\nrow.mid!.inner!.v! + 1"
+        ));
+        must_agree(&format!(
+            "{CHAIN}local row: Outer = {row}\nlocal i: Inner? = row.mid!.inner\ni == nil"
+        ));
+    }
+}
+
+#[test]
+fn a_plain_chain_reads_through_every_link() {
+    must_agree(
+        "class V\n  x: integer\n  fn init(x: integer)\n    self.x = x\n  end\nend\n\
+         class B\n  pos: V\n  fn init(p: V)\n    self.pos = p\n  end\nend\n\
+         class W\n  body: B\n  fn init(b: B)\n    self.body = b\n  end\n\
+         \x20 fn sum() -> integer\n    return self.body.pos.x + self.body.pos.x\n  end\nend\n\
+         local w: W = W(B(V(21)))\n\
+         w.body.pos.x = w.body.pos.x + 1\n\
+         w.sum()",
+    );
+}
+
+#[test]
+fn a_chain_rooted_at_a_call_evaluates_the_call_once() {
+    must_agree(
+        "class V\n  x: integer?\n  fn init(x: integer?)\n    self.x = x\n  end\nend\n\
+         class B\n  pos: V?\n  fn init(p: V?)\n    self.pos = p\n  end\nend\n\
+         local calls: integer = 0\n\
+         fn make() -> B?\n  calls = calls + 1\n  return B(V(5))\nend\n\
+         local r: integer = make()?.pos?.x ?? 0\n\
+         r * 100 + calls",
+    );
+}
+
+#[test]
+fn a_safe_index_evaluates_its_receiver_once() {
+    // `f()?[i]` compiled its receiver twice — once for the nil test and
+    // again inside the index read — so `f` ran twice.
+    must_agree(
+        "local calls: integer = 0\n\
+         fn get() -> table<integer>?\n  calls = calls + 1\n  return {10, 20}\nend\n\
+         local x: integer? = get()?[2]\n\
+         calls * 100 + (x ?? 0)",
+    );
+    must_agree(
+        "local t: table<integer>? = nil\n\
+         local i: integer = 1\n\
+         local x: integer? = t?[i]\n\
+         x == nil",
+    );
+}
+
+#[test]
+fn a_literal_fallback_is_kept_or_skipped_by_one_test() {
+    for (x, rhs) in [
+        ("nil", "-1"),
+        ("4", "-1"),
+        ("nil", "0"),
+        ("4", "100000000000"),
+    ] {
+        must_agree(&format!("local x: integer? = {x}\nx ?? {rhs}"));
+    }
+    must_agree("local s: string? = nil\ns ?? \"none\"");
+    must_agree("local s: string? = \"some\"\ns ?? \"none\"");
+    must_agree("local f: float? = nil\nf ?? -0.5");
+    for b in ["true", "false"] {
+        must_agree(&format!(
+            "local b: boolean = {b}\nlocal r: boolean = b and false\nr"
+        ));
+        must_agree(&format!(
+            "local b: boolean = {b}\nlocal r: boolean = b or true\nr"
+        ));
+    }
+}
+
+#[test]
+fn a_negative_literal_is_the_number_itself() {
+    must_agree("local x: integer = -9223372036854775807\nx");
+    must_agree("local f: float = -0.0\n1.0 / f");
+    must_agree("local n: integer = 3\nn * -2");
+}

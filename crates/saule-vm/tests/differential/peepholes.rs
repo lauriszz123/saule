@@ -1033,7 +1033,11 @@ fn a_force_unwrapped_field_read_fuses() {
     // increment on the way in and a decrement on the old occupant's way
     // out. `--profile-bytecode` on `nullsafe` counted `GETF UNWRAPNIL` as
     // the **top adjacent pair**, 288,000 of 5,088,042 instructions.
-    let src = format!("{LINKED}local n: Node = Node(Leaf(42)){NL}n.next!.v!");
+    //
+    // One link at a time: two or more in a row are one `GETPATH` instead,
+    // which `a_chain_of_field_reads_is_one_getpath` covers.
+    let src =
+        format!("{LINKED}local n: Node = Node(Leaf(42)){NL}local leaf: Leaf = n.next!{NL}leaf.v!");
     let l = listing(&src);
     assert!(emits(&l, "GETFU"), "the field unwrap did not fuse:{NL}{l}");
     assert!(
@@ -1176,4 +1180,78 @@ h.get()"#
         "the interface call went dynamic:{NL}{l}"
     );
     must_agree(&src);
+}
+
+#[test]
+fn a_chain_of_field_reads_is_one_getpath() {
+    // `nullsafe`'s three hot expressions: a safe chain, a safe chain into a
+    // table, and an unwrapping chain. Each used to be a `GETF` per link,
+    // with a `JNOTNIL`/`JMP`/`JMP`/`LOADNIL` diamond around every `?.`.
+    let src = "class Inner\n  v: integer?\n  fn init(v: integer?)\n    self.v = v\n  end\nend\n\
+class Mid\n  inner: Inner?\n  tags: table<integer>?\n  fn init(inner: Inner?, tags: table<integer>?)\n    self.inner = inner\n    self.tags = tags\n  end\nend\n\
+class Outer\n  mid: Mid?\n  fn init(mid: Mid?)\n    self.mid = mid\n  end\n\
+\x20 fn a() -> integer\n    return self.mid?.inner?.v ?? -1\n  end\n\
+\x20 fn b() -> integer\n    return self.mid?.tags?[1] ?? 0\n  end\n\
+\x20 fn c() -> integer\n    return self.mid!.inner!.v!\n  end\nend\n";
+    let l = listing(src);
+    for f in ["Outer.a", "Outer.b", "Outer.c"] {
+        let body = proto(&l, f);
+        assert!(
+            emits(body, "GETPATH"),
+            "{f} reads its chain link by link:{NL}{body}"
+        );
+        for gone in ["GETF", "GETFU", "JMP", "LOADNIL", "NEGI"] {
+            assert!(!emits(body, gone), "{f} still emits {gone}:{NL}{body}");
+        }
+    }
+    // The fallback is one load the test skips, not a jump around it.
+    assert!(proto(&l, "Outer.a").contains("-1"), "`-1` was not folded");
+}
+
+#[test]
+fn a_match_arm_reads_its_payload_fields_directly() {
+    let src = "enum Event\n  Click(x: integer, y: integer),\n  Key(code: integer)\nend\n\
+fn handle(e: Event) -> integer\n  return match e\n    case Event.Click(x, y) then x + y\n    case Event.Key(c) when c > 100 then c\n    case Event.Key(c) then 0\n  end\nend\n";
+    let l = listing(src);
+    let body = proto(&l, "handle");
+    assert!(
+        emits(body, "GETPAY"),
+        "payload fields are not read directly:{NL}{body}"
+    );
+    for gone in ["UNWRAP", "GETARR", "TEST", "LTI"] {
+        assert!(
+            !emits(body, gone),
+            "the match still emits {gone}:{NL}{body}"
+        );
+    }
+    // The parameter is matched where it is, not copied first.
+    assert!(
+        !body.lines().any(|l| {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            w.get(1) == Some(&"MOVE") && w.get(3) == Some(&"0")
+        }),
+        "the scrutinee was copied:{NL}{body}"
+    );
+}
+
+#[test]
+fn a_tiny_lambda_through_a_local_is_compiled_in_place() {
+    let src = "fn run() -> integer\n  local add: fn(integer, integer) -> integer = (a, b) => a + b\n  local s: integer = 0\n  for i: integer = 1, 10 do\n    s = add(s, i)\n  end\n  local g: fn(integer) -> integer = fn(a: integer) -> integer\n    return a\n  end\n  local r: integer = g(s)\n  return r\nend\n";
+    let l = listing(src);
+    let body = proto(&l, "run");
+    assert!(
+        emits(body, "CALLK"),
+        "`g` is not called as its proto:{NL}{body}"
+    );
+    assert!(
+        !emits(body, "CALL"),
+        "a lambda local is still called as a value:{NL}{body}"
+    );
+    assert_eq!(
+        body.lines()
+            .filter(|l| l.split_whitespace().nth(1) == Some("CALLK"))
+            .count(),
+        1,
+        "`add` was called rather than inlined:{NL}{body}"
+    );
 }
