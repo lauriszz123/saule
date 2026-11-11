@@ -164,6 +164,41 @@ fn two_closures_share_one_captured_binding() {
     );
 }
 
+/// A closure that reassigns the variable holding it, through a tail call, and
+/// then keeps using its upvalues.
+///
+/// What this guards is the one reference count a `Frame` still keeps. A frame
+/// holds its `Proto` and `Chunk` without counting them — the chunk and the
+/// engine own those for longer than any frame — but it *owns* its closure
+/// handle, because a closure's last strong reference can be the very binding
+/// its own body overwrites. The tail call is what makes that reachable: a
+/// tail call replaces the caller's frame, so the register the caller loaded
+/// the callee into is gone too, and after `g = fn(m) …` runs there is nothing
+/// left pointing at the running closure but the frame. Read its upvalue
+/// array with the frame not holding it and this is a use-after-free.
+#[test]
+fn a_closure_that_reassigns_itself_keeps_its_upvalues() {
+    must_agree(
+        "local acc: integer = 0\n\
+         local g: fn(integer) -> integer = fn(n)\n\
+         \x20 return n\n\
+         end\n\
+         g = fn(n)\n\
+         \x20 g = fn(m)\n\
+         \x20   return m * 2\n\
+         \x20 end\n\
+         \x20 acc = acc + n\n\
+         \x20 return acc\n\
+         end\n\
+         local via: fn(integer) -> integer = fn(n)\n\
+         \x20 return g(n)\n\
+         end\n\
+         local first: integer = via(7)\n\
+         local second: integer = g(1)\n\
+         first * 100 + second * 10 + acc",
+    );
+}
+
 // ── per-iteration capture ─────────────────────────────────────────────────
 //
 // Each iteration's closure keeps the value *it* saw. The VM closes a loop's

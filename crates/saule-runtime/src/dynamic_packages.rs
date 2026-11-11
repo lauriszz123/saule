@@ -14,7 +14,8 @@
 //! `~/.saule` is the Saule home directory; set `SAULE_HOME` to relocate it.
 //! See [`saule_home`] for the exact resolution order.
 //!
-//! 1. [`discover`] (run once from [`crate::init`]) scans the packages
+//! 1. [`discover`] (run once, at the first `import` or other question that
+//!    needs it — not at startup) scans the packages
 //!    directory and reads each library's metadata **out of the file** —
 //!    [`embedded`] parses it as data; nothing is loaded — into a [`Manifest`]
 //!    in a process-global registry. A library that cannot be used is

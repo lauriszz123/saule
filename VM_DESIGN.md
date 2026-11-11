@@ -263,6 +263,14 @@ Concrete mitigations, in priority order:
    when storing.
 4. **`MOVE` on a dead source could become a move.** Deferred — the liveness
    analysis is not worth it until measured.
+5. **An activation record holds nothing it does not have to.** A `Frame`
+   carries its `Proto` and `Chunk` as `ManuallyDrop<Rc<_>>`, not `Rc<_>`: a
+   `Chunk` owns every `Proto` the VM runs and `VmShared` owns every `Chunk`,
+   both for longer than any frame opened over them, so a frame that counted
+   them was paying two refcount pairs per call *and* per return for a
+   guarantee already in hand. Worth `fib` −23%, `closure` −12%. The closure
+   handle stays owned — its last strong reference can be the register or
+   upvalue cell its own body overwrites.
 
 ### 4.4 Additive runtime changes
 

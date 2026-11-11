@@ -194,6 +194,30 @@ impl VmFunction for Closure {
     }
 }
 
+/// A pointer a [`Frame`] carries to something it does not own.
+///
+/// `ManuallyDrop<Rc<T>>` rather than `&T` or `*const T`, which is the same
+/// choice the dispatch loop makes one layer down and for the same reason —
+/// see that module's header. It is the same pointer in a register and the
+/// same type to codegen as an `Rc<T>`, so it keeps whatever the owned form
+/// bought LLVM, while costing nothing to create and nothing to drop.
+pub type Held<T> = std::mem::ManuallyDrop<Rc<T>>;
+
+/// Copy the pointer out of an `Rc` without touching its reference count.
+///
+/// # Safety
+///
+/// The pointee must outlive the returned [`Held`]. Nothing about the value
+/// enforces that: it neither holds a count nor carries a lifetime, and
+/// dereferencing one whose pointee has been freed is use-after-free. Every
+/// caller here satisfies it the same way — see [`Frame::proto`].
+pub(crate) unsafe fn hold<T>(rc: &Rc<T>) -> Held<T> {
+    // SAFETY: the bits are copied, not the ownership. The original `Rc` keeps
+    // its count and the copy is never dropped, so no count is touched and
+    // none is lost.
+    std::mem::ManuallyDrop::new(unsafe { std::ptr::read(rc) })
+}
+
 /// One activation record. `Environment` disappears entirely: a call is a
 /// `Vec` push plus a bounds check that the register file is long enough.
 #[derive(Debug)]
@@ -207,12 +231,29 @@ pub struct Frame {
     /// things the dispatch loop actually wants from the closure are cached
     /// beside it, and `func` is now read only by the three opcodes that
     /// touch upvalues.
+    /// Owned, and the only one of the three that is. `proto` and `chunk`
+    /// below are kept alive by the engine whatever the frame does; a closure
+    /// is not. Its last strong reference can be the very register or upvalue
+    /// cell that its own body overwrites — `f = nil` inside a lambda that
+    /// captured itself is enough — and the frame is then all that stands
+    /// between `GETUPVAL` and a freed upvalue array.
     pub func: Rc<VmFunctionRef>,
     /// The running proto — `func`'s, resolved once when the frame is built.
-    pub proto: Rc<Proto>,
+    ///
+    /// Carried as a [`Held`] rather than an `Rc`: entering and leaving a
+    /// frame happens on every call *and* every return, so an owned `Proto`
+    /// and `Chunk` cost two refcount pairs per round trip for a guarantee
+    /// that was already in hand. Every `Rc<Proto>` the VM runs comes from
+    /// `chunk.proto(idx)`, so its `Chunk` holds it for the chunk's whole
+    /// life; every `Rc<Chunk>` comes from `VmShared::chunks`, which outlives
+    /// every frame opened over it. The dispatch loop already reads both out
+    /// of the frame this way and documents the invariant at length; this
+    /// stops the *writes* paying for it too.
+    pub proto: Held<Proto>,
     /// The chunk `proto` was compiled in. Constants, protos, jump tables and
     /// cast types are per chunk, so they follow the frame rather than the VM.
-    pub chunk: Rc<crate::chunk::Chunk>,
+    /// Held, not owned, for the reason given on `proto`.
+    pub chunk: Held<crate::chunk::Chunk>,
     /// `R[0]` is `stack[base]`.
     pub base: u32,
     /// Absolute register in the *caller* where this call's results go.

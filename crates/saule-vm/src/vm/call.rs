@@ -12,6 +12,7 @@ use saule_runtime::{RuntimeError, Value};
 use crate::chunk::{Chunk, InlineCache, Proto};
 use crate::op::{Instruction, Op};
 
+use super::frame::{Held, hold};
 use super::ops::operand_err;
 use super::{ALL_RESULTS, Closure, Frame, Vm};
 
@@ -418,8 +419,11 @@ impl Vm {
             message: "internal: frame handle is not a bytecode closure".into(),
             span: site.span(),
         })?;
-        let proto = Rc::clone(&cl.proto);
-        let chunk = Rc::clone(&cl.chunk);
+        // SAFETY: as in `push_frame` — the chunk owns the proto and `shared`
+        // owns the chunk, so neither can go away while this frame runs. The
+        // frame being replaced held them the same way, so overwriting it
+        // leaks no count either.
+        let (proto, chunk) = unsafe { (hold(&cl.proto), hold(&cl.chunk)) };
         let pdata = &*proto;
 
         let frame = self.frames.last().expect("frame");
@@ -493,11 +497,17 @@ impl Vm {
                 span: site.span(),
             });
         }
-        let cl = Closure::from_handle(&func).ok_or_else(|| RuntimeError::TypeError {
-            message: "internal: frame handle is not a bytecode closure".into(),
-            span: site.span(),
-        })?;
-        let (proto, chunk) = (Rc::clone(&cl.proto), Rc::clone(&cl.chunk));
+        let (proto, chunk) = {
+            let cl = Closure::from_handle(&func).ok_or_else(|| RuntimeError::TypeError {
+                message: "internal: frame handle is not a bytecode closure".into(),
+                span: site.span(),
+            })?;
+            // SAFETY: the closure's `Chunk` holds this `Proto`, and
+            // `shared.chunks` holds that `Chunk`, for longer than any frame
+            // over them — see `Frame::proto`. Taken in a block of its own so
+            // the borrow of `func` ends before it is moved into the frame.
+            unsafe { (hold(&cl.proto), hold(&cl.chunk)) }
+        };
         self.push_frame_resolved(func, proto, chunk, base, n_args, ret_to, n_ret, site)
     }
 
@@ -511,8 +521,8 @@ impl Vm {
     pub(crate) fn push_frame_resolved(
         &mut self,
         func: Rc<VmFunctionRef>,
-        proto: Rc<Proto>,
-        chunk: Rc<Chunk>,
+        proto: Held<Proto>,
+        chunk: Held<Chunk>,
         base: u32,
         n_args: usize,
         ret_to: u32,
@@ -690,8 +700,15 @@ impl Vm {
         n_ret: u8,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
-        let chunk = Rc::clone(&self.shared.chunks[tm]);
-        let proto = Rc::clone(chunk.proto(target));
+        // SAFETY: `shared.chunks` owns this chunk for as long as this `Vm`
+        // holds its `Rc<VmShared>`, which is the whole call, and the chunk
+        // owns the proto — see `Frame::proto`. Held rather than borrowed
+        // because `closure_for` and `push_frame_resolved` both want
+        // `&mut self`, which a borrow of `self.shared` would forbid.
+        let chunk = unsafe { hold(&self.shared.chunks[tm]) };
+        // SAFETY: as above — the proto belongs to `chunk`, which outlives
+        // the frame.
+        let proto = unsafe { hold(chunk.proto(target)) };
         let handle = self.closure_for(&chunk, target);
         self.push_frame_resolved(handle, proto, chunk, base, n_args, ret_to, n_ret, site)
     }

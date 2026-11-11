@@ -38,6 +38,35 @@ history.
 
 ### Changed
 
+- **A program that does nothing starts in half the time.** `saule run` on an
+  empty file took 2.80 ms, and 1.50 ms of that was reading every installed
+  native package's library off the disk — a 1.8 MB library costs 0.8 ms in the
+  read and another 0.75 ms parsing the 114 metadata records inside it — to
+  learn names that most programs never ask for, before the program's first
+  byte was lexed. The scan now happens at the first `import` or other question
+  that needs it, so a program that imports no package never touches the
+  packages directory: **2.80 ms → 1.34 ms**, against Lua's 0.75 ms on the same
+  machine, and the `startup` benchmark from 3.9x Lua to 1.9x. Nothing about
+  what resolves, or what an unusable package reports, changed. The one reader
+  that used to force the scan on every run was the typechecker's signature
+  table — it registers what has been discovered and no longer does the
+  discovering, which import resolution, running first and asking per `import`,
+  already did.
+- **A call no longer touches three reference counts.** A `Frame` owned its
+  closure, its `Proto` and its `Chunk`, so entering and leaving one — which
+  happens on every call *and* every return — cost three increments and three
+  decrements. Two were for a guarantee the engine already makes: a `Chunk`
+  owns every `Proto` the VM runs and `VmShared` owns every `Chunk`, both for
+  longer than any frame over them, which is the invariant the dispatch loop
+  already relies on to *read* them out of a frame without a clone. The frame
+  now carries them the same way, so only the closure handle is counted — and
+  that asymmetry is deliberate: a closure's last strong reference can be the
+  very register or upvalue cell its own body overwrites. Worth `fib` −23%,
+  `closure` −12%, `bintree` −12%, `errors` −11%, `vecops` −10%, and −6% to
+  −8% on `sort`, `generic`, `match`, `iface` and `oop`; the core-mechanisms
+  geomean goes from 1.8x Lua to 1.7x and the suite's from 2.0x to 1.9x.
+  Call-free code is untouched, as it should be: `mandel`, `strings`,
+  `nullsafe` and `mathlib` do not move.
 - **`obj.field!` is one instruction, and `x != nil` is two.** Two codegen
   fusions the VM's opcode table already had the opcodes for but nothing
   emitted. A force-unwrapped field read was `GETF` + `UNWRAPNIL`, which

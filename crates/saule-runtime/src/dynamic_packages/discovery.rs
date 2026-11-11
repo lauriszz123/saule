@@ -4,8 +4,10 @@
 // Only the `LIBS` cache below holds one, and that is feature-gated too.
 #[cfg(feature = "native-packages")]
 use libloading::Library;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Once, RwLock};
 
 use super::*;
@@ -26,6 +28,22 @@ static REJECTED: RwLock<Option<HashMap<String, String>>> = RwLock::new(None);
 pub(crate) static LIBS: RwLock<Option<HashMap<String, Arc<Library>>>> = RwLock::new(None);
 
 pub(crate) static DISCOVER_ONCE: Once = Once::new();
+
+/// `0` before [`discover`] has run, `1` after. A thread compares it against
+/// [`SIGS_GENERATION`] to decide whether its signature table has seen the
+/// packages the process has found.
+///
+/// A counter rather than a bool because the question is not "has discovery
+/// happened" — that is [`DISCOVER_ONCE`] — but "has *this thread* registered
+/// what discovery found", and those differ per thread.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// The [`GENERATION`] this thread's `saule-typeck` signature table was
+    /// filled from. `SIGS` in `saule-sigs` is thread-local, so this has to
+    /// be too.
+    static SIGS_GENERATION: Cell<u64> = const { Cell::new(0) };
+}
 
 // ─── Filesystem layout ──────────────────────────────────────────────────────
 
@@ -70,6 +88,29 @@ pub(crate) fn library_extension() -> &'static str {
 /// A library that cannot be used is not an error here — a program that
 /// never imports it should not hear about it — so the reason is recorded
 /// instead, and reported by the `import` that names it.
+///
+/// ## Why this is not called from `crate::init`
+///
+/// It used to be, and that made every `saule run` pay for it. Reading a
+/// package is reading its *whole file*: a 1.8 MB library cost 0.8 ms in the
+/// read and another 0.75 ms parsing the TOML of the 114 records inside it,
+/// which was **54% of the 2.8 ms a program that does nothing took** — spent
+/// before the program's first byte was lexed, on a library it never
+/// imported. Startup fell from 2.80 ms to 1.37 ms when it stopped.
+///
+/// So the scan happens at the first question only a scan can answer:
+/// [`lookup`], [`rejection`] and [`package_names`] each call this before
+/// reading their registry. Import resolution (`crate::module::resolve`,
+/// `crate::module::seed`) asks per `import` statement and runs *before* the
+/// type passes, so a module that imports a package still has its manifests
+/// in hand by the time anything needs them, and a module that imports
+/// nothing never touches the disk.
+///
+/// [`register_sigs`] is the one reader that must *not* trigger a scan — it
+/// runs on every type-check, whether or not anything was imported — so it
+/// registers what has been discovered and nothing more. Calling it here is
+/// what keeps that honest: whichever order the two happen in, the thread
+/// that discovers a package registers its signatures before returning.
 pub fn discover() {
     DISCOVER_ONCE.call_once(|| {
         let (found, rejected) = scan(&packages_dir(), &legacy_manifests_dir());
@@ -77,7 +118,11 @@ pub fn discover() {
             .write()
             .expect("dynamic manifest registry poisoned") = Some(found);
         *REJECTED.write().expect("rejection registry poisoned") = Some(rejected);
+        GENERATION.store(1, Ordering::Release);
     });
+    // Cheap after the first call on this thread: an atomic load and a
+    // thread-local read.
+    register_sigs();
 }
 
 type Scan = (HashMap<String, Arc<Manifest>>, HashMap<String, String>);
@@ -244,7 +289,19 @@ pub fn rejection(name: &str) -> Option<String> {
 /// class metadata [`seed_classes`] gives the checker instead, the same way
 /// a Saule class's are, which is what keeps `Image.width()` — an instance
 /// method called on the class — an error.
+/// Deliberately does **not** call [`discover`]: it runs on the first
+/// signature lookup of every thread that type-checks anything, so forcing a
+/// scan here would put the cost back on every program, imports or not. What
+/// makes that safe is that [`discover`] calls *this* on the way out, so a
+/// thread that discovers packages registers them itself.
 pub fn register_sigs() {
+    // Already in step with what the process has found — including the
+    // "nothing discovered, nothing to register" case, which is every run of
+    // a program that imports no package.
+    let generation = GENERATION.load(Ordering::Acquire);
+    if SIGS_GENERATION.with(Cell::get) == generation {
+        return;
+    }
     let guard = MANIFESTS
         .read()
         .expect("dynamic manifest registry poisoned");
@@ -271,10 +328,13 @@ pub fn register_sigs() {
             }
         }
     }
+    SIGS_GENERATION.with(|g| g.set(generation));
 }
 
-/// Look up a discovered package by import name.
+/// Look up a discovered package by import name. Scans first if nothing has
+/// yet needed the packages directory — see [`discover`].
 pub(crate) fn lookup(name: &str) -> Option<Arc<Manifest>> {
+    discover();
     let guard = MANIFESTS
         .read()
         .expect("dynamic manifest registry poisoned");
@@ -289,6 +349,7 @@ pub fn is_dynamic_package(name: &str) -> bool {
 /// Every discovered dynamic package's import name. Used by tooling (the LSP's
 /// import completion) to offer installed packages as import targets.
 pub fn package_names() -> Vec<String> {
+    discover();
     let guard = MANIFESTS
         .read()
         .expect("dynamic manifest registry poisoned");

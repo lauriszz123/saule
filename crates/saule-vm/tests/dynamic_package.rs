@@ -106,6 +106,58 @@ fn compile(entry: &Path) -> saule_vm::program::Program {
     }
 }
 
+/// A package's natives are type-checked, although nothing reads the packages
+/// directory until an `import` asks it to.
+///
+/// The scan is lazy — it used to run from `saule_runtime::init()`, where it
+/// cost every program more than half its startup — so what the checker knows
+/// about a package now depends on an order that used to be fixed. The arity
+/// of a native static is the end of that chain: it is reported only if the
+/// manifest was read, and read late, after this thread had already
+/// type-checked a module that imports nothing.
+#[test]
+fn a_packages_signatures_reach_the_typechecker() {
+    install_fixture();
+    // Type-check something that imports nothing *first*. That fills this
+    // thread's signature table, which happens once per thread and never
+    // again — so a package discovered afterwards has missed the only moment
+    // the old code would have registered it in. This is the order an editor
+    // reaches naturally: one file open, then another that imports a package.
+    let plain = project(
+        "dynpkg_plain_first",
+        &[("main.sau", "println(String.len(\"ab\"))\n")],
+    );
+    compile(&plain.join("main.sau"));
+
+    let dir = project(
+        "dynpkg_bad_arity",
+        &[
+            (
+                "lib.sau",
+                "from fixture import *\n                 export fn total() -> integer\n                 \x20 return Util.sum({1}, 2)\n                 end\n",
+            ),
+            ("main.sau", "from lib import total\nprintln(total())\n"),
+        ],
+    );
+    let err = saule_vm::program::compile(&dir.join("main.sau"))
+        .expect_err("`Util.sum` takes one argument, and the call passes two");
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("`Util.sum` expects 1 argument(s), got 2"),
+        "the error should be the arity of the native it checked, got: {text}"
+    );
+
+    // And the signature table itself holds it, not only whatever the class
+    // metadata of the `import` happened to seed. This is the half that the
+    // diagnostic above does not pin down: `discover` registers what it finds
+    // on the thread that finds it, which is what keeps the table the same
+    // whether the scan ran at startup — as it used to — or here.
+    assert!(
+        saule_typeck::sigs::lookup("Util.sum").is_some(),
+        "a discovered package's static should be registered with the checker"
+    );
+}
+
 /// Compiling folds the package's exports without loading it, records the
 /// load on the importing module's chunk, and running performs it.
 ///

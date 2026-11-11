@@ -374,11 +374,16 @@ impl Vm {
             // slower on `loop_arith`. A `ManuallyDrop<Rc<T>>` is the same
             // pointer in a register and the same type to codegen, so it keeps
             // whatever made the owned form fast and drops only the traffic.
+            //
+            // The frame's fields are `Held` for exactly the same reason, so
+            // this is now a copy of a pointer out of a pointer: `ptr::read`
+            // because `ManuallyDrop<Rc<_>>` is not `Copy`, not because
+            // anything here is being taken out of an owner.
             let (proto, chunk, base, mut pc) = {
                 let f = self.frames.last().expect("frame");
                 (
-                    unsafe { std::mem::ManuallyDrop::new(std::ptr::read(&f.proto)) },
-                    unsafe { std::mem::ManuallyDrop::new(std::ptr::read(&f.chunk)) },
+                    unsafe { std::ptr::read(&f.proto) },
+                    unsafe { std::ptr::read(&f.chunk) },
                     f.base as usize,
                     f.pc as usize,
                 )
