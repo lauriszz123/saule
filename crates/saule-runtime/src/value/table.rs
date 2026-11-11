@@ -222,6 +222,20 @@ impl TableObject {
         self.array.len()
     }
 
+    /// Where Saule index `i` lives in the array part, if it lives there.
+    ///
+    /// The integer-key fast path the dispatch loop takes before falling back
+    /// to [`get`](Self::get) and [`set`](Self::set), which are out of line
+    /// and test every kind of key. A key this answers `Some` for is exactly
+    /// one those two would have resolved to the array part, so the fast path
+    /// changes how a lookup is made and never what it finds. `0` and
+    /// negatives wrap to an index no array reaches.
+    #[inline(always)]
+    pub fn array_index(&self, i: i64) -> Option<usize> {
+        let slot = (i as usize).wrapping_sub(1);
+        (slot < self.array.len()).then_some(slot)
+    }
+
     /// Read by arbitrary value index. Returns `Nil` for missing keys.
     pub fn get(&self, key: &Value) -> Value {
         if let Value::Int(i) = key

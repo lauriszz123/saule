@@ -38,6 +38,14 @@ history.
 
 ### Changed
 
+- **`t[i]` with an integer inside the array is read and written in place.**
+  Every indexed read and write called the table's general `get` or `set` out
+  of line — which test every kind of key, string and hash part included — and
+  wrote the result back with the full drop of whatever the register held,
+  even a float. An integer key inside the array part now goes straight to the
+  slot, and anything else to the general path, so the answer is the same
+  either way; a store still tells the cycle collector about a container, and
+  a test now says so. `matrix` −21% (2.2x Lua → **1.8x**), `array` −5%.
 - **Copying a value is one branch, not a jump table — 14% across the suite.**
   `Value::clone` matched `Nil`, `Bool`, `Int` and `Float` as four arms, and
   LLVM lowered that to a jump table on the value's type. It is inlined into

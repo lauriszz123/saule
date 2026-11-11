@@ -1094,47 +1094,81 @@ impl Vm {
                     Op::GETMAP | Op::GETMAPK | Op::GETIDX => {
                         let tr = base + ins.b() as usize;
                         let v = {
-                            let Value::Table(t) = &self.stack[tr] else {
-                                return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                            let Value::Table(t) = self.reg(tr) else {
+                                return Err(operand_err(self.reg(tr), "table", &proto, here));
                             };
                             let t = t.borrow();
                             if op == Op::GETMAPK {
                                 t.get(&chunk.constants[ins.c() as usize])
                             } else {
-                                t.get(self.reg(base + ins.c() as usize))
+                                let key = self.reg(base + ins.c() as usize);
+                                // An integer inside the array part, read in
+                                // place — see `TableObject::array_index`.
+                                match key {
+                                    Value::Int(i) => match t.array_index(*i) {
+                                        Some(slot) => t.array[slot].clone(),
+                                        None => t.get(key),
+                                    },
+                                    _ => t.get(key),
+                                }
                             }
                         };
-                        *self.reg_mut(base + a) = v;
+                        self.set_reg(base + a, v);
                     }
                     // `t[i]!` — the index and the force-unwrap in one word.
                     // See the opcode's doc for the profile that justifies it.
                     Op::GETIDXU => {
                         let tr = base + ins.b() as usize;
                         let v = {
-                            let Value::Table(t) = &self.stack[tr] else {
-                                return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                            let Value::Table(t) = self.reg(tr) else {
+                                return Err(operand_err(self.reg(tr), "table", &proto, here));
                             };
-                            t.borrow().get(self.reg(base + ins.c() as usize))
+                            let t = t.borrow();
+                            let key = self.reg(base + ins.c() as usize);
+                            match key {
+                                Value::Int(i) => match t.array_index(*i) {
+                                    Some(slot) => t.array[slot].clone(),
+                                    None => t.get(key),
+                                },
+                                _ => t.get(key),
+                            }
                         };
                         if matches!(v, Value::Nil) {
                             return Err(RuntimeError::ForceUnwrapNil {
                                 span: proto.span_at(here),
                             });
                         }
-                        *self.reg_mut(base + a) = v;
+                        self.set_reg(base + a, v);
                     }
                     Op::SETMAP | Op::SETMAPK | Op::SETIDX => {
                         let tr = base + a;
                         // The stored value is the one thing that genuinely
                         // moves into the table, so it is the one clone left.
                         let v = (*self.reg(base + ins.c() as usize)).clone();
-                        let Value::Table(t) = &self.stack[tr] else {
-                            return Err(operand_err(&self.stack[tr], "table", &proto, here));
+                        let Value::Table(t) = self.reg(tr) else {
+                            return Err(operand_err(self.reg(tr), "table", &proto, here));
                         };
                         let r = if op == Op::SETMAPK {
                             t.borrow_mut().set(&chunk.constants[ins.b() as usize], v)
                         } else {
-                            t.borrow_mut().set(self.reg(base + ins.b() as usize), v)
+                            let key = self.reg(base + ins.b() as usize);
+                            let mut t = t.borrow_mut();
+                            // An integer inside the array part, written in
+                            // place. `on_store` first, exactly as `set` does
+                            // it, so a container stored into an array is
+                            // still seen by the cycle collector.
+                            let slot = match key {
+                                Value::Int(i) => t.array_index(*i),
+                                _ => None,
+                            };
+                            match slot {
+                                Some(slot) => {
+                                    saule_runtime::gc::on_store(&v);
+                                    t.array[slot] = v;
+                                    Ok(())
+                                }
+                                None => t.set(key, v),
+                            }
                         };
                         r.map_err(|m| RuntimeError::TypeError {
                             message: m,
