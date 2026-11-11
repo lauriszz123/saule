@@ -70,7 +70,7 @@ pub(crate) use call::Site;
 pub use frame::{ALL_RESULTS, Closure, Frame};
 pub use upval::Upvalue;
 
-use build::{build_classes, build_enums};
+use build::{build_classes, build_enums, build_variant_names};
 use ops::max_frames_from_env;
 
 /// Frame-depth limit, equal to the runtime's re-entrant call limit
@@ -144,6 +144,9 @@ pub struct VmShared {
     statics: Vec<Rc<RefCell<Vec<Value>>>>,
     /// One runtime enum per `EnumProto`, built once at start-up.
     enums: Vec<Rc<saule_runtime::value::EnumObject>>,
+    /// `enums`' names, prebuilt for `NEWVARIANT` — see
+    /// [`build::build_variant_names`].
+    variant_names: Vec<build::VariantNames>,
     max_frames: usize,
     /// Register files parked for reuse by the next re-entrant call.
     ///
@@ -258,6 +261,7 @@ impl Vm {
         let shared = Rc::new_cyclic(|weak: &std::rc::Weak<VmShared>| {
             let (classes, class_of, statics) = build_classes(&chunks, weak);
             let enums = build_enums(&chunks, weak);
+            let variant_names = build_variant_names(&chunks);
             // A class or enum named as a value reads its module slot, which
             // no instruction writes — see `Chunk::type_slots`.
             let mut modules = vec![Value::Nil; module_slots];
@@ -276,6 +280,7 @@ impl Vm {
             }
             VmShared {
                 enums,
+                variant_names,
                 modules: RefCell::new(modules),
                 closure_cache: cache,
                 chunks,

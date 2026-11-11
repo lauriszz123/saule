@@ -38,6 +38,21 @@ history.
 
 ### Changed
 
+- **Building an enum variant with a payload allocates three times, not
+  seven.** `Event.Click(x, y)` rebuilt both names — the enum's and the
+  variant's — from scratch on every construction: a `String` out of the enum
+  table and a `SauleStr` box around it, twice, for text that never changes.
+  The names are now made once per engine and shared. `match` −11%
+  (2.9x Lua → **2.5x**).
+- **A pattern search stops zeroing 512 bytes per character.** `find` built a
+  fresh match state at every start position it tried, and building one
+  clears its 32-entry capture array; an unanchored search over a line did
+  that once per character. The state is now reset instead — nothing reads a
+  capture above the current level, so it is the same state. `String.gsub`
+  also writes each replacement straight into its result, reading `%1`…`%9`
+  by span rather than building every capture's text to use one, and `match`
+  and `gsub` decode their arguments into reused buffers. `pattern` −17%
+  (2.1x Lua → **1.75x**), `wordfreq` −4%.
 - **`t[i]` with an integer inside the array is read and written in place.**
   Every indexed read and write called the table's general `get` or `set` out
   of line — which test every kind of key, string and hash part included — and

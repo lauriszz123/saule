@@ -522,3 +522,4 @@ f6416669dfe58967	V string:0r4 0r8 0r12 0r16 0r20 0r24 0r28 1r1 1r5 1r9 1r13 1r17
 cc7365223cd35d61	E force-unwrapped a `nil` value
 8ebb6ef85d716022	V string:-1,10,20,30,-1,7,8,-1,
 ec5a06a870fc0fe7	V string:5:zero,1,20,three,40,50,nil,9,
+2855afc4a415ed0c	V string:Shape.Rect/Rect Shape.Circle/Circle Shape.Empty/Empty Event.Key/Key Event.Click/Click 

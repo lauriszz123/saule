@@ -148,7 +148,6 @@ impl Vm {
         n: usize,
         base: usize,
         a: usize,
-        chunk: &Chunk,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
         let (e_idx, tag) = ((packed >> 16) as usize, packed & 0xffff);
@@ -165,10 +164,11 @@ impl Vm {
                 span: site.span(),
             });
         };
-        let name = chunk.enums[e_idx].variants[tag as usize].name.to_string();
+        // Prebuilt once per engine — see `build_variant_names`.
+        let names = &self.shared.variant_names[e_idx];
         let v = saule_runtime::value::EnumVariantObject {
-            enum_name: e.name.clone().into(),
-            variant_name: name.into(),
+            enum_name: names.enum_name.clone(),
+            variant_name: names.variants[tag as usize].clone(),
             tag,
             value: std::cell::OnceCell::from(payload),
             enum_obj: RefCell::new(Some(Rc::clone(e))),
@@ -1737,7 +1737,7 @@ impl Vm {
                     Op::NEWVAR => {
                         let packed = self.extra_arg(code.as_ptr(), &mut pc);
                         let n = (ins.b() as usize).saturating_sub(1);
-                        self.new_variant(packed, n, base, a, &chunk, &Site::Code(&proto, here))?;
+                        self.new_variant(packed, n, base, a, &Site::Code(&proto, here))?;
                     }
                     Op::GETTAG => {
                         let t = match self.reg(base + ins.b() as usize) {

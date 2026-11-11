@@ -133,6 +133,37 @@ pub(crate) fn build_classes(
     (classes, class_of, statics)
 }
 
+/// Every enum's name and its variants' names, as the `SauleStr`s a variant
+/// object holds, made once per engine and indexed like `VmShared::enums`.
+///
+/// Constructing a payload variant — `Event.Click(x, y)` — used to build both
+/// names afresh: a `String` from the enum table and a `SauleStr` box around
+/// it, twice. That was four of the seven allocations each construction made,
+/// for strings that never change. Cloning these is a refcount bump each.
+pub(crate) fn build_variant_names(chunks: &[Rc<Chunk>]) -> Vec<VariantNames> {
+    use saule_runtime::value::SauleStr;
+    chunks[0]
+        .enums
+        .iter()
+        .map(|proto| VariantNames {
+            enum_name: SauleStr::from(&*proto.name),
+            variants: proto
+                .variants
+                .iter()
+                .map(|v| SauleStr::from(&*v.name))
+                .collect(),
+        })
+        .collect()
+}
+
+/// One enum's names — see [`build_variant_names`].
+#[derive(Debug)]
+pub(crate) struct VariantNames {
+    pub(crate) enum_name: saule_runtime::value::SauleStr,
+    /// By tag.
+    pub(crate) variants: Vec<saule_runtime::value::SauleStr>,
+}
+
 /// Materialise one runtime enum per `EnumProto`.
 ///
 /// Bare and valued variants are **singletons**, so `Status.Alive` is the
