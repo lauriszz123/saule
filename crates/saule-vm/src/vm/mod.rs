@@ -446,6 +446,53 @@ impl Vm {
         )
     }
 
+    /// [`invoke_first`](Self::invoke_first) for a caller that already holds
+    /// the callee's proto and chunk and its own depth guard — which a
+    /// [`CallSession`](saule_runtime::value::CallSession) does, because
+    /// neither changes between the calls it makes.
+    ///
+    /// The downcast that recovers a proto from a handle, and the stack probe
+    /// and thread-local write a depth guard costs, are per *session* here
+    /// rather than per call. The calls in a session are sequential — one
+    /// returns before the next starts — so one guard bounds the nesting
+    /// exactly as a guard each would.
+    pub(crate) fn invoke_first_resolved(
+        &mut self,
+        handle: &Rc<VmFunctionRef>,
+        proto: &Rc<crate::chunk::Proto>,
+        chunk: &Rc<crate::chunk::Chunk>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, RuntimeError> {
+        let base = self.free_base();
+        self.ensure_stack(base as usize + args.len());
+        for (i, a) in args.iter().enumerate() {
+            self.stack[base as usize + i] = a.clone();
+        }
+        // SAFETY: as everywhere a frame is built — the chunk owns the proto
+        // and the engine owns the chunk, both for longer than the frame.
+        // See `Frame::proto`.
+        let (p, c) = unsafe { (frame::hold(proto), frame::hold(chunk)) };
+        self.push_frame_resolved(
+            Rc::clone(handle),
+            p,
+            c,
+            base,
+            args.len(),
+            base,
+            ALL_RESULTS,
+            &Site::Known(span),
+        )?;
+        self.execute().map_err(|e| self.attribute(e))?;
+        let first = if self.results.is_empty() {
+            Value::Nil
+        } else {
+            self.results.swap_remove(0)
+        };
+        self.results.clear();
+        Ok(first)
+    }
+
     /// [`invoke`](Self::invoke) for a caller that wants a single value, with
     /// no `Vec` in the middle.
     ///

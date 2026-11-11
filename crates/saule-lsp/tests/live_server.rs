@@ -702,6 +702,10 @@ const RUNTIME_ONLY: &[&str] = &[
     "nullability/force_unwrap_nil",
     "nullability/force_unwrap_return_nil",
     "stdlib/io_use_after_close",
+    // The callback reaches `Iter.map` as an `any`, which is the only way to
+    // get a non-function past the checker — so the combinator itself is the
+    // first thing that can see it is a number.
+    "stdlib/iter_callback_not_a_function",
     // A pattern arrives as a `string` argument, so nothing before the call
     // knows what it says. Validating a pattern written as a literal would be
     // a real improvement — the same trick `String.format`'s placeholders

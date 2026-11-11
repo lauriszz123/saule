@@ -3,13 +3,13 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use saule_runtime::value::{VmFunction, VmFunctionRef};
+use saule_runtime::value::{CallSession, VmFunction, VmFunctionRef};
 use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::Proto;
 
-use super::VmShared;
 use super::upval::Upvalue;
+use super::{Vm, VmShared};
 
 /// A bytecode function plus the upvalues it captured.
 ///
@@ -191,6 +191,87 @@ impl VmFunction for Closure {
             vm.abandon();
         }
         out
+    }
+
+    /// Hold the register file open across a run of calls.
+    ///
+    /// [`call_first`](Self::call_first) above does three things per call
+    /// that do not depend on the call: it upgrades the `Weak<VmShared>`,
+    /// takes a `Vm` out of the re-entry pool, and hands it back — and
+    /// handing it back resets every register the callback touched. Per
+    /// `Table.sort` that is nothing; per *comparison*, on a sort that asks
+    /// 3.3 million times, it is most of what a two-instruction comparator
+    /// costs.
+    fn call_session(&self, handle: &Rc<VmFunctionRef>) -> Option<Box<dyn CallSession>> {
+        let shared = self.shared.upgrade()?;
+        // One guard for the session, because its calls are sequential: it is
+        // the same bound on the same resource, taken once.
+        let depth = saule_runtime::enter_call_depth(&(0..0)).ok()?;
+        let vm = shared.take_vm();
+        Some(Box::new(Calls {
+            shared,
+            handle: Rc::clone(handle),
+            proto: Rc::clone(&self.proto),
+            chunk: Rc::clone(&self.chunk),
+            vm: Some(vm),
+            _depth: depth,
+        }))
+    }
+}
+
+/// One re-entry `Vm`, held for as long as a native keeps calling back.
+///
+/// The register file is reset when the session ends rather than after each
+/// call. In between, the last call's registers still refer to its values —
+/// which is why the reset exists at all — but they are released when the
+/// native that opened the session returns, instead of outliving the whole
+/// program the way a pooled-but-unreset `Vm` would.
+struct Calls {
+    shared: Rc<VmShared>,
+    handle: Rc<VmFunctionRef>,
+    /// The callee's proto and chunk, recovered from the handle once instead
+    /// of by a downcast per call.
+    proto: Rc<Proto>,
+    chunk: Rc<crate::chunk::Chunk>,
+    /// `None` once a call has failed: the engine state went with the error.
+    vm: Option<Box<Vm>>,
+    /// Held, not read: the session occupies one level of call depth for as
+    /// long as it is open.
+    _depth: saule_runtime::DepthGuard,
+}
+
+impl CallSession for Calls {
+    fn call_first(
+        &mut self,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, RuntimeError> {
+        let Some(vm) = self.vm.as_mut() else {
+            return Err(RuntimeError::TypeError {
+                message: "internal: a call session is used after one of its calls failed".into(),
+                span,
+            });
+        };
+        match vm.invoke_first_resolved(&self.handle, &self.proto, &self.chunk, args, span) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                // As in `call_first`: a closure that captured one of the
+                // callee's registers may have escaped, so close before the
+                // file is dropped. Not pooled — an unwound `Vm` still holds
+                // the frames the error left.
+                let mut vm = self.vm.take().expect("checked just above");
+                vm.abandon();
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Drop for Calls {
+    fn drop(&mut self) {
+        if let Some(vm) = self.vm.take() {
+            self.shared.give_vm(vm);
+        }
     }
 }
 

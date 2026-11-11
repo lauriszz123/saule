@@ -395,6 +395,11 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
     // Scratch for the comparator's two arguments, allocated once for the
     // whole sort rather than once per comparison.
     let mut argbuf: Vec<Value> = Vec::with_capacity(2);
+    // The register file the comparator runs on, opened once for the whole
+    // sort rather than taken from the re-entry pool and handed back on every
+    // comparison. `None` for a native comparator, which has nothing to hold
+    // open — see `call_value_session`.
+    let mut session = crate::call::call_value_session(&comp);
     let n = elements.len();
     let mut width = 1;
     while width < n {
@@ -406,7 +411,13 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
                 buf.clear();
                 let (mut i, mut j) = (lo, mid);
                 while i < mid && j < hi {
-                    if invoke_comp(&comp, &elements[j], &elements[i], &mut argbuf)? {
+                    if invoke_comp(
+                        &comp,
+                        session.as_deref_mut(),
+                        &elements[j],
+                        &elements[i],
+                        &mut argbuf,
+                    )? {
                         buf.push(elements[j].clone());
                         j += 1;
                     } else {
@@ -433,7 +444,13 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
 /// 200k elements asks this about 3.5 million times, so the arguments go in a
 /// buffer that already exists, and a bytecode comparator answers through
 /// `invoke_first` with no `Vec` around the one boolean it returns.
-fn invoke_comp(comp: &Value, a: &Value, b: &Value, buf: &mut Vec<Value>) -> Result<bool, String> {
+fn invoke_comp(
+    comp: &Value,
+    session: Option<&mut (dyn crate::value::CallSession + '_)>,
+    a: &Value,
+    b: &Value,
+    buf: &mut Vec<Value>,
+) -> Result<bool, String> {
     if !matches!(
         comp,
         Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
@@ -446,8 +463,11 @@ fn invoke_comp(comp: &Value, a: &Value, b: &Value, buf: &mut Vec<Value>) -> Resu
     buf.clear();
     buf.push(a.clone());
     buf.push(b.clone());
-    let result = crate::call::call_value_first(comp, buf, 0..0)
-        .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
+    let result = match session {
+        Some(s) => s.call_first(buf, 0..0),
+        None => crate::call::call_value_first(comp, buf, 0..0),
+    }
+    .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
     Ok(result.is_truthy())
 }
 

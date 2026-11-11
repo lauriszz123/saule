@@ -1,0 +1,16 @@
+-- An `Iter` combinator must report a callee that is not a function, and
+-- report it whether or not the source has any elements to call it on.
+--
+-- The check used to sit inside the per-element loop, so an empty source
+-- skipped it and the combinator quietly answered `{}` — the one input where
+-- a program could pass a number as its callback and hear nothing about it.
+-- It is made once per combinator now, which is both cheaper and the reason
+-- this case reports at all.
+class Main
+  static fn main()
+    local empty: table<integer> = {}
+    local callback: any = 42
+    local out: any = Iter.map(empty, callback)
+    println(out)
+  end
+end

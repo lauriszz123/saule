@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use crate::error::RuntimeError;
 use crate::value::foreign::NATIVE_CONSTRUCTOR;
-use crate::value::{ClassObject, MethodRef, Value};
+use crate::value::{CallSession, ClassObject, MethodRef, Value};
 
 /// Maximum nesting depth of re-entrant calls.
 ///
@@ -236,6 +236,19 @@ pub fn call_value_first(
             .into_iter()
             .next()
             .unwrap_or(Value::Nil)),
+    }
+}
+
+/// A session for calling `callee` many times — see [`CallSession`].
+///
+/// `None` when there is nothing to amortise, which is every callee but a
+/// compiled function: a native comparator is a Rust `fn` and calling it is
+/// already the whole cost. The caller then uses [`call_value_first`] per
+/// call, so there is one code path to get right and one to fall back to.
+pub fn call_value_session(callee: &Value) -> Option<Box<dyn CallSession>> {
+    match callee {
+        Value::VmFunction(f) => f.call_session(f),
+        _ => None,
     }
 }
 

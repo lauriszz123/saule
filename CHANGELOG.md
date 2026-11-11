@@ -38,6 +38,22 @@ history.
 
 ### Changed
 
+- **A native that calls back a million times sets up once, not a million
+  times.** `Table.sort`'s comparator and every `Iter` combinator's callback
+  run on a register file of their own — the dispatch loop holds `&mut Vm`
+  across the native that is calling back, so the callee cannot have the
+  caller's — and *getting* one was per call what it could be per sort:
+  upgrading a `Weak`, taking a file out of the re-entry pool, handing it back
+  (which resets every register the callback touched), recovering the callee's
+  proto by downcast, and taking a call-depth guard. A `CallSession` holds all
+  of that open for the run of calls — the depth guard included, since the
+  calls are sequential and one guard bounds the same nesting — and the `Iter`
+  combinators stop allocating a fresh argument `Vec` per element on top of
+  it. `sort` −17% (2.9x Lua → **2.4x**), `iterlib` −17% (4.2x → **3.5x**),
+  `tablelib` −9%; the suite's geomean 1.9x → **1.8x**. What is left is no
+  longer the outlier it was: the same lambda costs 34 ns called from Saule
+  and 8.4 ns called from Lua, so the *ordinary* call path is now the thing to
+  attack.
 - **A program that does nothing starts in half the time.** `saule run` on an
   empty file took 2.80 ms, and 1.50 ms of that was reading every installed
   native package's library off the disk — a 1.8 MB library costs 0.8 ms in the
@@ -97,6 +113,11 @@ history.
 
 ### Fixed
 
+- **An `Iter` combinator reports a callback that is not a function even when
+  the source is empty.** The check sat inside the per-element loop, so
+  `Iter.map({}, 42)` quietly answered `{}` — the one input where a program
+  could pass a number as its callback and hear nothing about it. It is made
+  once, before the loop.
 - A callback run by a built-in — a `Table.sort` comparator, an operator
   overload, a `toString` — reads and writes the enclosing function's locals
   correctly. It used to touch its own registers instead: the caller never saw

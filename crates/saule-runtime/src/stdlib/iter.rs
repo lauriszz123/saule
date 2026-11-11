@@ -320,20 +320,74 @@ fn table_value(items: Vec<Value>) -> Value {
     Value::Table(Rc::new(RefCell::new(TableObject::from_array(items))))
 }
 
-/// Call a Saule callable with `args` and take its first return value.
-/// `what` names the combinator so a failure inside the callback says which
-/// one was running.
-fn call(f: &Value, args: Vec<Value>, what: &str) -> Result<Value, String> {
-    if !matches!(
-        f,
-        Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
-    ) {
-        return Err(format!(
-            "{what}: expected a function, got `{}`",
-            f.type_name()
-        ));
+/// A combinator's callback, prepared once and then called once per element.
+///
+/// Every `Iter` combinator that takes a function calls it in a loop, and
+/// three things used to happen inside that loop which do not depend on the
+/// element: the callee was re-checked for being callable, its arguments were
+/// built in a fresh `Vec` — a malloc and a free per element — and, for a
+/// compiled callee, a register file was taken from the re-entry pool and
+/// handed back. All three move out here, to once per combinator.
+struct Callback<'a> {
+    f: &'a Value,
+    what: &'static str,
+    /// Scratch for the arguments, reused across every element.
+    args: Vec<Value>,
+    /// `None` for a native callee, which has nothing to hold open — see
+    /// [`crate::call::call_value_session`].
+    session: Option<Box<dyn crate::value::CallSession>>,
+}
+
+impl<'a> Callback<'a> {
+    /// Prepare `f`, reporting here rather than at the first element if it is
+    /// not callable at all.
+    fn new(f: &'a Value, what: &'static str, arity: usize) -> Result<Self, String> {
+        if !matches!(
+            f,
+            Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
+        ) {
+            return Err(format!(
+                "{what}: expected a function, got `{}`",
+                f.type_name()
+            ));
+        }
+        Ok(Callback {
+            f,
+            what,
+            args: Vec::with_capacity(arity),
+            session: crate::call::call_value_session(f),
+        })
     }
-    crate::call::call_value_first(f, &args, 0..0).map_err(|e| format!("{what}: {e}"))
+
+    /// Call with no arguments — `Iter.collect`'s step function.
+    fn call0(&mut self) -> Result<Value, String> {
+        self.args.clear();
+        self.run()
+    }
+
+    /// Call with one argument, which is every other combinator.
+    fn call1(&mut self, a: Value) -> Result<Value, String> {
+        self.args.clear();
+        self.args.push(a);
+        self.run()
+    }
+
+    /// Call with two — `Iter.reduce`'s `(acc, element)` and `Iter.zipWith`.
+    fn call2(&mut self, a: Value, b: Value) -> Result<Value, String> {
+        self.args.clear();
+        self.args.push(a);
+        self.args.push(b);
+        self.run()
+    }
+
+    fn run(&mut self) -> Result<Value, String> {
+        let what = self.what;
+        match self.session.as_deref_mut() {
+            Some(s) => s.call_first(&self.args, 0..0),
+            None => crate::call::call_value_first(self.f, &self.args, 0..0),
+        }
+        .map_err(|e| format!("{what}: {e}"))
+    }
 }
 
 /// `a == b` by the language's own rule, so `OpEq` is honoured.
@@ -363,10 +417,10 @@ fn lt(a: &Value, b: &Value, what: &str) -> Result<bool, String> {
 /// which is the one thing the lazy design would have bought.
 fn iter_collect(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.collect", args, 1)?;
-    let step = &args[0];
+    let mut step = Callback::new(&args[0], "Iter.collect", 0)?;
     let mut out: Vec<Value> = Vec::new();
     loop {
-        match call(step, Vec::new(), "Iter.collect")? {
+        match step.call0()? {
             Value::Nil => break,
             v => out.push(v),
         }
@@ -379,9 +433,10 @@ fn iter_collect(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_map(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.map", args, 2)?;
     let src = elements("Iter.map", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.map", 1)?;
     let mut out = Vec::with_capacity(src.len());
     for element in src {
-        out.push(call(&args[1], vec![element], "Iter.map")?);
+        out.push(f.call1(element)?);
     }
     Ok(vec![table_value(out)])
 }
@@ -389,9 +444,10 @@ fn iter_map(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_filter(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.filter", args, 2)?;
     let src = elements("Iter.filter", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.filter", 1)?;
     let mut out = Vec::new();
     for element in src {
-        if call(&args[1], vec![element.clone()], "Iter.filter")?.is_truthy() {
+        if f.call1(element.clone())?.is_truthy() {
             out.push(element);
         }
     }
@@ -401,9 +457,10 @@ fn iter_filter(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_reduce(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.reduce", args, 3)?;
     let src = elements("Iter.reduce", args, 0)?;
+    let mut f = Callback::new(&args[2], "Iter.reduce", 2)?;
     let mut acc = args[1].clone();
     for element in src {
-        acc = call(&args[2], vec![acc, element], "Iter.reduce")?;
+        acc = f.call2(acc, element)?;
     }
     Ok(vec![acc])
 }
@@ -411,8 +468,9 @@ fn iter_reduce(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_for_each(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.forEach", args, 2)?;
     let src = elements("Iter.forEach", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.forEach", 1)?;
     for element in src {
-        call(&args[1], vec![element], "Iter.forEach")?;
+        f.call1(element)?;
     }
     Ok(vec![Value::Nil])
 }
@@ -422,8 +480,9 @@ fn iter_for_each(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_find(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.find", args, 2)?;
     let src = elements("Iter.find", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.find", 1)?;
     for element in src {
-        if call(&args[1], vec![element.clone()], "Iter.find")?.is_truthy() {
+        if f.call1(element.clone())?.is_truthy() {
             return Ok(vec![element]);
         }
     }
@@ -433,8 +492,9 @@ fn iter_find(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_find_index(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.findIndex", args, 2)?;
     let src = elements("Iter.findIndex", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.findIndex", 1)?;
     for (i, element) in src.into_iter().enumerate() {
-        if call(&args[1], vec![element], "Iter.findIndex")?.is_truthy() {
+        if f.call1(element)?.is_truthy() {
             return Ok(vec![Value::Int(i as i64 + 1)]);
         }
     }
@@ -448,8 +508,9 @@ fn iter_find_index(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_any(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.any", args, 2)?;
     let src = elements("Iter.any", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.any", 1)?;
     for element in src {
-        if call(&args[1], vec![element], "Iter.any")?.is_truthy() {
+        if f.call1(element)?.is_truthy() {
             return Ok(vec![Value::Bool(true)]);
         }
     }
@@ -459,8 +520,9 @@ fn iter_any(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_all(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.all", args, 2)?;
     let src = elements("Iter.all", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.all", 1)?;
     for element in src {
-        if !call(&args[1], vec![element], "Iter.all")?.is_truthy() {
+        if !f.call1(element)?.is_truthy() {
             return Ok(vec![Value::Bool(false)]);
         }
     }
@@ -470,9 +532,10 @@ fn iter_all(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_count(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.count", args, 2)?;
     let src = elements("Iter.count", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.count", 1)?;
     let mut n: i64 = 0;
     for element in src {
-        if call(&args[1], vec![element], "Iter.count")?.is_truthy() {
+        if f.call1(element)?.is_truthy() {
             n += 1;
         }
     }
@@ -533,9 +596,10 @@ fn iter_zip_with(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.zipWith", args, 3)?;
     let left = elements("Iter.zipWith", args, 0)?;
     let right = elements("Iter.zipWith", args, 1)?;
+    let mut f = Callback::new(&args[2], "Iter.zipWith", 2)?;
     let mut out = Vec::with_capacity(left.len().min(right.len()));
     for (a, b) in left.into_iter().zip(right) {
-        out.push(call(&args[2], vec![a, b], "Iter.zipWith")?);
+        out.push(f.call2(a, b)?);
     }
     Ok(vec![table_value(out)])
 }
@@ -600,9 +664,10 @@ fn iter_unique(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_sort_by(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.sortBy", args, 2)?;
     let src = elements("Iter.sortBy", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.sortBy", 1)?;
     let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(src.len());
     for element in src {
-        let key = call(&args[1], vec![element.clone()], "Iter.sortBy")?;
+        let key = f.call1(element.clone())?;
         keyed.push((key, element));
     }
 
@@ -652,9 +717,10 @@ fn iter_sort_by(args: &[Value]) -> Result<Vec<Value>, String> {
 fn iter_group_by(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.groupBy", args, 2)?;
     let src = elements("Iter.groupBy", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.groupBy", 1)?;
     let out = Rc::new(RefCell::new(TableObject::new()));
     for (i, element) in src.into_iter().enumerate() {
-        let key = call(&args[1], vec![element.clone()], "Iter.groupBy")?;
+        let key = f.call1(element.clone())?;
         if !matches!(key, Value::Str(_) | Value::Int(_) | Value::Bool(_)) {
             return Err(format!(
                 "Iter.groupBy: the key for element {} is a `{}`; a table can only be keyed by \

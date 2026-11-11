@@ -74,6 +74,42 @@ pub trait VmFunction: fmt::Debug {
             .next()
             .unwrap_or(Value::Nil))
     }
+
+    /// Open a [`CallSession`] for a caller about to make *many* calls to
+    /// this one function.
+    ///
+    /// `None` by default, and from any implementor whose per-call cost is
+    /// already the whole cost. The VM's is not: a callback runs on a
+    /// register file of its own — the dispatch loop holds `&mut Vm` across
+    /// the native that is calling back, so the callee cannot have the
+    /// caller's — and setting one up is per *call* what it could be per
+    /// *sort*. `Table.sort` on 200k elements asks its comparator about 3.3
+    /// million times.
+    fn call_session(&self, _handle: &std::rc::Rc<VmFunctionRef>) -> Option<Box<dyn CallSession>> {
+        None
+    }
+}
+
+/// Many calls to one function, with whatever a call needs set up once
+/// instead of per call.
+///
+/// Opened through [`crate::call::call_value_session`], which answers `None`
+/// for a callee with nothing to amortise — the caller then falls back to
+/// [`crate::call::call_value_first`] per call and both paths stay honest.
+///
+/// A session that fails stays failed: the engine state it was holding is
+/// abandoned with the error, because a callback that did not return cleanly
+/// may have left a frame or an open upvalue behind. Callers stop at the
+/// first error anyway, which is what makes that the simple rule rather than
+/// a limitation.
+pub trait CallSession {
+    /// Call the function this session was opened for, taking its first
+    /// result — [`VmFunction::call_first`]'s shape, and for the same reason.
+    fn call_first(
+        &mut self,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<Value, crate::error::RuntimeError>;
 }
 
 /// A [`VmFunction`] held behind a **thin** pointer.

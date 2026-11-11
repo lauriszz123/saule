@@ -41,7 +41,7 @@ pub use coroutine::{CoroutineRef, VmCoroutine};
 pub use enum_::{EnumObject, EnumVariantObject};
 pub use file::FileHandle;
 pub use foreign::{ForeignClass, ForeignObject};
-pub use function::{NativeClosure, NativeFn, VmFunction, VmFunctionRef};
+pub use function::{CallSession, NativeClosure, NativeFn, VmFunction, VmFunctionRef};
 pub use interface::InterfaceObject;
 pub use process::ProcessHandle;
 pub use str::{SauleStr, hash_str};
