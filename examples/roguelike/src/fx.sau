@@ -1,0 +1,143 @@
+-- Effects: particle bursts, floating numbers and screen shake.
+--
+-- Each kind of burst is one `ParticleSystem`, moved to where the burst
+-- happens and told to `emit` there. Particles keep the world position they
+-- were born at, so one system serves every burst of its kind at once.
+
+from shine import Graphics, ParticleSystem, Canvas, AreaSpread, Font
+
+export class FloatText
+	text: string = ""
+	x: float = 0.0
+	y: float = 0.0
+	life: float = 0.9
+	r: float = 1.0
+	g: float = 1.0
+	b: float = 1.0
+
+	fn init(text: string, x: float, y: float, r: float, g: float, b: float)
+		self.text = text
+		self.x = x
+		self.y = y
+		self.r = r
+		self.g = g
+		self.b = b
+	end
+end
+
+export class Fx
+	sparks: ParticleSystem
+	blood: ParticleSystem
+	dust: ParticleSystem
+	embers: ParticleSystem
+	texts: table<FloatText> = {}
+	-- How hard the screen is shaking, from 0 to 1. It decays on its own.
+	trauma: float = 0.0
+	font: Font
+
+	fn init(glow: Canvas, font: Font)
+		self.font = font
+
+		self.sparks = Graphics.newParticleSystem(glow, 600)
+		self.sparks.setParticleLifetime(0.15, 0.4)
+		self.sparks.setSpeed(80.0, 260.0)
+		self.sparks.setSpread(2.0 * Math.pi)
+		self.sparks.setLinearDamping(4.0, 6.0)
+		self.sparks.setSizes({0.6, 0.15})
+		self.sparks.setColors({1.0, 0.95, 0.6, 1.0, 1.0, 0.5, 0.1, 0.0})
+
+		self.blood = Graphics.newParticleSystem(glow, 800)
+		self.blood.setParticleLifetime(0.3, 0.8)
+		self.blood.setSpeed(40.0, 200.0)
+		self.blood.setSpread(2.0 * Math.pi)
+		self.blood.setLinearDamping(3.0, 5.0)
+		self.blood.setSizes({0.9, 0.4, 0.0})
+		self.blood.setSizeVariation(0.5)
+
+		self.dust = Graphics.newParticleSystem(glow, 300)
+		self.dust.setParticleLifetime(0.2, 0.45)
+		self.dust.setSpeed(5.0, 30.0)
+		self.dust.setSpread(2.0 * Math.pi)
+		self.dust.setSizes({0.5, 0.9})
+		self.dust.setColors({0.7, 0.75, 1.0, 0.5, 0.4, 0.45, 0.8, 0.0})
+
+		-- Sparks drifting up off the lantern, always running.
+		self.embers = Graphics.newParticleSystem(glow, 120)
+		self.embers.setEmissionRate(14.0)
+		self.embers.setParticleLifetime(0.6, 1.3)
+		self.embers.setDirection(-Math.pi / 2.0)
+		self.embers.setSpread(0.9)
+		self.embers.setSpeed(15.0, 45.0)
+		self.embers.setLinearAcceleration(-10.0, -20.0, 10.0, -40.0)
+		self.embers.setEmissionArea(AreaSpread.Ellipse, 5.0, 3.0)
+		self.embers.setSizes({0.35, 0.15})
+		self.embers.setColors({1.0, 0.85, 0.4, 0.9, 1.0, 0.35, 0.05, 0.0})
+	end
+
+	fn spark(x: float, y: float, count: integer)
+		self.sparks.setPosition(x, y)
+		self.sparks.emit(count)
+	end
+
+	-- A death or a wound, in the monster's own colour.
+	fn splat(x: float, y: float, count: integer, r: float, g: float, b: float)
+		self.blood.setColors({r, g, b, 1.0, r * 0.5, g * 0.5, b * 0.5, 0.0})
+		self.blood.setPosition(x, y)
+		self.blood.emit(count)
+	end
+
+	fn puff(x: float, y: float)
+		self.dust.setPosition(x, y)
+		self.dust.emit(2)
+	end
+
+	fn say(text: string, x: float, y: float, r: float, g: float, b: float)
+		Table.insert(self.texts, FloatText(text, x, y, r, g, b))
+	end
+
+	fn shake(amount: float)
+		self.trauma = Math.min(1.0, self.trauma + amount)
+	end
+
+	fn update(dt: float, lanternX: float, lanternY: float)
+		self.sparks.update(dt)
+		self.blood.update(dt)
+		self.dust.update(dt)
+		self.embers.setPosition(lanternX, lanternY)
+		self.embers.update(dt)
+		self.trauma = Math.max(0.0, self.trauma - dt * 1.6)
+		local i: integer = #self.texts
+		while i >= 1 do
+			local t: FloatText = self.texts[i]!
+			t.life = t.life - dt
+			t.y = t.y - dt * 32.0
+			if t.life <= 0.0 then
+				Table.remove(self.texts, i)
+			end
+			i = i - 1
+		end
+	end
+
+	-- The camera offset this frame's shake adds: trauma squared, so small
+	-- knocks barely move the view and big ones throw it about.
+	fn offset(time: float) -> (float, float)
+		local k: float = self.trauma * self.trauma * 9.0
+		return Math.sin(time * 61.0) * k, Math.cos(time * 47.0) * k
+	end
+
+	fn draw()
+		Graphics.setBlendMode("add")
+		Graphics.setColor(1.0, 1.0, 1.0)
+		Graphics.draw(self.embers)
+		Graphics.draw(self.sparks)
+		Graphics.setBlendMode("alpha")
+		Graphics.draw(self.blood)
+		Graphics.draw(self.dust)
+		Graphics.setFont(self.font)
+		for t in self.texts do
+			Graphics.setColor(t.r, t.g, t.b, Math.min(1.0, t.life * 2.0))
+			Graphics.print(t.text, t.x - self.font.getWidth(t.text) / 2.0, t.y)
+		end
+		Graphics.setColor(1.0, 1.0, 1.0)
+	end
+end

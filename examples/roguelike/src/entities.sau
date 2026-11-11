@@ -1,0 +1,193 @@
+-- What moves in the dungeon: the player, the monsters, what they shoot, and
+-- what they drop.
+
+export enum Team
+	Player,
+	Monster
+end
+
+export enum EnemyKind
+	Slime,
+	Bat,
+	Archer,
+	Brute
+end
+
+-- What a monster is doing right now.
+export enum Mode
+	-- Moving about: a slime's hop, a bat's flutter, an archer's pacing.
+	Roam,
+	-- A slime resting between hops.
+	Rest,
+	-- A brute gathering itself to charge, and the charge itself.
+	Windup,
+	Charge,
+	-- A brute that charged into a wall.
+	Stunned
+end
+
+export enum Upgrade
+	Damage,
+	FireRate,
+	Speed,
+	MultiShot,
+	MaxHealth
+end
+
+-- What a pickup gives. A coin carries its value and an upgrade carries which
+-- one it is, so one `match` both identifies a pickup and unpacks it.
+export enum Loot
+	Heart,
+	Coin(value: integer),
+	Boon(kind: Upgrade)
+end
+
+export class Bolt
+	x: float = 0.0
+	y: float = 0.0
+	vx: float = 0.0
+	vy: float = 0.0
+	damage: integer = 1
+	team: Team = Team.Player
+	life: float = 1.2
+	radius: float = 4.0
+	dead: boolean = false
+
+	fn init(x: float, y: float, vx: float, vy: float, damage: integer, team: Team)
+		self.x = x
+		self.y = y
+		self.vx = vx
+		self.vy = vy
+		self.damage = damage
+		self.team = team
+		if team == Team.Monster then
+			self.radius = 4.0
+		else
+			self.radius = 5.0
+		end
+	end
+end
+
+export class Pickup
+	loot: Loot = Loot.Heart
+	x: float = 0.0
+	y: float = 0.0
+	age: float = 0.0
+	taken: boolean = false
+
+	fn init(loot: Loot, x: float, y: float)
+		self.loot = loot
+		self.x = x
+		self.y = y
+	end
+end
+
+export class Player
+	x: float = 0.0
+	y: float = 0.0
+	radius: float = 10.0
+	hp: integer = 6
+	maxHp: integer = 6
+	speed: float = 170.0
+	fireDelay: float = 0.28
+	cooldown: float = 0.0
+	damage: integer = 1
+	shots: integer = 1
+	invuln: float = 0.0
+	dashTime: float = 0.0
+	dashCooldown: float = 0.0
+	dashX: float = 0.0
+	dashY: float = 0.0
+	coins: integer = 0
+	kills: integer = 0
+	aim: float = 0.0
+	upgrades: table<Upgrade> = {}
+
+	fn init(x: float, y: float)
+		self.x = x
+		self.y = y
+	end
+
+	fn apply(up: Upgrade)
+		Table.insert(self.upgrades, up)
+		match up
+			case Upgrade.Damage then self.damage = self.damage + 1
+			case Upgrade.FireRate then self.fireDelay = Math.max(0.08, self.fireDelay * 0.8)
+			case Upgrade.Speed then self.speed = self.speed + 25.0
+			case Upgrade.MultiShot then self.shots = Math.min(self.shots + 1, 5)
+			case Upgrade.MaxHealth then
+				self.maxHp = self.maxHp + 2
+				self.hp = self.hp + 2
+		end
+	end
+
+	static fn describe(up: Upgrade) -> string
+		return match up
+			case Upgrade.Damage then "Sharper flame: +1 damage"
+			case Upgrade.FireRate then "Quick wick: faster shots"
+			case Upgrade.Speed then "Light boots: faster feet"
+			case Upgrade.MultiShot then "Split flame: one more bolt"
+			case Upgrade.MaxHealth then "Warm heart: +1 heart"
+		end
+	end
+end
+
+export class Enemy
+	kind: EnemyKind = EnemyKind.Slime
+	x: float = 0.0
+	y: float = 0.0
+	vx: float = 0.0
+	vy: float = 0.0
+	hp: integer = 1
+	maxHp: integer = 1
+	radius: float = 10.0
+	speed: float = 60.0
+	-- Seconds into whatever the monster is doing now.
+	timer: float = 0.0
+	mode: Mode = Mode.Roam
+	-- A brute's charge direction, locked in when the windup ends.
+	dirX: float = 0.0
+	dirY: float = 0.0
+	flash: float = 0.0
+	-- A big slime splits in two when it dies.
+	big: boolean = false
+	dead: boolean = false
+
+	fn init(kind: EnemyKind, x: float, y: float, depth: integer)
+		self.kind = kind
+		self.x = x
+		self.y = y
+		local bonus: integer = depth / 3
+		match kind
+			case EnemyKind.Slime then
+				self.hp = 3 + bonus
+				self.radius = 12.0
+				self.speed = 55.0
+				self.big = true
+			case EnemyKind.Bat then
+				self.hp = 1 + bonus / 2
+				self.radius = 8.0
+				self.speed = 125.0
+			case EnemyKind.Archer then
+				self.hp = 2 + bonus
+				self.radius = 10.0
+				self.speed = 70.0
+			case EnemyKind.Brute then
+				self.hp = 7 + bonus * 2
+				self.radius = 16.0
+				self.speed = 45.0
+		end
+		self.maxHp = self.hp
+		self.timer = Math.random() * 2.0
+	end
+
+	-- What it is worth when it dies.
+	fn bounty() -> integer
+		return match self.kind
+			case EnemyKind.Slime then 1
+			case EnemyKind.Bat then 1
+			case EnemyKind.Archer then 2
+			case EnemyKind.Brute then 4
+		end
+	end
+end

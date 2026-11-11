@@ -231,6 +231,12 @@ history.
 
 ### Fixed
 
+- **An `as` in a field default converts.** `static f: float = 230 as float`
+  left the field `nil`: the checker compared a field's default against its
+  declared type but never walked the expression, so the `as` was never told
+  it was a conversion and ran as the type test instead ("is 230 a float?").
+  Static and instance defaults alike. Walking the default also means an error
+  inside one is now reported, where before it went unnoticed.
 - **`f()?[i]` calls `f` once.** A safe index compiled its receiver twice — once
   for the nil test and again for the read — so a call there ran twice, side
   effects and all.

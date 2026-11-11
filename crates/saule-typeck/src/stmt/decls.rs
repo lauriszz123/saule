@@ -474,6 +474,13 @@ pub(crate) fn check_class(
             check_binding_type(ty, m.span.clone(), errors);
             if let Some(default_expr) = default {
                 let scope = Scope::default();
+                // Walk the expression itself first, as a module variable's
+                // initialiser is. Only compatibility used to be checked here,
+                // so nothing inside a field default was ever walked: an error
+                // in it went unreported, and an `as` in it was never given
+                // its reading — `static f: float = 230 as float` ran as the
+                // type test, and the field was nil.
+                check_expr_expecting(default_expr, Some(ty), &scope, errors);
                 check_assignment_compat(ty, default_expr, &scope, errors);
             }
         }

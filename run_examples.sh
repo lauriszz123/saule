@@ -97,6 +97,7 @@ skip_reason() {
     */uikit) echo "library: no entry point to run" ;;
     */markdown) echo "library: no entry point to run" ;;
     */md-viewer) echo "interactive: opens a window and loops until closed" ;;
+    */roguelike) echo "interactive: opens a window and loops until closed" ;;
     *) return 1 ;;
   esac
 }

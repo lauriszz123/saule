@@ -1,0 +1,764 @@
+-- One run of the game: the floor, everything on it, and the rules that move
+-- them.
+
+from shine import Graphics, Keyboard, Mouse, Random, RandomGenerator, Canvas
+from dungeon import Dungeon, Room, Cell
+from entities import Player, Enemy, EnemyKind, Mode, Bolt, Team, Pickup, Loot, Upgrade
+from art import Art
+from fx import Fx
+from sfx import Sfx
+
+export class Game
+	static MAP_W: integer = 64
+	static MAP_H: integer = 44
+
+	art: Art
+	fx: Fx
+	sfx: Sfx
+	seed: integer = 0
+	depth: integer = 1
+	dungeon: Dungeon
+	player: Player
+	enemies: table<Enemy> = {}
+	bolts: table<Bolt> = {}
+	pickups: table<Pickup> = {}
+	rng: RandomGenerator
+	time: float = 0.0
+	camX: float = 0.0
+	camY: float = 0.0
+	-- Set once the player has stepped on the stairs; the main loop fades
+	-- out and calls `descend`.
+	onStairs: boolean = false
+	-- Set when the player dies.
+	over: boolean = false
+	-- A banner across the screen for a moment: the floor number, an upgrade.
+	banner: string = ""
+	bannerTime: float = 0.0
+
+	fn init(art: Art, fx: Fx, sfx: Sfx, seed: integer)
+		self.art = art
+		self.fx = fx
+		self.sfx = sfx
+		self.seed = seed
+		self.rng = Random.newRandomGenerator(seed)
+		self.dungeon = Dungeon(Game.MAP_W, Game.MAP_H, self.rng, 1)
+		self.player = Player(0.0, 0.0)
+		self.build()
+	end
+
+	-- Make the floor for the current depth and put everything on it.
+	local fn build()
+		self.rng = Random.newRandomGenerator(self.seed * 1000 + self.depth)
+		self.dungeon = Dungeon(Game.MAP_W, Game.MAP_H, self.rng, self.depth)
+		self.art.bake(self.dungeon)
+		self.enemies = {}
+		self.bolts = {}
+		self.pickups = {}
+		self.onStairs = false
+
+		local t: float = Dungeon.TILE as float
+		local start: Room = self.dungeon.rooms[1]!
+		self.player.x = ((start.centerX() as float) + 0.5) * t
+		self.player.y = ((start.centerY() as float) + 0.5) * t
+		self.camX = self.player.x
+		self.camY = self.player.y
+
+		local boonRoom: integer = self.rng.randomInt(2, #self.dungeon.rooms)
+		for i: integer = 2, #self.dungeon.rooms do
+			local room: Room = self.dungeon.rooms[i]!
+			local count: integer = self.rng.randomInt(1, 2 + self.depth / 2)
+			for k: integer = 1, count do
+				local cx, cy = room.randomSpot(self.rng)
+				Table.insert(self.enemies, Enemy(self.pickKind(), ((cx as float) + 0.5) * t, ((cy as float) + 0.5) * t, self.depth))
+			end
+			if i == boonRoom then
+				self.drop(room, Loot.Boon(self.randomUpgrade()))
+			elseif self.rng.random() < 0.3 then
+				self.drop(room, Loot.Heart)
+			elseif self.rng.random() < 0.5 then
+				self.drop(room, Loot.Coin(self.rng.randomInt(1, 3)))
+			end
+		end
+
+		self.banner = "Depth " .. self.depth
+		self.bannerTime = 2.5
+		self.revealAround()
+	end
+
+	local fn drop(room: Room, loot: Loot)
+		local t: float = Dungeon.TILE as float
+		local cx, cy = room.randomSpot(self.rng)
+		Table.insert(self.pickups, Pickup(loot, ((cx as float) + 0.5) * t, ((cy as float) + 0.5) * t))
+	end
+
+	-- Deeper floors bring nastier monsters.
+	local fn pickKind() -> EnemyKind
+		local roll: float = self.rng.random() + (self.depth as float) * 0.05
+		if roll < 0.45 then
+			return EnemyKind.Slime
+		elseif roll < 0.7 then
+			return EnemyKind.Bat
+		elseif roll < 0.92 then
+			return EnemyKind.Archer
+		end
+		return EnemyKind.Brute
+	end
+
+	local fn randomUpgrade() -> Upgrade
+		return match self.rng.randomInt(1, 5)
+			case 1 then Upgrade.Damage
+			case 2 then Upgrade.FireRate
+			case 3 then Upgrade.Speed
+			case 4 then Upgrade.MultiShot
+			case _ then Upgrade.MaxHealth
+		end
+	end
+
+	fn descend()
+		self.depth = self.depth + 1
+		self.build()
+		self.sfx.play(self.sfx.stairs)
+	end
+
+	-- The point under the mouse, in world pixels.
+	fn mouseWorld() -> (float, float)
+		local mx, my = Mouse.getPosition()
+		return mx + self.camX - (Graphics.getWidth() as float) / 2.0, my + self.camY - (Graphics.getHeight() as float) / 2.0
+	end
+
+	-- ---- moving things --------------------------------------------------
+
+	-- Move a circle by `dx, dy`, stopping at walls one axis at a time so it
+	-- slides along them. Returns whether each axis was blocked.
+	local fn slide(x: float, y: float, dx: float, dy: float, r: float) -> (float, float, boolean, boolean)
+		local nx: float = x + dx
+		local hitX: boolean = false
+		if self.dungeon.blocked(nx, y, r) then
+			nx = x
+			hitX = true
+		end
+		local ny: float = y + dy
+		local hitY: boolean = false
+		if self.dungeon.blocked(nx, ny, r) then
+			ny = y
+			hitY = true
+		end
+		return nx, ny, hitX, hitY
+	end
+
+	fn update(dt: float)
+		self.time = self.time + dt
+		self.bannerTime = Math.max(0.0, self.bannerTime - dt)
+		if self.over then
+			self.fx.update(dt, self.player.x, self.player.y - 14.0)
+			return
+		end
+		self.updatePlayer(dt)
+		for e in self.enemies do
+			self.updateEnemy(e, dt)
+		end
+		self.updateBolts(dt)
+		self.updatePickups(dt)
+		self.enemies = self.alive(self.enemies)
+		self.revealAround()
+
+		-- The camera eases after the player rather than sitting on them.
+		local k: float = Math.min(1.0, dt * 8.0)
+		self.camX = self.camX + (self.player.x - self.camX) * k
+		self.camY = self.camY + (self.player.y - self.camY) * k
+		self.fx.update(dt, self.player.x, self.player.y - 14.0)
+	end
+
+	local fn alive(list: table<Enemy>) -> table<Enemy>
+		local out: table<Enemy> = {}
+		for e in list do
+			if not e.dead then
+				Table.insert(out, e)
+			end
+		end
+		return out
+	end
+
+	local fn updatePlayer(dt: float)
+		local p: Player = self.player
+		p.cooldown = Math.max(0.0, p.cooldown - dt)
+		p.invuln = Math.max(0.0, p.invuln - dt)
+		p.dashCooldown = Math.max(0.0, p.dashCooldown - dt)
+
+		local mx, my = self.mouseWorld()
+		p.aim = Math.atan(my - p.y, mx - p.x)
+
+		local ix: float = 0.0
+		local iy: float = 0.0
+		if Keyboard.isDown("a") or Keyboard.isDown("left") then
+			ix = ix - 1.0
+		end
+		if Keyboard.isDown("d") or Keyboard.isDown("right") then
+			ix = ix + 1.0
+		end
+		if Keyboard.isDown("w") or Keyboard.isDown("up") then
+			iy = iy - 1.0
+		end
+		if Keyboard.isDown("s") or Keyboard.isDown("down") then
+			iy = iy + 1.0
+		end
+		local len: float = Math.sqrt(ix * ix + iy * iy)
+		if len > 0.0 then
+			ix = ix / len
+			iy = iy / len
+		end
+
+		local vx: float = ix * p.speed
+		local vy: float = iy * p.speed
+		if p.dashTime > 0.0 then
+			p.dashTime = p.dashTime - dt
+			vx = p.dashX * 520.0
+			vy = p.dashY * 520.0
+			self.fx.puff(p.x, p.y)
+		end
+		local nx, ny, hx, hy = self.slide(p.x, p.y, vx * dt, vy * dt, p.radius)
+		p.x = nx
+		p.y = ny
+
+		if (Mouse.isDown(1) or Keyboard.isDown("space")) and p.cooldown <= 0.0 then
+			self.fire()
+		end
+
+		local t: float = Dungeon.TILE as float
+		if self.dungeon.get(Math.floor(p.x / t), Math.floor(p.y / t)) == Cell.Stairs then
+			self.onStairs = true
+		end
+	end
+
+	-- Dash where the player is heading, or where they aim if standing still.
+	fn dash()
+		local p: Player = self.player
+		if p.dashCooldown > 0.0 or self.over then
+			return
+		end
+		local dx: float = 0.0
+		local dy: float = 0.0
+		if Keyboard.isDown("a") or Keyboard.isDown("left") then
+			dx = dx - 1.0
+		end
+		if Keyboard.isDown("d") or Keyboard.isDown("right") then
+			dx = dx + 1.0
+		end
+		if Keyboard.isDown("w") or Keyboard.isDown("up") then
+			dy = dy - 1.0
+		end
+		if Keyboard.isDown("s") or Keyboard.isDown("down") then
+			dy = dy + 1.0
+		end
+		local len: float = Math.sqrt(dx * dx + dy * dy)
+		if len == 0.0 then
+			dx = Math.cos(p.aim)
+			dy = Math.sin(p.aim)
+			len = 1.0
+		end
+		p.dashX = dx / len
+		p.dashY = dy / len
+		p.dashTime = 0.16
+		p.dashCooldown = 0.9
+		-- A dash passes through harm.
+		p.invuln = Math.max(p.invuln, 0.25)
+	end
+
+	local fn fire()
+		local p: Player = self.player
+		p.cooldown = p.fireDelay
+		local spread: float = 0.16
+		local first: float = p.aim - spread * ((p.shots - 1) as float) / 2.0
+		for i: integer = 0, p.shots - 1 do
+			local a: float = first + spread * (i as float)
+			Table.insert(self.bolts, Bolt(p.x + Math.cos(a) * 14.0, p.y + Math.sin(a) * 14.0, Math.cos(a) * 440.0, Math.sin(a) * 440.0, p.damage, Team.Player))
+		end
+		self.sfx.playShot()
+	end
+
+	local fn updateEnemy(e: Enemy, dt: float)
+		local p: Player = self.player
+		e.timer = e.timer + dt
+		e.flash = Math.max(0.0, e.flash - dt)
+		local dx: float = p.x - e.x
+		local dy: float = p.y - e.y
+		local dist: float = Math.max(0.001, Math.sqrt(dx * dx + dy * dy))
+		local ux: float = dx / dist
+		local uy: float = dy / dist
+		-- Monsters wake when the player comes near enough to see them.
+		local awake: boolean = dist < 330.0
+
+		local vx: float = 0.0
+		local vy: float = 0.0
+		match e.kind
+			case EnemyKind.Slime then
+				-- Hop, rest, hop: a slime only moves in bursts.
+				if e.mode == Mode.Roam then
+					if awake then
+						vx = ux * e.speed
+						vy = uy * e.speed
+					end
+					if e.timer > 0.45 then
+						e.mode = Mode.Rest
+						e.timer = 0.0
+					end
+				elseif e.timer > 0.5 then
+					e.mode = Mode.Roam
+					e.timer = 0.0
+				end
+			case EnemyKind.Bat then
+				-- A new flutter direction every so often, leaning towards
+				-- the player once it has noticed them.
+				if e.timer > 0.35 then
+					e.timer = 0.0
+					local a: float = Math.random() * 2.0 * Math.pi
+					e.vx = Math.cos(a)
+					e.vy = Math.sin(a)
+					if awake then
+						e.vx = e.vx + ux * 1.6
+						e.vy = e.vy + uy * 1.6
+					end
+				end
+				vx = e.vx * e.speed * 0.6
+				vy = e.vy * e.speed * 0.6
+			case EnemyKind.Archer then
+				-- Keep a middle distance, sidestep, and shoot.
+				if awake then
+					local side: float = Math.sin(self.time * 1.3 + e.x)
+					if dist < 170.0 then
+						vx = -ux * e.speed
+						vy = -uy * e.speed
+					elseif dist > 260.0 then
+						vx = ux * e.speed
+						vy = uy * e.speed
+					else
+						vx = -uy * e.speed * side
+						vy = ux * e.speed * side
+					end
+					if e.timer > 1.9 then
+						e.timer = 0.0
+						Table.insert(self.bolts, Bolt(e.x, e.y, ux * 230.0, uy * 230.0, 1, Team.Monster))
+						self.sfx.play(self.sfx.arrow)
+					end
+				end
+			case EnemyKind.Brute then
+				vx, vy = self.brute(e, dt, awake, dist, ux, uy)
+		end
+
+		local nx, ny, hx, hy = self.slide(e.x, e.y, vx * dt, vy * dt, e.radius)
+		e.x = nx
+		e.y = ny
+		if e.kind == EnemyKind.Brute and e.mode == Mode.Charge and (hx or hy) then
+			-- Into the wall at full tilt.
+			e.mode = Mode.Stunned
+			e.timer = 0.0
+			self.fx.shake(0.5)
+			self.fx.spark(e.x + e.dirX * e.radius, e.y + e.dirY * e.radius, 18)
+			self.sfx.play(self.sfx.hurt)
+		end
+
+		-- Touching the player hurts it.
+		if dist < e.radius + p.radius then
+			self.hurtPlayer(1, e.x, e.y)
+		end
+	end
+
+	-- Walk up, wind up, charge in a straight line, and reel when it misses.
+	local fn brute(e: Enemy, dt: float, awake: boolean, dist: float, ux: float, uy: float) -> (float, float)
+		match e.mode
+			case Mode.Roam then
+				if awake and dist < 240.0 and e.timer > 1.2 then
+					e.mode = Mode.Windup
+					e.timer = 0.0
+				end
+				if awake then
+					return ux * e.speed, uy * e.speed
+				end
+			case Mode.Windup then
+				e.flash = 0.05
+				if e.timer > 0.65 then
+					e.mode = Mode.Charge
+					e.timer = 0.0
+					e.dirX = ux
+					e.dirY = uy
+				end
+			case Mode.Charge then
+				if e.timer > 0.8 then
+					e.mode = Mode.Roam
+					e.timer = 0.0
+				end
+				return e.dirX * 400.0, e.dirY * 400.0
+			case Mode.Stunned then
+				if e.timer > 1.1 then
+					e.mode = Mode.Roam
+					e.timer = 0.0
+				end
+			case Mode.Rest then
+				e.mode = Mode.Roam
+		end
+		return 0.0, 0.0
+	end
+
+	local fn updateBolts(dt: float)
+		local keep: table<Bolt> = {}
+		for b in self.bolts do
+			b.life = b.life - dt
+			b.x = b.x + b.vx * dt
+			b.y = b.y + b.vy * dt
+			if self.dungeon.solidAt(b.x, b.y) then
+				b.dead = true
+				self.fx.spark(b.x - b.vx * dt, b.y - b.vy * dt, 6)
+			elseif b.team == Team.Player then
+				for e in self.enemies do
+					if not e.dead and not b.dead and self.touches(b.x, b.y, b.radius, e.x, e.y, e.radius) then
+						b.dead = true
+						self.hitEnemy(e, b)
+					end
+				end
+			elseif self.touches(b.x, b.y, b.radius, self.player.x, self.player.y, self.player.radius) then
+				b.dead = true
+				self.hurtPlayer(b.damage, b.x - b.vx, b.y - b.vy)
+			end
+			if b.life > 0.0 and not b.dead then
+				Table.insert(keep, b)
+			end
+		end
+		self.bolts = keep
+	end
+
+	local fn touches(ax: float, ay: float, ar: float, bx: float, by: float, br: float) -> boolean
+		local dx: float = ax - bx
+		local dy: float = ay - by
+		local r: float = ar + br
+		return dx * dx + dy * dy < r * r
+	end
+
+	local fn hitEnemy(e: Enemy, b: Bolt)
+		e.hp = e.hp - b.damage
+		e.flash = 0.12
+		local speed: float = Math.max(1.0, Math.sqrt(b.vx * b.vx + b.vy * b.vy))
+		-- Knocked back along the bolt's path, unless it is mid-charge.
+		if not (e.kind == EnemyKind.Brute and e.mode == Mode.Charge) then
+			local nx, ny, hx, hy = self.slide(e.x, e.y, b.vx / speed * 9.0, b.vy / speed * 9.0, e.radius)
+			e.x = nx
+			e.y = ny
+		end
+		self.fx.spark(b.x, b.y, 8)
+		self.fx.say("" .. b.damage, e.x, e.y - e.radius - 6.0, 1.0, 0.9, 0.5)
+		self.sfx.playHit()
+		if e.hp <= 0 then
+			self.kill(e)
+		end
+	end
+
+	local fn kill(e: Enemy)
+		e.dead = true
+		self.player.kills = self.player.kills + 1
+		local r, g, b = Game.colorOf(e.kind)
+		self.fx.splat(e.x, e.y, 26, r, g, b)
+		self.fx.shake(0.15)
+		self.sfx.play(self.sfx.kill)
+		if e.kind == EnemyKind.Slime and e.big then
+			-- A big slime splits into two small ones.
+			for i: integer = 0, 1 do
+				local s: Enemy = Enemy(EnemyKind.Slime, e.x + ((i * 2 - 1) as float) * 8.0, e.y, self.depth)
+				s.big = false
+				s.radius = 8.0
+				s.hp = 1 + self.depth / 4
+				s.speed = 80.0
+				Table.insert(self.enemies, s)
+			end
+		end
+		if Math.random() < 0.55 then
+			Table.insert(self.pickups, Pickup(Loot.Coin(e.bounty()), e.x, e.y))
+		elseif Math.random() < 0.12 then
+			Table.insert(self.pickups, Pickup(Loot.Heart, e.x, e.y))
+		end
+	end
+
+	local fn hurtPlayer(damage: integer, fromX: float, fromY: float)
+		local p: Player = self.player
+		if p.invuln > 0.0 or self.over then
+			return
+		end
+		p.hp = p.hp - damage
+		p.invuln = 1.0
+		self.fx.shake(0.6)
+		self.fx.splat(p.x, p.y, 16, 0.9, 0.2, 0.2)
+		self.sfx.play(self.sfx.hurt)
+		-- Pushed away from whatever hit it.
+		local dx: float = p.x - fromX
+		local dy: float = p.y - fromY
+		local d: float = Math.max(0.001, Math.sqrt(dx * dx + dy * dy))
+		local nx, ny, hx, hy = self.slide(p.x, p.y, dx / d * 16.0, dy / d * 16.0, p.radius)
+		p.x = nx
+		p.y = ny
+		if p.hp <= 0 then
+			p.hp = 0
+			self.over = true
+			self.fx.splat(p.x, p.y, 60, 1.0, 0.7, 0.3)
+			self.fx.shake(1.0)
+		end
+	end
+
+	local fn updatePickups(dt: float)
+		local p: Player = self.player
+		local keep: table<Pickup> = {}
+		for item in self.pickups do
+			item.age = item.age + dt
+			if self.touches(item.x, item.y, 10.0, p.x, p.y, p.radius) then
+				self.take(item)
+			else
+				Table.insert(keep, item)
+			end
+		end
+		self.pickups = keep
+	end
+
+	local fn take(item: Pickup)
+		local p: Player = self.player
+		match item.loot
+			case Loot.Heart then
+				if p.hp >= p.maxHp then
+					-- Full: leave it for later.
+					Table.insert(self.pickups, item)
+					return
+				end
+				p.hp = Math.min(p.maxHp, p.hp + 2)
+				self.fx.say("+heart", item.x, item.y - 12.0, 1.0, 0.4, 0.45)
+				self.sfx.play(self.sfx.coin)
+			case Loot.Coin(value) then
+				p.coins = p.coins + value
+				self.fx.say("+" .. value, item.x, item.y - 12.0, 1.0, 0.85, 0.3)
+				self.sfx.play(self.sfx.coin)
+			case Loot.Boon(kind) then
+				p.apply(kind)
+				self.banner = Player.describe(kind)
+				self.bannerTime = 3.0
+				self.fx.spark(item.x, item.y, 40)
+				self.sfx.play(self.sfx.boon)
+		end
+	end
+
+	-- Light the cells inside the lantern's reach and clear their fog.
+	local fn revealAround()
+		local t: float = Dungeon.TILE as float
+		local px: integer = Math.floor(self.player.x / t)
+		local py: integer = Math.floor(self.player.y / t)
+		local reach: integer = Math.floor((Art.LIGHT as float) / t)
+		local fresh: table<integer> = {}
+		for y: integer = py - reach, py + reach do
+			for x: integer = px - reach, px + reach do
+				local dx: integer = x - px
+				local dy: integer = y - py
+				if dx * dx + dy * dy <= reach * reach and self.dungeon.inside(x, y) and not self.dungeon.isSeen(x, y) then
+					self.dungeon.markSeen(x, y)
+					Table.insert(fresh, x)
+					Table.insert(fresh, y)
+				end
+			end
+		end
+		self.art.reveal(fresh)
+	end
+
+	static fn colorOf(kind: EnemyKind) -> (float, float, float)
+		match kind
+			case EnemyKind.Slime then return 0.35, 0.85, 0.4
+			case EnemyKind.Bat then return 0.6, 0.45, 0.85
+			case EnemyKind.Archer then return 0.85, 0.82, 0.7
+			case EnemyKind.Brute then return 0.85, 0.35, 0.25
+		end
+		return 1.0, 1.0, 1.0
+	end
+
+	-- ---- drawing --------------------------------------------------------
+
+	fn draw()
+		local w: float = Graphics.getWidth() as float
+		local h: float = Graphics.getHeight() as float
+		local sx, sy = self.fx.offset(self.time)
+		Graphics.push()
+		Graphics.translate(Math.floor(w / 2.0 - self.camX + sx) as float, Math.floor(h / 2.0 - self.camY + sy) as float)
+
+		Graphics.setColor(1.0, 1.0, 1.0)
+		Graphics.draw(self.art.map!)
+
+		for item in self.pickups do
+			self.drawPickup(item)
+		end
+		for e in self.enemies do
+			self.drawEnemy(e)
+		end
+		if not self.over then
+			self.drawPlayer()
+		end
+		for b in self.bolts do
+			self.drawBolt(b)
+		end
+		self.fx.draw()
+
+		-- Darkness: the lantern's pool of light, then the fog over cells
+		-- never seen.
+		-- The light is a blit, with the dark filled in around it; it
+		-- flickers by how strongly it is drawn rather than by its size.
+		local lx: float = Math.floor(self.player.x) as float - (Art.LIGHT as float)
+		local ly: float = Math.floor(self.player.y) as float - (Art.LIGHT as float)
+		local d: float = (Art.LIGHT as float) * 2.0
+		local flicker: float = 0.92 + Random.noise(self.time * 3.0) * 0.16
+		Graphics.setColor(1.0, 1.0, 1.0, flicker)
+		Graphics.draw(self.art.light, lx, ly)
+		Graphics.setColor(0.01, 0.0, 0.03, Art.DARK * flicker)
+		local left: float = self.camX - w
+		local top: float = self.camY - h
+		Graphics.rectangle("fill", left, top, w * 2.0, ly - top)
+		Graphics.rectangle("fill", left, ly + d, w * 2.0, top + h * 2.0 - ly - d)
+		Graphics.rectangle("fill", left, ly, lx - left, d)
+		Graphics.rectangle("fill", lx + d, ly, left + w * 2.0 - lx - d, d)
+		Graphics.setColor(1.0, 1.0, 1.0)
+		Graphics.draw(self.art.fog!)
+
+		Graphics.pop()
+	end
+
+	local fn drawPlayer()
+		local p: Player = self.player
+		-- Blink while invulnerable.
+		if p.invuln > 0.0 and Math.floor(self.time * 20.0) % 2 == 0 then
+			return
+		end
+		Graphics.setColor(0.0, 0.0, 0.0, 0.35)
+		Graphics.ellipse("fill", p.x, p.y + 9.0, 10.0, 4.0)
+		Graphics.setColor(0.25, 0.4, 0.75)
+		Graphics.circle("fill", p.x, p.y, p.radius)
+		Graphics.setColor(0.9, 0.82, 0.68)
+		Graphics.circle("fill", p.x + Math.cos(p.aim) * 3.0, p.y - 3.0 + Math.sin(p.aim) * 2.0, 5.5)
+		-- The lantern, held out towards the aim.
+		local lx: float = p.x + Math.cos(p.aim) * 13.0
+		local ly: float = p.y + Math.sin(p.aim) * 13.0
+		Graphics.setColor(1.0, 0.8, 0.35, 0.35)
+		Graphics.circle("fill", lx, ly, 8.0)
+		Graphics.setColor(1.0, 0.9, 0.55)
+		Graphics.circle("fill", lx, ly, 3.5)
+	end
+
+	local fn drawEnemy(e: Enemy)
+		local r, g, b = Game.colorOf(e.kind)
+		if e.flash > 0.0 then
+			r = 1.0
+			g = 1.0
+			b = 1.0
+		end
+		Graphics.setColor(0.0, 0.0, 0.0, 0.35)
+		Graphics.ellipse("fill", e.x, e.y + e.radius * 0.8, e.radius, e.radius * 0.35)
+		match e.kind
+			case EnemyKind.Slime then
+				-- Squashes as it hops.
+				local squash: float = 1.0
+				if e.mode == Mode.Roam then
+					squash = 1.0 + Math.sin(e.timer / 0.45 * Math.pi) * 0.25
+				end
+				Graphics.setColor(r, g, b, 0.9)
+				Graphics.ellipse("fill", e.x, e.y + (1.0 - 1.0 / squash) * e.radius, e.radius / squash, e.radius * squash)
+				Graphics.setColor(0.05, 0.1, 0.05)
+				Graphics.circle("fill", e.x - e.radius * 0.35, e.y - 2.0, 2.0)
+				Graphics.circle("fill", e.x + e.radius * 0.35, e.y - 2.0, 2.0)
+			case EnemyKind.Bat then
+				local flap: float = Math.sin(self.time * 22.0 + e.x) * 5.0
+				Graphics.setColor(r, g, b)
+				Graphics.polygon("fill", {e.x, e.y, e.x - 14.0, e.y - 4.0 + flap, e.x - 6.0, e.y + 3.0})
+				Graphics.polygon("fill", {e.x, e.y, e.x + 14.0, e.y - 4.0 + flap, e.x + 6.0, e.y + 3.0})
+				Graphics.circle("fill", e.x, e.y, e.radius * 0.7)
+				Graphics.setColor(1.0, 0.3, 0.3)
+				Graphics.circle("fill", e.x - 2.0, e.y - 1.0, 1.2)
+				Graphics.circle("fill", e.x + 2.0, e.y - 1.0, 1.2)
+			case EnemyKind.Archer then
+				Graphics.setColor(r, g, b)
+				Graphics.circle("fill", e.x, e.y - 4.0, 6.0)
+				Graphics.rectangle("fill", e.x - 5.0, e.y + 1.0, 10.0, 10.0, 2.0)
+				Graphics.setColor(0.1, 0.1, 0.1)
+				Graphics.circle("fill", e.x - 2.0, e.y - 5.0, 1.4)
+				Graphics.circle("fill", e.x + 2.0, e.y - 5.0, 1.4)
+				-- The bow, drawn as it nears a shot.
+				Graphics.setColor(0.6, 0.4, 0.2)
+				Graphics.setLineWidth(2.0)
+				local a: float = Math.atan(self.player.y - e.y, self.player.x - e.x)
+				Graphics.arc("line", e.x, e.y, 11.0, a - 0.8, a + 0.8, "open")
+				Graphics.setLineWidth(1.0)
+			case EnemyKind.Brute then
+				local swell: float = 0.0
+				if e.mode == Mode.Windup then
+					swell = Math.sin(e.timer * 40.0) * 2.0
+				end
+				Graphics.setColor(r * 0.7, g * 0.7, b * 0.7)
+				Graphics.circle("fill", e.x, e.y, e.radius + swell)
+				Graphics.setColor(r, g, b)
+				Graphics.circle("fill", e.x, e.y - 3.0, e.radius - 4.0 + swell)
+				Graphics.setColor(1.0, 0.85, 0.3)
+				Graphics.circle("fill", e.x - 5.0, e.y - 5.0, 2.2)
+				Graphics.circle("fill", e.x + 5.0, e.y - 5.0, 2.2)
+				if e.mode == Mode.Stunned then
+					Graphics.setColor(1.0, 1.0, 0.5)
+					for i: integer = 0, 2 do
+						local a: float = self.time * 5.0 + (i as float) * 2.1
+						Graphics.circle("fill", e.x + Math.cos(a) * 12.0, e.y - e.radius - 4.0 + Math.sin(a) * 3.0, 2.0)
+					end
+				end
+		end
+		-- A health bar once it has been hurt.
+		if e.hp < e.maxHp then
+			local bw: float = e.radius * 2.0
+			Graphics.setColor(0.1, 0.0, 0.0, 0.8)
+			Graphics.rectangle("fill", e.x - bw / 2.0, e.y - e.radius - 9.0, bw, 3.0)
+			Graphics.setColor(0.9, 0.25, 0.2)
+			Graphics.rectangle("fill", e.x - bw / 2.0, e.y - e.radius - 9.0, bw * (e.hp as float) / (e.maxHp as float), 3.0)
+		end
+	end
+
+	local fn drawBolt(b: Bolt)
+		if b.team == Team.Player then
+			Graphics.setBlendMode("add")
+			Graphics.setColor(1.0, 0.6, 0.15, 0.5)
+			Graphics.circle("fill", b.x, b.y, b.radius + 4.0)
+			Graphics.setColor(1.0, 0.92, 0.6)
+			Graphics.circle("fill", b.x, b.y, b.radius)
+			Graphics.setBlendMode("alpha")
+		else
+			Graphics.setColor(0.85, 0.85, 0.75)
+			Graphics.setLineWidth(2.0)
+			local len: float = Math.sqrt(b.vx * b.vx + b.vy * b.vy)
+			Graphics.line(b.x, b.y, b.x - b.vx / len * 12.0, b.y - b.vy / len * 12.0)
+			Graphics.setLineWidth(1.0)
+		end
+	end
+
+	local fn drawPickup(item: Pickup)
+		local bob: float = Math.sin(item.age * 4.0) * 3.0
+		local x: float = item.x
+		local y: float = item.y + bob
+		match item.loot
+			case Loot.Heart then
+				Graphics.setColor(0.95, 0.3, 0.35)
+				Game.heart(x, y, 7.0)
+			case Loot.Coin(value) then
+				Graphics.setColor(1.0, 0.8, 0.25)
+				Graphics.circle("fill", x, y, 4.0 + (value as float))
+				Graphics.setColor(0.7, 0.5, 0.1)
+				Graphics.circle("line", x, y, 4.0 + (value as float))
+			case Loot.Boon(kind) then
+				local spin: float = item.age * 2.0
+				Graphics.setBlendMode("add")
+				Graphics.setColor(0.5, 0.8, 1.0, 0.35)
+				Graphics.circle("fill", x, y, 14.0 + Math.sin(item.age * 6.0) * 2.0)
+				Graphics.setBlendMode("alpha")
+				Graphics.setColor(0.7, 0.9, 1.0)
+				Graphics.polygon("fill", {x + Math.cos(spin) * 9.0, y + Math.sin(spin) * 9.0, x + Math.cos(spin + 2.1) * 9.0, y + Math.sin(spin + 2.1) * 9.0, x + Math.cos(spin + 4.2) * 9.0, y + Math.sin(spin + 4.2) * 9.0})
+		end
+	end
+
+	-- A heart of half-width `s`, from two circles and a triangle.
+	static fn heart(x: float, y: float, s: float)
+		Graphics.circle("fill", x - s * 0.5, y - s * 0.2, s * 0.55)
+		Graphics.circle("fill", x + s * 0.5, y - s * 0.2, s * 0.55)
+		Graphics.polygon("fill", {x - s * 1.03, y, x + s * 1.03, y, x, y + s * 1.1})
+	end
+end
