@@ -52,3 +52,4 @@ What Saule does that its ancestors do not: index overloading, trailing blocks, c
 - [`examples/markdown`](https://github.com/lauriszz123/saule/tree/main/examples/markdown)
 - [`examples/md-viewer`](https://github.com/lauriszz123/saule/tree/main/examples/md-viewer)
 - [`examples/native-package`](https://github.com/lauriszz123/saule/tree/main/examples/native-package)
+- [`examples/roguelike`](https://github.com/lauriszz123/saule/tree/main/examples/roguelike)

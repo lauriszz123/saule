@@ -231,6 +231,14 @@ history.
 
 ### Fixed
 
+- **A program's own class or enum is not mistaken for a native package's.**
+  Discovering a native package puts its static classes' members in a table
+  the checker shares across every module, and that table was consulted
+  before the module's own declarations. So a module that declared `enum
+  Event` — UIKit does — and imported anything at all from a package with an
+  `Event` class had `Event.KeyPressed` reported as missing from the
+  package's class. The module's own declaration now answers first; a typo on
+  the package's class is still caught.
 - **An `as` in a field default converts.** `static f: float = 230 as float`
   left the field `nil`: the checker compared a field's default against its
   declared type but never walked the expression, so the `as` was never told
