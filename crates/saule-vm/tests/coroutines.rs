@@ -1412,7 +1412,10 @@ gen.yield(1)
 1
 "#,
     );
-    assert!(e.contains("yielder"), "got: {e}");
+    assert!(
+        e.contains("`yield` is not a method of the coroutine"),
+        "got: {e}"
+    );
 }
 
 #[test]
@@ -1426,7 +1429,7 @@ gen.frobnicate()
 "#,
     );
     assert!(
-        e.contains("no method `frobnicate` on Coroutine"),
+        e.contains("`Coroutine` has no method `frobnicate`"),
         "got: {e}"
     );
     let e = fails(
@@ -1456,7 +1459,7 @@ end
 go()
 "#,
     );
-    assert!(out.contains("no method `resume` on Yielder"), "got: {out}");
+    assert!(out.contains("`Yielder` has no method `resume`"), "got: {out}");
 }
 
 // ── Identity ─────────────────────────────────────────────────────────────
@@ -1573,7 +1576,10 @@ gen
 "#,
     );
     let err = saule_runtime::call::call_method(&v, "resume", &[], 0..0).unwrap_err();
-    assert!(format!("{err}").contains("no longer running"), "got: {err}");
+    assert!(
+        format!("{err}").contains("whose program has finished running"),
+        "got: {err}"
+    );
 }
 
 // ── Scale ────────────────────────────────────────────────────────────────
