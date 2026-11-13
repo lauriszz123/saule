@@ -132,6 +132,28 @@ fn negating_a_string() {
 }
 
 #[test]
+fn complement_of_a_float_is_the_programs_mistake_not_an_engine_bug() {
+    // The compiler used to emit the integer-only `BNOT` for any operand, so
+    // a `float` reached it and was reported as a broken chunk.
+    assert_eq!(
+        shown("local f: float = 6.0;\nlocal x: any = ~f\n"),
+        Shown {
+            message: "cannot take the bitwise complement of a `float`".into(),
+            label: "this is a `float`".into(),
+            help: help(
+                "`~` works on `integer`s only; convert with `as integer`, or implement `OpBNot` on the class"
+            ),
+            line: 2,
+        }
+    );
+    // Through `any` as well.
+    let s = shown("local f: any = 6.0;\nlocal x: any = ~f\n");
+    assert_eq!(s.message, "cannot take the bitwise complement of a `float`");
+    ok("local n: integer = 6;\nlocal x: integer = ~n\n");
+    ok("local n: any = 6;\nlocal x: any = ~n\n");
+}
+
+#[test]
 fn length_of_an_integer_uses_an() {
     let s = shown("local s: any = 5\nlocal n: integer = #s\n");
     assert_eq!(s.message, "cannot take the length of an `integer`");
