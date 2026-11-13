@@ -361,6 +361,61 @@ impl Vm {
         )
     }
 
+    /// The error a native's `Err(message)` becomes.
+    ///
+    /// Most natives fail because they were handed something they cannot work
+    /// with. `error()` is different: the program raised it on purpose, and may
+    /// have asked — with a level, as in Lua — for the blame to land on a
+    /// caller's line rather than its own. The callers' call sites are only
+    /// known here, in their saved `pc`s.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn native_failure(&self, message: String, site: &Site<'_>) -> RuntimeError {
+        let Some(level) = saule_runtime::stdlib::core::take_raised_level() else {
+            return RuntimeError::TypeError {
+                message,
+                span: site.span(),
+            };
+        };
+        let span = site.span();
+        let origin = span.start;
+        let here = RuntimeError::Raised {
+            message: message.clone(),
+            span,
+            label: "raised here".to_string(),
+            origin,
+        };
+        if level <= 1 {
+            return here;
+        }
+        // Natives push no frame, so the top frame is the function that
+        // called `error`: level 1. Level `n` is `n - 1` frames below it, and
+        // a level deeper than the stack blames the outermost call there is.
+        let depth = self.frames.len();
+        let (Some(top), Some(blamed)) = (
+            self.frames.last(),
+            self.frames.get(
+                depth
+                    .saturating_sub(level as usize)
+                    .min(depth.saturating_sub(1)),
+            ),
+        ) else {
+            return here;
+        };
+        // The snippet is drawn from the file the top frame is in, so a
+        // caller in another module can't be pointed at from here; its line
+        // is still in the stack trace below.
+        if Rc::ptr_eq(&top.chunk, &blamed.chunk) && !std::ptr::eq(top, blamed) {
+            return RuntimeError::Raised {
+                message,
+                span: blamed.proto.span_at(blamed.pc.saturating_sub(1)),
+                label: format!("raised at level {level}: blamed on this call"),
+                origin,
+            };
+        }
+        here
+    }
+
     /// Call a native, a native closure, or fail with the same message shape
     /// the tree-walker produces. Arguments are passed as a **borrow of the
     /// register file** — no `Vec`, no per-argument clone (§13).
@@ -381,10 +436,7 @@ impl Vm {
             Value::Native(nf) => {
                 let v = self
                     .foreign(|vm| (nf.func)(&vm.stack[args_from..args_from + n_args]))
-                    .map_err(|m| RuntimeError::TypeError {
-                        message: m,
-                        span: site.span(),
-                    })?;
+                    .map_err(|m| self.native_failure(m, site))?;
                 // **Moved**, not cloned. `store_results` takes a slice, so
                 // the one value a `Native` returns went in by reference and
                 // came back out through `cloned()` — a refcount pair per
@@ -396,10 +448,7 @@ impl Vm {
             Value::NativeClosure(nc) => {
                 let vs = self
                     .foreign(|vm| (nc.func)(&vm.stack[args_from..args_from + n_args]))
-                    .map_err(|m| RuntimeError::TypeError {
-                        message: m,
-                        span: site.span(),
-                    })?;
+                    .map_err(|m| self.native_failure(m, site))?;
                 self.store_results(dst, &vs, n_ret);
                 Ok(())
             }

@@ -51,14 +51,7 @@ pub(crate) fn clear() {
 
 fn describe(proto: &Proto, chunk: &Chunk, at: Option<u32>) -> TraceFrame {
     let source = chunk.source.inner();
-    let line = at.map(|pc| {
-        let offset = proto.span_at(pc).start.min(source.len());
-        source.as_bytes()[..offset]
-            .iter()
-            .filter(|b| **b == b'\n')
-            .count()
-            + 1
-    });
+    let line = at.map(|pc| line_of(source, proto.span_at(pc).start));
     let top_level = std::ptr::eq(proto, &**chunk.proto(chunk.main));
     TraceFrame {
         function: match &proto.name {
@@ -69,6 +62,16 @@ fn describe(proto: &Proto, chunk: &Chunk, at: Option<u32>) -> TraceFrame {
         file: chunk.source.name().to_string(),
         line,
     }
+}
+
+/// 1-based line of a byte offset into `source`.
+fn line_of(source: &str, offset: usize) -> usize {
+    let offset = offset.min(source.len());
+    source.as_bytes()[..offset]
+        .iter()
+        .filter(|b| **b == b'\n')
+        .count()
+        + 1
 }
 
 fn push(frame: TraceFrame) {
@@ -96,9 +99,18 @@ impl Vm {
     ///
     /// A callback a native calls runs on a VM of its own, so a failure inside
     /// one passes through here once per VM, innermost first.
-    pub(crate) fn record_trace(&self) {
+    ///
+    /// `at` is where the error itself points, an offset into the running
+    /// frame's file. The running frame has no saved `pc` to read its line
+    /// from, but the error was raised in it, so the error's position is its
+    /// line.
+    pub(crate) fn record_trace(&self, at: Option<usize>) {
         for (i, frame) in self.frames.iter().rev().enumerate() {
-            push(describe_frame(frame, i == 0));
+            let mut traced = describe_frame(frame, i == 0);
+            if i == 0 && traced.line.is_none() {
+                traced.line = at.map(|offset| line_of(frame.chunk.source.inner(), offset));
+            }
+            push(traced);
         }
     }
 

@@ -1,0 +1,4 @@
+-- A level below 1 names no function, so `error` refuses it instead of
+-- guessing where to point.
+-- Expected: "error level must be 1 or more … got 0".
+error("unreachable", 0)

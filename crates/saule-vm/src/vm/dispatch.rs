@@ -301,7 +301,18 @@ impl Vm {
     #[cold]
     #[inline(never)]
     pub(crate) fn attribute(&self, e: RuntimeError) -> RuntimeError {
-        self.record_trace();
+        // A `throw`'s own frames were recorded as it unwound them; what is
+        // left on the stack was calling, not running, and has its own line.
+        let at = match &e {
+            RuntimeError::Thrown { .. } => None,
+            // Its span may be a caller's line, by request; the frame that
+            // was running is the one that called `error`.
+            RuntimeError::Raised { origin, .. } => Some(*origin),
+            _ => miette::Diagnostic::labels(&e)
+                .and_then(|mut labels| labels.next())
+                .map(|label| label.offset()),
+        };
+        self.record_trace(at);
         match e {
             // A `throw` has to stay itself for an enclosing `catch`; the
             // others are anchored already.

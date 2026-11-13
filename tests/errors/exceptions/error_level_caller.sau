@@ -1,0 +1,15 @@
+-- `error(msg, 2)` blames the caller, as in Lua: the caret is on the
+-- `check(-1)` call on line 12, not on the `error` call on line 7. The stack
+-- trace still reports `check` at line 7.
+-- Pinned in crates/saule-vm/tests/raised_errors.rs.
+fn check(n: integer)
+  if n < 0 then
+    error("n must be non-negative, got " .. n, 2)
+  end
+end
+
+fn caller()
+  check(-1)
+end
+
+caller()

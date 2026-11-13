@@ -1,0 +1,11 @@
+-- `error` with and without a level type-checks, and a guard that never fires
+-- raises nothing.
+fn check(n: integer)
+  if n < 0 then error("negative", 2) end
+  if n > 100 then error("too big") end
+  if n == 50 then error("fifty", nil) end
+end
+
+check(0)
+check(100)
+println("ok")

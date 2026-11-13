@@ -162,11 +162,31 @@ println(fallback)                     -- present
 
 <div class="api-list">
 <details class="api-entry" id="error">
-<summary><code class="api-sig"><span class="sig-fn">error</span><span class="sig-punct">(</span><span class="sig-param">msg</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-kw">nil</span></code></summary>
+<summary><code class="api-sig"><span class="sig-fn">error</span><span class="sig-punct">(</span><span class="sig-param">msg</span><span class="sig-punct">:</span> <span class="sig-type">string</span><span class="sig-punct">,</span> <span class="sig-param">level</span><span class="sig-punct">:</span> <span class="sig-type">integer</span><span class="sig-punct">?</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-kw">nil</span></code></summary>
 
 
-Raises `msg` as a runtime error, ending the program. Present for familiarity
+Raises `msg` as a runtime error, ending the program. The message is shown
+exactly as written, followed by the stack trace. Present for familiarity
 with Lua.
+
+`level` says whose line the error points at, as in Lua: `1` (the default)
+is the `error` call itself, `2` the call into the function that raised it,
+`3` the call one further out. A function that checks its arguments raises
+at level 2, so the error lands on the line that passed the bad value rather
+than on the check. A level deeper than the stack points at the outermost
+call. A level below 1 is itself an error. The stack trace is the same at any
+level.
+
+```saule
+fn sqrtOf(n: float) -> float
+    if n < 0.0 then
+        error("sqrtOf needs a non-negative number, got " .. n, 2)
+    end
+    return Math.sqrt(n)
+end
+
+println(sqrtOf(4.0))             -- 2.0
+```
 
 **It is not the same as `throw`.** A value you `throw` can be caught by a
 `catch` clause of the matching type; an `error` cannot be caught at all. Use

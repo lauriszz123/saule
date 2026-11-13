@@ -28,6 +28,26 @@ pub enum RuntimeError {
         span: std::ops::Range<usize>,
     },
 
+    /// `error(msg, level)` — a failure the program raised on purpose.
+    ///
+    /// Its own variant because nothing went wrong with the *language* here:
+    /// the message is the program's, so it is shown as written, with no
+    /// category in front of it. `span` is the call at `level`: the `error`
+    /// call itself at level 1, the call into the function that raised it at
+    /// level 2.
+    #[error("{message}")]
+    Raised {
+        message: String,
+        #[label("{label}")]
+        span: std::ops::Range<usize>,
+        /// What the caret says, which depends on whose line it is.
+        label: String,
+        /// Where `error` itself was called — the same as `span` at level 1.
+        /// The stack trace's innermost frame is reported at this line, not
+        /// at the line the level blames.
+        origin: usize,
+    },
+
     #[error("argument error: {message}")]
     ArgumentError {
         message: String,

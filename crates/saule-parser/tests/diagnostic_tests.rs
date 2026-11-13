@@ -69,6 +69,46 @@ fn a_reserved_word_is_named_as_one() {
     assert_contains(&help.expect("a name collision has a fix"), "reserved word");
 }
 
+// ── a typed `local` that lost its `=` ───────────────────────────────────────
+
+#[test]
+fn a_typed_local_missing_its_equals_says_so() {
+    // Without this, the declaration ends at the type, the value becomes a
+    // statement of its own, and the only complaint is a type error about
+    // assigning `nil`.
+    let src = "local build: integer Saule.build\nprintln(build)";
+    let (msg, help) = reported(src);
+    assert_eq!(
+        msg,
+        "expected `=` before the value of `build`, found identifier `Saule`"
+    );
+    assert_contains(&help.expect("names the fix"), "local build: T = value");
+    assert_contains(&strict_error(src).to_string(), "`=` before the value");
+
+    // The value is kept as the initializer, so nothing downstream complains
+    // about `nil`.
+    let parsed = recover(src);
+    assert_eq!(parsed.errors.len(), 1);
+    assert!(matches!(
+        &parsed.module.stmts[0].value,
+        Stmt::Local { value: Some(_), .. }
+    ));
+}
+
+#[test]
+fn a_typed_local_followed_by_a_real_statement_is_left_alone() {
+    for src in [
+        "local x: integer?\nprintln(x)",
+        "local x: integer?\nx = 3",
+        "local x: integer?\nx += 1",
+        "local x: integer?\nlocal y: integer?\nx, y = 1, 2",
+        "local x: integer?\nif true then end",
+    ] {
+        let tokens = Lexer::new(src).tokenize().expect("lex ok");
+        assert!(parse(tokens).is_ok(), "should parse cleanly:\n{src}");
+    }
+}
+
 // ── expected: which token wanted an operand ─────────────────────────────────
 
 #[test]

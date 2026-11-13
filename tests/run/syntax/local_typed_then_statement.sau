@@ -1,0 +1,15 @@
+-- A typed `local` with no value is followed by an ordinary statement, and
+-- none of them is mistaken for the declaration's missing `=` value.
+local a: integer?
+println(a)
+local b: integer?
+b = 3
+local c: integer?
+c = 0
+c += 1
+local d: integer?
+local e: integer?
+d, e = 1, 2
+local f: integer?
+if f == nil then println("nil") end
+println(b, c, d, e)

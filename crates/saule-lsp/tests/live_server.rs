@@ -694,6 +694,12 @@ const RUNTIME_ONLY: &[&str] = &[
     "coroutines/yield_after_coroutine_freed",
     "coroutines/yield_outside_coroutine",
     "exceptions/catch_wrong_type",
+    // `error()` is a call that fails when run; whether it runs, and with
+    // which level, is not something the checker decides.
+    "exceptions/error_level_caller",
+    "exceptions/error_level_zero",
+    "exceptions/error_not_catchable",
+    "exceptions/error_raised",
     "exceptions/stack_overflow_recursion",
     "exceptions/stack_overflow_reentrant",
     "exceptions/throw_uncaught",
