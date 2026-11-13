@@ -1,0 +1,5 @@
+-- A table can't be keyed by `nil`. Expected: "cannot use `nil` as a table
+-- key", with a help line saying which key types are allowed.
+local t: table<any, integer> = {}
+local k: any? = nil
+t[k] = 1

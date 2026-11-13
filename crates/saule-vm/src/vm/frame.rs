@@ -129,13 +129,7 @@ impl VmFunction for Closure {
         span: std::ops::Range<usize>,
     ) -> Result<Vec<Value>, RuntimeError> {
         let Some(shared) = self.shared.upgrade() else {
-            return Err(RuntimeError::TypeError {
-                message: format!(
-                    "cannot call `{}`: the engine that compiled it is no longer running",
-                    self.proto.label()
-                ),
-                span,
-            });
+            return Err(engine_gone(&self.proto, span));
         };
         // Recycled where possible: this is per *comparison* on a sort, and
         // a fresh `Vm` is two heap allocations.
@@ -173,13 +167,7 @@ impl VmFunction for Closure {
         span: std::ops::Range<usize>,
     ) -> Result<Value, RuntimeError> {
         let Some(shared) = self.shared.upgrade() else {
-            return Err(RuntimeError::TypeError {
-                message: format!(
-                    "cannot call `{}`: the engine that compiled it is no longer running",
-                    self.proto.label()
-                ),
-                span,
-            });
+            return Err(engine_gone(&self.proto, span));
         };
         let mut vm = shared.take_vm();
         let out = vm.invoke_first(handle, args, span);
@@ -247,7 +235,7 @@ impl CallSession for Calls {
         span: std::ops::Range<usize>,
     ) -> Result<Value, RuntimeError> {
         let Some(vm) = self.vm.as_mut() else {
-            return Err(RuntimeError::TypeError {
+            return Err(RuntimeError::Internal {
                 message: "internal: a call session is used after one of its calls failed".into(),
                 span,
             });
@@ -283,6 +271,22 @@ impl Drop for Calls {
 /// same type to codegen as an `Rc<T>`, so it keeps whatever the owned form
 /// bought LLVM, while costing nothing to create and nothing to drop.
 pub type Held<T> = std::mem::ManuallyDrop<Rc<T>>;
+
+/// A function value kept past the end of the program that compiled it — an
+/// embedder holding on to one, say — and then called.
+#[cold]
+#[inline(never)]
+fn engine_gone(proto: &Proto, span: std::ops::Range<usize>) -> RuntimeError {
+    RuntimeError::fault(
+        format!(
+            "cannot call `{}`: the program that defined it has finished running",
+            proto.label()
+        ),
+        "called here",
+        span,
+    )
+    .with_help("a Saule function can only be called while the program that defined it is running")
+}
 
 /// Copy the pointer out of an `Rc` without touching its reference count.
 ///

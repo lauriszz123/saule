@@ -96,7 +96,10 @@ impl Compiler<'_> {
             Num::Int => (Op::FORPREP_I, Op::FORLOOP_I),
             Num::Float => (Op::FORPREP_F, Op::FORLOOP_F),
         };
-        let exit = self.emit_jump(prep, a, span);
+        // `FORPREP` fails only on the step (a zero one), so that is where its
+        // error points — not at the whole loop, body and all. With no step
+        // written, the default can't be zero, and the loop is all there is.
+        let exit = self.emit_jump(prep, a, step.map_or(span, |s| &s.span));
 
         let body_start = self.f.label_here();
         // The user-visible loop variable is the fourth control register;
@@ -189,7 +192,8 @@ impl Compiler<'_> {
         self.expr_to(iter, base)?;
 
         let a = self.reg8(base, span)?;
-        let prep = self.emit_jump_abx(Op::ITERPREP, a, span)?;
+        // Its errors are about the value being iterated, so they point at it.
+        let prep = self.emit_jump_abx(Op::ITERPREP, a, &iter.span)?;
 
         let top = self.f.label_here();
         // One variable binds the value; two bind key then value.
@@ -345,7 +349,8 @@ impl Compiler<'_> {
         self.expr_to(iter, base)?;
 
         let a = self.reg8(base, span)?;
-        let prep = self.emit_jump_abx(Op::ITERPREPX, a, span)?;
+        // Its errors are about the value being iterated, so they point at it.
+        let prep = self.emit_jump_abx(Op::ITERPREPX, a, &iter.span)?;
 
         let win = if nvars == 1 { base + 4 } else { base + 3 };
         if nvars == 1 {

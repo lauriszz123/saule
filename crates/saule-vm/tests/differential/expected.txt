@@ -20,7 +20,6 @@
 08aace792f28f2ea	V integer:3
 08e9ff07b587447c	V integer:-6
 094d76cc4def0128	V integer:1250025000
-096937fc9ad2338b	E division by zero — cannot divide by 0
 097ff421622d7bad	V integer:9
 09944785ab8d5c89	V integer:0
 0af22f6281c5b6cd	V string:9
@@ -110,13 +109,11 @@
 361b5ccd65132220	V string:12!
 3620339f644410ec	V integer:37
 3654d0faca77c8f1	V integer:5
-37e9470fb11f49b5	E type error: value of type `integer` is not callable — only functions, classes, and methods can be called
 38c1db31f058246b	V string:x1.5
 39024ec3d894441b	V string:North/North
 394101fbcf8a2b3b	V integer:1
 394fb846771c8ca9	V string:11/7
 39f0983f6a3bcd1f	V string:2/1
-3a438aba98581ea4	E type error: class `Box` declares no instance field `nope` — it has `v`
 3ab67eff3714a931	V string:1,3,5,9
 3ad42407948df014	V string:localhost/(unset)
 3ade2fa6d3313e62	V string:<class C>
@@ -148,7 +145,6 @@
 49922fa336fe38e4	V string:(nil)
 4a48a98eceb54221	V string:11/22
 4a4bee1496c8ace9	V integer:0
-4adb21ad4674a820	E type error: value of type `string` is not callable — only functions, classes, and methods can be called
 4e40dd46121a8dfc	V string:caught bang
 4edd9350c6f51dd9	V string:11:10:-3:xy:7
 4eeea968c676a6b5	V integer:-1
@@ -157,7 +153,6 @@
 507372804f2b0741	V string:1:11
 514adb79d6e1677f	V string:3,6,9,
 514c965184014cec	V string:hi
-515a3c6bb96aee4a	E type error: value of type `integer` is not callable — only functions, classes, and methods can be called
 518e240b9ef0e93b	V string:rcc:26
 522cc82aec8025ad	V float:3.0
 5318c3af1e159da1	V integer:5
@@ -185,7 +180,6 @@
 5ec7f7ff45489b11	V integer:0
 5f0d670a4f48df89	E uncaught exception: a string
 5f669c067428fcdd	V integer:13
-600845fccbe292f9	E division by zero — cannot divide by 0
 60d51a22263a2efa	V integer:3
 6168514a721e0302	V string:nil/nil
 61710eee74407854	V boolean:true
@@ -235,7 +229,6 @@
 7a544ece3c4f2b00	V integer:12
 7a86812b7a169838	V string:t:7:z/t:1:z
 7a8b8f9ec0469f53	V string:<class Counter>:14:14
-7ab9db192e67416c	E type error: `iter()` must return a function, got `integer`
 7b39dfef3d12e309	V string:alice
 7b62a4e4462ea51a	V integer:2
 7be65f735b6306ae	V integer:15
@@ -253,7 +246,6 @@
 837b30c4f461ed03	V integer:32768
 837b3dc4f462031a	V integer:32767
 84225c5991bdebb7	V integer:99
-8455dcb194824481	E numeric `for` loop requires a non-zero step value
 8458ca72525a181b	V integer:7
 847a312dbdac1aaf	V integer:6
 84a35b804d5e3707	V integer:0
@@ -263,7 +255,6 @@
 86792e00336b6ecb	V boolean:false
 87118a85acac524f	V integer:60
 872baba66d57ac58	V integer:1024
-8754b4a66d7ac0b7	E type error: `^` on integers requires a non-negative exponent, got -1 — use floats (`(base as float) ^ -1.0`) for a fractional result
 877b3e347de81897	V boolean:true
 880123a62ba4fc82	V boolean:false
 881c04967e57f26e	V integer:7
@@ -297,7 +288,6 @@
 9af72a40d470e0e0	V boolean:true
 9b738f7d086bbc9b	V integer:25
 9c7778b5898fed62	V string:here
-9d47384c9b98554f	E division by zero — cannot divide by 0
 9d589793d501433a	V string:$42
 9de6e46a9f3776b4	V float:2.718281828459045
 9dee0ce363318817	V string:1-4dtrue2.5end
@@ -344,7 +334,6 @@ b9e193de4ba65e21	V boolean:false
 ba34fc2d82e2ade2	V boolean:true
 ba8d1549bca107e4	V integer:1
 ba9ac6fc6df21bce	V boolean:true
-bb529ad9da28713d	E type error: no field or method `nope` on instance of class `Box` — available fields: (check class definition)
 bd58fa884b34e129	V string:opened|denied
 bdee60fb21852283	V boolean:false
 bfd9aae46a8784c4	V integer:1
@@ -455,7 +444,6 @@ f6359bd04d0b555a	V boolean:true
 f68907a4882eb43e	V string:5/nil
 f6c3beb072218e27	V integer:-99
 f7015803feddb02e	V string:30!
-f7506a95a008e184	E type error: cannot iterate over a `integer` with `for ... in` — use a table, a function, or a class that implements `Iterable`
 f791535505ea7a81	V boolean:true
 f7c156e2ebfd7351	V string:9/nil
 f7cefbda42d0e94b	V integer:9223372036854775807
@@ -581,7 +569,6 @@ d115c9dff05c4389	V integer:135
 ba3bcc383f942b09	V boolean:true
 8cc5e66f007df59d	V integer:3
 ab53e34cee14d196	V integer:31
-39e5c3703d463fc2	E division by zero — cannot divide by 0
 0032191d7f48601f	V integer:5
 f9c05e5d81b2ff5d	V integer:-8
 ccf7ce5351cb19c2	V integer:110
@@ -602,3 +589,16 @@ a24ddb11e5f01601	V integer:2
 4fcd8c2da98e1b7e	V integer:37478
 6e57e03d93aedbec	E stack overflow: evaluation nested more than 10000 levels deep
 023fbd0ac9aef03f	V integer:14884
+bb529ad9da28713d	E `Box` has no field or method `nope`
+3a438aba98581ea4	E class `Box` has no field `nope`
+7ab9db192e67416c	E `BadIter.iter()` returned an `integer`, not a function
+515a3c6bb96aee4a	E cannot call an `integer`
+37e9470fb11f49b5	E cannot call an `integer`
+4adb21ad4674a820	E cannot call a `string`
+8754b4a66d7ac0b7	E negative exponent in integer `^`
+600845fccbe292f9	E integer division by zero
+096937fc9ad2338b	E integer division by zero
+8455dcb194824481	E `for` loop step cannot be 0
+9d47384c9b98554f	E integer division by zero
+39e5c3703d463fc2	E integer division by zero
+f7506a95a008e184	E cannot iterate over an `integer`

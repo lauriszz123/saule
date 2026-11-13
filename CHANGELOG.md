@@ -8,6 +8,13 @@ history.
 
 ### Added
 
+- **`error(msg, level)`.** Levels work as in Lua: `1` (the default) points at
+  the `error` call, `2` at the call into the function that raised it, and so
+  on. A function that validates its arguments raises at level 2, so the error
+  lands on the line that passed the bad value. The message is shown as
+  written; the stack trace is the same at every level. See
+  [`error`](./DOCS.md#errormsg-string-level-integer---nil).
+
 - **Coroutines.** `Coroutine.create(fn(co) … end)` makes a function that pauses
   at `co.yield(v)` and resumes from exactly there, with its locals and call
   stack intact. They are stackful — pass the yielder down and any function can
@@ -38,6 +45,23 @@ history.
 
 ### Changed
 
+- **Runtime errors say what went wrong and how to fix it.** Each one has a
+  precise title ("integer division by zero", "cannot iterate over an
+  `integer`"), a plain label on the code at fault ("the divisor here is 0",
+  "this is an `integer`, not a function"), and a help line with the fix,
+  usually as a short example. Before, almost all of them were `type error:
+  …` labelled "type mismatch or invalid operation", whatever had actually
+  happened, with the advice run into the title. A built-in function that refuses its argument
+  is now named in the label. A missing member lists the class's fields. A
+  `for` loop's error points at the step or the iterated value, not at the
+  whole loop. A failure that can only be a bug in Saule says so, and says
+  where to report it.
+- **Every frame of a stack trace has a line number**, the innermost one
+  included.
+- **A forgotten `=` in a typed `local` is reported as one.** `local build:
+  integer Saule.build` used to fail with "cannot assign `nil` to `integer`";
+  it now says ``expected `=` before the value of `build` `` and points at
+  the value.
 - **Every benchmark is now under 2x Lua; the suite is at 1.33x.** These
   changes took the four that were still above it below:
   - **`closure`** (2.5x → **0.8x**): a local that holds one lambda for its

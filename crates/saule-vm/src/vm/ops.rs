@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use saule_runtime::value::TableObject;
+use saule_runtime::error::a_type;
 use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::{FieldPath, LinkKind, PathLink, Proto};
@@ -190,7 +191,7 @@ impl Vm {
             cur = match inst.fields.get(link.slot as usize) {
                 Some(v) => v,
                 None => {
-                    return Err(RuntimeError::TypeError {
+                    return Err(RuntimeError::Internal {
                         message: format!(
                             "internal: field slot {} on an instance with {} field(s) — \
                              the chunk disagrees with the layout it was compiled against",
@@ -212,7 +213,7 @@ impl Vm {
 /// [`operand_err`] for one link of a field path, at that link's span.
 #[cold]
 fn path_operand_err(got: &Value, link: &PathLink, proto: &Proto) -> RuntimeError {
-    RuntimeError::TypeError {
+    RuntimeError::Internal {
         message: format!(
             "internal: typed opcode in `{}` expected `instance` but the register held `{}` — \
              the chunk disagrees with the types it was compiled against",
@@ -226,7 +227,7 @@ fn path_operand_err(got: &Value, link: &PathLink, proto: &Proto) -> RuntimeError
 // ---- free helpers ------------------------------------------------------
 
 pub(crate) fn field_slot_err(slot: usize, have: usize, proto: &Proto, here: u32) -> RuntimeError {
-    RuntimeError::TypeError {
+    RuntimeError::Internal {
         message: format!(
             "internal: field slot {slot} on an instance with {have} field(s) — \
              the chunk disagrees with the layout it was compiled against"
@@ -236,7 +237,7 @@ pub(crate) fn field_slot_err(slot: usize, have: usize, proto: &Proto, here: u32)
 }
 
 pub(crate) fn operand_err(got: &Value, want: &str, proto: &Proto, here: u32) -> RuntimeError {
-    RuntimeError::TypeError {
+    RuntimeError::Internal {
         message: format!(
             "internal: typed opcode in `{}` expected `{want}` but the register held `{}` — \
              the chunk disagrees with the types it was compiled against",
@@ -245,6 +246,43 @@ pub(crate) fn operand_err(got: &Value, want: &str, proto: &Proto, here: u32) -> 
         ),
         span: proto.span_at(here),
     }
+}
+
+/// `for … in` over something that cannot be iterated.
+#[cold]
+#[inline(never)]
+pub(crate) fn not_iterable(type_name: &str, span: std::ops::Range<usize>) -> RuntimeError {
+    RuntimeError::fault(
+        format!("cannot iterate over {}", a_type(type_name)),
+        format!("this is {}, not a collection", a_type(type_name)),
+        span,
+    )
+    .with_help(
+        "`for … in` takes a table, an iterator function, or an object with an `iter()` method (`Iterable`); to count, use `for i = 1, n do`",
+    )
+}
+
+/// An `Iterable`'s `iter()` that returned something other than a function.
+/// `got` reads as the end of "returned …": `nothing`, "a `string`".
+#[cold]
+#[inline(never)]
+pub(crate) fn bad_iter_result(
+    source: &Value,
+    got: &str,
+    span: std::ops::Range<usize>,
+) -> RuntimeError {
+    let class = match source {
+        Value::Instance(inst) => inst.borrow().class.name.clone(),
+        other => other.type_name().to_string(),
+    };
+    RuntimeError::fault(
+        format!("`{class}.iter()` returned {got}, not a function"),
+        "this loop called `iter()`",
+        span,
+    )
+    .with_help(format!(
+        "`{class}.iter()` must return a function; the loop calls it for each next value, and stops when it returns `nil`"
+    ))
 }
 
 /// Does the value in `v` satisfy `cast_types[idx]`?

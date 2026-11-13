@@ -342,8 +342,5 @@ fn misplaced_argument(
             args.len()
         ),
     };
-    saule_runtime::RuntimeError::TypeError {
-        message,
-        span: span.clone(),
-    }
+    saule_runtime::RuntimeError::native(message, None, span.clone()).relabel("in this call")
 }

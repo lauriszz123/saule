@@ -46,8 +46,8 @@ use crate::op::{Instruction, Op};
 
 use super::call::Site;
 use super::ops::{
-    cast_holds, convert_to, field_slot_err, float_in_range, index_array, int_in_range, jump,
-    operand_err, shift, snapshot_pairs,
+    bad_iter_result, cast_holds, convert_to, field_slot_err, float_in_range, index_array,
+    int_in_range, jump, not_iterable, operand_err, shift, snapshot_pairs,
 };
 use super::{ALL_RESULTS, Closure, Upvalue, Vm};
 
@@ -159,7 +159,7 @@ impl Vm {
             .collect();
         let payload = Value::Table(Rc::new(RefCell::new(TableObject::from_array(items))));
         let Some(e) = self.shared.enums.get(e_idx) else {
-            return Err(RuntimeError::TypeError {
+            return Err(RuntimeError::Internal {
                 message: format!("internal: no enum {e_idx}"),
                 span: site.span(),
             });
@@ -199,7 +199,7 @@ impl Vm {
     ) -> Result<(), RuntimeError> {
         let key = chunk.constants[k as usize].clone();
         let Value::Str(name) = &key else {
-            return Err(RuntimeError::TypeError {
+            return Err(RuntimeError::Internal {
                 message: "internal: CALLMX name is not a string".into(),
                 span: site.span(),
             });
@@ -550,7 +550,7 @@ impl Vm {
                         }
                     }
                     Op::EXTRAARG => {
-                        return Err(RuntimeError::TypeError {
+                        return Err(RuntimeError::Internal {
                             message: "internal: EXTRAARG executed as an instruction".into(),
                             span: proto.span_at(here),
                         });
@@ -622,14 +622,10 @@ impl Vm {
                             // rather than a silent 0, matching `int_op`.
                             _ => {
                                 let Ok(exp) = u32::try_from(r) else {
-                                    return Err(RuntimeError::TypeError {
-                                        message: format!(
-                                            "`^` on integers requires a non-negative exponent, \
-                                             got {r} — use floats (`(base as float) ^ {r}.0`) \
-                                             for a fractional result"
-                                        ),
-                                        span: proto.span_at(here),
-                                    });
+                                    return Err(saule_runtime::ops::negative_int_exponent(
+                                        r,
+                                        proto.span_at(here),
+                                    ));
                                 };
                                 l.wrapping_pow(exp)
                             }
@@ -701,7 +697,7 @@ impl Vm {
                     Op::ARITHX => {
                         let code_v = self.extra_arg(code.as_ptr(), &mut pc);
                         let Some(op) = crate::op::dynop::decode_binary(code_v) else {
-                            return Err(RuntimeError::TypeError {
+                            return Err(RuntimeError::Internal {
                                 message: format!("internal: ARITHX with unknown operator {code_v}"),
                                 span: proto.span_at(here),
                             });
@@ -715,7 +711,7 @@ impl Vm {
                     Op::UNARYX => {
                         let code_v = self.extra_arg(code.as_ptr(), &mut pc);
                         let Some(op) = crate::op::dynop::decode_unary(code_v) else {
-                            return Err(RuntimeError::TypeError {
+                            return Err(RuntimeError::Internal {
                                 message: format!("internal: UNARYX with unknown operator {code_v}"),
                                 span: proto.span_at(here),
                             });
@@ -935,13 +931,7 @@ impl Vm {
                         let pairs = match self.reg(base + a) {
                             Value::Table(t) => snapshot_pairs(&t.borrow()),
                             other => {
-                                return Err(RuntimeError::TypeError {
-                                    message: format!(
-                                        "cannot iterate a `{}` — `for … in` needs a table",
-                                        other.type_name()
-                                    ),
-                                    span: proto.span_at(here),
-                                });
+                                return Err(not_iterable(other.type_name(), proto.span_at(here)));
                             }
                         };
                         let empty = pairs.is_empty();
@@ -1023,13 +1013,11 @@ impl Vm {
                                     saule_runtime::call::call_method(&src, "iter", &[], span)
                                 })?;
                                 let Some(driver) = vs.into_iter().next() else {
-                                    return Err(RuntimeError::TypeError {
-                                        message: format!(
-                                            "`{}.iter()` returned no value — it must return a function",
-                                            src.type_name()
-                                        ),
-                                        span: proto.span_at(here),
-                                    });
+                                    return Err(bad_iter_result(
+                                        &src,
+                                        "nothing",
+                                        proto.span_at(here),
+                                    ));
                                 };
                                 if !matches!(
                                     driver,
@@ -1037,26 +1025,18 @@ impl Vm {
                                         | Value::NativeClosure(_)
                                         | Value::VmFunction(_)
                                 ) {
-                                    return Err(RuntimeError::TypeError {
-                                        message: format!(
-                                            "`iter()` must return a function, got `{}`",
-                                            driver.type_name()
-                                        ),
-                                        span: proto.span_at(here),
-                                    });
+                                    return Err(bad_iter_result(
+                                        &src,
+                                        &saule_runtime::error::a_type(driver.type_name()),
+                                        proto.span_at(here),
+                                    ));
                                 }
                                 *self.reg_mut(base + a) = driver;
                                 *self.reg_mut(base + a + 1) = Value::Nil;
                                 *self.reg_mut(base + a + 2) = Value::Bool(true);
                             }
                             other => {
-                                return Err(RuntimeError::TypeError {
-                                    message: format!(
-                                        "cannot iterate over a `{}` with `for ... in` — use a table, a function, or a class that implements `Iterable`",
-                                        other.type_name()
-                                    ),
-                                    span: proto.span_at(here),
-                                });
+                                return Err(not_iterable(other.type_name(), proto.span_at(here)));
                             }
                         }
                     }
@@ -1098,9 +1078,11 @@ impl Vm {
                             t.array.push(v);
                         } else {
                             t.set(&Value::Int(idx), v)
-                                .map_err(|m| RuntimeError::TypeError {
-                                    message: m,
-                                    span: proto.span_at(here),
+                                .map_err(|m| {
+                                    saule_runtime::members::table_write_failed(
+                                        m,
+                                        proto.span_at(here),
+                                    )
                                 })?;
                         }
                     }
@@ -1188,9 +1170,8 @@ impl Vm {
                                 None => t.set(key, v),
                             }
                         };
-                        r.map_err(|m| RuntimeError::TypeError {
-                            message: m,
-                            span: proto.span_at(here),
+                        r.map_err(|m| {
+                            saule_runtime::members::table_write_failed(m, proto.span_at(here))
                         })?;
                     }
                     Op::APPEND => {
@@ -1426,7 +1407,7 @@ impl Vm {
                         {
                             Some(t) => t,
                             None => {
-                                return Err(RuntimeError::TypeError {
+                                return Err(RuntimeError::Internal {
                                     message: format!(
                                         "internal: no static method {slot} on class {cls}"
                                     ),
@@ -1510,7 +1491,7 @@ impl Vm {
                     Op::NEW => {
                         let idx = ins.bx() as usize;
                         let Some(class) = self.shared.classes.get(idx) else {
-                            return Err(RuntimeError::TypeError {
+                            return Err(RuntimeError::Internal {
                                 message: format!("internal: no class {idx} in this chunk"),
                                 span: proto.span_at(here),
                             });
@@ -1618,7 +1599,7 @@ impl Vm {
                         match v {
                             Some(v) => *self.reg_mut(base + a) = v,
                             None => {
-                                return Err(RuntimeError::TypeError {
+                                return Err(RuntimeError::Internal {
                                     message: format!("internal: no static {slot} on class {cls}"),
                                     span: proto.span_at(here),
                                 });
@@ -1640,7 +1621,7 @@ impl Vm {
                         }) {
                             Some(true) => {}
                             _ => {
-                                return Err(RuntimeError::TypeError {
+                                return Err(RuntimeError::Internal {
                                     message: format!("internal: no static {slot} on class {cls}"),
                                     span: proto.span_at(here),
                                 });
@@ -1756,7 +1737,7 @@ impl Vm {
                         {
                             Some(t) => t,
                             None => {
-                                return Err(RuntimeError::TypeError {
+                                return Err(RuntimeError::Internal {
                                     message: format!(
                                         "internal: no static method {slot} on class {cls}"
                                     ),
@@ -1789,7 +1770,7 @@ impl Vm {
                         match v {
                             Some(v) => *self.reg_mut(base + a) = Value::EnumVariant(v),
                             None => {
-                                return Err(RuntimeError::TypeError {
+                                return Err(RuntimeError::Internal {
                                     message: format!(
                                         "internal: no singleton for enum {e_idx} tag {tag}"
                                     ),
@@ -1897,7 +1878,7 @@ impl Vm {
                     Op::GETFX => {
                         let key = chunk.constants[ins.c() as usize].clone();
                         let Value::Str(name) = &key else {
-                            return Err(RuntimeError::TypeError {
+                            return Err(RuntimeError::Internal {
                                 message: "internal: GETFX key is not a string".into(),
                                 span: proto.span_at(here),
                             });
@@ -1915,7 +1896,7 @@ impl Vm {
                         // three different writes, decided in one place.
                         let key = chunk.constants[ins.b() as usize].clone();
                         let Value::Str(name) = &key else {
-                            return Err(RuntimeError::TypeError {
+                            return Err(RuntimeError::Internal {
                                 message: "internal: SETFX key is not a string".into(),
                                 span: proto.span_at(here),
                             });

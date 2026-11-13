@@ -1,0 +1,7 @@
+-- Arithmetic on a string that arrived through `any` can only be caught when
+-- it runs. Expected: "cannot use `*` on a `string` and an `integer`", with a
+-- help line showing the `as integer` conversion.
+-- Pinned in crates/saule-vm/tests/runtime_diagnostics.rs.
+local a: any = "x"
+local b: any = a * 2
+println(b)

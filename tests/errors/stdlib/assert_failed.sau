@@ -1,0 +1,4 @@
+-- A failed `assert` shows its message as the title. Expected: "assertion
+-- failed: x must be set", labelled "this assertion failed".
+local x: integer? = nil
+assert(x, "x must be set")

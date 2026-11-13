@@ -161,20 +161,18 @@ impl Coroutine {
                 } else {
                     "cannot resume a coroutine that is waiting on another one it resumed"
                 };
-                return Err(RuntimeError::TypeError {
-                    message: message.into(),
-                    span,
-                });
+                return Err(RuntimeError::fault(message, "resumed here", span).with_help(
+                    "a coroutine runs one resume at a time; resume it again after it yields",
+                ));
             }
             State::Dead => return Ok(vec![Value::Nil]),
         }
         let Some(shared) = self.shared.upgrade() else {
-            return Err(RuntimeError::TypeError {
-                message: "cannot resume a coroutine: the engine that created it is no longer \
-                          running"
-                    .into(),
+            return Err(RuntimeError::fault(
+                "cannot resume a coroutine whose program has finished running",
+                "resumed here",
                 span,
-            });
+            ));
         };
         // Each resume runs a dispatch loop under a Rust frame of its own, so
         // coroutines resuming coroutines nest on the native stack — the
@@ -295,10 +293,11 @@ impl VmCoroutine for Coroutine {
             if args.is_empty() {
                 Ok(())
             } else {
-                Err(RuntimeError::TypeError {
-                    message: format!("Coroutine.{method} takes no arguments, got {}", args.len()),
-                    span: span.clone(),
-                })
+                Err(RuntimeError::fault(
+                    format!("`{method}()` takes no arguments, got {}", args.len()),
+                    "called with arguments here",
+                    span.clone(),
+                ))
             }
         };
         match name {
@@ -335,19 +334,20 @@ impl VmCoroutine for Coroutine {
                     },
                 ))])
             }
-            "yield" => Err(RuntimeError::TypeError {
-                message: "`yield` is called on the yielder a coroutine's body is given, not on \
-                          the coroutine"
-                    .into(),
+            "yield" => Err(RuntimeError::fault(
+                "`yield` is not a method of the coroutine",
+                "this is the coroutine",
                 span,
-            }),
-            other => Err(RuntimeError::TypeError {
-                message: format!(
-                    "no method `{other}` on Coroutine — valid: resume / status / isDone / error / \
-                     iter"
-                ),
+            )
+            .with_help(
+                "yield on the yielder the body is given: `Coroutine.create(fn(co) co.yield(v) end)`",
+            )),
+            other => Err(RuntimeError::fault(
+                format!("`Coroutine` has no method `{other}`"),
+                "this is a `Coroutine`",
                 span,
-            }),
+            )
+            .with_help("its methods are `resume`, `status`, `isDone`, `error` and `iter`")),
         }
     }
 }
@@ -376,26 +376,37 @@ impl VmCoroutine for Yielder {
         span: std::ops::Range<usize>,
     ) -> Result<Vec<Value>, RuntimeError> {
         if name != "yield" {
-            return Err(RuntimeError::TypeError {
-                message: format!("no method `{name}` on Yielder — valid: yield"),
+            return Err(RuntimeError::fault(
+                format!("`Yielder` has no method `{name}`"),
+                "this is a `Yielder`",
                 span,
-            });
+            )
+            .with_help("its only method is `yield`"));
         }
         let running = self
             .coroutine_addr()
             .is_some_and(|addr| addr == CURRENT.with(Cell::get));
-        let message = match self.co.upgrade() {
-            None => "cannot yield: the coroutine this yielder belongs to no longer exists",
-            Some(_) if running => {
-                "cannot yield from inside a callback — a sort comparator, an operator overload, \
-                 a `toString` or any other function a built-in calls back — because the \
-                 built-in's own call cannot be suspended; yield from the coroutine's own code"
-            }
-            Some(_) => "cannot yield a coroutine that is not the one running",
-        };
-        Err(RuntimeError::TypeError {
-            message: message.into(),
-            span,
+        Err(match self.co.upgrade() {
+            None => RuntimeError::fault(
+                "cannot yield: the coroutine this yielder belongs to no longer exists",
+                "yielded here",
+                span,
+            )
+            .with_help("a yielder can only be used while its coroutine is alive"),
+            Some(_) if running => RuntimeError::fault(
+                "cannot yield from inside a callback",
+                "yielded here, inside a function a built-in called back",
+                span,
+            )
+            .with_help(
+                "a sort comparator, an operator overload or a `toString` runs inside a built-in's call, which cannot be suspended; yield from the coroutine's own code",
+            ),
+            Some(_) => RuntimeError::fault(
+                "cannot yield a coroutine that is not the one running",
+                "yielded here",
+                span,
+            )
+            .with_help("only the running coroutine's own yielder can yield"),
         })
     }
 }

@@ -1,0 +1,7 @@
+-- Integer division by zero has no answer. Expected: "integer division by
+-- zero", the caret on `10 / z` labelled "the divisor here is 0". Pinned in
+-- crates/saule-vm/tests/runtime_diagnostics.rs. Float
+-- division by zero is `inf`, not an error — see
+-- tests/run/syntax/float_division_by_zero.sau.
+local z: integer = 0
+println(10 / z)

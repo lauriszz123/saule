@@ -410,8 +410,7 @@ unsafe extern "C" fn func_call(
         // The bare message. The package usually returns it as its own error,
         // which the interpreter wraps again — so passing the rendered
         // `type error: …` along printed the prefix twice.
-        Err(crate::RuntimeError::TypeError { message, .. }) => unsafe { write_err(out, &message) },
-        Err(e) => unsafe { write_err(out, &e.to_string()) },
+        Err(e) => unsafe { write_err(out, &e.message_text()) },
     }
 }
 

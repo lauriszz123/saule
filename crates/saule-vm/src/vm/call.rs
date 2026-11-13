@@ -162,7 +162,7 @@ impl Vm {
                 .class_of
                 .get(&key)
                 .copied()
-                .ok_or_else(|| RuntimeError::TypeError {
+                .ok_or_else(|| RuntimeError::Internal {
                     message: format!(
                         "internal: `{}` was not built from this chunk",
                         inst.borrow().class.name
@@ -183,7 +183,7 @@ impl Vm {
             // something inside its own chunk (`ClassProto::vowner`).
             .zip(cp.vowner.get(slot).map(|o| table[*o as usize].module))
             .map(|(t, m)| (m, t))
-            .ok_or_else(|| RuntimeError::TypeError {
+            .ok_or_else(|| RuntimeError::Internal {
                 message: format!(
                     "internal: `{}` has no method in vtable slot {slot}",
                     inst.borrow().class.name
@@ -235,7 +235,7 @@ impl Vm {
                 .class_of
                 .get(&key)
                 .copied()
-                .ok_or_else(|| RuntimeError::TypeError {
+                .ok_or_else(|| RuntimeError::Internal {
                     message: format!(
                         "internal: `{}` was not built from this chunk",
                         inst.borrow().class.name
@@ -249,12 +249,16 @@ impl Vm {
             .get(&iface)
             .and_then(|t| t.get(slot))
             .copied()
-            .ok_or_else(|| RuntimeError::TypeError {
-                message: format!(
-                    "`{}` does not implement the interface this call requires",
-                    inst.borrow().class.name
-                ),
-                span: proto.span_at(here),
+            .ok_or_else(|| {
+                let class = inst.borrow().class.name.clone();
+                RuntimeError::fault(
+                    format!("`{class}` does not implement the interface this call goes through"),
+                    format!("this is {}", saule_runtime::error::a_type(&class)),
+                    proto.span_at(here),
+                )
+                .with_help(format!(
+                    "declare it on the class: `class {class} implements …`"
+                ))
             })?;
         cp.vtable
             .get(vslot as usize)
@@ -268,7 +272,7 @@ impl Vm {
                     .map(|o| table[*o as usize].module),
             )
             .map(|(t, m)| (m, t))
-            .ok_or_else(|| RuntimeError::TypeError {
+            .ok_or_else(|| RuntimeError::Internal {
                 message: format!(
                     "internal: `{}` has no method in slot {vslot}",
                     inst.borrow().class.name
@@ -370,12 +374,14 @@ impl Vm {
     /// known here, in their saved `pc`s.
     #[cold]
     #[inline(never)]
-    pub(crate) fn native_failure(&self, message: String, site: &Site<'_>) -> RuntimeError {
+    pub(crate) fn native_failure(
+        &self,
+        message: String,
+        function: &str,
+        site: &Site<'_>,
+    ) -> RuntimeError {
         let Some(level) = saule_runtime::stdlib::core::take_raised_level() else {
-            return RuntimeError::TypeError {
-                message,
-                span: site.span(),
-            };
+            return RuntimeError::native(message, Some(function), site.span());
         };
         let span = site.span();
         let origin = span.start;
@@ -436,7 +442,7 @@ impl Vm {
             Value::Native(nf) => {
                 let v = self
                     .foreign(|vm| (nf.func)(&vm.stack[args_from..args_from + n_args]))
-                    .map_err(|m| self.native_failure(m, site))?;
+                    .map_err(|m| self.native_failure(m, nf.name, site))?;
                 // **Moved**, not cloned. `store_results` takes a slice, so
                 // the one value a `Native` returns went in by reference and
                 // came back out through `cloned()` — a refcount pair per
@@ -448,7 +454,7 @@ impl Vm {
             Value::NativeClosure(nc) => {
                 let vs = self
                     .foreign(|vm| (nc.func)(&vm.stack[args_from..args_from + n_args]))
-                    .map_err(|m| self.native_failure(m, site))?;
+                    .map_err(|m| self.native_failure(m, nc.name, site))?;
                 self.store_results(dst, &vs, n_ret);
                 Ok(())
             }
@@ -488,7 +494,7 @@ impl Vm {
         n_args: usize,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
-        let cl = Closure::from_handle(&handle).ok_or_else(|| RuntimeError::TypeError {
+        let cl = Closure::from_handle(&handle).ok_or_else(|| RuntimeError::Internal {
             message: "internal: frame handle is not a bytecode closure".into(),
             span: site.span(),
         })?;
@@ -591,7 +597,7 @@ impl Vm {
             });
         }
         let (proto, chunk) = {
-            let cl = Closure::from_handle(&func).ok_or_else(|| RuntimeError::TypeError {
+            let cl = Closure::from_handle(&func).ok_or_else(|| RuntimeError::Internal {
                 message: "internal: frame handle is not a bytecode closure".into(),
                 span: site.span(),
             })?;

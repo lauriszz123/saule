@@ -1,0 +1,34 @@
+-- The working twins of the runtime-error fixtures: the same operations
+-- through `any`, on values that support them, raise nothing.
+class Box
+  v: integer = 1
+end
+
+local a: any = 3
+local b: any = a * 2
+println(b)
+
+local f: any = fn() -> integer return 7 end
+println(f())
+
+local t: any = {10, 20}
+for k, v in t do
+  println(k, v)
+end
+
+local box: any = Box()
+println(box.v)
+
+local tbl: table<any, integer> = {}
+local key: any = "k"
+tbl[key] = 1
+println(tbl["k"])
+
+local x: integer? = 1
+assert(x, "x must be set")
+
+local step: integer = -1
+for i = 2, 1, step do
+  println(i)
+end
+println("ok")

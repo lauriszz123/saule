@@ -51,9 +51,10 @@ fn rejected(
     r: Result<saule_vm::Chunk, saule_vm::CompileError>,
 ) -> (String, std::ops::Range<usize>) {
     match r {
-        Err(saule_vm::CompileError::Rejected(saule_runtime::RuntimeError::TypeError {
+        Err(saule_vm::CompileError::Rejected(saule_runtime::RuntimeError::Fault {
             message,
             span,
+            ..
         })) => (message, span),
         other => panic!("expected the program to be rejected, got {other:?}"),
     }

@@ -310,9 +310,16 @@ impl TableObject {
             }
         }
         let Some(k) = TableKey::from_value(key) else {
+            // Title, then the advice after ` — `, which the caller turns into
+            // the help line (see `RuntimeError::native`).
             return Err(format!(
-                "table keys must be integer, string, or boolean, got `{}`",
-                key.type_name()
+                "cannot use {} as a table key — a key must be an `integer`, a `string` or a `boolean`{}",
+                crate::error::a_type(key.type_name()),
+                if matches!(key, Value::Nil) {
+                    "; check that the key has a value before using it"
+                } else {
+                    ""
+                }
             ));
         };
         self.grow_hint();
