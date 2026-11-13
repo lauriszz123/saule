@@ -590,9 +590,7 @@ fn file_read(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Val
             read_format(&format, &mut src)
         }
         FileHandle::Open { reader: None, .. } => Err(NOT_FOR_READING.to_string()),
-        FileHandle::Stdout | FileHandle::Stderr => {
-            Err(READ_FROM_OUTPUT.to_string())
-        }
+        FileHandle::Stdout | FileHandle::Stderr => Err(READ_FROM_OUTPUT.to_string()),
         FileHandle::Closed => unreachable!(),
     }
 }
@@ -659,9 +657,7 @@ fn file_read_bytes(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<V
         } => read_raw(r, limit),
         FileHandle::Stdin(r) => read_raw(r, limit),
         FileHandle::Open { reader: None, .. } => Err(NOT_FOR_READING.to_string()),
-        FileHandle::Stdout | FileHandle::Stderr => {
-            Err(READ_FROM_OUTPUT.to_string())
-        }
+        FileHandle::Stdout | FileHandle::Stderr => Err(READ_FROM_OUTPUT.to_string()),
         FileHandle::Closed => unreachable!(),
     }
 }

@@ -260,7 +260,9 @@ fn several_fields_are_listed_in_the_plural() {
         "class P\n  x: integer = 1\n  y: integer = 2\nend\nlocal p: any = P()\nprintln(p.z)\n",
     );
     assert!(
-        s.help.as_deref().is_some_and(|h| h.starts_with("`P` has the fields `x`, `y`.")),
+        s.help
+            .as_deref()
+            .is_some_and(|h| h.starts_with("`P` has the fields `x`, `y`.")),
         "{:?}",
         s.help
     );
@@ -288,7 +290,10 @@ fn calling_a_missing_method() {
     assert_eq!(s.message, "`Box` has no method `nope`");
     assert_eq!(s.label, "this is a `Box`");
     assert_eq!(s.line, 5);
-    assert!(s.help.is_some_and(|h| h.contains("`Box` has the field `v`")));
+    assert!(
+        s.help
+            .is_some_and(|h| h.contains("`Box` has the field `v`"))
+    );
 }
 
 #[test]
@@ -364,8 +369,14 @@ fn a_loop_error_points_at_the_part_of_the_header_at_fault_not_the_whole_loop() {
 
 #[test]
 fn an_operator_error_underlines_the_operation() {
-    assert_eq!(pointed("local a: any = \"x\"\nlocal b: any = a * 2\n"), "a * 2");
-    assert_eq!(pointed("local z: integer = 0\nlocal q: integer = 10 / z\n"), "10 / z");
+    assert_eq!(
+        pointed("local a: any = \"x\"\nlocal b: any = a * 2\n"),
+        "a * 2"
+    );
+    assert_eq!(
+        pointed("local z: integer = 0\nlocal q: integer = 10 / z\n"),
+        "10 / z"
+    );
 }
 
 // ── built-in functions ──────────────────────────────────────────────────────
@@ -433,12 +444,21 @@ fn a_failed_assertion_has_no_signature_to_distract_from_its_message() {
 fn math_says_which_value_was_wrong_and_keeps_a_floats_point() {
     let s = shown("local x: float = -9.0\nlocal r: float = Math.sqrt(x)\n");
     assert_eq!(s.message, "square root of a negative number (-9.0)");
-    assert!(s.help.is_some_and(|h| h.contains("`Math.sqrt(Math.abs(x))`")));
+    assert!(
+        s.help
+            .is_some_and(|h| h.contains("`Math.sqrt(Math.abs(x))`"))
+    );
     ok("local x: float = 9.0\nlocal r: float = Math.sqrt(x)\n");
 
     let s = shown("local c: integer = Math.clamp(5, 10, 1)\n");
-    assert_eq!(s.message, "`Math.clamp` lower bound 10 is above its upper bound 1");
-    assert!(s.help.is_some_and(|h| h.starts_with("the order is `Math.clamp(n, lo, hi)`")));
+    assert_eq!(
+        s.message,
+        "`Math.clamp` lower bound 10 is above its upper bound 1"
+    );
+    assert!(
+        s.help
+            .is_some_and(|h| h.starts_with("the order is `Math.clamp(n, lo, hi)`"))
+    );
     ok("local c: integer = Math.clamp(5, 1, 10)\n");
 }
 
@@ -467,10 +487,13 @@ fn an_argument_message_names_the_argument_and_the_function() {
         "argument 2 of `Table.sort` must be a function, got an `integer`"
     );
     assert!(
-        s.help.is_some_and(|h| h.starts_with("pass a comparator such as")),
+        s.help
+            .is_some_and(|h| h.starts_with("pass a comparator such as")),
         "the fix comes before the signature"
     );
-    ok("local t: table<integer> = {3, 1}\nlocal cmp: any = fn(a: integer, b: integer) -> boolean return a > b end\nTable.sort(t, cmp)\n");
+    ok(
+        "local t: table<integer> = {3, 1}\nlocal cmp: any = fn(a: integer, b: integer) -> boolean return a > b end\nTable.sort(t, cmp)\n",
+    );
 }
 
 #[test]
@@ -509,7 +532,11 @@ fn advice_goes_in_the_help_not_the_message() {
     // A message with ` — ` in it is a title with its advice run in.
     for src in FAILING {
         let s = shown(src);
-        assert!(!s.message.contains(" — "), "advice in the message: {}", s.message);
+        assert!(
+            !s.message.contains(" — "),
+            "advice in the message: {}",
+            s.message
+        );
     }
 }
 
@@ -520,7 +547,9 @@ fn no_runtime_message_uses_engine_jargon() {
     for src in FAILING {
         let s = shown(src);
         let text = format!("{} {} {}", s.message, s.label, s.help.unwrap_or_default());
-        for word in ["dispatch", "operand", "vtable", "register", "opcode", "proto"] {
+        for word in [
+            "dispatch", "operand", "vtable", "register", "opcode", "proto",
+        ] {
             assert!(!text.contains(word), "`{word}` in: {text}");
         }
     }

@@ -194,9 +194,7 @@ impl Compiler<'_> {
                 // how a link in an object graph is declared, so this is
                 // what walking one is spelled as. `GETF UNWRAPNIL` is the
                 // top adjacent pair in `nullsafe`.
-                Expr::Member { obj, name } => {
-                    self.member_to(inner, obj, name, dst, Some(span))?
-                }
+                Expr::Member { obj, name } => self.member_to(inner, obj, name, dst, Some(span))?,
                 _ => {
                     let m = self.mark();
                     let r = self.operand_to_reg(inner, self.operand_is_pure(inner))?;

@@ -509,8 +509,14 @@ fn math_random(args: &[Value]) -> Result<Value, String> {
             Ok(Value::Int((next_u64() % span) as i64 + 1))
         }
         2 => {
-            let lo = to_i64(number_at(args, 0, "random")?, "the `Math.random` lower bound")?;
-            let hi = to_i64(number_at(args, 1, "random")?, "the `Math.random` upper bound")?;
+            let lo = to_i64(
+                number_at(args, 0, "random")?,
+                "the `Math.random` lower bound",
+            )?;
+            let hi = to_i64(
+                number_at(args, 1, "random")?,
+                "the `Math.random` upper bound",
+            )?;
             if lo > hi {
                 return Err(format!(
                     "`Math.random` lower bound {lo} is above the upper bound {hi} — swap them: `Math.random({hi}, {lo})`"

@@ -983,10 +983,7 @@ fn a_nil_comparison_feeding_an_if_becomes_a_nil_branch() {
              if x {op} nil then{NL} r = 1{NL}end{NL}r"
         );
         let l = listing(&src);
-        assert!(
-            emits(&l, want),
-            "`{op} nil` did not fuse to {want}:{NL}{l}"
-        );
+        assert!(emits(&l, want), "`{op} nil` did not fuse to {want}:{NL}{l}");
         assert!(
             !emits(&l, "EQV"),
             "`{op} nil` still materialises a boolean:{NL}{l}"
@@ -1054,9 +1051,7 @@ fn a_force_unwrapped_static_read_keeps_the_separate_unwrap() {
     // measured pair asking for one, so it keeps `UNWRAPNIL` — and this is
     // the assertion that fails if `member_read` ever starts reporting a
     // fusion it did not perform, which would drop the nil test entirely.
-    let src = format!(
-        "class Holder{NL}\x20 static total: integer? = 99{NL}end{NL}Holder.total!"
-    );
+    let src = format!("class Holder{NL}\x20 static total: integer? = 99{NL}end{NL}Holder.total!");
     let l = listing(&src);
     assert!(emits(&l, "GETSTAT"), "expected a static read:{NL}{l}");
     assert!(

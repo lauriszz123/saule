@@ -487,7 +487,11 @@ mod tests {
 
     #[test]
     fn the_functions_own_name_is_stripped_only_as_a_prefix_with_a_colon() {
-        let e = RuntimeError::native("Table.insert: out of range".into(), Some("Table.insert"), 0..1);
+        let e = RuntimeError::native(
+            "Table.insert: out of range".into(),
+            Some("Table.insert"),
+            0..1,
+        );
         assert_eq!(parts(&e).0, "out of range");
         // No colon: it is part of the sentence, so it stays.
         let e = RuntimeError::native("String.gsub limit is bad".into(), Some("String.gsub"), 0..1);

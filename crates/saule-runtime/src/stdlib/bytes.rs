@@ -539,6 +539,9 @@ mod tests {
     #[test]
     fn a_string_argument_where_bytes_are_wanted_names_both_types() {
         let err = bytes_len(&[Value::Str(SauleStr::new("x".into()))]).unwrap_err();
-        assert_eq!(err, "argument 1 of `Bytes.len` must be `bytes`, got a `string`");
+        assert_eq!(
+            err,
+            "argument 1 of `Bytes.len` must be `bytes`, got a `string`"
+        );
     }
 }
