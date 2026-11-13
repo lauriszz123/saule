@@ -88,7 +88,27 @@ impl Compiler<'_> {
                     return Ok(());
                 }
             },
-            UnaryOp::BNot => Instruction::abc(Op::BNOT, a, b, 0),
+            // `BNOT` reads its operand as an `integer` and treats anything
+            // else as a broken chunk. The checker lets `~` through on any
+            // operand kind (it is a runtime check, like `-` on a string), so
+            // only a proved `integer` gets the typed opcode; everything else
+            // goes through `ops::unary`, which reports a `float` or `string`
+            // as the user's mistake and dispatches an `OpBNot` overload.
+            UnaryOp::BNot => match self.num_of_node(rhs) {
+                Some(Num::Int) => Instruction::abc(Op::BNOT, a, b, 0),
+                _ => {
+                    self.emit(Instruction::abc(Op::UNARYX, a, b, 0), span);
+                    self.emit(
+                        Instruction::ax_of(
+                            Op::EXTRAARG,
+                            crate::op::dynop::encode_unary(UnaryOp::BNot),
+                        ),
+                        span,
+                    );
+                    self.free_to(m);
+                    return Ok(());
+                }
+            },
             UnaryOp::Len => Instruction::abc(Op::LEN, a, b, 0),
         };
         self.emit(ins, span);

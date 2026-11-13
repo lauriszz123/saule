@@ -255,6 +255,12 @@ history.
 
 ### Fixed
 
+- **`~` on a `float` reports the program's mistake.** The compiler emitted
+  the integer-only complement instruction whatever the operand was, so `~f`
+  on a `float` failed as a broken chunk instead of saying "cannot take the
+  bitwise complement of a `float`". Only an operand proved to be an
+  `integer` gets that instruction now; anything else is checked when it
+  runs, which also lets a class's `OpBNot` overload work there.
 - **A program's own class or enum is not mistaken for a native package's.**
   Discovering a native package puts its static classes' members in a table
   the checker shares across every module, and that table was consulted
