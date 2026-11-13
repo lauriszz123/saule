@@ -827,6 +827,7 @@ name = "saule-lsp"
 version = "26.0.0"
 dependencies = [
  "dashmap 6.2.1",
+ "lsp-types",
  "miette",
  "saule-ast",
  "saule-db",
@@ -952,11 +953,13 @@ name = "saule-wasm"
 version = "26.0.0"
 dependencies = [
  "js-sys",
+ "lsp-types",
  "miette",
  "saule-ast",
  "saule-diagnostics",
  "saule-fmt",
  "saule-lexer",
+ "saule-lsp",
  "saule-parser",
  "saule-runtime",
  "saule-semantic",

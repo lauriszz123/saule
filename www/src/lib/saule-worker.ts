@@ -23,16 +23,19 @@
  * page can show that the runtime is warming up on first use.
  */
 
-import init, { check, format, run, version } from './saule_wasm/saule_wasm.js';
+import init, { check, complete, format, run, version } from './saule_wasm/saule_wasm.js';
 // Vite rewrites this to the emitted asset URL (hashed, and prefixed with the
 // site's base path), so the module is fetched rather than inlined as base64 —
 // which keeps it cacheable and out of the JS bundle.
 import wasmUrl from './saule_wasm/saule_wasm_bg.wasm?url';
 
-/** Which entry point a request wants. All three take a program's source. */
-export type WorkerJob = 'run' | 'check' | 'format';
+/**
+ * Which entry point a request wants. All take a program's source;
+ * `complete` also takes the caret, as a UTF-8 byte offset.
+ */
+export type WorkerJob = 'run' | 'check' | 'format' | 'complete';
 
-export type WorkerRequest = { type: WorkerJob; id: number; source: string };
+export type WorkerRequest = { type: WorkerJob; id: number; source: string; offset?: number };
 
 export type WorkerResponse =
 	| { type: 'ready'; version: string }
@@ -47,7 +50,12 @@ const ready: Promise<void> = init({ module_or_path: wasmUrl }).then(() => {
 	ctx.postMessage(message);
 });
 
-const ENTRY: Record<WorkerJob, (source: string) => string> = { run, check, format };
+const ENTRY: Record<WorkerJob, (source: string, offset: number) => string> = {
+	run,
+	check,
+	format,
+	complete,
+};
 
 ctx.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
 	const request = event.data;
@@ -59,7 +67,7 @@ ctx.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
 			// Each entry point returns the JSON string its counterpart in
 			// runtime.ts describes. Parsing happens on the main thread so a
 			// malformed payload surfaces there rather than as a dead worker.
-			const json = entry(request.source);
+			const json = entry(request.source, request.offset ?? 0);
 			const message: WorkerResponse = { type: 'result', id: request.id, json };
 			ctx.postMessage(message);
 		})

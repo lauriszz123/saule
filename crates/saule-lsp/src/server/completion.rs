@@ -34,11 +34,98 @@ pub(crate) use items::*;
 pub(crate) use repair::*;
 pub(crate) use walk::*;
 
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, CompletionResponse, Position, Url};
+use lsp_types::{CompletionItem, CompletionItemKind};
+#[cfg(feature = "server")]
+use lsp_types::{CompletionResponse, Position, Url};
 
+#[cfg(feature = "server")]
 use super::{Backend, canonical};
+#[cfg(feature = "server")]
 use crate::line_index::LineIndex;
 
+/// Completions at byte `offset` in a lone buffer, with no file behind it.
+///
+/// The same engine [`Backend::completion_at`] runs, minus what only a
+/// workspace has: there are no sibling files to import from or to offer as
+/// import paths, and no editing history to recover a broken parse with. This
+/// is what the web playground calls; the caller must have run
+/// `saule_runtime::init()` so the stdlib's names and signatures are seeded.
+pub fn complete(source: &str, offset: usize) -> Vec<CompletionItem> {
+    let Some((patched, prefix)) = splice_sentinel(source, offset) else {
+        return Vec::new();
+    };
+    if let Some((keywords, detail)) = line_keywords(source, offset) {
+        return filter(keyword_items(&keywords, detail), &prefix);
+    }
+    let Some(module) = parse_tolerant(&patched, None) else {
+        return Vec::new();
+    };
+    let _ = saule_semantic::analyze_with_seed(&module, saule_semantic::ModuleSeed::default());
+
+    let Some(found) = Walk::run(&module) else {
+        if Walk::in_interface_body(&module, offset - prefix.len()) {
+            let items = keyword_items(INTERFACE_KEYWORDS, "interface member");
+            return filter(items, &prefix);
+        }
+        return Vec::new();
+    };
+    let items = match &found.ctx {
+        Ctx::Member(recv) => member_items(recv, &found),
+        Ctx::TypeName => type_items(),
+        Ctx::BaseClass { exclude } => class_items(exclude),
+        Ctx::Interfaces { exclude } => interface_items(exclude),
+        Ctx::Value { stmt_start } => value_items(&found, &module, *stmt_start),
+        Ctx::AfterExport => export_items(),
+        Ctx::Pattern { scrutinee } => pattern_items(scrutinee.as_ref(), &found),
+        Ctx::VariantName { enum_name } => enum_variants(enum_name),
+        Ctx::ClassMember {
+            is_static,
+            is_private,
+        } => class_member_items(*is_static, *is_private),
+        Ctx::ImportPath { .. } => native_import_items(),
+        Ctx::ImportName { path } => import_name_items(path, None),
+    };
+    let items = if found.expected.is_none() {
+        case_first(items, &prefix)
+    } else {
+        items
+    };
+    filter(items, &prefix)
+}
+
+/// The native packages an `import` can name. Anything with `auto_prelude`
+/// (the stdlib: `table`, `math`, `io`, …) is already installed into every
+/// scope, so importing it is meaningless and it is left out.
+fn native_import_items() -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    for pkg in saule_runtime::native_packages::all() {
+        if pkg.auto_prelude {
+            continue;
+        }
+        items.push(sorted(
+            item(
+                pkg.name.to_string(),
+                CompletionItemKind::MODULE,
+                Some("native package".into()),
+            ),
+            "0",
+        ));
+    }
+    for name in saule_runtime::dynamic_packages::package_names() {
+        let n = saule_runtime::dynamic_packages::export_names(&name).len();
+        items.push(sorted(
+            item(
+                name,
+                CompletionItemKind::MODULE,
+                Some(format!("native package ({n} exported classes)")),
+            ),
+            "0",
+        ));
+    }
+    items
+}
+
+#[cfg(feature = "server")]
 impl Backend {
     pub(super) async fn completion_at(
         &self,
@@ -135,35 +222,7 @@ impl Backend {
         quoted: bool,
     ) -> Vec<CompletionItem> {
         let sep = if quoted { "/" } else { "." };
-        let mut items = Vec::new();
-
-        // Only packages that actually require an import. Anything with
-        // `auto_prelude` (the stdlib: `table`, `math`, `io`, …) is already
-        // installed into every scope, so importing it is meaningless.
-        for pkg in saule_runtime::native_packages::all() {
-            if pkg.auto_prelude {
-                continue;
-            }
-            items.push(sorted(
-                item(
-                    pkg.name.to_string(),
-                    CompletionItemKind::MODULE,
-                    Some("native package".into()),
-                ),
-                "0",
-            ));
-        }
-        for name in saule_runtime::dynamic_packages::package_names() {
-            let n = saule_runtime::dynamic_packages::export_names(&name).len();
-            items.push(sorted(
-                item(
-                    name,
-                    CompletionItemKind::MODULE,
-                    Some(format!("native package ({n} exported classes)")),
-                ),
-                "0",
-            ));
-        }
+        let mut items = native_import_items();
 
         // Dependencies declared in `saule.config`. These live outside the
         // workspace (`../json`) and are not under the project's own

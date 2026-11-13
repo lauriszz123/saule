@@ -3,13 +3,13 @@
 
 use super::*;
 use crate::server::sighelp::render_type;
+use lsp_types::{CompletionItem, CompletionItemKind};
 use saule_ast::{Decl, Expr, Module, Spanned, Stmt, Type};
 use saule_semantic::registry::{
     ClassRegistry, interface_extends, is_subtype_named, lookup_field_type, lookup_method,
     with_classes, with_enums, with_interfaces,
 };
 use saule_typeck::sigs::{self};
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 /// Classes usable as a base class. A class can't extend itself, and can't
 /// extend one of its own descendants either — that would close a cycle in the

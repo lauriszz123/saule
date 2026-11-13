@@ -6,7 +6,7 @@
 //! into the original UTF-8 source, so we precompute the byte offset of
 //! every line start once per document and resolve positions on demand.
 
-use tower_lsp::lsp_types::{Position, Range};
+use lsp_types::{Position, Range};
 
 /// Map from byte offsets in a UTF-8 source string to LSP positions.
 /// Cheap to build (O(n) one-pass scan) and cheap to query (binary search

@@ -9,10 +9,10 @@ pub(crate) use catalog::*;
 pub(crate) use render::*;
 
 use crate::server::sighelp::render_type;
+use lsp_types::{CompletionItem, CompletionItemKind};
 use saule_ast::{Decl, Expr, Spanned, Stmt};
 use saule_semantic::registry::{lookup_field_type, lookup_method, with_classes, with_enums};
 use saule_typeck::sigs::{self};
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use super::*;
 
