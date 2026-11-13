@@ -109,11 +109,15 @@ export function getRuntimeVersion(): string | null {
 
 let nextId = 1;
 
+type Job = 'run' | 'check' | 'format' | 'complete';
+
 /** A request waiting its turn. */
 interface Queued {
-	type: 'run' | 'check' | 'format';
+	type: Job;
 	source: string;
 	timeoutMs?: number;
+	/** The caret, for `complete`: a UTF-8 byte offset into `source`. */
+	offset?: number;
 	resolve: (json: string) => void;
 	reject: (reason: unknown) => void;
 }
@@ -136,9 +140,9 @@ class Channel {
 	}
 
 	/** Send one request, resolving with the JSON the module returned. */
-	send(type: 'run' | 'check' | 'format', source: string, timeoutMs?: number): Promise<string> {
+	send(type: Job, source: string, timeoutMs?: number, offset?: number): Promise<string> {
 		return new Promise<string>((resolve, reject) => {
-			this.queue.push({ type, source, timeoutMs, resolve, reject });
+			this.queue.push({ type, source, timeoutMs, offset, resolve, reject });
 			this.pump();
 		});
 	}
@@ -179,7 +183,7 @@ class Channel {
 					}, next.timeoutMs);
 
 		this.pending = { resolve: next.resolve, reject: next.reject, timeout };
-		this.worker.postMessage({ type: next.type, id, source: next.source });
+		this.worker.postMessage({ type: next.type, id, source: next.source, offset: next.offset });
 	}
 
 	/**
@@ -305,6 +309,35 @@ export async function checkSaule(source: string): Promise<Diagnostic[] | null> {
 }
 
 let checkTicket = 0;
+
+/** One suggestion from the language server's completion engine. */
+export interface SauleCompletion {
+	label: string;
+	/** CodeMirror's completion type: `method`, `variable`, `class`, … */
+	kind: string;
+	detail?: string;
+	/** Markdown documentation, when the item has any. */
+	doc?: string;
+}
+
+/**
+ * Completions at `offset` (a UTF-8 byte offset), ranked best first.
+ *
+ * The same engine the editor plugins use, run in the analysis worker: it
+ * parses the buffer, so it knows what is in scope and what type a receiver
+ * has. A request overtaken by a newer one resolves to `null`.
+ */
+export async function completeSaule(
+	source: string,
+	offset: number
+): Promise<SauleCompletion[] | null> {
+	const ticket = ++completeTicket;
+	const json = await analysis.send('complete', source, undefined, offset);
+	if (ticket !== completeTicket) return null;
+	return JSON.parse(json) as SauleCompletion[];
+}
+
+let completeTicket = 0;
 
 /** Pretty-print `source` — the same pass `saule fmt` runs. */
 export async function formatSaule(source: string): Promise<FormatResult> {

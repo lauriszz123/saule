@@ -1,0 +1,9 @@
+-- A member the class doesn't have, read through `any` so only the run can
+-- see it. Expected: "`Box` has no field or method `nope`", labelled "this is
+-- a `Box`", with the help listing its fields (`v`).
+class Box
+  v: integer = 1
+end
+
+local b: any = Box()
+println(b.nope)

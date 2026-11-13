@@ -68,7 +68,13 @@ pub fn register_sigs() {
         vec![t_named("T")],
     );
     let _ = any;
-    register("error", vec![t_named("string")], vec![t_named("nil")]);
+    // `error(msg, level?)`: `level` says whose line the error is reported at,
+    // as in Lua — 1 (the default) the function calling `error`, 2 its caller.
+    register(
+        "error",
+        vec![t_named("string"), t_nullable(t_named("integer"))],
+        vec![t_named("nil")],
+    );
 }
 
 fn builtin_print(args: &[Value]) -> Result<Value, String> {
@@ -136,10 +142,45 @@ fn builtin_assert(args: &[Value]) -> Result<Value, String> {
     Err(format!("assertion failed: {}", message.to_display_string()))
 }
 
+thread_local! {
+    /// The level the last `error(msg, level)` asked to be blamed at, waiting
+    /// for the VM to collect it with [`take_raised_level`].
+    static RAISED_LEVEL: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the native failure just returned came from `error()` and, if so,
+/// at which level: 1 is the function that called `error`, 2 its caller, and
+/// so on. Taking it clears it.
+///
+/// A native can only fail with a `String`, which leaves no room to say
+/// "this was raised on purpose, blame my caller". So `error` leaves the level
+/// here as it fails, and the VM, which is the only thing that knows where
+/// each level's call is, reads it back when it turns the `String` into a
+/// [`crate::error::RuntimeError`].
+pub fn take_raised_level() -> Option<u32> {
+    RAISED_LEVEL.with(|l| l.take())
+}
+
 fn builtin_error(args: &[Value]) -> Result<Value, String> {
     let msg = args
         .first()
         .cloned()
         .unwrap_or_else(|| Value::Str(SauleStr::new("error".to_string())));
+    let level = match args.get(1) {
+        None | Some(Value::Nil) => 1,
+        Some(Value::Int(n)) if *n >= 1 => u32::try_from(*n).unwrap_or(u32::MAX),
+        Some(Value::Int(n)) => {
+            return Err(format!(
+                "error level must be 1 or more (1 blames the function calling `error`, 2 its caller), got {n}"
+            ));
+        }
+        Some(other) => {
+            return Err(format!(
+                "error level must be an `integer`, got `{}`",
+                other.type_name()
+            ));
+        }
+    };
+    RAISED_LEVEL.with(|l| l.set(Some(level)));
     Err(msg.to_display_string())
 }

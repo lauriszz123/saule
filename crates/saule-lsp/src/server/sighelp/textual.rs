@@ -3,9 +3,9 @@
 //! Resolves the callee by name from raw text — no AST — so signature help
 //! still appears while the document is badly malformed.
 
+use lsp_types::SignatureHelp;
 use saule_ast::{Param, Type};
 use saule_semantic::{lookup_method, super_init_target, with_classes};
-use tower_lsp::lsp_types::SignatureHelp;
 
 use super::*;
 

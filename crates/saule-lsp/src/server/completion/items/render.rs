@@ -3,12 +3,10 @@
 //! applied to the finished list.
 
 use crate::server::sighelp::render_type;
+use lsp_types::{CompletionItem, CompletionItemKind, Documentation, MarkupContent, MarkupKind};
 use saule_ast::{Param, Type};
 use saule_semantic::MethodSig;
 use saule_typeck::sigs::NativeSig;
-use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, Documentation, MarkupContent, MarkupKind,
-};
 
 pub(crate) fn render_native_sig(name: &str, sig: &NativeSig) -> String {
     let mut params: Vec<String> = sig.params.iter().map(render_type).collect();

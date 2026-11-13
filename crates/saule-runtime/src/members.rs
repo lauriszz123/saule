@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::error::RuntimeError;
+use crate::error::{RuntimeError, a_type};
 use crate::value::{EnumObject, EnumVariantObject, NativeClosure, SauleStr, TableObject, Value};
 
 /// A callable that constructs a fresh `EnumVariant` carrying its arguments
@@ -90,13 +90,14 @@ pub fn read_member(
             if let Some(m) = inst_ref.class.lookup_static_method(name) {
                 return Ok(m.to_value());
             }
-            Err(RuntimeError::TypeError {
-                message: format!(
-                    "no field or method `{name}` on instance of class `{}` — available fields: (check class definition)",
-                    inst_ref.class.name
-                ),
+            let class = &inst_ref.class.name;
+            let fields = inst_ref.class.layout.names();
+            let err = RuntimeError::fault(
+                format!("`{class}` has no field or method `{name}`"),
+                format!("this is {}", a_type(class)),
                 span,
-            })
+            );
+            Err(err.with_help(member_help(class, fields)))
         }
         Value::Class(class) => {
             if let Some(v) = class.lookup_static_field(name) {
@@ -105,13 +106,7 @@ pub fn read_member(
             if let Some(m) = class.lookup_static_method(name) {
                 return Ok(m.to_value());
             }
-            Err(RuntimeError::TypeError {
-                message: format!(
-                    "no static member `{name}` on class `{}` — try `{}:` method notation or check if this is an instance method",
-                    class.name, class.name
-                ),
-                span,
-            })
+            Err(no_static_member(&class.name, name, span))
         }
         Value::Enum(enum_obj) => {
             if let Some(variant) = enum_obj.variants.get(name) {
@@ -124,13 +119,19 @@ pub fn read_member(
                     arity,
                 ));
             }
-            Err(RuntimeError::TypeError {
-                message: format!(
-                    "no variant `{name}` on enum `{}` — check enum definition",
-                    enum_obj.name
-                ),
+            let mut variants: Vec<&str> = enum_obj
+                .variants
+                .keys()
+                .chain(enum_obj.tuple_variants.keys())
+                .map(String::as_str)
+                .collect();
+            variants.sort_unstable();
+            Err(RuntimeError::fault(
+                format!("enum `{}` has no variant `{name}`", enum_obj.name),
+                format!("`{}` is an enum", enum_obj.name),
                 span,
-            })
+            )
+            .with_help(format!("its variants are `{}`", variants.join("`, `"))))
         }
         Value::EnumVariant(variant) => match name {
             "value" => Ok(variant
@@ -145,13 +146,18 @@ pub fn read_member(
                 {
                     return Ok(m.to_value());
                 }
-                Err(RuntimeError::TypeError {
-                    message: format!(
-                        "no property or method `{name}` on enum variant `{}.{}`",
+                Err(RuntimeError::fault(
+                    format!(
+                        "enum variant `{}.{}` has no property or method `{name}`",
                         variant.enum_name, variant.variant_name
                     ),
+                    format!("this is `{}.{}`", variant.enum_name, variant.variant_name),
                     span,
-                })
+                )
+                .with_help(format!(
+                    "a variant has `name` and `value`, plus the methods declared in `enum {}`",
+                    variant.enum_name
+                )))
             }
         },
         // Lua-style table access: `t.foo` is sugar for `t["foo"]`. Misses
@@ -169,22 +175,54 @@ pub fn read_member(
             if let Some(m) = obj.class.methods.get(name) {
                 return Ok(m.clone());
             }
-            Err(RuntimeError::TypeError {
-                message: format!(
-                    "no property or method `{name}` on instance of class `{}`",
-                    obj.class.name
-                ),
+            Err(RuntimeError::fault(
+                format!("`{}` has no property or method `{name}`", obj.class.name),
+                format!("this is {}", a_type(&obj.class.name)),
                 span,
-            })
+            ))
         }
-        other => Err(RuntimeError::TypeError {
-            message: format!(
-                "cannot read field `{name}` on value of type `{}` — only instances, classes, enums, and tables have members",
-                other.type_name()
-            ),
+        other => Err(RuntimeError::fault(
+            format!("cannot read `.{name}` from {}", a_type(other.type_name())),
+            format!("this is {}, which has no members", a_type(other.type_name())),
             span,
-        }),
+        )
+        .with_help(
+            "only objects, classes, enums and tables have members; check that this holds the value you expect",
+        )),
     }
+}
+
+/// The help for a member that isn't there: what is there, and the usual
+/// reason — a typo. Shared by a read and a method call.
+pub(crate) fn member_help(class: &str, fields: &[Rc<str>]) -> String {
+    if fields.is_empty() {
+        format!(
+            "check the spelling against `class {class}` (names are case-sensitive), or add the member there"
+        )
+    } else {
+        format!(
+            "`{class}` has the field{} `{}`. Check the spelling (names are case-sensitive), or add the member to `class {class}`",
+            if fields.len() == 1 { "" } else { "s" },
+            fields.join("`, `")
+        )
+    }
+}
+
+/// `Class.name` where the class has no static `name`. Shared by a read and a
+/// call, which have to say the same thing.
+pub(crate) fn no_static_member(
+    class: &str,
+    name: &str,
+    span: std::ops::Range<usize>,
+) -> RuntimeError {
+    RuntimeError::fault(
+        format!("class `{class}` has no static member `{name}`"),
+        format!("`{class}` here is the class itself, not an object made from it"),
+        span,
+    )
+    .with_help(format!(
+        "if `{name}` belongs to each object, make one first and use that: `local x = {class}(…)` then `x.{name}`"
+    ))
 }
 
 /// Write `receiver.name = value`.
@@ -205,16 +243,25 @@ pub fn write_member(
                 return Ok(());
             }
             let class = inst.borrow().class.name.clone();
-            let known = inst.borrow().class.layout.names().join("`, `");
-            Err(RuntimeError::TypeError {
-                message: if known.is_empty() {
-                    format!("class `{class}` declares no instance field `{name}`")
-                } else {
-                    format!(
-                        "class `{class}` declares no instance field `{name}` — it has `{known}`"
-                    )
-                },
+            let names = inst.borrow().class.layout.names().to_vec();
+            let known = format!(
+                "the field{} `{}`",
+                if names.len() == 1 { "" } else { "s" },
+                names.join("`, `")
+            );
+            let err = RuntimeError::fault(
+                format!("class `{class}` has no field `{name}`"),
+                "assigned here",
                 span,
+            );
+            Err(if names.is_empty() {
+                err.with_help(format!(
+                    "`{class}` declares no fields; declare `{name}` in `class {class}` to give its objects one"
+                ))
+            } else {
+                err.with_help(format!(
+                    "`{class}` has {known}. Check the spelling, or declare `{name}` in `class {class}` — an object only has the fields its class declares"
+                ))
             })
         }
         Value::Class(class) => {
@@ -235,7 +282,7 @@ pub fn write_member(
             items
                 .borrow_mut()
                 .set(&key, value)
-                .map_err(|message| RuntimeError::TypeError { message, span })
+                .map_err(|message| table_write_failed(message, span))
         }
         // An object of a native class: a property with a setter.
         Value::Foreign(obj) => {
@@ -244,21 +291,34 @@ pub fn write_member(
                 return Ok(());
             }
             let class = &obj.class.name;
-            Err(RuntimeError::TypeError {
-                message: if obj.class.getters.contains_key(name) {
-                    format!("`{class}.{name}` is read-only: the class defines no setter for it")
-                } else {
-                    format!("class `{class}` has no property `{name}` to assign")
-                },
-                span,
+            Err(if obj.class.getters.contains_key(name) {
+                RuntimeError::fault(
+                    format!("`{class}.{name}` is read-only"),
+                    "assigned here",
+                    span,
+                )
+                .with_help(format!("`{class}` lets `{name}` be read, but defines no setter for it"))
+            } else {
+                RuntimeError::fault(
+                    format!("`{class}` has no property `{name}`"),
+                    "assigned here",
+                    span,
+                )
             })
         }
-        other => Err(RuntimeError::TypeError {
-            message: format!(
-                "cannot assign field `{name}` on value of type `{}` — only instances and classes can have fields assigned",
-                other.type_name()
-            ),
+        other => Err(RuntimeError::fault(
+            format!("cannot set `.{name}` on {}", a_type(other.type_name())),
+            format!("this is {}, which has no fields", a_type(other.type_name())),
             span,
-        }),
+        )
+        .with_help(
+            "only objects, classes and tables have fields to set; check that this holds the value you expect",
+        )),
     }
+}
+
+/// A table refusing a write — a `nil` or NaN key. The table says why; this
+/// says where.
+pub fn table_write_failed(message: String, span: std::ops::Range<usize>) -> RuntimeError {
+    RuntimeError::native(message, None, span).relabel("the key used here")
 }

@@ -1,15 +1,14 @@
 /**
  * Completion and hover for the playground's editor.
  *
- * The data is `stdlib-index.json`, generated from DOCS.md by
- * `scripts/gen-stdlib-index.mjs` — so every signature the editor offers is
- * one the reference documents and one the examples were run against. There
- * is no second list to keep in step.
+ * **Completion** is the language server's own engine (`saule-lsp`, compiled
+ * into the wasm module and run in the analysis worker), so the playground
+ * suggests what the editor plugins do: the receiver's members after a `.`,
+ * the locals in scope for a bare word, ranked by what fits. Only if the
+ * runtime cannot load does it fall back to the static list below.
  *
- * This is deliberately *not* a language server. There is no type inference
- * here, and there is no attempt at one: a completion that guesses wrong
- * about a receiver's type is worse than a list the reader can skim. What it
- * knows is the shape of the text around the cursor.
+ * **Hover**, and that fallback, read `stdlib-index.json`, generated from
+ * DOCS.md by `scripts/gen-stdlib-index.mjs`.
  */
 
 import {
@@ -23,6 +22,7 @@ import { syntaxTree } from '@codemirror/language';
 import type { EditorState, Extension } from '@codemirror/state';
 
 import index from './stdlib-index.json';
+import { completeSaule, type SauleCompletion } from './runtime';
 
 interface Entry {
 	label: string;
@@ -204,8 +204,126 @@ function withBase(href: string): string {
 	return `${base}${href}`;
 }
 
+/** Set once the engine has failed to load; from then on, the static list. */
+let engineDown = false;
+
+/** UTF-8 length of `text`, which is how the engine counts offsets. */
+const utf8 = new TextEncoder();
+
 /**
- * What to offer at the cursor.
+ * What to offer at the cursor, from the language server's engine.
+ *
+ * The engine decides the context itself — member, value, type, pattern,
+ * import — from a real parse, and returns its list filtered and ranked. So
+ * the list is shown as given (`filter: false`) and re-asked on every
+ * keystroke rather than narrowed client-side, which would re-rank it by
+ * CodeMirror's fuzzy score and undo the engine's ordering.
+ */
+async function engineSource(context: CompletionContext): Promise<CompletionResult | null> {
+	if (engineDown) return staticSource(context);
+
+	const word = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/);
+	const from = word ? word.from : context.pos;
+	const before = context.state.sliceDoc(Math.max(0, from - 1), from);
+	// Open on a word being typed, right after a `.` or `:` (a member or a
+	// type), or when asked for explicitly with Ctrl-Space.
+	const typed = word !== null && word.from < word.to;
+	if (!typed && !context.explicit && before !== '.' && before !== ':') return null;
+
+	const doc = context.state.doc.toString();
+	const offset = utf8.encode(doc.slice(0, context.pos)).length;
+
+	let items: SauleCompletion[] | null;
+	try {
+		items = await completeSaule(doc, offset);
+	} catch {
+		engineDown = true;
+		return staticSource(context);
+	}
+	// Superseded by a newer request, or the editor moved on meanwhile.
+	if (items === null || context.aborted) return null;
+	if (items.length === 0) return null;
+
+	const options: Completion[] = items.map((c, i) => ({
+		label: c.label,
+		type: c.kind,
+		detail: c.detail,
+		info: c.doc ? () => markdownInfo(c.doc!) : undefined,
+		// Ignored for ordering under `filter: false`, but kept in step with
+		// the engine's rank in case CodeMirror ever consults it.
+		boost: Math.max(-99, 99 - i),
+	}));
+
+	// Block snippets where a statement can start — the engine offers
+	// keywords exactly there.
+	if (!word || before !== '.') {
+		const keywords = new Set(items.filter((c) => c.kind === 'keyword').map((c) => c.label));
+		const prefix = word ? word.text : '';
+		for (const [label, template] of SNIPPETS) {
+			if (!keywords.has(label) || !label.startsWith(prefix)) continue;
+			options.push({
+				label,
+				type: 'text',
+				detail: 'snippet',
+				apply: applySnippet(template),
+			});
+		}
+	}
+
+	return { from, options, filter: false };
+}
+
+/**
+ * The engine's documentation, which is Markdown: fenced code becomes a
+ * signature block, prose becomes paragraphs. Enough for what the docs
+ * contain, without a Markdown dependency.
+ */
+function markdownInfo(md: string): HTMLElement {
+	const wrap = document.createElement('div');
+	wrap.className = 'cm-saule-info';
+	// The stdlib's docs end in a link to the reference; it goes in the
+	// card's footer, as on the static cards, rather than in the prose.
+	// Widened by hand: TypeScript does not see the callback assign it.
+	let href = null as string | null;
+	md = md.replace(/\[Full reference[^\]]*\]\(([^)]+)\)/, (_m, url: string) => {
+		href = url;
+		return '';
+	});
+	const parts = md.split(/```[a-z]*\n?/);
+	parts.forEach((part, i) => {
+		const text = part.trim();
+		if (!text) return;
+		if (i % 2 === 1) {
+			const sig = document.createElement('div');
+			sig.className = 'cm-saule-info-sig';
+			sig.textContent = text;
+			wrap.append(sig);
+			return;
+		}
+		for (const para of text.split(/\n\s*\n/)) {
+			const p = document.createElement('p');
+			p.className = 'cm-saule-info-body';
+			p.textContent = plain(para.replace(/^#+\s*/gm, '').replace(/^---$/gm, ''));
+			if (p.textContent) wrap.append(p);
+		}
+	});
+	if (href) {
+		const foot = document.createElement('div');
+		foot.className = 'cm-saule-info-foot';
+		foot.append(document.createElement('span'));
+		const link = document.createElement('a');
+		link.href = href;
+		link.target = '_blank';
+		link.rel = 'noreferrer';
+		link.textContent = 'Reference ↗';
+		foot.append(link);
+		wrap.append(foot);
+	}
+	return wrap;
+}
+
+/**
+ * The fallback: what to offer at the cursor without the engine.
  *
  * Three shapes, in the order they are tested:
  *
@@ -216,7 +334,7 @@ function withBase(href: string): string {
  *     filtering by what is typed does the rest.
  *   * a bare word — modules, prelude functions, keywords, types, snippets.
  */
-function source(context: CompletionContext): CompletionResult | null {
+function staticSource(context: CompletionContext): CompletionResult | null {
 	const dotted = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_]*/);
 	if (dotted) {
 		const [receiver, typed] = dotted.text.split('.');
@@ -366,7 +484,7 @@ function hover(state: EditorState, pos: number): Tooltip | null {
 export function sauleDocs(): Extension {
 	return [
 		autocompletion({
-			override: [source],
+			override: [engineSource],
 			activateOnTyping: true,
 			icons: false,
 			maxRenderedOptions: 40,

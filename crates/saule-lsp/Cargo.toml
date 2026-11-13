@@ -5,13 +5,36 @@ edition.workspace = true
 description.workspace = true
 license.workspace = true
 
+# The analysis itself — completion first — is a library, so the web
+# playground (`saule-wasm`) can link the same engine the editors get. The
+# library builds without `server`; only the binary needs it.
+[lib]
+name = "saule_lsp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "saule-lsp"
 path = "src/main.rs"
+required-features = ["server"]
+
+[features]
+default = ["server"]
+# The language server proper: the tower-lsp service, its async runtime, the
+# incremental database, and native package loading. None of it builds for
+# wasm32, and none of it is needed to answer a completion for one buffer.
+server = [
+	"dep:tower-lsp",
+	"dep:tokio",
+	"dep:dashmap",
+	"dep:saule-db",
+	"dep:saule-vm",
+	"saule-runtime/native-packages",
+	"saule-vm/native-packages",
+]
 
 [dependencies]
 saule-ast = { path = "../saule-ast" }
-saule-db = { path = "../saule-db" }
+saule-db = { path = "../saule-db", optional = true }
 saule-project = { path = "../saule-project" }
 saule-version = { path = "../saule-version" }
 saule-docs = { path = "../saule-docs" }
@@ -19,12 +42,16 @@ saule-lexer = { path = "../saule-lexer" }
 saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
 saule-typeck = { path = "../saule-typeck" }
-saule-runtime = { path = "../saule-runtime" }
-saule-vm = { path = "../saule-vm" }
+saule-runtime = { path = "../saule-runtime", default-features = false }
+saule-vm = { path = "../saule-vm", default-features = false, optional = true }
 saule-fmt = { path = "../saule-fmt" }
 miette = "7.6.0"
-tower-lsp = "0.20"
-tokio = { version = "1", features = [
+# The protocol's data types, used directly so the library does not need
+# tower-lsp. The same version tower-lsp 0.20 re-exports, so the two are one
+# crate and `tower_lsp::lsp_types::X` and `lsp_types::X` are the same type.
+lsp-types = "0.94.1"
+tower-lsp = { version = "0.20", optional = true }
+tokio = { version = "1", optional = true, features = [
 	"rt-multi-thread",
 	"io-std",
 	# `io-util` carries the AsyncRead/AsyncWrite extension traits and
@@ -33,6 +60,6 @@ tokio = { version = "1", features = [
 	"macros",
 	"sync",
 ] }
-dashmap = "6"
+dashmap = { version = "6", optional = true }
 # For `Registration.register_options`, which is a raw `serde_json::Value`.
 serde_json = "1"

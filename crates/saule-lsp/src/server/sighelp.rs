@@ -36,14 +36,19 @@ pub(crate) use repair::*;
 pub(crate) use textual::*;
 pub(crate) use walk::*;
 
+use lsp_types::SignatureHelp;
+#[cfg(feature = "server")]
+use lsp_types::{Position, Url};
 use saule_ast::{Module, Param, Type};
 use saule_semantic::{lookup_function, lookup_method, with_classes};
-use tower_lsp::lsp_types::{Position, SignatureHelp, Url};
 
+#[cfg(feature = "server")]
 use crate::line_index::LineIndex;
 
+#[cfg(feature = "server")]
 use super::{Backend, canonical};
 
+#[cfg(feature = "server")]
 impl Backend {
     /// Resolve signature help at `pos` inside `uri`. Returns `None`
     /// when the cursor isn't inside any call's arg list, the callee
@@ -123,6 +128,7 @@ impl Backend {
     }
 }
 
+#[cfg(feature = "server")]
 impl Backend {
     /// Log one line per signature-help request to the client's LSP
     /// console: the caret's line as *the server* has it, with `[|]`
@@ -162,7 +168,7 @@ impl Backend {
             .unwrap_or("<none>");
         self.client
             .log_message(
-                tower_lsp::lsp_types::MessageType::INFO,
+                lsp_types::MessageType::INFO,
                 format!(
                     "sighelp {}:{} -> {got}  ::  {marked}",
                     pos.line, pos.character

@@ -204,10 +204,9 @@ pub fn call_value(
     match callee {
         Value::Native(nf) => (nf.func)(args)
             .map(|v| vec![v])
-            .map_err(|message| RuntimeError::TypeError { message, span }),
-        Value::NativeClosure(nc) => {
-            (nc.func)(args).map_err(|message| RuntimeError::TypeError { message, span })
-        }
+            .map_err(|message| RuntimeError::from_native_call(message, nf.name, span)),
+        Value::NativeClosure(nc) => (nc.func)(args)
+            .map_err(|message| RuntimeError::from_native_call(message, nc.name, span)),
         // A bytecode function: the VM runs it on a fresh register file over
         // its existing shared state.
         Value::VmFunction(f) => f.invoke(args, span),
@@ -300,13 +299,12 @@ pub fn call_method(
             if let Some(v) = inst.borrow().field(name).cloned() {
                 return call_value(&v, args, span);
             }
-            Err(RuntimeError::TypeError {
-                message: format!(
-                    "no method or field `{name}` on instance of class `{}` — instance members are case-sensitive",
-                    class.name
-                ),
+            Err(RuntimeError::fault(
+                format!("`{}` has no method `{name}`", class.name),
+                format!("this is {}", crate::error::a_type(&class.name)),
                 span,
-            })
+            )
+            .with_help(crate::members::member_help(&class.name, class.layout.names())))
         }
         Value::Class(class) => call_static(class, name, args, span),
         Value::EnumVariant(variant) => {
@@ -339,10 +337,11 @@ pub fn call_method(
             }
         }
         Value::File(handle) => crate::stdlib::io::dispatch_file_method(handle, name, args)
-            .map_err(|message| RuntimeError::TypeError { message, span }),
+            .map_err(|message| RuntimeError::native(message, Some(&format!("File.{name}")), span)),
         Value::Process(handle) => {
-            crate::stdlib::process::dispatch_process_method(handle, name, args)
-                .map_err(|message| RuntimeError::TypeError { message, span })
+            crate::stdlib::process::dispatch_process_method(handle, name, args).map_err(|message| {
+                RuntimeError::native(message, Some(&format!("Process.{name}")), span)
+            })
         }
         Value::Coroutine(c) => c.call_method(name, args, span),
         // An object of a native class: its method takes the object as
@@ -379,11 +378,5 @@ pub fn call_static(
     if let Some(v) = class.lookup_static_field(name) {
         return call_value(&v, args, span);
     }
-    Err(RuntimeError::TypeError {
-        message: format!(
-            "no static member `{name}` on class `{}` — check the class definition for the correct name",
-            class.name
-        ),
-        span,
-    })
+    Err(crate::members::no_static_member(&class.name, name, span))
 }

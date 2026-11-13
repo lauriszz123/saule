@@ -4,10 +4,8 @@
 //! highlighted by byte ranges into that label rather than by index, which
 //! is what lets clients underline the right span.
 
+use lsp_types::{ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation};
 use saule_ast::{Param, Type};
-use tower_lsp::lsp_types::{
-    ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation,
-};
 
 use super::*;
 

@@ -17,23 +17,41 @@
 //! the analyse → publish pipeline, [`format`] for formatting,
 //! [`hover`] for hover, and [`nav`] for goto-definition / references.
 
-mod completion;
+//!
+//! Without the `server` feature only the editor-independent engines are
+//! compiled — completion and signature help — which is what the web
+//! playground links. Everything that needs a `Backend` is gated.
+
+pub(crate) mod completion;
+#[cfg(feature = "server")]
 mod diagnostics;
+#[cfg(feature = "server")]
 mod format;
+#[cfg(feature = "server")]
 mod highlight;
+#[cfg(feature = "server")]
 mod hover;
+#[cfg(feature = "server")]
 mod inlay;
 mod native_names;
+#[cfg(feature = "server")]
 mod nav;
 mod sighelp;
+#[cfg(feature = "server")]
 mod symbols;
 
+#[cfg(feature = "server")]
 use std::collections::HashSet;
+#[cfg(feature = "server")]
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "server")]
 use dashmap::DashMap;
+#[cfg(feature = "server")]
 use tokio::sync::Mutex;
+#[cfg(feature = "server")]
 use tower_lsp::jsonrpc::Result;
+#[cfg(feature = "server")]
 use tower_lsp::lsp_types::{
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
@@ -46,18 +64,23 @@ use tower_lsp::lsp_types::{
     SignatureHelp, SignatureHelpOptions, SignatureHelpParams, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
 };
+#[cfg(feature = "server")]
 use tower_lsp::{Client, LanguageServer};
+
+pub use completion::complete;
 
 /// Per-document state: the latest source we've been told about plus the
 /// client's version counter. Stored verbatim so any part of the pipeline
 /// (diagnostics today, formatting / hover later) can re-run against the
 /// authoritative text without re-reading from disk or trusting whatever
 /// snapshot the request happens to carry.
+#[cfg(feature = "server")]
 pub(crate) struct Document {
     pub(crate) source: String,
     pub(crate) version: i32,
 }
 
+#[cfg(feature = "server")]
 pub struct Backend {
     pub(crate) client: Client,
     /// Open documents, keyed by URI string. `DashMap` lets independent
@@ -125,6 +148,7 @@ pub struct Backend {
     pub(crate) watched_files_dynamic: Mutex<bool>,
 }
 
+#[cfg(feature = "server")]
 impl Backend {
     /// The recovered tree for `source`, using what a previous clean parse of
     /// the same document knew about it — and refreshing that knowledge when
@@ -193,6 +217,7 @@ impl Backend {
     }
 }
 
+#[cfg(feature = "server")]
 impl Backend {
     /// The import seed for `module`: what its imports bring into scope.
     ///
@@ -366,6 +391,7 @@ impl Backend {
     }
 }
 
+#[cfg(feature = "server")]
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
@@ -736,6 +762,7 @@ impl LanguageServer for Backend {
 /// Canonicalise a path, falling back to the input on failure. Used as
 /// the stable key shape for `workspace_files` and `rev_imports` so the
 /// same file referenced via different relative spellings hashes equally.
+#[cfg(feature = "server")]
 pub(crate) fn canonical(p: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(p).ok()
 }
@@ -743,6 +770,7 @@ pub(crate) fn canonical(p: &Path) -> Option<PathBuf> {
 /// Convert an absolute file path to a `file://` URI suitable for
 /// `publishDiagnostics`. Returns `None` if the path isn't absolute or
 /// contains invalid UTF-8 the URI crate rejects.
+#[cfg(feature = "server")]
 pub(crate) fn path_to_uri(p: &Path) -> Option<Url> {
     Url::from_file_path(p).ok()
 }

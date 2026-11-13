@@ -1,0 +1,8 @@
+-- `error` is not `throw`: a `catch` of the matching type does not intercept
+-- it, and the program ends with "boom".
+try
+  error("boom")
+catch e: string
+  println("caught " .. e)
+end
+println("unreachable")

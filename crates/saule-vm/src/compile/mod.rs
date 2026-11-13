@@ -144,7 +144,10 @@ pub(crate) fn declared_later(name: &str, reached: bool, span: Range<usize>) -> C
              module body runs from top to bottom"
         )
     };
-    CompileError::Rejected(saule_runtime::RuntimeError::TypeError { message, span })
+    CompileError::Rejected(
+        saule_runtime::RuntimeError::native(message, None, span)
+            .relabel(format!("`{name}` used before it is declared")),
+    )
 }
 
 /// `class X implements I` where `X` lacks some of `I`'s methods: `missing` is
@@ -159,13 +162,17 @@ pub(crate) fn missing_methods(
         .map(|(iface, method)| format!("`{method}` from interface `{iface}`"))
         .collect::<Vec<_>>()
         .join(", ");
-    CompileError::Rejected(saule_runtime::RuntimeError::TypeError {
-        message: format!(
-            "class `{class}` is missing method{}: {list}",
-            if missing.len() == 1 { "" } else { "s" }
-        ),
-        span,
-    })
+    CompileError::Rejected(
+        saule_runtime::RuntimeError::fault(
+            format!(
+                "class `{class}` is missing method{}: {list}",
+                if missing.len() == 1 { "" } else { "s" }
+            ),
+            format!("`{class}` declared here"),
+            span,
+        )
+        .with_help("a class must define every method of each interface it implements"),
+    )
 }
 
 pub(crate) fn literal_value(e: &saule_ast::Expr) -> Option<saule_runtime::Value> {

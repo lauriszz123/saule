@@ -1,0 +1,6 @@
+-- A step of 0 would never reach the end of the loop. Expected: "`for` loop
+-- step cannot be 0", the caret on `step` labelled "the step here is 0".
+local step: integer = 0
+for i = 1, 3, step do
+  println(i)
+end

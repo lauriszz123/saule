@@ -19,39 +19,103 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+/// A type's name with the article English puts in front of it, for a
+/// diagnostic that says "this is …": "a `string`", "an `integer`", "an
+/// `Item`", and `nil` bare, since there is only one.
+pub fn a_type(name: &str) -> String {
+    match name {
+        "nil" => "`nil`".to_string(),
+        _ if name.starts_with(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']) => {
+            format!("an `{name}`")
+        }
+        _ => format!("a `{name}`"),
+    }
+}
+
 #[derive(Debug, Error, Diagnostic)]
 pub enum RuntimeError {
-    #[error("type error: {message}")]
-    TypeError {
+    /// A failure the program can cause, which the checker could not rule out:
+    /// an operand of the wrong kind arriving through `any`, a member that
+    /// isn't there, a built-in function rejecting its argument.
+    ///
+    /// Written the way a Rust diagnostic is, in three parts that each do one
+    /// job: `message` says what went wrong and nothing else; `label`, under
+    /// the caret, says what *this* expression has to do with it ("this is a
+    /// `string`"); `help` says what to change. Advice never goes in the
+    /// message, where it turns a title into a paragraph.
+    ///
+    /// Build one with [`RuntimeError::fault`], or [`RuntimeError::native`]
+    /// for a built-in function's `Err(String)`.
+    #[error("{message}")]
+    Fault {
         message: String,
-        #[label("type mismatch or invalid operation")]
+        #[label("{label}")]
         span: std::ops::Range<usize>,
-    },
-
-    #[error("argument error: {message}")]
-    ArgumentError {
-        message: String,
+        label: String,
         #[help]
         help: Option<String>,
-        #[label("invalid or missing call argument")]
+    },
+
+    /// A broken invariant inside the engine: a chunk disagreeing with the
+    /// layout it was compiled against, an opcode that cannot occur. Never the
+    /// program's fault, and the message says so rather than leaving the
+    /// reader to wonder what they did wrong.
+    #[error("internal error: {}", .message.trim_start_matches("internal: "))]
+    #[diagnostic(help(
+        "this is a bug in Saule, not in your program — please report it, with the program that triggered it, at https://github.com/lauriszz123/saule/issues"
+    ))]
+    Internal {
+        message: String,
+        #[label("while running this")]
         span: std::ops::Range<usize>,
     },
 
-    #[error("cannot mix `integer` and `float` in arithmetic — type mismatch")]
+    /// `error(msg, level)` — a failure the program raised on purpose.
+    ///
+    /// Its own variant because nothing went wrong with the *language* here:
+    /// the message is the program's, so it is shown as written, with no
+    /// category in front of it. `span` is the call at `level`: the `error`
+    /// call itself at level 1, the call into the function that raised it at
+    /// level 2.
+    #[error("{message}")]
+    Raised {
+        message: String,
+        #[label("{label}")]
+        span: std::ops::Range<usize>,
+        /// What the caret says, which depends on whose line it is.
+        label: String,
+        /// Where `error` itself was called — the same as `span` at level 1.
+        /// The stack trace's innermost frame is reported at this line, not
+        /// at the line the level blames.
+        origin: usize,
+    },
+
+    #[error("cannot mix an `integer` and a `float` in arithmetic")]
+    #[diagnostic(help(
+        "convert one side so both match: `(n as float)` keeps the fraction, `(x as integer)` drops it"
+    ))]
     NumericMix {
-        #[label("cast one side with `as integer` / `as float` to make the types match")]
+        #[label("one side is an `integer`, the other a `float`")]
         span: std::ops::Range<usize>,
     },
 
-    #[error("division by zero — cannot divide by 0")]
+    /// Integer `/` or `%` by zero. Float division by zero is not an error —
+    /// it is `inf` or NaN, as IEEE 754 says.
+    #[error("integer division by zero")]
+    #[diagnostic(help(
+        "check the divisor first: `if d != 0 then … end` (float division by zero gives `inf` instead)"
+    ))]
     DivisionByZero {
-        #[label("ensure the divisor is not zero")]
+        #[label("the divisor here is 0")]
         span: std::ops::Range<usize>,
     },
 
-    #[error("numeric `for` loop requires a non-zero step value")]
+    #[error("`for` loop step cannot be 0")]
+    #[diagnostic(help(
+        "a step of 0 never reaches the limit; use a positive step to count up or a negative one to count down, e.g. `for i = 10, 1, -1 do`"
+    ))]
     ZeroStep {
-        #[label("step cannot be 0 — use a positive or negative number")]
+        #[label("the step here is 0")]
         span: std::ops::Range<usize>,
     },
 
@@ -168,6 +232,97 @@ pub enum RuntimeError {
 }
 
 impl RuntimeError {
+    /// A [`RuntimeError::Fault`] with no help yet; add one with
+    /// [`with_help`](Self::with_help).
+    pub fn fault(
+        message: impl Into<String>,
+        label: impl Into<String>,
+        span: std::ops::Range<usize>,
+    ) -> RuntimeError {
+        RuntimeError::Fault {
+            message: message.into(),
+            span,
+            label: label.into(),
+            help: None,
+        }
+    }
+
+    /// Attach the line that says what to do about it. A no-op on any variant
+    /// but [`RuntimeError::Fault`], whose others carry fixed advice.
+    pub fn with_help(mut self, text: impl Into<String>) -> RuntimeError {
+        if let RuntimeError::Fault { help, .. } = &mut self {
+            *help = Some(text.into());
+        }
+        self
+    }
+
+    /// Replace what the caret says. A no-op on any variant but
+    /// [`RuntimeError::Fault`].
+    pub fn relabel(mut self, text: impl Into<String>) -> RuntimeError {
+        if let RuntimeError::Fault { label, .. } = &mut self {
+            *label = text.into();
+        }
+        self
+    }
+
+    /// What a built-in function's `Err(message)` becomes.
+    ///
+    /// Built-ins can only fail with a `String`, and there are hundreds of
+    /// them, each written as "what went wrong — what to do". So the one rule
+    /// lives here: the part before the first ` — ` is the message, the part
+    /// after it the help, and the caret names the function that refused —
+    /// which, from the call site alone, is often not obvious in a chain.
+    pub fn native(
+        message: String,
+        function: Option<&str>,
+        span: std::ops::Range<usize>,
+    ) -> RuntimeError {
+        let (title, help) = match message.split_once(" — ") {
+            Some((title, help)) => (title.to_string(), Some(help.to_string())),
+            None => (message, None),
+        };
+        // "Table.insert: position 5 out of range" — the label below already
+        // names the function, so the title needn't.
+        let title = match function.and_then(|f| title.strip_prefix(f)) {
+            Some(rest) if rest.starts_with(": ") => rest[2..].to_string(),
+            _ => title,
+        };
+        let label = match function {
+            Some("assert") => "this assertion failed".to_string(),
+            Some(name) if !name.is_empty() => format!("`{name}` failed here"),
+            _ => "failed here".to_string(),
+        };
+        RuntimeError::Fault {
+            message: title,
+            span,
+            label,
+            help,
+        }
+    }
+
+    /// [`native`](Self::native), unless the failure was `error()` raising on
+    /// purpose, which becomes [`RuntimeError::Raised`] at its own call.
+    ///
+    /// For the callers that have no stack to blame a level against — a
+    /// built-in calling another one back. Taking the level here, rather than
+    /// leaving it, is what stops it from attaching to some later failure.
+    pub fn from_native_call(
+        message: String,
+        function: &str,
+        span: std::ops::Range<usize>,
+    ) -> RuntimeError {
+        if crate::stdlib::core::take_raised_level().is_some() {
+            let origin = span.start;
+            return RuntimeError::Raised {
+                message,
+                span,
+                label: "raised here".to_string(),
+                origin,
+            };
+        }
+        RuntimeError::native(message, Some(function), span)
+    }
+
     /// "this value cannot be called".
     ///
     /// Written once because it is reached from two unrelated places — the
@@ -175,11 +330,24 @@ impl RuntimeError {
     /// register holding something that is not a function — and a program
     /// failing here has to fail the same way whichever reached it.
     pub fn not_callable(type_name: &str, span: std::ops::Range<usize>) -> RuntimeError {
-        RuntimeError::TypeError {
-            message: format!(
-                "value of type `{type_name}` is not callable — only functions, classes, and methods can be called"
-            ),
+        RuntimeError::fault(
+            format!("cannot call {}", a_type(type_name)),
+            format!("this is {}, not a function", a_type(type_name)),
             span,
+        )
+        .with_help(
+            "only functions and classes can be called; check that this variable holds the function you expect",
+        )
+    }
+
+    /// The message alone, for a caller that has nowhere to put a label or a
+    /// help — a native package receiving the failure of a callback it made.
+    pub fn message_text(&self) -> String {
+        match self {
+            RuntimeError::Fault { message, .. }
+            | RuntimeError::Raised { message, .. }
+            | RuntimeError::Internal { message, .. } => message.clone(),
+            other => other.to_string(),
         }
     }
 }
@@ -245,5 +413,101 @@ impl ImportedDiagnostic {
             span,
             label,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miette::Diagnostic;
+
+    fn parts(e: &RuntimeError) -> (String, String, Option<String>) {
+        let label = e
+            .labels()
+            .and_then(|mut l| l.next())
+            .and_then(|l| l.label().map(str::to_string))
+            .unwrap_or_default();
+        (e.to_string(), label, e.help().map(|h| h.to_string()))
+    }
+
+    #[test]
+    fn a_type_picks_the_article() {
+        assert_eq!(a_type("string"), "a `string`");
+        assert_eq!(a_type("integer"), "an `integer`");
+        assert_eq!(a_type("Item"), "an `Item`");
+        assert_eq!(a_type("Box"), "a `Box`");
+        assert_eq!(a_type("nil"), "`nil`");
+    }
+
+    #[test]
+    fn a_natives_advice_moves_from_the_message_to_the_help() {
+        let e = RuntimeError::native("bad thing — do this instead".into(), Some("Foo.bar"), 0..1);
+        assert_eq!(
+            parts(&e),
+            (
+                "bad thing".into(),
+                "`Foo.bar` failed here".into(),
+                Some("do this instead".into())
+            )
+        );
+    }
+
+    #[test]
+    fn only_the_first_dash_splits() {
+        let e = RuntimeError::native("a — b — c".into(), None, 0..1);
+        assert_eq!(
+            parts(&e),
+            ("a".into(), "failed here".into(), Some("b — c".into()))
+        );
+    }
+
+    #[test]
+    fn a_message_without_advice_has_no_help() {
+        let e = RuntimeError::native("just this".into(), Some("f"), 0..1);
+        assert_eq!(parts(&e).2, None);
+    }
+
+    #[test]
+    fn the_functions_own_name_is_stripped_only_as_a_prefix_with_a_colon() {
+        let e = RuntimeError::native("Table.insert: out of range".into(), Some("Table.insert"), 0..1);
+        assert_eq!(parts(&e).0, "out of range");
+        // No colon: it is part of the sentence, so it stays.
+        let e = RuntimeError::native("String.gsub limit is bad".into(), Some("String.gsub"), 0..1);
+        assert_eq!(parts(&e).0, "String.gsub limit is bad");
+        // Another function's name is not this one's.
+        let e = RuntimeError::native("Table.insert: x".into(), Some("Table.remove"), 0..1);
+        assert_eq!(parts(&e).0, "Table.insert: x");
+    }
+
+    #[test]
+    fn assert_gets_its_own_label() {
+        let e = RuntimeError::native("assertion failed: x".into(), Some("assert"), 0..1);
+        assert_eq!(parts(&e).1, "this assertion failed");
+    }
+
+    #[test]
+    fn an_internal_error_says_it_is_a_bug_and_drops_the_prefix() {
+        let e = RuntimeError::Internal {
+            message: "internal: no enum 3".into(),
+            span: 0..1,
+        };
+        let (message, _, help) = parts(&e);
+        assert_eq!(message, "internal error: no enum 3");
+        assert!(help.is_some_and(|h| h.contains("bug in Saule")));
+    }
+
+    #[test]
+    fn help_and_relabel_touch_only_a_fault() {
+        let e = RuntimeError::DivisionByZero { span: 0..1 }
+            .with_help("ignored")
+            .relabel("ignored");
+        assert_eq!(parts(&e).1, "the divisor here is 0");
+        assert_ne!(parts(&e).2.as_deref(), Some("ignored"));
+    }
+
+    #[test]
+    fn message_text_is_the_bare_message() {
+        let e = RuntimeError::fault("the message", "a label", 0..1).with_help("a help");
+        assert_eq!(e.message_text(), "the message");
     }
 }

@@ -1,0 +1,5 @@
+-- A typed `local` whose `=` was forgotten is reported as a missing `=`, at
+-- the value, rather than as `nil` assigned to a non-nullable `integer`.
+-- Expected: "expected `=` before the value of `build`, found identifier `Saule`".
+local build: integer Saule.build
+println(build)

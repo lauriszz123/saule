@@ -1,0 +1,7 @@
+-- Float division by zero follows IEEE 754 — `inf`, `-inf`, NaN — rather than
+-- raising the error integer division does.
+local z: float = 0.0
+println(1.0 / z)
+println(-1.0 / z)
+local nan: float = z / z
+println(nan != nan)

@@ -9,6 +9,8 @@
 //! `saule-typeck` enforces statically; the runtime only needs the method.
 
 use saule_ast::ops::{binary_contract, binop_symbol, unary_contract};
+
+use crate::error::a_type;
 use saule_ast::{BinOp, UnaryOp};
 
 use crate::error::RuntimeError;
@@ -65,14 +67,15 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
         // `#x` is typed `integer` everywhere else in the language; keep that
         // true even when the length came from user code.
         if matches!(op, UnaryOp::Len) && !matches!(out, Value::Int(_)) {
-            return Err(RuntimeError::TypeError {
-                message: format!(
-                    "`{}.len()` must return an `integer`, got `{}`",
-                    class_name(&v),
-                    out.type_name()
-                ),
+            let class = class_name(&v);
+            return Err(RuntimeError::fault(
+                format!("`{class}.len()` must return an `integer`, got `{}`", out.type_name()),
+                format!("`#` called `{class}.len()` here"),
                 span,
-            });
+            )
+            .with_help(format!(
+                "`#x` is always an `integer`, so make `{class}.len()` return one"
+            )));
         }
         return Ok(out);
     }
@@ -81,27 +84,28 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
         UnaryOp::Neg => match v {
             Value::Int(n) => Ok(Value::Int(-n)),
             Value::Float(f) => Ok(Value::Float(-f)),
-            other => Err(RuntimeError::TypeError {
-                message: format!(
-                    "cannot negate a `{}` — negation only works on numbers, or a class implementing `OpNeg`",
-                    describe(&other)
-                ),
+            other => Err(RuntimeError::fault(
+                format!("cannot negate {}", a_type(&describe(&other))),
+                format!("this is {}", a_type(&describe(&other))),
                 span,
-            }),
+            )
+            .with_help(
+                "`-` needs a number; check that this holds the value you expect, or implement `OpNeg` on the class",
+            )),
         },
         UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
         // `~x` — one's complement. Integers only: a bit pattern is not a
         // property a `float` has, and Saule never coerces between the two.
         UnaryOp::BNot => match v {
             Value::Int(n) => Ok(Value::Int(!n)),
-            other => Err(RuntimeError::TypeError {
-                message: format!(
-                    "cannot take the bitwise complement of a `{}` — `~` works on `integer`, \
-                     or a class implementing `OpBNot`",
-                    describe(&other)
-                ),
+            other => Err(RuntimeError::fault(
+                format!("cannot take the bitwise complement of {}", a_type(&describe(&other))),
+                format!("this is {}", a_type(&describe(&other))),
                 span,
-            }),
+            )
+            .with_help(
+                "`~` works on `integer`s only; convert with `as integer`, or implement `OpBNot` on the class",
+            )),
         },
         UnaryOp::Len => match v {
             Value::Str(s) => Ok(Value::Int(
@@ -112,13 +116,14 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
             // a buffer there are none to count. The unit each type is
             // measured in is the unit it is indexed by.
             Value::Bytes(b) => Ok(Value::Int(b.len() as i64)),
-            other => Err(RuntimeError::TypeError {
-                message: format!(
-                    "cannot take length of a `{}` — only strings, bytes, tables, and classes implementing `OpLen` have a length",
-                    describe(&other)
-                ),
+            other => Err(RuntimeError::fault(
+                format!("cannot take the length of {}", a_type(&describe(&other))),
+                format!("this is {}", a_type(&describe(&other))),
                 span,
-            }),
+            )
+            .with_help(
+                "`#` measures strings, tables and bytes; check that this holds the value you expect, or implement `OpLen` on the class",
+            )),
         },
     }
 }
@@ -242,13 +247,14 @@ fn try_overload(
                 return Ok(None);
             };
             let Value::Int(n) = out else {
-                return Err(RuntimeError::TypeError {
-                    message: format!(
-                        "`compare()` must return an `integer` (negative, zero, or positive), got `{}`",
-                        out.type_name()
-                    ),
-                    span: span.clone(),
-                });
+                return Err(RuntimeError::fault(
+                    format!("`compare()` must return an `integer`, got `{}`", out.type_name()),
+                    "this comparison called `compare()`",
+                    span.clone(),
+                )
+                .with_help(
+                    "`compare(other)` must return an `integer`: below 0 if this value is smaller, 0 if equal, above 0 if bigger",
+                ));
             };
             let n = if flipped { n.wrapping_neg() } else { n };
             Ok(Some(Value::Bool(match op {
@@ -278,18 +284,18 @@ fn try_overload(
                 return Ok(None);
             }
             if has_overload(r, method) {
-                return Err(RuntimeError::TypeError {
-                    message: format!(
-                        "`{}` overloads `{}`, but `{}` dispatches on its left operand, which is a `{}` — \
-                         put the `{}` value on the left",
-                        class_name(r),
-                        binop_symbol(op),
-                        binop_symbol(op),
-                        describe(l),
-                        class_name(r)
+                let (class, sym) = (class_name(r), binop_symbol(op));
+                return Err(RuntimeError::fault(
+                    format!(
+                        "`{class}` supports `{sym}`, but it is on the right and {} is on the left",
+                        a_type(&describe(l))
                     ),
-                    span: span.clone(),
-                });
+                    format!("`{sym}` uses the left side's definition"),
+                    span.clone(),
+                )
+                .with_help(format!(
+                    "swap the two sides so the `{class}` value comes first"
+                )));
             }
             Ok(None)
         }
@@ -311,16 +317,19 @@ fn arithmetic(
         (Value::Int(_), Value::Float(_)) | (Value::Float(_), Value::Int(_)) => {
             Err(RuntimeError::NumericMix { span })
         }
-        (a, b) => Err(RuntimeError::TypeError {
-            message: format!(
-                "arithmetic requires numbers but got `{}` and `{}` — cast with `as integer` \
-                 / `as float`, or implement `{}` on the class",
-                describe(&a),
-                describe(&b),
+        (a, b) => {
+            let (a, b) = (describe(&a), describe(&b));
+            let sym = binop_symbol(op);
+            Err(RuntimeError::fault(
+                format!("cannot use `{sym}` on {} and {}", a_type(&a), a_type(&b)),
+                format!("`{sym}` needs two numbers here"),
+                span,
+            )
+            .with_help(format!(
+                "convert the non-number first, e.g. `(s as integer) {sym} 2` for a string holding a number; a class can define `{sym}` by implementing `{}`",
                 binary_contract(op).map_or("OpAdd", |c| c.interface)
-            ),
-            span,
-        }),
+            )))
+        }
     }
 }
 
@@ -356,18 +365,25 @@ fn int_op(op: BinOp, a: i64, b: i64, span: std::ops::Range<usize>) -> Result<Val
         // answer, so it's an error rather than a silent 0.
         Pow => {
             let Ok(exp) = u32::try_from(b) else {
-                return Err(RuntimeError::TypeError {
-                    message: format!(
-                        "`^` on integers requires a non-negative exponent, got {b} — \
-                         use floats (`(base as float) ^ {b}.0`) for a fractional result"
-                    ),
-                    span,
-                });
+                return Err(negative_int_exponent(b, span));
             };
             Ok(Value::Int(a.wrapping_pow(exp)))
         }
         _ => unreachable!(),
     }
+}
+
+/// `integer ^ integer` with a negative exponent, which has no integer answer.
+/// Public because the VM's own `^` raises it too, and the two must agree.
+pub fn negative_int_exponent(exp: i64, span: std::ops::Range<usize>) -> RuntimeError {
+    RuntimeError::fault(
+        "negative exponent in integer `^`",
+        format!("the exponent here is {exp}"),
+        span,
+    )
+    .with_help(format!(
+        "the result would be a fraction, which an `integer` can't hold; use floats: `(base as float) ^ {exp}.0`"
+    ))
 }
 
 /// `&` `|` `~` `<<` `>>` — integers only.
@@ -383,17 +399,16 @@ fn bitwise(
 ) -> Result<Value, RuntimeError> {
     use BinOp::*;
     let (Value::Int(a), Value::Int(b)) = (&l, &r) else {
-        return Err(RuntimeError::TypeError {
-            message: format!(
-                "`{}` requires `integer` operands but got `{}` and `{}` — cast with \
-                 `as integer`, or implement `{}` on the class",
-                binop_symbol(op),
-                describe(&l),
-                describe(&r),
-                binary_contract(op).map_or("OpBAnd", |c| c.interface)
-            ),
+        let (a, b, sym) = (describe(&l), describe(&r), binop_symbol(op));
+        return Err(RuntimeError::fault(
+            format!("cannot use `{sym}` on {} and {}", a_type(&a), a_type(&b)),
+            format!("`{sym}` needs two `integer`s here"),
             span,
-        });
+        )
+        .with_help(format!(
+            "bitwise operators work on `integer`s only; convert with `as integer`, or implement `{}` on the class",
+            binary_contract(op).map_or("OpBAnd", |c| c.interface)
+        )));
     };
     let (a, b) = (*a, *b);
     Ok(Value::Int(match op {
@@ -455,11 +470,15 @@ fn comparison(
     let ord: Ordering = match (&l, &r) {
         (Value::Int(a), Value::Int(b)) => a.cmp(b),
         (Value::Float(a), Value::Float(b)) => {
-            a.partial_cmp(b).ok_or_else(|| RuntimeError::TypeError {
-                message:
-                    "cannot compare NaN (not-a-number) — comparison is undefined for NaN values"
-                        .into(),
-                span: span.clone(),
+            a.partial_cmp(b).ok_or_else(|| {
+                RuntimeError::fault(
+                    "cannot compare NaN (\"not a number\") with `<` or `>`",
+                    "one side of this comparison is NaN",
+                    span.clone(),
+                )
+                .with_help(
+                    "NaN (e.g. from `0.0 / 0.0`) is unordered; test for it first with `x != x`, which is true only for NaN",
+                )
             })?
         }
         (Value::Str(a), Value::Str(b)) => a.cmp(b),
@@ -467,15 +486,15 @@ fn comparison(
             return Err(RuntimeError::NumericMix { span });
         }
         (a, b) => {
-            return Err(RuntimeError::TypeError {
-                message: format!(
-                    "cannot compare `{}` with `{}` — comparison works on numbers, strings, \
-                     or classes implementing `OpCompare`",
-                    describe(a),
-                    describe(b)
-                ),
+            let (a, b) = (describe(a), describe(b));
+            return Err(RuntimeError::fault(
+                format!("cannot compare {} with {}", a_type(&a), a_type(&b)),
+                "both sides must be the same kind of value",
                 span,
-            });
+            )
+            .with_help(
+                "ordering compares two numbers or two strings; convert one side, e.g. `tostring(n)` or `(s as integer)`, or implement `OpCompare` on the class",
+            ));
         }
     };
 
@@ -533,21 +552,25 @@ pub fn display_value(v: &Value, span: std::ops::Range<usize>) -> Result<String, 
     let out = call_overload(v, "toString", Vec::new(), span.clone())?;
     match out {
         Value::Str(s) => Ok((*s).clone()),
-        other => Err(RuntimeError::TypeError {
-            message: format!(
-                "`{}.toString()` must return a `string`, got `{}`",
-                class_name(v),
-                other.type_name()
-            ),
-            span,
-        }),
+        other => {
+            let class = class_name(v);
+            Err(RuntimeError::fault(
+                format!(
+                    "`{class}.toString()` must return a `string`, got `{}`",
+                    other.type_name()
+                ),
+                format!("converting {} to a string here", a_type(&class)),
+                span,
+            )
+            .with_help(format!("make `{class}.toString()` return a `string`")))
+        }
     }
 }
 
 /// [`display_value`] for native builtins, which report failures as plain
 /// strings and have no span to attribute them to.
 pub fn display_value_native(v: &Value) -> Result<String, String> {
-    display_value(v, 0..0).map_err(|e| e.to_string())
+    display_value(v, 0..0).map_err(|e| e.message_text())
 }
 
 /// `..` where at least one side is not already a string.

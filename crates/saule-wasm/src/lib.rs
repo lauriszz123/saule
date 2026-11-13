@@ -300,6 +300,73 @@ pub fn format_to_json(source: &str) -> String {
         .unwrap_or_else(|_| r#"{"ok":false}"#.to_string())
 }
 
+/// One suggestion, in the shape the playground's editor consumes.
+#[derive(Serialize, Debug)]
+pub struct Completion {
+    pub label: String,
+    /// CodeMirror's vocabulary: `function`, `method`, `variable`, …
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Markdown, when the item is documented.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+}
+
+/// Completions at byte `offset`, in the order the language server ranks them.
+///
+/// The same engine the editors use, so `p.` on a `Player` offers `Player`'s
+/// members and a bare word offers the locals in scope — not every name the
+/// library has. The ranking is carried by the order of the array.
+pub fn complete(source: &str, offset: usize) -> Vec<Completion> {
+    use lsp_types::{CompletionItemKind as K, Documentation};
+
+    saule_runtime::init();
+    // The engine slices the source at `offset`; one off a char boundary
+    // would panic, which on wasm takes the whole module down.
+    if offset > source.len() || !source.is_char_boundary(offset) {
+        return Vec::new();
+    }
+    let mut items = saule_lsp::complete(source, offset);
+    items.sort_by(|a, b| {
+        let ka = a.sort_text.as_deref().unwrap_or(&a.label);
+        let kb = b.sort_text.as_deref().unwrap_or(&b.label);
+        ka.cmp(kb)
+    });
+    items
+        .into_iter()
+        .map(|i| Completion {
+            kind: match i.kind {
+                Some(K::METHOD) => "method",
+                Some(K::FUNCTION | K::CONSTRUCTOR) => "function",
+                Some(K::FIELD | K::PROPERTY) => "property",
+                Some(K::VARIABLE | K::VALUE) => "variable",
+                Some(K::CONSTANT) => "constant",
+                Some(K::CLASS | K::STRUCT) => "class",
+                Some(K::INTERFACE) => "interface",
+                Some(K::ENUM) => "enum",
+                Some(K::ENUM_MEMBER) => "enum",
+                Some(K::MODULE | K::FILE) => "namespace",
+                Some(K::KEYWORD) => "keyword",
+                Some(K::SNIPPET) => "text",
+                Some(K::TYPE_PARAMETER) => "type",
+                _ => "text",
+            },
+            detail: i.detail,
+            doc: i.documentation.map(|d| match d {
+                Documentation::String(s) => s,
+                Documentation::MarkupContent(m) => m.value,
+            }),
+            label: i.label,
+        })
+        .collect()
+}
+
+/// [`complete`], serialized as a JSON array.
+pub fn complete_to_json(source: &str, offset: usize) -> String {
+    serde_json::to_string(&complete(source, offset)).unwrap_or_else(|_| "[]".to_string())
+}
+
 /// [`run`], serialized. The browser entry point returns this string.
 ///
 /// Serialization cannot realistically fail — every field is a plain string,
@@ -361,6 +428,12 @@ mod browser {
     #[wasm_bindgen]
     pub fn check(source: &str) -> String {
         super::check_to_json(source)
+    }
+
+    /// Completions at byte `offset`, as a JSON array of `Completion`s.
+    #[wasm_bindgen]
+    pub fn complete(source: &str, offset: usize) -> String {
+        super::complete_to_json(source, offset)
     }
 
     /// Pretty-print a program, returning a JSON `FormatResult`.
@@ -636,5 +709,44 @@ mod check_and_format_tests {
             out.text.as_deref(),
             Some("local mask: integer = 0xFF\nlocal f = (a, b) => a < b\n")
         );
+    }
+
+    /// Completions at the `|` in `src`.
+    fn labels_at(src: &str) -> Vec<String> {
+        let at = src.find('|').expect("a | marks the caret");
+        let source = src.replacen('|', "", 1);
+        complete(&source, at).into_iter().map(|c| c.label).collect()
+    }
+
+    #[test]
+    fn member_completion_offers_the_receivers_members_only() {
+        // The playground used to offer every instance method in the library
+        // after any `x.`. A string has none — its functions live on `String`.
+        let got = labels_at("local s: string = \"hi\"\nlocal n = s.|\n");
+        assert!(got.is_empty(), "{got:?}");
+        let got = labels_at("local n = String.|\n");
+        assert!(got.iter().any(|l| l == "upper"), "{got:?}");
+        assert!(!got.iter().any(|l| l == "sqrt"), "{got:?}");
+    }
+
+    #[test]
+    fn user_class_members_are_completed() {
+        let got = labels_at(
+            "class Player\n    hp: integer = 10\n    fn heal(n: integer)\n        self.hp = self.hp + n\n    end\nend\nlocal p = Player()\np.|\n",
+        );
+        assert!(got.iter().any(|l| l == "hp"), "{got:?}");
+        assert!(got.iter().any(|l| l == "heal"), "{got:?}");
+        assert!(!got.iter().any(|l| l == "upper"), "{got:?}");
+    }
+
+    #[test]
+    fn bare_words_offer_locals_in_scope() {
+        let got = labels_at("local version: float = 1.0\nprintln(ver|)\n");
+        assert_eq!(got.first().map(String::as_str), Some("version"), "{got:?}");
+    }
+
+    #[test]
+    fn a_caret_off_a_char_boundary_answers_nothing_rather_than_panicking() {
+        assert!(complete("local s = \"é\"", 12).is_empty());
     }
 }

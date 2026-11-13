@@ -187,10 +187,11 @@ pub fn run_tests(
         vm::trace::clear();
         let result = match vm.call_top_level(entry, name) {
             Some(r) => r.map(|_| ()),
-            None => Err(RuntimeError::TypeError {
-                message: format!("the test `{name}` could not be found"),
-                span: 0..0,
-            }),
+            None => Err(RuntimeError::fault(
+                format!("the test `{name}` could not be found"),
+                "",
+                0..0,
+            )),
         };
         if result.is_err() {
             vm.reset_after_failure();

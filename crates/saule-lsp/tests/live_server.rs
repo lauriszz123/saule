@@ -693,7 +693,25 @@ const RUNTIME_ONLY: &[&str] = &[
     // other coroutine misuse is a type error now that `Coroutine<T>` is typed.
     "coroutines/yield_after_coroutine_freed",
     "coroutines/yield_outside_coroutine",
+    // Through `any`, which is how a value the checker can't see into reaches
+    // an operator, a call, a loop or a member — or reached with a value
+    // (a zero divisor or step, a `nil` key, a failing assertion) only the
+    // run knows.
+    "classes/missing_member_through_any",
+    "control/for_zero_step",
+    "control/iterate_a_non_iterable",
+    "functions/call_a_non_function",
+    "stdlib/assert_failed",
+    "syntax/dynamic_arithmetic_on_string",
+    "syntax/integer_division_by_zero",
+    "tables/table_nil_key",
     "exceptions/catch_wrong_type",
+    // `error()` is a call that fails when run; whether it runs, and with
+    // which level, is not something the checker decides.
+    "exceptions/error_level_caller",
+    "exceptions/error_level_zero",
+    "exceptions/error_not_catchable",
+    "exceptions/error_raised",
     "exceptions/stack_overflow_recursion",
     "exceptions/stack_overflow_reentrant",
     "exceptions/throw_uncaught",

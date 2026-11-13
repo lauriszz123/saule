@@ -1,0 +1,14 @@
+-- `error(msg)` ends the program with the message as written — no
+-- "type error:" in front — pointed at the `error` call on line 6, with a
+-- stack trace whose every frame has a line (check:6, caller:11, top:14).
+-- Pinned in crates/saule-vm/tests/raised_errors.rs.
+fn check(n: integer)
+  if n < 0 then error("n must be non-negative, got " .. n) end
+end
+
+fn caller()
+  check(1)
+  check(-1)
+end
+
+caller()

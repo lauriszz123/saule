@@ -1,7 +1,7 @@
 //! Statement parsing: local, control flow (if/while/repeat/for/try),
 //! return, throw, expression-statement-or-assignment, plus block helpers.
 
-use saule_ast::{BinOp, Spanned, Stmt};
+use saule_ast::{BinOp, Expr, Spanned, Stmt};
 use saule_lexer::Token;
 
 use crate::error::ParseError;
@@ -133,6 +133,24 @@ impl Parser {
             let e = self.parse_expression()?;
             let end = e.span.end;
             (Some(e), end)
+        } else if first_ty.is_some() && self.looks_like_missing_assign() {
+            // `local build: integer Saule.build` — the `=` was forgotten.
+            // Read on, the declaration would end at the type and the value
+            // become a statement of its own, and the only complaint would be
+            // a type error about assigning `nil`, which points nowhere near
+            // the actual mistake.
+            let err = self
+                .expected_here(format!("`=` before the value of `{first_name}`"))
+                .with_help(format!(
+                    "a typed `local` takes its value after `=`: `local {first_name}: T = value`"
+                ));
+            if !self.recovering() {
+                return Err(err);
+            }
+            self.record(err);
+            let e = self.parse_expression()?;
+            let end = e.span.end;
+            (Some(e), end)
         } else {
             (None, first_span.end)
         };
@@ -146,6 +164,72 @@ impl Parser {
             },
             kw.span.start..end,
         ))
+    }
+
+    /// After `local name: T` with no `=`: is what follows a value that lost
+    /// its `=`, rather than the next statement?
+    ///
+    /// The tokens carry no line breaks, so this asks the grammar instead: the
+    /// next thing must read as an expression that cannot stand as a statement
+    /// on its own — not a call, not the target of an assignment, not a
+    /// `match`. A bare `Saule.build` or `42` does nothing as a statement, so
+    /// reading it as the missing initializer never changes valid code.
+    /// Always rewinds; it only answers the question.
+    fn looks_like_missing_assign(&mut self) -> bool {
+        if self.starts_statement_keyword() {
+            return false;
+        }
+        let saved = self.pos;
+        let missing = self
+            .speculate(|p| {
+                let e = p.parse_expression().ok()?;
+                let effectful = matches!(
+                    e.value,
+                    Expr::Call { .. }
+                        | Expr::Match { .. }
+                        | Expr::Pipe { .. }
+                        | Expr::Lambda { .. }
+                        | Expr::Error
+                );
+                let next = &p.peek().value;
+                let continues = matches!(next, Token::Assign | Token::Comma)
+                    || compound_assign_op(next).is_some();
+                (!effectful && !continues).then_some(())
+            })
+            .is_some();
+        self.pos = saved;
+        missing
+    }
+
+    /// Whether the next token opens a statement through its own rule rather
+    /// than through [`Self::parse_expr_or_assign`].
+    fn starts_statement_keyword(&self) -> bool {
+        matches!(
+            self.peek().value,
+            Token::Local
+                | Token::If
+                | Token::While
+                | Token::Repeat
+                | Token::For
+                | Token::Try
+                | Token::Return
+                | Token::Throw
+                | Token::Break
+                | Token::Continue
+                | Token::Fn
+                | Token::Class
+                | Token::Interface
+                | Token::Enum
+                | Token::Import
+                | Token::From
+                | Token::Export
+                | Token::Eof
+                | Token::End
+                | Token::Else
+                | Token::Elseif
+                | Token::Until
+                | Token::Semi
+        )
     }
 
     pub(crate) fn parse_if(&mut self) -> Result<Spanned<Stmt>, ParseError> {

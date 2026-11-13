@@ -25,6 +25,12 @@ saule-typeck = { path = "../saule-typeck" }
 # The pretty-printer behind `format`. The playground's Format button is the
 # same code path `saule fmt` runs, so the two can never disagree.
 saule-fmt = { path = "../saule-fmt" }
+# The language server's completion engine, so the playground suggests what
+# an editor would: scope- and type-aware rather than matched by text.
+# `server` off: that is tower-lsp, tokio and native loading, none of which
+# builds for wasm, and none of which completion needs.
+saule-lsp = { path = "../saule-lsp", default-features = false }
+lsp-types = "0.94.1"
 # `native-packages` off: the browser cannot dlopen a shared library, and
 # leaving it on would pull `libloading`, which does not build for wasm.
 saule-runtime = { path = "../saule-runtime", default-features = false }

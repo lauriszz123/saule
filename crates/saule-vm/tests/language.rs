@@ -1546,7 +1546,7 @@ mod operators {
         // give — better an error than a silently truncated 0.
         assert!(matches!(
             eval("2 ^ -1").unwrap_err(),
-            PipelineError::Runtime(RuntimeError::TypeError { .. })
+            PipelineError::Runtime(RuntimeError::Fault { .. })
         ));
     }
     #[test]
@@ -2178,7 +2178,7 @@ fn bitwise_complement_rejects_a_float() {
     // the *binary* `6.0 ~ f` — the same ambiguity `-` has had all along.
     assert!(matches!(
         eval("local f: float = 6.0;\n~f").unwrap_err(),
-        PipelineError::Runtime(RuntimeError::TypeError { .. })
+        PipelineError::Runtime(RuntimeError::Fault { .. })
     ));
 }
 

@@ -1,0 +1,4 @@
+-- Calling a number that arrived through `any`. Expected: "cannot call an
+-- `integer`", labelled "this is an `integer`, not a function".
+local f: any = 5
+f()

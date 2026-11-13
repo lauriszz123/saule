@@ -3,15 +3,8 @@
 //! Communicates over stdin/stdout (the conventional LSP transport).
 //! Editors launch this binary as a child process and speak LSP to it.
 
-mod exprty;
-mod hover;
-mod line_index;
-mod refs;
-mod server;
-mod syntax;
-mod transport;
-
-use server::Backend;
+use saule_lsp::server::Backend;
+use saule_lsp::transport;
 use tower_lsp::{LspService, Server};
 
 /// Stack for every thread that runs analysis.

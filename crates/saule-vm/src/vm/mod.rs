@@ -408,10 +408,7 @@ impl Vm {
     /// embedder uses to invoke a Saule function it got hold of.
     pub fn call(&mut self, callee: Value, args: &[Value]) -> Result<Vec<Value>, RuntimeError> {
         let Value::VmFunction(handle) = callee else {
-            return Err(RuntimeError::TypeError {
-                message: format!("attempt to call a `{}`", callee.type_name()),
-                span: 0..0,
-            });
+            return Err(RuntimeError::not_callable(callee.type_name(), 0..0));
         };
         self.invoke(&handle, args, 0..0)
     }
