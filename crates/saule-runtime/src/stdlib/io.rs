@@ -62,6 +62,19 @@ const IO_MODE_VARIANTS: [(&str, &str); 9] = [
 /// `IoSeek`'s variants. See [`IO_MODE_VARIANTS`].
 const IO_SEEK_VARIANTS: [(&str, &str); 3] = [("Set", "set"), ("Cur", "cur"), ("End", "end")];
 
+// What a file handle says when it is used the wrong way. Title, then ` — `,
+// then the fix, which the runtime moves into the help line.
+const FILE_CLOSED: &str =
+    "the file is closed — it was closed with `close()`; open it again with `Io.open(path, mode)`";
+const NOT_FOR_READING: &str = "the file was not opened for reading — \
+     open it with a mode that reads: \"r\", or \"r+\" / \"w+\" / \"a+\" to read and write";
+const NOT_FOR_WRITING: &str = "the file was not opened for writing — \
+     open it with \"w\" (replace), \"a\" (append), or \"r+\" to read and write";
+const READ_FROM_OUTPUT: &str =
+    "cannot read from stdout or stderr — they are output streams; read input from `Io.stdin`";
+const WRITE_TO_STDIN: &str =
+    "cannot write to stdin — it is an input stream; write to `Io.stdout` or `Io.stderr`";
+
 /// The types this package contributes to the semantic registries.
 ///
 /// `install` defines `IoMode`, `IoSeek` and `File` as runtime *values*, which
@@ -268,12 +281,8 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
 fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<String, String> {
     match args.get(idx) {
         Some(Value::Str(s)) => Ok((**s).clone()),
-        Some(other) => Err(format!(
-            "{name} expects a string at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `string`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
@@ -289,12 +298,13 @@ fn extract_enum_string(name: &str, args: &[Value], idx: usize) -> Result<String,
             )),
         },
         Some(Value::Str(s)) => Ok((**s).clone()),
-        Some(other) => Err(format!(
-            "{name} expects an enum variant or string at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
+        Some(other) => Err(super::wrong_arg(
+            name,
+            idx,
+            "an enum variant or a `string`",
+            other,
         )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
@@ -334,7 +344,12 @@ fn io_open(args: &[Value]) -> Result<Vec<Value>, String> {
             opts.read(true).append(true).create(true);
             (true, true)
         }
-        other => return Err(format!("Io.open: unknown mode `{other}`")),
+        other => {
+            return Err(format!(
+                "Io.open: unknown mode `{other}` — use \"r\" to read, \"w\" to write (replacing the file), \"a\" to append, \
+                 or add `+` to both read and write (\"r+\", \"w+\", \"a+\"); add `b` for bytes"
+            ));
+        }
     };
 
     match opts.open(&path) {
@@ -486,7 +501,9 @@ fn read_format(fmt: &str, src: &mut ReadSource<'_>) -> Result<Vec<Value>, String
                 Err(_) => Ok(vec![Value::Nil]),
             }
         }
-        other => Err(format!("Io.read: unsupported format `{other}`")),
+        other => Err(format!(
+            "Io.read: unknown format `{other}` — use \"l\" for a line, \"L\" for a line with its newline, \"a\" for everything, or \"n\" for a number"
+        )),
     }
 }
 
@@ -548,7 +565,7 @@ fn require_open<'a>(
     handle: &'a mut std::cell::RefMut<'_, FileHandle>,
 ) -> Result<&'a mut FileHandle, String> {
     if matches!(**handle, FileHandle::Closed) {
-        return Err("file is closed".to_string());
+        return Err(FILE_CLOSED.to_string());
     }
     Ok(&mut **handle)
 }
@@ -572,10 +589,8 @@ fn file_read(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Val
             let mut src = ReadSource::BufStdin(r);
             read_format(&format, &mut src)
         }
-        FileHandle::Open { reader: None, .. } => Err("file is not opened for reading".to_string()),
-        FileHandle::Stdout | FileHandle::Stderr => {
-            Err("cannot read from stdout/stderr".to_string())
-        }
+        FileHandle::Open { reader: None, .. } => Err(NOT_FOR_READING.to_string()),
+        FileHandle::Stdout | FileHandle::Stderr => Err(READ_FROM_OUTPUT.to_string()),
         FileHandle::Closed => unreachable!(),
     }
 }
@@ -605,8 +620,8 @@ fn file_write(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Va
             }
             Ok(vec![Value::Nil])
         }
-        FileHandle::Open { writer: None, .. } => Err("file is not opened for writing".to_string()),
-        FileHandle::Stdin(_) => Err("cannot write to stdin".to_string()),
+        FileHandle::Open { writer: None, .. } => Err(NOT_FOR_WRITING.to_string()),
+        FileHandle::Stdin(_) => Err(WRITE_TO_STDIN.to_string()),
         FileHandle::Closed => unreachable!(),
     }
 }
@@ -641,10 +656,8 @@ fn file_read_bytes(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<V
             reader: Some(r), ..
         } => read_raw(r, limit),
         FileHandle::Stdin(r) => read_raw(r, limit),
-        FileHandle::Open { reader: None, .. } => Err("file is not opened for reading".to_string()),
-        FileHandle::Stdout | FileHandle::Stderr => {
-            Err("cannot read from stdout/stderr".to_string())
-        }
+        FileHandle::Open { reader: None, .. } => Err(NOT_FOR_READING.to_string()),
+        FileHandle::Stdout | FileHandle::Stderr => Err(READ_FROM_OUTPUT.to_string()),
         FileHandle::Closed => unreachable!(),
     }
 }
@@ -727,8 +740,8 @@ fn file_write_bytes(
                 "cannot write non-UTF-8 bytes to stdout/stderr — open a file instead".to_string(),
             ),
         },
-        FileHandle::Open { writer: None, .. } => Err("file is not opened for writing".to_string()),
-        FileHandle::Stdin(_) => Err("cannot write to stdin".to_string()),
+        FileHandle::Open { writer: None, .. } => Err(NOT_FOR_WRITING.to_string()),
+        FileHandle::Stdin(_) => Err(WRITE_TO_STDIN.to_string()),
         FileHandle::Closed => unreachable!(),
     }
 }
@@ -765,8 +778,8 @@ fn file_lines(handle: &Rc<RefCell<FileHandle>>, _args: &[Value]) -> Result<Vec<V
                         Err(e) => Err(format!("File.lines: {e}")),
                     }
                 }
-                FileHandle::Closed => Err("File.lines: file is closed".to_string()),
-                _ => Err("File.lines: file is not readable".to_string()),
+                FileHandle::Closed => Err(format!("File.lines: {FILE_CLOSED}")),
+                _ => Err(format!("File.lines: {NOT_FOR_READING}")),
             }
         }),
         param_names: Vec::new(),
@@ -797,7 +810,11 @@ fn file_seek(handle: &Rc<RefCell<FileHandle>>, args: &[Value]) -> Result<Vec<Val
         "set" => SeekFrom::Start(offset.max(0) as u64),
         "cur" => SeekFrom::Current(offset),
         "end" => SeekFrom::End(offset),
-        other => return Err(format!("File.seek: invalid whence `{other}`")),
+        other => {
+            return Err(format!(
+                "File.seek: unknown position `{other}` — measure the offset from \"set\" (the start), \"cur\" (where you are) or \"end\""
+            ));
+        }
     };
     let mut h = handle.borrow_mut();
     let h = require_open(&mut h)?;

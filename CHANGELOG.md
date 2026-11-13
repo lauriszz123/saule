@@ -4,7 +4,34 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
-## Next
+## 26.30
+
+### Changed
+
+- **A failing built-in function shows its signature, and the standard
+  library's messages say what to do.** The help line of an error raised by
+  a built-in ends with the function's documented signature, parameter names
+  included, so the argument order is always in view:
+  `signature: Table.insert<V>(t: table<V>, value: V, pos: integer?) -> nil`.
+  Every argument error now reads the same way — "argument 2 of `Table.sort`
+  must be a function, got an `integer`" — and the rest were rewritten to
+  give the fix: `Math.clamp` with its bounds swapped says to swap them,
+  `Math.sqrt` of a negative says which value and suggests `Math.abs`,
+  `String.format` names the placeholder that has no value, a malformed
+  pattern says how to close a `[` or `(`, and a file opened only for
+  reading names the modes that write.
+- **Two labels say what to do instead of where.** The missing-`=` error
+  now reads "add `=` before this value" under the value, and `error(msg, 2)`
+  labels the caller's line "reported here, at this call (`error` level 2)"
+  rather than "blamed on this call".
+
+### Fixed
+
+- **`Saule.atLeast` counted its argument from 0.** Passing it a non-string
+  reported "argument 0"; it now says "argument 1", like every other
+  function.
+
+## 26.29
 
 ### Added
 
@@ -15,34 +42,6 @@ history.
   written; the stack trace is the same at every level. See
   [`error`](./DOCS.md#errormsg-string-level-integer---nil).
 
-- **Coroutines.** `Coroutine.create(fn(co) … end)` makes a function that pauses
-  at `co.yield(v)` and resumes from exactly there, with its locals and call
-  stack intact. They are stackful — pass the yielder down and any function can
-  yield — and typed: a `Coroutine<T>` yields `T`s, `resume()` answers a `T?`,
-  and `for v in gen do` iterates one with `v: T`. `T` is learned from where the
-  coroutine goes, so the body's `co` needs no annotation. A coroutine that
-  fails is reported through `resume()` and `error()` rather than ending the
-  program. See [Coroutines](./LANGUAGE.md#coroutines) and the
-  [`Coroutine` reference](./DOCS.md#coroutine); the editor types, completes and
-  documents both handles.
-- **A worked coroutines example.** [`examples/coroutines`](./examples/coroutines)
-  is a six-part tour: lazy stream combinators that are themselves coroutines,
-  a stackful tokenizer that yields from two frames below the body, a
-  recursive-descent parser that pulls one token at a time, and a cooperative
-  scheduler whose tasks interleave on one thread — one of which fails without
-  taking the others with it. The playground gains three coroutine programs
-  alongside it.
-- **The examples are tiered, and there are ten more of them.** Both the
-  playground picker and the Examples index group their programs as *Simple*,
-  *Intermediate* and *Advanced* — by the features you need to know to read
-  one, not by length — and each example page carries its tier as a sidebar
-  badge. The playground gains strings and text, tables, loops and control
-  flow, functions (defaults, named arguments, multiple returns, variadics),
-  error handling, enums, custom iterables, bitwise operators, wrapper types
-  and `when(…)` pipelines; its null-safety, pattern-matching and generics
-  programs were rewritten to cover `?.`/`?[`/`!`, guards and bindings, and
-  bounds. All 24 run under both engines in `npm run check-samples`.
-
 ### Changed
 
 - **Runtime errors say what went wrong and how to fix it.** Each one has a
@@ -51,17 +50,31 @@ history.
   "this is an `integer`, not a function"), and a help line with the fix,
   usually as a short example. Before, almost all of them were `type error:
   …` labelled "type mismatch or invalid operation", whatever had actually
-  happened, with the advice run into the title. A built-in function that refuses its argument
-  is now named in the label. A missing member lists the class's fields. A
-  `for` loop's error points at the step or the iterated value, not at the
-  whole loop. A failure that can only be a bug in Saule says so, and says
-  where to report it.
+  happened, with the advice run into the title. A built-in function that
+  refuses its argument is now named in the label. A missing member lists the
+  class's fields. A `for` loop's error points at the step or the iterated
+  value, not at the whole loop. A failure that can only be a bug in Saule
+  says so, and says where to report it.
 - **Every frame of a stack trace has a line number**, the innermost one
   included.
 - **A forgotten `=` in a typed `local` is reported as one.** `local build:
   integer Saule.build` used to fail with "cannot assign `nil` to `integer`";
   it now says ``expected `=` before the value of `build` `` and points at
   the value.
+
+### Fixed
+
+- **`~` on a `float` reports the program's mistake.** The compiler emitted
+  the integer-only complement instruction whatever the operand was, so `~f`
+  on a `float` failed as a broken chunk instead of saying "cannot take the
+  bitwise complement of a `float`". Only an operand proved to be an
+  `integer` gets that instruction now; anything else is checked when it
+  runs, which also lets a class's `OpBNot` overload work there.
+
+## 26.28
+
+### Changed
+
 - **Every benchmark is now under 2x Lua; the suite is at 1.33x.** These
   changes took the four that were still above it below:
   - **`closure`** (2.5x → **0.8x**): a local that holds one lambda for its
@@ -100,6 +113,51 @@ history.
   around it, `-1` is loaded as a literal rather than negated at run time,
   and `t?[i]` on a table is a nil test and one read. `nullsafe` −35%
   (2.7x Lua → **1.7x**).
+
+### Fixed
+
+- **A program's own class or enum is not mistaken for a native package's.**
+  Discovering a native package puts its static classes' members in a table
+  the checker shares across every module, and that table was consulted
+  before the module's own declarations. So a module that declared `enum
+  Event` — UIKit does — and imported anything at all from a package with an
+  `Event` class had `Event.KeyPressed` reported as missing from the
+  package's class. The module's own declaration now answers first; a typo on
+  the package's class is still caught.
+- **An `as` in a field default converts.** `static f: float = 230 as float`
+  left the field `nil`: the checker compared a field's default against its
+  declared type but never walked the expression, so the `as` was never told
+  it was a conversion and ran as the type test instead ("is 230 a float?").
+  Static and instance defaults alike. Walking the default also means an error
+  inside one is now reported, where before it went unnoticed.
+- **`f()?[i]` calls `f` once.** A safe index compiled its receiver twice — once
+  for the nil test and again for the read — so a call there ran twice, side
+  effects and all.
+
+## 26.27
+
+### Added
+
+- **A worked coroutines example.** [`examples/coroutines`](./examples/coroutines)
+  is a six-part tour: lazy stream combinators that are themselves coroutines,
+  a stackful tokenizer that yields from two frames below the body, a
+  recursive-descent parser that pulls one token at a time, and a cooperative
+  scheduler whose tasks interleave on one thread — one of which fails without
+  taking the others with it. The playground gains three coroutine programs
+  alongside it.
+- **The examples are tiered, and there are ten more of them.** Both the
+  playground picker and the Examples index group their programs as *Simple*,
+  *Intermediate* and *Advanced* — by the features you need to know to read
+  one, not by length — and each example page carries its tier as a sidebar
+  badge. The playground gains strings and text, tables, loops and control
+  flow, functions (defaults, named arguments, multiple returns, variadics),
+  error handling, enums, custom iterables, bitwise operators, wrapper types
+  and `when(…)` pipelines; its null-safety, pattern-matching and generics
+  programs were rewritten to cover `?.`/`?[`/`!`, guards and bindings, and
+  bounds. All 24 run under both engines in `npm run check-samples`.
+
+### Changed
+
 - **Building an enum variant with a payload allocates three times, not
   seven.** `Event.Click(x, y)` rebuilt both names — the enum's and the
   variant's — from scratch on every construction: a `String` out of the enum
@@ -240,44 +298,9 @@ history.
   walking such as `bintree` gains a little too. **The copy is what costs,
   not the dispatch** — removing the cheaper triple alone moved the wall
   clock not at all, which is worth knowing before fusing the next pair.
-- **A generic class's methods are checked like any other's.** On a receiver
-  such as `Box<integer>`, `box.put("x")` is now an argument error, a misspelt
-  method is reported, and a lambda argument's parameters take their types from
-  the receiver. These calls were not checked at all before.
-- **A generic method learns its type parameters from where its result goes**
-  when the arguments leave them open — an annotated `local`, a declared return
-  type, or the parameter the call fills. An argument that disagrees is still
-  reported.
-- `for v in x` over an instance of an `Iterable<T>` class binds `v` as a `T`
-  when it is not annotated, as it already did for tables.
-- A method call on an `any` value is `any`, as a field read on one already
-  was, so a dynamic call's result can be used anywhere `any` can.
 
 ### Fixed
 
-- **`~` on a `float` reports the program's mistake.** The compiler emitted
-  the integer-only complement instruction whatever the operand was, so `~f`
-  on a `float` failed as a broken chunk instead of saying "cannot take the
-  bitwise complement of a `float`". Only an operand proved to be an
-  `integer` gets that instruction now; anything else is checked when it
-  runs, which also lets a class's `OpBNot` overload work there.
-- **A program's own class or enum is not mistaken for a native package's.**
-  Discovering a native package puts its static classes' members in a table
-  the checker shares across every module, and that table was consulted
-  before the module's own declarations. So a module that declared `enum
-  Event` — UIKit does — and imported anything at all from a package with an
-  `Event` class had `Event.KeyPressed` reported as missing from the
-  package's class. The module's own declaration now answers first; a typo on
-  the package's class is still caught.
-- **An `as` in a field default converts.** `static f: float = 230 as float`
-  left the field `nil`: the checker compared a field's default against its
-  declared type but never walked the expression, so the `as` was never told
-  it was a conversion and ran as the type test instead ("is 230 a float?").
-  Static and instance defaults alike. Walking the default also means an error
-  inside one is now reported, where before it went unnoticed.
-- **`f()?[i]` calls `f` once.** A safe index compiled its receiver twice — once
-  for the nil test and again for the read — so a call there ran twice, side
-  effects and all.
 - **An index assignment on a generic class calls its `OpNewIndex`.**
   `grid[1] = v` on a `Grid<T>` failed at run time with an internal "typed
   opcode expected `table` but the register held `instance`": the compiler,
@@ -296,6 +319,36 @@ history.
 - `import uikit` followed by a `from …` line still being typed no longer
   reports the import as the removed syntax, and completion works on the `from`
   line. An unfinished `from path` is reported on its own line.
+
+## 26.26
+
+### Added
+
+- **Coroutines.** `Coroutine.create(fn(co) … end)` makes a function that pauses
+  at `co.yield(v)` and resumes from exactly there, with its locals and call
+  stack intact. They are stackful — pass the yielder down and any function can
+  yield — and typed: a `Coroutine<T>` yields `T`s, `resume()` answers a `T?`,
+  and `for v in gen do` iterates one with `v: T`. `T` is learned from where the
+  coroutine goes, so the body's `co` needs no annotation. A coroutine that
+  fails is reported through `resume()` and `error()` rather than ending the
+  program. See [Coroutines](./LANGUAGE.md#coroutines) and the
+  [`Coroutine` reference](./DOCS.md#coroutine); the editor types, completes and
+  documents both handles.
+
+### Changed
+
+- **A generic class's methods are checked like any other's.** On a receiver
+  such as `Box<integer>`, `box.put("x")` is now an argument error, a misspelt
+  method is reported, and a lambda argument's parameters take their types from
+  the receiver. These calls were not checked at all before.
+- **A generic method learns its type parameters from where its result goes**
+  when the arguments leave them open — an annotated `local`, a declared return
+  type, or the parameter the call fills. An argument that disagrees is still
+  reported.
+- `for v in x` over an instance of an `Iterable<T>` class binds `v` as a `T`
+  when it is not annotated, as it already did for tables.
+- A method call on an `any` value is `any`, as a field read on one already
+  was, so a dynamic call's result can be used anywhere `any` can.
 
 ## 26.24
 

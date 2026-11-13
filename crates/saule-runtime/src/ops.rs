@@ -69,7 +69,10 @@ pub fn unary(op: UnaryOp, v: Value, span: std::ops::Range<usize>) -> Result<Valu
         if matches!(op, UnaryOp::Len) && !matches!(out, Value::Int(_)) {
             let class = class_name(&v);
             return Err(RuntimeError::fault(
-                format!("`{class}.len()` must return an `integer`, got `{}`", out.type_name()),
+                format!(
+                    "`{class}.len()` must return an `integer`, got `{}`",
+                    out.type_name()
+                ),
                 format!("`#` called `{class}.len()` here"),
                 span,
             )

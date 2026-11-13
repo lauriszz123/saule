@@ -197,7 +197,9 @@ fn a_force_unwrapped_field_read_passes_a_value() {
     // nothing in the suite covered the shape before the fusion landed —
     // `run_tests.sh` checks exit status only, so a wrong *value* here was
     // invisible. Both links present, read through two of them.
-    must_agree(&format!("{LINKED}local n: Node = Node(Leaf(42))\nn.next!.v!"));
+    must_agree(&format!(
+        "{LINKED}local n: Node = Node(Leaf(42))\nn.next!.v!"
+    ));
 }
 
 #[test]
@@ -206,7 +208,9 @@ fn a_force_unwrapped_field_read_throws_on_a_nil_link() {
     // carry a nil forward into the second.
     must_agree(&format!("{LINKED}local n: Node = Node(nil)\nn.next!.v!"));
     // ...and the second link, which is the one the outer `!` guards.
-    must_agree(&format!("{LINKED}local n: Node = Node(Leaf(nil))\nn.next!.v!"));
+    must_agree(&format!(
+        "{LINKED}local n: Node = Node(Leaf(nil))\nn.next!.v!"
+    ));
 }
 
 #[test]

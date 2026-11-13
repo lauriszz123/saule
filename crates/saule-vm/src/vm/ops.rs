@@ -8,8 +8,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saule_runtime::value::TableObject;
 use saule_runtime::error::a_type;
+use saule_runtime::value::TableObject;
 use saule_runtime::{RuntimeError, Value};
 
 use crate::chunk::{FieldPath, LinkKind, PathLink, Proto};

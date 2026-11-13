@@ -1459,7 +1459,10 @@ end
 go()
 "#,
     );
-    assert!(out.contains("`Yielder` has no method `resume`"), "got: {out}");
+    assert!(
+        out.contains("`Yielder` has no method `resume`"),
+        "got: {out}"
+    );
 }
 
 // ── Identity ─────────────────────────────────────────────────────────────

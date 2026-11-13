@@ -112,11 +112,37 @@ pub(crate) fn define_native(
     );
 }
 
+// ── Argument errors ─────────────────────────────────────────────────────────
+//
+// One wording for every built-in, so a reader learns it once: which argument,
+// of which function, what it had to be, and what it was. The runtime turns
+// the message into a diagnostic whose help line shows the function's
+// documented signature (`RuntimeError::native`), so these don't repeat it.
+
+/// "argument 2 of `String.rep` must be an `integer`, got a `string`". `want`
+/// is written with its article: "a `string`", "a function".
+pub(crate) fn wrong_arg(name: &str, idx: usize, want: &str, got: &Value) -> String {
+    format!(
+        "argument {} of `{name}` must be {want}, got {}",
+        idx + 1,
+        crate::error::a_type(got.type_name())
+    )
+}
+
+/// "`String.rep` is missing argument 2".
+pub(crate) fn missing_arg(name: &str, idx: usize) -> String {
+    format!("`{name}` is missing argument {}", idx + 1)
+}
+
+fn arguments(n: usize) -> &'static str {
+    if n == 1 { "argument" } else { "arguments" }
+}
+
 pub(crate) fn expect_arity(name: &str, args: &[Value], expected: usize) -> Result<(), String> {
     if args.len() != expected {
         return Err(format!(
-            "{name} expects exactly {expected} argument{}, got {}",
-            if expected == 1 { "" } else { "s" },
+            "`{name}` takes {expected} {}, got {}",
+            arguments(expected),
             args.len()
         ));
     }
@@ -126,8 +152,8 @@ pub(crate) fn expect_arity(name: &str, args: &[Value], expected: usize) -> Resul
 pub(crate) fn expect_min_arity(name: &str, args: &[Value], min: usize) -> Result<(), String> {
     if args.len() < min {
         return Err(format!(
-            "{name} expects at least {min} argument{}, got {}",
-            if min == 1 { "" } else { "s" },
+            "`{name}` takes at least {min} {}, got {}",
+            arguments(min),
             args.len()
         ));
     }

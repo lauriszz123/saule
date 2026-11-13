@@ -106,12 +106,8 @@ fn write(handle: &Rc<RefCell<ProcessHandle>>, args: &[Value]) -> Result<Vec<Valu
 fn expect_bytes(name: &str, args: &[Value], idx: usize) -> Result<SauleBytes, String> {
     match args.get(idx) {
         Some(Value::Bytes(b)) => Ok(b.clone()),
-        Some(other) => Err(format!(
-            "{name} expects bytes at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "`bytes`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
@@ -121,11 +117,7 @@ fn expect_int_opt(name: &str, args: &[Value], idx: usize) -> Result<Option<i64>,
     match args.get(idx) {
         None | Some(Value::Nil) => Ok(None),
         Some(Value::Int(n)) => Ok(Some(*n)),
-        Some(other) => Err(format!(
-            "{name} expects an integer at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
+        Some(other) => Err(super::wrong_arg(name, idx, "an `integer` or `nil`", other)),
     }
 }
 

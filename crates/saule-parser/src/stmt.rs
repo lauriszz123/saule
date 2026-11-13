@@ -141,6 +141,7 @@ impl Parser {
             // the actual mistake.
             let err = self
                 .expected_here(format!("`=` before the value of `{first_name}`"))
+                .with_label("add `=` before this value")
                 .with_help(format!(
                     "a typed `local` takes its value after `=`: `local {first_name}: T = value`"
                 ));

@@ -161,9 +161,11 @@ impl Coroutine {
                 } else {
                     "cannot resume a coroutine that is waiting on another one it resumed"
                 };
-                return Err(RuntimeError::fault(message, "resumed here", span).with_help(
-                    "a coroutine runs one resume at a time; resume it again after it yields",
-                ));
+                return Err(
+                    RuntimeError::fault(message, "resumed here", span).with_help(
+                        "a coroutine runs one resume at a time; resume it again after it yields",
+                    ),
+                );
             }
             State::Dead => return Ok(vec![Value::Nil]),
         }

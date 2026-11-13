@@ -879,6 +879,7 @@ dependencies = [
  "miette",
  "object",
  "saule-ast",
+ "saule-docs",
  "saule-lexer",
  "saule-native-abi",
  "saule-parser",

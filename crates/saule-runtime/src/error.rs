@@ -19,6 +19,13 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+/// A built-in's signature as DOCS.md writes it — parameter names included,
+/// which the checker's own signature table doesn't have.
+fn documented_signature(qname: &str) -> Option<String> {
+    let entry = saule_docs::stdlib().entry(qname)?;
+    (entry.kind == saule_docs::EntryKind::Function).then(|| entry.signature.clone())
+}
+
 /// A type's name with the article English puts in front of it, for a
 /// diagnostic that says "this is …": "a `string`", "an `integer`", "an
 /// `Item`", and `nil` bare, since there is only one.
@@ -292,6 +299,17 @@ impl RuntimeError {
             Some(name) if !name.is_empty() => format!("`{name}` failed here"),
             _ => "failed here".to_string(),
         };
+        // The signature answers the question most of these leave open — what
+        // goes where — so it closes the help. `assert`'s is noise next to the
+        // program's own message.
+        let signature = function
+            .filter(|f| *f != "assert")
+            .and_then(documented_signature);
+        let help = match (help, signature) {
+            (Some(h), Some(s)) => Some(format!("{h}\nsignature: `{s}`")),
+            (None, Some(s)) => Some(format!("signature: `{s}`")),
+            (h, None) => h,
+        };
         RuntimeError::Fault {
             message: title,
             span,
@@ -469,7 +487,11 @@ mod tests {
 
     #[test]
     fn the_functions_own_name_is_stripped_only_as_a_prefix_with_a_colon() {
-        let e = RuntimeError::native("Table.insert: out of range".into(), Some("Table.insert"), 0..1);
+        let e = RuntimeError::native(
+            "Table.insert: out of range".into(),
+            Some("Table.insert"),
+            0..1,
+        );
         assert_eq!(parts(&e).0, "out of range");
         // No colon: it is part of the sentence, so it stays.
         let e = RuntimeError::native("String.gsub limit is bad".into(), Some("String.gsub"), 0..1);
@@ -477,6 +499,32 @@ mod tests {
         // Another function's name is not this one's.
         let e = RuntimeError::native("Table.insert: x".into(), Some("Table.remove"), 0..1);
         assert_eq!(parts(&e).0, "Table.insert: x");
+    }
+
+    #[test]
+    fn a_documented_built_in_gets_its_signature_after_the_advice() {
+        let e = RuntimeError::native("bad — fix it".into(), Some("Math.sqrt"), 0..1);
+        assert_eq!(
+            parts(&e).2.as_deref(),
+            Some("fix it\nsignature: `Math.sqrt<N>(n: N) -> float`")
+        );
+        // With no advice of its own, the signature is the whole help.
+        let e = RuntimeError::native("bad".into(), Some("Math.sqrt"), 0..1);
+        assert_eq!(
+            parts(&e).2.as_deref(),
+            Some("signature: `Math.sqrt<N>(n: N) -> float`")
+        );
+    }
+
+    #[test]
+    fn an_undocumented_name_and_assert_get_no_signature() {
+        let e = RuntimeError::native("bad".into(), Some("Nope.nothing"), 0..1);
+        assert_eq!(parts(&e).2, None);
+        let e = RuntimeError::native("assertion failed: x".into(), Some("assert"), 0..1);
+        assert_eq!(parts(&e).2, None);
+        // A constant is documented too, but has no signature to call by.
+        let e = RuntimeError::native("bad".into(), Some("Math.pi"), 0..1);
+        assert_eq!(parts(&e).2, None);
     }
 
     #[test]

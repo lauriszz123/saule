@@ -140,12 +140,12 @@ impl<'a> MatchState<'a> {
     /// the unit that a following `*`, `+`, `-` or `?` applies to.
     fn class_end(&self, p: usize) -> Result<usize, String> {
         let Some(&c) = self.pat.get(p) else {
-            return Err("malformed pattern: ends after `%`".to_string());
+            return Err("malformed pattern: it ends with a lone `%` — `%` escapes the character after it; write `%%` for a literal percent sign".to_string());
         };
         match c {
             '%' => {
                 if p + 1 >= self.pat.len() {
-                    return Err("malformed pattern: ends after `%`".to_string());
+                    return Err("malformed pattern: it ends with a lone `%` — `%` escapes the character after it; write `%%` for a literal percent sign".to_string());
                 }
                 Ok(p + 2)
             }
@@ -160,13 +160,13 @@ impl<'a> MatchState<'a> {
                 // containing `]`.
                 loop {
                     let Some(&cc) = self.pat.get(q) else {
-                        return Err("malformed pattern: missing `]`".to_string());
+                        return Err("malformed pattern: a `[` set is never closed — end it with `]`, or write `%[` for a literal bracket".to_string());
                     };
                     q += 1;
                     // `%]` is a literal `]`, so it must not close the set.
                     if cc == '%' {
                         if q >= self.pat.len() {
-                            return Err("malformed pattern: ends after `%`".to_string());
+                            return Err("malformed pattern: it ends with a lone `%` — `%` escapes the character after it; write `%%` for a literal percent sign".to_string());
                         }
                         q += 1;
                     }
@@ -228,7 +228,7 @@ impl<'a> MatchState<'a> {
     /// `%bxy` — a balanced run from `x` to its matching `y`, nesting counted.
     fn match_balance(&mut self, s: usize, p: usize) -> Result<Option<usize>, String> {
         if p + 1 >= self.pat.len() {
-            return Err("malformed pattern: `%b` needs two characters".to_string());
+            return Err("malformed pattern: `%b` needs two characters after it — the opening and closing delimiter, e.g. `%b()` matches balanced parentheses".to_string());
         }
         if self.src.get(s) != Some(&self.pat[p]) {
             return Ok(None);
@@ -284,7 +284,9 @@ impl<'a> MatchState<'a> {
 
     fn start_capture(&mut self, s: usize, p: usize, what: isize) -> Result<Option<usize>, String> {
         if self.level >= MAX_CAPTURES {
-            return Err(format!("pattern has more than {MAX_CAPTURES} captures"));
+            return Err(format!(
+                "pattern has more than {MAX_CAPTURES} captures — split it into smaller patterns, or use `%(` for a literal parenthesis"
+            ));
         }
         self.capture[self.level] = (s, what);
         self.level += 1;
@@ -311,7 +313,7 @@ impl<'a> MatchState<'a> {
                 return Ok(i);
             }
         }
-        Err("malformed pattern: `)` with no `(`".to_string())
+        Err("malformed pattern: `)` closes a capture that was never opened — write `%)` for a literal parenthesis".to_string())
     }
 
     /// `%1`–`%9` — match the same text a previous capture matched.
@@ -319,7 +321,11 @@ impl<'a> MatchState<'a> {
         let l = (idx as usize)
             .checked_sub('1' as usize)
             .filter(|&l| l < self.level && self.capture[l].1 != CAP_UNFINISHED)
-            .ok_or_else(|| format!("malformed pattern: invalid capture reference `%{idx}`"))?;
+            .ok_or_else(|| {
+                format!(
+                    "malformed pattern: `%{idx}` refers to capture {idx}, which doesn't exist at this point — `%1`–`%9` repeat a `( … )` capture that comes earlier in the pattern"
+                )
+            })?;
         let len = self.capture[l].1 as usize;
         let from = self.capture[l].0;
         if self.src.len() - s >= len && self.src[from..from + len] == self.src[s..s + len] {
@@ -338,7 +344,10 @@ impl<'a> MatchState<'a> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             self.depth -= 1;
-            return Err("pattern too complex (recursion limit reached)".to_string());
+            return Err(
+                "pattern too complex: matching it nested too deeply — simplify it, e.g. replace a run of optional items with a single `*`"
+                    .to_string(),
+            );
         }
         let result = loop {
             if p >= self.pat.len() {
@@ -457,7 +466,10 @@ impl<'a> MatchState<'a> {
         for i in 0..self.level {
             let (cs, len) = self.capture[i];
             if len == CAP_UNFINISHED {
-                return Err("malformed pattern: unfinished capture".to_string());
+                return Err(
+                    "malformed pattern: unfinished capture — a `(` is never closed; end it with `)`, or write `%(` for a literal parenthesis"
+                        .to_string(),
+                );
             }
             if len == CAP_POSITION {
                 return Err("position capture `()` is not supported".to_string());
@@ -566,7 +578,8 @@ pub fn expand_replacement_into(
                 };
                 let (from, to) = span.ok_or_else(|| {
                     format!(
-                        "replacement refers to capture `%{d}`, but the pattern has {}",
+                        "replacement refers to capture `%{d}`, but the pattern has {} — \
+                         `%1`–`%9` insert what the pattern's `( … )` captures matched, and `%0` the whole match",
                         m.captures.len().max(1)
                     )
                 })?;
@@ -574,8 +587,8 @@ pub fn expand_replacement_into(
             }
             other => {
                 return Err(format!(
-                    "malformed replacement: `%{other}` is not a capture reference \
-                     (use `%%` for a literal `%`)"
+                    "malformed replacement: `%{other}` is not a capture reference — \
+                     in a replacement, `%` is followed by a digit `0`–`9`; write `%%` for a literal `%`"
                 ));
             }
         }
@@ -698,10 +711,10 @@ mod tests {
 
     #[test]
     fn malformed_patterns_are_errors_not_panics() {
-        assert!(err("abc", "[abc").contains("missing `]`"));
-        assert!(err("abc", "%").contains("ends after `%`"));
+        assert!(err("abc", "[abc").contains("a `[` set is never closed"));
+        assert!(err("abc", "%").contains("ends with a lone `%`"));
         assert!(err("abc", "(a").contains("unfinished capture"));
-        assert!(err("abc", "a)").contains("`)` with no `(`"));
+        assert!(err("abc", "a)").contains("`)` closes a capture that was never opened"));
         assert!(err("abc", "()").contains("position capture"));
         assert!(err("abc", "%f%a").contains("`%f` must be followed by `[`"));
     }
@@ -786,9 +799,10 @@ mod tests {
         let t: Vec<char> = "<%1|%0>".chars().collect();
         assert_eq!(expand_replacement(&t, &s, &mt).unwrap(), "<ab|ab>");
         let two: Vec<char> = "%2".chars().collect();
-        assert_eq!(
-            expand_replacement(&two, &s, &mt).unwrap_err(),
-            "replacement refers to capture `%2`, but the pattern has 1"
+        assert!(
+            expand_replacement(&two, &s, &mt)
+                .unwrap_err()
+                .starts_with("replacement refers to capture `%2`, but the pattern has 1 — ")
         );
         // Appending: what is already in the buffer stays in front.
         let mut out = String::from("pre:");

@@ -304,7 +304,10 @@ pub fn call_method(
                 format!("this is {}", crate::error::a_type(&class.name)),
                 span,
             )
-            .with_help(crate::members::member_help(&class.name, class.layout.names())))
+            .with_help(crate::members::member_help(
+                &class.name,
+                class.layout.names(),
+            )))
         }
         Value::Class(class) => call_static(class, name, args, span),
         Value::EnumVariant(variant) => {

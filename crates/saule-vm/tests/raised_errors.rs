@@ -127,7 +127,7 @@ fn level_two_points_at_the_call_into_the_raising_function() {
         (
             "n must be non-negative, got -1".to_string(),
             8,
-            "raised at level 2: blamed on this call".to_string()
+            "reported here, at this call (`error` level 2)".to_string()
         )
     );
     // The trace is unchanged by the level: `check` is still where `error`
@@ -141,7 +141,7 @@ fn level_three_points_one_further_out() {
     let (e, frames) = fail(&src);
     let (_, line, label) = raised(&src, &e);
     assert_eq!(line, 11);
-    assert_eq!(label, "raised at level 3: blamed on this call");
+    assert_eq!(label, "reported here, at this call (`error` level 3)");
     assert_eq!(trace_lines(&frames), expected_trace());
 }
 

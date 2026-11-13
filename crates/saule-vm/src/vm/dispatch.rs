@@ -1077,13 +1077,9 @@ impl Vm {
                         } else if idx == n + 1 {
                             t.array.push(v);
                         } else {
-                            t.set(&Value::Int(idx), v)
-                                .map_err(|m| {
-                                    saule_runtime::members::table_write_failed(
-                                        m,
-                                        proto.span_at(here),
-                                    )
-                                })?;
+                            t.set(&Value::Int(idx), v).map_err(|m| {
+                                saule_runtime::members::table_write_failed(m, proto.span_at(here))
+                            })?;
                         }
                     }
                     // Both index forms borrow the table and the key in place.

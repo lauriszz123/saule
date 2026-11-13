@@ -296,8 +296,7 @@ pub fn check_to_json(source: &str) -> String {
 
 /// [`format`], serialized.
 pub fn format_to_json(source: &str) -> String {
-    serde_json::to_string(&format(source))
-        .unwrap_or_else(|_| r#"{"ok":false}"#.to_string())
+    serde_json::to_string(&format(source)).unwrap_or_else(|_| r#"{"ok":false}"#.to_string())
 }
 
 /// One suggestion, in the shape the playground's editor consumes.
